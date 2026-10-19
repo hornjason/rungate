@@ -55,8 +55,9 @@
  * literal in the tuple `test/release-guard.test.ts` pins.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
+import { spawnSync } from "child_process";
 import { join } from "path";
 import { createCiWorkflows } from "../lib/scaffold/steps";
 import {
@@ -451,16 +452,52 @@ interface Run {
  * for the same reason: inheriting `process.env` is a fixture that can satisfy
  * the assertion without the feature.
  */
-function runAuthScript(script: string, env: Record<string, string>): Run {
+/** `bash`, resolved once from this process's PATH — see `runAuthScript`. */
+const BASH = (() => {
+  const found = spawnSync("sh", ["-c", "command -v bash"], { encoding: "utf-8" });
+  const path = (found.stdout ?? "").trim();
+  if (!path) throw new Error("no bash on PATH — these cases execute the generated script");
+  return path;
+})();
+
+function runAuthScript(
+  script: string,
+  env: Record<string, string>,
+  opts: { gcloud?: { exit: number } } = {},
+): Run {
   const dir = scratchDir("ai-review-run-");
   const sh = join(dir, "auth-detect.sh");
   writeFileSync(sh, script);
   const out = join(dir, "github_output");
   writeFileSync(out, "");
-  const r = Bun.spawnSync(["bash", sh], {
+
+  // `gcloud` is supplied by the case or absent, never inherited (#679).
+  //
+  // Since #679 the script resolves mode `adc` from a WORKING Application
+  // Default Credential, so the ambient environment decides what "no
+  // credential configured" means. Measured on this machine, which has both:
+  // these two AC-4 cases resolved `adc`, emitted no UNMEASURED warning, and
+  // went red — correctly. They would have stayed green in CI, where gcloud
+  // is not installed, which is the half that matters: a case whose verdict
+  // depends on whose laptop it runs on is not measuring the generator
+  // (#507). PATH is the scratch bin and nothing else; the script's only
+  // external command is the probe, and `echo`, `[` and `exit` are builtins.
+  const bin = join(dir, "bin");
+  mkdirSync(bin, { recursive: true });
+  if (opts.gcloud) {
+    writeFileSync(join(bin, "gcloud"), `#!/bin/sh\nexit ${opts.gcloud.exit}\n`, { mode: 0o755 });
+    chmodSync(join(bin, "gcloud"), 0o755);
+  }
+
+  // Absolute: with PATH set to the scratch bin, `bash` has to be resolved
+  // from this process's environment or nothing spawns, and a spawn failure
+  // is non-zero and reads exactly like a refusal.
+  const r = Bun.spawnSync([BASH, sh], {
     env: {
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
-      HOME: process.env.HOME ?? dir,
+      PATH: bin,
+      // Scratch, never the developer's real home — see the PATH note above
+      // and `test/ai-review-scaffold.test.ts` (#679).
+      HOME: dir,
       GITHUB_OUTPUT: out,
       ...env,
     },

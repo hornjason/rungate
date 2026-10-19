@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  AI_REVIEW_ADC_MODE,
+  AI_REVIEW_ADC_PROBE,
   AI_REVIEW_AUTH_PRECEDENCE,
   AI_REVIEW_MODES,
   AI_REVIEW_REQUIRED_EXIT,
@@ -15,6 +17,7 @@ import {
 
 /**
  * Covers AC-1, AC-5, AC-6, AC-6b (#630 — the ai-review auth-detect step).
+ * Covers SC-2123, SC-2124, SC-2125 (HARNESS-STANDARD.md) — #679.
  *
  * The thing under test is a SCRIPT, so every case below runs it. Asserting on
  * the generated text would be asserting that a template literal contains what
@@ -62,6 +65,14 @@ interface Run {
 
 let runSeq = 0;
 
+/** `bash`, resolved once from this process's PATH — see `runScript`. */
+const BASH = (() => {
+  const found = spawnSync("sh", ["-c", "command -v bash"], { encoding: "utf-8" });
+  const path = (found.stdout ?? "").trim();
+  if (!path) throw new Error("no bash on PATH — these cases execute the generated script");
+  return path;
+})();
+
 /**
  * Execute a generated script with an environment built from scratch.
  *
@@ -70,23 +81,56 @@ let runSeq = 0;
  * would see the "no credentials" cases resolve a mode and the refusal cases
  * go green for the wrong reason.
  */
-function runScript(script: string, env: Record<string, string>): Run {
+function runScript(
+  script: string,
+  env: Record<string, string>,
+  opts: { gcloud?: { exit: number } } = {},
+): Run {
   const dir = join(SCRATCH, `run-${runSeq++}`);
   const sh = join(dir, "auth-detect.sh");
   const outFile = join(dir, "github_output");
-  spawnSync("mkdir", ["-p", dir]);
+  const bin = join(dir, "bin");
+  spawnSync("mkdir", ["-p", bin]);
   writeFileSync(sh, script);
   writeFileSync(outFile, "");
 
-  const r = spawnSync("bash", [sh], {
+  // `gcloud` is supplied by the case or absent, never inherited (#679).
+  //
+  // The script's only external command is the ADC probe, so PATH is the
+  // scratch bin and NOTHING else: `echo`, `[` and `exit` are bash builtins.
+  // Inheriting the real PATH would make every case machine-dependent in the
+  // direction nobody checks — this project's owner HAS working ADC and
+  // `gcloud` on their PATH, so "no credential resolves none" would go red on
+  // their laptop and green in CI, and "a resolved mode emits no annotation"
+  // would pass there for a reason the case does not name. #507: a fixture
+  // must not lose its witness to an input it does not control.
+  if (opts.gcloud) {
+    const stub = join(bin, "gcloud");
+    writeFileSync(stub, `#!/bin/sh\nexit ${opts.gcloud.exit}\n`, { mode: 0o755 });
+    chmodSync(stub, 0o755);
+  }
+
+  // Absolute, because the child's PATH is the scratch bin: `bash` has to be
+  // resolved from THIS process's environment or nothing spawns at all, and a
+  // failure to spawn reports exit -1, which is non-zero and reads exactly
+  // like a refusal.
+  const r = spawnSync(BASH, [sh], {
     encoding: "utf-8",
     env: {
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
-      HOME: process.env.HOME ?? dir,
+      PATH: bin,
+      // Scratch, never the developer's real home. Same argument as PATH
+      // above: with the real HOME, the file-existence mutant in #679 AC-6
+      // finds this machine's own ADC file and reds five cases that have
+      // nothing to do with the case under test — a count that depends on
+      // whether the developer has run `gcloud auth login` is not a count.
+      // Measured: 11 red with the real HOME, 6 with this one, in CI 6 either
+      // way. A case that controls its inputs is the only one that witnesses.
+      HOME: dir,
       GITHUB_OUTPUT: outFile,
       ...env,
     },
   });
+  expect(r.error, `the script did not run: ${r.error?.message}`).toBeUndefined();
 
   const outputs = readFileSync(outFile, "utf-8");
   const modes = [...outputs.matchAll(/^mode=(.*)$/gm)].map(m => m[1]);
@@ -175,14 +219,17 @@ describe("AC-6b: the non-zero exit is routed through one exported constant", () 
   });
 });
 
-// ── AC-1: exactly one of four modes, in precedence order ─────────────────
+// ── AC-1: exactly one of five modes, in precedence order ─────────────────
 
-describe("AC-1: the builder resolves exactly one of four modes", () => {
-  test("AC-1: the precedence list is the three credentials, in order, plus none", () => {
+describe("AC-1: the builder resolves exactly one of five modes", () => {
+  test("AC-1: the precedence list is the three credentials, in order, then adc, then none", () => {
     expect(AI_REVIEW_AUTH_PRECEDENCE.map(e => e.secret)).toEqual([...SECRETS]);
-    expect(AI_REVIEW_MODES.length).toBe(4);
+    // Five since #679: `adc` is not a secret, so it is not in the precedence
+    // table — it is the branch after the table is exhausted.
+    expect(AI_REVIEW_MODES.length).toBe(5);
     expect(AI_REVIEW_MODES[AI_REVIEW_MODES.length - 1]).toBe("none");
-    expect([...new Set(AI_REVIEW_MODES)].length, "two modes share a name").toBe(4);
+    expect(AI_REVIEW_MODES[AI_REVIEW_MODES.length - 2]).toBe(AI_REVIEW_ADC_MODE);
+    expect([...new Set(AI_REVIEW_MODES)].length, "two modes share a name").toBe(5);
   });
 
   test("AC-1: each credential alone resolves its own mode", () => {
@@ -252,6 +299,138 @@ describe("AC-1: the builder resolves exactly one of four modes", () => {
         ).toMatch(new RegExp(`^${secret}:\\s*\\$\\{\\{\\s*(secrets|vars)\\.${secret}\\s*\\}\\}$`));
       }
     }
+  });
+});
+
+// ── #679: Application Default Credentials are a credential ───────────────
+
+/**
+ * Covers #679 AC-1, AC-2, AC-4, AC-5, AC-6.
+ *
+ * #679 AC-3 — mode `adc` runs claude-code-action with `use_vertex` and no
+ * `google-github-actions/auth` step — is NOT covered here and cannot be:
+ * the generated workflow has no claude-code-action in it at all yet.
+ * `buildReviewRunScript` annotates "a credential resolved, but no review
+ * step is wired into this job yet (#631)". There is nothing to point an
+ * assertion at until #631 lands the reviewer, and writing one against the
+ * absent step would be the vacuous assertion this file's header warns about.
+ */
+describe("#679: ADC is a credential, and only when it actually works", () => {
+  /** A HOME carrying an ADC credentials file — what a revoked login leaves. */
+  let adcHomeSeq = 0;
+  const adcHome = (): string => {
+    const home = join(SCRATCH, `adc-home-${adcHomeSeq++}`);
+    const dir = join(home, ".config", "gcloud");
+    spawnSync("mkdir", ["-p", dir]);
+    writeFileSync(join(dir, "application_default_credentials.json"), "{}");
+    return home;
+  };
+
+  test("#679 AC-1: no secret, working ADC, resolves adc rather than none", () => {
+    const r = runScript(buildAuthDetectScript(), {}, { gcloud: { exit: 0 } });
+    expect(r.mode, `${r.stdout}${r.stderr}`).toBe(AI_REVIEW_ADC_MODE);
+    expect(r.code, "a runner that can review must not fail the job").toBe(0);
+    expect(r.stdout + r.stderr, "a resolved credential is not UNMEASURED")
+      .not.toContain("::warning");
+  });
+
+  test("#679 AC-2: a failing probe resolves none, however present the ADC file is", () => {
+    // The whole risk. `gcloud` is on PATH and exits non-zero — stale,
+    // revoked or expired ADC — AND the credentials file is present, which is
+    // exactly the state a revoked login leaves behind and exactly what a
+    // file-existence test cannot tell from a working credential.
+    //
+    // The file is PLANTED and not assumed. Without it this case is green
+    // under the file-existence probe too, since there would be no file for
+    // that probe to find: measured at 4 red where 6 was predicted, and the
+    // two missing reds were this case and nothing else. A fixture whose
+    // name says "however present the ADC file is" has to make it present.
+    const r = runScript(buildAuthDetectScript(), { HOME: adcHome() }, { gcloud: { exit: 1 } });
+    expect(r.mode, `${r.stdout}${r.stderr}`).toBe("none");
+  });
+
+  test("#679 AC-5: no secret and no gcloud at all still resolves none and annotates", () => {
+    // The GitHub-hosted runner, where `gcloud` is not installed. The new
+    // branch must not swallow the credential-less case.
+    const r = runScript(buildAuthDetectScript(), {});
+    expect(r.mode).toBe("none");
+    expect(r.stdout + r.stderr).toContain("::warning");
+    expect(r.code, "UNMEASURED is not a failure unless the consumer asked").toBe(0);
+  });
+
+  test("#679 AC-5: the annotation names ADC, not only the three secrets", () => {
+    // A warning that lists only the secret store sends a reader to configure
+    // the one thing this consumer cannot produce (#679's premise).
+    const r = runScript(buildAuthDetectScript(), {});
+    expect(r.stdout + r.stderr).toContain("Application Default Credential");
+  });
+
+  test("#679 AC-4: every secret still wins over a working ADC", () => {
+    const script = buildAuthDetectScript();
+    for (const { secret, mode } of AI_REVIEW_AUTH_PRECEDENCE) {
+      const r = runScript(script, { [secret]: "x" }, { gcloud: { exit: 0 } });
+      expect(
+        r.mode,
+        `${secret} was configured and the job used somebody's ambient login instead`,
+      ).toBe(mode);
+    }
+  });
+
+  test("#679 AC-4: the ADC branch is last in the script, not merely last in the table", () => {
+    // The case above passes if the branches are ordered correctly. It also
+    // passes if ADC were FIRST and the stub happened to fail — so the order
+    // is read off the script too, with both halves required.
+    const script = buildAuthDetectScript();
+    const adcAt = script.indexOf(AI_REVIEW_ADC_PROBE);
+    expect(adcAt, "the probe is not in the generated script").toBeGreaterThan(-1);
+    for (const { secret } of AI_REVIEW_AUTH_PRECEDENCE) {
+      expect(script.indexOf(secret), `${secret} is tested after ADC`).toBeLessThan(adcAt);
+    }
+  });
+
+  test("#679 AC-2: the probe attempts a credential, it does not stat a path", () => {
+    const script = buildAuthDetectScript();
+    // Named forms rather than a general scan: the point is that THESE two
+    // cheap probes are absent, because each resolves a usable-looking mode
+    // from something that is true of a revoked credential.
+    expect(script, "a file test decides the mode").not.toContain("application_default_credentials.json");
+    expect(script, "a runner label decides the mode").not.toContain("RUNNER_LABELS");
+    expect(script).toContain("print-access-token");
+  });
+
+  test("#679 AC-6: the access token is never captured or printed", () => {
+    // A bearer token in a shell variable is one `set -x` away from the build
+    // log, and `$GITHUB_OUTPUT` is read by later steps.
+    const script = buildAuthDetectScript();
+    expect(script).toContain("print-access-token >/dev/null 2>&1");
+    expect(script, "the token is assigned to a variable").not.toMatch(
+      /\w+=\$\((?:.*)print-access-token/,
+    );
+  });
+
+  test("#679 AC-6: the file-existence mutant resolves adc where the real script does not", () => {
+    // The counterfactual, run rather than described. The mutant is the cheap
+    // probe #679 names: it tests the ADC file and ignores whether the
+    // credential works. Both are driven with a gcloud that FAILS and the
+    // file present — the state a revoked login leaves behind.
+    const real = buildAuthDetectScript();
+    const mutant = real.replace(
+      AI_REVIEW_ADC_PROBE,
+      '[ -f "${HOME}/.config/gcloud/application_default_credentials.json" ]',
+    );
+    expect(mutant, "could not build the mutant: the probe moved").not.toBe(real);
+
+    const env = { HOME: adcHome() };
+
+    expect(
+      runScript(mutant, env, { gcloud: { exit: 1 } }).mode,
+      "the mutant was expected to resolve adc from the file alone — if this is " +
+        "none the counterfactual is wrong, not the probe",
+    ).toBe(AI_REVIEW_ADC_MODE);
+    expect(
+      runScript(real, env, { gcloud: { exit: 1 } }).mode,
+      "the real script read the file instead of the credential",
+    ).toBe("none");
   });
 });
 

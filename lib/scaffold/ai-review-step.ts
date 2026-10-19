@@ -46,15 +46,75 @@
  */
 export const AI_REVIEW_REQUIRED_EXIT = 1;
 
-/** The four states the step can resolve. Exactly one is reached per run. */
-export type AiReviewAuthMode = "vertex" | "oauth" | "api-key" | "none";
+/** The five states the step can resolve. Exactly one is reached per run. */
+export type AiReviewAuthMode = "vertex" | "oauth" | "api-key" | "adc" | "none";
 
 export const AI_REVIEW_MODES: readonly AiReviewAuthMode[] = [
   "vertex",
   "oauth",
   "api-key",
+  "adc",
   "none",
 ];
+
+/**
+ * The probe that resolves mode `adc` (#679).
+ *
+ * ## Why a fourth mode exists at all
+ *
+ * The three credentials above are all repository secrets, and this project's
+ * owner **cannot produce any of them**: Vertex access is through an
+ * organizational Google login, so there is no service-account key to mint and
+ * no Claude OAuth token to paste. Every design in #630 and #631 assumed a
+ * credential in the secret store, and for this consumer that assumption has
+ * no satisfiable instance.
+ *
+ * Measured on `jhorn-mac` with nothing but `gcloud auth login`: a
+ * `rawPredict` against `claude-sonnet-5` authenticated with Application
+ * Default Credentials alone returned HTTP 200 and a real completion. No
+ * `GCP_SA_KEY`, no `google-github-actions/auth`, no `credentials_json`. A
+ * self-hosted runner executing as that user already holds a working
+ * credential — it is simply not in the secret store.
+ *
+ * So the pre-#679 script annotated *"No Claude credential is configured …
+ * This check is UNMEASURED, not a passing review"* on a runner that could
+ * have reviewed the pull request. **That is #630's defect through the other
+ * door**, and the more corrosive direction of the two: a false PASS is a
+ * review nobody did, a false UNMEASURED trains people to ignore the
+ * annotation that is supposed to mean something.
+ *
+ * ## Why this command and not a file test
+ *
+ * The cheap probe is `[ -f ~/.config/gcloud/application_default_credentials.json ]`.
+ * That file is present on the machine above and was last written 2026-09-22;
+ * its existence says nothing about whether the token still refreshes. A mode
+ * resolved from a path that exists is a value read from somewhere that
+ * answers confidently and incorrectly.
+ *
+ * `print-access-token` **attempts the credential**: it exits non-zero when
+ * ADC is absent, unparseable or expired, and when `gcloud` is not installed
+ * at all — which is every GitHub-hosted runner, so the hosted case still
+ * resolves `none` and still annotates UNMEASURED.
+ *
+ * **The limit, stated rather than left to be discovered:** a credential that
+ * has been REVOKED while an unexpired access token is still cached locally
+ * will pass this probe. Closing that needs a call to the Vertex endpoint,
+ * which needs the project id, and the project id is #631's to supply. The
+ * residual is a window no longer than the cached token's life.
+ *
+ * ## Why the token is never captured
+ *
+ * The output is redirected to `/dev/null` rather than assigned, so the access
+ * token never enters a shell variable, a log line, or `$GITHUB_OUTPUT`. The
+ * exit status carries everything the decision needs. A later edit that
+ * captures it to compare against the empty string would be a bearer token one
+ * `set -x` away from the build log.
+ */
+export const AI_REVIEW_ADC_PROBE =
+  "gcloud auth application-default print-access-token >/dev/null 2>&1";
+
+/** The mode `AI_REVIEW_ADC_PROBE` resolves on success. */
+export const AI_REVIEW_ADC_MODE: AiReviewAuthMode = "adc";
 
 export interface AiReviewCredential {
   /** The repository secret the runner interpolates into the step's env. */
@@ -128,10 +188,15 @@ export function buildAuthDetectScript(): string {
     return `${keyword} [ -n "\${${c.secret}:-}" ]; then\n  mode=${c.mode}`;
   }).join("\n");
 
+  // Every path that was tried, by name. A warning that does not say what was
+  // missing is a warning nobody can act on — and since #679 the set of paths
+  // is not just the secret store, so naming only the secrets would send a
+  // reader to configure the one thing this consumer cannot produce.
   const warning =
     `No Claude credential is configured ` +
-    `(${SECRET_NAMES.join(", ")}), so no AI review ran on this pull request. ` +
-    `This check is UNMEASURED, not a passing review. ` +
+    `(${SECRET_NAMES.join(", ")}), and no usable Google Application Default ` +
+    `Credential is available on this runner, so no AI review ran on this ` +
+    `pull request. This check is UNMEASURED, not a passing review. ` +
     `Set the repository variable ${AI_REVIEW_REQUIRE_VAR} to ` +
     `'${AI_REVIEW_REQUIRE_VALUE}' to make an unmeasured review fail instead.`;
 
@@ -149,6 +214,11 @@ set -uo pipefail
 
 mode=none
 ${branches}
+# The secret store is exhausted. ADC is LAST on purpose (#679 AC-4): a
+# repository that configures a credential must not be silently switched onto
+# whichever developer's ambient login the runner happens to be executing as.
+elif ${AI_REVIEW_ADC_PROBE}; then
+  mode=${AI_REVIEW_ADC_MODE}
 fi
 
 echo "ai-review auth mode: \${mode}"

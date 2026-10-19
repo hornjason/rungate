@@ -6,7 +6,7 @@
  *   runScaffoldConformity(import.meta.dir + "/..");
  */
 import { describe, test, expect } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import type { Dirent } from "fs";
 import { collectSpecFiles } from "./spec-files";
@@ -4219,6 +4219,21 @@ export function aiReviewAuthScript(root: string): AiReviewReading {
 }
 
 /** One execution of a generated script, under an environment built from scratch. */
+/**
+ * `bash`, absolute — the child's PATH is an empty scratch bin, so the shell
+ * cannot be resolved from it. Memoised: a spawn per conformity case is what
+ * this function exists to avoid.
+ */
+let BASH_PATH: string | null = null;
+function resolveBash(): string {
+  if (BASH_PATH) return BASH_PATH;
+  const found = spawnSync("sh", ["-c", "command -v bash"], { encoding: "utf-8" });
+  const path = (found.stdout ?? "").trim();
+  if (!path) throw new Error("AIREVIEW-1 runs the generated script and found no bash on PATH");
+  BASH_PATH = path;
+  return path;
+}
+
 function runAiReviewScript(script: string, env: Record<string, string>): { code: number; stdout: string } {
   const dir = mkdtempSync(join(tmpdir(), "rungate-ai-review-"));
   try {
@@ -4230,9 +4245,20 @@ function runAiReviewScript(script: string, env: Record<string, string>): { code:
     // ANTHROPIC_API_KEY exported would make the credential-free case resolve a
     // mode, and the whole check would go green for a reason unrelated to the
     // code — test/ai-review-scaffold.test.ts makes the same argument.
-    const r = spawnSync("bash", [sh], {
+    //
+    // PATH was the one thing still inherited, and since #679 that is the same
+    // hole: the script resolves mode `adc` from a working Application Default
+    // Credential, so on a machine with `gcloud` installed this check asked
+    // the developer's own Google login whether the SCAFFOLD is correct.
+    // Measured before this line: 9.8s and a timeout, because two cold gcloud
+    // invocations is what "no credential configured" cost. An empty scratch
+    // bin is the whole fix — the script's only external command is the probe,
+    // and `echo`, `[` and `exit` are bash builtins.
+    const bin = join(dir, "bin");
+    mkdirSync(bin, { recursive: true });
+    const r = spawnSync(resolveBash(), [sh], {
       encoding: "utf-8",
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: dir, GITHUB_OUTPUT: out, ...env },
+      env: { PATH: bin, HOME: dir, GITHUB_OUTPUT: out, ...env },
     });
     return { code: r.status ?? -1, stdout: `${r.stdout ?? ""}${r.stderr ?? ""}` };
   } finally {

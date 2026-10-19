@@ -4956,6 +4956,94 @@ None of the mutations is left in the tree; all were run and reverted, and
 - [x] SC-871: workflows/ship.js contains [PRIOR-WORK-REFUSAL-START, PRIOR_WORK_OPEN_PR] — a run refuses before IMPLEMENT when the issue has an open PR this run is not standing on, and resuming that PR's own branch is not refused
 - [x] SC-872: workflows/ship.js contains [function lookupTargets, function normalizeExistingPr] — the issue number and repo slug are validated before they are interpolated into the lookup command, and only a positive outcome of "none" is read as "no open PR"
 
+### A credential outside the secret store is still a credential (#679)
+
+`buildAuthDetectScript()` resolved its mode by probing three repository
+secrets and nothing else, so a runner with working Google Application
+Default Credentials annotated *"No Claude credential is configured … This
+check is UNMEASURED, not a passing review"* and reviewed nothing. The
+sentence was false: a credential was configured, it was simply not in the
+secret store.
+
+**This is #630's defect through the other door, and the worse direction.** A
+false PASS is a review nobody did. A false UNMEASURED is a review that could
+have happened, reported as impossible — and it trains people to ignore the
+annotation that is supposed to mean something, which costs the whole
+mechanism rather than one pull request.
+
+It is not hypothetical for this consumer. Vertex access here is an
+organizational Google login: there is no service-account key to mint and no
+Claude OAuth token to paste, so **every design in #630 and #631 so far had
+no satisfiable instance.** Measured on `jhorn-mac` with nothing but
+`gcloud auth login`: a `rawPredict` against `claude-sonnet-5` authenticated
+with ADC alone returned HTTP 200 and a real completion.
+
+Two things make the fourth mode honest rather than convenient:
+
+- **It is probed, not inferred.** `gcloud auth application-default
+  print-access-token` attempts the credential. The cheap version is
+  `[ -f ~/.config/gcloud/application_default_credentials.json ]`, and that
+  file is present on the machine above having last been written
+  2026-09-22 — its existence says nothing about whether the token still
+  refreshes. The limit is stated rather than left to be found: a credential
+  revoked while an unexpired access token is still cached locally passes
+  this probe.
+- **It is last.** The secret store wins, so a repository that configures a
+  credential is never silently switched onto whichever developer's ambient
+  login the runner is executing as.
+
+The token is redirected to `/dev/null` and never assigned, so it cannot
+reach a log line or `$GITHUB_OUTPUT`.
+
+**#679 AC-3 is not met and is not attempted.** It asks that mode `adc` run
+claude-code-action with `use_vertex` and no auth step. The generated
+workflow has no claude-code-action in it at all — `buildReviewRunScript`
+annotates *"a credential resolved, but no review step is wired into this job
+yet (#631)"* — so there is nothing to point an assertion at, and writing one
+against the absent step would be the vacuous assertion that file's header
+warns about. It lands with #631.
+
+- [x] SC-2123: lib/scaffold/ai-review-step.ts contains [export const AI_REVIEW_ADC_PROBE] — the ADC probe is one exported command that ATTEMPTS the credential, so a stale, revoked or expired login resolves `none`, and `gcloud` being absent entirely — every GitHub-hosted runner — resolves `none` too
+- [x] SC-2124: lib/scaffold/ai-review-step.ts contains [# The secret store is exhausted] — the ADC branch is generated after every secret branch, so a configured credential is never displaced by a runner's ambient login
+- [x] SC-2125: test/ai-review-scaffold.test.ts contains [#679 AC-2: a failing probe resolves none, however present the ADC file is] — the case PLANTS the credentials file and runs a `gcloud` that fails, which is the state a revoked login leaves behind and the one input on which the real probe and a file test disagree
+
+What was broken to prove the cases fail, run and counted rather than
+asserted, over `test/ai-review-scaffold.test.ts` +
+`test/ai-review-workflow.test.ts` (55 tests). **Baseline read before any
+mutation row.**
+
+| Row | Predicted | Measured |
+|---|---|---|
+| **baseline** — unmutated | 55 pass, 0 fail | **55 pass, 0 fail** |
+| the genuinely pre-#679 script — the `adc` branch removed | 5 | **5 of 55** |
+| the cheapest wrong probe — stat the ADC file | 5 | **5 of 55** |
+| the `adc` branch moved FIRST, ahead of the secret store | 2 | **2 of 55** |
+| the harness's own `gcloud` stub neutered | 1 | **1 of 55** |
+
+**The cheapest wrong probe row is the one that earned its place twice.** It
+first came back 4, and the missing red was `#679 AC-2: a failing probe
+resolves none, however present the ADC file is` — a case whose name says the
+file is present and whose fixture never planted it, so under a
+file-existence probe there was no file to find and the case passed over
+exactly the regression it is named after (#500). The fixture plants it now.
+
+**Before that, the same row came back 11**, and all eleven were real reds
+about the mutated behaviour — because the harness passed the developer's own
+`HOME` through, and this machine has an ADC file in it. Five pre-existing
+#630 cases were therefore witnesses on this laptop and not in CI. That is
+not coverage, it is a count that depends on whether someone has run
+`gcloud auth login`, so `HOME` is a scratch directory now and the cases that
+need the file plant it. **A battery row that does not reproduce on another
+machine is a claim, not a count.**
+
+Three places were executing the generated script with an inherited `PATH`,
+which since #679 means asking the developer's Google login whether the
+SCAFFOLD is correct. `lib/conformity.ts`'s AIREVIEW-1 was one of them, and
+it is production rather than a test: measured at 9.8s and a timeout, because
+two cold `gcloud` invocations is what *"no credential configured"* cost. All
+three now run with an empty scratch bin on PATH and an absolute `bash`; the
+pair of suites went from 11.3s to 1.3s.
+
 ### An issue title is attacker-supplied text, and it reaches two shells and one parser (#696)
 
 `workflows/ship.js`'s COMMIT phase composed
