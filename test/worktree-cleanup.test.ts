@@ -217,6 +217,77 @@ describe("#1038: commits that exist here and nowhere else", () => {
       const r = rescueStrandedBranches(repo);
       expect(r.pushed.map(p => p.branch), "main must never be pushed unattended").not.toContain("main");
       expect(r.examined, "main is excluded before the denominator, not after").toBe(0);
+
+      // Not pushing it is correct. Not RECORDING it was the defect: this
+      // fixture used to return the same object as a clean tree, so a `main`
+      // holding commits that exist on no other machine was invisible. The
+      // two assertions above both passed throughout — excluding the branch
+      // and losing it look identical from `pushed` and `examined`.
+      expect(r.withheld, "main is withheld, with the count that makes it actionable")
+        .toEqual([{ branch: "main", commits: 1 }]);
+      expect(r.unmeasured, "and this is a complete reading, not a refusal").toBeNull();
+
+      const other = plant();
+      try {
+        const clean = rescueStrandedBranches(other.repo);
+        expect(clean.withheld, "the control really is clean").toEqual([]);
+        expect(r, "a stranded default branch must not spell the same as a clean tree")
+          .not.toEqual(clean);
+      } finally { rmSync(other.root, { recursive: true, force: true }); }
+      expect(rescueReportLines(r).join("\n"), "and the reader is told to push it")
+        .toContain("STRANDED withheld: main");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  /**
+   * The structural guarantee, after five rounds of finding the same shape
+   * one adjacent case at a time: every stranded branch reaches exactly one
+   * bucket. Each previous round removed a branch with a filter and recorded
+   * it nowhere — the default branch excluded twice by `b.branch !== skip`,
+   * a live branch read from one HEAD, a failed read collapsing to `""`.
+   *
+   * Asserting the partition is TOTAL is what makes the next one impossible
+   * rather than merely absent: a new exclusion that forgets its bucket drops
+   * the count and turns this red, without anybody predicting which exclusion
+   * it would be.
+   */
+  test("every stranded branch lands in exactly one bucket — the partition is total", () => {
+    const { repo, root } = plant();
+    try {
+      // One of each: the default branch ahead of origin, a branch live in a
+      // linked worktree, and an ordinary stranded branch to be published.
+      writeFileSync(join(repo, "b.txt"), "b\n");
+      git(repo, "add", "-A"); git(repo, "commit", "-m", "local main commit");
+      commitOn(repo, "feat/live", "x\n");
+      commitOn(repo, "feat/orphan", "y\n");
+      const wt = join(root, "wt-live");
+      git(repo, "worktree", "add", wt, "feat/live");
+
+      const found = strandedBranches(repo)!;
+      expect(found.stranded.map(b => b.branch).sort(),
+        "the premise: all three are stranded before the sweep runs",
+      ).toEqual(["feat/live", "feat/orphan", "main"]);
+
+      const r = rescueStrandedBranches(repo);
+      const landed = [
+        ...r.withheld.map(w => w.branch),
+        ...r.declined,
+        ...r.pushed.map(p => p.branch),
+        ...r.failed.map(f => f.branch),
+        ...r.unreadable,
+      ].sort();
+
+      expect(landed,
+        "a branch excluded by a filter but recorded in no bucket vanishes from " +
+          "the result, which is this module's own defect — every stranded branch " +
+          "must be accounted for exactly once",
+      ).toEqual(["feat/live", "feat/orphan", "main"]);
+      expect(new Set(landed).size, "and no branch is counted twice").toBe(landed.length);
+
+      // The buckets are the ones predicted, not just non-empty somewhere.
+      expect(r.withheld.map(w => w.branch), "the default branch").toEqual(["main"]);
+      expect(r.declined, "live in a linked worktree").toEqual(["feat/live"]);
+      expect(r.pushed.map(p => p.branch), "genuinely stranded, so published").toEqual(["feat/orphan"]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -509,13 +580,18 @@ describe("#1038: commits that exist here and nowhere else", () => {
     }
   });
 
-  // The `examined` doc comment used to list "only the default branch was
-  // stranded" as a cause of `examined: 0` alongside "nothing was stranded",
-  // with the same discriminators on both. This is the measurement that
-  // showed the row was not merely indistinguishable but unreachable: a
-  // default branch that is itself stranded has no ref on origin, so no
-  // default can be resolved and the honest answer is UNMEASURED. Asserting
-  // it here means the comment cannot quietly regain the wrong row.
+  // A default branch that was NEVER pushed is a different state from one
+  // that is merely ahead of an existing `origin/main`, and only this one
+  // refuses: with no `origin/main` there is no symref and no `ls-remote`
+  // answer, so no default can be resolved and the honest reading is
+  // UNMEASURED rather than a clean zero.
+  //
+  // Both states must be pinned because they were once conflated. A probe
+  // built on THIS fixture was used to argue that a stranded default branch
+  // could never produce a clean-looking result — true here, false for the
+  // ahead-of-origin case covered by "the default branch is never pushed by
+  // the rescue", which returned a result byte-identical to a clean tree.
+  // One fixture, generalised to a claim about a state it did not build.
   test("a stranded default branch reports UNMEASURED, never a clean examined: 0", () => {
     const root = mkdtempSync(join(tmpdir(), "rg-strand-"));
     try {

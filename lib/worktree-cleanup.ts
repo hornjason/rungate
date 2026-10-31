@@ -669,23 +669,26 @@ export interface RescueResult {
    * | What happened | How to tell |
    * |---|---|
    * | the reading could not be taken | `unmeasured` is non-null |
-   * | the sweep ran but saw only part of the tree | `unmeasured` null, `unreadable` non-empty |
+   * | the sweep ran but saw only part of the tree | `unreadable` non-empty |
    * | everything stranded is live work somewhere | `declined` non-empty |
-   * | there was nothing to rescue | `unmeasured` null, `unreadable` and `declined` both empty |
+   * | the only stranded branch is the default one | `withheld` non-empty |
+   * | there was nothing to rescue | every one of the four is empty/null |
    *
-   * Row one collapsing into row four is the defect this whole module is
-   * about, and `unmeasured` is what keeps them apart. `declined` exists as a
-   * field, rather than as silence, for row three.
+   * Row one collapsing into the last row is the defect this whole module is
+   * about, and `unmeasured` is what keeps them apart.
    *
-   * **An earlier version of this comment carried a fifth row — "only the
-   * default branch was stranded" — with a "how to tell" cell identical to
-   * row four's.** It was wrong twice over. It asserted a separation the
-   * type does not implement, and the state it named does not produce this
-   * reading at all: a default branch that is itself stranded has no ref on
-   * origin, so `protectedFromRescue` cannot resolve a default and the
-   * result is row ONE, `unmeasured` non-null. Measured 2026-10-31 on a
-   * planted repo with an origin and an unpushed `main`. The reachable way
-   * to reach row four is that nothing was stranded.
+   * **Do not answer the next "is this case distinguishable?" question by
+   * reasoning about it.** Two rounds of this comment did, and both were
+   * wrong — once asserting a separation the type did not implement, once
+   * claiming a reachable state was unreachable because the probe that
+   * "proved" it built a repo whose `main` had never been pushed, which is a
+   * different state from a `main` that is ahead of an existing `origin/main`.
+   * The guarantee is now structural instead of argued: `rescueStrandedBranches`
+   * partitions every stranded branch into exactly one of `withheld`,
+   * `declined`, `pushed` or `failed`, and `test/worktree-cleanup.test.ts`
+   * asserts that partition is total over the planted population. A branch
+   * cannot silently vanish from the result, so no future exclusion can
+   * reintroduce this shape without turning that case red.
    */
   examined: number;
   /** Held commits on no origin ref, and `git push` succeeded. */
@@ -693,8 +696,14 @@ export interface RescueResult {
   /** Held commits on no origin ref, and the push did not succeed. */
   failed: { branch: string; commits: number; reason: string }[];
   /**
-   * Stranded, and deliberately NOT pushed because the checkout is on it —
-   * somebody's live work rather than something left behind.
+   * Stranded, and deliberately NOT pushed because the branch is checked out
+   * in SOME worktree of this repository — somebody's live work rather than
+   * something left behind.
+   *
+   * Not "the checkout this ran from". `projectRoot` is `repoRootFrom(cwd)`,
+   * which resolves `--git-common-dir` and so always names the main checkout;
+   * reading one HEAD was the round-8 defect. This is the set from
+   * `git worktree list`, so a branch live in a linked worktree counts.
    *
    * Its own field rather than silence: a branch missing from both `pushed`
    * and `failed` would be indistinguishable from one the sweep never saw,
@@ -702,6 +711,21 @@ export interface RescueResult {
    * the log most needs to be told.
    */
   declined: string[];
+  /**
+   * Stranded, and deliberately NOT pushed because it IS the default branch —
+   * the one ref this sweep must never publish to.
+   *
+   * It carries its commit count because the count is the actionable part:
+   * "your `main` holds 3 commits that exist nowhere else" is a thing to act
+   * on, and it is exactly what used to be dropped. Until this field existed,
+   * a stranded default branch was excluded by the same `b.branch !== skip`
+   * test in both the `declined` and the `candidates` filters and so reached
+   * no bucket at all, making the result byte-identical to a clean tree. The
+   * sweep still will not push it — withholding is correct — but withholding
+   * silently is the module's own defect turned on the one branch that
+   * matters most.
+   */
+  withheld: { branch: string; commits: number }[];
   /**
    * Branches whose own count could not be read, so they are neither in
    * `pushed` nor in `failed` nor known to be clean. Carried out of
@@ -802,9 +826,19 @@ export function rescueStrandedBranches(
   /** Injectable so a case can drive the deadline instead of waiting it out. */
   budgetMs: number = RESCUE_BUDGET_MS,
 ): RescueResult {
+  // Started HERE, at entry, so the constant's claim to bound the whole sweep
+  // is true. It used to start just above the push loop, which left two
+  // unbudgeted calls ahead of it: `protectedFromRescue` falls through to
+  // `ls-remote --symref origin HEAD` with a 30s timeout whenever the local
+  // `origin/HEAD` symref is missing — the hand-added-remote and bare-mirror
+  // cases its own comment calls common — and `checkedOutBranches` runs a
+  // `worktree list`. A session could spend ~30s before the budget began,
+  // and that time appeared in no `failed`, `declined` or `unreadable` row:
+  // the same silent wall-clock this constant was added to stop.
+  const deadline = Date.now() + budgetMs;
   const found = strandedBranches(projectRoot);
   if (found === null) {
-    return { examined: 0, pushed: [], failed: [], declined: [], unreadable: [], unmeasured: "could not list branches or remotes" };
+    return { examined: 0, pushed: [], failed: [], declined: [], withheld: [], unreadable: [], unmeasured: "could not list branches or remotes" };
   }
 
   // Nothing to rescue is a CLEAN reading, and it is reached without a
@@ -816,7 +850,7 @@ export function rescueStrandedBranches(
   // no remote and no stranded work. A clean tree would have been reported
   // as an instrument failure, which is this issue's own defect inverted.
   if (found.stranded.length === 0) {
-    return { examined: 0, pushed: [], failed: [], declined: [], unreadable: found.unreadable, unmeasured: null };
+    return { examined: 0, pushed: [], failed: [], declined: [], withheld: [], unreadable: found.unreadable, unmeasured: null };
   }
 
   const skip = protectedFromRescue(projectRoot);
@@ -824,7 +858,7 @@ export function rescueStrandedBranches(
     // Refuse rather than guess. Rescuing with no idea which branch is the
     // default risks pushing the one branch this must never touch.
     return {
-      examined: 0, pushed: [], failed: [], declined: [], unreadable: found.unreadable,
+      examined: 0, pushed: [], failed: [], declined: [], withheld: [], unreadable: found.unreadable,
       unmeasured: "could not establish the default branch from origin/HEAD or ls-remote",
     };
   }
@@ -860,17 +894,29 @@ export function rescueStrandedBranches(
     // the state least worth trusting — the fail-open shape named first in
     // `.claude/rules/checks-must-be-able-to-fail.md`.
     return {
-      examined: 0, pushed: [], failed: [], declined: [], unreadable: found.unreadable,
+      examined: 0, pushed: [], failed: [], declined: [], withheld: [], unreadable: found.unreadable,
       unmeasured: "could not list the checkouts of this repository, so live work could not be told from stranded work",
     };
   }
-  const declined = found.stranded
-    .filter(b => b.branch !== skip && live.has(b.branch))
-    .map(b => b.branch);
-
-  const candidates = found.stranded.filter(
-    b => b.branch !== skip && !declined.includes(b.branch),
-  );
+  // THE PARTITION. Every stranded branch takes exactly one of these three
+  // exits, and the two push outcomes split the third. Written as one pass
+  // over one population, rather than as three filters that each re-derive
+  // the exclusions, because the bug this replaces was precisely that two
+  // filters shared the `b.branch !== skip` test and neither owned the
+  // branch it removed: the default branch was excluded twice and recorded
+  // nowhere, so a `main` holding commits that exist on no other machine
+  // returned the same object as a clean tree.
+  //
+  // The rule for anything added here: a new exclusion gets a new bucket. An
+  // exclusion expressed only as a filter is a branch that disappears.
+  const withheld: RescueResult["withheld"] = [];
+  const declined: string[] = [];
+  const candidates: StrandedBranch[] = [];
+  for (const b of found.stranded) {
+    if (b.branch === skip) withheld.push({ branch: b.branch, commits: b.commits });
+    else if (live.has(b.branch)) declined.push(b.branch);
+    else candidates.push(b);
+  }
   const pushed: StrandedBranch[] = [];
   const failed: RescueResult["failed"] = [];
 
@@ -878,8 +924,8 @@ export function rescueStrandedBranches(
   // must cost a bounded wait rather than 120s per branch. The deadline is
   // checked BEFORE each push, so the worst case is one timeout past it, and
   // every branch not reached is a `failed` row naming the budget — never a
-  // silent omission, which would read as "nothing was stranded".
-  const deadline = Date.now() + budgetMs;
+  // silent omission, which would read as "nothing was stranded". `deadline`
+  // is computed at function entry, not here — see the note there.
   for (const b of candidates) {
     if (Date.now() >= deadline) {
       failed.push({
@@ -896,7 +942,7 @@ export function rescueStrandedBranches(
     }
   }
 
-  return { examined: candidates.length, pushed, failed, declined, unreadable: found.unreadable, unmeasured: null };
+  return { examined: candidates.length, pushed, failed, declined, withheld, unreadable: found.unreadable, unmeasured: null };
 }
 
 /**
@@ -919,8 +965,16 @@ export function rescueReportLines(r: RescueResult): string[] {
   // Spoken even when the rescue itself was refused: a branch nobody could
   // count is the likeliest hiding place for the work this feature exists to
   // find, so it must not be swallowed by the refusal line above it.
+  // "a worktree of this repository", not "this checkout". `declined` is
+  // populated from `git worktree list`, so the branch is usually live in
+  // some OTHER worktree — naming this one would be false in exactly the
+  // case the round-8 fix was written for, and a misleading reason is worse
+  // than none in a feature whose whole value is saying why.
   for (const b of r.declined) {
-    lines.push(`STRANDED declined: ${b} — this checkout is on it, so it is live work and was not published`);
+    lines.push(`STRANDED declined: ${b} — checked out in a worktree of this repository, so it is live work and was not published`);
+  }
+  for (const w of r.withheld) {
+    lines.push(`STRANDED withheld: ${w.branch} (${w.commits} commit(s) that are on no remote) — it is the default branch, which this sweep never pushes. Push it yourself or the work exists only on this machine`);
   }
   for (const b of r.unreadable) lines.push(`STRANDED unreadable: ${b} — could not count its commits`);
   return lines;
