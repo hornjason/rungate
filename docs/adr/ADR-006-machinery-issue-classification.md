@@ -1,19 +1,52 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-31
 ---
 
 # ADR-006: The six Convergence Machinery issues, classified
 
 ## Status
 
-**Proposed.** ADR-005 classified the eleven issues sitting in a numbered
-`Convergence Phase N` milestone that named no criterion. It scoped itself to
-those milestones and so missed this population entirely — six issues in a
-hand-made `Convergence Machinery` milestone, none of which names a criterion
-either. Jason found the gap from #1173 on the board.
+**Accepted on 2026-10-31** — the adjudication is correct and is the decision
+of record.
+
+**Its decision has NOT been applied to the tracker, and accepting it does not
+make that true.** Measured on 2026-10-31 against the table below, all six
+rows, not a sample:
+
+| Issue | What the table assigns | On the tracker today |
+|---|---|---|
+| #1495 | `CRC-C2` | open, body does not cite CRC-C2 |
+| #1497 | `CRC-C2` | open, body does not cite CRC-C2 |
+| #1571 | `CRC-C2` | open, body does not cite CRC-C2 |
+| #1257 | `(b)` none — machinery | open, body does not say machinery |
+| #1173 | `(b)` none — machinery | open, body does not say machinery |
+| #1157 | `(b)` none — machinery | open, body does not say machinery |
+
+Six of six unrepaired. Every one of these issues still renders on the board
+exactly as it did before this ADR was written — a blank Criteria cell that
+reads the same whether nobody looked or somebody decided — which is the
+condition the ADR exists to remove.
+
+Re-take the table rather than trusting it. This reading is of the tracker,
+not of this repository, so no test can hold it current:
+
+```
+$ for N in 1495 1497 1571 1257 1173 1157; do
+    printf '#%s %s  ' "$N" "$(gh issue view $N --json state --jq .state)"
+    gh issue view $N --json body --jq .body | grep -oE 'CRC-[A-Z]+[0-9]+|machinery' | sort -u | tr '\n' ' '
+    echo
+  done
+```
+
+A row whose *On the tracker today* cell stops matching that output means
+the repair happened and this section is stale — which is the outcome this
+ADR wants, and the one nothing here can notice on its own.
+
+Recorded here rather than silently ticked. Accepting the reading and applying
+it are two acts, and only the first has happened.
 
 ## The question this answers
 

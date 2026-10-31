@@ -1,16 +1,49 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-10-31
 owner: jason
 governs: the issues that close the convergence spec's forward coverage gap — what each one is for, which criteria it serves, which files it may touch, and what must land first
 ---
 
 # ADR-004 Increment 1: the issues that close the forward gap
 
-**Status:** Proposed — this file is the reservation. Nothing is created until
-it is committed.
+## Status
+
+**Accepted on 2026-10-31.** The pre-existing issues this plan edits are the
+three named in its own *edit before you file* table, and the edit was
+applied to all three — the criteria the table assigns are cited in the
+issue bodies, not merely assigned here.
+
+| Issue | Assigned by the table | Cited in the body | Applied |
+|---|---|---|---|
+| #1162 | CRC-B8 | CRC-B8 | yes |
+| #1167 | CRC-B1, CRC-A4 | CRC-B1, CRC-A4 | yes |
+| #1266 | CRC-M15 | CRC-M15 | yes |
+
+Measured 2026-10-31, per issue:
+
+```
+$ gh issue view <N> --json body --jq .body | grep -oE 'CRC-[A-Z]+[0-9]+' | sort -u
+```
+
+**An earlier draft of this note said only that the three were "open on the
+tracker carrying that scope", which does not establish this.** An issue
+existing and an issue having been edited are different facts, and ADR-006
+in this same batch is the proof that they come apart: its table compared
+assigned against cited and found **0 of 6** applied. The same comparison
+run here is 3 of 3, so the readings differ and the distinction was worth
+making — which is exactly why the claim now carries the table rather than
+the assertion.
+
+Scoped deliberately to those three. The *eighteen new issues* section lists
+unnumbered placeholders (P0-1, P1-1, …) that were never filed, so acceptance
+covers the edit-first half of the plan and not the creation half. An earlier
+draft of this note also cited #1425; that issue appears in this document only
+in an aside correcting a mistaken claim that it had closed, and is no part of
+the plan.
+
 **Deciders:** Jason (owner, authorised creation), Rayford (DA)
 
 ## This is a one-off record, not a step in the pipeline

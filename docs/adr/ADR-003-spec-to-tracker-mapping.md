@@ -1,15 +1,39 @@
 ---
 doc-type: adr
-status: proposed
+status: superseded
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-31
 owner: jason
 governs: how a spec's criteria reach the tracker — phase placement, milestones, and the issue-to-criterion citation
 ---
 
 # ADR-003: How a spec becomes trackable work
 
-**Status:** Proposed — steps 1 and 2 executed for one spec, step 3 is the open gap
+## Status
+
+**Superseded by `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md` on 2026-10-31.** This
+ADR states 0 criteria of its own; the pipeline spec states 26 — SC-2600
+through SC-2625 — covering the same subject: how a spec's criteria reach the
+tracker as milestones, issues and blocked-by edges. The content moved, so
+this is superseded rather than accepted, per the A7 rule recorded in
+project-state Priority 2.
+
+Measured on `origin/main`, not carried from a summary:
+
+```
+$ git show origin/main:specs/SPEC-TO-BOARD-PIPELINE-SPEC.md | grep -c '^- \[[ x]\]'
+26
+```
+
+An earlier draft said 25. Do not reconcile that against ADR-009's "15 of
+15": that figure measured only the first batch, before SC-2615..SC-2625
+existed, so it neither conflicts with 26 nor supports 25. The id range is
+quoted alongside the count because a bare count cannot be re-checked
+without re-running the grep, and this note's whole argument is that the
+later document is the fuller one.
+
+ADR-009 names the pipeline spec as the engine's governing document.
+
 **Deciders:** Jason (owner), Rayford (DA)
 **Trigger:** The board could not say what was done, in progress or next, and the
 reason was structural: 251 criteria were unticked across 23 specs and **six**
