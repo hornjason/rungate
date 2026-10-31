@@ -12,8 +12,30 @@ governs: the issues that close the convergence spec's forward coverage gap — w
 ## Status
 
 **Accepted on 2026-10-31.** The pre-existing issues this plan edits are the
-three named in its own *edit before you file* table — #1162, #1167 and
-#1266 — and all three are open on the tracker carrying that scope.
+three named in its own *edit before you file* table, and the edit was
+applied to all three — the criteria the table assigns are cited in the
+issue bodies, not merely assigned here.
+
+| Issue | Assigned by the table | Cited in the body | Applied |
+|---|---|---|---|
+| #1162 | CRC-B8 | CRC-B8 | yes |
+| #1167 | CRC-B1, CRC-A4 | CRC-B1, CRC-A4 | yes |
+| #1266 | CRC-M15 | CRC-M15 | yes |
+
+Measured 2026-10-31, per issue:
+
+```
+$ gh issue view <N> --json body --jq .body | grep -oE 'CRC-[A-Z]+[0-9]+' | sort -u
+```
+
+**An earlier draft of this note said only that the three were "open on the
+tracker carrying that scope", which does not establish this.** An issue
+existing and an issue having been edited are different facts, and ADR-006
+in this same batch is the proof that they come apart: its table compared
+assigned against cited and found **0 of 6** applied. The same comparison
+run here is 3 of 3, so the readings differ and the distinction was worth
+making — which is exactly why the claim now carries the table rather than
+the assertion.
 
 Scoped deliberately to those three. The *eighteen new issues* section lists
 unnumbered placeholders (P0-1, P1-1, …) that were never filed, so acceptance
