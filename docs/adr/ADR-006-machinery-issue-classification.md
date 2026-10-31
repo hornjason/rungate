@@ -30,6 +30,21 @@ exactly as it did before this ADR was written — a blank Criteria cell that
 reads the same whether nobody looked or somebody decided — which is the
 condition the ADR exists to remove.
 
+Re-take the table rather than trusting it. This reading is of the tracker,
+not of this repository, so no test can hold it current:
+
+```
+$ for N in 1495 1497 1571 1257 1173 1157; do
+    printf '#%s %s  ' "$N" "$(gh issue view $N --json state --jq .state)"
+    gh issue view $N --json body --jq .body | grep -oE 'CRC-[A-Z]+[0-9]+|machinery' | sort -u | tr '\n' ' '
+    echo
+  done
+```
+
+A row whose *On the tracker today* cell stops matching that output means
+the repair happened and this section is stale — which is the outcome this
+ADR wants, and the one nothing here can notice on its own.
+
 Recorded here rather than silently ticked. Accepting the reading and applying
 it are two acts, and only the first has happened.
 
