@@ -821,6 +821,37 @@ export function protectedFromRescue(projectRoot: string): string | null {
  * which is why this can run every session without a guard asking whether it
  * is needed.
  */
+/**
+ * The one place a `RescueResult` is built, so no exit can forget a field.
+ *
+ * `rescueStrandedBranches` has six exits and each used to spell all seven
+ * fields by hand. Nothing forced a new one — added for some new
+ * precondition — to carry `unreadable`, `withheld` or `declined`, and the
+ * partition case only catches a mistake in a field its own bucket list
+ * already names. That is a test gap standing in for a type, which is the
+ * weaker of the two.
+ *
+ * `unreadable` is a REQUIRED positional argument rather than one of the
+ * defaulted fields, deliberately. It is the field most likely to be
+ * dropped — every refusal must still carry the branches it could not
+ * count, because a branch nobody could read is the likeliest hiding place
+ * for the work this module exists to find, and defaulting it to `[]` would
+ * let a new exit swallow that silently while looking correct. Everything
+ * else defaults to the "nothing happened" value, which is what an early
+ * return means.
+ */
+function rescueResult(
+  unreadable: string[],
+  over: Partial<Omit<RescueResult, "unreadable">> = {},
+): RescueResult {
+  return {
+    examined: 0, pushed: [], failed: [], declined: [], withheld: [],
+    unmeasured: null,
+    unreadable,
+    ...over,
+  };
+}
+
 export function rescueStrandedBranches(
   projectRoot: string,
   /** Injectable so a case can drive the deadline instead of waiting it out. */
@@ -838,7 +869,7 @@ export function rescueStrandedBranches(
   const deadline = Date.now() + budgetMs;
   const found = strandedBranches(projectRoot);
   if (found === null) {
-    return { examined: 0, pushed: [], failed: [], declined: [], withheld: [], unreadable: [], unmeasured: "could not list branches or remotes" };
+    return rescueResult([], { unmeasured: "could not list branches or remotes" });
   }
 
   // Nothing to rescue is a CLEAN reading, and it is reached without a
@@ -850,17 +881,16 @@ export function rescueStrandedBranches(
   // no remote and no stranded work. A clean tree would have been reported
   // as an instrument failure, which is this issue's own defect inverted.
   if (found.stranded.length === 0) {
-    return { examined: 0, pushed: [], failed: [], declined: [], withheld: [], unreadable: found.unreadable, unmeasured: null };
+    return rescueResult(found.unreadable);
   }
 
   const skip = protectedFromRescue(projectRoot);
   if (skip === null) {
     // Refuse rather than guess. Rescuing with no idea which branch is the
     // default risks pushing the one branch this must never touch.
-    return {
-      examined: 0, pushed: [], failed: [], declined: [], withheld: [], unreadable: found.unreadable,
+    return rescueResult(found.unreadable, {
       unmeasured: "could not establish the default branch from origin/HEAD or ls-remote",
-    };
+    });
   }
 
   // The branch this checkout is ON is work somebody is doing RIGHT NOW, not
@@ -893,10 +923,9 @@ export function rescueStrandedBranches(
     // publish every branch including the live ones, exactly when git is in
     // the state least worth trusting — the fail-open shape named first in
     // `.claude/rules/checks-must-be-able-to-fail.md`.
-    return {
-      examined: 0, pushed: [], failed: [], declined: [], withheld: [], unreadable: found.unreadable,
+    return rescueResult(found.unreadable, {
       unmeasured: "could not list the checkouts of this repository, so live work could not be told from stranded work",
-    };
+    });
   }
   // THE PARTITION. Every stranded branch takes exactly one of these three
   // exits, and the two push outcomes split the third. Written as one pass
@@ -942,7 +971,7 @@ export function rescueStrandedBranches(
     }
   }
 
-  return { examined: candidates.length, pushed, failed, declined, withheld, unreadable: found.unreadable, unmeasured: null };
+  return rescueResult(found.unreadable, { examined: candidates.length, pushed, failed, declined, withheld });
 }
 
 /**
