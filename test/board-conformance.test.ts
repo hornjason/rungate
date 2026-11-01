@@ -581,6 +581,60 @@ describe("every field the snapshot declares is read by something", () => {
   }
 });
 
+describe("a repeat inside a LIST, not just a repeated row", () => {
+  /**
+   * Round 2 of this PR, and the same defect one level down from the row
+   * identities: `milestones` sums `phases[].criteria`, so one criterion
+   * listed in two phases raises the target while only one of the two can
+   * ever be credited. The row-level sweep did not reach it because it
+   * asked which ROWS carry an identity, not which LISTS a measure counts.
+   *
+   * So the rule is stated over the whole population of list-valued
+   * fields, with the membership predicted rather than described: a list
+   * whose repeat moves a reading must be refused, and a list whose repeat
+   * moves nothing must not be — refusing a board over a duplicate that
+   * changes no reading is a refusal nobody can act on.
+   */
+  const lists: { field: string; apply: (b: BoardSnapshot) => void }[] = [
+    { field: "phases[].criteria (within one phase)", apply: b => void (b.phases[0]!.criteria = [...b.phases[0]!.criteria, b.phases[0]!.criteria[0]!]) },
+    { field: "phases[].criteria (across two phases)", apply: b => void (b.phases[1]!.criteria = [...b.phases[1]!.criteria, b.phases[0]!.criteria[0]!]) },
+    { field: "issues[].blockedBy", apply: b => void (b.issues[1]!.blockedBy = [...b.issues[1]!.blockedBy, b.issues[1]!.blockedBy[0]!]) },
+    { field: "issues[].labels", apply: b => void (b.issues[1]!.labels = [...b.issues[1]!.labels, b.issues[1]!.labels[0]!]) },
+  ];
+
+  const triple = (b: BoardSnapshot) => takeReadings(b).map(r => `${r.name}:${r.status}:${r.measured}/${r.target}`);
+
+  for (const l of lists) {
+    test(`a repeat in ${l.field} is refused exactly when it moves a reading`, () => {
+      const board = completeBoard();
+      l.apply(board);
+      const moves = JSON.stringify(triple(board)) !== JSON.stringify(triple(completeBoard()));
+      const read = readSnapshotText(JSON.stringify(board));
+      expect(
+        read.board === null,
+        moves
+          ? `a repeat in ${l.field} changes a reading's numbers and the board was still read — the denominator ` +
+            `counts one entry twice and nothing can ever reach it`
+          : `a repeat in ${l.field} changes no reading and the board was refused — a refusal nobody can act on`,
+      ).toBe(moves);
+      if (moves) expect(read.why).toContain("repeats an identity");
+    });
+  }
+
+  test("at least one list is in each group, so neither arm above is vacuous", () => {
+    const moved = lists.filter(l => {
+      const b = completeBoard();
+      l.apply(b);
+      return JSON.stringify(triple(b)) !== JSON.stringify(triple(completeBoard()));
+    });
+    expect(moved.length, "no list's repeat moves a reading, so the refusing arm witnessed nothing").toBeGreaterThan(0);
+    expect(
+      moved.length,
+      "every list's repeat moves a reading, so the tolerated arm witnessed nothing",
+    ).toBeLessThan(lists.length);
+  });
+});
+
 describe("--produce: the spawned source", () => {
   /**
    * The producer is reached by PATH, not by import, so a copy of the

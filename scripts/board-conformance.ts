@@ -413,10 +413,24 @@ export function readSnapshotText(text: string): SnapshotRead {
   // row's identity inflate the denominator — and `onBoard` dedupes issue
   // numbers into a Set, so the numerator would not rise with it. The
   // board would report short against a target nothing can reach.
+  //
+  // A LIST a measure counts the length of is a population too, and
+  // `phases[].criteria` is one: the `milestones` reading sums it, so one
+  // criterion listed in two phases — or twice in one — raises the target
+  // while only one of the two can ever be credited. Found in review as
+  // the same defect one level down from the row identities, which is
+  // where a sweep that stops at the row shape leaves it.
+  //
+  // `blockedBy` and `labels` are NOT here, and the test asserts that
+  // membership rather than this comment doing it: nothing counts their
+  // length, so a repeat in either moves no reading, and refusing a board
+  // over a duplicate that changes no reading is a refusal nobody can act
+  // on.
   const repeats: [string, unknown[]][] = [
     ["issues", issues.map(i => i!.number)],
     ["criteria", criteria.map(c => c!.id)],
     ["phases", phases.map(p => p!.phase)],
+    ["phases[].criteria", phases.flatMap(p => p!.criteria)],
   ];
   for (const [population, ids] of repeats) {
     if (hasRepeat(ids)) {
