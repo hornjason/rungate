@@ -34,11 +34,10 @@ project's config from a prompt.
   caller of the throwing loader and it catches the throw, so the site counted
   as migrated while behaving exactly as it did before.
 - **Never read only `.claude/rungate.json`.** Both layouts are supported
-  indefinitely — consumers in the wild are on both. A monolith-only read means
-  a consumer who followed the documented migration silently gets nothing, and
-  that has already switched off the ceremony tier control (#310), custom
-  matchers (#212/#90), role grading, pre-flight checks and the
-  task-completion conformity run (#214).
+  indefinitely — consumers in the wild are on both, so a monolith-only read
+  silently gives nothing to a consumer who followed the documented
+  migration. The five features it has already switched off, with their
+  issue numbers: `reference/config-access-worked-instances.md`.
 - **Never substitute a built-in default for absent config without recording
   that you did so.** Anti-pattern: *Silent Default Substitution*. A present
   config with empty contents must be loud. `0`, `{}`, `null` and `SKIP` are
@@ -79,11 +78,10 @@ The rule for `lib/scaffold/ai-review-step.ts` and anything shaped like it:
 
 ## The worked instances live next door
 
-Two of these were written up at length — the Layer 1 compliance report (#597)
-and the hill-climb that had nowhere to write (#646), with the commands beside
-every number. Both are in `reference/config-access-worked-instances.md`,
-verbatim. They were moved out of the always-loaded surface, not deleted
-(#1009).
+The Layer 1 compliance report (#597) and the hill-climb that had nowhere to
+write (#646) are in `reference/config-access-worked-instances.md` verbatim,
+with the commands beside every number. Moved out of the always-loaded
+surface, not deleted (#1009).
 
 ## Enforced by
 

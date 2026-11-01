@@ -188,6 +188,22 @@ This block left `.claude/rules/config-access.md` verbatim when the instruction
 surface reached 37 bytes of headroom. The rule routes to it. Nothing was
 rewritten and nothing was deleted — same reasoning as #1009.
 
+## What a monolith-only read has already switched off (moved out of the rule, 2026-11-01)
+
+`.claude/rules/config-access.md` says never to read only
+`.claude/rungate.json`, because both layouts are supported indefinitely and
+consumers in the wild are on both. The enumeration behind that sentence left
+the always-loaded rule when adding the `board-conformance` routing row put the
+peak surface over budget; the rule routes here. Five features a monolith-only
+read has already silently switched off for a consumer who followed the
+documented migration:
+
+- the ceremony tier control (#310)
+- custom matchers (#212, #90)
+- role grading
+- pre-flight checks
+- the task-completion conformity run (#214)
+
 ## Why the rules file exists — two ADRs and a tripled count (#214, #309, moved by #1520)
 
 ADR-001 (2026-10-05) specified this rule and the check that enforces it. The

@@ -49,10 +49,9 @@ it — a comment is where a project declares intent. What the position cannot do
 is tell a claim from a citation, and they are the same shape.
 
 Measured at #360: of 220 comment-position credits the population separates
-almost perfectly **by structural position** — every citation found sat
-mid-sentence in running prose. So this is not a new marker to adopt; it is
-the convention the repo already followed, made checkable. The audit, and
-the three times this rule caught itself, are in
+almost perfectly **by structural position** — every citation sat mid-sentence
+in running prose. This is the convention the repo already followed, made
+checkable. The audit, and the three times this rule caught itself:
 `reference/check-failure-worked-instances.md`.
 
 ## The direction this is allowed to be wrong in

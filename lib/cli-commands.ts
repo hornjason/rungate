@@ -209,6 +209,25 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
       "rungate board-mirror --project <node-id> [--spec <spec.md>] [--field <name>] [--write] [--ready] [--json]",
     projectRootFlag: true,
   },
+  // Item B5 of the ladder in `project-state.json`, and the plan's terminal
+  // condition: the overall goal's verify command is this one with no
+  // arguments. Five of Stage B's six items are each one of its readings, so
+  // it is also the command most likely to be made vacuous — a skeleton
+  // exiting 0 would turn the whole plan green at once.
+  //
+  // It therefore refuses in three states rather than two. `unmeasured` is
+  // not `met`: with no `--snapshot` nothing has been read, and a board
+  // nobody could read has not passed. `test/board-conformance.test.ts`
+  // proves each refusal against a mutant with the exit constant zeroed.
+  //
+  // No `projectRootFlag`: it takes an explicit `--snapshot` path and reads
+  // nothing relative to a root, so adding the flag would hand the script an
+  // argument it would read as a positional.
+  "board-conformance": {
+    script: "scripts/board-conformance.ts",
+    summary: "Does the board say what the spec says — every reading, and whether any is short of target",
+    usage: "rungate board-conformance [--reading <name>] [--snapshot <path>] [--list-readings]",
+  },
   // Step 4 of ADR-003, in reverse. The issue template's own footer says a
   // GitHub issue form cannot set a milestone or a dependency; this does both
   // from a plan somebody approved. `--repair` fixes issues that already
