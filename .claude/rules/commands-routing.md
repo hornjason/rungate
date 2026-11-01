@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 6ab133a869b8f836
+generated-sha: 7d24dd9aaf0ad9fd
 ---
 
 ## Command Routing
@@ -21,6 +21,7 @@ Run one as `bun bin/rungate.ts <command>`.
 | `plan-spec` | Derive a repository's milestones from a spec's Phase placement table |
 | `criterion-inventory` | Trace every criterion to the tests, issues and pull requests that name it |
 | `board-mirror` | Show every spec's criteria, and what is ready to pick up, on the project board |
+| `board-conformance` | Does the board say what the spec says — every reading, and whether any is short of target |
 | `plan-issues` | Apply an approved issue plan — --decompose creates issues from criteria (step 4), --repair links and demotes existing ones |
 | `plan-deps` | Write a spec's phase order onto the tracker as blocked-by edges |
 | `sync-spec-tests` | Regenerate the conformity suite from the specs |

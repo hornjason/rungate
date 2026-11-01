@@ -30,6 +30,7 @@
     "scripts/plan-spec.ts",
     "scripts/criterion-inventory.ts",
     "scripts/board-mirror.ts",
+    "scripts/board-conformance.ts",
     "scripts/plan-deps.ts",
     "scripts/plan-issues.ts",
     "scripts/create-spec.ts",
