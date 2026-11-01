@@ -451,9 +451,22 @@ export function stageIsComplete(stage: Stage): boolean {
  * stale the moment a stage closes, and the two mis-scores above were both
  * somebody trusting a stale sentence.
  */
+export function retrosOwed(stages: readonly Stage[]): string[] {
+  return stages.filter(s => stageIsComplete(s) && (s.retro === null || s.retro === undefined)).map(s => s.id);
+}
+
+/** The message for a set of stages owing a retro. One wording, one site. */
+function retroDebt(owed: readonly string[], next: string): string {
+  return (
+    `stage ${owed.join(", ")} is complete and has no retro. Write what went well, what went poorly, and ` +
+    `the improvements WITH the mechanism that enforces each, then ${next}. A stage that teaches nothing ` +
+    `forward is a stage whose mistakes are scheduled to repeat.`
+  );
+}
+
 export function nextStage(
   stages: readonly Stage[],
-): { stage: Stage; blocked: string | null } | null {
+): { stage: Stage | null; blocked: string | null } | null {
   // Walked in order so the FIRST unmet precondition is the one reported. A
   // caller shown two blockers at once fixes the convenient one.
   const owed: string[] = [];
@@ -467,9 +480,7 @@ export function nextStage(
     }
     const blocked =
       owed.length > 0
-        ? `stage ${owed.join(", ")} is complete and has no retro. Write what went well, what went poorly, and ` +
-          `the improvements WITH the mechanism that enforces each, then stage ${stage.id} is available. ` +
-          `A stage that teaches nothing forward is a stage whose mistakes are scheduled to repeat.`
+        ? retroDebt(owed, `stage ${stage.id} is available`)
         : stage.agreed === null
           ? `stage ${stage.id} has agreed: null — its ${stage.items.length} item(s) are a proposal, not an ` +
             `agreement. Nothing in it may be started or ticked until the wording is agreed and written here ` +
@@ -477,6 +488,18 @@ export function nextStage(
           : null;
     return { stage, blocked };
   }
+
+  // Every stage is complete — but that is not the same as finished.
+  //
+  // This branch used to `return null`, which a caller reads as "nothing
+  // left to do". A ladder whose LAST stage completes with retro: null then
+  // reported done while the one retro nobody can be reminded of later —
+  // the final one — was silently skipped. Found by review on #1696, and it
+  // is the retro gate failing exactly where there is no next stage to carry
+  // the message. `stage: null` says the work is done; a non-null `blocked`
+  // says the plan is not.
+  const debt = retrosOwed(stages);
+  if (debt.length > 0) return { stage: null, blocked: retroDebt(debt, "the plan is finished") };
   return null;
 }
 

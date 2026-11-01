@@ -30,6 +30,7 @@ import {
   ladderViolations,
   nextStage,
   openImprovements,
+  retrosOwed,
   stageIsComplete,
   stageLadderViolations,
   type Retro,
@@ -354,7 +355,24 @@ describe("completion is derived, never asserted", () => {
     expect(stageIsComplete(ok({ items: [] }))).toBe(false);
   });
 
-  test("nextStage returns null when everything is done", () => {
+  test("nextStage returns null when everything is done AND every retro is written", () => {
     expect(nextStage([ok()])).toBeNull();
+  });
+
+  test("the LAST stage completing with no retro is reported, not read as finished", () => {
+    // Found by review on #1696. The retro gate ran only when a later,
+    // incomplete stage existed to carry the message, so the final stage —
+    // the one no future stage can ever remind anybody about — could
+    // complete with retro: null and the plan read as done.
+    const end = nextStage([ok(), ok({ id: "B", retro: null })]);
+    expect(end, "a complete ladder owing a retro reported nothing to do").not.toBeNull();
+    expect(end!.stage, "there is no stage left to work, so `stage` must be null").toBeNull();
+    expect(end!.blocked).toContain("is complete and has no retro");
+    expect(end!.blocked).toContain("B");
+  });
+
+  test("retrosOwed names every complete stage missing one, and nothing else", () => {
+    expect(retrosOwed([ok(), ok({ id: "B", retro: null }), ok({ id: "C", items: [{ id: "C1", what: "x", done: false, verify: null }], retro: null })]))
+      .toEqual(["B"]);
   });
 });

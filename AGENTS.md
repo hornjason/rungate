@@ -15,7 +15,7 @@ Ship harness — conformity tests, scaffold, and agent briefs for AI-first devel
 
 ## Hard Constraints
 
-### How we work — nine rules; one to seven are Jason's call of 2026-10-28, rules 8 and 9 of 2026-10-30 and 2026-10-31
+### How we work — ten rules; 1-7 are Jason's call of 2026-10-28, 8, 9 and 10 of 2026-10-30, 2026-10-31 and 2026-11-01
 
 1. **A spec says what must be true; it is never the to-do list.** Specs still
    carry checkboxes. Nobody works from them — work comes off the tracker.
