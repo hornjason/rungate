@@ -997,31 +997,51 @@
         "improvements": [
           {
             "what": "A stage's definition of done lives in exactly one place and is executable",
-            "mechanism": "project-state.json `stages`, each item carrying a verify command; test/stage-ladder.test.ts runs them. ADR-009's table is a pointer."
+            "mechanism": "project-state.json `goal`, `goals`, `stages`; every item carries a verify command and test/stage-ladder.test.ts runs them. ADR-009's two tables are pointers.",
+            "status": "in-place",
+            "verify": "bun -e 'const d=require(\"./project-state.json\");if(!d.goal||!d.goals?.length||!d.stages?.length)process.exit(1);if(d.stages.flatMap(s=>s.items).filter(i=>i.done&&!i.verify).length)process.exit(1)'"
           },
           {
             "what": "A ticked item cannot contain its own denial",
-            "mechanism": "stageLadderViolations refuses a done item whose text matches a DENIALS phrase"
+            "mechanism": "stageLadderViolations refuses a done item whose text matches a DENIALS phrase",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[{id:\"A1\",what:\"0 of them ticked\",done:true,verify:\"true\"}],retro:null}]).join(\"|\").includes(\"One of the two is wrong\"))process.exit(1)'"
           },
           {
             "what": "A stage nobody agreed cannot be worked",
-            "mechanism": "stageLadderViolations refuses a done item in a stage with agreed: null — Stage B is in that state now"
+            "mechanism": "stageLadderViolations refuses a done item in a stage with agreed: null",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:null,items:[{id:\"A1\",what:\"w\",done:true,verify:\"true\"}],retro:null}]).join(\"|\").includes(\"nobody has signed off\"))process.exit(1)'"
           },
           {
             "what": "A re-lettering cannot go unnoticed",
-            "mechanism": "stageLadderViolations refuses a stage whose letter does not match its position"
+            "mechanism": "stageLadderViolations refuses a stage whose letter does not match its position",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[],retro:null},{id:\"C\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[],retro:null}]).join(\"|\").includes(\"but it sits at position 1\"))process.exit(1)'"
           },
           {
             "what": "Every stage states what it is FOR, not just a label",
-            "mechanism": "Stage.goal is required and refused when empty"
+            "mechanism": "Stage.goal is required and refused when empty",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"\",serves:1,agreed:\"d\",items:[],retro:null}]).join(\"|\").includes(\"is a label, not a goal\"))process.exit(1)'"
           },
           {
             "what": "What a stage teaches is recorded before the next one starts",
-            "mechanism": "nextStage refuses to advance past a complete stage whose retro is null"
+            "mechanism": "nextStage refuses to advance past a complete stage whose retro is null",
+            "status": "in-place",
+            "verify": "bun -e 'const {nextStage}=await import(\"./lib/stage-ladder.ts\");const r=nextStage([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[{id:\"A1\",what:\"w\",done:true,verify:\"true\"}],retro:null},{id:\"B\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[{id:\"B1\",what:\"w\",done:false,verify:null}],retro:null}]);if(!String(r&&r.blocked).includes(\"is complete and has no retro\"))process.exit(1)'"
+          },
+          {
+            "what": "A retro's improvements are PROVED, not described — a named mechanism is still prose",
+            "mechanism": "Improvement.status is in-place or open; in-place requires a verify command, and test/stage-ladder.test.ts RUNS every one. Jason caught this on 2026-11-01: the first version of this retro named six mechanisms and proved none.",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[],retro:{wentWell:[],wentPoorly:[],improvements:[{what:\"x\",mechanism:\"a test somewhere\",status:\"in-place\",verify:null}]}}]).join(\"|\").includes(\"A named mechanism is\"))process.exit(1)'"
           },
           {
             "what": "Repairing past the third review round is a decision, not a drift",
-            "mechanism": "NOTHING YET — needs a decision. AI_REVIEW_ROUND_CAP=3 bounds the reviewer's carry-forward rounds, a different quantity: #1687's 14 runs were 13 pushes, each a legitimate round 1. Nothing in this repository can see 'the author pushed another fix instead of re-scoping'."
+            "mechanism": "NONE YET, needs a decision. AI_REVIEW_ROUND_CAP=3 bounds the reviewer's carry-forward rounds, a different quantity: #1687's 14 runs were 13 pushes, each a legitimate round 1. Nothing in this repository can see 'the author pushed another fix instead of re-scoping'.",
+            "status": "open",
+            "verify": null
           }
         ]
       }
@@ -1029,7 +1049,7 @@
     {
       "id": "B",
       "name": "Build the engine's own board",
-      "agreed": null,
+      "agreed": "2026-11-01 Jason — B1..B6 as ADR-009 drafted them",
       "items": [
         {
           "id": "B1",

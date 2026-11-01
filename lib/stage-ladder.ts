@@ -111,6 +111,27 @@ export interface StageItem {
 export interface Improvement {
   what: string;
   mechanism: string;
+  /**
+   * `in-place` — the mechanism exists and `verify` proves it. `open` — it
+   * does not, nobody has built it, and that is declared rather than
+   * implied. There is no third state: a lesson is either enforced or it is
+   * outstanding, and a retro that cannot say which is a retro nobody can
+   * act on.
+   */
+  status: "in-place" | "open";
+  /**
+   * A command that exits 0 only when the mechanism is really there.
+   *
+   * Required on `in-place` and refused on `open` — an open improvement with
+   * a command would be claiming the thing it says is missing.
+   *
+   * **Where the command is `bun test <file> -t <name>`, it must also assert
+   * a case RAN.** `bun test -t` exits 0 when the pattern matches nothing,
+   * so a renamed or deleted case makes the improvement look enforced while
+   * nothing checks it — the vacuous shape, measured here on 2026-11-01.
+   * Piping to `grep -qE '^ 1 pass'` is the guard the live entries use.
+   */
+  verify: string | null;
 }
 
 /**
@@ -232,12 +253,61 @@ function retroViolations(raw: unknown, at: string): string[] {
       out.push(
         `${iAt}.mechanism is ${JSON.stringify(e.mechanism)} — name what ENFORCES this improvement: a test, ` +
           `a gate, a refusal, a schema field. A resolution with no mechanism is what Stage A already had, ` +
-          `and it ran to fourteen review rounds against a rule that said three. "nothing yet, needs a ` +
-          `decision" is an acceptable answer; an empty one is not.`,
+          `and it ran to fourteen review rounds against a rule that said three.`,
       );
+    }
+
+    if (e.status !== "in-place" && e.status !== "open") {
+      out.push(`${iAt}.status is ${JSON.stringify(e.status)}, expected "in-place" or "open"`);
+      return;
+    }
+    // The pairing is the point. `in-place` with no command is a claim
+    // nobody can check — which is the exact defect the retro is recording.
+    // `open` with a command claims the thing it says is missing.
+    if (e.status === "in-place" && (typeof e.verify !== "string" || e.verify.trim().length === 0)) {
+      out.push(
+        `${iAt} says the mechanism is in place and gives no command to prove it. A named mechanism is ` +
+          `still prose — "${String(e.mechanism).slice(0, 60)}" is a description, not evidence. Write the ` +
+          `command that exits 0 only while it is really there, or set status to "open".`,
+      );
+    }
+    if (e.status === "open" && e.verify !== null && e.verify !== undefined) {
+      out.push(`${iAt} is open but carries a verify command — an outstanding improvement cannot prove itself`);
     }
   });
   return out;
+}
+
+/**
+ * Improvements a retro claims are in place, so a caller can RUN their
+ * commands. Flat across every stage, newest stages last.
+ *
+ * Separate from the validator because this module takes no I/O: the
+ * validator says the retro is well-formed, and the caller proves the
+ * learning actually landed. Both are needed — Stage A's retro named six
+ * mechanisms correctly and could have named six that did not exist.
+ */
+export function claimedImprovements(
+  stages: readonly Stage[],
+): { stage: string; what: string; verify: string }[] {
+  const out: { stage: string; what: string; verify: string }[] = [];
+  for (const s of stages) {
+    for (const im of s.retro?.improvements ?? []) {
+      if (im.status === "in-place" && typeof im.verify === "string") {
+        out.push({ stage: s.id, what: im.what, verify: im.verify });
+      }
+    }
+  }
+  return out;
+}
+
+/** Improvements a retro declares outstanding — reported, never hidden. */
+export function openImprovements(stages: readonly Stage[]): { stage: string; what: string }[] {
+  return stages.flatMap(s =>
+    (s.retro?.improvements ?? [])
+      .filter(im => im.status === "open")
+      .map(im => ({ stage: s.id, what: im.what })),
+  );
 }
 
 /**

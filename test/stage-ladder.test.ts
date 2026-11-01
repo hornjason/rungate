@@ -26,8 +26,10 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 import {
   COMMAND_NOT_FOUND,
+  claimedImprovements,
   ladderViolations,
   nextStage,
+  openImprovements,
   stageIsComplete,
   stageLadderViolations,
   type Retro,
@@ -56,7 +58,7 @@ const run = (cmd: string) => spawnSync("sh", ["-c", cmd], { cwd: ROOT, encoding:
 const retro = (over: Partial<Retro> = {}): Retro => ({
   wentWell: ["a thing"],
   wentPoorly: ["another thing"],
-  improvements: [{ what: "do better", mechanism: "a test that refuses it" }],
+  improvements: [{ what: "do better", mechanism: "a test that refuses it", status: "in-place", verify: "true" }],
   ...over,
 });
 
@@ -144,7 +146,7 @@ describe("the live plan", () => {
     ).not.toBe(0);
   });
 
-  test("Stage A is complete, carries its retro, and Stage B is blocked on Jason", () => {
+  test("Stage A is complete and carries its retro; Stage B is next and unblocked", () => {
     const a = stages.find(s => s.id === "A")!;
     expect(stageIsComplete(a), "Stage A is no longer complete").toBe(true);
     expect(a.retro, "Stage A has no retro — the stage that taught the most would teach nothing").not.toBeNull();
@@ -152,11 +154,46 @@ describe("the live plan", () => {
 
     const next = nextStage(stages);
     expect(next?.stage.id, "the next incomplete stage is not B").toBe("B");
+    // Jason agreed B1..B6 on 2026-11-01. Before that this assertion read
+    // `toContain("agreed: null")` — the gate did its job for the whole time
+    // the stage was a proposal, and this is the commit where that stopped
+    // being true.
+    expect(
+      next?.stage.agreed,
+      "Stage B has no `agreed` — it may not be worked until its wording is signed off",
+    ).toBeTruthy();
     expect(
       next?.blocked,
-      "Stage B is no longer reported as blocked. It is the one stage Jason has not signed off — if that " +
-        "changed, the change belongs in `agreed`, and this assertion should be updated in the same commit.",
-    ).toContain("agreed: null");
+      "Stage B is reported blocked. Either a prior stage lost its retro, or something else came up — read " +
+        "the message rather than deleting this assertion.",
+    ).toBeNull();
+  });
+
+  test("every in-place improvement's command exits 0 — a learning only described is not carried forward", () => {
+    // The retro's own mechanisms, executed. `mechanism` is a sentence and a
+    // sentence can name something that does not exist: the first version of
+    // Stage A's retro named six and proved none. This is the case that
+    // stops a stage's learnings from being a list of good intentions, and
+    // it went red on its first run against an improvement claiming the very
+    // mechanism this case is.
+    const claimed = claimedImprovements(stages);
+    expect(claimed.length, "no improvement claims to be in place, so this case witnessed nothing").toBeGreaterThan(0);
+
+    const broken = claimed
+      .map(c => ({ c, r: run(c.verify) }))
+      .filter(({ r }) => r.status !== 0)
+      .map(({ c, r }) => `${c.stage}: ${c.what}\n     ${c.verify}\n     exit ${r.status}`);
+
+    expect(
+      broken,
+      "a retro says a mechanism is in place and its own command refuses. The learning from that stage is " +
+        "NOT carried forward — either the mechanism regressed, or it was described and never built. " +
+        "Fix the mechanism or set the improvement's status to \"open\" and say so.",
+    ).toEqual([]);
+
+    // Open ones are declared, not hidden. Printed so a reader of a green
+    // run still sees what is outstanding.
+    for (const o of openImprovements(stages)) console.log(`  OPEN improvement (stage ${o.stage}): ${o.what}`);
   });
 
   test("the goal names a SUCCESS.md claim, and that claim is really there", () => {
@@ -222,9 +259,32 @@ describe("the ladder refuses the things that went wrong in Stage A", () => {
 
   test("an improvement naming no mechanism is refused — a resolution is not a fix", () => {
     const v = stageLadderViolations([
-      ok({ retro: retro({ improvements: [{ what: "stop at round three", mechanism: "  " }] }) }),
+      ok({ retro: retro({ improvements: [{ what: "stop at round three", mechanism: "  ", status: "open", verify: null }] }) }),
     ]);
     expect(v.join("\n")).toContain("name what ENFORCES this improvement");
+  });
+
+  test("an improvement claiming to be in place with no command is refused — the prose trap", () => {
+    // Jason's question on 2026-11-01: does the retro carry commands? It did
+    // not. A named mechanism read as enforcement and proved nothing.
+    const v = stageLadderViolations([
+      ok({ retro: retro({ improvements: [{ what: "x", mechanism: "a test somewhere", status: "in-place", verify: null }] }) }),
+    ]);
+    expect(v.join("\n")).toContain("A named mechanism is");
+  });
+
+  test("an open improvement carrying a command is refused — it cannot prove what it says is missing", () => {
+    const v = stageLadderViolations([
+      ok({ retro: retro({ improvements: [{ what: "x", mechanism: "none yet", status: "open", verify: "true" }] }) }),
+    ]);
+    expect(v.join("\n")).toContain("cannot prove itself");
+  });
+
+  test("an improvement with no status is refused", () => {
+    const v = stageLadderViolations([
+      ok({ retro: retro({ improvements: [{ what: "x", mechanism: "y" } as never] }) }),
+    ]);
+    expect(v.join("\n")).toContain('expected "in-place" or "open"');
   });
 
   test("the overall goal with no verify command is refused", () => {
