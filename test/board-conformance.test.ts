@@ -260,6 +260,63 @@ describe("each reading, planted short and planted complete", () => {
     });
   }
 
+  test("EVERY reading that resolves an issue number refuses a dangling one — the sweep, not one more case", () => {
+    // Rounds 1, 2 and 5 of #1697 found the same hole three times, one
+    // reading at a time: a pointer counted without being resolved. The
+    // reviewer's point was that a per-reading repair guarantees a sixth
+    // round, and that is right. So this is a battery over all five.
+    //
+    // It predicts MEMBERSHIP rather than a total, because "it did not
+    // move" is ambiguous: a reading that reads a reference and fails to
+    // validate it stays `met` under this board, exactly like a reading
+    // that holds no references at all. `readsIssueRefs` is the
+    // declaration that tells those two apart, and the first assertion
+    // pins it so a new reading cannot quietly join the wrong group.
+    expect(
+      READINGS.filter(r => r.readsIssueRefs).map(r => r.name).sort(),
+      "a reading's readsIssueRefs declaration moved. If a new reading resolves an issue number it must set " +
+        "the flag AND validate the reference against the board — see the rounds this battery replaced.",
+    ).toEqual(["blocked-by-edges", "criterion-coverage"]);
+
+    // Every row carries a reference, and every reference names nothing.
+    //
+    // Written this way after the first version went green WITHOUT the fix.
+    // It had mapped over the existing edges, so the one issue whose
+    // `blockedBy` was already empty went short on the empty array rather
+    // than on the dangling pointer — the reading moved, for a reason that
+    // had nothing to do with what the case is about. Every row now holds a
+    // reference, so the OLD predicates (`length > 0`, `typeof number`)
+    // count all of them and report `met`, and only resolving the pointer
+    // makes this go short.
+    const dangling = completeBoard();
+    for (const c of dangling.criteria) {
+      c.satisfiedByIssue = 9999;
+      delete c.recordedTrue; // or "already true" satisfies it without the pointer
+    }
+    for (const i of dangling.issues) {
+      i.blockedBy = [9999];
+      delete i.rootReady; // or a declared root satisfies it without the edge
+    }
+
+    const complete = completeBoard();
+    for (const spec of READINGS) {
+      const under = takeReading(spec, dangling);
+      const control = takeReading(spec, complete);
+      if (spec.readsIssueRefs) {
+        expect(
+          under.status,
+          `${spec.name} declares it resolves issue numbers and still reports ${under.status} when every ` +
+            `reference on the board names nothing. A pointer to nothing is not coverage.`,
+        ).toBe("short");
+      }
+      // The control is what stops the loop above being satisfied by a
+      // reading that refuses whatever it is handed.
+      if (!spec.readsIssueRefs) {
+        expect(control.status, `${spec.name} refused a complete board`).toBe("met");
+      }
+    }
+  });
+
   test("ONE short reading refuses the whole board even while the other four are met", () => {
     const broken = completeBoard();
     broken.issues[1]!.labels = ["bug"];

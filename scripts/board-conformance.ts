@@ -90,9 +90,28 @@ interface ReadingSpec {
   name: string;
   item: string;
   what: string;
+  /**
+   * True when this measure consumes an ISSUE NUMBER pointing at another
+   * row of the board — `satisfiedByIssue`, `blockedBy`.
+   *
+   * Declared rather than inferred, because the test battery needs to know
+   * which readings a dangling-reference board is supposed to move. A
+   * reading that reads a reference and does NOT validate it stays `met`
+   * under that board, which is indistinguishable from a reading that
+   * holds no references at all — so "it did not move" cannot be the
+   * signal. This flag is the membership the battery predicts.
+   *
+   * **Adding a reading that resolves an issue number means setting this
+   * and validating the reference.** Rounds 1, 2 and 5 of #1697 were the
+   * same hole found three times, one reading at a time.
+   */
+  readsIssueRefs: boolean;
   /** How many of `target` are conformant, and out of how many. */
   measure: (board: BoardSnapshot) => { measured: number; target: number };
 }
+
+/** The issue numbers actually on the board, for resolving a reference. */
+const onBoard = (b: BoardSnapshot): Set<number> => new Set(b.issues.map(i => i.number));
 
 /**
  * The five readings, and the ladder item that owns each one's source.
@@ -107,12 +126,14 @@ export const READINGS: readonly ReadingSpec[] = [
     name: "milestones",
     item: "B1",
     what: "every engine issue sits in a milestone",
+    readsIssueRefs: false,
     measure: b => ({ measured: b.issues.filter(i => (i.milestone ?? "").trim() !== "").length, target: b.issues.length }),
   },
   {
     name: "criterion-coverage",
     item: "B2",
     what: "every engine criterion names an open issue, or is recorded as already true",
+    readsIssueRefs: true,
     // `typeof === "number"`, not `!== null`. A criterion object that simply
     // OMITS the field is `undefined`, and `undefined !== null` is true — so
     // a B2 generator relying on ordinary object omission rather than an
@@ -125,7 +146,7 @@ export const READINGS: readonly ReadingSpec[] = [
     // counting it is the same defect one level deeper: coverage asserted
     // against data the reading never looked at.
     measure: b => {
-      const present = new Set(b.issues.map(i => i.number));
+      const present = onBoard(b);
       return {
         measured: b.criteria.filter(
           c => (typeof c.satisfiedByIssue === "number" && present.has(c.satisfiedByIssue)) || c.recordedTrue === true,
@@ -138,21 +159,34 @@ export const READINGS: readonly ReadingSpec[] = [
     name: "blocked-by-edges",
     item: "B3",
     what: "every engine issue is a declared root or carries a blocked-by edge, so what is next is computed",
-    measure: b => ({
-      measured: b.issues.filter(i => i.rootReady === true || i.blockedBy.length > 0).length,
-      target: b.issues.length,
-    }),
+    readsIssueRefs: true,
+    // Every edge has to RESOLVE. `blockedBy.length > 0` counted an issue
+    // blocked only by numbers naming nothing on the board — the same
+    // dangling-pointer defect as `satisfiedByIssue`, in the sibling
+    // reading, which is why `readsIssueRefs` exists rather than a third
+    // hand-written case.
+    measure: b => {
+      const present = onBoard(b);
+      return {
+        measured: b.issues.filter(
+          i => i.rootReady === true || i.blockedBy.some(n => present.has(n)),
+        ).length,
+        target: b.issues.length,
+      };
+    },
   },
   {
     name: "criteria-field",
     item: "B4",
     what: "the board's Criteria column is populated for every engine issue",
+    readsIssueRefs: false,
     measure: b => ({ measured: b.issues.filter(i => (i.criteriaField ?? "").trim() !== "").length, target: b.issues.length }),
   },
   {
     name: "queue-label",
     item: "B6",
     what: "every engine issue carries the `engine` label, so the queue is the label",
+    readsIssueRefs: false,
     measure: b => ({ measured: b.issues.filter(i => i.labels.includes("engine")).length, target: b.issues.length }),
   },
 ];
