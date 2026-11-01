@@ -36,7 +36,9 @@ import {
   READINGS,
   READING_NAMES,
   REFUSE_EXIT,
+  PRODUCE_TIMEOUT_MS,
   conformant,
+  readSnapshotText,
   takeReading,
   takeReadings,
   type BoardSnapshot,
@@ -59,8 +61,16 @@ beforeAll(() => {
 
 afterAll(() => rmSync(SCRATCH, { recursive: true, force: true }));
 
-const run = (script: string, args: string[]) => {
-  const r = spawnSync("bun", [script, ...args], { cwd: ROOT, encoding: "utf-8" });
+const run = (script: string, args: string[], env: Record<string, string> = {}) => {
+  // A bound of its own, so a command that WEDGES fails this suite rather
+  // than hanging it. A hung run reports no failures at all, which reads
+  // like a clean one to anything watching the count.
+  const r = spawnSync("bun", [script, ...args], {
+    cwd: ROOT,
+    encoding: "utf-8",
+    env: { ...process.env, ...env },
+    timeout: 45_000,
+  });
   return { code: r.status ?? -1, out: r.stdout ?? "", err: r.stderr ?? "" };
 };
 
@@ -87,13 +97,20 @@ const refuses = (args: string[], why: string) => {
 /** A board where every reading is met, which each case then breaks one of. */
 const completeBoard = (): BoardSnapshot => ({
   issues: [
-    { number: 1, milestone: "Phase 1", blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
-    { number: 2, milestone: "Phase 2", blockedBy: [1], criteriaField: "SC-2619", labels: ["engine", "bug"] },
+    { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+    { number: 2, blockedBy: [1], criteriaField: "SC-2619", labels: ["engine", "bug"] },
   ],
   criteria: [
     { id: "SC-2618", satisfiedByIssue: 1 },
     { id: "SC-2619", satisfiedByIssue: 2 },
     { id: "SC-2620", satisfiedByIssue: null, recordedTrue: true },
+  ],
+  // Two phases of unequal size, because `milestones` counts CRITERIA and
+  // not phases: a fixture with one criterion per phase cannot tell the two
+  // denominators apart, and the real board's largest phase holds fourteen.
+  phases: [
+    { phase: 0, criteria: ["SC-2618", "SC-2619"], milestoneState: "unchanged" },
+    { phase: 1, criteria: ["SC-2620"], milestoneState: "unchanged" },
   ],
 });
 
@@ -144,7 +161,13 @@ describe("the refusals, each proved against the mutant", () => {
     refuses(["--snapshot", broken], "a corrupt snapshot");
     // A corrupt board is never an empty board —
     // `.claude/rules/config-access.md`. Both refuse; only one says why.
-    expect(run(SCRIPT, ["--snapshot", broken]).err).toContain("not an empty board");
+    //
+    // And the WHY is asserted, not just the refusal. Four different things
+    // make a snapshot unreadable and they used to print one sentence, so a
+    // case watching that sentence was watching a signal four mechanisms
+    // share. The battery found it: dropping the required-population check
+    // left this suite entirely green.
+    expect(run(SCRIPT, ["--snapshot", broken]).err).toContain("it is not JSON");
   });
 
   test("an EMPTY board refuses — 0 of 0 is not a pass", () => {
@@ -152,9 +175,68 @@ describe("the refusals, each proved against the mutant", () => {
     // first: with no issues and no criteria every ratio is satisfied by
     // counting nothing, and the command would certify the plan complete
     // against a board that does not exist.
-    const empty = plant("empty", { issues: [], criteria: [] });
+    const empty = plant("empty", { issues: [], criteria: [], phases: [] });
     refuses(["--snapshot", empty], "a board with nothing on it");
     expect(run(SCRIPT, ["--snapshot", empty]).out).toContain("UNMEASURED");
+  });
+
+  test("a POPULATION the snapshot never mentions refuses the board, by name", () => {
+    // An absent array and an empty one are indistinguishable once parsed,
+    // and this command calls an empty population UNMEASURED on purpose. A
+    // producer that dropped a population would therefore look exactly like
+    // one reporting honestly that it has nothing — so the arrays are
+    // required, and a snapshot written before a population existed is
+    // refused rather than silently read with one reading missing.
+    //
+    // Field-level absence inside a row is the opposite call, and round 6 is
+    // why: see the omitted-satisfiedByIssue case above.
+    for (const population of ["issues", "criteria", "phases"]) {
+      const board = completeBoard() as unknown as Record<string, unknown>;
+      delete board[population];
+      const at = plant(`no-${population}`, board as unknown as BoardSnapshot);
+      refuses(["--snapshot", at], `a snapshot with no ${population} array`);
+      // Named, because the refusal alone is satisfied by the UNMEASURED
+      // one an empty population produces — which is what made the first
+      // version of this case green with the check removed.
+      expect(
+        run(SCRIPT, ["--snapshot", at]).err,
+        `an absent \`${population}\` array was read as an empty population rather than an unread one`,
+      ).toContain(`carries no \`${population}\` array`);
+    }
+  });
+
+  test("a repeated identity refuses — two rows of one row inflate a denominator nothing can reach", () => {
+    // Every reading is a ratio over a population. `onBoard` dedupes issue
+    // numbers into a Set, so a duplicated row raises the target without
+    // ever raising what can be counted, and the board reports short
+    // forever against a number that is wrong rather than unmet.
+    const dupes: { population: string; field: string; apply: (b: BoardSnapshot) => void }[] = [
+      { population: "issues", field: "number", apply: b => void (b.issues[1]!.number = b.issues[0]!.number) },
+      { population: "criteria", field: "id", apply: b => void (b.criteria[1]!.id = b.criteria[0]!.id) },
+      { population: "phases", field: "phase", apply: b => void (b.phases[1]!.phase = b.phases[0]!.phase) },
+    ];
+    for (const d of dupes) {
+      const board = completeBoard();
+      d.apply(board);
+      const at = plant(`dupe-${d.population}-${d.field}`, board);
+      refuses(["--snapshot", at], `a board with a repeated ${d.population}.${d.field}`);
+      expect(
+        run(SCRIPT, ["--snapshot", at]).err,
+        `a repeated ${d.population}.${d.field} was read as a longer board`,
+      ).toContain(`\`${d.population}\` repeats an identity`);
+    }
+  });
+
+  test("a milestoneState the producer does not emit refuses, rather than counting as not-unchanged", () => {
+    // `unchanged` is the only conformant value, so a fifth verdict — a
+    // typo, a producer inventing one — lands in the `!== "unchanged"`
+    // bucket and reads as an honest SHORT. That is a board nobody read
+    // reported as a board that is behind, which are different facts.
+    const board = completeBoard() as unknown as { phases: Record<string, unknown>[] };
+    board.phases[1]!.milestoneState = "unchangd";
+    const at = plant("bad-milestone-state", board as unknown as BoardSnapshot);
+    refuses(["--snapshot", at], "a phase carrying an unknown milestoneState");
+    expect(run(SCRIPT, ["--snapshot", at]).err).toContain("`phases`[1] has no usable identity");
   });
 
   test("a criterion that OMITS satisfiedByIssue refuses — undefined is not a covered criterion", () => {
@@ -217,15 +299,15 @@ describe("the refusals, each proved against the mutant", () => {
     // `number` — what a blocked-by edge resolves against — makes the board
     // unread. Both directions are asserted, so neither repair can come
     // back.
-    const degrades: Record<string, string> = {
-      blockedBy: "blocked-by-edges",
-      labels: "queue-label",
-      criteriaField: "criteria-field",
-      milestone: "milestones",
-    };
-    for (const [field, reading] of Object.entries(degrades)) {
-      const board = completeBoard() as unknown as { issues: Record<string, unknown>[] };
-      delete board.issues[1]![field];
+    const degrades: { row: "issues" | "phases"; at: number; field: string; reading: string }[] = [
+      { row: "issues", at: 1, field: "blockedBy", reading: "blocked-by-edges" },
+      { row: "issues", at: 1, field: "labels", reading: "queue-label" },
+      { row: "issues", at: 1, field: "criteriaField", reading: "criteria-field" },
+      { row: "phases", at: 1, field: "milestoneState", reading: "milestones" },
+    ];
+    for (const { row, at: index, field, reading } of degrades) {
+      const board = completeBoard() as unknown as Record<string, Record<string, unknown>[]>;
+      delete board[row]![index]![field];
       const at = plant(`missing-${field}`, board as unknown as BoardSnapshot);
       const r = run(SCRIPT, ["--snapshot", at]);
       expect(r.err, `omitting ${field} threw`).not.toContain("TypeError");
@@ -238,13 +320,24 @@ describe("the refusals, each proved against the mutant", () => {
       refuses(["--snapshot", at], `a board short on ${reading}`);
     }
 
-    const noNumber = completeBoard() as unknown as { issues: Record<string, unknown>[] };
-    delete noNumber.issues[1]!.number;
-    const at = plant("missing-number", noNumber as unknown as BoardSnapshot);
-    refuses(["--snapshot", at], "an issue with no number");
-    expect(run(SCRIPT, ["--snapshot", at]).err, "an unidentifiable row did not refuse the board").toContain(
-      "not an empty board",
-    );
+    // And every identity field, not just the issue's. All three rows carry
+    // one, all three are what a ratio's denominator is counted over, and
+    // repairing them one at a time is what rounds 1, 2 and 5 of #1697 were.
+    const identities: { row: "issues" | "criteria" | "phases"; field: string }[] = [
+      { row: "issues", field: "number" },
+      { row: "criteria", field: "id" },
+      { row: "phases", field: "phase" },
+    ];
+    for (const { row, field } of identities) {
+      const board = completeBoard() as unknown as Record<string, Record<string, unknown>[]>;
+      delete board[row]![0]![field];
+      const at = plant(`missing-${row}-${field}`, board as unknown as BoardSnapshot);
+      refuses(["--snapshot", at], `a ${row} row with no ${field}`);
+      expect(
+        run(SCRIPT, ["--snapshot", at]).err,
+        `an unidentifiable ${row} row did not refuse the board`,
+      ).toContain(`\`${row}\`[0] has no usable identity`);
+    }
   });
 
   test("a complete board passes — the control, without which every case above is vacuous", () => {
@@ -263,7 +356,7 @@ describe("each reading, planted short and planted complete", () => {
    * something: the same board, one field different.
    */
   const breaks: { reading: string; what: string; break: (b: BoardSnapshot) => void }[] = [
-    { reading: "milestones", what: "an issue with no milestone", break: b => void (b.issues[1]!.milestone = null) },
+    { reading: "milestones", what: "a phase whose milestone the board does not carry", break: b => void (b.phases[1]!.milestoneState = "create") },
     { reading: "criterion-coverage", what: "a criterion naming no issue and not recorded true", break: b => void (b.criteria[2]!.recordedTrue = false) },
     { reading: "blocked-by-edges", what: "an issue that is neither a declared root nor blocked", break: b => void (b.issues[1]!.blockedBy = []) },
     { reading: "criteria-field", what: "an issue whose Criteria column is blank", break: b => void (b.issues[0]!.criteriaField = "  ") },
@@ -379,6 +472,328 @@ describe("each reading, planted short and planted complete", () => {
       ["blocked-by-edges", "criteria-field", "criterion-coverage", "milestones"],
     );
     expect(conformant(readings), "four of five met read as conformant").toBe(false);
+  });
+});
+
+describe("the milestones reading (B1)", () => {
+  /**
+   * The reading B1 replaced was *every engine issue sits in a milestone*,
+   * and it could not fail. "Engine issue" is not written down anywhere —
+   * zero issues carried the `engine` label on 2026-11-01 — so the only way
+   * to enumerate the population is to ask which issues sit in a Pipeline
+   * Phase milestone, and that population is 100% in a milestone by
+   * construction. The cases below are about the population that can fail.
+   */
+  const milestones = () => READINGS.find(r => r.name === "milestones")!;
+
+  test("it counts CRITERIA, not phases — a big phase with no milestone is not one phase short", () => {
+    const board = completeBoard();
+    board.phases[0]!.milestoneState = "create"; // the two-criterion phase
+    const r = takeReading(milestones(), board);
+    expect(r.target, "the denominator is phases, so a phase holding fourteen criteria counts as one").toBe(3);
+    expect(r.measured, "the numerator is phases too — the two criteria with no home were not counted").toBe(1);
+  });
+
+  test("DRIFT is short, not met — rename and update are a board saying what the spec does not", () => {
+    // `create` is the obvious one and the cheapest fix would have tested
+    // only that. `rename` is a milestone whose title no longer matches the
+    // spec's phase heading and `update` is one whose criteria list has
+    // drifted; both are a live milestone that exists, which is exactly the
+    // shape a `!== "create"` predicate would wave through.
+    for (const state of ["create", "rename", "update"] as const) {
+      const board = completeBoard();
+      board.phases[1]!.milestoneState = state;
+      expect(takeReading(milestones(), board).status, `milestoneState "${state}" was counted as conformant`).toBe(
+        "short",
+      );
+    }
+    const ok = completeBoard();
+    expect(takeReading(milestones(), ok).status, "`unchanged` everywhere was not met — the control").toBe("met");
+  });
+
+  test("a board with no phases is unmeasured, not met", () => {
+    const board = completeBoard();
+    board.phases = [];
+    expect(takeReading(milestones(), board).status).toBe("unmeasured");
+  });
+});
+
+describe("every field the snapshot declares is read by something", () => {
+  /**
+   * The defect this whole stage exists to close is *declared and nothing
+   * reads it* — a field, a column or a document that looks like state and
+   * is inert. B1 found one here: `BoardIssue.milestone` existed only to
+   * feed the circular reading above, and after that reading moved to the
+   * phase population nothing would have read it.
+   *
+   * So rather than deleting that one field, the property is asserted for
+   * the whole population: every field of every snapshot row has to change
+   * what this command reports. The field list is scanned out of the
+   * interfaces, so adding a field to one and not perturbing it here fails
+   * the first case rather than going unnoticed.
+   */
+  const fieldsOf = (iface: string): string[] => {
+    const block = source.match(new RegExp(String.raw`export interface ${iface} \{([\s\S]*?)\n\}`));
+    if (!block) throw new Error(`no interface ${iface} in scripts/board-conformance.ts`);
+    return [...block[1]!.matchAll(/^ {2}(\w+)\??:/gm)].map(m => m[1]!);
+  };
+
+  type Perturbation = { field: string; effect: "reading" | "unreadable"; apply: (b: BoardSnapshot) => void };
+  const perturbations: Perturbation[] = [
+    // Identity fields: repeated, not removed. A repeat is the case a
+    // removal cannot make — the row still parses and the denominator is
+    // the thing that moves.
+    { field: "BoardIssue.number", effect: "unreadable", apply: b => void (b.issues[1]!.number = b.issues[0]!.number) },
+    { field: "BoardCriterion.id", effect: "unreadable", apply: b => void (b.criteria[1]!.id = b.criteria[0]!.id) },
+    { field: "BoardPhase.phase", effect: "unreadable", apply: b => void (b.phases[1]!.phase = b.phases[0]!.phase) },
+
+    { field: "BoardIssue.blockedBy", effect: "reading", apply: b => void (b.issues[1]!.blockedBy = []) },
+    { field: "BoardIssue.rootReady", effect: "reading", apply: b => void (b.issues[0]!.rootReady = false) },
+    { field: "BoardIssue.criteriaField", effect: "reading", apply: b => void (b.issues[0]!.criteriaField = "  ") },
+    { field: "BoardIssue.labels", effect: "reading", apply: b => void (b.issues[1]!.labels = ["bug"]) },
+    { field: "BoardCriterion.satisfiedByIssue", effect: "reading", apply: b => void (b.criteria[0]!.satisfiedByIssue = null) },
+    { field: "BoardCriterion.recordedTrue", effect: "reading", apply: b => void (b.criteria[2]!.recordedTrue = false) },
+    { field: "BoardPhase.criteria", effect: "reading", apply: b => void (b.phases[1]!.criteria = [...b.phases[1]!.criteria, "SC-9999"]) },
+    { field: "BoardPhase.milestoneState", effect: "reading", apply: b => void (b.phases[1]!.milestoneState = "create") },
+  ];
+
+  test("the perturbation list is exactly the declared fields — a new field cannot slip in inert", () => {
+    const declared = ["BoardIssue", "BoardCriterion", "BoardPhase"].flatMap(i =>
+      fieldsOf(i).map(f => `${i}.${f}`),
+    );
+    expect(
+      perturbations.map(p => p.field).sort(),
+      "a snapshot field has no perturbation below, so nothing here proves any reading looks at it. Add a row " +
+        "that moves a reading — or delete the field, which is what B1 did to BoardIssue.milestone.",
+    ).toEqual(declared.sort());
+  });
+
+  for (const p of perturbations) {
+    test(`${p.field} changes what the command reports`, () => {
+      const board = completeBoard();
+      p.apply(board);
+      if (p.effect === "unreadable") {
+        expect(
+          readSnapshotText(JSON.stringify(board)).board,
+          `a repeated ${p.field} parsed as a valid board, so the identity it carries decides nothing`,
+        ).toBeNull();
+        return;
+      }
+      const before = takeReadings(completeBoard()).map(r => `${r.name}:${r.status}:${r.measured}/${r.target}`);
+      const after = takeReadings(board).map(r => `${r.name}:${r.status}:${r.measured}/${r.target}`);
+      expect(
+        after,
+        `perturbing ${p.field} changed no reading's status, numerator or denominator. The field is declared ` +
+          `and nothing reads it — the exact shape Stage B exists to close.`,
+      ).not.toEqual(before);
+    });
+  }
+});
+
+describe("a repeat inside a LIST, not just a repeated row", () => {
+  /**
+   * Round 2 of this PR, and the same defect one level down from the row
+   * identities: `milestones` sums `phases[].criteria`, so one criterion
+   * listed in two phases raises the target while only one of the two can
+   * ever be credited. The row-level sweep did not reach it because it
+   * asked which ROWS carry an identity, not which LISTS a measure counts.
+   *
+   * So the rule is stated over the whole population of list-valued
+   * fields, with the membership predicted rather than described: a list
+   * whose repeat moves a reading must be refused, and a list whose repeat
+   * moves nothing must not be — refusing a board over a duplicate that
+   * changes no reading is a refusal nobody can act on.
+   */
+  const lists: { field: string; apply: (b: BoardSnapshot) => void }[] = [
+    { field: "phases[].criteria (within one phase)", apply: b => void (b.phases[0]!.criteria = [...b.phases[0]!.criteria, b.phases[0]!.criteria[0]!]) },
+    { field: "phases[].criteria (across two phases)", apply: b => void (b.phases[1]!.criteria = [...b.phases[1]!.criteria, b.phases[0]!.criteria[0]!]) },
+    { field: "issues[].blockedBy", apply: b => void (b.issues[1]!.blockedBy = [...b.issues[1]!.blockedBy, b.issues[1]!.blockedBy[0]!]) },
+    { field: "issues[].labels", apply: b => void (b.issues[1]!.labels = [...b.issues[1]!.labels, b.issues[1]!.labels[0]!]) },
+  ];
+
+  const triple = (b: BoardSnapshot) => takeReadings(b).map(r => `${r.name}:${r.status}:${r.measured}/${r.target}`);
+
+  for (const l of lists) {
+    test(`a repeat in ${l.field} is refused exactly when it moves a reading`, () => {
+      const board = completeBoard();
+      l.apply(board);
+      const moves = JSON.stringify(triple(board)) !== JSON.stringify(triple(completeBoard()));
+      const read = readSnapshotText(JSON.stringify(board));
+      expect(
+        read.board === null,
+        moves
+          ? `a repeat in ${l.field} changes a reading's numbers and the board was still read — the denominator ` +
+            `counts one entry twice and nothing can ever reach it`
+          : `a repeat in ${l.field} changes no reading and the board was refused — a refusal nobody can act on`,
+      ).toBe(moves);
+      if (moves) expect(read.why).toContain("repeats an identity");
+    });
+  }
+
+  test("at least one list is in each group, so neither arm above is vacuous", () => {
+    const moved = lists.filter(l => {
+      const b = completeBoard();
+      l.apply(b);
+      return JSON.stringify(triple(b)) !== JSON.stringify(triple(completeBoard()));
+    });
+    expect(moved.length, "no list's repeat moves a reading, so the refusing arm witnessed nothing").toBeGreaterThan(0);
+    expect(
+      moved.length,
+      "every list's repeat moves a reading, so the tolerated arm witnessed nothing",
+    ).toBeLessThan(lists.length);
+  });
+});
+
+describe("--produce: the spawned source", () => {
+  /**
+   * The producer is reached by PATH, not by import, so a copy of the
+   * command in a directory holding a stand-in `board-snapshot.ts` is the
+   * real `--produce` path with a source it can predict.
+   *
+   * Round 1 of this PR: `produceBoard` had no coverage at all, so dropping
+   * the `--repo` forward or inverting the exit-code test would have
+   * shipped with every case above green. The stand-in exists to make those
+   * two mutations visible, which is why it ECHOES its argv rather than
+   * just printing a snapshot.
+   */
+  const stage = (producer: string): { command: string; argvAt: string } => {
+    const dir = mkdtempSync(join(SCRATCH, "produce-"));
+    writeFileSync(join(dir, "board-conformance.ts"), source);
+    writeFileSync(join(dir, "board-snapshot.ts"), producer);
+    return { command: join(dir, "board-conformance.ts"), argvAt: join(dir, "argv.json") };
+  };
+
+  /**
+   * Records the argv it was handed, then prints a board meeting every
+   * reading.
+   *
+   * It writes argv to a FILE rather than to stderr: `produceBoard`
+   * captures the child's stderr and keeps it only on a refusal, so an
+   * echo there is invisible on the path this case is about.
+   */
+  const ECHOING_PRODUCER = `
+import { writeFileSync } from "fs";
+import { join } from "path";
+writeFileSync(join(import.meta.dir, "argv.json"), JSON.stringify(process.argv.slice(2)));
+process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
+`;
+
+  test("it forwards --spec, --prefix and --repo to the producer", () => {
+    const { command, argvAt } = stage(ECHOING_PRODUCER);
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline", "--repo", "o/n"]);
+    expect(r.code, `--produce refused a board every reading meets:\n${r.out}${r.err}`).toBe(0);
+    expect(
+      JSON.parse(readFileSync(argvAt, "utf-8")) as string[],
+      "an argument the caller gave was not forwarded, so the producer read a different board than it was asked for",
+    ).toEqual(["specs/X.md", "--prefix", "Pipeline", "--repo", "o/n"]);
+    expect(r.out).toContain("every reading is met");
+  });
+
+  test("--repo is optional, and omitting it forwards nothing in its place", () => {
+    const { command, argvAt } = stage(ECHOING_PRODUCER);
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline"]);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(readFileSync(argvAt, "utf-8"))).toEqual(["specs/X.md", "--prefix", "Pipeline"]);
+  });
+
+  test("a producer that refuses makes the command UNMEASURED, and its reason is carried through", () => {
+    const { command } = stage(`process.stderr.write("UNMEASURED — the API said 502\\n"); process.exit(3);`);
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline"]);
+    expect(r.code, "a producer that refused was read as a board").not.toBe(0);
+    expect(r.err).toContain("board-snapshot refused (exit 3)");
+    expect(r.err, "the producer's own reason was dropped, so the refusal says nothing actionable").toContain(
+      "the API said 502",
+    );
+  });
+
+  test("a producer that exits 0 with unreadable output is UNMEASURED, not an empty board", () => {
+    const { command } = stage(`process.stdout.write("not a snapshot");`);
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline"]);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("exited 0 and what it emitted is unreadable");
+    expect(r.err, "the parse failure's own reason was not carried").toContain("it is not JSON");
+  });
+
+  test("--produce and --snapshot together refuse — two sources is a question, not a default", () => {
+    const { command } = stage(ECHOING_PRODUCER);
+    const planted = plant("two-sources", completeBoard());
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline", "--snapshot", planted]);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("two sources");
+  });
+
+  test("--produce with no --spec or no --prefix refuses, and never spawns", () => {
+    for (const argv of [
+      ["--produce", "--prefix", "Pipeline"],
+      ["--produce", "--spec", "specs/X.md"],
+    ]) {
+      // A producer that would CRASH if reached, so the refusal is proved
+      // to have happened before the spawn rather than after it.
+      const { command } = stage(`throw new Error("the producer was spawned without the arguments it needs");`);
+      const r = run(command, argv);
+      expect(r.code, `[${argv.join(" ")}] did not refuse`).not.toBe(0);
+      expect(r.err).toContain("--produce needs --spec <path> and --prefix <name>");
+      expect(r.err, `[${argv.join(" ")}] spawned the producer anyway`).not.toContain("the producer was spawned");
+    }
+  });
+
+  test("a producer that hangs is killed and reported, not waited on", () => {
+    // Every other failure mode here becomes a crisp refusal; a wedge was
+    // the one that did not, and an unattended loop cannot observe a wedge
+    // — it just stops. The producer below never exits.
+    const { command } = stage(`await new Promise(() => {});`);
+    const started = Date.now();
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "P"], {
+      RUNGATE_PRODUCE_TIMEOUT_MS: "2000",
+    });
+    const elapsed = Date.now() - started;
+    expect(r.code, "a hanging producer was read as a board").not.toBe(0);
+    expect(r.err).toContain("was killed by");
+    expect(
+      elapsed,
+      `the run took ${elapsed}ms against a 2000ms bound — the timeout is not what ended it`,
+    ).toBeLessThan(30_000);
+
+    // And the default is what ships. An env var set in CI, or a typo
+    // falling back to 0, would disable the bound in spawnSync entirely.
+    expect(PRODUCE_TIMEOUT_MS, "the default timeout is not a positive number of milliseconds").toBe(60_000);
+  });
+
+  test("--name=value and --name value forward identically — one parser, not two", () => {
+    // The producer parses its own flags with `parseArgs`, which accepts
+    // both spellings; this command used to read its own with
+    // `argv.indexOf`, which accepts one. So `--spec=x` worked on the
+    // producer and was silently refused on the path that forwards to it.
+    // Two deciders for one input, disagreeing about exactly the spelling
+    // that matters.
+    const spaced = stage(ECHOING_PRODUCER);
+    expect(run(spaced.command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline", "--repo", "o/n"]).code).toBe(0);
+    const joined = stage(ECHOING_PRODUCER);
+    expect(run(joined.command, ["--produce", "--spec=specs/X.md", "--prefix=Pipeline", "--repo=o/n"]).code).toBe(0);
+    expect(
+      JSON.parse(readFileSync(joined.argvAt, "utf-8")),
+      "`--name=value` forwarded something different from `--name value`",
+    ).toEqual(JSON.parse(readFileSync(spaced.argvAt, "utf-8")));
+  });
+
+  test("a producer that cannot be started says so, rather than reporting no output", () => {
+    // `r.error` with a null status, empty stdout and empty stderr — the
+    // one failure whose cause is already in hand, and the one a message
+    // built from stdout/stderr alone describes as "no output".
+    const { command } = stage(ECHOING_PRODUCER);
+    // The OUTER spawn goes through this process's own binary, so only the
+    // inner `spawnSync("bun", ...)` is the one that cannot resolve. Using
+    // the name for both would fail at the outer call and the case would
+    // pass having never reached the branch.
+    const r = spawnSync(process.execPath, [command, "--produce", "--spec", "specs/X.md", "--prefix", "P"], {
+      cwd: ROOT,
+      encoding: "utf-8",
+      env: { ...process.env, PATH: join(SCRATCH, "nothing-here") },
+    });
+    expect(r.status, `the outer spawn itself failed: ${r.error?.message ?? "no error"}`).not.toBe(0);
+    expect(r.stderr, "a spawn that never started was reported as a producer that ran and said nothing").toContain(
+      "could not be started",
+    );
   });
 });
 
