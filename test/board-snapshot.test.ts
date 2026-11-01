@@ -111,11 +111,32 @@ async function withSpec<T>(content: string, fn: (dir: string, specPath: string) 
   }
 }
 
-const emitted = async (argv: string[], gh: BoardSnapshotGitHub, dir: string): Promise<ProducedSnapshot> => {
-  const out = join(dir, "snapshot.json");
-  const code = await boardSnapshotMain([...argv, "--out", out], gh);
+/**
+ * Run the producer and capture what it printed.
+ *
+ * stdout is the only output it has. It writes no file by design: a
+ * snapshot somebody can commit is one that goes stale, and SC-2619 of
+ * `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md` refuses a step reading a board
+ * state that was assembled earlier by somebody else.
+ */
+const capture = async (argv: string[], gh: BoardSnapshotGitHub): Promise<{ code: number; text: string }> => {
+  const chunks: string[] = [];
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((s: string) => {
+    chunks.push(s);
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    return { code: await boardSnapshotMain(argv, gh), text: chunks.join("") };
+  } finally {
+    process.stdout.write = write;
+  }
+};
+
+const emitted = async (argv: string[], gh: BoardSnapshotGitHub): Promise<ProducedSnapshot> => {
+  const { code, text } = await capture(argv, gh);
   expect(code, "the producer refused a case that is supposed to succeed").toBe(0);
-  return JSON.parse(readFileSync(out, "utf-8")) as ProducedSnapshot;
+  return JSON.parse(text) as ProducedSnapshot;
 };
 
 describe("what it produces", () => {
@@ -125,7 +146,7 @@ describe("what it produces", () => {
       // fixture where every phase lands on one verdict cannot show that
       // the producer reads the board rather than asserting a constant.
       const { gh } = spy([CONFORMANT_LIVE[0]!]);
-      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh, dir);
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
       expect(snap.phases).toEqual([
         { phase: 0, criteria: ["SC-9001", "SC-9002"], milestoneState: "unchanged" },
         { phase: 1, criteria: ["SC-9003"], milestoneState: "create" },
@@ -140,7 +161,7 @@ describe("what it produces", () => {
         CONFORMANT_LIVE[1]!,
       ];
       const { gh } = spy(stale);
-      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh, dir);
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
       expect(snap.phases.find(p => p.phase === 0)?.milestoneState).toBe("update");
       // The control: the phase whose body did not drift is still unchanged,
       // so the `update` above is the drift and not the whole run going red.
@@ -154,30 +175,20 @@ describe("what it produces", () => {
     // true thing to say about a source that does not exist yet.
     await withSpec(SPEC, async (dir, at) => {
       const { gh } = spy(CONFORMANT_LIVE);
-      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh, dir);
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
       expect(snap.issues).toEqual([]);
       expect(snap.criteria).toEqual([]);
     });
   });
 
-  test("it writes to stdout when --out is absent, and the two carry the same snapshot", async () => {
-    await withSpec(SPEC, async (dir, at) => {
-      const { gh } = spy(CONFORMANT_LIVE);
-      const chunks: string[] = [];
-      const write = process.stdout.write.bind(process.stdout);
-      // @ts-expect-error narrowing the overloads is not worth it here
-      process.stdout.write = (s: string) => void chunks.push(s) || true;
-      let code: number;
-      try {
-        code = await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n"], gh);
-      } finally {
-        process.stdout.write = write;
-      }
-      expect(code).toBe(0);
-      const viaStdout = JSON.parse(chunks.join("")) as ProducedSnapshot;
-      const viaFile = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh, dir);
-      expect(viaStdout.phases).toEqual(viaFile.phases);
-    });
+  test("it writes no file — the snapshot is stdout and nothing else", async () => {
+    // A producer with an --out flag invites a committed snapshot, and a
+    // committed snapshot is a board state that was true once. SC-2619
+    // refuses a step that reads one. Asserted on the SOURCE, because a
+    // behavioural case cannot show that a file was not written somewhere
+    // the case never looked.
+    expect(SOURCE, "the producer writes a file").not.toContain("writeFileSync");
+    expect(SOURCE, "the producer takes an output path").not.toContain("--out");
   });
 });
 
@@ -233,7 +244,7 @@ describe("the refusals, and whether the API was reached", () => {
     // genuinely has no milestones is a READABLE board, every phase short.
     await withSpec(SPEC, async (dir, at) => {
       const { gh } = spy([]);
-      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh, dir);
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
       expect(snap.phases.map(p => p.milestoneState)).toEqual(["create", "create"]);
     });
   });
@@ -264,8 +275,7 @@ describe("the refusals, and whether the API was reached", () => {
 
         process.env.GITHUB_REPOSITORY = "env/slug";
         const fromEnv = spy(CONFORMANT_LIVE);
-        const out = join(_dir, "from-env.json");
-        expect(await boardSnapshotMain([at, "--prefix", "Fix", "--out", out], fromEnv.gh)).toBe(0);
+        expect((await capture([at, "--prefix", "Fix"], fromEnv.gh)).code).toBe(0);
         expect(fromEnv.calls).toContain("listMilestones env/slug");
       } finally {
         if (had === undefined) delete process.env.GITHUB_REPOSITORY;
@@ -281,11 +291,11 @@ describe("the two files agree, and the producer never writes", () => {
     // only thing that stops them drifting apart — a producer emitting a
     // key the reader does not know about would be refused as unreadable
     // at the moment somebody wires the verify command, not here.
-    await withSpec(SPEC, async (dir, at) => {
+    await withSpec(SPEC, async (_dir, at) => {
       const { gh } = spy(CONFORMANT_LIVE);
-      const out = join(dir, "snap.json");
-      expect(await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n", "--out", out], gh)).toBe(0);
-      const read = readSnapshotText(readFileSync(out, "utf-8"));
+      const { code, text } = await capture([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      expect(code).toBe(0);
+      const read = readSnapshotText(text);
       expect(read.why, "the reader could not parse what the producer wrote").toBeNull();
       expect(read.board!.phases.map(p => p.milestoneState)).toEqual(["unchanged", "unchanged"]);
     });

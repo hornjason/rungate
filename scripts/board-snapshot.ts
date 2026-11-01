@@ -32,7 +32,7 @@
  * A producer that repaired the thing it measures would make the reading
  * true by taking it.
  */
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient, listMilestones } from "../lib/github";
@@ -57,14 +57,17 @@ export interface BoardSnapshotGitHub {
 
 const LIVE_GITHUB: BoardSnapshotGitHub = { createClient: createGitHubClient, listMilestones };
 
-const USAGE = `rungate board-snapshot <spec.md> --prefix <name> [--repo <owner/name>] [--out <path>]
+const USAGE = `rungate board-snapshot <spec.md> --prefix <name> [--repo <owner/name>]
 
   --prefix   the milestone name prefix, e.g. "Pipeline" for
              "Pipeline Phase 4 — every spec is planned". Required, for the
              reason plan-spec states: deriving it from the filename calls
              the live milestones something they are not.
   --repo     owner/name. Defaults to $GITHUB_REPOSITORY.
-  --out      write the snapshot here. Default: stdout.`;
+
+The snapshot goes to stdout. It writes no file on purpose: a snapshot
+somebody can commit is a snapshot that goes stale, and SC-2619 of
+SPEC-TO-BOARD-PIPELINE-SPEC.md refuses a step that reads one.`;
 
 /** One phase of the spec, and whether the board already carries its milestone. */
 export interface SnapshotPhase {
@@ -99,7 +102,6 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
       options: {
         prefix: { type: "string" },
         repo: { type: "string" },
-        out: { type: "string" },
         "project-root": { type: "string" },
       },
       allowPositionals: true,
@@ -185,12 +187,7 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
     criteria: [],
   };
 
-  const text = `${JSON.stringify(snapshot, null, 2)}\n`;
-  if (values.out) {
-    writeFileSync(isAbsolute(values.out) ? values.out : join(root, values.out), text);
-  } else {
-    process.stdout.write(text);
-  }
+  process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
   return 0;
 }
 
