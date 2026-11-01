@@ -157,6 +157,45 @@ describe("the refusals, each proved against the mutant", () => {
     expect(run(SCRIPT, ["--snapshot", empty]).out).toContain("UNMEASURED");
   });
 
+  test("a criterion that OMITS satisfiedByIssue refuses — undefined is not a covered criterion", () => {
+    // Review of #1697. `undefined !== null` is true, so a generator relying
+    // on ordinary object omission rather than an explicit null would have
+    // had every uncovered criterion counted as covered — this command's own
+    // failure mode inverted, a reading reporting met on data it never saw.
+    const board = completeBoard() as unknown as { criteria: Record<string, unknown>[] };
+    delete board.criteria[0]!.satisfiedByIssue;
+    const at = plant("omitted-field", board as unknown as BoardSnapshot);
+    refuses(["--snapshot", at, "--reading", "criterion-coverage"], "a criterion with no satisfiedByIssue key");
+
+    // Through the CLI the parser catches it first, so that assertion
+    // witnesses the shape check rather than the coverage predicate — two
+    // mechanisms, one exit code. The predicate is therefore exercised
+    // directly, on a board the parser never saw.
+    const spec = READINGS.find(r => r.name === "criterion-coverage")!;
+    const reading = takeReading(spec, board as unknown as BoardSnapshot);
+    expect(reading.status, "an omitted satisfiedByIssue counted as a covered criterion").toBe("short");
+    expect(reading.measured).toBe(2);
+  });
+
+  test("an issue missing a field the measures dereference refuses as UNMEASURED, not as a crash", () => {
+    // Review of #1697. `i.blockedBy.length` and `i.labels.includes(...)`
+    // assume a present array; a hand-written fixture or a half-wired source
+    // omitting one used to die on a TypeError — a stack trace where the
+    // contract says UNMEASURED, exiting with a code that reads like a
+    // refusal while witnessing nothing.
+    for (const field of ["blockedBy", "labels", "number", "criteriaField"]) {
+      const board = completeBoard() as unknown as { issues: Record<string, unknown>[] };
+      delete board.issues[0]![field];
+      const at = plant(`missing-${field}`, board as unknown as BoardSnapshot);
+      refuses(["--snapshot", at], `an issue with no ${field}`);
+      const r = run(SCRIPT, ["--snapshot", at]);
+      expect(r.err, `omitting ${field} produced a stack trace rather than the UNMEASURED refusal`).toContain(
+        "not an empty board",
+      );
+      expect(r.err, `omitting ${field} threw`).not.toContain("TypeError");
+    }
+  });
+
   test("a complete board passes — the control, without which every case above is vacuous", () => {
     const at = plant("complete", completeBoard());
     const r = run(SCRIPT, ["--snapshot", at]);

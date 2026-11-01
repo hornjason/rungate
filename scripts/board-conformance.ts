@@ -113,8 +113,14 @@ export const READINGS: readonly ReadingSpec[] = [
     name: "criterion-coverage",
     item: "B2",
     what: "every engine criterion names an open issue, or is recorded as already true",
+    // `typeof === "number"`, not `!== null`. A criterion object that simply
+    // OMITS the field is `undefined`, and `undefined !== null` is true — so
+    // a B2 generator relying on ordinary object omission rather than an
+    // explicit null would have every uncovered criterion counted as covered.
+    // That is this command's own failure mode, inverted: a reading reporting
+    // met on data it never saw.
     measure: b => ({
-      measured: b.criteria.filter(c => c.satisfiedByIssue !== null || c.recordedTrue === true).length,
+      measured: b.criteria.filter(c => typeof c.satisfiedByIssue === "number" || c.recordedTrue === true).length,
       target: b.criteria.length,
     }),
   },
@@ -181,13 +187,43 @@ export function formatReading(r: Reading): string {
   return `${mark} ${r.name.padEnd(20)} ${r.why}\n             ${r.what}  [${r.item}]`;
 }
 
+const isIssue = (v: unknown): v is BoardIssue => {
+  const i = v as Partial<BoardIssue>;
+  return (
+    typeof i === "object" && i !== null &&
+    typeof i.number === "number" &&
+    (i.milestone === null || typeof i.milestone === "string") &&
+    Array.isArray(i.blockedBy) &&
+    (i.criteriaField === null || typeof i.criteriaField === "string") &&
+    Array.isArray(i.labels)
+  );
+};
+
+const isCriterion = (v: unknown): v is BoardCriterion => {
+  const c = v as Partial<BoardCriterion>;
+  return (
+    typeof c === "object" && c !== null &&
+    typeof c.id === "string" &&
+    (c.satisfiedByIssue === null || typeof c.satisfiedByIssue === "number")
+  );
+};
+
 function parseSnapshot(path: string): BoardSnapshot | null {
   // A snapshot that is present and unreadable is UNMEASURED, not an empty
   // board — `.claude/rules/config-access.md`. Both end in a refusal here,
   // but only one of them says the file was broken.
+  //
+  // The ELEMENT shapes are checked, not just the two arrays. Without that,
+  // an issue omitting `blockedBy` or `labels` reaches a measure that
+  // dereferences them and the command dies on a TypeError — a stack trace
+  // where the contract says UNMEASURED, and an exit code that happens to
+  // look like a refusal while witnessing nothing. `--snapshot` reads a file
+  // this program did not write, so every field it touches is validated at
+  // the boundary rather than at each use.
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as Partial<BoardSnapshot>;
     if (!Array.isArray(raw.issues) || !Array.isArray(raw.criteria)) return null;
+    if (!raw.issues.every(isIssue) || !raw.criteria.every(isCriterion)) return null;
     return { issues: raw.issues, criteria: raw.criteria };
   } catch {
     return null;
