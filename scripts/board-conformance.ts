@@ -36,6 +36,7 @@
 import { spawnSync } from "child_process";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { parseArgs } from "util";
 
 /**
  * The one exit code every refusal routes through, declared exactly once.
@@ -462,26 +463,41 @@ export function readSnapshotText(text: string): SnapshotRead {
  * temp directory and the spawn fails. The battery uses `--snapshot`, which
  * is why that stays the only source the negative cases touch.
  */
-function produceBoard(argv: readonly string[]): { board: BoardSnapshot | null; error: string | null } {
-  const flag = (name: string): string | undefined => {
-    const at = argv.indexOf(name);
-    if (at < 0) return undefined;
-    const v = argv[at + 1];
-    return v === undefined || v.startsWith("--") ? undefined : v;
-  };
-  const spec = flag("--spec");
-  const prefix = flag("--prefix");
+function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: string | null } {
+  const { spec, prefix, repo } = flags;
   if (spec === undefined || prefix === undefined) {
     return { board: null, error: "--produce needs --spec <path> and --prefix <name>" };
   }
   const args = [join(import.meta.dir, "board-snapshot.ts"), spec, "--prefix", prefix];
-  const repo = flag("--repo");
   if (repo !== undefined) args.push("--repo", repo);
-  const r = spawnSync("bun", args, { encoding: "utf-8" });
-  // `r.error` first. A spawn that never started — no `bun` on PATH —
-  // sets it and leaves status null, stdout and stderr empty, so reading
-  // only those reports "exit none: no output" for the one failure whose
-  // cause is already in hand.
+  // A TIMEOUT, because a hang is the one failure mode every other branch
+  // here turns into a crisp refusal and this one did not. `listMilestones`
+  // has no timeout of its own, and B5 exists so a loop can run
+  // unattended — a wedge is worse than a refusal, because nothing
+  // observes it.
+  const r = spawnSync("bun", args, { encoding: "utf-8", timeout: PRODUCE_TIMEOUT_MS });
+  // The timeout BEFORE the generic error. An expired `timeout` sets
+  // `error` as well as `signal`, so checking `error` first puts a hang
+  // into the "could not be started" branch, which says the opposite of
+  // what happened.
+  //
+  // `signal`, and not `error.code === "ETIMEDOUT"`. Measured on this
+  // runtime: a killed child reports `status: null, signal: "SIGTERM",
+  // error.code: "ETIMEDOUT"` — BOTH — so an `||` across the two has a
+  // half no input here can reach, and a clause nothing can exercise is
+  // not a guard.
+  if (r.signal !== null && r.signal !== undefined) {
+    return {
+      board: null,
+      error:
+        `board-snapshot was killed by ${r.signal ?? "the timeout"} after ${PRODUCE_TIMEOUT_MS}ms. A producer ` +
+        `that hangs is UNMEASURED, not a board — an unattended loop cannot observe a wedge.`,
+    };
+  }
+  // Then a spawn that never started — no `bun` on PATH. It sets `error`
+  // and leaves status null with both streams empty, so reading only
+  // those reports "exit none: no output" for the one failure whose cause
+  // is already in hand.
   if (r.error) {
     return { board: null, error: `board-snapshot could not be started: ${r.error.message}` };
   }
@@ -497,27 +513,107 @@ function produceBoard(argv: readonly string[]): { board: BoardSnapshot | null; e
     : { board: read.board, error: null };
 }
 
+/**
+ * How long the producer gets. A reading is a few API calls; a minute is
+ * a hang.
+ *
+ * Overridable by env ONLY so the hang can be proved — a timeout nothing
+ * can reach inside a test run is a timeout nobody has watched fire, and
+ * that is the shape this whole file is about. A non-numeric or absent
+ * value falls back to the default rather than to zero, because `0`
+ * disables the timeout entirely in `spawnSync` and a mis-set variable
+ * would quietly remove the bound.
+ */
+export const PRODUCE_TIMEOUT_MS = Number(process.env.RUNGATE_PRODUCE_TIMEOUT_MS) || 60_000;
+
+interface Flags {
+  listReadings: boolean;
+  produce: boolean;
+  snapshot?: string;
+  snapshotGiven: boolean;
+  reading?: string;
+  readingGiven: boolean;
+  spec?: string;
+  prefix?: string;
+  repo?: string;
+}
+
+/**
+ * ONE parser for the whole command, and the same one the producer uses.
+ *
+ * This read its flags with `argv.indexOf(name)` and the producer reads
+ * its own with `parseArgs`, so `--spec=x` worked when `board-snapshot`
+ * was called directly and was silently refused when `board-conformance
+ * --produce` forwarded it. Two parsers for one input, free to disagree
+ * about exactly the spelling that matters —
+ * `.claude/rules/checks-must-be-able-to-fail.md`, *two deciders*. Found
+ * in review. `parseArgs` is from `node:util`, so this costs no relative
+ * import and the mutant still loads.
+ *
+ * `strict: false` because this command's flag set is not the producer's
+ * and an unknown flag is not what refuses here.
+ */
+function readFlags(argv: readonly string[]): Flags {
+  const { values } = parseArgs({
+    args: [...argv],
+    options: {
+      "list-readings": { type: "boolean" },
+      produce: { type: "boolean" },
+      snapshot: { type: "string" },
+      reading: { type: "string" },
+      spec: { type: "string" },
+      prefix: { type: "string" },
+      repo: { type: "string" },
+    },
+    strict: false,
+    allowPositionals: true,
+  });
+  // A flag whose value is another flag, or absent, parses as `true` or as
+  // the next flag's name. Neither is a value, and both have to stay
+  // distinguishable from "not given at all".
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && !v.startsWith("--") ? v : undefined;
+  return {
+    listReadings: values["list-readings"] === true,
+    produce: values.produce === true,
+    snapshot: str(values.snapshot),
+    snapshotGiven: values.snapshot !== undefined,
+    reading: str(values.reading),
+    readingGiven: values.reading !== undefined,
+    spec: str(values.spec),
+    prefix: str(values.prefix),
+    repo: str(values.repo),
+  };
+}
+
 export function main(argv: readonly string[]): number {
-  if (argv.includes("--list-readings")) {
+  let flags: Flags;
+  try {
+    flags = readFlags(argv);
+  } catch (e) {
+    console.error(`board-conformance: ${(e as Error).message}`);
+    return REFUSE_EXIT;
+  }
+
+  if (flags.listReadings) {
     for (const r of READINGS) console.log(`${r.name.padEnd(20)} ${r.what}  [${r.item}]`);
     return 0;
   }
 
-  const snapshotAt = argv.indexOf("--snapshot");
-  const snapshotPath = snapshotAt >= 0 ? argv[snapshotAt + 1] : undefined;
-  if (snapshotAt >= 0 && (snapshotPath === undefined || snapshotPath.startsWith("--"))) {
+  const snapshotPath = flags.snapshot;
+  if (flags.snapshotGiven && snapshotPath === undefined) {
     console.error("board-conformance: --snapshot needs a path");
     return REFUSE_EXIT;
   }
 
   let board: BoardSnapshot | null = null;
   let sourceFailed: string | null = null;
-  if (argv.includes("--produce")) {
-    if (snapshotPath !== undefined) {
+  if (flags.produce) {
+    if (flags.snapshotGiven) {
       console.error("board-conformance: --produce and --snapshot are two sources. Pass one.");
       return REFUSE_EXIT;
     }
-    const produced = produceBoard(argv);
+    const produced = produceBoard(flags);
     if (produced.error !== null) sourceFailed = produced.error;
     else board = produced.board;
   } else if (snapshotPath !== undefined) {
@@ -530,9 +626,8 @@ export function main(argv: readonly string[]): number {
     return REFUSE_EXIT;
   }
 
-  const readingAt = argv.indexOf("--reading");
-  if (readingAt >= 0) {
-    const name = argv[readingAt + 1];
+  if (flags.readingGiven) {
+    const name = flags.reading;
     const spec = READINGS.find(r => r.name === name);
     if (!spec) {
       // A typo must never read as a pass. This is the first case the

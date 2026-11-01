@@ -36,6 +36,7 @@ import {
   READINGS,
   READING_NAMES,
   REFUSE_EXIT,
+  PRODUCE_TIMEOUT_MS,
   conformant,
   readSnapshotText,
   takeReading,
@@ -60,8 +61,16 @@ beforeAll(() => {
 
 afterAll(() => rmSync(SCRATCH, { recursive: true, force: true }));
 
-const run = (script: string, args: string[]) => {
-  const r = spawnSync("bun", [script, ...args], { cwd: ROOT, encoding: "utf-8" });
+const run = (script: string, args: string[], env: Record<string, string> = {}) => {
+  // A bound of its own, so a command that WEDGES fails this suite rather
+  // than hanging it. A hung run reports no failures at all, which reads
+  // like a clean one to anything watching the count.
+  const r = spawnSync("bun", [script, ...args], {
+    cwd: ROOT,
+    encoding: "utf-8",
+    env: { ...process.env, ...env },
+    timeout: 45_000,
+  });
   return { code: r.status ?? -1, out: r.stdout ?? "", err: r.stderr ?? "" };
 };
 
@@ -726,6 +735,45 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
       expect(r.err).toContain("--produce needs --spec <path> and --prefix <name>");
       expect(r.err, `[${argv.join(" ")}] spawned the producer anyway`).not.toContain("the producer was spawned");
     }
+  });
+
+  test("a producer that hangs is killed and reported, not waited on", () => {
+    // Every other failure mode here becomes a crisp refusal; a wedge was
+    // the one that did not, and an unattended loop cannot observe a wedge
+    // — it just stops. The producer below never exits.
+    const { command } = stage(`await new Promise(() => {});`);
+    const started = Date.now();
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "P"], {
+      RUNGATE_PRODUCE_TIMEOUT_MS: "2000",
+    });
+    const elapsed = Date.now() - started;
+    expect(r.code, "a hanging producer was read as a board").not.toBe(0);
+    expect(r.err).toContain("was killed by");
+    expect(
+      elapsed,
+      `the run took ${elapsed}ms against a 2000ms bound — the timeout is not what ended it`,
+    ).toBeLessThan(30_000);
+
+    // And the default is what ships. An env var set in CI, or a typo
+    // falling back to 0, would disable the bound in spawnSync entirely.
+    expect(PRODUCE_TIMEOUT_MS, "the default timeout is not a positive number of milliseconds").toBe(60_000);
+  });
+
+  test("--name=value and --name value forward identically — one parser, not two", () => {
+    // The producer parses its own flags with `parseArgs`, which accepts
+    // both spellings; this command used to read its own with
+    // `argv.indexOf`, which accepts one. So `--spec=x` worked on the
+    // producer and was silently refused on the path that forwards to it.
+    // Two deciders for one input, disagreeing about exactly the spelling
+    // that matters.
+    const spaced = stage(ECHOING_PRODUCER);
+    expect(run(spaced.command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline", "--repo", "o/n"]).code).toBe(0);
+    const joined = stage(ECHOING_PRODUCER);
+    expect(run(joined.command, ["--produce", "--spec=specs/X.md", "--prefix=Pipeline", "--repo=o/n"]).code).toBe(0);
+    expect(
+      JSON.parse(readFileSync(joined.argvAt, "utf-8")),
+      "`--name=value` forwarded something different from `--name value`",
+    ).toEqual(JSON.parse(readFileSync(spaced.argvAt, "utf-8")));
   });
 
   test("a producer that cannot be started says so, rather than reporting no output", () => {
