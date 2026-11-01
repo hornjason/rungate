@@ -12,7 +12,7 @@ updated: 2026-10-11
 |------|------|--------------|
 | AGENTS.md | Project entry point | Always first |
 | PROJECT-STATE.md | Live status + handoff (generated from project-state.json — don't edit directly) | Session start, always first after AGENTS.md |
-| project-state.json | Source of truth for project status — **DA-owned, never written from an agent worktree** (#296) | Reading current state |
+| project-state.json | Status, and the plan: `goal`, `goals`, `stages`. The one place a done-condition lives. **DA-owned, never written from a worktree** (#296) | Session start, and before starting any stage |
 | .claude/rungate/ | Harness project config (directory) | Shipping through harness |
 | package.json | Dependencies and scripts | Adding deps or scripts |
 | tsconfig.json | TypeScript configuration | Changing TS settings |

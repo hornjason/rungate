@@ -53,6 +53,13 @@ Ship harness — conformity tests, scaffold, and agent briefs for AI-first devel
 9. **An agreement is not real until it is in `project-state.json`** — write
    it there before the turn ends. Priority 2 says what the last unwritten
    one cost. Jason's call, 2026-10-31.
+10. **The plan is `project-state.json`'s `goal`, `goals` and `stages` —
+    nowhere else.** Each item carries the command that proves it; a stage is
+    complete when every command exits 0, never because a document says so,
+    and carries a `retro` before the next may start. Read it before any
+    stage; `bun test test/stage-ladder.test.ts` runs it. **Never restate a
+    done-condition elsewhere** — three copies is how Stage A was scored
+    wrong twice.
 
 ## Rules
 

@@ -103,11 +103,15 @@ spanning all the work below stays technically "served" by almost any commit for
 weeks, which makes the drift test useless — and the drift test is the only
 instrument that catches partial work being reported as whole.
 
-| | Goal | Done when |
-|---|---|---|
-| **1** | The engine's own work is on the board and measurable | The conformance command runs, and the engine backlog can be worked off the board without asking an agent what is next |
-| **2** | The engine works | The conformance command exits 0 |
-| **3** | It generalises | The convergence spec ships through the engine untouched |
+**The three goals and their done-conditions are in `project-state.json`
+under `goals`, and each stage names which one it serves.** They are not
+restated here — this section carried the only copy for two days, and a
+done-condition nothing executes is the defect the rest of this document is
+about.
+
+```bash
+bun -e 'const d=require("./project-state.json"); for (const g of d.goals) console.log(g.id, g.goal, "—", g.doneWhen)'
+```
 
 Goal 1 is first because it proves the method in days rather than weeks. If the
 board does not read the way it is meant to after Goal 1, little has been spent.

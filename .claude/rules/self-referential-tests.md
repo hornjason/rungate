@@ -187,8 +187,7 @@ Related: `.claude/rules/checks-must-be-able-to-fail.md`,
 `.claude/rules/claiming-sc-coverage.md`,
 `.claude/rules/harness-managed.md`.
 
-## This file tripped three of its own checks while it was being written
-
-Kept verbatim in `reference/self-referential-tests-worked-instances.md`.
-The one that matters is the Tier 2 row above: **cite a stable symbol,
-never a line number.**
+This file tripped three of its own checks while it was being written —
+verbatim in `reference/self-referential-tests-worked-instances.md`. The one
+that matters is the Tier 2 row: **cite a stable symbol, never a line
+number.**

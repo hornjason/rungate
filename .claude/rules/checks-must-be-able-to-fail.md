@@ -105,20 +105,19 @@ A sentence in the PR is evidence a reader has to trust. When the guard is a
 script, the break can live in the test instead, and then it is re-checked on
 every run.
 
-Route every refusal through **one exported exit-code constant**, declared on a
-single line, and have the test build a mutant copy of the source with that
-constant set to `0`. Each negative case then runs twice — the real script, and
-the mutant — and asserts the real one refuses while the mutant does not. The
-second assertion is the whole point: it is the removal of the non-zero exit,
-performed and observed, so a case that later starts passing for an unrelated
-reason stops being indistinguishable from a case that is genuinely caught.
+Route every refusal through **one exported exit-code constant** on a single
+line, and have the test build a mutant copy of the source with it set to
+`0`. Each negative case runs twice — real script and mutant — asserting the
+real one refuses and the mutant does not. The second assertion is the whole
+point: the removal of the non-zero exit, performed and observed, so a case
+that later passes for an unrelated reason is no longer indistinguishable
+from one genuinely caught.
 
-Two properties make that work and both must be asserted by the test, not left
-as conventions: the constant appears **exactly once** in the source, so no
-refusal can bypass the mutation by inlining `process.exit(1)`; and the script
-has **no relative imports**, so the mutant runs from a temp directory instead
-of dying on module resolution — a non-zero exit that reads as the mutation
-having been rejected on the merits.
+Two properties must be **asserted by the test**, not left as conventions:
+the constant appears **exactly once**, so no refusal bypasses the mutation
+by inlining `process.exit(1)`; and the script has **no relative imports**,
+so the mutant does not die on module resolution — which reads as a refusal
+on the merits.
 
 `scripts/rook-review-scope.ts` and `test/rook-review-scope.test.ts` are the
 worked example (#129); what was broken to prove it, and the counts, are in
@@ -133,19 +132,16 @@ function short-circuited to `return []`. The copy is spawned —
 `bun test <mutant> -t <check name>` — and the real suite is spawned the same
 way against the same planted state. Real red, mutant green, one input.
 
-Four things make that work, all asserted by the test rather than left as
-conventions: the fixture is **executed, not described**, and its failure
-counted with the parser the harness itself uses; the check is **observed
-running** (`ran === 1` before any assertion, because a `-t` that matches
-nothing and a mutant that failed to load both report zero failures); the
-binding signature appears **exactly once**, or the file aborts; and the mutant
-has **no relative imports left**, or it dies on module resolution and reads as
-a refusal.
+Four things must be **asserted by the test**: the fixture is **executed,
+not described**, its failure counted with the harness's own parser; the
+check is **observed running** (`ran === 1` first — a `-t` matching nothing
+and a mutant that failed to load both report zero failures); the binding
+signature appears **exactly once**; and the mutant has **no relative
+imports**, or it dies on module resolution and reads as a refusal.
 
 `gates/workflow.test.ts`'s `suiteVerdictViolations` and
-`test/suite-binding-mutation.test.ts` are the worked example (#224); what was
-broken to prove it, and the counts, are in
-`reference/check-failure-worked-instances.md`.
+`test/suite-binding-mutation.test.ts` are the worked example (#224); the
+break and the counts are in `reference/check-failure-worked-instances.md`.
 
 ## The worked instances live next door
 

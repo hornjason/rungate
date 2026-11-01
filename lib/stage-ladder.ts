@@ -51,6 +51,18 @@
  * (`.claude/rules/checks-must-be-able-to-fail.md`, *two deciders that agree*).
  */
 
+/**
+ * A command that could not be RUN did not fail.
+ *
+ * `sh` exits 127 when the program does not exist. A verify command whose
+ * tool is missing — a different base image, a minimal container — is not
+ * evidence that the item regressed, and reporting it as one is the mirror of
+ * the defect SUCCESS.md claim 4 names: *"could not measure" never reads as
+ * "nothing wrong"*. It must not read as "something wrong" either. The caller
+ * separates this exit code and reports it as UNMEASURED, named.
+ */
+export const COMMAND_NOT_FOUND = 127;
+
 /** One item on a stage: a thing to do, and the command that proves it done. */
 export interface StageItem {
   /** `A1`, `B4` — the stage letter followed by a 1-based position. */
@@ -85,11 +97,65 @@ export interface StageItem {
   scope?: "repo" | "machine";
 }
 
+/**
+ * One improvement a retrospective produced.
+ *
+ * `mechanism` is the point. "We will stop repairing at round three" is a
+ * resolution, and a resolution is the thing this repository keeps proving
+ * does not survive contact with the next session — Stage A ran to fourteen
+ * rounds against a rule that already said three. An improvement has to name
+ * what ENFORCES it: a test, a gate, a refusal, a schema field. "Nothing yet,
+ * needs a decision" is an acceptable mechanism and an honest one; an empty
+ * string is not.
+ */
+export interface Improvement {
+  what: string;
+  mechanism: string;
+}
+
+/**
+ * What a stage taught, recorded before the next stage may start.
+ *
+ * Structured rather than prose for the same reason the ladder is: a
+ * paragraph of lessons is read once and never executed. Three lists, and
+ * `nextStage` refuses to advance past a complete stage that has none.
+ */
+export interface Retro {
+  wentWell: string[];
+  wentPoorly: string[];
+  improvements: Improvement[];
+}
+
+/**
+ * One of the sequenced goals the stages serve.
+ *
+ * These are Jason's, agreed on 2026-10-30 and recorded in ADR-009 §3. They
+ * are here rather than there because a done-condition nothing executes is
+ * the defect this whole module exists to remove.
+ */
+export interface Goal {
+  id: number;
+  goal: string;
+  doneWhen: string;
+}
+
 /** One stage of the build order. */
 export interface Stage {
   /** A single uppercase letter. Position in the array IS the order. */
   id: string;
   name: string;
+  /**
+   * What this stage is FOR, in one sentence.
+   *
+   * Distinct from `name`, which is a label. "Write it down" is a label;
+   * "the goal and the engine spec exist and say what they must, so every
+   * stage below has something to build against" is a goal. The distinction
+   * is not pedantry — Stage A shipped with only a label, and the question
+   * "what was this stage for" had no answer anybody could point at.
+   */
+  goal: string;
+  /** Which `Goal.id` this stage serves. */
+  serves: number;
   /**
    * Who agreed this stage's contents, and when — `"2026-10-30 Jason"`.
    *
@@ -101,6 +167,14 @@ export interface Stage {
    */
   agreed: string | null;
   items: StageItem[];
+  /**
+   * What the stage taught. `null` until it is written.
+   *
+   * A complete stage with `retro: null` BLOCKS the next stage. That is the
+   * whole mechanism: the retrospective is a gate rather than a good
+   * intention, because a good intention is what Stage A had.
+   */
+  retro: Retro | null;
 }
 
 const ITEM_ID = /^([A-Z])(\d+)$/;
@@ -120,6 +194,51 @@ const ITEM_ID = /^([A-Z])(\d+)$/;
  * reading it, even when the item is genuinely done.
  */
 const DENIALS = ["is not met", "are not met", "0 of", "not applied", "does not exist"];
+
+/** Every violation in one stage's `retro`, or none if it is absent. */
+function retroViolations(raw: unknown, at: string): string[] {
+  if (raw === null || raw === undefined) return [];
+  const out: string[] = [];
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return [`${at}.retro is ${Array.isArray(raw) ? "an array" : typeof raw}, expected an object or null`];
+  }
+  const r = raw as Record<string, unknown>;
+
+  for (const k of ["wentWell", "wentPoorly"]) {
+    const v = r[k];
+    if (!Array.isArray(v) || v.some(e => typeof e !== "string")) {
+      out.push(`${at}.retro.${k} is ${JSON.stringify(v)}, expected an array of strings`);
+    }
+  }
+
+  if (!Array.isArray(r.improvements)) {
+    out.push(`${at}.retro.improvements is ${JSON.stringify(r.improvements)}, expected an array`);
+    return out;
+  }
+  // An empty improvements list is allowed and means "nothing to change",
+  // which is a real finding. What is refused is an improvement that names
+  // no mechanism — see the Improvement docblock.
+  r.improvements.forEach((im, i) => {
+    const iAt = `${at}.retro.improvements[${i}]`;
+    if (im === null || typeof im !== "object" || Array.isArray(im)) {
+      out.push(`${iAt} is not an object`);
+      return;
+    }
+    const e = im as Record<string, unknown>;
+    if (typeof e.what !== "string" || e.what.length === 0) {
+      out.push(`${iAt}.what is ${JSON.stringify(e.what)}, expected a non-empty string`);
+    }
+    if (typeof e.mechanism !== "string" || e.mechanism.trim().length === 0) {
+      out.push(
+        `${iAt}.mechanism is ${JSON.stringify(e.mechanism)} — name what ENFORCES this improvement: a test, ` +
+          `a gate, a refusal, a schema field. A resolution with no mechanism is what Stage A already had, ` +
+          `and it ran to fourteen review rounds against a rule that said three. "nothing yet, needs a ` +
+          `decision" is an acceptable answer; an empty one is not.`,
+      );
+    }
+  });
+  return out;
+}
 
 /**
  * Every violation in a stage ladder, in document order.
@@ -163,6 +282,17 @@ export function stageLadderViolations(raw: unknown): string[] {
     if (typeof stage.name !== "string" || stage.name.length === 0) {
       out.push(`${at}.name is ${JSON.stringify(stage.name)}, expected a non-empty string`);
     }
+    if (typeof stage.goal !== "string" || stage.goal.length === 0) {
+      out.push(
+        `${at}.goal is ${JSON.stringify(stage.goal)}, expected a sentence saying what this stage is FOR. ` +
+          `"${typeof stage.name === "string" ? stage.name : "?"}" is a label, not a goal — Stage A shipped with ` +
+          `only a label and the question "what was this stage for" had no answer anybody could point at.`,
+      );
+    }
+    if (typeof stage.serves !== "number") {
+      out.push(`${at}.serves is ${JSON.stringify(stage.serves)}, expected the id of the goal this stage serves`);
+    }
+    out.push(...retroViolations(stage.retro, at));
     const agreed = stage.agreed;
     if (agreed !== null && typeof agreed !== "string") {
       out.push(`${at}.agreed is ${JSON.stringify(agreed)}, expected a string like "2026-10-30 Jason" or null for not-yet-agreed`);
@@ -254,15 +384,103 @@ export function stageIsComplete(stage: Stage): boolean {
 export function nextStage(
   stages: readonly Stage[],
 ): { stage: Stage; blocked: string | null } | null {
+  // Walked in order so the FIRST unmet precondition is the one reported. A
+  // caller shown two blockers at once fixes the convenient one.
+  const owed: string[] = [];
   for (const stage of stages) {
-    if (stageIsComplete(stage)) continue;
-    return {
-      stage,
-      blocked:
-        stage.agreed === null
-          ? `stage ${stage.id} has agreed: null — its ${stage.items.length} item(s) are a proposal, not an agreement. Nothing in it may be started or ticked until the wording is agreed and written here (AGENTS.md rule 9).`
-          : null,
-    };
+    if (stageIsComplete(stage)) {
+      // The retro gate. A finished stage with nothing written down is how
+      // every lesson from Stage A would have been lost: the work lands, the
+      // context is compacted, and the next stage repeats it.
+      if (stage.retro === null || stage.retro === undefined) owed.push(stage.id);
+      continue;
+    }
+    const blocked =
+      owed.length > 0
+        ? `stage ${owed.join(", ")} is complete and has no retro. Write what went well, what went poorly, and ` +
+          `the improvements WITH the mechanism that enforces each, then stage ${stage.id} is available. ` +
+          `A stage that teaches nothing forward is a stage whose mistakes are scheduled to repeat.`
+        : stage.agreed === null
+          ? `stage ${stage.id} has agreed: null — its ${stage.items.length} item(s) are a proposal, not an ` +
+            `agreement. Nothing in it may be started or ticked until the wording is agreed and written here ` +
+            `(AGENTS.md rule 9).`
+          : null;
+    return { stage, blocked };
   }
   return null;
+}
+
+/**
+ * Every violation in the whole ladder document — the goal, the goals, and
+ * the stages together.
+ *
+ * Separate from `stageLadderViolations` only because the stages can be
+ * checked without the goals and the cross-reference cannot. This is the
+ * function a caller should use; it is the single decider for "is the plan
+ * well-formed".
+ */
+export function ladderViolations(raw: unknown): string[] {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return [`the document is ${Array.isArray(raw) ? "an array" : typeof raw}, not an object`];
+  }
+  const doc = raw as Record<string, unknown>;
+  const out: string[] = [];
+
+  // The overall goal. One place, and it carries its own check — a goal with
+  // no way to tell whether it is met is the shape Stage A's done-when had.
+  const goal = doc.goal;
+  if (goal === null || typeof goal !== "object" || Array.isArray(goal)) {
+    out.push(`goal is ${JSON.stringify(goal)}, expected an object with "statement" and "verify"`);
+  } else {
+    const g = goal as Record<string, unknown>;
+    if (typeof g.statement !== "string" || g.statement.length === 0) {
+      out.push(`goal.statement is ${JSON.stringify(g.statement)}, expected the one sentence everything serves`);
+    }
+    if (typeof g.verify !== "string" || g.verify.trim().length === 0) {
+      out.push(
+        `goal.verify is ${JSON.stringify(g.verify)} — the overall goal needs a command that says whether it ` +
+          `is met, for the same reason every item does.`,
+      );
+    }
+  }
+
+  const ids = new Set<number>();
+  if (!Array.isArray(doc.goals)) {
+    out.push(`goals is ${JSON.stringify(doc.goals)}, expected an array`);
+  } else {
+    doc.goals.forEach((g, i) => {
+      const at = `goals[${i}]`;
+      if (g === null || typeof g !== "object" || Array.isArray(g)) {
+        out.push(`${at} is not an object`);
+        return;
+      }
+      const e = g as Record<string, unknown>;
+      if (typeof e.id !== "number") out.push(`${at}.id is ${JSON.stringify(e.id)}, expected a number`);
+      else ids.add(e.id);
+      for (const k of ["goal", "doneWhen"]) {
+        if (typeof e[k] !== "string" || (e[k] as string).length === 0) {
+          out.push(`${at}.${k} is ${JSON.stringify(e[k])}, expected a non-empty string`);
+        }
+      }
+    });
+  }
+
+  out.push(...stageLadderViolations(doc.stages));
+
+  // Every stage serves a goal that exists. A dangling `serves` is how a
+  // stage ends up orphaned from the thing it is supposed to advance.
+  if (Array.isArray(doc.stages) && ids.size > 0) {
+    doc.stages.forEach((s, i) => {
+      const e = s as Record<string, unknown> | null;
+      if (e === null || typeof e !== "object") return;
+      if (typeof e.serves === "number" && !ids.has(e.serves)) {
+        out.push(
+          `stages[${i}].serves is ${e.serves}, which is not the id of any goal. ` +
+            `Known goal ids: ${[...ids].join(", ")}.`,
+        );
+      }
+    });
+  }
+
+  return out;
 }

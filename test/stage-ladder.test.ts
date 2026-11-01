@@ -1,5 +1,5 @@
 /**
- * The stage ladder is executed, not read.
+ * The plan is executed, not read.
  *
  * `lib/stage-ladder.ts` says why this exists. The short version: Stage A's
  * definition of done lived in three prose documents that nothing compared,
@@ -12,51 +12,76 @@
  *
  * ## What was broken to prove these can fail
  *
- * Every rule in `stageLadderViolations` has a negative case below that
- * plants the violation and asserts the message. Beyond that, each of Stage
- * A's seven verify commands was run against an empty scratch tree on
- * 2026-11-01 and all seven refused — so none of them is a command that
- * passes regardless of the repository, which is the failure mode that makes
- * a green ladder worthless.
+ * Every rule in `ladderViolations` has a negative case below that plants the
+ * violation and asserts the message. Beyond that, each of Stage A's seven
+ * verify commands was run against an empty scratch tree on 2026-11-01 and
+ * all seven refused — so none of them is a command that passes regardless of
+ * the repository, which is the failure mode that makes a green ladder
+ * worthless. `A1.verify` was then set to `false` in the live file and this
+ * suite went red naming it, green again on restore.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { spawnSync } from "child_process";
-import { stageLadderViolations, stageIsComplete, nextStage, type Stage } from "../lib/stage-ladder.ts";
+import {
+  COMMAND_NOT_FOUND,
+  ladderViolations,
+  nextStage,
+  stageIsComplete,
+  stageLadderViolations,
+  type Retro,
+  type Stage,
+} from "../lib/stage-ladder.ts";
 
 const ROOT = join(import.meta.dir, "..");
-const stages = (JSON.parse(readFileSync(join(ROOT, "project-state.json"), "utf-8")) as { stages: Stage[] }).stages;
+const doc = JSON.parse(readFileSync(join(ROOT, "project-state.json"), "utf-8")) as {
+  goal: { statement: string; verify: string };
+  goals: { id: number }[];
+  stages: Stage[];
+};
+const stages = doc.stages;
 
 /**
  * How many done items may have their evidence outside this repository.
  *
  * Exactly one: Stage A's A2, whose evidence is `~/.claude/FLEET-STATE.md`.
- * The number is asserted rather than described, so a second item cannot
- * become unrunnable-in-CI without somebody editing this line and saying why.
+ * Asserted rather than described, so a second item cannot become
+ * unrunnable-in-CI without somebody editing this line and saying why.
  */
 const MACHINE_SCOPED_ALLOWED = 1;
 
 const run = (cmd: string) => spawnSync("sh", ["-c", cmd], { cwd: ROOT, encoding: "utf-8" });
 
-/** A minimal valid ladder, for the negative cases to break one field at a time. */
-const ok = (over: Partial<Stage> = {}): Stage => ({
-  id: "A",
-  name: "Write it down",
-  agreed: "2026-10-30 Jason",
-  items: [{ id: "A1", what: "a thing", done: true, verify: "true" }],
+const retro = (over: Partial<Retro> = {}): Retro => ({
+  wentWell: ["a thing"],
+  wentPoorly: ["another thing"],
+  improvements: [{ what: "do better", mechanism: "a test that refuses it" }],
   ...over,
 });
 
-describe("the live ladder", () => {
-  test("is internally consistent", () => {
-    expect(stageLadderViolations(stages), "project-state.json `stages` is malformed").toEqual([]);
+/** A minimal valid stage, for the negative cases to break one field at a time. */
+const ok = (over: Partial<Stage> = {}): Stage => ({
+  id: "A",
+  name: "Write it down",
+  goal: "the documents exist and say what they must",
+  serves: 1,
+  agreed: "2026-10-30 Jason",
+  items: [{ id: "A1", what: "a thing", done: true, verify: "true" }],
+  retro: retro(),
+  ...over,
+});
+
+describe("the live plan", () => {
+  test("is internally consistent — goal, goals and stages together", () => {
+    expect(ladderViolations(doc), "project-state.json's plan is malformed").toEqual([]);
   });
 
   test("every DONE item's verify command exits 0 — this is what 'done' means", () => {
     const checked: string[] = [];
     const failed: string[] = [];
     const deferred: string[] = [];
+    const unmeasured: string[] = [];
 
     for (const stage of stages) {
       for (const item of stage.items) {
@@ -67,7 +92,11 @@ describe("the live ladder", () => {
         }
         checked.push(item.id);
         const r = run(item.verify!);
-        if (r.status !== 0) {
+        // 127 is "the tool is not here", which is not evidence the item
+        // regressed. Counted apart so it can never read as a pass either.
+        if (r.status === COMMAND_NOT_FOUND) {
+          unmeasured.push(`${item.id}: ${item.verify}`);
+        } else if (r.status !== 0) {
           failed.push(
             `${item.id} exited ${r.status}: ${item.verify}\n` +
               `     ${item.what}\n` +
@@ -77,28 +106,49 @@ describe("the live ladder", () => {
       }
     }
 
-    // A run that checked nothing is not a run that passed. Without this the
-    // whole case is green on an empty `stages`, which is the vacuous shape.
+    // A run that checked nothing is not a run that passed.
     expect(checked.length, "no repo-scoped done items were executed, so this case witnessed nothing").toBeGreaterThan(0);
+
+    expect(
+      unmeasured,
+      `a verify command's program does not exist on this machine (exit ${COMMAND_NOT_FOUND}). That is not a ` +
+        `regression and it is not a pass — the item is UNMEASURED. Install the tool or write the check with ` +
+        `something the runner has.`,
+    ).toEqual([]);
 
     expect(
       deferred.length,
       `${deferred.length} done item(s) have evidence outside this repository (${deferred.join(", ") || "none"}) ` +
-        `and were NOT executed. The allowance is ${MACHINE_SCOPED_ALLOWED}. A new one means a stage item ` +
-        `CI can never check — decide that deliberately and raise this constant with a reason, or move the ` +
-        `evidence into the repository.`,
+        `and were NOT executed. The allowance is ${MACHINE_SCOPED_ALLOWED}. A new one means a stage item CI can ` +
+        `never check — decide that deliberately and raise this constant with a reason, or move the evidence in.`,
     ).toBe(MACHINE_SCOPED_ALLOWED);
 
     expect(
       failed,
-      `a stage item is marked done and its own verify command refuses. Either the work regressed or the ` +
-        `item was ticked without the command being run. Do not weaken the command to make this pass.`,
+      `a stage item is marked done and its own verify command refuses. Either the work regressed or the item ` +
+        `was ticked without the command being run. Do not weaken the command to make this pass.`,
     ).toEqual([]);
   });
 
-  test("Stage A is complete and Stage B is the next thing, blocked on Jason", () => {
+  test("the overall goal carries a command, and that command is not yet met", () => {
+    // The honest state: `rungate board-conformance` is B5/D2 in this very
+    // ladder, so the goal CANNOT be met yet. This case exists so the day it
+    // starts passing is a day somebody notices, rather than a sentence
+    // somewhere going stale in the other direction.
+    expect(doc.goal.verify.length, "the overall goal has no verify command").toBeGreaterThan(0);
+    const r = run(doc.goal.verify);
+    expect(
+      r.status,
+      "the overall goal's command now exits 0. If `board-conformance` is real and passing, the goal is MET — " +
+        "say so in project-state.json and update this assertion in the same commit.",
+    ).not.toBe(0);
+  });
+
+  test("Stage A is complete, carries its retro, and Stage B is blocked on Jason", () => {
     const a = stages.find(s => s.id === "A")!;
     expect(stageIsComplete(a), "Stage A is no longer complete").toBe(true);
+    expect(a.retro, "Stage A has no retro — the stage that taught the most would teach nothing").not.toBeNull();
+    expect(a.retro!.improvements.length, "Stage A's retro lists no improvements").toBeGreaterThan(0);
 
     const next = nextStage(stages);
     expect(next?.stage.id, "the next incomplete stage is not B").toBe("B");
@@ -107,6 +157,27 @@ describe("the live ladder", () => {
       "Stage B is no longer reported as blocked. It is the one stage Jason has not signed off — if that " +
         "changed, the change belongs in `agreed`, and this assertion should be updated in the same commit.",
     ).toContain("agreed: null");
+  });
+
+  test("the goal names a SUCCESS.md claim, and that claim is really there", () => {
+    // SUCCESS.md stays the charter and keeps the claim; project-state keeps
+    // the living plan and REFERENCES it. That is a checked cross-reference
+    // rather than a fourth copy, and this is the check.
+    const n = (doc.goal as { successClaim?: unknown }).successClaim;
+    expect(typeof n, "the goal names no SUCCESS.md claim").toBe("number");
+    const success = readFileSync(join(ROOT, "SUCCESS.md"), "utf-8");
+    expect(
+      new RegExp(`^${n}\\. \\*\\*`, "m").test(success),
+      `project-state.json's goal says it serves SUCCESS.md claim ${n}, and SUCCESS.md has no claim ${n}. ` +
+        `One of the two moved. SUCCESS.md is the charter; renumbering a claim there means updating the ` +
+        `reference here in the same commit.`,
+    ).toBe(true);
+  });
+
+  test("every stage serves one of the three agreed goals", () => {
+    const ids = new Set(doc.goals.map(g => g.id));
+    expect(ids.size, "no goals are recorded").toBeGreaterThan(0);
+    expect(stages.filter(s => !ids.has(s.serves)).map(s => s.id)).toEqual([]);
   });
 });
 
@@ -131,10 +202,34 @@ describe("the ladder refuses the things that went wrong in Stage A", () => {
   });
 
   test("a stage whose letter does not match its position is refused — the re-lettering trap", () => {
-    // ADR-009 inserted a new Stage B and pushed every later letter down.
-    // The old ladder could not see it; this is that drift, planted.
     const v = stageLadderViolations([ok(), ok({ id: "C", items: [] })]);
-    expect(v.join("\n")).toContain('but it sits at position 1');
+    expect(v.join("\n")).toContain("but it sits at position 1");
+  });
+
+  test("a stage with a label but no goal is refused", () => {
+    const v = stageLadderViolations([ok({ goal: "" })]);
+    expect(v.join("\n")).toContain("is a label, not a goal");
+  });
+
+  test("a stage serving a goal that does not exist is refused", () => {
+    const v = ladderViolations({
+      goal: { statement: "x", verify: "true" },
+      goals: [{ id: 1, goal: "g", doneWhen: "d" }],
+      stages: [ok({ serves: 9 })],
+    });
+    expect(v.join("\n")).toContain("which is not the id of any goal");
+  });
+
+  test("an improvement naming no mechanism is refused — a resolution is not a fix", () => {
+    const v = stageLadderViolations([
+      ok({ retro: retro({ improvements: [{ what: "stop at round three", mechanism: "  " }] }) }),
+    ]);
+    expect(v.join("\n")).toContain("name what ENFORCES this improvement");
+  });
+
+  test("the overall goal with no verify command is refused", () => {
+    const v = ladderViolations({ goal: { statement: "x", verify: "" }, goals: [], stages: [] });
+    expect(v.join("\n")).toContain("the overall goal needs a command");
   });
 
   test("an item whose number is not its position is refused, so a count can be checked", () => {
@@ -155,13 +250,37 @@ describe("the ladder refuses the things that went wrong in Stage A", () => {
   });
 
   test("a clean ladder produces no violations — the control", () => {
-    // Without this, every case above is satisfied by a function that returns
-    // a violation for everything.
+    // Without this, every case above is satisfied by a function that
+    // returns a violation for everything.
     expect(stageLadderViolations([ok()])).toEqual([]);
   });
 
   test("stages must be an array", () => {
     expect(stageLadderViolations(undefined).join("")).toContain("not an array");
+  });
+});
+
+describe("the retro is a gate, not a habit", () => {
+  test("a complete stage with no retro blocks the next stage", () => {
+    const blocked = nextStage([
+      ok({ retro: null }),
+      ok({ id: "B", items: [{ id: "B1", what: "x", done: false, verify: null }] }),
+    ]);
+    expect(blocked?.stage.id).toBe("B");
+    expect(blocked?.blocked).toContain("is complete and has no retro");
+  });
+
+  test("the same pair with the retro written is not blocked — the control", () => {
+    const free = nextStage([
+      ok(),
+      ok({ id: "B", items: [{ id: "B1", what: "x", done: false, verify: null }] }),
+    ]);
+    expect(free?.stage.id).toBe("B");
+    expect(free?.blocked).toBeNull();
+  });
+
+  test("a retro that is not an object is refused", () => {
+    expect(stageLadderViolations([ok({ retro: "we did fine" as never })]).join("")).toContain("expected an object or null");
   });
 });
 
@@ -175,7 +294,7 @@ describe("completion is derived, never asserted", () => {
     expect(stageIsComplete(ok({ items: [] }))).toBe(false);
   });
 
-  test("nextStage skips complete stages and returns null when everything is done", () => {
+  test("nextStage returns null when everything is done", () => {
     expect(nextStage([ok()])).toBeNull();
   });
 });
