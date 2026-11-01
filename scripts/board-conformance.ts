@@ -464,6 +464,13 @@ function produceBoard(argv: readonly string[]): { board: BoardSnapshot | null; e
   const repo = flag("--repo");
   if (repo !== undefined) args.push("--repo", repo);
   const r = spawnSync("bun", args, { encoding: "utf-8" });
+  // `r.error` first. A spawn that never started — no `bun` on PATH —
+  // sets it and leaves status null, stdout and stderr empty, so reading
+  // only those reports "exit none: no output" for the one failure whose
+  // cause is already in hand.
+  if (r.error) {
+    return { board: null, error: `board-snapshot could not be started: ${r.error.message}` };
+  }
   if (r.status !== 0) {
     return {
       board: null,

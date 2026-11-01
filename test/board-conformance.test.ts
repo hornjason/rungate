@@ -581,6 +581,120 @@ describe("every field the snapshot declares is read by something", () => {
   }
 });
 
+describe("--produce: the spawned source", () => {
+  /**
+   * The producer is reached by PATH, not by import, so a copy of the
+   * command in a directory holding a stand-in `board-snapshot.ts` is the
+   * real `--produce` path with a source it can predict.
+   *
+   * Round 1 of this PR: `produceBoard` had no coverage at all, so dropping
+   * the `--repo` forward or inverting the exit-code test would have
+   * shipped with every case above green. The stand-in exists to make those
+   * two mutations visible, which is why it ECHOES its argv rather than
+   * just printing a snapshot.
+   */
+  const stage = (producer: string): { command: string; argvAt: string } => {
+    const dir = mkdtempSync(join(SCRATCH, "produce-"));
+    writeFileSync(join(dir, "board-conformance.ts"), source);
+    writeFileSync(join(dir, "board-snapshot.ts"), producer);
+    return { command: join(dir, "board-conformance.ts"), argvAt: join(dir, "argv.json") };
+  };
+
+  /**
+   * Records the argv it was handed, then prints a board meeting every
+   * reading.
+   *
+   * It writes argv to a FILE rather than to stderr: `produceBoard`
+   * captures the child's stderr and keeps it only on a refusal, so an
+   * echo there is invisible on the path this case is about.
+   */
+  const ECHOING_PRODUCER = `
+import { writeFileSync } from "fs";
+import { join } from "path";
+writeFileSync(join(import.meta.dir, "argv.json"), JSON.stringify(process.argv.slice(2)));
+process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
+`;
+
+  test("it forwards --spec, --prefix and --repo to the producer", () => {
+    const { command, argvAt } = stage(ECHOING_PRODUCER);
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline", "--repo", "o/n"]);
+    expect(r.code, `--produce refused a board every reading meets:\n${r.out}${r.err}`).toBe(0);
+    expect(
+      JSON.parse(readFileSync(argvAt, "utf-8")) as string[],
+      "an argument the caller gave was not forwarded, so the producer read a different board than it was asked for",
+    ).toEqual(["specs/X.md", "--prefix", "Pipeline", "--repo", "o/n"]);
+    expect(r.out).toContain("every reading is met");
+  });
+
+  test("--repo is optional, and omitting it forwards nothing in its place", () => {
+    const { command, argvAt } = stage(ECHOING_PRODUCER);
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline"]);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(readFileSync(argvAt, "utf-8"))).toEqual(["specs/X.md", "--prefix", "Pipeline"]);
+  });
+
+  test("a producer that refuses makes the command UNMEASURED, and its reason is carried through", () => {
+    const { command } = stage(`process.stderr.write("UNMEASURED — the API said 502\\n"); process.exit(3);`);
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline"]);
+    expect(r.code, "a producer that refused was read as a board").not.toBe(0);
+    expect(r.err).toContain("board-snapshot refused (exit 3)");
+    expect(r.err, "the producer's own reason was dropped, so the refusal says nothing actionable").toContain(
+      "the API said 502",
+    );
+  });
+
+  test("a producer that exits 0 with unreadable output is UNMEASURED, not an empty board", () => {
+    const { command } = stage(`process.stdout.write("not a snapshot");`);
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline"]);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("exited 0 and what it emitted is unreadable");
+    expect(r.err, "the parse failure's own reason was not carried").toContain("it is not JSON");
+  });
+
+  test("--produce and --snapshot together refuse — two sources is a question, not a default", () => {
+    const { command } = stage(ECHOING_PRODUCER);
+    const planted = plant("two-sources", completeBoard());
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "Pipeline", "--snapshot", planted]);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("two sources");
+  });
+
+  test("--produce with no --spec or no --prefix refuses, and never spawns", () => {
+    for (const argv of [
+      ["--produce", "--prefix", "Pipeline"],
+      ["--produce", "--spec", "specs/X.md"],
+    ]) {
+      // A producer that would CRASH if reached, so the refusal is proved
+      // to have happened before the spawn rather than after it.
+      const { command } = stage(`throw new Error("the producer was spawned without the arguments it needs");`);
+      const r = run(command, argv);
+      expect(r.code, `[${argv.join(" ")}] did not refuse`).not.toBe(0);
+      expect(r.err).toContain("--produce needs --spec <path> and --prefix <name>");
+      expect(r.err, `[${argv.join(" ")}] spawned the producer anyway`).not.toContain("the producer was spawned");
+    }
+  });
+
+  test("a producer that cannot be started says so, rather than reporting no output", () => {
+    // `r.error` with a null status, empty stdout and empty stderr — the
+    // one failure whose cause is already in hand, and the one a message
+    // built from stdout/stderr alone describes as "no output".
+    const { command } = stage(ECHOING_PRODUCER);
+    // The OUTER spawn goes through this process's own binary, so only the
+    // inner `spawnSync("bun", ...)` is the one that cannot resolve. Using
+    // the name for both would fail at the outer call and the case would
+    // pass having never reached the branch.
+    const r = spawnSync(process.execPath, [command, "--produce", "--spec", "specs/X.md", "--prefix", "P"], {
+      cwd: ROOT,
+      encoding: "utf-8",
+      env: { ...process.env, PATH: join(SCRATCH, "nothing-here") },
+    });
+    expect(r.status, `the outer spawn itself failed: ${r.error?.message ?? "no error"}`).not.toBe(0);
+    expect(r.stderr, "a spawn that never started was reported as a producer that ran and said nothing").toContain(
+      "could not be started",
+    );
+  });
+});
+
 describe("the properties the mutant depends on", () => {
   test("REFUSE_EXIT is assigned exactly once", () => {
     const decls = source.match(/REFUSE_EXIT\s*=/g) || [];
