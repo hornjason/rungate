@@ -134,14 +134,28 @@ Stage A is documents and must be reviewed by Jason, because its output is
 specs. Everything after is engine machinery and by rule 2 above should not
 need him.
 
-| | Stage | In one line |
-|---|---|---|
-| **A** | Write it down | The goal and the engine spec exist and say the right things |
-| **B** | Build the engine's own board | The engine spec becomes milestones, issues and edges — a real backlog to work from |
-| **C** | Build the missing behaviour | The things the engine spec names that do not exist or are false |
-| **D** | Remove the agent from the loop | One command, runnable by Jason, that says whether the board is right |
-| **E** | Place the rest of the specs | The other specs get placement tables and reach the board |
-| **F** | Ship the payload | Convergence goes through the engine untouched |
+**The stages, their items and their done-conditions are in
+`project-state.json` under `stages`. They are not restated here.**
+
+```bash
+bun -e 'for (const s of require("./project-state.json").stages) console.log(s.id, s.name, s.agreed ?? "NOT AGREED")'
+bun test test/stage-ladder.test.ts   # runs every done item's verify command
+```
+
+This section used to carry its own six-row table, and that table is what the
+decision below is about. A reader found it, found it complete and
+self-consistent, and had no way to discover that `project-state.json` held a
+second, finer definition that disagreed. Stage A was scored wrong twice on
+exactly that: once as *5 of 6* against a real 3 of 7, and once — on
+2026-11-01, after the stage had passed — as a failure. The row for Stage A
+read *"the goal and the engine spec exist and say the right things"*, which
+is a done-condition that cannot come back wrong, and `AGENTS.md` rule 6 says
+the proof is a test.
+
+So the ladder is data in one file, each item carries the shell command that
+proves it, and a stage is complete when every command exits 0. Nothing
+asserts completion in prose, here or anywhere. `lib/stage-ladder.ts` holds
+the one decider; do not add a second.
 
 **The engine's own board is built in Stage B, not at the end.** Doing it last
 means the engine work itself has no backlog, and an agent builds it from
