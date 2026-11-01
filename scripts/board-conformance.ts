@@ -119,10 +119,20 @@ export const READINGS: readonly ReadingSpec[] = [
     // explicit null would have every uncovered criterion counted as covered.
     // That is this command's own failure mode, inverted: a reading reporting
     // met on data it never saw.
-    measure: b => ({
-      measured: b.criteria.filter(c => typeof c.satisfiedByIssue === "number" || c.recordedTrue === true).length,
-      target: b.criteria.length,
-    }),
+    //
+    // And the number has to name an issue that is ON the board. A stale
+    // reference, a typo or a renumbered issue is a pointer to nothing, and
+    // counting it is the same defect one level deeper: coverage asserted
+    // against data the reading never looked at.
+    measure: b => {
+      const present = new Set(b.issues.map(i => i.number));
+      return {
+        measured: b.criteria.filter(
+          c => (typeof c.satisfiedByIssue === "number" && present.has(c.satisfiedByIssue)) || c.recordedTrue === true,
+        ).length,
+        target: b.criteria.length,
+      };
+    },
   },
   {
     name: "blocked-by-edges",

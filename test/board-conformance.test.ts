@@ -177,6 +177,22 @@ describe("the refusals, each proved against the mutant", () => {
     expect(reading.measured).toBe(2);
   });
 
+  test("a criterion pointing at an issue that is not on the board refuses — a pointer to nothing is not coverage", () => {
+    // Review of #1697, round 2. `typeof === "number"` distinguishes null
+    // from omitted and still says nothing about whether the issue exists:
+    // a stale reference, a typo or a renumbered issue counted as covered.
+    // The same defect one level deeper than round 1's.
+    const board = completeBoard();
+    board.criteria[1]!.satisfiedByIssue = 9999;
+    const at = plant("dangling-ref", board);
+    refuses(["--snapshot", at, "--reading", "criterion-coverage"], "a criterion naming an absent issue");
+
+    const spec = READINGS.find(r => r.name === "criterion-coverage")!;
+    const reading = takeReading(spec, board);
+    expect(reading.status, "a criterion naming issue 9999 counted as covered").toBe("short");
+    expect(reading.measured).toBe(2);
+  });
+
   test("an issue missing a field the measures dereference refuses as UNMEASURED, not as a crash", () => {
     // Review of #1697. `i.blockedBy.length` and `i.labels.includes(...)`
     // assume a present array; a hand-written fixture or a half-wired source
