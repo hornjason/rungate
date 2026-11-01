@@ -1079,7 +1079,7 @@
           "id": "B5",
           "what": "`rungate board-conformance` exists as a skeleton that runs, prints its readings and exits non-zero while any is short of target — the terminal condition, so a loop can run unattended",
           "done": false,
-          "verify": "out=$(bun bin/rungate.ts board-conformance --list-readings) && printf '%s' \"$out\" | grep -qE 'milestones.*criterion-coverage|criterion-coverage'"
+          "verify": "out=$(bun bin/rungate.ts board-conformance --list-readings) && for r in milestones criterion-coverage blocked-by-edges criteria-field queue-label; do printf '%s' \"$out\" | grep -q \"$r\" || exit 1; done"
         },
         {
           "id": "B6",
