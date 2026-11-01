@@ -154,13 +154,13 @@ describe("the live plan", () => {
     expect(a.retro!.improvements.length, "Stage A's retro lists no improvements").toBeGreaterThan(0);
 
     const next = nextStage(stages);
-    expect(next?.stage.id, "the next incomplete stage is not B").toBe("B");
+    expect(next?.stage?.id, "the next incomplete stage is not B").toBe("B");
     // Jason agreed B1..B6 on 2026-11-01. Before that this assertion read
     // `toContain("agreed: null")` — the gate did its job for the whole time
     // the stage was a proposal, and this is the commit where that stopped
     // being true.
     expect(
-      next?.stage.agreed,
+      next?.stage?.agreed,
       "Stage B has no `agreed` — it may not be worked until its wording is signed off",
     ).toBeTruthy();
     expect(
@@ -327,7 +327,7 @@ describe("the retro is a gate, not a habit", () => {
       ok({ retro: null }),
       ok({ id: "B", items: [{ id: "B1", what: "x", done: false, verify: null }] }),
     ]);
-    expect(blocked?.stage.id).toBe("B");
+    expect(blocked?.stage?.id).toBe("B");
     expect(blocked?.blocked).toContain("is complete and has no retro");
   });
 
@@ -336,7 +336,7 @@ describe("the retro is a gate, not a habit", () => {
       ok(),
       ok({ id: "B", items: [{ id: "B1", what: "x", done: false, verify: null }] }),
     ]);
-    expect(free?.stage.id).toBe("B");
+    expect(free?.stage?.id).toBe("B");
     expect(free?.blocked).toBeNull();
   });
 
