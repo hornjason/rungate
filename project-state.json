@@ -1,8 +1,8 @@
 {
-  "updated": "2026-10-31",
+  "updated": "2026-11-01",
   "priorities": [
-    "THE GOAL (2026-10-30, supersedes the 2026-10-23 SCOPE LOCK below). A spec in git becomes a readable board with nothing hand-run: open the board and see every issue, its milestone, the criterion it serves and what blocks it, without opening an issue. One command reports the same thing so nothing depends on an agent reading. Decision record docs/adr/ADR-009-engine-goal-and-build-order.md. ADR-009 IS ON MAIN — PR #1685 merged 2026-10-31 as 4dcb9ff3, with the board identifiers in .claude/rungate/config.json under `board`.",
-    "THE STAGE LADDER — the definition of every stage, and where we are on it. AGREED WITH JASON 2026-10-30 as five stages and 25 items — 7 + 6 + 6 + 4 + 2, counted per stage so the number is checkable rather than asserted — then RE-LETTERED by ADR-009 into six. The re-lettering is the trap: ADR-009 inserted a new Stage B (build the engine's own board) and pushed everything down one, so the old Stage B is now C, old C is now D, old D is now E and old E is now F. Scoring a stage against the old scheme, or against ADR-009's Consequences section, is how the 2026-10-31 Stage A audit reported 5 of 6 against a real 3 of 7. AUDIT AGAINST THIS LIST AND NO OTHER. Every item below is Jason's own wording from 2026-10-30 EXCEPT Stage B's six and E5, both of which say so on their own line: ADR-009 created Stage B and added E5 after that conversation, and Stage B is the one stage he has not yet signed off. Two exceptions, named here and named again where they sit — an umbrella claim that does not carry its own exceptions is the thing this ladder exists to stop. === STAGE A, write it down — documents only, blocks everything below — 7 of 7, COMPLETE 2026-10-31 === A1 [x] the goal becomes a claim in SUCCESS.md, falsifiable, with the check named — PR #1688 MERGED 2026-10-31 · A2 [x] the goal is set in the fleet goal file via /goal, superseding the 2026-10-25 filing-gate goal, demoted in place · A3 [x] the pipeline spec declares itself the ENGINE and names convergence as the PAYLOAD — PR #1691 MERGED 2026-10-31. `governs:` now reads 'THE ENGINE that turns a spec into board state — not the specs it ships. Payload: CODE-REVIEW-CONVERGENCE-SPEC.md', and there are TWO 'does not govern' sections, cross-linked so reading either alone is visibly half the boundary. Verify: git show origin/main:specs/SPEC-TO-BOARD-PIPELINE-SPEC.md | grep -E '^governs:|does not govern' · A4 [x] criteria for the no-hand rule — SC-2618..2621; 0 of them ticked, and 'done when each has a failing test' is not met · A5 [x] a criterion fixing the acceptance test: the engine is done when convergence ships through it untouched — PR #1691 MERGED 2026-10-31 as SC-2625. It is deliberately UNTICKED and carries the generator's 'REVIEW: unmatched' marker, because no mechanism yet tells a tool edit from a hand edit on the GitHub API; test/spec-to-board-pipeline.test.ts binds that it cannot be ticked without a detector. Verify: git show origin/main:specs/SPEC-TO-BOARD-PIPELINE-SPEC.md | grep 'SC-2625:' · A6 [x] no criterion in this work may be satisfied by a symbol's presence — SC-2622 (the fix for 1131 of 1485) · A7 [x] the Proposed ADRs resolved, accepted or withdrawn — PR #1694 MERGED 2026-10-31, all six. 001 superseded by 002; 002 accepted (CONFIG-1/CONFIG-2 enforce it); 003 superseded by SPEC-TO-BOARD-PIPELINE-SPEC.md (0 criteria against 26); 004 accepted, scoped to #1162/#1167/#1266, all three measured as carrying their assigned criteria 3 of 3; 005 accepted, cited by three production files; 006 accepted with its decision recorded as NOT applied, 0 of 6 repaired. Resolved BY RULE, not by asking Jason, per the rule recorded below. test/adr-resolution-figures.test.ts now re-derives the two tree-checkable figures so they cannot go stale again. Verify: for n in 1 2 3 4 5 6; do git show origin/main:docs/adr/ADR-00$n-*.md | grep -m1 '^status:'; done === STAGE B, build the engine's own board — DRAFTED 2026-10-31, NOT YET AGREED === New in ADR-009, which says two things about it: the engine's own board is built HERE and not at the end, or the engine work has no backlog and an agent builds it from memory, which is the defect the whole document is about; and the conformance command's SKELETON is built HERE and not in Stage D, or the loop has no terminal condition. Proposed items: B1 [ ] plan-spec run against SPEC-TO-BOARD-PIPELINE-SPEC.md so the engine spec's own criteria become milestones (partly done — ADR-008 and #1674 created six issues in Pipeline Phase milestones) · B2 [ ] every engine criterion either names an open issue or is recorded as already true and needing only a binding · B3 [ ] blocked-by edges across the engine issues, so *what is next* is computed from the graph rather than read · B4 [ ] the board's Criteria field populated for every engine issue — a DISPLAY MIRROR; the issue body stays the source of truth, because `gh issue list --json projectItems` returns Status only and cannot see custom fields · B5 [ ] `rungate board-conformance` exists as a skeleton that runs, prints its readings and exits non-zero while any is short of target — the terminal condition, so a loop can run unattended · B6 [ ] the `engine` label is the work queue and every engine issue carries it, so 'nothing outside the queue gets an agent' is enforceable. === STAGE C, build the missing behaviour — was STAGE B, six items from the spec's own criteria === C1 [ ] SC-2609, 'serves no criterion' must be SAYABLE — NAMES_NONE is still the empty string on main today, so the criterion passes while being false; blank means *not filled in*, *tool could not tell* and *deliberately none* at once. This is #1173 · C2 [ ] SC-2611, a spec with no placement table is REPORTED as unplanned — 25 of 27 specs are indistinguishable from specs with no work left · C3 [ ] SC-2612, lib/finding-promotion.ts — ABSENT on main. It turns a review finding that names real work into a criterion, and it is the only thing that DRAINS the criterion-less issues rather than tagging them · C4 [ ] SC-2613, filingGate in lib/github.ts — 0 occurrences on main. Without it a tool that creates issues bypasses the cap a `gh issue create` is metered by · C5 [x] SC-2614, STALE_CITATION in the arbiter — present on main (3 occurrences); a finding quoting source absent from the reviewed tree is reported stale, not adjudicated as live · C6 [ ] SC-2602, SC-2606 and SC-2610 are credited on a word in a comment — each needs real behaviour and a test that goes red without it. === STAGE D, remove the agent from the loop — was STAGE C; Jason's words: 'this is your actual constraint' === D1 [ ] criterion-inventory takes its OWN snapshot — today the input directory is built by hand with two `gh` commands, so the number is reproducible by nobody else · D2 [ ] `rungate board-conformance`, one command and one verdict — 0 references in lib/cli-commands.ts; today Jason has to trust that an agent read four tools' output correctly · D3 [ ] it fetches and reads origin/main, never a working tree — a stale tree and a missing feature look identical, and that is the mechanism behind 'bits and pieces stitched together' · D4 [ ] it names unmerged and uncommitted work in EVERY run, not when an agent remembers to check (the rescue arm from #1038 and PR #1687 is the input) · D5 [ ] it runs as a test on main in CI · D6 [ ] every criterion is proved red before it is trusted — mutation, with predicted MEMBERSHIP stated first. === STAGE E, place the rest of the specs — was STAGE D 'Populate'; only after C and D, or it has to be redone === E1 [ ] Phase placement tables authored for the specs that need them — human-authored and reviewed BY DESIGN; 2 of 27 carry one today · E2 [ ] `plan-issues --repair` run, so issues naming nothing get a criterion or an explicit 'none' · E3 [ ] `plan-deps` run, so ordering becomes data — 0 of 71 open issues carried an edge on 2026-10-30; the raw `has:blocked-by` reading was 36 of 71 on 2026-10-31, but that filter may mean 'has a link' rather than 'has an OPEN blocker', so it is a reading and not yet a tick · E4 [ ] `board-mirror --write` run, so the board column reflects the bodies · E5 [ ] a spec declares which SUCCESS claim it serves (SC-2623). NOT PART OF THE 2026-10-30 AGREEMENT — ADR-009 added it afterwards and it is placed here by me, which is why this stage lists five items where the original Stage D listed four. The re-lettered ladder therefore totals 26 agreed-plus-one, not 25. === STAGE F, ship the payload — was STAGE E === F1 [ ] specs/CODE-REVIEW-CONVERGENCE-SPEC.md goes through the engine with no agent touching anything · F2 [ ] `board-conformance` exits 0. THAT IS THE GOAL MET. A stage is finished when every one of its items is ticked AND an audit has been run against this list. LOOSE ENDS from the same conversation, still open: commit 9f12ffd6 in rg-wt-m12-proposal, 90 lines on no remote branch, containing a section headed 'the decision this needs from Jason'; and specs/HELP-SPEC.md, untracked and not on main. || A7 IS THE ONLY ITEM LEFT once PR #1691 lands (it carries A3 and A5; open and armed 2026-10-31). Jason asked 2026-10-31 'can we get through this without me' — so A7 is resolved BY RULE rather than by asking him: an ADR is accepted if code enforces it today, superseded if its content moved to another document, rejected if nothing implements it and nothing will. The resolution lands as a PR he reviews, not as a conversation he has to be present for. || STAGE A IS COMPLETE, audited 2026-10-31 against THIS list and no other, every item read against origin/main at 86679424 with the command recorded beside it. A1 SUCCESS.md names `rungate board-conformance` as the check. A2 ~/.claude/FLEET-STATE.md line 19 carries the 2026-10-30 goal and line 101 'DEMOTED 2026-10-30' keeps the 2026-10-25 filing-gate goal in place rather than deleting it. A3, A5, A7 as recorded above. A4 SC-2618..2621 all four present. A6 SC-2622 present. The prior audit that reported 5 of 6 scored against ADR-009's Consequences section instead of this ladder; this one did not, which is the whole reason the 'AUDIT AGAINST THIS LIST AND NO OTHER' sentence is at the top. NEXT: Stage B is NOT started and must not be — it is the one stage Jason has not signed off, and B1..B6 are ADR-009's drafting rather than his words.",
+    "THE GOAL IS project-state.json`s top-level `goal` key — statement, the command that proves it, and the SUCCESS.md claim it serves. This entry is a pointer and deliberately does not restate it. Set 2026-10-30 by Jason, supersedes the 2026-10-23 SCOPE LOCK below. Decision record docs/adr/ADR-009-engine-goal-and-build-order.md, ON MAIN — PR #1685 merged 2026-10-31 as 4dcb9ff3, with the board identifiers in .claude/rungate/config.json under `board`. The goal text used to be duplicated here, in SUCCESS.md, in ~/.claude/FLEET-STATE.md and in ADR-009; three of those are now pointers and SUCCESS.md keeps it as claim 7 because SUCCESS.md is the charter. test/stage-ladder.test.ts asserts the claim it names exists.",
+    "THE STAGE LADDER AND THE GOALS ARE DATA, in this file, under the top-level `goal`, `goals` and `stages` keys. Read them there. This entry is a pointer and carries no checklist, no goal text and no done-condition of its own, deliberately. WHY: the definition of done used to live in three prose documents that nothing compared — ADR-009's stage table, ADR-009's goal table and this entry — so an agent reading any one of them read a complete, self-consistent answer with no way to discover the other two. Stage A was scored wrong twice that way. HOW IT IS HELD NOW: every item carries a `verify` shell command and a stage is complete when every command exits 0, derived and never asserted; every stage states its goal and which of the three agreed goals it serves; every completed stage carries a retro whose improvements each name the MECHANISM that enforces them, and nextStage refuses to advance past a complete stage that has none. lib/stage-ladder.ts is the one decider; test/stage-ladder.test.ts executes it. STAGE B IS NOT AGREED — `agreed: null`. ADR-009 drafted B1..B6 after the conversation that set the ladder; they are the engine's proposal, not Jason's words, and the ladder refuses to let anything in Stage B be ticked until he agrees the wording. LOOSE ENDS: commit 9f12ffd6 on rg/m12-proposal, 68 lines on no remote, headed 'the decision this needs from Jason'; and specs/HELP-SPEC.md, untracked and not on main.",
     "BASELINES measured 2026-10-30 on origin/main at eae12e11, so a later reading can tell whether anything moved: 1 of 15 pipeline criteria proved by a test naming the id; 2 of 27 top-level specs carrying a Phase placement table; 71 open issues of which 46 name a criterion and 0 carry a blocked-by edge; 1131 of 1485 ticked criteria repo-wide satisfied by a symbol being present rather than a behaviour; 0 claims in SUCCESS.md naming the board, backlog or tracker; 0 repository locations recording the board node id before PR #1685.",
     "THE DEFECT THIS EXISTS TO STOP. A criterion of the form `<file> contains [<symbol>]` is satisfied by a name being present. SC-2609 requires lib/board-mirror.ts to contain NAMES_NONE; it does, and its value is the empty string — satisfiable and false. That is how partial work reads as a finished plan. No criterion added under ADR-009 may be satisfied by a symbol existing. ADR-009 IS ON MAIN — PR #1685 merged 2026-10-31 as 4dcb9ff3, with the board identifiers in .claude/rungate/config.json under `board`.",
     "LOOSE ENDS, both unmerged and invisible from GitHub: commit 9f12ffd6 in /Users/jhorn/Projects/rg-wt-m12-proposal is on no remote branch — 90 lines adding an increment-1 build plan to specs/CODE-REVIEW-CONVERGENCE-SPEC.md, containing a section headed the decision this needs from Jason; and specs/HELP-SPEC.md is untracked in /Users/jhorn/Projects/rg-wt-threads2 and not on main.",
@@ -926,5 +926,349 @@
       1685
     ],
     "summary": "THE STAGE DEFINITIONS WERE NEVER WRITTEN DOWN, AND THAT MADE A STAGE AUDIT SCORE THE WRONG LIST.\n\n#1685 merged (4dcb9ff3) carrying ADR-009, the board identifiers in .claude/rungate/config.json under `board`, AGENTS.md rule 8, and SC-2615..2624. All four verified present on main.\n\nThen Jason asked whether Stage A was done, and the honest answer took a transcript dig to find. The seven items that DEFINE Stage A — A1..A7 — were agreed with him in conversation on 2026-10-30 and written to no file at all; they existed only inside a 387 MB session log. Lacking them, the audit scored against ADR-009's Consequences section, a different and easier list, and reported 5 of 6. Measured against the real list the reading is 3 of 7: A2, A4 and A6 are done, A3 is partial, and A1 (SUCCESS.md claim, PR #1688), A5 (no criterion states the acceptance test) and A7 (ADR-001..006 all still `proposed`) are not. Jason's recall that we had defined them was correct and my first search for them was too narrow — the fourth time that pairing has happened.\n\nTHE FIX IS NOT A BETTER SEARCH. Priority 2 of this file is now the stage ladder itself, A1..A7 with tick state plus the B-F one-liners, because this is the file read at the start of every session and an ADR is read only when the reasoning is in question. AGENTS.md rule 9 makes it standing: an agreement is not real until it is in project-state.json, written before the turn ends. The B-F sub-items are deliberately NOT drafted here — Stage A's own rule is that documents get reviewed by Jason, and inventing his list is the mistake this entry exists to stop.\n\nRule 9 cost 530 bytes the instruction surface did not have: the peak sat at 100% of budget on .claude/agents/aditi.md. The rule was cut to a three-line pointer with the evidence held once, here, which leaves 236 bytes free against a 230-byte floor. The next rule added to AGENTS.md goes red until a worked record moves into reference/.\n\nTHE REST OF THE LADDER WAS RECOVERABLE, AND ONLY ONE STAGE WAS GENUINELY MISSING. Searching every transcript for Stage B through F turned up the original in full: a 2026-10-30 reply listing FIVE stages and 25 items (7 + 6 + 6 + 4 + 2) — A codify, B the engine's missing behaviour, C remove me from the loop, D populate, E ship the payload — ending in four questions to Jason. ADR-009 then RE-LETTERED it into six by inserting 'build the engine's own board' as a new Stage B and pushing the rest down one. That re-lettering is the live hazard: old B is now C, old C is now D, old D is now E, old E is now F, and an audit that picks the wrong scheme scores a different list without noticing. Priority 2 now carries all six stages with both letterings recorded, every item in Jason's own 2026-10-30 wording, and tick state measured on origin/main rather than asserted: C1 NAMES_NONE is still the empty string, C3 lib/finding-promotion.ts is absent, C4 filingGate has zero occurrences, C5 STALE_CITATION is present, D2 board-conformance has zero references in cli-commands.ts, E1 is 2 of 27 specs placed. Only Stage B's six items are drafted rather than agreed, and they are marked as such, because ADR-009 created that stage after the conversation and it is the one thing Jason has not signed off."
-  }
+  },
+  "stages": [
+    {
+      "id": "A",
+      "name": "Write it down — documents only, blocks everything below",
+      "agreed": "2026-10-30 Jason",
+      "items": [
+        {
+          "id": "A1",
+          "what": "the goal becomes a claim in SUCCESS.md, falsifiable, with the check named",
+          "done": true,
+          "verify": "grep -q 'rungate board-conformance' SUCCESS.md"
+        },
+        {
+          "id": "A2",
+          "what": "the goal is set in the fleet goal file, superseding the 2026-10-25 filing-gate goal, demoted in place rather than deleted",
+          "done": true,
+          "scope": "machine",
+          "verify": "grep -q '^## THE GOAL — set by Jason 2026-10-30' $HOME/.claude/FLEET-STATE.md"
+        },
+        {
+          "id": "A3",
+          "what": "the pipeline spec declares itself the ENGINE and names convergence as the PAYLOAD",
+          "done": true,
+          "verify": "grep -q '^governs: THE ENGINE' specs/SPEC-TO-BOARD-PIPELINE-SPEC.md"
+        },
+        {
+          "id": "A4",
+          "what": "criteria for the no-hand rule exist — SC-2618..2621. They are deliberately unticked: they are Phase 7 behaviour, built in Stages B-D, and Stage A delivers the criteria rather than the behaviour",
+          "done": true,
+          "verify": "test \"$(grep -cE '^- \\[.\\] SC-26(18|19|20|21):' specs/SPEC-TO-BOARD-PIPELINE-SPEC.md)\" = 4"
+        },
+        {
+          "id": "A5",
+          "what": "a criterion fixing the acceptance test: the engine is done when convergence ships through it untouched. SC-2625, deliberately unticked, and bound so it cannot be ticked without a detector",
+          "done": true,
+          "verify": "grep -q 'SC-2625:' specs/SPEC-TO-BOARD-PIPELINE-SPEC.md && grep -rq 'SC-2625' test/"
+        },
+        {
+          "id": "A6",
+          "what": "no criterion in this work may be satisfied by a symbol's presence — SC-2622, the fix for 1131 of 1485",
+          "done": true,
+          "verify": "grep -q 'SC-2622:' specs/SPEC-TO-BOARD-PIPELINE-SPEC.md"
+        },
+        {
+          "id": "A7",
+          "what": "the six Proposed ADRs resolved, accepted, superseded or withdrawn — resolved by rule rather than by asking Jason",
+          "done": true,
+          "verify": "test \"$(grep -hm1 '^status:' docs/adr/ADR-001-*.md docs/adr/ADR-002-*.md docs/adr/ADR-003-*.md docs/adr/ADR-004-*.md docs/adr/ADR-005-*.md docs/adr/ADR-006-*.md | grep -cE 'accepted|superseded|withdrawn')\" = 6"
+        }
+      ],
+      "goal": "The goal and the engine spec exist and say the right things",
+      "serves": 1,
+      "retro": {
+        "wentWell": [
+          "Seven items, six PRs, one day — 2026-10-31, 12:25 to 22:20, +1600/-59.",
+          "Three wrong figures were retracted in the documents rather than quietly fixed: '25 criteria' for 26, 'four files' for three, #1425 in a scope the document excludes. ADR-006 ships saying its own decision has NOT been applied, 0 of 6.",
+          "Two defect classes became structure instead of point fixes: the worktree partition with a totality test, and test/adr-resolution-figures.test.ts, which re-derives the figures so they cannot drift again.",
+          "A real safety bug surfaced and was fixed — a `main` holding unpushed commits returned a result byte-identical to a clean tree.",
+          "Issues opened against closed on the day was 1 to 1. The swarm's three-to-one did not recur."
+        ],
+        "wentPoorly": [
+          "136 review events across six PRs; #1687 alone took 32 threads and 14 AI Review runs over nine hours. AGENTS.md rule 5 says stop at the third round and re-scope. Nothing enforced it and nobody invoked it. This was the largest cost of the stage by a wide margin.",
+          "The stage was scored wrong twice by the agent that built it — as 5 of 6 against a real 3 of 7, and later as a failure after it had passed. Cause: the definition of done lived in three prose documents that nothing compared.",
+          "A4 shipped ticked while its own text read \"0 of them ticked, and 'done when each has a failing test' is not met\". Nothing refused it.",
+          "Stage A's done-when could not come back wrong: 'the goal and the engine spec exist and say the right things'.",
+          "Seven-day issue ratio reached 3.62 — 29 opened against 8 closed. The day was clean; the week diverged."
+        ],
+        "improvements": [
+          {
+            "what": "A stage's definition of done lives in exactly one place and is executable",
+            "mechanism": "project-state.json `goal`, `goals`, `stages`; every item carries a verify command and test/stage-ladder.test.ts runs them. ADR-009's two tables are pointers.",
+            "status": "in-place",
+            "verify": "bun -e 'const d=require(\"./project-state.json\");if(!d.goal||!d.goals?.length||!d.stages?.length)process.exit(1);if(d.stages.flatMap(s=>s.items).filter(i=>i.done&&!i.verify).length)process.exit(1)'"
+          },
+          {
+            "what": "A ticked item cannot contain its own denial",
+            "mechanism": "stageLadderViolations refuses a done item whose text matches a DENIALS phrase",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[{id:\"A1\",what:\"0 of them ticked\",done:true,verify:\"true\"}],retro:null}]).join(\"|\").includes(\"One of the two is wrong\"))process.exit(1)'"
+          },
+          {
+            "what": "A stage nobody agreed cannot be worked",
+            "mechanism": "stageLadderViolations refuses a done item in a stage with agreed: null",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:null,items:[{id:\"A1\",what:\"w\",done:true,verify:\"true\"}],retro:null}]).join(\"|\").includes(\"nobody has signed off\"))process.exit(1)'"
+          },
+          {
+            "what": "A re-lettering cannot go unnoticed",
+            "mechanism": "stageLadderViolations refuses a stage whose letter does not match its position",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[],retro:null},{id:\"C\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[],retro:null}]).join(\"|\").includes(\"but it sits at position 1\"))process.exit(1)'"
+          },
+          {
+            "what": "Every stage states what it is FOR, not just a label",
+            "mechanism": "Stage.goal is required and refused when empty",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"\",serves:1,agreed:\"d\",items:[],retro:null}]).join(\"|\").includes(\"is a label, not a goal\"))process.exit(1)'"
+          },
+          {
+            "what": "What a stage teaches is recorded before the next one starts",
+            "mechanism": "nextStage refuses to advance past a complete stage whose retro is null",
+            "status": "in-place",
+            "verify": "bun -e 'const {nextStage}=await import(\"./lib/stage-ladder.ts\");const r=nextStage([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[{id:\"A1\",what:\"w\",done:true,verify:\"true\"}],retro:null},{id:\"B\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[{id:\"B1\",what:\"w\",done:false,verify:null}],retro:null}]);if(!String(r&&r.blocked).includes(\"is complete and has no retro\"))process.exit(1)'"
+          },
+          {
+            "what": "A retro's improvements are PROVED, not described — a named mechanism is still prose",
+            "mechanism": "Improvement.status is in-place or open; in-place requires a verify command, and test/stage-ladder.test.ts RUNS every one. Jason caught this on 2026-11-01: the first version of this retro named six mechanisms and proved none.",
+            "status": "in-place",
+            "verify": "bun -e 'const {stageLadderViolations}=await import(\"./lib/stage-ladder.ts\");if(!stageLadderViolations([{id:\"A\",name:\"n\",goal:\"g\",serves:1,agreed:\"d\",items:[],retro:{wentWell:[],wentPoorly:[],improvements:[{what:\"x\",mechanism:\"a test somewhere\",status:\"in-place\",verify:null}]}}]).join(\"|\").includes(\"A named mechanism is\"))process.exit(1)'"
+          },
+          {
+            "what": "Repairing past the third review round is a decision, not a drift",
+            "mechanism": "NONE YET, needs a decision. AI_REVIEW_ROUND_CAP=3 bounds the reviewer's carry-forward rounds, a different quantity: #1687's 14 runs were 13 pushes, each a legitimate round 1. Nothing in this repository can see 'the author pushed another fix instead of re-scoping'.",
+            "status": "open",
+            "verify": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "B",
+      "name": "Build the engine's own board",
+      "agreed": "2026-11-01 Jason — B1..B6 as ADR-009 drafted them",
+      "items": [
+        {
+          "id": "B1",
+          "what": "plan-spec run against SPEC-TO-BOARD-PIPELINE-SPEC.md so the engine spec's own criteria become milestones (partly done — ADR-008 and #1674 created six issues in Pipeline Phase milestones)",
+          "done": false,
+          "verify": "bun bin/rungate.ts board-conformance --reading milestones"
+        },
+        {
+          "id": "B2",
+          "what": "every engine criterion either names an open issue or is recorded as already true and needing only a binding",
+          "done": false,
+          "verify": "bun bin/rungate.ts board-conformance --reading criterion-coverage"
+        },
+        {
+          "id": "B3",
+          "what": "blocked-by edges across the engine issues, so what is next is computed from the graph rather than read",
+          "done": false,
+          "verify": "bun bin/rungate.ts board-conformance --reading blocked-by-edges"
+        },
+        {
+          "id": "B4",
+          "what": "the board's Criteria field populated for every engine issue — a DISPLAY MIRROR; the issue body stays the source of truth, because `gh issue list --json projectItems` returns Status only and cannot see custom fields",
+          "done": false,
+          "verify": "bun bin/rungate.ts board-conformance --reading criteria-field"
+        },
+        {
+          "id": "B5",
+          "what": "`rungate board-conformance` exists as a skeleton that runs, prints its readings and exits non-zero while any is short of target — the terminal condition, so a loop can run unattended",
+          "done": false,
+          "verify": "out=$(bun bin/rungate.ts board-conformance --list-readings) && for r in milestones criterion-coverage blocked-by-edges criteria-field queue-label; do printf '%s' \"$out\" | grep -q \"$r\" || exit 1; done"
+        },
+        {
+          "id": "B6",
+          "what": "the `engine` label is the work queue and every engine issue carries it, so 'nothing outside the queue gets an agent' is enforceable",
+          "done": false,
+          "verify": "bun bin/rungate.ts board-conformance --reading queue-label"
+        }
+      ],
+      "goal": "The engine spec becomes milestones, issues and edges — a real backlog to work from",
+      "serves": 1,
+      "retro": null
+    },
+    {
+      "id": "C",
+      "name": "Build the missing behaviour — was Stage B before ADR-009 re-lettered",
+      "agreed": "2026-10-30 Jason",
+      "items": [
+        {
+          "id": "C1",
+          "what": "SC-2609, 'serves no criterion' must be SAYABLE — NAMES_NONE is still the empty string on main, so the criterion passes while being false. This is #1173",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "C2",
+          "what": "SC-2611, a spec with no placement table is REPORTED as unplanned — 25 of 27 specs are indistinguishable from specs with no work left",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "C3",
+          "what": "SC-2612, lib/finding-promotion.ts — turns a review finding that names real work into a criterion, and is the only thing that DRAINS the criterion-less issues rather than tagging them",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "C4",
+          "what": "SC-2613, filingGate in lib/github.ts — without it a tool that creates issues bypasses the cap a `gh issue create` is metered by",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "C5",
+          "what": "SC-2614, STALE_CITATION in the arbiter — a finding quoting source absent from the reviewed tree is reported stale, not adjudicated as live",
+          "done": true,
+          "verify": "grep -q 'STALE_CITATION' lib/finding-arbiter.ts"
+        },
+        {
+          "id": "C6",
+          "what": "SC-2602, SC-2606 and SC-2610 are credited on a word in a comment — each needs real behaviour and a test that goes red without it",
+          "done": false,
+          "verify": null
+        }
+      ],
+      "goal": "The things the engine spec names that do not exist or are false get built",
+      "serves": 2,
+      "retro": null
+    },
+    {
+      "id": "D",
+      "name": "Remove the agent from the loop — Jason's words: 'this is your actual constraint'",
+      "agreed": "2026-10-30 Jason",
+      "items": [
+        {
+          "id": "D1",
+          "what": "criterion-inventory takes its OWN snapshot — today the input directory is built by hand with two `gh` commands, so the number is reproducible by nobody else",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "D2",
+          "what": "`rungate board-conformance`, one command and one verdict — today Jason has to trust that an agent read four tools' output correctly",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "D3",
+          "what": "it fetches and reads origin/main, never a working tree — a stale tree and a missing feature look identical",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "D4",
+          "what": "it names unmerged and uncommitted work in EVERY run, not when an agent remembers to check (the rescue arm from #1038 and PR #1687 is the input)",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "D5",
+          "what": "it runs as a test on main in CI",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "D6",
+          "what": "every criterion is proved red before it is trusted — mutation, with predicted MEMBERSHIP stated first",
+          "done": false,
+          "verify": null
+        }
+      ],
+      "goal": "One command, runnable by Jason, that says whether the board is right",
+      "serves": 2,
+      "retro": null
+    },
+    {
+      "id": "E",
+      "name": "Place the rest of the specs — only after C and D, or it has to be redone",
+      "agreed": "2026-10-30 Jason",
+      "items": [
+        {
+          "id": "E1",
+          "what": "Phase placement tables authored for the specs that need them — human-authored and reviewed BY DESIGN; 2 of 27 carry one today",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "E2",
+          "what": "`plan-issues --repair` run, so issues naming nothing get a criterion or an explicit 'none'",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "E3",
+          "what": "`plan-deps` run, so ordering becomes data — 0 of 71 open issues carried an edge on 2026-10-30; the raw `has:blocked-by` reading of 36 of 71 may mean 'has a link' rather than 'has an OPEN blocker', so it is a reading and not yet a tick",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "E4",
+          "what": "`board-mirror --write` run, so the board column reflects the bodies",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "E5",
+          "what": "a spec declares which SUCCESS claim it serves (SC-2623). NOT PART OF THE 2026-10-30 AGREEMENT — ADR-009 added it afterwards and it is placed here by the DA, which is why this stage lists five where the original Stage D listed four",
+          "done": false,
+          "verify": null
+        }
+      ],
+      "goal": "The other specs get placement tables and reach the board",
+      "serves": 3,
+      "retro": null
+    },
+    {
+      "id": "F",
+      "name": "Ship the payload",
+      "agreed": "2026-10-30 Jason",
+      "items": [
+        {
+          "id": "F1",
+          "what": "specs/CODE-REVIEW-CONVERGENCE-SPEC.md goes through the engine with no agent touching anything",
+          "done": false,
+          "verify": null
+        },
+        {
+          "id": "F2",
+          "what": "`board-conformance` exits 0. THAT IS THE GOAL MET",
+          "done": false,
+          "verify": null
+        }
+      ],
+      "goal": "Convergence goes through the engine untouched",
+      "serves": 3,
+      "retro": null
+    }
+  ],
+  "goal": {
+    "statement": "A spec in git becomes a readable board with nothing hand-run: open the board and see every issue, its milestone, the criterion it serves and what blocks it, without opening an issue. One command reports the same thing so nothing depends on an agent reading.",
+    "verify": "bun bin/rungate.ts board-conformance",
+    "successClaim": 7,
+    "agreed": "2026-10-30 Jason",
+    "decisionRecord": "docs/adr/ADR-009-engine-goal-and-build-order.md"
+  },
+  "goals": [
+    {
+      "id": 1,
+      "goal": "The engine's own work is on the board and measurable",
+      "doneWhen": "The conformance command runs, and the engine backlog can be worked off the board without asking an agent what is next"
+    },
+    {
+      "id": 2,
+      "goal": "The engine works",
+      "doneWhen": "The conformance command exits 0"
+    },
+    {
+      "id": 3,
+      "goal": "It generalises",
+      "doneWhen": "The convergence spec ships through the engine untouched"
+    }
+  ]
 }

@@ -214,16 +214,12 @@ Pass `--expect-branch <your branch>` whenever the work is not in your cwd.
 It refuses with `UNMEASURED: wrong tree`, naming both the directory it read
 and the branch you meant.
 
-**And do not build the obvious detector.** A populated `COMMITS` beside an
-empty `FILES MODIFIED` and an empty `DIFF CONTENT` is not
-self-contradictory: `git log A...B` is a **symmetric difference** and
-`git diff A...B` is `merge-base..B`, so that is every branch merged into or
-behind main. A refusal built on it fires on the normal case.
-
-Both measurements, and why the skill itself is not where this gets fixed,
-are in `reference/parallel-sessions-worked-instances.md` (#1348). Two security reviews on
-2026-10-17 were each measured against a tree their branch had already moved
-past, and neither report gave the reader any way to tell.
+**And do not build the obvious detector** — a populated `COMMITS` beside an
+empty `DIFF CONTENT` is the normal case, not a contradiction. Why, both
+measurements, and why the skill is not where this gets fixed:
+`reference/parallel-sessions-worked-instances.md` (#1348). Two security
+reviews on 2026-10-17 were each measured against a tree their branch had
+already moved past, and neither report let the reader tell.
 
 A report whose currency could not be established says so. "I could not
 resolve the branch" is a thing worth writing down; silence reads as current.
