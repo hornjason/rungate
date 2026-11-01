@@ -167,10 +167,21 @@ describe("the refusals, each proved against the mutant", () => {
     const at = plant("omitted-field", board as unknown as BoardSnapshot);
     refuses(["--snapshot", at, "--reading", "criterion-coverage"], "a criterion with no satisfiedByIssue key");
 
-    // Through the CLI the parser catches it first, so that assertion
-    // witnesses the shape check rather than the coverage predicate — two
-    // mechanisms, one exit code. The predicate is therefore exercised
-    // directly, on a board the parser never saw.
+    // And it refuses through THIS reading, not through the parser.
+    //
+    // Round 6 caught the first version of this: the boundary rejected the
+    // whole snapshot over the absent key, so the refusal above was the
+    // shape check and every other reading went UNMEASURED too — two
+    // mechanisms behind one exit code, and the wrong one winning. The
+    // boundary now normalises an absent optional field, so the output has
+    // to show criterion-coverage SHORT with the rest untouched.
+    const whole = run(SCRIPT, ["--snapshot", at]);
+    expect(whole.out, "the absent key made the whole board unreadable rather than one reading short").not.toContain(
+      "UNMEASURED",
+    );
+    expect(whole.out).toContain("SHORT       criterion-coverage");
+    expect(whole.out.match(/^MET /gm)?.length, "an absent satisfiedByIssue moved a reading it has nothing to do with").toBe(4);
+
     const spec = READINGS.find(r => r.name === "criterion-coverage")!;
     const reading = takeReading(spec, board as unknown as BoardSnapshot);
     expect(reading.status, "an omitted satisfiedByIssue counted as a covered criterion").toBe("short");
@@ -193,23 +204,47 @@ describe("the refusals, each proved against the mutant", () => {
     expect(reading.measured).toBe(2);
   });
 
-  test("an issue missing a field the measures dereference refuses as UNMEASURED, not as a crash", () => {
-    // Review of #1697. `i.blockedBy.length` and `i.labels.includes(...)`
-    // assume a present array; a hand-written fixture or a half-wired source
-    // omitting one used to die on a TypeError — a stack trace where the
-    // contract says UNMEASURED, exiting with a code that reads like a
-    // refusal while witnessing nothing.
-    for (const field of ["blockedBy", "labels", "number", "criteriaField"]) {
+  test("an absent field never throws, and only an absent IDENTITY field refuses the whole board", () => {
+    // Rounds 1 and 6. `i.blockedBy.length` and `i.labels.includes(...)`
+    // assume a present array, so a hand-written fixture or a half-wired
+    // source omitting one used to die on a TypeError — a stack trace where
+    // the contract says UNMEASURED. Then the first repair went too far the
+    // other way and rejected the whole snapshot over any absent key, which
+    // turned four unrelated readings UNMEASURED and hid which field was
+    // missing.
+    //
+    // The line now: an optional field degrades ITS OWN reading, and only
+    // `number` — what a blocked-by edge resolves against — makes the board
+    // unread. Both directions are asserted, so neither repair can come
+    // back.
+    const degrades: Record<string, string> = {
+      blockedBy: "blocked-by-edges",
+      labels: "queue-label",
+      criteriaField: "criteria-field",
+      milestone: "milestones",
+    };
+    for (const [field, reading] of Object.entries(degrades)) {
       const board = completeBoard() as unknown as { issues: Record<string, unknown>[] };
-      delete board.issues[0]![field];
+      delete board.issues[1]![field];
       const at = plant(`missing-${field}`, board as unknown as BoardSnapshot);
-      refuses(["--snapshot", at], `an issue with no ${field}`);
       const r = run(SCRIPT, ["--snapshot", at]);
-      expect(r.err, `omitting ${field} produced a stack trace rather than the UNMEASURED refusal`).toContain(
-        "not an empty board",
-      );
       expect(r.err, `omitting ${field} threw`).not.toContain("TypeError");
+      expect(r.out, `omitting ${field} made the whole board unreadable`).not.toContain("UNMEASURED");
+      expect(r.out, `omitting ${field} did not move ${reading}`).toContain(`SHORT       ${reading}`);
+      expect(
+        r.out.match(/^SHORT /gm)?.length,
+        `omitting ${field} moved a reading other than ${reading}`,
+      ).toBe(1);
+      refuses(["--snapshot", at], `a board short on ${reading}`);
     }
+
+    const noNumber = completeBoard() as unknown as { issues: Record<string, unknown>[] };
+    delete noNumber.issues[1]!.number;
+    const at = plant("missing-number", noNumber as unknown as BoardSnapshot);
+    refuses(["--snapshot", at], "an issue with no number");
+    expect(run(SCRIPT, ["--snapshot", at]).err, "an unidentifiable row did not refuse the board").toContain(
+      "not an empty board",
+    );
   });
 
   test("a complete board passes — the control, without which every case above is vacuous", () => {

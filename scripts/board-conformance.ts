@@ -231,25 +231,49 @@ export function formatReading(r: Reading): string {
   return `${mark} ${r.name.padEnd(20)} ${r.why}\n             ${r.what}  [${r.item}]`;
 }
 
-const isIssue = (v: unknown): v is BoardIssue => {
+/**
+ * An absent optional field is NOT an unreadable board.
+ *
+ * The boundary normalises where the measures already tolerate absence —
+ * `milestone`, `criteriaField`, `satisfiedByIssue`, `blockedBy`,
+ * `labels` — and refuses only where it cannot. Validating those strictly
+ * was worse than not validating them: a generator that builds a criterion
+ * without ever touching `satisfiedByIssue` produces JSON with the key
+ * dropped, which is an ordinary way to produce JSON, and the whole
+ * snapshot became unparseable. Every reading then said UNMEASURED,
+ * including the four that had nothing to do with the missing field,
+ * instead of `criterion-coverage` alone going short.
+ *
+ * `number` and `id` are different: they are what a reference RESOLVES
+ * against. A row that cannot be identified makes every pointer to it
+ * unanswerable, so a board containing one is genuinely unread.
+ */
+const asText = (v: unknown): string | null => (typeof v === "string" ? v : null);
+const asList = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+
+const normaliseIssue = (v: unknown): BoardIssue | null => {
+  if (typeof v !== "object" || v === null) return null;
   const i = v as Partial<BoardIssue>;
-  return (
-    typeof i === "object" && i !== null &&
-    typeof i.number === "number" &&
-    (i.milestone === null || typeof i.milestone === "string") &&
-    Array.isArray(i.blockedBy) &&
-    (i.criteriaField === null || typeof i.criteriaField === "string") &&
-    Array.isArray(i.labels)
-  );
+  if (typeof i.number !== "number") return null;
+  return {
+    number: i.number,
+    milestone: asText(i.milestone),
+    blockedBy: asList<number>(i.blockedBy).filter(n => typeof n === "number"),
+    rootReady: i.rootReady === true,
+    criteriaField: asText(i.criteriaField),
+    labels: asList<string>(i.labels).filter(l => typeof l === "string"),
+  };
 };
 
-const isCriterion = (v: unknown): v is BoardCriterion => {
+const normaliseCriterion = (v: unknown): BoardCriterion | null => {
+  if (typeof v !== "object" || v === null) return null;
   const c = v as Partial<BoardCriterion>;
-  return (
-    typeof c === "object" && c !== null &&
-    typeof c.id === "string" &&
-    (c.satisfiedByIssue === null || typeof c.satisfiedByIssue === "number")
-  );
+  if (typeof c.id !== "string") return null;
+  return {
+    id: c.id,
+    satisfiedByIssue: typeof c.satisfiedByIssue === "number" ? c.satisfiedByIssue : null,
+    recordedTrue: c.recordedTrue === true,
+  };
 };
 
 function parseSnapshot(path: string): BoardSnapshot | null {
@@ -257,18 +281,24 @@ function parseSnapshot(path: string): BoardSnapshot | null {
   // board — `.claude/rules/config-access.md`. Both end in a refusal here,
   // but only one of them says the file was broken.
   //
-  // The ELEMENT shapes are checked, not just the two arrays. Without that,
-  // an issue omitting `blockedBy` or `labels` reaches a measure that
+  // Every ELEMENT is normalised, not just the two arrays checked. Without
+  // that, an issue omitting `blockedBy` or `labels` reaches a measure that
   // dereferences them and the command dies on a TypeError — a stack trace
-  // where the contract says UNMEASURED, and an exit code that happens to
-  // look like a refusal while witnessing nothing. `--snapshot` reads a file
-  // this program did not write, so every field it touches is validated at
-  // the boundary rather than at each use.
+  // where the contract says UNMEASURED. `--snapshot` reads a file this
+  // program did not write, so every field it touches is settled here
+  // rather than at each use.
+  //
+  // Normalised rather than rejected, except for the identity fields: see
+  // `normaliseIssue`. Refusing the whole board over one absent optional
+  // key turns four unrelated readings UNMEASURED and hides which field
+  // was actually missing.
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as Partial<BoardSnapshot>;
     if (!Array.isArray(raw.issues) || !Array.isArray(raw.criteria)) return null;
-    if (!raw.issues.every(isIssue) || !raw.criteria.every(isCriterion)) return null;
-    return { issues: raw.issues, criteria: raw.criteria };
+    const issues = raw.issues.map(normaliseIssue);
+    const criteria = raw.criteria.map(normaliseCriterion);
+    if (issues.some(i => i === null) || criteria.some(c => c === null)) return null;
+    return { issues: issues as BoardIssue[], criteria: criteria as BoardCriterion[] };
   } catch {
     return null;
   }
