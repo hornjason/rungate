@@ -333,6 +333,25 @@ describe("each reading, planted short and planted complete", () => {
       delete i.rootReady; // or a declared root satisfies it without the edge
     }
 
+    // A row whose references are PARTLY stale, which the all-9999 board
+    // above cannot produce. Round 7 found the gap it left: the battery
+    // varied which reading it looked at and held the input shape fixed at
+    // "every reference dangling", so a measure satisfied by one surviving
+    // edge passed all of it. Named as the thing every other row holds
+    // constant, which is the only way that shape gets found.
+    const mixed = completeBoard();
+    for (const i of mixed.issues) {
+      i.blockedBy = [...i.blockedBy, 9999];
+      delete i.rootReady;
+    }
+    mixed.issues[0]!.blockedBy = [mixed.issues[1]!.number, 9999];
+    const mixedEdges = takeReading(READINGS.find(r => r.name === "blocked-by-edges")!, mixed);
+    expect(
+      mixedEdges.status,
+      "an issue blocked by one real edge and one stale one reported met. A graph with an edge naming " +
+        "nothing never surfaces that issue as next, so one surviving edge is not a computed graph.",
+    ).toBe("short");
+
     const complete = completeBoard();
     for (const spec of READINGS) {
       const under = takeReading(spec, dangling);

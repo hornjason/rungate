@@ -3,7 +3,7 @@ description: Worked instances behind `.claude/rules/config-access.md` — the La
 doc-type: reference
 status: active
 owner: jason
-updated: 2026-10-21
+updated: 2026-11-01
 ---
 
 # Config access — the worked instances

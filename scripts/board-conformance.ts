@@ -160,16 +160,23 @@ export const READINGS: readonly ReadingSpec[] = [
     item: "B3",
     what: "every engine issue is a declared root or carries a blocked-by edge, so what is next is computed",
     readsIssueRefs: true,
-    // Every edge has to RESOLVE. `blockedBy.length > 0` counted an issue
-    // blocked only by numbers naming nothing on the board — the same
-    // dangling-pointer defect as `satisfiedByIssue`, in the sibling
-    // reading, which is why `readsIssueRefs` exists rather than a third
-    // hand-written case.
+    // EVERY edge has to resolve, and `some` is not that.
+    //
+    // The reading exists so "what is next" can be computed from the graph:
+    // an issue blocked by a number naming nothing is blocked by something
+    // that can never close, so it never surfaces as next and the graph is
+    // wrong. One real edge beside a stale one is still a wrong graph, which
+    // is why this is `every` and not `some` — round 7 caught the two
+    // disagreeing, with this comment already asserting `every`.
+    //
+    // `length > 0` first, because `[].every(...)` is true and an issue with
+    // no edges at all would otherwise pass as a computed one. `rootReady`
+    // is how an issue says it has no blockers on purpose.
     measure: b => {
       const present = onBoard(b);
       return {
         measured: b.issues.filter(
-          i => i.rootReady === true || i.blockedBy.some(n => present.has(n)),
+          i => i.rootReady === true || (i.blockedBy.length > 0 && i.blockedBy.every(n => present.has(n))),
         ).length,
         target: b.issues.length,
       };
