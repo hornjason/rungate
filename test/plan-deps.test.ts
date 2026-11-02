@@ -363,6 +363,129 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
  * blocked by exactly the size of the phase before it, and the two
  * hand-authored within-phase edges are reported as EXTRA rather than planned.
  */
+/**
+ * `--milestone-prefix` (item **B3**).
+ *
+ * `phaseOf` reads `Phase <n>` out of a milestone title and nothing else, so
+ * two specs that both numbered their phases put unrelated issues in the same
+ * phase. Measured on hornjason/rungate 2026-11-01: an unfiltered run derived
+ * 48 edges across 28 issues, and the engine issues in Pipeline Phase 5 came
+ * out blocked by #1162, #1656 and #1657 — three issues from a different
+ * spec's Phase 4, which block them in no sense anybody intended.
+ *
+ * The flag narrows the POPULATION, which is the only thing that can fix
+ * this: the edge derivation is right about the order it is given, and what
+ * it is given has to be one spec's issues.
+ */
+describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Phase N", () => {
+  /** An issue in a named milestone family, so two can be mixed in one read. */
+  const fam = (number: number, family: string, phase: number): DepIssue => ({
+    number,
+    state: "OPEN",
+    milestone: `${family} Phase ${phase} — a heading`,
+    blockedBy: [],
+  });
+
+  function spy(issues: DepIssue[]) {
+    const calls: string[] = [];
+    const gh: PlanDepsGitHub = {
+      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+      readIssues: async () => issues,
+      addBlockers: async (_repo, blocked, blockers) => {
+        calls.push(`#${blocked} +${[...blockers].join(",")}`);
+      },
+    };
+    return { gh, calls };
+  }
+
+  const MIXED = [fam(10, "Pipeline", 0), fam(11, "Pipeline", 1), fam(20, "Other", 0), fam(21, "Other", 1)];
+
+  test("without it, the two families are sequenced against each other", async () => {
+    // Not an endorsement — it is the behaviour the flag exists to avoid,
+    // asserted so that adding the flag cannot silently change the default
+    // for every existing caller.
+    const s = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write"], s.gh)).toBe(0);
+    expect(s.calls.sort()).toEqual(["#11 +10,20", "#21 +10,20"]);
+  });
+
+  test("with it, only that family is read and only its edges are written", async () => {
+    const s = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipeline"], s.gh)).toBe(0);
+    expect(s.calls).toEqual(["#11 +10"]);
+  });
+
+  test("every near miss is OUT — no milestone, the prefix mid-title, or a LONGER family name", async () => {
+    // The last row is round 2 of #1703: a bare `startsWith` admits any
+    // family whose name begins with this one, which is the contamination
+    // the flag exists to prevent arriving through the fix for it.
+    const s = spy([
+      ...MIXED,
+      { number: 30, state: "OPEN", milestone: null, blockedBy: [] },
+      { number: 31, state: "OPEN", milestone: "Not Pipeline Phase 1 — mid-title", blockedBy: [] },
+      { number: 32, state: "OPEN", milestone: "Pipelines Phase 1 — a longer name", blockedBy: [] },
+      { number: 33, state: "OPEN", milestone: "Pipeline — no phase at all", blockedBy: [] },
+    ]);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipeline"], s.gh)).toBe(0);
+    expect(s.calls).toEqual(["#11 +10"]);
+  });
+
+  test("a prefix that is a PREFIX of the real family name matches nothing", async () => {
+    // `--milestone-prefix Pipe` against `Pipeline Phase N` used to admit
+    // the whole family and sequence it as if it were the caller's own.
+    const s = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipe"], s.gh)).toBe(
+      REFUSAL_EXIT,
+    );
+    expect(s.calls, "a truncated prefix sequenced another family's issues").toEqual([]);
+  });
+
+  test('an EMPTY prefix refuses — it is not "no filter requested"', async () => {
+    // Round 1 of #1703. `"".startsWith("")` is true for every string,
+    // including the `""` a null milestone normalises to, so
+    // `--milestone-prefix "$X"` with $X unset quietly re-admits every
+    // spec's issues and reports success — the exact contamination the
+    // flag exists to prevent.
+    for (const empty of ["", "   "]) {
+      const s = spy(MIXED);
+      expect(
+        await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", empty], s.gh),
+        `--milestone-prefix ${JSON.stringify(empty)} was accepted`,
+      ).toBe(REFUSAL_EXIT);
+      expect(s.calls, "an empty prefix wrote the unfiltered population").toEqual([]);
+    }
+
+    // The control: omitting the flag entirely is still allowed and still
+    // writes. Without it, a guard refusing every run would pass above.
+    const omitted = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write"], omitted.gh)).toBe(0);
+    expect(omitted.calls.length).toBeGreaterThan(0);
+  });
+
+  test("a prefix matching nothing says THAT, not 'no issues were read'", async () => {
+    // The exit code alone cannot carry this: an unknown-flag refusal, an
+    // empty repository and a typo'd prefix are all 1, and only one of them
+    // is about the prefix. A reader told "an empty repository and a failed
+    // fetch produce the same empty edge list" goes and checks the API.
+    const s = spy(MIXED);
+    const said: string[] = [];
+    const err = console.error;
+    console.error = (...a: unknown[]) => void said.push(a.join(" "));
+    try {
+      expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Nope"], s.gh)).toBe(
+        REFUSAL_EXIT,
+      );
+    } finally {
+      console.error = err;
+    }
+    expect(s.calls, "a prefix that matched nothing still wrote").toEqual([]);
+    const text = said.join("\n");
+    expect(text).toContain('"Nope"');
+    expect(text).toContain("4 issue(s) were read");
+    expect(text, "it blamed the read for what the filter did").not.toContain("no issues were read");
+  });
+});
+
 describe("the shape the live convergence board has", () => {
   const phaseSizes = [2, 6, 8, 4, 3, 10, 6];
   const issues: DepIssue[] = [];
