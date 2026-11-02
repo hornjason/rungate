@@ -3609,6 +3609,13 @@ export function createCiWorkflows(root: string, actions: string[], opts: { force
   // UNMEASURED and refuses. Off unless the project says so: `issues: read`
   // is a scope the job below deliberately does not take, and a credential
   // nothing needs is a credential nobody audits.
+  // Spliced into BOTH workflow bodies below — the sharded one and the
+  // unsharded one. They are two separate template literals a few hundred
+  // lines apart, and the first version of this change reached only the
+  // sharded one, so `suiteReadsTracker: true` was a silent no-op for every
+  // consumer without `ci.shards >= 2`. Found in review of #1701. Neither
+  // half shipping at all is the same failure as either half shipping
+  // alone, under a condition nothing tested for.
   const tracker = suiteReadsTracker(harness?.ci);
   const trackerTokenEnv = tracker
     ? `\n        env:\n          # ci.suiteReadsTracker. Read-only, and paired with \`issues: read\`\n          # on the job above — the workflow declares \`contents: read\` and nothing else,\n          # so every other scope on this token is \`none\` and a tracker read\n          # is a 403 whatever this line says.\n          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}`
@@ -3792,7 +3799,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ${runsOn}
+    runs-on: ${runsOn}${trackerPermissions}
     steps:
 ${checkoutStep}
 ${baseRefStep}
@@ -3800,7 +3807,7 @@ ${baseRefStep}
         with:
 ${bunStep}
       - run: bun install${globalTools.step}${ciSetupStep()}
-      - run: ${test.command}${typecheckStep}
+      - run: ${test.command}${trackerTokenEnv}${typecheckStep}
 `;
 
   const gatesYml = `# Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.

@@ -288,29 +288,64 @@ describe("#1700: ci.suiteReadsTracker", () => {
     expect(handsOverToken("        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")).toBe(true);
   });
 
-  test("off: the suite gets no token and the job takes no issues scope", () => {
-    const yml = emitWith({ shards: 2 });
-    expect(handsOverToken(yml), "an unflagged consumer's test suite was handed a credential").toBe(false);
-    expect(grantsIssuesRead(yml), "an unflagged consumer's test job took a scope it does not need").toBe(false);
-  });
+  /**
+   * BOTH workflow bodies, because there are two.
+   *
+   * `ci.shards` absent or 1 emits a completely separate template a few
+   * hundred lines from the sharded one, and the first version of this
+   * change reached only the sharded body — so `suiteReadsTracker: true`
+   * was a silent no-op for every consumer that had not also configured
+   * sharding. Found in review of #1701, and it is the same shape as the
+   * token-without-scope case below: nothing ships, under a condition
+   * nothing tested for.
+   *
+   * The job that runs the suite is named differently in the two bodies,
+   * so the slice is derived rather than written twice.
+   */
+  const bodies: { what: string; ci: Record<string, unknown>; job: string }[] = [
+    { what: "unsharded", ci: {}, job: "\n  test:" },
+    { what: "sharded", ci: { shards: 2 }, job: "\n  test-shard:" },
+  ];
 
-  test("on: the token and the scope arrive together, on the job that runs the suite", () => {
-    const yml = emitWith({ shards: 2, suiteReadsTracker: true });
+  const suiteJob = (yml: string, start: string): string => {
+    const from = yml.indexOf(start);
+    if (from < 0) return "";
+    const next = yml.indexOf("\n  ", from + start.length);
+    // To the next job header at the same indent, or the end of the file.
+    const end = yml.slice(from + start.length).search(/\n {2}[a-z][\w-]*:\n/);
+    return end < 0 ? yml.slice(from) : yml.slice(from, from + start.length + end);
+  };
 
-    // Both, on the SAME job. A token with no scope is a 403 and a scope
-    // with no token is nothing; either alone would let a case pass while
-    // the reading still failed, which is the outcome the flag exists to
-    // prevent. Sliced to the shard job so a grant on a sibling job cannot
-    // stand in for one here.
-    const shardJob = yml.slice(yml.indexOf("\n  test-shard:"), yml.indexOf("\n  test:"));
-    expect(shardJob.length, "the shard job was not found, so this case read nothing").toBeGreaterThan(0);
-    expect(grantsIssuesRead(shardJob), "the job running the suite does not grant `issues: read`").toBe(true);
-    expect(handsOverToken(shardJob), "the job running the suite is handed no token").toBe(true);
-  });
+  for (const b of bodies) {
+    test(`${b.what}: off, the suite gets no token and the job takes no issues scope`, () => {
+      const yml = emitWith(b.ci);
+      expect(handsOverToken(yml), "an unflagged consumer's test suite was handed a credential").toBe(false);
+      expect(grantsIssuesRead(yml), "an unflagged consumer's test job took a scope it does not need").toBe(false);
+    });
 
-  test("off is byte-identical to a tree that has never heard of the flag", () => {
-    // This ships to every consumer through the scaffold. A diff in the
-    // default output is a diff in their pipeline.
-    expect(emitWith({ shards: 2, suiteReadsTracker: false })).toBe(emitWith({ shards: 2 }));
+    test(`${b.what}: on, the token and the scope arrive together on the job that runs the suite`, () => {
+      const yml = emitWith({ ...b.ci, suiteReadsTracker: true });
+
+      // Both, on the SAME job. A token with no scope is a 403 and a scope
+      // with no token is nothing; either alone would let a case pass
+      // while the reading still failed. Sliced to the job so a grant on a
+      // sibling job cannot stand in for one here.
+      const job = suiteJob(yml, b.job);
+      expect(job.length, `the ${b.what} suite job was not found, so this case read nothing`).toBeGreaterThan(0);
+      expect(grantsIssuesRead(job), `the ${b.what} job running the suite does not grant \`issues: read\``).toBe(true);
+      expect(handsOverToken(job), `the ${b.what} job running the suite is handed no token`).toBe(true);
+    });
+
+    test(`${b.what}: off is byte-identical to a tree that has never heard of the flag`, () => {
+      // This ships to every consumer through the scaffold. A diff in the
+      // default output is a diff in their pipeline.
+      expect(emitWith({ ...b.ci, suiteReadsTracker: false })).toBe(emitWith(b.ci));
+    });
+  }
+
+  test("the two bodies really are different workflows, or the loop above is one case twice", () => {
+    expect(emitWith({})).not.toBe(emitWith({ shards: 2 }));
+    expect(emitWith({})).not.toContain("test-shard");
+    expect(emitWith({ shards: 2 })).toContain("test-shard");
   });
 });
