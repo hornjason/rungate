@@ -203,6 +203,76 @@ export function placementReading(content: string): PlacementReading {
   };
 }
 
+/** One criterion, and what the board says about it — item **B2**. */
+export interface CriterionCoverage {
+  id: string;
+  /**
+   * The engine issue whose Criteria column names it, or EXPLICIT null.
+   *
+   * Never omitted. `board-conformance` counts
+   * `typeof satisfiedByIssue === "number"` precisely because
+   * `undefined !== null` is true, so a generator relying on ordinary object
+   * omission would have every uncovered criterion counted as covered.
+   *
+   * The LOWEST number when several issues name it, so an unchanged board
+   * cannot produce a different snapshot on a re-run and read as movement.
+   */
+  satisfiedByIssue: number | null;
+  /** The spec's own checkbox is ticked — already true, needing only a binding. */
+  recordedTrue: boolean;
+}
+
+/**
+ * Invert the board's Criteria column into the spec's criterion population.
+ *
+ * The population is the SPEC's, never the board's: an id some issue names
+ * and the spec does not state is not a criterion, and counting it would let
+ * the board raise its own denominator.
+ *
+ * **`columnRead` is the three-state gate.** It must be `false` whenever the
+ * Criteria column was not read for every engine issue — a truncated item
+ * list, a failed project query, or a project with no board at all. The
+ * population then comes back EMPTY, which `board-conformance` reports
+ * UNMEASURED. Emitting the rest would report SHORT: a criterion no *read*
+ * issue names is indistinguishable from one named by an issue nobody could
+ * read, and only one of those is a measurement.
+ *
+ * ## `oneScMentionPattern`, not a pattern of its own
+ *
+ * The same mistake {@link uncoveredByMilestone} records below, made again
+ * 150 lines above it. The first version of this built its own
+ * `(^|[^\w-])id($|[^\w-])` regex, which is a SECOND DECIDER for the
+ * question "does this text name this criterion" — one this repository has
+ * answered in one place since `criterion-inventory` was written. The two
+ * were free to disagree and did: `oneScMentionPattern`'s `\b` fires on a
+ * hyphen-to-letter transition, so it matches `partial-SC-9001`, and the
+ * hand-rolled leading class `[^\w-]` refused that same text. A criterion
+ * named in that form would have been reported uncovered by this reading
+ * and covered by every other consumer of the shared pattern. Found in
+ * review of #1713.
+ *
+ * Trailing-side behaviour is the part that must not move: `(?![\w-])`
+ * stops `SC-9001` matching inside `SC-90011`, and a reading that credited
+ * a criterion no issue names is indistinguishable from a board somebody
+ * actually populated.
+ */
+export function criterionCoverage(
+  content: string,
+  issues: readonly { number: number; criteriaField?: string | null }[],
+  columnRead: boolean,
+): CriterionCoverage[] {
+  if (!columnRead) return [];
+  // Ascending, so "the lowest number wins" is the first write rather than a
+  // comparison every later issue has to remember to make.
+  const ordered = [...issues].sort((a, b) => a.number - b.number);
+  return parseCriteria(content).map(c => {
+    const naming = ordered.find(
+      i => typeof i.criteriaField === "string" && oneScMentionPattern(c.id).test(i.criteriaField),
+    );
+    return { id: c.id, satisfiedByIssue: naming?.number ?? null, recordedTrue: c.ticked };
+  });
+}
+
 export interface MilestoneAction {
   /** What the milestone should be called. Derived, never typed. */
   title: string;

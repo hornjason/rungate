@@ -31,6 +31,7 @@ import {
   type ProducedSnapshot,
 } from "../scripts/board-snapshot";
 import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
+import { oneScMentionPattern } from "../lib/sc-ids";
 import { readSnapshotText, takeReadings } from "../scripts/board-conformance";
 
 const ROOT = join(import.meta.dir, "..");
@@ -262,10 +263,14 @@ describe("what it produces", () => {
     });
   });
 
-  test("the CRITERION population is empty, because B2 has not wired it", async () => {
-    // Emitting partial criterion data would make `criterion-coverage`
-    // report SHORT — a number nobody measured. Empty makes it UNMEASURED,
-    // which is the true thing to say about a source that does not exist.
+  test("the CRITERION population is empty when there is no board to read it from", async () => {
+    // This said "because B2 has not wired it" until B2 wired it. The
+    // assertion is unchanged and the REASON is not: emitting partial
+    // criterion data makes `criterion-coverage` report SHORT — a number
+    // nobody measured — where empty makes it UNMEASURED. What has moved is
+    // that the population is now empty because this run has no board and
+    // no `--project-root`, not because the producer cannot build one. The
+    // cases that prove it CAN are in `the criterion population (B2)`.
     await withSpec(SPEC, async (dir, at) => {
       const { gh } = spy(CONFORMANT_LIVE);
       const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
@@ -930,6 +935,228 @@ describe("the refusals, and whether the API was reached", () => {
           r => r.name === "criteria-field",
         )!;
         expect(shortReading.status).toBe("short");
+      });
+    });
+  });
+
+  /**
+   * `criteria` — item **B2**, the producer half.
+   *
+   * The population is the SPEC's criteria, and the board's answer about each
+   * one is which engine issue names it in the Criteria column B4 wired, or
+   * the spec's own tick. Until this landed the producer emitted `[]` and
+   * `criterion-coverage` was UNMEASURED by construction.
+   *
+   * The whole population is inverted out of ONE source — the Criteria column
+   * readings already gathered for `criteriaField`. There is no second query
+   * and no second spelling of "which issue covers what", because two
+   * deciders answering that would be behaviourally one and a mutation of
+   * either would leave the other holding every case up.
+   */
+  describe("the criterion population (B2)", () => {
+    const twoEngineIssues = {
+      issues: [iss({ number: 10, milestone: IN_PHASE_0 }), iss({ number: 11, milestone: IN_PHASE_1 })],
+    };
+
+    /** The spec's three criteria, with what the board said about each. */
+    const coverage = (snap: ProducedSnapshot) =>
+      snap.criteria.map(c => [c.id, c.satisfiedByIssue, c.recordedTrue]);
+
+    test("an issue naming a criterion covers it, and the rest are explicitly uncovered", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "empty" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(coverage(snap)).toEqual([
+          ["SC-9001", 10, false],
+          ["SC-9002", null, false],
+          ["SC-9003", null, false],
+        ]);
+      });
+    });
+
+    test("an uncovered criterion carries an EXPLICIT null, never an omitted key", async () => {
+      // `board-conformance` counts `typeof satisfiedByIssue === "number"`
+      // precisely because `undefined !== null` is true: a generator relying
+      // on ordinary object omission would have every uncovered criterion
+      // counted as covered. That is this command's own failure mode,
+      // inverted — a reading reporting met on data it never saw.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, { ...twoEngineIssues, fields: { 10: { kind: "empty" }, 11: { kind: "empty" } } });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria.every(c => "satisfiedByIssue" in c), "an uncovered criterion omitted the key").toBe(true);
+        expect(snap.criteria.map(c => c.satisfiedByIssue)).toEqual([null, null, null]);
+      });
+    });
+
+    test("a TICKED criterion is recorded true even though no issue names it", async () => {
+      const ticked = SPEC.replace("- [ ] SC-9002", "- [x] SC-9002");
+      expect(ticked, "the fixture edit did not land, so this case asserts nothing").toContain("- [x] SC-9002");
+      await withSpec(ticked, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, { ...twoEngineIssues, fields: { 10: { kind: "empty" }, 11: { kind: "empty" } } });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(coverage(snap)).toEqual([
+          ["SC-9001", null, false],
+          ["SC-9002", null, true],
+          ["SC-9003", null, false],
+        ]);
+      });
+    });
+
+    test("one field naming SEVERAL criteria covers all of them", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001, SC-9003" }, 11: { kind: "empty" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(coverage(snap)).toEqual([
+          ["SC-9001", 10, false],
+          ["SC-9002", null, false],
+          ["SC-9003", 10, false],
+        ]);
+      });
+    });
+
+    test("a criterion id is matched whole — `SC-9001` does not land inside a longer id", async () => {
+      // The quiet direction, and the half of the boundary that must not
+      // move when the shared `oneScMentionPattern` is the decider: its
+      // `(?![\w-])` is what stops `SC-9001` matching inside `SC-90011`.
+      // Crediting a criterion no issue names produces a number
+      // indistinguishable from a board somebody actually populated.
+      //
+      // The leading side deliberately has no case here. The shared pattern
+      // uses `\b`, which DOES fire on a hyphen-to-letter transition, so
+      // `partial-SC-9001` counts as naming it — asserting otherwise would
+      // be this reading disagreeing with every other consumer of the
+      // pattern, which is the defect review of #1713 found.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-90011" }, 11: { kind: "value", value: "SC-9001x" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria.map(c => c.satisfiedByIssue)).toEqual([null, null, null]);
+      });
+    });
+
+    test("the decider is the SHARED one, so a hyphen-prefixed mention counts here too", async () => {
+      // Not a preference about hyphens — an agreement assertion. `\b` in
+      // `oneScMentionPattern` matches `partial-SC-9001`, and
+      // `uncoveredByMilestone` in the same file reads the same text the
+      // same way. The case exists so a future hand-rolled boundary in this
+      // function goes red instead of quietly splitting the two answers.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "partial-SC-9001" }, 11: { kind: "empty" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria.find(c => c.id === "SC-9001")!.satisfiedByIssue).toBe(10);
+        expect(
+          oneScMentionPattern("SC-9001").test("partial-SC-9001"),
+          "the shared pattern stopped matching this, so the agreement above is vacuous",
+        ).toBe(true);
+      });
+    });
+
+    test("an id the spec does not state invents no criterion", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9999" }, 11: { kind: "empty" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria.map(c => c.id)).toEqual(["SC-9001", "SC-9002", "SC-9003"]);
+        expect(snap.criteria.map(c => c.satisfiedByIssue)).toEqual([null, null, null]);
+      });
+    });
+
+    test("two issues naming one criterion resolve to the LOWEST number, every time", async () => {
+      // Determinism, so a re-run of an unchanged board cannot produce a
+      // different snapshot and read as a change on the board.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "value", value: "SC-9001" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria.find(c => c.id === "SC-9001")!.satisfiedByIssue).toBe(10);
+      });
+    });
+
+    test("ONE unread issue emits no population at all — partial coverage is not a measurement", async () => {
+      // The B4 rule, one level up. A truncated row means some issue's
+      // Criteria column is unknown, so a criterion nothing else names
+      // cannot be called uncovered. Emitting the rest would report SHORT —
+      // a number nobody measured — where UNMEASURED is the true answer.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "truncated" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria, "a partially-read column produced a countable population").toEqual([]);
+      });
+    });
+
+    test("NO board configured emits no population either", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        const { gh } = spy(CONFORMANT_LIVE, twoEngineIssues);
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria).toEqual([]);
+      });
+    });
+
+    test("a board with no engine issues on it is still UNMEASURED, not 0 of 3", async () => {
+      // There is no column to read and nothing to invert. Emitting the
+      // population all-null would say the board was consulted and carries
+      // no coverage, which is a sentence about data nobody fetched.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh, calls } = spy(CONFORMANT_LIVE, { issues: [] });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria).toEqual([]);
+        expect(calls.filter(c => c.startsWith("readField")), "it queried a column with nothing to ask about").toEqual([]);
+      });
+    });
+
+    test("the emitted snapshot makes `criterion-coverage` MET through the real reader", async () => {
+      // Across the file boundary, for the same reason B4 does it: producer
+      // and reader agreeing about a JSON key by convention is the
+      // three-copy defect in miniature.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const all = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001, SC-9002" }, 11: { kind: "value", value: "SC-9003" } },
+        });
+        const met = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], all.gh);
+        const reading = takeReadings(readSnapshotText(JSON.stringify(met)).board).find(
+          r => r.name === "criterion-coverage",
+        )!;
+        expect([reading.status, reading.why]).toEqual(["met", "3 of 3"]);
+
+        const some = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "empty" } },
+        });
+        const short = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], some.gh);
+        const shortReading = takeReadings(readSnapshotText(JSON.stringify(short)).board).find(
+          r => r.name === "criterion-coverage",
+        )!;
+        expect([shortReading.status, shortReading.why]).toEqual(["short", "1 of 3 — 2 short"]);
       });
     });
   });

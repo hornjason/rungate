@@ -48,7 +48,7 @@ import {
   type LiveIssue,
   type ProjectFieldReading,
 } from "../lib/live-issues";
-import { milestonePlan, placementReading } from "../lib/spec-placement";
+import { criterionCoverage, milestonePlan, placementReading, type CriterionCoverage } from "../lib/spec-placement";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -191,12 +191,15 @@ export interface ProducedSnapshot {
    */
   closedBlockers: number[];
   /**
-   * Empty, and deliberately so. B2 owns the criterion population; until it
-   * wires its source, an empty array makes `criterion-coverage` UNMEASURED,
-   * which is the true thing to say. Filling it with partial data here would
-   * make that reading SHORT — a number nobody measured.
+   * The spec's criteria, and what the board says about each — item **B2**.
+   *
+   * EMPTY when the Criteria column was not read for every engine issue, or
+   * when there was no column to read: `board-conformance` reports that
+   * UNMEASURED, which is the true thing to say. Filling it with partial
+   * data would make the reading SHORT — a number nobody measured. See
+   * {@link criterionCoverage}, which owns that decision.
    */
-  criteria: never[];
+  criteria: CriterionCoverage[];
 }
 
 export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB): Promise<number> {
@@ -418,19 +421,35 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
   };
 
   const { actions } = milestonePlan(content, live, prefix);
+  const snapshotIssues = engine.map(i => ({
+    number: i.number,
+    blockedBy: [...i.blockedBy],
+    rootReady: frontier !== null && phaseOf(i.milestone) === frontier,
+    labels: [...i.labels],
+    ...criteriaKey(i.number),
+  }));
+
+  // B2's population is inverted out of the SAME readings `criteriaField`
+  // emits — one query, one answer about which issue covers what. A second
+  // source for the same question would be behaviourally one decider, so no
+  // test could tell them apart and a mutation of either would leave the
+  // other holding every case up.
+  //
+  // `columnRead` is the gate, and it is deliberately conjunctive: a board
+  // must be configured AND there must be an engine issue to ask about AND
+  // every one of them must have come back with a key. A population built
+  // from a column read for only some of them would call a criterion
+  // uncovered on the strength of a row nobody could read.
+  const columnRead =
+    board !== null && snapshotIssues.length > 0 && snapshotIssues.every(i => "criteriaField" in i);
+
   const snapshot: ProducedSnapshot = {
     producedAt: new Date().toISOString(),
     spec: specArg,
     phases: actions.map(a => ({ phase: a.phase, criteria: a.criteria, milestoneState: a.action })),
-    issues: engine.map(i => ({
-      number: i.number,
-      blockedBy: [...i.blockedBy],
-      rootReady: frontier !== null && phaseOf(i.milestone) === frontier,
-      labels: [...i.labels],
-      ...criteriaKey(i.number),
-    })),
+    issues: snapshotIssues,
     closedBlockers: [...named].sort((a, b) => a - b),
-    criteria: [],
+    criteria: criterionCoverage(content, snapshotIssues, columnRead),
   };
 
   process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
