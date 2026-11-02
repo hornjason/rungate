@@ -31,6 +31,7 @@ import {
   type ProducedSnapshot,
 } from "../scripts/board-snapshot";
 import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
+import { oneScMentionPattern } from "../lib/sc-ids";
 import { readSnapshotText, takeReadings } from "../scripts/board-conformance";
 
 const ROOT = join(import.meta.dir, "..");
@@ -1023,18 +1024,47 @@ describe("the refusals, and whether the API was reached", () => {
       });
     });
 
-    test("a criterion id is matched whole — `SC-900` does not land inside `SC-9001`", async () => {
-      // The quiet direction. A prefix match would credit a criterion no
-      // issue names, and the resulting number is indistinguishable from a
-      // board somebody actually populated.
+    test("a criterion id is matched whole — `SC-9001` does not land inside a longer id", async () => {
+      // The quiet direction, and the half of the boundary that must not
+      // move when the shared `oneScMentionPattern` is the decider: its
+      // `(?![\w-])` is what stops `SC-9001` matching inside `SC-90011`.
+      // Crediting a criterion no issue names produces a number
+      // indistinguishable from a board somebody actually populated.
+      //
+      // The leading side deliberately has no case here. The shared pattern
+      // uses `\b`, which DOES fire on a hyphen-to-letter transition, so
+      // `partial-SC-9001` counts as naming it — asserting otherwise would
+      // be this reading disagreeing with every other consumer of the
+      // pattern, which is the defect review of #1713 found.
       await withSpec(SPEC, async (dir, at) => {
         writeBoardConfig(dir, BOARD);
         const { gh } = spy(CONFORMANT_LIVE, {
           ...twoEngineIssues,
-          fields: { 10: { kind: "value", value: "SC-900" }, 11: { kind: "value", value: "SC-9001x" } },
+          fields: { 10: { kind: "value", value: "SC-90011" }, 11: { kind: "value", value: "SC-9001x" } },
         });
         const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
         expect(snap.criteria.map(c => c.satisfiedByIssue)).toEqual([null, null, null]);
+      });
+    });
+
+    test("the decider is the SHARED one, so a hyphen-prefixed mention counts here too", async () => {
+      // Not a preference about hyphens — an agreement assertion. `\b` in
+      // `oneScMentionPattern` matches `partial-SC-9001`, and
+      // `uncoveredByMilestone` in the same file reads the same text the
+      // same way. The case exists so a future hand-rolled boundary in this
+      // function goes red instead of quietly splitting the two answers.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "partial-SC-9001" }, 11: { kind: "empty" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria.find(c => c.id === "SC-9001")!.satisfiedByIssue).toBe(10);
+        expect(
+          oneScMentionPattern("SC-9001").test("partial-SC-9001"),
+          "the shared pattern stopped matching this, so the agreement above is vacuous",
+        ).toBe(true);
       });
     });
 

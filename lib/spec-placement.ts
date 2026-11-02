@@ -237,9 +237,24 @@ export interface CriterionCoverage {
  * issue names is indistinguishable from one named by an issue nobody could
  * read, and only one of those is a measurement.
  *
- * Matching is whole-id. A prefix match would credit `SC-900` against an
- * issue naming `SC-9001`, and the resulting number is indistinguishable
- * from a board somebody actually populated.
+ * ## `oneScMentionPattern`, not a pattern of its own
+ *
+ * The same mistake {@link uncoveredByMilestone} records below, made again
+ * 150 lines above it. The first version of this built its own
+ * `(^|[^\w-])id($|[^\w-])` regex, which is a SECOND DECIDER for the
+ * question "does this text name this criterion" — one this repository has
+ * answered in one place since `criterion-inventory` was written. The two
+ * were free to disagree and did: `oneScMentionPattern`'s `\b` fires on a
+ * hyphen-to-letter transition, so it matches `partial-SC-9001`, and the
+ * hand-rolled leading class `[^\w-]` refused that same text. A criterion
+ * named in that form would have been reported uncovered by this reading
+ * and covered by every other consumer of the shared pattern. Found in
+ * review of #1713.
+ *
+ * Trailing-side behaviour is the part that must not move: `(?![\w-])`
+ * stops `SC-9001` matching inside `SC-90011`, and a reading that credited
+ * a criterion no issue names is indistinguishable from a board somebody
+ * actually populated.
  */
 export function criterionCoverage(
   content: string,
@@ -251,10 +266,9 @@ export function criterionCoverage(
   // comparison every later issue has to remember to make.
   const ordered = [...issues].sort((a, b) => a.number - b.number);
   return parseCriteria(content).map(c => {
-    const naming = ordered.find(i => {
-      const field = i.criteriaField;
-      return typeof field === "string" && new RegExp(`(^|[^\\w-])${c.id}($|[^\\w-])`).test(field);
-    });
+    const naming = ordered.find(
+      i => typeof i.criteriaField === "string" && oneScMentionPattern(c.id).test(i.criteriaField),
+    );
     return { id: c.id, satisfiedByIssue: naming?.number ?? null, recordedTrue: c.ticked };
   });
 }
