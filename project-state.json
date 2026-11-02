@@ -1057,9 +1057,9 @@
       "items": [
         {
           "id": "B1",
-          "what": "plan-spec run against SPEC-TO-BOARD-PIPELINE-SPEC.md so the engine spec's own criteria become milestones (partly done — ADR-008 and #1674 created six issues in Pipeline Phase milestones)",
-          "done": false,
-          "verify": "bun bin/rungate.ts board-conformance --reading milestones"
+          "what": "the engine spec's own 26 criteria each sit in a phase the board carries as a milestone — plan-spec --write created Pipeline Phase 6-9 (#17-#20), and board-conformance --produce reads it from the live API with no hand-made file in between",
+          "done": true,
+          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading milestones"
         },
         {
           "id": "B2",
