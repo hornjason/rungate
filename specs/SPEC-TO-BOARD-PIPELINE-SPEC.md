@@ -5,7 +5,7 @@ compliance: strict
 governs: THE ENGINE that turns a spec into board state — not the specs it ships. Payload: CODE-REVIEW-CONVERGENCE-SPEC.md
 created: 2026-10-29
 status: active
-updated: 2026-10-31
+updated: 2026-11-02
 ---
 
 # The spec-to-board pipeline
@@ -68,7 +68,7 @@ different facts and only one is actionable — *Silent Default Substitution*,
 - [x] SC-2600: lib/spec-placement.ts contains [NON_PHASE_PLACEMENTS, placementReading] — a placement value outside the closed set is a refusal naming the row, never a row quietly skipped, and an absent table reports UNMEASURED rather than an empty reading that looks like a spec in perfect order
       proved-by: test/plan-spec.test.ts — 40 pass, 0 fail, 2026-11-02; claims the id in a declaring position
 - [x] SC-2601: lib/issue-decomposition.ts contains [DecompositionReading, unmeasuredReasons] — one unreadable row makes the WHOLE reading UNMEASURED, because a plan that is partly unreadable is not a plan that is partly done and creating issues is not an operation to perform from half a table
-      proved-by: test/issue-decomposition.test.ts "a plan that is partly unreadable" — 63 pass, 0 fail, 2026-11-02
+      proved-by: test/issue-decomposition.test.ts "one bad row makes the WHOLE reading unmeasured, not a partial plan" — 63 pass, 0 fail, 2026-11-02
 - [ ] SC-2602: test/issue-decomposition.test.ts contains [a bad row skipped instead of rejected] — the refusals are proved able to fail by a mutant that converts every rejection into a skip, and the predicted membership is the six refusal cases plus the whole-reading case
 
 ### One criterion becomes the right number of issues
@@ -90,10 +90,8 @@ different facts and only one is actionable — *Silent Default Substitution*,
 
 - [x] SC-2608: lib/issue-repair.ts contains [CRITERIA_HEADING] — a created issue and a repaired one name their criterion under ONE heading, or an inventory reading sees half the population and reports the other half as uncovered
       proved-by: test/plan-issues.test.ts — 33 pass, 0 fail, 2026-11-02; CRITERIA_HEADING is the one heading both paths write
-- [x] SC-2609: lib/board-mirror.ts contains [NAMES_NONE] — "this issue serves no criterion" is spelled, never left as an empty cell: a blank reads as *not yet filled in*, *the tool could not tell* and *deliberately none* at once, and 28 cells on the live board were blank for this reason on 2026-10-29
-      proved-by: test/board-mirror.test.ts — 46 pass, 0 fail, 2026-11-02; NAMES_NONE is spelled, not left blank
-- [x] SC-2610: lib/board-mirror.ts contains [every spec] — the mirror reads every spec in `specs/`, not one named on the command line, because a board built from one spec reports every criterion of the other 25 as having no issue
-      proved-by: test/board-mirror.test.ts "SC-2610: every spec contributes, not the one on the command line" — 46 pass, 0 fail, 2026-11-02
+- [ ] SC-2609: lib/board-mirror.ts contains [NAMES_NONE] — "this issue serves no criterion" is spelled, never left as an empty cell: a blank reads as *not yet filled in*, *the tool could not tell* and *deliberately none* at once, and 28 cells on the live board were blank for this reason on 2026-10-29
+- [ ] SC-2610: lib/board-mirror.ts contains [every spec] — the mirror reads every spec in `specs/`, not one named on the command line, because a board built from one spec reports every criterion of the other 25 as having no issue
 
 ### The gaps the board has to make visible
 

@@ -1,6 +1,4 @@
 /**
- * Covers SC-2609 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
- *
  * What the board is allowed to say (#1647).
  *
  * ## What was broken to prove these can fail
