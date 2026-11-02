@@ -5227,22 +5227,68 @@ describe("the filing cap under direct-ship mode", () => {
     // direction it is caught INTO is the whole property. A corrupt config
     // resolving to `direct` would make "raise the cap" reachable by breaking
     // the config, which is the one thing a cap must not be.
-    expect(filingsPerRunFor({ ship: { mode: "dierct" } })).toBe(FILINGS_PER_RUN);
-    expect(filingsPerRunFor({ ship: "not an object" })).toBe(FILINGS_PER_RUN);
-    expect(filingsPerRunFor(null), "absent config is harness, so strict").toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor(() => ({ ship: { mode: "dierct" } }))).toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor(() => ({ ship: "not an object" }))).toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor(() => null), "absent config is harness, so strict").toBe(FILINGS_PER_RUN);
   });
 
   test("FG-193: a real direct-ship config resolves through the same path", () => {
     // The premise FG-190 asserts on a hand-built ShipPolicy. This one starts
     // from the config SHAPE, so a change to `resolveShipPolicy`'s reading of
     // the block cannot leave FG-190 green against a policy nothing produces.
-    const fromConfig = filingsPerRunFor({
+    const fromConfig = filingsPerRunFor(() => ({
       ship: { mode: "direct", since: "2026-10-19", reason: "stabilising RunGate" },
-    });
+    }));
     expect(fromConfig, "a direct config must out-earn an absent one").toBeGreaterThan(
-      filingsPerRunFor(null),
+      filingsPerRunFor(() => null),
     );
     expect(fromConfig).toBe(FILINGS_PER_RUN_DIRECT);
+  });
+
+  test("FG-196: a config that THROWS while loading still yields the strict cap", () => {
+    // `filingsPerRunFor` took the loaded config at first, so the caller
+    // evaluated `tryLoadRungateConfig(root)` as an argument expression —
+    // outside the try. `readJson` is a bare `JSON.parse(readFileSync(...))`,
+    // so one malformed `config.json` threw straight out of `filingGate` and
+    // blocked every filing on the machine. Review of #1725 found it; FG-192
+    // could not, because a hand-built object never throws on the way in.
+    expect(() =>
+      filingsPerRunFor(() => {
+        throw new SyntaxError("Unexpected token } in JSON at position 41");
+      }),
+    ).not.toThrow();
+    expect(
+      filingsPerRunFor(() => {
+        throw new SyntaxError("Unexpected token } in JSON at position 41");
+      }),
+      "a config that cannot be PARSED must not be a route to the larger allowance",
+    ).toBe(FILINGS_PER_RUN);
+  });
+
+  test("FG-197: no cap message hardcodes an allowance — all four take it", () => {
+    // I called the refusal messages a population, fixed three of them, and
+    // shipped. `unreservedAllowanceNote` was the fourth and the review found
+    // it. A per-message test would have to be remembered for the fifth, so
+    // this asserts the PROPERTY over the module's own source: no template
+    // may interpolate the constant into prose, because prose that disagrees
+    // with the live cap is the stale-copy class this file keeps meeting.
+    const src = readFileSync(join(REPO, "lib", "issue-filing-gate.ts"), "utf-8");
+    const hardcoded = src
+      .split("\n")
+      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+      .filter(r => r.line.includes("${FILINGS_PER_RUN}") || r.line.includes("${FILINGS_PER_RUN_DIRECT}"));
+    expect(
+      hardcoded,
+      "a cap message must interpolate the RESOLVED cap, never the constant — otherwise it " +
+        "tells an agent 'the cap is 1' while the cap is 3. Add a `cap` parameter defaulting " +
+        "to FILINGS_PER_RUN and pass the resolved value at the call site.",
+    ).toEqual([]);
+    // The control: without it the row above is green on a module that stopped
+    // mentioning the cap at all, which is a different repo, not a fixed one.
+    expect(
+      src.split("${cap}").length - 1,
+      "no message interpolates the resolved cap, so the assertion above is vacuous",
+    ).toBeGreaterThanOrEqual(4);
   });
 
   test("FG-194: the raised cap is bounded, so it cannot drift into a swarm's number", () => {

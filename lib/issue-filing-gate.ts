@@ -363,10 +363,21 @@ export function filingsPerRun(policy: ShipPolicy): number {
  * rule is about converting corruption into ABSENCE and then into a feature
  * silently switched off. Here corruption and absence resolve to the same
  * answer on purpose, and it is the conservative one.
+ *
+ * **It takes a THUNK, not a config, and that is the whole guard.** The first
+ * spelling took the loaded config, so the caller evaluated
+ * `tryLoadRungateConfig(root)` as an argument expression — OUTSIDE this
+ * `try`. `readJson` is a bare `JSON.parse(readFileSync(...))` with no catch,
+ * so one malformed `config.json` threw straight out of `filingGate` and
+ * blocked every filing on the machine, which is the opposite of a
+ * conservative fallback and strictly worse than the state it was written to
+ * handle. The review of #1725 caught it. A signature taking the VALUE cannot
+ * guard its own production; one taking the thunk can only be called the
+ * right way. `FG-196` is the assertion.
  */
-export function filingsPerRunFor(harnessConfig: Record<string, unknown> | null | undefined): number {
+export function filingsPerRunFor(load: () => Record<string, unknown> | null | undefined): number {
   try {
-    return filingsPerRun(resolveShipPolicy(harnessConfig));
+    return filingsPerRun(resolveShipPolicy(load()));
   } catch {
     return FILINGS_PER_RUN;
   }
@@ -2515,7 +2526,7 @@ export async function filingGate(
   // config moved underneath them, which is the shape `readFor` is cached to
   // avoid one line below. A config that cannot be read resolves to the
   // STRICT cap — `filingsPerRunFor`.
-  const cap = filingsPerRunFor(tryLoadRungateConfig(options.projectRoot));
+  const cap = filingsPerRunFor(() => tryLoadRungateConfig(options.projectRoot));
   // Read once per TARGET TRACKER, not once per command and not once per
   // clause. Once per clause would adjudicate two creates against two
   // different snapshots; once per command would adjudicate a `--repo other/x`
@@ -3031,7 +3042,7 @@ export async function filingGate(
           : reading.outcome === "UNRESERVED"
             ? unreservedCapReason(run, target, cap)
             : uncountableReason(target);
-      if (reading.outcome === "UNRESERVED") notes.push(unreservedAllowanceNote());
+      if (reading.outcome === "UNRESERVED") notes.push(unreservedAllowanceNote(cap));
       // The intent this clause took is released with the rest below: it won
       // no position, and a losing reservation that is never given back is
       // the same stranded allowance by a rarer route.
@@ -3303,11 +3314,11 @@ export function unkeyedLedgerNote(): string {
  * state being unknown — `reserveAllowance` has the two apart, and the other
  * one refuses.
  */
-export function unreservedAllowanceNote(): string {
+export function unreservedAllowanceNote(cap: number = FILINGS_PER_RUN): string {
   return (
     "[FindingArbiter] UNMEASURED allowance — this filing's intent row could NOT be appended to " +
     `${ledgerPath()}, so it took no position in this run's queue and the per-run cap of ` +
-    `${FILINGS_PER_RUN} could not hold for it. The filing is REFUSED, not allowed: see ` +
+    `${cap} could not hold for it. The filing is REFUSED, not allowed: see ` +
     "`unreservedCapReason`. This note names the writer so an operator repairs the file rather " +
     "than the filing."
   );
