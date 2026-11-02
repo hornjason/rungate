@@ -115,6 +115,13 @@ the work is real.
 Each row names the group's **lead** criterion, because that is all a
 `--decompose` row may name. The rest arrive in step two.
 
+The lead is the criterion the group's edges hang off, not the lowest-numbered
+one — and for group 2 those differ. SC-2616 leads because it is the criterion
+that depends on group 1: a reading cannot refuse an issue naming no criterion
+until the cell can say *"serves none"* out loud. SC-2615 is numerically first
+and depends on nothing in this plan. The other three groups happen to have
+their lead first as well, which is coincidence rather than a convention.
+
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
 | SC-2609 | Make board-mirror's criteria cell say what it means | lib/board-mirror.ts, scripts/board-mirror.ts, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, test/board-mirror.test.ts | Pipeline Phase 3 — the board tells the truth | — |
@@ -184,3 +191,29 @@ check first if this plan is ever re-read.
 **Nothing here is ticked by this ADR.** The plan creates issues; the board
 reading decides what is covered; and #1714's eight are the only criteria this
 stage records as already true.
+
+### Three review rounds, one defect class — what a fourth would not fix
+
+AGENTS.md rule 5 stops the repairing here, and the reviewer reached the same
+count independently. Every round found something live, and they were not
+three unrelated misses:
+
+| Round | Found |
+|---|---|
+| 1 | `SC-2020` for `SC-2620`; three disagreeing edge counts in one paragraph; ADR-003's cardinality stated one-way when the source says both |
+| 2 | a docblock attributed to `criterionIdsIn`, which takes one spec's text; a generated file named as one an issue would edit |
+| 3 | a lead criterion chosen on a rule the document never stated |
+
+One class, five instances: **a hand-written value in prose that has to agree
+with a table or a source somewhere else, and nothing derives it.** Each round
+caught the next instance because a reader was the only instrument.
+
+A fourth round would not fix a defect in this document — the round-3 review
+re-checked every count, the 13-criterion total, the four edges, the 2.7
+ratio and the `board-mirror` attribution, and reports they agree with each
+other and with the code. It would fix the *class*, and that is a different
+problem: deriving a plan's prose totals from its own table is work on the
+planner, not on this plan. It is not filed as an eighth issue, in a document
+whose subject is not over-filing; it belongs to group 5, which is already
+*what a spec must declare and prove about itself*, and this section is the
+record so whoever picks that up does not rediscover it.
