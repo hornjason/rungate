@@ -70,6 +70,40 @@ export function readProjectSlug(projectRoot: string): string | null {
 }
 
 /**
+ * The project board this repository's readings are taken against — item **B4**.
+ *
+ * `null` when no `board` block is configured, or when it does not carry both
+ * identifiers a field read needs. Null rather than a partial object: a caller
+ * holding a project id with no field id cannot read a column, and handing it
+ * half the block makes it decide for itself what to do about the other half —
+ * which is a second decider in every caller.
+ *
+ * `board` is not in `ProjectHarnessSchema`; it reaches the resolved config
+ * through `.passthrough()`, same as `remoteHosts`, which is why every field
+ * access below is guarded rather than typed.
+ *
+ * **The field is named by ID, and only by id.** `lib/live-issues.ts` resolves
+ * it to a name against the API. A name configured beside the id would be two
+ * identifiers for one field, and a rename on the board would read every value
+ * as blank with nothing saying so.
+ */
+export function readBoardConfig(projectRoot: string): { projectId: string; criteriaFieldId: string } | null {
+  const config = tryLoadRungateConfig(projectRoot);
+  const board = (config as Record<string, unknown> | null)?.board;
+  if (!board || typeof board !== "object" || Array.isArray(board)) return null;
+  const row = board as Record<string, unknown>;
+  const fields = row.fields;
+  const criteria =
+    fields && typeof fields === "object" && !Array.isArray(fields)
+      ? (fields as Record<string, unknown>).Criteria
+      : undefined;
+  const projectId = typeof row.id === "string" ? row.id.trim() : "";
+  const criteriaFieldId = typeof criteria === "string" ? criteria.trim() : "";
+  if (projectId === "" || criteriaFieldId === "") return null;
+  return { projectId, criteriaFieldId };
+}
+
+/**
  * Pre-flight SSH hosts, keyed by name. `{}` when none are configured.
  *
  * `remoteHosts` is not in `ProjectHarnessSchema`; it reaches the resolved

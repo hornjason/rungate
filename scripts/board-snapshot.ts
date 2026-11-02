@@ -37,12 +37,16 @@ import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { openFrontier, phaseOf } from "../lib/board-mirror";
 import { createGitHubClient, listMilestones } from "../lib/github";
+import { readBoardConfig } from "../lib/config-readers";
 import {
   inMilestoneFamily,
   readIssueStates,
   readLiveIssues,
   readMilestonePrefix,
+  readProjectFieldIdentity,
+  readProjectFieldValues,
   type LiveIssue,
+  type ProjectFieldReading,
 } from "../lib/live-issues";
 import { milestonePlan, placementReading } from "../lib/spec-placement";
 
@@ -74,6 +78,15 @@ export interface BoardSnapshotGitHub {
    * because telling a finished blocker from a typo is the entire point.
    */
   readStates: (repo: string, numbers: readonly number[]) => Promise<Map<number, string>>;
+  /** A ProjectV2 field id resolved to its name and owning project — B4. */
+  readFieldIdentity: (fieldId: string) => Promise<{ name: string; projectId: string }>;
+  /** One project field's value for specific issue numbers — B4. */
+  readFieldValues: (
+    repo: string,
+    numbers: readonly number[],
+    projectId: string,
+    fieldName: string,
+  ) => Promise<Map<number, ProjectFieldReading>>;
 }
 
 const LIVE_GITHUB: BoardSnapshotGitHub = {
@@ -81,6 +94,9 @@ const LIVE_GITHUB: BoardSnapshotGitHub = {
   listMilestones,
   readIssues: repo => readLiveIssues(repo, false),
   readStates: (repo, numbers) => readIssueStates(repo, numbers),
+  readFieldIdentity: fieldId => readProjectFieldIdentity(fieldId),
+  readFieldValues: (repo, numbers, projectId, fieldName) =>
+    readProjectFieldValues(repo, numbers, projectId, fieldName),
 };
 
 const USAGE = `rungate board-snapshot <spec.md> --prefix <name> [--repo <owner/name>]
@@ -114,13 +130,15 @@ export interface SnapshotPhase {
  * conformant by construction. It is the same trap the `milestones` reading
  * walked into: see the note at the top of this file.
  *
- * ## `criteriaField` is deliberately not here
+ * ## `criteriaField` is read from the project, not from the issue
  *
- * The board's Criteria column is a Projects v2 custom field and nothing in
- * this query can see it. Emitting `criteriaField: null` would make the
- * `criteria-field` reading report `0 of N — N short` for a column nobody
- * read. `board-conformance` treats the ABSENT key as "not read" and reports
- * that reading UNMEASURED, which is the true thing to say until B4 wires it.
+ * The board's Criteria column is a Projects v2 custom field; the issue query
+ * cannot see it, which is why B4 is a second read. The key is PRESENT with a
+ * value or `null` when the column was read, and ABSENT when it was not —
+ * because no board is configured, because the project read failed, or
+ * because that issue's project-item list was cut. `board-conformance` turns
+ * the absent key into UNMEASURED, and emitting `null` in those cases would
+ * report `0 of N — N short` for a column nobody finished reading.
  */
 export interface SnapshotIssue {
   number: number;
@@ -135,6 +153,15 @@ export interface SnapshotIssue {
   rootReady: boolean;
   /** Every label on the issue, read rather than assumed empty. */
   labels: string[];
+  /**
+   * The board's Criteria column for this issue — B4.
+   *
+   * PRESENT and a string: populated. PRESENT and `null`: read, and either
+   * blank or the issue is on no item of this project — both are *the column
+   * is not populated*, which is the question `criteria-field` asks. ABSENT:
+   * not read, which makes the reading UNMEASURED rather than short.
+   */
+  criteriaField?: string | null;
 }
 
 export interface ProducedSnapshot {
@@ -337,6 +364,59 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
   }
   const named = unresolved.filter(n => (states.get(n) ?? "OPEN") !== "OPEN");
 
+  // The board's Criteria column — item B4.
+  //
+  // Everything here fails to ABSENT rather than to `null`, and never to a
+  // refusal. A tree with no `board` block, a project API that is down, and
+  // an item list that was cut are all "this column was not read", which
+  // `board-conformance` reports UNMEASURED. Refusing the whole snapshot
+  // instead would take `milestones` and `blocked-by-edges` down with it,
+  // and both are met and polled unattended; emitting `null` instead would
+  // report `0 of N — N short` for a column nobody finished reading.
+  const criteria = new Map<number, ProjectFieldReading>();
+  const board = readBoardConfig(root);
+  if (board !== null && engine.length > 0) {
+    try {
+      const identity = await gh.readFieldIdentity(board.criteriaFieldId);
+      if (identity.projectId !== board.projectId) {
+        // Two identifiers in one config block, finally compared. A field
+        // from another project would answer, and the answers would look
+        // exactly like a reading of this board.
+        console.error(
+          `board-snapshot: the Criteria column was NOT read — the configured field ` +
+            `${board.criteriaFieldId} belongs to project ${identity.projectId}, not to the configured ` +
+            `board ${board.projectId}. Reading it would measure another project's column.`,
+        );
+      } else {
+        for (const [number, reading] of await gh.readFieldValues(
+          repo,
+          engine.map(i => i.number),
+          board.projectId,
+          identity.name,
+        )) {
+          criteria.set(number, reading);
+        }
+      }
+    } catch (e) {
+      console.error(
+        `board-snapshot: the Criteria column was NOT read — ${(e as Error).message}. The ` +
+          `criteria-field reading is UNMEASURED; every other reading in this snapshot stands.`,
+      );
+    }
+  } else if (board === null) {
+    console.error(
+      `board-snapshot: the Criteria column was NOT read — no board.id and board.fields.Criteria in ` +
+        `${root}'s rungate config. That is a project with no board, not a board with an empty column.`,
+    );
+  }
+
+  /** PRESENT only when the column was actually read for this issue. */
+  const criteriaKey = (number: number): { criteriaField?: string | null } => {
+    const reading = criteria.get(number);
+    if (reading === undefined || reading.kind === "truncated") return {};
+    return { criteriaField: reading.kind === "value" ? reading.value : null };
+  };
+
   const { actions } = milestonePlan(content, live, prefix);
   const snapshot: ProducedSnapshot = {
     producedAt: new Date().toISOString(),
@@ -347,6 +427,7 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
       blockedBy: [...i.blockedBy],
       rootReady: frontier !== null && phaseOf(i.milestone) === frontier,
       labels: [...i.labels],
+      ...criteriaKey(i.number),
     })),
     closedBlockers: [...named].sort((a, b) => a - b),
     criteria: [],

@@ -263,7 +263,7 @@ describe("#364 SC-830: the registry reading fails loudly or not at all", () => {
   test("a 500 throws rather than reporting an empty registry", async () => {
     // The fail-open this would otherwise be: an unreachable registry
     // returning {versions: []} waves every duplicate straight through.
-    expect(registryState("rungate", reply(500, {}))).rejects.toThrow("registry returned 500");
+    await expect(registryState("rungate", reply(500, {}))).rejects.toThrow("registry returned 500");
   });
 
   test("the packument is read for versions and dist-tags", async () => {

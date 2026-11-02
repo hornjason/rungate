@@ -105,7 +105,7 @@ describe("SC-1614: malformed config throws; absent config does not", () => {
   test("a trailing comma is not 'no docs declared'", async () => {
     writeMonolithConfig(`{ "project": "T", "contextDocs": ["A.md"], }`);
     writeState();
-    expect(assembleBrief({ slug: SLUG, workDir, projectRoot }))
+    await expect(assembleBrief({ slug: SLUG, workDir, projectRoot }))
       .rejects.toThrow();
   });
 

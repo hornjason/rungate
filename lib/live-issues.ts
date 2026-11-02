@@ -296,3 +296,147 @@ export async function readIssueStates(
   }
   return out;
 }
+
+/**
+ * What a project board's custom field says about one issue — item **B4**.
+ *
+ * FOUR states, and each of the three that are not a value means something
+ * different to the reading:
+ *
+ * - `value`    the column is populated. Counted.
+ * - `empty`    the issue is on this project and the column is blank.
+ * - `off-board` the issue is on no item of this project at all.
+ * - `truncated` its project-item list was cut before this project was
+ *   reached, so whether it is on the board is UNKNOWN.
+ *
+ * `empty` and `off-board` are both *the column is not populated for this
+ * issue*, which is what `criteria-field` asks, so `board-snapshot` emits
+ * `null` for both. `truncated` is not an answer at all and omits the key,
+ * which is what turns the reading UNMEASURED. Collapsing it into
+ * `off-board` would report a board nobody finished reading as short.
+ */
+export type ProjectFieldReading =
+  | { readonly kind: "value"; readonly value: string }
+  | { readonly kind: "empty" }
+  | { readonly kind: "off-board" }
+  | { readonly kind: "truncated" };
+
+/**
+ * How many project items one issue's connection is read for.
+ *
+ * An issue is normally on one project, occasionally two. This is generous
+ * and still reports being cut rather than guessing — see `truncated` above.
+ */
+export const PROJECT_ITEM_PAGE = 20;
+
+/** How many issues one {@link readProjectFieldValues} call resolves. */
+export const FIELD_BATCH = 25;
+
+/**
+ * Resolve a ProjectV2 field ID to its name and the project that owns it.
+ *
+ * ## Why the NAME is derived rather than configured
+ *
+ * The value query is `fieldValueByName(name:)` — GitHub offers no
+ * by-id form — so the name has to come from somewhere. Putting it in config
+ * beside the id would be two identifiers for one field, free to disagree,
+ * and a rename on the board would silently read every value as blank. The
+ * id is the one identifier; the name is whatever it resolves to today.
+ *
+ * The project id comes back for the same reason: `board.id` and
+ * `board.fields.Criteria` sit in one config block and nothing has ever
+ * compared them. A field belonging to another project would read values off
+ * a board this repository does not use, and they would look like ours.
+ */
+export async function readProjectFieldIdentity(
+  fieldId: string,
+  exec: GraphQlExec = ghWithoutGhToken,
+): Promise<{ name: string; projectId: string }> {
+  const raw = exec([
+    "api",
+    "graphql",
+    "-f",
+    "query=query($id:ID!){node(id:$id){... on ProjectV2FieldCommon{name project{id}}}}",
+    "-f",
+    `id=${fieldId}`,
+  ]);
+  const node = (JSON.parse(raw) as { data: { node: { name?: string; project?: { id?: string } } | null } }).data
+    .node;
+  if (!node?.name || !node.project?.id) {
+    throw new Error(`${fieldId} did not resolve to a project field with a name and a project`);
+  }
+  return { name: node.name, projectId: node.project.id };
+}
+
+/**
+ * One project field's value for specific issues — item **B4**.
+ *
+ * Targeted by number, for the reason {@link readIssueStates} gives: the
+ * population that matters is the handful of engine issues, not every issue
+ * the repository has ever had.
+ *
+ * The item is matched on `projectId` rather than taken as `nodes[0]`. An
+ * issue on two projects returns two items in an order nothing guarantees,
+ * and reading the wrong one is a measurement of somebody else's board.
+ */
+export async function readProjectFieldValues(
+  repo: string,
+  numbers: readonly number[],
+  projectId: string,
+  fieldName: string,
+  exec: GraphQlExec = ghWithoutGhToken,
+): Promise<Map<number, ProjectFieldReading>> {
+  const [owner, name] = repo.split("/");
+  const out = new Map<number, ProjectFieldReading>();
+  const unique = [...new Set(numbers)];
+  for (let at = 0; at < unique.length; at += FIELD_BATCH) {
+    const chunk = unique.slice(at, at + FIELD_BATCH);
+    const selection =
+      `number projectItems(first:${PROJECT_ITEM_PAGE}){pageInfo{hasNextPage} ` +
+      `nodes{project{id} fieldValueByName(name:$field){... on ProjectV2ItemFieldTextValue{text}}}}`;
+    const aliases = chunk.map(n => `i${n}: issue(number:${n}){${selection}}`).join(" ");
+    const raw = exec([
+      "api",
+      "graphql",
+      "-f",
+      `query=query($owner:String!,$name:String!,$field:String!){repository(owner:$owner,name:$name){${aliases}}}`,
+      "-f",
+      `owner=${owner}`,
+      "-f",
+      `name=${name}`,
+      "-f",
+      `field=${fieldName}`,
+    ]);
+    const repoNode = (
+      JSON.parse(raw) as {
+        data: {
+          repository: Record<
+            string,
+            {
+              number: number;
+              projectItems: {
+                pageInfo: { hasNextPage: boolean };
+                nodes: { project: { id: string } | null; fieldValueByName: { text?: string | null } | null }[];
+              };
+            } | null
+          >;
+        };
+      }
+    ).data.repository;
+    for (const n of chunk) {
+      const node = repoNode?.[`i${n}`];
+      if (node === null || node === undefined) {
+        out.set(n, { kind: "off-board" });
+        continue;
+      }
+      const item = node.projectItems.nodes.find(i => i.project?.id === projectId);
+      if (item === undefined) {
+        out.set(n, node.projectItems.pageInfo.hasNextPage ? { kind: "truncated" } : { kind: "off-board" });
+        continue;
+      }
+      const text = (item.fieldValueByName?.text ?? "").trim();
+      out.set(n, text === "" ? { kind: "empty" } : { kind: "value", value: text });
+    }
+  }
+  return out;
+}

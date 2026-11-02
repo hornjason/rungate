@@ -256,17 +256,17 @@ describe("#366 SC-824: the check the issue asked for can fail", () => {
     expect(v[0]).toContain("UNMEASURED");
   });
 
-  test("an unreachable registry throws rather than reporting agreement", () => {
+  test("an unreachable registry throws rather than reporting agreement", async () => {
     // The fail-open this check could most easily have had. A registry read
     // that fell back to the recorded value would make the whole file agree
     // with itself whenever the network was down.
     const dead = (async () => ({ ok: false, status: 503 })) as unknown as typeof fetch;
-    expect(publishedVersion("rungate", dead)).rejects.toThrow("503");
+    await expect(publishedVersion("rungate", dead)).rejects.toThrow("503");
   });
 
-  test("a registry reply with no version throws", () => {
+  test("a registry reply with no version throws", async () => {
     const empty = (async () => ({ ok: true, status: 200, json: async () => ({}) })) as unknown as typeof fetch;
-    expect(publishedVersion("rungate", empty)).rejects.toThrow("no version");
+    await expect(publishedVersion("rungate", empty)).rejects.toThrow("no version");
   });
 
   test("the registry read is real — it resolves the package this repo publishes", () => {

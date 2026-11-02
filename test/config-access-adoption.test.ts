@@ -38,7 +38,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { loadRoleConfig, readProjectSlug, readRemoteHosts } from "../lib/config-readers";
+import { loadRoleConfig, readBoardConfig, readProjectSlug, readRemoteHosts } from "../lib/config-readers";
 import { loadRegistry } from "../lib/create-sc";
 import { loadValidRoles, loadRoleBriefPaths } from "../scripts/grade-deterministic";
 import { getProjectSlug } from "../scripts/parallel-ship";
@@ -54,6 +54,7 @@ const AUTHORED = {
     quinn: { brief: "prompts/quinn.md", standardTask: "verify" },
   },
   remoteHosts: { db: { host: "db.invalid", preFlightCmd: "true" } },
+  board: { owner: "someone", number: 3, id: "PVT_fixture", fields: { Criteria: "PVTF_fixture" } },
   customMatchers: [{ name: "adoption-only-matcher", description: "fixture", kind: "contains" }],
 };
 
@@ -134,6 +135,56 @@ describe("SC-1449: the accessors read the directory layout, which is what the ol
       // stops running and nothing else notices.
       expect(readRemoteHosts(dir)).toEqual(AUTHORED.remoteHosts);
       expect(readRemoteHosts(dir)).toEqual(readRemoteHosts(mono));
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("the board resolves from both layouts, and a HALF-configured one is null — B4", () => {
+    const dir = makeRoot("directory");
+    const mono = makeRoot("monolith");
+    const none = makeRoot("neither");
+    try {
+      expect(readBoardConfig(dir)).toEqual({ projectId: "PVT_fixture", criteriaFieldId: "PVTF_fixture" });
+      expect(readBoardConfig(dir)).toEqual(readBoardConfig(mono));
+      expect(readBoardConfig(none), "a project with no config has no board").toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("every half-written board is null, not a half-filled object — B4", () => {
+    // `board-snapshot` reads a column with a project id AND a field id.
+    // Handing it one of the two makes it decide for itself what to do about
+    // the other, which is a second decider in every caller. Written as a
+    // table because the shape that will be added next is the one a single
+    // hand-picked case cannot see.
+    const rows: { why: string; board: unknown }[] = [
+      { why: "no board key at all", board: undefined },
+      { why: "an empty object", board: {} },
+      { why: "an array, not a block", board: [] },
+      { why: "a project id and no fields", board: { id: "PVT_x" } },
+      { why: "fields with no Criteria", board: { id: "PVT_x", fields: { Status: "PVTSSF_x" } } },
+      { why: "a Criteria id and no project id", board: { fields: { Criteria: "PVTF_x" } } },
+      { why: "a blank project id", board: { id: "   ", fields: { Criteria: "PVTF_x" } } },
+      { why: "a blank Criteria id", board: { id: "PVT_x", fields: { Criteria: "  " } } },
+      { why: "fields as a string", board: { id: "PVT_x", fields: "Criteria" } },
+      { why: "a numeric Criteria id", board: { id: "PVT_x", fields: { Criteria: 7 } } },
+    ];
+    const root = mkdtempSync(join(tmpdir(), "rungate-board-"));
+    scratch.push(root);
+    mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+    const at = join(root, ".claude", "rungate", "config.json");
+    try {
+      for (const row of rows) {
+        writeFileSync(at, JSON.stringify(row.board === undefined ? {} : { board: row.board }));
+        expect(readBoardConfig(root), `${row.why} produced a board`).toBeNull();
+      }
+      // The control: the same file with BOTH identifiers reads, so the ten
+      // rows above are not passing against a reader that returns null for
+      // everything.
+      writeFileSync(at, JSON.stringify({ board: { id: "PVT_x", fields: { Criteria: "PVTF_x" } } }));
+      expect(readBoardConfig(root)).toEqual({ projectId: "PVT_x", criteriaFieldId: "PVTF_x" });
     } finally {
       cleanup();
     }

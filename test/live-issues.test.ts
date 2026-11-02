@@ -18,13 +18,17 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import {
+  FIELD_BATCH,
   ISSUE_PAGE,
   LIVE_ISSUES_QUERY,
+  PROJECT_ITEM_PAGE,
   STATE_BATCH,
   inMilestoneFamily,
   readIssueStates,
   readLiveIssues,
   readMilestonePrefix,
+  readProjectFieldIdentity,
+  readProjectFieldValues,
   type GraphQlExec,
 } from "../lib/live-issues";
 import { phaseInFamily } from "../lib/spec-placement";
@@ -172,7 +176,7 @@ describe("the pagination loop", () => {
     const boom: GraphQlExec = () => {
       throw new Error("HTTP 403");
     };
-    expect(readLiveIssues("o/n", false, boom)).rejects.toThrow("HTTP 403");
+    await expect(readLiveIssues("o/n", false, boom)).rejects.toThrow("HTTP 403");
   });
 });
 
@@ -295,7 +299,204 @@ describe("resolving specific issue numbers", () => {
     const boom: GraphQlExec = () => {
       throw new Error("HTTP 502");
     };
-    expect(readIssueStates("o/n", [9], boom)).rejects.toThrow("HTTP 502");
+    await expect(readIssueStates("o/n", [9], boom)).rejects.toThrow("HTTP 502");
+  });
+});
+
+/**
+ * `readProjectFieldIdentity` and `readProjectFieldValues` — item **B4**.
+ *
+ * `board-snapshot` injects fakes at both seams, so without these the whole
+ * Projects v2 reading — which item belongs to which project, which of four
+ * states an issue is in, and whether the field id is even ours — runs in no
+ * test at all. Same reason as `readIssueStates` in #1704.
+ */
+describe("the board's Criteria column", () => {
+  const transportOf = (responses: string[]): { exec: GraphQlExec; calls: string[][] } => {
+    const calls: string[][] = [];
+    let i = 0;
+    return {
+      calls,
+      exec: (args: readonly string[]) => {
+        calls.push([...args]);
+        const out = responses[i];
+        if (out === undefined) throw new Error(`asked for call ${i + 1} and there are ${responses.length}`);
+        i += 1;
+        return out;
+      },
+    };
+  };
+
+  /** One issue's `projectItems` connection, as GitHub returns it. */
+  const items = (
+    nodes: { project: string | null; text?: string | null }[],
+    hasNextPage = false,
+  ) => ({
+    projectItems: {
+      pageInfo: { hasNextPage },
+      nodes: nodes.map(n => ({
+        project: n.project === null ? null : { id: n.project },
+        fieldValueByName: n.text === undefined ? null : { text: n.text },
+      })),
+    },
+  });
+
+  const repoAnswer = (rows: Record<string, unknown>) => JSON.stringify({ data: { repository: rows } });
+
+  describe("resolving the configured field id", () => {
+    test("the name and the owning project both come back", async () => {
+      const t = transportOf([
+        JSON.stringify({ data: { node: { name: "Criteria", project: { id: "PVT_ours" } } } }),
+      ]);
+      expect(await readProjectFieldIdentity("PVTF_x", t.exec)).toEqual({
+        name: "Criteria",
+        projectId: "PVT_ours",
+      });
+      expect(t.calls[0]!).toContain("id=PVTF_x");
+    });
+
+    test("an id that resolves to nothing THROWS — it is not a field with no name", async () => {
+      // `node(id:)` returns null for an id that names nothing and for one
+      // naming something that is not a field. Either way the caller cannot
+      // read a column, and a `{name:"",projectId:""}` would sail into the
+      // project comparison and quietly fail it for the wrong reason.
+      const t = transportOf([JSON.stringify({ data: { node: null } })]);
+      await expect(readProjectFieldIdentity("PVTF_gone", t.exec)).rejects.toThrow("PVTF_gone");
+    });
+
+    test("a field with a name but no project THROWS too", async () => {
+      const t = transportOf([JSON.stringify({ data: { node: { name: "Criteria" } } })]);
+      await expect(readProjectFieldIdentity("PVTF_x", t.exec)).rejects.toThrow("PVTF_x");
+    });
+  });
+
+  describe("reading the values", () => {
+    test("all four states come back distinct, from ONE call", async () => {
+      // One response carrying every state, so a reader that collapses two
+      // of them cannot pass by being consistently wrong about a map with
+      // one kind in it.
+      const t = transportOf([
+        repoAnswer({
+          i1: items([{ project: "PVT_ours", text: "SC-1" }]),
+          i2: items([{ project: "PVT_ours", text: "" }]),
+          i3: items([{ project: "PVT_other", text: "SC-9" }]),
+          i4: items([{ project: "PVT_other", text: "SC-9" }], true),
+        }),
+      ]);
+      const got = await readProjectFieldValues("o/n", [1, 2, 3, 4], "PVT_ours", "Criteria", t.exec);
+      expect([...got.entries()]).toEqual([
+        [1, { kind: "value", value: "SC-1" }],
+        [2, { kind: "empty" }],
+        [3, { kind: "off-board" }],
+        [4, { kind: "truncated" }],
+      ]);
+    });
+
+    test("the item is matched on PROJECT, not taken as the first one", async () => {
+      // An issue on two boards returns two items in an order nothing
+      // guarantees. `nodes[0]` reads whichever GitHub felt like, and the
+      // answer looks exactly like a reading of ours. Our project is SECOND
+      // here, which is the only arrangement that separates the two.
+      const t = transportOf([
+        repoAnswer({
+          i7: items([
+            { project: "PVT_other", text: "SOMEBODY ELSE'S" },
+            { project: "PVT_ours", text: "SC-7" },
+          ]),
+        }),
+      ]);
+      const got = await readProjectFieldValues("o/n", [7], "PVT_ours", "Criteria", t.exec);
+      expect(got.get(7)).toEqual({ kind: "value", value: "SC-7" });
+    });
+
+    test("a cut list whose page DOES carry our project is answered, not refused", async () => {
+      // `truncated` is for not having found it yet. Having found it means
+      // the rest of the page cannot change the answer, and reporting
+      // UNMEASURED there would make the reading refuse on a board it read
+      // correctly.
+      const t = transportOf([repoAnswer({ i8: items([{ project: "PVT_ours", text: "SC-8" }], true) })]);
+      const got = await readProjectFieldValues("o/n", [8], "PVT_ours", "Criteria", t.exec);
+      expect(got.get(8)).toEqual({ kind: "value", value: "SC-8" });
+    });
+
+    test("whitespace-only is EMPTY, and a value keeps its own spacing trimmed", async () => {
+      const t = transportOf([
+        repoAnswer({
+          i1: items([{ project: "PVT_ours", text: "   " }]),
+          i2: items([{ project: "PVT_ours", text: " SC-2 " }]),
+          i3: items([{ project: "PVT_ours" }]),
+        }),
+      ]);
+      const got = await readProjectFieldValues("o/n", [1, 2, 3], "PVT_ours", "Criteria", t.exec);
+      expect(got.get(1)).toEqual({ kind: "empty" });
+      expect(got.get(2)).toEqual({ kind: "value", value: "SC-2" });
+      expect(got.get(3), "an item with no field value at all").toEqual({ kind: "empty" });
+    });
+
+    test("EVERY number asked about gets an answer, including one naming no issue", async () => {
+      // The opposite convention from `readIssueStates`, deliberately. There
+      // an absent key means "no such issue" and the caller needs to see it.
+      // Here the caller is asking about issues it already holds, and a
+      // missing key would make the producer omit `criteriaField` and turn
+      // the whole reading UNMEASURED on one odd row.
+      const t = transportOf([repoAnswer({ i1: items([{ project: "PVT_ours", text: "SC-1" }]), i404: null })]);
+      const got = await readProjectFieldValues("o/n", [1, 404], "PVT_ours", "Criteria", t.exec);
+      expect([...got.keys()].sort((a, b) => a - b)).toEqual([1, 404]);
+      expect(got.get(404)).toEqual({ kind: "off-board" });
+    });
+
+    test("the field name is sent as a VARIABLE, so a rename needs no code change", async () => {
+      const t = transportOf([repoAnswer({ i1: items([{ project: "PVT_ours", text: "x" }]) })]);
+      await readProjectFieldValues("o/n", [1], "PVT_ours", "Acceptance criteria", t.exec);
+      expect(t.calls[0]!).toContain("field=Acceptance criteria");
+      expect(t.calls[0]!).toContain("owner=o");
+      expect(t.calls[0]!).toContain("name=n");
+      expect(t.calls[0]!.join(" ")).toContain("i1: issue(number:1)");
+    });
+
+    test("more numbers than one batch holds are split, and NONE is dropped", async () => {
+      const numbers = Array.from({ length: FIELD_BATCH + 1 }, (_, i) => i + 1);
+      const chunkOf = (ns: number[]) =>
+        repoAnswer(Object.fromEntries(ns.map(n => [`i${n}`, items([{ project: "PVT_ours", text: `SC-${n}` }])])));
+      const t = transportOf([chunkOf(numbers.slice(0, FIELD_BATCH)), chunkOf(numbers.slice(FIELD_BATCH))]);
+      const got = await readProjectFieldValues("o/n", numbers, "PVT_ours", "Criteria", t.exec);
+      expect(t.calls).toHaveLength(2);
+      expect([...got.keys()].sort((a, b) => a - b)).toEqual(numbers);
+    });
+
+    test("a repeated number is asked about once", async () => {
+      const t = transportOf([repoAnswer({ i5: items([{ project: "PVT_ours", text: "SC-5" }]) })]);
+      await readProjectFieldValues("o/n", [5, 5, 5], "PVT_ours", "Criteria", t.exec);
+      expect(t.calls).toHaveLength(1);
+      expect((t.calls[0]!.join(" ").match(/i5: issue/g) ?? []).length).toBe(1);
+    });
+
+    test("no numbers costs no call", async () => {
+      const t = transportOf([]);
+      expect(await readProjectFieldValues("o/n", [], "PVT_ours", "Criteria", t.exec)).toEqual(new Map());
+      expect(t.calls).toHaveLength(0);
+    });
+
+    test("a transport that throws is not a board with an empty column", async () => {
+      const boom: GraphQlExec = () => {
+        throw new Error("HTTP 502");
+      };
+      await expect(readProjectFieldValues("o/n", [1], "PVT_ours", "Criteria", boom)).rejects.toThrow(
+        "HTTP 502",
+      );
+    });
+
+    test("the item connection asks for the declared page size and can report being cut", () => {
+      // Same property the issue query's connections carry: a connection
+      // read ONCE must say it was cut, or a second item page reads as
+      // "not on this board".
+      const t = transportOf([repoAnswer({ i1: items([{ project: "PVT_ours", text: "x" }]) })]);
+      return readProjectFieldValues("o/n", [1], "PVT_ours", "Criteria", t.exec).then(() => {
+        const query = t.calls[0]!.join(" ");
+        expect(query).toContain(`projectItems(first:${PROJECT_ITEM_PAGE})`);
+        expect(query).toContain("pageInfo{hasNextPage}");
+      });
+    });
   });
 });
 

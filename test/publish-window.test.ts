@@ -230,18 +230,18 @@ describe("#1237 the release immediately before the current one", () => {
 });
 
 describe("#1237 the registry read is real and refuses rather than falling back", () => {
-  test("an unreachable registry throws", () => {
+  test("an unreachable registry throws", async () => {
     const dead = (async () => ({ ok: false, status: 503 })) as unknown as typeof fetch;
-    expect(readPackument("rungate", dead)).rejects.toThrow("503");
+    await expect(readPackument("rungate", dead)).rejects.toThrow("503");
   });
 
-  test("a reply with no versions map throws", () => {
+  test("a reply with no versions map throws", async () => {
     const empty = (async () => ({
       ok: true,
       status: 200,
       json: async () => ({ "dist-tags": { latest: "1.0.0" } }),
     })) as unknown as typeof fetch;
-    expect(readPackument("rungate", empty)).rejects.toThrow("no versions");
+    await expect(readPackument("rungate", empty)).rejects.toThrow("no versions");
   });
 
   test("it resolves the package this repo publishes", async () => {
