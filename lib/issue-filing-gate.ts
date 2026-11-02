@@ -129,6 +129,8 @@ import {
 } from "./finding-jury";
 import { clauses, createsIssue, flagValues, labelValues } from "./issue-create-override";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
+import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
+import { tryLoadRungateConfig } from "./config-loader";
 
 /**
  * The label that waives this gate.
@@ -283,9 +285,133 @@ export function namedClaim(text: string): number | null {
  * **Not configurable, on purpose.** A cap read from config is a cap an agent
  * raises, and #1595 says in as many words that a cap nobody can defend is a
  * cap someone raises. Changing it is an edit here, against the two readings
- * above, which a reviewer can disagree with.
+ * above, which a reviewer can disagree with. `FILINGS_PER_RUN_DIRECT` is the
+ * second of exactly two numbers this file declares, and config SELECTS
+ * between them rather than supplying one — see its docblock for why that
+ * answers the objection instead of overriding it.
  */
 export const FILINGS_PER_RUN = 1;
+
+/**
+ * The allowance while the project is in DIRECT-SHIP mode.
+ *
+ * Jason's call, 2026-11-02: *"raise the cap for this work until we have
+ * these stages completed and ready for agents to swarm"*.
+ *
+ * ## Why this does not reopen the hole the docblock above closes
+ *
+ * The objection is *"a cap read from config is a cap an agent raises"*, and
+ * it is about a NUMBER in config. There is no number in config here. Both
+ * allowances are source constants a reviewer can disagree with, and
+ * `.claude/rungate/config.json` chooses which one applies by declaring what
+ * kind of work the project is doing. An agent cannot invent a third value,
+ * and raising its own allowance means flipping `ship.mode`, which rewrites a
+ * generated rule file that every agent loads and is therefore loud.
+ *
+ * ## Why `ship.mode` is the right switch and a date is not
+ *
+ * `ship.mode: "direct"` already means *stabilising RunGate and clearing the
+ * backlogs, until we get RunGate under control* — declared 2026-10-19, with
+ * its own `since` and `reason`. That is the same condition Jason stated, so
+ * the raise ENDS when the project goes back to `"harness"` rather than when
+ * somebody remembers to lower a constant. A dated expiry would have to be
+ * guessed, and an expired one is read as a bug rather than a policy.
+ *
+ * ## Why 3
+ *
+ * The cap exists because of what a SWARM did — #1595 measured 57 filed
+ * against 53 closed in a day — and the engine work is the opposite
+ * population: it is what makes the backlog shrink, which is the carve-out
+ * already granted to the opened-against-closed ratio. The number is the
+ * count Stage B actually needed rather than a round one: this run spent its
+ * allowance on #1704 and then had two genuine findings it could not file,
+ * both of them `green-check-lies` against ladder items that read MET only
+ * because a person had edited the tracker. Three is 13x below #1595's
+ * per-day figure, and `FG-194` asserts it stays at or below five, so it
+ * cannot creep into a swarm's number one pull request at a time.
+ *
+ * A PLANNED filing is already exempt from the cap entirely (`plannedFiling`),
+ * so this number governs ad-hoc findings only — the decompose path that
+ * creates seven issues from a merged plan never consulted it.
+ */
+export const FILINGS_PER_RUN_DIRECT = 3;
+
+/**
+ * The allowance a given ship policy earns.
+ *
+ * One decider, so a second site cannot answer the same question differently
+ * — `.claude/rules/checks-must-be-able-to-fail.md`, *two deciders that
+ * agree*. Both call sites that consult the cap take the number from here.
+ */
+export function filingsPerRun(policy: ShipPolicy): number {
+  return policy.mode === "direct" ? FILINGS_PER_RUN_DIRECT : FILINGS_PER_RUN;
+}
+
+/**
+ * The allowance a loaded harness config earns, resolving the ship policy.
+ *
+ * **An unresolvable `ship` block falls back to the STRICT cap, and the
+ * direction is the property.** `resolveShipPolicy` throws on a block that is
+ * present and unreadable, which is right for a generator and wrong here:
+ * this runs inside a `PreToolUse` hook, where a throw blocks every filing on
+ * the machine. So the throw is caught — into `FILINGS_PER_RUN`, never into
+ * the raised one. A corrupt config that RAISED the cap would make "file more
+ * issues" reachable by breaking a file, which is the one thing a cap must
+ * not be, and `FG-192` is the assertion rather than this sentence.
+ *
+ * This is not the `catch {}` `.claude/rules/config-access.md` forbids: that
+ * rule is about converting corruption into ABSENCE and then into a feature
+ * silently switched off. Here corruption and absence resolve to the same
+ * answer on purpose, and it is the conservative one.
+ *
+ * **But they must not resolve to the same REPORT, and for one round they
+ * did.** The same rule's other half — *"never substitute a built-in default
+ * for absent config without recording that you did so"* — was not satisfied
+ * by a conservative number: an agent in direct-ship mode, refused at its
+ * first filing by a message reading *"the cap is 1"*, could not tell a
+ * harness-mode policy from a `config.json` that will not parse. One of those
+ * is the cap working and the other is an operator's repair, and the refusal
+ * named neither. So this returns a READING rather than a number, and
+ * `filingGate` pushes `unreadableShipPolicyNote` when `unreadable` is set.
+ * Round 5 of #1725 found it; `FG-198` is the assertion.
+ *
+ * It stays ONE function returning both halves, rather than a number plus a
+ * `shipPolicyUnreadable()` predicate beside it. Two exported functions
+ * answering one question about one input are two deciders over that input,
+ * and a mutation of either would leave the other holding the case up —
+ * `.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape.
+ *
+ * **It takes a THUNK, not a config, and that is the whole guard.** The first
+ * spelling took the loaded config, so the caller evaluated
+ * `tryLoadRungateConfig(root)` as an argument expression — OUTSIDE this
+ * `try`. `readJson` is a bare `JSON.parse(readFileSync(...))` with no catch,
+ * so one malformed `config.json` threw straight out of `filingGate` and
+ * blocked every filing on the machine, which is the opposite of a
+ * conservative fallback and strictly worse than the state it was written to
+ * handle. The review of #1725 caught it. A signature taking the VALUE cannot
+ * guard its own production; one taking the thunk can only be called the
+ * right way. `FG-196` is the assertion.
+ */
+export type FilingCapReading = {
+  /** The allowance to enforce. Strict whenever the policy could not be read. */
+  cap: number;
+  /**
+   * Whether the `ship` block was present and unresolvable. **Not "absent"** —
+   * an unscaffolded tree has no policy to read and is not an anomaly, so it
+   * reports `false` and earns no note. This is the corrupt case alone.
+   */
+  unreadable: boolean;
+};
+
+export function filingsPerRunFor(
+  load: () => Record<string, unknown> | null | undefined,
+): FilingCapReading {
+  try {
+    return { cap: filingsPerRun(resolveShipPolicy(load())), unreadable: false };
+  } catch {
+    return { cap: FILINGS_PER_RUN, unreadable: true };
+  }
+}
 
 /**
  * How far back the cap counts.
@@ -687,6 +813,16 @@ export function reserveAllowance(
     append: (row: FilingLedgerRow) => boolean;
     readLedger: () => FilingLedgerRow[] | null;
     window?: number;
+    /**
+     * The run's allowance. **Required, and the absence of a default is the
+     * point.** It was `cap?: number` falling back to `FILINGS_PER_RUN`, which
+     * is the shape review found at round 4 of #1725: a defaulted cap makes
+     * "a call site that forgot to pass it" a silent behaviour change that
+     * only a reviewer or a text-matching test can catch, one occurrence at a
+     * time. With no default the compiler catches it, at every site, for free
+     * — see `filingsPerRun` for the pair of constants this resolves between.
+     */
+    cap: number;
   },
 ): AllowanceReading {
   const intent: FilingLedgerRow = {
@@ -705,7 +841,7 @@ export function reserveAllowance(
   const after = io.readLedger();
   if (after === null) return { outcome: "UNCOUNTABLE", intent };
   const ordinal = intentOrdinal(after, intent.key, run, io.now, io.window);
-  return ordinal > FILINGS_PER_RUN
+  return ordinal > io.cap
     ? { outcome: "LOST", already: ordinal - 1, intent }
     : { outcome: "WON", intent };
 }
@@ -741,10 +877,15 @@ export function releaseAllowance(
 }
 
 /** The refusal an agent reads when the run has spent its allowance. */
-export function overCapReason(run: string, already: number, target: CommentTarget): string {
+export function overCapReason(
+  run: string,
+  already: number,
+  target: CommentTarget,
+  cap: number,
+): string {
   return [
     `this run has already filed ${already} issue(s) in the last ${RUN_WINDOW_MS / 3_600_000}h, and the cap is ` +
-      `${FILINGS_PER_RUN}. The overflow is a comment.`,
+      `${cap}. The overflow is a comment.`,
     "",
     `  ${commentTargetSentence(target)}`,
     "",
@@ -765,10 +906,14 @@ export function overCapReason(run: string, already: number, target: CommentTarge
  * that cannot be written. The refusal is the same because the consequence is
  * the same — the cap's state did not change, so the cap did not hold.
  */
-export function unreservedCapReason(run: string, target: CommentTarget): string {
+export function unreservedCapReason(
+  run: string,
+  target: CommentTarget,
+  cap: number,
+): string {
   return [
     `this run's allowance could not be RESERVED: the intent row could not be appended to ` +
-      `${ledgerPath()}. The cap is ${FILINGS_PER_RUN} per run and it is not measurable right now.`,
+      `${ledgerPath()}. The cap is ${cap} per run and it is not measurable right now.`,
     "",
     `  ${commentTargetSentence(target)}`,
     "",
@@ -789,10 +934,14 @@ export function unreservedCapReason(run: string, target: CommentTarget): string 
  * it, and the remedy is to repair or move the file. Says so, so the agent
  * does not spend a turn re-drafting a body that was never the problem.
  */
-export function unreadableRunReason(why: string, target: CommentTarget): string {
+export function unreadableRunReason(
+  why: string,
+  target: CommentTarget,
+  cap: number,
+): string {
   return [
     `this filing's RUN could not be read, so there is no denominator to count against:`,
-    `${why}. The cap is ${FILINGS_PER_RUN} per run and this directory's run is unknown.`,
+    `${why}. The cap is ${cap} per run and this directory's run is unknown.`,
     "",
     `  ${commentTargetSentence(target)}`,
     "",
@@ -2405,6 +2554,13 @@ export async function filingGate(
   const at = options.now ?? new Date().toISOString();
   const read = options.readExisting ?? openFindings;
   const planSource = options.readPlan ?? gitSource(options.projectRoot);
+  // The run's allowance, resolved ONCE per command. Per clause would let two
+  // clauses of one command be adjudicated against two different caps if the
+  // config moved underneath them, which is the shape `readFor` is cached to
+  // avoid one line below. A config that cannot be read resolves to the
+  // STRICT cap — `filingsPerRunFor`.
+  const allowance = filingsPerRunFor(() => tryLoadRungateConfig(options.projectRoot));
+  const cap = allowance.cap;
   // Read once per TARGET TRACKER, not once per command and not once per
   // clause. Once per clause would adjudicate two creates against two
   // different snapshots; once per command would adjudicate a `--repo other/x`
@@ -2440,6 +2596,13 @@ export async function filingGate(
   const rows: FilingLedgerRow[] = [];
   const refusals: string[] = [];
   const notes: string[] = [];
+
+  // A cap the config could not justify is still enforced, and now it says so.
+  // Pushed here rather than at the resolve above because `notes` does not
+  // exist yet there, and the ordering is deliberate: this is the first note a
+  // reader sees, because it is the one that explains the NUMBER every later
+  // refusal quotes.
+  if (allowance.unreadable) notes.push(unreadableShipPolicyNote(cap));
 
   // One batch per command, so every row of one adjudication shares it and the
   // clause index separates them — `CandidateRecord.key`'s scheme exactly.
@@ -2517,7 +2680,7 @@ export async function filingGate(
   // ledger nobody can read, and a run nobody could resolve.
   const uncountableReason = (target: CommentTarget) =>
     reading.run === null
-      ? unreadableRunReason(reading.why ?? "the remote could not be read", target)
+      ? unreadableRunReason(reading.why ?? "the remote could not be read", target, cap)
       : uncountableCapReason(run, target);
   // The per-clause verdicts, kept so the race stage below can compose the
   // same refusal message the loop composes. One array, written once per
@@ -2702,7 +2865,7 @@ export async function filingGate(
     // an open issue is still `DUPLICATE`, and one that declares no reason is
     // still `COMMENT_INSTEAD`; `read2` is untouched above.
     const planned = plannedFiling(attempt.title, planSource);
-    const capped = uncountable || (spent >= FILINGS_PER_RUN && !planned.planned);
+    const capped = uncountable || (spent >= cap && !planned.planned);
     const verdict: FilingAdjudication =
       wouldEmit && capped
         ? {
@@ -2711,7 +2874,7 @@ export async function filingGate(
             refusal: uncountable ? "UNMEASURED_CAP" : "OVER_CAP",
             reason: uncountable
               ? uncountableReason(await targetFor(attempt.repo))
-              : overCapReason(run, spent, await targetFor(attempt.repo)),
+              : overCapReason(run, spent, await targetFor(attempt.repo), cap),
           }
         : read2;
     const overridden = overrideOf(verdict);
@@ -2907,7 +3070,7 @@ export async function filingGate(
       // is measured from, so `intentsInRun` would count planned work against
       // the population the number was calibrated on.
       if (row.plannedBy != null) continue;
-      const reading = reserveAllowance(row, run, { now: nowMs, append, readLedger: readAgain });
+      const reading = reserveAllowance(row, run, { now: nowMs, append, readLedger: readAgain, cap });
       if (reading.outcome === "WON") {
         reserved.push(reading.intent);
         continue;
@@ -2916,11 +3079,11 @@ export async function filingGate(
       const target = await targetFor(attempts[index].repo);
       const reason =
         reading.outcome === "LOST"
-          ? overCapReason(run, reading.already, target)
+          ? overCapReason(run, reading.already, target, cap)
           : reading.outcome === "UNRESERVED"
-            ? unreservedCapReason(run, target)
+            ? unreservedCapReason(run, target, cap)
             : uncountableReason(target);
-      if (reading.outcome === "UNRESERVED") notes.push(unreservedAllowanceNote());
+      if (reading.outcome === "UNRESERVED") notes.push(unreservedAllowanceNote(cap));
       // The intent this clause took is released with the rest below: it won
       // no position, and a losing reservation that is never given back is
       // the same stranded allowance by a rarer route.
@@ -3192,11 +3355,11 @@ export function unkeyedLedgerNote(): string {
  * state being unknown — `reserveAllowance` has the two apart, and the other
  * one refuses.
  */
-export function unreservedAllowanceNote(): string {
+export function unreservedAllowanceNote(cap: number): string {
   return (
     "[FindingArbiter] UNMEASURED allowance — this filing's intent row could NOT be appended to " +
     `${ledgerPath()}, so it took no position in this run's queue and the per-run cap of ` +
-    `${FILINGS_PER_RUN} could not hold for it. The filing is REFUSED, not allowed: see ` +
+    `${cap} could not hold for it. The filing is REFUSED, not allowed: see ` +
     "`unreservedCapReason`. This note names the writer so an operator repairs the file rather " +
     "than the filing."
   );
@@ -3249,6 +3412,32 @@ export function overrideNote(v: FilingAdjudication, prior: FilingLedgerRow | nul
     `refusal of this same title at ${prior?.at}. This adjudication did not reproduce it — the ` +
     "body has changed since, and the body is an input to the symptom keys — so the override is " +
     `recorded against that row rather than this one. Recorded in ${ledgerPath()}.`
+  );
+}
+
+/**
+ * The `ship` block is present and will not resolve, so the allowance is the
+ * strict one for a reason the config cannot account for.
+ *
+ * **Not a refusal, and not a weaker cap.** The number is already conservative
+ * — `filingsPerRunFor` never falls back UPWARD — so nothing about the
+ * adjudication changes. What was missing is the sentence: an agent in
+ * direct-ship mode refused by *"the cap is 1"* had no way to tell a
+ * harness-mode policy from a `config.json` that will not parse, and only one
+ * of those is an operator's job. Round 5 of #1725.
+ *
+ * Takes the cap for the same reason the four refusals do: prose that states
+ * an allowance it was not handed is the stale-copy class this file keeps
+ * meeting, and with no default the compiler refuses a caller that forgets.
+ */
+export function unreadableShipPolicyNote(cap: number): string {
+  return (
+    `[FindingArbiter] This project's \`ship\` block is present and could not be resolved, so the ` +
+    `per-run cap is the STRICT ${cap} rather than whatever the config meant. The filing is NOT ` +
+    `blocked by this note and the number is deliberately the conservative one — a corrupt config ` +
+    `must never be a route to a larger allowance. But if you expected direct-ship mode's raised ` +
+    `cap and were refused, this is why, and the repair is \`.claude/rungate/config.json\`, not a ` +
+    `re-draft of your filing.`
   );
 }
 

@@ -73,11 +73,18 @@ import {
   filingFinding,
   intentsInRun,
   intentOrdinal,
+  FILINGS_PER_RUN,
+  FILINGS_PER_RUN_DIRECT,
+  filingsPerRun,
+  filingsPerRunFor,
   reserveAllowance,
   releaseAllowance,
   ledgerTitle,
   MAX_LEDGER_TITLE,
   overCapReason,
+  unreservedCapReason,
+  unreadableRunReason,
+  unreservedAllowanceNote,
   namesARepository,
   runIdFor,
   waivableRefusal,
@@ -2993,14 +3000,22 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
   const M1 = "declared === null";
   /** `M2` — the closed list stops being closed. */
   const M2 = "if (token in COMMENT_EXEMPTIONS) return token as CommentExemption;";
-  /** `M3` — the cap never binds, however much the run has filed. */
-  const M3 = "spent >= FILINGS_PER_RUN";
+  /**
+   * `M3` — the cap never binds, however much the run has filed.
+   *
+   * The anchor is `spent >= cap`, not `spent >= FILINGS_PER_RUN`: the cap is
+   * resolved per command now, because direct-ship mode earns a larger one.
+   * `buildMutant` asserts an anchor appears EXACTLY once, so renaming the
+   * site turned this row red rather than leaving it green against a mutation
+   * that no longer applied — which is the only reason the rename was safe.
+   */
+  const M3 = "spent >= cap";
   /** `M4` — every refusal becomes waivable, including the cap. */
   const M4 = "return refusal === null || !(refusal in UNWAIVABLE_REFUSALS);";
   /** `M5` — the cap stops seeing filings the label would carry through. */
   const M5 = "|| overrideOf(read2)";
   /** `M6` — the reservation is taken and its position is never read. */
-  const M6 = "ordinal > FILINGS_PER_RUN";
+  const M6 = "ordinal > io.cap";
   /**
    * `M7` — the comment DEFAULT goes back to being waivable by a label.
    *
@@ -4269,13 +4284,21 @@ describe("FG-143..FG-176: a numeric cap, which no argument defeats", () => {
     const row = { ...landed(run), intent: false, emitted: true, withheldBy: null };
 
     expect(
-      reserveAllowance(row, run, { now: Date.parse(AT), append: () => false, readLedger: () => [] })
-        .outcome,
+      reserveAllowance(row, run, {
+        now: Date.parse(AT),
+        append: () => false,
+        readLedger: () => [],
+        cap: FILINGS_PER_RUN,
+      }).outcome,
       "the WRITER failed, so no position was taken",
     ).toBe("UNRESERVED");
     expect(
-      reserveAllowance(row, run, { now: Date.parse(AT), append: () => true, readLedger: () => null })
-        .outcome,
+      reserveAllowance(row, run, {
+        now: Date.parse(AT),
+        append: () => true,
+        readLedger: () => null,
+        cap: FILINGS_PER_RUN,
+      }).outcome,
       "the STATE could not be read, which is the cap's own input",
     ).toBe("UNCOUNTABLE");
 
@@ -4585,7 +4608,7 @@ describe("FG-143..FG-176: a numeric cap, which no argument defeats", () => {
   });
 
   test("FG-150: the refusal names the cap, the run and the comment target", () => {
-    const text = overCapReason("/wt/x", 1, onPr);
+    const text = overCapReason("/wt/x", 1, onPr, FILINGS_PER_RUN);
     expect(text).toContain("cap is 1");
     expect(text).toContain("/wt/x");
     expect(text).toContain("PR #1595");
@@ -5157,5 +5180,289 @@ describe("FG-180..FG-184: a merged plan is the cap's second route", () => {
     const r = await run(filing("something nobody planned"), namesIt);
     expect(r.rows[0].refusal).toBe("OVER_CAP");
     expect(r.rows[0].plannedBy).toBeNull();
+  });
+});
+
+/**
+ * The allowance is larger while the project is in DIRECT-SHIP mode.
+ *
+ * Jason's call, 2026-11-02: raise the cap for the engine work that is
+ * shrinking the backlog, and put it back before agents swarm on it. The cap
+ * exists because of what a SWARM did — #1595 measured 57 filed against 53
+ * closed — and engine work is the opposite population, which is the same
+ * carve-out already made for the opened-against-closed ratio.
+ *
+ * **Why `ship.mode` and not a number in config.** `FILINGS_PER_RUN`'s own
+ * docblock refuses a configurable cap, in as many words: *"a cap read from
+ * config is a cap an agent raises"*. That objection is answered rather than
+ * overridden here — BOTH numbers stay source constants a reviewer can
+ * disagree with, and config selects between them and cannot invent a third.
+ * `ship.mode` is the switch that already means *stabilising, not swarming*,
+ * so the raise reverts itself the day the project goes back to `harness`
+ * instead of waiting for somebody to remember.
+ *
+ * FG-192 is the one that matters most: a config the gate cannot read falls
+ * back to the STRICT cap. An unreadable config must never be a route to the
+ * larger allowance.
+ */
+describe("the filing cap under direct-ship mode", () => {
+  test("FG-190: direct-ship mode gets a LARGER allowance than harness mode", () => {
+    // Stated as a RELATION between two calls, not as `toBe(CONSTANT)`.
+    // `expect(filingsPerRun(direct)).toBe(FILINGS_PER_RUN_DIRECT)` is vacuous
+    // under exactly the mutation that matters — editing the constant moves
+    // both sides of the comparison, so the row stays green while the two
+    // modes stop differing. It was written that way first and the battery
+    // caught it: M1 (`FILINGS_PER_RUN_DIRECT = 1`) left this row passing.
+    const direct = filingsPerRun({ mode: "direct", since: "2026-10-19", reason: "stabilising" });
+    expect(direct, "direct-ship must earn more than harness").toBeGreaterThan(
+      filingsPerRun({ mode: "harness" }),
+    );
+    expect(direct, "and it is the declared constant").toBe(FILINGS_PER_RUN_DIRECT);
+  });
+
+  test("FG-191 CONTROL: harness mode still gets the strict one", () => {
+    // Without this row the change reads as a blanket raise, which is the
+    // pathology #1595 measured. The two constants must also DIFFER, or both
+    // halves pass against a gate that no longer has two modes at all.
+    expect(filingsPerRun({ mode: "harness" })).toBe(FILINGS_PER_RUN);
+    expect(
+      FILINGS_PER_RUN_DIRECT,
+      "the two caps are equal, so neither row above can distinguish the modes",
+    ).toBeGreaterThan(FILINGS_PER_RUN);
+  });
+
+  test("FG-192: an unresolvable policy falls back to the STRICT cap, never the raised one", () => {
+    // `resolveShipPolicy` THROWS on a `ship` block that is present and
+    // unreadable, and this gate runs as a PreToolUse hook where a throw
+    // blocks every filing on the machine. So the throw is caught — and the
+    // direction it is caught INTO is the whole property. A corrupt config
+    // resolving to `direct` would make "raise the cap" reachable by breaking
+    // the config, which is the one thing a cap must not be.
+    expect(filingsPerRunFor(() => ({ ship: { mode: "dierct" } })).cap).toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor(() => ({ ship: "not an object" })).cap).toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor(() => null).cap, "absent config is harness, so strict").toBe(
+      FILINGS_PER_RUN,
+    );
+    // And the two reach the same NUMBER by different routes, which is the
+    // distinction round 5 found missing: a corrupt block is an operator's
+    // repair, an absent one is an unscaffolded tree and no anomaly at all.
+    expect(
+      filingsPerRunFor(() => ({ ship: { mode: "dierct" } })).unreadable,
+      "a present-and-unresolvable ship block is an anomaly and must be reportable",
+    ).toBe(true);
+    expect(
+      filingsPerRunFor(() => null).unreadable,
+      "an absent config is not an anomaly — a note here would fire on every unscaffolded tree",
+    ).toBe(false);
+  });
+
+  test("FG-193: a real direct-ship config resolves through the same path", () => {
+    // The premise FG-190 asserts on a hand-built ShipPolicy. This one starts
+    // from the config SHAPE, so a change to `resolveShipPolicy`'s reading of
+    // the block cannot leave FG-190 green against a policy nothing produces.
+    const fromConfig = filingsPerRunFor(() => ({
+      ship: { mode: "direct", since: "2026-10-19", reason: "stabilising RunGate" },
+    }));
+    expect(fromConfig.cap, "a direct config must out-earn an absent one").toBeGreaterThan(
+      filingsPerRunFor(() => null).cap,
+    );
+    expect(fromConfig.cap).toBe(FILINGS_PER_RUN_DIRECT);
+    expect(fromConfig.unreadable, "a config that resolved is not an anomaly").toBe(false);
+  });
+
+  test("FG-196: a config that THROWS while loading still yields the strict cap", () => {
+    // `filingsPerRunFor` took the loaded config at first, so the caller
+    // evaluated `tryLoadRungateConfig(root)` as an argument expression —
+    // outside the try. `readJson` is a bare `JSON.parse(readFileSync(...))`,
+    // so one malformed `config.json` threw straight out of `filingGate` and
+    // blocked every filing on the machine. Review of #1725 found it; FG-192
+    // could not, because a hand-built object never throws on the way in.
+    expect(() =>
+      filingsPerRunFor(() => {
+        throw new SyntaxError("Unexpected token } in JSON at position 41");
+      }),
+    ).not.toThrow();
+    expect(
+      filingsPerRunFor(() => {
+        throw new SyntaxError("Unexpected token } in JSON at position 41");
+      }).cap,
+      "a config that cannot be PARSED must not be a route to the larger allowance",
+    ).toBe(FILINGS_PER_RUN);
+  });
+
+  test("FG-197: a cap consumer cannot fall back to the strict constant — the COMPILER says so", () => {
+    // Round 4 of #1725 found the shape behind every round before it: I was
+    // fixing one call site of a class at a time. Three messages, then a
+    // fourth; then a text-matching version of this row that two spellings
+    // defeated — `const strict = FILINGS_PER_RUN` and a `+` concat — which
+    // is `.claude/rules/checks-must-be-able-to-fail.md`'s *detector narrower
+    // than what it detects*, written while citing that rule.
+    //
+    // So the detector is no longer a grep. Every consumer of the cap takes
+    // it as a REQUIRED parameter with no default, and a site that forgets it
+    // fails to compile. The five `@ts-expect-error`s below are the
+    // assertion: each is an error TODAY, and the moment any signature
+    // regains a `= FILINGS_PER_RUN` the call becomes legal, the directive
+    // becomes unused, and `bun scripts/typecheck.ts` goes red naming it.
+    //
+    // That is also this row's own control, and it is a stronger one than a
+    // count of interpolations: an unused `@ts-expect-error` is an ERROR in
+    // this repo's config, so the guard cannot pass vacuously — it has to be
+    // pointed at something that genuinely does not type-check.
+    //
+    // Proved able to fail: restoring `cap?: number` on `reserveAllowance`'s
+    // bag turned the first two directives unused and typecheck reported
+    // 2 errors against a baseline of 0.
+    //
+    // Every name below is IMPORTED at the top of this file, deliberately. A
+    // `@ts-expect-error` is satisfied by whichever error arrives first, so a
+    // directive sitting above an out-of-scope identifier is green on
+    // `TS2304: cannot find name` and witnesses nothing about the cap.
+    const target: CommentTarget = { reading: "PR", number: 1725, branch: "rg/filing-cap-direct" };
+
+    // @ts-expect-error cap is required — a forgotten allowance must not compile
+    overCapReason("/wt/x", 1, target);
+    // @ts-expect-error cap is required
+    unreservedCapReason("/wt/x", target);
+    // @ts-expect-error cap is required
+    unreadableRunReason("the remote could not be read", target);
+    // @ts-expect-error cap is required
+    unreservedAllowanceNote();
+    // @ts-expect-error cap is required on the reservation bag too
+    reserveAllowance({} as FilingLedgerRow, "fg197", {
+      now: 0,
+      append: () => true,
+      readLedger: () => [],
+    });
+
+    // And the runtime half, so this row is not purely a type assertion: the
+    // resolved cap REACHES the prose. A signature can be required and still
+    // be ignored by the body it was added for.
+    expect(
+      overCapReason("/wt/x", 1, target, FILINGS_PER_RUN_DIRECT),
+      "the message must name the cap it was handed, not the constant",
+    ).toContain(`cap is ${FILINGS_PER_RUN_DIRECT}`);
+    expect(unreservedCapReason("/wt/x", target, FILINGS_PER_RUN_DIRECT)).toContain(
+      `${FILINGS_PER_RUN_DIRECT} per run`,
+    );
+    expect(unreadableRunReason("why", target, FILINGS_PER_RUN_DIRECT)).toContain(
+      `${FILINGS_PER_RUN_DIRECT} per run`,
+    );
+    expect(unreservedAllowanceNote(FILINGS_PER_RUN_DIRECT)).toContain(
+      `cap of ${FILINGS_PER_RUN_DIRECT}`,
+    );
+  });
+
+  test("FG-198: a corrupt ship block is REPORTED, not just conservatively defaulted", async () => {
+    // Round 5 of #1725. The fallback direction was already right and already
+    // asserted (FG-192); what was missing was the record. An agent in
+    // direct-ship mode refused by "the cap is 1" could not tell a
+    // harness-mode policy from a `config.json` that will not parse, and only
+    // one of those is an operator's repair rather than a re-draft.
+    //
+    // `.claude/rules/config-access.md`: *"never substitute a built-in default
+    // for absent config without recording that you did so."* The docblock
+    // answered the first half of that rule and not the second.
+    const AT = "2026-11-02T18:00:00.000Z";
+    const onPr: CommentTarget = { reading: "PR", number: 1725, branch: "rg/filing-cap-direct" };
+    const filing =
+      'gh issue create --title "zqxjShipBlock drops a reading it resolved" ' +
+      `--body "\`zqxjShipBlock\` in lib/zqxj-ship-block.ts loses 23 of 41 readings over 8802 runs. Claim 4. ${DECLARED}"`;
+
+    const dir = freshRun();
+    mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+    // Present and unparseable — NOT absent. The two resolve to the same cap
+    // on purpose and must not resolve to the same report.
+    writeFileSync(join(dir, ".claude", "rungate", "config.json"), '{"ship": {"mode": "dierct"');
+
+    const corrupt = await filingGate(filing, {
+      projectRoot: dir,
+      now: AT,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: () => [],
+      readTarget: async () => onPr,
+    });
+    expect(
+      corrupt.note,
+      "a cap the config could not justify must say so — otherwise the refusal is unattributable",
+    ).toContain("could not be resolved");
+    expect(corrupt.note, "and it must name the number every later refusal quotes").toContain(
+      `STRICT ${FILINGS_PER_RUN}`,
+    );
+
+    // CONTROL, one variable — the SAME directory with the SAME shape of
+    // config, parseable. Without it the row above is satisfied by a gate
+    // that emits the note unconditionally, which is a banner, not a reading.
+    writeFileSync(
+      join(dir, ".claude", "rungate", "config.json"),
+      JSON.stringify({ ship: { mode: "direct", since: "2026-10-19", reason: "stabilising" } }),
+    );
+    const parses = await filingGate(filing, {
+      projectRoot: dir,
+      now: AT,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: () => [],
+      readTarget: async () => onPr,
+    });
+    expect(
+      parses.note ?? "",
+      "a config that resolved is not an anomaly and must earn no note",
+    ).not.toContain("could not be resolved");
+  });
+
+  test("FG-194: the raised cap is bounded, so it cannot drift into a swarm's number", () => {
+    // #1595's swarm ran at 57 filed against 53 closed. A cap that creeps
+    // upward one PR at a time ends there, and nothing else in this file
+    // would go red on the way. The bound is an assertion rather than a
+    // comment because a comment is how the last one of these was missed.
+    expect(
+      FILINGS_PER_RUN_DIRECT,
+      "a direct-ship allowance above 5 is not a raised cap, it is no cap — " +
+        "argue it in `FILINGS_PER_RUN_DIRECT`'s docblock against a reading, not here",
+    ).toBeLessThanOrEqual(5);
+  });
+
+  test("FG-195: reserveAllowance honours the cap it is handed, not the module constant", () => {
+    // The behavioural half. Both decision sites must read the resolved cap:
+    // a guard missing from the reservation stage means the adjudication
+    // allows a third filing and the reservation then refuses it, which is
+    // FG-185's defect one layer down.
+    const rows: FilingLedgerRow[] = [];
+    const io = (cap: number) => ({
+      now: 1_000,
+      append: (row: FilingLedgerRow) => (rows.push(row), true),
+      readLedger: () => rows,
+      cap,
+    });
+    const row = (n: number): FilingLedgerRow => ({
+      at: new Date(1_000).toISOString(),
+      key: `fg195/${n}`,
+      id: "new",
+      title: `a finding this run is filing (${n})`,
+      symptomHash: "h",
+      category: "correctness",
+      severity: null,
+      disposition: "ISSUE",
+      refusal: null,
+      emitted: false,
+      withheldBy: INTENT_PENDING,
+      jury: null,
+      duplicateOf: [],
+      overridden: false,
+      refiledAfter: null,
+      exemption: "out-of-pr-diff",
+      intent: true,
+      run: "fg195",
+    });
+
+    const strict = [1, 2].map(n => reserveAllowance(row(n), "fg195", io(FILINGS_PER_RUN)));
+    expect(strict.map(r => r.outcome), "at a cap of 1 the second is LOST").toEqual(["WON", "LOST"]);
+
+    rows.length = 0;
+    const raised = [1, 2, 3].map(n => reserveAllowance(row(n), "fg195", io(FILINGS_PER_RUN_DIRECT)));
+    expect(
+      raised.map(r => r.outcome),
+      "at the direct-ship cap the first three all win",
+    ).toEqual(["WON", "WON", "WON"]);
   });
 });
