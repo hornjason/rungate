@@ -63,6 +63,17 @@
  */
 export const COMMAND_NOT_FOUND = 127;
 
+/**
+ * Where a `verify` can be run — see {@link StageItem.scope} for each.
+ *
+ * Declared as the list rather than only as a union so the validator's
+ * refusal message is generated from it. A fourth scope added to the type
+ * and forgotten in a hand-written message is a message that names a legal
+ * value as illegal.
+ */
+export const ITEM_SCOPES = ["repo", "machine", "credentialed"] as const;
+export type ItemScope = (typeof ITEM_SCOPES)[number];
+
 /** One item on a stage: a thing to do, and the command that proves it done. */
 export interface StageItem {
   /** `A1`, `B4` — the stage letter followed by a 1-based position. */
@@ -86,15 +97,29 @@ export interface StageItem {
    *
    * `"machine"` — the evidence is outside the repository, on the operator's
    * machine. Stage A's A2 is the live instance: the goal is set in
-   * `~/.claude/FLEET-STATE.md`, which no CI runner has. Such an item is NOT
-   * silently skipped, because a check that quietly declines to run is
-   * indistinguishable from a check that passed
+   * `~/.claude/FLEET-STATE.md`, which no CI runner has.
+   *
+   * `"credentialed"` — the evidence is reachable from anywhere, and reading
+   * it needs a credential CI does not hold. Stage B's B4 is the live
+   * instance: the board's Criteria column is a ProjectV2 custom field on a
+   * USER-level project, and `secrets.GITHUB_TOKEN` is repository-scoped, so
+   * the one token CI has structurally cannot see it. Measured 2026-11-02 —
+   * B1 (milestones) and B3 (issues) are repository resources and passed in
+   * the same shard that B4 failed in.
+   *
+   * It is deliberately NOT `"machine"`: that word says the evidence is on
+   * one operator's disk, and a reader who believes it looks in the wrong
+   * place. Giving CI a `read:project` token would move B4 to `"repo"` and
+   * is the better end state; this records the state until somebody does.
+   *
+   * No non-`"repo"` item is silently skipped, because a check that quietly
+   * declines to run is indistinguishable from a check that passed
    * (`.claude/rules/checks-must-be-able-to-fail.md`, *assertions that hold
-   * vacuously*). It is counted, named in the output, and the count is itself
-   * asserted — so a second machine-scoped item cannot appear without somebody
-   * deciding to allow it.
+   * vacuously*). Each is counted, named in the output, and its count is
+   * itself asserted as an equality — so a second one of either kind cannot
+   * appear without somebody deciding to allow it.
    */
-  scope?: "repo" | "machine";
+  scope?: ItemScope;
 }
 
 /**
@@ -398,8 +423,14 @@ export function stageLadderViolations(raw: unknown): string[] {
       if (item.verify !== null && typeof item.verify !== "string") {
         out.push(`${iAt}.verify is ${JSON.stringify(item.verify)}, expected a shell command or null`);
       }
-      if (item.scope !== undefined && item.scope !== "repo" && item.scope !== "machine") {
-        out.push(`${iAt}.scope is ${JSON.stringify(item.scope)}, expected "repo", "machine" or absent (absent means "repo")`);
+      // Widened to `readonly string[]` on purpose: this validator reads
+      // parsed JSON, so the value is whatever was in the file, and a
+      // narrowly typed `includes` refuses to be asked about it.
+      if (item.scope !== undefined && !(ITEM_SCOPES as readonly string[]).includes(item.scope as string)) {
+        out.push(
+          `${iAt}.scope is ${JSON.stringify(item.scope)}, expected ` +
+            `${ITEM_SCOPES.map(s => `"${s}"`).join(", ")} or absent (absent means "repo")`,
+        );
       }
 
       if (item.done === true) {

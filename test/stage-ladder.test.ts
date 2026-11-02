@@ -26,6 +26,7 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 import {
   COMMAND_NOT_FOUND,
+  ITEM_SCOPES,
   claimedImprovements,
   ladderViolations,
   nextStage,
@@ -54,6 +55,44 @@ const stages = doc.stages;
  */
 const MACHINE_SCOPED_ALLOWED = 1;
 
+/**
+ * How many done items may need a credential CI does not hold.
+ *
+ * Exactly one: Stage B's B4. The board's Criteria column is a ProjectV2
+ * custom field on a USER-level project and `secrets.GITHUB_TOKEN` is
+ * repository-scoped, so the one token CI has cannot read it. Measured on
+ * 2026-11-02, run `41406458500`: B1 and B3 — milestones and issues, both
+ * repository resources — passed in the same shard B4 failed in, with the
+ * same token. Locally, against a `read:project` PAT, B4 exits 0.
+ *
+ * An equality, like {@link MACHINE_SCOPED_ALLOWED}: a second one cannot
+ * appear without somebody editing this line. The way to LOWER it is to give
+ * CI a `read:project` token and move B4 back to the default scope, which is
+ * strictly better than this and is the reason the constant is written as a
+ * debt rather than a budget.
+ */
+const CREDENTIALED_ALLOWED = 1;
+
+/**
+ * How long the whole loop below gets. Some of its verify commands read the
+ * live GitHub API and they run one after another, so this is a sum.
+ *
+ * Measured 2026-11-02: the whole loop, 4.9s. An order of magnitude of
+ * headroom — room for a slow API, and not enough for a hung command to
+ * hold CI open.
+ *
+ * **No count of API-backed items is stated here, deliberately.** Two
+ * revisions of this comment carried one and both were wrong: the first
+ * said "four" when B5 runs `--list-readings` and opens no connection, and
+ * it stayed wrong when B4 became `credentialed` and stopped being
+ * executed at all. A number in a comment is a second decider that nothing
+ * runs. What catches a budget that has gone tight is the `failed`
+ * assertion's own message: a killed command is reported as `exited null`,
+ * and that message says to raise this constant rather than untick a true
+ * item.
+ */
+const LIVE_VERIFY_BUDGET_MS = 60_000;
+
 const run = (cmd: string) => spawnSync("sh", ["-c", cmd], { cwd: ROOT, encoding: "utf-8" });
 
 const retro = (over: Partial<Retro> = {}): Retro => ({
@@ -81,9 +120,17 @@ describe("the live plan", () => {
   });
 
   test("every DONE item's verify command exits 0 — this is what 'done' means", () => {
+    // Timeout is EXPLICIT below, and it has to be. Items here read the live
+    // GitHub API and run in sequence, and Bun's 5s default killed this the
+    // moment B4 was ticked and added one more: `spawnSync` was cut mid-call
+    // and the item was reported as `exited null`, which reads exactly like
+    // the work regressing. A ladder item that is slow is not a ladder item
+    // that failed, so the budget is stated rather than inherited — see
+    // LIVE_VERIFY_BUDGET_MS for which items it covers and the measurement.
     const checked: string[] = [];
     const failed: string[] = [];
     const deferred: string[] = [];
+    const credentialed: string[] = [];
     const unmeasured: string[] = [];
 
     for (const stage of stages) {
@@ -91,6 +138,15 @@ describe("the live plan", () => {
         if (!item.done) continue;
         if (item.scope === "machine") {
           deferred.push(item.id);
+          continue;
+        }
+        // Not run, for the same reason `machine` is not: the runner cannot
+        // reach the evidence. Counted on the DECLARATION rather than on a
+        // failure, so this case reads identically on a laptop holding a
+        // `read:project` PAT and on a CI runner holding none — a tally that
+        // differs by environment measures the environment.
+        if (item.scope === "credentialed") {
+          credentialed.push(item.id);
           continue;
         }
         checked.push(item.id);
@@ -127,11 +183,23 @@ describe("the live plan", () => {
     ).toBe(MACHINE_SCOPED_ALLOWED);
 
     expect(
+      credentialed.length,
+      `${credentialed.length} done item(s) need a credential CI does not hold ` +
+        `(${credentialed.join(", ") || "none"}) and were NOT executed. The allowance is ` +
+        `${CREDENTIALED_ALLOWED}. If this ROSE, a stage item just became unverifiable in CI — decide that ` +
+        `deliberately and raise the constant with a reason. If it FELL because CI gained a read:project ` +
+        `token, drop the item's scope back to the default and lower the constant in the same commit; that ` +
+        `is the direction this debt is meant to move.`,
+    ).toBe(CREDENTIALED_ALLOWED);
+
+    expect(
       failed,
       `a stage item is marked done and its own verify command refuses. Either the work regressed or the item ` +
-        `was ticked without the command being run. Do not weaken the command to make this pass.`,
+        `was ticked without the command being run. Do not weaken the command to make this pass. An item ` +
+        `reported as "exited null" was KILLED, not refused — raise LIVE_VERIFY_BUDGET_MS rather than ` +
+        `unticking the item.`,
     ).toEqual([]);
-  });
+  }, LIVE_VERIFY_BUDGET_MS);
 
   test("the overall goal carries a command, and that command is not yet met", () => {
     // The honest state: `rungate board-conformance` is B5/D2 in this very
@@ -307,7 +375,24 @@ describe("the ladder refuses the things that went wrong in Stage A", () => {
     const v = stageLadderViolations([
       ok({ items: [{ id: "A1", what: "x", done: true, verify: "true", scope: "local" as never }] }),
     ]);
-    expect(v.join("\n")).toContain('expected "repo", "machine" or absent');
+    expect(v.join("\n")).toContain('expected "repo", "machine", "credentialed" or absent');
+  });
+
+  // The refusal message is GENERATED from `ITEM_SCOPES`, so a scope added to
+  // the type and forgotten in a hand-written sentence cannot happen. Without
+  // this the case above passes against a message that omits a legal value —
+  // and the agent reading it deletes a correct scope.
+  test("every legal scope is accepted, and the refusal names all of them", () => {
+    for (const scope of ITEM_SCOPES) {
+      expect(
+        stageLadderViolations([ok({ items: [{ id: "A1", what: "x", done: true, verify: "true", scope }] })]),
+        `scope ${JSON.stringify(scope)} is in ITEM_SCOPES and was refused`,
+      ).toEqual([]);
+    }
+    const v = stageLadderViolations([
+      ok({ items: [{ id: "A1", what: "x", done: true, verify: "true", scope: "nope" as never }] }),
+    ]).join("\n");
+    for (const scope of ITEM_SCOPES) expect(v).toContain(`"${scope}"`);
   });
 
   test("a clean ladder produces no violations — the control", () => {
