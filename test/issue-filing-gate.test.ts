@@ -5238,9 +5238,22 @@ describe("the filing cap under direct-ship mode", () => {
     // direction it is caught INTO is the whole property. A corrupt config
     // resolving to `direct` would make "raise the cap" reachable by breaking
     // the config, which is the one thing a cap must not be.
-    expect(filingsPerRunFor(() => ({ ship: { mode: "dierct" } }))).toBe(FILINGS_PER_RUN);
-    expect(filingsPerRunFor(() => ({ ship: "not an object" }))).toBe(FILINGS_PER_RUN);
-    expect(filingsPerRunFor(() => null), "absent config is harness, so strict").toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor(() => ({ ship: { mode: "dierct" } })).cap).toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor(() => ({ ship: "not an object" })).cap).toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor(() => null).cap, "absent config is harness, so strict").toBe(
+      FILINGS_PER_RUN,
+    );
+    // And the two reach the same NUMBER by different routes, which is the
+    // distinction round 5 found missing: a corrupt block is an operator's
+    // repair, an absent one is an unscaffolded tree and no anomaly at all.
+    expect(
+      filingsPerRunFor(() => ({ ship: { mode: "dierct" } })).unreadable,
+      "a present-and-unresolvable ship block is an anomaly and must be reportable",
+    ).toBe(true);
+    expect(
+      filingsPerRunFor(() => null).unreadable,
+      "an absent config is not an anomaly — a note here would fire on every unscaffolded tree",
+    ).toBe(false);
   });
 
   test("FG-193: a real direct-ship config resolves through the same path", () => {
@@ -5250,10 +5263,11 @@ describe("the filing cap under direct-ship mode", () => {
     const fromConfig = filingsPerRunFor(() => ({
       ship: { mode: "direct", since: "2026-10-19", reason: "stabilising RunGate" },
     }));
-    expect(fromConfig, "a direct config must out-earn an absent one").toBeGreaterThan(
-      filingsPerRunFor(() => null),
+    expect(fromConfig.cap, "a direct config must out-earn an absent one").toBeGreaterThan(
+      filingsPerRunFor(() => null).cap,
     );
-    expect(fromConfig).toBe(FILINGS_PER_RUN_DIRECT);
+    expect(fromConfig.cap).toBe(FILINGS_PER_RUN_DIRECT);
+    expect(fromConfig.unreadable, "a config that resolved is not an anomaly").toBe(false);
   });
 
   test("FG-196: a config that THROWS while loading still yields the strict cap", () => {
@@ -5271,7 +5285,7 @@ describe("the filing cap under direct-ship mode", () => {
     expect(
       filingsPerRunFor(() => {
         throw new SyntaxError("Unexpected token } in JSON at position 41");
-      }),
+      }).cap,
       "a config that cannot be PARSED must not be a route to the larger allowance",
     ).toBe(FILINGS_PER_RUN);
   });
@@ -5337,6 +5351,63 @@ describe("the filing cap under direct-ship mode", () => {
     expect(unreservedAllowanceNote(FILINGS_PER_RUN_DIRECT)).toContain(
       `cap of ${FILINGS_PER_RUN_DIRECT}`,
     );
+  });
+
+  test("FG-198: a corrupt ship block is REPORTED, not just conservatively defaulted", async () => {
+    // Round 5 of #1725. The fallback direction was already right and already
+    // asserted (FG-192); what was missing was the record. An agent in
+    // direct-ship mode refused by "the cap is 1" could not tell a
+    // harness-mode policy from a `config.json` that will not parse, and only
+    // one of those is an operator's repair rather than a re-draft.
+    //
+    // `.claude/rules/config-access.md`: *"never substitute a built-in default
+    // for absent config without recording that you did so."* The docblock
+    // answered the first half of that rule and not the second.
+    const AT = "2026-11-02T18:00:00.000Z";
+    const onPr: CommentTarget = { reading: "PR", number: 1725, branch: "rg/filing-cap-direct" };
+    const filing =
+      'gh issue create --title "zqxjShipBlock drops a reading it resolved" ' +
+      `--body "\`zqxjShipBlock\` in lib/zqxj-ship-block.ts loses 23 of 41 readings over 8802 runs. Claim 4. ${DECLARED}"`;
+
+    const dir = freshRun();
+    mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+    // Present and unparseable — NOT absent. The two resolve to the same cap
+    // on purpose and must not resolve to the same report.
+    writeFileSync(join(dir, ".claude", "rungate", "config.json"), '{"ship": {"mode": "dierct"');
+
+    const corrupt = await filingGate(filing, {
+      projectRoot: dir,
+      now: AT,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: () => [],
+      readTarget: async () => onPr,
+    });
+    expect(
+      corrupt.note,
+      "a cap the config could not justify must say so — otherwise the refusal is unattributable",
+    ).toContain("could not be resolved");
+    expect(corrupt.note, "and it must name the number every later refusal quotes").toContain(
+      `STRICT ${FILINGS_PER_RUN}`,
+    );
+
+    // CONTROL, one variable — the SAME directory with the SAME shape of
+    // config, parseable. Without it the row above is satisfied by a gate
+    // that emits the note unconditionally, which is a banner, not a reading.
+    writeFileSync(
+      join(dir, ".claude", "rungate", "config.json"),
+      JSON.stringify({ ship: { mode: "direct", since: "2026-10-19", reason: "stabilising" } }),
+    );
+    const parses = await filingGate(filing, {
+      projectRoot: dir,
+      now: AT,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: () => [],
+      readTarget: async () => onPr,
+    });
+    expect(
+      parses.note ?? "",
+      "a config that resolved is not an anomaly and must earn no note",
+    ).not.toContain("could not be resolved");
   });
 
   test("FG-194: the raised cap is bounded, so it cannot drift into a swarm's number", () => {

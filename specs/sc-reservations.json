@@ -110,7 +110,7 @@
       "from": 190,
       "to": 199,
       "namespace": "FG",
-      "note": "Jason asked on 2026-11-02 for the filing cap to be raised for engine work until the stages are complete. FG has no allocator, FG-186 is the highest id on main and FG-100..119 the highest declared block, so this sits above both — the eyeballed-headroom method the rule names, declared before any id is consumed. FG-190..194 are consumed. Delete when the PR merges."
+      "note": "Jason asked on 2026-11-02 for the filing cap to be raised for engine work until the stages are complete. FG has no allocator, FG-186 is the highest id on main and FG-100..119 the highest declared block, so this sits above both — the eyeballed-headroom method the rule names, declared before any id is consumed. The whole block is claimed: do not pick an id inside 190..199 while this entry stands, whatever a count of what is consumed today would suggest — an internal sub-count goes stale with every commit, and a peer reading it as headroom is exactly the FG-45 collision of 2026-10-22. Delete the entry when the PR merges."
     }
   ]
 }

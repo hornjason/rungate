@@ -364,6 +364,23 @@ export function filingsPerRun(policy: ShipPolicy): number {
  * silently switched off. Here corruption and absence resolve to the same
  * answer on purpose, and it is the conservative one.
  *
+ * **But they must not resolve to the same REPORT, and for one round they
+ * did.** The same rule's other half — *"never substitute a built-in default
+ * for absent config without recording that you did so"* — was not satisfied
+ * by a conservative number: an agent in direct-ship mode, refused at its
+ * first filing by a message reading *"the cap is 1"*, could not tell a
+ * harness-mode policy from a `config.json` that will not parse. One of those
+ * is the cap working and the other is an operator's repair, and the refusal
+ * named neither. So this returns a READING rather than a number, and
+ * `filingGate` pushes `unreadableShipPolicyNote` when `unreadable` is set.
+ * Round 5 of #1725 found it; `FG-198` is the assertion.
+ *
+ * It stays ONE function returning both halves, rather than a number plus a
+ * `shipPolicyUnreadable()` predicate beside it. Two exported functions
+ * answering one question about one input are two deciders over that input,
+ * and a mutation of either would leave the other holding the case up —
+ * `.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape.
+ *
  * **It takes a THUNK, not a config, and that is the whole guard.** The first
  * spelling took the loaded config, so the caller evaluated
  * `tryLoadRungateConfig(root)` as an argument expression — OUTSIDE this
@@ -375,11 +392,24 @@ export function filingsPerRun(policy: ShipPolicy): number {
  * guard its own production; one taking the thunk can only be called the
  * right way. `FG-196` is the assertion.
  */
-export function filingsPerRunFor(load: () => Record<string, unknown> | null | undefined): number {
+export type FilingCapReading = {
+  /** The allowance to enforce. Strict whenever the policy could not be read. */
+  cap: number;
+  /**
+   * Whether the `ship` block was present and unresolvable. **Not "absent"** —
+   * an unscaffolded tree has no policy to read and is not an anomaly, so it
+   * reports `false` and earns no note. This is the corrupt case alone.
+   */
+  unreadable: boolean;
+};
+
+export function filingsPerRunFor(
+  load: () => Record<string, unknown> | null | undefined,
+): FilingCapReading {
   try {
-    return filingsPerRun(resolveShipPolicy(load()));
+    return { cap: filingsPerRun(resolveShipPolicy(load())), unreadable: false };
   } catch {
-    return FILINGS_PER_RUN;
+    return { cap: FILINGS_PER_RUN, unreadable: true };
   }
 }
 
@@ -2529,7 +2559,8 @@ export async function filingGate(
   // config moved underneath them, which is the shape `readFor` is cached to
   // avoid one line below. A config that cannot be read resolves to the
   // STRICT cap — `filingsPerRunFor`.
-  const cap = filingsPerRunFor(() => tryLoadRungateConfig(options.projectRoot));
+  const allowance = filingsPerRunFor(() => tryLoadRungateConfig(options.projectRoot));
+  const cap = allowance.cap;
   // Read once per TARGET TRACKER, not once per command and not once per
   // clause. Once per clause would adjudicate two creates against two
   // different snapshots; once per command would adjudicate a `--repo other/x`
@@ -2565,6 +2596,13 @@ export async function filingGate(
   const rows: FilingLedgerRow[] = [];
   const refusals: string[] = [];
   const notes: string[] = [];
+
+  // A cap the config could not justify is still enforced, and now it says so.
+  // Pushed here rather than at the resolve above because `notes` does not
+  // exist yet there, and the ordering is deliberate: this is the first note a
+  // reader sees, because it is the one that explains the NUMBER every later
+  // refusal quotes.
+  if (allowance.unreadable) notes.push(unreadableShipPolicyNote(cap));
 
   // One batch per command, so every row of one adjudication shares it and the
   // clause index separates them — `CandidateRecord.key`'s scheme exactly.
@@ -3374,6 +3412,32 @@ export function overrideNote(v: FilingAdjudication, prior: FilingLedgerRow | nul
     `refusal of this same title at ${prior?.at}. This adjudication did not reproduce it — the ` +
     "body has changed since, and the body is an input to the symptom keys — so the override is " +
     `recorded against that row rather than this one. Recorded in ${ledgerPath()}.`
+  );
+}
+
+/**
+ * The `ship` block is present and will not resolve, so the allowance is the
+ * strict one for a reason the config cannot account for.
+ *
+ * **Not a refusal, and not a weaker cap.** The number is already conservative
+ * — `filingsPerRunFor` never falls back UPWARD — so nothing about the
+ * adjudication changes. What was missing is the sentence: an agent in
+ * direct-ship mode refused by *"the cap is 1"* had no way to tell a
+ * harness-mode policy from a `config.json` that will not parse, and only one
+ * of those is an operator's job. Round 5 of #1725.
+ *
+ * Takes the cap for the same reason the four refusals do: prose that states
+ * an allowance it was not handed is the stale-copy class this file keeps
+ * meeting, and with no default the compiler refuses a caller that forgets.
+ */
+export function unreadableShipPolicyNote(cap: number): string {
+  return (
+    `[FindingArbiter] This project's \`ship\` block is present and could not be resolved, so the ` +
+    `per-run cap is the STRICT ${cap} rather than whatever the config meant. The filing is NOT ` +
+    `blocked by this note and the number is deliberately the conservative one — a corrupt config ` +
+    `must never be a route to a larger allowance. But if you expected direct-ship mode's raised ` +
+    `cap and were refused, this is why, and the repair is \`.claude/rungate/config.json\`, not a ` +
+    `re-draft of your filing.`
   );
 }
 
