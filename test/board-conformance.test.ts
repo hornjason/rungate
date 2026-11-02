@@ -112,6 +112,98 @@ const completeBoard = (): BoardSnapshot => ({
     { phase: 0, criteria: ["SC-2618", "SC-2619"], milestoneState: "unchanged" },
     { phase: 1, criteria: ["SC-2620"], milestoneState: "unchanged" },
   ],
+  // PRESENT and empty — the producer read closed issues and none is named
+  // as a blocker. Absent would mean it never looked, which `#1704` makes
+  // UNMEASURED; a fixture that omitted it would turn every case in this
+  // file into a refusal about the fixture rather than about its subject.
+  closedBlockers: [],
+});
+
+/**
+ * A CLOSED blocker and a NONEXISTENT one — #1704.
+ *
+ * `board-snapshot` read open issues only, so `blocked-by-edges` resolved
+ * every `blockedBy` number against the open population. A blocker that had
+ * been FINISHED was then indistinguishable from a typo: both absent, both
+ * counted short. The reading would have flipped MET -> SHORT the first time
+ * an engine issue closed — on the event the whole order exists to make
+ * happen, and with no change to the board that caused it.
+ *
+ * The denominator stays open-only: a closed issue is not work. What widens
+ * is what an edge may RESOLVE to.
+ */
+describe("a finished blocker is not a missing one", () => {
+  /** Issue 2 blocked by 9, which is closed and off the open population. */
+  const withClosedBlocker = (): BoardSnapshot => ({
+    ...completeBoard(),
+    issues: [
+      { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+      { number: 2, blockedBy: [9], criteriaField: "SC-2619", labels: ["engine"] },
+    ],
+    closedBlockers: [9],
+  });
+
+  test("an edge to a CLOSED issue resolves — the reading stays met", () => {
+    const at = plant("closed-blocker-met", withClosedBlocker());
+    const r = run(SCRIPT, ["--snapshot", at, "--reading", "blocked-by-edges"]);
+    expect(r.out, `${r.out}${r.err}`).toContain("MET");
+    expect(r.code).toBe(0);
+  });
+
+  test("an edge to a number NOBODY has is still short — the two are told apart", () => {
+    // The control, and the whole point. Widening by simply trusting every
+    // `blockedBy` number would pass the case above and lose the reading.
+    const board = withClosedBlocker();
+    board.issues[1]!.blockedBy = [404];
+    const at = plant("closed-blocker-typo", board);
+    const r = run(SCRIPT, ["--snapshot", at, "--reading", "blocked-by-edges"]);
+    expect(r.out, "an edge to a number on no list resolved").toContain("SHORT");
+    refuses(["--snapshot", at, "--reading", "blocked-by-edges"], "an edge naming nothing at all");
+  });
+
+  test("a closed blocker does NOT enter the denominator — it is not work", () => {
+    const at = plant("closed-blocker-denominator", withClosedBlocker());
+    const r = run(SCRIPT, ["--snapshot", at, "--reading", "blocked-by-edges"]);
+    expect(r.out, "the closed issue was counted as an engine issue").toContain("2 of 2");
+  });
+
+  test("`closedBlockers` ABSENT on a non-empty board is UNMEASURED, not an empty list", () => {
+    // Opposite convention from `satisfiedByIssue`, deliberately, and both
+    // resolve toward refusing to claim. An older snapshot that never read
+    // closed issues cannot tell a finished blocker from a typo, and
+    // treating its silence as "there are none" reproduces #1704 against
+    // every file written before this change.
+    const board = withClosedBlocker() as unknown as Record<string, unknown>;
+    delete board.closedBlockers;
+    const at = plant("closed-blockers-unread", board as unknown as BoardSnapshot);
+    const r = run(SCRIPT, ["--snapshot", at, "--reading", "blocked-by-edges"]);
+    expect(r.out, `${r.out}${r.err}`).toContain("UNMEASURED");
+    refuses(["--snapshot", at, "--reading", "blocked-by-edges"], "a board that never read closed issues");
+  });
+
+  test("an EMPTY `closedBlockers` is read-and-none, and measures normally", () => {
+    // The control for the case above: present-and-empty must not refuse, or
+    // the refusal is just "this reading always refuses" and says nothing
+    // about whether anybody looked.
+    const at = plant("closed-blockers-empty", { ...completeBoard(), closedBlockers: [] });
+    const r = run(SCRIPT, ["--snapshot", at, "--reading", "blocked-by-edges"]);
+    expect(r.out, `${r.out}${r.err}`).toContain("MET");
+    expect(r.code).toBe(0);
+  });
+
+  test("the widening touches blocked-by-edges ONLY — criterion-coverage is unmoved", () => {
+    // `onBoard` is shared. A criterion pointing at a CLOSED issue is a
+    // different claim from an edge pointing at one: "this criterion is
+    // covered by open work" is false if the work is finished and the
+    // criterion still is not true. Asserting it here stops the cheap fix —
+    // widening `onBoard` itself — from passing every case above.
+    const board = completeBoard();
+    board.closedBlockers = [9];
+    board.criteria = [{ id: "SC-2618", satisfiedByIssue: 9 }];
+    const at = plant("closed-not-coverage", board);
+    const r = run(SCRIPT, ["--snapshot", at, "--reading", "criterion-coverage"]);
+    expect(r.out, "a criterion was counted as covered by a CLOSED issue").toContain("SHORT");
+  });
 });
 
 const plant = (name: string, board: BoardSnapshot): string => {
@@ -299,22 +391,34 @@ describe("the refusals, each proved against the mutant", () => {
     // `number` — what a blocked-by edge resolves against — makes the board
     // unread. Both directions are asserted, so neither repair can come
     // back.
-    const degrades: { row: "issues" | "phases"; at: number; field: string; reading: string }[] = [
-      { row: "issues", at: 1, field: "blockedBy", reading: "blocked-by-edges" },
-      { row: "issues", at: 1, field: "labels", reading: "queue-label" },
-      { row: "issues", at: 1, field: "criteriaField", reading: "criteria-field" },
-      { row: "phases", at: 1, field: "milestoneState", reading: "milestones" },
+    //
+    // `to` differs by field, and that is the point rather than an
+    // inconsistency. Omitting `blockedBy` or `labels` is a row the producer
+    // read and found empty, which is a measurement — SHORT. Omitting
+    // `criteriaField` is a column nothing queried, which is not — see the
+    // B4 describe below. What every row shares is the property this case is
+    // really about: EXACTLY ONE reading moves, and the other four stay met.
+    const degrades: {
+      row: "issues" | "phases";
+      at: number;
+      field: string;
+      reading: string;
+      to: "SHORT      " | "UNMEASURED ";
+    }[] = [
+      { row: "issues", at: 1, field: "blockedBy", reading: "blocked-by-edges", to: "SHORT      " },
+      { row: "issues", at: 1, field: "labels", reading: "queue-label", to: "SHORT      " },
+      { row: "issues", at: 1, field: "criteriaField", reading: "criteria-field", to: "UNMEASURED " },
+      { row: "phases", at: 1, field: "milestoneState", reading: "milestones", to: "SHORT      " },
     ];
-    for (const { row, at: index, field, reading } of degrades) {
+    for (const { row, at: index, field, reading, to } of degrades) {
       const board = completeBoard() as unknown as Record<string, Record<string, unknown>[]>;
       delete board[row]![index]![field];
       const at = plant(`missing-${field}`, board as unknown as BoardSnapshot);
       const r = run(SCRIPT, ["--snapshot", at]);
       expect(r.err, `omitting ${field} threw`).not.toContain("TypeError");
-      expect(r.out, `omitting ${field} made the whole board unreadable`).not.toContain("UNMEASURED");
-      expect(r.out, `omitting ${field} did not move ${reading}`).toContain(`SHORT       ${reading}`);
+      expect(r.out, `omitting ${field} did not move ${reading}`).toContain(`${to} ${reading}`);
       expect(
-        r.out.match(/^SHORT /gm)?.length,
+        (r.out.match(/^(SHORT|UNMEASURED) /gm) ?? []).length,
         `omitting ${field} moved a reading other than ${reading}`,
       ).toBe(1);
       refuses(["--snapshot", at], `a board short on ${reading}`);
@@ -722,17 +826,25 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
     expect(r.err).toContain("two sources");
   });
 
-  test("--produce with no --spec or no --prefix refuses, and never spawns", () => {
+  test("--produce with a missing OR EMPTY --spec or --prefix refuses, and never spawns", () => {
+    // The empty rows are round 1 of #1703, swept here because this command
+    // is the third member of that population: an empty `--prefix ""` used
+    // to reach the producer, which refuses it — so the reader reported the
+    // CHILD's refusal for an argument it was handed itself, and the reader
+    // of that message goes looking at the spec file.
     for (const argv of [
       ["--produce", "--prefix", "Pipeline"],
       ["--produce", "--spec", "specs/X.md"],
+      ["--produce", "--spec", "specs/X.md", "--prefix", ""],
+      ["--produce", "--spec", "", "--prefix", "Pipeline"],
+      ["--produce", "--spec", "specs/X.md", "--prefix", "   "],
     ]) {
       // A producer that would CRASH if reached, so the refusal is proved
       // to have happened before the spawn rather than after it.
       const { command } = stage(`throw new Error("the producer was spawned without the arguments it needs");`);
       const r = run(command, argv);
       expect(r.code, `[${argv.join(" ")}] did not refuse`).not.toBe(0);
-      expect(r.err).toContain("--produce needs --spec <path> and --prefix <name>");
+      expect(r.err).toContain("--produce needs a non-empty --spec <path> and --prefix <name>");
       expect(r.err, `[${argv.join(" ")}] spawned the producer anyway`).not.toContain("the producer was spawned");
     }
   });
@@ -794,6 +906,97 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
     expect(r.stderr, "a spawn that never started was reported as a producer that ran and said nothing").toContain(
       "could not be started",
     );
+  });
+});
+
+/**
+ * B3 fills `issues`, and the moment it does, every reading that counts over
+ * issues starts reporting a number. `criteria-field` is the one whose source
+ * B3 does NOT wire: the Criteria column is a Projects v2 custom field and
+ * nothing in the snapshot's query can see it.
+ *
+ * An unread field and an empty field spell the same thing in JSON if the
+ * producer writes `null` for both, so `criteria-field` would have read
+ * `0 of 5 — 5 short` the day B3 landed: a number nobody measured, which is
+ * the Silent Default Substitution shape in `.claude/rules/config-access.md`
+ * wearing a denominator.
+ *
+ * The distinction is positional: **the key absent means not read**, and an
+ * explicit `null` means read and empty. Note this is the OPPOSITE reading
+ * from `satisfiedByIssue`, where absence must not count as covered — and
+ * deliberately so. There, absence that reads as met certifies nothing; here,
+ * absence that reads as short invents a measurement. Both resolve toward
+ * refusing to claim.
+ */
+describe("a field the producer did not read is not a field that is empty (B4)", () => {
+  const withIssues = (issues: BoardSnapshot["issues"]): BoardSnapshot => ({ ...completeBoard(), issues });
+
+  const criteriaField = (board: BoardSnapshot) =>
+    takeReadings(board).find(r => r.name === "criteria-field")!;
+
+  test("every issue omits it: UNMEASURED, not 0 of N", () => {
+    const r = criteriaField(
+      withIssues([
+        { number: 1, blockedBy: [], rootReady: true, labels: ["engine"] },
+        { number: 2, blockedBy: [1], labels: ["engine"] },
+      ]),
+    );
+    expect(r.status, `an unread column was reported as ${r.why}`).toBe("unmeasured");
+    expect(r.why).toContain("2");
+  });
+
+  test("SOME issues omit it: still UNMEASURED — a partial read is not a read", () => {
+    // The dangerous direction. Shrinking the denominator to the rows that
+    // happen to carry the field makes the reading easier to satisfy the
+    // less of the population was read, and `1 of 1` is the most flattering
+    // thing this command can say.
+    const r = criteriaField(
+      withIssues([
+        { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+        { number: 2, blockedBy: [1], labels: ["engine"] },
+      ]),
+    );
+    expect(r.status, `a half-read column was reported as ${r.why}`).toBe("unmeasured");
+  });
+
+  test("read and empty is SHORT, because that is a measurement", () => {
+    const r = criteriaField(
+      withIssues([
+        { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+        { number: 2, blockedBy: [1], criteriaField: null, labels: ["engine"] },
+      ]),
+    );
+    expect(r.status).toBe("short");
+    expect(r.why).toContain("1 of 2");
+  });
+
+  test('a read-but-blank string is SHORT too, not met', () => {
+    const r = criteriaField(
+      withIssues([
+        { number: 1, blockedBy: [], rootReady: true, criteriaField: "   ", labels: ["engine"] },
+        { number: 2, blockedBy: [1], criteriaField: "SC-2619", labels: ["engine"] },
+      ]),
+    );
+    expect(r.status).toBe("short");
+  });
+
+  test("the unread guard does not swallow the reading — a complete board is still MET", () => {
+    // Without this, returning "unmeasured" unconditionally would pass every
+    // case above while making the reading incapable of ever going met.
+    expect(criteriaField(completeBoard()).status).toBe("met");
+  });
+
+  test("it is scoped to criteria-field — the other issue readings still count every row", () => {
+    // An `unreadable` guard that fired for every reading would turn the
+    // whole command UNMEASURED the moment one column went unread, which is
+    // the same defect pointed the other way.
+    const half = withIssues([
+      { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+      { number: 2, blockedBy: [1], labels: ["engine"] },
+    ]);
+    const queue = takeReadings(half).find(r => r.name === "queue-label")!;
+    expect(queue.status, "queue-label stopped counting because a DIFFERENT column was unread").toBe("met");
+    expect(queue.why).toContain("2 of 2");
   });
 });
 

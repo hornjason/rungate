@@ -56,8 +56,21 @@ export interface BoardIssue {
   blockedBy: number[];
   /** Set when the issue is deliberately a root — nothing blocks it. */
   rootReady?: boolean;
-  /** The board's Criteria column for this issue — a mirror of the body. */
-  criteriaField: string | null;
+  /**
+   * The board's Criteria column for this issue — a mirror of the body.
+   *
+   * **Absent means the producer did not read it. `null` means it read it
+   * and the column is empty.** Those are different facts and writing both
+   * as `null` would have `criteria-field` report `0 of N — N short` for a
+   * column nothing queried, which is a number nobody measured.
+   *
+   * This is the opposite convention from `BoardCriterion.satisfiedByIssue`,
+   * where an omitted key must NOT count as covered. Both point the same
+   * way: toward refusing to claim. There, absence reading as met would
+   * certify nothing; here, absence reading as short would invent a
+   * measurement.
+   */
+  criteriaField?: string | null;
   labels: string[];
 }
 
@@ -89,6 +102,22 @@ export interface BoardSnapshot {
   issues: BoardIssue[];
   criteria: BoardCriterion[];
   phases: BoardPhase[];
+  /**
+   * The CLOSED issues that at least one engine issue names as a blocker.
+   *
+   * **Absent means the producer never read closed issues. `[]` means it
+   * read them and there are none.** Same convention as
+   * {@link BoardIssue.criteriaField}, and here for the sharper reason:
+   * every snapshot written before #1704 was open-only, and reading its
+   * silence as "there are none" reproduces the defect against every one
+   * of them. `blocked-by-edges` goes UNMEASURED on an absent key rather
+   * than narrowing quietly.
+   *
+   * It is NOT part of any denominator. A closed issue is finished work,
+   * so it is not an engine issue; what it widens is only what an edge may
+   * RESOLVE to. See {@link resolvableBlocker}.
+   */
+  closedBlockers?: number[];
 }
 
 export type ReadingStatus = "met" | "short" | "unmeasured";
@@ -124,12 +153,45 @@ interface ReadingSpec {
    * same hole found three times, one reading at a time.
    */
   readsIssueRefs: boolean;
+  /**
+   * Why this reading cannot be TAKEN against this board, or null.
+   *
+   * Separate from `measure` because the two answer different questions. A
+   * measure says how much of the population conforms; this says whether the
+   * population was read at all. Collapsing them means expressing "nobody
+   * looked" as a ratio, and every ratio is a claim.
+   *
+   * Consulted before `measure`, so a reading that cannot be taken never
+   * produces a number for anyone to quote.
+   */
+  unreadable?: (board: BoardSnapshot) => string | null;
   /** How many of `target` are conformant, and out of how many. */
   measure: (board: BoardSnapshot) => { measured: number; target: number };
 }
 
 /** The issue numbers actually on the board, for resolving a reference. */
 const onBoard = (b: BoardSnapshot): Set<number> => new Set(b.issues.map(i => i.number));
+
+/**
+ * What a `blockedBy` edge is allowed to point at — #1704.
+ *
+ * Open engine issues, PLUS the closed issues a producer recorded as named
+ * by one. Deliberately not {@link onBoard} widened: that set answers "is
+ * this an engine issue", and `criterion-coverage` asks it about a
+ * criterion's `satisfiedByIssue`. A criterion pointed at a finished issue
+ * is NOT covered — the work is done and the criterion still is not true —
+ * while an edge pointed at a finished issue has resolved perfectly. Two
+ * questions about the same numbers, so two sets, and the test names an
+ * input on which they must disagree.
+ *
+ * Without this, `blocked-by-edges` flipped MET -> SHORT the first time an
+ * engine issue closed: a finished blocker and a typo were both simply
+ * absent from the open population, and nothing in the board could tell
+ * them apart. It would have broken on the event the order exists to
+ * produce, with no change to the board that caused it.
+ */
+const resolvableBlocker = (b: BoardSnapshot): Set<number> =>
+  new Set([...b.issues.map(i => i.number), ...(b.closedBlockers ?? [])]);
 
 /**
  * The five readings, and the ladder item that owns each one's source.
@@ -204,8 +266,19 @@ export const READINGS: readonly ReadingSpec[] = [
     // `length > 0` first, because `[].every(...)` is true and an issue with
     // no edges at all would otherwise pass as a computed one. `rootReady`
     // is how an issue says it has no blockers on purpose.
+    // An absent `closedBlockers` is NOT an empty one. A snapshot written
+    // before #1704 read open issues only, so it cannot tell a finished
+    // blocker from a typo — and treating its silence as "there are none"
+    // is exactly the reading that broke. The denominator is unchanged by
+    // either answer, so this is a statement about whether anybody looked.
+    unreadable: b =>
+      b.closedBlockers !== undefined || b.issues.length === 0
+        ? null
+        : `closed issues were never read, so an edge to a FINISHED blocker is indistinguishable ` +
+          `from an edge to one that never existed — both absent from the ${b.issues.length} open ` +
+          `issue(s) on this board`,
     measure: b => {
-      const present = onBoard(b);
+      const present = resolvableBlocker(b);
       return {
         measured: b.issues.filter(
           i => i.rootReady === true || (i.blockedBy.length > 0 && i.blockedBy.every(n => present.has(n))),
@@ -219,6 +292,17 @@ export const READINGS: readonly ReadingSpec[] = [
     item: "B4",
     what: "the board's Criteria column is populated for every engine issue",
     readsIssueRefs: false,
+    // ANY issue missing the key, not all of them. A partial read is not a
+    // read: dropping the unread rows from the denominator makes this
+    // reading easier to satisfy the less of the board was looked at, and
+    // `1 of 1` is the most flattering sentence this command can produce.
+    unreadable: b => {
+      const unread = b.issues.filter(i => !("criteriaField" in i)).map(i => `#${i.number}`);
+      return unread.length === 0
+        ? null
+        : `the Criteria column was not read for ${unread.length} of ${b.issues.length} issue(s) ` +
+            `(${unread.slice(0, 5).join(", ")}${unread.length > 5 ? ", …" : ""}) — that is not an empty column`;
+    },
     measure: b => ({ measured: b.issues.filter(i => (i.criteriaField ?? "").trim() !== "").length, target: b.issues.length }),
   },
   {
@@ -248,6 +332,8 @@ export function takeReading(spec: ReadingSpec, board: BoardSnapshot | null): Rea
   if (board === null) {
     return { ...base, status: "unmeasured", measured: 0, target: 0, why: `no board snapshot — ${spec.item} has not wired this reading's source yet` };
   }
+  const why = spec.unreadable?.(board) ?? null;
+  if (why !== null) return { ...base, status: "unmeasured", measured: 0, target: 0, why };
   const { measured, target } = spec.measure(board);
   if (target === 0) {
     return { ...base, status: "unmeasured", measured, target, why: "the board carries nothing for this reading to count, so 0 of 0 is not a pass" };
@@ -298,7 +384,10 @@ const normaliseIssue = (v: unknown): BoardIssue | null => {
     number: i.number,
     blockedBy: asList<number>(i.blockedBy).filter(n => typeof n === "number"),
     rootReady: i.rootReady === true,
-    criteriaField: asText(i.criteriaField),
+    // Key PRESENCE, not value. `asText(undefined)` is `null`, which would
+    // erase the distinction this field exists to carry — an omitted column
+    // and a column read as empty would arrive here identical.
+    ...("criteriaField" in (v as object) ? { criteriaField: asText(i.criteriaField) } : {}),
     labels: asList<string>(i.labels).filter(l => typeof l === "string"),
   };
 };
@@ -439,11 +528,22 @@ export function readSnapshotText(text: string): SnapshotRead {
     }
   }
 
+  // `closedBlockers` is spread in only when the key is PRESENT, because
+  // its absence is the signal. Writing `closedBlockers: raw.closedBlockers`
+  // unconditionally would put the key on the object with value `undefined`
+  // — and `"closedBlockers" in board` would then be true for a snapshot
+  // that never carried it. A non-array value is dropped the same way an
+  // absent one is: a producer that wrote something else did not write a
+  // list of closed blockers.
+  const closed = Array.isArray(raw.closedBlockers)
+    ? { closedBlockers: raw.closedBlockers.filter((n): n is number => typeof n === "number") }
+    : {};
   return {
     board: {
       issues: issues as BoardIssue[],
       criteria: criteria as BoardCriterion[],
       phases: phases as BoardPhase[],
+      ...closed,
     },
     why: null,
   };
@@ -465,8 +565,12 @@ export function readSnapshotText(text: string): SnapshotRead {
  */
 function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: string | null } {
   const { spec, prefix, repo } = flags;
-  if (spec === undefined || prefix === undefined) {
-    return { board: null, error: "--produce needs --spec <path> and --prefix <name>" };
+  // `=== undefined` is not enough: an empty `--prefix ""` reaches the
+  // producer, which refuses it, and the reader then reports the CHILD's
+  // refusal for an argument this command was handed. Same population as
+  // plan-deps' --milestone-prefix and board-snapshot's own --prefix.
+  if (spec === undefined || prefix === undefined || spec.trim() === "" || prefix.trim() === "") {
+    return { board: null, error: "--produce needs a non-empty --spec <path> and --prefix <name>" };
   }
   const args = [join(import.meta.dir, "board-snapshot.ts"), spec, "--prefix", prefix];
   if (repo !== undefined) args.push("--repo", repo);

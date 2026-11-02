@@ -20,7 +20,9 @@ import { join } from "path";
 import {
   ISSUE_PAGE,
   LIVE_ISSUES_QUERY,
+  STATE_BATCH,
   inMilestoneFamily,
+  readIssueStates,
   readLiveIssues,
   readMilestonePrefix,
   type GraphQlExec,
@@ -31,6 +33,7 @@ type Node = {
   number: number;
   state?: string;
   milestone?: { title: string } | null;
+  labels?: { pageInfo: { hasNextPage: boolean }; nodes: { name: string }[] } | null;
   blockedBy?: { pageInfo: { hasNextPage: boolean }; nodes: { number: number }[] } | null;
 };
 
@@ -43,6 +46,7 @@ const page = (nodes: Node[], next?: string) =>
           nodes: nodes.map(n => ({
             state: "OPEN",
             milestone: null,
+            labels: { pageInfo: { hasNextPage: false }, nodes: [] },
             blockedBy: { pageInfo: { hasNextPage: false }, nodes: [] },
             ...n,
           })),
@@ -75,6 +79,7 @@ describe("the field mapping", () => {
           number: 10,
           state: "CLOSED",
           milestone: { title: "Pipeline Phase 2 — the order is data" },
+          labels: { pageInfo: { hasNextPage: false }, nodes: [{ name: "engine" }, { name: "bug" }] },
           blockedBy: { pageInfo: { hasNextPage: false }, nodes: [{ number: 7 }, { number: 8 }] },
         },
       ]),
@@ -84,29 +89,45 @@ describe("the field mapping", () => {
       number: 10,
       state: "CLOSED",
       milestone: "Pipeline Phase 2 — the order is data",
+      labels: ["engine", "bug"],
+      labelsTruncated: false,
       blockedBy: [7, 8],
       blockedByTruncated: false,
     });
   });
 
-  test("a null milestone and an absent blocker list are empty, not a throw", async () => {
-    const t = transport([page([{ number: 11, milestone: null, blockedBy: null }])]);
+  test("a null milestone, an absent label list and an absent blocker list are empty, not a throw", async () => {
+    const t = transport([page([{ number: 11, milestone: null, labels: null, blockedBy: null }])]);
     const [issue] = await readLiveIssues("o/n", false, t.exec);
     expect(issue!.milestone).toBeNull();
+    expect(issue!.labels).toEqual([]);
     expect(issue!.blockedBy).toEqual([]);
   });
 
-  test("a CUT blocker list is reported, and a complete one is not", async () => {
-    // Both arms in one read. A reader hardcoding either value passes a
-    // case where every row agrees.
+  test("BOTH paged connections report truncation, and both report it independently", async () => {
+    // One flag set and the other not, in the SAME row. A reader copying one
+    // flag into both fields, or hardcoding either, fails here and passes a
+    // case where the two agree. Round 1 of #1703 found `blockedBy` handled
+    // and `labels` not, in one query.
     const t = transport([
       page([
-        { number: 12, blockedBy: { pageInfo: { hasNextPage: true }, nodes: [{ number: 1 }] } },
-        { number: 13, blockedBy: { pageInfo: { hasNextPage: false }, nodes: [{ number: 2 }] } },
+        {
+          number: 12,
+          labels: { pageInfo: { hasNextPage: true }, nodes: [{ name: "a" }] },
+          blockedBy: { pageInfo: { hasNextPage: false }, nodes: [{ number: 1 }] },
+        },
+        {
+          number: 13,
+          labels: { pageInfo: { hasNextPage: false }, nodes: [{ name: "b" }] },
+          blockedBy: { pageInfo: { hasNextPage: true }, nodes: [{ number: 2 }] },
+        },
       ]),
     ]);
     const got = await readLiveIssues("o/n", false, t.exec);
-    expect(got.map(i => i.blockedByTruncated)).toEqual([true, false]);
+    expect(got.map(i => [i.labelsTruncated, i.blockedByTruncated])).toEqual([
+      [true, false],
+      [false, true],
+    ]);
   });
 });
 
@@ -160,7 +181,7 @@ describe("the query itself", () => {
     // Three connections, one constant. A hand-typed 100 on one of them
     // drifts the day ISSUE_PAGE moves.
     const sizes = [...LIVE_ISSUES_QUERY.matchAll(/first:(\d+)/g)].map(m => Number(m[1]));
-    expect(sizes).toHaveLength(2);
+    expect(sizes).toHaveLength(3);
     expect(new Set(sizes)).toEqual(new Set([ISSUE_PAGE]));
   });
 
@@ -169,12 +190,112 @@ describe("the query itself", () => {
     // loop. Anything read ONCE must SAY it was cut. Written as a loop over
     // a list rather than one assertion, because the next connection added
     // here is the one that will be silent.
-    for (const field of ["blockedBy"]) {
+    for (const field of ["labels", "blockedBy"]) {
       const at = LIVE_ISSUES_QUERY.indexOf(`${field}(first:`);
       expect(at, `${field} is not in the query`).toBeGreaterThan(-1);
       const connection = LIVE_ISSUES_QUERY.slice(at, LIVE_ISSUES_QUERY.indexOf("}", at) + 1);
       expect(connection, `${field} is paged and cannot report being cut`).toContain("pageInfo{hasNextPage}");
     }
+  });
+});
+
+/**
+ * `readIssueStates` — #1704.
+ *
+ * `board-snapshot` injects a fake at the `readStates` seam ABOVE this
+ * function, exactly as it does for `readIssues`, so without these the
+ * aliasing, the batching and — the one that matters — the decision to leave
+ * an unanswered number ABSENT run in no test at all.
+ *
+ * That absence is the whole feature. A number naming a finished issue and a
+ * number naming nothing are the two facts the caller has to tell apart, and
+ * any placeholder state here collapses them before the caller sees them.
+ */
+describe("resolving specific issue numbers", () => {
+  /** Replays canned responses, recording the argv of each call. */
+  const states = (responses: string[]): { exec: GraphQlExec; calls: string[][] } => {
+    const calls: string[][] = [];
+    let i = 0;
+    return {
+      calls,
+      exec: (args: readonly string[]) => {
+        calls.push([...args]);
+        const out = responses[i];
+        if (out === undefined) throw new Error(`asked for call ${i + 1} and there are ${responses.length}`);
+        i += 1;
+        return out;
+      },
+    };
+  };
+
+  /** The aliased shape GitHub returns: one key per number, `null` for none. */
+  const answer = (rows: Record<string, { number: number; state: string } | null>) =>
+    JSON.stringify({ data: { repository: rows } });
+
+  test("an answered number carries its state, and an UNANSWERED one is absent", async () => {
+    // Both in one call, so a reader that defaults the missing key cannot
+    // pass by being consistently wrong about a map with nothing in it.
+    const t = states([answer({ i9: { number: 9, state: "CLOSED" }, i404: null })]);
+    const got = await readIssueStates("o/n", [9, 404], t.exec);
+    expect(got.get(9)).toBe("CLOSED");
+    expect(got.has(404), "a number naming no issue was given a state").toBe(false);
+    expect(got.size).toBe(1);
+  });
+
+  test("OPEN comes back as OPEN — the state is read, not assumed from presence", async () => {
+    // The control for the row above. If every answered number came back
+    // CLOSED, the case above would still pass and every open blocker would
+    // be reported as finished work.
+    const t = states([answer({ i6: { number: 6, state: "OPEN" }, i9: { number: 9, state: "CLOSED" } })]);
+    const got = await readIssueStates("o/n", [6, 9], t.exec);
+    expect([...got.entries()].sort()).toEqual([
+      [6, "OPEN"],
+      [9, "CLOSED"],
+    ]);
+  });
+
+  test("every number asked about appears in the query, under its own alias", async () => {
+    const t = states([answer({ i1: { number: 1, state: "OPEN" }, i2: { number: 2, state: "OPEN" } })]);
+    await readIssueStates("o/n", [1, 2], t.exec);
+    const query = t.calls[0]!.join(" ");
+    expect(query).toContain("i1: issue(number:1)");
+    expect(query).toContain("i2: issue(number:2)");
+    expect(t.calls[0]!).toContain("owner=o");
+    expect(t.calls[0]!).toContain("name=n");
+  });
+
+  test("a repeated number is asked about once", async () => {
+    const t = states([answer({ i9: { number: 9, state: "CLOSED" } })]);
+    const got = await readIssueStates("o/n", [9, 9, 9], t.exec);
+    expect(t.calls, "the duplicates each cost a round trip").toHaveLength(1);
+    expect((t.calls[0]!.join(" ").match(/i9: issue/g) ?? []).length).toBe(1);
+    expect(got.get(9)).toBe("CLOSED");
+  });
+
+  test("more numbers than one batch holds are split, and NONE is dropped", async () => {
+    // A loop that batches but returns only the last chunk's answers is the
+    // quiet version of this bug: every edge past the boundary reads as a
+    // typo, which is the defect #1704 is, one page in.
+    const numbers = Array.from({ length: STATE_BATCH + 1 }, (_, i) => i + 1);
+    const chunkOf = (ns: number[]) =>
+      answer(Object.fromEntries(ns.map(n => [`i${n}`, { number: n, state: "CLOSED" }])));
+    const t = states([chunkOf(numbers.slice(0, STATE_BATCH)), chunkOf(numbers.slice(STATE_BATCH))]);
+    const got = await readIssueStates("o/n", numbers, t.exec);
+    expect(t.calls).toHaveLength(2);
+    expect([...got.keys()].sort((a, b) => a - b)).toEqual(numbers);
+  });
+
+  test("no numbers costs no call", async () => {
+    const t = states([]);
+    expect(await readIssueStates("o/n", [], t.exec)).toEqual(new Map());
+    expect(t.calls).toHaveLength(0);
+  });
+
+  test("a transport that throws is not a board with no finished blockers", async () => {
+    const boom: GraphQlExec = () => {
+      throw new Error("HTTP 502");
+    };
+    expect(readIssueStates("o/n", [9], boom)).rejects.toThrow("HTTP 502");
   });
 });
 

@@ -35,9 +35,16 @@
 import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
+import { openFrontier, phaseOf } from "../lib/board-mirror";
 import { createGitHubClient, listMilestones } from "../lib/github";
+import {
+  inMilestoneFamily,
+  readIssueStates,
+  readLiveIssues,
+  readMilestonePrefix,
+  type LiveIssue,
+} from "../lib/live-issues";
 import { milestonePlan, placementReading } from "../lib/spec-placement";
-import { readMilestonePrefix } from "../lib/live-issues";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -54,9 +61,27 @@ export const REFUSAL_EXIT = 1;
 export interface BoardSnapshotGitHub {
   createClient: typeof createGitHubClient;
   listMilestones: typeof listMilestones;
+  /** Every OPEN issue in the repository, with its milestone, edges and labels. */
+  readIssues: (repo: string) => Promise<LiveIssue[]>;
+  /**
+   * The state of SPECIFIC issue numbers — #1704.
+   *
+   * Targeted rather than a second full read. Reading every closed issue to
+   * answer the same question costs nine pages against this repository where
+   * this costs one call, on a command CI runs and an unattended loop polls.
+   *
+   * A number naming no issue is ABSENT from the map rather than defaulted,
+   * because telling a finished blocker from a typo is the entire point.
+   */
+  readStates: (repo: string, numbers: readonly number[]) => Promise<Map<number, string>>;
 }
 
-const LIVE_GITHUB: BoardSnapshotGitHub = { createClient: createGitHubClient, listMilestones };
+const LIVE_GITHUB: BoardSnapshotGitHub = {
+  createClient: createGitHubClient,
+  listMilestones,
+  readIssues: repo => readLiveIssues(repo, false),
+  readStates: (repo, numbers) => readIssueStates(repo, numbers),
+};
 
 const USAGE = `rungate board-snapshot <spec.md> --prefix <name> [--repo <owner/name>]
 
@@ -78,20 +103,72 @@ export interface SnapshotPhase {
   milestoneState: "create" | "rename" | "update" | "unchanged";
 }
 
+/**
+ * One engine issue (item **B3**).
+ *
+ * ## What makes an issue an engine issue, and why it is not the label
+ *
+ * Membership is *sits in a milestone whose title starts with the prefix*.
+ * Not the `engine` label — that is what the `queue-label` reading COUNTS,
+ * and a population defined by the predicate it is measured against is 100%
+ * conformant by construction. It is the same trap the `milestones` reading
+ * walked into: see the note at the top of this file.
+ *
+ * ## `criteriaField` is deliberately not here
+ *
+ * The board's Criteria column is a Projects v2 custom field and nothing in
+ * this query can see it. Emitting `criteriaField: null` would make the
+ * `criteria-field` reading report `0 of N — N short` for a column nobody
+ * read. `board-conformance` treats the ABSENT key as "not read" and reports
+ * that reading UNMEASURED, which is the true thing to say until B4 wires it.
+ */
+export interface SnapshotIssue {
+  number: number;
+  /** The issue numbers that already block this one, live. */
+  blockedBy: number[];
+  /**
+   * True when the issue sits in the lowest phase that carries any engine
+   * issue. Derived from the milestone order, not declared: the first phase
+   * has nothing before it to be blocked by, so an edge there would be a
+   * fiction.
+   */
+  rootReady: boolean;
+  /** Every label on the issue, read rather than assumed empty. */
+  labels: string[];
+}
+
 export interface ProducedSnapshot {
   /** When this was taken. A snapshot with no timestamp cannot be called stale. */
   producedAt: string;
   /** The spec the phases came from, as given. */
   spec: string;
   phases: SnapshotPhase[];
+  /** The engine issues — see {@link SnapshotIssue} for what makes one. */
+  issues: SnapshotIssue[];
   /**
-   * Empty, and deliberately so. B3, B4 and B6 own the issue population and
-   * B2 owns the criterion population; until one of them wires its source,
-   * an empty array makes its reading UNMEASURED, which is the true thing to
-   * say. Filling them with partial data here would make those readings
-   * SHORT — a number nobody measured.
+   * The CLOSED issues at least one engine issue names as a blocker — #1704.
+   *
+   * ALWAYS emitted, `[]` when there are none. `board-conformance` treats an
+   * absent key as "closed issues were never read" and makes
+   * `blocked-by-edges` UNMEASURED, so omitting it on an empty list would
+   * turn every clean board into a refusal.
+   *
+   * Only the ones NAMED. Emitting every closed issue in the repository
+   * would widen what an edge may resolve to across the whole tracker, so a
+   * typo landing on any finished issue would resolve — the defect this
+   * fixes, one size larger.
+   *
+   * Not narrowed to the family. The question is whether the number names a
+   * real issue, and an engine issue blocked by another spec's finished work
+   * has a resolved edge.
    */
-  issues: never[];
+  closedBlockers: number[];
+  /**
+   * Empty, and deliberately so. B2 owns the criterion population; until it
+   * wires its source, an empty array makes `criterion-coverage` UNMEASURED,
+   * which is the true thing to say. Filling it with partial data here would
+   * make that reading SHORT — a number nobody measured.
+   */
   criteria: never[];
 }
 
@@ -190,12 +267,88 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
     return REFUSAL_EXIT;
   }
 
+  // Same refusal, same reason: a repository whose issues could not be read
+  // and one with no issues produce the same empty array, and only one of
+  // them is a reading.
+  let liveIssues;
+  try {
+    liveIssues = await gh.readIssues(repo);
+  } catch (e) {
+    console.error(
+      `board-snapshot: UNMEASURED — could not read ${repo}'s issues: ${(e as Error).message}. ` +
+        `That is not a repository with no engine issues.`,
+    );
+    return REFUSAL_EXIT;
+  }
+
+  // The population: a milestone in this spec's family that carries a phase
+  // number. `inMilestoneFamily` is the single binding `plan-deps` also
+  // calls — it anchors on `<prefix> Phase `, so a family whose name merely
+  // begins with this one is out. `phaseOf` is still required on top: a
+  // hand-made `Pipeline Phase X` has no place in an order.
+  const engine = liveIssues.filter(
+    i => inMilestoneFamily(i.milestone, prefix) && phaseOf(i.milestone) !== null,
+  );
+
+  // A CUT list is not a short one, on EITHER connection. A blocker past the
+  // page boundary makes `blocked-by-edges` count the issue short — or, once
+  // somebody adds one edge, met on a list this never saw the end of. A label
+  // past the boundary makes `queue-label` read `engine` as absent. One loop
+  // over both, because fixing the connection a reviewer names and leaving
+  // the next one silent is how this came back in round 1.
+  const cut: string[] = [
+    ...engine.filter(i => i.blockedByTruncated === true).map(i => `#${i.number} (blockers)`),
+    ...engine.filter(i => i.labelsTruncated === true).map(i => `#${i.number} (labels)`),
+  ];
+  if (cut.length > 0) {
+    console.error(
+      `board-snapshot: UNMEASURED — a paged list was cut for ${cut.length} issue(s) ` +
+        `(${cut.join(", ")}). A row past the page boundary reads as absent.`,
+    );
+    return REFUSAL_EXIT;
+  }
+
+  const frontier = openFrontier(engine.map(i => ({ state: i.state, phase: phaseOf(i.milestone) })));
+
+  // Which absent numbers are FINISHED, rather than never-existed — #1704.
+  //
+  // Only the edges that did NOT resolve against the engine population are
+  // asked about, so this costs one extra call for a handful of numbers
+  // rather than paging the whole repository. A number naming no issue at
+  // all comes back ABSENT from the map, which is the distinction the
+  // reading depends on: a typo stays short.
+  // Against the whole OPEN read, not the engine subset of it. An issue
+  // outside the milestone family is known OPEN the moment `readIssues`
+  // returns, so asking the API about it is a round trip for an answer
+  // already in hand — and on a tracker carrying several specs, most of a
+  // cross-spec edge list is exactly that. Round 1 of #1706.
+  const known = new Set(liveIssues.map(i => i.number));
+  const unresolved = [...new Set(engine.flatMap(i => i.blockedBy))].filter(n => !known.has(n));
+  let states: Map<number, string>;
+  try {
+    states = unresolved.length === 0 ? new Map() : await gh.readStates(repo, unresolved);
+  } catch (e) {
+    console.error(
+      `board-snapshot: UNMEASURED — could not resolve ${unresolved.length} blocker number(s) ` +
+        `against ${repo}: ${(e as Error).message}. Guessing would make a FINISHED blocker and a ` +
+        `typo the same answer, which is the whole reason this read exists.`,
+    );
+    return REFUSAL_EXIT;
+  }
+  const named = unresolved.filter(n => (states.get(n) ?? "OPEN") !== "OPEN");
+
   const { actions } = milestonePlan(content, live, prefix);
   const snapshot: ProducedSnapshot = {
     producedAt: new Date().toISOString(),
     spec: specArg,
     phases: actions.map(a => ({ phase: a.phase, criteria: a.criteria, milestoneState: a.action })),
-    issues: [],
+    issues: engine.map(i => ({
+      number: i.number,
+      blockedBy: [...i.blockedBy],
+      rootReady: frontier !== null && phaseOf(i.milestone) === frontier,
+      labels: [...i.labels],
+    })),
+    closedBlockers: [...named].sort((a, b) => a - b),
     criteria: [],
   };
 
