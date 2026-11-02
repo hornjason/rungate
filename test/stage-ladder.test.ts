@@ -97,6 +97,15 @@ const CREDENTIALED_ALLOWED = 0;
  */
 const LIVE_VERIFY_BUDGET_MS = 60_000;
 
+/**
+ * How many stages are finished. An EQUALITY, so it refuses a fall as well
+ * as a rise: completing a stage is a deliberate edit here, and a stage
+ * going backwards is a regression rather than a number somebody lowers.
+ *
+ * Stage A completed 2026-10-31, Stage B 2026-11-02.
+ */
+const COMPLETE_STAGES = 2;
+
 const run = (cmd: string) => spawnSync("sh", ["-c", cmd], { cwd: ROOT, encoding: "utf-8" });
 
 const retro = (over: Partial<Retro> = {}): Retro => ({
@@ -219,26 +228,49 @@ describe("the live plan", () => {
     ).not.toBe(0);
   });
 
-  test("Stage A is complete and carries its retro; Stage B is next and unblocked", () => {
-    const a = stages.find(s => s.id === "A")!;
-    expect(stageIsComplete(a), "Stage A is no longer complete").toBe(true);
-    expect(a.retro, "Stage A has no retro — the stage that taught the most would teach nothing").not.toBeNull();
-    expect(a.retro!.improvements.length, "Stage A's retro lists no improvements").toBeGreaterThan(0);
+  test("every complete stage carries a retro, and the next one is agreed and unblocked", () => {
+    // This case used to name Stage A and Stage B as literals, and it went
+    // red the moment Stage B completed — correct work, red suite, in a file
+    // the work never opened. That is the stale-copy class Stage B's own
+    // retro names twice, reproduced inside the ladder that records it. So
+    // the letters are derived now and only the COUNT is written down.
+    const complete = stages.filter(stageIsComplete);
+    expect(
+      complete.length,
+      `COMPLETE_STAGES says ${COMPLETE_STAGES} stage(s) are finished and ${complete.length} are. ` +
+        "This is an EQUALITY: a stage completing is a deliberate edit here, and a stage going " +
+        "backwards is a regression, not a number to lower quietly.",
+    ).toBe(COMPLETE_STAGES);
+
+    for (const s of complete) {
+      expect(s.retro, `Stage ${s.id} is complete and has no retro — it would teach nothing`).not.toBeNull();
+      expect(s.retro!.improvements.length, `Stage ${s.id}'s retro lists no improvements`).toBeGreaterThan(0);
+    }
 
     const next = nextStage(stages);
-    expect(next?.stage?.id, "the next incomplete stage is not B").toBe("B");
-    // Jason agreed B1..B6 on 2026-11-01. Before that this assertion read
-    // `toContain("agreed: null")` — the gate did its job for the whole time
-    // the stage was a proposal, and this is the commit where that stopped
-    // being true.
+    // Assert on `next`, NOT on `next?.stage`. `nextStage` returns a BARE
+    // `null` once every stage is done and no retro is owed — not
+    // `{stage: null}` — so `next?.stage` is `undefined` there, and
+    // `expect(undefined).not.toBeNull()` passes. That spelling shipped for
+    // one round and the review caught it: the row meant to announce "every
+    // stage is complete" was vacuous in exactly that case, and the test
+    // only failed two lines later with `Stage undefined has no agreed`.
+    // The second line is not redundant — a reading WITH a null stage is a
+    // different fact from no reading at all, and only this spelling can
+    // tell them apart.
+    expect(next, "every stage is complete — say so rather than deleting this assertion").not.toBeNull();
+    expect(next!.stage, "nextStage returned a reading whose stage is null").not.toBeNull();
+    // Jason agreed A and C..F on 2026-10-30 and B on 2026-11-01. Before
+    // that this read `toContain("agreed: null")` for B — the gate did its
+    // job for the whole time that stage was a proposal.
     expect(
       next?.stage?.agreed,
-      "Stage B has no `agreed` — it may not be worked until its wording is signed off",
+      `Stage ${next?.stage?.id} has no \`agreed\` — it may not be worked until its wording is signed off`,
     ).toBeTruthy();
     expect(
       next?.blocked,
-      "Stage B is reported blocked. Either a prior stage lost its retro, or something else came up — read " +
-        "the message rather than deleting this assertion.",
+      `Stage ${next?.stage?.id} is reported blocked. Either a prior stage lost its retro, or something ` +
+        "else came up — read the message rather than deleting this assertion.",
     ).toBeNull();
   });
 
