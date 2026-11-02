@@ -60,7 +60,7 @@ the convergence spec.
 |---|---|---|
 | 1 | SC-2609, SC-2610 | both are `board-mirror`'s criteria cell — one spells "serves none", the other points its criterion at the symbol that already reads every spec |
 | 2 | SC-2615, SC-2616, SC-2617 | the three readings Phase 6 is missing; two are the corpus-wide outcome of mechanisms #1681 and #1680 already build |
-| 3 | SC-2618, SC-2619, SC-2620 | one command — give `board-conformance` a terminal condition, refuse hand-assembled inputs, run it in CI |
+| 3 | SC-2618, SC-2619, SC-2620 | one command — give `board-conformance` a terminal condition, refuse hand-assembled inputs, and bind it as a test so drift reddens CI |
 | 4 | SC-2621 | different files and no dependency on the command's shape |
 | 5 | SC-2622, SC-2623 | both are what a spec must declare and prove about itself |
 | 6 | SC-2624 | a different command entirely |
@@ -72,12 +72,21 @@ finish because it is two unrelated changes.
 
 ### SC-2610's behaviour already exists, and its issue must say so
 
-`board-mirror` **does** read every spec. `readSpecDir` in
-`lib/board-mirror.ts` calls `readdirSync(dir, { recursive: true,
-withFileTypes: true })` over `<root>/specs`, the docblock above
-`criterionIdsIn` reads *"Every criterion id in `<root>/specs`, from every
-spec, including nested ones"*, and `main` in `scripts/board-mirror.ts`
-documents the id set's default as *"every spec in the tree"*.
+`board-mirror` **does** read every spec. `specCriteriaIn` in
+`lib/board-mirror.ts` takes a root rather than a spec and sweeps
+`<root>/specs` through `readSpecDir`, which calls `readdirSync(dir, {
+recursive: true, withFileTypes: true })`; `main` in
+`scripts/board-mirror.ts` documents the id set's default as *"every spec in
+the tree"*.
+
+A first draft of this paragraph attributed the sweep's docblock —
+*"Every criterion id in `<root>/specs`, from every spec, including nested
+ones"* — to `criterionIdsIn`, and the AI review caught it. That function
+takes one spec's text and cannot read a directory. The docblock is followed
+immediately by a second docblock, so it is attached to nothing in the
+syntax, which is how it reads as belonging to the export below it. Worth
+noticing in a section whose whole subject is a criterion pointed at prose
+instead of code: the same ambiguity, one level down.
 
 What is wrong is the criterion's evidence, not the code. It reads
 `lib/board-mirror.ts contains [every spec]`, and `every spec` is a prose
@@ -110,11 +119,20 @@ Each row names the group's **lead** criterion, because that is all a
 |---|---|---|---|---|
 | SC-2609 | Make board-mirror's criteria cell say what it means | lib/board-mirror.ts, scripts/board-mirror.ts, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, test/board-mirror.test.ts | Pipeline Phase 3 — the board tells the truth | — |
 | SC-2616 | Produce the three Phase 6 readings the board is missing | lib/spec-placement.ts, lib/criterion-issue-census.ts, lib/spec-deps.ts, scripts/board-conformance.ts, test/plan-spec.test.ts, test/criterion-issue-census.test.ts, test/plan-deps.test.ts | Pipeline Phase 6 — the board's state is a reading | #1680, #1681, Make board-mirror's criteria cell say what it means |
-| SC-2618 | Give board-conformance a terminal condition and real inputs | scripts/board-conformance.ts, scripts/criterion-inventory.ts, test/board-conformance.test.ts, test/criterion-inventory.test.ts, .github/workflows/ci.yml | Pipeline Phase 7 — nothing is hand-run | — |
+| SC-2618 | Give board-conformance a terminal condition and real inputs | scripts/board-conformance.ts, scripts/criterion-inventory.ts, test/board-conformance.test.ts, test/criterion-inventory.test.ts | Pipeline Phase 7 — nothing is hand-run | — |
 | SC-2621 | Read the board's identifiers from project config | lib/live-issues.ts, .claude/rungate/config.json, test/live-issues.test.ts | Pipeline Phase 7 — nothing is hand-run | — |
 | SC-2622 | Make this spec prove and trace its own criteria | specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, lib/spec-evidence.ts, lib/spec-template.ts, lib/spec-requirements.ts, test/spec-evidence.test.ts, test/spec-requirements.test.ts | Pipeline Phase 8 — the chain traces back to a goal | — |
 | SC-2624 | Establish a goal from evidence when the recorded one is stale | scripts/precompute-goal.ts, test/precompute-goal.test.ts | Pipeline Phase 8 — the chain traces back to a goal | — |
 | SC-2625 | Ship the convergence spec to the board with no hand edit | specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, test/board-conformance.test.ts | Pipeline Phase 9 — the payload ships | Give board-conformance a terminal condition and real inputs |
+
+**No row names `.github/workflows/ci.yml`, and SC-2620 is the reason that is
+not an omission.** The generated `test` job already runs `bun test`, so a
+`board-conformance` case under `test/` reddens CI by existing. The first
+draft listed the workflow and the AI review refused it: that file is
+scaffold-owned — `lib/scaffold/owned-files.ts` carries it as
+*regenerated, job-preserving* — so an issue naming it invites a hand edit
+the next `rungate scaffold` overwrites, in every consumer repository as
+well as this one. AGENTS.md: *fix the generator, not generated files*.
 
 Seven rows. Five carry `—` in `Blocked by` and two carry edges, which is four
 edges in total: group 2 waits on `#1680`, `#1681` and group 1, and group 7
