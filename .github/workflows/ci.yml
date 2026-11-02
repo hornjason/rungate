@@ -1,4 +1,4 @@
-# generated-sha: 1806f81f20cf6d45
+# generated-sha: 31745104244b11b5
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -124,11 +124,14 @@ jobs:
           fi
       - run: bun test --shard=${{ matrix.shard }}/4
         env:
-          # ci.suiteReadsTracker. Read-only, and paired with `issues: read`
-          # on the job above — the workflow declares `contents: read` and nothing else,
-          # so every other scope on this token is `none` and a tracker read
-          # is a 403 whatever this line says.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ci.suiteReadsTracker, with ci.trackerTokenSecret naming the secret.
+          # NOT the built-in token: that one is repository-scoped and cannot see a
+          # ProjectV2 board at all, so a board reading came back UNMEASURED with
+          # milestones and issues passing beside it. The `issues: read` grant on
+          # the job above still applies to the built-in token and is kept for it.
+          # If this secret is unset the value is empty and the command refuses by
+          # name — it does not quietly fall back to a token that cannot answer.
+          GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
       - run: bun run typecheck
       # #1190. The aggregate below counts these instead of asking the Actions
       # API: `gh` is a GitHub-hosted-image fact rather than a runner fact, and

@@ -2868,6 +2868,57 @@ export function suiteReadsTracker(ci: unknown): boolean {
   return (ci as { suiteReadsTracker?: unknown } | null | undefined)?.suiteReadsTracker === true;
 }
 
+/** What {@link trackerTokenSecret} returns when the project names nothing. */
+export const DEFAULT_TRACKER_SECRET = "GITHUB_TOKEN";
+
+/**
+ * WHICH secret holds the token the suite reads the tracker with.
+ * `ci.trackerTokenSecret`, and `GITHUB_TOKEN` — the built-in — when absent.
+ *
+ * ## Why a project would name another one
+ *
+ * The built-in token is REPOSITORY-scoped, and a ProjectV2 board is not a
+ * repository resource. Measured 2026-11-02 on run `41406458500`: the same
+ * token read milestones and issues fine and could not see the board's
+ * Criteria column at all, so rungate's own B4 passed locally and failed in
+ * CI. A board reading therefore needs a credential carrying
+ * `read:project`, which only a PAT or an App token has.
+ *
+ * ## Absent is the built-in; MALFORMED is a refusal
+ *
+ * A name that is not a legal secret identifier THROWS rather than falling
+ * back. The fallback is the dangerous direction here: it hands the suite a
+ * token that authenticates perfectly and cannot see the board, so the
+ * reading comes back UNMEASURED or short and nothing says the cause was a
+ * typo in config. `.claude/rules/config-access.md` — a malformed config is
+ * never a missing config.
+ *
+ * The pattern is also the injection guard. This string is interpolated
+ * into a `${{ }}` expression in generated YAML, so a value carrying `}}`
+ * or a newline would close the expression and write whatever followed into
+ * the consumer's pipeline.
+ */
+export function trackerTokenSecret(ci: unknown): string {
+  const raw = (ci as { trackerTokenSecret?: unknown } | null | undefined)?.trackerTokenSecret;
+  if (raw === undefined || raw === null) return DEFAULT_TRACKER_SECRET;
+  if (typeof raw !== "string") {
+    throw new Error(
+      `ci.trackerTokenSecret is ${JSON.stringify(raw)}, expected the NAME of a secret as a string. ` +
+        `Remove the key to use the built-in GITHUB_TOKEN.`,
+    );
+  }
+  const name = raw.trim();
+  if (name === "") return DEFAULT_TRACKER_SECRET;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new Error(
+      `ci.trackerTokenSecret is ${JSON.stringify(raw)}, which is not a legal GitHub secret name ` +
+        `(a letter or underscore, then letters, digits and underscores). It is interpolated into a ` +
+        `\${{ }} expression in the generated workflow, so this refuses rather than emitting it.`,
+    );
+  }
+  return name;
+}
+
 /**
  * The one non-zero exit the shard aggregate ever takes (#1181).
  *
@@ -3617,8 +3668,23 @@ export function createCiWorkflows(root: string, actions: string[], opts: { force
   // half shipping at all is the same failure as either half shipping
   // alone, under a condition nothing tested for.
   const tracker = suiteReadsTracker(harness?.ci);
+  // WHICH secret, because the built-in one cannot read a project board —
+  // it is repository-scoped and a ProjectV2 field is not a repository
+  // resource. `ci.trackerTokenSecret` names another; absent means the
+  // built-in, so an existing consumer's output does not move.
+  // Named for what it holds — a NAME, not a credential. Spelled
+  // `trackerSecret` it read as `…Secret = <identifier>` to the generated
+  // pre-commit scanner's tier 2, which cannot tell an assignment from a
+  // reference when the value is a bare identifier rather than a dotted
+  // path. Renaming is the honest fix; widening a security allowlist to get
+  // a token-wiring change through is not.
+  const tokenSecretName = trackerTokenSecret(harness?.ci);
+  const trackerTokenNote =
+    tokenSecretName === DEFAULT_TRACKER_SECRET
+      ? `\n          # ci.suiteReadsTracker. Read-only, and paired with \`issues: read\`\n          # on the job above — the workflow declares \`contents: read\` and nothing else,\n          # so every other scope on this token is \`none\` and a tracker read\n          # is a 403 whatever this line says.`
+      : `\n          # ci.suiteReadsTracker, with ci.trackerTokenSecret naming the secret.\n          # NOT the built-in token: that one is repository-scoped and cannot see a\n          # ProjectV2 board at all, so a board reading came back UNMEASURED with\n          # milestones and issues passing beside it. The \`issues: read\` grant on\n          # the job above still applies to the built-in token and is kept for it.\n          # If this secret is unset the value is empty and the command refuses by\n          # name — it does not quietly fall back to a token that cannot answer.`;
   const trackerTokenEnv = tracker
-    ? `\n        env:\n          # ci.suiteReadsTracker. Read-only, and paired with \`issues: read\`\n          # on the job above — the workflow declares \`contents: read\` and nothing else,\n          # so every other scope on this token is \`none\` and a tracker read\n          # is a 403 whatever this line says.\n          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}`
+    ? `\n        env:${trackerTokenNote}\n          GITHUB_TOKEN: \${{ secrets.${tokenSecretName} }}`
     : "";
   const trackerPermissions = tracker
     ? `\n    # ci.suiteReadsTracker. The step below reads milestones and issues;\n    # without this the token it is handed has no scope for either.\n    permissions:\n      contents: read\n      issues: read`

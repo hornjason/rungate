@@ -56,22 +56,26 @@ const stages = doc.stages;
 const MACHINE_SCOPED_ALLOWED = 1;
 
 /**
- * How many done items may need a credential CI does not hold.
+ * How many done items may need a credential CI does not hold. **Zero.**
  *
- * Exactly one: Stage B's B4. The board's Criteria column is a ProjectV2
- * custom field on a USER-level project and `secrets.GITHUB_TOKEN` is
- * repository-scoped, so the one token CI has cannot read it. Measured on
- * 2026-11-02, run `41406458500`: B1 and B3 — milestones and issues, both
- * repository resources — passed in the same shard B4 failed in, with the
- * same token. Locally, against a `read:project` PAT, B4 exits 0.
+ * It was one for part of 2026-11-02. B4 reads the board's Criteria column,
+ * a ProjectV2 custom field on a USER-level project, and
+ * `secrets.GITHUB_TOKEN` is repository-scoped — run `41406458500` has B1
+ * and B3 passing in the same shard B4 failed in, on the same token, which
+ * is the control that named the variable.
  *
- * An equality, like {@link MACHINE_SCOPED_ALLOWED}: a second one cannot
- * appear without somebody editing this line. The way to LOWER it is to give
- * CI a `read:project` token and move B4 back to the default scope, which is
- * strictly better than this and is the reason the constant is written as a
- * debt rather than a budget.
+ * Jason added a `read:project` secret the same day and
+ * `ci.trackerTokenSecret` now names it, so B4 is executed by CI like any
+ * other item and the debt is paid. The scope itself stays in
+ * {@link ITEM_SCOPES} — the mechanism is still the right answer the next
+ * time evidence sits behind a credential, and deleting it would mean
+ * rediscovering it under a red build.
+ *
+ * An equality, like {@link MACHINE_SCOPED_ALLOWED}, and now at the floor:
+ * any rise is a stage item becoming unverifiable in CI and needs somebody
+ * to edit this line and say why.
  */
-const CREDENTIALED_ALLOWED = 1;
+const CREDENTIALED_ALLOWED = 0;
 
 /**
  * How long the whole loop below gets. Some of its verify commands read the
