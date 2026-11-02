@@ -157,6 +157,18 @@ export interface Improvement {
    * Piping to `grep -qE '^ 1 pass'` is the guard the live entries use.
    */
   verify: string | null;
+  /**
+   * The tracker issue carrying this improvement, where one exists.
+   *
+   * Optional, because a retro is written before the issues are filed. It
+   * earns a field rather than a sentence in `what` for the reason rule 4
+   * gives: ordering and ownership are data, and an improvement whose only
+   * home is this file is the note rule 10 exists to refuse.
+   *
+   * Refused unless it is a positive integer — `"1727"` and `0` both read as
+   * a link while resolving to nothing.
+   */
+  issue?: number;
 }
 
 /**
@@ -280,6 +292,12 @@ function retroViolations(raw: unknown, at: string): string[] {
           `a gate, a refusal, a schema field. A resolution with no mechanism is what Stage A already had, ` +
           `and it ran to fourteen review rounds against a rule that said three.`,
       );
+    }
+
+    // Before the status branch, which returns early: a bad link on an entry
+    // that also has a bad status would otherwise go unreported.
+    if (e.issue !== undefined && (typeof e.issue !== "number" || !Number.isInteger(e.issue) || e.issue <= 0)) {
+      out.push(`${iAt}.issue is ${JSON.stringify(e.issue)}, expected a positive integer issue number`);
     }
 
     if (e.status !== "in-place" && e.status !== "open") {

@@ -385,6 +385,29 @@ describe("the ladder refuses the things that went wrong in Stage A", () => {
     expect(v.join("\n")).toContain("cannot prove itself");
   });
 
+  test("an improvement's issue link must be a real issue number, and a valid one is allowed", () => {
+    // Review of #1729: Stage B's retro gained `issue` on two improvements and
+    // nothing declared or checked the field, so `"1727"`, `0` and a typo all
+    // read as a link. An open improvement that is only a note is the shape
+    // rule 10 exists to refuse, so the link has to be the kind a tracker can
+    // resolve.
+    const bad = (issue: unknown) =>
+      stageLadderViolations([
+        ok({ retro: retro({ improvements: [{ what: "x", mechanism: "y", status: "open", verify: null, issue } as never] }) }),
+      ]).join("\n");
+    expect(bad("1727")).toContain("expected a positive integer issue number");
+    expect(bad(0)).toContain("expected a positive integer issue number");
+    expect(bad(17.5)).toContain("expected a positive integer issue number");
+    // The control: the field is OPTIONAL and a real number passes, or the
+    // check above would be satisfied by a validator that refuses every issue.
+    expect(bad(1727)).not.toContain("issue");
+    expect(
+      stageLadderViolations([
+        ok({ retro: retro({ improvements: [{ what: "x", mechanism: "y", status: "open", verify: null }] }) }),
+      ]).join("\n"),
+    ).not.toContain("issue");
+  });
+
   test("an improvement with no status is refused", () => {
     const v = stageLadderViolations([
       ok({ retro: retro({ improvements: [{ what: "x", mechanism: "y" } as never] }) }),
