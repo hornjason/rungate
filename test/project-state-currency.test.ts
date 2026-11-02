@@ -231,6 +231,28 @@ describe("project-state currency", () => {
         `Write it as "YYYY-MM-DD session N" — without the number this comparison is UNMEASURED, which is ` +
         `not the same as the two halves agreeing.`,
     ).not.toBeNull();
+
+    // `sessions[0]` is only the newest if the array is newest-first, and
+    // nothing enforced that. An entry PUSHED instead of UNSHIFTED leaves a
+    // correctly-ordered-looking file whose first element is session 1, and
+    // the comparison below would then demand the headline match it — a
+    // guard that fires on the wrong half and sends the fixer to the wrong
+    // file. So the ordering is asserted rather than assumed. Round 2 of
+    // #1711.
+    const numbered: { at: number; n: number }[] = (state.sessions ?? [])
+      .map((s: { date?: unknown }, at: number) => ({ at, n: sessionNumberIn(s?.date) }))
+      .filter((r: { n: number | null }) => r.n !== null);
+    const highest = numbered.reduce(
+      (best: { at: number; n: number }, r: { at: number; n: number }) => (r.n > best.n ? r : best),
+      { at: -1, n: -1 },
+    );
+    expect(
+      highest.at,
+      `sessions[${highest.at}] carries the highest session number (${highest.n}) but the array is read ` +
+        `newest-first, so sessions[0] must hold it. An entry was appended instead of prepended — move it ` +
+        `to the front. Until it is, every reader of this file, and the headline comparison below, is ` +
+        `looking at the wrong entry.`,
+    ).toBe(0);
     expect(
       state.session?.number,
       `project-state.json's top-level session is ${JSON.stringify(state.session?.number)} while the newest ` +
