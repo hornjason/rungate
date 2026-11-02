@@ -252,7 +252,8 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   "plan-deps": {
     script: "scripts/plan-deps.ts",
     summary: "Write a spec's phase order onto the tracker as blocked-by edges",
-    usage: "rungate plan-deps --repo <owner/name> [--write] [--json] [--include-closed]",
+    usage:
+      "rungate plan-deps --repo <owner/name> --milestone-prefix <name> [--write] [--json] [--include-closed]",
   },
   "sync-spec-tests": {
     script: "scripts/sync-spec-tests.ts",

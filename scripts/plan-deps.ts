@@ -107,8 +107,8 @@ const LIVE_GITHUB: PlanDepsGitHub = {
   addBlockers: liveAddBlockers,
 };
 
-const USAGE = `rungate plan-deps --repo <owner/name> [--write] [--json] [--include-closed]
-                              [--milestone-prefix <name>]
+const USAGE = `rungate plan-deps --repo <owner/name> --milestone-prefix <name>
+                              [--write] [--json] [--include-closed]
 
   --repo              owner/name. Defaults to $GITHUB_REPOSITORY.
   --write             apply the missing edges. Without it, nothing is mutated.
@@ -116,12 +116,16 @@ const USAGE = `rungate plan-deps --repo <owner/name> [--write] [--json] [--inclu
   --include-closed    derive edges to closed issues too. Off by default: a
                       closed issue can never block anything, so the edge is a
                       row on a card that changes no decision.
-  --milestone-prefix  consider only issues whose milestone TITLE starts with
-                      this, e.g. "Pipeline". A phase number is read out of the
-                      title and nothing else, so two specs that both numbered
-                      their phases put unrelated issues in the same phase and
-                      get sequenced against each other. Pass this whenever the
-                      repository carries more than one spec's milestones.`;
+  --milestone-prefix  REQUIRED. Consider only issues whose milestone TITLE
+                      starts with this, e.g. "Pipeline". A phase number is read
+                      out of the title and nothing else, so two specs that both
+                      numbered their phases put unrelated issues in the same
+                      phase and get sequenced against each other. Required
+                      rather than optional since #1728: omitting it resolved 89
+                      edges across 38 issues spanning two families and took
+                      \`board-conformance\`'s blocked-by reading from 12 of 12
+                      to 4 of 12. \`plan-spec\` and \`board-snapshot\` require
+                      their --prefix for the same reason.`;
 
 export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Promise<number> {
   // Read off the RAW argv, because the refusal below happens when there is no
@@ -202,8 +206,31 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     );
   }
 
-  const prefix = prefixRead.kind === "given" ? prefixRead.prefix : undefined;
-  const issues = prefix === undefined ? read : read.filter(i => inMilestoneFamily(i.milestone, prefix));
+  // ABSENT is refused too, and for a sharper reason than blank. This
+  // repository carries TWO families with Phase milestones — `Pipeline
+  // Phase 0..9` and `Convergence Phase 0..6` — so an unscoped read
+  // sequences one spec's issues against another's, and `board-conformance`
+  // scores a single family. Measured 2026-11-02 (#1728): a `--write` with
+  // no prefix resolved 89 edges across 38 issues and took
+  // `blocked-by-edges` from 12 of 12 to 4 of 12, on edges the reading
+  // cannot resolve. `plan-spec` and `board-snapshot` already require their
+  // `--prefix` for the same reason; this is the third tool agreeing.
+  //
+  // The dry run is refused as well as the write. It is what a reader
+  // consults BEFORE writing, so an unscoped count is the misleading half.
+  if (prefixRead.kind === "absent") {
+    return refuse(
+      values.json,
+      `--milestone-prefix is required. This repository has more than one milestone family carrying ` +
+        `\`Phase N\` titles, so an unscoped run sequences one spec's issues against another's and ` +
+        `writes edges \`board-conformance --prefix <name>\` cannot resolve. Name the family, e.g. ` +
+        `--milestone-prefix Pipeline.`,
+      true,
+    );
+  }
+
+  const prefix = prefixRead.prefix;
+  const issues = read.filter(i => inMilestoneFamily(i.milestone, prefix));
 
   // A prefix that matched nothing is its own reading, and it has to say so
   // here: `degenerateReasons` would report "no issues were read — an empty

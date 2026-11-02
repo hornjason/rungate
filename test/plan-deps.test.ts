@@ -221,21 +221,21 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
 
   test("a sound two-phase reading writes, one call per blocked issue", async () => {
     const s = spy([iss(10, 0), iss(11, 0), iss(20, 1)]);
-    const code = await planDepsMain(["--repo", "o/r", "--write"], s.gh);
+    const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
     expect(s.calls).toEqual(["#20 +10,11"]);
     expect(code).toBe(0);
   });
 
   test("an EMPTY read writes nothing and refuses", async () => {
     const s = spy([]);
-    const code = await planDepsMain(["--repo", "o/r", "--write"], s.gh);
+    const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
     expect(s.calls, "an edge was written despite the refusal").toEqual([]);
     expect(code).toBe(REFUSAL_EXIT);
   });
 
   test("a SINGLE-PHASE read writes nothing and refuses", async () => {
     const s = spy([iss(10, 0), iss(11, 0)]);
-    const code = await planDepsMain(["--repo", "o/r", "--write"], s.gh);
+    const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
     expect(s.calls).toEqual([]);
     expect(code).toBe(REFUSAL_EXIT);
   });
@@ -252,7 +252,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
         throw new Error("gh: HTTP 503");
       },
     };
-    const code = await planDepsMain(["--repo", "o/r", "--write"], gh);
+    const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], gh);
     expect(code, "every write failed and the command reported success").toBe(REFUSAL_EXIT);
   });
 
@@ -269,7 +269,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     };
     let code;
     try {
-      code = await planDepsMain(["--repo", "o/r", "--write", "--json"], gh);
+      code = await planDepsMain(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], gh);
     } finally {
       console.log = log;
     }
@@ -288,7 +288,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     const s = spy([iss(10, 0), iss(20, 1)]);
     let code;
     try {
-      code = await planDepsMain(["--repo", "o/r", "--write", "--json"], s.gh);
+      code = await planDepsMain(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
     } finally {
       console.log = log;
     }
@@ -299,14 +299,14 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
 
   test("a second --write run is a no-op — the command is idempotent", async () => {
     const s = spy([iss(10, 0), iss(20, 1, { blockedBy: [10] })]);
-    const code = await planDepsMain(["--repo", "o/r", "--write"], s.gh);
+    const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
     expect(s.calls, "an edge that already exists was written again").toEqual([]);
     expect(code).toBe(0);
   });
 
   test("--write never removes an EXTRA edge", async () => {
     const s = spy([iss(10, 0), iss(20, 1), iss(21, 1, { blockedBy: [20] })]);
-    await planDepsMain(["--repo", "o/r", "--write"], s.gh);
+    await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
     // Only the derived pair is added; nothing in the call list removes 21<-20
     // and `addBlockers` is the only mutation the seam exposes.
     expect(s.calls).toEqual(["#20 +10", "#21 +10"]);
@@ -318,7 +318,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     console.log = (x: string) => void out.push(x);
     const s = spy([iss(10, 0), iss(20, 1)]);
     try {
-      await planDepsMain(["--repo", "o/r", "--write", "--json"], s.gh);
+      await planDepsMain(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
     } finally {
       console.log = log;
     }
@@ -333,7 +333,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     const s = spy([]);
     let code;
     try {
-      code = await planDepsMain(["--repo", "o/r", "--write", "--json"], s.gh);
+      code = await planDepsMain(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
     } finally {
       console.log = log;
     }
@@ -347,7 +347,11 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     const saved = process.env.GITHUB_REPOSITORY;
     delete process.env.GITHUB_REPOSITORY;
     try {
-      expect(await planDepsMain(["--write"], s.gh)).toBe(REFUSAL_EXIT);
+      // The prefix is supplied even though this case is about the repo.
+      // Without it, #1728's new refusal fires too and the exit code is
+      // overdetermined — the case would stay green with the repo guard
+      // deleted. One missing thing at a time.
+      expect(await planDepsMain(["--write", "--milestone-prefix", "Convergence"], s.gh)).toBe(REFUSAL_EXIT);
       expect(s.calls).toEqual([]);
     } finally {
       if (saved !== undefined) process.env.GITHUB_REPOSITORY = saved;
@@ -400,13 +404,31 @@ describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Pha
 
   const MIXED = [fam(10, "Pipeline", 0), fam(11, "Pipeline", 1), fam(20, "Other", 0), fam(21, "Other", 1)];
 
-  test("without it, the two families are sequenced against each other", async () => {
-    // Not an endorsement — it is the behaviour the flag exists to avoid,
-    // asserted so that adding the flag cannot silently change the default
-    // for every existing caller.
-    const s = spy(MIXED);
-    expect(await planDepsMain(["--repo", "o/r", "--write"], s.gh)).toBe(0);
-    expect(s.calls.sort()).toEqual(["#11 +10,20", "#21 +10,20"]);
+  test("OMITTING it refuses — an unscoped run is the defect, not the default (#1728)", async () => {
+    // This case previously asserted the opposite: that omitting the flag
+    // sequenced both families together, recorded so that "adding the flag
+    // cannot silently change the default for every existing caller."
+    // #1728 measured what that default costs — a `--write` with no prefix
+    // resolved 89 edges across 38 issues spanning `Pipeline Phase 0..9`
+    // and `Convergence Phase 0..6`, and `board-conformance --prefix
+    // Pipeline` scores only the first, so `blocked-by-edges` fell 12 of 12
+    // to 4 of 12 on edges the reading cannot resolve.
+    //
+    // There is no caller to protect: no workflow, script or CI job invokes
+    // `plan-deps`, and `lib/cli-commands.ts`'s usage string never listed
+    // the flag. `plan-spec` and `board-snapshot` both REQUIRE `--prefix`
+    // for the reason plan-spec states — deriving the family silently calls
+    // the live milestones something they are not. This makes the third
+    // tool agree, which is the Stage B retro improvement "two tools that
+    // write the same board agree about which issues ARE the board".
+    for (const argv of [
+      ["--repo", "o/r", "--write"],
+      ["--repo", "o/r"], // the dry run misleads too — it is what you read before writing
+    ]) {
+      const s = spy(MIXED);
+      expect(await planDepsMain(argv, s.gh), `${argv.join(" ")} was accepted`).toBe(REFUSAL_EXIT);
+      expect(s.calls, "an unscoped run wrote edges across both families").toEqual([]);
+    }
   });
 
   test("with it, only that family is read and only its edges are written", async () => {
@@ -455,11 +477,14 @@ describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Pha
       expect(s.calls, "an empty prefix wrote the unfiltered population").toEqual([]);
     }
 
-    // The control: omitting the flag entirely is still allowed and still
-    // writes. Without it, a guard refusing every run would pass above.
-    const omitted = spy(MIXED);
-    expect(await planDepsMain(["--repo", "o/r", "--write"], omitted.gh)).toBe(0);
-    expect(omitted.calls.length).toBeGreaterThan(0);
+    // The control, and it had to change shape when #1728 made an omitted
+    // flag a refusal too. It used to be "omitting it still writes", which
+    // can no longer distinguish anything. A VALID prefix still writing is
+    // what rules out a guard that refuses every run — the property the
+    // old control was actually buying.
+    const valid = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipeline"], valid.gh)).toBe(0);
+    expect(valid.calls.length).toBeGreaterThan(0);
   });
 
   test("a prefix matching nothing says THAT, not 'no issues were read'", async () => {
