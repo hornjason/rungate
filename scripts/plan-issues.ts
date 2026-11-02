@@ -641,7 +641,20 @@ export async function main(
   console.log(
     `\n  Then re-run both, in this order — a demotion changes the phase sizes and\n` +
       `  the board column is a mirror of the body, not a second source:\n` +
-      `    rungate plan-deps --repo ${repo} --write\n` +
+      `    rungate plan-deps --repo ${repo} --milestone-prefix <name> --write\n` +
+      // `--milestone-prefix` is REQUIRED since #1728, so the command this
+      // used to print now refuses — a follow-up that cannot run is worse
+      // than none, because the reader learns the advice is stale only
+      // after acting on it.
+      //
+      // A PLACEHOLDER, not a filled-in value, and the same shape as
+      // `<id>` below. A repair knows the milestones it DEMOTED; the
+      // family `plan-deps` must sequence is the one holding the issues
+      // that stayed, and this command never reads them. Guessing from
+      // the demoted rows would be right whenever the repair touched one
+      // family and silently wrong exactly when it did not — which is the
+      // case the flag exists for.
+      //
       // NO `--spec`. Narrowing the sweep while WRITING blanks the Criteria
       // cell of every issue serving any other spec — SC-2610 — so a printed
       // command carrying it hands the reader the defect as advice.

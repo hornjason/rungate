@@ -18,6 +18,7 @@
  * something, so the negative cases here record what reached GitHub.
  */
 import { describe, expect, test } from "bun:test";
+import { join } from "path";
 import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
 import type { DepIssue } from "../lib/spec-deps";
 import { REFUSAL_EXIT, main as planDepsMain } from "../scripts/plan-deps";
@@ -723,6 +724,38 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
     expect(reasons).toContain("--milestone-prefix is required");
     expect(reasons, "the API's failure was reported instead of the caller's").not.toContain("403");
     expect(calls, "the network was read before a static argument was checked").toBe(0);
+  });
+
+  test("the follow-up `plan-issues --repair` PRINTS is a command this still accepts", async () => {
+    // Review of #1730, round 2. Making the flag required made somebody
+    // else's advice stale: `plan-issues --write` prints a `plan-deps` line
+    // as the exact next step, and that line carried no prefix, so a reader
+    // who followed it got a refusal. Advice that cannot run is worse than
+    // none — the reader learns it is stale only after acting on it.
+    //
+    // The printed string is READ OUT OF THE SOURCE and executed here
+    // rather than copied into an expectation. A `toContain` would hold
+    // just as well against a line that is stale in some NEW way, which is
+    // the whole failure mode: this asserts the command runs, not that it
+    // looks like it used to.
+    const src = await Bun.file(join(import.meta.dir, "..", "scripts", "plan-issues.ts")).text();
+    const printed = src.match(/rungate plan-deps ([^`\n\\]*)/);
+    expect(printed, "plan-issues no longer prints a plan-deps follow-up — delete this case or follow it").not.toBeNull();
+
+    const argv = printed![1]!
+      .trim()
+      .split(/\s+/)
+      // The two placeholders the printed line carries. `${repo}` is a
+      // template hole in the source; `<name>` is deliberate, because a
+      // repair cannot know which family the issues that STAYED belong to.
+      .map(a => (a === "${repo}" ? "o/r" : a === "<name>" ? "Pipeline" : a));
+
+    const s = spy(MIXED);
+    const got = await run(argv, s.gh);
+    expect(
+      got.code,
+      `the follow-up plan-issues prints is refused by plan-deps:\n  rungate plan-deps ${argv.join(" ")}\n${got.stderr}`,
+    ).toBe(0);
   });
 
   test("the control: a read that SUCCEEDS is not reported as a failed one", async () => {
