@@ -784,12 +784,15 @@ export function reserveAllowance(
     readLedger: () => FilingLedgerRow[] | null;
     window?: number;
     /**
-     * The run's allowance. Absent means `FILINGS_PER_RUN`, so every caller
-     * written before direct-ship mode keeps its exact behaviour — and the
-     * default is the STRICT one, because a caller that forgot to pass the
-     * cap must not be handed the larger one.
+     * The run's allowance. **Required, and the absence of a default is the
+     * point.** It was `cap?: number` falling back to `FILINGS_PER_RUN`, which
+     * is the shape review found at round 4 of #1725: a defaulted cap makes
+     * "a call site that forgot to pass it" a silent behaviour change that
+     * only a reviewer or a text-matching test can catch, one occurrence at a
+     * time. With no default the compiler catches it, at every site, for free
+     * — see `filingsPerRun` for the pair of constants this resolves between.
      */
-    cap?: number;
+    cap: number;
   },
 ): AllowanceReading {
   const intent: FilingLedgerRow = {
@@ -808,7 +811,7 @@ export function reserveAllowance(
   const after = io.readLedger();
   if (after === null) return { outcome: "UNCOUNTABLE", intent };
   const ordinal = intentOrdinal(after, intent.key, run, io.now, io.window);
-  return ordinal > (io.cap ?? FILINGS_PER_RUN)
+  return ordinal > io.cap
     ? { outcome: "LOST", already: ordinal - 1, intent }
     : { outcome: "WON", intent };
 }
@@ -848,7 +851,7 @@ export function overCapReason(
   run: string,
   already: number,
   target: CommentTarget,
-  cap: number = FILINGS_PER_RUN,
+  cap: number,
 ): string {
   return [
     `this run has already filed ${already} issue(s) in the last ${RUN_WINDOW_MS / 3_600_000}h, and the cap is ` +
@@ -876,7 +879,7 @@ export function overCapReason(
 export function unreservedCapReason(
   run: string,
   target: CommentTarget,
-  cap: number = FILINGS_PER_RUN,
+  cap: number,
 ): string {
   return [
     `this run's allowance could not be RESERVED: the intent row could not be appended to ` +
@@ -904,7 +907,7 @@ export function unreservedCapReason(
 export function unreadableRunReason(
   why: string,
   target: CommentTarget,
-  cap: number = FILINGS_PER_RUN,
+  cap: number,
 ): string {
   return [
     `this filing's RUN could not be read, so there is no denominator to count against:`,
@@ -3314,7 +3317,7 @@ export function unkeyedLedgerNote(): string {
  * state being unknown — `reserveAllowance` has the two apart, and the other
  * one refuses.
  */
-export function unreservedAllowanceNote(cap: number = FILINGS_PER_RUN): string {
+export function unreservedAllowanceNote(cap: number): string {
   return (
     "[FindingArbiter] UNMEASURED allowance — this filing's intent row could NOT be appended to " +
     `${ledgerPath()}, so it took no position in this run's queue and the per-run cap of ` +

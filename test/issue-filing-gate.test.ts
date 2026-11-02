@@ -82,6 +82,9 @@ import {
   ledgerTitle,
   MAX_LEDGER_TITLE,
   overCapReason,
+  unreservedCapReason,
+  unreadableRunReason,
+  unreservedAllowanceNote,
   namesARepository,
   runIdFor,
   waivableRefusal,
@@ -3012,7 +3015,7 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
   /** `M5` — the cap stops seeing filings the label would carry through. */
   const M5 = "|| overrideOf(read2)";
   /** `M6` — the reservation is taken and its position is never read. */
-  const M6 = "ordinal > (io.cap ?? FILINGS_PER_RUN)";
+  const M6 = "ordinal > io.cap";
   /**
    * `M7` — the comment DEFAULT goes back to being waivable by a label.
    *
@@ -4281,13 +4284,21 @@ describe("FG-143..FG-176: a numeric cap, which no argument defeats", () => {
     const row = { ...landed(run), intent: false, emitted: true, withheldBy: null };
 
     expect(
-      reserveAllowance(row, run, { now: Date.parse(AT), append: () => false, readLedger: () => [] })
-        .outcome,
+      reserveAllowance(row, run, {
+        now: Date.parse(AT),
+        append: () => false,
+        readLedger: () => [],
+        cap: FILINGS_PER_RUN,
+      }).outcome,
       "the WRITER failed, so no position was taken",
     ).toBe("UNRESERVED");
     expect(
-      reserveAllowance(row, run, { now: Date.parse(AT), append: () => true, readLedger: () => null })
-        .outcome,
+      reserveAllowance(row, run, {
+        now: Date.parse(AT),
+        append: () => true,
+        readLedger: () => null,
+        cap: FILINGS_PER_RUN,
+      }).outcome,
       "the STATE could not be read, which is the cap's own input",
     ).toBe("UNCOUNTABLE");
 
@@ -4597,7 +4608,7 @@ describe("FG-143..FG-176: a numeric cap, which no argument defeats", () => {
   });
 
   test("FG-150: the refusal names the cap, the run and the comment target", () => {
-    const text = overCapReason("/wt/x", 1, onPr);
+    const text = overCapReason("/wt/x", 1, onPr, FILINGS_PER_RUN);
     expect(text).toContain("cap is 1");
     expect(text).toContain("/wt/x");
     expect(text).toContain("PR #1595");
@@ -5265,30 +5276,67 @@ describe("the filing cap under direct-ship mode", () => {
     ).toBe(FILINGS_PER_RUN);
   });
 
-  test("FG-197: no cap message hardcodes an allowance — all four take it", () => {
-    // I called the refusal messages a population, fixed three of them, and
-    // shipped. `unreservedAllowanceNote` was the fourth and the review found
-    // it. A per-message test would have to be remembered for the fifth, so
-    // this asserts the PROPERTY over the module's own source: no template
-    // may interpolate the constant into prose, because prose that disagrees
-    // with the live cap is the stale-copy class this file keeps meeting.
-    const src = readFileSync(join(REPO, "lib", "issue-filing-gate.ts"), "utf-8");
-    const hardcoded = src
-      .split("\n")
-      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
-      .filter(r => r.line.includes("${FILINGS_PER_RUN}") || r.line.includes("${FILINGS_PER_RUN_DIRECT}"));
+  test("FG-197: a cap consumer cannot fall back to the strict constant — the COMPILER says so", () => {
+    // Round 4 of #1725 found the shape behind every round before it: I was
+    // fixing one call site of a class at a time. Three messages, then a
+    // fourth; then a text-matching version of this row that two spellings
+    // defeated — `const strict = FILINGS_PER_RUN` and a `+` concat — which
+    // is `.claude/rules/checks-must-be-able-to-fail.md`'s *detector narrower
+    // than what it detects*, written while citing that rule.
+    //
+    // So the detector is no longer a grep. Every consumer of the cap takes
+    // it as a REQUIRED parameter with no default, and a site that forgets it
+    // fails to compile. The five `@ts-expect-error`s below are the
+    // assertion: each is an error TODAY, and the moment any signature
+    // regains a `= FILINGS_PER_RUN` the call becomes legal, the directive
+    // becomes unused, and `bun scripts/typecheck.ts` goes red naming it.
+    //
+    // That is also this row's own control, and it is a stronger one than a
+    // count of interpolations: an unused `@ts-expect-error` is an ERROR in
+    // this repo's config, so the guard cannot pass vacuously — it has to be
+    // pointed at something that genuinely does not type-check.
+    //
+    // Proved able to fail: restoring `cap?: number` on `reserveAllowance`'s
+    // bag turned the first two directives unused and typecheck reported
+    // 2 errors against a baseline of 0.
+    //
+    // Every name below is IMPORTED at the top of this file, deliberately. A
+    // `@ts-expect-error` is satisfied by whichever error arrives first, so a
+    // directive sitting above an out-of-scope identifier is green on
+    // `TS2304: cannot find name` and witnesses nothing about the cap.
+    const target: CommentTarget = { reading: "PR", number: 1725, branch: "rg/filing-cap-direct" };
+
+    // @ts-expect-error cap is required — a forgotten allowance must not compile
+    overCapReason("/wt/x", 1, target);
+    // @ts-expect-error cap is required
+    unreservedCapReason("/wt/x", target);
+    // @ts-expect-error cap is required
+    unreadableRunReason("the remote could not be read", target);
+    // @ts-expect-error cap is required
+    unreservedAllowanceNote();
+    // @ts-expect-error cap is required on the reservation bag too
+    reserveAllowance({} as FilingLedgerRow, "fg197", {
+      now: 0,
+      append: () => true,
+      readLedger: () => [],
+    });
+
+    // And the runtime half, so this row is not purely a type assertion: the
+    // resolved cap REACHES the prose. A signature can be required and still
+    // be ignored by the body it was added for.
     expect(
-      hardcoded,
-      "a cap message must interpolate the RESOLVED cap, never the constant — otherwise it " +
-        "tells an agent 'the cap is 1' while the cap is 3. Add a `cap` parameter defaulting " +
-        "to FILINGS_PER_RUN and pass the resolved value at the call site.",
-    ).toEqual([]);
-    // The control: without it the row above is green on a module that stopped
-    // mentioning the cap at all, which is a different repo, not a fixed one.
-    expect(
-      src.split("${cap}").length - 1,
-      "no message interpolates the resolved cap, so the assertion above is vacuous",
-    ).toBeGreaterThanOrEqual(4);
+      overCapReason("/wt/x", 1, target, FILINGS_PER_RUN_DIRECT),
+      "the message must name the cap it was handed, not the constant",
+    ).toContain(`cap is ${FILINGS_PER_RUN_DIRECT}`);
+    expect(unreservedCapReason("/wt/x", target, FILINGS_PER_RUN_DIRECT)).toContain(
+      `${FILINGS_PER_RUN_DIRECT} per run`,
+    );
+    expect(unreadableRunReason("why", target, FILINGS_PER_RUN_DIRECT)).toContain(
+      `${FILINGS_PER_RUN_DIRECT} per run`,
+    );
+    expect(unreservedAllowanceNote(FILINGS_PER_RUN_DIRECT)).toContain(
+      `cap of ${FILINGS_PER_RUN_DIRECT}`,
+    );
   });
 
   test("FG-194: the raised cap is bounded, so it cannot drift into a swarm's number", () => {
