@@ -204,9 +204,21 @@ three unrelated misses:
 | 2 | a docblock attributed to `criterionIdsIn`, which takes one spec's text; a generated file named as one an issue would edit |
 | 3 | a lead criterion chosen on a rule the document never stated |
 
-One class, five instances: **a hand-written value in prose that has to agree
-with a table or a source somewhere else, and nothing derives it.** Each round
-caught the next instance because a reader was the only instrument.
+Six findings, five of them one class: **a hand-written value in prose that
+has to agree with a table or a source somewhere else, and nothing derives
+it.** Each round caught the next instance because a reader was the only
+instrument.
+
+The sixth — naming a generated file in a plan row — is not in that class. It
+is a policy error, not a disagreement between two copies of a value, and
+`lib/scaffold/owned-files.ts` already answers it for anyone who asks. It is
+counted in the table above and excluded here, because a class that absorbs
+every finding is a class that predicts nothing.
+
+A review round found the five-against-six slip in this very paragraph, which
+is the class reproducing inside the section written to retire it. That is
+the strongest argument for the derived check below and it is left standing
+rather than tidied away.
 
 A fourth round would not fix a defect in this document — the round-3 review
 re-checked every count, the 13-criterion total, the four edges, the 2.7
