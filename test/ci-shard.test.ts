@@ -22,7 +22,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createCiWorkflows, shardCount } from "../lib/scaffold/steps";
+import { createCiWorkflows, shardCount, suiteReadsTracker } from "../lib/scaffold/steps";
 import { mergeManagedWorkflow } from "../lib/scaffold/managed-workflow";
 
 describe("#728: shardCount reads one declaration", () => {
@@ -212,5 +212,105 @@ jobs:
     const merged = mergeManagedWorkflow(withConsumerJob, generated);
     expect(merged).toContain("deploy-docs");
     expect(merged).toContain("./deploy.sh");
+  });
+});
+
+/**
+ * `ci.suiteReadsTracker` — a token for the suite, and the scope it needs.
+ *
+ * A conformance reading of the BOARD has no offline source. rungate's own
+ * ladder (`project-state.json`, Stage B) runs `board-conformance` as a
+ * verify command and a step that cannot authenticate reports UNMEASURED
+ * and refuses, so without this the ladder is red in CI or it stops
+ * checking most of a stage. Jason's call, 2026-11-01.
+ *
+ * Two things are at stake and both arms are asserted. The env and the
+ * permission must arrive TOGETHER — the workflow declares
+ * `contents: read` and nothing else, so a token handed over with no
+ * `issues: read` is a 403 that looks exactly like a reading that failed.
+ * And an unflagged consumer must get byte-identical output, because this
+ * ships to every downstream project through the scaffold and almost none
+ * of them want their test suite holding a credential.
+ */
+describe("#1700: ci.suiteReadsTracker", () => {
+  test("the flag reads the exact boolean true, and nothing else", () => {
+    // A loose read of a variable that hands out a credential is a
+    // credential handed out by accident —
+    // `.claude/rules/config-access.md` makes the same argument about
+    // RUNGATE_REQUIRE_AI_REVIEW with the direction reversed.
+    expect(suiteReadsTracker({ suiteReadsTracker: true })).toBe(true);
+    for (const loose of ["true", "TRUE", 1, {}, [], "yes"]) {
+      expect(suiteReadsTracker({ suiteReadsTracker: loose }), `${JSON.stringify(loose)} turned the token on`).toBe(
+        false,
+      );
+    }
+    expect(suiteReadsTracker(undefined)).toBe(false);
+    expect(suiteReadsTracker(null)).toBe(false);
+    expect(suiteReadsTracker({})).toBe(false);
+  });
+
+  const emitWith = (ci: Record<string, unknown>): string => {
+    const root = mkdtempSync(join(tmpdir(), "rungate-tracker-"));
+    mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+    writeFileSync(
+      join(root, ".claude", "rungate", "config.json"),
+      JSON.stringify({ slug: "trackerfix", test: { command: "bun test", timeout: 300000 }, ci }),
+    );
+    writeFileSync(join(root, ".bun-version"), "1.4.3\n");
+    createCiWorkflows(root, [], { force: true });
+    const out = join(root, ".github", "workflows", "ci.yml");
+    if (!existsSync(out)) throw new Error("the generator wrote no ci.yml. UNMEASURED, not a pass.");
+    const yml = readFileSync(out, "utf8");
+    rmSync(root, { recursive: true, force: true });
+    return yml;
+  };
+
+  /**
+   * A LINE that grants the scope, not the characters anywhere in the file.
+   *
+   * The first version of these cases matched the substring `issues: read`,
+   * and the generated step's own comment contains that phrase — so
+   * deleting the entire permissions block left both cases green. A
+   * detector satisfied by its subject's documentation measures nothing;
+   * found by the mutation battery, which is the only thing that could
+   * have found it.
+   */
+  const grantsIssuesRead = (yml: string): boolean => /^ {6}issues: read$/m.test(yml);
+  const handsOverToken = (yml: string): boolean =>
+    /^ {10}GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}$/m.test(yml);
+
+  test("the detectors read a YAML line, not a phrase that also appears in a comment", () => {
+    // Asserted directly, because both cases below are vacuous if these
+    // are satisfied by prose.
+    expect(grantsIssuesRead("# paired with `issues: read` on the job above")).toBe(false);
+    expect(grantsIssuesRead("    permissions:\n      issues: read\n")).toBe(true);
+    expect(handsOverToken("# the step gets GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}")).toBe(false);
+    expect(handsOverToken("        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n")).toBe(true);
+  });
+
+  test("off: the suite gets no token and the job takes no issues scope", () => {
+    const yml = emitWith({ shards: 2 });
+    expect(handsOverToken(yml), "an unflagged consumer's test suite was handed a credential").toBe(false);
+    expect(grantsIssuesRead(yml), "an unflagged consumer's test job took a scope it does not need").toBe(false);
+  });
+
+  test("on: the token and the scope arrive together, on the job that runs the suite", () => {
+    const yml = emitWith({ shards: 2, suiteReadsTracker: true });
+
+    // Both, on the SAME job. A token with no scope is a 403 and a scope
+    // with no token is nothing; either alone would let a case pass while
+    // the reading still failed, which is the outcome the flag exists to
+    // prevent. Sliced to the shard job so a grant on a sibling job cannot
+    // stand in for one here.
+    const shardJob = yml.slice(yml.indexOf("\n  test-shard:"), yml.indexOf("\n  test:"));
+    expect(shardJob.length, "the shard job was not found, so this case read nothing").toBeGreaterThan(0);
+    expect(grantsIssuesRead(shardJob), "the job running the suite does not grant `issues: read`").toBe(true);
+    expect(handsOverToken(shardJob), "the job running the suite is handed no token").toBe(true);
+  });
+
+  test("off is byte-identical to a tree that has never heard of the flag", () => {
+    // This ships to every consumer through the scaffold. A diff in the
+    // default output is a diff in their pipeline.
+    expect(emitWith({ shards: 2, suiteReadsTracker: false })).toBe(emitWith({ shards: 2 }));
   });
 });
