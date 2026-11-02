@@ -37,7 +37,7 @@ import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { openFrontier, phaseOf } from "../lib/board-mirror";
 import { createGitHubClient, listMilestones } from "../lib/github";
-import { readLiveIssues, type LiveIssue } from "../lib/live-issues";
+import { inMilestoneFamily, readLiveIssues, type LiveIssue } from "../lib/live-issues";
 import { milestonePlan, placementReading } from "../lib/spec-placement";
 
 /**
@@ -234,12 +234,13 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
     return REFUSAL_EXIT;
   }
 
-  // The population: a milestone whose title starts with the prefix AND
-  // carries a phase number. The prefix alone is not enough — `milestonePlan`
-  // derives titles as `<prefix> Phase <n> — <heading>`, and a hand-made
-  // milestone sharing the prefix without a phase has no place in an order.
+  // The population: a milestone in this spec's family that carries a phase
+  // number. `inMilestoneFamily` is the single binding `plan-deps` also
+  // calls — it anchors on `<prefix> Phase `, so a family whose name merely
+  // begins with this one is out. `phaseOf` is still required on top: a
+  // hand-made `Pipeline Phase X` has no place in an order.
   const engine = liveIssues.filter(
-    i => i.milestone !== null && i.milestone.startsWith(prefix) && phaseOf(i.milestone) !== null,
+    i => inMilestoneFamily(i.milestone, prefix) && phaseOf(i.milestone) !== null,
   );
 
   // A CUT list is not a short one, on EITHER connection. A blocker past the

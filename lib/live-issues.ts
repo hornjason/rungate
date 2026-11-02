@@ -37,6 +37,27 @@ import type { DepIssue } from "./spec-deps";
  */
 export const ISSUE_PAGE = 100;
 
+/**
+ * Does this milestone belong to the spec family named by `prefix`?
+ *
+ * ONE binding, called by `plan-deps` and `board-snapshot`. They ask the same
+ * question about the same input, and two guards that do that are
+ * behaviourally one — a mutation of either leaves the other holding the case
+ * up, and both read as covered while one is dead.
+ *
+ * The anchor is `<prefix> Phase `, not a bare `startsWith(prefix)`.
+ * `lib/spec-placement.ts` builds every derived title as
+ * `${prefix} ${heading}` where the heading is `Phase N` or `Phase N — text`,
+ * so that string is the family's actual shape. A bare prefix test admits any
+ * family whose name merely BEGINS with this one — `Pipe` matching
+ * `Pipeline Phase 0`, `Fix` matching `Fixture Phase 2` — which is the
+ * cross-spec contamination the prefix exists to prevent, arriving through
+ * the fix for it. Round 2 of #1703.
+ */
+export function inMilestoneFamily(milestone: string | null | undefined, prefix: string): boolean {
+  return (milestone ?? "").startsWith(`${prefix} Phase `);
+}
+
 /** One issue, with everything a board reading asks about it. */
 export interface LiveIssue extends DepIssue {
   /** Every label name on the issue, as GitHub spells them. */

@@ -15,7 +15,13 @@
  * assert on what comes out, not on what a fake was told to return.
  */
 import { describe, expect, test } from "bun:test";
-import { ISSUE_PAGE, LIVE_ISSUES_QUERY, readLiveIssues, type GraphQlExec } from "../lib/live-issues";
+import {
+  ISSUE_PAGE,
+  LIVE_ISSUES_QUERY,
+  inMilestoneFamily,
+  readLiveIssues,
+  type GraphQlExec,
+} from "../lib/live-issues";
 
 type Node = {
   number: number;
@@ -183,5 +189,43 @@ describe("the query itself", () => {
       const connection = LIVE_ISSUES_QUERY.slice(at, LIVE_ISSUES_QUERY.indexOf("}", at) + 1);
       expect(connection, `${field} is paged and cannot report being cut`).toContain("pageInfo{hasNextPage}");
     }
+  });
+});
+
+/**
+ * `inMilestoneFamily` — round 2 of #1703.
+ *
+ * A bare `startsWith(prefix)` admits any family whose NAME begins with this
+ * one, which is the cross-spec contamination the prefix was added to
+ * prevent, arriving through the fix for it.
+ */
+describe("which milestones belong to a spec's family", () => {
+  const cases: { title: string | null; prefix: string; want: boolean; why: string }[] = [
+    { title: "Pipeline Phase 0 — the transform refuses", prefix: "Pipeline", want: true, why: "the derived shape" },
+    { title: "Pipeline Phase 10 — a two-digit phase", prefix: "Pipeline", want: true, why: "phases past nine" },
+    { title: "Pipeline Phase 3", prefix: "Pipeline", want: true, why: "a heading with no em dash" },
+    { title: "Pipeline Phase 0 — x", prefix: "Pipe", want: false, why: "a prefix of ANOTHER family's name" },
+    { title: "Pipelines Phase 1 — x", prefix: "Pipeline", want: false, why: "a longer family name" },
+    // The trailing space in the anchor is load-bearing, and nothing above
+    // showed it: every other row differs before `Phase` is reached.
+    // Without it `${prefix} Phase` matches this, and `phaseOf` then finds
+    // the 1 and calls it Phase 1.
+    { title: "Pipeline Phases 1 — a plural", prefix: "Pipeline", want: false, why: "`Phase` not followed by a space" },
+    { title: "Not Pipeline Phase 1 — x", prefix: "Pipeline", want: false, why: "the prefix mid-title" },
+    { title: "Pipeline — no phase at all", prefix: "Pipeline", want: false, why: "no phase to order by" },
+    { title: "Pipeline", prefix: "Pipeline", want: false, why: "the bare family name" },
+    { title: null, prefix: "Pipeline", want: false, why: "no milestone" },
+    { title: "Pipeline Phase 0 — x", prefix: "", want: false, why: "an empty prefix matches nothing here either" },
+  ];
+
+  for (const c of cases) {
+    test(`${JSON.stringify(c.title)} with prefix ${JSON.stringify(c.prefix)} is ${c.want} — ${c.why}`, () => {
+      expect(inMilestoneFamily(c.title, c.prefix)).toBe(c.want);
+    });
+  }
+
+  test("both arms are present, so no constant satisfies the table above", () => {
+    expect(cases.some(c => c.want)).toBe(true);
+    expect(cases.some(c => !c.want)).toBe(true);
   });
 });

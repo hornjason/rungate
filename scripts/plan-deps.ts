@@ -32,7 +32,7 @@ import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
 import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
 import type { DepEdge, DepIssue } from "../lib/spec-deps";
-import { ghWithoutGhToken, readLiveIssues } from "../lib/live-issues";
+import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues } from "../lib/live-issues";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-deps.test.ts` can build a
@@ -132,7 +132,7 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     return REFUSAL_EXIT;
   }
 
-  const issues = prefix === undefined ? read : read.filter(i => (i.milestone ?? "").startsWith(prefix));
+  const issues = prefix === undefined ? read : read.filter(i => inMilestoneFamily(i.milestone, prefix));
 
   // A prefix that matched nothing is its own reading, and it has to say so
   // here: `degenerateReasons` would report "no issues were read — an empty

@@ -241,6 +241,9 @@ describe("the issue population (B3)", () => {
           iss({ number: 12, milestone: null, labels: ["engine"] }), // labelled, no milestone
           iss({ number: 13, milestone: "Other Phase 1 — somebody else's" }), // wrong prefix
           iss({ number: 14, milestone: "Fix the flaky test" }), // right prefix, no phase
+          // Round 2 of #1703: a LONGER family name beginning with this
+          // one. A bare `startsWith("Fix")` admits it.
+          iss({ number: 15, milestone: "Fixture Phase 2 — a longer family" })
         ],
       });
       const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);

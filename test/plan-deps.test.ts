@@ -415,14 +415,29 @@ describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Pha
     expect(s.calls).toEqual(["#11 +10"]);
   });
 
-  test("an issue with no milestone is out, and so is one whose title merely CONTAINS the prefix", async () => {
+  test("every near miss is OUT — no milestone, the prefix mid-title, or a LONGER family name", async () => {
+    // The last row is round 2 of #1703: a bare `startsWith` admits any
+    // family whose name begins with this one, which is the contamination
+    // the flag exists to prevent arriving through the fix for it.
     const s = spy([
       ...MIXED,
       { number: 30, state: "OPEN", milestone: null, blockedBy: [] },
       { number: 31, state: "OPEN", milestone: "Not Pipeline Phase 1 — mid-title", blockedBy: [] },
+      { number: 32, state: "OPEN", milestone: "Pipelines Phase 1 — a longer name", blockedBy: [] },
+      { number: 33, state: "OPEN", milestone: "Pipeline — no phase at all", blockedBy: [] },
     ]);
     expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipeline"], s.gh)).toBe(0);
     expect(s.calls).toEqual(["#11 +10"]);
+  });
+
+  test("a prefix that is a PREFIX of the real family name matches nothing", async () => {
+    // `--milestone-prefix Pipe` against `Pipeline Phase N` used to admit
+    // the whole family and sequence it as if it were the caller's own.
+    const s = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipe"], s.gh)).toBe(
+      REFUSAL_EXIT,
+    );
+    expect(s.calls, "a truncated prefix sequenced another family's issues").toEqual([]);
   });
 
   test('an EMPTY prefix refuses — it is not "no filter requested"', async () => {
