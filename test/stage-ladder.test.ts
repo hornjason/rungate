@@ -248,7 +248,18 @@ describe("the live plan", () => {
     }
 
     const next = nextStage(stages);
-    expect(next?.stage, "every stage is complete — say so rather than deleting this assertion").not.toBeNull();
+    // Assert on `next`, NOT on `next?.stage`. `nextStage` returns a BARE
+    // `null` once every stage is done and no retro is owed — not
+    // `{stage: null}` — so `next?.stage` is `undefined` there, and
+    // `expect(undefined).not.toBeNull()` passes. That spelling shipped for
+    // one round and the review caught it: the row meant to announce "every
+    // stage is complete" was vacuous in exactly that case, and the test
+    // only failed two lines later with `Stage undefined has no agreed`.
+    // The second line is not redundant — a reading WITH a null stage is a
+    // different fact from no reading at all, and only this spelling can
+    // tell them apart.
+    expect(next, "every stage is complete — say so rather than deleting this assertion").not.toBeNull();
+    expect(next!.stage, "nextStage returned a reading whose stage is null").not.toBeNull();
     // Jason agreed A and C..F on 2026-10-30 and B on 2026-11-01. Before
     // that this read `toContain("agreed: null")` for B — the gate did its
     // job for the whole time that stage was a proposal.
