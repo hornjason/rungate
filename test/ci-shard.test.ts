@@ -19,10 +19,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createCiWorkflows, shardCount, suiteReadsTracker } from "../lib/scaffold/steps";
+import { DEFAULT_TRACKER_SECRET, createCiWorkflows, shardCount, suiteReadsTracker, trackerTokenSecret } from "../lib/scaffold/steps";
 import { mergeManagedWorkflow } from "../lib/scaffold/managed-workflow";
 
 describe("#728: shardCount reads one declaration", () => {
@@ -63,29 +63,37 @@ describe("#728: shardCount reads one declaration", () => {
  * always agrees.
  */
 describe("#728: the emitted CI workflow", () => {
+  // The cleanup is in a `finally` because both this helper and `emitWith`
+  // below have throwing paths — the UNMEASURED refusal here, and a
+  // deliberately malformed config there — and a `rmSync` on the line after
+  // the throw never runs. Every such run leaked an `mkdtemp` directory
+  // under the OS tmp dir. Found in review of #1712; fixed in both helpers
+  // in the same commit, because one of them is not the population.
   const emit = (shards?: number): string => {
     const root = mkdtempSync(join(tmpdir(), "rungate-shard-"));
-    mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
-    writeFileSync(
-      join(root, ".claude", "rungate", "config.json"),
-      JSON.stringify({
-        slug: "shardfix",
-        test: { command: "bun test", timeout: 300000 },
-        ci: shards === undefined ? {} : { shards },
-      }),
-    );
-    writeFileSync(join(root, ".bun-version"), "1.4.3\n");
-    createCiWorkflows(root, [], { force: true });
-
-    const out = join(root, ".github", "workflows", "ci.yml");
-    if (!existsSync(out)) {
-      throw new Error(
-        `the generator wrote no ci.yml for shards=${shards}. UNMEASURED, not a pass.`,
+    try {
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(
+        join(root, ".claude", "rungate", "config.json"),
+        JSON.stringify({
+          slug: "shardfix",
+          test: { command: "bun test", timeout: 300000 },
+          ci: shards === undefined ? {} : { shards },
+        }),
       );
+      writeFileSync(join(root, ".bun-version"), "1.4.3\n");
+      createCiWorkflows(root, [], { force: true });
+
+      const out = join(root, ".github", "workflows", "ci.yml");
+      if (!existsSync(out)) {
+        throw new Error(
+          `the generator wrote no ci.yml for shards=${shards}. UNMEASURED, not a pass.`,
+        );
+      }
+      return readFileSync(out, "utf8");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-    const yml = readFileSync(out, "utf8");
-    rmSync(root, { recursive: true, force: true });
-    return yml;
   };
 
   test("the generator is reachable and writes a workflow", () => {
@@ -249,20 +257,25 @@ describe("#1700: ci.suiteReadsTracker", () => {
     expect(suiteReadsTracker({})).toBe(false);
   });
 
+  // `finally`, for the reason given on `emit` above: the injection case
+  // below drives `createCiWorkflows` into a throw, which is the line the
+  // cleanup used to sit after.
   const emitWith = (ci: Record<string, unknown>): string => {
     const root = mkdtempSync(join(tmpdir(), "rungate-tracker-"));
-    mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
-    writeFileSync(
-      join(root, ".claude", "rungate", "config.json"),
-      JSON.stringify({ slug: "trackerfix", test: { command: "bun test", timeout: 300000 }, ci }),
-    );
-    writeFileSync(join(root, ".bun-version"), "1.4.3\n");
-    createCiWorkflows(root, [], { force: true });
-    const out = join(root, ".github", "workflows", "ci.yml");
-    if (!existsSync(out)) throw new Error("the generator wrote no ci.yml. UNMEASURED, not a pass.");
-    const yml = readFileSync(out, "utf8");
-    rmSync(root, { recursive: true, force: true });
-    return yml;
+    try {
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(
+        join(root, ".claude", "rungate", "config.json"),
+        JSON.stringify({ slug: "trackerfix", test: { command: "bun test", timeout: 300000 }, ci }),
+      );
+      writeFileSync(join(root, ".bun-version"), "1.4.3\n");
+      createCiWorkflows(root, [], { force: true });
+      const out = join(root, ".github", "workflows", "ci.yml");
+      if (!existsSync(out)) throw new Error("the generator wrote no ci.yml. UNMEASURED, not a pass.");
+      return readFileSync(out, "utf8");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   };
 
   /**
@@ -342,6 +355,117 @@ describe("#1700: ci.suiteReadsTracker", () => {
       expect(emitWith({ ...b.ci, suiteReadsTracker: false })).toBe(emitWith(b.ci));
     });
   }
+
+  /**
+   * `ci.trackerTokenSecret` — WHICH secret, because the built-in one
+   * cannot read a board.
+   *
+   * Measured 2026-11-02 on run `41406458500`: `secrets.GITHUB_TOKEN` read
+   * milestones and issues fine and could not see the Criteria column at
+   * all, because a ProjectV2 board is not a repository resource. B4 passed
+   * locally and failed in CI with every other reading green beside it.
+   */
+  describe("ci.trackerTokenSecret", () => {
+    test("absent, blank and whitespace all mean the built-in token", () => {
+      expect(trackerTokenSecret(undefined)).toBe(DEFAULT_TRACKER_SECRET);
+      expect(trackerTokenSecret(null)).toBe(DEFAULT_TRACKER_SECRET);
+      expect(trackerTokenSecret({})).toBe(DEFAULT_TRACKER_SECRET);
+      expect(trackerTokenSecret({ trackerTokenSecret: "" })).toBe(DEFAULT_TRACKER_SECRET);
+      expect(trackerTokenSecret({ trackerTokenSecret: "   " })).toBe(DEFAULT_TRACKER_SECRET);
+    });
+
+    test("a name is trimmed and returned", () => {
+      expect(trackerTokenSecret({ trackerTokenSecret: "RUNGATE_PROJECT_TOKEN" })).toBe("RUNGATE_PROJECT_TOKEN");
+      expect(trackerTokenSecret({ trackerTokenSecret: "  BOARD_PAT \n" })).toBe("BOARD_PAT");
+    });
+
+    /**
+     * THROWS rather than falling back, and the fallback is why.
+     *
+     * A typo'd name quietly resolved to the built-in token hands the suite
+     * a credential that authenticates perfectly and cannot see the board,
+     * so the reading comes back UNMEASURED and nothing names config as the
+     * cause. The pattern is also the injection guard: this string is
+     * interpolated into a `${{ }}` expression, so a value carrying `}}`
+     * would close it and write the rest into a consumer's pipeline.
+     */
+    test("a malformed name is REFUSED, not quietly replaced by the built-in", () => {
+      for (const bad of ["A }} B", "has space", "no-dash", "1LEADING", "a\nb", "${{ secrets.X }}", 7, true, []]) {
+        expect(
+          () => trackerTokenSecret({ trackerTokenSecret: bad }),
+          `${JSON.stringify(bad)} was accepted as a secret name`,
+        ).toThrow();
+      }
+    });
+
+    test("an injection-shaped name never reaches the generated YAML", () => {
+      // The assertion the one above cannot make: that the refusal is what
+      // keeps it out of the file, rather than some later escaping nobody
+      // has written.
+      expect(() => emitWith({ suiteReadsTracker: true, trackerTokenSecret: "X }} ${{ secrets.NPM_TOKEN" })).toThrow();
+    });
+
+    test("the refusing path leaves no temp directory behind", () => {
+      // Counted ON DISK, before and after, rather than asserted about the
+      // helper's source: what has to run is the `finally`, and a case that
+      // reads the file for the word would stay green against a `finally`
+      // that throws. Pre-existing leaks cancel in the difference.
+      const leaked = (): number => readdirSync(tmpdir()).filter((n) => n.startsWith("rungate-tracker-")).length;
+      const before = leaked();
+      expect(() => emitWith({ suiteReadsTracker: true, trackerTokenSecret: "X }} ${{ secrets.NPM_TOKEN" })).toThrow();
+      expect(leaked() - before, "the refusing emit left an mkdtemp directory under the OS tmp dir").toBe(0);
+    });
+
+    for (const b of bodies) {
+      test(`${b.what}: the named secret is the one handed over, and the built-in is not`, () => {
+        const yml = emitWith({ ...b.ci, suiteReadsTracker: true, trackerTokenSecret: "RUNGATE_PROJECT_TOKEN" });
+        const job = suiteJob(yml, b.job);
+        expect(job.length, `the ${b.what} suite job was not found, so this case read nothing`).toBeGreaterThan(0);
+        expect(
+          /^ {10}GITHUB_TOKEN: \$\{\{ secrets\.RUNGATE_PROJECT_TOKEN \}\}$/m.test(job),
+          `the ${b.what} job was not handed the NAMED secret`,
+        ).toBe(true);
+        expect(
+          handsOverToken(job),
+          `the ${b.what} job still takes the built-in token, which cannot read a board`,
+        ).toBe(false);
+      });
+
+      test(`${b.what}: naming the built-in explicitly is byte-identical to naming nothing`, () => {
+        // Otherwise the default path has two spellings that drift apart,
+        // and a consumer who writes the obvious thing gets a diff in their
+        // pipeline for no behavioural reason.
+        const builtIn = DEFAULT_TRACKER_SECRET;
+        expect(emitWith({ ...b.ci, suiteReadsTracker: true, trackerTokenSecret: builtIn })).toBe(
+          emitWith({ ...b.ci, suiteReadsTracker: true }),
+        );
+      });
+
+      test(`${b.what}: a named secret with the FLAG off still hands over nothing`, () => {
+        // `trackerTokenSecret` says which, never whether. Without this, a
+        // consumer who sets the name and forgets the flag could be handed a
+        // credential nothing asked for.
+        expect(emitWith({ ...b.ci, trackerTokenSecret: "RUNGATE_PROJECT_TOKEN" })).toBe(emitWith(b.ci));
+      });
+
+      test(`${b.what}: a MALFORMED name with the flag off does not refuse the whole scaffold`, () => {
+        // The refusal is the injection guard, and the only position the
+        // value is injected into is the `${{ }}` the flag already gates.
+        // With the flag off nothing interpolates it, so a stale or
+        // mid-edit value must not fail CI generation for a consumer who is
+        // not using the feature — this ships to every downstream project.
+        // Found in review of #1712. The flag-ON half stays a refusal: the
+        // injection case above passes `suiteReadsTracker: true`.
+        for (const bad of ["X }} ${{ secrets.NPM_TOKEN", "no-dash", "has space", 7]) {
+          expect(
+            () => emitWith({ ...b.ci, trackerTokenSecret: bad }),
+            `${JSON.stringify(bad)} with the flag OFF failed the whole generation`,
+          ).not.toThrow();
+        }
+        expect(emitWith({ ...b.ci, trackerTokenSecret: "no-dash" })).toBe(emitWith(b.ci));
+      });
+    }
+  });
 
   test("the two bodies really are different workflows, or the loop above is one case twice", () => {
     expect(emitWith({})).not.toBe(emitWith({ shards: 2 }));

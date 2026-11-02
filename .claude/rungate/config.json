@@ -42,6 +42,7 @@
     },
     "shards": 4,
     "suiteReadsTracker": true,
+    "trackerTokenSecret": "RUNGATE_PROJECT_TOKEN",
     "vertex": {
       "project": "jhorn-pai",
       "workloadIdentityProvider": "projects/939083080179/locations/global/workloadIdentityPools/github/providers/github-actions",

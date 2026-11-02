@@ -2,31 +2,23 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 73 (2026-11-02)** — STAGE B'S FOUR ITEMS EXIT 0 FROM MAIN, AND B2 WAS NOT STARTED.
+**Session 74 (2026-11-02)** — THE BOARD IS READABLE BY CI NOW, AND STAGE B'S LAST OPEN DEBT IS CLOSED.
 
-#1710 merged (45fa2a25). Ticked from main at that commit, each command run before the tick and not after:
+Jason created a `read:project` token and added it as the repository secret `RUNGATE_PROJECT_TOKEN`. `ci.trackerTokenSecret` names it, the scaffold emits it into the generated test step, B4 is back on the DEFAULT scope and `CREDENTIALED_ALLOWED` is 0 — so CI executes B4's verify like any other item and the debt recorded hours earlier is paid rather than carried.
 
-  milestones          MET 26 of 26   exit 0   B1
-  blocked-by-edges    MET 5 of 5     exit 0   B3
-  criteria-field      MET 5 of 5     exit 0   B4
-  queue-label         MET 5 of 5     exit 0   B6
-  criterion-coverage  UNMEASURED     exit 1   B2 — NOT STARTED
+The config key names WHICH secret; `ci.suiteReadsTracker` still decides WHETHER. Two keys because they are two questions, and a consumer who names a secret and forgets the flag must not be handed a credential — asserted, in both workflow bodies.
 
-B6 was the `engine` label on the five engine issues, and the population was derived live rather than taken from a carried-forward list: every open issue in a `Pipeline Phase N` milestone, which is #1675, #1677, #1678, #1680 and #1681. The reading already worked and said SHORT 0 of 5; nothing was built for it.
+A MALFORMED name THROWS rather than falling back to the built-in token. The fallback is the dangerous direction: the built-in token authenticates perfectly and cannot see a ProjectV2 board, so a typo in config would produce an UNMEASURED reading with nothing naming the cause. The same pattern is the injection guard — the value is interpolated into a `${{ }}` expression, so a name carrying `}}` would close it and write the rest into a consumer's pipeline. There is a case asserting an injection-shaped name never reaches the YAML, which is the half the refusal test cannot make on its own.
 
-B2 IS NOT STARTED AND THAT IS JASON'S CALL, NOT A BLOCKER. It requires creating an issue per engine criterion, and the backlog is running at 30 opened against 8 closed over seven days — 3.75 to 1. Spending into a diverging backlog is a decision about the project, not something a counter decides quietly. Stage B is therefore five of six, and `stageIsComplete` says so: the retro is written, but the stage does not read complete and Stage C is not available. That is the honest state and it is derived, not asserted.
+Three mutations, each red in exactly the predicted pair: removing the name pattern reddens the refusal and the injection case; making the generator ignore the configured name reddens both bodies' hand-over cases; letting a named secret turn the token on without the flag reddens both flag-off cases.
 
-THE RETRO IS WRITTEN, with six improvements — three in-place with a command that proves each, three open and declared as open. The three in-place: a stage item CI cannot verify now says so by name through `scope: "credentialed"` bounded by an equality; a reading that could not be TAKEN is distinguishable from one that came back empty at every layer, through an absent key rather than a null; and two identifiers in one config block are compared, so a field copied from another project cannot be read as this board's.
+`scope: "credentialed"` STAYS in the scope list even though nothing uses it. It is the right answer the next time evidence sits behind a credential, and deleting it would mean rediscovering it under a red build.
 
-THE WORST THING STAGE B DID, recorded as an open improvement because nothing enforces it yet: a number published in a PR body is a second copy of a measurement with nothing comparing them, and it went stale three times in one stage — `four API-backed items` when two was right, `31 pass` against a file holding 32 cases, and a session narrative saying `a fourth done item` after the test file had already been corrected. Every one was caught by a reviewer. In every one I had already fixed the number in the file.
+ON THE RATIO, A CORRECTION FROM JASON: the issues-opened-against-closed count does NOT gate engine work. Building the engine is what reduces the backlog, so holding B2 because the ratio is 3.75 to 1 blocks the fix on the symptom. The ratio applies when a SWARM runs on the backlog, which is where three-to-one actually hurt. B2 is therefore unblocked on that ground; it has not been started in this session.
 
-WHAT NEEDS JASON, two things, neither urgent:
-  1. B2 — whether to create issues against a 3.75-to-1 backlog.
-  2. A `read:project` credential for CI. Without it B4 cannot be verified by CI at all, which is recorded as `scope: "credentialed"` with a constant that falls to zero the day the token exists. Granting CI a credential is his decision and was put to him on #1710.
+WHAT NEEDS JASON: nothing right now. One thing worth knowing rather than acting on — a classic PAT with `repo` scope is write-capable, and the whole test suite sees it on same-repo pull requests. A fine-grained token with read-only Projects, Contents and Issues would do the same job with less reach, and swapping it needs no code change because the secret name stays the same.
 
-STAGE C IS NOT STARTED.
-
-Suite: No full local suite — .claude/rules/parallel-sessions.md forbids a concurrent full run while other sessions hold worktrees. Census-routed per diff: stage-ladder, prose-self-distance, closing-keywords, project-state-currency, project-state-shape, update-project-state, success-doc, distribution-standing and rule-lifecycle-spec — 284 pass, 12 todo, 0 fail across 9 files. Earlier in the day, on #1709: board-snapshot, live-issues, config-access-adoption, board-conformance, plan-deps, board-mirror and plan-spec — 323 pass, 0 fail — plus a 14-row mutation battery with zero holes. `bun run typecheck` at baseline throughout. CI ran the four shards on #1709, #1710 and #1711.
+Suite: No full local suite — .claude/rules/parallel-sessions.md forbids a concurrent full run while other sessions hold worktrees. Census-routed per diff: stage-ladder and ci-shard — 62 pass, 0 fail — plus the DA-owned state set. Three mutations against the new ci.trackerTokenSecret cases, every one red in the predicted pair. `bun run typecheck` at baseline.
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -111,6 +103,23 @@ Suite: 25/25 SCs done.
 
 ---
 
+**Session 2026-11-02 session 74:**
+- THE BOARD IS READABLE BY CI NOW, AND STAGE B'S LAST OPEN DEBT IS CLOSED.
+
+Jason created a `read:project` token and added it as the repository secret `RUNGATE_PROJECT_TOKEN`. `ci.trackerTokenSecret` names it, the scaffold emits it into the generated test step, B4 is back on the DEFAULT scope and `CREDENTIALED_ALLOWED` is 0 — so CI executes B4's verify like any other item and the debt recorded hours earlier is paid rather than carried.
+
+The config key names WHICH secret; `ci.suiteReadsTracker` still decides WHETHER. Two keys because they are two questions, and a consumer who names a secret and forgets the flag must not be handed a credential — asserted, in both workflow bodies.
+
+A MALFORMED name THROWS rather than falling back to the built-in token. The fallback is the dangerous direction: the built-in token authenticates perfectly and cannot see a ProjectV2 board, so a typo in config would produce an UNMEASURED reading with nothing naming the cause. The same pattern is the injection guard — the value is interpolated into a `${{ }}` expression, so a name carrying `}}` would close it and write the rest into a consumer's pipeline. There is a case asserting an injection-shaped name never reaches the YAML, which is the half the refusal test cannot make on its own.
+
+Three mutations, each red in exactly the predicted pair: removing the name pattern reddens the refusal and the injection case; making the generator ignore the configured name reddens both bodies' hand-over cases; letting a named secret turn the token on without the flag reddens both flag-off cases.
+
+`scope: "credentialed"` STAYS in the scope list even though nothing uses it. It is the right answer the next time evidence sits behind a credential, and deleting it would mean rediscovering it under a red build.
+
+ON THE RATIO, A CORRECTION FROM JASON: the issues-opened-against-closed count does NOT gate engine work. Building the engine is what reduces the backlog, so holding B2 because the ratio is 3.75 to 1 blocks the fix on the symptom. The ratio applies when a SWARM runs on the backlog, which is where three-to-one actually hurt. B2 is therefore unblocked on that ground; it has not been started in this session.
+
+WHAT NEEDS JASON: nothing right now. One thing worth knowing rather than acting on — a classic PAT with `repo` scope is write-capable, and the whole test suite sees it on same-repo pull requests. A fine-grained token with read-only Projects, Contents and Issues would do the same job with less reach, and swapping it needs no code change because the secret name stays the same.
+
 **Session 2026-11-02 session 73:**
 - STAGE B'S FOUR ITEMS EXIT 0 FROM MAIN, AND B2 WAS NOT STARTED.
 
@@ -166,21 +175,4 @@ WHAT WOULD CLOSE THE DEBT: a `read:project` token in CI. That is a credential gr
 STAGE B: B1, B3, B4 and B5 all exit 0 from main. B6 remains and needs only the `engine` label on the five engine issues — the reading already works and says SHORT 0 of 5. B2 is NOT being started.
 
 WHAT NEEDS JASON: 30 issues opened against 8 closed in seven days, 3.75 to 1. One of the thirty is mine. Nothing else needs him right now.
-
-**Session 2026-11-02 session 71:**
-- TWO DECIDERS THAT AGREED WAS THE DEFECT, AND THE FIX WAS A DELEGATION RATHER THAN A SECOND REPAIR.
-
-#1705 merged (f8ac754b). `plan-deps` and `board-snapshot` both ask which milestones belong to a spec's family, and they asked it with two different spellings that agree on every input anybody had tried — the fourth shape in `.claude/rules/checks-must-be-able-to-fail.md`, where no behavioural test can tell which one is holding a result up. `lib/spec-placement.ts`'s `phaseInFamily(title, prefix)` is now the only compiled copy of the `<prefix> Phase N` anchor; `inMilestoneFamily` is DEFINED as that parse succeeding, and `milestonePlan`'s own `phaseOf` delegates to it. A census in `test/live-issues.test.ts` asserts the anchor is compiled in exactly one file, because the behavioural cases cannot see a second copy that agrees today — a battery confirmed it, reverting the delegation to an identical regex turned nothing red.
-
-`--prefix` is one reading now too, with three states. `readMilestonePrefix` returns absent/blank/given. `plan-deps` had been testing `raw.trim() === ""` for emptiness while filtering with the UNTRIMMED `raw`, so `--milestone-prefix " Pipeline"` passed the guard, matched nothing, and refused naming a string that looks like it should obviously match. `plan-spec` and `board-snapshot` had the same split reversed — `if (!prefix)` admits `"   "`, and `plan-spec --write` would have created milestones called `"    Phase 1 — …"` on the live tracker. The POPULATION is guarded, not the three sites repaired: a test refuses any command declaring a `--prefix` string option that decides for itself.
-
-Every refusal in `plan-deps` and `plan-spec` now honours `--json`. A caller parsing stdout used to get usage text on four and six paths respectively, which is a crash where a reading was asked for.
-
-Three review rounds, six findings, every one real and every one answered by fixing the whole population rather than the member named. Round 3 was `low` and AGENTS.md rule 5 was applied — declined, with the reasoning published on the PR saying what a fourth round would fix. KNOWN AND DELIBERATELY UNFIXED, recorded there and not filed: `plan-deps` reads the API before checking a blank prefix, and `plan-spec --json --write` prints `wrote: "yes"` BEFORE `applyMilestones` runs.
-
-STAGE B: B1 and B3 both exit 0 from main. B3 landed as #1706 and is ticked by #1708. `blocked-by-edges` resolved every `blocked by` number against the OPEN engine population, so a FINISHED blocker was indistinguishable from a typo — both simply absent — and the reading would have flipped MET to SHORT the first time an engine issue closed, reddening B3's verify on correct work. The producer now resolves only the numbers an edge names that the open population could not answer, and emits them as `closedBlockers`; an absent key makes the reading UNMEASURED rather than silently narrowing. NOT a full closed-issue read, which answers the same question: measured here, 72 open issues against 805 in total turns one GraphQL page into nine on a command CI runs and an unattended loop polls, and a 502 was observed on it. Ten mutations across two batteries, every row red in exactly the predicted tests.
-
-CI on main was red at f8ac754b for `project-state currency` — this entry is what clears it. The suite is one shard behind the tree whenever a PR lands and nothing records it here, which is the file lying about where the project is.
-
-WHAT NEEDS JASON: 30 issues opened against 7 closed in seven days, 4.3 to 1 — worse than the 3.6 recorded yesterday, and the shape of the swarm he stopped. One of the thirty is mine (#1704, closed by #1706). B2 is NOT being started: it requires creating issues, and whether to spend into a diverging backlog is his call rather than something a counter decides quietly.
 
