@@ -16,6 +16,7 @@
  *
  * `plan-deps --write` applies edges. This reads them.
  */
+import { phaseInFamily } from "./spec-placement";
 import type { DepIssue } from "./spec-deps";
 
 /**
@@ -31,22 +32,30 @@ export const ISSUE_PAGE = 100;
 /**
  * Does this milestone belong to the spec family named by `prefix`?
  *
- * ONE binding, called by `plan-deps` and `board-snapshot`. They ask the same
- * question about the same input, and two guards that do that are
- * behaviourally one — a mutation of either leaves the other holding the case
- * up, and both read as covered while one is dead.
- *
- * The anchor is `<prefix> Phase `, not a bare `startsWith(prefix)`.
- * `lib/spec-placement.ts` builds every derived title as
+ * DEFINED as the anchored phase parse succeeding, rather than spelled out
+ * again here. `lib/spec-placement.ts` builds every derived title as
  * `${prefix} ${heading}` where the heading is `Phase N` or `Phase N — text`,
- * so that string is the family's actual shape. A bare prefix test admits any
- * family whose name merely BEGINS with this one — `Pipe` matching
- * `Pipeline Phase 0`, `Fix` matching `Fixture Phase 2` — which is the
- * cross-spec contamination the prefix exists to prevent, arriving through
- * the fix for it. Round 2 of #1703.
+ * and `phaseInFamily` is the one function that reads that grammar.
+ *
+ * ## Why it is a delegation and not a `startsWith`
+ *
+ * It WAS a `startsWith(`${prefix} Phase `)`, with a docblock claiming to be
+ * the one binding `plan-deps` and `board-snapshot` shared. That claim was
+ * false: `board-snapshot` reaches the question through `milestonePlan`,
+ * whose own `phaseOf` compiled `^<prefix> Phase (\d+)\b`. Two deciders
+ * answering one question about one input — the fourth shape in
+ * `.claude/rules/checks-must-be-able-to-fail.md` — and they disagreed, on
+ * `"Pipeline Phase  1 — oops"` and on anything else with no number after
+ * `Phase `. Round 2 of #1705.
+ *
+ * The anchor itself is still the point, and still not a bare
+ * `startsWith(prefix)`: that admits any family whose name merely BEGINS
+ * with this one — `Pipe` matching `Pipeline Phase 0`, `Fix` matching
+ * `Fixture Phase 2` — which is the cross-spec contamination the prefix
+ * exists to prevent, arriving through the fix for it (round 2 of #1703).
  */
 export function inMilestoneFamily(milestone: string | null | undefined, prefix: string): boolean {
-  return (milestone ?? "").startsWith(`${prefix} Phase `);
+  return phaseInFamily(milestone, prefix) !== null;
 }
 
 /**

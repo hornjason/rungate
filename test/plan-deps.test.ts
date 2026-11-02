@@ -614,6 +614,67 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
     });
   }
 
+  /**
+   * Round 2 of #1705. `readLiveIssues` throws rather than returning an empty
+   * list — a caller that cannot tell "no issues" from "the call failed"
+   * reports the flattering one. Nothing caught it here, so a bad token, a
+   * rate limit or an outage left `main()` rejecting: a stack trace on
+   * stderr and an EMPTY stdout, which under `--json` is the same crash the
+   * four cases above exist to stop, on the input that needs the payload
+   * most.
+   */
+  const THROWS: PlanDepsGitHub = {
+    createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+    readIssues: async () => {
+      throw new Error("gh: HTTP 403 — Bad credentials");
+    },
+    addBlockers: async () => {},
+  };
+
+  test("a FAILED issue read refuses on the --json channel, not as a rejection", async () => {
+    const got = await run(["--repo", "o/r", "--json", "--write"], THROWS);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    const payload = JSON.parse(got.stdout);
+    expect(payload.wrote).toBe("refused");
+    expect(payload.reading).toBe("UNMEASURED");
+    expect(
+      payload.unmeasuredReasons.join(" "),
+      "the payload refused without naming what the API said",
+    ).toContain("403");
+  });
+
+  test("the same failure on the TEXT channel says so too, and is not a stack trace", async () => {
+    const got = await run(["--repo", "o/r", "--write"], THROWS);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    expect(got.stdout.trim()).toBe("");
+    expect(got.stderr).toContain("403");
+    expect(got.stderr, "a failed read was reported as an empty repository").not.toContain(
+      "0 issue(s) read",
+    );
+  });
+
+  test("a client that cannot be built is the same refusal, not a rejection", async () => {
+    // `createClient` is the other call on this path that can throw, and a
+    // repair of only the one the finding named leaves it. Both go through
+    // the same guard.
+    const noClient: PlanDepsGitHub = {
+      createClient: (() => {
+        throw new Error("no GITHUB_TOKEN in the environment");
+      }) as PlanDepsGitHub["createClient"],
+      readIssues: async () => MIXED,
+      addBlockers: async () => {},
+    };
+    const got = await run(["--repo", "o/r", "--json"], noClient);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    expect(JSON.parse(got.stdout).unmeasuredReasons.join(" ")).toContain("GITHUB_TOKEN");
+  });
+
+  test("the control: a read that SUCCEEDS is not reported as a failed one", async () => {
+    const got = await run(["--repo", "o/r", "--json", "--milestone-prefix", "Pipeline"], spy(MIXED).gh);
+    expect(got.code).toBe(0);
+    expect(JSON.parse(got.stdout).reading).toBe("MEASURED");
+  });
+
   test("WITHOUT --json those same four stay on stderr and leave stdout empty", async () => {
     // The control. A fix that emits JSON unconditionally passes every case
     // above and breaks every human caller, and nothing above can see it.

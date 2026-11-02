@@ -154,8 +154,28 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     return refuse(values.json, `--repo is required (or set GITHUB_REPOSITORY)`, true);
   }
 
-  const client = gh.createClient();
-  const read = await gh.readIssues(client, repo, values["include-closed"]);
+  // The API call is the ONE thing on this path that fails by throwing, and
+  // `readLiveIssues` throws on purpose: a caller that cannot tell "the
+  // repository has no issues" from "the call failed" reports the flattering
+  // one. Uncaught, that throw left `main()` rejecting — a stack trace on
+  // stderr and an EMPTY stdout, which under `--json` is exactly the crash
+  // every refusal above was routed through `refuse()` to stop, arriving on
+  // the input that needs the payload most. Round 2 of #1705.
+  //
+  // `createClient` is inside the same `try`. Repairing only the call the
+  // finding named would leave the other one on the same path throwing the
+  // same way.
+  let read;
+  try {
+    const client = gh.createClient();
+    read = await gh.readIssues(client, repo, values["include-closed"]);
+  } catch (e) {
+    return refuse(
+      values.json,
+      `UNMEASURED — the issues could not be read: ${(e as Error).message}. That is a failed ` +
+        `call, not a repository with no issues.`,
+    );
+  }
 
   // Narrow the POPULATION, not the edges. The derivation is right about the
   // order it is handed; what it is handed has to be one spec's issues. An

@@ -374,6 +374,102 @@ describe("scripts/plan-spec --write: nothing reaches GitHub on an unsound table"
     ]);
   });
 
+  /**
+   * Round 2 of #1705. The blank-prefix refusal added in round 1 wrote plain
+   * text whatever `--json` said — reintroducing, in this PR, the exact gap
+   * round 1 closed in `plan-deps`. It is not the only one: SIX refusals
+   * return before `plan-spec`'s `--json` block, so this is the population
+   * rather than the line the finding pointed at.
+   */
+  async function jsonRefusal(argv: string[], onDisk = SOUND) {
+    const dir = mkdtempSync(join(tmpdir(), "rg-plan-spec-json-"));
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void err.push(a.join(" "));
+    try {
+      writeFileSync(join(dir, "SPEC.md"), onDisk);
+      const s = spy([]);
+      const code = await planSpecMain(["--project-root", dir, ...argv], s.gh);
+      return { code, stdout: out.join("\n"), stderr: err.join("\n"), created: s.created };
+    } finally {
+      console.log = log;
+      console.error = error;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const PLAN_SPEC_REFUSALS: { why: string; argv: string[]; names: string; spec?: string }[] = [
+    { why: "an unparseable argument", argv: ["SPEC.md", "--repo", "o/r", "--prefix", "C", "--nope"], names: "nope" },
+    { why: "no spec", argv: ["--repo", "o/r", "--prefix", "C"], names: "no spec given" },
+    { why: "a blank --prefix", argv: ["SPEC.md", "--repo", "o/r", "--prefix", "   "], names: "blank" },
+    { why: "no --prefix", argv: ["SPEC.md", "--repo", "o/r"], names: "--prefix" },
+    { why: "no --repo", argv: ["SPEC.md", "--prefix", "C"], names: "--repo" },
+    { why: "no spec on disk", argv: ["absent.md", "--repo", "o/r", "--prefix", "C"], names: "absent.md" },
+    {
+      why: "an unreadable placement table",
+      argv: ["SPEC.md", "--repo", "o/r", "--prefix", "C"],
+      names: "UNMEASURED",
+      spec: "# A spec with no placement table at all\n",
+    },
+  ];
+
+  for (const r of PLAN_SPEC_REFUSALS) {
+    test(`${r.why} emits a parseable payload under --json`, async () => {
+      const saved = process.env.GITHUB_REPOSITORY;
+      delete process.env.GITHUB_REPOSITORY;
+      let got;
+      try {
+        got = await jsonRefusal([...r.argv, "--json", "--write"], r.spec ?? SOUND);
+      } finally {
+        if (saved !== undefined) process.env.GITHUB_REPOSITORY = saved;
+      }
+      expect(got.code).toBe(REFUSAL_EXIT);
+      expect(got.created, "a refusal still created milestones").toEqual([]);
+      let payload: { wrote?: string; problems?: string[] };
+      try {
+        payload = JSON.parse(got.stdout);
+      } catch {
+        throw new Error(
+          `--json refusal (${r.why}) put nothing parseable on stdout. stdout was ` +
+            `${JSON.stringify(got.stdout)}; stderr was ${JSON.stringify(got.stderr.slice(0, 200))}`,
+        );
+      }
+      expect(payload.wrote).toBe("refused");
+      expect((payload.problems ?? []).join(" "), "the payload did not say which refusal").toContain(
+        r.names,
+      );
+    });
+  }
+
+  test("WITHOUT --json those refusals stay on stderr and leave stdout empty", async () => {
+    // The control, as in plan-deps: a fix that emits JSON unconditionally
+    // passes every case above and breaks every human caller.
+    const saved = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      for (const r of PLAN_SPEC_REFUSALS) {
+        const got = await jsonRefusal([...r.argv, "--write"], r.spec ?? SOUND);
+        expect(got.code).toBe(REFUSAL_EXIT);
+        expect(got.stdout.trim(), `${r.why} printed a payload nobody asked for`).toBe("");
+        expect(got.stderr, `${r.why} said nothing on stderr`).toContain(r.names);
+      }
+    } finally {
+      if (saved !== undefined) process.env.GITHUB_REPOSITORY = saved;
+    }
+  });
+
+  test("the refusal payload carries every key a SOUND --json run does", async () => {
+    const sound = await jsonRefusal(["SPEC.md", "--repo", "o/r", "--prefix", "Conv", "--json"]);
+    const refused = await jsonRefusal(["SPEC.md", "--repo", "o/r", "--prefix", "   ", "--json"]);
+    expect(sound.code).toBe(0);
+    expect(Object.keys(JSON.parse(refused.stdout)).sort()).toEqual(
+      Object.keys(JSON.parse(sound.stdout)).sort(),
+    );
+  });
+
   test("an unplaced criterion: --write creates NOTHING and refuses", async () => {
     const { code, created, renamed } = await run(UNPLACED, ["--write"]);
     expect(created, "a milestone was created despite the refusal").toEqual([]);

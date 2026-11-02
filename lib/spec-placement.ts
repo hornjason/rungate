@@ -59,6 +59,39 @@ export const NON_PHASE_PLACEMENTS = [
 /** `Phase 0`, `Phase 11`. The capture is the number. */
 export const PHASE_VALUE = /^Phase (\d+)$/;
 
+/**
+ * Which phase of `prefix`'s family this milestone title is, or `null`.
+ *
+ * THE anchored parse. `milestonePlan` calls it to file live milestones by
+ * phase, and `inMilestoneFamily` in `lib/live-issues.ts` is defined as
+ * "this returned a number" — so `plan-deps` narrowing a population and
+ * `board-snapshot` matching the board are the same decision, not two that
+ * happen to agree.
+ *
+ * Round 2 of #1705 found them disagreeing. `inMilestoneFamily` tested
+ * `startsWith(`${prefix} Phase `)`, which admits anything at all after the
+ * space; this needs a number there. On `"Pipeline Phase  1 — oops"` — one
+ * stray space — the first said yes and this says no, so `plan-deps` would
+ * have sequenced an issue whose phase `board-snapshot` files as unmanaged
+ * and `lib/board-mirror.ts` reads as 1. Two spellings of one grammar drift
+ * the moment either is edited, and nothing behavioural can see which of
+ * them a case is holding up: `.claude/rules/checks-must-be-able-to-fail.md`,
+ * fourth shape.
+ *
+ * The prefix is escaped, so a family name containing regex punctuation is
+ * matched literally rather than compiled.
+ *
+ * Not to be confused with `phaseOf` in `lib/board-mirror.ts`, which reads a
+ * phase number out of ANY title regardless of family. That one answers a
+ * different question — "what phase is this, whoever owns it" — and is the
+ * reason `--milestone-prefix` has to narrow the population before the order
+ * is derived.
+ */
+export function phaseInFamily(title: string | null | undefined, prefix: string): number | null {
+  const m = (title ?? "").match(new RegExp(String.raw`^${escapeRe(prefix)} Phase (\d+)\b`));
+  return m ? Number(m[1]) : null;
+}
+
 export interface PlacementRow {
   /** The first cell, asterisks stripped: `Phase 3`, `Done`, `Blocked — …`. */
   placement: string;
@@ -249,10 +282,7 @@ export function milestonePlan(
     if (m) byPhase.set(Number(m[1]), r.ids);
   }
 
-  const phaseOf = (title: string): number | null => {
-    const m = title.match(new RegExp(String.raw`^${escapeRe(prefix)} Phase (\d+)\b`));
-    return m ? Number(m[1]) : null;
-  };
+  const phaseOf = (title: string): number | null => phaseInFamily(title, prefix);
   const liveByPhase = new Map<number, LiveMilestone>();
   for (const l of live) {
     const n = phaseOf(l.title);

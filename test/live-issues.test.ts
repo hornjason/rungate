@@ -25,6 +25,7 @@ import {
   readMilestonePrefix,
   type GraphQlExec,
 } from "../lib/live-issues";
+import { phaseInFamily } from "../lib/spec-placement";
 
 type Node = {
   number: number;
@@ -212,6 +213,88 @@ describe("which milestones belong to a spec's family", () => {
   test("both arms are present, so no constant satisfies the table above", () => {
     expect(cases.some(c => c.want)).toBe(true);
     expect(cases.some(c => !c.want)).toBe(true);
+  });
+
+  /**
+   * Round 2 of #1705. `inMilestoneFamily` said it was the one binding
+   * `plan-deps` and `board-snapshot` share, and it was not: `board-snapshot`
+   * reaches the question through `milestonePlan`, whose own `phaseOf`
+   * re-implements the anchor as `^<prefix> Phase (\d+)\b`. Two deciders
+   * answering one question about one input, which is the fourth shape in
+   * `.claude/rules/checks-must-be-able-to-fail.md` — and they disagreed.
+   *
+   * These are the inputs the two spellings separate. A `startsWith` test
+   * admits anything at all after `Phase `; the regex needs a number there.
+   */
+  const DISAGREED = [
+    "Pipeline Phase  1 — two spaces, so the number is not where it looks",
+    "Pipeline Phase 1x — a digit glued to a word",
+    "Pipeline Phase one — spelled out",
+    "Pipeline Phase — nothing at all",
+  ];
+
+  for (const title of DISAGREED) {
+    test(`${JSON.stringify(title.slice(0, 26))}… is judged the same by both`, () => {
+      expect(inMilestoneFamily(title, "Pipeline")).toBe(phaseInFamily(title, "Pipeline") !== null);
+    });
+  }
+
+  test("and those inputs are OUT — an unreadable phase is not a family member", () => {
+    // Which direction they agreed in matters. Agreeing on `true` would mean
+    // `plan-deps` sequencing an issue whose phase nothing can read.
+    for (const title of DISAGREED) {
+      expect(inMilestoneFamily(title, "Pipeline"), `${JSON.stringify(title)} was admitted`).toBe(false);
+    }
+  });
+
+  test("the control: the two agree on the whole table above, both arms", () => {
+    // Without this the four rows above pass against a pair that agrees by
+    // both being constantly false.
+    for (const c of cases) {
+      expect(
+        inMilestoneFamily(c.title, c.prefix),
+        `the two anchors disagree about ${JSON.stringify(c.title)}`,
+      ).toBe(phaseInFamily(c.title ?? "", c.prefix) !== null);
+    }
+    expect(cases.filter(c => c.want).length).toBeGreaterThan(0);
+  });
+
+  test("the family anchor is COMPILED in exactly one place", () => {
+    // The behavioural cases above cannot see a second copy of the anchor
+    // that happens to agree today — that is the whole defect, and a battery
+    // confirmed it: reverting `milestonePlan`'s delegation to its own
+    // identical regex turns nothing red. Only a structural assertion can.
+    // COMMENTS FIRST. Both files describe the anchor in prose — this one
+    // quotes the `startsWith` spelling it replaced — and a guard that a
+    // docblock trips is a guard the next person deletes. The first spelling
+    // of this case reported two files and both hits were documentation.
+    const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    const found: string[] = [];
+    for (const dir of ["lib", "scripts"]) {
+      const at = join(import.meta.dir, "..", dir);
+      for (const name of readdirSync(at).filter(f => f.endsWith(".ts"))) {
+        // A prefix interpolated immediately before ` Phase ` — the shape of
+        // an anchored family parse, however the rest is spelled.
+        for (const _ of code(readFileSync(join(at, name), "utf-8")).matchAll(
+          /\$\{(?:escapeRe\()?prefix\)?\}\s*Phase /g,
+        )) {
+          found.push(`${dir}/${name}`);
+        }
+      }
+    }
+    expect(
+      found,
+      `the <prefix> Phase anchor is the family grammar and belongs to phaseInFamily in ` +
+        `lib/spec-placement.ts alone. A second copy is a second decider: it agrees today, ` +
+        `no behavioural case can tell which one is holding a result up, and the pair drifts ` +
+        `the moment either is edited.`,
+    ).toEqual(["lib/spec-placement.ts"]);
+  });
+
+  test("the anchored parse returns the NUMBER, which is what milestonePlan needs", () => {
+    expect(phaseInFamily("Pipeline Phase 10 — two digits", "Pipeline")).toBe(10);
+    expect(phaseInFamily("Pipeline Phase 0", "Pipeline")).toBe(0);
+    expect(phaseInFamily("Other Phase 3 — another spec", "Pipeline")).toBeNull();
   });
 });
 
