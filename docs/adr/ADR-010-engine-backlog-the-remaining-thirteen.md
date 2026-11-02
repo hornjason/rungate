@@ -150,18 +150,21 @@ totals in the prose, none of them the table's.
 ## Step two — the criteria the lead row could not carry
 
 `--decompose` writes the lead criterion into each new body. The other six are
-annotated afterwards, once the issues have numbers:
+annotated afterwards, once the issues have numbers. The `Repair` cell is the
+literal `(a)` for annotate and `(b)` for demote — `lib/issue-repair.ts`
+compares the cell to those two strings and refuses anything else, including
+the words they stand for:
 
 `bun bin/rungate.ts plan-issues --repair <repair-plan.md> --repo hornjason/rungate --write`
 
 | Issue | Phase | Repair | Criteria | Confidence | Why |
 |---|---|---|---|---|---|
-| *group 1* | 3 | annotate | SC-2609, SC-2610 | high | one change to the criteria cell; SC-2610 is an evidence repair, not a build |
-| *group 2* | 6 | annotate | SC-2615, SC-2616, SC-2617 | high | the three readings Phase 6 is missing |
-| *group 3* | 7 | annotate | SC-2618, SC-2619, SC-2620 | high | one command: terminal condition, inputs, where it runs |
-| *group 5* | 8 | annotate | SC-2622, SC-2623 | high | both are what a spec declares and proves about itself |
+| #1716 | 3 | (a) | SC-2609, SC-2610 | high | one change to the criteria cell; SC-2610 is an evidence repair, not a build |
+| #1717 | 6 | (a) | SC-2615, SC-2616, SC-2617 | high | the three readings Phase 6 is missing |
+| #1718 | 7 | (a) | SC-2618, SC-2619, SC-2620 | high | one command: terminal condition, inputs, where it runs |
+| #1720 | 8 | (a) | SC-2622, SC-2623 | high | both are what a spec declares and proves about itself |
 
-The `Issue` column is written when step one has run and the numbers exist.
+The `Issue` column was blank in #1715 and filled here: `--decompose --write` created #1716 through #1722 on 2026-11-02, in the order of the table above, and the four groups needing a second criterion are the four rows here.
 That is a hand-assembled intermediate and it is worth naming as one: it is
 the shape SC-2619 refuses for a *conformance reading*, and the reason the
 same shape is acceptable here is that a plan is an adjudication somebody
