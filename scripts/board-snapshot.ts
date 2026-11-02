@@ -317,8 +317,13 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
   // rather than paging the whole repository. A number naming no issue at
   // all comes back ABSENT from the map, which is the distinction the
   // reading depends on: a typo stays short.
-  const engineNumbers = new Set(engine.map(i => i.number));
-  const unresolved = [...new Set(engine.flatMap(i => i.blockedBy))].filter(n => !engineNumbers.has(n));
+  // Against the whole OPEN read, not the engine subset of it. An issue
+  // outside the milestone family is known OPEN the moment `readIssues`
+  // returns, so asking the API about it is a round trip for an answer
+  // already in hand — and on a tracker carrying several specs, most of a
+  // cross-spec edge list is exactly that. Round 1 of #1706.
+  const known = new Set(liveIssues.map(i => i.number));
+  const unresolved = [...new Set(engine.flatMap(i => i.blockedBy))].filter(n => !known.has(n));
   let states: Map<number, string>;
   try {
     states = unresolved.length === 0 ? new Map() : await gh.readStates(repo, unresolved);

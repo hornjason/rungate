@@ -600,13 +600,16 @@ describe("the refusals, and whether the API was reached", () => {
     // a command CI runs and an unattended loop polls, and a 502 was
     // observed on it while this was being written.
     //
-    // 10 and 11 are already in hand, so asking about them is a round trip
-    // for an answer the producer is holding.
+    // 10, 11 and 5 are all in hand — 5 because `readIssues` returns every
+    // OPEN issue, not only the engine ones, so an out-of-family blocker is
+    // known OPEN the moment it returns. Round 1 of #1706 found 5 being
+    // asked about.
     await withSpec(SPEC, async (_dir, at) => {
       const { gh, asked } = spy(CONFORMANT_LIVE, {
         issues: [
           iss({ number: 10, milestone: IN_PHASE_0, blockedBy: [] }),
-          iss({ number: 11, milestone: IN_PHASE_1, blockedBy: [10, 9, 9, 404] }),
+          iss({ number: 11, milestone: IN_PHASE_1, blockedBy: [10, 5, 9, 9, 404] }),
+          iss({ number: 5, milestone: "Other Phase 1 — another spec" }),
         ],
         states: { 9: "CLOSED" },
       });
@@ -616,6 +619,30 @@ describe("the refusals, and whether the API was reached", () => {
         [...asked[0]!].sort((a, b) => a - b),
         "it asked about a number it had already resolved, or asked twice about one",
       ).toEqual([9, 404]);
+    });
+  });
+
+  test("an OPEN issue OUTSIDE the family is already resolved — it costs no call at all", async () => {
+    // The population half of the row above. `known` is the whole open
+    // read; narrowing it to the engine subset is the same answer at the
+    // cost of a round trip per cross-spec edge, and on a tracker carrying
+    // several specs that is most of them.
+    await withSpec(SPEC, async (_dir, at) => {
+      const { gh, calls } = spy(CONFORMANT_LIVE, {
+        issues: [
+          iss({ number: 10, milestone: IN_PHASE_0 }),
+          iss({ number: 11, milestone: IN_PHASE_1, blockedBy: [10, 5] }),
+          iss({ number: 5, milestone: "Other Phase 1 — another spec" }),
+        ],
+      });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      expect(calls, "an open issue the producer already has was asked about").toEqual([
+        "createClient",
+        "listMilestones o/n",
+        "readIssues o/n",
+      ]);
+      // And it is still not finished work, so the emitted list is unmoved.
+      expect(snap.closedBlockers).toEqual([]);
     });
   });
 
