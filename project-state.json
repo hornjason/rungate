@@ -1073,19 +1073,19 @@
           "id": "B2",
           "what": "every engine criterion either names an open issue or is recorded as already true and needing only a binding",
           "done": false,
-          "verify": "bun bin/rungate.ts board-conformance --reading criterion-coverage"
+          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading criterion-coverage"
         },
         {
           "id": "B3",
-          "what": "blocked-by edges across the engine issues, so what is next is computed from the graph rather than read",
-          "done": false,
-          "verify": "bun bin/rungate.ts board-conformance --reading blocked-by-edges"
+          "what": "blocked-by edges across the engine issues, so what is next is computed from the graph rather than read — board-conformance --produce reads them live and MET 5 of 5 on 2026-11-02, after #1706 taught the producer to tell a FINISHED blocker from a number naming nothing",
+          "done": true,
+          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading blocked-by-edges"
         },
         {
           "id": "B4",
           "what": "the board's Criteria field populated for every engine issue — a DISPLAY MIRROR; the issue body stays the source of truth, because `gh issue list --json projectItems` returns Status only and cannot see custom fields",
           "done": false,
-          "verify": "bun bin/rungate.ts board-conformance --reading criteria-field"
+          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading criteria-field"
         },
         {
           "id": "B5",
@@ -1097,7 +1097,7 @@
           "id": "B6",
           "what": "the `engine` label is the work queue and every engine issue carries it, so 'nothing outside the queue gets an agent' is enforceable",
           "done": false,
-          "verify": "bun bin/rungate.ts board-conformance --reading queue-label"
+          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading queue-label"
         }
       ],
       "goal": "The engine spec becomes milestones, issues and edges — a real backlog to work from",
