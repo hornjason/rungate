@@ -1,4 +1,4 @@
-# generated-sha: d8f60da837d25be8
+# generated-sha: 1806f81f20cf6d45
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -77,6 +77,11 @@ permissions:
 jobs:
   test-shard:
     runs-on: "ubuntu-latest"
+    # ci.suiteReadsTracker. The step below reads milestones and issues;
+    # without this the token it is handed has no scope for either.
+    permissions:
+      contents: read
+      issues: read
     strategy:
       # One red shard must not cancel the others: the whole point is to see
       # every failure in one run rather than re-running to find the next.
@@ -118,6 +123,12 @@ jobs:
             echo "rungate: no scripts/ci-setup.sh in this tree, so no consumer setup ran (#529)"
           fi
       - run: bun test --shard=${{ matrix.shard }}/4
+        env:
+          # ci.suiteReadsTracker. Read-only, and paired with `issues: read`
+          # on the job above — the workflow declares `contents: read` and nothing else,
+          # so every other scope on this token is `none` and a tracker read
+          # is a 403 whatever this line says.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: bun run typecheck
       # #1190. The aggregate below counts these instead of asking the Actions
       # API: `gh` is a GitHub-hosted-image fact rather than a runner fact, and

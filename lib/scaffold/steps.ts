@@ -2838,6 +2838,37 @@ export function shardCount(ci: unknown): number {
 }
 
 /**
+ * Does this project's suite read the issue tracker? `ci.suiteReadsTracker`.
+ *
+ * **Off unless the config says the exact boolean `true`.** Not truthy, not
+ * the string `"true"`: a loose reading of a variable that hands a token to
+ * a test suite is a token handed out by accident, and the same argument
+ * `.claude/rules/config-access.md` makes about `RUNGATE_REQUIRE_AI_REVIEW`
+ * applies with the direction reversed — there the loose read turns a gate
+ * on, here it turns a credential on.
+ *
+ * When it is on, the generated shard step gets `GITHUB_TOKEN` from
+ * `secrets.GITHUB_TOKEN` and the job's `permissions:` gains `issues: read`.
+ * Both, or neither works: the workflow declares `contents: read` and
+ * nothing else, so every other scope on that token is `none` and a
+ * milestone read is a 403 whatever the step's env says.
+ *
+ * Why it exists at all: a conformance reading of the BOARD has no offline
+ * source. `rungate`'s own ladder (`project-state.json`, Stage B) runs
+ * `board-conformance` as a verify command, and a step that cannot
+ * authenticate reports UNMEASURED and refuses — so without this the ladder
+ * is red in CI or it stops checking most of a stage. Jason's call,
+ * 2026-11-01.
+ *
+ * Why it is not on for everyone: `issues: read` is a scope the surrounding
+ * job deliberately does not take, and most consumers' suites never touch
+ * the tracker. A credential nothing needs is a credential nobody audits.
+ */
+export function suiteReadsTracker(ci: unknown): boolean {
+  return (ci as { suiteReadsTracker?: unknown } | null | undefined)?.suiteReadsTracker === true;
+}
+
+/**
  * The one non-zero exit the shard aggregate ever takes (#1181).
  *
  * Declared once, and spelled nowhere else in the script, so
@@ -3573,6 +3604,26 @@ export function createCiWorkflows(root: string, actions: string[], opts: { force
   // literal here.
   const globalTools = globalToolInstallStep(harness?.ci);
 
+  // #1700 / Stage B. A conformance reading of the BOARD has no offline
+  // source, so the suite that takes one needs a token or it reports
+  // UNMEASURED and refuses. Off unless the project says so: `issues: read`
+  // is a scope the job below deliberately does not take, and a credential
+  // nothing needs is a credential nobody audits.
+  // Spliced into BOTH workflow bodies below — the sharded one and the
+  // unsharded one. They are two separate template literals a few hundred
+  // lines apart, and the first version of this change reached only the
+  // sharded one, so `suiteReadsTracker: true` was a silent no-op for every
+  // consumer without `ci.shards >= 2`. Found in review of #1701. Neither
+  // half shipping at all is the same failure as either half shipping
+  // alone, under a condition nothing tested for.
+  const tracker = suiteReadsTracker(harness?.ci);
+  const trackerTokenEnv = tracker
+    ? `\n        env:\n          # ci.suiteReadsTracker. Read-only, and paired with \`issues: read\`\n          # on the job above — the workflow declares \`contents: read\` and nothing else,\n          # so every other scope on this token is \`none\` and a tracker read\n          # is a 403 whatever this line says.\n          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}`
+    : "";
+  const trackerPermissions = tracker
+    ? `\n    # ci.suiteReadsTracker. The step below reads milestones and issues;\n    # without this the token it is handed has no scope for either.\n    permissions:\n      contents: read\n      issues: read`
+    : "";
+
   const typecheck = typecheckDecision(root);
   const typecheckStep = typecheck.command
     ? `\n      - run: ${typecheck.command}`
@@ -3654,7 +3705,7 @@ permissions:
 
 jobs:
   test-shard:
-    runs-on: ${runsOn}
+    runs-on: ${runsOn}${trackerPermissions}
     strategy:
       # One red shard must not cancel the others: the whole point is to see
       # every failure in one run rather than re-running to find the next.
@@ -3668,7 +3719,7 @@ ${baseRefStep}
         with:
 ${bunStep}
       - run: bun install${globalTools.step}${ciSetupStep()}
-      - run: ${test.command} --shard=\${{ matrix.shard }}/${shards}${typecheckStep}
+      - run: ${test.command} --shard=\${{ matrix.shard }}/${shards}${trackerTokenEnv}${typecheckStep}
 ${buildShardMarkerSteps("      ")}
 
   # The aggregate. Named "test" because that is the context branch protection
@@ -3748,7 +3799,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ${runsOn}
+    runs-on: ${runsOn}${trackerPermissions}
     steps:
 ${checkoutStep}
 ${baseRefStep}
@@ -3756,7 +3807,7 @@ ${baseRefStep}
         with:
 ${bunStep}
       - run: bun install${globalTools.step}${ciSetupStep()}
-      - run: ${test.command}${typecheckStep}
+      - run: ${test.command}${trackerTokenEnv}${typecheckStep}
 `;
 
   const gatesYml = `# Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
