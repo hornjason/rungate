@@ -37,7 +37,7 @@ import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { openFrontier, phaseOf } from "../lib/board-mirror";
 import { createGitHubClient, listMilestones } from "../lib/github";
-import { readBoardConfig } from "../lib/config-readers";
+import { readBoardConfig, readQueueLabel } from "../lib/config-readers";
 import {
   inMilestoneFamily,
   readIssueStates,
@@ -190,6 +190,14 @@ export interface ProducedSnapshot {
    * has a resolved edge.
    */
   closedBlockers: number[];
+  /**
+   * The work-queue label from `board.queueLabel`, or `null` when the
+   * project configures none. Resolved HERE because `board-conformance`
+   * must stay free of relative imports — its mutation battery copies it
+   * into an `mkdtemp` and a relative import makes the mutant fail to load
+   * (`.claude/rules/self-referential-tests.md`).
+   */
+  queueLabel: string | null;
   /**
    * The spec's criteria, and what the board says about each — item **B2**.
    *
@@ -449,6 +457,7 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
     phases: actions.map(a => ({ phase: a.phase, criteria: a.criteria, milestoneState: a.action })),
     issues: snapshotIssues,
     closedBlockers: [...named].sort((a, b) => a - b),
+    queueLabel: readQueueLabel(root),
     criteria: criterionCoverage(content, snapshotIssues, columnRead),
   };
 

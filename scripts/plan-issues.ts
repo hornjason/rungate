@@ -40,6 +40,7 @@ import {
 } from "../lib/issue-repair";
 import type { RepairRow } from "../lib/issue-repair";
 import { parseDecompositionPlan, planDecomposition } from "../lib/issue-decomposition";
+import { readQueueLabel } from "../lib/config-readers";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-issues.test.ts` can build a
@@ -165,7 +166,14 @@ export interface DecomposeGitHub {
   milestones: (repo: string) => Promise<Set<string>>;
   create: (
     repo: string,
-    issue: { title: string; body: string; milestone: string | null },
+    /**
+     * `label` is the work-queue label from `readQueueLabel`, or `null` when
+     * the project configures none. It is part of CREATION rather than a
+     * later edit because #1727 is what a later edit looks like: seven
+     * issues arrived on 2026-11-02 without it and `queue-label` fell MET
+     * 12 of 12 → 5 of 12, repaired by seven `gh issue edit` calls by hand.
+     */
+    issue: { title: string; body: string; milestone: string | null; label: string | null },
   ) => Promise<number>;
   addBlockedBy: (repo: string, blocked: number, blocker: number) => Promise<void>;
   /**
@@ -244,6 +252,7 @@ const LIVE_DECOMPOSE: DecomposeGitHub = {
   create: async (repo, issue) => {
     const args = ["issue", "create", "--repo", repo, "--title", issue.title, "--body-file", "-"];
     if (issue.milestone !== null) args.push("--milestone", issue.milestone);
+    if (issue.label !== null) args.push("--label", issue.label);
     const url = gh(args, issue.body).trim();
     const n = Number(url.split("/").pop());
     // A URL whose last segment is not a number means `gh` printed something
@@ -329,6 +338,12 @@ async function decompose(
   write: boolean,
   json: boolean,
   api: DecomposeGitHub,
+  /**
+   * The work-queue label to stamp on everything created, or `null`. Passed
+   * in rather than read here so a test can state both worlds without a
+   * config fixture on disk.
+   */
+  queueLabel: string | null,
 ): Promise<number> {
   const refuse = refusalReporter(json);
 
@@ -371,7 +386,12 @@ async function decompose(
     for (const a of planned.actions) {
       if (a.kind !== "create") continue;
       try {
-        const n = await api.create(repo, { title: a.title, body: a.body, milestone: a.row.milestone });
+        const n = await api.create(repo, {
+          title: a.title,
+          body: a.body,
+          milestone: a.row.milestone,
+          label: queueLabel,
+        });
         numbers.set(a.row.outcome, n);
         created.push({ title: a.title, number: n });
       } catch (e) {
@@ -534,7 +554,7 @@ export async function main(
     const within = relative(root, planPath);
     const escapes = within === ".." || within.startsWith(`..${sep}`);
     const planLabel = within === "" || escapes ? planPath : within;
-    return await decompose(planPath, planLabel, repo, values.write, values.json, gh3);
+    return await decompose(planPath, planLabel, repo, values.write, values.json, gh3, readQueueLabel(root));
   }
 
   const reading = parseRepairPlan(readFileSync(planPath, "utf-8"));
