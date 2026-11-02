@@ -95,6 +95,19 @@ const state = JSON.parse(readFileSync(STATE, "utf-8"));
 const latestDate: string = state.session?.date ?? "";
 
 /**
+ * The session number an entry in `sessions[]` declares, or `null`.
+ *
+ * The array's `date` carries both, as `"2026-11-02 session 73"`. Null
+ * rather than 0 when no number is spelled: a missing number and session
+ * zero are different facts, and the caller reports them differently.
+ */
+export function sessionNumberIn(date: unknown): number | null {
+  if (typeof date !== "string") return null;
+  const m = /\bsession\s+(\d+)\b/i.exec(date);
+  return m ? Number(m[1]) : null;
+}
+
+/**
  * The one timezone every date in this comparison is resolved in (#766).
  *
  * Both sides of the comparison are calendar days, and a calendar day has no
@@ -201,6 +214,53 @@ describe("project-state currency", () => {
     expect(latestDate, "project-state.json has no session.date — nothing to compare against").toMatch(
       /^\d{4}-\d{2}-\d{2}/,
     );
+  });
+
+  // The headline and the history are two copies of "which session is this",
+  // and nothing compared them. Measured on #1711: `sessions[]` had run to 73
+  // while the top-level `session` still held 71 — so `PROJECT-STATE.md`,
+  // whose first line is "Read this before anything else", opened by saying
+  // Stage B was B1 and B3, two sessions after B4, B5 and B6 were ticked. The
+  // renderer takes the headline from one and the body from the other, so the
+  // same document contradicted itself and neither half was wrong on its own.
+  test("the headline session is the newest one in the history", () => {
+    const newest = sessionNumberIn(state.sessions?.[0]?.date);
+    expect(
+      newest,
+      `sessions[0].date is ${JSON.stringify(state.sessions?.[0]?.date)} and spells no session number. ` +
+        `Write it as "YYYY-MM-DD session N" — without the number this comparison is UNMEASURED, which is ` +
+        `not the same as the two halves agreeing.`,
+    ).not.toBeNull();
+
+    // `sessions[0]` is only the newest if the array is newest-first, and
+    // nothing enforced that. An entry PUSHED instead of UNSHIFTED leaves a
+    // correctly-ordered-looking file whose first element is session 1, and
+    // the comparison below would then demand the headline match it — a
+    // guard that fires on the wrong half and sends the fixer to the wrong
+    // file. So the ordering is asserted rather than assumed. Round 2 of
+    // #1711.
+    const numbered: { at: number; n: number }[] = (state.sessions ?? [])
+      .map((s: { date?: unknown }, at: number) => ({ at, n: sessionNumberIn(s?.date) }))
+      .filter((r: { n: number | null }) => r.n !== null);
+    const highest = numbered.reduce(
+      (best: { at: number; n: number }, r: { at: number; n: number }) => (r.n > best.n ? r : best),
+      { at: -1, n: -1 },
+    );
+    expect(
+      highest.at,
+      `sessions[${highest.at}] carries the highest session number (${highest.n}) but the array is read ` +
+        `newest-first, so sessions[0] must hold it. An entry was appended instead of prepended — move it ` +
+        `to the front. Until it is, every reader of this file, and the headline comparison below, is ` +
+        `looking at the wrong entry.`,
+    ).toBe(0);
+    expect(
+      state.session?.number,
+      `project-state.json's top-level session is ${JSON.stringify(state.session?.number)} while the newest ` +
+        `entry in sessions[] is ${newest}. PROJECT-STATE.md renders its headline from the first and its ` +
+        `body from the second, so it states two different answers to "where is this project". Update the ` +
+        `top-level session block in the same commit that adds a session entry — number, date, suite, ` +
+        `issues and summary — and re-run scripts/update-project-state.ts.`,
+    ).toBe(newest);
   });
 
   test("git is readable — an unreadable log is UNMEASURED, not clean", () => {
