@@ -484,6 +484,178 @@ describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Pha
     expect(text).toContain("4 issue(s) were read");
     expect(text, "it blamed the read for what the filter did").not.toContain("no issues were read");
   });
+
+  /**
+   * Round 1 of #1705. The emptiness guard tested `prefix.trim() === ""` and
+   * the filter then used the UNTRIMMED value, so the two disagreed about
+   * every input with whitespace on an end: `" Pipeline"` passes the guard,
+   * matches nothing, and refuses with a message naming a string that looks
+   * like it should obviously match.
+   *
+   * The pair of cases below is the point. Trimming only the GUARD is the
+   * state this is leaving; trimming only the FILTER would accept `"   "` and
+   * silently sequence every family. One trimmed reading feeds both.
+   */
+  test("a prefix with whitespace on an end is TRIMMED, not refused for matching nothing", async () => {
+    for (const padded of [" Pipeline", "Pipeline ", "  Pipeline  ", "\tPipeline\n"]) {
+      const s = spy(MIXED);
+      expect(
+        await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", padded], s.gh),
+        `--milestone-prefix ${JSON.stringify(padded)} was refused`,
+      ).toBe(0);
+      expect(s.calls, `${JSON.stringify(padded)} did not reach the Pipeline family`).toEqual([
+        "#11 +10",
+      ]);
+    }
+  });
+
+  test("trimming touches the ENDS only — a family name with a space inside survives", async () => {
+    // The control for the case above. `replaceAll(" ", "")` and a
+    // `trim()`-shaped fix are the same on every input there; this input
+    // separates them, and a prefix of two words is the ordinary case on a
+    // tracker carrying more than one spec.
+    const s = spy([
+      { number: 40, state: "OPEN", milestone: "Spec Two Phase 0 — a", blockedBy: [] },
+      { number: 41, state: "OPEN", milestone: "Spec Two Phase 1 — b", blockedBy: [] },
+    ]);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", " Spec Two "], s.gh)).toBe(0);
+    expect(s.calls).toEqual(["#41 +40"]);
+  });
+});
+
+/**
+ * `--json` is a CONTRACT, and a refusal has to keep it — round 1 of #1705.
+ *
+ * `--json` is documented as "the whole plan, for something other than a
+ * person". Four refusals returned before the `--json` block, so a caller
+ * doing `JSON.parse(stdout)` got an empty string and a crash where it should
+ * have got a structured `wrote: "refused"` payload. The UNMEASURED-from-
+ * `dependencyPlan` case already honoured both channels; these four did not,
+ * which is the population.
+ *
+ * Each case asserts the payload PARSES and says which refusal it was. An
+ * exit code cannot carry that: all four are 1.
+ */
+describe("scripts/plan-deps --json: every refusal reaches the channel the caller asked for", () => {
+  function spy(issues: DepIssue[]) {
+    const calls: string[] = [];
+    const gh: PlanDepsGitHub = {
+      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+      readIssues: async () => issues,
+      addBlockers: async (_repo, blocked, blockers) => {
+        calls.push(`#${blocked} +${[...blockers].join(",")}`);
+      },
+    };
+    return { gh, calls };
+  }
+
+  const MIXED: DepIssue[] = [
+    { number: 10, state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
+    { number: 11, state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
+  ];
+
+  /** Runs `main` with both channels captured, so neither can hide. */
+  async function run(argv: string[], gh: PlanDepsGitHub) {
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void err.push(a.join(" "));
+    try {
+      const code = await planDepsMain(argv, gh);
+      return { code, stdout: out.join("\n"), stderr: err.join("\n") };
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+  }
+
+  const REFUSALS: { why: string; argv: string[]; names: string }[] = [
+    { why: "an unparseable argument", argv: ["--repo", "o/r", "--nonsense"], names: "nonsense" },
+    { why: "no --repo", argv: [], names: "--repo" },
+    { why: "a blank --milestone-prefix", argv: ["--repo", "o/r", "--milestone-prefix", "   "], names: "blank" },
+    {
+      why: "a --milestone-prefix matching nothing",
+      argv: ["--repo", "o/r", "--milestone-prefix", "Nope"],
+      names: "Nope",
+    },
+  ];
+
+  for (const r of REFUSALS) {
+    test(`${r.why} still emits a parseable payload under --json`, async () => {
+      const s = spy(MIXED);
+      const saved = process.env.GITHUB_REPOSITORY;
+      delete process.env.GITHUB_REPOSITORY;
+      let got;
+      try {
+        got = await run([...r.argv, "--json", "--write"], s.gh);
+      } finally {
+        if (saved !== undefined) process.env.GITHUB_REPOSITORY = saved;
+      }
+      expect(got.code, "the refusal stopped reporting a failure").toBe(REFUSAL_EXIT);
+      expect(s.calls, "a refusal still wrote").toEqual([]);
+
+      let payload: { wrote?: string; reading?: string; unmeasuredReasons?: string[] };
+      try {
+        payload = JSON.parse(got.stdout);
+      } catch {
+        throw new Error(
+          `--json refusal (${r.why}) put nothing parseable on stdout. stdout was ` +
+            `${JSON.stringify(got.stdout)}; stderr was ${JSON.stringify(got.stderr)}`,
+        );
+      }
+      expect(payload.wrote, "the payload did not say the write was refused").toBe("refused");
+      expect(payload.reading).toBe("UNMEASURED");
+      expect(
+        (payload.unmeasuredReasons ?? []).join(" "),
+        "the payload refused without saying which refusal it was",
+      ).toContain(r.names);
+    });
+  }
+
+  test("WITHOUT --json those same four stay on stderr and leave stdout empty", async () => {
+    // The control. A fix that emits JSON unconditionally passes every case
+    // above and breaks every human caller, and nothing above can see it.
+    const saved = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      for (const r of REFUSALS) {
+        const s = spy(MIXED);
+        const got = await run([...r.argv, "--write"], s.gh);
+        expect(got.code).toBe(REFUSAL_EXIT);
+        expect(got.stdout.trim(), `${r.why} printed a payload nobody asked for`).toBe("");
+        expect(got.stderr, `${r.why} said nothing on stderr`).toContain(r.names);
+      }
+    } finally {
+      if (saved !== undefined) process.env.GITHUB_REPOSITORY = saved;
+    }
+  });
+
+  test("a SOUND --json run is unchanged — same keys, and `wrote` is not `refused`", async () => {
+    // Without this, a refusal payload that happens to be well-formed proves
+    // nothing about the shape a consumer actually switches on.
+    const s = spy(MIXED);
+    const got = await run(["--repo", "o/r", "--json", "--write", "--milestone-prefix", "Pipeline"], s.gh);
+    expect(got.code).toBe(0);
+    const payload = JSON.parse(got.stdout);
+    expect(payload.wrote).toBe("yes");
+    expect(payload.reading).toBe("MEASURED");
+    for (const key of ["reading", "unmeasuredReasons", "phases", "missing", "present", "extra", "results", "wrote"]) {
+      expect(Object.keys(payload), `the success payload lost \`${key}\``).toContain(key);
+    }
+  });
+
+  test("the refusal payload carries every key the success payload does", async () => {
+    // A consumer reading `.missing.length` on a refusal must get `[]`, not a
+    // TypeError. The two shapes are asserted against each other rather than
+    // against a hand-copied list, so neither can drift alone.
+    const sound = await run(["--repo", "o/r", "--json", "--milestone-prefix", "Pipeline"], spy(MIXED).gh);
+    const refused = await run(["--repo", "o/r", "--json", "--milestone-prefix", "Nope"], spy(MIXED).gh);
+    const soundKeys = Object.keys(JSON.parse(sound.stdout)).sort();
+    const refusedKeys = Object.keys(JSON.parse(refused.stdout)).sort();
+    expect(refusedKeys).toEqual(soundKeys);
+  });
 });
 
 describe("the shape the live convergence board has", () => {

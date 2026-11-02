@@ -32,7 +32,7 @@ import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
 import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
 import type { DepEdge, DepIssue } from "../lib/spec-deps";
-import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues } from "../lib/live-issues";
+import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues, readMilestonePrefix } from "../lib/live-issues";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-deps.test.ts` can build a
@@ -40,6 +40,48 @@ import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues } from "../lib/live
  * (`.claude/rules/checks-must-be-able-to-fail.md`).
  */
 export const REFUSAL_EXIT = 1;
+
+/**
+ * Refuse on the channel the caller asked for — round 1 of #1705.
+ *
+ * `--json` is documented as "the whole plan, for something other than a
+ * person", and four refusals returned before the `--json` block ever ran: an
+ * unparseable argument, a missing `--repo`, and the two prefix refusals. A
+ * caller doing `JSON.parse(stdout)` got an empty string and a crash, on
+ * exactly the inputs where it most needed to be told what went wrong.
+ *
+ * The payload carries every key the success payload does, asserted against
+ * the success payload rather than a hand-copied list, so a consumer reading
+ * `.missing.length` on a refusal gets `0` and not a `TypeError`.
+ *
+ * `usage` is appended only on the text channel. A usage block is for a
+ * person; inside a JSON string it is noise a parser has to step over.
+ */
+function refuse(json: boolean, reason: string, usage = false): number {
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          reading: "UNMEASURED",
+          unmeasuredReasons: [reason],
+          phases: [],
+          missing: [],
+          present: [],
+          extra: [],
+          unphased: [],
+          frontier: null,
+          results: [],
+          wrote: "refused",
+        },
+        null,
+        2,
+      ),
+    );
+  } else {
+    console.error(`plan-deps: ${reason}${usage ? `\n\n${USAGE}` : ""}`);
+  }
+  return REFUSAL_EXIT;
+}
 
 export interface PlanDepsGitHub {
   createClient: typeof createGitHubClient;
@@ -82,6 +124,12 @@ const USAGE = `rungate plan-deps --repo <owner/name> [--write] [--json] [--inclu
                       repository carries more than one spec's milestones.`;
 
 export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Promise<number> {
+  // Read off the RAW argv, because the refusal below happens when there is no
+  // parse to read `values.json` from. `--json` is declared boolean, and
+  // `parseArgs` rejects `--json=x` for a boolean option, so an exact match is
+  // the whole set of spellings that reach the parsed value.
+  const jsonRequested = argv.includes("--json");
+
   let parsed;
   try {
     parsed = parseArgs({
@@ -97,15 +145,13 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
       allowPositionals: true,
     });
   } catch (e) {
-    console.error(`plan-deps: ${(e as Error).message}\n\n${USAGE}`);
-    return REFUSAL_EXIT;
+    return refuse(jsonRequested, (e as Error).message, true);
   }
 
   const { values } = parsed;
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) {
-    console.error(`plan-deps: --repo is required (or set GITHUB_REPOSITORY)\n\n${USAGE}`);
-    return REFUSAL_EXIT;
+    return refuse(values.json, `--repo is required (or set GITHUB_REPOSITORY)`, true);
   }
 
   const client = gh.createClient();
@@ -115,23 +161,28 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // order it is handed; what it is handed has to be one spec's issues. An
   // issue with no milestone is out by the same test — `startsWith` on a
   // missing title is not a match, and it would be `unphased` anyway.
-  const prefix = values["milestone-prefix"];
+  //
+  // ONE reading, trimmed once, feeding both the refusal and the filter. The
+  // first version tested `raw.trim() === ""` and filtered with `raw`, so
+  // `" Pipeline"` passed the guard and matched nothing (round 1 of #1705).
+  const prefixRead = readMilestonePrefix(values["milestone-prefix"]);
 
-  // An EMPTY prefix is not "no filter requested". `"".startsWith("")` is
-  // true for every string, including the `""` a null milestone normalises
-  // to, so `--milestone-prefix "$X"` with `$X` unset quietly re-admits every
-  // spec's issues — the exact contamination the flag exists to prevent, and
-  // it would report success. `plan-spec` and `board-snapshot` already refuse
-  // an empty `--prefix`; this is the third member of that population.
-  if (prefix !== undefined && prefix.trim() === "") {
-    console.error(
-      `plan-deps: --milestone-prefix was given and is empty. An empty prefix matches every ` +
-        `milestone, which is not a narrowed population — omit the flag if you meant no filter.` +
-        `\n\n${USAGE}`,
+  // A BLANK prefix is not "no filter requested". `"".startsWith(" Phase ")`
+  // is false, but `inMilestoneFamily(m, "")` tests `" Phase "`, which every
+  // derived title contains — so `--milestone-prefix "$X"` with `$X` unset
+  // quietly re-admits every spec's issues and reports success, the exact
+  // contamination the flag exists to prevent. `plan-spec` and
+  // `board-snapshot` refuse a blank `--prefix` through the same reading.
+  if (prefixRead.kind === "blank") {
+    return refuse(
+      values.json,
+      `--milestone-prefix was given as ${JSON.stringify(prefixRead.raw)}, which is blank. A blank ` +
+        `prefix narrows nothing — omit the flag if you meant no filter.`,
+      true,
     );
-    return REFUSAL_EXIT;
   }
 
+  const prefix = prefixRead.kind === "given" ? prefixRead.prefix : undefined;
   const issues = prefix === undefined ? read : read.filter(i => inMilestoneFamily(i.milestone, prefix));
 
   // A prefix that matched nothing is its own reading, and it has to say so
@@ -141,11 +192,11 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // the prefix is the likeliest way to arrive here, and that sentence sends
   // the reader to the API.
   if (prefix !== undefined && issues.length === 0 && read.length > 0) {
-    console.error(
-      `plan-deps: UNMEASURED — ${read.length} issue(s) were read and NONE carries a milestone ` +
+    return refuse(
+      values.json,
+      `UNMEASURED — ${read.length} issue(s) were read and NONE carries a milestone ` +
         `starting "${prefix}". That is a prefix matching nothing, not a repository with no issues.`,
     );
-    return REFUSAL_EXIT;
   }
 
   const plan = dependencyPlan(issues, { includeClosed: values["include-closed"] });

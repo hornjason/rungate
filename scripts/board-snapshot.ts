@@ -37,6 +37,7 @@ import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient, listMilestones } from "../lib/github";
 import { milestonePlan, placementReading } from "../lib/spec-placement";
+import { readMilestonePrefix } from "../lib/live-issues";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -117,11 +118,22 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
     console.error(`board-snapshot: no spec given\n\n${USAGE}`);
     return REFUSAL_EXIT;
   }
-  const prefix = values.prefix;
-  if (!prefix) {
-    console.error(`board-snapshot: --prefix is required\n\n${USAGE}`);
+  // ONE reading, trimmed once — the same binding `plan-spec` and `plan-deps`
+  // call. `if (!prefix)` was false for `"   "`, so a blank prefix derived
+  // milestone titles starting with the space, matched none of the live ones,
+  // and reported a conformant board as needing every milestone created.
+  // Round 1 of #1705.
+  const prefixRead = readMilestonePrefix(values.prefix);
+  if (prefixRead.kind !== "given") {
+    console.error(
+      prefixRead.kind === "absent"
+        ? `board-snapshot: --prefix is required\n\n${USAGE}`
+        : `board-snapshot: --prefix was given as ${JSON.stringify(prefixRead.raw)}, which is blank. ` +
+            `It would match no milestone on the board and report every phase as missing.\n\n${USAGE}`,
+    );
     return REFUSAL_EXIT;
   }
+  const prefix = prefixRead.prefix;
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) {
     console.error(`board-snapshot: --repo is required (or set GITHUB_REPOSITORY)\n\n${USAGE}`);

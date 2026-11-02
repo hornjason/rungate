@@ -264,6 +264,45 @@ describe("the refusals, and whether the API was reached", () => {
     });
   });
 
+  /**
+   * Round 1 of #1705, swept. The finding was reported against `plan-deps`,
+   * where a guard trimmed and a filter did not. Here the split runs the
+   * other way: `if (!prefix)` is false for `"   "`, so a blank prefix was
+   * accepted and `milestonePlan` would plan milestones called
+   * `"    Phase 0 — …"`. One trimmed reading now serves both commands.
+   */
+  test("a BLANK --prefix refuses, and never reaches the API", async () => {
+    await withSpec(SPEC, async (_dir, at) => {
+      for (const blank of ["", "   ", "\t", "\n "]) {
+        const { gh, calls } = spy(CONFORMANT_LIVE);
+        expect(
+          await boardSnapshotMain([at, "--prefix", blank, "--repo", "o/n"], gh),
+          `--prefix ${JSON.stringify(blank)} was accepted`,
+        ).toBe(REFUSAL_EXIT);
+        expect(calls, `--prefix ${JSON.stringify(blank)} reached the API`).toEqual([]);
+      }
+    });
+  });
+
+  test("a --prefix with whitespace on an end is TRIMMED, and names the same family", async () => {
+    // The control for the case above: a guard that refuses every prefix
+    // containing whitespace would pass it. These two must disagree, and the
+    // only reading that makes them disagree is a trimmed one.
+    // `CONFORMANT_LIVE` holds milestones already named `Fix Phase N — …`.
+    // An untrimmed `"  Fix  "` derives `"  Fix    Phase 0 — …"`, matches none
+    // of them, and every phase comes back `create` — a board that is already
+    // right, reported as needing six milestones made.
+    await withSpec(SPEC, async (_dir, at) => {
+      const padded = await emitted([at, "--prefix", "  Fix  ", "--repo", "o/n"], spy(CONFORMANT_LIVE).gh);
+      const plain = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], spy(CONFORMANT_LIVE).gh);
+      expect(padded.phases.map(p => p.milestoneState)).toEqual(plain.phases.map(p => p.milestoneState));
+      expect(
+        plain.phases.map(p => p.milestoneState),
+        "the control is vacuous — the plain prefix did not recognise the live board either",
+      ).toEqual(["unchanged", "unchanged"]);
+    });
+  });
+
   test("--repo falls back to GITHUB_REPOSITORY, and refuses when neither is set", async () => {
     await withSpec(SPEC, async (_dir, at) => {
       const had = process.env.GITHUB_REPOSITORY;

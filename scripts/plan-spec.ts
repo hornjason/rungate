@@ -52,6 +52,7 @@ import {
   placementReading,
   uncoveredByMilestone,
 } from "../lib/spec-placement";
+import { readMilestonePrefix } from "../lib/live-issues";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-spec.test.ts` can build a
@@ -120,11 +121,22 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
     console.error(`plan-spec: no spec given\n\n${USAGE}`);
     return REFUSAL_EXIT;
   }
-  const prefix = values.prefix;
-  if (!prefix) {
-    console.error(`plan-spec: --prefix is required\n\n${USAGE}`);
+  // ONE reading, trimmed once. `if (!prefix)` was false for `"   "`, and
+  // this command WRITES: a blank prefix would have created live milestones
+  // called `"    Phase 1 — …"`, and a padded one `"  Conv   Phase 1 — …"`,
+  // matching no milestone already on the board. Round 1 of #1705 found the
+  // same guard/use split in `plan-deps`; this is the same population.
+  const prefixRead = readMilestonePrefix(values.prefix);
+  if (prefixRead.kind !== "given") {
+    console.error(
+      prefixRead.kind === "absent"
+        ? `plan-spec: --prefix is required\n\n${USAGE}`
+        : `plan-spec: --prefix was given as ${JSON.stringify(prefixRead.raw)}, which is blank. ` +
+            `Every milestone it names would start with the space.\n\n${USAGE}`,
+    );
     return REFUSAL_EXIT;
   }
+  const prefix = prefixRead.prefix;
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) {
     console.error(`plan-spec: --repo is required (or set GITHUB_REPOSITORY)\n\n${USAGE}`);

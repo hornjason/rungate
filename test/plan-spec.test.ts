@@ -331,6 +331,49 @@ describe("scripts/plan-spec --write: nothing reaches GitHub on an unsound table"
     ],
   });
 
+  /**
+   * Round 1 of #1705, swept. The finding named `plan-deps`, where the
+   * emptiness guard trimmed and the filter did not. The same split is here
+   * with the halves reversed: `if (!prefix)` is false for `"   "`, so a
+   * blank prefix was ACCEPTED — and this command writes, so it would have
+   * created live milestones called `"    Phase 1 — stop the repeats"`.
+   *
+   * The two cases are a pair. Refusing blank without trimming leaves
+   * `" Conv "` creating `"  Conv   Phase 1 …"`; trimming without refusing
+   * blank leaves `"   "` creating `" Phase 1 …"`. One reading does both.
+   */
+  async function runWithPrefix(prefix: string, extra: string[] = []) {
+    const dir = mkdtempSync(join(tmpdir(), "rg-plan-spec-prefix-"));
+    try {
+      writeFileSync(join(dir, "SPEC.md"), SOUND);
+      const s = spy([]);
+      const code = await planSpecMain(
+        ["SPEC.md", "--repo", "o/r", "--prefix", prefix, "--project-root", dir, "--write", ...extra],
+        s.gh,
+      );
+      return { code, created: s.created };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a BLANK --prefix refuses, and creates nothing", async () => {
+    for (const blank of ["", "   ", "\t"]) {
+      const { code, created } = await runWithPrefix(blank);
+      expect(code, `--prefix ${JSON.stringify(blank)} was accepted`).toBe(REFUSAL_EXIT);
+      expect(created, `--prefix ${JSON.stringify(blank)} created milestones`).toEqual([]);
+    }
+  });
+
+  test("a --prefix with whitespace on an end is TRIMMED before it names anything", async () => {
+    const { code, created } = await runWithPrefix("  Conv  ");
+    expect(code).toBe(0);
+    expect(created, "the untrimmed prefix reached the milestone title").toEqual([
+      "Conv Phase 1 — stop the repeats",
+      "Conv Phase 2 — stop the false findings",
+    ]);
+  });
+
   test("an unplaced criterion: --write creates NOTHING and refuses", async () => {
     const { code, created, renamed } = await run(UNPLACED, ["--write"]);
     expect(created, "a milestone was created despite the refusal").toEqual([]);

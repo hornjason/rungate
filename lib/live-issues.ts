@@ -50,6 +50,49 @@ export function inMilestoneFamily(milestone: string | null | undefined, prefix: 
 }
 
 /**
+ * What a `--prefix` / `--milestone-prefix` argument actually said.
+ *
+ * Three states, never two. A command that collapses them has to pick which
+ * lie to tell: `absent` folded into `blank` refuses a caller who asked for no
+ * filter, and `blank` folded into `given` hands {@link inMilestoneFamily} the
+ * string `""`, which matches `" Phase "` in every family at once.
+ *
+ * ## It trims, and that is the whole of round 1 of #1705
+ *
+ * `plan-deps` tested `raw.trim() === ""` for emptiness and then filtered with
+ * the UNTRIMMED `raw`, so the guard and the use disagreed about every input
+ * with whitespace on an end. `--milestone-prefix " Pipeline"` — a shell
+ * variable with a stray space, a CI input, a copy-paste — passed the guard,
+ * matched nothing, and refused with a message naming a string that looks like
+ * it should obviously match.
+ *
+ * `plan-spec` and `board-snapshot` had the same split in the other direction:
+ * `if (!prefix)` admits `"   "`, and `plan-spec --write` would then CREATE
+ * milestones called `"    Phase 0 — …"`. One reading, returned trimmed, so
+ * there is nothing for a guard and a use to disagree about.
+ *
+ * Ends only. `" Spec Two "` is `"Spec Two"`, not `"SpecTwo"` — a two-word
+ * family name is the ordinary case on a tracker carrying more than one spec.
+ *
+ * `scripts/board-conformance.ts` deliberately does NOT call this: it must
+ * stay free of relative imports or its mutation battery's copy dies on module
+ * resolution and every negative case goes green having witnessed nothing. It
+ * forwards the argument to `board-snapshot`, which does call this, so the
+ * decision still happens exactly once — see
+ * `.claude/rules/checks-must-be-able-to-fail.md`, *two deciders that agree*.
+ */
+export type MilestonePrefixReading =
+  | { readonly kind: "absent" }
+  | { readonly kind: "blank"; readonly raw: string }
+  | { readonly kind: "given"; readonly prefix: string };
+
+export function readMilestonePrefix(raw: string | undefined): MilestonePrefixReading {
+  if (raw === undefined) return { kind: "absent" };
+  const prefix = raw.trim();
+  return prefix === "" ? { kind: "blank", raw } : { kind: "given", prefix };
+}
+
+/**
  * One issue, as the dependency order needs it.
  *
  * `DepIssue` exactly, for now. The alias names the seam a later reading

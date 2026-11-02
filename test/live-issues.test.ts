@@ -15,11 +15,14 @@
  * assert on what comes out, not on what a fake was told to return.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync, readdirSync } from "fs";
+import { join } from "path";
 import {
   ISSUE_PAGE,
   LIVE_ISSUES_QUERY,
   inMilestoneFamily,
   readLiveIssues,
+  readMilestonePrefix,
   type GraphQlExec,
 } from "../lib/live-issues";
 
@@ -209,5 +212,107 @@ describe("which milestones belong to a spec's family", () => {
   test("both arms are present, so no constant satisfies the table above", () => {
     expect(cases.some(c => c.want)).toBe(true);
     expect(cases.some(c => !c.want)).toBe(true);
+  });
+});
+
+/**
+ * `readMilestonePrefix` — round 1 of #1705.
+ *
+ * The finding was reported against `plan-deps`: the emptiness guard tested
+ * `raw.trim() === ""` and the filter used the untrimmed `raw`, so the two
+ * disagreed about every input with whitespace on an end. `plan-spec` and
+ * `board-snapshot` had the same split reversed — `if (!prefix)` admits
+ * `"   "`, and `plan-spec --write` would have created milestones called
+ * `"    Phase 1 — …"` on a live tracker.
+ *
+ * One reading, so there is nothing for a guard and a use to disagree about.
+ */
+describe("what a --prefix argument actually said", () => {
+  const rows: { raw: string | undefined; kind: string; prefix?: string; why: string }[] = [
+    { raw: undefined, kind: "absent", why: "the flag was not passed at all" },
+    { raw: "Pipeline", kind: "given", prefix: "Pipeline", why: "the ordinary case" },
+    { raw: " Pipeline", kind: "given", prefix: "Pipeline", why: "a leading space" },
+    { raw: "Pipeline ", kind: "given", prefix: "Pipeline", why: "a trailing space" },
+    { raw: "\tPipeline\n", kind: "given", prefix: "Pipeline", why: "a tab and a newline" },
+    { raw: " Spec Two ", kind: "given", prefix: "Spec Two", why: "ENDS only — the inner space stays" },
+    { raw: "", kind: "blank", why: "an unset shell variable" },
+    { raw: "   ", kind: "blank", why: "spaces only" },
+    { raw: "\t\n", kind: "blank", why: "other whitespace only" },
+  ];
+
+  for (const r of rows) {
+    test(`${JSON.stringify(r.raw)} reads as ${r.kind} — ${r.why}`, () => {
+      const got = readMilestonePrefix(r.raw);
+      expect(got.kind).toBe(r.kind as typeof got.kind);
+      if (got.kind === "given") expect(got.prefix).toBe(r.prefix!);
+    });
+  }
+
+  test("all three states occur above, so no constant satisfies the table", () => {
+    const kinds = new Set(rows.map(r => r.kind));
+    expect(kinds).toEqual(new Set(["absent", "blank", "given"]));
+  });
+
+  test("a blank reading carries the RAW text, so the refusal can quote it", () => {
+    // `--prefix "   " was given` and `--prefix was not given` are different
+    // facts and a caller debugging a CI input needs to be told which.
+    const got = readMilestonePrefix("  ");
+    expect(got.kind === "blank" && got.raw).toBe("  ");
+  });
+
+  /**
+   * The POPULATION, not the three sites repaired.
+   *
+   * `.claude/rules/checks-must-be-able-to-fail.md`, fourth shape: at N sites
+   * a behavioural suite catches only the last one to regress. A fourth
+   * command taking a milestone prefix is the thing this has to see, and the
+   * three behavioural suites cannot.
+   *
+   * The exemption is DERIVED rather than listed. `scripts/board-conformance.ts`
+   * carries no relative imports on purpose — its mutation battery copies the
+   * file into a temp directory, and an import would kill the copy on module
+   * resolution, so every negative case would go green having witnessed
+   * nothing. A file in that state cannot call this binding and must not grow
+   * a second decider; it forwards its prefix to `board-snapshot`, which does
+   * call it. Naming the file here instead would be an allowlist whose only
+   * evidence is that somebody wrote the name down.
+   */
+  test("every command taking a milestone prefix routes through this one reading", () => {
+    const dir = join(import.meta.dir, "..", "scripts");
+    const offenders: string[] = [];
+    for (const name of readdirSync(dir).filter(f => f.endsWith(".ts"))) {
+      const src = readFileSync(join(dir, name), "utf-8");
+      if (!/prefix"?\s*:\s*\{\s*type:\s*"string"/.test(src)) continue;
+      const importFree = !/from\s+"\.\.?\//.test(src);
+      // A WHOLE-WORD match, and the module it comes from. `src.includes(...)`
+      // was the first spelling and it is green against a file that renamed
+      // the symbol to `readMilestonePrefixX` and decides for itself — proved
+      // by doing exactly that, which is why this line is not `includes`.
+      const routed = /\breadMilestonePrefix\b/.test(src) && /lib\/live-issues/.test(src);
+      if (importFree || routed) continue;
+      offenders.push(name);
+    }
+    expect(
+      offenders,
+      `these declare a --prefix string option, decide on it themselves, and can import: ` +
+        `call readMilestonePrefix from lib/live-issues.ts instead. Two guards answering the ` +
+        `same question about the same input are behaviourally one.`,
+    ).toEqual([]);
+  });
+
+  test("that scan actually found the commands — it is not vacuous on an empty set", () => {
+    // The control. A regex that matches nothing passes the case above
+    // forever, and the whole point of the case is the file nobody has
+    // written yet.
+    const dir = join(import.meta.dir, "..", "scripts");
+    const withPrefix = readdirSync(dir)
+      .filter(f => f.endsWith(".ts"))
+      .filter(f => /prefix"?\s*:\s*\{\s*type:\s*"string"/.test(readFileSync(join(dir, f), "utf-8")));
+    expect(withPrefix.sort()).toEqual([
+      "board-conformance.ts",
+      "board-snapshot.ts",
+      "plan-deps.ts",
+      "plan-spec.ts",
+    ]);
   });
 });
