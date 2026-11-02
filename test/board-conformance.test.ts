@@ -299,22 +299,34 @@ describe("the refusals, each proved against the mutant", () => {
     // `number` — what a blocked-by edge resolves against — makes the board
     // unread. Both directions are asserted, so neither repair can come
     // back.
-    const degrades: { row: "issues" | "phases"; at: number; field: string; reading: string }[] = [
-      { row: "issues", at: 1, field: "blockedBy", reading: "blocked-by-edges" },
-      { row: "issues", at: 1, field: "labels", reading: "queue-label" },
-      { row: "issues", at: 1, field: "criteriaField", reading: "criteria-field" },
-      { row: "phases", at: 1, field: "milestoneState", reading: "milestones" },
+    //
+    // `to` differs by field, and that is the point rather than an
+    // inconsistency. Omitting `blockedBy` or `labels` is a row the producer
+    // read and found empty, which is a measurement — SHORT. Omitting
+    // `criteriaField` is a column nothing queried, which is not — see the
+    // B4 describe below. What every row shares is the property this case is
+    // really about: EXACTLY ONE reading moves, and the other four stay met.
+    const degrades: {
+      row: "issues" | "phases";
+      at: number;
+      field: string;
+      reading: string;
+      to: "SHORT      " | "UNMEASURED ";
+    }[] = [
+      { row: "issues", at: 1, field: "blockedBy", reading: "blocked-by-edges", to: "SHORT      " },
+      { row: "issues", at: 1, field: "labels", reading: "queue-label", to: "SHORT      " },
+      { row: "issues", at: 1, field: "criteriaField", reading: "criteria-field", to: "UNMEASURED " },
+      { row: "phases", at: 1, field: "milestoneState", reading: "milestones", to: "SHORT      " },
     ];
-    for (const { row, at: index, field, reading } of degrades) {
+    for (const { row, at: index, field, reading, to } of degrades) {
       const board = completeBoard() as unknown as Record<string, Record<string, unknown>[]>;
       delete board[row]![index]![field];
       const at = plant(`missing-${field}`, board as unknown as BoardSnapshot);
       const r = run(SCRIPT, ["--snapshot", at]);
       expect(r.err, `omitting ${field} threw`).not.toContain("TypeError");
-      expect(r.out, `omitting ${field} made the whole board unreadable`).not.toContain("UNMEASURED");
-      expect(r.out, `omitting ${field} did not move ${reading}`).toContain(`SHORT       ${reading}`);
+      expect(r.out, `omitting ${field} did not move ${reading}`).toContain(`${to} ${reading}`);
       expect(
-        r.out.match(/^SHORT /gm)?.length,
+        (r.out.match(/^(SHORT|UNMEASURED) /gm) ?? []).length,
         `omitting ${field} moved a reading other than ${reading}`,
       ).toBe(1);
       refuses(["--snapshot", at], `a board short on ${reading}`);
@@ -794,6 +806,97 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
     expect(r.stderr, "a spawn that never started was reported as a producer that ran and said nothing").toContain(
       "could not be started",
     );
+  });
+});
+
+/**
+ * B3 fills `issues`, and the moment it does, every reading that counts over
+ * issues starts reporting a number. `criteria-field` is the one whose source
+ * B3 does NOT wire: the Criteria column is a Projects v2 custom field and
+ * nothing in the snapshot's query can see it.
+ *
+ * An unread field and an empty field spell the same thing in JSON if the
+ * producer writes `null` for both, so `criteria-field` would have read
+ * `0 of 5 — 5 short` the day B3 landed: a number nobody measured, which is
+ * the Silent Default Substitution shape in `.claude/rules/config-access.md`
+ * wearing a denominator.
+ *
+ * The distinction is positional: **the key absent means not read**, and an
+ * explicit `null` means read and empty. Note this is the OPPOSITE reading
+ * from `satisfiedByIssue`, where absence must not count as covered — and
+ * deliberately so. There, absence that reads as met certifies nothing; here,
+ * absence that reads as short invents a measurement. Both resolve toward
+ * refusing to claim.
+ */
+describe("a field the producer did not read is not a field that is empty (B4)", () => {
+  const withIssues = (issues: BoardSnapshot["issues"]): BoardSnapshot => ({ ...completeBoard(), issues });
+
+  const criteriaField = (board: BoardSnapshot) =>
+    takeReadings(board).find(r => r.name === "criteria-field")!;
+
+  test("every issue omits it: UNMEASURED, not 0 of N", () => {
+    const r = criteriaField(
+      withIssues([
+        { number: 1, blockedBy: [], rootReady: true, labels: ["engine"] },
+        { number: 2, blockedBy: [1], labels: ["engine"] },
+      ]),
+    );
+    expect(r.status, `an unread column was reported as ${r.why}`).toBe("unmeasured");
+    expect(r.why).toContain("2");
+  });
+
+  test("SOME issues omit it: still UNMEASURED — a partial read is not a read", () => {
+    // The dangerous direction. Shrinking the denominator to the rows that
+    // happen to carry the field makes the reading easier to satisfy the
+    // less of the population was read, and `1 of 1` is the most flattering
+    // thing this command can say.
+    const r = criteriaField(
+      withIssues([
+        { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+        { number: 2, blockedBy: [1], labels: ["engine"] },
+      ]),
+    );
+    expect(r.status, `a half-read column was reported as ${r.why}`).toBe("unmeasured");
+  });
+
+  test("read and empty is SHORT, because that is a measurement", () => {
+    const r = criteriaField(
+      withIssues([
+        { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+        { number: 2, blockedBy: [1], criteriaField: null, labels: ["engine"] },
+      ]),
+    );
+    expect(r.status).toBe("short");
+    expect(r.why).toContain("1 of 2");
+  });
+
+  test('a read-but-blank string is SHORT too, not met', () => {
+    const r = criteriaField(
+      withIssues([
+        { number: 1, blockedBy: [], rootReady: true, criteriaField: "   ", labels: ["engine"] },
+        { number: 2, blockedBy: [1], criteriaField: "SC-2619", labels: ["engine"] },
+      ]),
+    );
+    expect(r.status).toBe("short");
+  });
+
+  test("the unread guard does not swallow the reading — a complete board is still MET", () => {
+    // Without this, returning "unmeasured" unconditionally would pass every
+    // case above while making the reading incapable of ever going met.
+    expect(criteriaField(completeBoard()).status).toBe("met");
+  });
+
+  test("it is scoped to criteria-field — the other issue readings still count every row", () => {
+    // An `unreadable` guard that fired for every reading would turn the
+    // whole command UNMEASURED the moment one column went unread, which is
+    // the same defect pointed the other way.
+    const half = withIssues([
+      { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+      { number: 2, blockedBy: [1], labels: ["engine"] },
+    ]);
+    const queue = takeReadings(half).find(r => r.name === "queue-label")!;
+    expect(queue.status, "queue-label stopped counting because a DIFFERENT column was unread").toBe("met");
+    expect(queue.why).toContain("2 of 2");
   });
 });
 

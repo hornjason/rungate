@@ -30,15 +30,36 @@ import {
   type BoardSnapshotGitHub,
   type ProducedSnapshot,
 } from "../scripts/board-snapshot";
-import { readSnapshotText } from "../scripts/board-conformance";
+import type { LiveIssue } from "../lib/live-issues";
+import { readSnapshotText, takeReadings } from "../scripts/board-conformance";
 
 const ROOT = join(import.meta.dir, "..");
 const SOURCE = readFileSync(join(ROOT, "scripts/board-snapshot.ts"), "utf-8");
 
 type Live = { number: number; title: string; description: string | null };
 
+interface SpyOptions {
+  /** What `readIssues` returns. Default: none, so the issue reading is empty. */
+  issues?: LiveIssue[];
+  /** What `listMilestones` throws instead of answering. */
+  throws?: Error;
+  /** What `readIssues` throws instead of answering. */
+  issuesThrow?: Error;
+}
+
+/** One live issue, with the fields a case is not asserting on defaulted. */
+const iss = (o: Partial<LiveIssue> & { number: number }): LiveIssue => ({
+  state: "OPEN",
+  milestone: null,
+  blockedBy: [],
+  labels: [],
+  ...o,
+});
+
 /** Records whether the API was reached at all, and with what. */
-function spy(live: Live[] = [], throws?: Error) {
+function spy(live: Live[] = [], throwsOrOpts?: Error | SpyOptions) {
+  const o: SpyOptions =
+    throwsOrOpts instanceof Error ? { throws: throwsOrOpts } : (throwsOrOpts ?? {});
   const calls: string[] = [];
   const gh: BoardSnapshotGitHub = {
     createClient: (() => {
@@ -47,9 +68,14 @@ function spy(live: Live[] = [], throws?: Error) {
     }) as unknown as BoardSnapshotGitHub["createClient"],
     listMilestones: (async (_c: unknown, repo: string) => {
       calls.push(`listMilestones ${repo}`);
-      if (throws) throw throws;
+      if (o.throws) throw o.throws;
       return live;
     }) as unknown as BoardSnapshotGitHub["listMilestones"],
+    readIssues: async (repo: string) => {
+      calls.push(`readIssues ${repo}`);
+      if (o.issuesThrow) throw o.issuesThrow;
+      return o.issues ?? [];
+    },
   };
   return { gh, calls };
 }
@@ -169,14 +195,13 @@ describe("what it produces", () => {
     });
   });
 
-  test("the issue and criterion populations are EMPTY, because no B item has wired them", async () => {
-    // Emitting partial issue data would make B3, B4 and B6 report SHORT —
-    // a number nobody measured. Empty makes them UNMEASURED, which is the
-    // true thing to say about a source that does not exist yet.
+  test("the CRITERION population is empty, because B2 has not wired it", async () => {
+    // Emitting partial criterion data would make `criterion-coverage`
+    // report SHORT — a number nobody measured. Empty makes it UNMEASURED,
+    // which is the true thing to say about a source that does not exist.
     await withSpec(SPEC, async (dir, at) => {
       const { gh } = spy(CONFORMANT_LIVE);
       const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
-      expect(snap.issues).toEqual([]);
       expect(snap.criteria).toEqual([]);
     });
   });
@@ -189,6 +214,93 @@ describe("what it produces", () => {
     // the case never looked.
     expect(SOURCE, "the producer writes a file").not.toContain("writeFileSync");
     expect(SOURCE, "the producer takes an output path").not.toContain("--out");
+  });
+});
+
+/**
+ * The issue population (item **B3**).
+ *
+ * The thing every case here is really guarding is the circularity the
+ * `milestones` reading already walked into once: if the set of engine
+ * issues were defined as *the ones carrying the `engine` label*, then
+ * `queue-label` is 100% by construction and `blocked-by-edges` is measured
+ * over whatever subset happens to be labelled. Membership is the MILESTONE
+ * and the predicates are the edges and the label, so each can fail.
+ */
+describe("the issue population (B3)", () => {
+  const IN_PHASE_0 = "Fix Phase 0 — the first one";
+  const IN_PHASE_1 = "Fix Phase 1 — the second one";
+
+  test("membership is the prefixed phase milestone — not the label, and not the edges", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      const { gh } = spy(CONFORMANT_LIVE, {
+        issues: [
+          iss({ number: 10, milestone: IN_PHASE_0 }),
+          iss({ number: 11, milestone: IN_PHASE_1, labels: ["engine"] }),
+          // Each of the next three is a near miss, and each is OUT:
+          iss({ number: 12, milestone: null, labels: ["engine"] }), // labelled, no milestone
+          iss({ number: 13, milestone: "Other Phase 1 — somebody else's" }), // wrong prefix
+          iss({ number: 14, milestone: "Fix the flaky test" }), // right prefix, no phase
+        ],
+      });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      expect(snap.issues.map(i => i.number)).toEqual([10, 11]);
+    });
+  });
+
+  test("the lowest phase carrying an issue is rootReady, and nothing above it is", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      const { gh } = spy(CONFORMANT_LIVE, {
+        issues: [iss({ number: 11, milestone: IN_PHASE_1 }), iss({ number: 10, milestone: IN_PHASE_0 })],
+      });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      // Both arms. Marking everything root, or nothing, both satisfy a
+      // single-arm case and both make `blocked-by-edges` unable to fail.
+      expect(snap.issues.find(i => i.number === 10)?.rootReady).toBe(true);
+      expect(snap.issues.find(i => i.number === 11)?.rootReady).toBe(false);
+    });
+  });
+
+  test("the frontier is derived, not hardcoded to phase 0", async () => {
+    // Phase 0 carrying no issue is the ordinary mid-project state. A
+    // producer testing `phase === 0` would mark NOTHING root here, and
+    // every issue in the first phase with work in it would read as
+    // missing an edge it can never legitimately have.
+    await withSpec(SPEC, async (dir, at) => {
+      const { gh } = spy(CONFORMANT_LIVE, { issues: [iss({ number: 11, milestone: IN_PHASE_1 })] });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      expect(snap.issues[0]?.rootReady).toBe(true);
+    });
+  });
+
+  test("blockedBy and labels come through as read", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      const { gh } = spy(CONFORMANT_LIVE, {
+        issues: [
+          iss({ number: 10, milestone: IN_PHASE_0, labels: ["engine", "bug"] }),
+          iss({ number: 11, milestone: IN_PHASE_1, blockedBy: [10] }),
+        ],
+      });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      expect(snap.issues.find(i => i.number === 10)?.labels).toEqual(["engine", "bug"]);
+      expect(snap.issues.find(i => i.number === 11)?.blockedBy).toEqual([10]);
+      // The control for `labels`: an unlabelled issue reports an EMPTY
+      // list and not the other one's. A producer returning a constant
+      // would satisfy the assertion above.
+      expect(snap.issues.find(i => i.number === 11)?.labels).toEqual([]);
+    });
+  });
+
+  test("no issue carries a criteriaField key — that column was never read", async () => {
+    // The key's ABSENCE is the signal `board-conformance` reads to report
+    // `criteria-field` UNMEASURED. Writing `criteriaField: null` here
+    // would make it say `0 of N — N short` about a Projects v2 field
+    // nothing in this file can see.
+    await withSpec(SPEC, async (dir, at) => {
+      const { gh } = spy(CONFORMANT_LIVE, { issues: [iss({ number: 10, milestone: IN_PHASE_0 })] });
+      const { text } = await capture([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      expect(text, "the producer emitted a Criteria column it never queried").not.toContain("criteriaField");
+    });
   });
 });
 
@@ -208,7 +320,14 @@ describe("the refusals, and whether the API was reached", () => {
     await withSpec(SPEC, async (_dir, at) => {
       const { gh, calls } = spy(CONFORMANT_LIVE);
       expect(await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n"], gh)).toBe(0);
-      expect(calls.length, "the control never reached the API either, so the case above proves nothing").toBe(2);
+      // The names, not a count. A count drifts silently every time the
+      // producer gains a call, and then the control is passing on a
+      // number nobody re-derived.
+      expect(calls, "the control never reached the API either, so the case above proves nothing").toEqual([
+        "createClient",
+        "listMilestones o/n",
+        "readIssues o/n",
+      ]);
     });
   });
 
@@ -264,6 +383,33 @@ describe("the refusals, and whether the API was reached", () => {
     });
   });
 
+  test("an issue read that failed is UNMEASURED, not a board with no engine issues", async () => {
+    await withSpec(SPEC, async (_dir, at) => {
+      const { gh } = spy(CONFORMANT_LIVE, { issuesThrow: new Error("HTTP 403: Resource not accessible") });
+      const code = await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      expect(code, "a failed issue read produced a snapshot").toBe(REFUSAL_EXIT);
+    });
+  });
+
+  test("a CUT blocker list refuses, naming the issues — an edge past the page boundary reads as absent", async () => {
+    await withSpec(SPEC, async (_dir, at) => {
+      const { gh } = spy(CONFORMANT_LIVE, {
+        issues: [
+          iss({ number: 10, milestone: "Fix Phase 0 — the first one", blockedBy: [1], blockedByTruncated: true }),
+        ],
+      });
+      expect(await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n"], gh)).toBe(REFUSAL_EXIT);
+
+      // The control: the SAME issue with the same single edge and the flag
+      // off produces a snapshot. Without this, a producer refusing every
+      // issue with a blocker would pass the case above.
+      const ok = spy(CONFORMANT_LIVE, {
+        issues: [iss({ number: 10, milestone: "Fix Phase 0 — the first one", blockedBy: [1] })],
+      });
+      expect((await capture([at, "--prefix", "Fix", "--repo", "o/n"], ok.gh)).code).toBe(0);
+    });
+  });
+
   test("--repo falls back to GITHUB_REPOSITORY, and refuses when neither is set", async () => {
     await withSpec(SPEC, async (_dir, at) => {
       const had = process.env.GITHUB_REPOSITORY;
@@ -298,6 +444,38 @@ describe("the two files agree, and the producer never writes", () => {
       const read = readSnapshotText(text);
       expect(read.why, "the reader could not parse what the producer wrote").toBeNull();
       expect(read.board!.phases.map(p => p.milestoneState)).toEqual(["unchanged", "unchanged"]);
+    });
+  });
+
+  test("the issues the producer emits drive blocked-by-edges, and criteria-field stays UNMEASURED", async () => {
+    // The whole point of B3, asserted end to end through both files: an
+    // unsequenced board reads SHORT, the same board with the edge reads
+    // MET, and the column nobody queried never becomes a number.
+    await withSpec(SPEC, async (_dir, at) => {
+      const unsequenced = spy(CONFORMANT_LIVE, {
+        issues: [
+          iss({ number: 10, milestone: "Fix Phase 0 — the first one" }),
+          iss({ number: 11, milestone: "Fix Phase 1 — the second one" }),
+        ],
+      });
+      const before = readSnapshotText((await capture([at, "--prefix", "Fix", "--repo", "o/n"], unsequenced.gh)).text);
+      const edges = (b: typeof before) => takeReadings(b.board!).find(r => r.name === "blocked-by-edges")!;
+      expect(edges(before).status, "an unsequenced board read as sequenced").toBe("short");
+      expect(edges(before).why).toContain("1 of 2");
+
+      const sequenced = spy(CONFORMANT_LIVE, {
+        issues: [
+          iss({ number: 10, milestone: "Fix Phase 0 — the first one" }),
+          iss({ number: 11, milestone: "Fix Phase 1 — the second one", blockedBy: [10] }),
+        ],
+      });
+      const after = readSnapshotText((await capture([at, "--prefix", "Fix", "--repo", "o/n"], sequenced.gh)).text);
+      expect(edges(after).status, "adding the edge did not move the reading").toBe("met");
+
+      // And the column B4 owns is untouched by either.
+      for (const r of [before, after]) {
+        expect(takeReadings(r.board!).find(x => x.name === "criteria-field")!.status).toBe("unmeasured");
+      }
     });
   });
 

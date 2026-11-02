@@ -56,8 +56,21 @@ export interface BoardIssue {
   blockedBy: number[];
   /** Set when the issue is deliberately a root — nothing blocks it. */
   rootReady?: boolean;
-  /** The board's Criteria column for this issue — a mirror of the body. */
-  criteriaField: string | null;
+  /**
+   * The board's Criteria column for this issue — a mirror of the body.
+   *
+   * **Absent means the producer did not read it. `null` means it read it
+   * and the column is empty.** Those are different facts and writing both
+   * as `null` would have `criteria-field` report `0 of N — N short` for a
+   * column nothing queried, which is a number nobody measured.
+   *
+   * This is the opposite convention from `BoardCriterion.satisfiedByIssue`,
+   * where an omitted key must NOT count as covered. Both point the same
+   * way: toward refusing to claim. There, absence reading as met would
+   * certify nothing; here, absence reading as short would invent a
+   * measurement.
+   */
+  criteriaField?: string | null;
   labels: string[];
 }
 
@@ -124,6 +137,18 @@ interface ReadingSpec {
    * same hole found three times, one reading at a time.
    */
   readsIssueRefs: boolean;
+  /**
+   * Why this reading cannot be TAKEN against this board, or null.
+   *
+   * Separate from `measure` because the two answer different questions. A
+   * measure says how much of the population conforms; this says whether the
+   * population was read at all. Collapsing them means expressing "nobody
+   * looked" as a ratio, and every ratio is a claim.
+   *
+   * Consulted before `measure`, so a reading that cannot be taken never
+   * produces a number for anyone to quote.
+   */
+  unreadable?: (board: BoardSnapshot) => string | null;
   /** How many of `target` are conformant, and out of how many. */
   measure: (board: BoardSnapshot) => { measured: number; target: number };
 }
@@ -219,6 +244,17 @@ export const READINGS: readonly ReadingSpec[] = [
     item: "B4",
     what: "the board's Criteria column is populated for every engine issue",
     readsIssueRefs: false,
+    // ANY issue missing the key, not all of them. A partial read is not a
+    // read: dropping the unread rows from the denominator makes this
+    // reading easier to satisfy the less of the board was looked at, and
+    // `1 of 1` is the most flattering sentence this command can produce.
+    unreadable: b => {
+      const unread = b.issues.filter(i => !("criteriaField" in i)).map(i => `#${i.number}`);
+      return unread.length === 0
+        ? null
+        : `the Criteria column was not read for ${unread.length} of ${b.issues.length} issue(s) ` +
+            `(${unread.slice(0, 5).join(", ")}${unread.length > 5 ? ", …" : ""}) — that is not an empty column`;
+    },
     measure: b => ({ measured: b.issues.filter(i => (i.criteriaField ?? "").trim() !== "").length, target: b.issues.length }),
   },
   {
@@ -248,6 +284,8 @@ export function takeReading(spec: ReadingSpec, board: BoardSnapshot | null): Rea
   if (board === null) {
     return { ...base, status: "unmeasured", measured: 0, target: 0, why: `no board snapshot — ${spec.item} has not wired this reading's source yet` };
   }
+  const why = spec.unreadable?.(board) ?? null;
+  if (why !== null) return { ...base, status: "unmeasured", measured: 0, target: 0, why };
   const { measured, target } = spec.measure(board);
   if (target === 0) {
     return { ...base, status: "unmeasured", measured, target, why: "the board carries nothing for this reading to count, so 0 of 0 is not a pass" };
@@ -298,7 +336,10 @@ const normaliseIssue = (v: unknown): BoardIssue | null => {
     number: i.number,
     blockedBy: asList<number>(i.blockedBy).filter(n => typeof n === "number"),
     rootReady: i.rootReady === true,
-    criteriaField: asText(i.criteriaField),
+    // Key PRESENCE, not value. `asText(undefined)` is `null`, which would
+    // erase the distinction this field exists to carry — an omitted column
+    // and a column read as empty would arrive here identical.
+    ...("criteriaField" in (v as object) ? { criteriaField: asText(i.criteriaField) } : {}),
     labels: asList<string>(i.labels).filter(l => typeof l === "string"),
   };
 };

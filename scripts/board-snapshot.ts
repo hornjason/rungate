@@ -35,7 +35,9 @@
 import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
+import { openFrontier, phaseOf } from "../lib/board-mirror";
 import { createGitHubClient, listMilestones } from "../lib/github";
+import { readLiveIssues, type LiveIssue } from "../lib/live-issues";
 import { milestonePlan, placementReading } from "../lib/spec-placement";
 
 /**
@@ -53,9 +55,15 @@ export const REFUSAL_EXIT = 1;
 export interface BoardSnapshotGitHub {
   createClient: typeof createGitHubClient;
   listMilestones: typeof listMilestones;
+  /** Every OPEN issue in the repository, with its milestone, edges and labels. */
+  readIssues: (repo: string) => Promise<LiveIssue[]>;
 }
 
-const LIVE_GITHUB: BoardSnapshotGitHub = { createClient: createGitHubClient, listMilestones };
+const LIVE_GITHUB: BoardSnapshotGitHub = {
+  createClient: createGitHubClient,
+  listMilestones,
+  readIssues: repo => readLiveIssues(repo, false),
+};
 
 const USAGE = `rungate board-snapshot <spec.md> --prefix <name> [--repo <owner/name>]
 
@@ -77,20 +85,54 @@ export interface SnapshotPhase {
   milestoneState: "create" | "rename" | "update" | "unchanged";
 }
 
+/**
+ * One engine issue (item **B3**).
+ *
+ * ## What makes an issue an engine issue, and why it is not the label
+ *
+ * Membership is *sits in a milestone whose title starts with the prefix*.
+ * Not the `engine` label — that is what the `queue-label` reading COUNTS,
+ * and a population defined by the predicate it is measured against is 100%
+ * conformant by construction. It is the same trap the `milestones` reading
+ * walked into: see the note at the top of this file.
+ *
+ * ## `criteriaField` is deliberately not here
+ *
+ * The board's Criteria column is a Projects v2 custom field and nothing in
+ * this query can see it. Emitting `criteriaField: null` would make the
+ * `criteria-field` reading report `0 of N — N short` for a column nobody
+ * read. `board-conformance` treats the ABSENT key as "not read" and reports
+ * that reading UNMEASURED, which is the true thing to say until B4 wires it.
+ */
+export interface SnapshotIssue {
+  number: number;
+  /** The issue numbers that already block this one, live. */
+  blockedBy: number[];
+  /**
+   * True when the issue sits in the lowest phase that carries any engine
+   * issue. Derived from the milestone order, not declared: the first phase
+   * has nothing before it to be blocked by, so an edge there would be a
+   * fiction.
+   */
+  rootReady: boolean;
+  /** Every label on the issue, read rather than assumed empty. */
+  labels: string[];
+}
+
 export interface ProducedSnapshot {
   /** When this was taken. A snapshot with no timestamp cannot be called stale. */
   producedAt: string;
   /** The spec the phases came from, as given. */
   spec: string;
   phases: SnapshotPhase[];
+  /** The engine issues — see {@link SnapshotIssue} for what makes one. */
+  issues: SnapshotIssue[];
   /**
-   * Empty, and deliberately so. B3, B4 and B6 own the issue population and
-   * B2 owns the criterion population; until one of them wires its source,
-   * an empty array makes its reading UNMEASURED, which is the true thing to
-   * say. Filling them with partial data here would make those readings
-   * SHORT — a number nobody measured.
+   * Empty, and deliberately so. B2 owns the criterion population; until it
+   * wires its source, an empty array makes `criterion-coverage` UNMEASURED,
+   * which is the true thing to say. Filling it with partial data here would
+   * make that reading SHORT — a number nobody measured.
    */
-  issues: never[];
   criteria: never[];
 }
 
@@ -178,12 +220,54 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
     return REFUSAL_EXIT;
   }
 
+  // Same refusal, same reason: a repository whose issues could not be read
+  // and one with no issues produce the same empty array, and only one of
+  // them is a reading.
+  let liveIssues;
+  try {
+    liveIssues = await gh.readIssues(repo);
+  } catch (e) {
+    console.error(
+      `board-snapshot: UNMEASURED — could not read ${repo}'s issues: ${(e as Error).message}. ` +
+        `That is not a repository with no engine issues.`,
+    );
+    return REFUSAL_EXIT;
+  }
+
+  // The population: a milestone whose title starts with the prefix AND
+  // carries a phase number. The prefix alone is not enough — `milestonePlan`
+  // derives titles as `<prefix> Phase <n> — <heading>`, and a hand-made
+  // milestone sharing the prefix without a phase has no place in an order.
+  const engine = liveIssues.filter(
+    i => i.milestone !== null && i.milestone.startsWith(prefix) && phaseOf(i.milestone) !== null,
+  );
+
+  // A CUT blocker list is not a short one. An edge past the page boundary
+  // is invisible here, so the issue reads as carrying no edge at all and
+  // `blocked-by-edges` would count it short — or, once somebody adds one
+  // edge, met on a list this never saw the end of.
+  const truncated = engine.filter(i => i.blockedByTruncated === true).map(i => `#${i.number}`);
+  if (truncated.length > 0) {
+    console.error(
+      `board-snapshot: UNMEASURED — the blocker list was cut for ${truncated.length} issue(s) ` +
+        `(${truncated.join(", ")}). An edge past the page boundary reads as absent.`,
+    );
+    return REFUSAL_EXIT;
+  }
+
+  const frontier = openFrontier(engine.map(i => ({ state: i.state, phase: phaseOf(i.milestone) })));
+
   const { actions } = milestonePlan(content, live, prefix);
   const snapshot: ProducedSnapshot = {
     producedAt: new Date().toISOString(),
     spec: specArg,
     phases: actions.map(a => ({ phase: a.phase, criteria: a.criteria, milestoneState: a.action })),
-    issues: [],
+    issues: engine.map(i => ({
+      number: i.number,
+      blockedBy: [...i.blockedBy],
+      rootReady: frontier !== null && phaseOf(i.milestone) === frontier,
+      labels: [...i.labels],
+    })),
     criteria: [],
   };
 
