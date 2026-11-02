@@ -1,4 +1,6 @@
 /**
+ * Covers SC-2601, SC-2603, SC-2604, SC-2605, SC-2607 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ *
  * Step 4 of ADR-003: one criterion into the right number of issues.
  *
  * The interesting half is the refusals. A parser that silently drops a row it

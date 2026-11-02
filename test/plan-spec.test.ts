@@ -1,4 +1,6 @@
 /**
+ * Covers SC-2600 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ *
  * `lib/spec-placement.ts` — the placement table, and the milestones derived
  * from it (#1647).
  *
