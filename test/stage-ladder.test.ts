@@ -54,6 +54,17 @@ const stages = doc.stages;
  */
 const MACHINE_SCOPED_ALLOWED = 1;
 
+/**
+ * How long every done item's verify command gets, in total.
+ *
+ * Four of them call the live GitHub API through `board-conformance
+ * --produce` and they run one after another, so the budget is a sum rather
+ * than a per-item allowance. Measured 2026-11-02 at roughly 5s for four
+ * API-backed items; 60s leaves room for a slow network without letting a
+ * hung command hold CI open.
+ */
+const LIVE_VERIFY_BUDGET_MS = 60_000;
+
 const run = (cmd: string) => spawnSync("sh", ["-c", cmd], { cwd: ROOT, encoding: "utf-8" });
 
 const retro = (over: Partial<Retro> = {}): Retro => ({
@@ -81,6 +92,13 @@ describe("the live plan", () => {
   });
 
   test("every DONE item's verify command exits 0 — this is what 'done' means", () => {
+    // Timeout is EXPLICIT below, and it has to be. Four of the done items
+    // run `board-conformance --produce`, which reads the live GitHub API,
+    // and they run in sequence. Bun's 5s default killed this the moment B4
+    // was ticked and made a fourth: `spawnSync` was cut mid-call and the
+    // item was reported as `exited null`, which reads exactly like the work
+    // regressing. A ladder item that is slow is not a ladder item that
+    // failed, so the budget is stated rather than inherited.
     const checked: string[] = [];
     const failed: string[] = [];
     const deferred: string[] = [];
@@ -129,9 +147,11 @@ describe("the live plan", () => {
     expect(
       failed,
       `a stage item is marked done and its own verify command refuses. Either the work regressed or the item ` +
-        `was ticked without the command being run. Do not weaken the command to make this pass.`,
+        `was ticked without the command being run. Do not weaken the command to make this pass. An item ` +
+        `reported as "exited null" was KILLED, not refused — raise LIVE_VERIFY_BUDGET_MS rather than ` +
+        `unticking the item.`,
     ).toEqual([]);
-  });
+  }, LIVE_VERIFY_BUDGET_MS);
 
   test("the overall goal carries a command, and that command is not yet met", () => {
     // The honest state: `rungate board-conformance` is B5/D2 in this very
