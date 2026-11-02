@@ -104,13 +104,6 @@
       "from": 2630,
       "to": 2631,
       "note": "#1038 - commits that exist on this machine and nowhere else. Exactly the two ids consumed rather than a block of twenty: PROJECT-STATE.md on main names SC-2636 as the board-identifier config reader and no block reserves it, so a wider block would have squatted on a published plan's id without colliding with anything a diff could show. 2600-2629 (rg/pipeline-spec) is the highest declared block. Delete when the PR merges."
-    },
-    {
-      "owner": "rg/filing-cap-direct",
-      "from": 190,
-      "to": 199,
-      "namespace": "FG",
-      "note": "Jason asked on 2026-11-02 for the filing cap to be raised for engine work until the stages are complete. FG has no allocator, FG-186 is the highest id on main and FG-100..119 the highest declared block, so this sits above both — the eyeballed-headroom method the rule names, declared before any id is consumed. The whole block is claimed: do not pick an id inside 190..199 while this entry stands, whatever a count of what is consumed today would suggest — an internal sub-count goes stale with every commit, and a peer reading it as headroom is exactly the FG-45 collision of 2026-10-22. Delete the entry when the PR merges."
     }
   ]
 }
