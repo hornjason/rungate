@@ -176,7 +176,7 @@ describe("the pagination loop", () => {
     const boom: GraphQlExec = () => {
       throw new Error("HTTP 403");
     };
-    expect(readLiveIssues("o/n", false, boom)).rejects.toThrow("HTTP 403");
+    await expect(readLiveIssues("o/n", false, boom)).rejects.toThrow("HTTP 403");
   });
 });
 
@@ -299,7 +299,7 @@ describe("resolving specific issue numbers", () => {
     const boom: GraphQlExec = () => {
       throw new Error("HTTP 502");
     };
-    expect(readIssueStates("o/n", [9], boom)).rejects.toThrow("HTTP 502");
+    await expect(readIssueStates("o/n", [9], boom)).rejects.toThrow("HTTP 502");
   });
 });
 
@@ -361,12 +361,12 @@ describe("the board's Criteria column", () => {
       // read a column, and a `{name:"",projectId:""}` would sail into the
       // project comparison and quietly fail it for the wrong reason.
       const t = transportOf([JSON.stringify({ data: { node: null } })]);
-      expect(readProjectFieldIdentity("PVTF_gone", t.exec)).rejects.toThrow("PVTF_gone");
+      await expect(readProjectFieldIdentity("PVTF_gone", t.exec)).rejects.toThrow("PVTF_gone");
     });
 
     test("a field with a name but no project THROWS too", async () => {
       const t = transportOf([JSON.stringify({ data: { node: { name: "Criteria" } } })]);
-      expect(readProjectFieldIdentity("PVTF_x", t.exec)).rejects.toThrow("PVTF_x");
+      await expect(readProjectFieldIdentity("PVTF_x", t.exec)).rejects.toThrow("PVTF_x");
     });
   });
 
@@ -481,7 +481,9 @@ describe("the board's Criteria column", () => {
       const boom: GraphQlExec = () => {
         throw new Error("HTTP 502");
       };
-      expect(readProjectFieldValues("o/n", [1], "PVT_ours", "Criteria", boom)).rejects.toThrow("HTTP 502");
+      await expect(readProjectFieldValues("o/n", [1], "PVT_ours", "Criteria", boom)).rejects.toThrow(
+        "HTTP 502",
+      );
     });
 
     test("the item connection asks for the declared page size and can report being cut", () => {
