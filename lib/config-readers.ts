@@ -70,15 +70,6 @@ export function readProjectSlug(projectRoot: string): string | null {
 }
 
 /**
- * Pre-flight SSH hosts, keyed by name. `{}` when none are configured.
- *
- * `remoteHosts` is not in `ProjectHarnessSchema`; it reaches the resolved
- * config through `.passthrough()`, which is why the value is `unknown` and
- * every field access downstream is guarded. Declaring it would be a schema
- * change affecting every consumer config in the wild — out of scope here, and
- * recorded rather than done.
- */
-/**
  * The project board this repository's readings are taken against — item **B4**.
  *
  * `null` when no `board` block is configured, or when it does not carry both
@@ -112,6 +103,15 @@ export function readBoardConfig(projectRoot: string): { projectId: string; crite
   return { projectId, criteriaFieldId };
 }
 
+/**
+ * Pre-flight SSH hosts, keyed by name. `{}` when none are configured.
+ *
+ * `remoteHosts` is not in `ProjectHarnessSchema`; it reaches the resolved
+ * config through `.passthrough()`, which is why the value is `unknown` and
+ * every field access downstream is guarded. Declaring it would be a schema
+ * change affecting every consumer config in the wild — out of scope here, and
+ * recorded rather than done.
+ */
 export function readRemoteHosts(projectRoot: string): Record<string, unknown> {
   const config = tryLoadRungateConfig(projectRoot);
   const hosts = (config as Record<string, unknown> | null)?.remoteHosts;
