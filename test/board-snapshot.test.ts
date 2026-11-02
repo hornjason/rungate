@@ -21,7 +21,7 @@
  * real parser and asserts a board comes out.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -30,7 +30,7 @@ import {
   type BoardSnapshotGitHub,
   type ProducedSnapshot,
 } from "../scripts/board-snapshot";
-import type { LiveIssue } from "../lib/live-issues";
+import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
 import { readSnapshotText, takeReadings } from "../scripts/board-conformance";
 
 const ROOT = join(import.meta.dir, "..");
@@ -53,6 +53,18 @@ interface SpyOptions {
   states?: Record<number, string>;
   /** What `readStates` throws instead of answering. */
   statesThrow?: Error;
+  /**
+   * What `readFieldValues` answers per issue number — B4. A number ASKED
+   * about and absent from this map is `off-board`: the issue is on no item
+   * of this project, which is a MEASURED fact and not a failure to look.
+   */
+  fields?: Record<number, ProjectFieldReading>;
+  /** What `readFieldValues` throws instead of answering. */
+  fieldsThrow?: Error;
+  /** What `readFieldIdentity` resolves the configured field id to. */
+  identity?: { name: string; projectId: string };
+  /** What `readFieldIdentity` throws instead of answering. */
+  identityThrow?: Error;
 }
 
 /** One live issue, with the fields a case is not asserting on defaulted. */
@@ -71,6 +83,8 @@ function spy(live: Live[] = [], throwsOrOpts?: Error | SpyOptions) {
   const calls: string[] = [];
   /** Every number list `readStates` was handed, one entry per call. */
   const asked: number[][] = [];
+  /** The same, for `readFieldValues` — B4. */
+  const askedFields: number[][] = [];
   const gh: BoardSnapshotGitHub = {
     createClient: (() => {
       calls.push("createClient");
@@ -100,8 +114,21 @@ function spy(live: Live[] = [], throwsOrOpts?: Error | SpyOptions) {
       }
       return out;
     },
+    readFieldIdentity: async (fieldId: string) => {
+      calls.push(`readFieldIdentity ${fieldId}`);
+      if (o.identityThrow) throw o.identityThrow;
+      return o.identity ?? { name: "Criteria", projectId: BOARD.id };
+    },
+    readFieldValues: async (repo: string, numbers: readonly number[], projectId: string, field: string) => {
+      askedFields.push([...numbers]);
+      calls.push(`readFieldValues ${repo} ${projectId} ${field} ${[...numbers].sort((a, b) => a - b).join(",")}`);
+      if (o.fieldsThrow) throw o.fieldsThrow;
+      const out = new Map<number, ProjectFieldReading>();
+      for (const n of numbers) out.set(n, o.fields?.[n] ?? { kind: "off-board" });
+      return out;
+    },
   };
-  return { gh, calls, asked };
+  return { gh, calls, asked, askedFields };
 }
 
 /**
@@ -160,6 +187,22 @@ async function withSpec<T>(content: string, fn: (dir: string, specPath: string) 
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+/**
+ * A project root carrying a rungate config, for the B4 cases.
+ *
+ * The producer resolves the project board out of `.claude/rungate/config.json`
+ * under `--project-root`. Writing a real one into the scratch tree exercises
+ * the real loader; the cases that want NO board simply pass a root without it,
+ * which is also the state of every consumer that has not configured one.
+ */
+function writeBoardConfig(dir: string, board: unknown): void {
+  mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+  writeFileSync(join(dir, ".claude", "rungate", "config.json"), JSON.stringify({ project: "fixture", board }));
+}
+
+/** The shape `.claude/rungate/config.json` carries on this repository. */
+const BOARD = { owner: "hornjason", number: 3, id: "PVT_board", fields: { Criteria: "PVTF_criteria" } };
 
 /**
  * Run the producer and capture what it printed.
@@ -318,14 +361,20 @@ describe("the issue population (B3)", () => {
     });
   });
 
-  test("no issue carries a criteriaField key — that column was never read", async () => {
+  test("a project with NO board emits no criteriaField key at all", async () => {
     // The key's ABSENCE is the signal `board-conformance` reads to report
-    // `criteria-field` UNMEASURED. Writing `criteriaField: null` here
-    // would make it say `0 of N — N short` about a Projects v2 field
-    // nothing in this file can see.
+    // `criteria-field` UNMEASURED. Writing `criteriaField: null` here would
+    // make it say `0 of N — N short` about a Projects v2 column nothing
+    // queried.
+    //
+    // `--project-root` is the scratch tree and pinning it is the point: B4
+    // taught this producer to read the column when a board IS configured,
+    // and without the pin the root is the repository's own checkout, where
+    // one is. The case would then be asserting "the fixture's project id
+    // does not match the repo's", which is true and is not what it says.
     await withSpec(SPEC, async (dir, at) => {
       const { gh } = spy(CONFORMANT_LIVE, { issues: [iss({ number: 10, milestone: IN_PHASE_0 })] });
-      const { text } = await capture([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      const { text } = await capture([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
       expect(text, "the producer emitted a Criteria column it never queried").not.toContain("criteriaField");
     });
   });
@@ -627,7 +676,11 @@ describe("the refusals, and whether the API was reached", () => {
     // read; narrowing it to the engine subset is the same answer at the
     // cost of a round trip per cross-spec edge, and on a tracker carrying
     // several specs that is most of them.
-    await withSpec(SPEC, async (_dir, at) => {
+    // `--project-root` is the scratch tree, which carries no board config,
+    // so the Criteria read adds no calls and this list stays about blocker
+    // resolution. Without it the root is the repository's own checkout and
+    // the case quietly starts asserting B4's calls too.
+    await withSpec(SPEC, async (dir, at) => {
       const { gh, calls } = spy(CONFORMANT_LIVE, {
         issues: [
           iss({ number: 10, milestone: IN_PHASE_0 }),
@@ -635,7 +688,7 @@ describe("the refusals, and whether the API was reached", () => {
           iss({ number: 5, milestone: "Other Phase 1 — another spec" }),
         ],
       });
-      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
       expect(calls, "an open issue the producer already has was asked about").toEqual([
         "createClient",
         "listMilestones o/n",
@@ -651,14 +704,15 @@ describe("the refusals, and whether the API was reached", () => {
     // producer that always calls once, and the ordinary board — every edge
     // pointing at another engine issue — must reach the API for milestones
     // and issues and then stop.
-    await withSpec(SPEC, async (_dir, at) => {
+    await withSpec(SPEC, async (dir, at) => {
       const { gh, calls } = spy(CONFORMANT_LIVE, {
         issues: [
           iss({ number: 10, milestone: IN_PHASE_0 }),
           iss({ number: 11, milestone: IN_PHASE_1, blockedBy: [10] }),
         ],
       });
-      await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      // Board-less root, same reason as the case above.
+      await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
       expect(calls).toEqual(["createClient", "listMilestones o/n", "readIssues o/n"]);
     });
   });
@@ -676,6 +730,207 @@ describe("the refusals, and whether the API was reached", () => {
         statesThrow: new Error("HTTP 502"),
       });
       expect(await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n"], gh)).toBe(REFUSAL_EXIT);
+    });
+  });
+
+  /**
+   * `criteriaField` — item **B4**, the producer half.
+   *
+   * The Criteria column is a Projects v2 CUSTOM FIELD. `gh issue list --json
+   * projectItems` returns Status and nothing else, so until this landed the
+   * producer emitted no `criteriaField` key at all and `criteria-field` was
+   * UNMEASURED by construction — which was the true thing to say, and is
+   * exactly why the absent key must keep meaning *not read* rather than
+   * *empty*.
+   */
+  describe("the board's Criteria column", () => {
+    const twoEngineIssues = {
+      issues: [iss({ number: 10, milestone: IN_PHASE_0 }), iss({ number: 11, milestone: IN_PHASE_1 })],
+    };
+
+    test("a value on the board is emitted verbatim", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "value", value: "SC-9003" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.issues.map(i => [i.number, i.criteriaField])).toEqual([
+          [10, "SC-9001"],
+          [11, "SC-9003"],
+        ]);
+      });
+    });
+
+    test("read-and-empty is NULL, and the key is still there", async () => {
+      // The whole three-state point. `null` is a measurement — the column
+      // was read and nothing is in it — and `criteria-field` counts it
+      // SHORT. An omitted key would make the same board UNMEASURED, which
+      // is a different and much more flattering sentence.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "empty" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.issues.map(i => i.criteriaField)).toEqual(["SC-9001", null]);
+        expect(snap.issues.every(i => "criteriaField" in i), "a read issue lost its key").toBe(true);
+      });
+    });
+
+    test("an issue on NO item of this project is null too — it was looked for", async () => {
+      // Off-board and on-board-but-blank are both "the column is not
+      // populated for this issue", which is the question the reading asks.
+      // Neither is a failure to look, so neither may omit the key.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "off-board" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.issues.map(i => i.criteriaField)).toEqual(["SC-9001", null]);
+      });
+    });
+
+    test("a TRUNCATED project-item list omits the key for that issue ALONE", async () => {
+      // The issue's item list was cut before this project was reached, so
+      // whether it is on the board is unknown — not absent. The reader's
+      // `unreadable` hook fires on ANY issue missing the key, so one
+      // truncated row makes the whole reading UNMEASURED, which is the
+      // honest answer and is why this must not be flattened to null.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "truncated" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.issues.map(i => "criteriaField" in i)).toEqual([true, false]);
+        expect(snap.issues[0]!.criteriaField).toBe("SC-9001");
+      });
+    });
+
+    test("NO board configured omits the key for every issue, and reaches no project API", async () => {
+      // A consumer with no `board` block has not got an empty Criteria
+      // column — it has not got a board. Emitting null for every issue
+      // would report `0 of N — N short` for a column nothing queried.
+      await withSpec(SPEC, async (dir, at) => {
+        const { gh, calls } = spy(CONFORMANT_LIVE, twoEngineIssues);
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.issues.map(i => "criteriaField" in i)).toEqual([false, false]);
+        expect(
+          calls.filter(c => c.startsWith("readField")),
+          "it queried a project the config never named",
+        ).toEqual([]);
+      });
+    });
+
+    test("a FAILED project read omits the key — it does not refuse the whole snapshot", async () => {
+      // Deliberate, and the one judgement call in this change. The Criteria
+      // column feeds ONE reading; `milestones` and `blocked-by-edges` are
+      // already met and their verify commands run unattended. Refusing the
+      // whole snapshot would turn a B4 outage into a B1 and B3 outage. The
+      // key is omitted, so `criteria-field` reports UNMEASURED by itself —
+      // fail-closed for the reading that could not be taken, and silent for
+      // the two that could.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, { ...twoEngineIssues, fieldsThrow: new Error("HTTP 502") });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.issues.map(i => "criteriaField" in i)).toEqual([false, false]);
+        // The control: the two readings that do not depend on it still have
+        // their data, so what came back is a snapshot and not a stub.
+        expect(snap.phases.map(p => p.milestoneState)).toEqual(["unchanged", "unchanged"]);
+      });
+    });
+
+    test("a field id that resolves into ANOTHER project is not read", async () => {
+      // `board.id` and `board.fields.Criteria` are two identifiers in one
+      // config block and nothing has ever compared them. A Criteria field
+      // copied from another project's config reads values off a board this
+      // repository does not use, and every one of them would look like a
+      // measurement of ours.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh, calls } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          identity: { name: "Criteria", projectId: "PVT_someone_elses" },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.issues.map(i => "criteriaField" in i)).toEqual([false, false]);
+        expect(
+          calls.filter(c => c.startsWith("readFieldValues")),
+          "it read values from a field belonging to another project",
+        ).toEqual([]);
+      });
+    });
+
+    test("the field NAME comes from the id, not from a second copy of the word", async () => {
+      // One identifier. The config names the field by ID; the name used in
+      // the query is whatever that id resolves to, so a rename on the board
+      // follows automatically and there is no second spelling to drift.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh, calls } = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          identity: { name: "Acceptance criteria", projectId: BOARD.id },
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "value", value: "SC-9003" } },
+        });
+        await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(calls).toContain(`readFieldIdentity ${BOARD.fields.Criteria}`);
+        expect(calls.find(c => c.startsWith("readFieldValues"))).toContain("Acceptance criteria");
+      });
+    });
+
+    test("only the ENGINE issues are asked about", async () => {
+      // Not every open issue in the repository. The reading's denominator
+      // is the engine population, so a query over the rest is a cost with
+      // no reader — and on this tracker that is 70-odd issues against five.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh, askedFields } = spy(CONFORMANT_LIVE, {
+          issues: [
+            iss({ number: 10, milestone: IN_PHASE_0 }),
+            iss({ number: 11, milestone: IN_PHASE_1 }),
+            iss({ number: 99, milestone: "Other Phase 1 — another spec" }),
+            iss({ number: 98, milestone: null }),
+          ],
+        });
+        await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(askedFields).toHaveLength(1);
+        expect([...askedFields[0]!].sort((a, b) => a - b)).toEqual([10, 11]);
+      });
+    });
+
+    test("the emitted snapshot makes `criteria-field` MET through the real reader", async () => {
+      // End to end across the file boundary, because the producer and the
+      // reader agreeing about a JSON key by convention is the three-copy
+      // defect in miniature. A populated column must come out MET, and the
+      // same board with one blank must come out SHORT.
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const full = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "value", value: "SC-9003" } },
+        });
+        const met = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], full.gh);
+        const read = readSnapshotText(JSON.stringify(met));
+        const reading = takeReadings(read.board).find(r => r.name === "criteria-field")!;
+        expect([reading.status, reading.why]).toEqual(["met", "2 of 2"]);
+
+        const partial = spy(CONFORMANT_LIVE, {
+          ...twoEngineIssues,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 11: { kind: "empty" } },
+        });
+        const short = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], partial.gh);
+        const shortReading = takeReadings(readSnapshotText(JSON.stringify(short)).board).find(
+          r => r.name === "criteria-field",
+        )!;
+        expect(shortReading.status).toBe("short");
+      });
     });
   });
 
@@ -729,18 +984,22 @@ describe("the two files agree, and the producer never writes", () => {
     });
   });
 
-  test("the issues the producer emits drive blocked-by-edges, and criteria-field stays UNMEASURED", async () => {
+  test("the issues the producer emits drive blocked-by-edges, and an unconfigured column stays UNMEASURED", async () => {
     // The whole point of B3, asserted end to end through both files: an
     // unsequenced board reads SHORT, the same board with the edge reads
-    // MET, and the column nobody queried never becomes a number.
-    await withSpec(SPEC, async (_dir, at) => {
+    // MET, and a column this project has not configured never becomes a
+    // number. `--project-root` is the board-less scratch tree, so the last
+    // assertion is about the producer and not about a fixture id failing
+    // to match the repository's own config.
+    await withSpec(SPEC, async (dir, at) => {
+      const argv = [at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir];
       const unsequenced = spy(CONFORMANT_LIVE, {
         issues: [
           iss({ number: 10, milestone: "Fix Phase 0 — the first one" }),
           iss({ number: 11, milestone: "Fix Phase 1 — the second one" }),
         ],
       });
-      const before = readSnapshotText((await capture([at, "--prefix", "Fix", "--repo", "o/n"], unsequenced.gh)).text);
+      const before = readSnapshotText((await capture(argv, unsequenced.gh)).text);
       const edges = (b: typeof before) => takeReadings(b.board!).find(r => r.name === "blocked-by-edges")!;
       expect(edges(before).status, "an unsequenced board read as sequenced").toBe("short");
       expect(edges(before).why).toContain("1 of 2");
@@ -751,7 +1010,7 @@ describe("the two files agree, and the producer never writes", () => {
           iss({ number: 11, milestone: "Fix Phase 1 — the second one", blockedBy: [10] }),
         ],
       });
-      const after = readSnapshotText((await capture([at, "--prefix", "Fix", "--repo", "o/n"], sequenced.gh)).text);
+      const after = readSnapshotText((await capture(argv, sequenced.gh)).text);
       expect(edges(after).status, "adding the edge did not move the reading").toBe("met");
 
       // And the column B4 owns is untouched by either.
