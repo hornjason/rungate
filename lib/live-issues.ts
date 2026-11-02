@@ -41,6 +41,19 @@ export const ISSUE_PAGE = 100;
 export interface LiveIssue extends DepIssue {
   /** Every label name on the issue, as GitHub spells them. */
   readonly labels: readonly string[];
+  /**
+   * True when the LABEL list was cut — a paged connection reporting another
+   * page. Same reasoning as {@link DepIssue.blockedByTruncated}, and here
+   * for the same reason: `board-conformance`'s `queue-label` reading asks
+   * `labels.includes("engine")`, so a label past the boundary reads as
+   * absent and the issue counts short having been looked at wrong.
+   *
+   * Every paged connection in {@link LIVE_ISSUES_QUERY} now either carries
+   * a truncation flag or is followed to the end. Round 1 of #1703 found
+   * this on `labels` alone; it is recorded as the property because
+   * repairing one member of a population leaves the next one silent.
+   */
+  readonly labelsTruncated?: boolean;
 }
 
 export const LIVE_ISSUES_QUERY = `
@@ -52,7 +65,7 @@ query($owner:String!,$name:String!,$states:[IssueState!],$after:String){
         number
         state
         milestone{title}
-        labels(first:${ISSUE_PAGE}){nodes{name}}
+        labels(first:${ISSUE_PAGE}){pageInfo{hasNextPage} nodes{name}}
         blockedBy(first:${ISSUE_PAGE}){pageInfo{hasNextPage} nodes{number}}
       }
     }
@@ -66,7 +79,7 @@ interface IssuePage {
     number: number;
     state: string;
     milestone: { title: string } | null;
-    labels: { nodes: { name: string }[] } | null;
+    labels: { pageInfo: { hasNextPage: boolean }; nodes: { name: string }[] } | null;
     blockedBy: { pageInfo: { hasNextPage: boolean }; nodes: { number: number }[] } | null;
   }[];
 }
@@ -90,19 +103,31 @@ export function ghWithoutGhToken(args: readonly string[]): string {
   return new TextDecoder().decode(proc.stdout);
 }
 
+/** How a GraphQL call is made. Injected so the mapping below has a test. */
+export type GraphQlExec = (args: readonly string[]) => string;
+
 /**
  * Every issue in the repository, paged to the end.
  *
  * Throws on a failed call rather than returning an empty list. A caller that
  * cannot tell "the repository has no issues" from "the call failed" reports
  * the flattering one.
+ *
+ * `exec` is a parameter because both consumers inject a fake at the
+ * `readIssues` seam ABOVE this function, so without it the field mapping and
+ * the pagination loop — the only logic this module has — run in no test.
+ * Round 1 of #1703.
  */
-export async function readLiveIssues(repo: string, includeClosed: boolean): Promise<LiveIssue[]> {
+export async function readLiveIssues(
+  repo: string,
+  includeClosed: boolean,
+  exec: GraphQlExec = ghWithoutGhToken,
+): Promise<LiveIssue[]> {
   const [owner, name] = repo.split("/");
   const out: LiveIssue[] = [];
   let after: string | null = null;
   for (;;) {
-    const raw = ghWithoutGhToken([
+    const raw = exec([
       "api",
       "graphql",
       "-f",
@@ -122,6 +147,7 @@ export async function readLiveIssues(repo: string, includeClosed: boolean): Prom
         state: n.state,
         milestone: n.milestone?.title ?? null,
         labels: (n.labels?.nodes ?? []).map(l => l.name),
+        labelsTruncated: n.labels?.pageInfo.hasNextPage === true,
         blockedBy: (n.blockedBy?.nodes ?? []).map(b => b.number),
         // A second page means this list is CUT, not short. `dependencyPlan`
         // refuses rather than deriving from it: an unread blocker past the

@@ -116,6 +116,22 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // issue with no milestone is out by the same test — `startsWith` on a
   // missing title is not a match, and it would be `unphased` anyway.
   const prefix = values["milestone-prefix"];
+
+  // An EMPTY prefix is not "no filter requested". `"".startsWith("")` is
+  // true for every string, including the `""` a null milestone normalises
+  // to, so `--milestone-prefix "$X"` with `$X` unset quietly re-admits every
+  // spec's issues — the exact contamination the flag exists to prevent, and
+  // it would report success. `plan-spec` and `board-snapshot` already refuse
+  // an empty `--prefix`; this is the third member of that population.
+  if (prefix !== undefined && prefix.trim() === "") {
+    console.error(
+      `plan-deps: --milestone-prefix was given and is empty. An empty prefix matches every ` +
+        `milestone, which is not a narrowed population — omit the flag if you meant no filter.` +
+        `\n\n${USAGE}`,
+    );
+    return REFUSAL_EXIT;
+  }
+
   const issues = prefix === undefined ? read : read.filter(i => (i.milestone ?? "").startsWith(prefix));
 
   // A prefix that matched nothing is its own reading, and it has to say so

@@ -242,15 +242,20 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
     i => i.milestone !== null && i.milestone.startsWith(prefix) && phaseOf(i.milestone) !== null,
   );
 
-  // A CUT blocker list is not a short one. An edge past the page boundary
-  // is invisible here, so the issue reads as carrying no edge at all and
-  // `blocked-by-edges` would count it short — or, once somebody adds one
-  // edge, met on a list this never saw the end of.
-  const truncated = engine.filter(i => i.blockedByTruncated === true).map(i => `#${i.number}`);
-  if (truncated.length > 0) {
+  // A CUT list is not a short one, on EITHER connection. A blocker past the
+  // page boundary makes `blocked-by-edges` count the issue short — or, once
+  // somebody adds one edge, met on a list this never saw the end of. A label
+  // past the boundary makes `queue-label` read `engine` as absent. One loop
+  // over both, because fixing the connection a reviewer names and leaving
+  // the next one silent is how this came back in round 1.
+  const cut: string[] = [
+    ...engine.filter(i => i.blockedByTruncated === true).map(i => `#${i.number} (blockers)`),
+    ...engine.filter(i => i.labelsTruncated === true).map(i => `#${i.number} (labels)`),
+  ];
+  if (cut.length > 0) {
     console.error(
-      `board-snapshot: UNMEASURED — the blocker list was cut for ${truncated.length} issue(s) ` +
-        `(${truncated.join(", ")}). An edge past the page boundary reads as absent.`,
+      `board-snapshot: UNMEASURED — a paged list was cut for ${cut.length} issue(s) ` +
+        `(${cut.join(", ")}). A row past the page boundary reads as absent.`,
     );
     return REFUSAL_EXIT;
   }

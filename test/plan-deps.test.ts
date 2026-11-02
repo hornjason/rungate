@@ -425,6 +425,28 @@ describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Pha
     expect(s.calls).toEqual(["#11 +10"]);
   });
 
+  test('an EMPTY prefix refuses — it is not "no filter requested"', async () => {
+    // Round 1 of #1703. `"".startsWith("")` is true for every string,
+    // including the `""` a null milestone normalises to, so
+    // `--milestone-prefix "$X"` with $X unset quietly re-admits every
+    // spec's issues and reports success — the exact contamination the
+    // flag exists to prevent.
+    for (const empty of ["", "   "]) {
+      const s = spy(MIXED);
+      expect(
+        await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", empty], s.gh),
+        `--milestone-prefix ${JSON.stringify(empty)} was accepted`,
+      ).toBe(REFUSAL_EXIT);
+      expect(s.calls, "an empty prefix wrote the unfiltered population").toEqual([]);
+    }
+
+    // The control: omitting the flag entirely is still allowed and still
+    // writes. Without it, a guard refusing every run would pass above.
+    const omitted = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write"], omitted.gh)).toBe(0);
+    expect(omitted.calls.length).toBeGreaterThan(0);
+  });
+
   test("a prefix matching nothing says THAT, not 'no issues were read'", async () => {
     // The exit code alone cannot carry this: an unknown-flag refusal, an
     // empty repository and a typo'd prefix are all 1, and only one of them

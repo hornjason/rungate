@@ -734,17 +734,25 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
     expect(r.err).toContain("two sources");
   });
 
-  test("--produce with no --spec or no --prefix refuses, and never spawns", () => {
+  test("--produce with a missing OR EMPTY --spec or --prefix refuses, and never spawns", () => {
+    // The empty rows are round 1 of #1703, swept here because this command
+    // is the third member of that population: an empty `--prefix ""` used
+    // to reach the producer, which refuses it — so the reader reported the
+    // CHILD's refusal for an argument it was handed itself, and the reader
+    // of that message goes looking at the spec file.
     for (const argv of [
       ["--produce", "--prefix", "Pipeline"],
       ["--produce", "--spec", "specs/X.md"],
+      ["--produce", "--spec", "specs/X.md", "--prefix", ""],
+      ["--produce", "--spec", "", "--prefix", "Pipeline"],
+      ["--produce", "--spec", "specs/X.md", "--prefix", "   "],
     ]) {
       // A producer that would CRASH if reached, so the refusal is proved
       // to have happened before the spawn rather than after it.
       const { command } = stage(`throw new Error("the producer was spawned without the arguments it needs");`);
       const r = run(command, argv);
       expect(r.code, `[${argv.join(" ")}] did not refuse`).not.toBe(0);
-      expect(r.err).toContain("--produce needs --spec <path> and --prefix <name>");
+      expect(r.err).toContain("--produce needs a non-empty --spec <path> and --prefix <name>");
       expect(r.err, `[${argv.join(" ")}] spawned the producer anyway`).not.toContain("the producer was spawned");
     }
   });

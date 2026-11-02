@@ -506,8 +506,12 @@ export function readSnapshotText(text: string): SnapshotRead {
  */
 function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: string | null } {
   const { spec, prefix, repo } = flags;
-  if (spec === undefined || prefix === undefined) {
-    return { board: null, error: "--produce needs --spec <path> and --prefix <name>" };
+  // `=== undefined` is not enough: an empty `--prefix ""` reaches the
+  // producer, which refuses it, and the reader then reports the CHILD's
+  // refusal for an argument this command was handed. Same population as
+  // plan-deps' --milestone-prefix and board-snapshot's own --prefix.
+  if (spec === undefined || prefix === undefined || spec.trim() === "" || prefix.trim() === "") {
+    return { board: null, error: "--produce needs a non-empty --spec <path> and --prefix <name>" };
   }
   const args = [join(import.meta.dir, "board-snapshot.ts"), spec, "--prefix", prefix];
   if (repo !== undefined) args.push("--repo", repo);

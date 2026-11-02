@@ -391,22 +391,42 @@ describe("the refusals, and whether the API was reached", () => {
     });
   });
 
-  test("a CUT blocker list refuses, naming the issues — an edge past the page boundary reads as absent", async () => {
+  test("a CUT list refuses on EITHER paged connection — a row past the boundary reads as absent", async () => {
+    // Both members, because round 1 of #1703 found that `blockedBy` was
+    // handled and `labels` was not, in the same query. A blocker past the
+    // boundary makes `blocked-by-edges` count the issue short; a label
+    // past it makes `queue-label` read `engine` as absent. Same shape,
+    // same refusal, asserted over the population rather than the one a
+    // reviewer happened to name.
+    const cut: { why: string; issue: Parameters<typeof iss>[0] }[] = [
+      {
+        why: "blockers",
+        issue: { number: 10, milestone: "Fix Phase 0 — the first one", blockedBy: [1], blockedByTruncated: true },
+      },
+      {
+        why: "labels",
+        issue: { number: 10, milestone: "Fix Phase 0 — the first one", labels: ["engine"], labelsTruncated: true },
+      },
+    ];
     await withSpec(SPEC, async (_dir, at) => {
-      const { gh } = spy(CONFORMANT_LIVE, {
-        issues: [
-          iss({ number: 10, milestone: "Fix Phase 0 — the first one", blockedBy: [1], blockedByTruncated: true }),
-        ],
-      });
-      expect(await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n"], gh)).toBe(REFUSAL_EXIT);
+      for (const c of cut) {
+        const { gh } = spy(CONFORMANT_LIVE, { issues: [iss(c.issue)] });
+        expect(
+          await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n"], gh),
+          `a cut ${c.why} list produced a snapshot`,
+        ).toBe(REFUSAL_EXIT);
 
-      // The control: the SAME issue with the same single edge and the flag
-      // off produces a snapshot. Without this, a producer refusing every
-      // issue with a blocker would pass the case above.
-      const ok = spy(CONFORMANT_LIVE, {
-        issues: [iss({ number: 10, milestone: "Fix Phase 0 — the first one", blockedBy: [1] })],
-      });
-      expect((await capture([at, "--prefix", "Fix", "--repo", "o/n"], ok.gh)).code).toBe(0);
+        // The control, per member: the SAME issue with the same content
+        // and the flag off produces a snapshot. Without it, a producer
+        // refusing every issue that has a blocker or a label would pass.
+        const flag = c.why === "blockers" ? "blockedByTruncated" : "labelsTruncated";
+        const { [flag]: _dropped, ...rest } = c.issue as Record<string, unknown>;
+        const ok = spy(CONFORMANT_LIVE, { issues: [iss(rest as Parameters<typeof iss>[0])] });
+        expect(
+          (await capture([at, "--prefix", "Fix", "--repo", "o/n"], ok.gh)).code,
+          `the ${c.why} control refused too, so the case above proves nothing`,
+        ).toBe(0);
+      }
     });
   });
 
