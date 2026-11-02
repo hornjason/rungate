@@ -127,7 +127,7 @@ events.** Why a `--name-only` router cannot tell them apart:
 
 | what you did | what to run |
 |---|---|
-| added or renamed a file | `test/scaffold-conformity.test.ts` `test/package-closure.test.ts` |
+| added or renamed a file | `test/scaffold-conformity.test.ts` `test/package-closure.test.ts` `test/harness-fixed-point.test.ts` |
 | added a doc, or edited one containing file:line citations | `test/line-citation-ratchet.test.ts` `test/agents-md-refs.test.ts` |
 | edited any markdown outside test/fixtures/ | `test/prose-self-distance.test.ts` |
 | added or edited CLAUDE.md, AGENTS.md or a .claude/rules/ doc | `test/rule-provenance.test.ts` `test/instruction-surface-budget.test.ts` `test/harness-fixed-point.test.ts` |
