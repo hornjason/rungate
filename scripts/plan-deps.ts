@@ -32,6 +32,7 @@ import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
 import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
 import type { DepEdge, DepIssue } from "../lib/spec-deps";
+import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues, readMilestonePrefix } from "../lib/live-issues";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-deps.test.ts` can build a
@@ -40,8 +41,47 @@ import type { DepEdge, DepIssue } from "../lib/spec-deps";
  */
 export const REFUSAL_EXIT = 1;
 
-/** Page size for the issue read. The whole repository is one query. */
-export const PAGE = 100;
+/**
+ * Refuse on the channel the caller asked for — round 1 of #1705.
+ *
+ * `--json` is documented as "the whole plan, for something other than a
+ * person", and four refusals returned before the `--json` block ever ran: an
+ * unparseable argument, a missing `--repo`, and the two prefix refusals. A
+ * caller doing `JSON.parse(stdout)` got an empty string and a crash, on
+ * exactly the inputs where it most needed to be told what went wrong.
+ *
+ * The payload carries every key the success payload does, asserted against
+ * the success payload rather than a hand-copied list, so a consumer reading
+ * `.missing.length` on a refusal gets `0` and not a `TypeError`.
+ *
+ * `usage` is appended only on the text channel. A usage block is for a
+ * person; inside a JSON string it is noise a parser has to step over.
+ */
+function refuse(json: boolean, reason: string, usage = false): number {
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          reading: "UNMEASURED",
+          unmeasuredReasons: [reason],
+          phases: [],
+          missing: [],
+          present: [],
+          extra: [],
+          unphased: [],
+          frontier: null,
+          results: [],
+          wrote: "refused",
+        },
+        null,
+        2,
+      ),
+    );
+  } else {
+    console.error(`plan-deps: ${reason}${usage ? `\n\n${USAGE}` : ""}`);
+  }
+  return REFUSAL_EXIT;
+}
 
 export interface PlanDepsGitHub {
   createClient: typeof createGitHubClient;
@@ -51,91 +91,6 @@ export interface PlanDepsGitHub {
   addBlockers: (repo: string, blocked: number, blockers: readonly number[]) => Promise<void>;
 }
 
-const QUERY = `
-query($owner:String!,$name:String!,$states:[IssueState!],$after:String){
-  repository(owner:$owner,name:$name){
-    issues(first:${PAGE},after:$after,states:$states){
-      pageInfo{hasNextPage endCursor}
-      nodes{
-        number
-        state
-        milestone{title}
-        blockedBy(first:${PAGE}){pageInfo{hasNextPage} nodes{number}}
-      }
-    }
-  }
-}`;
-
-/** One shape of the GraphQL page, so nothing below is inferred as `any`. */
-interface IssuePage {
-  pageInfo: { hasNextPage: boolean; endCursor: string };
-  nodes: {
-    number: number;
-    state: string;
-    milestone: { title: string } | null;
-    blockedBy: { pageInfo: { hasNextPage: boolean }; nodes: { number: number }[] } | null;
-  }[];
-}
-
-/**
- * `gh`, with `GH_TOKEN` unset.
- *
- * Deleted rather than set to `undefined`: spreading `process.env` and
- * overwriting one key with `undefined` leaves the key PRESENT in the object
- * Bun hands the child, and `gh` prefers `GH_TOKEN` to its own keychain
- * whenever the variable exists at all.
- */
-function gh(args: readonly string[]): string {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
-  delete env.GH_TOKEN;
-  const proc = Bun.spawnSync(["gh", ...args], { env });
-  if (proc.exitCode !== 0) {
-    throw new Error(new TextDecoder().decode(proc.stderr).trim().slice(0, 300));
-  }
-  return new TextDecoder().decode(proc.stdout);
-}
-
-async function liveReadIssues(
-  _client: unknown,
-  repo: string,
-  includeClosed: boolean,
-): Promise<DepIssue[]> {
-  const [owner, name] = repo.split("/");
-  const out: DepIssue[] = [];
-  let after: string | null = null;
-  for (;;) {
-    const raw = gh([
-      "api",
-      "graphql",
-      "-f",
-      `query=${QUERY}`,
-      "-f",
-      `owner=${owner}`,
-      "-f",
-      `name=${name}`,
-      ...(includeClosed ? [] : ["-f", "states=OPEN"]),
-      ...(after === null ? [] : ["-f", `after=${after}`]),
-    ]);
-    const page = (JSON.parse(raw) as { data: { repository: { issues: IssuePage } } }).data
-      .repository.issues;
-    for (const n of page.nodes) {
-      out.push({
-        number: n.number,
-        state: n.state,
-        milestone: n.milestone?.title ?? null,
-        blockedBy: (n.blockedBy?.nodes ?? []).map(b => b.number),
-        // A second page means this list is CUT, not short. `dependencyPlan`
-        // refuses rather than deriving from it: an unread blocker past the
-        // boundary reads as missing and gets re-added.
-        blockedByTruncated: n.blockedBy?.pageInfo.hasNextPage === true,
-      });
-    }
-    if (!page.pageInfo.hasNextPage) return out;
-    after = page.pageInfo.endCursor;
-  }
-}
-
 async function liveAddBlockers(
   repo: string,
   blocked: number,
@@ -143,25 +98,38 @@ async function liveAddBlockers(
 ): Promise<void> {
   const args = ["issue", "edit", String(blocked), "--repo", repo];
   for (const b of blockers) args.push("--add-blocked-by", String(b));
-  gh(args);
+  ghWithoutGhToken(args);
 }
 
 const LIVE_GITHUB: PlanDepsGitHub = {
   createClient: createGitHubClient,
-  readIssues: liveReadIssues,
+  readIssues: (_client, repo, includeClosed) => readLiveIssues(repo, includeClosed),
   addBlockers: liveAddBlockers,
 };
 
 const USAGE = `rungate plan-deps --repo <owner/name> [--write] [--json] [--include-closed]
+                              [--milestone-prefix <name>]
 
-  --repo            owner/name. Defaults to $GITHUB_REPOSITORY.
-  --write           apply the missing edges. Without it, nothing is mutated.
-  --json            the whole plan, for something other than a person.
-  --include-closed  derive edges to closed issues too. Off by default: a
-                    closed issue can never block anything, so the edge is a
-                    row on a card that changes no decision.`;
+  --repo              owner/name. Defaults to $GITHUB_REPOSITORY.
+  --write             apply the missing edges. Without it, nothing is mutated.
+  --json              the whole plan, for something other than a person.
+  --include-closed    derive edges to closed issues too. Off by default: a
+                      closed issue can never block anything, so the edge is a
+                      row on a card that changes no decision.
+  --milestone-prefix  consider only issues whose milestone TITLE starts with
+                      this, e.g. "Pipeline". A phase number is read out of the
+                      title and nothing else, so two specs that both numbered
+                      their phases put unrelated issues in the same phase and
+                      get sequenced against each other. Pass this whenever the
+                      repository carries more than one spec's milestones.`;
 
 export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Promise<number> {
+  // Read off the RAW argv, because the refusal below happens when there is no
+  // parse to read `values.json` from. `--json` is declared boolean, and
+  // `parseArgs` rejects `--json=x` for a boolean option, so an exact match is
+  // the whole set of spellings that reach the parsed value.
+  const jsonRequested = argv.includes("--json");
+
   let parsed;
   try {
     parsed = parseArgs({
@@ -171,24 +139,86 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
         write: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         "include-closed": { type: "boolean", default: false },
+        "milestone-prefix": { type: "string" },
         "project-root": { type: "string" },
       },
       allowPositionals: true,
     });
   } catch (e) {
-    console.error(`plan-deps: ${(e as Error).message}\n\n${USAGE}`);
-    return REFUSAL_EXIT;
+    return refuse(jsonRequested, (e as Error).message, true);
   }
 
   const { values } = parsed;
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) {
-    console.error(`plan-deps: --repo is required (or set GITHUB_REPOSITORY)\n\n${USAGE}`);
-    return REFUSAL_EXIT;
+    return refuse(values.json, `--repo is required (or set GITHUB_REPOSITORY)`, true);
   }
 
-  const client = gh.createClient();
-  const issues = await gh.readIssues(client, repo, values["include-closed"]);
+  // The API call is the ONE thing on this path that fails by throwing, and
+  // `readLiveIssues` throws on purpose: a caller that cannot tell "the
+  // repository has no issues" from "the call failed" reports the flattering
+  // one. Uncaught, that throw left `main()` rejecting — a stack trace on
+  // stderr and an EMPTY stdout, which under `--json` is exactly the crash
+  // every refusal above was routed through `refuse()` to stop, arriving on
+  // the input that needs the payload most. Round 2 of #1705.
+  //
+  // `createClient` is inside the same `try`. Repairing only the call the
+  // finding named would leave the other one on the same path throwing the
+  // same way.
+  let read;
+  try {
+    const client = gh.createClient();
+    read = await gh.readIssues(client, repo, values["include-closed"]);
+  } catch (e) {
+    return refuse(
+      values.json,
+      `UNMEASURED — the issues could not be read: ${(e as Error).message}. That is a failed ` +
+        `call, not a repository with no issues.`,
+    );
+  }
+
+  // Narrow the POPULATION, not the edges. The derivation is right about the
+  // order it is handed; what it is handed has to be one spec's issues. An
+  // issue with no milestone is out by the same test — `startsWith` on a
+  // missing title is not a match, and it would be `unphased` anyway.
+  //
+  // ONE reading, trimmed once, feeding both the refusal and the filter. The
+  // first version tested `raw.trim() === ""` and filtered with `raw`, so
+  // `" Pipeline"` passed the guard and matched nothing (round 1 of #1705).
+  const prefixRead = readMilestonePrefix(values["milestone-prefix"]);
+
+  // A BLANK prefix is not "no filter requested". `"".startsWith(" Phase ")`
+  // is false, but `inMilestoneFamily(m, "")` tests `" Phase "`, which every
+  // derived title contains — so `--milestone-prefix "$X"` with `$X` unset
+  // quietly re-admits every spec's issues and reports success, the exact
+  // contamination the flag exists to prevent. `plan-spec` and
+  // `board-snapshot` refuse a blank `--prefix` through the same reading.
+  if (prefixRead.kind === "blank") {
+    return refuse(
+      values.json,
+      `--milestone-prefix was given as ${JSON.stringify(prefixRead.raw)}, which is blank. A blank ` +
+        `prefix narrows nothing — omit the flag if you meant no filter.`,
+      true,
+    );
+  }
+
+  const prefix = prefixRead.kind === "given" ? prefixRead.prefix : undefined;
+  const issues = prefix === undefined ? read : read.filter(i => inMilestoneFamily(i.milestone, prefix));
+
+  // A prefix that matched nothing is its own reading, and it has to say so
+  // here: `degenerateReasons` would report "no issues were read — an empty
+  // repository and a failed fetch produce the same empty edge list", which
+  // is false when four issues were read and the filter took them. A typo in
+  // the prefix is the likeliest way to arrive here, and that sentence sends
+  // the reader to the API.
+  if (prefix !== undefined && issues.length === 0 && read.length > 0) {
+    return refuse(
+      values.json,
+      `UNMEASURED — ${read.length} issue(s) were read and NONE carries a milestone ` +
+        `starting "${prefix}". That is a prefix matching nothing, not a repository with no issues.`,
+    );
+  }
+
   const plan = dependencyPlan(issues, { includeClosed: values["include-closed"] });
 
   // The refusal, decided BEFORE anything is written. `plan-spec` shipped this
@@ -215,7 +245,13 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     return refuseWrite || failures.length > 0 ? REFUSAL_EXIT : 0;
   }
 
-  console.log(`${repo} — ${issues.length} issue(s) read, phases ${plan.phases.join(" -> ") || "(none)"}\n`);
+  const scope =
+    prefix === undefined
+      ? ""
+      : ` (of ${read.length}, narrowed to milestones starting "${prefix}")`;
+  console.log(
+    `${repo} — ${issues.length} issue(s) read${scope}, phases ${plan.phases.join(" -> ") || "(none)"}\n`,
+  );
 
   if (plan.reading === "UNMEASURED") {
     console.error(`plan-deps: UNMEASURED — the dependency plan could not be read:`);

@@ -52,6 +52,7 @@ import {
   placementReading,
   uncoveredByMilestone,
 } from "../lib/spec-placement";
+import { readMilestonePrefix } from "../lib/live-issues";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-spec.test.ts` can build a
@@ -59,6 +60,46 @@ import {
  * (`.claude/rules/checks-must-be-able-to-fail.md`).
  */
 export const REFUSAL_EXIT = 1;
+
+/**
+ * Refuse on the channel the caller asked for — round 2 of #1705.
+ *
+ * `--json` is documented as "the whole reading, for something other than a
+ * person", and SIX refusals returned before the `--json` block ever ran. A
+ * caller doing `JSON.parse(stdout)` got an empty string and a crash on the
+ * inputs where it most needed to be told what went wrong.
+ *
+ * The finding pointed at the blank-prefix refusal added in round 1 of this
+ * PR — this change reintroducing, one command over, the gap round 1 had
+ * just closed in `plan-deps`. The other five were already there, and a
+ * repair of one leaves the next silent.
+ *
+ * Keys match the success payload, asserted against it rather than against a
+ * copied list, so a consumer reading `.actions.length` on a refusal gets
+ * `0` and not a `TypeError`. The reason goes in `problems`, which is where
+ * a reader already looks for what is wrong with this run.
+ */
+function refuse(json: boolean, reason: string, usage = false): number {
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          reading: { reading: "UNMEASURED", unmeasuredReasons: [reason], criteria: [], rows: [] },
+          actions: [],
+          unmanaged: [],
+          coverage: [],
+          problems: [reason],
+          wrote: "refused",
+        },
+        null,
+        2,
+      ),
+    );
+  } else {
+    console.error(`plan-spec: ${reason}${usage ? `\n\n${USAGE}` : ""}`);
+  }
+  return REFUSAL_EXIT;
+}
 
 /**
  * The GitHub calls, injected so a test can watch whether any of them happened.
@@ -110,42 +151,56 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
       allowPositionals: true,
     });
   } catch (e) {
-    console.error(`plan-spec: ${(e as Error).message}\n\n${USAGE}`);
-    return REFUSAL_EXIT;
+    // Read off the RAW argv: there is no parse to take `values.json` from
+    // at this point. `--json` is declared boolean and `parseArgs` rejects
+    // `--json=x` for one, so an exact match is every spelling that could
+    // have reached the parsed value.
+    return refuse(argv.includes("--json"), (e as Error).message, true);
   }
 
   const { values, positionals } = parsed;
   const specArg = positionals[0];
   if (!specArg) {
-    console.error(`plan-spec: no spec given\n\n${USAGE}`);
-    return REFUSAL_EXIT;
+    return refuse(values.json, `no spec given`, true);
   }
-  const prefix = values.prefix;
-  if (!prefix) {
-    console.error(`plan-spec: --prefix is required\n\n${USAGE}`);
-    return REFUSAL_EXIT;
+  // ONE reading, trimmed once. `if (!prefix)` was false for `"   "`, and
+  // this command WRITES: a blank prefix would have created live milestones
+  // called `"    Phase 1 — …"`, and a padded one `"  Conv   Phase 1 — …"`,
+  // matching no milestone already on the board. Round 1 of #1705 found the
+  // same guard/use split in `plan-deps`; this is the same population.
+  const prefixRead = readMilestonePrefix(values.prefix);
+  if (prefixRead.kind !== "given") {
+    return refuse(
+      values.json,
+      prefixRead.kind === "absent"
+        ? `--prefix is required`
+        : `--prefix was given as ${JSON.stringify(prefixRead.raw)}, which is blank. ` +
+            `Every milestone it names would start with the space.`,
+      true,
+    );
   }
+  const prefix = prefixRead.prefix;
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) {
-    console.error(`plan-spec: --repo is required (or set GITHUB_REPOSITORY)\n\n${USAGE}`);
-    return REFUSAL_EXIT;
+    return refuse(values.json, `--repo is required (or set GITHUB_REPOSITORY)`, true);
   }
 
   const root = values["project-root"] ?? process.cwd();
   const specPath = isAbsolute(specArg) ? specArg : join(root, specArg);
   if (!existsSync(specPath)) {
-    console.error(`plan-spec: no such spec: ${specPath}`);
-    return REFUSAL_EXIT;
+    return refuse(values.json, `no such spec: ${specPath}`);
   }
   const content = readFileSync(specPath, "utf-8");
 
   // ── Step 1: is the spec's own table sound? ───────────────────────────────
   const reading = placementReading(content);
   if (reading.reading === "UNMEASURED") {
-    console.error(`plan-spec: UNMEASURED — the placement table could not be read:`);
-    for (const r of reading.unmeasuredReasons) console.error(`  - ${r}`);
-    console.error(`\nSee docs/adr/ADR-003-spec-to-tracker-mapping.md § 1.`);
-    return REFUSAL_EXIT;
+    return refuse(
+      values.json,
+      `UNMEASURED — the placement table could not be read:\n` +
+        reading.unmeasuredReasons.map(r => `  - ${r}`).join("\n") +
+        `\n\nSee docs/adr/ADR-003-spec-to-tracker-mapping.md § 1.`,
+    );
   }
 
   const problems: string[] = [];

@@ -363,6 +363,362 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
  * blocked by exactly the size of the phase before it, and the two
  * hand-authored within-phase edges are reported as EXTRA rather than planned.
  */
+/**
+ * `--milestone-prefix` (item **B3**).
+ *
+ * `phaseOf` reads `Phase <n>` out of a milestone title and nothing else, so
+ * two specs that both numbered their phases put unrelated issues in the same
+ * phase. Measured on hornjason/rungate 2026-11-01: an unfiltered run derived
+ * 48 edges across 28 issues, and the engine issues in Pipeline Phase 5 came
+ * out blocked by #1162, #1656 and #1657 — three issues from a different
+ * spec's Phase 4, which block them in no sense anybody intended.
+ *
+ * The flag narrows the POPULATION, which is the only thing that can fix
+ * this: the edge derivation is right about the order it is given, and what
+ * it is given has to be one spec's issues.
+ */
+describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Phase N", () => {
+  /** An issue in a named milestone family, so two can be mixed in one read. */
+  const fam = (number: number, family: string, phase: number): DepIssue => ({
+    number,
+    state: "OPEN",
+    milestone: `${family} Phase ${phase} — a heading`,
+    blockedBy: [],
+  });
+
+  function spy(issues: DepIssue[]) {
+    const calls: string[] = [];
+    const gh: PlanDepsGitHub = {
+      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+      readIssues: async () => issues,
+      addBlockers: async (_repo, blocked, blockers) => {
+        calls.push(`#${blocked} +${[...blockers].join(",")}`);
+      },
+    };
+    return { gh, calls };
+  }
+
+  const MIXED = [fam(10, "Pipeline", 0), fam(11, "Pipeline", 1), fam(20, "Other", 0), fam(21, "Other", 1)];
+
+  test("without it, the two families are sequenced against each other", async () => {
+    // Not an endorsement — it is the behaviour the flag exists to avoid,
+    // asserted so that adding the flag cannot silently change the default
+    // for every existing caller.
+    const s = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write"], s.gh)).toBe(0);
+    expect(s.calls.sort()).toEqual(["#11 +10,20", "#21 +10,20"]);
+  });
+
+  test("with it, only that family is read and only its edges are written", async () => {
+    const s = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipeline"], s.gh)).toBe(0);
+    expect(s.calls).toEqual(["#11 +10"]);
+  });
+
+  test("every near miss is OUT — no milestone, the prefix mid-title, or a LONGER family name", async () => {
+    // The last row is round 2 of #1703: a bare `startsWith` admits any
+    // family whose name begins with this one, which is the contamination
+    // the flag exists to prevent arriving through the fix for it.
+    const s = spy([
+      ...MIXED,
+      { number: 30, state: "OPEN", milestone: null, blockedBy: [] },
+      { number: 31, state: "OPEN", milestone: "Not Pipeline Phase 1 — mid-title", blockedBy: [] },
+      { number: 32, state: "OPEN", milestone: "Pipelines Phase 1 — a longer name", blockedBy: [] },
+      { number: 33, state: "OPEN", milestone: "Pipeline — no phase at all", blockedBy: [] },
+    ]);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipeline"], s.gh)).toBe(0);
+    expect(s.calls).toEqual(["#11 +10"]);
+  });
+
+  test("a prefix that is a PREFIX of the real family name matches nothing", async () => {
+    // `--milestone-prefix Pipe` against `Pipeline Phase N` used to admit
+    // the whole family and sequence it as if it were the caller's own.
+    const s = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipe"], s.gh)).toBe(
+      REFUSAL_EXIT,
+    );
+    expect(s.calls, "a truncated prefix sequenced another family's issues").toEqual([]);
+  });
+
+  test('an EMPTY prefix refuses — it is not "no filter requested"', async () => {
+    // Round 1 of #1703. `"".startsWith("")` is true for every string,
+    // including the `""` a null milestone normalises to, so
+    // `--milestone-prefix "$X"` with $X unset quietly re-admits every
+    // spec's issues and reports success — the exact contamination the
+    // flag exists to prevent.
+    for (const empty of ["", "   "]) {
+      const s = spy(MIXED);
+      expect(
+        await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", empty], s.gh),
+        `--milestone-prefix ${JSON.stringify(empty)} was accepted`,
+      ).toBe(REFUSAL_EXIT);
+      expect(s.calls, "an empty prefix wrote the unfiltered population").toEqual([]);
+    }
+
+    // The control: omitting the flag entirely is still allowed and still
+    // writes. Without it, a guard refusing every run would pass above.
+    const omitted = spy(MIXED);
+    expect(await planDepsMain(["--repo", "o/r", "--write"], omitted.gh)).toBe(0);
+    expect(omitted.calls.length).toBeGreaterThan(0);
+  });
+
+  test("a prefix matching nothing says THAT, not 'no issues were read'", async () => {
+    // The exit code alone cannot carry this: an unknown-flag refusal, an
+    // empty repository and a typo'd prefix are all 1, and only one of them
+    // is about the prefix. A reader told "an empty repository and a failed
+    // fetch produce the same empty edge list" goes and checks the API.
+    const s = spy(MIXED);
+    const said: string[] = [];
+    const err = console.error;
+    console.error = (...a: unknown[]) => void said.push(a.join(" "));
+    try {
+      expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Nope"], s.gh)).toBe(
+        REFUSAL_EXIT,
+      );
+    } finally {
+      console.error = err;
+    }
+    expect(s.calls, "a prefix that matched nothing still wrote").toEqual([]);
+    const text = said.join("\n");
+    expect(text).toContain('"Nope"');
+    expect(text).toContain("4 issue(s) were read");
+    expect(text, "it blamed the read for what the filter did").not.toContain("no issues were read");
+  });
+
+  /**
+   * Round 1 of #1705. The emptiness guard tested `prefix.trim() === ""` and
+   * the filter then used the UNTRIMMED value, so the two disagreed about
+   * every input with whitespace on an end: `" Pipeline"` passes the guard,
+   * matches nothing, and refuses with a message naming a string that looks
+   * like it should obviously match.
+   *
+   * The pair of cases below is the point. Trimming only the GUARD is the
+   * state this is leaving; trimming only the FILTER would accept `"   "` and
+   * silently sequence every family. One trimmed reading feeds both.
+   */
+  test("a prefix with whitespace on an end is TRIMMED, not refused for matching nothing", async () => {
+    for (const padded of [" Pipeline", "Pipeline ", "  Pipeline  ", "\tPipeline\n"]) {
+      const s = spy(MIXED);
+      expect(
+        await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", padded], s.gh),
+        `--milestone-prefix ${JSON.stringify(padded)} was refused`,
+      ).toBe(0);
+      expect(s.calls, `${JSON.stringify(padded)} did not reach the Pipeline family`).toEqual([
+        "#11 +10",
+      ]);
+    }
+  });
+
+  test("trimming touches the ENDS only — a family name with a space inside survives", async () => {
+    // The control for the case above. `replaceAll(" ", "")` and a
+    // `trim()`-shaped fix are the same on every input there; this input
+    // separates them, and a prefix of two words is the ordinary case on a
+    // tracker carrying more than one spec.
+    const s = spy([
+      { number: 40, state: "OPEN", milestone: "Spec Two Phase 0 — a", blockedBy: [] },
+      { number: 41, state: "OPEN", milestone: "Spec Two Phase 1 — b", blockedBy: [] },
+    ]);
+    expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", " Spec Two "], s.gh)).toBe(0);
+    expect(s.calls).toEqual(["#41 +40"]);
+  });
+});
+
+/**
+ * `--json` is a CONTRACT, and a refusal has to keep it — round 1 of #1705.
+ *
+ * `--json` is documented as "the whole plan, for something other than a
+ * person". Four refusals returned before the `--json` block, so a caller
+ * doing `JSON.parse(stdout)` got an empty string and a crash where it should
+ * have got a structured `wrote: "refused"` payload. The UNMEASURED-from-
+ * `dependencyPlan` case already honoured both channels; these four did not,
+ * which is the population.
+ *
+ * Each case asserts the payload PARSES and says which refusal it was. An
+ * exit code cannot carry that: all four are 1.
+ */
+describe("scripts/plan-deps --json: every refusal reaches the channel the caller asked for", () => {
+  function spy(issues: DepIssue[]) {
+    const calls: string[] = [];
+    const gh: PlanDepsGitHub = {
+      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+      readIssues: async () => issues,
+      addBlockers: async (_repo, blocked, blockers) => {
+        calls.push(`#${blocked} +${[...blockers].join(",")}`);
+      },
+    };
+    return { gh, calls };
+  }
+
+  const MIXED: DepIssue[] = [
+    { number: 10, state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
+    { number: 11, state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
+  ];
+
+  /** Runs `main` with both channels captured, so neither can hide. */
+  async function run(argv: string[], gh: PlanDepsGitHub) {
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void err.push(a.join(" "));
+    try {
+      const code = await planDepsMain(argv, gh);
+      return { code, stdout: out.join("\n"), stderr: err.join("\n") };
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+  }
+
+  const REFUSALS: { why: string; argv: string[]; names: string }[] = [
+    { why: "an unparseable argument", argv: ["--repo", "o/r", "--nonsense"], names: "nonsense" },
+    { why: "no --repo", argv: [], names: "--repo" },
+    { why: "a blank --milestone-prefix", argv: ["--repo", "o/r", "--milestone-prefix", "   "], names: "blank" },
+    {
+      why: "a --milestone-prefix matching nothing",
+      argv: ["--repo", "o/r", "--milestone-prefix", "Nope"],
+      names: "Nope",
+    },
+  ];
+
+  for (const r of REFUSALS) {
+    test(`${r.why} still emits a parseable payload under --json`, async () => {
+      const s = spy(MIXED);
+      const saved = process.env.GITHUB_REPOSITORY;
+      delete process.env.GITHUB_REPOSITORY;
+      let got;
+      try {
+        got = await run([...r.argv, "--json", "--write"], s.gh);
+      } finally {
+        if (saved !== undefined) process.env.GITHUB_REPOSITORY = saved;
+      }
+      expect(got.code, "the refusal stopped reporting a failure").toBe(REFUSAL_EXIT);
+      expect(s.calls, "a refusal still wrote").toEqual([]);
+
+      let payload: { wrote?: string; reading?: string; unmeasuredReasons?: string[] };
+      try {
+        payload = JSON.parse(got.stdout);
+      } catch {
+        throw new Error(
+          `--json refusal (${r.why}) put nothing parseable on stdout. stdout was ` +
+            `${JSON.stringify(got.stdout)}; stderr was ${JSON.stringify(got.stderr)}`,
+        );
+      }
+      expect(payload.wrote, "the payload did not say the write was refused").toBe("refused");
+      expect(payload.reading).toBe("UNMEASURED");
+      expect(
+        (payload.unmeasuredReasons ?? []).join(" "),
+        "the payload refused without saying which refusal it was",
+      ).toContain(r.names);
+    });
+  }
+
+  /**
+   * Round 2 of #1705. `readLiveIssues` throws rather than returning an empty
+   * list — a caller that cannot tell "no issues" from "the call failed"
+   * reports the flattering one. Nothing caught it here, so a bad token, a
+   * rate limit or an outage left `main()` rejecting: a stack trace on
+   * stderr and an EMPTY stdout, which under `--json` is the same crash the
+   * four cases above exist to stop, on the input that needs the payload
+   * most.
+   */
+  const THROWS: PlanDepsGitHub = {
+    createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+    readIssues: async () => {
+      throw new Error("gh: HTTP 403 — Bad credentials");
+    },
+    addBlockers: async () => {},
+  };
+
+  test("a FAILED issue read refuses on the --json channel, not as a rejection", async () => {
+    const got = await run(["--repo", "o/r", "--json", "--write"], THROWS);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    const payload = JSON.parse(got.stdout);
+    expect(payload.wrote).toBe("refused");
+    expect(payload.reading).toBe("UNMEASURED");
+    expect(
+      payload.unmeasuredReasons.join(" "),
+      "the payload refused without naming what the API said",
+    ).toContain("403");
+  });
+
+  test("the same failure on the TEXT channel says so too, and is not a stack trace", async () => {
+    const got = await run(["--repo", "o/r", "--write"], THROWS);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    expect(got.stdout.trim()).toBe("");
+    expect(got.stderr).toContain("403");
+    expect(got.stderr, "a failed read was reported as an empty repository").not.toContain(
+      "0 issue(s) read",
+    );
+  });
+
+  test("a client that cannot be built is the same refusal, not a rejection", async () => {
+    // `createClient` is the other call on this path that can throw, and a
+    // repair of only the one the finding named leaves it. Both go through
+    // the same guard.
+    const noClient: PlanDepsGitHub = {
+      createClient: (() => {
+        throw new Error("no GITHUB_TOKEN in the environment");
+      }) as PlanDepsGitHub["createClient"],
+      readIssues: async () => MIXED,
+      addBlockers: async () => {},
+    };
+    const got = await run(["--repo", "o/r", "--json"], noClient);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    expect(JSON.parse(got.stdout).unmeasuredReasons.join(" ")).toContain("GITHUB_TOKEN");
+  });
+
+  test("the control: a read that SUCCEEDS is not reported as a failed one", async () => {
+    const got = await run(["--repo", "o/r", "--json", "--milestone-prefix", "Pipeline"], spy(MIXED).gh);
+    expect(got.code).toBe(0);
+    expect(JSON.parse(got.stdout).reading).toBe("MEASURED");
+  });
+
+  test("WITHOUT --json those same four stay on stderr and leave stdout empty", async () => {
+    // The control. A fix that emits JSON unconditionally passes every case
+    // above and breaks every human caller, and nothing above can see it.
+    const saved = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      for (const r of REFUSALS) {
+        const s = spy(MIXED);
+        const got = await run([...r.argv, "--write"], s.gh);
+        expect(got.code).toBe(REFUSAL_EXIT);
+        expect(got.stdout.trim(), `${r.why} printed a payload nobody asked for`).toBe("");
+        expect(got.stderr, `${r.why} said nothing on stderr`).toContain(r.names);
+      }
+    } finally {
+      if (saved !== undefined) process.env.GITHUB_REPOSITORY = saved;
+    }
+  });
+
+  test("a SOUND --json run is unchanged — same keys, and `wrote` is not `refused`", async () => {
+    // Without this, a refusal payload that happens to be well-formed proves
+    // nothing about the shape a consumer actually switches on.
+    const s = spy(MIXED);
+    const got = await run(["--repo", "o/r", "--json", "--write", "--milestone-prefix", "Pipeline"], s.gh);
+    expect(got.code).toBe(0);
+    const payload = JSON.parse(got.stdout);
+    expect(payload.wrote).toBe("yes");
+    expect(payload.reading).toBe("MEASURED");
+    for (const key of ["reading", "unmeasuredReasons", "phases", "missing", "present", "extra", "results", "wrote"]) {
+      expect(Object.keys(payload), `the success payload lost \`${key}\``).toContain(key);
+    }
+  });
+
+  test("the refusal payload carries every key the success payload does", async () => {
+    // A consumer reading `.missing.length` on a refusal must get `[]`, not a
+    // TypeError. The two shapes are asserted against each other rather than
+    // against a hand-copied list, so neither can drift alone.
+    const sound = await run(["--repo", "o/r", "--json", "--milestone-prefix", "Pipeline"], spy(MIXED).gh);
+    const refused = await run(["--repo", "o/r", "--json", "--milestone-prefix", "Nope"], spy(MIXED).gh);
+    const soundKeys = Object.keys(JSON.parse(sound.stdout)).sort();
+    const refusedKeys = Object.keys(JSON.parse(refused.stdout)).sort();
+    expect(refusedKeys).toEqual(soundKeys);
+  });
+});
+
 describe("the shape the live convergence board has", () => {
   const phaseSizes = [2, 6, 8, 4, 3, 10, 6];
   const issues: DepIssue[] = [];
