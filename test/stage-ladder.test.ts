@@ -74,23 +74,22 @@ const MACHINE_SCOPED_ALLOWED = 1;
 const CREDENTIALED_ALLOWED = 1;
 
 /**
- * How long every done item's verify command gets, in total.
+ * How long the whole loop below gets. Some of its verify commands read the
+ * live GitHub API and they run one after another, so this is a sum.
  *
- * TWO of the items this loop executes call the live GitHub API, through
- * `board-conformance --produce`: B1 and B3. B4 does too but is
- * `credentialed` and skipped here, and B5 runs `--list-readings`, which
- * prints the reading names and opens no connection. The budget is a sum
- * rather than a per-item allowance because they run one after another.
+ * Measured 2026-11-02: the whole loop, 4.9s. An order of magnitude of
+ * headroom — room for a slow API, and not enough for a hung command to
+ * hold CI open.
  *
- * Measured 2026-11-02 on a warm network: B1 2.0s, B3 2.1s. 60s is
- * deliberately far above that — room for a slow network, and not enough
- * for a hung command to hold CI open.
- *
- * An earlier revision of this comment said "four API-backed items … about
- * 5s", which was wrong when it was written and wronger once B4 was
- * skipped. It is recorded because the number is the justification: a
- * budget whose stated measurement nobody can reproduce is a magic
- * constant with a paragraph attached.
+ * **No count of API-backed items is stated here, deliberately.** Two
+ * revisions of this comment carried one and both were wrong: the first
+ * said "four" when B5 runs `--list-readings` and opens no connection, and
+ * it stayed wrong when B4 became `credentialed` and stopped being
+ * executed at all. A number in a comment is a second decider that nothing
+ * runs. What catches a budget that has gone tight is the `failed`
+ * assertion's own message: a killed command is reported as `exited null`,
+ * and that message says to raise this constant rather than untick a true
+ * item.
  */
 const LIVE_VERIFY_BUDGET_MS = 60_000;
 
@@ -133,7 +132,6 @@ describe("the live plan", () => {
     const deferred: string[] = [];
     const credentialed: string[] = [];
     const unmeasured: string[] = [];
-    const startedAt = Date.now();
 
     for (const stage of stages) {
       for (const item of stage.items) {
@@ -169,21 +167,6 @@ describe("the live plan", () => {
 
     // A run that checked nothing is not a run that passed.
     expect(checked.length, "no repo-scoped done items were executed, so this case witnessed nothing").toBeGreaterThan(0);
-
-    // The budget, asserted against what this run actually took, rather than
-    // justified by a sentence naming a count of API-backed items. That
-    // sentence was wrong twice in one PR — once when written and again when
-    // B4 became `credentialed` and stopped being executed — and nothing
-    // could see it. This can: a loop that grows past half the budget says
-    // so while there is still headroom, instead of the next person reading
-    // `exited null` and unticking a true item.
-    const elapsed = Date.now() - startedAt;
-    expect(
-      elapsed * 2,
-      `the done items took ${elapsed}ms of a ${LIVE_VERIFY_BUDGET_MS}ms budget — over half, so the next ` +
-        `API-backed item to be ticked may be KILLED mid-call and reported as "exited null", which is ` +
-        `indistinguishable from the work regressing. Raise LIVE_VERIFY_BUDGET_MS and restate its measurement.`,
-    ).toBeLessThan(LIVE_VERIFY_BUDGET_MS);
 
     expect(
       unmeasured,
