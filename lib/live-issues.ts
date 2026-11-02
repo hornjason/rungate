@@ -102,13 +102,36 @@ export function readMilestonePrefix(raw: string | undefined): MilestonePrefixRea
 }
 
 /**
- * One issue, as the dependency order needs it.
+ * One issue, with everything a board reading asks about it.
  *
- * `DepIssue` exactly, for now. The alias names the seam a later reading
- * widens, and keeps both consumers importing one type rather than one
- * importing the other's.
+ * ## Labels come back too, and they are read rather than assumed
+ *
+ * `board-conformance`'s `queue-label` reading counts issues carrying
+ * `engine`, so the snapshot has to say something about labels. Emitting an
+ * empty list for every issue would report a number nobody measured — a zero
+ * that happens to be right is `.claude/rules/config-access.md`'s *Silent
+ * Default Substitution*, and it is indistinguishable from a board where
+ * nothing is labelled. One extra field on a query already being run is the
+ * honest option.
  */
-export type LiveIssue = DepIssue;
+export interface LiveIssue extends DepIssue {
+  /** Every label name on the issue, as GitHub spells them. */
+  readonly labels: readonly string[];
+  /**
+   * True when the LABEL list was cut — a paged connection reporting another
+   * page. Same reasoning as {@link DepIssue.blockedByTruncated}, and here
+   * for the same reason: `queue-label` asks `labels.includes("engine")`, so
+   * a label past the boundary reads as ABSENT and the issue counts short
+   * having been looked at wrong.
+   *
+   * Every paged connection in {@link LIVE_ISSUES_QUERY} either carries a
+   * truncation flag or is followed to the end. Round 1 of #1703 found this
+   * on `labels` after `blockedBy` had been handled correctly; it is
+   * recorded as the property because repairing one member of a population
+   * leaves the next one silent.
+   */
+  readonly labelsTruncated?: boolean;
+}
 
 export const LIVE_ISSUES_QUERY = `
 query($owner:String!,$name:String!,$states:[IssueState!],$after:String){
@@ -119,6 +142,7 @@ query($owner:String!,$name:String!,$states:[IssueState!],$after:String){
         number
         state
         milestone{title}
+        labels(first:${ISSUE_PAGE}){pageInfo{hasNextPage} nodes{name}}
         blockedBy(first:${ISSUE_PAGE}){pageInfo{hasNextPage} nodes{number}}
       }
     }
@@ -132,6 +156,7 @@ interface IssuePage {
     number: number;
     state: string;
     milestone: { title: string } | null;
+    labels: { pageInfo: { hasNextPage: boolean }; nodes: { name: string }[] } | null;
     blockedBy: { pageInfo: { hasNextPage: boolean }; nodes: { number: number }[] } | null;
   }[];
 }
@@ -198,6 +223,8 @@ export async function readLiveIssues(
         number: n.number,
         state: n.state,
         milestone: n.milestone?.title ?? null,
+        labels: (n.labels?.nodes ?? []).map(l => l.name),
+        labelsTruncated: n.labels?.pageInfo.hasNextPage === true,
         blockedBy: (n.blockedBy?.nodes ?? []).map(b => b.number),
         // A second page means this list is CUT, not short. `dependencyPlan`
         // refuses rather than deriving from it: an unread blocker past the
@@ -208,4 +235,64 @@ export async function readLiveIssues(
     if (!page.pageInfo.hasNextPage) return out;
     after = page.pageInfo.endCursor;
   }
+}
+
+/**
+ * How many numbers one {@link readIssueStates} call resolves.
+ *
+ * Aliased `issue(number:)` lookups in a single query. GitHub scores a
+ * query by its node count, so this is a chunk size rather than a limit on
+ * what the caller may ask for.
+ */
+export const STATE_BATCH = 50;
+
+/**
+ * The state of specific issues, BY NUMBER — #1704.
+ *
+ * ## Why this is not `readLiveIssues(repo, true)`
+ *
+ * `board-snapshot` needs to tell a FINISHED blocker from one that never
+ * existed, and both are simply absent from the open population. The
+ * obvious fix is to read closed issues too. Measured on hornjason/rungate:
+ * 72 open issues, 805 in total — so that turns a one-page read into nine,
+ * on a command CI runs and an unattended loop polls, and every extra page
+ * is another chance at the HTTP 502 that was observed while this was being
+ * written.
+ *
+ * This resolves only the numbers actually named by an edge, which is a
+ * handful and does not grow with the repository's age.
+ *
+ * A number naming no issue at all is ABSENT from the returned map — not
+ * recorded with some placeholder state. That is the distinction the whole
+ * change exists to preserve, so it must survive this function: a typo and
+ * a finished issue have to come back different.
+ */
+export async function readIssueStates(
+  repo: string,
+  numbers: readonly number[],
+  exec: GraphQlExec = ghWithoutGhToken,
+): Promise<Map<number, string>> {
+  const [owner, name] = repo.split("/");
+  const out = new Map<number, string>();
+  const unique = [...new Set(numbers)];
+  for (let at = 0; at < unique.length; at += STATE_BATCH) {
+    const chunk = unique.slice(at, at + STATE_BATCH);
+    const fields = chunk.map(n => `i${n}: issue(number:${n}){number state}`).join(" ");
+    const raw = exec([
+      "api",
+      "graphql",
+      "-f",
+      `query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${fields}}}`,
+      "-f",
+      `owner=${owner}`,
+      "-f",
+      `name=${name}`,
+    ]);
+    const repoNode = (JSON.parse(raw) as { data: { repository: Record<string, { number: number; state: string } | null> } })
+      .data.repository;
+    for (const node of Object.values(repoNode ?? {})) {
+      if (node !== null && node !== undefined) out.set(node.number, node.state);
+    }
+  }
+  return out;
 }
