@@ -1,4 +1,6 @@
 /**
+ * Covers SC-2614 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ *
  * The filing arbiter, stage 1 (#1187).
  *
  * The suite is built around one requirement: **the gate must be able to

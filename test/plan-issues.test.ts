@@ -1,4 +1,6 @@
 /**
+ * Covers SC-2608 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ *
  * `lib/issue-repair.ts` and `scripts/plan-issues.ts --repair` (#1647).
  *
  * ## The write cases assert on the CALLS
