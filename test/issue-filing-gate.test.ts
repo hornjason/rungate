@@ -73,6 +73,10 @@ import {
   filingFinding,
   intentsInRun,
   intentOrdinal,
+  FILINGS_PER_RUN,
+  FILINGS_PER_RUN_DIRECT,
+  filingsPerRun,
+  filingsPerRunFor,
   reserveAllowance,
   releaseAllowance,
   ledgerTitle,
@@ -2993,14 +2997,22 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
   const M1 = "declared === null";
   /** `M2` — the closed list stops being closed. */
   const M2 = "if (token in COMMENT_EXEMPTIONS) return token as CommentExemption;";
-  /** `M3` — the cap never binds, however much the run has filed. */
-  const M3 = "spent >= FILINGS_PER_RUN";
+  /**
+   * `M3` — the cap never binds, however much the run has filed.
+   *
+   * The anchor is `spent >= cap`, not `spent >= FILINGS_PER_RUN`: the cap is
+   * resolved per command now, because direct-ship mode earns a larger one.
+   * `buildMutant` asserts an anchor appears EXACTLY once, so renaming the
+   * site turned this row red rather than leaving it green against a mutation
+   * that no longer applied — which is the only reason the rename was safe.
+   */
+  const M3 = "spent >= cap";
   /** `M4` — every refusal becomes waivable, including the cap. */
   const M4 = "return refusal === null || !(refusal in UNWAIVABLE_REFUSALS);";
   /** `M5` — the cap stops seeing filings the label would carry through. */
   const M5 = "|| overrideOf(read2)";
   /** `M6` — the reservation is taken and its position is never read. */
-  const M6 = "ordinal > FILINGS_PER_RUN";
+  const M6 = "ordinal > (io.cap ?? FILINGS_PER_RUN)";
   /**
    * `M7` — the comment DEFAULT goes back to being waivable by a label.
    *
@@ -5157,5 +5169,135 @@ describe("FG-180..FG-184: a merged plan is the cap's second route", () => {
     const r = await run(filing("something nobody planned"), namesIt);
     expect(r.rows[0].refusal).toBe("OVER_CAP");
     expect(r.rows[0].plannedBy).toBeNull();
+  });
+});
+
+/**
+ * The allowance is larger while the project is in DIRECT-SHIP mode.
+ *
+ * Jason's call, 2026-11-02: raise the cap for the engine work that is
+ * shrinking the backlog, and put it back before agents swarm on it. The cap
+ * exists because of what a SWARM did — #1595 measured 57 filed against 53
+ * closed — and engine work is the opposite population, which is the same
+ * carve-out already made for the opened-against-closed ratio.
+ *
+ * **Why `ship.mode` and not a number in config.** `FILINGS_PER_RUN`'s own
+ * docblock refuses a configurable cap, in as many words: *"a cap read from
+ * config is a cap an agent raises"*. That objection is answered rather than
+ * overridden here — BOTH numbers stay source constants a reviewer can
+ * disagree with, and config selects between them and cannot invent a third.
+ * `ship.mode` is the switch that already means *stabilising, not swarming*,
+ * so the raise reverts itself the day the project goes back to `harness`
+ * instead of waiting for somebody to remember.
+ *
+ * FG-192 is the one that matters most: a config the gate cannot read falls
+ * back to the STRICT cap. An unreadable config must never be a route to the
+ * larger allowance.
+ */
+describe("the filing cap under direct-ship mode", () => {
+  test("FG-190: direct-ship mode gets a LARGER allowance than harness mode", () => {
+    // Stated as a RELATION between two calls, not as `toBe(CONSTANT)`.
+    // `expect(filingsPerRun(direct)).toBe(FILINGS_PER_RUN_DIRECT)` is vacuous
+    // under exactly the mutation that matters — editing the constant moves
+    // both sides of the comparison, so the row stays green while the two
+    // modes stop differing. It was written that way first and the battery
+    // caught it: M1 (`FILINGS_PER_RUN_DIRECT = 1`) left this row passing.
+    const direct = filingsPerRun({ mode: "direct", since: "2026-10-19", reason: "stabilising" });
+    expect(direct, "direct-ship must earn more than harness").toBeGreaterThan(
+      filingsPerRun({ mode: "harness" }),
+    );
+    expect(direct, "and it is the declared constant").toBe(FILINGS_PER_RUN_DIRECT);
+  });
+
+  test("FG-191 CONTROL: harness mode still gets the strict one", () => {
+    // Without this row the change reads as a blanket raise, which is the
+    // pathology #1595 measured. The two constants must also DIFFER, or both
+    // halves pass against a gate that no longer has two modes at all.
+    expect(filingsPerRun({ mode: "harness" })).toBe(FILINGS_PER_RUN);
+    expect(
+      FILINGS_PER_RUN_DIRECT,
+      "the two caps are equal, so neither row above can distinguish the modes",
+    ).toBeGreaterThan(FILINGS_PER_RUN);
+  });
+
+  test("FG-192: an unresolvable policy falls back to the STRICT cap, never the raised one", () => {
+    // `resolveShipPolicy` THROWS on a `ship` block that is present and
+    // unreadable, and this gate runs as a PreToolUse hook where a throw
+    // blocks every filing on the machine. So the throw is caught — and the
+    // direction it is caught INTO is the whole property. A corrupt config
+    // resolving to `direct` would make "raise the cap" reachable by breaking
+    // the config, which is the one thing a cap must not be.
+    expect(filingsPerRunFor({ ship: { mode: "dierct" } })).toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor({ ship: "not an object" })).toBe(FILINGS_PER_RUN);
+    expect(filingsPerRunFor(null), "absent config is harness, so strict").toBe(FILINGS_PER_RUN);
+  });
+
+  test("FG-193: a real direct-ship config resolves through the same path", () => {
+    // The premise FG-190 asserts on a hand-built ShipPolicy. This one starts
+    // from the config SHAPE, so a change to `resolveShipPolicy`'s reading of
+    // the block cannot leave FG-190 green against a policy nothing produces.
+    const fromConfig = filingsPerRunFor({
+      ship: { mode: "direct", since: "2026-10-19", reason: "stabilising RunGate" },
+    });
+    expect(fromConfig, "a direct config must out-earn an absent one").toBeGreaterThan(
+      filingsPerRunFor(null),
+    );
+    expect(fromConfig).toBe(FILINGS_PER_RUN_DIRECT);
+  });
+
+  test("FG-194: the raised cap is bounded, so it cannot drift into a swarm's number", () => {
+    // #1595's swarm ran at 57 filed against 53 closed. A cap that creeps
+    // upward one PR at a time ends there, and nothing else in this file
+    // would go red on the way. The bound is an assertion rather than a
+    // comment because a comment is how the last one of these was missed.
+    expect(
+      FILINGS_PER_RUN_DIRECT,
+      "a direct-ship allowance above 5 is not a raised cap, it is no cap — " +
+        "argue it in `FILINGS_PER_RUN_DIRECT`'s docblock against a reading, not here",
+    ).toBeLessThanOrEqual(5);
+  });
+
+  test("FG-195: reserveAllowance honours the cap it is handed, not the module constant", () => {
+    // The behavioural half. Both decision sites must read the resolved cap:
+    // a guard missing from the reservation stage means the adjudication
+    // allows a third filing and the reservation then refuses it, which is
+    // FG-185's defect one layer down.
+    const rows: FilingLedgerRow[] = [];
+    const io = (cap: number) => ({
+      now: 1_000,
+      append: (row: FilingLedgerRow) => (rows.push(row), true),
+      readLedger: () => rows,
+      cap,
+    });
+    const row = (n: number): FilingLedgerRow => ({
+      at: new Date(1_000).toISOString(),
+      key: `fg195/${n}`,
+      id: "new",
+      title: `a finding this run is filing (${n})`,
+      symptomHash: "h",
+      category: "correctness",
+      severity: null,
+      disposition: "ISSUE",
+      refusal: null,
+      emitted: false,
+      withheldBy: INTENT_PENDING,
+      jury: null,
+      duplicateOf: [],
+      overridden: false,
+      refiledAfter: null,
+      exemption: "out-of-pr-diff",
+      intent: true,
+      run: "fg195",
+    });
+
+    const strict = [1, 2].map(n => reserveAllowance(row(n), "fg195", io(FILINGS_PER_RUN)));
+    expect(strict.map(r => r.outcome), "at a cap of 1 the second is LOST").toEqual(["WON", "LOST"]);
+
+    rows.length = 0;
+    const raised = [1, 2, 3].map(n => reserveAllowance(row(n), "fg195", io(FILINGS_PER_RUN_DIRECT)));
+    expect(
+      raised.map(r => r.outcome),
+      "at the direct-ship cap the first three all win",
+    ).toEqual(["WON", "WON", "WON"]);
   });
 });
