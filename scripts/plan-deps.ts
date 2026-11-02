@@ -246,7 +246,7 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // is false when four issues were read and the filter took them. A typo in
   // the prefix is the likeliest way to arrive here, and that sentence sends
   // the reader to the API.
-  if (prefix !== undefined && issues.length === 0 && read.length > 0) {
+  if (issues.length === 0 && read.length > 0) {
     return refuse(
       values.json,
       `UNMEASURED — ${read.length} issue(s) were read and NONE carries a milestone ` +
@@ -280,12 +280,14 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     return refuseWrite || failures.length > 0 ? REFUSAL_EXIT : 0;
   }
 
-  const scope =
-    prefix === undefined
-      ? ""
-      : ` (of ${read.length}, narrowed to milestones starting "${prefix}")`;
+  // No unscoped branch. There is no longer a run with no prefix, so a
+  // `prefix === undefined ? "" : …` here would be a line that reads as if
+  // one were still possible — and a later edit would take the empty-scope
+  // string for a reachable path a test exercises. Review of #1730 found
+  // both this and the guard above.
   console.log(
-    `${repo} — ${issues.length} issue(s) read${scope}, phases ${plan.phases.join(" -> ") || "(none)"}\n`,
+    `${repo} — ${issues.length} issue(s) read (of ${read.length}, narrowed to milestones ` +
+      `starting "${prefix}"), phases ${plan.phases.join(" -> ") || "(none)"}\n`,
   );
 
   if (plan.reading === "UNMEASURED") {

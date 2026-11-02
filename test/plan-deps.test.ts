@@ -726,6 +726,33 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
     expect(calls, "the network was read before a static argument was checked").toBe(0);
   });
 
+  test("the text header NAMES the scope it measured, both counts and the prefix", async () => {
+    // Review of #1730, round 3. Two `prefix === undefined` branches were
+    // left behind when the flag became required, and deleting both broke
+    // no test — so nothing asserted this line at all, which is why a dead
+    // branch could sit in it reading as a reachable unscoped path.
+    //
+    // Three facts, because the filtered count alone cannot show that a
+    // filter ran: MIXED carries issues from two families, so `read` and
+    // `issues` must differ here. A header that printed one number twice
+    // would pass an assertion naming only the total.
+    // A LOCAL fixture, not the `MIXED` in this describe — that one is
+    // Pipeline-only, so it cannot show a filter narrowing anything.
+    const families: DepIssue[] = [
+      { number: 10, state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
+      { number: 11, state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
+      { number: 20, state: "OPEN", milestone: "Convergence Phase 0 — c", blockedBy: [] },
+    ];
+    const scoped = families.filter(i => (i.milestone ?? "").startsWith("Pipeline")).length;
+    expect(scoped, "the fixture stopped mixing families, so this case cannot see a filter run")
+      .toBeLessThan(families.length);
+
+    const got = await run(["--repo", "o/r", "--milestone-prefix", "Pipeline"], spy(families).gh);
+    expect(got.code, got.stderr).toBe(0);
+    expect(got.stdout).toContain(`${scoped} issue(s) read`);
+    expect(got.stdout).toContain(`of ${families.length}, narrowed to milestones starting "Pipeline"`);
+  });
+
   test("the follow-up `plan-issues --repair` PRINTS is a command this still accepts", async () => {
     // Review of #1730, round 2. Making the flag required made somebody
     // else's advice stale: `plan-issues --write` prints a `plan-deps` line
