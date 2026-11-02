@@ -158,29 +158,14 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     return refuse(values.json, `--repo is required (or set GITHUB_REPOSITORY)`, true);
   }
 
-  // The API call is the ONE thing on this path that fails by throwing, and
-  // `readLiveIssues` throws on purpose: a caller that cannot tell "the
-  // repository has no issues" from "the call failed" reports the flattering
-  // one. Uncaught, that throw left `main()` rejecting — a stack trace on
-  // stderr and an EMPTY stdout, which under `--json` is exactly the crash
-  // every refusal above was routed through `refuse()` to stop, arriving on
-  // the input that needs the payload most. Round 2 of #1705.
+  // THE PREFIX IS RESOLVED BEFORE THE NETWORK READ, and that ordering is
+  // the point rather than an optimisation. Review of #1730: with the check
+  // below the read, `plan-deps --repo o/r` against an unauthenticated `gh`
+  // reports "the issues could not be read" — so the one mistake #1728
+  // exists to catch is reported as an API problem, and the actionable
+  // message never arrives. A static argument check has no business
+  // depending on the network being up.
   //
-  // `createClient` is inside the same `try`. Repairing only the call the
-  // finding named would leave the other one on the same path throwing the
-  // same way.
-  let read;
-  try {
-    const client = gh.createClient();
-    read = await gh.readIssues(client, repo, values["include-closed"]);
-  } catch (e) {
-    return refuse(
-      values.json,
-      `UNMEASURED — the issues could not be read: ${(e as Error).message}. That is a failed ` +
-        `call, not a repository with no issues.`,
-    );
-  }
-
   // Narrow the POPULATION, not the edges. The derivation is right about the
   // order it is handed; what it is handed has to be one spec's issues. An
   // issue with no milestone is out by the same test — `startsWith` on a
@@ -230,6 +215,29 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   }
 
   const prefix = prefixRead.prefix;
+
+  // Only now does anything touch the network. `createClient` is inside the
+  // same `try` as the read: repairing only the call a finding named would
+  // leave the other one on the same path throwing the same way.
+  //
+  // Distinguishing "the repository has no issues" from "the call failed"
+  // matters because reporting the flattering one is how an empty edge list
+  // reads as a clean plan. Uncaught, that throw left `main()` rejecting — a
+  // stack on stderr and an EMPTY stdout, which under `--json` is the crash
+  // every refusal here is routed through `refuse()` to stop, arriving on
+  // the input that needs the payload most. Round 2 of #1705.
+  let read;
+  try {
+    const client = gh.createClient();
+    read = await gh.readIssues(client, repo, values["include-closed"]);
+  } catch (e) {
+    return refuse(
+      values.json,
+      `UNMEASURED — the issues could not be read: ${(e as Error).message}. That is a failed ` +
+        `call, not a repository with no issues.`,
+    );
+  }
+
   const issues = read.filter(i => inMilestoneFamily(i.milestone, prefix));
 
   // A prefix that matched nothing is its own reading, and it has to say so

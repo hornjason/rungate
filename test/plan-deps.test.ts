@@ -656,8 +656,12 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
     addBlockers: async () => {},
   };
 
+  // Every case below passes `--milestone-prefix`, and that is not noise: the
+  // prefix is resolved BEFORE the network read (review of #1730), so a run
+  // that omits it never reaches the read at all. The case that asserts that
+  // ordering is at the bottom of this block.
   test("a FAILED issue read refuses on the --json channel, not as a rejection", async () => {
-    const got = await run(["--repo", "o/r", "--json", "--write"], THROWS);
+    const got = await run(["--repo", "o/r", "--json", "--write", "--milestone-prefix", "Pipeline"], THROWS);
     expect(got.code).toBe(REFUSAL_EXIT);
     const payload = JSON.parse(got.stdout);
     expect(payload.wrote).toBe("refused");
@@ -669,7 +673,7 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
   });
 
   test("the same failure on the TEXT channel says so too, and is not a stack trace", async () => {
-    const got = await run(["--repo", "o/r", "--write"], THROWS);
+    const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Pipeline"], THROWS);
     expect(got.code).toBe(REFUSAL_EXIT);
     expect(got.stdout.trim()).toBe("");
     expect(got.stderr).toContain("403");
@@ -689,9 +693,36 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
       readIssues: async () => MIXED,
       addBlockers: async () => {},
     };
-    const got = await run(["--repo", "o/r", "--json"], noClient);
+    const got = await run(["--repo", "o/r", "--json", "--milestone-prefix", "Pipeline"], noClient);
     expect(got.code).toBe(REFUSAL_EXIT);
     expect(JSON.parse(got.stdout).unmeasuredReasons.join(" ")).toContain("GITHUB_TOKEN");
+  });
+
+  test("a MISSING prefix is refused BEFORE the read, so the message is the actionable one", async () => {
+    // Review of #1730. With the prefix check below the read, the one mistake
+    // #1728 exists to catch reports as "the issues could not be read" on any
+    // tree whose `gh` cannot authenticate — the API's problem, not the
+    // caller's, and the actionable sentence never arrives.
+    //
+    // Both assertions are needed and neither implies the other. The message
+    // alone would pass if the read ran and threw and something downstream
+    // re-refused; `calls === 0` alone would pass if the refusal said the
+    // wrong thing. A static argument check must not depend on the network.
+    let calls = 0;
+    const counted: PlanDepsGitHub = {
+      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+      readIssues: async () => {
+        calls++;
+        throw new Error("gh: HTTP 403 — Bad credentials");
+      },
+      addBlockers: async () => {},
+    };
+    const got = await run(["--repo", "o/r", "--json"], counted);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    const reasons = JSON.parse(got.stdout).unmeasuredReasons.join(" ");
+    expect(reasons).toContain("--milestone-prefix is required");
+    expect(reasons, "the API's failure was reported instead of the caller's").not.toContain("403");
+    expect(calls, "the network was read before a static argument was checked").toBe(0);
   });
 
   test("the control: a read that SUCCEEDS is not reported as a failed one", async () => {
