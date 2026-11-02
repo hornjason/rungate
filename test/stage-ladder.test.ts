@@ -26,6 +26,7 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 import {
   COMMAND_NOT_FOUND,
+  ITEM_SCOPES,
   claimedImprovements,
   ladderViolations,
   nextStage,
@@ -53,6 +54,24 @@ const stages = doc.stages;
  * unrunnable-in-CI without somebody editing this line and saying why.
  */
 const MACHINE_SCOPED_ALLOWED = 1;
+
+/**
+ * How many done items may need a credential CI does not hold.
+ *
+ * Exactly one: Stage B's B4. The board's Criteria column is a ProjectV2
+ * custom field on a USER-level project and `secrets.GITHUB_TOKEN` is
+ * repository-scoped, so the one token CI has cannot read it. Measured on
+ * 2026-11-02, run `41406458500`: B1 and B3 — milestones and issues, both
+ * repository resources — passed in the same shard B4 failed in, with the
+ * same token. Locally, against a `read:project` PAT, B4 exits 0.
+ *
+ * An equality, like {@link MACHINE_SCOPED_ALLOWED}: a second one cannot
+ * appear without somebody editing this line. The way to LOWER it is to give
+ * CI a `read:project` token and move B4 back to the default scope, which is
+ * strictly better than this and is the reason the constant is written as a
+ * debt rather than a budget.
+ */
+const CREDENTIALED_ALLOWED = 1;
 
 /**
  * How long every done item's verify command gets, in total.
@@ -102,6 +121,7 @@ describe("the live plan", () => {
     const checked: string[] = [];
     const failed: string[] = [];
     const deferred: string[] = [];
+    const credentialed: string[] = [];
     const unmeasured: string[] = [];
 
     for (const stage of stages) {
@@ -109,6 +129,15 @@ describe("the live plan", () => {
         if (!item.done) continue;
         if (item.scope === "machine") {
           deferred.push(item.id);
+          continue;
+        }
+        // Not run, for the same reason `machine` is not: the runner cannot
+        // reach the evidence. Counted on the DECLARATION rather than on a
+        // failure, so this case reads identically on a laptop holding a
+        // `read:project` PAT and on a CI runner holding none — a tally that
+        // differs by environment measures the environment.
+        if (item.scope === "credentialed") {
+          credentialed.push(item.id);
           continue;
         }
         checked.push(item.id);
@@ -143,6 +172,16 @@ describe("the live plan", () => {
         `and were NOT executed. The allowance is ${MACHINE_SCOPED_ALLOWED}. A new one means a stage item CI can ` +
         `never check — decide that deliberately and raise this constant with a reason, or move the evidence in.`,
     ).toBe(MACHINE_SCOPED_ALLOWED);
+
+    expect(
+      credentialed.length,
+      `${credentialed.length} done item(s) need a credential CI does not hold ` +
+        `(${credentialed.join(", ") || "none"}) and were NOT executed. The allowance is ` +
+        `${CREDENTIALED_ALLOWED}. If this ROSE, a stage item just became unverifiable in CI — decide that ` +
+        `deliberately and raise the constant with a reason. If it FELL because CI gained a read:project ` +
+        `token, drop the item's scope back to the default and lower the constant in the same commit; that ` +
+        `is the direction this debt is meant to move.`,
+    ).toBe(CREDENTIALED_ALLOWED);
 
     expect(
       failed,
@@ -327,7 +366,24 @@ describe("the ladder refuses the things that went wrong in Stage A", () => {
     const v = stageLadderViolations([
       ok({ items: [{ id: "A1", what: "x", done: true, verify: "true", scope: "local" as never }] }),
     ]);
-    expect(v.join("\n")).toContain('expected "repo", "machine" or absent');
+    expect(v.join("\n")).toContain('expected "repo", "machine", "credentialed" or absent');
+  });
+
+  // The refusal message is GENERATED from `ITEM_SCOPES`, so a scope added to
+  // the type and forgotten in a hand-written sentence cannot happen. Without
+  // this the case above passes against a message that omits a legal value —
+  // and the agent reading it deletes a correct scope.
+  test("every legal scope is accepted, and the refusal names all of them", () => {
+    for (const scope of ITEM_SCOPES) {
+      expect(
+        stageLadderViolations([ok({ items: [{ id: "A1", what: "x", done: true, verify: "true", scope }] })]),
+        `scope ${JSON.stringify(scope)} is in ITEM_SCOPES and was refused`,
+      ).toEqual([]);
+    }
+    const v = stageLadderViolations([
+      ok({ items: [{ id: "A1", what: "x", done: true, verify: "true", scope: "nope" as never }] }),
+    ]).join("\n");
+    for (const scope of ITEM_SCOPES) expect(v).toContain(`"${scope}"`);
   });
 
   test("a clean ladder produces no violations — the control", () => {

@@ -121,6 +121,16 @@ Three review rounds, all three findings real. Round 1 named three unawaited `.re
 
 ROUND 3 WAS DECLINED UNDER RULE 5, AND IT NAMED A REAL GAP. The value query matches `... on ProjectV2ItemFieldTextValue` only, and nothing asserts the configured field IS text. Measured: `dataType` is TEXT today, so nothing is misreported. But retype the column to single-select and the fragment stops matching, `text` is absent, and every issue reads empty → null → SHORT 0 of 5 — a WRONG reading produced by a change that raises no error, which is the one thing this work claims it never does. Not filed as an issue: nobody would act on it with Stage B closing and the backlog at 3.75 to 1. It is carried into Stage B's retro with a mechanism and a verify instead.
 
+CI CANNOT READ THE BOARD, AND THE LADDER NOW SAYS SO RATHER THAN GOING RED.
+
+B4's verify passed locally and failed in CI on run 41406458500. Not a flake and not a timeout: the Criteria column is a ProjectV2 custom field on a USER-level project, and `secrets.GITHUB_TOKEN` is repository-scoped, so the one token CI holds structurally cannot see it. B1 and B3 — milestones and issues, both repository resources — passed in the SAME shard with the SAME token, which is the control that names the variable.
+
+`scope: "credentialed"` is a third item scope, beside `repo` and `machine`. It is deliberately not `machine`: that word says the evidence sits on one operator's disk, and a reader who believes it looks in the wrong place. The item is not executed by the ladder, it is COUNTED and NAMED, and `CREDENTIALED_ALLOWED` is an equality — so a second one cannot appear quietly, and the constant falls the day CI gains a `read:project` token. Counted on the DECLARATION rather than on a failure, so the case reads the same on a laptop holding a PAT and on a runner holding none; a tally that differs by environment measures the environment. Five mutations, all red in the predicted cases: dropping B4's scope, marking B5 credentialed too, shrinking `ITEM_SCOPES`, making the validator reject a LISTED scope, and hardcoding the refusal message so it omits the new one.
+
+The ladder also got a stated time budget. Ticking B4 made a fourth done item that calls the live API, they run in sequence, and Bun's 5s default cut `spawnSync` mid-call — the item came back as `B4 exited null`, which is the same text a genuine refusal produces.
+
+WHAT WOULD CLOSE THE DEBT: a `read:project` token in CI. That is a credential grant and Jason's call, not something to do quietly.
+
 STAGE B: B1, B3, B4 and B5 all exit 0 from main. B6 remains and needs only the `engine` label on the five engine issues — the reading already works and says SHORT 0 of 5. B2 is NOT being started.
 
 WHAT NEEDS JASON: 30 issues opened against 8 closed in seven days, 3.75 to 1. One of the thirty is mine. Nothing else needs him right now.
