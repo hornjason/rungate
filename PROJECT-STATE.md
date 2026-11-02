@@ -104,6 +104,31 @@ Suite: 25/25 SCs done.
 
 ---
 
+**Session 2026-11-02 session 73:**
+- STAGE B'S FOUR ITEMS EXIT 0 FROM MAIN, AND B2 WAS NOT STARTED.
+
+#1710 merged (45fa2a25). Ticked from main at that commit, each command run before the tick and not after:
+
+  milestones          MET 26 of 26   exit 0   B1
+  blocked-by-edges    MET 5 of 5     exit 0   B3
+  criteria-field      MET 5 of 5     exit 0   B4
+  queue-label         MET 5 of 5     exit 0   B6
+  criterion-coverage  UNMEASURED     exit 1   B2 — NOT STARTED
+
+B6 was the `engine` label on the five engine issues, and the population was derived live rather than taken from a carried-forward list: every open issue in a `Pipeline Phase N` milestone, which is #1675, #1677, #1678, #1680 and #1681. The reading already worked and said SHORT 0 of 5; nothing was built for it.
+
+B2 IS NOT STARTED AND THAT IS JASON'S CALL, NOT A BLOCKER. It requires creating an issue per engine criterion, and the backlog is running at 30 opened against 8 closed over seven days — 3.75 to 1. Spending into a diverging backlog is a decision about the project, not something a counter decides quietly. Stage B is therefore five of six, and `stageIsComplete` says so: the retro is written, but the stage does not read complete and Stage C is not available. That is the honest state and it is derived, not asserted.
+
+THE RETRO IS WRITTEN, with six improvements — three in-place with a command that proves each, three open and declared as open. The three in-place: a stage item CI cannot verify now says so by name through `scope: "credentialed"` bounded by an equality; a reading that could not be TAKEN is distinguishable from one that came back empty at every layer, through an absent key rather than a null; and two identifiers in one config block are compared, so a field copied from another project cannot be read as this board's.
+
+THE WORST THING STAGE B DID, recorded as an open improvement because nothing enforces it yet: a number published in a PR body is a second copy of a measurement with nothing comparing them, and it went stale three times in one stage — `four API-backed items` when two was right, `31 pass` against a file holding 32 cases, and a session narrative saying `a fourth done item` after the test file had already been corrected. Every one was caught by a reviewer. In every one I had already fixed the number in the file.
+
+WHAT NEEDS JASON, two things, neither urgent:
+  1. B2 — whether to create issues against a 3.75-to-1 backlog.
+  2. A `read:project` credential for CI. Without it B4 cannot be verified by CI at all, which is recorded as `scope: "credentialed"` with a constant that falls to zero the day the token exists. Granting CI a credential is his decision and was put to him on #1710.
+
+STAGE C IS NOT STARTED.
+
 **Session 2026-11-02 session 72:**
 - THE BOARD COLUMN IS READ NOW, AND IT COULD NOT HAVE BEEN READ FROM THE ISSUE QUERY AT ALL.
 
@@ -151,17 +176,4 @@ STAGE B: B1 and B3 both exit 0 from main. B3 landed as #1706 and is ticked by #1
 CI on main was red at f8ac754b for `project-state currency` — this entry is what clears it. The suite is one shard behind the tree whenever a PR lands and nothing records it here, which is the file lying about where the project is.
 
 WHAT NEEDS JASON: 30 issues opened against 7 closed in seven days, 4.3 to 1 — worse than the 3.6 recorded yesterday, and the shape of the swarm he stopped. One of the thirty is mine (#1704, closed by #1706). B2 is NOT being started: it requires creating issues, and whether to spend into a diverging backlog is his call rather than something a counter decides quietly.
-
-**Session 2026-11-01 session 70:**
-- THE PLAN STOPPED BEING PROSE AND BECAME SOMETHING A TEST RUNS, AND STAGE B STARTED AT THE ITEM THAT COULD HAVE MADE EVERY OTHER ONE GREEN BY ACCIDENT.
-
-#1696 merged (da4b0803). This file carries `goal`, `goals` and `stages`: six stages, 32 items, every item holding the shell command that proves it. `lib/stage-ladder.ts` is the only thing that decides what any of it means and `test/stage-ladder.test.ts` EXECUTES those commands. A stage is complete when they exit 0 and at no other time. AGENTS.md rule 10 says the plan lives here and nowhere else; ADR-009's two tables are now pointers, because the done-condition had three copies that nothing compared and that is how Stage A was scored wrong twice.
-
-Stage A is 7 of 7 against a fresh clone of origin/main, and all seven commands were run against an EMPTY tree first and refused — a command that passes regardless of the repository is what makes a green ladder worthless. Its retro is a gate: no later stage starts until a complete one has written theirs. Seven improvements in place and proving themselves each run, one open — the review-round budget, which has no mechanism because AI_REVIEW_ROUND_CAP bounds the reviewer's carry-forward rounds and not pushes.
-
-#1696 took eight review rounds and rounds 2 through 7 each found something real: a hardcoded grep path with exit 127 reading as a regression beneath it, a retro gate with no teeth on the LAST stage, a stale PR body, a verify deciding on a pipeline's trailing exit status, and a vacuous regex alternation (`milestones.*X|X` is satisfied by X alone). Rounds 6 and 7 hit the same line, and that is the honest signal: 22 hand-written shell commands in this file have no checker, only a reviewer. The reviewer twice asked for a split and was partly right — my first rebuttal measured the wrong split. It is feasible and only needs ordering; it was not done because no defect was left for it to prevent.
-
-Stage B then opened at B5 (PR #1697), deliberately. Five of its six items and the overall goal all run `rungate board-conformance`, so a skeleton exiting 0 would have turned the whole plan green in one commit. The refusal was built before the command: every refusal runs twice on one planted input, real script against a mutant with its single exit constant zeroed; three states so an unread board is UNMEASURED rather than met; an EMPTY board unmeasured too, since 0 of 0 would certify the plan against a board that does not exist; and each of the five readings planted short AND complete, because 'it refuses' is satisfied by a reading that refuses unconditionally. On that branch — NOT yet on main, and B5's `done` is still false here — B5's verify exits 0 while the goal and B1, B2, B3, B4 and B6 all still exit 1. The skeleton did not turn the plan green, which was the risk. B5 is ticked here only once #1697 lands and the command runs from main.
-
-WHAT NEEDS JASON: 29 issues opened against 8 closed in seven days, 3.6 to 1. AGENTS.md rule 7 says above 1 the backlog diverges however fast the work goes, and this is the shape of the swarm he stopped. The filing arbiter is already refusing at one issue per run per day, so B5 shipped with no issue and its record is the ladder item plus the PR. Whether that cap is the right answer is his call, not something a counter should decide quietly.
 
