@@ -76,11 +76,21 @@ const CREDENTIALED_ALLOWED = 1;
 /**
  * How long every done item's verify command gets, in total.
  *
- * Four of them call the live GitHub API through `board-conformance
- * --produce` and they run one after another, so the budget is a sum rather
- * than a per-item allowance. Measured 2026-11-02 at roughly 5s for four
- * API-backed items; 60s leaves room for a slow network without letting a
- * hung command hold CI open.
+ * TWO of the items this loop executes call the live GitHub API, through
+ * `board-conformance --produce`: B1 and B3. B4 does too but is
+ * `credentialed` and skipped here, and B5 runs `--list-readings`, which
+ * prints the reading names and opens no connection. The budget is a sum
+ * rather than a per-item allowance because they run one after another.
+ *
+ * Measured 2026-11-02 on a warm network: B1 2.0s, B3 2.1s. 60s is
+ * deliberately far above that — room for a slow network, and not enough
+ * for a hung command to hold CI open.
+ *
+ * An earlier revision of this comment said "four API-backed items … about
+ * 5s", which was wrong when it was written and wronger once B4 was
+ * skipped. It is recorded because the number is the justification: a
+ * budget whose stated measurement nobody can reproduce is a magic
+ * constant with a paragraph attached.
  */
 const LIVE_VERIFY_BUDGET_MS = 60_000;
 
@@ -111,18 +121,19 @@ describe("the live plan", () => {
   });
 
   test("every DONE item's verify command exits 0 — this is what 'done' means", () => {
-    // Timeout is EXPLICIT below, and it has to be. Four of the done items
-    // run `board-conformance --produce`, which reads the live GitHub API,
-    // and they run in sequence. Bun's 5s default killed this the moment B4
-    // was ticked and made a fourth: `spawnSync` was cut mid-call and the
-    // item was reported as `exited null`, which reads exactly like the work
-    // regressing. A ladder item that is slow is not a ladder item that
-    // failed, so the budget is stated rather than inherited.
+    // Timeout is EXPLICIT below, and it has to be. Items here read the live
+    // GitHub API and run in sequence, and Bun's 5s default killed this the
+    // moment B4 was ticked and added one more: `spawnSync` was cut mid-call
+    // and the item was reported as `exited null`, which reads exactly like
+    // the work regressing. A ladder item that is slow is not a ladder item
+    // that failed, so the budget is stated rather than inherited — see
+    // LIVE_VERIFY_BUDGET_MS for which items it covers and the measurement.
     const checked: string[] = [];
     const failed: string[] = [];
     const deferred: string[] = [];
     const credentialed: string[] = [];
     const unmeasured: string[] = [];
+    const startedAt = Date.now();
 
     for (const stage of stages) {
       for (const item of stage.items) {
@@ -158,6 +169,21 @@ describe("the live plan", () => {
 
     // A run that checked nothing is not a run that passed.
     expect(checked.length, "no repo-scoped done items were executed, so this case witnessed nothing").toBeGreaterThan(0);
+
+    // The budget, asserted against what this run actually took, rather than
+    // justified by a sentence naming a count of API-backed items. That
+    // sentence was wrong twice in one PR — once when written and again when
+    // B4 became `credentialed` and stopped being executed — and nothing
+    // could see it. This can: a loop that grows past half the budget says
+    // so while there is still headroom, instead of the next person reading
+    // `exited null` and unticking a true item.
+    const elapsed = Date.now() - startedAt;
+    expect(
+      elapsed * 2,
+      `the done items took ${elapsed}ms of a ${LIVE_VERIFY_BUDGET_MS}ms budget — over half, so the next ` +
+        `API-backed item to be ticked may be KILLED mid-call and reported as "exited null", which is ` +
+        `indistinguishable from the work regressing. Raise LIVE_VERIFY_BUDGET_MS and restate its measurement.`,
+    ).toBeLessThan(LIVE_VERIFY_BUDGET_MS);
 
     expect(
       unmeasured,
