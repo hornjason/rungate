@@ -3678,7 +3678,16 @@ export function createCiWorkflows(root: string, actions: string[], opts: { force
   // reference when the value is a bare identifier rather than a dotted
   // path. Renaming is the honest fix; widening a security allowlist to get
   // a token-wiring change through is not.
-  const tokenSecretName = trackerTokenSecret(harness?.ci);
+  //
+  // Resolved only when the flag is ON. `trackerTokenSecret` REFUSES a
+  // malformed name rather than falling back, and that refusal fails the
+  // whole scaffold run — so evaluating it unconditionally lets a key
+  // nothing interpolates break CI generation for a consumer who is not
+  // using the feature. The refusal is also the injection guard, and the
+  // only position the value is injected into is the `${{ }}` expression
+  // below, which `tracker` already gates: moving the call inside the gate
+  // narrows the blast radius without narrowing the guard. Review of #1712.
+  const tokenSecretName = tracker ? trackerTokenSecret(harness?.ci) : DEFAULT_TRACKER_SECRET;
   const trackerTokenNote =
     tokenSecretName === DEFAULT_TRACKER_SECRET
       ? `\n          # ci.suiteReadsTracker. Read-only, and paired with \`issues: read\`\n          # on the job above — the workflow declares \`contents: read\` and nothing else,\n          # so every other scope on this token is \`none\` and a tracker read\n          # is a 403 whatever this line says.`
