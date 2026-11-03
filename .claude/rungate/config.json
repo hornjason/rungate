@@ -22,7 +22,8 @@
       "My items": "PVTV_lAHOAZTQCM4BpMuRzgMSqdI",
       "What's next": "PVTV_lAHOAZTQCM4BpMuRzgMSs_Y",
       "Spec coverage": "PVTV_lAHOAZTQCM4BpMuRzgMSzhk"
-    }
+    },
+    "queueLabel": "engine"
   },
   "ship": {
     "mode": "direct",

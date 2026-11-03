@@ -117,6 +117,11 @@ const completeBoard = (): BoardSnapshot => ({
   // UNMEASURED; a fixture that omitted it would turn every case in this
   // file into a refusal about the fixture rather than about its subject.
   closedBlockers: [],
+  // PRESENT for the same reason as `closedBlockers` above — #1727 moved the
+  // queue label out of this file and onto the snapshot, so a fixture that
+  // omitted it would make `queue-label` UNMEASURED in every case here and
+  // the refusals would be about the fixture rather than their subjects.
+  queueLabel: "engine",
 });
 
 /**
@@ -670,6 +675,71 @@ describe("every field the snapshot declares is read by something", () => {
       "a snapshot field has no perturbation below, so nothing here proves any reading looks at it. Add a row " +
         "that moves a reading — or delete the field, which is what B1 did to BoardIssue.milestone.",
     ).toEqual(declared.sort());
+  });
+
+  /**
+   * The census above enumerates the ROW interfaces and stops there, and
+   * that is the gap #1727 shipped through: `queueLabel` was declared on
+   * `BoardSnapshot`, written by the producer, and silently dropped.
+   *
+   * `readSnapshotText` rebuilds the board from a NAMED list of fields
+   * rather than spreading `raw`, so a field nobody adds to that list does
+   * not survive the parse — on `--snapshot` and `--produce` alike. The
+   * reading then reports UNMEASURED against a snapshot carrying exactly
+   * what it asked for, which reads as the producer's fault.
+   *
+   * Stated over the whole population rather than repaired one field at a
+   * time: a top-level field that cannot survive a round trip is inert, and
+   * the next one added will be inert in the same way.
+   */
+  test("a padded queueLabel is normalised at the parse, not trusted into the measure", () => {
+    // Review of #1727. `unreadable` tested `trim() !== ""` and `measure`
+    // then filtered on the RAW value, so `" engine "` cleared the gate and
+    // searched issue labels for a string no GitHub label can equal: the
+    // reading said 0 of N, a confident wrong number, where the right count
+    // belonged. Two guards over one value that disagreed about its shape.
+    const padded = { ...completeBoard(), queueLabel: "  engine  " } as unknown as BoardSnapshot;
+    const read = readSnapshotText(JSON.stringify(padded));
+    expect(read.board?.queueLabel, "the padding reached the snapshot").toBe("engine");
+
+    // The reading itself, because the field being trimmed is not the claim
+    // — the claim is that the COUNT is right.
+    //
+    // Both assertions below are needed and the SECOND is the stronger one,
+    // measured rather than assumed: mutating `measure` to re-pad the label
+    // leaves the comparison GREEN, because it breaks the padded board and
+    // the clean one identically. Only the control sees it, by insisting the
+    // clean board counts something. A comparison between two boards cannot
+    // catch a defect that moves both.
+    const q = takeReadings(read.board!).find(r => r.name === "queue-label")!;
+    const clean = takeReadings(completeBoard()).find(r => r.name === "queue-label")!;
+    expect(
+      `${q.status}:${q.measured}/${q.target}`,
+      "a padded label measured differently from an unpadded one",
+    ).toBe(`${clean.status}:${clean.measured}/${clean.target}`);
+    expect(clean.measured, "the clean board matched NO label, so the comparison above is vacuous")
+      .toBeGreaterThan(0);
+  });
+
+  test("every top-level snapshot field SURVIVES the parse — a named rebuild drops what nobody lists", () => {
+    const complete = completeBoard() as unknown as Record<string, unknown>;
+    const declared = fieldsOf("BoardSnapshot");
+
+    // The fixture is the premise. A field the complete board omits cannot
+    // be observed surviving or being dropped, so an incomplete fixture
+    // would make this case vacuous about exactly the field it is for.
+    expect(
+      declared.filter(f => !(f in complete)),
+      "completeBoard() omits a declared snapshot field, so this case cannot observe whether the parse keeps it",
+    ).toEqual([]);
+
+    const read = readSnapshotText(JSON.stringify(complete));
+    expect(read.board, `a complete board did not parse: ${read.why}`).not.toBeNull();
+    expect(
+      declared.filter(f => !(f in (read.board as unknown as Record<string, unknown>))),
+      "a field the snapshot declares did not survive readSnapshotText. It rebuilds from a named list — add the " +
+        "field there, present-only if its ABSENCE is a signal the way closedBlockers and queueLabel are.",
+    ).toEqual([]);
   });
 
   for (const p of perturbations) {

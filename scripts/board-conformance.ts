@@ -103,6 +103,23 @@ export interface BoardSnapshot {
   criteria: BoardCriterion[];
   phases: BoardPhase[];
   /**
+   * The project's work-queue label, carried as DATA rather than read here.
+   *
+   * It arrives on the snapshot for a mechanical reason as well as a design
+   * one. `test/board-conformance.test.ts` builds a mutant copy of this file
+   * in an `mkdtemp` directory, and a relative import makes that copy fail
+   * to load — which reads as a refusal on the merits and leaves every
+   * negative case witnessing nothing
+   * (`.claude/rules/self-referential-tests.md`). `scripts/board-snapshot.ts`
+   * already imports `readQueueLabel`, so the producer resolves it and this
+   * file stays import-free.
+   *
+   * **Absent means the producer never resolved one**, and `queue-label`
+   * goes UNMEASURED rather than counting 0 — same convention as
+   * {@link closedBlockers}.
+   */
+  queueLabel?: string | null;
+  /**
    * The CLOSED issues that at least one engine issue names as a blocker.
    *
    * **Absent means the producer never read closed issues. `[]` means it
@@ -308,9 +325,27 @@ export const READINGS: readonly ReadingSpec[] = [
   {
     name: "queue-label",
     item: "B6",
-    what: "every engine issue carries the `engine` label, so the queue is the label",
+    what: "every engine issue carries the queue label, so the queue is the label",
     readsIssueRefs: false,
-    measure: b => ({ measured: b.issues.filter(i => i.labels.includes("engine")).length, target: b.issues.length }),
+    // The label is CONFIGURED, and this reading no longer knows its name on
+    // its own. Before #1727 it spelled `"engine"` and was the only thing
+    // that did, so `plan-issues --decompose --write` could create seven
+    // issues without it and take this reading MET 12 of 12 → 5 of 12 — a
+    // writer failing a reading it never consults. Both now go through
+    // `readQueueLabel`, so there is ONE answer to mutate rather than two
+    // that agree (`.claude/rules/checks-must-be-able-to-fail.md`).
+    unreadable: b =>
+      typeof b.queueLabel === "string" && b.queueLabel.trim() !== ""
+        ? null
+        : "no queue label is in the snapshot — set `board.queueLabel` in .claude/rungate/config.json and " +
+          "re-take it. A tree that never named a queue has not got an empty one, so this is UNMEASURED " +
+          "rather than 0 of N.",
+    measure: b => {
+      // Non-null here: `unreadable` above refused every other case, and
+      // `takeReading` runs it first.
+      const label = b.queueLabel!;
+      return { measured: b.issues.filter(i => i.labels.includes(label)).length, target: b.issues.length };
+    },
   },
 ];
 
@@ -538,12 +573,40 @@ export function readSnapshotText(text: string): SnapshotRead {
   const closed = Array.isArray(raw.closedBlockers)
     ? { closedBlockers: raw.closedBlockers.filter((n): n is number => typeof n === "number") }
     : {};
+
+  // TRIMMED here, which is the only place it can be. `readQueueLabel`
+  // trims at the config read, but that is the PRODUCER path — this function
+  // also accepts a hand-written or externally produced `--snapshot`, and
+  // copying `" engine "` through verbatim passed `unreadable` (non-blank
+  // after trim) and then had `measure` search issue labels for the literal
+  // `" engine "`, which no GitHub label can equal. The reading would have
+  // said 0 of N — a confident wrong number where UNMEASURED or the right
+  // count belonged. Found in review of #1727.
+  //
+  // Normalising at the boundary rather than re-trimming inside `measure`
+  // keeps ONE answer to *what is the label*: `unreadable` and `measure`
+  // then read the same bytes by construction, instead of two guards
+  // agreeing to trim and a third one later forgetting.
+  //
+  // `queueLabel` is carried the same way as `closedBlockers`, for the same
+  // reason — #1727.
+  // This function rebuilds the board from a NAMED list of fields rather
+  // than spreading `raw`, so a key nobody adds here is silently dropped on
+  // EVERY path: `--snapshot` as well as `--produce`. The producer wrote
+  // the label, the reading never saw it, and `queue-label` reported
+  // UNMEASURED against a snapshot that carried exactly what it asked for.
+  //
+  // Present-only, like `closedBlockers`: absence is the signal the reading
+  // reports on, so writing the key unconditionally would make a tree that
+  // never configured a queue indistinguishable from one that did.
+  const queue = typeof raw.queueLabel === "string" ? { queueLabel: raw.queueLabel.trim() } : {};
   return {
     board: {
       issues: issues as BoardIssue[],
       criteria: criteria as BoardCriterion[],
       phases: phases as BoardPhase[],
       ...closed,
+      ...queue,
     },
     why: null,
   };

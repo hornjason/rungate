@@ -104,6 +104,36 @@ export function readBoardConfig(projectRoot: string): { projectId: string; crite
 }
 
 /**
+ * The label that marks an issue as being in the work queue, or `null`.
+ *
+ * **One binding, because the writer and the reading must not disagree.**
+ * `scripts/plan-issues.ts` applies it when it creates an issue and
+ * `scripts/board-conformance.ts`'s `queue-label` reading scores it, and
+ * before #1727 only the second knew the name. `--decompose --write` created
+ * seven issues on 2026-11-02 and the reading fell MET 12 of 12 → 5 of 12 on
+ * a command that never consulted it; the repair was seven `gh issue edit`
+ * calls by hand, which is what SC-2625 forbids.
+ *
+ * Spelling `"engine"` in the writer as well would have fixed that day and
+ * built the *two deciders that agree* shape — no behavioural case can tell
+ * them apart, and a mutation of either leaves the other holding every case
+ * up (`.claude/rules/checks-must-be-able-to-fail.md`).
+ *
+ * `null` for absent, blank or non-string, and callers must say UNMEASURED
+ * rather than substitute one: a tree that never configured a queue has not
+ * got an empty queue, it has no queue.
+ */
+export function readQueueLabel(projectRoot: string): string | null {
+  const config = tryLoadRungateConfig(projectRoot);
+  const board = (config as Record<string, unknown> | null)?.board;
+  if (!board || typeof board !== "object" || Array.isArray(board)) return null;
+  const raw = (board as Record<string, unknown>).queueLabel;
+  if (typeof raw !== "string") return null;
+  const label = raw.trim();
+  return label === "" ? null : label;
+}
+
+/**
  * Pre-flight SSH hosts, keyed by name. `{}` when none are configured.
  *
  * `remoteHosts` is not in `ProjectHarnessSchema`; it reaches the resolved

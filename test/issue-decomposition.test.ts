@@ -677,6 +677,19 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
     const calls: string[] = [];
     let next = 2000;
     const wired = new Map(seed.wired ?? []);
+    // The WHOLE issue object each `create` received, beside the existing
+    // `calls` strings rather than folded into them. `calls` records the
+    // title and the milestone and nothing else, which is exactly why a
+    // dropped `label` was invisible to every case in this file: the fake's
+    // own recording was the blind spot, so no assertion over `calls` could
+    // ever have caught it. Kept separate so the existing string assertions
+    // are untouched.
+    const created: Array<{
+      title: string;
+      body: string;
+      milestone: string | null;
+      label: string | null;
+    }> = [];
     const api: DecomposeGitHub = {
       openTitles: async () => new Map(seed.open ?? []),
       milestones: async () => new Set(seed.milestones ?? []),
@@ -686,6 +699,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
       },
       create: async (_repo, issue) => {
         const n = next++;
+        created.push(issue);
         calls.push(`create #${n} "${issue.title}" milestone=${issue.milestone ?? "-"}`);
         return n;
       },
@@ -693,7 +707,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
         calls.push(`edge #${blocked} blocked by #${blocker}`);
       },
     };
-    return { api, calls };
+    return { api, calls, created };
   }
 
   async function run(rows: string[], api: DecomposeGitHub, extra: string[] = []) {
@@ -711,6 +725,100 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }
+
+  /**
+   * The same `run`, but against a project root carrying a real config, so
+   * `readQueueLabel(root)` at the call site is INSIDE what is measured.
+   * Without this the chain is only ever exercised with `undefined as never`
+   * as the root, which resolves to no label and tests nothing.
+   */
+  async function runInProject(
+    rows: string[],
+    api: DecomposeGitHub,
+    config: unknown,
+    extra: string[] = [],
+  ) {
+    const dir = mkdtempSync(join(tmpdir(), "rg-decompose-root-"));
+    try {
+      mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+      writeFileSync(
+        join(dir, ".claude", "rungate", "config.json"),
+        JSON.stringify(config, null, 2),
+      );
+      const p = join(dir, "plan.md");
+      writeFileSync(p, plan(...rows));
+      return await planIssuesMain(
+        ["--decompose", p, "--repo", "o/r", "--project-root", dir, ...extra],
+        undefined as never,
+        api,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // ── #1727: the label reaches the issue, end to end ──────────────────────
+  //
+  // Raised on rounds 2, 3 and 4 of this pull request and not written until
+  // the fourth. The reviewer was right that it was the one test missing: the
+  // defect this PR exists to fix is that `plan-issues --decompose --write`
+  // created #1716..#1722 with no queue label, and until these cases existed
+  // nothing failed if the label stopped arriving.
+  //
+  // Proved able to fail. Three mutations of `scripts/plan-issues.ts`, each
+  // run and reverted, each reddening exactly ONE of the two cases:
+  //
+  //   | mutation                                   | red                |
+  //   |--------------------------------------------|--------------------|
+  //   | `label: queueLabel` -> `label: null`       | the case below     |
+  //   | `readQueueLabel(root)` -> `null`           | the case below     |
+  //   | `readQueueLabel(root)` -> `"engine"`       | the CONTROL below  |
+  //
+  // The third is why there are two cases and not one. A single case asserting
+  // the label arrives is satisfied by spelling `"engine"` in the writer —
+  // which fixes the day and builds the *two deciders that agree* shape the
+  // docblock on `readQueueLabel` exists to forbid. The control is the only
+  // thing that can tell a read value from an invented one.
+
+  /** A plan row in the markdown the parser actually reads. */
+  const planRow = (criterion: string, outcome: string) =>
+    `| ${criterion} | ${outcome} | lib/spec-deps.ts | Phase 3 | — |`;
+
+  test("#1727: the configured queue label reaches every created issue", async () => {
+    const { api, created } = recorder({ milestones: ["Phase 3"] });
+    const code = await runInProject(
+      [planRow("CRC-C2", "first outcome"), planRow("CRC-C3", "second outcome")],
+      api,
+      { project: "fixture", board: { queueLabel: "engine" } },
+      ["--write"],
+    );
+    expect(code).toBe(0);
+    expect(created.length, "nothing was created, so the assertion below is vacuous").toBe(2);
+    expect(
+      created.map(i => i.label),
+      "an issue was created without the configured queue label — this is #1727, " +
+        "where seven issues reached the board and `queue-label` fell to 5 of 12",
+    ).toEqual(["engine", "engine"]);
+  });
+
+  test("#1727 CONTROL: no configured label means null, not an invented one", async () => {
+    // Or the case above passes under a hardcoded "engine" that ignores
+    // config entirely, which is the cheapest wrong fix available here.
+    const { api, created } = recorder({ milestones: ["Phase 3"] });
+    const code = await runInProject(
+      [planRow("CRC-C2", "first outcome")],
+      api,
+      { project: "fixture" },
+      ["--write"],
+    );
+    expect(code).toBe(0);
+    expect(created.length).toBe(1);
+    expect(
+      created[0].label,
+      "a label was stamped on an issue with no `board.queueLabel` configured — " +
+        "the value is invented rather than read",
+    ).toBeNull();
+  });
 
   test("without --write nothing is created", async () => {
     // `Phase 3` must exist even for a dry run: the reading is validated
