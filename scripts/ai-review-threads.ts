@@ -34,6 +34,7 @@ import { createGitHubClient } from "../lib/github";
 import {
   aiReviewThreadsExitCode,
   postReviewThreads,
+  threadsLandedPhrase,
   type AiReviewThreadPoster,
   type AiReviewThreadResponse,
 } from "../lib/ai-review-threads";
@@ -197,9 +198,17 @@ if (result.outcome === "FAILED") {
   );
 } else if (result.outcome === "DEGRADED_NO_WRITE") {
   console.log(
-    `::warning title=AI review threads::No review threads were created: this token cannot write ` +
+    `::warning title=AI review threads::${threadsLandedPhrase(result)}: this token cannot write ` +
       `pull-request comments. A pull_request run from a fork is handed a read-only token whatever ` +
       `the workflow declares. The findings are in this run's annotations.`,
+  );
+} else if (result.outcome === "BLOCKED_BY_PENDING_REVIEW") {
+  console.log(
+    `::warning title=AI review threads::${threadsLandedPhrase(result)}: this pull request already ` +
+      `holds a pending review by this job's identity, and GitHub allows one per identity per pull ` +
+      `request. Nothing the author can do clears it — the review belongs to the bot, not to a ` +
+      `person, so it does not appear in anyone's "Finish your review" banner. The findings are in ` +
+      `this run's annotations.`,
   );
 } else if (result.outcome === "UNMEASURED") {
   console.log(
