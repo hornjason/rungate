@@ -126,6 +126,37 @@ describe("the reviewer's prompt names no value its toolset cannot obtain", () =>
     ).toEqual([]);
   });
 
+  test("a partial record is REFUSED, not interpolated as `undefined`", () => {
+    // Raised in review of this change. An index signature does not model a
+    // missing key, so a caller overriding three of the five type-checks
+    // cleanly and would have shipped a prompt saying "write to undefined" —
+    // this file's own defect a second time. One case per required key, so a
+    // guard that only checks the findings path is red here.
+    for (const key of Object.keys(step.AI_REVIEW_PROMPT_PATH_EXPRESSIONS)) {
+      const partial = { ...step.AI_REVIEW_PROMPT_PATH_EXPRESSIONS };
+      delete (partial as Record<string, string>)[key];
+      expect(
+        () => step.buildReviewPrompt(partial),
+        `omitting ${key} did not refuse — the prompt carries "undefined" as a path`,
+      ).toThrow(key);
+    }
+    // Blank is the same defect wearing a string. `${""}` interpolates to
+    // nothing at all, which is a prompt naming no destination.
+    expect(() =>
+      step.buildReviewPrompt({
+        ...step.AI_REVIEW_PROMPT_PATH_EXPRESSIONS,
+        [step.AI_REVIEW_FINDINGS_PATH_VAR]: "   ",
+      }),
+    ).toThrow(step.AI_REVIEW_FINDINGS_PATH_VAR);
+  });
+
+  test("CONTROL: the complete record is accepted, so the refusal is not unconditional", () => {
+    // Without this, a guard that threw on everything would pass the case
+    // above while making the generator unusable.
+    expect(() => step.buildReviewPrompt(step.AI_REVIEW_PROMPT_PATH_EXPRESSIONS)).not.toThrow();
+    expect(step.buildReviewPrompt().length).toBeGreaterThan(1000);
+  });
+
   test("every key in the record is a real exported path variable", () => {
     // A subset, deliberately, not an equality: three path variables —
     // AI_REVIEW_DISARM_CLI_PATH, AI_REVIEW_LEDGER_SNAPSHOT_PATH and

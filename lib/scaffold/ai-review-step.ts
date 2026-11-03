@@ -5542,9 +5542,35 @@ export function buildReviewPrompt(
   const passive = AI_REVIEW_PASSIVE_SEVERITIES.join(", ");
   const f = AI_REVIEW_FINDING_FIELDS;
 
-  // Named for how they read at the call site. A missing key is a programming
-  // error here, not a runtime condition: the record is frozen above and the
-  // test file asserts it covers every `*_PATH_VAR` the module exports.
+  // REFUSE a partial record rather than interpolating `undefined` into a
+  // path. An index signature does not model a missing key, so a caller that
+  // overrides three of the five type-checks cleanly and ships a prompt
+  // telling the reviewer to write to `undefined` — which is this file's own
+  // defect a second time: an unwritable destination the agent then guesses
+  // around, and UNMEASURED either way.
+  //
+  // This replaces a comment asserting the keys were all present. A docblock
+  // claiming a property is the reason nobody checks it
+  // (`.claude/rules/checks-must-be-able-to-fail.md`), and the default record
+  // being frozen says nothing about an argument a caller passes instead.
+  const required = [
+    AI_REVIEW_FINDINGS_PATH_VAR,
+    AI_REVIEW_ROUND_PATH_VAR,
+    AI_REVIEW_INTENT_PATH_VAR,
+    AI_REVIEW_CARRY_PATH_VAR,
+    AI_REVIEW_CHANGED_FILES_PATH_VAR,
+  ];
+  const missing = required.filter(k => typeof paths[k] !== "string" || paths[k].trim() === "");
+  if (missing.length > 0) {
+    throw new Error(
+      `buildReviewPrompt: no path for ${missing.join(", ")}. Every one of the ` +
+        `${required.length} paths must be a non-empty string: the reviewer holds ` +
+        `${AI_REVIEW_ALLOWED_TOOLS} and cannot read an environment variable, so a path ` +
+        `absent from the prompt is one it will guess.`,
+    );
+  }
+
+  // Named for how they read at the call site.
   const findingsPath = paths[AI_REVIEW_FINDINGS_PATH_VAR];
   const roundPath = paths[AI_REVIEW_ROUND_PATH_VAR];
   const intentPath = paths[AI_REVIEW_INTENT_PATH_VAR];
