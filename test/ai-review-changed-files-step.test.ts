@@ -359,17 +359,34 @@ describe("#1356 / CF: the generated job supplies the changed-file list", () => {
       "the basename is written as a literal somewhere other than its own constant, " +
         "so the writer and the reader can drift apart silently",
     ).toBe(1);
+    // Counted as env BINDINGS, which is what the message has always said.
+    // It used to count bare occurrences of the basename, and the two were
+    // the same number until the prompt started carrying the resolved path
+    // instead of the variable's name — at which point an occurrence appeared
+    // that is not a binding and the count read six. Bumping it to six would
+    // have made a missing binding invisible behind the prompt's mention, so
+    // the measurement is narrowed to the thing being counted instead.
+    const bindings = JOB.split(`${AI_REVIEW_CHANGED_FILES_PATH_VAR}: `).length - 1;
     expect(
-      JOB.split(AI_REVIEW_CHANGED_FILES_BASENAME).length - 1,
+      bindings,
       "the env bindings for the list no longer number five. The consumers are " +
         "`ai-review-changed-files` (writes it), `ai-review-carry` (decides " +
-        "`review_scope` from it, #1600), `ai-review-action` (the prompt reads " +
-        "it, #1600), `ai-review-run` (reports on it) and `ai-review-threads` " +
-        "(holds back a finding it cannot anchor, #1612). If you added or " +
-        "removed a consumer, update this number and name it in the comment " +
-        "above; if you did not, a binding has gone missing and a step is " +
-        "about to read a path nothing set.",
+        "`review_scope` from it, #1600), `ai-review-action` (the reviewer is " +
+        "handed the path in its prompt, #1600), `ai-review-run` (reports on " +
+        "it) and `ai-review-threads` (holds back a finding it cannot anchor, " +
+        "#1612). If you added or removed a consumer, update this number and " +
+        "name it in the comment above; if you did not, a binding has gone " +
+        "missing and a step is about to read a path nothing set.",
     ).toBe(5);
+    // And the prompt's own mention, asserted separately rather than folded
+    // into the count above: the reviewer cannot read an environment variable
+    // (`--allowedTools Read,Grep,Glob,Write`), so the path has to be in the
+    // text. See `test/ai-review-prompt-paths.test.ts`.
+    expect(
+      JOB.split(AI_REVIEW_CHANGED_FILES_BASENAME).length - 1 - bindings,
+      "the reviewer's prompt no longer carries the changed-file list's path, " +
+        "so a narrowed round has no list it can actually open",
+    ).toBe(1);
     expect(AI_REVIEW_CHANGED_FILES_STEP_NAME.length).toBeGreaterThan(0);
   });
 

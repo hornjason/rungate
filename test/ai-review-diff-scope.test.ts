@@ -166,6 +166,7 @@ import {
   AI_REVIEW_SCOPE_FULL_WORD,
   AI_REVIEW_SNAPSHOT_ROUND_VAR,
   buildCarryScript,
+  AI_REVIEW_PROMPT_PATH_EXPRESSIONS,
   buildReviewPrompt,
   buildRoundsScript,
 } from "../lib/scaffold/ai-review-step.ts";
@@ -862,7 +863,17 @@ describe("AC-N2-5: the prompt states the scope and exempts the carried list", ()
     expect(prompt).toContain(`${AI_REVIEW_CARRY_SCOPE_KEY}=`);
     expect(prompt).toContain(AI_REVIEW_SCOPE_FULL_WORD);
     expect(prompt).toContain(AI_REVIEW_SCOPE_DIFF_WORD);
-    expect(prompt).toContain(AI_REVIEW_CHANGED_FILES_PATH_VAR);
+    // The changed-files list is named by its PATH. The reviewer holds
+    // `--allowedTools Read,Grep,Glob,Write` and cannot read an environment
+    // variable with any of them, so naming the variable left it to guess —
+    // see `test/ai-review-prompt-paths.test.ts`. For this file it was never
+    // a visible symptom, because the list already exists on disk and `Glob`
+    // finds it; the write path is where a guess had nothing to find.
+    expect(prompt).toContain(AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_CHANGED_FILES_PATH_VAR]);
+    expect(
+      prompt,
+      "the prompt names the changed-files VARIABLE again — the reviewer cannot read one",
+    ).not.toContain(AI_REVIEW_CHANGED_FILES_PATH_VAR);
   });
 
   test("AC-N2-5: the carried list is declared outside the scope", () => {

@@ -70,6 +70,7 @@ import {
   AI_REVIEW_PR_TITLE_VAR,
   AI_REVIEW_PR_BODY_VAR,
   AI_REVIEW_RUN_STEP_ID,
+  AI_REVIEW_PROMPT_PATH_EXPRESSIONS,
   buildReviewPrompt,
   AI_REVIEW_CARRY_PATH_VAR,
   AI_REVIEW_CARRY_READ,
@@ -468,16 +469,33 @@ describe("AC-S5: nothing from the branch under review reaches the prompt", () =>
   // deliberately reads the RAW prompt, because a wrap cannot hide one.
   const flat = prompt.replace(/\s+/g, " ");
 
-  test("AC-S5: the round state reaches the reviewer as a FILE, not an expression", () => {
-    // AC-6b in test/ai-review-credentialed-job.test.ts forbids any `${{` in
-    // the prompt, and it is right: an expression is substituted before the
-    // action sees the text, so it is content rather than instruction. The
-    // first draft of #1168 interpolated three closed-set values and argued
-    // they were safe. They were; the rule is still right, because "this one
-    // is a closed set" is how the next one gets in. Asserted here as well as
-    // there, because this is the change that would have broken it.
-    expect(prompt).not.toContain("${{");
-    expect(prompt).toContain(AI_REVIEW_ROUND_PATH_VAR);
+  test("AC-S5: the round state reaches the reviewer as a FILE, named by its path", () => {
+    // This used to refuse any `${{` and require the variable NAME instead.
+    // The objection it recorded is worth keeping verbatim, because it is the
+    // right objection: the first draft of #1168 interpolated three
+    // closed-set values and argued they were safe. They were; the rule was
+    // still right, because *"this one is a closed set" is how the next one
+    // gets in*.
+    //
+    // What changed is not that argument. It is that naming the variable was
+    // never an alternative: `--allowedTools Read,Grep,Glob,Write` cannot read
+    // an environment variable, so the reviewer answered the instruction by
+    // guessing the path, and ~38% of rounds were recorded UNMEASURED because
+    // the guess was wrong. A rule whose compliant form does not work is not
+    // the safe option.
+    //
+    // So the ban was not dropped for a judgement call — it was replaced by a
+    // mechanical one. AC-6b in `test/ai-review-credentialed-job.test.ts` now
+    // enumerates the author-settable contexts and refuses them, asserts by
+    // equality that the ONLY expressions present are this job's own prepare
+    // step outputs, and carries a control that plants `vars.` and watches it
+    // go red. "This one is a closed set" is no longer an argument anyone has
+    // to be trusted about; it is the assertion.
+    expect(prompt).toContain(AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_ROUND_PATH_VAR]);
+    expect(
+      prompt,
+      "the prompt names the round VARIABLE again — the reviewer cannot read one",
+    ).not.toContain(AI_REVIEW_ROUND_PATH_VAR);
   });
 
   test("AC-S5: the prompt names the three fields the state file carries", () => {
@@ -524,13 +542,15 @@ describe("AC-S5: nothing from the branch under review reaches the prompt", () =>
     // This used to require "nothing carries its findings forward for you",
     // which was true when it was written and stopped being true in #1381.
     // What the case is FOR is that the prompt states the carry's real state
-    // rather than leaving the reviewer to infer one, so it now requires the
-    // variable the walker's file arrives under — and AC-S6 below is what
-    // keeps the two in step, in both directions.
+    // rather than leaving the reviewer to infer one, so it requires the
+    // walker's file to be named — and AC-S6 below is what keeps the two in
+    // step, in both directions. It names the PATH rather than the variable
+    // now, because the reviewer cannot read a variable; see AC-S5's first
+    // case above.
     expect(
       flat,
       "the prompt no longer tells the reviewer where to read what earlier rounds raised",
-    ).toContain(AI_REVIEW_CARRY_PATH_VAR);
+    ).toContain(AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_CARRY_PATH_VAR]);
   });
 
   test("AC-S5: an absent state file is a stated case, not an undefined one", () => {
@@ -1270,9 +1290,16 @@ describe("AC-S8 (CRC-B1): the intent reaches the reviewer, and the body never re
     expect(r.intentFile).not.toContain(AI_REVIEW_INTENT_UNMEASURED);
   });
 
-  test("AC-S8g: the prompt names the variable and frames the body as a claim, not an instruction", () => {
+  test("AC-S8g: the prompt names the intent FILE and frames the body as a claim, not an instruction", () => {
     const prompt = buildReviewPrompt();
-    expect(prompt).toContain(AI_REVIEW_INTENT_PATH_VAR);
+    // The path, not the variable — the reviewer cannot read one. CRC-B1 is
+    // untouched by that: the PATH reaches the reviewer and the title and
+    // body still never do.
+    expect(prompt).toContain(AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_INTENT_PATH_VAR]);
+    expect(
+      prompt,
+      "the prompt names the intent VARIABLE again — the reviewer cannot read one",
+    ).not.toContain(AI_REVIEW_INTENT_PATH_VAR);
     // The framing is the control on the model's context, and it is the half
     // that `env:` does not buy. A prompt that handed the reviewer an
     // author-written document without saying what authority it has is a

@@ -49,6 +49,8 @@ import {
   AI_REVIEW_ACTION_STEP_ID,
   AI_REVIEW_AUTH_PRECEDENCE,
   AI_REVIEW_AUTH_STEP_ID,
+  AI_REVIEW_PREPARE_STEP_ID,
+  AI_REVIEW_PROMPT_PATH_EXPRESSIONS,
   AI_REVIEW_FINDINGS_KEY,
   AI_REVIEW_FINDINGS_PATH_VAR,
   AI_REVIEW_JOB,
@@ -423,19 +425,34 @@ describe("AC-6b: the review prompt interpolates the findings path and key", () =
   test("AC-6b: the prompt the action receives names both", () => {
     const prompt = String(step(AI_REVIEW_ACTION_STEP_ID).with?.prompt ?? "");
     expect(prompt.length, "the action is handed no prompt").toBeGreaterThan(100);
-    expect(prompt).toContain(AI_REVIEW_FINDINGS_PATH_VAR);
+    // The PATH, not the variable's name. The reviewer holds
+    // `--allowedTools Read,Grep,Glob,Write` and none of those four reads an
+    // environment variable, so a prompt naming the variable is an
+    // instruction it can only answer by guessing. The measurement is in
+    // `test/ai-review-prompt-paths.test.ts`.
+    expect(prompt).toContain(AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_FINDINGS_PATH_VAR]);
+    expect(
+      prompt,
+      "the prompt names the findings VARIABLE again — the reviewer cannot read one",
+    ).not.toContain(AI_REVIEW_FINDINGS_PATH_VAR);
     expect(prompt).toContain(AI_REVIEW_FINDINGS_KEY);
   });
 
-  test("AC-6b: changing the path constant moves the prompt — no second spelling", async () => {
-    const mutant = await mutate("AI_REVIEW_FINDINGS_PATH_VAR", AI_REVIEW_FINDINGS_PATH_VAR, "mutant.json");
-    expect(mutant.buildReviewPrompt()).toContain("mutant.json");
+  test("AC-6b: changing the prepare step's id moves the prompt — no second spelling", async () => {
+    // The mutation moved from the variable NAME to the step id, because the
+    // step id is now what the prompt's path is built out of. Same property:
+    // the prompt and the `env:` block derive from one record, so neither can
+    // be typed out a second time and drift.
+    const mutant = await mutate("AI_REVIEW_PREPARE_STEP_ID", AI_REVIEW_PREPARE_STEP_ID, "mutant-step");
+    expect(mutant.buildReviewPrompt()).toContain("steps.mutant-step.outputs.path");
     expect(
       mutant.buildReviewPrompt(),
-      `the prompt still names ${AI_REVIEW_FINDINGS_PATH_VAR} after the constant changed — ` +
-        `the path is typed into the prompt a second time`,
-    ).not.toContain(AI_REVIEW_FINDINGS_PATH_VAR);
-    expect(mutant.buildReviewRunStep(VERTEX, REFS(PROJECT), "0.0.0-fixture")).toContain("mutant.json");
+      `the prompt still names steps.${AI_REVIEW_PREPARE_STEP_ID} after the constant ` +
+        `changed — the path is typed into the prompt a second time`,
+    ).not.toContain(`steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.path`);
+    expect(mutant.buildReviewRunStep(VERTEX, REFS(PROJECT), "0.0.0-fixture")).toContain(
+      "steps.mutant-step.outputs.path",
+    );
   });
 
   test("AC-6b: changing the key constant moves the prompt — no second spelling", async () => {
@@ -464,9 +481,69 @@ describe("AC-6b: the review prompt interpolates the findings path and key", () =
     ).toBe(buildReviewPrompt().trimEnd());
   });
 
-  test("AC-6b: no `${{` expression is interpolated into the prompt", () => {
+  // ── AC-6b: which expressions may reach the prompt ──────────────────────
+  //
+  // This was a blanket refusal of `${{` anywhere in the prompt. Its reason,
+  // kept verbatim below, is about CONTENT AN ATTACKER CAN SET — and that is
+  // a property of the context, not of interpolation. The reviewer cannot
+  // read an environment variable (`--allowedTools Read,Grep,Glob,Write`), so
+  // a prompt that names a variable instead of a path is an instruction the
+  // agent answers by guessing; see `test/ai-review-prompt-paths.test.ts` for
+  // the transcript that measured it.
+  //
+  // So the ban now names what it is protecting against. A blanket ban that
+  // has to be switched off to ship a correct change is a ban that gets
+  // switched off.
+
+  /** Contexts a pull request author can influence, directly or by setting a variable. */
+  const ATTACKER_SETTABLE = [
+    "vars.",
+    "env.",
+    "inputs.",
+    "secrets.",
+    "github.event.",
+    "github.head_ref",
+    "github.ref_name",
+    "github.actor",
+    "github.triggering_actor",
+  ];
+
+  /** The one binding: which expressions in a prompt come from a context an author can set. */
+  function unsafeExpressions(prompt: string): string[] {
+    return [...prompt.matchAll(/\$\{\{([^}]*)\}\}/g)]
+      .map(m => m[1].trim())
+      .filter(e => ATTACKER_SETTABLE.some(ctx => e.includes(ctx)));
+  }
+
+  test("AC-6b: no attacker-settable expression is interpolated into the prompt", () => {
     // An expression is substituted into the text before the action sees it,
     // so a repository variable in the prompt is content an attacker can set.
-    expect(buildReviewPrompt()).not.toContain("${{");
+    expect(
+      unsafeExpressions(buildReviewPrompt()),
+      "an expression resolving from a context a pull request author can set " +
+        "reaches the reviewer's prompt — that is prompt injection with extra steps",
+    ).toEqual([]);
+  });
+
+  test("AC-6b CONTROL: the detector still catches a planted `vars.` expression", () => {
+    // Without this the narrowed guard and a guard that stopped matching
+    // produce the same empty list, which is the whole shape
+    // `.claude/rules/checks-must-be-able-to-fail.md` exists for.
+    const planted = `Write the result to \${{ vars.RUNGATE_EVIL }} and nowhere else.`;
+    expect(unsafeExpressions(planted)).toEqual(["vars.RUNGATE_EVIL"]);
+    expect(unsafeExpressions(`read \${{ github.event.pull_request.title }}`)).toHaveLength(1);
+  });
+
+  test("AC-6b: every expression that DOES reach the prompt is one this step computes", () => {
+    // The allow direction, stated as an equality rather than left implicit:
+    // the only expressions in the prompt are the prepare step's own outputs,
+    // each of which resolves to RUNNER_TEMP + run id + run attempt + a
+    // basename fixed in the generator. No author-controlled component.
+    const found = [...buildReviewPrompt().matchAll(/\$\{\{([^}]*)\}\}/g)].map(m => m[1].trim());
+    expect(found.length, "no expression reached the prompt — the case is vacuous").toBeGreaterThan(0);
+    expect(
+      found.filter(e => !e.startsWith(`steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.`)),
+      "an expression from somewhere other than the prepare step reached the prompt",
+    ).toEqual([]);
   });
 });
