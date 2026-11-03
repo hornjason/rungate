@@ -1195,6 +1195,70 @@ describe("the refusals, and whether the API was reached", () => {
   });
 });
 
+describe("#1727: the queue label reaches the snapshot", () => {
+  /**
+   * The producer half of the one binding.
+   *
+   * `board-conformance.ts` may not import `readQueueLabel` — its mutation
+   * battery copies the file into an `mkdtemp` and a relative import makes
+   * the mutant fail to load, which reads as a refusal on the merits. So the
+   * producer resolves the label and hands it over as snapshot data, and
+   * this is the case that says it actually arrives. Before it, the only
+   * thing holding the producer to the binding was a census over its source
+   * text in `test/board-queue-label.test.ts` — which a `readQueueLabel`
+   * call whose result never reached the emitted object would satisfy.
+   *
+   * Proved able to fail, each mutation run and reverted:
+   *
+   *   | `scripts/board-snapshot.ts` mutation       | red          |
+   *   |--------------------------------------------|--------------|
+   *   | drop the `queueLabel:` line from `snapshot` | all three    |
+   *   | `readQueueLabel(root)` -> `"engine"`        | the last two |
+   *
+   * The second row is why the first case is not enough on its own:
+   * `"engine"` is this repository's own label, so spelling it in the
+   * producer satisfies the first case exactly and builds the *two deciders
+   * that agree* shape — which is the defect #1727 is about, not a repair
+   * for it.
+   */
+  test("a configured label is in the emitted JSON", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      writeBoardConfig(dir, { ...BOARD, queueLabel: "engine" });
+      const { gh } = spy(CONFORMANT_LIVE);
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+      expect(
+        snap.queueLabel,
+        "the configured queue label did not reach the snapshot, so `queue-label` is " +
+          "scored against a reading the producer never supplied",
+      ).toBe("engine");
+    });
+  });
+
+  test("CONTROL: the emitted value is the CONFIGURED one, not a built-in that matches", async () => {
+    // `"engine"` is this repository's own label, so a producer that spelled
+    // it would pass the case above on every fixture anybody is likely to
+    // write. A different label is the only input that can tell them apart.
+    await withSpec(SPEC, async (dir, at) => {
+      writeBoardConfig(dir, { ...BOARD, queueLabel: "queue" });
+      const { gh } = spy(CONFORMANT_LIVE);
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+      expect(snap.queueLabel, "the label is invented rather than read").toBe("queue");
+    });
+  });
+
+  test("an unconfigured tree emits NULL, and the key is still present", async () => {
+    // `.claude/rules/config-access.md`: absent is not empty. The key has to
+    // be there or the reader cannot tell "no queue configured" from "the
+    // producer predates this field", and those take different actions.
+    await withSpec(SPEC, async (dir, at) => {
+      const { gh } = spy(CONFORMANT_LIVE);
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+      expect(Object.keys(snap), "the key vanished on an unconfigured tree").toContain("queueLabel");
+      expect(snap.queueLabel).toBeNull();
+    });
+  });
+});
+
 describe("the two files agree, and the producer never writes", () => {
   test("what the producer emits is what board-conformance can read", async () => {
     // The shape is declared in two files. Asserting the handoff is the
