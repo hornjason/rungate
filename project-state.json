@@ -1010,7 +1010,7 @@
   "session": {
     "number": 78,
     "date": "2026-11-03",
-    "suite": "No full local suite — concurrent worktrees. From main at e93bd62b: stage-ladder 33 pass / 0 fail (every item verify executed); the DA-state census set 238 pass / 0 fail across 7 files. At #1731's head bbe1d7a1: board-conformance + board-queue-label + board-snapshot + plan-issues + issue-decomposition 233 pass / 0 fail, 643 expect() calls. CI ran all four shards green on #1737, #1738 and #1731.",
+    "suite": "No full local suite — concurrent worktrees. From main at e93bd62b: stage-ladder 33 pass / 0 fail (every item verify executed); the DA-state census set 238 pass / 12 todo / 0 fail across 7 files. At #1731's head bbe1d7a1: board-conformance + board-queue-label + board-snapshot + plan-issues + issue-decomposition 233 pass / 0 fail, 643 expect() calls. CI ran all four shards green on #1737, #1738 and #1731.",
     "issues_created": [],
     "issues_closed": [
       1736,
@@ -1220,7 +1220,7 @@
           },
           {
             "what": "A measurement published in a PR body stops being a second copy that nothing compares.",
-            "mechanism": "INTENDED: generate the PR's evidence block from the command output — write the counts to a file as the suite runs and compose the body from it — so a figure cannot be typed once and corrected only in the file. NOT BUILT. Three stale figures in this stage, all found by a reviewer, is the measurement that says it is worth building; stating it as open rather than implying the discipline will hold is the point.",
+            "mechanism": "INTENDED: generate the PR's evidence block from the command output — write the counts to a file as the suite runs and compose the body from it — so a figure cannot be typed once and corrected only in the file. NOT BUILT. EIGHT stale figures in this stage now, all found by a reviewer, and the discipline demonstrably did not hold: three during the stage itself, then five more on #1739 — the session entry recording the stage as COMPLETE — across three consecutive review rounds. Those five were a prior ratio value relayed from a carry-forward note instead of read from the file that holds it, a closed-count read six minutes before the last close landed, an opened-count delta left unaccounted while claiming to account for the whole movement, SUCCESS.md still naming the previously published version after the publish succeeded, and a dropped `12 todo` from a suite line. Every one is the same shape: a figure typed once, into prose, with nothing comparing it to the command or file it came from. Stating it as open rather than implying the discipline will hold is the point, and #1739 is the strongest evidence yet that it will not.",
             "status": "open",
             "verify": null
           },
