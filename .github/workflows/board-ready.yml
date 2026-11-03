@@ -1,0 +1,76 @@
+# Not managed by rungate — the scaffold owns ci.yml, gates.yml and the two
+# ai-review files, and regenerates them by job name. This one is caller-owned.
+#
+# #1744 — Ready is reachable today only by somebody running `board-mirror
+# --ready --write` by hand, which is Claim 7's third falsification verbatim:
+# "a board state reachable only by someone running a command by hand".
+#
+# There is no "became unblocked" event. `issue_dependencies` exists as a
+# webhook but is NOT a valid Actions `on:` trigger, and `blocked_by_removed`
+# fires when somebody unlinks a dependency rather than when the blocker
+# closes. So the trigger is the close itself, and the script fans out to that
+# issue's `blocking` list.
+#
+# **No schedule.** A cron is the thing this exists to remove; see #1744.
+#
+# Every `uses:` is pinned to a commit SHA, and both
+# `test/action-pin-parity.test.ts` and BR-14 assert it.
+name: Board — a closed blocker frees what it blocked
+
+on:
+  issues:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue number to fan out from"
+        required: true
+        type: string
+      write:
+        description: "Perform the moves (default: report only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  move-freed-issues-to-ready:
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version-file: ".bun-version"
+      - run: bun install
+
+      # The credential is resolved INSIDE `run:`, never in an `if:`.
+      # `secrets` is not available in `if:` at all, and a step skipped by
+      # `if:` reports SKIPPED — which reads as satisfied. The script emits a
+      # `::warning::UNMEASURED` naming BOARD_PROJECT_TOKEN and exits 2, so a
+      # repository that has never configured a PAT gets an annotation it can
+      # act on rather than a quiet green. See `.claude/rules/config-access.md`.
+      #
+      # GITHUB_TOKEN cannot write ProjectsV2, which is why this is a PAT and
+      # not the built-in token.
+      #
+      # ISSUE and WRITE go through env:, never interpolated into the script
+      # line — `${{ inputs.* }}` read directly is one input-type change away
+      # from the injection GitHub's own guidance opens with.
+      - name: Fan out from the closed blocker
+        continue-on-error: true # an unconfigured consumer is annotated, not broken
+        env:
+          BOARD_PROJECT_TOKEN: ${{ secrets.BOARD_PROJECT_TOKEN }}
+          PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          WRITE: ${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
+        run: |
+          if [ -z "$PROJECT_ID" ]; then
+            echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
+            exit 0
+          fi
+          bun scripts/board-ready.ts \
+            --repo "$GITHUB_REPOSITORY" \
+            --closed-issue "$ISSUE" \
+            --project "$PROJECT_ID" \
+            $WRITE
