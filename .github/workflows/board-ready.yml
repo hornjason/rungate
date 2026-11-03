@@ -39,23 +39,26 @@ jobs:
     runs-on: "ubuntu-latest"
     # `issues: [closed]` is triggerable by anyone who can close an issue, and
     # an issue's own author can close it — so an outside contributor can start
-    # a job that holds a ProjectsV2 PAT. Security review flagged it and was
-    # right to.
+    # a job that holds a ProjectsV2 PAT.
     #
-    # Nothing is writable that way today: an outsider cannot create a
-    # `blocked by` edge, so their issue's `blocking` list is empty and the
-    # fan-out writes nothing. That is GitHub's permission model doing the
-    # work, not this file, and a guard that depends on another system's
-    # defaults is a guard somebody else can change. So the job does not start
-    # at all unless the issue belongs to someone trusted.
+    # **The first gate here was wrong, and review caught it.** It read
+    # `github.event.issue.author_association`, which is the association of
+    # whoever OPENED the issue, not whoever closed it. Those differ in both
+    # directions, and the direction that bit is the ordinary one: a
+    # maintainer closing an outside contributor's issue would have been
+    # refused, so the feature would have silently not worked for exactly the
+    # issues most likely to be filed from outside.
+    #
+    # There is no actor permission in an Actions expression, so the check
+    # moved into the script, where the API can answer it:
+    # `GET /repos/{repo}/collaborators/{actor}/permission` must say `write`
+    # or `admin` before anything is written. A control that needs a fact
+    # expressions cannot see does not belong in an expression.
     #
     # What this deliberately does NOT do is the other suggested fix —
     # defaulting the untrusted trigger to report-only and requiring a manual
     # dispatch to write. That is precisely the hand-run command #1744 exists
     # to remove; it would leave the feature looking present and doing nothing.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
@@ -95,6 +98,9 @@ jobs:
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
           WRITE: ${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
+          # The identity that TRIGGERED this run, which is the one the script
+          # asks the permission endpoint about. Not the issue's author.
+          ACTOR: ${{ github.actor }}
         run: |
           if [ -z "$PROJECT_ID" ]; then
             echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
@@ -104,4 +110,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --closed-issue "$ISSUE" \
             --project "$PROJECT_ID" \
+            --actor "$ACTOR" \
             $WRITE

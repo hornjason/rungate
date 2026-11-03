@@ -20,8 +20,10 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { isReady } from "../lib/board-mirror";
 import {
+  actorMayWrite,
   fanoutDecisions,
   readBoardCredential,
+  truncatedReadings,
   type Dependent,
 } from "../lib/board-ready-fanout";
 
@@ -104,17 +106,49 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
   // has been found on this day's work — twice on #1740's reader and once
   // here — so it is asserted as a census over the file's GraphQL list
   // selections rather than against `blocking` alone.
-  test("BR-19: no GraphQL list in the script is read with a bare first:", () => {
+  test("BR-19: every GraphQL list in the script declares its own truncation", () => {
     const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
-    // `projectItems(first:10)` and `fieldValues(first:20)` are per-issue
-    // sub-selections with hard upper bounds, not collections that grow; the
-    // two that page over a repository's data are named.
     for (const sel of ["blocking(first:100,after:$c)", "items(first:100,after:$c)"]) {
       expect(src, `${sel} missing — a list that can grow must carry a cursor`).toContain(sel);
     }
     expect(src).not.toContain("blocking(first:50)");
-    // and both loops read the flag rather than assuming one page
-    expect([...src.matchAll(/pageInfo\{hasNextPage endCursor\}/g)].length).toBeGreaterThanOrEqual(2);
+    // **The census, widened.** Its first version exempted `projectItems` and
+    // `fieldValues` as "per-issue sub-selections with hard upper bounds" —
+    // an exemption by reasoning, which is the same mistake that put a
+    // comment-shaped carve-out into #1740's token-host case. Review found
+    // it, and that was the FOURTH unpaginated read on one day's work.
+    //
+    // So: every `first:` in the file asks for a full page, and every one is
+    // accompanied by a `pageInfo` — either cursored, or checked for
+    // truncation and refused. A new selection cannot be added without one.
+    //
+    // Comment lines are stripped first: this file's own prose says
+    // `first: 50` while recounting the finding, and a census that reads its
+    // own explanation is measuring the wrong text.
+    const code = src
+      .split("\n")
+      .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+    const firsts = [...code.matchAll(/\bfirst:\s*(\d+)/g)].map(m => Number(m[1]));
+    expect(firsts.length).toBeGreaterThanOrEqual(5);
+    for (const n of firsts) expect(n, `a first:${n} asks for less than a page`).toBe(100);
+    expect([...code.matchAll(/pageInfo\{hasNextPage/g)].length).toBe(firsts.length);
+  });
+
+  // The two sub-selections are bounded in practice and are read anyway as
+  // readings that can fail. A Status field on page two and no Status field
+  // at all are the same `undefined`, and only one of them means "leave it".
+  test("BR-23: a truncated projectItems or fieldValues page is reported, not ignored", () => {
+    const whole = { number: 1, projectItems: { pageInfo: { hasNextPage: false }, nodes: [] } };
+    const itemsCut = { number: 2, projectItems: { pageInfo: { hasNextPage: true }, nodes: [] } };
+    const fieldsCut = {
+      number: 3,
+      projectItems: { pageInfo: { hasNextPage: false }, nodes: [{ fieldValues: { pageInfo: { hasNextPage: true } } }] },
+    };
+    expect(truncatedReadings([whole, itemsCut, fieldsCut])).toEqual([2, 3]);
+    // the positive control: a complete reading reports nothing, so the case
+    // above is not green because every input is called truncated
+    expect(truncatedReadings([whole])).toEqual([]);
   });
 
   // `continue-on-error: true` turns a GraphQL error, a bad argument and a
@@ -259,6 +293,43 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
   test("BR-15: the workflow invokes scripts/board-ready.ts, which exists", () => {
     expect(yml).toContain("bun scripts/board-ready.ts");
     expect(readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8")).toContain("fanoutDecisions");
+  });
+
+  // **The gate that was wrong.** The first version read
+  // `github.event.issue.author_association` in an `if:`, which describes
+  // whoever OPENED the issue and never whoever closed it. The damaging
+  // direction is the ordinary one: a maintainer closing an outside
+  // contributor's issue was refused, so the feature silently did not work
+  // for exactly the issues most likely to be filed from outside.
+  test("BR-24: the trust gate names the acting identity, not the issue's author", () => {
+    // Comment lines excluded — the file explains the mistake at length, and
+    // a check that reads the explanation refuses the record of the fix.
+    const live = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+    expect(live, "author_association describes the wrong person").not.toContain("author_association");
+    expect(live).toContain("github.actor");
+    expect(live).toContain("--actor");
+  });
+
+  test("BR-25: only a writing permission may move the board", () => {
+    for (const p of ["admin", "write", "maintain"]) expect(actorMayWrite(p), `${p} should write`).toBe(true);
+    for (const p of ["read", "none", "triage", ""]) expect(actorMayWrite(p), `${p} must not write`).toBe(false);
+  });
+
+  // UNMEASURED, not zero, in the place it decides a write: a permission the
+  // run could not read is not a permission it was granted.
+  test("BR-26: an unreadable permission refuses", () => {
+    expect(actorMayWrite(null)).toBe(false);
+  });
+
+  // The gate decides before the first mutation and after the dry-run exit,
+  // so a report-only run still reports. Asserted on order, because a check
+  // placed after the write is a check that observed the write.
+  test("BR-27: the permission check precedes every updateProjectV2ItemFieldValue", () => {
+    const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+    const gate = src.indexOf("actorMayWrite(permission)");
+    const write = src.indexOf("updateProjectV2ItemFieldValue");
+    expect(gate, "the gate is not called at all").toBeGreaterThan(-1);
+    expect(write).toBeGreaterThan(gate);
   });
 
   // The untrusted-input rule, as a case. `github.event.issue.*` interpolated

@@ -14,7 +14,13 @@
  * credential is one: `GITHUB_TOKEN` cannot write ProjectsV2, and a run that
  * could not look has not found nothing.
  */
-import { fanoutDecisions, readBoardCredential, type Dependent } from "../lib/board-ready-fanout";
+import {
+  actorMayWrite,
+  fanoutDecisions,
+  readBoardCredential,
+  truncatedReadings,
+  type Dependent,
+} from "../lib/board-ready-fanout";
 import { phaseOf, openFrontier } from "../lib/board-mirror";
 
 /**
@@ -46,10 +52,30 @@ async function gql(token: string, query: string, variables: Record<string, unkno
   return j.data;
 }
 
+/**
+ * The acting identity's permission ON THIS REPOSITORY, or `null` when the
+ * answer could not be read. `null` is UNMEASURED and refuses — see
+ * `actorMayWrite`.
+ */
+async function actorPermission(token: string, repo: string, actor: string): Promise<string | null> {
+  const r = await fetch(`https://api.github.com/repos/${repo}/collaborators/${actor}/permission`, {
+    headers: { authorization: `bearer ${token}`, accept: "application/vnd.github+json" },
+  });
+  // 404 is the documented answer for "not a collaborator", which is a READ
+  // of "no permission" rather than a failure to read. Everything else —
+  // 401, 403, 5xx — is unreadable and must not be flattened into it.
+  if (r.status === 404) return "none";
+  if (!r.ok) return null;
+  const j = (await r.json()) as { permission?: unknown };
+  return typeof j.permission === "string" ? j.permission : null;
+}
+
+
 async function main(): Promise<number> {
   const repo = arg("repo");
   const rawClosed = arg("closed-issue");
   const project = arg("project");
+  const actor = arg("actor");
   const apply = process.argv.includes("--write");
   // `Number(null)` is 0 and `Number.isFinite(0)` is true, so the first
   // version of this guard passed a MISSING `--closed-issue` straight through
@@ -90,10 +116,14 @@ async function main(): Promise<number> {
          nodes{
            number state milestone{title} assignees{totalCount}
            issueDependenciesSummary{blockedBy}
-           projectItems(first:10){nodes{
-             id project{id}
-             fieldValues(first:20){nodes{... on ProjectV2ItemFieldSingleSelectValue{
-               name optionId field{... on ProjectV2FieldCommon{id name}}}}}}}}}}}}`;
+           projectItems(first:100){
+             pageInfo{hasNextPage endCursor}
+             nodes{
+               id project{id}
+               fieldValues(first:100){
+                 pageInfo{hasNextPage endCursor}
+                 nodes{... on ProjectV2ItemFieldSingleSelectValue{
+                   name optionId field{... on ProjectV2FieldCommon{id name}}}}}}}}}}}}`;
   const blocking: any[] = [];
   let cursor: string | null = null;
   do {
@@ -132,6 +162,21 @@ async function main(): Promise<number> {
   }
   const frontier = openFrontier(frontierItems);
 
+  // A truncated sub-selection means this run saw PART of a dependent's board
+  // membership or part of its fields, and "I did not find the Status field"
+  // and "the Status field was on page two" produce the same `null`. Refuse
+  // the whole run rather than write a subset: a board half-moved is harder to
+  // notice than one that did not move.
+  const unreadable = truncatedReadings(blocking);
+  if (unreadable.length > 0) {
+    console.log(
+      `::warning::UNMEASURED — ${unreadable.map(n => `#${n}`).join(", ")} ` +
+        `returned more project items or field values than one page holds, so their board ` +
+        `membership was read only in part. Nothing was written.`,
+    );
+    return EXIT_REFUSED;
+  }
+
   const itemOf = new Map<number, { itemId: string; fieldId: string; optionId: string | null }>();
   const dependents: Dependent[] = blocking.map((b: any) => {
     const item = (b.projectItems?.nodes ?? []).find((i: any) => i.project?.id === project);
@@ -167,6 +212,26 @@ async function main(): Promise<number> {
     console.log(`\nDry run. ${moving.length} issue(s) would move. Pass --write to perform it.`);
     return 0;
   }
+
+  // The trust gate, at the point where it decides something. `issues:
+  // [closed]` is triggerable by anyone who can close an issue — including an
+  // outside contributor closing their own — and this job holds a ProjectsV2
+  // PAT. The check that used to live in the workflow's `if:` read the
+  // ISSUE AUTHOR's association, which is a different person from the one
+  // who triggered the run; see `actorMayWrite`.
+  if (actor === null) {
+    console.log("::warning::UNMEASURED — --actor was not supplied, so nothing could be authorised. Nothing written.");
+    return EXIT_REFUSED;
+  }
+  const permission = await actorPermission(token, repo, actor);
+  if (!actorMayWrite(permission)) {
+    console.log(
+      `::warning::refusing to write: ${actor} has permission "${permission ?? "UNMEASURED"}" on ${repo}, ` +
+        `and this job holds a board-writing credential.`,
+    );
+    return EXIT_REFUSED;
+  }
+
   for (const dec of moving) {
     const target = itemOf.get(dec.number);
     if (!target) {

@@ -119,6 +119,63 @@ export function fanoutDecisions(
 }
 
 /** The credential, or the reason there is no reading to report. */
+/** A GraphQL connection, as far as truncation is concerned. */
+interface MaybeTruncated {
+  readonly pageInfo?: { readonly hasNextPage?: boolean } | null;
+  readonly nodes?: readonly unknown[] | null;
+}
+
+/**
+ * Which dependents had their board membership read only in part.
+ *
+ * `projectItems` and `fieldValues` are sub-selections inside a paginated
+ * list, so cursoring them costs a round trip per node and both are bounded
+ * in practice. **"Bounded in practice" is the reasoning that has been wrong
+ * four times on this day's work**, so it is not trusted: each is asked for
+ * with a `pageInfo`, and a truncated page is UNMEASURED.
+ *
+ * It matters because a Status field on page two and no Status field at all
+ * produce the same `undefined`, and one of those means "leave it alone"
+ * while the other means "I could not look".
+ */
+export function truncatedReadings(
+  dependents: readonly { readonly number: number; readonly projectItems?: MaybeTruncated | null }[],
+): number[] {
+  return dependents
+    .filter(d => {
+      const items = d.projectItems;
+      if (items?.pageInfo?.hasNextPage === true) return true;
+      return (items?.nodes ?? []).some(
+        (n: any) => n?.fieldValues?.pageInfo?.hasNextPage === true,
+      );
+    })
+    .map(d => d.number);
+}
+
+/**
+ * May the identity that triggered this run cause a board write?
+ *
+ * The first version of this gate was an Actions `if:` reading
+ * `github.event.issue.author_association`, and review was right that it
+ * checks the wrong person: that field describes whoever OPENED the issue,
+ * never whoever closed it. The two differ in both directions and the
+ * ordinary direction is the damaging one — a maintainer closing an outside
+ * contributor's issue would have been refused, so the feature would have
+ * quietly not worked for exactly the issues most likely to come from
+ * outside.
+ *
+ * `repos/{repo}/collaborators/{actor}/permission` answers about the ACTOR.
+ * Its `permission` field is one of `admin`, `write`, `read`, `none`, and an
+ * unreadable response is `null` — which is UNMEASURED and refuses, because
+ * a permission we could not read is not a permission we were granted.
+ */
+export const WRITING_PERMISSIONS: readonly string[] = ["admin", "write", "maintain"];
+
+export function actorMayWrite(permission: string | null): boolean {
+  if (permission === null) return false;
+  return WRITING_PERMISSIONS.includes(permission);
+}
+
 export type CredentialReading =
   | { readonly kind: "present"; readonly token: string }
   | { readonly kind: "UNMEASURED"; readonly why: string };
