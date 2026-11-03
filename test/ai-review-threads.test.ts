@@ -136,6 +136,86 @@ describe("postReviewThreads", () => {
     expect(aiReviewThreadsExitCode(r)).toBe(AI_REVIEW_THREADS_REFUSAL);
   });
 
+  // #1736. The 422 the demotion cannot clear.
+  //
+  // Both strings below are the API's real responses, copied from a run. They
+  // differ in the ONE thing the branch is allowed to read — the condition —
+  // and in nothing else: same status, same shape, same plausibility. That is
+  // the pair, and without the second one the first is green over a branch
+  // that degrades every 422 it sees.
+  const PENDING_422 =
+    'Validation Failed: {"resource":"PullRequestReview","code":"custom",' +
+    '"field":"user_id","message":"user_id can only have one pending review per pull request"}';
+  const LINE_422 =
+    'Validation Failed: {"resource":"PullRequestReviewComment","code":"custom",' +
+    '"field":"line","message":"line must be part of the diff"}';
+
+  test("a pending review is a state of the pull request, not a broken producer", async () => {
+    // Observed on #1731 across three runs. The identity holding the pending
+    // review is the job's own `github-actions[bot]`, so nobody can clear it
+    // from the UI; reddening a required check for it blocks a pull request
+    // whose review PASSED, for a reason no author can act on.
+    const { sent, post } = recorder(() => ({ ok: false, status: 422, message: PENDING_422 }));
+    const r = await postReviewThreads(reading([finding]), post);
+    expect(r.outcome).toBe("BLOCKED_BY_PENDING_REVIEW");
+    expect(aiReviewThreadsExitCode(r)).toBe(0);
+    expect(r.detail.join(" ")).toContain("pending review");
+
+    // Only this branch can produce a single request. The demotion is the
+    // generic 422 path and sends a second, file-level one — so a length of 1
+    // is an observation the status code alone cannot make, which is the sixth
+    // shape in `.claude/rules/checks-must-be-able-to-fail.md`. Retrying at
+    // file level here cannot work: the lock is on the review, not the anchor.
+    expect(sent).toEqual([{ path: "src/a.ts", line: 12 }]);
+  });
+
+  test("CONTROL: a 422 that is NOT the pending review still demotes, then fails", async () => {
+    // The row that differs. Same status, the other condition — and it must
+    // reach neither the new outcome nor a free pass. If this goes green as
+    // BLOCKED_BY_PENDING_REVIEW the detector is reading the status code.
+    const { sent, post } = recorder(() => ({ ok: false, status: 422, message: LINE_422 }));
+    const r = await postReviewThreads(reading([finding]), post);
+    expect(sent).toHaveLength(2);
+    expect(r.outcome).toBe("FAILED");
+    expect(aiReviewThreadsExitCode(r)).not.toBe(0);
+    expect(aiReviewThreadsExitCode(r)).toBe(AI_REVIEW_THREADS_REFUSAL);
+  });
+
+  test("CONTROL: the condition alone is not enough — a 500 that says it is still a failure", async () => {
+    // The other half of the conjunction. Without this row, dropping the
+    // status check from the predicate reddens nothing and the test above
+    // measures one operand of two — half a conjunction is green by
+    // construction. A 5xx is the producer being broken whatever its body says.
+    const { post } = recorder(() => ({ ok: false, status: 500, message: PENDING_422 }));
+    const r = await postReviewThreads(reading([finding]), post);
+    expect(r.outcome).toBe("FAILED");
+    expect(aiReviewThreadsExitCode(r)).toBe(AI_REVIEW_THREADS_REFUSAL);
+  });
+
+  test("a pending review does not swallow a failure that is not the lock", async () => {
+    // Same ordering argument as the 403 case: a real failure outranks a state
+    // of the pull request, or a broken producer hides behind one.
+    const { post } = recorder(n =>
+      n === 1
+        ? { ok: false, status: 422, message: PENDING_422 }
+        : { ok: false, status: 500, message: "boom" },
+    );
+    const r = await postReviewThreads(reading([finding, { ...finding, file: "src/b.ts" }]), post);
+    expect(r.outcome).toBe("FAILED");
+    expect(aiReviewThreadsExitCode(r)).not.toBe(0);
+    expect(aiReviewThreadsExitCode(r)).toBe(AI_REVIEW_THREADS_REFUSAL);
+  });
+
+  test("the pending-review condition is decided in exactly one place", async () => {
+    // One binding to mutate. A second site deciding the same question would
+    // hold every case above up on its own, so a mutation of either would
+    // leave the suite green — the fourth shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    const src = await Bun.file(new URL("../lib/ai-review-threads.ts", import.meta.url)).text();
+    expect(src.match(/function isPendingReviewRefusal/g) ?? []).toHaveLength(1);
+    expect(src.match(/PENDING_REVIEW_CONDITION/g) ?? []).toHaveLength(2);
+  });
+
   test("every refusal comes through the one constant", async () => {
     // So a mutant that zeroes it can be observed. A second literal exit code
     // somewhere in the module would survive the mutation and the case would

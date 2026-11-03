@@ -152,6 +152,7 @@ export const AI_REVIEW_THREADS_REFUSAL = 1;
  * | `NOTHING_TO_POST` | 0 | no | the review located nothing to anchor |
  * | `UNMEASURED` | 0 | no | there was no reading to post FROM |
  * | `DEGRADED_NO_WRITE` | 0 | no | the token cannot write; see below |
+ * | `BLOCKED_BY_PENDING_REVIEW` | 0 | no | the pull request is locked; see below |
  * | `FAILED` | any | **yes** | the producer is broken |
  *
  * `UNMEASURED` is not a quieter `NOTHING_TO_POST`. A review that did not run
@@ -163,6 +164,7 @@ export type AiReviewThreadOutcome =
   | "NOTHING_TO_POST"
   | "UNMEASURED"
   | "DEGRADED_NO_WRITE"
+  | "BLOCKED_BY_PENDING_REVIEW"
   | "FAILED";
 
 /** What the API said. `status` is `null` for a failure that never got one. */
@@ -191,6 +193,33 @@ export interface AiReviewThreadsResult {
 const UNPROCESSABLE = 422;
 /** HTTP 403 — the documented answer to a token without `pull-requests: write`. */
 const FORBIDDEN = 403;
+
+/**
+ * The OTHER 422, and the reason the status code alone cannot be the branch.
+ *
+ * GitHub allows one pending review per identity per pull request. When a
+ * previous round left one open, every `createReviewComment` on that pull
+ * request answers 422 with this condition — and the identity is the job's own
+ * `github-actions[bot]`, so there is no UI anybody can clear it from.
+ *
+ * Matched on the condition rather than on the serialised body: the message is
+ * a JSON document the API is free to reformat, and a detector that a
+ * whitespace change defeats is the second shape in
+ * `.claude/rules/checks-must-be-able-to-fail.md`.
+ */
+const PENDING_REVIEW_CONDITION = /pending review/i;
+
+/**
+ * One binding, so a mutation of it is observable. Both halves are required:
+ * the status narrows it to a validation refusal, the condition says WHICH —
+ * and the wrong direction here is the expensive one, because a false positive
+ * turns a genuinely broken producer into a green check.
+ */
+function isPendingReviewRefusal(answer: AiReviewThreadResponse): boolean {
+  return (
+    !answer.ok && answer.status === UNPROCESSABLE && PENDING_REVIEW_CONDITION.test(answer.message)
+  );
+}
 
 /**
  * Post every comment a reading calls for, and say which of the four
@@ -244,11 +273,25 @@ export async function postReviewThreads(
   let posted = 0;
   let demoted = 0;
   let forbidden = 0;
+  let pending = 0;
   let failed = 0;
 
   for (const request of requests) {
     const where = request.line === null ? request.path : `${request.path}:${request.line}`;
     let answer = await post(request);
+
+    // Before the demotion, because the demotion cannot clear this one and a
+    // second request would buy a second identical 422. The lock is on the
+    // review, not on the anchor.
+    if (isPendingReviewRefusal(answer)) {
+      pending += 1;
+      detail.push(
+        `${where}: 422 — this pull request already holds a pending review by this identity, so no ` +
+          `comment can be added to it. That is a state of the pull request, not a finding this ` +
+          `producer got wrong; dropping to file level answers the same way.`,
+      );
+      continue;
+    }
 
     // The demotion, and only from a line. A file-level request that is
     // refused has nothing left to drop.
@@ -274,14 +317,23 @@ export async function postReviewThreads(
     detail.push(`${where}: ${answer.status ?? "no status"} — ${answer.message}`);
   }
 
-  // Order matters. A real failure outranks the fork excuse, and both outrank
-  // a partial success — a round that posted three of four comments has lost
-  // a finding and must say so.
+  // Order matters. A real failure outranks the fork excuse and the pending
+  // -review lock, and all three outrank a partial success — a round that
+  // posted three of four comments has lost a finding and must say so.
   if (failed > 0) {
     return { outcome: "FAILED", attempted: requests.length, posted, demoted, detail };
   }
   if (forbidden > 0) {
     return { outcome: "DEGRADED_NO_WRITE", attempted: requests.length, posted, demoted, detail };
+  }
+  if (pending > 0) {
+    return {
+      outcome: "BLOCKED_BY_PENDING_REVIEW",
+      attempted: requests.length,
+      posted,
+      demoted,
+      detail,
+    };
   }
   detail.push(
     `posted ${posted} review ${posted === 1 ? "comment" : "comments"}` +
