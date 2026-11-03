@@ -37,12 +37,37 @@ permissions:
 jobs:
   move-freed-issues-to-ready:
     runs-on: "ubuntu-latest"
+    # `issues: [closed]` is triggerable by anyone who can close an issue, and
+    # an issue's own author can close it — so an outside contributor can start
+    # a job that holds a ProjectsV2 PAT. Security review flagged it and was
+    # right to.
+    #
+    # Nothing is writable that way today: an outsider cannot create a
+    # `blocked by` edge, so their issue's `blocking` list is empty and the
+    # fan-out writes nothing. That is GitHub's permission model doing the
+    # work, not this file, and a guard that depends on another system's
+    # defaults is a guard somebody else can change. So the job does not start
+    # at all unless the issue belongs to someone trusted.
+    #
+    # What this deliberately does NOT do is the other suggested fix —
+    # defaulting the untrusted trigger to report-only and requiring a manual
+    # dispatch to write. That is precisely the hand-run command #1744 exists
+    # to remove; it would leave the feature looking present and doing nothing.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
         with:
           bun-version-file: ".bun-version"
-      - run: bun install
+      # `--ignore-scripts`: this job carries a PAT, and a postinstall script in
+      # any transitive dependency runs as the job. The secret is scoped to the
+      # fan-out step's `env:` and not to this one, so it is not reachable from
+      # here today — but step-scoped env is one careless edit from job-scoped,
+      # and the flag costs nothing. `--frozen-lockfile` so the tree that runs
+      # is the tree that was reviewed.
+      - run: bun install --frozen-lockfile --ignore-scripts
 
       # The credential is resolved INSIDE `run:`, never in an `if:`.
       # `secrets` is not available in `if:` at all, and a step skipped by

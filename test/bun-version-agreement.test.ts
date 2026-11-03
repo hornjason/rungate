@@ -146,7 +146,9 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // ten times on one tree and reads the series; `closing-references` joined
     // in #1362, which runs the closing-reference audit this branch adds;
     // `ai-review-unmeasured` joined in #1488, which runs the unmeasured
-    // classifier through `bunx` after the review job ends. That makes ten.
+    // classifier through `bunx` after the review job ends; and `board-ready`
+    // joined in #1744, which runs the fan-out that moves a freed issue to
+    // Ready when its blocker closes. That makes eleven.
     //
     // The floor and the list are two different claims, deliberately:
     // the floor says the scan read SOMETHING, so no case below is satisfied
@@ -156,12 +158,13 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // meant to turn this red once.
     const steps = setupBunStepsUnder(WORKFLOW_DIR);
     expect(steps.length, "fewer setup-bun steps than this repo has workflows that install bun")
-      .toBeGreaterThanOrEqual(10);
+      .toBeGreaterThanOrEqual(11);
     const files = new Set(steps.map(s => s.file));
     expect([...files].sort()).toEqual([
       "action-pins.yml",
       "ai-review-unmeasured.yml",
       "ai-review.yml",
+      "board-ready.yml",
       "ci.yml",
       "claude-review.yml",
       "closing-references.yml",
