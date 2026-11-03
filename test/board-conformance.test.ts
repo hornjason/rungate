@@ -692,6 +692,35 @@ describe("every field the snapshot declares is read by something", () => {
    * time: a top-level field that cannot survive a round trip is inert, and
    * the next one added will be inert in the same way.
    */
+  test("a padded queueLabel is normalised at the parse, not trusted into the measure", () => {
+    // Review of #1727. `unreadable` tested `trim() !== ""` and `measure`
+    // then filtered on the RAW value, so `" engine "` cleared the gate and
+    // searched issue labels for a string no GitHub label can equal: the
+    // reading said 0 of N, a confident wrong number, where the right count
+    // belonged. Two guards over one value that disagreed about its shape.
+    const padded = { ...completeBoard(), queueLabel: "  engine  " } as unknown as BoardSnapshot;
+    const read = readSnapshotText(JSON.stringify(padded));
+    expect(read.board?.queueLabel, "the padding reached the snapshot").toBe("engine");
+
+    // The reading itself, because the field being trimmed is not the claim
+    // — the claim is that the COUNT is right.
+    //
+    // Both assertions below are needed and the SECOND is the stronger one,
+    // measured rather than assumed: mutating `measure` to re-pad the label
+    // leaves the comparison GREEN, because it breaks the padded board and
+    // the clean one identically. Only the control sees it, by insisting the
+    // clean board counts something. A comparison between two boards cannot
+    // catch a defect that moves both.
+    const q = takeReadings(read.board!).find(r => r.name === "queue-label")!;
+    const clean = takeReadings(completeBoard()).find(r => r.name === "queue-label")!;
+    expect(
+      `${q.status}:${q.measured}/${q.target}`,
+      "a padded label measured differently from an unpadded one",
+    ).toBe(`${clean.status}:${clean.measured}/${clean.target}`);
+    expect(clean.measured, "the clean board matched NO label, so the comparison above is vacuous")
+      .toBeGreaterThan(0);
+  });
+
   test("every top-level snapshot field SURVIVES the parse — a named rebuild drops what nobody lists", () => {
     const complete = completeBoard() as unknown as Record<string, unknown>;
     const declared = fieldsOf("BoardSnapshot");

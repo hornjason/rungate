@@ -574,7 +574,22 @@ export function readSnapshotText(text: string): SnapshotRead {
     ? { closedBlockers: raw.closedBlockers.filter((n): n is number => typeof n === "number") }
     : {};
 
-  // `queueLabel` is carried the same way, and for the same reason — #1727.
+  // TRIMMED here, which is the only place it can be. `readQueueLabel`
+  // trims at the config read, but that is the PRODUCER path — this function
+  // also accepts a hand-written or externally produced `--snapshot`, and
+  // copying `" engine "` through verbatim passed `unreadable` (non-blank
+  // after trim) and then had `measure` search issue labels for the literal
+  // `" engine "`, which no GitHub label can equal. The reading would have
+  // said 0 of N — a confident wrong number where UNMEASURED or the right
+  // count belonged. Found in review of #1727.
+  //
+  // Normalising at the boundary rather than re-trimming inside `measure`
+  // keeps ONE answer to *what is the label*: `unreadable` and `measure`
+  // then read the same bytes by construction, instead of two guards
+  // agreeing to trim and a third one later forgetting.
+  //
+  // `queueLabel` is carried the same way as `closedBlockers`, for the same
+  // reason — #1727.
   // This function rebuilds the board from a NAMED list of fields rather
   // than spreading `raw`, so a key nobody adds here is silently dropped on
   // EVERY path: `--snapshot` as well as `--produce`. The producer wrote
@@ -584,7 +599,7 @@ export function readSnapshotText(text: string): SnapshotRead {
   // Present-only, like `closedBlockers`: absence is the signal the reading
   // reports on, so writing the key unconditionally would make a tree that
   // never configured a queue indistinguishable from one that did.
-  const queue = typeof raw.queueLabel === "string" ? { queueLabel: raw.queueLabel } : {};
+  const queue = typeof raw.queueLabel === "string" ? { queueLabel: raw.queueLabel.trim() } : {};
   return {
     board: {
       issues: issues as BoardIssue[],
