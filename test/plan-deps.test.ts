@@ -640,6 +640,53 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
     });
   }
 
+  test("the blank refusal's advice is one the tool accepts — no circle", async () => {
+    // Found in review of #1730. The blank-prefix message was written when an
+    // omitted flag meant "no filter", and said so: "omit the flag if you
+    // meant no filter." This PR makes an omitted flag a refusal, so a caller
+    // who followed that sentence was sent straight into the next refusal and
+    // round-tripped between two error messages with no way out.
+    //
+    // Both halves are run rather than asserted about, because the defect is
+    // precisely that the advice and the behaviour disagreed and each was
+    // individually correct.
+    const saved = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      const blank = await run(["--repo", "o/r", "--milestone-prefix", "   "], spy(MIXED).gh);
+      const omitted = await run(["--repo", "o/r"], spy(MIXED).gh);
+      expect(blank.code, "the blank refusal stopped refusing").toBe(REFUSAL_EXIT);
+
+      // The premise. If omitting were accepted the advice would be fine and
+      // this case would be asserting a style preference.
+      expect(
+        omitted.code,
+        "omitting the flag is accepted, so the blank message's advice works and " +
+          "this case is measuring nothing",
+      ).toBe(REFUSAL_EXIT);
+
+      // So the blank message may not send the caller there.
+      expect(
+        blank.stderr.toLowerCase(),
+        "the blank refusal still tells the caller to omit a flag the very next " +
+          "check refuses — following the advice reaches the absent-prefix " +
+          "refusal and the caller is in a loop between two error messages",
+      ).not.toContain("omit the flag");
+
+      // And it must name the remedy that does work, or the caller is told
+      // what not to do and nothing else. Deleting the advice is the cheapest
+      // wrong fix for the assertion above.
+      expect(
+        blank.stderr,
+        "the blank refusal names no working remedy — it says the prefix is blank " +
+          "and leaves the caller to guess",
+      ).toContain("--milestone-prefix");
+      expect(blank.stderr).toMatch(/--milestone-prefix \w/);
+    } finally {
+      if (saved !== undefined) process.env.GITHUB_REPOSITORY = saved;
+    }
+  });
+
   /**
    * Round 2 of #1705. `readLiveIssues` throws rather than returning an empty
    * list — a caller that cannot tell "no issues" from "the call failed"

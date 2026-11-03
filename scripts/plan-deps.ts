@@ -182,11 +182,22 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // quietly re-admits every spec's issues and reports success, the exact
   // contamination the flag exists to prevent. `plan-spec` and
   // `board-snapshot` refuse a blank `--prefix` through the same reading.
+  //
+  // The remedy this names must be one the NEXT check accepts. It used to
+  // read "omit the flag if you meant no filter", which was true until the
+  // absent case below became a refusal too — after which following it
+  // landed the caller in that refusal and the two messages sent them back
+  // and forth with no accepted argv between them. Caught in review of
+  // #1730; `test/plan-deps.test.ts` runs both refusals in one case so the
+  // advice cannot drift from the behaviour again.
   if (prefixRead.kind === "blank") {
     return refuse(
       values.json,
       `--milestone-prefix was given as ${JSON.stringify(prefixRead.raw)}, which is blank. A blank ` +
-        `prefix narrows nothing — omit the flag if you meant no filter.`,
+        `prefix narrows nothing — it matches every \`Phase N\` title in the repository, which is ` +
+        `the contamination the flag exists to prevent. Name the milestone family instead, e.g. ` +
+        `--milestone-prefix Pipeline. There is no "no filter" option: an omitted flag is refused ` +
+        `for the same reason.`,
       true,
     );
   }
