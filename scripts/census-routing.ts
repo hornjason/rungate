@@ -183,8 +183,33 @@ const UNTICKED_CRITERION = new RegExp(`^\\s*[-*]\\s*\\[ \\]\\s*${TRACKED_ID_PREF
 export const CENSUS_TRIGGERS: CensusTrigger[] = [
   {
     id: "new-file",
+    //
+    // `harness-fixed-point` is here as of #1732, and the `rule-doc` row is
+    // NOT where it belongs alone. That row fires on an edit to a
+    // `.claude/rules/` file, which catches the case where you change a
+    // generated rule and forget to regenerate — but several of those rules
+    // carry a COUNT derived from scanning a directory, so adding a file
+    // makes one stale WITHOUT touching it, and the row cannot fire.
+    //
+    // Measured on this PR: adding `docs/adr/ADR-011-…md` routed five
+    // suites, none of them this one, and CI then failed #827 with
+    // `.claude/rules/docs-routing.md` as the only file in its diff — the
+    // ADR count read 10 against 11 on disk. #1009 records the same shape
+    // from `reference/` and fixed only the half where the rule is also
+    // edited.
+    //
+    // On `isNew` rather than a list of scanned directories, deliberately.
+    // The directories live in `categories` in `lib/scaffold/steps.ts` and
+    // are not exported; copying them here would be two deciders over *what
+    // the generator scans*, and the copy would drift the first time one is
+    // added. Any new file can move a generated count, so the cheap correct
+    // predicate is the event this row already fires on.
     event: "added or renamed a file",
-    tests: ["test/scaffold-conformity.test.ts", "test/package-closure.test.ts"],
+    tests: [
+      "test/scaffold-conformity.test.ts",
+      "test/package-closure.test.ts",
+      "test/harness-fixed-point.test.ts",
+    ],
     fires: c => c.isNew,
   },
   {
