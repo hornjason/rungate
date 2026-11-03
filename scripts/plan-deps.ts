@@ -107,8 +107,8 @@ const LIVE_GITHUB: PlanDepsGitHub = {
   addBlockers: liveAddBlockers,
 };
 
-const USAGE = `rungate plan-deps --repo <owner/name> [--write] [--json] [--include-closed]
-                              [--milestone-prefix <name>]
+const USAGE = `rungate plan-deps --repo <owner/name> --milestone-prefix <name>
+                              [--write] [--json] [--include-closed]
 
   --repo              owner/name. Defaults to $GITHUB_REPOSITORY.
   --write             apply the missing edges. Without it, nothing is mutated.
@@ -116,12 +116,16 @@ const USAGE = `rungate plan-deps --repo <owner/name> [--write] [--json] [--inclu
   --include-closed    derive edges to closed issues too. Off by default: a
                       closed issue can never block anything, so the edge is a
                       row on a card that changes no decision.
-  --milestone-prefix  consider only issues whose milestone TITLE starts with
-                      this, e.g. "Pipeline". A phase number is read out of the
-                      title and nothing else, so two specs that both numbered
-                      their phases put unrelated issues in the same phase and
-                      get sequenced against each other. Pass this whenever the
-                      repository carries more than one spec's milestones.`;
+  --milestone-prefix  REQUIRED. Consider only issues whose milestone TITLE
+                      starts with this, e.g. "Pipeline". A phase number is read
+                      out of the title and nothing else, so two specs that both
+                      numbered their phases put unrelated issues in the same
+                      phase and get sequenced against each other. Required
+                      rather than optional since #1728: omitting it resolved 89
+                      edges across 38 issues spanning two families and took
+                      \`board-conformance\`'s blocked-by reading from 12 of 12
+                      to 4 of 12. \`plan-spec\` and \`board-snapshot\` require
+                      their --prefix for the same reason.`;
 
 export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Promise<number> {
   // Read off the RAW argv, because the refusal below happens when there is no
@@ -154,29 +158,14 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     return refuse(values.json, `--repo is required (or set GITHUB_REPOSITORY)`, true);
   }
 
-  // The API call is the ONE thing on this path that fails by throwing, and
-  // `readLiveIssues` throws on purpose: a caller that cannot tell "the
-  // repository has no issues" from "the call failed" reports the flattering
-  // one. Uncaught, that throw left `main()` rejecting — a stack trace on
-  // stderr and an EMPTY stdout, which under `--json` is exactly the crash
-  // every refusal above was routed through `refuse()` to stop, arriving on
-  // the input that needs the payload most. Round 2 of #1705.
+  // THE PREFIX IS RESOLVED BEFORE THE NETWORK READ, and that ordering is
+  // the point rather than an optimisation. Review of #1730: with the check
+  // below the read, `plan-deps --repo o/r` against an unauthenticated `gh`
+  // reports "the issues could not be read" — so the one mistake #1728
+  // exists to catch is reported as an API problem, and the actionable
+  // message never arrives. A static argument check has no business
+  // depending on the network being up.
   //
-  // `createClient` is inside the same `try`. Repairing only the call the
-  // finding named would leave the other one on the same path throwing the
-  // same way.
-  let read;
-  try {
-    const client = gh.createClient();
-    read = await gh.readIssues(client, repo, values["include-closed"]);
-  } catch (e) {
-    return refuse(
-      values.json,
-      `UNMEASURED — the issues could not be read: ${(e as Error).message}. That is a failed ` +
-        `call, not a repository with no issues.`,
-    );
-  }
-
   // Narrow the POPULATION, not the edges. The derivation is right about the
   // order it is handed; what it is handed has to be one spec's issues. An
   // issue with no milestone is out by the same test — `startsWith` on a
@@ -193,17 +182,74 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // quietly re-admits every spec's issues and reports success, the exact
   // contamination the flag exists to prevent. `plan-spec` and
   // `board-snapshot` refuse a blank `--prefix` through the same reading.
+  //
+  // The remedy this names must be one the NEXT check accepts. It used to
+  // read "omit the flag if you meant no filter", which was true until the
+  // absent case below became a refusal too — after which following it
+  // landed the caller in that refusal and the two messages sent them back
+  // and forth with no accepted argv between them. Caught in review of
+  // #1730; `test/plan-deps.test.ts` runs both refusals in one case so the
+  // advice cannot drift from the behaviour again.
   if (prefixRead.kind === "blank") {
     return refuse(
       values.json,
       `--milestone-prefix was given as ${JSON.stringify(prefixRead.raw)}, which is blank. A blank ` +
-        `prefix narrows nothing — omit the flag if you meant no filter.`,
+        `prefix narrows nothing — it matches every \`Phase N\` title in the repository, which is ` +
+        `the contamination the flag exists to prevent. Name the milestone family instead, e.g. ` +
+        `--milestone-prefix Pipeline. There is no "no filter" option: an omitted flag is refused ` +
+        `for the same reason.`,
       true,
     );
   }
 
-  const prefix = prefixRead.kind === "given" ? prefixRead.prefix : undefined;
-  const issues = prefix === undefined ? read : read.filter(i => inMilestoneFamily(i.milestone, prefix));
+  // ABSENT is refused too, and for a sharper reason than blank. This
+  // repository carries TWO families with Phase milestones — `Pipeline
+  // Phase 0..9` and `Convergence Phase 0..6` — so an unscoped read
+  // sequences one spec's issues against another's, and `board-conformance`
+  // scores a single family. Measured 2026-11-02 (#1728): a `--write` with
+  // no prefix resolved 89 edges across 38 issues and took
+  // `blocked-by-edges` from 12 of 12 to 4 of 12, on edges the reading
+  // cannot resolve. `plan-spec` and `board-snapshot` already require their
+  // `--prefix` for the same reason; this is the third tool agreeing.
+  //
+  // The dry run is refused as well as the write. It is what a reader
+  // consults BEFORE writing, so an unscoped count is the misleading half.
+  if (prefixRead.kind === "absent") {
+    return refuse(
+      values.json,
+      `--milestone-prefix is required. This repository has more than one milestone family carrying ` +
+        `\`Phase N\` titles, so an unscoped run sequences one spec's issues against another's and ` +
+        `writes edges \`board-conformance --prefix <name>\` cannot resolve. Name the family, e.g. ` +
+        `--milestone-prefix Pipeline.`,
+      true,
+    );
+  }
+
+  const prefix = prefixRead.prefix;
+
+  // Only now does anything touch the network. `createClient` is inside the
+  // same `try` as the read: repairing only the call a finding named would
+  // leave the other one on the same path throwing the same way.
+  //
+  // Distinguishing "the repository has no issues" from "the call failed"
+  // matters because reporting the flattering one is how an empty edge list
+  // reads as a clean plan. Uncaught, that throw left `main()` rejecting — a
+  // stack on stderr and an EMPTY stdout, which under `--json` is the crash
+  // every refusal here is routed through `refuse()` to stop, arriving on
+  // the input that needs the payload most. Round 2 of #1705.
+  let read;
+  try {
+    const client = gh.createClient();
+    read = await gh.readIssues(client, repo, values["include-closed"]);
+  } catch (e) {
+    return refuse(
+      values.json,
+      `UNMEASURED — the issues could not be read: ${(e as Error).message}. That is a failed ` +
+        `call, not a repository with no issues.`,
+    );
+  }
+
+  const issues = read.filter(i => inMilestoneFamily(i.milestone, prefix));
 
   // A prefix that matched nothing is its own reading, and it has to say so
   // here: `degenerateReasons` would report "no issues were read — an empty
@@ -211,7 +257,7 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // is false when four issues were read and the filter took them. A typo in
   // the prefix is the likeliest way to arrive here, and that sentence sends
   // the reader to the API.
-  if (prefix !== undefined && issues.length === 0 && read.length > 0) {
+  if (issues.length === 0 && read.length > 0) {
     return refuse(
       values.json,
       `UNMEASURED — ${read.length} issue(s) were read and NONE carries a milestone ` +
@@ -245,12 +291,14 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     return refuseWrite || failures.length > 0 ? REFUSAL_EXIT : 0;
   }
 
-  const scope =
-    prefix === undefined
-      ? ""
-      : ` (of ${read.length}, narrowed to milestones starting "${prefix}")`;
+  // No unscoped branch. There is no longer a run with no prefix, so a
+  // `prefix === undefined ? "" : …` here would be a line that reads as if
+  // one were still possible — and a later edit would take the empty-scope
+  // string for a reachable path a test exercises. Review of #1730 found
+  // both this and the guard above.
   console.log(
-    `${repo} — ${issues.length} issue(s) read${scope}, phases ${plan.phases.join(" -> ") || "(none)"}\n`,
+    `${repo} — ${issues.length} issue(s) read (of ${read.length}, narrowed to milestones ` +
+      `starting "${prefix}"), phases ${plan.phases.join(" -> ") || "(none)"}\n`,
   );
 
   if (plan.reading === "UNMEASURED") {
