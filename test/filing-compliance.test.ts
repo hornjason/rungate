@@ -140,6 +140,36 @@ describe("targetOf", () => {
     expect(t.reading).toBe("UNOBSERVABLE");
     expect(t.reading === "UNOBSERVABLE" && t.why).toContain("not refused");
   });
+
+  // Raised twice in review before it was fixed, and it is this module's
+  // header contradicting its own code: the header says `DUPLICATE` is the
+  // ONE refusal whose row persists its target, and `targetOf` read
+  // `duplicateOf` on any unemitted row.
+  //
+  // `issue-filing-gate.ts` computes collisions in the dedupe stage before
+  // the later stages run, so a finding can collide and then be refused for
+  // another reason entirely — leaving a populated `duplicateOf` on a row
+  // whose refusal named a completely different target. Following it asks
+  // whether somebody commented on an unrelated issue and counts the answer
+  // as compliance. The quiet direction: the denominator grows and the rate
+  // is measured against the wrong issues.
+  test("FC-13: duplicateOf is only a target when the row's own refusal is DUPLICATE", () => {
+    for (const refusal of ["OVER_CAP", "NO_CLAIM", "TOO_MANY_FILES", "DROPPED_CATEGORY"]) {
+      const t = targetOf({ ...ROW, refusal, duplicateOf: ["1400"] as never });
+      expect(t.reading, `${refusal} followed a DUPLICATE row's target`).toBe("UNOBSERVABLE");
+      expect(t.reading === "UNOBSERVABLE" && t.why).toContain(refusal);
+    }
+  });
+
+  // The positive control for FC-13: the same populated `duplicateOf` on a
+  // row that IS a DUPLICATE still reads NAMED, so FC-13 is not green
+  // because `targetOf` stopped naming anything at all.
+  test("FC-14: the same duplicateOf on a DUPLICATE row is still a target", () => {
+    expect(targetOf({ ...ROW, refusal: "DUPLICATE", duplicateOf: ["1400"] as never })).toEqual({
+      reading: "NAMED",
+      issues: [1400],
+    });
+  });
 });
 
 describe("complianceReading", () => {

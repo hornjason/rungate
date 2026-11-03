@@ -138,6 +138,15 @@ export interface ComplianceReading {
 const NOT_REFUSED = "NOT_REFUSED";
 
 /**
+ * The one refusal whose row persists its own comment target.
+ *
+ * One binding, so the rule the header states and the rule the code applies
+ * are the same string, and a mutation of it moves the behaviour.
+ * `issue-filing-gate.ts` writes this literal on the dedupe refusal.
+ */
+const DUPLICATE = "DUPLICATE";
+
+/**
  * One `duplicateOf` element as an issue number, or `null`.
  *
  * One binding, so there is one thing to mutate and one place that decides
@@ -161,10 +170,25 @@ export function targetOf(row: FilingComplianceRow): ComplianceTarget {
       why: "this filing was not refused — it reached the tracker, so there is no comment to look for",
     };
   }
-  const issues = (row.duplicateOf ?? [])
-    .map(issueNumber)
-    .filter((n): n is number => n !== null);
-  if (issues.length > 0) return { reading: "NAMED", issues: [...issues] };
+  // **`duplicateOf` is only this row's target when the row's OWN refusal is
+  // `DUPLICATE`.** Review raised this twice before it was fixed, and it is
+  // the module's header contradicting its own code: the header says the one
+  // exception is `DUPLICATE`, whose `duplicateOf` holds the issues the
+  // finding collided with, and the code read the field on any unemitted row.
+  //
+  // `issue-filing-gate.ts` can reach a refusal other than `DUPLICATE` on a
+  // finding that already collided — the dedupe stage computes collisions
+  // before the later stages run — so a `TOO_MANY_FILES` row can carry a
+  // populated `duplicateOf`. Reading it measures whether somebody commented
+  // on an unrelated issue, and counts the answer as compliance with a
+  // refusal that named a different target entirely. It is the quiet
+  // direction: the denominator looks healthier and the rate is wrong.
+  if (row.refusal === DUPLICATE) {
+    const issues = (row.duplicateOf ?? [])
+      .map(issueNumber)
+      .filter((n): n is number => n !== null);
+    if (issues.length > 0) return { reading: "NAMED", issues: [...issues] };
+  }
   return {
     reading: "UNOBSERVABLE",
     why:
