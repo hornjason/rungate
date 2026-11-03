@@ -640,10 +640,20 @@ describe("#1225: the harmful-change count, and why it is UNMEASURED here", () =>
     // This is a tripwire, not a decoration. The day the contract grows a
     // remedy field this goes red, and the fix is to build the counter rather
     // than to widen the list.
+    //
+    // It is deliberately wider than the thing it detects: it fires on ANY new
+    // member, so somebody has to judge each one. `population` (#1651) was
+    // judged on 2026-11-03 and is NOT a remedy. It says how many instances of
+    // a finding's shape exist; there is nothing in it to write over the clean
+    // candidate and re-run, so it moves the harmful-change count from
+    // UNMEASURED to UNMEASURED. The judgement is recorded here rather than in
+    // a widened predicate, because a predicate that decides "is this a remedy"
+    // is a second guess at the same question and would pass this one silently.
     expect(Object.keys(AI_REVIEW_FINDING_FIELDS).sort()).toEqual([
       "failureScenario",
       "file",
       "line",
+      "population",
       "severity",
       "summary",
     ]);

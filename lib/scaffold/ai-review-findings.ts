@@ -224,6 +224,40 @@ function populationCount(value: unknown): number | null {
 // `AI_REVIEW_FINDINGS_KEY`. A parameter name is indistinguishable from a key
 // read to that census, and widening the census to exclude parameter names
 // would weaken the check to buy a nicer identifier here.
+/**
+ * #1651. The population reading, as the line a real run prints.
+ *
+ * `populationReading` without this was an instrument with no consumer — the
+ * aggregate existed, its tests passed, and no review run computed it. That is
+ * the defect this pull request describes, written into the fix for it, and it
+ * was caught on review rather than by me.
+ *
+ * Returns `null` for an empty payload, because "0 of 0 findings declared a
+ * class size" is not a reading anybody can act on and a notice on every clean
+ * review is a notice nobody reads.
+ *
+ * `instances` is printed only when something declared one, and it is NEVER
+ * added to the finding count: they are different units (see
+ * `PopulationReading`). An undeclared finding is reported as undeclared and
+ * contributes nothing — `.claude/rules/config-access.md`'s rule against
+ * substituting a default for a measurement nobody took.
+ */
+export function populationNotice(reported: readonly unknown[]): string | null {
+  if (reported.length === 0) return null;
+  const { declared, undeclared, instances } = populationReading(reported);
+  const head = `${declared} of ${reported.length} finding(s) declared how many instances their class has`;
+  const tail =
+    declared === 0
+      ? ""
+      : `, covering ${instances} instance(s) in total`;
+  const rest =
+    undeclared === 0
+      ? "."
+      : `. ${undeclared} did not, so for those the class size is UNMEASURED — not one. ` +
+        `REVIEW.md asks for the whole class in one finding; the cap counts classes, not instances.`;
+  return `${head}${tail}${rest}`;
+}
+
 export function populationReading(reported: readonly unknown[]): PopulationReading {
   let declared = 0;
   let undeclared = 0;
@@ -359,6 +393,16 @@ export const AI_REVIEW_SUPPRESSED_TITLE = "AI review repeats not reported again"
 
 /** CRC-N4 (#1586). The history could not be compared — not "no repeats". */
 export const AI_REVIEW_SUPPRESSED_UNMEASURED_TITLE = "AI review repeat check UNMEASURED";
+
+/**
+ * #1651. How many of this round's findings said how big their class is.
+ *
+ * Its own title, for `AI_REVIEW_ADVISORY_TITLE`'s reason: this is not a
+ * finding and nobody has to act on it. It is the reading that tells us
+ * whether the class-naming instruction in `REVIEW.md` is being followed —
+ * which, before this, nothing anywhere computed.
+ */
+export const AI_REVIEW_POPULATION_TITLE = "AI review class sizes declared";
 
 /**
  * A stable identity for one finding, so an answer can name it.
@@ -2313,6 +2357,17 @@ export function main(
   const advisory = advisoryNotice(reading);
   if (advisory !== null) {
     console.log(`::notice title=${AI_REVIEW_ADVISORY_TITLE}::${escapeAnnotation(advisory)}`);
+  }
+
+  // #1651's reading, on its own title. A `::notice`: it decides nothing and
+  // `aiReviewExitCode` never sees it — an undeclared class size is a thing to
+  // watch across rounds, not a reason to refuse a pull request today. Emitted
+  // for EVERY round including a clean one with findings, because the whole
+  // point is a series: a rate that only appears when it is bad is a rate
+  // nobody can compare against anything.
+  const population = populationNotice(reading.reported ?? []);
+  if (population !== null) {
+    console.log(`::notice title=${AI_REVIEW_POPULATION_TITLE}::${escapeAnnotation(population)}`);
   }
 
   // CRC-N4's reading, on its own title (#1586). A `::notice`, because a

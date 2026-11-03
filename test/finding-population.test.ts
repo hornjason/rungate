@@ -29,8 +29,9 @@
  * serve, so `undeclared` is counted and named apart from `declared` and
  * nothing adds the two together.
  */
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import {
   AI_REVIEW_FINDING_FIELDS,
@@ -38,6 +39,9 @@ import {
 } from "../lib/scaffold/ai-review-step";
 import {
   AI_REVIEW_BLOCKING_REQUIRED_FIELDS,
+  AI_REVIEW_POPULATION_TITLE,
+  main,
+  populationNotice,
   populationReading,
   renderFinding,
 } from "../lib/scaffold/ai-review-findings";
@@ -189,5 +193,93 @@ describe("FP-9..FP-11: the contract and the conventions agree", () => {
     // and names the swept-and-found-none case, which is #1651's acceptance
     // line and the half a reviewer silently skips
     expect(review).toMatch(/swept|found none|only instance/i);
+  });
+});
+
+/**
+ * FP-15..FP-19: the reading reaches a real run.
+ *
+ * Added on review. The first version of this pull request exported
+ * `populationReading`, covered it with FP-1..FP-6, and called it from
+ * NOWHERE in production — so the aggregate that was supposed to make the
+ * class instruction observable was computed only by its own tests. An
+ * instrument with no consumer is the precise shape this change exists to
+ * fix, written into the fix (`.claude/rules/checks-must-be-able-to-fail.md`,
+ * *a detector narrower than what it detects*, arriving as a detector wired
+ * to nothing at all).
+ *
+ * These cases run `main` over a fixture payload, which is the same entry
+ * point CI calls, and assert on the ANNOTATION rather than on the function.
+ * Deleting the emission while keeping the export turns FP-15 red; that is
+ * the mutation that the earlier cases could not see.
+ */
+describe("FP-15..FP-19: a real run prints the reading", () => {
+  let SCRATCH: string;
+  let seq = 0;
+
+  beforeAll(() => {
+    SCRATCH = mkdtempSync(join(tmpdir(), "finding-population-"));
+  });
+  afterAll(() => {
+    if (SCRATCH) rmSync(SCRATCH, { recursive: true, force: true });
+  });
+
+  const run = (findings: Record<string, unknown>[], verdict = "PASS"): string[] => {
+    const path = join(SCRATCH, `findings-${seq++}.json`);
+    writeFileSync(path, JSON.stringify({ findings, verdict }));
+    const written: string[] = [];
+    const log = console.log;
+    const err = console.error;
+    console.log = (...a: unknown[]) => void written.push(a.map(String).join(" "));
+    console.error = (...a: unknown[]) => void written.push(a.map(String).join(" "));
+    try {
+      main([path]);
+    } finally {
+      console.log = log;
+      console.error = err;
+    }
+    return written.join("\n").split("\n").filter(l => l.length > 0);
+  };
+
+  const notice = (lines: string[]): string | undefined =>
+    lines.find(l => l.includes(AI_REVIEW_POPULATION_TITLE));
+
+  test("FP-15: a run with findings emits the population annotation", () => {
+    const lines = run([f({ population: 9 }), f()]);
+    const line = notice(lines);
+    expect(line, "no run of main printed the population reading").toBeDefined();
+    // It is a notice and not a refusal: this decides nothing.
+    expect(line).toContain("::notice");
+  });
+
+  // Membership, not just the total — the sixth shape. Every number in the
+  // reading is named by value, so a sentence that prints a believable but
+  // wrong count cannot pass.
+  test("FP-16: the annotation names declared, total and instances by value", () => {
+    const line = notice(run([f({ population: 9 }), f({ population: 2 }), f()]))!;
+    expect(line).toContain("2 of 3");
+    expect(line).toContain("11");
+  });
+
+  test("FP-17: an undeclared finding is reported UNMEASURED, not as one", () => {
+    const line = notice(run([f(), f()]))!;
+    expect(line).toContain("0 of 2");
+    expect(line).toContain("UNMEASURED");
+    // and the sentence never claims instances it did not measure
+    expect(line).not.toMatch(/covering \d+ instance/);
+  });
+
+  test("FP-18: every finding declaring its class leaves nothing UNMEASURED", () => {
+    const line = notice(run([f({ population: 4 })]))!;
+    expect(line).toContain("1 of 1");
+    expect(line).toContain("covering 4 instance");
+    expect(line).not.toContain("UNMEASURED");
+  });
+
+  // The control. An empty payload is a clean review and gets no notice, so
+  // the annotation's presence is evidence about findings and not about runs.
+  test("FP-19: a payload with no findings prints no population annotation", () => {
+    expect(notice(run([]))).toBeUndefined();
+    expect(populationNotice([])).toBeNull();
   });
 });
