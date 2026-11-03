@@ -89,23 +89,28 @@ Hand-typing an edge here would be a second source for the one thing rule 4
 says must be data, and it is how a row ends up blocked by an issue that
 closed last week.
 
-**`--milestone-prefix Pipeline` is not optional, and on `main` today it is
-not yet enforced.** That gap is the whole of this paragraph. PR #1730 makes
-an omitted flag a refusal; until it merges, `scripts/plan-deps.ts` refuses
-only a *blank* prefix and treats an *omitted* one as no filter at all. So
-this plan's `plan-deps` step must not be run before #1730 lands — a reader
-who followed the command and dropped the flag today would reproduce
-exactly the corruption cited below, with nothing to stop them.
+**`--milestone-prefix Pipeline` is not optional.** Without it the derivation
+spans both milestone families — `Pipeline Phase N` and `Convergence Phase
+N` — and on 2026-11-02 an unscoped run wrote 89 edges across 38 issues and
+took `blocked-by-edges` from 12 of 12 to 4 of 12. That is #1728.
 
-Found in review of this ADR, which had written the fix in the present
-tense while it sat unmerged in another branch. The tree the reviewer reads
-is `main`, and it was right about `main`.
+Whether the *tool* stops you depends on which tree you are standing in, and
+this document deliberately does not say. #1730 is the change that makes an
+omitted flag a refusal; before it, `scripts/plan-deps.ts` refuses only a
+*blank* prefix and reads an *omitted* one as no filter at all. Check the
+tracker rather than this paragraph:
 
-Without the flag the
-derivation spans both milestone families — `Pipeline Phase N` and
-`Convergence Phase N` — and on 2026-11-02 an unscoped run wrote 89 edges
-across 38 issues and took `blocked-by-edges` from 12 of 12 to 4 of 12.
-That is #1728, and the flag is required as of that fix.
+```bash
+gh issue view 1728 --json state -q .state   # CLOSED => the refusal is live
+```
+
+Two earlier rounds of review on this ADR were both about the same sentence,
+in opposite directions — one caught it claiming the fix in the present tense
+while the fix sat unmerged, the next caught the correction contradicting
+itself two paragraphs later. A prose claim about merge state is wrong at
+some point in every PR's life by construction, so the sentence is gone
+rather than repaired a third time. The requirement above is true in every
+tree; the enforcement is a tracker reading.
 
 ### Issues with no criterion — cleanup, and saying so
 
