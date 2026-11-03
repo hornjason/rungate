@@ -33,8 +33,8 @@ plan has nine rows and not fourteen:
 |---|---|
 | The filing parser cannot see a same-command heredoc | #1677, already open |
 | An evidence bound is published before it is true | #1720, already open |
-| `--decompose` sets no queue label | #1727, PR open |
-| `plan-deps` derives across every milestone family | #1728, PR open |
+| `--decompose` sets no queue label | issue #1727, fixed by PR #1731 |
+| `plan-deps` derives across every milestone family | issue #1728, fixed by PR #1730 |
 | The board's Criteria column drifts from the body | a verify, not work — `board-conformance --reading criteria-field` |
 
 ## Decision
