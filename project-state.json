@@ -1204,19 +1204,19 @@
             "what": "A stage item CI cannot verify says so BY NAME, instead of going red or being unticked.",
             "mechanism": "`scope: \"credentialed\"` on StageItem, counted and named by test/stage-ladder.test.ts and bounded by CREDENTIALED_ALLOWED as an EQUALITY — so a second one cannot appear quietly and the constant falls the day CI gains a read:project token. The scope list generates the validator's refusal message, so a scope added to the type cannot be left out of the sentence that names the legal values.",
             "status": "in-place",
-            "verify": "bun test test/stage-ladder.test.ts -t 'every legal scope is accepted' 2>&1 | grep -qE '^ 1 pass'"
+            "verify": "out=$(bun test test/stage-ladder.test.ts -t 'every legal scope is accepted' 2>&1) && printf '%s' \"$out\" | grep -qE '^ 1 pass'"
           },
           {
             "what": "A reading that could not be TAKEN is distinguishable from a reading that came back empty, at every layer.",
             "mechanism": "board-snapshot omits the `criteriaField` key when the column was not read — no board configured, the project call failed, or the item list was cut — and emits `null` only for read-and-empty. board-conformance's `unreadable` hook turns the absent key into UNMEASURED rather than SHORT. Four states in lib/live-issues.ts: value, empty, off-board, truncated.",
             "status": "in-place",
-            "verify": "bun test test/board-snapshot.test.ts -t \"the board's Criteria column\" 2>&1 | grep -qE '^ 10 pass'"
+            "verify": "out=$(bun test test/board-snapshot.test.ts -t \"the board's Criteria column\" 2>&1) && printf '%s' \"$out\" | grep -qE '^ 10 pass'"
           },
           {
             "what": "Two identifiers sitting in one config block are COMPARED, so a field copied from another project cannot be read as this board's.",
             "mechanism": "board-snapshot resolves the configured field id to its owning project and refuses to read it when that is not the configured board. readBoardConfig returns null unless BOTH identifiers are present, so no caller decides for itself what half a block means.",
             "status": "in-place",
-            "verify": "bun test test/live-issues.test.ts -t \"the board's Criteria column\" 2>&1 | grep -qE '^ 14 pass'"
+            "verify": "out=$(bun test test/live-issues.test.ts -t \"the board's Criteria column\" 2>&1) && printf '%s' \"$out\" | grep -qE '^ 14 pass'"
           },
           {
             "what": "A measurement published in a PR body stops being a second copy that nothing compares.",
@@ -1240,14 +1240,14 @@
             "what": "A writer that puts issues on the engine board also makes them conform to the readings that measure it.",
             "mechanism": "`plan-issues --decompose --write` applies the configured queue label as it creates each issue. BUILT, #1731 (e93bd62b), closing #1727. The label is not what selects the board — `scripts/board-snapshot.ts` says so by name, membership is *sits in a milestone whose title starts with the prefix* — so the label is a property the `queue-label` reading MEASURES, and a creator that does not set it ships an issue that is on the board and short of the reading. Seven issues, labelled by hand on 2026-11-02, is the measurement. The fix is ONE binding, `readQueueLabel` in `lib/config-readers.ts`, and not the cheaper spelling of `\"engine\"` in the writer as well: two deciders that agree are behaviourally one, no behavioural test can tell them apart, and a mutation of either leaves the other holding every case up. `board-conformance` reads the label off the snapshot as DATA and does not import it, because that file's mutation battery copies it into an mkdtemp and a relative import makes the mutant fail to load — which reads as a refusal on the merits. Absent, blank and non-string all read null and the reading reports UNMEASURED rather than 0 of N. Two findings were fixed as populations on the way: `readSnapshotText` rebuilt the board from a named field list so the carry never survived a round trip on `--snapshot` OR `--produce`, and the code-vs-prose detector was wrong in both directions before it was scoped to code. A known limit is recorded rather than dropped: the comment stripper does not remove a trailing `//` comment, so prose after code on one line reads as a spelling — a false ALARM, never a false pass.",
             "status": "in-place",
-            "verify": "bun test test/issue-decomposition.test.ts -t '#1727' 2>&1 | grep -qE '^ 2 pass'",
+            "verify": "out=$(bun test test/issue-decomposition.test.ts -t '#1727' 2>&1) && printf '%s' \"$out\" | grep -qE '^ 2 pass'",
             "issue": 1727
           },
           {
             "what": "Two tools that write the same board agree about which issues ARE the board.",
             "mechanism": "INTENDED: `plan-deps` takes the milestone prefix that `board-snapshot` takes, so the edges it writes resolve inside the population the reading scores. BUILT, #1730 (c05bad08), closing #1728. `lib/spec-deps.ts` selects on `phaseOf(i.milestone)` alone and `scripts/board-snapshot.ts` selects on `inMilestoneFamily(i.milestone, prefix) && phaseOf(i.milestone) !== null` — 49 issues against 12, because a second spec family (Convergence) carries Phase milestones too. Neither tool is wrong on its own terms, which is why running both in sequence is what produced an unresolvable edge. This is the hand edit #1722 (SC-2625) exists to refuse, so #1722 will catch it; whether it is also filed as its own issue is Jason's call and is not decided here. Shipped with two review findings of its own repaired: the prefix is read BEFORE the network call, so the refusal costs nothing and cannot be mistaken for an API failure; and the blank-prefix message no longer advises omitting the flag, which became a circle the moment omission was refused.",
             "status": "in-place",
-            "verify": "bun bin/rungate.ts plan-deps --repo hornjason/rungate --json 2>&1 | grep -q 'milestone-prefix is required'",
+            "verify": "if out=$(bun bin/rungate.ts plan-deps --repo hornjason/rungate --json 2>&1); then false; else printf '%s' \"$out\" | grep -q 'milestone-prefix is required'; fi",
             "issue": 1728
           }
         ]
