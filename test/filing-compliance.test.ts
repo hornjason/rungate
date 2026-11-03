@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+import { listIssueComments } from "../lib/github";
 
 import {
   complianceReading,
+  ghIssueComments,
   targetOf,
   type CommentReading,
   type FilingComplianceRow,
@@ -231,5 +236,94 @@ describe("complianceReading", () => {
     });
     expect(r.rate).toBeNull();
     expect(r.unobservableByRefusal).toEqual({ OVER_CAP: 1, COMMENT_INSTEAD: 2 });
+  });
+});
+
+/**
+ * SC-893: the lookup reaches GitHub through Octokit, never a `gh` subprocess.
+ *
+ * `ghIssueComments` spawned `gh api --paginate` until this change, which is
+ * the one thing GITHUB-API-MIGRATION-SPEC forbids in `lib/`. The swap must
+ * not quietly change what the three readings mean — and the direction that
+ * matters is the one this whole module exists to prevent: **a failed request
+ * must never degrade into an empty comment list**, because zero comments
+ * reads as "nobody complied" and the truth is "we could not see".
+ */
+describe("FC-9..FC-12: the comment lookup, after the Octokit migration", () => {
+  const pageClient = (pages: unknown[][]) => {
+    const seen: number[] = [];
+    return {
+      seen,
+      client: {
+        rest: {
+          issues: {
+            listComments: async (p: { page?: number }) => {
+              seen.push(p.page ?? 1);
+              return { data: pages[(p.page ?? 1) - 1] ?? [] };
+            },
+          },
+        },
+      } as unknown as Parameters<typeof listIssueComments>[0],
+    };
+  };
+
+  // FC-9: the pagination the `gh --paginate` flag used to buy us. A busy
+  // issue passes 100 comments and a single-page read truncates silently.
+  test("FC-9: every page is walked, not just the first", async () => {
+    const full = Array.from({ length: 100 }, (_, i) => ({ created_at: `2026-11-0${1}T00:00:${String(i).padStart(2, "0")}Z` }));
+    const { client, seen } = pageClient([full, [{ created_at: "2026-11-02T00:00:00Z" }]]);
+    const rows = await listIssueComments(client, "owner/repo", 7);
+    expect(rows.length).toBe(101);
+    expect(seen).toEqual([1, 2]);
+  });
+
+  // FC-10: and it STOPS. A short page is the end; a loop that asks for one
+  // more forever is the cheapest wrong spelling of the line above.
+  test("FC-10: a short page ends the walk", async () => {
+    const { client, seen } = pageClient([[{ created_at: "2026-11-01T00:00:00Z" }]]);
+    expect((await listIssueComments(client, "owner/repo", 7)).length).toBe(1);
+    expect(seen).toEqual([1]);
+  });
+
+  // FC-11: the reading that must not be lost, in BOTH failure positions.
+  // Zero comments reads as "nobody complied"; the truth is "we could not
+  // see", and the rate those feed is the whole point of the module.
+  test("FC-11: a failed request is UNMEASURED, not an empty comment list", async () => {
+    const noClient = await ghIssueComments("owner/repo", () => {
+      throw new Error("GITHUB_TOKEN environment variable is not set");
+    })(7);
+    expect(noClient.reading).toBe("UNMEASURED");
+    if (noClient.reading === "UNMEASURED") expect(noClient.why).toContain("GITHUB_TOKEN");
+
+    const throwingRequest = await ghIssueComments("owner/repo", () => ({
+      rest: {
+        issues: {
+          listComments: async () => {
+            throw new Error("404 Not Found");
+          },
+        },
+      },
+    }) as unknown as Parameters<typeof listIssueComments>[0])(7);
+    expect(throwingRequest.reading).toBe("UNMEASURED");
+    if (throwingRequest.reading === "UNMEASURED") expect(throwingRequest.why).toContain("404");
+  });
+
+  // The positive control for FC-11: a working client is MEASURED, so the
+  // case above is not green merely because everything returns UNMEASURED.
+  test("FC-11b: a client that answers is MEASURED, with the timestamps", async () => {
+    const read = await ghIssueComments("owner/repo", () => ({
+      rest: { issues: { listComments: async () => ({ data: [{ created_at: "2026-11-03T12:00:00Z" }] }) } },
+    }) as unknown as Parameters<typeof listIssueComments>[0])(7);
+    expect(read.reading).toBe("MEASURED");
+    if (read.reading === "MEASURED") expect(read.comments).toEqual([{ at: "2026-11-03T12:00:00Z" }]);
+  });
+
+  // FC-12: no `gh` subprocess survives in the module. Asserted here as well
+  // as in the repository-wide census, because this file is where somebody
+  // repairing a network problem would reach for one.
+  test("FC-12: the module spawns nothing", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "lib/filing-compliance.ts"), "utf-8");
+    expect(src).not.toContain("spawnSync");
+    expect(src).not.toContain("child_process");
   });
 });

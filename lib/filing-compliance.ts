@@ -66,7 +66,7 @@
  * is deliberately not made here.
  */
 
-import { spawnSync } from "node:child_process";
+import { createGitHubClient, listIssueComments, type GitHubClient } from "./github";
 
 /**
  * The fields of a ledger row this reading needs.
@@ -294,25 +294,30 @@ export async function complianceReading(input: {
  * Every failure is `UNMEASURED` carrying its own sentence. There is no path
  * here that returns an empty comment list for a request that did not succeed.
  */
-export function ghIssueComments(repo: string): CommentLookup {
+export function ghIssueComments(
+  repo: string,
+  // The seam exists so the failure path can be DRIVEN rather than provoked.
+  // Its first version had no argument, so the only way to observe the
+  // UNMEASURED branch was to run the case against the live API and hope it
+  // failed — a case whose verdict depends on the network is not a case.
+  makeClient: () => GitHubClient = createGitHubClient,
+): CommentLookup {
   return async (issue: number): Promise<CommentReading> => {
-    const run = spawnSync(
-      "gh",
-      ["api", `repos/${repo}/issues/${issue}/comments`, "--paginate", "--jq", ".[].created_at"],
-      { encoding: "utf-8" },
-    );
-    if (run.error) return { reading: "UNMEASURED", why: `gh could not be run: ${run.error.message}` };
-    if (run.status !== 0) {
-      return {
-        reading: "UNMEASURED",
-        why: `gh exited ${run.status}: ${(run.stderr ?? "").trim() || "no stderr"}`,
-      };
+    // SC-893: Octokit, not a `gh` subprocess. The three readings are
+    // unchanged — a client that cannot be built and a request that failed are
+    // both UNMEASURED carrying their own sentence, and neither may degrade
+    // into an empty comment list, which would read as "nobody commented".
+    let client: GitHubClient;
+    try {
+      client = makeClient();
+    } catch (e) {
+      return { reading: "UNMEASURED", why: `no GitHub client: ${(e as Error).message}` };
     }
-    const comments = (run.stdout ?? "")
-      .split("\n")
-      .map(l => l.trim())
-      .filter(l => l !== "")
-      .map(at => ({ at }));
-    return { reading: "MEASURED", comments };
+    try {
+      const rows = await listIssueComments(client, repo, issue);
+      return { reading: "MEASURED", comments: rows.map(r => ({ at: r.created_at })) };
+    } catch (e) {
+      return { reading: "UNMEASURED", why: `the comments request failed: ${(e as Error).message}` };
+    }
   };
 }

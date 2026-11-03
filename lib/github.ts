@@ -46,6 +46,12 @@ export interface GitHubClient {
        * `listMilestones` below passes `all` and does not expose the choice.
        */
       listMilestones: (params: { owner: string; repo: string; state?: string; per_page?: number }) => Promise<{ data: any[] }>;
+      /**
+       * One issue's comments. Paginated by the caller — `listIssueComments`
+       * below walks every page, because a single page silently truncates and
+       * a short list reads as a smaller answer rather than a wrong one.
+       */
+      listComments: (params: { owner: string; repo: string; issue_number: number; per_page?: number; page?: number }) => Promise<{ data: any[] }>;
       createMilestone: (params: { owner: string; repo: string; title: string; description?: string }) => Promise<{ data: any }>;
       updateMilestone: (params: { owner: string; repo: string; milestone_number: number; title?: string; description?: string }) => Promise<{ data: any }>;
     };
@@ -621,6 +627,43 @@ export async function listOpenIssues(
   // API cannot return more than was asked for, so `>` is a predicate that can
   // never fire. It is the cheapest wrong spelling of this line.
   return { considered: rows.length, perPage, truncated: rows.length >= perPage, droppedRows, issues };
+}
+
+/**
+ * Every comment on an issue, in creation order, across every page.
+ *
+ * SC-893: infrastructure reaches GitHub through Octokit, never through a `gh`
+ * subprocess. This replaced a `gh api --paginate --jq .[].created_at` call in
+ * `lib/filing-compliance.ts`, which was the last one in `lib/`.
+ *
+ * Pagination is a loop rather than a single `per_page: 100` read: a busy
+ * issue passes 100 comments, and a truncated list is not a smaller answer —
+ * it is a wrong one, and the reading it feeds is a compliance rate.
+ */
+export async function listIssueComments(
+  client: GitHubClient,
+  repoSlug: string,
+  issueNumber: number,
+): Promise<{ created_at: string }[]> {
+  const { owner, repo } = parseOwnerRepo(repoSlug);
+  const perPage = 100;
+  const out: { created_at: string }[] = [];
+  for (let page = 1; ; page++) {
+    const response = await client.rest.issues.listComments({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      per_page: perPage,
+      page,
+    });
+    const rows = Array.isArray(response?.data) ? response.data : [];
+    for (const row of rows) {
+      if (row !== null && typeof row === "object" && typeof row.created_at === "string") {
+        out.push({ created_at: row.created_at as string });
+      }
+    }
+    if (rows.length < perPage) return out;
+  }
 }
 
 /**
