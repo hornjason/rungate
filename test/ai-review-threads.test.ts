@@ -18,6 +18,7 @@ import {
   AI_REVIEW_THREADS_REFUSAL,
   aiReviewThreadsExitCode,
   postReviewThreads,
+  threadsLandedPhrase,
   type AiReviewThreadPoster,
 } from "../lib/ai-review-threads";
 import type { AiReviewFindingsReading } from "../lib/scaffold/ai-review-findings";
@@ -214,6 +215,53 @@ describe("postReviewThreads", () => {
     const src = await Bun.file(new URL("../lib/ai-review-threads.ts", import.meta.url)).text();
     expect(src.match(/function isPendingReviewRefusal/g) ?? []).toHaveLength(1);
     expect(src.match(/PENDING_REVIEW_CONDITION/g) ?? []).toHaveLength(2);
+  });
+
+  // Round 1 of review on #1737, and the finding is about BOTH degradations
+  // rather than the one that was named. Each is selected on a COUNT of
+  // refusals, never on `posted === 0`, so each can be reached with comments
+  // already on the diff — and each opened its annotation by denying them.
+  test("a round that posted some and then hit the lock does not claim it posted none", async () => {
+    const { post } = recorder(n =>
+      n === 1 ? { ok: true } : { ok: false, status: 422, message: PENDING_422 },
+    );
+    const r = await postReviewThreads(reading([finding, { ...finding, file: "src/b.ts" }]), post);
+    expect(r.outcome).toBe("BLOCKED_BY_PENDING_REVIEW");
+    expect(r.posted).toBe(1);
+    expect(threadsLandedPhrase(r)).toBe("Only 1 of 2 review threads were created");
+  });
+
+  test("the same is true of the fork degradation — one phrase, both outcomes", async () => {
+    // The other member of the population. Fixing only the outcome a reviewer
+    // named leaves the identical false claim one branch above it.
+    const { post } = recorder(n =>
+      n === 1 ? { ok: true } : { ok: false, status: 403, message: "Resource not accessible" },
+    );
+    const r = await postReviewThreads(reading([finding, { ...finding, file: "src/b.ts" }]), post);
+    expect(r.outcome).toBe("DEGRADED_NO_WRITE");
+    expect(threadsLandedPhrase(r)).toBe("Only 1 of 2 review threads were created");
+  });
+
+  test("a round that really posted nothing still says so", async () => {
+    // The control. Without it the phrase could return the qualified form
+    // always and both cases above would stay green over a sentence that is
+    // now wrong in the other direction.
+    const { post } = recorder(() => ({ ok: false, status: 422, message: PENDING_422 }));
+    const r = await postReviewThreads(reading([finding]), post);
+    expect(threadsLandedPhrase(r)).toBe("No review threads were created");
+  });
+
+  test("no annotation spells the claim for itself", async () => {
+    // One binding. A branch that inlines the sentence keeps its own copy of
+    // the bug, and a behavioural case cannot see the branch it did not take.
+    const script = await Bun.file(
+      new URL("../scripts/ai-review-threads.ts", import.meta.url),
+    ).text();
+    expect(script.match(/review threads were created/g) ?? []).toHaveLength(0);
+    // Call sites, not mentions — counting the symbol would count the import
+    // too, and the number would then move for a reason that is not a branch
+    // spelling the claim for itself.
+    expect(script.match(/threadsLandedPhrase\(result\)/g) ?? []).toHaveLength(2);
   });
 
   test("every refusal comes through the one constant", async () => {

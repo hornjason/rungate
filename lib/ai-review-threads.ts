@@ -342,6 +342,22 @@ export async function postReviewThreads(
   return { outcome: "POSTED", attempted: requests.length, posted, demoted, detail };
 }
 
+/**
+ * How an annotation may open, given what actually reached the diff.
+ *
+ * Both non-refusing degradations — the fork token and the pending-review
+ * lock — are selected on a COUNT of refusals and never on `posted === 0`, so
+ * either can be reached with comments already posted. Both used to open by
+ * saying none were, one line below an accurate `posted N` summary. The claim
+ * is about the round, so it is derived from the round rather than written
+ * into each branch.
+ */
+export function threadsLandedPhrase(result: AiReviewThreadsResult): string {
+  return result.posted === 0
+    ? "No review threads were created"
+    : `Only ${result.posted} of ${result.attempted} review threads were created`;
+}
+
 /** The exit code a round's outcome earns. Only `FAILED` refuses. */
 export function aiReviewThreadsExitCode(result: AiReviewThreadsResult): number {
   return result.outcome === "FAILED" ? AI_REVIEW_THREADS_REFUSAL : 0;
