@@ -101,8 +101,14 @@ omitted flag a refusal; before it, `scripts/plan-deps.ts` refuses only a
 tracker rather than this paragraph:
 
 ```bash
-gh issue view 1728 --json state -q .state   # CLOSED => the refusal is live
+gh pr view 1730 --json state -q .state   # MERGED => the refusal is live
 ```
+
+The PR rather than the issue, deliberately. #1730 is the only pull request
+whose `closingIssuesReferences` names #1728, so the two states are in fact
+equivalent — but a reader cannot see that from here, and #1728 is cited
+elsewhere in this document for the original cross-family bug. Asking about
+the change that makes the refusal is a question with one answer.
 
 Two earlier rounds of review on this ADR were both about the same sentence,
 in opposite directions — one caught it claiming the fix in the present tense
