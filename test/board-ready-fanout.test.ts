@@ -321,15 +321,26 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
     expect(actorMayWrite(null)).toBe(false);
   });
 
-  // The gate decides before the first mutation and after the dry-run exit,
-  // so a report-only run still reports. Asserted on order, because a check
-  // placed after the write is a check that observed the write.
-  test("BR-27: the permission check precedes every updateProjectV2ItemFieldValue", () => {
+  // Asserted on ORDER, because a gate placed after the thing it guards is a
+  // gate that watched it happen.
+  //
+  // The first spelling of this case only required the gate to precede the
+  // WRITE, and the script satisfied it while still reading the whole board
+  // with the PAT first. Security review caught that: dropping the job-level
+  // `if:` and checking late means an untrusted close starts a privileged
+  // job, which is a wider exposure than the predicate bug being fixed. The
+  // permission answer depends on no board data, so it is taken before the
+  // first `gql()` and the case says so.
+  test("BR-27: the permission check precedes the first privileged read, not just the write", () => {
     const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
-    const gate = src.indexOf("actorMayWrite(permission)");
-    const write = src.indexOf("updateProjectV2ItemFieldValue");
+    const code = src.split("\n").filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    const gate = code.indexOf("actorMayWrite(permission)");
     expect(gate, "the gate is not called at all").toBeGreaterThan(-1);
-    expect(write).toBeGreaterThan(gate);
+    // every call of the GraphQL helper, and the mutation, come after it
+    const reads = [...code.matchAll(/await gql\(/g)].map(m => m.index!);
+    expect(reads.length, "no gql call found — the census is measuring nothing").toBeGreaterThanOrEqual(3);
+    for (const at of reads) expect(at, "a board read precedes the trust gate").toBeGreaterThan(gate);
+    expect(code.indexOf("updateProjectV2ItemFieldValue")).toBeGreaterThan(gate);
   });
 
   // The untrusted-input rule, as a case. `github.event.issue.*` interpolated

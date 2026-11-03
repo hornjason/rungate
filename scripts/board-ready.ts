@@ -103,6 +103,35 @@ async function main(): Promise<number> {
   const token = credential.token;
   const [owner, name] = repo.split("/");
 
+  // **The trust gate, before the first read.** `issues: [closed]` is
+  // triggerable by anyone who can close an issue — including an outside
+  // contributor closing their own — and this job holds a ProjectsV2 PAT.
+  //
+  // It was first an Actions `if:` reading
+  // `github.event.issue.author_association`, which is the association of
+  // whoever OPENED the issue and never whoever closed it; the ordinary
+  // direction is the damaging one, since a maintainer closing an outsider's
+  // issue was refused and the feature silently did not work for exactly the
+  // issues most likely to come from outside.
+  //
+  // Moving it into the script fixed the predicate and then put it too late:
+  // an untrusted close still started a job that read the board with the PAT
+  // before refusing to write. Security review caught the relocation. The
+  // permission answer depends on no board data, so it is taken here —
+  // before any `gql()` — and nothing privileged happens until it clears.
+  if (actor === null) {
+    console.log("::warning::UNMEASURED — --actor was not supplied, so nothing could be authorised. Nothing was read.");
+    return EXIT_REFUSED;
+  }
+  const permission = await actorPermission(token, repo, actor);
+  if (!actorMayWrite(permission)) {
+    console.log(
+      `::warning::refusing to run: ${actor} has permission "${permission ?? "UNMEASURED"}" on ${repo}, ` +
+        `and this job holds a board-writing credential.`,
+    );
+    return EXIT_REFUSED;
+  }
+
   // What the closed issue was blocking, with everything isReady reads.
   //
   // **Paginated.** `first: 50` was the third unpaginated read caught on this
@@ -211,25 +240,6 @@ async function main(): Promise<number> {
   if (!apply) {
     console.log(`\nDry run. ${moving.length} issue(s) would move. Pass --write to perform it.`);
     return 0;
-  }
-
-  // The trust gate, at the point where it decides something. `issues:
-  // [closed]` is triggerable by anyone who can close an issue — including an
-  // outside contributor closing their own — and this job holds a ProjectsV2
-  // PAT. The check that used to live in the workflow's `if:` read the
-  // ISSUE AUTHOR's association, which is a different person from the one
-  // who triggered the run; see `actorMayWrite`.
-  if (actor === null) {
-    console.log("::warning::UNMEASURED — --actor was not supplied, so nothing could be authorised. Nothing written.");
-    return EXIT_REFUSED;
-  }
-  const permission = await actorPermission(token, repo, actor);
-  if (!actorMayWrite(permission)) {
-    console.log(
-      `::warning::refusing to write: ${actor} has permission "${permission ?? "UNMEASURED"}" on ${repo}, ` +
-        `and this job holds a board-writing credential.`,
-    );
-    return EXIT_REFUSED;
   }
 
   for (const dec of moving) {

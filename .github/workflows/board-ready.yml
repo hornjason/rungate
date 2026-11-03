@@ -51,9 +51,15 @@ jobs:
     #
     # There is no actor permission in an Actions expression, so the check
     # moved into the script, where the API can answer it:
-    # `GET /repos/{repo}/collaborators/{actor}/permission` must say `write`
-    # or `admin` before anything is written. A control that needs a fact
-    # expressions cannot see does not belong in an expression.
+    # `GET /repos/{repo}/collaborators/{actor}/permission` must say `write`,
+    # `maintain` or `admin`. A control that needs a fact expressions cannot
+    # see does not belong in an expression.
+    #
+    # That relocation was then caught being too LATE: the check sat just
+    # before the write, so an untrusted close still started a job that read
+    # the whole board with the PAT. It now runs before the first `gql()`,
+    # and BR-27 asserts the ordering against every read rather than only
+    # against the mutation.
     #
     # What this deliberately does NOT do is the other suggested fix —
     # defaulting the untrusted trigger to report-only and requiring a manual
