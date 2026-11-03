@@ -48,11 +48,21 @@ async function gql(token: string, query: string, variables: Record<string, unkno
 
 async function main(): Promise<number> {
   const repo = arg("repo");
-  const closed = Number(arg("closed-issue"));
+  const rawClosed = arg("closed-issue");
   const project = arg("project");
   const apply = process.argv.includes("--write");
-  if (!repo || !project || !Number.isFinite(closed)) {
+  // `Number(null)` is 0 and `Number.isFinite(0)` is true, so the first
+  // version of this guard passed a MISSING `--closed-issue` straight through
+  // and fanned out from issue 0. Caught in review of #1747. The absence is
+  // checked before the conversion, and the value must be a positive integer
+  // rather than merely finite — `1e9`, `0` and `-3` are all finite.
+  if (repo === null || project === null || rawClosed === null) {
     console.error("UNMEASURED: --repo <owner/name> --closed-issue <n> --project <id> are all required");
+    return EXIT_REFUSED;
+  }
+  const closed = Number(rawClosed);
+  if (!Number.isInteger(closed) || closed <= 0) {
+    console.error(`UNMEASURED: --closed-issue must be a positive integer, got "${rawClosed}"`);
     return EXIT_REFUSED;
   }
 
@@ -68,19 +78,30 @@ async function main(): Promise<number> {
   const [owner, name] = repo.split("/");
 
   // What the closed issue was blocking, with everything isReady reads.
-  const d = await gql(
-    token,
-    `query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){
-       blocking(first:50){nodes{
-         number state milestone{title} assignees{totalCount}
-         issueDependenciesSummary{blockedBy}
-         projectItems(first:10){nodes{
-           id project{id}
-           fieldValues(first:20){nodes{... on ProjectV2ItemFieldSingleSelectValue{
-             name optionId field{... on ProjectV2FieldCommon{id name}}}}}}}}}}}}`,
-    { o: owner, n: name, i: closed },
-  );
-  const blocking: any[] = d.repository.issue.blocking.nodes;
+  //
+  // **Paginated.** `first: 50` was the third unpaginated read caught on this
+  // changeset's sibling, and I wrote it anyway. A blocker freeing more than
+  // fifty issues is unlikely and is exactly the case where silently moving
+  // the first fifty is worst: the lane looks correct and the tail is
+  // invisible.
+  const BLOCKING_QUERY = `query($o:String!,$n:String!,$i:Int!,$c:String){repository(owner:$o,name:$n){issue(number:$i){
+       blocking(first:100,after:$c){
+         pageInfo{hasNextPage endCursor}
+         nodes{
+           number state milestone{title} assignees{totalCount}
+           issueDependenciesSummary{blockedBy}
+           projectItems(first:10){nodes{
+             id project{id}
+             fieldValues(first:20){nodes{... on ProjectV2ItemFieldSingleSelectValue{
+               name optionId field{... on ProjectV2FieldCommon{id name}}}}}}}}}}}}`;
+  const blocking: any[] = [];
+  let cursor: string | null = null;
+  do {
+    const d = await gql(token, BLOCKING_QUERY, { o: owner, n: name, i: closed, c: cursor });
+    const page = d.repository.issue.blocking;
+    blocking.push(...page.nodes);
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (cursor);
   if (blocking.length === 0) {
     console.log(`#${closed} was blocking nothing. No issue changed.`);
     return 0;
@@ -122,7 +143,14 @@ async function main(): Promise<number> {
       number: b.number,
       state: b.state,
       phase: phaseOf(b.milestone?.title),
-      blockedByOpen: b.issueDependenciesSummary?.blockedBy ?? 0,
+      // NOT `?? 0`. An absent summary means the field could not be read —
+      // a token not scoped for it returns no object — and calling that zero
+      // says "nothing is blocking this", which moves a genuinely blocked
+      // issue to Ready. `null` is UNMEASURED and never moves.
+      blockedByOpen:
+        typeof b.issueDependenciesSummary?.blockedBy === "number"
+          ? (b.issueDependenciesSummary.blockedBy as number)
+          : null,
       assignees: b.assignees?.totalCount ?? 0,
       boardStatus: item ? (statusValue?.name ?? null) : null,
     };

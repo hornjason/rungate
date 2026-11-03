@@ -82,8 +82,14 @@ jobs:
       # ISSUE and WRITE go through env:, never interpolated into the script
       # line — `${{ inputs.* }}` read directly is one input-type change away
       # from the injection GitHub's own guidance opens with.
+      # No `continue-on-error`. It was here to keep an unconfigured
+      # repository from showing a red X, and review was right that it buys
+      # that by swallowing EVERY failure — a GraphQL error, a bad argument,
+      # a board with no Ready option all become green. That is the silent
+      # pass this file's credential handling exists to refuse, reintroduced
+      # one level up. This workflow is not scaffolded to consumers; it runs
+      # here, where the PAT is configured, and a red run is the signal.
       - name: Fan out from the closed blocker
-        continue-on-error: true # an unconfigured consumer is annotated, not broken
         env:
           BOARD_PROJECT_TOKEN: ${{ secrets.BOARD_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}

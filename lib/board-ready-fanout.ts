@@ -47,8 +47,16 @@ export interface Dependent {
   /** `OPEN` or `CLOSED`, as GraphQL spells it. */
   readonly state: string;
   readonly phase: number | null;
-  /** OPEN blockers only — the lifetime count never goes back down. */
-  readonly blockedByOpen: number;
+  /**
+   * OPEN blockers only — the lifetime count never goes back down.
+   *
+   * **`null` means the dependency summary could not be read**, which is not
+   * the same as zero. `issueDependenciesSummary` is absent on a response the
+   * token was not scoped for, and `?? 0` turned that into "nothing is
+   * blocking it" — a fail-open that moves a genuinely blocked issue to
+   * Ready. Caught in review of #1747.
+   */
+  readonly blockedByOpen: number | null;
   readonly assignees: number;
   /** The board column, or `null` when the issue is not on the board at all. */
   readonly boardStatus: string | null;
@@ -68,6 +76,7 @@ export type FanoutDecision =
  */
 function whyNotReady(d: Dependent, frontier: number | null): string {
   if (d.state !== "OPEN") return `the issue is ${d.state}`;
+  if (d.blockedByOpen === null) return "UNMEASURED — the dependency summary could not be read";
   if (d.blockedByOpen > 0) {
     return `${d.blockedByOpen} open blocker${d.blockedByOpen === 1 ? "" : "s"} remain`;
   }
@@ -93,7 +102,18 @@ export function fanoutDecisions(
     if (d.boardStatus === readyColumn) {
       return { number: d.number, move: false, why: `already ${readyColumn}` };
     }
-    if (!isReady(d, frontier)) return { number: d.number, move: false, why: whyNotReady(d, frontier) };
+    // An unreadable blocker count is UNMEASURED, and UNMEASURED never moves.
+    // It cannot be handed to `isReady`, whose parameter is a number and whose
+    // honest answer here does not exist — the question is unanswerable, not
+    // answered false. Refusing before the decider is what keeps `isReady` the
+    // only thing that says yes.
+    if (d.blockedByOpen === null) {
+      return { number: d.number, move: false, why: whyNotReady(d, frontier) };
+    }
+    const measured = { ...d, blockedByOpen: d.blockedByOpen };
+    if (!isReady(measured, frontier)) {
+      return { number: d.number, move: false, why: whyNotReady(d, frontier) };
+    }
     return { number: d.number, move: true };
   });
 }

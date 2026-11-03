@@ -83,6 +83,80 @@ describe("BR-1..BR-6: the fan-out from one closed blocker", () => {
   });
 });
 
+describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", () => {
+  // `issueDependenciesSummary` is absent on a response the token was not
+  // scoped for. `?? 0` read that as "nothing is blocking it" and moved a
+  // genuinely blocked issue to Ready — the fail-open shape, in the one place
+  // where it writes to the board.
+  test("BR-17: an unreadable blocker count does not move the issue", () => {
+    const [d] = fanoutDecisions([dep({ blockedByOpen: null })], 3, "Ready");
+    expect(d.move).toBe(false);
+    if (!d.move) expect(d.why).toContain("UNMEASURED");
+  });
+
+  // The positive control: the same issue with a READ count of zero does
+  // move, so BR-17 is not green because nothing ever moves.
+  test("BR-18: a measured zero is not the same reading, and does move", () => {
+    expect(fanoutDecisions([dep({ blockedByOpen: 0 })], 3, "Ready")[0].move).toBe(true);
+  });
+
+  // Every list read in the script pages. This is the third time this shape
+  // has been found on this day's work — twice on #1740's reader and once
+  // here — so it is asserted as a census over the file's GraphQL list
+  // selections rather than against `blocking` alone.
+  test("BR-19: no GraphQL list in the script is read with a bare first:", () => {
+    const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+    // `projectItems(first:10)` and `fieldValues(first:20)` are per-issue
+    // sub-selections with hard upper bounds, not collections that grow; the
+    // two that page over a repository's data are named.
+    for (const sel of ["blocking(first:100,after:$c)", "items(first:100,after:$c)"]) {
+      expect(src, `${sel} missing — a list that can grow must carry a cursor`).toContain(sel);
+    }
+    expect(src).not.toContain("blocking(first:50)");
+    // and both loops read the flag rather than assuming one page
+    expect([...src.matchAll(/pageInfo\{hasNextPage endCursor\}/g)].length).toBeGreaterThanOrEqual(2);
+  });
+
+  // `continue-on-error: true` turns a GraphQL error, a bad argument and a
+  // board with no Ready option all green. That is the silent pass the
+  // credential handling exists to refuse, one level up.
+  // `Number(null)` is 0 and `Number.isFinite(0)` is true, so the original
+  // guard passed a MISSING `--closed-issue` through and fanned out from
+  // issue 0. Run rather than read: the guard sits before any network call,
+  // so the refusal is observable without a token.
+  test("BR-21: a missing or non-positive --closed-issue is refused", async () => {
+    const base = ["--repo", "o/n", "--project", "PVT_x"];
+    for (const extra of [[], ["--closed-issue", "0"], ["--closed-issue", "-3"], ["--closed-issue", "x"]]) {
+      const p = Bun.spawnSync(["bun", "scripts/board-ready.ts", ...base, ...extra], {
+        cwd: ROOT,
+        env: { ...process.env, BOARD_PROJECT_TOKEN: "" },
+      });
+      const err = new TextDecoder().decode(p.stderr);
+      expect(p.exitCode, `${extra.join(" ") || "(no flag)"} was not refused`).toBe(2);
+      expect(err).toContain("UNMEASURED");
+    }
+  }, 30_000);
+
+  // The positive control for BR-21: a well-formed invocation gets PAST the
+  // argument guard and refuses on the credential instead, so BR-21 is not
+  // green because every invocation exits 2 for the same reason.
+  test("BR-22: a valid issue number reaches the credential check", async () => {
+    const p = Bun.spawnSync(
+      ["bun", "scripts/board-ready.ts", "--repo", "o/n", "--project", "PVT_x", "--closed-issue", "7"],
+      { cwd: ROOT, env: { ...process.env, BOARD_PROJECT_TOKEN: "" } },
+    );
+    expect(new TextDecoder().decode(p.stdout)).toContain("BOARD_PROJECT_TOKEN");
+    expect(new TextDecoder().decode(p.stderr)).not.toContain("positive integer");
+  }, 30_000);
+
+  test("BR-20: the step does not swallow its own failures", () => {
+    const yml = readFileSync(join(ROOT, ".github/workflows/board-ready.yml"), "utf-8");
+    for (const line of yml.split("\n")) {
+      if (/^\s*continue-on-error:/.test(line)) expect(line).toContain("false");
+    }
+  });
+});
+
 describe("BR-7: the verdict is isReady's, and the reason cannot change it", () => {
   // A grid over every axis isReady reads. If the module ever grows its own
   // opinion — a reason string that also decides, a short-circuit that looks
@@ -92,19 +166,30 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
     const phases: (number | null)[] = [null, 3, 7];
     const frontiers: (number | null)[] = [null, 3];
     let compared = 0;
+    let unmeasured = 0;
     for (const state of states)
       for (const phase of phases)
-        for (const blockedByOpen of [0, 2])
+        // `null` joined this axis in review: an unreadable blocker count is
+        // the one input where `isReady` has no answer to agree with, so the
+        // grid asserts a DIFFERENT property for those rows — never moves.
+        for (const blockedByOpen of [0, 2, null])
           for (const assignees of [0, 1])
             for (const frontier of frontiers) {
               const d = dep({ state, phase, blockedByOpen, assignees });
               const [got] = fanoutDecisions([d], frontier, "Ready");
-              expect(got.move).toBe(isReady(d, frontier));
-              compared++;
+              if (blockedByOpen === null) {
+                expect(got.move).toBe(false);
+                unmeasured++;
+              } else {
+                expect(got.move).toBe(isReady({ ...d, blockedByOpen }, frontier));
+                compared++;
+              }
             }
-    // The grid is the instrument; a grid that shrank to nothing would pass
-    // vacuously.
+    // The grid is the instrument; one that shrank to nothing would pass
+    // vacuously, and both halves have to be non-empty for the split above
+    // to mean anything.
     expect(compared).toBe(48);
+    expect(unmeasured).toBe(24);
   });
 
   test("BR-8: and a row of that grid genuinely moves — the grid is not all false", () => {
