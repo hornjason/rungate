@@ -89,7 +89,19 @@ Hand-typing an edge here would be a second source for the one thing rule 4
 says must be data, and it is how a row ends up blocked by an issue that
 closed last week.
 
-`--milestone-prefix Pipeline` is required and not optional. Without it the
+**`--milestone-prefix Pipeline` is not optional, and on `main` today it is
+not yet enforced.** That gap is the whole of this paragraph. PR #1730 makes
+an omitted flag a refusal; until it merges, `scripts/plan-deps.ts` refuses
+only a *blank* prefix and treats an *omitted* one as no filter at all. So
+this plan's `plan-deps` step must not be run before #1730 lands — a reader
+who followed the command and dropped the flag today would reproduce
+exactly the corruption cited below, with nothing to stop them.
+
+Found in review of this ADR, which had written the fix in the present
+tense while it sat unmerged in another branch. The tree the reviewer reads
+is `main`, and it was right about `main`.
+
+Without the flag the
 derivation spans both milestone families — `Pipeline Phase N` and
 `Convergence Phase N` — and on 2026-11-02 an unscoped run wrote 89 edges
 across 38 issues and took `blocked-by-edges` from 12 of 12 to 4 of 12.
@@ -178,7 +190,15 @@ exists so an issue can be filed is a criterion nothing will ever retire.
 
 ## References
 
-- `docs/adr/ADR-003-spec-to-tracker-mapping.md` — the five steps this is step 4 of
+- `docs/adr/ADR-003-spec-to-tracker-mapping.md` — the mapping `--decompose`
+  serves. It states **three** steps, not five: placement, milestone,
+  issue-citation. This ADR said "the five steps this is step 4 of" and that
+  citation did not resolve to the document it named. The *"step 4"* and
+  *"step 5"* numbering is real but lives elsewhere — `plan-issues`' own
+  command description calls `--decompose` step 4 and `scripts/plan-deps.ts`
+  calls itself "Step 5 of ADR-003" — so three places number a sequence
+  ADR-003 does not carry. Corrected here only; the other two are a
+  pre-existing inconsistency and not this plan's to fix.
 - `docs/adr/ADR-010-engine-backlog-the-remaining-thirteen.md` — the previous plan, same shape
 - `lib/filing-plan.ts` — what makes a merged plan an authorisation
 - `lib/issue-decomposition.ts` — the table contract the first table above satisfies
