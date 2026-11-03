@@ -181,6 +181,16 @@ jobs:
       # The published artifact is the thing claim 5 is about, so it is tested
       # before it ships and not only on main.
       - run: bun test
+        env:
+          # The same secret `ci.yml` hands the sharded suite, and for the same
+          # reason: `test/stage-ladder.test.ts` executes every DONE item's
+          # verify command, and those run `board-conformance` against a
+          # ProjectV2 board. Without it all 27 of them exit 1 on
+          # "GITHUB_TOKEN environment variable is not set" and the release
+          # cannot be cut — which is what happened to v0.8.9 (run
+          # 41649310261), twice. The built-in token is repository-scoped and
+          # cannot see a board, so it is not a substitute.
+          GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
       - run: bun scripts/typecheck.ts
 
       # No token and no `--provenance`. Authentication is the OIDC credential
