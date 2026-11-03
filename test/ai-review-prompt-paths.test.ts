@@ -44,6 +44,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as step from "../lib/scaffold/ai-review-step";
 
 /**
@@ -109,14 +111,48 @@ describe("the reviewer's prompt names no value its toolset cannot obtain", () =>
     ).toEqual([]);
   });
 
-  test("the prompt still tells the reviewer where to write — it did not just go silent", () => {
-    // The cheapest wrong fix for the case above is deleting the sentence. That
-    // leaves the reviewer with no destination at all, which is the same
-    // UNMEASURED outcome by a shorter route.
+  test("every path is actually IN the prompt — deleting the sentence is not the fix", () => {
+    // The cheapest wrong fix for the case above is deleting the sentences
+    // rather than resolving them. That leaves the reviewer with no
+    // destination at all, which reaches the same UNMEASURED outcome by a
+    // shorter route and would leave the population case green.
+    const missing = Object.entries(step.AI_REVIEW_PROMPT_PATH_EXPRESSIONS)
+      .filter(([, expression]) => !prompt.includes(expression))
+      .map(([name]) => name);
     expect(
-      prompt,
-      "the prompt no longer names the findings file at all — deleting the " +
-        "instruction is not the fix, carrying the resolved path is",
-    ).toContain(step.AI_REVIEW_FINDINGS_BASENAME);
+      missing,
+      "the prompt names neither the variable nor the path for these — the " +
+        "reviewer has no way to reach the file at all",
+    ).toEqual([]);
+  });
+
+  test("every key in the record is a real exported path variable", () => {
+    // A subset, deliberately, not an equality: three path variables —
+    // AI_REVIEW_DISARM_CLI_PATH, AI_REVIEW_LEDGER_SNAPSHOT_PATH and
+    // AI_REVIEW_THREADS_PATH — belong to later SHELL steps and correctly
+    // never reach the reviewer. The case above is what covers a sixth
+    // reviewer-facing variable, because it runs over all eight.
+    const keys = Object.keys(step.AI_REVIEW_PROMPT_PATH_EXPRESSIONS);
+    expect(keys.filter(k => !names.includes(k)), "a key that is not a path variable").toEqual([]);
+    expect(keys).toContain(step.AI_REVIEW_FINDINGS_PATH_VAR);
+  });
+
+  test("the shipped workflow's `env:` block and the prompt name the same file", () => {
+    // Asserted against the workflow this repository actually runs, not a
+    // fixture: the two were typed out separately before, which is how the
+    // prompt came to name a variable the reviewer cannot read while the
+    // shell steps read a path.
+    const yml = readFileSync(
+      join(import.meta.dir, "..", ".github", "workflows", "ai-review.yml"),
+      "utf-8",
+    );
+    for (const [name, expression] of Object.entries(step.AI_REVIEW_PROMPT_PATH_EXPRESSIONS)) {
+      expect(yml, `the shipped \`env:\` block does not set ${name}`).toContain(
+        `${name}: ${expression}`,
+      );
+      expect(prompt, `the \`env:\` block and the prompt disagree about ${name}`).toContain(
+        expression,
+      );
+    }
   });
 });

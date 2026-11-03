@@ -178,21 +178,33 @@ export function shippedPrompt(workflowText: string): string | null {
  */
 export function shippedTemplate(prompt: string | null): Record<string, unknown> | null {
   if (prompt === null) return null;
-  const start = prompt.indexOf("{");
-  if (start === -1) return null;
-  let depth = 0;
-  for (let i = start; i < prompt.length; i++) {
-    if (prompt[i] === "{") depth++;
-    else if (prompt[i] === "}") {
-      depth--;
-      if (depth === 0) {
-        try {
-          const parsed = JSON.parse(prompt.slice(start, i + 1));
-          return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-            ? (parsed as Record<string, unknown>)
-            : null;
-        } catch {
-          return null;
+  // Every `{` in turn, not just the first one. The prompt carries the five
+  // path expressions the reviewer writes and reads from, and `${{ steps.x }}`
+  // puts a brace ahead of the template. Anchoring on the FIRST brace made the
+  // scan return null the moment anything braced appeared earlier in the
+  // prose, which reads as "no contract shipped" — a refusal for a reason
+  // that has nothing to do with the contract.
+  //
+  // This does not loosen what counts as the template: the slice still has to
+  // be brace-balanced AND parse AND be a non-array object, and AC-5b/AC-5c
+  // below compare its members against the reader's, so an unrelated JSON
+  // object found earlier would fail those rather than pass this.
+  for (let start = prompt.indexOf("{"); start !== -1; start = prompt.indexOf("{", start + 1)) {
+    let depth = 0;
+    for (let i = start; i < prompt.length; i++) {
+      if (prompt[i] === "{") depth++;
+      else if (prompt[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(prompt.slice(start, i + 1));
+            if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+              return parsed as Record<string, unknown>;
+            }
+          } catch {
+            // Not the template. Try the next opening brace.
+          }
+          break;
         }
       }
     }

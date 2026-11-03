@@ -70,6 +70,7 @@ import {
   AI_REVIEW_THREADS_BASENAME,
   AI_REVIEW_THREADS_PATH_VAR,
   buildCarryScript,
+  AI_REVIEW_PROMPT_PATH_EXPRESSIONS,
   buildReviewPrompt,
 } from "../lib/scaffold/ai-review-step.ts";
 // The READER of the file this step writes. Imported so the two sides of the
@@ -937,11 +938,21 @@ describe("AC-C5 (#1381): the reviewer is told the truth about the carry", () => 
   const prompt = buildReviewPrompt();
   const flat = prompt.replace(/\s+/g, " ");
 
-  test("AC-C5: the prompt names the variable, never a value", () => {
-    // AC-6b. The value arrives through `env:`; an expression interpolated
-    // into the prompt would be substituted before the action ever saw it.
-    expect(flat).toContain(AI_REVIEW_CARRY_PATH_VAR);
-    expect(prompt, "an expression reached the prompt text").not.toContain("${{");
+  test("AC-C5: the prompt names the carry file's PATH, not a variable", () => {
+    // This used to require the variable NAME and refuse any `${{`. The
+    // reviewer holds `--allowedTools Read,Grep,Glob,Write` and cannot read an
+    // environment variable with any of them, so naming the variable was an
+    // instruction it could only answer by guessing — see
+    // `test/ai-review-prompt-paths.test.ts` for the transcript.
+    //
+    // AC-6b still holds and is where the injection property is asserted: the
+    // expression allowed here is this job's own prepare-step output, which
+    // resolves to RUNNER_TEMP + run id + run attempt + a fixed basename.
+    expect(flat).toContain(AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_CARRY_PATH_VAR]);
+    expect(
+      prompt,
+      "the prompt names the carry VARIABLE again — the reviewer cannot read one",
+    ).not.toContain(AI_REVIEW_CARRY_PATH_VAR);
   });
 
   test("AC-C5: the prompt states all three readings by name", () => {
