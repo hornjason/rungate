@@ -537,7 +537,10 @@ describe("FC-18..FC-19: this file's claims about itself", () => {
     // to "FC-9". The commit messages cite these ids ("FC-11 is the positive
     // control"), so a duplicate makes a citation ambiguous rather than wrong,
     // which is the kind of error nobody notices.
-    const ids = [...SELF.matchAll(/test\("(FC-[0-9]+b?)\s*:/g)].map(m => m[1]!);
+    // `\s*` between `test(` and the literal. Without it a multi-line call —
+    // `test(\n  "FC-24: …"` — never matches, which is the gap the equality
+    // at the bottom of this case now makes visible.
+    const ids = [...SELF.matchAll(/\btest\(\s*"(FC-[0-9]+b?)\s*:/g)].map(m => m[1]!);
     const seen = new Map<string, number>();
     for (const id of ids) seen.set(id, (seen.get(id) ?? 0) + 1);
     const duplicated = [...seen].filter(([, n]) => n > 1).map(([id, n]) => `${id} x${n}`);
@@ -547,6 +550,28 @@ describe("FC-18..FC-19: this file's claims about itself", () => {
     // over an empty list, which is the third shape in
     // `.claude/rules/checks-must-be-able-to-fail.md`.
     expect(ids.length).toBeGreaterThanOrEqual(15);
+
+    // **The two checks must walk the SAME population.** Caught in review: the
+    // extractor above required the string literal to sit immediately after
+    // `test(`, and FC-24 is written across two lines, so its id was never
+    // captured. `ids` was silently one short of the `test(` count FC-19
+    // reads, and a duplicate introduced in that style would have left the
+    // duplicate check green — the second shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`, a detector narrower
+    // than what it detects, through the one formatting style this file had
+    // just introduced.
+    //
+    // A floor cannot see that: 25 clears `>= 15` exactly as well as 26 does.
+    // An EQUALITY against FC-19's own sweep can, and it also catches the
+    // other direction — a test in this file whose title does not open with
+    // an FC id has no citable name, which is what FC-18 is for.
+    const declared = [...SELF.matchAll(/^\s*test\(/gm)].length;
+    expect(
+      ids.length,
+      `FC-18 captured ${ids.length} ids and this file declares ${declared} tests. ` +
+        `Either a test's title does not open with an FC id, or the extractor above ` +
+        `cannot see the way it is written — widen the extractor, do not lower this.`,
+    ).toBe(declared);
   });
 
   test("FC-19: the docblock's baseline count is this suite's real test count", () => {
