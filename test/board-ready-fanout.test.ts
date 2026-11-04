@@ -21,6 +21,7 @@ import { join } from "path";
 import { isReady, isUnblocked } from "../lib/board-mirror";
 import {
   actorMayWrite,
+  WRITING_PERMISSIONS,
   fanoutDecisions,
   readBoardCredential,
   truncatedReadings,
@@ -398,6 +399,72 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
     expect(yml).not.toContain("cron:");
   });
 
+  /**
+   * The gate is before the expensive steps, and it spells the same set.
+   *
+   * `issues: [closed]` on a PUBLIC repository is triggerable by anybody with
+   * a GitHub account: open an issue, close your own issue. Until this round
+   * the script's trust gate was the first refusal, and reaching it cost a
+   * checkout, a bun install and a full dependency fetch — so the refusal was
+   * correct and the run was already paid for. Repeat at will.
+   *
+   * The step added here needs only `gh`, which is preinstalled, so the setup
+   * steps sit behind it.
+   *
+   * That makes two places that name writing permissions, which is the fourth
+   * shape in `.claude/rules/checks-must-be-able-to-fail.md` — and this step
+   * genuinely cannot import the decider, because the import is the checkout
+   * it exists to prevent. So the sets are asserted EQUAL rather than each
+   * asserted correct: they cannot drift into two guards that disagree, and a
+   * permission added to one is red until it is added to the other.
+   */
+  test("BR-33: the trust gate runs before checkout, and names the same permissions", () => {
+    // A DETECTOR THAT READS A WHOLE FILE READS ITS COMMENTS, and the
+    // ordering half of this row went red on the comment above the gate
+    // explaining what the gate saves — the words "bun install" in a sentence
+    // about `bun install`. Comments are stripped before any position is
+    // taken; the anti-vacuity assertions below are what keep the stripping
+    // from quietly taking the code with it.
+    const code = yml
+      .split("\n")
+      .filter(l => !/^\s*#/.test(l))
+      .join("\n");
+    // The `case` arm in the gate step, as the shell actually reads it.
+    const arm = /\n\s*(admin\|maintain\|write|[a-z|]+)\)\n/.exec(code)?.[1];
+    expect(
+      arm,
+      "no `case` arm listing permissions was found in board-ready.yml — this row would " +
+        "pass vacuously. Fix the pattern, do not delete the row.",
+    ).toBeTruthy();
+    const spelled = (arm ?? "").split("|").filter(Boolean).sort();
+    expect(spelled, "the parsed permission list is empty").not.toEqual([]);
+    expect(
+      spelled,
+      "the workflow's trust gate and WRITING_PERMISSIONS must name the same set — two " +
+        "guards answering one question are behaviourally one, and nothing can say which is live",
+    ).toEqual([...WRITING_PERMISSIONS].sort());
+
+    // Ordering: the gate step is declared before anything that costs a
+    // checkout or a dependency fetch, and each of those carries its `if:`.
+    const gateAt = code.indexOf("id: gate");
+    expect(gateAt, "no step with `id: gate` — this row would pass vacuously").toBeGreaterThan(-1);
+    const costly = ["actions/checkout@", "oven-sh/setup-bun@", "bun install"];
+    for (const needle of costly) {
+      const at = code.indexOf(needle);
+      expect(at, `${needle} is not in the workflow — the ordering census is measuring nothing`).toBeGreaterThan(-1);
+      expect(at, `${needle} runs before the trust gate`).toBeGreaterThan(gateAt);
+    }
+    // Declared after is not the same as conditional on. Every step that is
+    // not the gate itself must carry the guard, or an unconditional one
+    // reintroduces exactly the cost this removes.
+    const guards = code.split("\n").filter(l => /if:\s*steps\.gate\.outputs\.trusted == 'true'/.test(l));
+    expect(
+      guards.length,
+      "every step after the gate must be conditional on it: checkout, setup-bun, " +
+        "bun install and the fan-out step itself",
+    ).toBe(4);
+  });
+
   // `secrets` is not available in `if:` at all, and a step skipped by `if:`
   // reports SKIPPED — which a required check can treat as satisfied. The mode
   // is resolved inside `run:` (`.claude/rules/config-access.md`).
@@ -411,8 +478,13 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
   // Every `uses:` pinned to a commit SHA — asserted here as well as by
   // `test/action-pin-parity.test.ts`, because this file is new.
   test("BR-14: every action is pinned to a 40-character SHA", () => {
-    const uses = [...yml.matchAll(/^\s*- uses:\s*(\S+)/gm)].map(m => m[1]);
-    expect(uses.length).toBeGreaterThan(0);
+    // `- uses:` was the first spelling and it stopped seeing both actions
+    // the moment they grew an `if:`, which moves `uses:` off the dash line.
+    // A pin census that silently reads nothing is the vacuous shape, and the
+    // count assertion below is the only reason it reported rather than
+    // passing. The dash is optional now; the count is not.
+    const uses = [...yml.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)/gm)].map(m => m[1]);
+    expect(uses.length, "no `uses:` found in board-ready.yml — this row would pass vacuously").toBe(2);
     for (const u of uses) expect(u).toMatch(/@[0-9a-f]{40}$/);
   });
 

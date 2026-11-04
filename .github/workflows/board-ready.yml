@@ -65,9 +65,50 @@ jobs:
     # defaulting the untrusted trigger to report-only and requiring a manual
     # dispatch to write. That is precisely the hand-run command #1744 exists
     # to remove; it would leave the feature looking present and doing nothing.
+    #
+    # And then caught being too EXPENSIVE, which is a different problem from
+    # being too late. `issues: [closed]` on a PUBLIC repository is triggerable
+    # by anybody with a GitHub account — open an issue, close your own issue —
+    # and the script cannot refuse anything until a checkout, a bun install
+    # and a full dependency fetch have already run. The gate below needs only
+    # `gh`, which is preinstalled, so the setup steps are now behind it.
+    #
+    # **This does not decide trust twice.** `WRITING_PERMISSIONS` in
+    # `lib/board-ready-fanout.ts` is the decider and the script still consults
+    # it — this step cannot import it without the checkout it exists to
+    # prevent. BR-33 asserts the two spellings are the same set, so they
+    # cannot drift into two guards that disagree.
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+      - id: gate
+        name: May the acting identity move the board?
+        env:
+          GH_TOKEN: ${{ secrets.BOARD_PROJECT_TOKEN }}
+          # The identity that TRIGGERED this run, through env: rather than
+          # interpolated into the script line — BR-16.
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::UNMEASURED — BOARD_PROJECT_TOKEN is not set, so the acting identity could not be authorised and nothing was read. This run is UNMEASURED, not clean."
+            echo "trusted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # GITHUB_TOKEN cannot answer this endpoint; it needs admin access.
+          # A read that failed is "" and refuses with the rest — a permission
+          # we could not read is not a permission we were granted.
+          perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null) || perm=""
+          case "$perm" in
+            admin|maintain|write)
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::warning::refusing to run: $ACTOR has permission \"${perm:-UNMEASURED}\" on $GITHUB_REPOSITORY, and this job holds a board-writing credential."
+              echo "trusted=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+      - if: steps.gate.outputs.trusted == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - if: steps.gate.outputs.trusted == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
         with:
           bun-version-file: ".bun-version"
       # `--ignore-scripts`: this job carries a PAT, and a postinstall script in
@@ -76,7 +117,8 @@ jobs:
       # here today — but step-scoped env is one careless edit from job-scoped,
       # and the flag costs nothing. `--frozen-lockfile` so the tree that runs
       # is the tree that was reviewed.
-      - run: bun install --frozen-lockfile --ignore-scripts
+      - if: steps.gate.outputs.trusted == 'true'
+        run: bun install --frozen-lockfile --ignore-scripts
 
       # The credential is resolved INSIDE `run:`, never in an `if:`.
       # `secrets` is not available in `if:` at all, and a step skipped by
@@ -99,6 +141,7 @@ jobs:
       # one level up. This workflow is not scaffolded to consumers; it runs
       # here, where the PAT is configured, and a red run is the signal.
       - name: Fan out from the closed blocker
+        if: steps.gate.outputs.trusted == 'true'
         env:
           BOARD_PROJECT_TOKEN: ${{ secrets.BOARD_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
