@@ -94,6 +94,31 @@ describe("board-intake workflow", () => {
     expect(checkouts).toEqual([]);
   });
 
+  test("BI-6: the write is read back, and an unverified write is not reported as success", () => {
+    // Keying off `steps.add.outputs.itemId` fixes WHICH item is written. It
+    // does nothing about WHEN. This job and GitHub's built-in "Item added to
+    // project" automation fire off the same event and run concurrently, and
+    // this one does two extra round trips first — resolve the field, then
+    // mutate — so it is the slower of the two. If the built-in's "set to
+    // Backlog" lands after this step's "set to In review", the board reverts
+    // and the bug this workflow exists to fix comes back non-deterministically.
+    //
+    // A write whose effect is never read is indistinguishable from a write
+    // that was overwritten a millisecond later, so the mutation's own exit
+    // code is not a reading of the board's state
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, the sixth shape).
+    const move = runBlocks().find(b => b.includes("updateProjectV2ItemFieldValue"));
+    expect(move, "no run block performs the Status mutation").toBeDefined();
+
+    // Reads the item's own field value back, rather than re-reading the
+    // project's field definitions, which it already did to resolve the id.
+    expect(move!).toContain("fieldValues");
+    // Bounded retry rather than one hopeful write.
+    expect(/for .*attempt|while |until /.test(move!)).toBe(true);
+    // And a loud refusal when the read-back never agrees.
+    expect(move!).toContain("::error");
+  });
+
   test("BI-4: no run block interpolates a value", () => {
     // The other half of the same property, and the easy one to reintroduce.
     // A `${{ ... }}` inside `run:` is substituted into the shell BEFORE it

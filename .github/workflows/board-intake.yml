@@ -194,14 +194,62 @@ jobs:
             exit 1
           fi
 
-          gh api graphql \
-            -f project="${PROJECT_ID}" -f item="${ITEM_ID}" \
-            -f field="${field_id}" -f option="${option_id}" -f query='
-            mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
-              updateProjectV2ItemFieldValue(input: {
-                projectId: $project, itemId: $item, fieldId: $field,
-                value: { singleSelectOptionId: $option }
-              }) { projectV2Item { id } }
-            }' --jq '.data.updateProjectV2ItemFieldValue.projectV2Item.id'
+          # WRITE, THEN READ BACK. Keying off the add step's itemId settles
+          # WHICH item is written and says nothing about WHEN. This job and
+          # GitHub's built-in "Item added to project" automation fire off the
+          # same event and run concurrently, and this one is the slower of
+          # the two by construction: it resolves the field and the option
+          # first, which is two round trips the built-in does not make. If
+          # the built-in's "set to Backlog" lands after this step's write,
+          # the board reverts and the defect this workflow exists to fix
+          # returns non-deterministically.
+          #
+          # So the mutation's exit code is NOT a reading of the board. A
+          # write whose effect is never read is indistinguishable from one
+          # overwritten a millisecond later
+          # (`.claude/rules/checks-must-be-able-to-fail.md`, the sixth
+          # shape). Three attempts, each verified, and a loud refusal if the
+          # last one did not stick.
+          for attempt in 1 2 3; do
+            gh api graphql \
+              -f project="${PROJECT_ID}" -f item="${ITEM_ID}" \
+              -f field="${field_id}" -f option="${option_id}" -f query='
+              mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $project, itemId: $item, fieldId: $field,
+                  value: { singleSelectOptionId: $option }
+                }) { projectV2Item { id } }
+              }' --jq '.data.updateProjectV2ItemFieldValue.projectV2Item.id' > /dev/null
 
-          echo "::notice title=Board intake::Moved to '${COLUMN}'. This workflow owns only the opened->In review edge; merged->Done and closed->Done remain GitHub's built-in project workflows, so exactly one decider writes each transition."
+            # Give a concurrent built-in write time to land, so the read-back
+            # observes the SETTLED value rather than this step's own write
+            # racing ahead of it. Reading immediately would report success
+            # and then be overwritten, which is the exact failure being
+            # guarded against.
+            sleep 3
+
+            current=$(gh api graphql -f item="${ITEM_ID}" -f query='
+              query($item: ID!) {
+                node(id: $item) {
+                  ... on ProjectV2Item {
+                    fieldValues(first: 20) {
+                      nodes {
+                        ... on ProjectV2ItemFieldSingleSelectValue {
+                          name field { ... on ProjectV2FieldCommon { name } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' --jq '[.data.node.fieldValues.nodes[] | select(.field.name == "Status") | .name] | first // ""')
+
+            if [ "${current}" = "${COLUMN}" ]; then
+              echo "::notice title=Board intake::Moved to '${COLUMN}' and read it back on attempt ${attempt}. This workflow owns only the opened->In review edge; merged->Done and closed->Done remain GitHub's built-in project workflows, so exactly one decider writes each transition."
+              exit 0
+            fi
+
+            echo "Attempt ${attempt}: wrote '${COLUMN}', read back '${current:-(nothing)}' — a concurrent write won. Retrying."
+          done
+
+          echo "::error title=Board intake::Wrote '${COLUMN}' three times and the board still reads '${current:-(nothing)}'. Something else is writing this item's Status and winning: check the project's built-in workflows for a rule that also fires on a pull request being added. The item IS on the board; only its column is wrong. Not exiting 0 on this — a job that writes and does not check is how the column silently reverted before." >&2
+          exit 1
