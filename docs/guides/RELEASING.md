@@ -25,10 +25,11 @@ version number. Every cause is below.
 5. commit, push the BRANCH
 6. tag that branch commit, push the tag → release.yml publishes
 7. wait for the registry to serve it
-8. open the PR and merge
+8. open the PR, label it `ai-review-override`, and merge
 ```
 
-Steps 6 and 8 are in that order, not the other one.
+Steps 6 and 8 are in that order, not the other one. Step 8's label is not
+optional — see below.
 
 ## The three that bite
 
@@ -109,6 +110,39 @@ request needs rebasing onto main before its reviewer will run again.
 
 This is expected and is not a fault in any of those pull requests. On
 2026-11-04 it took #1740, #1747 and #1607 out at once.
+
+## The release PR cannot pass `ai-review`, and that is why step 8 carries a label
+
+The same refusal lands on the release pull request **itself**, every time,
+without exception. Step 4 rewrites the pin inside `.github/workflows/ai-review.yml`,
+so the release branch's copy of that file necessarily differs from main's, so
+the action declines before it starts. `ai-review` is a required check on main
+and it will sit at UNMEASURED forever; no re-run and no rebase can clear it,
+because the difference is the thing being shipped.
+
+`ai-review-override` is the designed answer, and this is the one case the
+standing rule against that label explicitly allows: the reviewer is
+**structurally unable to run**, not being waived after reporting something.
+Verified on the last release — #1749 carried the label and its `ai-review`
+check reports pass in 30s, which is the waiver path, not a review.
+
+Label it when you open the pull request rather than after watching the check
+fail. The waiver is standing: it survives later pushes, so a human reads the
+diff instead.
+
+### Two reds on a release PR are normal, and only one of them matters
+
+Required on main is exactly `test` and `ai-review` — nothing else, no required
+reviewers, `strict: false`. So:
+
+| Check | On a release PR | Blocks the merge? |
+|---|---|---|
+| `ai-review` | UNMEASURED until the label | **yes** — required |
+| `review` | fails in ~15s | no — not a required check |
+
+A red `review` makes the pull request `UNSTABLE`, which is mergeable.
+`required_conversation_resolution` is on, though, so an unresolved review
+thread **does** block — resolve threads, do not just re-run checks.
 
 ## A merged fix is not a shipped fix
 
