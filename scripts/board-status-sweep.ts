@@ -175,17 +175,42 @@ mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
   }) { projectV2Item { id } }
 }`;
 
+/**
+ * Turn one HTTP response into data or a legible error. Exported because it is
+ * the single binding for "what went wrong", and a network call is not needed
+ * to test any of its branches.
+ *
+ * THE ORDER MATTERS AND THE FIRST VERSION HAD IT WRONG. It parsed before
+ * checking the status, so a 502 from an outage, an HTML rate-limit page or a
+ * proxy error threw `SyntaxError: Unexpected token <` — the one case this
+ * function exists to make legible, masked by a parse failure. Reading the body
+ * as TEXT first keeps both facts available: the status, and what the server
+ * actually said.
+ */
+export function interpretResponse(status: number, ok: boolean, text: string): unknown {
+  let body: { errors?: unknown; data?: unknown };
+  try {
+    body = JSON.parse(text) as { errors?: unknown; data?: unknown };
+  } catch {
+    const snippet = text.trim().slice(0, 200);
+    throw new Error(
+      `HTTP ${status}: the response was not JSON, so GitHub did not answer the query — ${snippet || "(empty body)"}`,
+    );
+  }
+
+  // A GraphQL error arrives with HTTP 200, so the status alone is not a reading.
+  if (body.errors !== undefined) throw new Error(`GraphQL: ${JSON.stringify(body.errors)}`);
+  if (!ok) throw new Error(`HTTP ${status}`);
+  return body.data;
+}
+
 async function graphql(token: string, query: string, variables: Record<string, unknown>): Promise<any> {
   const res = await fetch("https://api.github.com/graphql", {
     method: "POST",
     headers: { authorization: `bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ query, variables }),
   });
-  const body = (await res.json()) as { errors?: unknown; data?: unknown };
-  // A GraphQL error arrives with HTTP 200, so the status alone is not a reading.
-  if (body.errors !== undefined) throw new Error(`GraphQL: ${JSON.stringify(body.errors)}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return body.data;
+  return interpretResponse(res.status, res.ok, await res.text());
 }
 
 /** Every item, paginated. A bare first:100 against a 121-item board returns a FALSE ZERO. */

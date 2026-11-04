@@ -119,6 +119,47 @@ describe("board-intake workflow", () => {
     expect(move!).toContain("::error");
   });
 
+  test("BI-7: every API call goes through one retrying helper", () => {
+    // `set -euo pipefail` is on for the whole step, so a bare `gh api graphql`
+    // that fails on a network blip or a secondary rate limit aborts the step
+    // immediately with gh's raw error. None of the diagnostics below it ever
+    // print, and the retry loop is never reached — so the loop guards the
+    // race it was written for and nothing else.
+    //
+    // This is a POPULATION, which is why it is asserted rather than fixed at
+    // the one site the reviewer named: the step makes three calls — resolve
+    // the Status field, mutate, read back — and all three had it.
+    const move = runBlocks().find(b => b.includes("updateProjectV2ItemFieldValue"));
+    expect(move, "no run block performs the Status mutation").toBeDefined();
+
+    // Comments are stripped first. The header explains the hazard and quotes
+    // the forbidden spelling to do it, so a detector that counts prose fails
+    // on the documentation rather than on the code — the same mistake BI-3
+    // made against `actions/checkout`, which is why it is handled up front
+    // here instead of after a red run.
+    const code = move!.split("\n").filter(l => !/^\s*#/.test(l));
+    const calls = code.filter(l => l.includes("gh api graphql")).map(l => l.trim());
+
+    expect(
+      calls.length,
+      `exactly one 'gh api graphql' may exist — the one inside gql(). Every ` +
+        `other call must go through that helper so a transient failure retries ` +
+        `instead of aborting the step under 'set -e'. Found:\n${calls.join("\n")}`,
+    ).toBe(1);
+    expect(calls[0]!).toContain('"$@"');
+
+    // The helper must exist and actually retry, or the row above is satisfied
+    // by deleting the call sites rather than routing them.
+    expect(code.some(l => /^\s*gql\(\)\s*\{/.test(l))).toBe(true);
+    expect(move!).toContain("for attempt in");
+    // And it must be USED — three call sites route through it today. The
+    // trailing class includes `\` because one of the three continues onto the
+    // next line; omitting it counted 2 and read as a missing call site rather
+    // than as a narrow detector.
+    const uses = code.filter(l => /(^|[^_a-z])gql\s+[-"'\\]/.test(l));
+    expect(uses.length, `call sites routed through gql():\n${uses.join("\n")}`).toBeGreaterThanOrEqual(3);
+  });
+
   test("BI-4: no run block interpolates a value", () => {
     // The other half of the same property, and the easy one to reintroduce.
     // A `${{ ... }}` inside `run:` is substituted into the shell BEFORE it

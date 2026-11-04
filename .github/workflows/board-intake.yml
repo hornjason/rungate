@@ -165,6 +165,30 @@ jobs:
         run: |
           set -euo pipefail
 
+          # EVERY API CALL GOES THROUGH HERE, and the reason is `set -e`.
+          # A bare `gh api graphql` that fails on a network blip, a secondary
+          # rate limit or a momentary 5xx aborts this step instantly with gh's
+          # raw error: the retry loop below is never reached and none of the
+          # diagnostics in this script ever print. The loop would then be
+          # guarding the race it was written for and nothing else.
+          #
+          # Three calls had that exposure, not the one that was reported —
+          # resolving the field, mutating, and reading back — so it is fixed
+          # as a population and `test/board-intake.test.ts` BI-7 asserts no
+          # bare `gh api graphql` survives anywhere in this step.
+          gql() {
+            local out attempt
+            for attempt in 1 2 3; do
+              if out=$(gh api graphql "$@" 2>&1); then
+                printf '%s' "${out}"
+                return 0
+              fi
+              sleep $(( attempt * 2 ))
+            done
+            echo "::error title=Board intake::GitHub's GraphQL API failed three times. The item may or may not be on the board and its Status is UNKNOWN — this run measured nothing. Last error: ${out}" >&2
+            return 1
+          }
+
           # An empty item id means the add step did not produce one. Writing a
           # field against "" returns a confusing NOT_FOUND about the project,
           # so say which half actually failed.
@@ -173,7 +197,7 @@ jobs:
             exit 1
           fi
 
-          status=$(gh api graphql -f project="${PROJECT_ID}" -f query='
+          status=$(gql -f project="${PROJECT_ID}" -f query='
             query($project: ID!) {
               node(id: $project) {
                 ... on ProjectV2 {
@@ -211,7 +235,7 @@ jobs:
           # shape). Three attempts, each verified, and a loud refusal if the
           # last one did not stick.
           for attempt in 1 2 3; do
-            gh api graphql \
+            gql \
               -f project="${PROJECT_ID}" -f item="${ITEM_ID}" \
               -f field="${field_id}" -f option="${option_id}" -f query='
               mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
@@ -228,7 +252,7 @@ jobs:
             # guarded against.
             sleep 3
 
-            current=$(gh api graphql -f item="${ITEM_ID}" -f query='
+            current=$(gql -f item="${ITEM_ID}" -f query='
               query($item: ID!) {
                 node(id: $item) {
                   ... on ProjectV2Item {

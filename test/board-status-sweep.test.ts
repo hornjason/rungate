@@ -16,6 +16,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DONE,
   IN_REVIEW,
+  interpretResponse,
   sweep,
   verdictFor,
   type BoardItem,
@@ -82,6 +83,38 @@ describe("board status sweep", () => {
     // The reason has to name why a guess is refused, or the next reader
     // deletes the branch as an oversight and writes Backlog.
     expect(v.kind === "undecidable" && v.why).toContain("not derivable");
+  });
+
+  test("BS-9: a non-JSON error body reports the HTTP status, not a parse error", () => {
+    // 502s, HTML rate-limit pages and proxy errors all arrive as non-JSON.
+    // Parsing before checking the status turned the one failure this function
+    // exists to make legible into `SyntaxError: Unexpected token <`.
+    expect(() => interpretResponse(502, false, "<html><body>Bad Gateway</body></html>")).toThrow(
+      /HTTP 502/,
+    );
+    // And it carries what the server actually said, so the next reader does
+    // not have to reproduce the outage to find out.
+    expect(() => interpretResponse(502, false, "<html>Bad Gateway</html>")).toThrow(/Bad Gateway/);
+  });
+
+  test("BS-10: an empty body is named as empty rather than silently truncated", () => {
+    expect(() => interpretResponse(503, false, "")).toThrow(/empty body/);
+  });
+
+  test("BS-11: a GraphQL error at HTTP 200 is still an error", () => {
+    // The reason the status alone was never sufficient. This must survive the
+    // reordering above — it is the property the original comment defended.
+    expect(() =>
+      interpretResponse(200, true, JSON.stringify({ errors: [{ message: "NOT_FOUND" }] })),
+    ).toThrow(/GraphQL.*NOT_FOUND/);
+  });
+
+  test("BS-12: a good response returns its data", () => {
+    // Anti-vacuity for the three rows above: if interpretResponse threw
+    // unconditionally they would all pass.
+    expect(interpretResponse(200, true, JSON.stringify({ data: { node: { id: "x" } } }))).toEqual({
+      node: { id: "x" },
+    });
   });
 
   test("BS-8: the reading partitions the population exactly once", () => {
