@@ -244,12 +244,17 @@ describe("board-intake workflow", () => {
     //   items       -> "the index does not carry this"    (it does)
     //
     // A bigger page is not the fix; it has the same defect further out. The
-    // fix is that a truncated page is UNMEASURED, which is the treatment
-    // `scripts/board-status-sweep.ts` already gave the same fact under the
-    // name `statusUnread` — and the commit that introduced that name is the
-    // commit that left all three of these behind. A population fixed in one
-    // half of a change and not the other is the thing this row exists to
-    // stop recurring.
+    // fix is that a truncated page is UNMEASURED — the treatment the board
+    // sweep already gives the same fact under the name `statusUnread`, and
+    // the change that introduced that name is the one that left all three of
+    // these behind. A population fixed in one half of a change and not the
+    // other is the thing this row exists to stop recurring.
+    //
+    // THAT SWEEP IS NOT IN THIS TREE: `scripts/board-status-sweep.ts` lives
+    // on `rg/board-sweep`, open as PR #1754 and unmerged. Review checked the
+    // path, found nothing, and was right to report it — a citation a reader
+    // cannot resolve is indistinguishable from an invented one. The pull
+    // request is named instead of the path.
     const move = runBlocks().find(b => b.includes("updateProjectV2ItemFieldValue"));
     expect(move, "no run block performs the Status mutation").toBeDefined();
     const code = move!.split("\n").filter(l => !/^\s*#/.test(l));

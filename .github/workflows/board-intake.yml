@@ -247,16 +247,25 @@ jobs:
           #
           # Found in review round 8, reported at one site. It is a population
           # — `fields`, `fieldValues` and the index `items` query — and the
-          # round that introduced it is the one that fixed the identical shape
-          # in `scripts/board-status-sweep.ts` and did not carry it across.
+          # round that introduced it fixed the identical shape in the board
+          # sweep without carrying it across.
+          #
+          # THAT SWEEP IS NOT IN THIS TREE. It is `scripts/board-status-sweep.ts`
+          # on branch `rg/board-sweep`, open as PR #1754 and unmerged, so a
+          # reader of this file cannot resolve the path and review was right
+          # to say so. Naming the pull request instead: a cross-branch
+          # reference a reader can follow beats a path that 404s, and the
+          # citation is kept rather than deleted because the precedent is the
+          # reason this fix has the shape it does.
           #
           # The repair is NOT a bigger page. A bigger page has the same defect
           # further out. Each connection now asks `pageInfo { hasNextPage }`,
           # and "wanted value not found AND the page was full" is reported as
-          # UNMEASURED with its own message — the same treatment the sweep's
-          # `statusUnread` gives the same fact, so the two halves answer it
-          # the same way. `test/board-intake.test.ts` BI-10 asserts the
-          # population rather than any one site.
+          # UNMEASURED with its own message — the same treatment #1754 gives
+          # the same fact under the name `statusUnread`, so the two halves
+          # answer it the same way once both land.
+          # `test/board-intake.test.ts` BI-10 asserts the population rather
+          # than any one site.
           fields=$(gql -f project="${PROJECT_ID}" -f query='
             query($project: ID!) {
               node(id: $project) {
