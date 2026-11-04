@@ -30,13 +30,35 @@
 # ship red — `closing-references.yml` uses `actions/checkout@v4` — so it is a
 # ratchet and its own piece of work, not a line to slip in here.
 #
-# WHAT IT DELIBERATELY DOES NOT DO: set a field. The action takes only
-# `project-url`, `github-token`, `labeled` and `label-operator` — there is no
-# field input, and that is fine, because GitHub's built-in project workflows
-# already move Status. #1744 reached `In progress` on its own when #1747 linked
-# to it. Adding a second thing that writes Status would be two deciders over
-# one field, and no behavioural test could tell which one was live
-# (`.claude/rules/checks-must-be-able-to-fail.md`).
+# IT SETS Status FOR PULL REQUESTS, AND THE REASON IT ONCE DID NOT WAS FALSE.
+# This header used to say the omission was "fine, because GitHub's built-in
+# project workflows already move Status", and cited #1744 reaching
+# `In progress` when #1747 linked to it. That observation was real and the
+# generalisation from it was wrong: the built-ins move ISSUES, not pull
+# requests. Measured 2026-11-04, after this file had been live for a day —
+# #1751, #1747 and #1740 all sat in Backlog, and #1607 read Done while open
+# and BLOCKED. All seven built-in workflows are enabled and the set contains
+# no rule for a pull request being opened, so for that transition there were
+# never two deciders competing. There were none.
+#
+# `actions/add-to-project` takes only `project-url`, `github-token`, `labeled`
+# and `label-operator` — no field input — so the transition is a SECOND step
+# that writes the field directly. It keys off `steps.add.outputs.itemId`
+# rather than re-querying the board, because a re-query races the built-in
+# "Item added to project" workflow, which is the thing that puts the item in
+# Backlog.
+#
+# THE SPLIT IS DELIBERATE AND IS THE WHOLE DESIGN: this workflow owns ONLY the
+# opened -> In review edge. `merged -> Done` and `closed -> Done` stay with
+# GitHub's built-ins. Neither end writes what the other writes, so there is
+# still exactly one decider per transition
+# (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape). Do not
+# add a merge or close handler here; it would recreate the two-deciders
+# problem this split exists to avoid.
+#
+# The field and the option are resolved BY NAME at run time rather than by
+# pasting node ids. A board rename then fails the job loudly instead of
+# writing a stale id, or worse, silently writing nothing.
 #
 # THE TOKEN MUST CARRY PROJECT **WRITE**. `GITHUB_TOKEN` cannot write ProjectsV2
 # at all, at any permission level, so a PAT or App is required and that is
@@ -98,12 +120,24 @@ on:
 
 # `pull_request_target` runs in the context of the BASE repository and so can
 # see secrets, which `pull_request` cannot — and that is the whole reason it is
-# used here, because this job needs a token that can write the board. It is
-# safe in this specific shape and would not be in most others: there is NO
-# checkout of the pull request's head, no `run:` step, and no interpolation of
-# any attacker-controlled value. The job executes one pinned action against the
-# event payload's item id. Do not add a checkout or a `run:` block to this file
-# without moving the trigger back to `pull_request`.
+# used here, because this job needs a token that can write the board.
+#
+# THERE IS NOW A `run:` STEP, and an earlier revision of this paragraph said
+# there was not. That sentence was load-bearing, so read what replaced it: the
+# property that makes `pull_request_target` safe is not the absence of a
+# script, it is that NO ATTACKER-CONTROLLED VALUE IS EVER EXECUTED. Two things
+# hold that up and both are asserted by `test/board-intake.test.ts`:
+#
+#   BI-3  nothing checks out the pull request's head, so no contributor code
+#         runs in a job holding a board-writing token
+#   BI-4  no `run:` block contains `${{ }}` at all. Interpolation happens
+#         BEFORE the shell starts, so a pull request title carrying shell
+#         syntax would be code rather than data. Values arrive through `env:`
+#
+# The only event data this job touches is an item id minted by GitHub and a
+# boolean. Neither is attacker-authored. If you add a step that needs a title,
+# a branch name or a body, it goes in `env:` and is quoted on use — and if you
+# ever need a checkout, move the trigger back to `pull_request` first.
 permissions:
   contents: read
 
@@ -111,7 +145,63 @@ jobs:
   add-to-board:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+      - id: add
+        uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
         with:
           project-url: https://github.com/users/hornjason/projects/3
           github-token: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+
+      # Only pull requests, and only ones offered for review. `opened` fires
+      # for a draft too, and a draft in `In review` says somebody is waiting
+      # on a reader when nobody is. Drafts stay in Backlog until
+      # `ready_for_review`, which this workflow also subscribes to.
+      - name: Move the pull request to In review
+        if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == false
+        env:
+          GH_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          PROJECT_ID: PVT_kwHOAZTQCM4BpMuR
+          ITEM_ID: ${{ steps.add.outputs.itemId }}
+          COLUMN: In review
+        run: |
+          set -euo pipefail
+
+          # An empty item id means the add step did not produce one. Writing a
+          # field against "" returns a confusing NOT_FOUND about the project,
+          # so say which half actually failed.
+          if [ -z "${ITEM_ID}" ]; then
+            echo "::error title=Board intake::The add step produced no itemId, so there is nothing to move. The item was NOT added and its Status is UNSET — this is not a board that merely missed a transition." >&2
+            exit 1
+          fi
+
+          status=$(gh api graphql -f project="${PROJECT_ID}" -f query='
+            query($project: ID!) {
+              node(id: $project) {
+                ... on ProjectV2 {
+                  fields(first: 50) {
+                    nodes { ... on ProjectV2SingleSelectField { id name options { id name } } }
+                  }
+                }
+              }
+            }' --jq ".data.node.fields.nodes[] | select(.name == \"Status\")")
+
+          field_id=$(printf '%s' "${status}" | jq -r '.id // empty')
+          option_id=$(printf '%s' "${status}" | jq -r --arg c "${COLUMN}" '.options[]? | select(.name == $c) | .id')
+
+          # Resolved by name on purpose, so a renamed field or column is a red
+          # job rather than a stale node id writing the wrong column quietly.
+          if [ -z "${field_id}" ] || [ -z "${option_id}" ]; then
+            echo "::error title=Board intake::Could not resolve the Status field or its '${COLUMN}' option on this project. The item WAS added; only the transition failed. Someone renamed the field or the column — update COLUMN in this workflow to match the board." >&2
+            exit 1
+          fi
+
+          gh api graphql \
+            -f project="${PROJECT_ID}" -f item="${ITEM_ID}" \
+            -f field="${field_id}" -f option="${option_id}" -f query='
+            mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $project, itemId: $item, fieldId: $field,
+                value: { singleSelectOptionId: $option }
+              }) { projectV2Item { id } }
+            }' --jq '.data.updateProjectV2ItemFieldValue.projectV2Item.id'
+
+          echo "::notice title=Board intake::Moved to '${COLUMN}'. This workflow owns only the opened->In review edge; merged->Done and closed->Done remain GitHub's built-in project workflows, so exactly one decider writes each transition."
