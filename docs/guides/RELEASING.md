@@ -21,7 +21,7 @@ version number. Every cause is below.
 2. bump package.json                    tree version -> the new number
 3. SUCCESS.md standing line             tree  -> the new number
                                         published -> WHAT THE REGISTRY SERVES TODAY
-4. bun bin/rungate.ts scaffold . --fix  moves the five `bunx rungate@` pins
+4. bun bin/rungate.ts scaffold . --fix  moves all six `bunx rungate@` pins
 5. commit, push the BRANCH
 6. tag that branch commit, push the tag → release.yml publishes
 7. wait for the registry to serve it
@@ -96,17 +96,35 @@ bun scripts/census-routing.ts    # the exact `bun test …` line for your diff
 
 ## Never hand-edit the version pins
 
-Five `bunx rungate@<version>` sites live in generated workflows.
-`scaffold . --fix` owns them; `test/harness-fixed-point.test.ts` refuses a
+**Six** `bunx rungate@<version>` sites live in generated workflows, across
+**two** files — not one:
+
+| File | Pins |
+|---|---|
+| `.github/workflows/ai-review.yml` | 5 |
+| `.github/workflows/ai-review-unmeasured.yml` | 1 |
+
+Count it yourself rather than trusting this table; it is the claim in this
+guide most likely to go stale, and it already has once:
+
+```bash
+git grep -c 'bunx rungate@' origin/main -- .github/workflows/
+```
+
+`scaffold . --fix` owns all six; `test/harness-fixed-point.test.ts` refuses a
 generated file the generator would rewrite. Editing one by hand reddens the
 build and the remedy is to re-run the scaffold anyway.
 
-## Moving the pin breaks every open pull request
+## Moving the pins breaks every open pull request
 
-The pin lives in `.github/workflows/ai-review.yml`, so a release rewrites that
-file. The review action **refuses to run when a pull request's copy differs
-from the default branch's** — so after a release merges, every open pull
-request needs rebasing onto main before its reviewer will run again.
+A release rewrites both files above. One of them is
+`.github/workflows/ai-review.yml`, and that is the one with a consequence: the
+review action **refuses to run when a pull request's copy of its own workflow
+differs from the default branch's** — so after a release merges, every open
+pull request needs rebasing onto main before its reviewer will run again.
+
+`ai-review-unmeasured.yml` carries a pin too and has no such guard, so it
+moves quietly. Enumerate from the table, not from this paragraph's examples.
 
 This is expected and is not a fault in any of those pull requests. On
 2026-11-04 it took #1740, #1747 and #1607 out at once.
@@ -117,8 +135,9 @@ The same refusal lands on the release pull request **itself**, every time,
 without exception. Step 4 rewrites the pin inside `.github/workflows/ai-review.yml`,
 so the release branch's copy of that file necessarily differs from main's, so
 the action declines before it starts. `ai-review` is a required check on main
-and it will sit at UNMEASURED forever; no re-run and no rebase can clear it,
-because the difference is the thing being shipped.
+and it stays **red** until the label — no re-run and no rebase can clear it,
+because the difference is the thing being shipped. (Red, not pending: the
+reason it gives is `UNMEASURED`, and the distinction is spelled out below.)
 
 `ai-review-override` is the designed answer, and this is the one case the
 standing rule against that label explicitly allows: the reviewer is
@@ -172,9 +191,13 @@ Applying `ai-review-override` turns that red into a pass and prints
 changes what the pipeline does about it, not whether anyone read the diff.
 That is why a human reads the release diff.
 
-A red `review` makes the pull request `UNSTABLE`, which is mergeable.
-`required_conversation_resolution` is on, though, so an unresolved review
-thread **does** block — resolve threads, do not just re-run checks.
+**What actually blocks a merge, in order of how often it catches people:**
+`required_conversation_resolution` is on, so an unresolved review thread
+blocks — resolve threads, do not just re-run checks. A failing *required*
+check blocks, and the required set is only `test` and `ai-review`. A failing
+non-required check makes the pull request `UNSTABLE`, which is still
+mergeable — but see the paragraph above: on a release that is a signal to
+investigate, not a state to merge through.
 
 ## A merged fix is not a shipped fix
 
