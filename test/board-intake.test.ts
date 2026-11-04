@@ -1,5 +1,5 @@
 /**
- * BI-1..BI-5 — `.github/workflows/board-intake.yml`.
+ * BI-1..BI-10 — `.github/workflows/board-intake.yml`.
  *
  * The workflow that puts every issue and pull request on the board, and moves
  * a pull request to In review when it opens. Covers the gap #1750 left open:
@@ -228,6 +228,72 @@ describe("board-intake workflow", () => {
       /\[ "\$\{current\}" = "\$\{COLUMN\}" \] && \[ -n "\$\{indexed\}" \]/.test(body),
       "the success branch must require the index reading as well as the field value",
     ).toBe(true);
+  });
+
+  test("BI-10: every paged connection reports truncation, and none reads a full page as absence", () => {
+    // Round 8's finding, asserted as the POPULATION it is rather than at the
+    // one site that was reported.
+    //
+    // This step asks three connections for a FIRST page — `fields`,
+    // `fieldValues` and the index `items` query — and before this row all
+    // three read "not in the page" as "not there". Each one then printed a
+    // confident error naming a cause that had not happened:
+    //
+    //   fields      -> "Someone renamed the field"        (nobody did)
+    //   fieldValues -> "a concurrent write won", 3 times  (nothing raced)
+    //   items       -> "the index does not carry this"    (it does)
+    //
+    // A bigger page is not the fix; it has the same defect further out. The
+    // fix is that a truncated page is UNMEASURED, which is the treatment
+    // `scripts/board-status-sweep.ts` already gave the same fact under the
+    // name `statusUnread` — and the commit that introduced that name is the
+    // commit that left all three of these behind. A population fixed in one
+    // half of a change and not the other is the thing this row exists to
+    // stop recurring.
+    const move = runBlocks().find(b => b.includes("updateProjectV2ItemFieldValue"));
+    expect(move, "no run block performs the Status mutation").toBeDefined();
+    const code = move!.split("\n").filter(l => !/^\s*#/.test(l));
+    const body = code.join("\n");
+
+    // A GraphQL connection asked for a bounded page. `| first // empty` in a
+    // jq program is deliberately not matched — the colon and the number are
+    // what make it a page request.
+    const paged = code.filter(l => /\w+\(first: \d+/.test(l)).map(l => l.trim());
+    const pageInfos = code.filter(l => l.includes("pageInfo { hasNextPage }"));
+
+    // Anti-vacuity before anything is compared: three is what the step makes
+    // today, and a row that passes by finding none of them is worthless.
+    expect(
+      paged.length,
+      `expected the three paged connections (fields, fieldValues, index items); found:\n${paged.join("\n")}`,
+    ).toBeGreaterThanOrEqual(3);
+
+    expect(
+      pageInfos.length,
+      `every paged connection must ask whether there is more beyond its page. ` +
+        `${paged.length} connection(s) request a page and ${pageInfos.length} ask for ` +
+        `pageInfo:\n${paged.join("\n")}`,
+    ).toBe(paged.length);
+
+    // And asking is not enough — the answer has to change what the job says.
+    // One refusal per connection, each naming the reading UNMEASURED, so a
+    // truncated page cannot be reported as a rename, a race, or a missing
+    // card.
+    const guards = code.filter(l => l.includes("hasNextPage')\" = \"true\" ]"));
+    expect(
+      guards.length,
+      `each paged connection needs a guard that fires when the wanted value was ` +
+        `absent AND the page was full. Found ${guards.length} for ${paged.length} ` +
+        `connection(s):\n${guards.join("\n")}`,
+    ).toBe(paged.length);
+    expect(
+      (body.match(/UNMEASURED/g) ?? []).length,
+      "each truncation guard must name the reading UNMEASURED, not guess a cause",
+    ).toBe(paged.length);
+
+    // The specific spelling round 8 reported, kept as a named regression:
+    // the sweep half of the same commit moved to 50 and this half did not.
+    expect(body).not.toContain("fieldValues(first: 20)");
   });
 
   test("BI-4: no run block interpolates a value", () => {

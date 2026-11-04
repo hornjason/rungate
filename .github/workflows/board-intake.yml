@@ -215,24 +215,50 @@ jobs:
             exit 1
           fi
 
-          status=$(gql -f project="${PROJECT_ID}" -f query='
+          # A TRUNCATED PAGE IS NOT AN ABSENT VALUE, and this step asked three
+          # connections for a FIRST page and then read "not in it" as "not
+          # there" at all three. Every one of them had the same consequence:
+          # a confident error message naming a cause that did not happen.
+          #
+          # Found in review round 8, reported at one site. It is a population
+          # — `fields`, `fieldValues` and the index `items` query — and the
+          # round that introduced it is the one that fixed the identical shape
+          # in `scripts/board-status-sweep.ts` and did not carry it across.
+          #
+          # The repair is NOT a bigger page. A bigger page has the same defect
+          # further out. Each connection now asks `pageInfo { hasNextPage }`,
+          # and "wanted value not found AND the page was full" is reported as
+          # UNMEASURED with its own message — the same treatment the sweep's
+          # `statusUnread` gives the same fact, so the two halves answer it
+          # the same way. `test/board-intake.test.ts` BI-10 asserts the
+          # population rather than any one site.
+          fields=$(gql -f project="${PROJECT_ID}" -f query='
             query($project: ID!) {
               node(id: $project) {
                 ... on ProjectV2 {
                   fields(first: 50) {
+                    pageInfo { hasNextPage }
                     nodes { ... on ProjectV2SingleSelectField { id name options { id name } } }
                   }
                 }
               }
-            }' --jq ".data.node.fields.nodes[] | select(.name == \"Status\")")
+            }' --jq '.data.node.fields')
 
+          status=$(printf '%s' "${fields}" | jq -r '[.nodes[] | select(.name == "Status")] | first // empty')
           field_id=$(printf '%s' "${status}" | jq -r '.id // empty')
           option_id=$(printf '%s' "${status}" | jq -r --arg c "${COLUMN}" '.options[]? | select(.name == $c) | .id')
 
+          if [ -z "${field_id}" ] && [ "$(printf '%s' "${fields}" | jq -r '.pageInfo.hasNextPage')" = "true" ]; then
+            echo "::error title=Board intake::The first 50 fields on this project do not include one named 'Status', AND there are more fields beyond that page — so this read is UNMEASURED, not a missing field. Nothing was written. Do not rename anything on the strength of this message; page the fields query instead." >&2
+            exit 1
+          fi
+
           # Resolved by name on purpose, so a renamed field or column is a red
           # job rather than a stale node id writing the wrong column quietly.
+          # Reachable only when the page was NOT truncated, so it can now say
+          # "renamed" and mean it.
           if [ -z "${field_id}" ] || [ -z "${option_id}" ]; then
-            echo "::error title=Board intake::Could not resolve the Status field or its '${COLUMN}' option on this project. The item WAS added; only the transition failed. Someone renamed the field or the column — update COLUMN in this workflow to match the board." >&2
+            echo "::error title=Board intake::Could not resolve the Status field or its '${COLUMN}' option on this project. The whole field list was read, so this is not a truncated page. The item WAS added; only the transition failed. Someone renamed the field or the column — update COLUMN in this workflow to match the board." >&2
             exit 1
           fi
 
@@ -270,11 +296,12 @@ jobs:
             # guarded against.
             sleep 3
 
-            current=$(gql -f item="${ITEM_ID}" -f query='
+            values=$(gql -f item="${ITEM_ID}" -f query='
               query($item: ID!) {
                 node(id: $item) {
                   ... on ProjectV2Item {
-                    fieldValues(first: 20) {
+                    fieldValues(first: 50) {
+                      pageInfo { hasNextPage }
                       nodes {
                         ... on ProjectV2ItemFieldSingleSelectValue {
                           name field { ... on ProjectV2FieldCommon { name } }
@@ -283,7 +310,19 @@ jobs:
                     }
                   }
                 }
-              }' --jq '[.data.node.fieldValues.nodes[] | select(.field.name == "Status") | .name] | first // ""')
+              }' --jq '.data.node.fieldValues')
+
+            current=$(printf '%s' "${values}" | jq -r '[.nodes[] | select(.field.name == "Status") | .name] | first // ""')
+
+            # The worst of the three, because its wrong diagnosis is the one
+            # a reader would act on: an item carrying more field values than
+            # the page holds reads back as "" and the loop below blames a
+            # competing writer for a race that never happened, three times,
+            # then fails a job whose write in fact succeeded.
+            if [ -z "${current}" ] && [ "$(printf '%s' "${values}" | jq -r '.pageInfo.hasNextPage')" = "true" ]; then
+              echo "::error title=Board intake::Status was not among this item's first 50 field values and there are more beyond that page, so the read-back is UNMEASURED — the write may well have worked. This is NOT a competing writer and NOT an unset column. Page the fieldValues query." >&2
+              exit 1
+            fi
 
             # THE FIELD VALUE IS NOT WHAT THE BOARD DRAWS, AND THIS STEP USED
             # TO STOP HERE. Projects serves a board view from a SEARCH INDEX
@@ -303,16 +342,32 @@ jobs:
             # the sixth shape).
             #
             # Both readings must agree before this job claims the move worked.
-            indexed=$(gql -f project="${PROJECT_ID}" -f q="status:\"${COLUMN}\"" -f query='
+            index_page=$(gql -f project="${PROJECT_ID}" -f q="status:\"${COLUMN}\"" -f query='
               query($project: ID!, $q: String!) {
                 node(id: $project) {
                   ... on ProjectV2 {
                     items(first: 100, query: $q) {
+                      pageInfo { hasNextPage }
                       nodes { id }
                     }
                   }
                 }
-              }' --jq "[.data.node.items.nodes[].id] | index(\"${ITEM_ID}\") // empty")
+              }' --jq '.data.node.items')
+
+            # `--arg` rather than interpolating ITEM_ID into the jq program.
+            # The id is minted by GitHub so this is not a sanitisation fix; a
+            # value pasted into a program text is simply a different thing
+            # from a value passed to one, and only one of them stays a value.
+            indexed=$(printf '%s' "${index_page}" | jq -r --arg id "${ITEM_ID}" '[.nodes[].id] | index($id) // empty')
+
+            # The third site. A column holding more than 100 cards is not
+            # hypothetical on a 121-item board, and without this the job
+            # reports the card as absent from the index and tells a human to
+            # go and look at an index that is in fact correct.
+            if [ -z "${indexed}" ] && [ "$(printf '%s' "${index_page}" | jq -r '.pageInfo.hasNextPage')" = "true" ]; then
+              echo "::error title=Board intake::More than 100 items match '${COLUMN}' in the project's search index and this item was not in the first page, so its membership is UNMEASURED — it may well be indexed and rendering. Do not read this as a missing card. Page the index query." >&2
+              exit 1
+            fi
 
             if [ "${current}" = "${COLUMN}" ] && [ -n "${indexed}" ]; then
               echo "::notice title=Board intake::Moved to '${COLUMN}' on attempt ${attempt}, confirmed in BOTH the item's field value and the project's search index — so the card will actually render. This workflow owns only the opened->In review edge; merged->Done and closed->Done remain GitHub's built-in project workflows, so exactly one decider writes each transition."
