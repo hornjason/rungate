@@ -35,6 +35,7 @@ const dep = (over: Partial<Dependent> = {}): Dependent => ({
   phase: 3,
   blockedByOpen: 0,
   assignees: 0,
+  onBoard: true,
   boardStatus: "Backlog",
   ...over,
 });
@@ -54,7 +55,7 @@ describe("BR-1..BR-6: the fan-out from one closed blocker", () => {
   // the board's contents depend on which issues happened to close, which is
   // a different and much larger claim than the one #1744 makes.
   test("BR-2: an issue that is not on the board is left alone, not added", () => {
-    const [d] = fanoutDecisions([dep({ boardStatus: null })], 3, "Ready");
+    const [d] = fanoutDecisions([dep({ onBoard: false, boardStatus: null })], 3, "Ready");
     expect(d.move).toBe(false);
     if (!d.move) expect(d.why).toContain("not on the board");
   });
@@ -100,6 +101,99 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
   // move, so BR-17 is not green because nothing ever moves.
   test("BR-18: a measured zero is not the same reading, and does move", () => {
     expect(fanoutDecisions([dep({ blockedByOpen: 0 })], 3, "Ready")[0].move).toBe(true);
+  });
+
+  /**
+   * Three board states, and `boardStatus: string | null` could only spell two.
+   *
+   * GraphQL returns a `ProjectV2ItemFieldSingleSelectValue` node only for a
+   * field that already HAS a value. An item added to the project whose Status
+   * was never set returns no such node, so `statusValue?.name ?? null` gave
+   * exactly the `null` that "this issue is not on the board at all" gives —
+   * and the reason printed for it was "not on the board", which is false.
+   *
+   * The cost is not a wrong move; neither state moves. It is that the log
+   * sends the reader to `board-mirror` to add an item that is already there,
+   * and the real obstacle — no Status value, therefore no field id to write
+   * through — is never named. `onBoard` is the axis that separates them.
+   */
+  test("BR-28: on the board with no Status is not the same reading as absent from it", () => {
+    const [absent] = fanoutDecisions([dep({ onBoard: false, boardStatus: null })], 3, "Ready");
+    const [unset] = fanoutDecisions([dep({ onBoard: true, boardStatus: null })], 3, "Ready");
+    expect(absent.move).toBe(false);
+    expect(unset.move).toBe(false);
+    if (absent.move || unset.move) throw new Error("unreachable — both are refusals");
+    // The whole point of the row: two refusals that do not say the same thing.
+    expect(absent.why).not.toBe(unset.why);
+    expect(absent.why).toContain("not on the board");
+    expect(unset.why).toContain("UNMEASURED");
+    expect(
+      unset.why,
+      "an item on the board with no Status must not be reported as absent from the board",
+    ).not.toContain("not on the board");
+  });
+
+  /**
+   * The same fail-open shape as `blockedByOpen`, on the field beside it.
+   *
+   * `b.assignees?.totalCount ?? 0` reads an unreadable assignee count as
+   * "nobody has claimed it", which is the direction that MOVES — an issue
+   * somebody is already working on lands in Ready. `blockedByOpen` was fixed
+   * to `null` for exactly this and the sibling field was left; BR-31 is the
+   * structural half, so a third field cannot arrive with `?? 0`.
+   */
+  test("BR-29: an unreadable assignee count does not move the issue", () => {
+    const [d] = fanoutDecisions([dep({ assignees: null })], 3, "Ready");
+    expect(d.move).toBe(false);
+    if (!d.move) expect(d.why).toContain("UNMEASURED");
+  });
+
+  // The positive control, so BR-29 is not green because nothing moves.
+  test("BR-30: a measured zero assignees is a reading, and does move", () => {
+    expect(fanoutDecisions([dep({ assignees: 0 })], 3, "Ready")[0].move).toBe(true);
+  });
+
+  /**
+   * The class, not the instance. Rounds 1-7 of #1747 fixed fail-open numeric
+   * defaults one field at a time — `blockedByOpen`, then `Number(null)` as a
+   * valid `--closed-issue`, then `assignees` — and nothing stopped the next
+   * one. This reads the object literal that builds a `Dependent` and refuses
+   * any `?? <number>` in it: an absent reading is `null`, which never moves.
+   */
+  test("BR-31: no field of a Dependent defaults an unreadable value to a number", () => {
+    const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+    const literal = /const dependents: Dependent\[\] = blocking\.map\(\(b: any\) => \{([\s\S]*?)\n {2}\}\);/
+      .exec(src)?.[1];
+    // ANTI-VACUITY. A detector that found nothing and a tree with no defaults
+    // produce the same empty list, and the second is the one worth believing
+    // only once the first is ruled out.
+    expect(
+      literal,
+      "the `blocking.map(...)` that builds Dependent was not found in scripts/board-ready.ts — " +
+        "this row would pass vacuously. Fix the pattern, do not delete the row.",
+    ).toBeTruthy();
+    // A DETECTOR THAT READS A WHOLE BLOCK READS ITS COMMENTS. The first
+    // spelling of this row went red on the two comments warning the next
+    // person off `?? 0` — a guard that cannot tell a default from a sentence
+    // about one gets relaxed rather than obeyed. Comments are stripped before
+    // anything is counted, and the field census below runs on the stripped
+    // text so the stripping cannot quietly take the code with it.
+    const code = (literal ?? "")
+      .split("\n")
+      .map(l => l.trim())
+      .filter(l => l !== "" && !l.startsWith("//") && !l.startsWith("*") && !l.startsWith("/*"));
+    const body = code.join("\n");
+    for (const field of ["number:", "state:", "phase:", "blockedByOpen:", "assignees:", "onBoard:", "boardStatus:"]) {
+      expect(body, `the matched literal does not contain ${field} — it matched the wrong block`).toContain(field);
+    }
+    const defaults = code.filter(l => /\?\?\s*-?\d/.test(l));
+    expect(
+      defaults,
+      "a field of Dependent substitutes a number for a reading that could not be taken. " +
+        "`?? 0` on assignees says 'nobody has claimed it' and MOVES the issue; on a blocker " +
+        "count it says 'nothing is blocking it' and moves it too. Use `null` — UNMEASURED never moves " +
+        "(`.claude/rules/config-access.md`, Silent Default Substitution).",
+    ).toEqual([]);
   });
 
   // Every list read in the script pages. This is the third time this shape
@@ -207,23 +301,28 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
         // the one input where `isReady` has no answer to agree with, so the
         // grid asserts a DIFFERENT property for those rows — never moves.
         for (const blockedByOpen of [0, 2, null])
-          for (const assignees of [0, 1])
+          // `assignees: null` joined the same axis in round 8 for the same
+          // reason — `isReady` takes a number, so an unread count is a
+          // question it cannot be asked rather than one it answers false.
+          for (const assignees of [0, 1, null])
             for (const frontier of frontiers) {
               const d = dep({ state, phase, blockedByOpen, assignees });
               const [got] = fanoutDecisions([d], frontier, "Ready");
-              if (blockedByOpen === null) {
+              if (blockedByOpen === null || assignees === null) {
                 expect(got.move).toBe(false);
                 unmeasured++;
               } else {
-                expect(got.move).toBe(isReady({ ...d, blockedByOpen }, frontier));
+                expect(got.move).toBe(isReady({ ...d, blockedByOpen, assignees }, frontier));
                 compared++;
               }
             }
     // The grid is the instrument; one that shrank to nothing would pass
     // vacuously, and both halves have to be non-empty for the split above
-    // to mean anything.
+    // to mean anything. 2 states x 3 phases x 3 blocker readings x 3
+    // assignee readings x 2 frontiers = 108, of which the 48 fully-measured
+    // rows are the ones isReady can be asked about.
     expect(compared).toBe(48);
-    expect(unmeasured).toBe(24);
+    expect(unmeasured).toBe(60);
   });
 
   test("BR-8: and a row of that grid genuinely moves — the grid is not all false", () => {

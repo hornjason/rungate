@@ -57,8 +57,27 @@ export interface Dependent {
    * Ready. Caught in review of #1747.
    */
   readonly blockedByOpen: number | null;
-  readonly assignees: number;
-  /** The board column, or `null` when the issue is not on the board at all. */
+  /**
+   * **`null` means the assignee count could not be read**, exactly as above.
+   * `?? 0` here says "nobody has claimed it", and that is the direction that
+   * MOVES — an issue somebody is already working on lands in Ready. The
+   * sibling field was fixed for this and this one was left; caught in review
+   * of #1747, round 7.
+   */
+  readonly assignees: number | null;
+  /** Is this issue on the board at all? Membership is `board-mirror`'s. */
+  readonly onBoard: boolean;
+  /**
+   * The board column, or `null` when the item has no Status VALUE.
+   *
+   * Not the same question as `onBoard`, and the two were one field until
+   * review of #1747 round 6. GraphQL returns a
+   * `ProjectV2ItemFieldSingleSelectValue` node only for a field that already
+   * has a value, so an item added to the project and never given a Status
+   * returns no node — producing the same `null` as an issue that is not on
+   * the board. One of those means "board-mirror owns this, leave it"; the
+   * other means "it is here and I cannot see where".
+   */
   readonly boardStatus: string | null;
 }
 
@@ -80,6 +99,7 @@ function whyNotReady(d: Dependent, frontier: number | null): string {
   if (d.blockedByOpen > 0) {
     return `${d.blockedByOpen} open blocker${d.blockedByOpen === 1 ? "" : "s"} remain`;
   }
+  if (d.assignees === null) return "UNMEASURED — the assignee count could not be read";
   if (d.assignees > 0) return "somebody has claimed it";
   if (frontier === null) return "no phase has open work, so nothing is next";
   if (d.phase === null) return "no phase milestone — it serves no criterion (ADR-003)";
@@ -96,8 +116,22 @@ export function fanoutDecisions(
   readyColumn: string,
 ): FanoutDecision[] {
   return dependents.map((d): FanoutDecision => {
-    if (d.boardStatus === null) {
+    if (!d.onBoard) {
       return { number: d.number, move: false, why: "not on the board — board-mirror owns membership" };
+    }
+    // On the board, and no Status value. Distinct from the line above on
+    // purpose: the caller resolves the Status FIELD ID from the item's own
+    // value node, so an item that has never had a Status has nothing to
+    // write through. Saying "not on the board" sent the reader to
+    // board-mirror to add an item that was already there.
+    if (d.boardStatus === null) {
+      return {
+        number: d.number,
+        move: false,
+        why:
+          "UNMEASURED — it is on the board with no Status value, so there is no Status field id " +
+          "to write through. This is NOT absent from the board.",
+      };
     }
     if (d.boardStatus === readyColumn) {
       return { number: d.number, move: false, why: `already ${readyColumn}` };
@@ -107,10 +141,10 @@ export function fanoutDecisions(
     // honest answer here does not exist — the question is unanswerable, not
     // answered false. Refusing before the decider is what keeps `isReady` the
     // only thing that says yes.
-    if (d.blockedByOpen === null) {
+    if (d.blockedByOpen === null || d.assignees === null) {
       return { number: d.number, move: false, why: whyNotReady(d, frontier) };
     }
-    const measured = { ...d, blockedByOpen: d.blockedByOpen };
+    const measured = { ...d, blockedByOpen: d.blockedByOpen, assignees: d.assignees };
     if (!isReady(measured, frontier)) {
       return { number: d.number, move: false, why: whyNotReady(d, frontier) };
     }

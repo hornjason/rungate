@@ -225,8 +225,15 @@ async function main(): Promise<number> {
         typeof b.issueDependenciesSummary?.blockedBy === "number"
           ? (b.issueDependenciesSummary.blockedBy as number)
           : null,
-      assignees: b.assignees?.totalCount ?? 0,
-      boardStatus: item ? (statusValue?.name ?? null) : null,
+      // NOT `?? 0`, for the same reason and in the damaging direction: a
+      // count read as zero says "nobody has claimed it", which MOVES an
+      // issue somebody is already working on into Ready.
+      assignees: typeof b.assignees?.totalCount === "number" ? (b.assignees.totalCount as number) : null,
+      // Two questions, two fields. `statusValue` is absent both when the
+      // issue is not on the board and when it is on the board with no
+      // Status value set, and only `item` can tell those apart.
+      onBoard: item !== undefined,
+      boardStatus: statusValue?.name ?? null,
     };
   });
 
