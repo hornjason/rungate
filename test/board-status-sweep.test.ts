@@ -404,6 +404,56 @@ describe("board status sweep", () => {
     expect(item?.statusUnread).toBe(false);
   });
 
+  // ── BS-34..BS-35: two review findings about what a run tells its reader ──
+  const SRC = readFileSync(join(import.meta.dir, "..", "scripts", "board-status-sweep.ts"), "utf-8");
+
+  test("BS-34: every network call carries a timeout, so a hang reaches withRetry", () => {
+    // `withRetry` survives failures that REJECT. A connection accepted and
+    // never answered rejects nothing, so it never retries and `main()`
+    // blocks forever — in CI, on the `--write` path, with nobody watching.
+    // Caught in review of #1754.
+    //
+    // A census over the population rather than the one site: a second fetch
+    // added later without a signal is the same defect at a new address.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    const fetches = [...code.matchAll(/\bfetch\(/g)];
+    // Anti-vacuity. Zero means the request path was rewritten and the row
+    // below is asserting over nothing.
+    expect(fetches.length, "expected at least one fetch( in the sweep").toBeGreaterThanOrEqual(1);
+    expect(
+      (code.match(/signal:\s*AbortSignal\.timeout\(/g) ?? []).length,
+      "every fetch( in this file must carry `signal: AbortSignal.timeout(...)` — " +
+        "a stalled connection never rejects, so withRetry never gets to retry it",
+    ).toBe(fetches.length);
+    // And the budget is per attempt, so three attempts get three chances.
+    expect(code).toMatch(/REQUEST_TIMEOUT_MS\s*=\s*[\d_]+/);
+  });
+
+  test("BS-35: the re-run instruction is not printed when nothing is writable", () => {
+    // One message served both branches, so a run finding only undecidable
+    // rows said "re-run with --write to apply the corrections above" when
+    // there were none above and --write is explicitly refused for those
+    // rows. An instruction that cannot work teaches the reader to distrust
+    // the tool rather than to go and pick the column.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    // The corrections branch must be guarded on corrections ALONE.
+    expect(
+      code,
+      "the --write instruction must be reachable only when there are corrections",
+    ).toMatch(/if\s*\(reading\.corrections\.length > 0\)\s*\{\s*\n\s*console\.log\([^)]*--write/);
+    // And the undecidable-only case must say so rather than borrow it.
+    expect(
+      code,
+      "a run with only undecidable rows needs its own message saying nothing is writable",
+    ).toMatch(/every row above is UNDECIDABLE/);
+    // Anti-vacuity: the old single-condition guard must be gone, not merely
+    // joined by a second one.
+    expect(
+      /reading\.corrections\.length > 0 \|\| reading\.undecidable\.length > 0/.test(code),
+      "the merged condition is the defect — the two cases print different instructions",
+    ).toBe(false);
+  });
+
   test("BS-33: isDraft is coerced, and a node this sweep cannot judge is null", () => {
     // `isDraft` is absent on the Issue fragment. An `undefined` reaching
     // `BoardItem.draft` makes `!item.draft` true for every item, so the draft

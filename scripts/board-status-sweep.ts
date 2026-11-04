@@ -371,11 +371,31 @@ async function graphql(token: string, query: string, variables: Record<string, u
   return withRetry(async () => rawGraphql(token, query, variables));
 }
 
+/**
+ * **A hang is not an error, so `withRetry` never sees it.**
+ *
+ * `withRetry` exists to survive a transient failure, and every failure it
+ * can survive is one that REJECTS — a network blip, a 5xx, a rate limit. A
+ * connection that is accepted and then never answered, or a TLS handshake
+ * that stalls, rejects nothing: `fetch` waits, `withRetry` is never given a
+ * chance to retry, and `main()` blocks forever. On the `--write` path this
+ * runs in CI with nobody watching, so the outcome the retry logic was built
+ * to prevent — a run that silently never finishes or reports — was still
+ * reachable, just through a trigger it does not cover. Caught in review of
+ * #1754.
+ *
+ * One timeout per ATTEMPT, not per run: `withRetry` makes three, so a
+ * genuinely slow-but-alive endpoint still gets three chances rather than one
+ * shared budget.
+ */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
 async function rawGraphql(token: string, query: string, variables: Record<string, unknown>): Promise<any> {
   const res = await fetch("https://api.github.com/graphql", {
     method: "POST",
     headers: { authorization: `bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   return interpretResponse(res.status, res.ok, await res.text());
 }
@@ -486,9 +506,26 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   if (!values.write) {
-    if (reading.corrections.length > 0 || reading.undecidable.length > 0) {
+    // **The instruction has to match what the run found.** One message
+    // served both branches, so a run with only undecidable rows said
+    // "re-run with --write to apply the corrections above" when there were
+    // no corrections above and `--write` would change nothing — it is
+    // explicitly refused for these rows. An instruction that cannot work is
+    // worse than none: the reader runs it, sees no change, and learns to
+    // distrust the tool rather than to go and pick the column. Caught in
+    // review of #1754.
+    if (reading.corrections.length > 0) {
       console.log("\nReport only. Re-run with --write to apply the corrections above.");
-      console.log("Undecidable rows are never written, with or without --write.");
+      if (reading.undecidable.length > 0) {
+        console.log("Undecidable rows are never written, with or without --write.");
+      }
+      return DRIFT_EXIT;
+    }
+    if (reading.undecidable.length > 0) {
+      console.log(
+        "\nReport only, and nothing here is writable: every row above is UNDECIDABLE. " +
+          "`--write` would change none of them. A person has to pick the column.",
+      );
       return DRIFT_EXIT;
     }
     console.log("\nThe board agrees with GitHub.");
