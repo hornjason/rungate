@@ -37,7 +37,7 @@ import {
  *
  * ## What was broken to prove these can fail
  *
- * Run against this tree, 24 tests. Every count predicted before the battery
+ * Run against this tree, 26 tests. Every count predicted before the battery
  * ran, and **the baseline row was read first** — an instrument that has
  * stopped reporting takes the baseline down with it, and nobody mutates
  * anything to produce that row.
@@ -54,7 +54,7 @@ import {
  *
  * | Row | Predicted | Measured |
  * |---|---|---|
- * | **baseline** — unmutated | 24 pass, 0 fail | **24 pass, 0 fail** |
+ * | **baseline** — unmutated | 26 pass, 0 fail | **26 pass, 0 fail** |
  * | M1 `rate` divides unconditionally — `NaN` instead of `null` | 3 | **3** |
  * | M2 the denominator becomes `rows.length` | 4 | **4** |
  * | M3 an `UNMEASURED` lookup reads as no-comment | 1 | **1** |
@@ -418,6 +418,29 @@ describe("FC-20..FC-23: a non-success must not render as a success", () => {
     expect(buckets.length, `expected one bucket, got ${JSON.stringify(reading.unobservableByRefusal)}`).toBe(1);
   });
 
+  test("FC-25: the bucket key and the UNOBSERVABLE message use the SAME word", async () => {
+    // The population half of FC-21, and I missed it: `countUnobservable` was
+    // moved to REFUSED_UNLABELLED and `targetOf`'s own message was left on
+    // `?? NOT_REFUSED`, so the same row was attributed one way in the count
+    // and the other way in the sentence a human reads. Two sites, one
+    // vocabulary, and nothing made them agree
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape).
+    const row = { ...ROW, refusal: null, emitted: false, duplicateOf: [] };
+    const reading = await complianceReading({ rows: [row], lookup: lookupOf({}), windowMs: 24 * HOUR });
+
+    const bucket = Object.keys(reading.unobservableByRefusal)[0]!;
+    const first = reading.rows[0];
+    // Narrowed rather than cast: if this row ever stops being UNOBSERVABLE
+    // the case has lost its subject and should say so, not read "" and pass.
+    expect(first?.state).toBe("UNOBSERVABLE");
+    const why = first?.state === "UNOBSERVABLE" ? first.why : "";
+    expect(
+      why.includes(bucket),
+      `the count buckets this row as '${bucket}' and the message says '${why}'. ` +
+        `A reader cannot reconcile a tally and a sentence that name the same row differently.`,
+    ).toBe(true);
+  });
+
   test("FC-22: an emitted row still buckets as NOT_REFUSED", async () => {
     // The positive control for FC-21. Without it, FC-21 passes against a
     // change that simply deletes the NOT_REFUSED bucket entirely, which would
@@ -431,6 +454,49 @@ describe("FC-20..FC-23: a non-success must not render as a success", () => {
     expect(Object.keys(reading.unobservableByRefusal)).toEqual(["NOT_REFUSED"]);
   });
 
+  test(
+    "FC-24: a server that never short-pages is UNMEASURED, not an infinite loop",
+    async () => {
+      // `for (let page = 1; ; page++)` terminated only on a short page. A
+      // server-side paging bug, a `page` param silently ignored, or a mock
+      // that always returns 100 rows makes this await forever and hold the
+      // calling process open — and the sibling `listOpenIssues` above takes
+      // the opposite tradeoff deliberately, reading one page and reporting
+      // `truncated`.
+      //
+      // THE MOCK HAS ITS OWN FUSE, and that is not belt-and-braces — it is
+      // the only reason this case is runnable. The first draft relied on
+      // bun's per-test timeout and the suite HUNG instead of going red: a
+      // tight await loop is not interrupted by it. A hung suite is not a
+      // red row, it is no reading at all.
+      //
+      // So the mock refuses after FUSE pages. Before the cap existed, the
+      // fuse fired and `why` carried the mock's message — red. With the cap,
+      // the loop stops on its own well under the fuse, which `calls` asserts:
+      // without that the row would pass on a run that only ever hit the fuse.
+      const FUSE = 500;
+      const full = Array.from({ length: 100 }, () => ({ created_at: "2026-11-01T00:00:00Z" }));
+      let calls = 0;
+      const read = await ghIssueComments("owner/repo", () => ({
+        rest: {
+          issues: {
+            listComments: async () => {
+              calls += 1;
+              if (calls > FUSE) throw new Error(`test fuse: ${FUSE} pages requested`);
+              return { data: full };
+            },
+          },
+        },
+      }) as unknown as Parameters<typeof listIssueComments>[0])(7);
+
+      expect(read.reading).toBe("UNMEASURED");
+      if (read.reading === "UNMEASURED") expect(read.why).toMatch(/page/i);
+      // The loop stopped itself, not the fuse.
+      expect(calls, `the loop ran to the test's own fuse (${calls} pages)`).toBeLessThan(FUSE);
+    },
+    30_000,
+  );
+
   test("FC-23: the DUPLICATE literal agrees with the filing gate's own vocabulary", () => {
     // `targetOf` gates on the string "DUPLICATE" and nothing tied that to
     // `issue-filing-gate.ts`, which is where the word is minted. A rename
@@ -441,7 +507,17 @@ describe("FC-20..FC-23: a non-success must not render as a success", () => {
     const gate = readFileSync(join(import.meta.dir, "..", "lib/issue-filing-gate.ts"), "utf-8");
     const self = readFileSync(join(import.meta.dir, "..", "lib/filing-compliance.ts"), "utf-8");
 
-    expect(/const DUPLICATE = "DUPLICATE"/.test(self)).toBe(true);
+    // TYPED, not bare. The text agreement below catches a rename in the
+    // gate; the type annotation catches it at COMPILE time, which is the
+    // stronger guard and the one a future editor cannot route around by
+    // updating this test. Asserted here so the annotation cannot be dropped
+    // back to a bare literal without a red row.
+    expect(
+      /const DUPLICATE: ArbiterRefusal = "DUPLICATE"/.test(self),
+      "DUPLICATE must be typed as ArbiterRefusal so a rename in lib/finding-arbiter.ts " +
+        "is a compile error rather than every duplicate row silently reading UNOBSERVABLE.",
+    ).toBe(true);
+    expect(/import type \{[^}]*ArbiterRefusal/.test(self)).toBe(true);
     expect(
       gate.includes('"DUPLICATE"'),
       "lib/issue-filing-gate.ts no longer spells the refusal \"DUPLICATE\". " +

@@ -67,6 +67,7 @@
  */
 
 import { createGitHubClient, listIssueComments, type GitHubClient } from "./github";
+import type { ArbiterRefusal } from "./finding-arbiter";
 
 /**
  * The fields of a ledger row this reading needs.
@@ -151,7 +152,7 @@ const REFUSED_UNLABELLED = "REFUSED_UNLABELLED";
  * are the same string, and a mutation of it moves the behaviour.
  * `issue-filing-gate.ts` writes this literal on the dedupe refusal.
  */
-const DUPLICATE = "DUPLICATE";
+const DUPLICATE: ArbiterRefusal = "DUPLICATE";
 
 /**
  * One `duplicateOf` element as an issue number, or `null`.
@@ -199,7 +200,7 @@ export function targetOf(row: FilingComplianceRow): ComplianceTarget {
   return {
     reading: "UNOBSERVABLE",
     why:
-      `the ledger records no comment target for a ${row.refusal ?? NOT_REFUSED} refusal. ` +
+      `the ledger records no comment target for a ${row.refusal ?? REFUSED_UNLABELLED} refusal. ` +
       "The refusal message named one, computed at refusal time; the row does not persist it",
   };
 }

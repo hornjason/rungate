@@ -647,8 +647,26 @@ export async function listIssueComments(
 ): Promise<{ created_at: string }[]> {
   const { owner, repo } = parseOwnerRepo(repoSlug);
   const perPage = 100;
+  // AN UNBOUNDED PAGE WALK IS NOT A READING, IT IS A HANG. This loop used to
+  // terminate only on a short page, so a server-side paging bug, a `page`
+  // param silently ignored, or a client that always answers with a full page
+  // held the calling process open forever with no reading and no error. The
+  // sibling `listOpenIssues` above takes the opposite tradeoff on purpose —
+  // one page, and a `truncated` flag — so neither function should simply
+  // trust the server to end the walk.
+  //
+  // 100 pages is 10,000 comments on one issue. Reaching it means the
+  // assumption is wrong, which is UNMEASURED rather than a long answer.
+  const maxPages = 100;
   const out: { created_at: string }[] = [];
   for (let page = 1; ; page++) {
+    if (page > maxPages) {
+      throw new Error(
+        `listComments walked ${maxPages} pages without a short page, so this read is ` +
+          `UNMEASURED rather than complete. Either the issue has more than ${maxPages * perPage} ` +
+          `comments or the server is not honouring the page parameter.`,
+      );
+    }
     const response = await client.rest.issues.listComments({
       owner,
       repo,
