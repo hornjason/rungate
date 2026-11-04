@@ -380,4 +380,45 @@ describe("board-intake workflow", () => {
     const offenders = runBlocks().filter(b => b.includes("${{"));
     expect(offenders).toEqual([]);
   });
+
+  test("BI-12: every scratch file the workflow creates is removed on exit", () => {
+    // Found in review. `err=$(mktemp)` was created and never removed.
+    //
+    // Low impact on an ephemeral runner and still worth an assertion, because
+    // the reason it is low impact is a property of the CURRENT trigger, not of
+    // this code: `pull_request_target` runs on GitHub's hosted runner today,
+    // and the same block on a self-hosted runner leaks a file per event. The
+    // assertion costs one line and survives that move; the reasoning does not.
+    //
+    // Comments are stripped FIRST. An earlier row in this file matched
+    // `bun install` inside a sentence explaining a gate, and the credential
+    // census two PRs over flagged the docblock explaining the credential
+    // census. A detector that reads a whole file reads its prose.
+    const assigned = [...code.join("\n").matchAll(/^\s*(\w+)=\$\(mktemp[^)]*\)/gm)].map(m => m[1]);
+
+    // Anti-vacuity. If the workflow stops spelling it `x=$(mktemp)` — a bare
+    // `mktemp -d`, a `TMPDIR` write, a helper — this finds nothing and an
+    // empty violation list would mean the detector broke, not that the leak
+    // was fixed. The count is asserted exactly, so a SECOND scratch file is
+    // red here until its cleanup is written too.
+    expect(
+      assigned,
+      "expected exactly one `name=$(mktemp)` in board-intake.yml. Zero means this " +
+        "detector no longer matches how the workflow makes scratch files and is " +
+        "passing vacuously — fix the pattern, do not delete the row. More than one " +
+        "means a new scratch file was added: give it a cleanup and raise this count.",
+    ).toEqual(["err"]);
+
+    const unreleased = assigned.filter(name => {
+      const trapped = new RegExp(`trap\\s+['"][^'"]*rm\\s+-f\\s+"?\\$\\{?${name}\\}?"?[^'"]*['"]\\s+EXIT`);
+      const removed = new RegExp(`rm\\s+-f\\s+"?\\$\\{?${name}\\}?"?`);
+      return !trapped.test(code.join("\n")) && !removed.test(code.join("\n"));
+    });
+    expect(
+      unreleased,
+      "every scratch file must be removed. Add `trap 'rm -f \"${name}\"' EXIT` " +
+        "immediately after the mktemp, so the file goes away on the failure paths too " +
+        "— a trailing `rm` is skipped by every early exit above it.",
+    ).toEqual([]);
+  });
 });

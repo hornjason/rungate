@@ -194,6 +194,10 @@ jobs:
           # Setting GH_NO_UPDATE_NOTIFIER would silence the one warning that
           # was named and leave the class open, so it is not the fix.
           err=$(mktemp)
+          # A trap, not a trailing `rm`. Every refusal below exits the step
+          # early, so a cleanup line at the bottom runs on exactly the path
+          # that did not need it. Asserted by BI-12.
+          trap 'rm -f "${err}"' EXIT
           gql() {
             local out attempt
             for attempt in 1 2 3; do
