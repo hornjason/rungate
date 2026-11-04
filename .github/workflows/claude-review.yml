@@ -420,7 +420,26 @@ jobs:
           # afterwards — including one that posted nothing, which is the state
           # #732 is about. A cumulative count makes the second run of any
           # reviewed pull request unfalsifiable.
-          echo "reviews_before=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq 'length' 2>/dev/null || echo unknown)" >> "$GITHUB_OUTPUT"
+          # `--paginate` IS LOAD-BEARING. Without it `gh api` returns the first
+          # page, 30 items, and this count is one half of the subtraction the
+          # post-step turns into NO_REVIEW_POSTED. At 30 reviews both halves
+          # saturate, the difference is 0 forever, and a required check fails
+          # on every run of that pull request whatever the reviewer did — on
+          # exactly the pull requests that have been reviewed the most, with
+          # no later run able to clear it. AC-8.
+          #
+          # Counted by EMITTING AN ID PER ITEM and counting lines, not by
+          # `--jq 'length'`: with `--paginate` the jq program runs once per
+          # page, so `length` prints one number per page and the caller reads
+          # whichever it happens to parse. A sum would work and this does not
+          # need one.
+          #
+          # The `|| unknown` is kept. Under `pipefail` a failed `gh` fails the
+          # whole substitution, and an absent reading is UNMEASURED rather
+          # than zero — zero here is indistinguishable from a real count of
+          # none, which is the state this check exists to report.
+          before=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq '.[].id' 2>/dev/null | wc -l | tr -d ' ') || before=unknown
+          echo "reviews_before=$before" >> "$GITHUB_OUTPUT"
 
       # Workload Identity Federation, and NO service-account key (#677, AC-15).
       #
@@ -605,7 +624,10 @@ jobs:
           REVIEWS_BEFORE: ${{ steps.subject.outputs.reviews_before }}
         run: |
           set -uo pipefail
-          after=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq 'length' 2>/dev/null || echo unknown)
+          # `--paginate`, and counted the same way as `reviews_before` — these
+          # are the two halves of one subtraction, and a saturated operand on
+          # either side makes the difference wrong. See that step. AC-8.
+          after=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq '.[].id' 2>/dev/null | wc -l | tr -d ' ') || after=unknown
           bun scripts/read-review-execution.ts \
             --execution-file "$EXECUTION_FILE" \
             --reviews-before "$REVIEWS_BEFORE" \

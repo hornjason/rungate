@@ -88,6 +88,16 @@ const runBody = (() => {
 
 const MAX_BYTES = Number(/MAX_BYTES:\s*"(\d+)"/.exec(gatherStep)?.[1]);
 
+/**
+ * Both `gh` stubs below answer `gh api` with THREE ID LINES, not the bare
+ * number `3`. That is what `--paginate --jq '.[].id'` emits, and AC-8 is why
+ * the shape matters: under `--paginate` the jq program runs once per page, so
+ * `--jq 'length'` prints one number per page rather than a total. The stubs
+ * modelled the old single-page contract, and when the reader changed, AC-1 and
+ * AC-2 went red rather than passing a stale fixture through — which is the
+ * behaviour wanted from a fixture that models an API.
+ */
+
 /** `GITHUB_OUTPUT` as the runner reads it: `k=v` lines and `k<<D … D` blocks. */
 function parseOutputs(text: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -140,7 +150,7 @@ if [ "$1" = "pr" ] && [ "$2" = "diff" ]; then
   head -c ${diffBytes} < /dev/zero | tr '\\0' '+'
   exit 0
 fi
-if [ "$1" = "api" ]; then echo 3; exit 0; fi
+if [ "$1" = "api" ]; then printf '101\\n102\\n103\\n'; exit 0; fi
 exit 1
 `,
   );
@@ -204,6 +214,55 @@ describe("the gather step hands the agent a diff the runner can actually read (#
         "across every output this step writes, and AC-2 builds a fixture at twice the cap. " +
         "Raising it past half the limit breaks the runner's write, not the review's coverage.",
     ).toBeLessThanOrEqual(GITHUB_OUTPUT_LIMIT / 2);
+  });
+
+  /**
+   * AC-8: every review count is read over ALL pages, in both places.
+   *
+   * `reviews_before` and `after` are the two halves of one subtraction, and
+   * `NO_REVIEW_POSTED` — a failure of this required check — fires when the
+   * difference is zero. `gh api <path>` without `--paginate` returns the FIRST
+   * PAGE, 30 items. So at 30 reviews both halves saturate at 30, the
+   * difference is 0 forever, and the check reports that no review was posted
+   * on every run of that pull request whatever the reviewer did.
+   *
+   * It fires on exactly the pull requests that have been reviewed the most,
+   * and once it fires it can never clear, because nothing a later run posts
+   * can move a saturated count. Measured 2026-11-04, unpaginated against
+   * paginated on the three pull requests then failing this way:
+   *
+   *   #1740  30 → 58      #1607  30 → 63      #1753  30 → 30
+   *
+   * and #1754, #1755, #1756, all under 30 reviews, all passed.
+   *
+   * THE COUNT IS THE POPULATION. Both reads are the same expression against
+   * the same path, so repairing one leaves a subtraction with one saturated
+   * operand — which is still always wrong, just less obviously. This row
+   * asserts the property over every `pulls/.../reviews` read in the file
+   * rather than naming two line numbers, so a third reader added later is
+   * covered without anybody remembering this comment.
+   *
+   * Breaking it: drop `--paginate` from either read and this goes red naming
+   * the one that lost it. No other row sees it.
+   */
+  test("AC-8: every review-count read paginates — an unpaginated one saturates at 30", () => {
+    const reads = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => !l.startsWith("#") && /gh api .*pulls\/.*\/reviews/.test(l));
+
+    expect(
+      reads.length,
+      "no `gh api …/pulls/<n>/reviews` read found — this row would pass vacuously",
+    ).toBe(2);
+
+    expect(
+      reads.filter((l) => !l.includes("--paginate")),
+      "`gh api` without `--paginate` returns 30 items. `reviews_before` and `after` are " +
+        "the two halves of the subtraction NO_REVIEW_POSTED reads, so at 30 reviews both " +
+        "saturate, the difference is 0 forever, and this required check fails on every " +
+        "run of the most-reviewed pull requests. Measured: #1740 read 30, really 58.",
+    ).toEqual([]);
   });
 
   /**
@@ -368,7 +427,7 @@ if [ "$1" = "pr" ] && [ "$2" = "diff" ]; then
   head -c ${Math.floor(MAX_BYTES / 2)} < /dev/zero | tr '\\0' '+'
   exit 0
 fi
-if [ "$1" = "api" ]; then echo 3; exit 0; fi
+if [ "$1" = "api" ]; then printf '101\\n102\\n103\\n'; exit 0; fi
 exit 1
 `,
     );
