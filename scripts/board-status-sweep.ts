@@ -37,23 +37,38 @@
  * `.claude/rules/config-access.md` calls the alternative Silent Default
  * Substitution.
  *
- * ## The import is relative, and that is the convention here
+ * ## The import is relative, and the mutant sandbox carries `lib/`
  *
  * An earlier draft imported `rungate/lib/github` to keep a mutant copy of
- * this file loadable from a temp directory. That was wrong twice: `lib/github`
- * is not in `package.json`'s `exports` map, so the specifier does not resolve
- * at all, and no mutation battery copies this file — the rule it was citing
- * (`.claude/rules/checks-must-be-able-to-fail.md`, "no relative imports")
- * governs files that ARE copied. Every other script here imports `../lib/*`.
+ * this file loadable from a temp directory. That was wrong: `lib/github` is
+ * not in `package.json`'s `exports` map, so the specifier does not resolve at
+ * all. Every other script here imports `../lib/*` and so does this one.
  *
- * `resolveGitHubToken` rather than `process.env.GITHUB_TOKEN`: the direct read
- * misses a machine authenticated only through `GH_TOKEN`, which the reviewer
- * caught on #1740 in exactly this shape.
+ * The same paragraph also said "no mutation battery copies this file", which
+ * was true when it was written and is no longer. BS-28 copies it, and the
+ * rule it was waving away (`.claude/rules/checks-must-be-able-to-fail.md`,
+ * "no relative imports") is satisfied the other way: the sandbox carries
+ * `lib/` and a link to `node_modules`, and every case asserts the run
+ * PRINTED ITS DECISION as well as what it exited with — because a mutant
+ * that died on module resolution also exits non-zero and would read as the
+ * mutation having been rejected on the merits.
+ *
+ * `resolveGitHubToken` rather than reading the environment variable
+ * directly: the direct read misses a machine authenticated only through
+ * `GH_TOKEN`, which the reviewer caught on #1740 in exactly this shape.
  */
 import { parseArgs } from "util";
 import { resolveGitHubToken } from "../lib/github";
 
-/** The one exit code this script refuses through. Mutated to 0 to prove the refusal is real. */
+/**
+ * The one exit code this script refuses through.
+ *
+ * `test/board-status-sweep.test.ts` BS-28 builds a copy with this set to `0`
+ * and runs both against the same input: the real one refuses and the mutant
+ * does not. That sentence used to be here with nothing behind it — no test
+ * imported this constant, ran `main()`, or looked at an exit code — which a
+ * reviewer caught, and which is the precise failure the rule above describes.
+ */
 export const DRIFT_EXIT = 1;
 
 export const PROJECT_ID = "PVT_kwHOAZTQCM4BpMuR";
@@ -256,8 +271,29 @@ export function interpretResponse(status: number, ok: boolean, text: string): un
   }
 
   const body = parsed as { errors?: unknown; data?: unknown };
-  // A GraphQL error arrives with HTTP 200, so the status alone is not a reading.
-  if (body.errors !== undefined) throw new Error(`GraphQL: ${JSON.stringify(body.errors)}`);
+
+  // A GraphQL error arrives with HTTP 200, so the status alone is not a
+  // reading.
+  //
+  // PRESENT IS NOT POPULATED, and the first version of this tested the wrong
+  // one: `body.errors !== undefined` fires on `"errors": null` and on
+  // `"errors": []`. A response that SUCCEEDED and carried an empty errors key
+  // was then reported as a GraphQL failure whose entire message was
+  // `GraphQL: null` or `GraphQL: []` — naming no defect and sending the
+  // reader after a query problem that does not exist.
+  //
+  // "A compliant server does not send either on success" is not a defence
+  // here. This function exists only to be defensive about responses that are
+  // not well formed; that is its premise, not an excuse.
+  //
+  // A non-array truthy `errors` is an envelope shape this function does not
+  // understand, and it refuses rather than returning `data` underneath it —
+  // returning data on an unrecognised envelope is Silent Default
+  // Substitution (`.claude/rules/config-access.md`).
+  const errors = body.errors;
+  const failed = Array.isArray(errors) ? errors.length > 0 : errors !== undefined && errors !== null;
+  if (failed) throw new Error(`GraphQL: ${JSON.stringify(errors)}`);
+
   if (!ok) throw new Error(`HTTP ${status}`);
   return body.data;
 }

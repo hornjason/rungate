@@ -12,7 +12,11 @@
  * That is the fifth shape in `.claude/rules/checks-must-be-able-to-fail.md`:
  * a case that goes green under the wrong repair.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { spawnSync } from "child_process";
+import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   BOARD_QUERY,
   DONE,
@@ -296,5 +300,149 @@ describe("board status sweep", () => {
     expect(r.corrections.map(c => c.number).sort()).toEqual([1607, 1749]);
     expect(r.undecidable.map(u => u.number).sort()).toEqual([1700, 1744]);
     expect(r.agrees + r.corrections.length + r.undecidable.length).toBe(items.length);
+  });
+
+  // BS-27. `errors` PRESENT is not `errors` POPULATED, and the guard tested
+  // the wrong one of those. `body.errors !== undefined` fires on
+  // `"errors": null` and on `"errors": []`, so a response that succeeded and
+  // carried an empty errors key was reported as a GraphQL failure — with
+  // `GraphQL: null` or `GraphQL: []` as the whole message, which names no
+  // defect and sends the reader looking for a query problem that is not
+  // there.
+  //
+  // A spec-compliant server does not send either on success. This function
+  // exists ENTIRELY to be defensive about servers that do not behave, which
+  // is why "the spec forbids it" is not a defence here — it is the premise.
+  test("BS-27: an absent, null or empty errors key is not a GraphQL error", () => {
+    const ok = JSON.stringify({ data: { node: { id: "x" } } });
+    expect(interpretResponse(200, true, ok)).toEqual({ node: { id: "x" } });
+
+    for (const spelling of ["null", "[]"]) {
+      const body = `{"errors":${spelling},"data":{"node":{"id":"x"}}}`;
+      expect(
+        () => interpretResponse(200, true, body),
+        `"errors": ${spelling} is an empty errors key on a successful response, not a failure`,
+      ).not.toThrow();
+      expect(interpretResponse(200, true, body)).toEqual({ node: { id: "x" } });
+    }
+
+    // The positive half, in the same case: a POPULATED errors array must
+    // still throw, and the message must carry the error so it is actionable.
+    // Without this the cheapest repair — deleting the check — goes green.
+    expect(() =>
+      interpretResponse(200, true, '{"errors":[{"message":"Bad credentials"}]}'),
+    ).toThrow(/Bad credentials/);
+
+    // And a non-array truthy `errors` is a shape this function does not
+    // understand. Refusing is right: silently returning data on an
+    // unrecognised envelope is Silent Default Substitution.
+    expect(() => interpretResponse(200, true, '{"errors":{"message":"odd"}}')).toThrow(/odd/);
+  });
+});
+
+// ── BS-28: the refusal, performed and observed ───────────────────────────
+//
+// THIS BATTERY EXISTS BECAUSE ITS ABSENCE WAS BEING CLAIMED AS PRESENT.
+// `DRIFT_EXIT`'s docblock read "Mutated to 0 to prove the refusal is real",
+// and nothing in this file imported `DRIFT_EXIT`, ran `main()`, or observed
+// an exit code. A comment saying a property is tested is the reason nobody
+// tests it (`.claude/rules/checks-must-be-able-to-fail.md`) — so the claim
+// is made true here rather than softened in the comment.
+//
+// The shape is `test/rook-review-scope.test.ts`'s, with one difference that
+// matters: that script has no relative imports, so its mutant is a lone file
+// in a temp directory. This one imports `../lib/github`, so the sandbox
+// carries `lib/` and a link to `node_modules`. A mutant that died on module
+// resolution would also exit non-zero and read as the mutation having been
+// rejected on the merits — which is why every case below asserts the run
+// PRINTED ITS DECISION as well as what it exited with.
+const ROOT = join(import.meta.dir, "..");
+const SWEEP = "scripts/board-status-sweep.ts";
+const source = readFileSync(join(ROOT, SWEEP), "utf-8");
+
+let SANDBOX = "";
+let REAL = "";
+let MUTANT = "";
+
+beforeAll(() => {
+  SANDBOX = mkdtempSync(join(tmpdir(), "board-sweep-mutant-"));
+  cpSync(join(ROOT, "lib"), join(SANDBOX, "lib"), { recursive: true });
+  cpSync(join(ROOT, "scripts"), join(SANDBOX, "scripts"), { recursive: true });
+  cpSync(join(ROOT, "package.json"), join(SANDBOX, "package.json"));
+  symlinkSync(join(ROOT, "node_modules"), join(SANDBOX, "node_modules"));
+
+  REAL = join(SANDBOX, SWEEP);
+  MUTANT = join(SANDBOX, "scripts", "board-status-sweep.mutant.ts");
+
+  const mutated = source.replace(/DRIFT_EXIT\s*=\s*1\b/, "DRIFT_EXIT = 0");
+  expect(
+    mutated,
+    "could not build the mutant: no `DRIFT_EXIT = 1` in " + SWEEP,
+  ).not.toBe(source);
+  writeFileSync(MUTANT, mutated);
+});
+
+afterAll(() => {
+  if (SANDBOX) rmSync(SANDBOX, { recursive: true, force: true });
+});
+
+/** Run a copy with NO credential in the environment, whatever this machine has. */
+function runWithoutCredential(script: string): { code: number; out: string } {
+  const env = { ...process.env };
+  delete env.GITHUB_TOKEN;
+  delete env.GH_TOKEN;
+  const r = spawnSync("bun", [script], { encoding: "utf-8", env, cwd: SANDBOX });
+  return { code: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+describe("BS-28: DRIFT_EXIT is the refusal, and the mutant proves it", () => {
+  test("the real script refuses an absent credential, and says so", () => {
+    const r = runWithoutCredential(REAL);
+    // The DECISION first. A non-zero exit on its own is also what a crash,
+    // a missing module and a syntax error produce.
+    expect(r.out, `the script printed no UNMEASURED reading:\n${r.out}`).toContain("UNMEASURED");
+    expect(r.code, `expected a refusal, got ${r.code}:\n${r.out}`).toBe(1);
+  });
+
+  test("the mutant reaches the same decision and does NOT refuse", () => {
+    const r = runWithoutCredential(MUTANT);
+    // Same reading printed — so this run demonstrably reached the mechanism
+    // rather than dying before it.
+    expect(r.out, `the mutant printed no UNMEASURED reading:\n${r.out}`).toContain("UNMEASURED");
+    // And the refusal is gone, which is the whole point: the non-zero exit
+    // was removed, performed, and observed.
+    expect(
+      r.code,
+      `the mutant (DRIFT_EXIT = 0) still exited ${r.code} — the refusal under ` +
+        `test is not what the case above observed.\n${r.out}`,
+    ).toBe(0);
+  });
+
+  test("DRIFT_EXIT is assigned exactly once, so the mutation cannot be bypassed", () => {
+    const assignments = source.match(/DRIFT_EXIT\s*=/g) ?? [];
+    expect(
+      assignments.length,
+      "more than one assignment to DRIFT_EXIT — the mutant would neutralise only one",
+    ).toBe(1);
+  });
+
+  test("no refusal inlines its own exit code", () => {
+    // A `process.exit(1)` or `return 1` elsewhere would survive the mutation
+    // and leave a refusal this battery cannot see.
+    //
+    // The first spelling of this captured `([^)]*)` and so stopped at the
+    // first inner paren of `main(process.argv.slice(2))`, reporting the
+    // entrypoint as an offender. Counting the call sites and asserting the
+    // one spelling is both narrower and correct — a detector that cannot
+    // parse the code it guards reports the code's shape as a defect.
+    const exits = [...source.matchAll(/process\.exit\(/g)];
+    expect(exits.length, "exactly one process.exit, and it returns main()'s value").toBe(1);
+    expect(source).toContain("process.exit(await main(");
+    expect(
+      /process\.exit\(\s*\d/.test(source),
+      "a numeric literal passed to process.exit bypasses DRIFT_EXIT entirely",
+    ).toBe(false);
+    const literals = [...source.matchAll(/^\s*return\s+([1-9]\d*)\s*;/gm)].map(m => m[0].trim());
+    expect(literals, "a literal non-zero return bypasses DRIFT_EXIT").toEqual([]);
   });
 });
