@@ -18,6 +18,7 @@ import {
   DONE,
   IN_REVIEW,
   interpretResponse,
+  requireNode,
   sweep,
   verdictFor,
   type BoardItem,
@@ -150,6 +151,50 @@ describe("board status sweep", () => {
     // unconditionally they would all pass.
     expect(interpretResponse(200, true, JSON.stringify({ data: { node: { id: "x" } } }))).toEqual({
       node: { id: "x" },
+    });
+  });
+
+  test("BS-20: a literal null body is a legible refusal, not a TypeError", () => {
+    // `JSON.parse("null")` succeeds, so the parse guard does not fire, and
+    // `body.errors` is then a property read on null. The function written to
+    // turn a bad response into a legible error dies with
+    // `Cannot read properties of null` — which does not name the status, the
+    // body, or this function's purpose.
+    expect(() => interpretResponse(200, true, "null")).toThrow(/not a response object/);
+    expect(() => interpretResponse(200, true, "null")).toThrow(/HTTP 200/);
+  });
+
+  test("BS-21: a bare JSON primitive is refused, not silently returned as undefined", () => {
+    // The quieter half of the same class and the reason this is two rows.
+    // `JSON.parse("5")` is 5; `(5).errors` is undefined, so NOTHING throws —
+    // the function returns `body.data`, which is undefined, and the caller
+    // walks into it. A crash is recoverable; a silent undefined is the sweep
+    // reporting on a board it never read.
+    expect(() => interpretResponse(200, true, "5")).toThrow(/not a response object/);
+    expect(() => interpretResponse(200, true, '"a string"')).toThrow(/not a response object/);
+    expect(() => interpretResponse(200, true, "[1,2]")).toThrow(/not a response object/);
+  });
+
+  test("BS-22: a null node says the token cannot SEE the project, not that the id is wrong", () => {
+    // The third site of BS-20's class and the one the report did not name,
+    // reached by an input GitHub really returns: `node(id: …)` resolves to
+    // null for a project the credential cannot see. The query SUCCEEDS, so
+    // there is no GraphQL error and no bad status — and `data.node.items` was
+    // a property read on null, exactly as `body.errors` was.
+    //
+    // The message has to separate the two readings a null node collapses: a
+    // wrong id and an invisible project are the same bytes.
+    expect(() => requireNode({ node: null }, "project board")).toThrow(/SUCCEEDED/);
+    expect(() => requireNode({ node: null }, "project board")).toThrow(/scope/);
+    expect(() => requireNode({}, "project board")).toThrow(/node: null/);
+    expect(() => requireNode(null, "project board")).toThrow(/no data object/);
+  });
+
+  test("BS-23: a real node is returned unchanged", () => {
+    // Anti-vacuity for BS-22: all four cases above pass against a function
+    // that throws unconditionally, which would take the whole sweep down.
+    expect(requireNode({ node: { items: { nodes: [] } } }, "project board")).toEqual({
+      items: { nodes: [] },
     });
   });
 

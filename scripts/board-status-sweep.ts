@@ -205,20 +205,69 @@ mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
  * actually said.
  */
 export function interpretResponse(status: number, ok: boolean, text: string): unknown {
-  let body: { errors?: unknown; data?: unknown };
+  const snippet = text.trim().slice(0, 200) || "(empty body)";
+
+  let parsed: unknown;
   try {
-    body = JSON.parse(text) as { errors?: unknown; data?: unknown };
+    parsed = JSON.parse(text);
   } catch {
-    const snippet = text.trim().slice(0, 200);
     throw new Error(
-      `HTTP ${status}: the response was not JSON, so GitHub did not answer the query — ${snippet || "(empty body)"}`,
+      `HTTP ${status}: the response was not JSON, so GitHub did not answer the query — ${snippet}`,
     );
   }
 
+  // PARSING IS NOT THE SAME AS BEING A RESPONSE, and the first version of this
+  // guard conflated them. `JSON.parse("null")` succeeds, so the catch above
+  // never fires and `body.errors` becomes a property read on null — this
+  // function, whose whole job is to turn a bad response into a legible error,
+  // died with `Cannot read properties of null`.
+  //
+  // The quieter half is worse and is why the check is on the TYPE rather than
+  // on null alone: `JSON.parse("5")` is 5, `(5).errors` is undefined, nothing
+  // throws, and the function returns `body.data` — undefined. A crash is
+  // recoverable; an undefined reading is the sweep reporting on a board it
+  // never read (`.claude/rules/config-access.md`, Silent Default
+  // Substitution).
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(
+      `HTTP ${status}: the response parsed as JSON but is not a response object — ${snippet}`,
+    );
+  }
+
+  const body = parsed as { errors?: unknown; data?: unknown };
   // A GraphQL error arrives with HTTP 200, so the status alone is not a reading.
   if (body.errors !== undefined) throw new Error(`GraphQL: ${JSON.stringify(body.errors)}`);
   if (!ok) throw new Error(`HTTP ${status}`);
   return body.data;
+}
+
+/**
+ * THE SAME CLASS, AT THE SITE THE REPORT DID NOT NAME, and this one fires on
+ * an input GitHub really returns. `node(id: …)` resolves to **null** for an id
+ * the token cannot see — not an error, a successful query with a null node —
+ * so `data.node.items` was a property read on null exactly as `body.errors`
+ * was. A `read:project` token hitting the `--write` path produces it.
+ *
+ * `null` and "no such field" are the same bytes to a property read, so this
+ * says which one it was and what to do about it.
+ */
+export function requireNode(data: unknown, what: string): Record<string, unknown> {
+  if (typeof data !== "object" || data === null) {
+    throw new Error(`GitHub returned no data object when asked for the ${what}.`);
+  }
+  const node = (data as { node?: unknown }).node;
+  if (node === null || node === undefined) {
+    throw new Error(
+      `GitHub answered the ${what} query with node: null for ${PROJECT_ID}. The query ` +
+        `SUCCEEDED — this is not a syntax or id error. A project id the token cannot see ` +
+        `reads as null, so check the credential carries project scope; read:project is ` +
+        `enough to read the board and not enough to write it.`,
+    );
+  }
+  if (typeof node !== "object") {
+    throw new Error(`GitHub returned a ${typeof node} where the ${what} should be.`);
+  }
+  return node as Record<string, unknown>;
 }
 
 async function graphql(token: string, query: string, variables: Record<string, unknown>): Promise<any> {
@@ -237,7 +286,7 @@ async function readBoard(token: string): Promise<BoardItem[]> {
 
   for (;;) {
     const data = await graphql(token, BOARD_QUERY, { project: PROJECT_ID, endCursor });
-    const page = data.node.items;
+    const page = (requireNode(data, "project board") as any).items;
 
     for (const node of page.nodes) {
       const content = node.content;
@@ -312,7 +361,7 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   const fields = await graphql(token, FIELDS_QUERY, { project: PROJECT_ID });
-  const statusField = fields.node.fields.nodes.find((f: any) => f?.name === "Status");
+  const statusField = (requireNode(fields, "project fields") as any).fields.nodes.find((f: any) => f?.name === "Status");
   if (statusField === undefined) throw new Error("no Status field on this project");
 
   const optionId = (name: string): string => {
