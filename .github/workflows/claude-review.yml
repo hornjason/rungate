@@ -301,9 +301,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ steps.guard.outputs.pr }}
           REPO: ${{ github.repository }}
-          # 256 kB. GITHUB_OUTPUT accepts 1 MB in total and the prompt has a
-          # context budget of its own; a number here is a deliberate limit with
-          # a reading attached, not a silent default.
+          # 96 kB — 24 pages, three quarters of MAX_ARG_STRLEN. A number here
+          # is a deliberate limit with a reading attached, not a silent default.
+          #
+          # THE BINDING LIMIT IS NOT GITHUB_OUTPUT. The 2026-10-28 reading
+          # below derived 256 kB against GITHUB_OUTPUT's 1 MB, and that bound
+          # is true and is the looser of the two. The diff does not stop at
+          # GITHUB_OUTPUT: it is interpolated into `prompt:`, and the action
+          # marshals every input into ONE environment variable, `ALL_INPUTS`,
+          # before `execve`ing bash. Linux refuses a single env string over
+          # MAX_ARG_STRLEN — 32 pages, 131,072 bytes — with
+          #
+          #   An error occurred trying to start process '/usr/bin/bash' …
+          #   Argument list too long
+          #
+          # which names no variable, no step and no size. Run 41879146916 on
+          # PR #1753, 2026-11-04: `ALL_INPUTS` 161,683 bytes, step dead, review
+          # never ran, post-step `NO_REVIEW_POSTED`. The 256 kB cap never
+          # fired, because 161,683 is under it. AC-6 now asserts the real one.
+          #
+          # Three quarters rather than the whole limit because the variable
+          # also carries the prompt literal and every other input, and
+          # JSON-escaping a diff adds about a byte per line.
+          #
+          # The 2026-10-28 reading still stands, and the patch-series fix in
+          # the step below is what preserves it: that reading measured the
+          # API's combined diff while the step gathered a per-commit series
+          # four times the size on PR #1753. The two numbers were never of the
+          # same thing. Against the combined diff the reading measured, 96 kB
+          # cuts 3 of those 49 — the same 3 the old 100,000 cap cut, and the
+          # long-tail cost named below is the price of a reviewer that starts.
           #
           # THE READING, taken 2026-10-28 over the 49 pull requests numbered
           # #1573..#1635 that still resolve, measuring each one's own diff in
@@ -335,14 +362,23 @@ jobs:
           # and the cases survive this change by construction, because they
           # size their fixtures off this value rather than off a literal.
           #
-          # The ceiling on any future raise is GITHUB_OUTPUT's 1 MB, which is
-          # shared with every other output this job writes. AC-5 asserts it.
-          MAX_BYTES: "262144"
+          # TWO ceilings bound any future raise, and the tighter one is the
+          # one that killed a run: MAX_ARG_STRLEN's 131,072 bytes per single
+          # environment string (AC-6), and GITHUB_OUTPUT's 1 MB shared across
+          # every output this job writes (AC-5). AC-5 alone was satisfied
+          # throughout the failure above, so do not read it as sufficient.
+          MAX_BYTES: "98304"
         run: |
           set -euo pipefail
           # Passed through env:, never interpolated into the script body —
           # the argument issue-audit.yml's header makes, applied here.
-          gh pr diff "$PR" --repo "$REPO" --patch > /tmp/pr.diff
+          # NO patch-series flag. `git format-patch` output is one patch per
+          # COMMIT, each with its own header, so the subject grows with the
+          # ROUND COUNT rather than with the change. Measured on PR #1753 at
+          # round 8: 155,370 bytes with it, 37,160 without, same change. The
+          # pull requests that have needed the most review were the ones whose
+          # reviewer could not start. AC-7.
+          gh pr diff "$PR" --repo "$REPO" > /tmp/pr.diff
           full=$(wc -c < /tmp/pr.diff | tr -d ' ')
           if [ "$full" -gt "$MAX_BYTES" ]; then
             head -c "$MAX_BYTES" /tmp/pr.diff > /tmp/pr.diff.cut
