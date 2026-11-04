@@ -87,7 +87,12 @@ name: Board intake
 
 on:
   issues:
-    types: [opened, reopened, transferred]
+    # NOT `transferred`. GitHub documents it as "an issue was transferred to
+    # another repository" and does not say which side receives it; the docs
+    # settle neither direction. If it is delivered to the SOURCE, this would
+    # add an issue that just LEFT to our board. Unproven in both directions is
+    # a reason to leave it out, not to keep it.
+    types: [opened, reopened]
   pull_request_target:
     types: [opened, reopened, ready_for_review]
 
