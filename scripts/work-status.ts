@@ -72,6 +72,13 @@ async function send(url: string, init: RequestInit = {}): Promise<Response> {
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const r = await fetch(target, { ...init, headers: { ...H, ...(init.headers ?? {}) }, redirect: "manual" });
     if (r.status < 300 || r.status > 399) return r;
+    // **Release the connection before taking the next hop.** An unconsumed
+    // body holds its socket out of the pool, and this script is nothing but
+    // sequential requests — a per-issue dependency call and a timeline page
+    // for every open issue. Caught in review of #1740. `cancel()` on a
+    // 3xx discards a body nothing reads: every branch below either throws
+    // or re-fetches, so there is no path that wanted it.
+    await r.body?.cancel().catch(() => {});
     const location = r.headers.get("location");
     if (location === null) throw new Error(`${r.status} from ${target} with no Location header`);
     target = assertTokenMayReach(location, "Location header", target).toString();

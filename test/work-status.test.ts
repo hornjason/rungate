@@ -295,4 +295,24 @@ describe("the status reader does not leak the token on any hop", () => {
   test("the hop count is bounded", () => {
     expect(src).toMatch(/MAX_REDIRECTS\s*=\s*\d+/);
   });
+
+  // Caught in review of #1740. A 3xx whose body is never read holds its
+  // socket out of the connection pool, and this script is nothing but
+  // sequential requests — one dependency call and one timeline page per open
+  // issue, ~80 of each. The redirect branch is the only place a response is
+  // discarded without being parsed, so it is the only place that needs this.
+  test("a redirect's body is released before the next hop", () => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    // Anti-vacuity: the hop loop must still be here for the row to mean
+    // anything. Zero matches is a renamed helper, not a satisfied property.
+    expect(
+      (code.match(/redirect:\s*"manual"/g) ?? []).length,
+      "expected the one manual-redirect fetch in send(); see the comment above",
+    ).toBe(1);
+    expect(
+      code,
+      "the redirect branch must release the response before re-fetching — " +
+        "an unconsumed body keeps its socket out of the pool",
+    ).toMatch(/r\.body\?\.cancel\(\)/);
+  });
 });
