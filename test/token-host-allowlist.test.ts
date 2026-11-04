@@ -2,10 +2,15 @@
  * May this URL carry our bearer token?
  *
  * The question `lib/github.ts` has asked of `GITHUB_API_URL` since security
- * review flagged that variable twice, now asked in one place by both callers.
- * The second caller is `restAll()` in `scripts/work-status.ts`, which follows
- * `Link: rel="next"` — a **response** header, so the host it names is chosen
- * by whoever answered, not by us.
+ * review flagged that variable twice, now asked in one place.
+ *
+ * The second caller, `restAll()` in `scripts/work-status.ts`, is NOT in this
+ * tree — it lands with #1740, and it follows `Link: rel="next"`, a **response**
+ * header, so the host it names is chosen by whoever answered rather than by
+ * us. That is what the `base` parameter is for, and until #1740 merges the
+ * cases below are the only thing exercising it. Written out because the
+ * earlier wording said "both callers" of a tree holding one, and a reader
+ * going to check cannot tell a split from a sentence nobody updated.
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
@@ -87,6 +92,57 @@ describe("tokenRefusalReason", () => {
   // read backwards: the two existing cases vary one axis each and the defect
   // sits on the pair neither visits. Naming what both hold fixed — the host
   // on one, the scheme on the other — is what produced this case.
+  /**
+   * An entry nothing can reach, and why it needs a SOURCE assertion.
+   *
+   * `LOOPBACK_HOSTS` carried both `"[::1]"` and `"::1"`. Only the bracketed
+   * form can ever match: `url.hostname` is what the set is compared against,
+   * and WHATWG always brackets an IPv6 host. Measured here rather than
+   * asserted, including the longhand, which normalises to the same thing:
+   *
+   *   new URL("http://[::1]/x").hostname                → "[::1]"
+   *   new URL("http://[0:0:0:0:0:0:0:1]/x").hostname    → "[::1]"
+   *   new URL("http://::1/x")                           → throws
+   *
+   * So the unbracketed entry matched no hostname any URL can produce. It was
+   * NOT a behaviour bug — the bracketed form is present, so IPv6 loopback was
+   * allowed correctly throughout, and removing the dead entry changes no
+   * outcome. That is exactly why this has to be a source assertion: an
+   * unreachable entry is by definition invisible to every behavioural case,
+   * and a behavioural suite that grew to cover it would be asserting
+   * something the URL parser makes impossible.
+   *
+   * The row is written as a property over the set rather than a ban on one
+   * string, so a second unbracketed literal added later is caught too.
+   *
+   * Breaking it: put `"::1"` back and this goes red naming it.
+   */
+  test("LOOPBACK_HOSTS holds no unbracketed IPv6 literal — nothing could reach one", () => {
+    expect(new URL("http://[::1]/x").hostname).toBe("[::1]");
+    expect(new URL("http://[0:0:0:0:0:0:0:1]/x").hostname).toBe("[::1]");
+    expect(() => new URL("http://::1/x")).toThrow();
+
+    const src = readFileSync(join(ROOT, "lib", "github.ts"), "utf8");
+    // Closing on `]);` and not on the first `]`. A `[^\]]*` body was the
+    // first spelling and it stopped INSIDE `"[::1]"` — the one entry this row
+    // exists to distinguish — so the match came back undefined and the
+    // vacuity guard below is what reported it rather than a silent pass.
+    const declared = /const LOOPBACK_HOSTS = new Set\(\[([\s\S]*?)\]\);/.exec(src)?.[1];
+    expect(
+      declared,
+      "LOOPBACK_HOSTS was not found in lib/github.ts — this row would pass vacuously",
+    ).toBeTruthy();
+
+    const entries = [...(declared ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(entries, "no entries parsed out of the set").not.toEqual([]);
+    expect(entries).toContain("[::1]");
+    expect(
+      entries.filter((h) => h.includes(":") && !h.startsWith("[")),
+      "an unbracketed IPv6 literal in LOOPBACK_HOSTS matches no hostname the URL parser " +
+        'can produce — `url.hostname` is always bracketed. Write "[::1]", not "::1".',
+    ).toEqual([]);
+  });
+
   test("only http and https reach loopback — any other scheme is refused there too", () => {
     for (const host of ["127.0.0.1", "localhost", "[::1]"]) {
       for (const scheme of ["ftp", "ws", "wss", "file", "gopher", "data"]) {

@@ -225,7 +225,13 @@ export function resolveApiBaseUrl(): string | undefined {
  * `https://evil.com@api.github.com` has an allowed hostname while still
  * sending credentials nobody wrote. Neither may pass.
  */
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+// BRACKETED ONLY. These are compared against `url.hostname`, and WHATWG
+// always brackets an IPv6 host — `http://[::1]/x` and the longhand
+// `http://[0:0:0:0:0:0:0:1]/x` both yield `"[::1]"`, and `http://::1/x` is
+// not a parseable URL at all. An unbracketed `"::1"` was here and matched
+// nothing; its removal changes no outcome, which is why the row that holds
+// this is a source assertion rather than a behavioural case.
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 const ALLOWED_API_HOSTS = new Set([
   "api.github.com",
@@ -236,9 +242,16 @@ const ALLOWED_API_HOSTS = new Set([
 /**
  * Why this URL may not carry our bearer token, or `null` when it may.
  *
- * One decider, two inputs: `GITHUB_API_URL` above, and every pagination hop
- * in `scripts/work-status.ts`. `base` resolves a relative `Link` header
- * against the page it arrived on.
+ * One decider. The in-tree caller is `assertTokenMayReach` above, over
+ * `GITHUB_API_URL`.
+ *
+ * `base` has no production caller IN THIS TREE and is not dead: it resolves a
+ * relative `Link: rel="next"` against the page it arrived on, for the
+ * pagination hops in `scripts/work-status.ts`, which lands with #1740. It is
+ * exercised today only by `test/token-host-allowlist.test.ts`, which passes
+ * it directly. Said plainly because the earlier wording named that file as a
+ * current second input and this tree does not contain it — a reader checking
+ * the claim finds nothing and cannot tell a split from a stale sentence.
  */
 export function tokenRefusalReason(raw: string, base?: string): string | null {
   let url: URL;
