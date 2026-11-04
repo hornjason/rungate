@@ -1,14 +1,14 @@
 ---
 doc-type: code-map
 status: generated
-updated: 2026-11-05
-scanned-at-sha: 0e3927c7
+updated: 2026-11-04
+scanned-at-sha: 7f234d61
 generator: rungate/scripts/generate-code-map.ts
 ---
 
 # Code Map — rungate
 
-Auto-generated architecture snapshot. Re-run `bun generate-code-map.ts .` to refresh.
+Auto-generated architecture snapshot. Re-run `bun generate-code-map.ts /Users/jhorn/Projects/rg-wt-flows` to refresh.
 Regenerate when src/ has commits since scanned-at-sha.
 
 **What this guarantees:** the sections below describe the tree at `scanned-at-sha`.
