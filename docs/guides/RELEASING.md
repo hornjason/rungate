@@ -130,15 +130,28 @@ Label it when you open the pull request rather than after watching the check
 fail. The waiver is standing: it survives later pushes, so a human reads the
 diff instead.
 
-### Two reds on a release PR are normal, and only one of them matters
+### Two red checks on a release PR are normal, and only one of them matters
 
 Required on main is exactly `test` and `ai-review` — nothing else, no required
 reviewers, `strict: false`. So:
 
-| Check | On a release PR | Blocks the merge? |
-|---|---|---|
-| `ai-review` | UNMEASURED until the label | **yes** — required |
-| `review` | fails in ~15s | no — not a required check |
+| Check | Outcome without the label | Why it says that | Blocks the merge? |
+|---|---|---|---|
+| `ai-review` | **red** — the step exits 1 | its message is `AI review UNMEASURED`: the reviewer never ran | **yes** — required |
+| `review` | **red** | a genuine failure | no — not a required check |
+
+**The outcome and the reason are different things, and this repository is
+strict about not confusing them.** `ai-review` is red, not pending and not
+neutral: the no-payload branch ends in `exit 1`. What is UNMEASURED is the
+*review*, not the check — nobody looked at the diff, so there is no verdict,
+and the check refuses rather than reporting a pass for a review that never
+happened. "UNMEASURED, not a silent pass" is the rule in
+`.claude/rules/config-access.md`; a green check there would be the defect.
+
+Applying `ai-review-override` turns that red into a pass and prints
+`AI review WAIVED`. The review is still UNMEASURED afterwards — the label
+changes what the pipeline does about it, not whether anyone read the diff.
+That is why a human reads the release diff.
 
 A red `review` makes the pull request `UNSTABLE`, which is mergeable.
 `required_conversation_resolution` is on, though, so an unresolved review
