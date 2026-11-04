@@ -157,6 +157,23 @@ async function main(): Promise<number> {
   let cursor: string | null = null;
   do {
     const d = await gql(token, BLOCKING_QUERY, { o: owner, n: name, i: closed, c: cursor });
+    // **`issue(number:)` resolves to null, with no `errors`, for a number
+    // that is not an Issue.** Issues and pull requests share one numbering
+    // space and this field resolves only Issues, so a PR number — or a
+    // deleted or mistyped one — returns a well-formed response whose `issue`
+    // is null. The `issues: closed` trigger always supplies a real issue, but
+    // this script is also reachable through `workflow_dispatch` with a
+    // free-text `issue` input, and there an operator's typo crashed with
+    // `Cannot read properties of null (reading 'blocking')` — an opaque
+    // stack trace where every other unreadable state in this file reports
+    // UNMEASURED and refuses. Caught in review of #1744.
+    if (!d.repository?.issue) {
+      console.log(
+        `::warning::#${closed} is not an issue on ${owner}/${name} — it may be a pull ` +
+          `request number, a deleted issue, or a typo. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
     const page = d.repository.issue.blocking;
     blocking.push(...page.nodes);
     cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;

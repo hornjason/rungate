@@ -602,6 +602,28 @@ describe("BR-34..BR-36: the Status field id comes from the project, not from the
     ).toBe(false);
   });
 
+  // Caught in review of #1744. `issue(number:)` resolves to `null` with no
+  // `errors` for a number that is not an Issue — issues and pull requests
+  // share one numbering space and this field resolves only Issues — so a PR
+  // number typed into `workflow_dispatch`'s free-text `issue` input produced
+  // `Cannot read properties of null (reading 'blocking')`, an opaque stack
+  // trace where every other unreadable state in this file reports UNMEASURED
+  // and refuses through `EXIT_REFUSED`.
+  test("BR-37: a number that is not an issue refuses, it does not dereference null", () => {
+    expect(
+      code,
+      "`d.repository.issue` must be checked before `.blocking` is read — " +
+        "a PR number or a deleted issue returns a well-formed response with a null issue",
+    ).toMatch(/if\s*\(!d\.repository\?\.issue\)/);
+    // The refusal must go through the same exit as every other UNMEASURED in
+    // this file, not a bare throw — otherwise it is a different failure mode
+    // wearing the same words.
+    expect(
+      code.slice(code.indexOf("if (!d.repository?.issue)")),
+      "the refusal must return EXIT_REFUSED, like every other unreadable state here",
+    ).toMatch(/if\s*\(!d\.repository\?\.issue\)[\s\S]{0,400}?return EXIT_REFUSED;/);
+  });
+
   test("BR-36: the field id is resolved from the project by name, exactly once", () => {
     // The positive half. Without it, deleting the guard BR-35 forbids goes
     // green while leaving nothing to write with.
