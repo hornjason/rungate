@@ -130,15 +130,34 @@ Label it when you open the pull request rather than after watching the check
 fail. The waiver is standing: it survives later pushes, so a human reads the
 diff instead.
 
-### Two red checks on a release PR are normal, and only one of them matters
+### One red check on a release PR is expected. A second one is not — investigate it
 
 Required on main is exactly `test` and `ai-review` — nothing else, no required
 reviewers, `strict: false`. So:
 
-| Check | Outcome without the label | Why it says that | Blocks the merge? |
+| Check | On a release PR | Why | Blocks the merge? |
 |---|---|---|---|
-| `ai-review` | **red** — the step exits 1 | its message is `AI review UNMEASURED`: the reviewer never ran | **yes** — required |
-| `review` | **red** | a genuine failure | no — not a required check |
+| `ai-review` | **red until the label** — the step exits 1 | structural: step 4 rewrites the pin inside `ai-review.yml`, so the action declines | **yes** — required |
+| `review` | should **pass** | nothing in a release touches `claude-review.yml` | no — not a required check |
+
+**An earlier revision of this table called a red `review` normal on a release
+PR. That was wrong, and the evidence is one query:** `review` succeeded on
+`#1738` (0.8.10) and `#1634` (0.8.8). It failed on `#1749` (0.8.11/0.8.12)
+with
+
+```
+An error occurred trying to start process '/usr/bin/bash' with working
+directory '/home/runner/work/rungate/rungate'. Argument list too long
+```
+
+— run `41838043364`, on the `Read what the review actually did` step. **The
+mechanism is not established.** It is not diff size: `#1749` changed +65/-66
+across six files, smaller than the pull requests whose `review` job passed
+the same day.
+
+So treat a red `review` on a release as an unexplained failure, not as
+scenery. Writing it off as expected is how a real one gets waved through,
+which is exactly what calling it "normal" here would have trained.
 
 **The outcome and the reason are different things, and this repository is
 strict about not confusing them.** `ai-review` is red, not pending and not
