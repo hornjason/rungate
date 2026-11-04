@@ -160,6 +160,45 @@ describe("board-intake workflow", () => {
     expect(uses.length, `call sites routed through gql():\n${uses.join("\n")}`).toBeGreaterThanOrEqual(3);
   });
 
+  test("BI-8: the helper's return value is stdout only, never stdout merged with stderr", () => {
+    // `out=$(gh api graphql "$@" 2>&1)` is correct for the FAILURE path, where
+    // ${out} is quoted into the ::error message, and wrong for the success
+    // path, where the same ${out} is the function's return value.
+    //
+    // Two of the three call sites treat it as data, not as a log: `status` is
+    // piped into `jq -r` to resolve field_id and option_id, and `current` is
+    // compared byte-for-byte against ${COLUMN}. `gh` writes to stderr on
+    // otherwise-successful calls — the update notifier, rate-limit warnings —
+    // and that text would be prepended to both.
+    //
+    // The `current` case is the one that matters, because it fails SILENTLY:
+    // the comparison simply stops matching, the loop logs "a concurrent write
+    // won" for a race that never happened, and after three attempts the step
+    // blames a competing writer for a polluted capture. Right exit code,
+    // wrong mechanism, and the diagnostic names the wrong cause
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, the sixth shape).
+    const move = runBlocks().find(b => b.includes("updateProjectV2ItemFieldValue"));
+    expect(move, "no run block performs the Status mutation").toBeDefined();
+
+    const code = move!.split("\n").filter(l => !/^\s*#/.test(l));
+    const merged = code.filter(l => l.includes("gh api graphql") && l.includes("2>&1"));
+    expect(
+      merged,
+      "the gh call must not merge stderr into the value it returns — callers jq-parse " +
+        "and string-compare it. Redirect stderr to a separate file and read it only for " +
+        "the error message.",
+    ).toEqual([]);
+
+    // Positive half: the stderr is still CAPTURED, not discarded. Dropping it
+    // satisfies the row above and makes the failure diagnostic say nothing,
+    // which is the cheapest wrong fix here
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, the fifth shape).
+    const call = code.find(l => l.includes("gh api graphql"));
+    expect(call, "no gh api graphql call found at all").toBeDefined();
+    expect(/2>\s*"?\$\{?err/.test(call!), `stderr is not captured: ${call}`).toBe(true);
+    expect(move!).toContain("Last error:");
+  });
+
   test("BI-4: no run block interpolates a value", () => {
     // The other half of the same property, and the easy one to reintroduce.
     // A `${{ ... }}` inside `run:` is substituted into the shell BEFORE it

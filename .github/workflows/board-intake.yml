@@ -176,16 +176,34 @@ jobs:
           # resolving the field, mutating, and reading back — so it is fixed
           # as a population and `test/board-intake.test.ts` BI-7 asserts no
           # bare `gh api graphql` survives anywhere in this step.
+          #
+          # STDERR GOES TO A FILE, NOT INTO THE RETURN VALUE. An earlier
+          # revision captured `2>&1`, which is right for the failure path —
+          # ${out} is quoted into the ::error — and wrong for the success
+          # path, because the same ${out} is what callers parse. `gh` writes
+          # to stderr on calls that SUCCEED: the update notifier, rate-limit
+          # warnings. Two of the three call sites treat the result as data,
+          # and the read-back is the dangerous one. A comparison against
+          # "${COLUMN}" that is polluted by a one-line warning simply stops
+          # matching, so the loop logs "a concurrent write won" for a race
+          # that never happened and then blames a competing writer for a
+          # dirty capture — the right exit code reporting the wrong
+          # mechanism (`.claude/rules/checks-must-be-able-to-fail.md`, the
+          # sixth shape).
+          #
+          # Setting GH_NO_UPDATE_NOTIFIER would silence the one warning that
+          # was named and leave the class open, so it is not the fix.
+          err=$(mktemp)
           gql() {
             local out attempt
             for attempt in 1 2 3; do
-              if out=$(gh api graphql "$@" 2>&1); then
+              if out=$(gh api graphql "$@" 2>"${err}"); then
                 printf '%s' "${out}"
                 return 0
               fi
               sleep $(( attempt * 2 ))
             done
-            echo "::error title=Board intake::GitHub's GraphQL API failed three times. The item may or may not be on the board and its Status is UNKNOWN — this run measured nothing. Last error: ${out}" >&2
+            echo "::error title=Board intake::GitHub's GraphQL API failed three times. The item may or may not be on the board and its Status is UNKNOWN — this run measured nothing. Last error: $(< "${err}")" >&2
             return 1
           }
 
