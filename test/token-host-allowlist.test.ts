@@ -15,7 +15,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
-import { assertTokenMayReach, tokenRefusalReason } from "../lib/github";
+import { assertTokenMayReach, resolveGitHubToken, tokenRefusalReason } from "../lib/github";
+import { tokenFromEnv } from "../scripts/check-state-record-closes";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -40,11 +41,41 @@ const ROOT = join(import.meta.dir, "..");
  * census below assert both directions before the tree is believed.
  */
 const TOKEN_NAMES = "(?:GITHUB_TOKEN|GH_TOKEN)";
+/**
+ * **And through an alias, which is how the one real violation hid.**
+ *
+ * A security scan found `scripts/check-state-record-closes.ts` reading
+ * `env.GITHUB_TOKEN ?? env.GH_TOKEN`, where `env` is a parameter defaulting
+ * to `process.env`. Pinning the receiver to the literal `process.env` made
+ * the census blind to it, and the commit that widened this to both names
+ * claimed the tree was clean on the strength of that blindness.
+ *
+ * So the receiver is WIDENED rather than dropped. Dropping it entirely was
+ * the first attempt and it went red on four files, every one a false
+ * positive: `${{ secrets.GITHUB_TOKEN }}` emitted into generated Actions
+ * YAML by `lib/scaffold/ai-review-step.ts`, and two prose comments naming
+ * `secrets.GITHUB_TOKEN`. That is how a workflow is SUPPOSED to pass the
+ * token, and a census that refuses the correct spelling is one the next
+ * person deletes.
+ *
+ * What is forbidden is reading these names off an ENVIRONMENT RECORD:
+ * `process.env`, `Bun.env`, `import.meta.env`, or any identifier whose name
+ * ends in `env` — which is what the alias in the real violation was.
+ *
+ * `delete env.GH_TOKEN` is explicitly NOT a violation and the tree has two
+ * of them. Removing a variable is the opposite of reading it to use as a
+ * credential, and a census that refused the cleanup would be relaxed rather
+ * than obeyed. The planted samples below assert every one of these
+ * directions, because each was found by being wrong about it first.
+ */
+// `[\w$]*` and not `[A-Za-z_$][\w$]*`: the bare identifier `env` is the one
+// the real violation used, and requiring a character before `env` missed it.
+const ENV_RECEIVER = "(?:process\\.env|Bun\\.env|import\\.meta\\.env|\\b[\\w$]*[eE]nv\\b)";
 const DIRECT_TOKEN_READ = new RegExp(
   [
-    `process\\.env\\.${TOKEN_NAMES}\\b`,
-    `process\\.env\\[\\s*["']${TOKEN_NAMES}["']\\s*\\]`,
-    `\\{[^}]*\\b${TOKEN_NAMES}\\b[^}]*\\}\\s*=\\s*process\\.env\\b`,
+    `(?<!delete\\s)${ENV_RECEIVER}\\s*\\??\\.\\s*${TOKEN_NAMES}\\b`,
+    `${ENV_RECEIVER}\\s*\\??\\[\\s*["'\`]${TOKEN_NAMES}["'\`]\\s*\\]`,
+    `\\{[^}]*\\b${TOKEN_NAMES}\\b[^}]*\\}\\s*=\\s*${ENV_RECEIVER}\\b`,
   ].join("|"),
 );
 
@@ -281,6 +312,31 @@ describe("one allowlist, declared once, whoever asks it", () => {
     expect(DIRECT_TOKEN_READ.test("const { GITHUB_TOKEN } = process.env;")).toBe(true);
     expect(DIRECT_TOKEN_READ.test("const { GH_TOKEN: t } = process.env;")).toBe(true);
     expect(DIRECT_TOKEN_READ.test("const { FOO, GH_TOKEN, BAR } = process.env;")).toBe(true);
+    // THE ALIAS, which is the one that actually hid in this tree. A security
+    // scan found `env.GITHUB_TOKEN ?? env.GH_TOKEN` in
+    // `scripts/check-state-record-closes.ts`, where `env` is a parameter
+    // defaulting to `process.env` — and the previous pattern pinned the
+    // receiver to the literal `process.env`, so it could not see it. The
+    // commit that widened this to both names then claimed the tree was
+    // clean, on the strength of that blindness.
+    expect(DIRECT_TOKEN_READ.test("token: env.GITHUB_TOKEN ?? env.GH_TOKEN ?? null,")).toBe(true);
+    expect(DIRECT_TOKEN_READ.test("const t = opts.env?.GH_TOKEN;")).toBe(true);
+    expect(DIRECT_TOKEN_READ.test('const t = procEnv["GITHUB_TOKEN"];')).toBe(true);
+    expect(DIRECT_TOKEN_READ.test("const t = Bun.env.GH_TOKEN;")).toBe(true);
+    expect(DIRECT_TOKEN_READ.test("const t = import.meta.env.GH_TOKEN;")).toBe(true);
+    expect(DIRECT_TOKEN_READ.test("const { GH_TOKEN } = env;")).toBe(true);
+    // NOT an Actions expression. `${{ secrets.GITHUB_TOKEN }}` is how a
+    // workflow is supposed to pass the token, and the scaffold emits it into
+    // generated YAML four times. The first widening flagged all of them.
+    expect(DIRECT_TOKEN_READ.test("`    GITHUB_TOKEN: \\${{ secrets.GITHUB_TOKEN }}`,")).toBe(false);
+    expect(DIRECT_TOKEN_READ.test(" * USER-level project, and `secrets.GITHUB_TOKEN` is repository-scoped")).toBe(false);
+    // And NOT a deletion. The tree holds two — `lib/live-issues.ts` and
+    // `scripts/plan-issues.ts` both `delete env.GH_TOKEN` to force a child
+    // process onto the other credential. Removing a variable is the opposite
+    // of reading it to use as one, and a census that refused the cleanup
+    // would be relaxed rather than obeyed.
+    expect(DIRECT_TOKEN_READ.test("delete env.GH_TOKEN;")).toBe(false);
+    expect(DIRECT_TOKEN_READ.test("  delete env.GITHUB_TOKEN;")).toBe(false);
     // And it must NOT fire on prose that merely names the variable, or this
     // census refuses the comment that explains why it exists — and the
     // cheapest repair for that is to stop writing the explanation.
@@ -310,6 +366,60 @@ describe("one allowlist, declared once, whoever asks it", () => {
         "'no credential' on a machine that has one, which is #139/#140 and cost this " +
         "repository a month of silently broken Octokit calls.",
     ).toEqual([]);
+  });
+
+  /**
+   * The one file that genuinely cannot call the resolver, bound by agreement.
+   *
+   * `scripts/check-state-record-closes.ts` must have no relative imports —
+   * `test/state-record-closes-mutation.test.ts` asserts it, because its
+   * mutants are copied to a temp directory and run there, so a
+   * `from "../lib/…"` makes every mutant die on module resolution and read
+   * as a refusal on the merits. The "one resolver" rule therefore cannot be
+   * satisfied there by calling `resolveGitHubToken`, and the security scan
+   * that found `env.GITHUB_TOKEN ?? env.GH_TOKEN` there proposed exactly
+   * that fix. It is blocked, not declined.
+   *
+   * So the two implementations are asserted EQUAL on the same inputs rather
+   * than each asserted correct — the fourth shape's documented remedy for an
+   * import-free file. A change to either is red until the other follows, and
+   * the grid includes the two properties the script was missing before this:
+   * the `GH_TOKEN` fallback and the trim.
+   *
+   * `resolveGitHubToken` grew an optional `env` parameter for this. It
+   * defaults to `process.env`, so every existing caller is unchanged.
+   */
+  test("the import-free copy of the resolver agrees with it on every input", () => {
+    const VALUES = [undefined, "", "   ", "tok", " tok ", "tok\n"];
+    let differed = 0;
+    let compared = 0;
+    let nonNull = 0;
+    for (const GITHUB_TOKEN of VALUES) {
+      for (const GH_TOKEN of VALUES) {
+        const env: Record<string, string | undefined> = { GITHUB_TOKEN, GH_TOKEN };
+        const mine = tokenFromEnv(env);
+        const theirs = resolveGitHubToken(env);
+        compared++;
+        if (mine !== theirs) differed++;
+        if (theirs !== undefined) nonNull++;
+        expect(
+          mine,
+          `the two resolvers disagree on GITHUB_TOKEN=${JSON.stringify(GITHUB_TOKEN)} ` +
+            `GH_TOKEN=${JSON.stringify(GH_TOKEN)} — scripts/check-state-record-closes.ts ` +
+            "cannot import lib/github.ts, so this equality is the only thing holding them together",
+        ).toBe(theirs);
+      }
+    }
+    // The grid is the instrument. Both halves non-empty, or it agrees vacuously.
+    expect(compared, "the grid collapsed").toBe(36);
+    expect(nonNull, "every row resolved to nothing — the grid proves no agreement").toBeGreaterThan(0);
+    expect(differed).toBe(0);
+
+    // And the two properties the script did NOT have before, asserted
+    // directly rather than inferred from the agreement above.
+    expect(tokenFromEnv({ GH_TOKEN: "tok" }), "the GH_TOKEN fallback").toBe("tok");
+    expect(tokenFromEnv({ GITHUB_TOKEN: "tok\n" }), "the trim").toBe("tok");
+    expect(tokenFromEnv({ GITHUB_TOKEN: "   ", GH_TOKEN: "tok" }), "whitespace is absence").toBe("tok");
   });
 
   // The other half: one resolver, not two. The census above forbids the raw

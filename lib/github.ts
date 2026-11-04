@@ -352,9 +352,18 @@ export function assertTokenMayReach(raw: string, context: string, base?: string)
  * exported-but-unset variable must produce the clear error here rather than
  * an unauthenticated client that 401s somewhere less obvious.
  */
-export function resolveGitHubToken(): string | undefined {
+export function resolveGitHubToken(
+  // Injectable so a second implementation can be asserted to AGREE with this
+  // one on the same inputs. `scripts/check-state-record-closes.ts` must stay
+  // import-free — `test/state-record-closes-mutation.test.ts` asserts it,
+  // because its mutants run from a temp directory and a relative import
+  // makes every one of them die on module resolution, which reads as a
+  // refusal on the merits. So that file cannot call this; the next best
+  // thing is that the two cannot silently disagree.
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
   for (const name of ["GITHUB_TOKEN", "GH_TOKEN"]) {
-    const v = process.env[name];
+    const v = env[name];
     // Trimmed, not just tested: `GH_TOKEN=$(cat token)` carries a trailing
     // newline, and Octokit sends it in the Authorization header, where it
     // 401s with nothing pointing at the whitespace as the cause.

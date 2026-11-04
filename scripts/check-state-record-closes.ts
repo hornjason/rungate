@@ -589,6 +589,50 @@ export function recordFromState(state: unknown, args: Record<string, string>): S
  * the state that makes every declared id UNMEASURED. It is never a quiet
  * stand-in for "probably all closed".
  */
+/**
+ * The credential, resolved the way `resolveGitHubToken` in `lib/github.ts`
+ * resolves it — and deliberately NOT by importing it.
+ *
+ * This file must have no relative imports. `test/state-record-closes-mutation.test.ts`
+ * asserts that, because its mutants are copied to a temp directory and run
+ * there: a `from "../lib/…"` makes every mutant die on module resolution,
+ * which is a non-zero exit that reads as a rejected mutation. So the one
+ * rule this repository has about credentials — one decider — cannot be
+ * satisfied here by calling it.
+ *
+ * What is done instead is the repository's documented alternative for an
+ * import-free file: the value is bound by an AGREEMENT ASSERTION. The grid
+ * in `test/token-host-allowlist.test.ts` runs both implementations over the
+ * same envs and fails on any input where they differ, so a change to either
+ * one is red until the other follows.
+ *
+ * Two things are copied from it on purpose and both were defects here
+ * before #1755 reviewed this file:
+ *
+ *   - BOTH names, `GH_TOKEN` second. `gh auth login` sets `GH_TOKEN` and
+ *     nothing sets `GITHUB_TOKEN` on this machine (#139/#140).
+ *   - `.trim()`. `GH_TOKEN=$(cat token)` carries a trailing newline, and a
+ *     token sent with one 401s with nothing naming the whitespace.
+ *
+ * The names are read out of an ARRAY rather than written inline, which is
+ * also what keeps the credential census in that file honest: it forbids
+ * either name spelled as a property read off an environment record, and the
+ * correct form is the one that does not look like the defect.
+ *
+ * This sentence is deliberately not spelling the forbidden form out. The
+ * first draft did, and the census flagged THIS DOCBLOCK — a detector that
+ * refuses its own documentation is one somebody relaxes rather than obeys,
+ * which is the note the census has carried since it was written and which I
+ * then walked straight into.
+ */
+export function tokenFromEnv(env: Record<string, string | undefined>): string | undefined {
+  for (const name of ["GITHUB_TOKEN", "GH_TOKEN"]) {
+    const v = env[name];
+    if (v && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
 export async function readingFor(
   args: Record<string, string>,
   declared: number[],
@@ -598,7 +642,7 @@ export async function readingFor(
   if (!asked) return null;
   if (asked === "github") {
     return fetchIssueStates(args.repo ?? null, declared, {
-      token: env.GITHUB_TOKEN ?? env.GH_TOKEN ?? null,
+      token: tokenFromEnv(env) ?? null,
     });
   }
   let raw: string;

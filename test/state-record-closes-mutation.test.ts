@@ -230,7 +230,27 @@ describe("#590 AC-6: the refusal is routed through exactly one exit code", () =>
   test("the script has no relative imports", () => {
     // Without this, the mutant run from a temp directory dies on module
     // resolution — a non-zero exit that reads as a rejected mutation.
-    const rel = source.match(/from\s+["']\.{1,2}\//g) || [];
+    //
+    // A DETECTOR THAT READS A WHOLE FILE READS ITS COMMENTS, and this one
+    // did: it went red on a docblock that EXPLAINS why the file may not
+    // import, because the explanation has to quote the shape it forbids.
+    // It had been latent since the row was written — any comment naming a
+    // relative import would have tripped it. Comment lines are dropped
+    // first, and the two assertions below are what stop the dropping from
+    // quietly taking the imports with it.
+    const lines = source.split("\n");
+    const code = lines.filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l));
+    expect(
+      code.length,
+      "every line of the script was treated as a comment — this row would pass vacuously",
+    ).toBeGreaterThan(0);
+    const imports = code.filter(l => /^\s*import\s|^\s*export\s+.*\sfrom\s/.test(l));
+    expect(
+      imports.length,
+      "no import statement found in the script at all — the detector is reading the wrong text, " +
+        "and an empty violation list would mean nothing",
+    ).toBeGreaterThan(0);
+    const rel = code.join("\n").match(/from\s+["']\.{1,2}\//g) || [];
     expect(rel, "a relative import would make every mutant run fail to resolve").toEqual([]);
   });
 });
