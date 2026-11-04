@@ -47,6 +47,17 @@ async function gql(token: string, query: string, variables: Record<string, unkno
     },
     body: JSON.stringify({ query, variables }),
   });
+  // **`r.ok` first, before the body means anything.** A GraphQL *query* error
+  // comes back 200 with an `errors` array, which is the check below and the
+  // usual path. An expired PAT, a secondary-rate-limit 403 and a 5xx come back
+  // with a plain `{"message": "..."}` body carrying NEITHER key — so `errors`
+  // was falsy, `data` was `undefined`, and this returned it. Every caller
+  // dereferences the result directly (`d.repository?.issue`, `all.node.items`,
+  // `.node?.field`), so an expired credential died as `Cannot read properties
+  // of undefined` rather than as this file's own UNMEASURED refusal. Caught in
+  // review of #1747; the same defect round 8 of #1740 fixed in
+  // `scripts/work-status.ts`. BR-38..BR-39 assert it across BOTH fetches here.
+  if (!r.ok) throw new Error(`${r.status} from the GraphQL endpoint`);
   const j = (await r.json()) as { data?: any; errors?: unknown };
   if (j.errors) throw new Error(JSON.stringify(j.errors));
   return j.data;

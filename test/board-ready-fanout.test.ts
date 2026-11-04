@@ -635,3 +635,57 @@ describe("BR-34..BR-36: the Status field id comes from the project, not from the
     expect((code.match(/field\(name:\s*"Status"\)/g) ?? []).length).toBe(1);
   });
 });
+
+/**
+ * BR-38..BR-39: an HTTP-level failure refuses, it does not return `undefined`.
+ *
+ * `gql()` treated a response as an error only when the parsed body carried a
+ * GraphQL `errors` array. GitHub answers an expired PAT, a secondary rate
+ * limit and a 5xx with a plain `{"message": "..."}` body and **neither** key,
+ * so `j.errors` was falsy, `j.data` was `undefined`, and the function returned
+ * it. Every caller then dereferenced a property straight off that —
+ * `d.repository?.issue`, `all.node.items`, `(...).node?.field` — and the run
+ * died with `TypeError: Cannot read properties of undefined`: an opaque crash
+ * in the one file whose whole subject is telling an unreadable state from a
+ * read one. Caught in review of #1747.
+ *
+ * This is the same defect, in the same shape, that round 8 of #1740 fixed in
+ * `scripts/work-status.ts`, which is why the population — **both** credentialed
+ * fetches in this script — is asserted rather than the one site named.
+ * `actorPermission` already checked; `gql` did not.
+ */
+describe("BR-38..BR-39: every credentialed fetch reads its status before its body", () => {
+  const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+  // A detector that reads a whole file reads its comments, and the docblock
+  // above `gql` now quotes the very thing this forbids.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+  const SITES = [...code.matchAll(/await fetch\(/g)].map(m => m.index!);
+
+  test("BR-38: the detector finds the whole population", () => {
+    // Anti-vacuity, and the reason BR-39 is a census rather than a spot check.
+    // A third fetch arriving here must be checked too, and a zero means the
+    // helpers were renamed and BR-39 is ranging over nothing.
+    expect(
+      SITES.length,
+      "expected exactly two `await fetch(` sites in scripts/board-ready.ts — " +
+        "`gql` and `actorPermission`. A new one must carry its own status check.",
+    ).toBe(2);
+  });
+
+  test("BR-39: no response body is parsed before its status is read", () => {
+    const unguarded = SITES.filter(at => {
+      const after = code.slice(at);
+      const parse = after.search(/await r\.json\(\)/);
+      if (parse < 0) return false; // nothing parsed, nothing to guard
+      const check = after.search(/r\.(ok|status)\b/);
+      return check < 0 || check > parse;
+    });
+    expect(
+      unguarded.length,
+      "a fetch whose body is parsed before `r.ok`/`r.status` is read turns an " +
+        "expired PAT, a 403 rate limit and a 5xx into `data: undefined`, which " +
+        "every caller dereferences as a bare TypeError instead of this file's " +
+        "own UNMEASURED refusal. Read the status first.",
+    ).toBe(0);
+  });
+});
