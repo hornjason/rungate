@@ -222,6 +222,7 @@ query($project: ID!) {
   node(id: $project) {
     ... on ProjectV2 {
       fields(first: 50) {
+        pageInfo { hasNextPage }
         nodes { ... on ProjectV2SingleSelectField { id name options { id name } } }
       }
     }
@@ -302,7 +303,15 @@ export function interpretResponse(status: number, ok: boolean, text: string): un
   const failed = Array.isArray(errors) ? errors.length > 0 : errors !== undefined && errors !== null;
   if (failed) throw new Error(`GraphQL: ${JSON.stringify(errors)}`);
 
-  if (!ok) throw new Error(`HTTP ${status}`);
+  // **The status AND what the server said**, which is what the docblock above
+  // promises and what this throw used to drop. A bad or scopeless token comes
+  // back 401/403 with a well-formed body — `{"message": "Bad credentials"}` —
+  // and no `errors` key, so `failed` above is false and both branches that
+  // preserve `snippet` are skipped. The reader was then handed `3 attempts
+  // failed, last: HTTP 401` by `withRetry`, for a permanent, non-retryable
+  // credential problem whose cause was in a sentence this line threw away.
+  // Caught in review of #1754; BS-36.
+  if (!ok) throw new Error(`HTTP ${status}: ${snippet}`);
   return body.data;
 }
 
@@ -533,8 +542,24 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   const fields = await graphql(token, FIELDS_QUERY, { project: PROJECT_ID });
-  const statusField = (requireNode(fields, "project fields") as any).fields.nodes.find((f: any) => f?.name === "Status");
-  if (statusField === undefined) throw new Error("no Status field on this project");
+  const fieldPage = (requireNode(fields, "project fields") as any).fields;
+  const statusField = fieldPage.nodes.find((f: any) => f?.name === "Status");
+  if (statusField === undefined) {
+    // **Absent and not-fetched are different facts**, and `find` returns the
+    // same `undefined` for both. `fields(first: 50)` carried no `pageInfo` at
+    // all, so a board grown past fifty custom fields would put Status on page
+    // two and this line would report it as missing — sending whoever hit it
+    // to look for a field that is already there. Caught in review of #1754;
+    // BS-37. Every other list in this file pages or declares its truncation.
+    if (fieldPage.pageInfo?.hasNextPage === true) {
+      throw new Error(
+        "UNMEASURED: the Status field was not on the first page of this project's fields, " +
+          "and the rest were not fetched. This is not 'no Status field' — it is a board with " +
+          "more than 50 custom fields, which this query does not yet page through.",
+      );
+    }
+    throw new Error("no Status field on this project");
+  }
 
   const optionId = (name: string): string => {
     const found = statusField.options.find((o: any) => o.name === name);

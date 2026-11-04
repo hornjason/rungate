@@ -429,6 +429,70 @@ describe("board status sweep", () => {
     expect(code).toMatch(/REQUEST_TIMEOUT_MS\s*=\s*[\d_]+/);
   });
 
+  // ── BS-36..BS-37: two more, from the round that reviewed BS-34/BS-35 ────
+
+  test("BS-36: an HTTP failure reports what the server said, not just the code", () => {
+    // GitHub answers a bad or scopeless token with 401/403 and a well-formed
+    // JSON body — `{"message": "Bad credentials", ...}` — carrying no `errors`
+    // key at all. So `failed` is false, the two branches that preserve
+    // `snippet` are both skipped, and execution reached `throw new Error(
+    // \`HTTP ${status}\`)`, discarding the one sentence that says WHY.
+    //
+    // Through `withRetry` the reader finally saw "3 attempts failed, last:
+    // HTTP 401" for a permanent, non-retryable credential problem — and this
+    // function's own docblock promises it "keeps both facts available: the
+    // status, and what the server actually said". Caught in review of #1754.
+    //
+    // Behavioural, not source-text: `interpretResponse` is exported, so the
+    // message a reader actually gets is the thing asserted.
+    const body = JSON.stringify({ message: "Bad credentials", documentation_url: "https://docs" });
+    let message = "";
+    try {
+      interpretResponse(401, false, body);
+      throw new Error("interpretResponse did not refuse a 401");
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    // Anti-vacuity: the row must be observing the !ok branch, not the
+    // not-JSON or not-an-object branch, both of which already carry text.
+    expect(message, "expected the status in the message").toContain("401");
+    expect(
+      message,
+      "a 401/403 body parses as JSON and carries no `errors`, so it reaches the " +
+        "`!ok` throw — which must carry the server's own text. Without it the " +
+        "reader gets a bare HTTP code for a permanent credential failure.",
+    ).toContain("Bad credentials");
+  });
+
+  test("BS-37: the field list is paginated, or says it could not be read", () => {
+    // `fields(first: 50)` with no `pageInfo`, in a file that loops `items`
+    // with a cursor and explicitly flags `statusUnread` when `fieldValues`
+    // truncates. A board that grows past fifty custom fields puts Status on
+    // page two, and `.find(f => f?.name === "Status")` returns undefined —
+    // throwing "no Status field on this project" about a field that exists
+    // and was simply not fetched. Not silent-wrong, but the message sends the
+    // reader to the board to look for something that is already there.
+    // Caught in review of #1754. `.claude/rules/…` — page every list.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    const q = code.slice(code.indexOf("const FIELDS_QUERY"), code.indexOf("const SET_STATUS"));
+    // Anti-vacuity: the query must still be here and must still be the one
+    // that asks for fields.
+    expect(q, "FIELDS_QUERY must still request fields").toMatch(/fields\(first:/);
+    expect(
+      q,
+      "FIELDS_QUERY must ask for `pageInfo { hasNextPage }` like every other " +
+        "list in this file, so a Status field on page two is UNMEASURED " +
+        "rather than reported as absent.",
+    ).toMatch(/pageInfo\s*\{[^}]*hasNextPage/);
+    // And the absence must be told apart from the truncation when it is
+    // reported, or the pageInfo is fetched and ignored.
+    expect(
+      code,
+      "the 'no Status field' refusal must distinguish a field that is absent " +
+        "from one that was never fetched — otherwise reading pageInfo changes nothing",
+    ).toMatch(/hasNextPage[\s\S]{0,600}?no Status field|no Status field[\s\S]{0,600}?hasNextPage/);
+  });
+
   test("BS-35: the re-run instruction is not printed when nothing is writable", () => {
     // One message served both branches, so a run finding only undecidable
     // rows said "re-run with --write to apply the corrections above" when
