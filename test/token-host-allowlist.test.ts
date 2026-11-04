@@ -20,12 +20,33 @@ import { assertTokenMayReach, tokenRefusalReason } from "../lib/github";
 const ROOT = join(import.meta.dir, "..");
 
 /**
- * Reading the credential out of the environment BY NAME, in the three
- * spellings TypeScript offers. Deliberately not a match on the bare word:
- * prose naming the variable is how the rule gets explained, and a detector
- * that refuses its own documentation gets relaxed rather than obeyed.
+ * Reading the credential out of the environment BY NAME.
+ *
+ * **Both names, and all four spellings.** The first version matched
+ * `GITHUB_TOKEN` only, in dot and bracket form, and review was right that it
+ * was narrower than the property the census claims. The two it missed are
+ * the two that matter most:
+ *
+ *   - `process.env.GH_TOKEN` — the name `gh auth login` actually sets, and
+ *     the ONLY one set on this machine. A file reading it directly looks
+ *     correct here and still bypasses the trim and the dual-name fallback.
+ *   - `const { GITHUB_TOKEN } = process.env` — destructuring, which reads
+ *     the same property through different syntax, exactly as `CLOSURE-8`'s
+ *     `readFileSync` is an import spelled differently.
+ *
+ * Deliberately still not a match on the bare word: prose naming the variable
+ * is how the rule gets explained, and a detector that refuses its own
+ * documentation gets relaxed rather than obeyed. The planted samples in the
+ * census below assert both directions before the tree is believed.
  */
-const DIRECT_TOKEN_READ = /process\.env\.GITHUB_TOKEN\b|process\.env\[\s*["']GITHUB_TOKEN["']\s*\]/;
+const TOKEN_NAMES = "(?:GITHUB_TOKEN|GH_TOKEN)";
+const DIRECT_TOKEN_READ = new RegExp(
+  [
+    `process\\.env\\.${TOKEN_NAMES}\\b`,
+    `process\\.env\\[\\s*["']${TOKEN_NAMES}["']\\s*\\]`,
+    `\\{[^}]*\\b${TOKEN_NAMES}\\b[^}]*\\}\\s*=\\s*process\\.env\\b`,
+  ].join("|"),
+);
 
 describe("tokenRefusalReason", () => {
   test("GitHub and loopback are allowed — CI sets GITHUB_API_URL to the real API", () => {
@@ -249,10 +270,26 @@ describe("one allowlist, declared once, whoever asks it", () => {
     expect(DIRECT_TOKEN_READ.test("const t = process.env.GITHUB_TOKEN;")).toBe(true);
     expect(DIRECT_TOKEN_READ.test('const t = process.env["GITHUB_TOKEN"];')).toBe(true);
     expect(DIRECT_TOKEN_READ.test("const t = process.env['GITHUB_TOKEN'];")).toBe(true);
+    // GH_TOKEN, added in review. It is the name `gh auth login` sets and the
+    // only one set on this machine, so a file reading it directly is the
+    // instance most likely to be written and least likely to be noticed —
+    // it works here and still skips the trim and the fallback.
+    expect(DIRECT_TOKEN_READ.test("const t = process.env.GH_TOKEN;")).toBe(true);
+    expect(DIRECT_TOKEN_READ.test('const t = process.env["GH_TOKEN"];')).toBe(true);
+    // Destructuring: the same property read through different syntax, which
+    // is the shape `CLOSURE-8` exists for one directory over.
+    expect(DIRECT_TOKEN_READ.test("const { GITHUB_TOKEN } = process.env;")).toBe(true);
+    expect(DIRECT_TOKEN_READ.test("const { GH_TOKEN: t } = process.env;")).toBe(true);
+    expect(DIRECT_TOKEN_READ.test("const { FOO, GH_TOKEN, BAR } = process.env;")).toBe(true);
     // And it must NOT fire on prose that merely names the variable, or this
     // census refuses the comment that explains why it exists — and the
     // cheapest repair for that is to stop writing the explanation.
     expect(DIRECT_TOKEN_READ.test("// export GITHUB_TOKEN before running")).toBe(false);
+    expect(DIRECT_TOKEN_READ.test("// GH_TOKEN is what gh auth login sets")).toBe(false);
+    // Nor on a name used as DATA rather than as a read — `resolveGitHubToken`
+    // itself loops over a names array, and a census that refused the one
+    // correct implementation would be deleted rather than obeyed.
+    expect(DIRECT_TOKEN_READ.test('const NAMES = ["GITHUB_TOKEN", "GH_TOKEN"];')).toBe(false);
 
     const readers: string[] = [];
     for (const dir of ["lib", "scripts", "gates", "hooks", "bin"]) {
