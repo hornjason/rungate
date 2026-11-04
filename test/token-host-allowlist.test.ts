@@ -183,13 +183,20 @@ describe("tokenRefusalReason", () => {
 
 });
 
-describe("one allowlist, and both callers ask it", () => {
+describe("one allowlist, declared once, whoever asks it", () => {
   // Two copies of an allowlist are one guard with a dead twin, and no
   // behavioural case can tell which half it exercised
   // (`.claude/rules/checks-must-be-able-to-fail.md`). Asserted as a
-  // repository-wide census rather than against the two files that exist
-  // today, because the defect this guards is somebody adding a THIRD caller
-  // and inlining the hosts beside it.
+  // repository-wide census rather than against the files that exist today,
+  // because the defect this guards is somebody adding ANOTHER caller and
+  // inlining the hosts beside it.
+  //
+  // The title used to say "both callers". There is one production caller in
+  // this tree — `resolveApiBaseUrl` — and the second, `restAll()` in
+  // `scripts/work-status.ts`, lands with #1740. That wording was wrong in
+  // three places on this branch and the census is the reason it did not
+  // matter: it counts declarations, not callers, so it is correct whatever
+  // the caller count turns out to be.
   test("the host set is declared exactly once in the tree", () => {
     const declarations: string[] = [];
     for (const dir of ["lib", "scripts", "gates", "hooks", "bin"]) {

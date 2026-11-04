@@ -195,12 +195,18 @@ export function createGitHubClient(): GitHubClient {
  * refused. GitHub Enterprise needs a host outside this list and stays a
  * separate, deliberate decision rather than a side effect of a test seam.
  *
- * **A second caller appeared** — a paginating reader following
- * `Link: rel="next"`, which is a **response** header, so the host it names is
- * chosen by whoever answered rather than by us. Same question, second input.
- * The check is therefore `tokenRefusalReason` below, exported and asked by
- * both; two copies of an allowlist are one guard with a dead twin, and no
- * behavioural case can tell which half it exercised.
+ * **A second caller is coming, and is not here yet** — a paginating reader
+ * following `Link: rel="next"`, which is a **response** header, so the host it
+ * names is chosen by whoever answered rather than by us. Same question,
+ * second input. That reader is `restAll()` in `scripts/work-status.ts` and it
+ * lands with #1740; this tree does not contain it.
+ *
+ * The check is therefore `tokenRefusalReason` below, exported so one decider
+ * can answer both: two copies of an allowlist are one guard with a dead twin,
+ * and no behavioural case can tell which half it exercised. Written in the
+ * future tense on purpose — the earlier wording said "appeared" and "both" of
+ * a tree holding one caller, and a reader going to check found nothing and
+ * could not tell a split from a sentence nobody updated.
  *
  * It stays in THIS file rather than moving to a leaf module, and the three
  * red checks that settled it are worth recording: SC-528 binds the literals
@@ -242,16 +248,24 @@ const ALLOWED_API_HOSTS = new Set([
 /**
  * Why this URL may not carry our bearer token, or `null` when it may.
  *
- * One decider. The in-tree caller is `assertTokenMayReach` above, over
- * `GITHUB_API_URL`.
+ * One decider, and these are its callers as this tree actually stands:
  *
- * `base` has no production caller IN THIS TREE and is not dead: it resolves a
- * relative `Link: rel="next"` against the page it arrived on, for the
- * pagination hops in `scripts/work-status.ts`, which lands with #1740. It is
- * exercised today only by `test/token-host-allowlist.test.ts`, which passes
- * it directly. Said plainly because the earlier wording named that file as a
- * current second input and this tree does not contain it — a reader checking
- * the claim finds nothing and cannot tell a split from a stale sentence.
+ * | caller | where | passes `base` |
+ * |---|---|---|
+ * | `resolveApiBaseUrl` | ABOVE, over `GITHUB_API_URL` | no |
+ * | `assertTokenMayReach` | BELOW, the throwing wrapper | yes, passes through |
+ * | `test/token-host-allowlist.test.ts` | the suite | yes, directly |
+ *
+ * `assertTokenMayReach` has **no in-tree production caller**. It is the entry
+ * point `restAll()` in `scripts/work-status.ts` will use, and that lands with
+ * #1740 — so today only the suite reaches it, and only the suite exercises
+ * `base`, which resolves a relative `Link: rel="next"` against the page it
+ * arrived on.
+ *
+ * Spelled out as a table because prose got it wrong twice: once naming
+ * `scripts/work-status.ts` as a current input when this tree lacks the file,
+ * and once naming `assertTokenMayReach` as the `GITHUB_API_URL` caller — the
+ * wrong function, in the wrong direction, and the one with no caller at all.
  */
 export function tokenRefusalReason(raw: string, base?: string): string | null {
   let url: URL;
