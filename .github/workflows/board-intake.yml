@@ -41,12 +41,33 @@
 # THE TOKEN MUST CARRY PROJECT **WRITE**. `GITHUB_TOKEN` cannot write ProjectsV2
 # at all, at any permission level, so a PAT or App is required and that is
 # GitHub's documented answer rather than a workaround here.
-# `RUNGATE_PROJECT_TOKEN` is the secret this repository already uses to READ the
-# board in `ci.yml` and `release.yml`. If it was minted `read:project` only,
-# this job fails with a permission error naming the project — which is the
-# correct and loud outcome. Do NOT silence it with `continue-on-error`: a job
-# that quietly fails to add items is indistinguishable from the state this file
+#
+# `RUNGATE_PROJECT_TOKEN` was minted `read:project` on 2026-11-02 and used only
+# to READ the board from `ci.yml` and `release.yml`. **Jason widened it to
+# project write on 2026-11-04, for this workflow.** The review of this pull
+# request flagged the read-only scope twice at `high` and was correct against
+# every record in the tree at the time it ran; the scope changed after it ran,
+# which no finding could have known.
+#
+# That widening has a cost worth stating where it is visible: the same secret
+# is handed to `bun test` in `ci.yml` and `release.yml`, so the suite now runs
+# with a credential that can modify the board. Nothing in the suite writes to
+# it. If that ever stops being true, the fix is a second secret scoped to this
+# workflow alone, not a narrower reader here.
+#
+# Do NOT silence a permission failure with `continue-on-error`: a job that
+# quietly fails to add items is indistinguishable from the state this file
 # exists to end.
+#
+# IT ADDS NOTHING RETROSPECTIVELY, BY DESIGN. Every trigger below is an event,
+# so an issue or pull request opened BEFORE this merges is never added — which
+# is the gap this file closes, left open for everything that already exists.
+# The backfill was therefore done by hand on 2026-11-04: #1747 and #1749 were
+# added, and a paginated sweep of every open pull request against the board
+# then returned zero missing. Anything opened in the window between that sweep
+# and this merge needs the same treatment once; after that the triggers cover
+# it. The first sweep read `first:100` against a 118-item board and reported a
+# false zero, so page the query or do not trust its answer.
 name: Board intake
 
 on:
