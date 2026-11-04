@@ -207,6 +207,93 @@ describe("the gather step hands the agent a diff the runner can actually read (#
   });
 
   /**
+   * AC-6: the cap's REAL ceiling, which is not the one AC-5 asserts.
+   *
+   * AC-5 bounds the cap by `GITHUB_OUTPUT`'s 1 MB, and that bound is true and
+   * not the binding one. The gathered diff does not stop at `GITHUB_OUTPUT`:
+   * it is interpolated into the `prompt:` input, and the action marshals every
+   * input into ONE environment variable — `ALL_INPUTS` — before `execve`ing
+   * bash. Linux caps a single argv/env string at `MAX_ARG_STRLEN`, 32 pages,
+   * 131072 bytes. Over it, `execve` returns `E2BIG` and the runner prints
+   *
+   *   An error occurred trying to start process '/usr/bin/bash' … Argument
+   *   list too long
+   *
+   * which names no variable, no step and no size, and the review never runs.
+   *
+   * MEASURED, not inferred. Run 41879146916 on PR #1753, 2026-11-04:
+   * `ALL_INPUTS` was 161,683 bytes, the step died with exactly that message,
+   * and the post-step reported `NO_REVIEW_POSTED`. The cap did not fire,
+   * because 161,683 is under the 262,144 it was then set to — AC-5's ceiling
+   * was satisfied the whole time.
+   *
+   * THREE QUARTERS, and the quarter is not caution. The variable also carries
+   * the prompt literal and every other input, and JSON-escaping a diff adds
+   * roughly a byte per line. A cap AT the limit overflows on the envelope.
+   *
+   * Breaking it: set `MAX_BYTES` back to `"262144"` and this goes red naming
+   * the limit, while AC-1, AC-2, AC-3 and AC-5 all stay green — which is the
+   * point, because those are the rows a raiser would run.
+   */
+  test("AC-6: the cap leaves room under MAX_ARG_STRLEN, which is what actually refused", () => {
+    const MAX_ARG_STRLEN = 32 * 4096;
+    expect(
+      MAX_BYTES,
+      `MAX_BYTES is ${MAX_BYTES}. The diff reaches the agent inside ONE environment ` +
+        `variable, and Linux refuses any single env string over ${MAX_ARG_STRLEN} bytes ` +
+        "with 'Argument list too long' before bash starts — see run 41879146916. " +
+        "GITHUB_OUTPUT's 1 MB (AC-5) is the looser of the two limits and not the one " +
+        "that fires.",
+    ).toBeLessThanOrEqual(Math.floor((MAX_ARG_STRLEN * 3) / 4));
+  });
+
+  /**
+   * AC-7: the subject is the PR's combined diff, never its per-commit series.
+   *
+   * `gh pr diff --patch` emits `git format-patch` output — every commit on the
+   * branch, each with its own header and message. Its size tracks the number
+   * of ROUNDS, not the size of the change, so the input grows every time the
+   * reviewer asks for a fix. Measured on PR #1753 at round 8, 2026-11-04:
+   *
+   *   gh pr diff 1753 --patch  →  155,370 bytes
+   *   gh pr diff 1753          →   37,160 bytes
+   *
+   * Four times the subject for the same change, and it was the 155 KB that
+   * pushed `ALL_INPUTS` past AC-6's limit. The feedback loop points the wrong
+   * way: the pull requests that have needed the most review are the ones whose
+   * reviewer cannot start. A reviewer wants the diff of the merge, which is
+   * what the prompt's own DIFF markers promise.
+   *
+   * Breaking it: put `--patch` back on the command and this goes red. No other
+   * row sees it — the stub `gh` in `runGather` ignores its flags, exactly as a
+   * reviewer reading only the round-trip cannot tell the two outputs apart.
+   *
+   * IT READS THE COMMAND, NOT THE STEP. A substring search over the whole body
+   * was the first spelling and it was wrong in the safe direction: the comment
+   * warning the next person off the flag has to name it, so the row went red
+   * on the fix that satisfied it. A detector that cannot tell a command from a
+   * sentence about a command measures the prose.
+   */
+  test("AC-7: the step gathers the combined diff, not the per-commit patch series", () => {
+    const commands = runBody
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => !l.startsWith("#") && l.includes("gh pr diff"));
+
+    expect(
+      commands.length,
+      "no `gh pr diff` command line outside a comment — this row would pass vacuously",
+    ).toBe(1);
+
+    expect(
+      commands.filter((l) => l.includes("--patch")),
+      "`gh pr diff --patch` emits one patch per COMMIT, so the subject grows with the " +
+        "round count rather than the change: 155,370 bytes against 37,160 on PR #1753 at " +
+        "round 8. That is what overflowed AC-6's limit. Gather the combined diff.",
+    ).toEqual([]);
+  });
+
+  /**
    * The control. Under the cap, nothing is truncated and the diff round-trips
    * whole — so a failure in the row below is about the cut and not about the
    * harness.
