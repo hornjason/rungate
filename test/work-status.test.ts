@@ -82,6 +82,40 @@ describe("orderReading: an item nothing can observe is UNMEASURED, never DONE", 
     expect(orderReading({ tracker: "#999", facts: { kind: "issue", state: "closed", stateReason: "not_planned" } })).toBe("ABANDONED");
   });
 
+  // Caught in review of #1740, and it is the same defect as the two above
+  // with the default on the other side. `stateReason === "not_planned" ?
+  // ABANDONED : DONE` FAILS OPEN: every reason the function does not know
+  // about came out DONE, including `null`, which is what GitHub returns for
+  // an issue closed before the field existed or by a client that does not
+  // set it. A tick for a closure nobody confirmed as completion is exactly
+  // the hallucinated reading this file exists to stop.
+  //
+  // Introspected rather than recalled — `IssueStateReason` on the live
+  // schema is REOPENED, NOT_PLANNED, COMPLETED, DUPLICATE, and REST adds
+  // `null`. So the set is closed today and will not stay closed, which is
+  // why the default is UNMEASURED rather than a fifth named case.
+  test("a closed issue is DONE only when GitHub says completed — everything else fails CLOSED", () => {
+    const closed = (stateReason: string | null) =>
+      orderReading({ tracker: "#999", facts: { kind: "issue", state: "closed", stateReason } });
+
+    // The positive half, in the same row. Without it the cheapest wrong fix
+    // — returning UNMEASURED for every closed issue — goes green.
+    expect(closed("completed")).toBe("DONE");
+
+    // Explicit non-completion. GitHub said the work did not happen.
+    expect(closed("not_planned")).toBe("ABANDONED");
+    expect(closed("duplicate")).toBe("ABANDONED");
+
+    // Not a claim either way. `reopened` on a CLOSED issue is contradictory,
+    // `null` is the field never having been set, and an unknown string is a
+    // value this function was written before.
+    expect(closed(null), "a null reason is the absence of a reason, not completion").toBe("UNMEASURED");
+    expect(closed("reopened"), "reopened on a closed issue is a contradiction, not a tick").toBe("UNMEASURED");
+    expect(closed("some_future_reason"), "a reason added after this code was written is not completion").toBe(
+      "UNMEASURED",
+    );
+  });
+
   // Item 7 — "re-run the Stage B audit" — WAS completed, on 2026-11-03, and
   // printed blank for a day because it has no tracker object. Understating is
   // a real cost: Jason read the report and asked why finished work showed as

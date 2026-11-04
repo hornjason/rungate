@@ -102,5 +102,19 @@ export function orderReading(item: {
   const f = item.facts;
   if (f.state === "open") return "OPEN";
   if (f.kind === "pr") return f.merged ? "DONE" : "ABANDONED";
-  return f.stateReason === "not_planned" ? "ABANDONED" : "DONE";
+  // CLOSED FAILS CLOSED. This was `stateReason === "not_planned" ?
+  // ABANDONED : DONE`, which handed DONE to every reason it did not know —
+  // including `null`, what GitHub returns for an issue closed before the
+  // field existed or by a client that does not set it. That is a tick for a
+  // closure nobody confirmed as completion, which is the reading this whole
+  // file exists to stop, arriving through its own default. Caught in review
+  // of #1740.
+  if (f.stateReason === "completed") return "DONE";
+  if (f.stateReason === "not_planned" || f.stateReason === "duplicate") return "ABANDONED";
+  // `reopened` on a closed issue is a contradiction; `null` is the absence
+  // of a reason; anything else is a value added after this was written.
+  // Introspected 2026-11-04: `IssueStateReason` is REOPENED, NOT_PLANNED,
+  // COMPLETED, DUPLICATE, and REST adds `null` — so the set is closed today
+  // and will not stay closed. UNMEASURED is the only honest default.
+  return "UNMEASURED";
 }
