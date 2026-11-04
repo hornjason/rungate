@@ -37,14 +37,24 @@ import {
  *
  * ## What was broken to prove these can fail
  *
- * Run against this tree, 11 tests. Every count predicted before the battery
+ * Run against this tree, 20 tests. Every count predicted before the battery
  * ran, and **the baseline row was read first** — an instrument that has
  * stopped reporting takes the baseline down with it, and nobody mutates
  * anything to produce that row.
  *
+ * **M1..M7 WERE MEASURED AT A SUITE OF ELEVEN, AND THAT MATTERS.** The
+ * sentence above said 11 while the file shipped 20, which reads as evidence
+ * the battery saw the suite being merged. It did not. Nine tests have been
+ * added since the battery ran — `FC-13`, `FC-14`, the five in the
+ * Octokit-migration block, and `FC-18`/`FC-19` below — so each mutant's
+ * failure count is a LOWER BOUND today, never an over-count: a mutation that
+ * killed three cases out of eleven cannot kill fewer now. The baseline row is
+ * re-read on every run and `FC-19` fails the suite when this number and the
+ * file disagree, which is how the stale one was found.
+ *
  * | Row | Predicted | Measured |
  * |---|---|---|
- * | **baseline** — unmutated | 11 pass, 0 fail | **11 pass, 0 fail** |
+ * | **baseline** — unmutated | 20 pass, 0 fail | **20 pass, 0 fail** |
  * | M1 `rate` divides unconditionally — `NaN` instead of `null` | 3 | **3** |
  * | M2 the denominator becomes `rows.length` | 4 | **4** |
  * | M3 an `UNMEASURED` lookup reads as no-comment | 1 | **1** |
@@ -279,7 +289,7 @@ describe("complianceReading", () => {
  * must never degrade into an empty comment list**, because zero comments
  * reads as "nobody complied" and the truth is "we could not see".
  */
-describe("FC-9..FC-12: the comment lookup, after the Octokit migration", () => {
+describe("FC-12, FC-15..FC-17: the comment lookup, after the Octokit migration", () => {
   const pageClient = (pages: unknown[][]) => {
     const seen: number[] = [];
     return {
@@ -297,9 +307,9 @@ describe("FC-9..FC-12: the comment lookup, after the Octokit migration", () => {
     };
   };
 
-  // FC-9: the pagination the `gh --paginate` flag used to buy us. A busy
+  // FC-15: the pagination the `gh --paginate` flag used to buy us. A busy
   // issue passes 100 comments and a single-page read truncates silently.
-  test("FC-9: every page is walked, not just the first", async () => {
+  test("FC-15: every page is walked, not just the first", async () => {
     const full = Array.from({ length: 100 }, (_, i) => ({ created_at: `2026-11-0${1}T00:00:${String(i).padStart(2, "0")}Z` }));
     const { client, seen } = pageClient([full, [{ created_at: "2026-11-02T00:00:00Z" }]]);
     const rows = await listIssueComments(client, "owner/repo", 7);
@@ -307,18 +317,18 @@ describe("FC-9..FC-12: the comment lookup, after the Octokit migration", () => {
     expect(seen).toEqual([1, 2]);
   });
 
-  // FC-10: and it STOPS. A short page is the end; a loop that asks for one
+  // FC-16: and it STOPS. A short page is the end; a loop that asks for one
   // more forever is the cheapest wrong spelling of the line above.
-  test("FC-10: a short page ends the walk", async () => {
+  test("FC-16: a short page ends the walk", async () => {
     const { client, seen } = pageClient([[{ created_at: "2026-11-01T00:00:00Z" }]]);
     expect((await listIssueComments(client, "owner/repo", 7)).length).toBe(1);
     expect(seen).toEqual([1]);
   });
 
-  // FC-11: the reading that must not be lost, in BOTH failure positions.
+  // FC-17: the reading that must not be lost, in BOTH failure positions.
   // Zero comments reads as "nobody complied"; the truth is "we could not
   // see", and the rate those feed is the whole point of the module.
-  test("FC-11: a failed request is UNMEASURED, not an empty comment list", async () => {
+  test("FC-17: a failed request is UNMEASURED, not an empty comment list", async () => {
     const noClient = await ghIssueComments("owner/repo", () => {
       throw new Error("GITHUB_TOKEN environment variable is not set");
     })(7);
@@ -338,9 +348,9 @@ describe("FC-9..FC-12: the comment lookup, after the Octokit migration", () => {
     if (throwingRequest.reading === "UNMEASURED") expect(throwingRequest.why).toContain("404");
   });
 
-  // The positive control for FC-11: a working client is MEASURED, so the
+  // The positive control for FC-17: a working client is MEASURED, so the
   // case above is not green merely because everything returns UNMEASURED.
-  test("FC-11b: a client that answers is MEASURED, with the timestamps", async () => {
+  test("FC-17b: a client that answers is MEASURED, with the timestamps", async () => {
     const read = await ghIssueComments("owner/repo", () => ({
       rest: { issues: { listComments: async () => ({ data: [{ created_at: "2026-11-03T12:00:00Z" }] }) } },
     }) as unknown as Parameters<typeof listIssueComments>[0])(7);
@@ -355,5 +365,58 @@ describe("FC-9..FC-12: the comment lookup, after the Octokit migration", () => {
     const src = readFileSync(join(import.meta.dir, "..", "lib/filing-compliance.ts"), "utf-8");
     expect(src).not.toContain("spawnSync");
     expect(src).not.toContain("child_process");
+  });
+});
+
+/**
+ * FC-18 and FC-19 assert two claims this file makes ABOUT ITSELF, because both
+ * were wrong when a reviewer read them and neither was checkable.
+ *
+ * Over thirteen rounds the recurring defect here has not been the logic — it
+ * has been a sentence about the code that the code falsifies: a mutation table
+ * stating a baseline the suite had outgrown, and ids reused for unrelated
+ * tests while the commit messages cited them as stable names. Fixing each by
+ * hand leaves the next edit free to break it again, so the claims are asserted
+ * instead of restated.
+ */
+describe("FC-18..FC-19: this file's claims about itself", () => {
+  const SELF = readFileSync(join(import.meta.dir, "filing-compliance.test.ts"), "utf-8");
+
+  test("FC-18: every FC id names exactly one test", () => {
+    // FC-9, FC-10 and FC-11 each named two unrelated tests when this was
+    // written — the rate-denominator case and a pagination case both answered
+    // to "FC-9". The commit messages cite these ids ("FC-11 is the positive
+    // control"), so a duplicate makes a citation ambiguous rather than wrong,
+    // which is the kind of error nobody notices.
+    const ids = [...SELF.matchAll(/test\("(FC-[0-9]+b?)\s*:/g)].map(m => m[1]!);
+    const seen = new Map<string, number>();
+    for (const id of ids) seen.set(id, (seen.get(id) ?? 0) + 1);
+    const duplicated = [...seen].filter(([, n]) => n > 1).map(([id, n]) => `${id} x${n}`);
+
+    expect(duplicated, `FC ids used more than once: ${duplicated.join(", ")}`).toEqual([]);
+    // Anti-vacuity: a regex that stops matching makes the row above green
+    // over an empty list, which is the third shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    expect(ids.length).toBeGreaterThanOrEqual(15);
+  });
+
+  test("FC-19: the docblock's baseline count is this suite's real test count", () => {
+    // The mutation table's baseline row said "11 pass, 0 fail" against a file
+    // that ships 20 tests. A reader takes that row as evidence the battery was
+    // run on the shipped suite; it was run on a suite seven tests smaller.
+    const actual = [...SELF.matchAll(/^\s*test\(/gm)].length;
+    const claimed = /\*\s*Run against this tree, ([0-9]+) tests\./.exec(SELF)?.[1];
+
+    expect(claimed, "the docblock no longer states a baseline count at all").toBeDefined();
+    expect(
+      Number(claimed),
+      `the docblock claims ${claimed} tests and the file has ${actual}. Re-run the ` +
+        `baseline and update BOTH the sentence and the table's baseline row — a stale ` +
+        `count reads as evidence the battery saw the shipped suite.`,
+    ).toBe(actual);
+
+    // And the table's own baseline row must agree with the sentence, or the
+    // two halves of the same claim can drift apart again.
+    expect(SELF).toContain(`| **baseline** — unmutated | ${actual} pass, 0 fail |`);
   });
 });
