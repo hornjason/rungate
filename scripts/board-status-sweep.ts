@@ -144,16 +144,24 @@ export function verdictFor(item: BoardItem): Verdict {
   }
 
   // A DRAFT pull request falls through to the same refusal as an open issue,
-  // and it must. `board-intake.yml` in this same change excludes drafts from
-  // In review on purpose — a draft there says somebody is waiting on a reader
-  // when nobody is — so a sweep that wrote In review for one would be a second
-  // decider contradicting the first, with no run in which they ever meet
-  // (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape).
+  // and it must — but NOT for the reason this comment used to give.
+  //
+  // It said `board-intake.yml` excludes drafts from In review on purpose, and
+  // that workflow does no such thing: its own header declares "WHAT IT
+  // DELIBERATELY DOES NOT DO: set a field", and GitHub's built-in project
+  // automation is the only thing in this repository that writes Status. A
+  // reader who went looking for the exclusion would not find it. Caught in
+  // review of #1754; the citation was carried over from a branch where the
+  // workflow DID have a Status step and was never re-read against main.
+  //
+  // The refusal stands on its own facts: a draft is not awaiting a reader, so
+  // In review is wrong, and Done is wrong because it is open. Nothing here can
+  // name the right column, which is what UNDECIDABLE means.
   const why =
     item.kind === "PullRequest"
-      ? "open DRAFT pull request marked Done. Done is wrong, and In review is wrong too — " +
-        "board-intake.yml keeps drafts out of it deliberately — so the right column is not " +
-        "derivable: a person has to pick it, or mark the pull request ready for review"
+      ? "open DRAFT pull request marked Done. Done is wrong because it is open, and In " +
+        "review is wrong because a draft is not awaiting a reader — so the right column " +
+        "is not derivable: a person has to pick it, or mark the pull request ready for review"
       : "open issue marked Done. Done is wrong, but Backlog, Ready and In progress are all " +
         "consistent with an open issue, so the right column is not derivable — a person has to pick it";
 
@@ -372,6 +380,59 @@ async function rawGraphql(token: string, query: string, variables: Record<string
   return interpretResponse(res.status, res.ok, await res.text());
 }
 
+/**
+ * One GraphQL item node, as a `BoardItem` — or `null` for a node this sweep
+ * has no opinion about (a draft issue, a deleted item, a redacted one).
+ *
+ * **Exported because it is the parsing half of the `statusUnread` fix and
+ * nothing could see it.** Caught in review of #1754: every case in
+ * `test/board-status-sweep.test.ts` built a `BoardItem` by hand and set
+ * `statusUnread` as a literal, so a typo in the `field?.name === "Status"`
+ * filter, a wrong nesting level, or an inverted `hasNextPage` would produce
+ * wrong values and pass all 26 rows — the third shape in
+ * `.claude/rules/checks-must-be-able-to-fail.md`, an assertion holding
+ * against a value the test itself just set. `readBoard` remains a network
+ * loop with nothing decided inside it.
+ */
+export function parseBoardItem(node: any): BoardItem | null {
+  const content = node?.content;
+  if (content === null || content === undefined) return null;
+  if (content.__typename !== "Issue" && content.__typename !== "PullRequest") return null;
+
+  const status =
+    (node.fieldValues?.nodes ?? [])
+      .filter((f: any) => f?.field?.name === "Status")
+      .map((f: any) => f.name)[0] ?? null;
+
+  // A FALSE ZERO ONE LEVEL DOWN. The board query pages `items`, and the
+  // per-item `fieldValues` connection was NOT paged: an item carrying
+  // more field values than the page holds loses Status off the end, and
+  // a missing Status reads as `null` — which `verdictFor` treats as "any
+  // non-Done column", i.e. agreement. A genuinely wrong Done column
+  // would be left uncorrected by `--write` and counted as agreeing.
+  // Exactly the shape this file already fixed for `items(first:100)`.
+  //
+  // `&& status === null` is load-bearing in the other direction too: a
+  // truncated page that DID carry Status was read, and calling it unread
+  // would refuse every large item for no reason.
+  const statusUnread = node.fieldValues?.pageInfo?.hasNextPage === true && status === null;
+
+  return {
+    itemId: node.id,
+    number: content.number,
+    kind: content.__typename,
+    state: content.state,
+    status,
+    // `isDraft` is absent on the Issue fragment, and an undefined here
+    // would make `!item.draft` true for every item — the draft branch
+    // would never run and BS-13 would be green against a sweep that
+    // still moves drafts. Coerce, so the field is a boolean or nothing
+    // reaches the verdict.
+    draft: content.isDraft === true,
+    statusUnread,
+  };
+}
+
 /** Every item, paginated. A bare first:100 against a 121-item board returns a FALSE ZERO. */
 async function readBoard(token: string): Promise<BoardItem[]> {
   const items: BoardItem[] = [];
@@ -382,37 +443,8 @@ async function readBoard(token: string): Promise<BoardItem[]> {
     const page = (requireNode(data, "project board") as any).items;
 
     for (const node of page.nodes) {
-      const content = node.content;
-      if (content === null || content === undefined) continue;
-      if (content.__typename !== "Issue" && content.__typename !== "PullRequest") continue;
-
-      const status = (node.fieldValues?.nodes ?? [])
-        .filter((f: any) => f?.field?.name === "Status")
-        .map((f: any) => f.name)[0] ?? null;
-
-      // A FALSE ZERO ONE LEVEL DOWN. The board query pages `items`, and the
-      // per-item `fieldValues` connection was NOT paged: an item carrying
-      // more field values than the page holds loses Status off the end, and
-      // a missing Status reads as `null` — which `verdictFor` treats as "any
-      // non-Done column", i.e. agreement. A genuinely wrong Done column
-      // would be left uncorrected by `--write` and counted as agreeing.
-      // Exactly the shape this file already fixed for `items(first:100)`.
-      const statusUnread = node.fieldValues?.pageInfo?.hasNextPage === true && status === null;
-
-      items.push({
-        itemId: node.id,
-        number: content.number,
-        kind: content.__typename,
-        state: content.state,
-        status,
-        // `isDraft` is absent on the Issue fragment, and an undefined here
-        // would make `!item.draft` true for every item — the draft branch
-        // would never run and BS-13 would be green against a sweep that
-        // still moves drafts. Coerce, so the field is a boolean or nothing
-        // reaches the verdict.
-        draft: content.isDraft === true,
-        statusUnread,
-      });
+      const item = parseBoardItem(node);
+      if (item !== null) items.push(item);
     }
 
     if (!page.pageInfo.hasNextPage) break;

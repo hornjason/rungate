@@ -23,6 +23,7 @@ import {
   IN_REVIEW,
   applyCorrections,
   interpretResponse,
+  parseBoardItem,
   requireNode,
   sweep,
   withRetry,
@@ -337,6 +338,83 @@ describe("board status sweep", () => {
     // understand. Refusing is right: silently returning data on an
     // unrecognised envelope is Silent Default Substitution.
     expect(() => interpretResponse(200, true, '{"errors":{"message":"odd"}}')).toThrow(/odd/);
+  });
+
+  // ── BS-29..BS-33: the parsing half, against real-shaped payloads ────────
+  //
+  // Caught in review of #1754, and it was right: every case above builds a
+  // `BoardItem` by hand and sets `statusUnread` as a literal. The function
+  // that DERIVES it from a GraphQL node had no case at all, so a typo in the
+  // `Status` filter, a wrong nesting level or an inverted `hasNextPage`
+  // would produce wrong values and leave all 26 rows green — the third shape
+  // in `.claude/rules/checks-must-be-able-to-fail.md`, an assertion holding
+  // against a value the test itself just set.
+  //
+  // These five feed `parseBoardItem` the shape the server actually sends.
+  const node = (over: Record<string, unknown> = {}, fieldValues?: unknown) => ({
+    id: "PVTI_x",
+    content: { __typename: "PullRequest", number: 7, state: "OPEN", isDraft: false, ...over },
+    fieldValues: fieldValues ?? { pageInfo: { hasNextPage: false }, nodes: [] },
+  });
+  const values = (names: Record<string, string>, hasNextPage = false) => ({
+    pageInfo: { hasNextPage },
+    nodes: Object.entries(names).map(([field, name]) => ({ name, field: { name: field } })),
+  });
+
+  test("BS-29: Status is read from the nested field name, not from position", () => {
+    // Two decoys either side, so a parser that takes `nodes[0].name` or the
+    // last node passes nothing. The filter has to look at `field.name`.
+    const item = parseBoardItem(
+      node({}, values({ Priority: "P1", Status: "Done", Size: "M" })),
+    );
+    expect(item?.status).toBe(DONE);
+    expect(item?.statusUnread).toBe(false);
+    expect(item).toMatchObject({ itemId: "PVTI_x", number: 7, kind: "PullRequest", state: "OPEN" });
+  });
+
+  test("BS-30: Status absent off the end of a FULL page is statusUnread, derived", () => {
+    // The finding's exact ask: prove `statusUnread` comes out true from a
+    // real-shaped payload, not from a hand-set fixture field. This is the
+    // false zero one level down — Status is not in the page, and the page
+    // says there is more.
+    const item = parseBoardItem(node({}, values({ Priority: "P1" }, true)));
+    expect(item?.status).toBeNull();
+    expect(item?.statusUnread).toBe(true);
+    // And the verdict that follows from it, so the two halves meet in one
+    // case rather than each being correct against its own fixture.
+    expect(verdictFor(item!).kind).toBe("undecidable");
+  });
+
+  test("BS-31: Status absent off a COMPLETE page is not read, it is not set", () => {
+    // The distinction the whole fix exists for. Same `status: null`, opposite
+    // meaning, and nothing but `hasNextPage` tells them apart — so a parser
+    // that ignored `pageInfo` would pass BS-30 and fail here, and one that
+    // always trusted it would pass here and fail BS-30.
+    const item = parseBoardItem(node({}, values({ Priority: "P1" }, false)));
+    expect(item?.status).toBeNull();
+    expect(item?.statusUnread).toBe(false);
+  });
+
+  test("BS-32: a truncated page that DID carry Status was read", () => {
+    // `&& status === null` in the other direction. Dropping it refuses every
+    // item with more fields than a page, for no reason, and BS-30 and BS-31
+    // both stay green while it does.
+    const item = parseBoardItem(node({}, values({ Status: IN_REVIEW }, true)));
+    expect(item?.status).toBe(IN_REVIEW);
+    expect(item?.statusUnread).toBe(false);
+  });
+
+  test("BS-33: isDraft is coerced, and a node this sweep cannot judge is null", () => {
+    // `isDraft` is absent on the Issue fragment. An `undefined` reaching
+    // `BoardItem.draft` makes `!item.draft` true for every item, so the draft
+    // branch never runs — BS-13 is green against a sweep that moves drafts.
+    expect(parseBoardItem(node({ __typename: "Issue", isDraft: undefined }))?.draft).toBe(false);
+    expect(parseBoardItem(node({ isDraft: true }))?.draft).toBe(true);
+
+    // And the three nodes that are not items of this sweep.
+    expect(parseBoardItem({ id: "a", content: null })).toBeNull();
+    expect(parseBoardItem({ id: "a" })).toBeNull();
+    expect(parseBoardItem({ id: "a", content: { __typename: "DraftIssue" } })).toBeNull();
   });
 });
 
