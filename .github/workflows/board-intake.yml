@@ -53,11 +53,20 @@
 # was itself, added by the same diff it was defending. Prose about a credential
 # is not a reading of one.
 #
-# So the first run IS the measurement, and `workflow_dispatch` is below so it
-# can be taken deliberately instead of waiting for an event. A refusal prints a
-# permission error naming the project, which is unambiguous and is the reading.
-# Do NOT silence it with `continue-on-error`: a job that quietly fails to add
-# items is indistinguishable from the state this file exists to end.
+# So the FIRST REAL EVENT is the measurement — the next issue or pull request
+# opened after this merges. A refusal prints a permission error naming the
+# project, which is unambiguous and is the reading. Do NOT silence it with
+# `continue-on-error`: a job that quietly fails to add items is
+# indistinguishable from the state this file exists to end.
+#
+# DO NOT ADD `workflow_dispatch` TO TRIGGER THAT PROBE ON DEMAND. It was added
+# in round 3 for exactly that reason and removed in round 4, because it cannot
+# work: `src/add-to-project.ts` line 49 resolves the item as
+# `context.payload.issue ?? context.payload.pull_request`, and a manual run has
+# neither. The job would run against an undefined item and tell you nothing
+# about the credential — a probe that reports on the exit code while never
+# reaching the mechanism it was added to measure
+# (`.claude/rules/checks-must-be-able-to-fail.md`, the sixth shape).
 #
 # ONE COST, IF IT IS WIDENED: the same secret is handed to `bun test` in
 # `ci.yml` and `release.yml`, so the suite would run with a credential that can
@@ -81,9 +90,6 @@ on:
     types: [opened, reopened, transferred]
   pull_request_target:
     types: [opened, reopened, ready_for_review]
-  # The scope probe. A secret cannot be read, so the run is the only evidence
-  # that the credential can write the board — see the header.
-  workflow_dispatch:
 
 # `pull_request_target` runs in the context of the BASE repository and so can
 # see secrets, which `pull_request` cannot — and that is the whole reason it is
