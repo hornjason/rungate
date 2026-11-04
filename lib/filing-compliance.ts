@@ -138,6 +138,13 @@ export interface ComplianceReading {
 const NOT_REFUSED = "NOT_REFUSED";
 
 /**
+ * A row that WAS refused and whose refusal the ledger did not label. Distinct
+ * from `NOT_REFUSED`, which means the row was emitted and has nothing to
+ * comply with. Both are "no refusal string"; only one of them is a gap.
+ */
+const REFUSED_UNLABELLED = "REFUSED_UNLABELLED";
+
+/**
  * The one refusal whose row persists its own comment target.
  *
  * One binding, so the rule the header states and the rule the code applies
@@ -228,7 +235,19 @@ export async function complianceReading(input: {
   const unobservableByRefusal: Record<string, number> = {};
 
   const countUnobservable = (row: FilingComplianceRow) => {
-    const key = row.emitted ? NOT_REFUSED : (row.refusal ?? NOT_REFUSED);
+    // TWO POPULATIONS, NOT ONE. This was
+    // `row.emitted ? NOT_REFUSED : (row.refusal ?? NOT_REFUSED)`, so a row
+    // that WAS refused but carries `refusal: null` — which the type allows
+    // and `targetOf`'s own UNOBSERVABLE message anticipates — landed in the
+    // same bucket as a row that was emitted and had nothing to comply with.
+    //
+    // This field exists to ATTRIBUTE the gap, and those two rows are the
+    // opposite ends of it: one needed no follow-up, the other needed one and
+    // the ledger cannot say what kind. Collapsing them is the one attribution
+    // this reading must never make, so the unlabelled refusal gets its own
+    // bucket rather than a default (`.claude/rules/config-access.md`, Silent
+    // Default Substitution).
+    const key = row.emitted ? NOT_REFUSED : (row.refusal ?? REFUSED_UNLABELLED);
     unobservableByRefusal[key] = (unobservableByRefusal[key] ?? 0) + 1;
   };
 

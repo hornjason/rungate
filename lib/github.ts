@@ -656,7 +656,25 @@ export async function listIssueComments(
       per_page: perPage,
       page,
     });
-    const rows = Array.isArray(response?.data) ? response.data : [];
+    // A SHAPE WE DID NOT EXPECT IS A FAILURE, NOT AN EMPTY PAGE. This read
+    // `Array.isArray(response?.data) ? response.data : []`, which turned any
+    // unexpected payload into a legitimately empty page: the loop then saw
+    // `rows.length < perPage`, returned what it had, and the caller reported
+    // MEASURED with zero comments. That is "nobody commented" where the truth
+    // is "we could not tell" — the exact conflation this module's header
+    // forbids, reached without any failure ever being observed. Throwing puts
+    // it back on the UNMEASURED path, which carries its own sentence.
+    if (!Array.isArray(response?.data)) {
+      throw new Error(
+        `listComments resolved with data of an unexpected shape (${
+          response?.data === null || response?.data === undefined
+            ? String(response?.data)
+            : typeof response.data
+        }), so this page is UNMEASURED rather than empty. ` +
+          `A non-array payload is not zero comments.`,
+      );
+    }
+    const rows = response.data;
     for (const row of rows) {
       if (row !== null && typeof row === "object" && typeof row.created_at === "string") {
         out.push({ created_at: row.created_at as string });

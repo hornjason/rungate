@@ -37,7 +37,7 @@ import {
  *
  * ## What was broken to prove these can fail
  *
- * Run against this tree, 20 tests. Every count predicted before the battery
+ * Run against this tree, 24 tests. Every count predicted before the battery
  * ran, and **the baseline row was read first** — an instrument that has
  * stopped reporting takes the baseline down with it, and nobody mutates
  * anything to produce that row.
@@ -54,7 +54,7 @@ import {
  *
  * | Row | Predicted | Measured |
  * |---|---|---|
- * | **baseline** — unmutated | 20 pass, 0 fail | **20 pass, 0 fail** |
+ * | **baseline** — unmutated | 24 pass, 0 fail | **24 pass, 0 fail** |
  * | M1 `rate` divides unconditionally — `NaN` instead of `null` | 3 | **3** |
  * | M2 the denominator becomes `rows.length` | 4 | **4** |
  * | M3 an `UNMEASURED` lookup reads as no-comment | 1 | **1** |
@@ -379,6 +379,79 @@ describe("FC-12, FC-15..FC-17: the comment lookup, after the Octokit migration",
  * hand leaves the next edit free to break it again, so the claims are asserted
  * instead of restated.
  */
+/**
+ * FC-20..FC-23 — four review findings that are one class, plus the coupling.
+ *
+ * THE CLASS: a non-success that renders identically to a success. It is the
+ * exact thing this module's header forbids ("Every failure is `UNMEASURED`
+ * carrying its own sentence"), and it had three live instances while that
+ * sentence was written down.
+ */
+describe("FC-20..FC-23: a non-success must not render as a success", () => {
+  test("FC-20: a non-array data page is UNMEASURED, not an empty page", async () => {
+    // `Array.isArray(response?.data) ? response.data : []` turned any
+    // unexpected payload into a legitimately-empty page. The loop then sees
+    // `rows.length < perPage`, returns what it has, and `ghIssueComments`
+    // reports MEASURED with zero comments — "nobody commented" when the truth
+    // is "we could not tell". FC-17 only ever exercised the two THROWING
+    // paths, so nothing covered a call that resolves with the wrong shape.
+    const bad = await ghIssueComments("owner/repo", () => ({
+      rest: { issues: { listComments: async () => ({ data: { message: "Not Found" } }) } },
+    }) as unknown as Parameters<typeof listIssueComments>[0])(7);
+    expect(bad.reading).toBe("UNMEASURED");
+    if (bad.reading === "UNMEASURED") expect(bad.why).toMatch(/array|shape/i);
+  });
+
+  test("FC-21: a refused row with no refusal label is its own bucket, not NOT_REFUSED", async () => {
+    // `row.emitted ? NOT_REFUSED : (row.refusal ?? NOT_REFUSED)` put a row
+    // that WAS refused but carries `refusal: null` — which the type allows and
+    // targetOf's own message anticipates — into the same bucket as a row that
+    // was emitted and needed no follow-up. The field exists to attribute the
+    // gap, and that conflation is the one attribution it must never make.
+    const reading = await complianceReading({
+      rows: [{ ...ROW, refusal: null, emitted: false, duplicateOf: [] }],
+      lookup: lookupOf({}),
+      windowMs: 24 * HOUR,
+    });
+    const buckets = Object.keys(reading.unobservableByRefusal);
+    expect(buckets).not.toContain("NOT_REFUSED");
+    expect(buckets.length, `expected one bucket, got ${JSON.stringify(reading.unobservableByRefusal)}`).toBe(1);
+  });
+
+  test("FC-22: an emitted row still buckets as NOT_REFUSED", async () => {
+    // The positive control for FC-21. Without it, FC-21 passes against a
+    // change that simply deletes the NOT_REFUSED bucket entirely, which would
+    // lose the distinction in the other direction
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, the fifth shape).
+    const reading = await complianceReading({
+      rows: [{ ...ROW, refusal: null, emitted: true, duplicateOf: [] }],
+      lookup: lookupOf({}),
+      windowMs: 24 * HOUR,
+    });
+    expect(Object.keys(reading.unobservableByRefusal)).toEqual(["NOT_REFUSED"]);
+  });
+
+  test("FC-23: the DUPLICATE literal agrees with the filing gate's own vocabulary", () => {
+    // `targetOf` gates on the string "DUPLICATE" and nothing tied that to
+    // `issue-filing-gate.ts`, which is where the word is minted. A rename
+    // there makes every duplicate row read UNOBSERVABLE — no test fails, no
+    // type error, just a quietly wrong population the next time somebody
+    // reads the production ledger. Asserted as an agreement rather than
+    // imported, because the gate is not this module's dependency.
+    const gate = readFileSync(join(import.meta.dir, "..", "lib/issue-filing-gate.ts"), "utf-8");
+    const self = readFileSync(join(import.meta.dir, "..", "lib/filing-compliance.ts"), "utf-8");
+
+    expect(/const DUPLICATE = "DUPLICATE"/.test(self)).toBe(true);
+    expect(
+      gate.includes('"DUPLICATE"'),
+      "lib/issue-filing-gate.ts no longer spells the refusal \"DUPLICATE\". " +
+        "lib/filing-compliance.ts gates targetOf on that exact string, so a rename there " +
+        "makes every duplicate row read UNOBSERVABLE silently. Rename BOTH, or give the " +
+        "gate an exported constant and import it.",
+    ).toBe(true);
+  });
+});
+
 describe("FC-18..FC-19: this file's claims about itself", () => {
   const SELF = readFileSync(join(import.meta.dir, "filing-compliance.test.ts"), "utf-8");
 
