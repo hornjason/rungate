@@ -18,7 +18,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { isReady } from "../lib/board-mirror";
+import { isReady, isUnblocked } from "../lib/board-mirror";
 import {
   actorMayWrite,
   fanoutDecisions,
@@ -151,6 +151,36 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
   // The positive control, so BR-29 is not green because nothing moves.
   test("BR-30: a measured zero assignees is a reading, and does move", () => {
     expect(fanoutDecisions([dep({ assignees: 0 })], 3, "Ready")[0].move).toBe(true);
+  });
+
+  /**
+   * What BR-29 is actually witnessing, measured rather than assumed.
+   *
+   * The battery for BR-29 removed `fanoutDecisions`' own `assignees === null`
+   * refusal and every row stayed green, which is the fourth shape in
+   * `.claude/rules/checks-must-be-able-to-fail.md`: two guards answering one
+   * question, so no behavioural case can say which is live. `isUnblocked`
+   * compares `assignees === 0`, and `null === 0` is false, so it already
+   * refuses — today, by strict equality, in another module.
+   *
+   * The guard upstream is kept for the reason the sibling one was: it stops a
+   * `null` reaching a parameter typed `number`, so the decider is never asked
+   * a question it cannot answer. But its redundancy means the live refusal is
+   * this equality, and nothing asserted it. `!assignees` and `assignees < 1`
+   * are both ordinary simplifications and both read an unread count as
+   * "nobody has claimed it" — the direction that MOVES.
+   */
+  test("BR-32: the readiness equality is strict, so an unread count is not a zero", () => {
+    expect(isUnblocked({ blockedBy: 0 }, 0), "the measured-zero control").toBe(true);
+    expect(
+      isUnblocked({ blockedBy: 0 }, null as unknown as number),
+      "an unread assignee count must not satisfy the readiness rule — `!assignees` and " +
+        "`assignees < 1` both do, and both move an issue somebody is already working on",
+    ).toBe(false);
+    expect(
+      isUnblocked({ blockedBy: null as unknown as number }, 0),
+      "an unread blocker count must not satisfy it either",
+    ).toBe(false);
   });
 
   /**
