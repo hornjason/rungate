@@ -1,4 +1,4 @@
-# generated-sha: 7477b25659ce3d43
+# generated-sha: 5719c416a68cd09c
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 #
 # THREE OUTCOMES, and only one of them is a review that found nothing.
@@ -2423,15 +2423,32 @@ jobs:
                   "file": "repo-relative path",
                   "line": 1,
                   "summary": "one sentence stating the defect",
-                  "failure_scenario": "concrete inputs or state, then the wrong output"
+                  "failure_scenario": "concrete inputs or state, then the wrong output",
+                  "population": 1
                 }
               ],
               "verdict": "PASS or BLOCK"
             }
 
-            Every one of those member names is required on every finding. A finding
-            missing `file` or `summary` reaches a maintainer as an annotation
-            naming no code and no defect, which is the same as not reporting it.
+            Every member name above except `population` is required on every
+            finding. A finding missing `file` or `summary` reaches a
+            maintainer as an annotation naming no code and no defect, which is the same
+            as not reporting it.
+
+            `population` is how many places have the shape you just described,
+            counting the one you cited and the ones OUTSIDE the diff. Scope it to the
+            PROPERTY and not to the spelling you matched: three unpaginated REST reads
+            and two unpaginated GraphQL selections in one file are five, because they
+            truncate for the same reason and the author fixes them in one edit.
+
+            It is the one optional member, and the only honest reason to omit it is that
+            you did not sweep. Leave it off in that case — absent reads as unmeasured,
+            which is true. Do not write `1` for a class you did not check: that says
+            you looked and found nothing else, and a maintainer who believes it stops
+            looking. The non-blocking cap counts CLASSES, so a finding carrying
+            `"population": 9` costs the same one slot as a finding carrying 1 —
+            there is never a reason to split a class across findings or to hold
+            instances back for a later round.
 
             On a finding whose severity BLOCKS, that requirement is now read back and
             enforced: a blocking finding missing any of `file`, `line`,

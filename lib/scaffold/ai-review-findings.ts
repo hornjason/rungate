@@ -125,6 +125,7 @@ import {
   AI_REVIEW_BLOCK_VERDICT,
   AI_REVIEW_FINDING_FIELDS,
   AI_REVIEW_FINDINGS_KEY,
+  AI_REVIEW_OPTIONAL_FINDING_FIELDS,
   AI_REVIEW_OUTCOME_LINE,
   AI_REVIEW_PASS_VERDICT,
   AI_REVIEW_REQUIRED_EXIT,
@@ -140,6 +141,7 @@ export {
   AI_REVIEW_BLOCK_VERDICT,
   AI_REVIEW_FINDING_FIELDS,
   AI_REVIEW_FINDINGS_KEY,
+  AI_REVIEW_OPTIONAL_FINDING_FIELDS,
   AI_REVIEW_OUTCOME_LINE,
   AI_REVIEW_PASS_VERDICT,
   AI_REVIEW_SEVERITIES,
@@ -173,6 +175,107 @@ export function escapeAnnotation(value: unknown): string {
 
 /** Annotation detail is capped: a megabyte of agent prose is not a message. */
 export const AI_REVIEW_DETAIL_MAX = 300;
+
+/** How many findings declared a class size, how many did not, and the total. */
+export interface PopulationReading {
+  /** Findings carrying a readable population. */
+  declared: number;
+  /** Findings carrying none, or one this cannot read. UNMEASURED, not one. */
+  undeclared: number;
+  /** Instances claimed by the declared findings. Never includes a default. */
+  instances: number;
+}
+
+/**
+ * One population value as a count, or `null`.
+ *
+ * ONE binding, so there is one thing to mutate and one place that decides
+ * what counts as a class size. `"3"`, `0`, `-1`, `1.5` and `true` are all
+ * things a model emits and none is a population; each returns `null` and the
+ * finding is UNMEASURED rather than contributing a number nobody measured.
+ *
+ * A string is refused rather than parsed on purpose. `duplicateOf` in
+ * `lib/filing-compliance.ts` went the other way for a good reason — it reads
+ * a ledger written by two writers over two days — but this field is being
+ * introduced now, with one producer and a contract, so accepting a second
+ * spelling on day one is how the contract stops meaning anything.
+ */
+function populationCount(value: unknown): number | null {
+  if (typeof value !== "number") return null;
+  return Number.isInteger(value) && value >= 1 ? value : null;
+}
+
+/**
+ * Did the reviewer say how big each defect class was?
+ *
+ * #1651's acceptance line is *"a finding payload carries the sibling sites it
+ * found, or states that it swept and found none"*, and this is the reading
+ * that makes it checkable. It judges nothing and blocks nothing — it reports,
+ * so the class instruction in `REVIEW.md` stops being prose with no
+ * instrument (`.claude/rules/checks-must-be-able-to-fail.md`).
+ *
+ * `declared + undeclared` is the payload size and `instances` is a different
+ * unit entirely. Do not add them, and do not render `instances` as though an
+ * undeclared finding contributed one to it.
+ */
+// The parameter is `reported` and not `findings` on purpose: AC-8a counts
+// every `findings:` spelling across this module and `ai-review-step.ts` and
+// requires exactly one, so that nothing reads the payload key except through
+// `AI_REVIEW_FINDINGS_KEY`. A parameter name is indistinguishable from a key
+// read to that census, and widening the census to exclude parameter names
+// would weaken the check to buy a nicer identifier here.
+/**
+ * #1651. The population reading, as the line a real run prints.
+ *
+ * `populationReading` without this was an instrument with no consumer — the
+ * aggregate existed, its tests passed, and no review run computed it. That is
+ * the defect this pull request describes, written into the fix for it, and it
+ * was caught on review rather than by me.
+ *
+ * Returns `null` for an empty payload, because "0 of 0 findings declared a
+ * class size" is not a reading anybody can act on and a notice on every clean
+ * review is a notice nobody reads.
+ *
+ * `instances` is printed only when something declared one, and it is NEVER
+ * added to the finding count: they are different units (see
+ * `PopulationReading`). An undeclared finding is reported as undeclared and
+ * contributes nothing — `.claude/rules/config-access.md`'s rule against
+ * substituting a default for a measurement nobody took.
+ */
+export function populationNotice(reported: readonly unknown[]): string | null {
+  if (reported.length === 0) return null;
+  const { declared, undeclared, instances } = populationReading(reported);
+  const head = `${declared} of ${reported.length} finding(s) declared how many instances their class has`;
+  const tail =
+    declared === 0
+      ? ""
+      : `, covering ${instances} instance(s) in total`;
+  const rest =
+    undeclared === 0
+      ? "."
+      : `. ${undeclared} did not, so for those the class size is UNMEASURED — not one. ` +
+        `REVIEW.md asks for the whole class in one finding; the cap counts classes, not instances.`;
+  return `${head}${tail}${rest}`;
+}
+
+export function populationReading(reported: readonly unknown[]): PopulationReading {
+  let declared = 0;
+  let undeclared = 0;
+  let instances = 0;
+  for (const item of reported) {
+    const n =
+      item !== null && typeof item === "object"
+        ? populationCount((item as Record<string, unknown>)[AI_REVIEW_FINDING_FIELDS.population])
+        : null;
+    if (n === null) {
+      undeclared++;
+      continue;
+    }
+    declared++;
+    instances += n;
+  }
+  return { declared, undeclared, instances };
+}
 
 /**
  * One finding, rendered for an annotation — capped, naming file and summary.
@@ -210,7 +313,16 @@ export function renderFinding(
   const line = `finding ${index} is ${String(finding[f.severity])} at ${where}: ${what}`;
   const body =
     line.length > AI_REVIEW_DETAIL_MAX ? `${line.slice(0, AI_REVIEW_DETAIL_MAX)}…` : line;
-  return tag === null ? body : `${body} [${tag}]`;
+  // The class size, AFTER the cap, for the same reason `tag` is: the finding
+  // whose class a reader most needs is the verbose one, and "this is 9 of a
+  // kind" truncated away reads as "this is one line". A finding that
+  // declared none renders nothing here — an invented "(1 instance)" is the
+  // default substitution `populationReading` exists to refuse.
+  const population = populationCount(finding[f.population]);
+  const sized = population === null
+    ? body
+    : `${body} [${population} instance${population === 1 ? "" : "s"} of this shape]`;
+  return tag === null ? sized : `${sized} [${tag}]`;
 }
 
 /**
@@ -281,6 +393,16 @@ export const AI_REVIEW_SUPPRESSED_TITLE = "AI review repeats not reported again"
 
 /** CRC-N4 (#1586). The history could not be compared — not "no repeats". */
 export const AI_REVIEW_SUPPRESSED_UNMEASURED_TITLE = "AI review repeat check UNMEASURED";
+
+/**
+ * #1651. How many of this round's findings said how big their class is.
+ *
+ * Its own title, for `AI_REVIEW_ADVISORY_TITLE`'s reason: this is not a
+ * finding and nobody has to act on it. It is the reading that tells us
+ * whether the class-naming instruction in `REVIEW.md` is being followed —
+ * which, before this, nothing anywhere computed.
+ */
+export const AI_REVIEW_POPULATION_TITLE = "AI review class sizes declared";
 
 /**
  * A stable identity for one finding, so an answer can name it.
@@ -502,12 +624,19 @@ export type AiReviewUnmeasuredReason =
  * two reasons; a second check of it would be the fourth shape in
  * `.claude/rules/checks-must-be-able-to-fail.md` — two deciders agreeing about
  * one input, of which a mutation leaves either one holding the case up.
+ *
+ * `AI_REVIEW_OPTIONAL_FINDING_FIELDS` is subtracted rather than spelled out
+ * here. Optionality is a property of the contract, so it is declared once,
+ * beside the contract, and this module reads it — a second list of excluded
+ * names in this file would be a second decider about what a finding must
+ * carry, and the two would drift the first time either moved.
  */
 export const AI_REVIEW_BLOCKING_REQUIRED_FIELDS: readonly string[] = Object.entries(
   AI_REVIEW_FINDING_FIELDS,
 )
   .filter(([key]) => key !== "severity")
-  .map(([, name]) => name);
+  .map(([, name]) => name)
+  .filter(name => !AI_REVIEW_OPTIONAL_FINDING_FIELDS.includes(name));
 
 /**
  * The contract fields a blocking finding failed to supply, in contract order.
@@ -2228,6 +2357,17 @@ export function main(
   const advisory = advisoryNotice(reading);
   if (advisory !== null) {
     console.log(`::notice title=${AI_REVIEW_ADVISORY_TITLE}::${escapeAnnotation(advisory)}`);
+  }
+
+  // #1651's reading, on its own title. A `::notice`: it decides nothing and
+  // `aiReviewExitCode` never sees it — an undeclared class size is a thing to
+  // watch across rounds, not a reason to refuse a pull request today. Emitted
+  // for EVERY round including a clean one with findings, because the whole
+  // point is a series: a rate that only appears when it is bad is a rate
+  // nobody can compare against anything.
+  const population = populationNotice(reading.reported ?? []);
+  if (population !== null) {
+    console.log(`::notice title=${AI_REVIEW_POPULATION_TITLE}::${escapeAnnotation(population)}`);
   }
 
   // CRC-N4's reading, on its own title (#1586). A `::notice`, because a

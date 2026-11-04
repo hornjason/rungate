@@ -3808,7 +3808,41 @@ export const AI_REVIEW_FINDING_FIELDS = {
   line: "line",
   summary: "summary",
   failureScenario: "failure_scenario",
+  /**
+   * How many instances of this defect's shape exist — #1651, CRC-N3.
+   *
+   * `REVIEW.md` has told the reviewer to name the CLASS since CRC-N3 landed,
+   * and nothing read whether it did, so the instruction had no instrument
+   * and could never be observed failing. This is where the answer goes.
+   *
+   * **Not required, and deliberately so.** A finding without it is
+   * UNMEASURED about its class size, which `populationReading` counts and
+   * names apart — never folded into 1, because "I swept and this is the only
+   * one" and "I did not sweep" are the two readings this field exists to
+   * separate, and defaulting collapses them at the one place it matters.
+   */
+  population: "population",
 } as const;
+
+/**
+ * Members of the contract a finding may omit, declared HERE beside the
+ * contract and nowhere else.
+ *
+ * `AI_REVIEW_BLOCKING_REQUIRED_FIELDS` derives the required set from
+ * `AI_REVIEW_FINDING_FIELDS` minus `severity` (#1166), deliberately, so that
+ * adding a member cannot leave the enforcement behind. Adding `population`
+ * therefore made it REQUIRED on every blocking finding — which is wrong for
+ * a field whose absence is a meaningful reading, and which turned 14 cases
+ * red the moment it was added. That red is the derivation working.
+ *
+ * The fix is not a second exclusion list in the deriving module: optionality
+ * is a property of the contract, so it is stated once, next to it, and the
+ * derivation subtracts it. A name here that the contract does not declare is
+ * refused by `test/finding-population.test.ts`.
+ */
+export const AI_REVIEW_OPTIONAL_FINDING_FIELDS: readonly string[] = [
+  AI_REVIEW_FINDING_FIELDS.population,
+];
 
 /**
  * The marker that carries a posted thread's identity, so a later round can
@@ -5797,15 +5831,32 @@ The payload is a single JSON object shaped exactly like this:
       "${f.file}": "repo-relative path",
       "${f.line}": 1,
       "${f.summary}": "one sentence stating the defect",
-      "${f.failureScenario}": "concrete inputs or state, then the wrong output"
+      "${f.failureScenario}": "concrete inputs or state, then the wrong output",
+      "${f.population}": 1
     }
   ],
   "${AI_REVIEW_VERDICT_KEY}": "${AI_REVIEW_VERDICTS.join(" or ")}"
 }
 
-Every one of those member names is required on every finding. A finding
-missing \`${f.file}\` or \`${f.summary}\` reaches a maintainer as an annotation
-naming no code and no defect, which is the same as not reporting it.
+Every member name above except \`${f.population}\` is required on every
+finding. A finding missing \`${f.file}\` or \`${f.summary}\` reaches a
+maintainer as an annotation naming no code and no defect, which is the same
+as not reporting it.
+
+\`${f.population}\` is how many places have the shape you just described,
+counting the one you cited and the ones OUTSIDE the diff. Scope it to the
+PROPERTY and not to the spelling you matched: three unpaginated REST reads
+and two unpaginated GraphQL selections in one file are five, because they
+truncate for the same reason and the author fixes them in one edit.
+
+It is the one optional member, and the only honest reason to omit it is that
+you did not sweep. Leave it off in that case — absent reads as unmeasured,
+which is true. Do not write \`1\` for a class you did not check: that says
+you looked and found nothing else, and a maintainer who believes it stops
+looking. The non-blocking cap counts CLASSES, so a finding carrying
+\`"${f.population}": 9\` costs the same one slot as a finding carrying 1 —
+there is never a reason to split a class across findings or to hold
+instances back for a later round.
 
 On a finding whose severity BLOCKS, that requirement is now read back and
 enforced: a blocking finding missing any of \`${f.file}\`, \`${f.line}\`,

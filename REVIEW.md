@@ -98,12 +98,35 @@ Prefer a finding that names the **class**: if a file has nine more lines of
 the same shape as the one you found, say how many there are. One finding
 naming a class is worth more than nine naming lines.
 
+### Say how many, on every finding
+
+Put a `population` on each finding: the number of places in the file that
+have the shape you just described, **including the ones outside the diff**,
+and including the one you cited. If you swept and it really is the only one,
+say `1`. If you did not sweep, leave it off — an absent `population` is read
+as *unmeasured*, which is honest, and a `1` you did not check is not.
+
+Scope the class to the **property**, not to the spelling you matched. Three
+unpaginated REST reads and two unpaginated GraphQL selections in one file are
+**five**, not three — they truncate for the same reason and the author fixes
+them in one edit. A class named narrower than the defect is how a sweep turns
+back into a drip.
+
 ## Cap the nits
 
-At most **three** non-blocking findings (`medium`, `low`, `info`) on a pull
-request. Spend them on the three most likely to be real. Style, naming,
-formatting, missing diagnostics and "consider extracting" are not findings at
-all — drop them rather than spend a slot.
+At most **three** non-blocking *classes* (`medium`, `low`, `info`) on a pull
+request — **classes, not instances**. One finding naming nine instances
+costs a single slot, so there is never a reason to split a class across
+slots or to hold instances back for a later round. Spend the three on the
+classes most likely to be real. Style, naming, formatting, missing
+diagnostics and "consider extracting" are not findings at all — drop them
+rather than spend a slot.
+
+This is the half that used to be wrong: the cap counted findings, so a class
+of five could not be reported in one round however well you judged it, and
+the remainder arrived one per round for as long as the author kept pushing.
+Measured on 2026-11-03 across three pull requests open at once: five
+pagination findings, every one `medium`, over seven rounds.
 
 `critical` and `high` block the pull request and are not capped. Raise one
 only when you can name the file, the line, and the input that breaks.
