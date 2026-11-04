@@ -1,0 +1,76 @@
+# Not managed by rungate. The scaffold regenerates named jobs in ci.yml,
+# gates.yml, ai-review.yml and ai-review-unmeasured.yml; this file is
+# caller-owned and is carried forward untouched on re-scaffold.
+#
+# EVERY ISSUE AND EVERY PULL REQUEST GOES ON THE BOARD, AUTOMATICALLY.
+#
+# Before this file there was no process at all. Measured 2026-11-04: zero
+# workflows in this repository wrote to the board, and the five pull requests
+# that were on it had been added by hand. #1747 and #1749 were missing for the
+# ordinary reason — nothing was ever going to put them there.
+#
+# The board READING that already exists does not cover this and was never going
+# to. `board-conformance`'s five readings all ask whether engine CRITERIA and
+# engine ISSUES agree with the pipeline spec; none of them asks whether all the
+# work is on the board, so every one stayed green while two pull requests were
+# absent. A reading scoped to one population cannot see a gap in another.
+#
+# THIS IS GITHUB'S OWN ACTION, used the way GitHub documents it. There is no
+# script here and nothing to maintain: `actions/add-to-project` takes a project
+# URL and a token and adds the event's item.
+#
+# It is pinned to a commit SHA because a tag is the publisher's to repoint at
+# any time. NOTHING IN THIS REPOSITORY ENFORCES THAT, and the first draft of
+# this comment claimed otherwise — it said `test/action-pin-parity.test.ts`
+# asserts it for every action. That test only checks the CLAUDE_CODE_ACTION
+# pin agrees between `ai-review.yml` and `claude-review.yml`, and
+# `test/release-guard.test.ts` walks `uses:` lines in `release.yml` alone.
+# Replacing the SHA below with `@v2` and running the pin suite is 16 pass /
+# 0 fail, which is how the false claim was found. A repo-wide pin check would
+# ship red — `closing-references.yml` uses `actions/checkout@v4` — so it is a
+# ratchet and its own piece of work, not a line to slip in here.
+#
+# WHAT IT DELIBERATELY DOES NOT DO: set a field. The action takes only
+# `project-url`, `github-token`, `labeled` and `label-operator` — there is no
+# field input, and that is fine, because GitHub's built-in project workflows
+# already move Status. #1744 reached `In progress` on its own when #1747 linked
+# to it. Adding a second thing that writes Status would be two deciders over
+# one field, and no behavioural test could tell which one was live
+# (`.claude/rules/checks-must-be-able-to-fail.md`).
+#
+# THE TOKEN MUST CARRY PROJECT **WRITE**. `GITHUB_TOKEN` cannot write ProjectsV2
+# at all, at any permission level, so a PAT or App is required and that is
+# GitHub's documented answer rather than a workaround here.
+# `RUNGATE_PROJECT_TOKEN` is the secret this repository already uses to READ the
+# board in `ci.yml` and `release.yml`. If it was minted `read:project` only,
+# this job fails with a permission error naming the project — which is the
+# correct and loud outcome. Do NOT silence it with `continue-on-error`: a job
+# that quietly fails to add items is indistinguishable from the state this file
+# exists to end.
+name: Board intake
+
+on:
+  issues:
+    types: [opened, reopened, transferred]
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+# `pull_request_target` runs in the context of the BASE repository and so can
+# see secrets, which `pull_request` cannot — and that is the whole reason it is
+# used here, because this job needs a token that can write the board. It is
+# safe in this specific shape and would not be in most others: there is NO
+# checkout of the pull request's head, no `run:` step, and no interpolation of
+# any attacker-controlled value. The job executes one pinned action against the
+# event payload's item id. Do not add a checkout or a `run:` block to this file
+# without moving the trigger back to `pull_request`.
+permissions:
+  contents: read
+
+jobs:
+  add-to-board:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+        with:
+          project-url: https://github.com/users/hornjason/projects/3
+          github-token: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
