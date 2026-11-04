@@ -199,6 +199,37 @@ describe("board-intake workflow", () => {
     expect(move!).toContain("Last error:");
   });
 
+  test("BI-9: the read-back asks the SEARCH INDEX, not only the field value", () => {
+    // Projects draws a board from a search index that is separate from the
+    // item data, and they can disagree. Measured on this project 2026-11-04:
+    // four pull requests held Status "In review" in the data,
+    // `items(query: "status:...")` returned two, and the board drew exactly
+    // those two. #1740 and #1747 were invisible for over an hour while every
+    // field-value read said they were fine.
+    //
+    // A read-back that asks only the data path therefore CANNOT observe the
+    // failure it exists to catch — it returns the right string, the job
+    // reports success, and nobody sees the card. Right exit code, wrong
+    // mechanism (`.claude/rules/checks-must-be-able-to-fail.md`, the sixth
+    // shape), which is the one this whole step was written to avoid.
+    const move = runBlocks().find(b => b.includes("updateProjectV2ItemFieldValue"));
+    expect(move, "no run block performs the Status mutation").toBeDefined();
+    const code = move!.split("\n").filter(l => !/^\s*#/.test(l));
+    const body = code.join("\n");
+
+    // The index is queried at all.
+    expect(body).toContain("items(first: 100, query:");
+    // Keyed to the column being written, not a hardcoded string that would
+    // keep passing after COLUMN changes.
+    expect(body).toContain('status:\\"${COLUMN}\\"');
+    // And BOTH readings gate the success path. Asserting the index query
+    // exists is not enough — it could be queried and ignored.
+    expect(
+      /\[ "\$\{current\}" = "\$\{COLUMN\}" \] && \[ -n "\$\{indexed\}" \]/.test(body),
+      "the success branch must require the index reading as well as the field value",
+    ).toBe(true);
+  });
+
   test("BI-4: no run block interpolates a value", () => {
     // The other half of the same property, and the easy one to reintroduce.
     // A `${{ ... }}` inside `run:` is substituted into the shell BEFORE it

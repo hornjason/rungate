@@ -72,6 +72,12 @@ export interface BoardItem {
   readonly status: string | null;
   /** Always false for an issue. Required, not optional: see `readBoard`. */
   readonly draft: boolean;
+  /**
+   * The field-value page was full, so Status may exist beyond it. A `null`
+   * status then means "not read", which is a different fact from "not set"
+   * and must not be allowed to read as agreement.
+   */
+  readonly statusUnread: boolean;
 }
 
 export type Verdict =
@@ -85,6 +91,20 @@ export type Verdict =
  * (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape).
  */
 export function verdictFor(item: BoardItem): Verdict {
+  // FIRST, because every branch below reads `item.status` and an unread one
+  // is not a value. `null` here means the field-value page was full and
+  // Status may lie beyond it, so "no status" and "status not read" would
+  // otherwise be the same input with opposite correct answers.
+  if (item.statusUnread) {
+    return {
+      kind: "undecidable",
+      why:
+        "the item's field-value page was full and Status was not among it, so this row's " +
+        "column was NOT READ. That is not the same as having no column, and it is not " +
+        "derivable from here — re-run against a query that pages fieldValues",
+    };
+  }
+
   const closed = item.state === "MERGED" || item.state === "CLOSED";
 
   if (closed) {
@@ -154,7 +174,8 @@ query($project: ID!, $endCursor: String) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
-          fieldValues(first: 20) {
+          fieldValues(first: 50) {
+            pageInfo { hasNextPage }
             nodes {
               ... on ProjectV2ItemFieldSingleSelectValue {
                 name
@@ -270,7 +291,43 @@ export function requireNode(data: unknown, what: string): Record<string, unknown
   return node as Record<string, unknown>;
 }
 
+/**
+ * Three attempts with backoff, matching `board-intake.yml`'s `gql()`.
+ *
+ * THE TWO HALVES OF THIS CHANGE MAKE THE SAME CALL AND ONLY ONE OF THEM
+ * RETRIED. The workflow hardened it with the reasoning that "a bare
+ * `gh api graphql` that fails on a network blip, a secondary rate limit or a
+ * momentary 5xx aborts the step" — every word of which is true of `fetch`
+ * here, and worse on the `--write` path, which issues one mutation per
+ * correction.
+ *
+ * `attempts` and `sleep` are injected so the cases can prove the retry
+ * without waiting on a real backoff.
+ */
+export async function withRetry<T>(
+  call: () => Promise<T>,
+  attempts = 3,
+  sleep: (ms: number) => Promise<void> = ms => new Promise(r => setTimeout(r, ms)),
+): Promise<T> {
+  let last: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await call();
+    } catch (err) {
+      last = err;
+      if (attempt < attempts) await sleep(attempt * 2000);
+    }
+  }
+  throw last instanceof Error
+    ? new Error(`${attempts} attempts failed, last: ${last.message}`)
+    : new Error(`${attempts} attempts failed: ${String(last)}`);
+}
+
 async function graphql(token: string, query: string, variables: Record<string, unknown>): Promise<any> {
+  return withRetry(async () => rawGraphql(token, query, variables));
+}
+
+async function rawGraphql(token: string, query: string, variables: Record<string, unknown>): Promise<any> {
   const res = await fetch("https://api.github.com/graphql", {
     method: "POST",
     headers: { authorization: `bearer ${token}`, "content-type": "application/json" },
@@ -297,6 +354,15 @@ async function readBoard(token: string): Promise<BoardItem[]> {
         .filter((f: any) => f?.field?.name === "Status")
         .map((f: any) => f.name)[0] ?? null;
 
+      // A FALSE ZERO ONE LEVEL DOWN. The board query pages `items`, and the
+      // per-item `fieldValues` connection was NOT paged: an item carrying
+      // more field values than the page holds loses Status off the end, and
+      // a missing Status reads as `null` — which `verdictFor` treats as "any
+      // non-Done column", i.e. agreement. A genuinely wrong Done column
+      // would be left uncorrected by `--write` and counted as agreeing.
+      // Exactly the shape this file already fixed for `items(first:100)`.
+      const statusUnread = node.fieldValues?.pageInfo?.hasNextPage === true && status === null;
+
       items.push({
         itemId: node.id,
         number: content.number,
@@ -309,6 +375,7 @@ async function readBoard(token: string): Promise<BoardItem[]> {
         // still moves drafts. Coerce, so the field is a boolean or nothing
         // reaches the verdict.
         draft: content.isDraft === true,
+        statusUnread,
       });
     }
 
@@ -370,22 +437,71 @@ async function main(argv: readonly string[]): Promise<number> {
     return found.id;
   };
 
-  for (const c of reading.corrections) {
+  const applied = await applyCorrections(reading.corrections, async c => {
     await graphql(token, SET_STATUS, {
       project: PROJECT_ID,
       item: c.itemId,
       field: statusField.id,
       option: optionId(c.to),
     });
-    console.log(`  wrote #${c.number} -> ${c.to}`);
-  }
+  });
 
-  console.log(`\nWrote ${reading.corrections.length} correction(s).`);
+  for (const w of applied.wrote) console.log(`  wrote #${w.number} -> ${w.to}`);
+  for (const f of applied.failed) console.log(`  FAILED #${f.number} -> ${f.to}: ${f.error}`);
+
+  console.log(`\nWrote ${applied.wrote.length} correction(s).`);
+  if (applied.failed.length > 0) {
+    console.log(
+      `${applied.failed.length} correction(s) FAILED and the board is partially corrected. ` +
+        `The rows above name exactly which; re-run to retry only those.`,
+    );
+    return DRIFT_EXIT;
+  }
   if (reading.undecidable.length > 0) {
     console.log(`${reading.undecidable.length} row(s) still need a person to choose a column.`);
     return DRIFT_EXIT;
   }
   return 0;
+}
+
+export interface Applied {
+  readonly wrote: ReadonlyArray<{ number: number; to: string }>;
+  readonly failed: ReadonlyArray<{ number: number; to: string; error: string }>;
+}
+
+/**
+ * Apply every correction, and finish the batch even when one fails.
+ *
+ * THE LOOP USED TO THROW OUT OF `main()`. A transient failure on correction 3
+ * of 5 crashed the process mid-batch, leaving the board partially corrected
+ * with no record of which writes landed — only whatever `console.log` had
+ * already printed. The run then reported nothing, which for a tool whose
+ * whole job is to make the board legible is the worst available outcome.
+ *
+ * Each failure is NAMED and the exit stays non-zero, so a partial batch is a
+ * reading rather than a crash.
+ */
+export async function applyCorrections<T extends { number: number; to: string }>(
+  corrections: readonly T[],
+  write: (c: T) => Promise<void>,
+): Promise<Applied> {
+  const wrote: Array<{ number: number; to: string }> = [];
+  const failed: Array<{ number: number; to: string; error: string }> = [];
+
+  for (const c of corrections) {
+    try {
+      await write(c);
+      wrote.push({ number: c.number, to: c.to });
+    } catch (err) {
+      failed.push({
+        number: c.number,
+        to: c.to,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { wrote, failed };
 }
 
 if (import.meta.main) {

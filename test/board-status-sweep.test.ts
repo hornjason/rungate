@@ -17,9 +17,11 @@ import {
   BOARD_QUERY,
   DONE,
   IN_REVIEW,
+  applyCorrections,
   interpretResponse,
   requireNode,
   sweep,
+  withRetry,
   verdictFor,
   type BoardItem,
   type ItemKind,
@@ -33,7 +35,7 @@ function item(
   status: string | null,
   draft = false,
 ): BoardItem {
-  return { itemId: `PVTI_${number}`, number, kind, state, status, draft };
+  return { itemId: `PVTI_${number}`, number, kind, state, status, draft, statusUnread: false };
 }
 
 describe("board status sweep", () => {
@@ -196,6 +198,84 @@ describe("board status sweep", () => {
     expect(requireNode({ node: { items: { nodes: [] } } }, "project board")).toEqual({
       items: { nodes: [] },
     });
+  });
+
+  test("BS-24: a status that was NOT READ is undecidable, never agreement", () => {
+    // The false zero one level down. `items` is paged; the per-item
+    // `fieldValues` connection was not, so an item carrying more field values
+    // than the page holds loses Status off the end — and a missing Status
+    // read as `null`, which every branch below treats as "some non-Done
+    // column", i.e. agreement. A genuinely wrong Done column would be
+    // counted as agreeing and left uncorrected by --write.
+    //
+    // "No column" and "column not read" are the same `null` with opposite
+    // correct answers, which is why this is a separate field and not a
+    // sentinel string.
+    const v = verdictFor({ ...item(1700, "PullRequest", "OPEN", null), statusUnread: true });
+    expect(v.kind).toBe("undecidable");
+    expect(v.kind === "undecidable" && v.why).toContain("NOT READ");
+
+    // It outranks every other branch, including the closed-item correction —
+    // a MERGED row whose column was never read must not be written to Done
+    // on the strength of a column nobody saw.
+    const closed = verdictFor({
+      ...item(1701, "PullRequest", "MERGED", null),
+      statusUnread: true,
+    });
+    expect(closed.kind).toBe("undecidable");
+  });
+
+  test("BS-25: a transient failure is retried, and a permanent one still refuses", async () => {
+    // The two halves of this change make the same call and only the workflow
+    // half retried. Same reasoning applies to `fetch`, and harder on the
+    // --write path, which issues one mutation per correction.
+    let calls = 0;
+    const flaky = await withRetry(
+      async () => {
+        calls += 1;
+        if (calls < 3) throw new Error("socket hang up");
+        return "ok";
+      },
+      3,
+      async () => {},
+    );
+    expect(flaky).toBe("ok");
+    expect(calls).toBe(3);
+
+    // Anti-vacuity: a withRetry that swallowed everything would satisfy the
+    // row above. Three real failures must still throw, carrying the last one.
+    let tries = 0;
+    await expect(
+      withRetry(
+        async () => {
+          tries += 1;
+          throw new Error("401 Bad credentials");
+        },
+        3,
+        async () => {},
+      ),
+    ).rejects.toThrow(/Bad credentials/);
+    expect(tries).toBe(3);
+  });
+
+  test("BS-26: one failed correction does not abandon the batch", async () => {
+    // The loop threw out of main(), so a transient failure on correction 3 of
+    // 5 left the board partially corrected with no record of which writes
+    // landed. A tool whose job is to make the board legible must not end by
+    // being illegible about itself.
+    const corrections = [
+      { number: 1, to: DONE },
+      { number: 2, to: DONE },
+      { number: 3, to: DONE },
+    ];
+    const applied = await applyCorrections(corrections, async c => {
+      if (c.number === 2) throw new Error("502 Bad Gateway");
+    });
+
+    expect(applied.wrote.map(w => w.number)).toEqual([1, 3]);
+    expect(applied.failed.map(f => f.number)).toEqual([2]);
+    // The failure has to carry WHY, or the row names a number and nothing else.
+    expect(applied.failed[0]?.error).toContain("502");
   });
 
   test("BS-8: the reading partitions the population exactly once", () => {

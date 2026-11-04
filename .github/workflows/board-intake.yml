@@ -285,13 +285,51 @@ jobs:
                 }
               }' --jq '[.data.node.fieldValues.nodes[] | select(.field.name == "Status") | .name] | first // ""')
 
-            if [ "${current}" = "${COLUMN}" ]; then
-              echo "::notice title=Board intake::Moved to '${COLUMN}' and read it back on attempt ${attempt}. This workflow owns only the opened->In review edge; merged->Done and closed->Done remain GitHub's built-in project workflows, so exactly one decider writes each transition."
+            # THE FIELD VALUE IS NOT WHAT THE BOARD DRAWS, AND THIS STEP USED
+            # TO STOP HERE. Projects serves a board view from a SEARCH INDEX
+            # that is separate from the item data, and the two can disagree.
+            #
+            # Measured on this project, 2026-11-04. Four pull requests held
+            # Status "In review" in the data; `items(query: "status:...")`
+            # returned two, and the board drew exactly those two. #1740 and
+            # #1747 were invisible on the board for over an hour while every
+            # field-value read said they were fine — which is precisely the
+            # read this loop was doing.
+            #
+            # So a read-back that only asks the data path CANNOT observe the
+            # failure it exists to catch: it returns "In review", the job
+            # reports success, and nobody sees the card. Right exit code,
+            # wrong mechanism (`.claude/rules/checks-must-be-able-to-fail.md`,
+            # the sixth shape).
+            #
+            # Both readings must agree before this job claims the move worked.
+            indexed=$(gql -f project="${PROJECT_ID}" -f q="status:\"${COLUMN}\"" -f query='
+              query($project: ID!, $q: String!) {
+                node(id: $project) {
+                  ... on ProjectV2 {
+                    items(first: 100, query: $q) {
+                      nodes { id }
+                    }
+                  }
+                }
+              }' --jq "[.data.node.items.nodes[].id] | index(\"${ITEM_ID}\") // empty")
+
+            if [ "${current}" = "${COLUMN}" ] && [ -n "${indexed}" ]; then
+              echo "::notice title=Board intake::Moved to '${COLUMN}' on attempt ${attempt}, confirmed in BOTH the item's field value and the project's search index — so the card will actually render. This workflow owns only the opened->In review edge; merged->Done and closed->Done remain GitHub's built-in project workflows, so exactly one decider writes each transition."
               exit 0
             fi
 
-            echo "Attempt ${attempt}: wrote '${COLUMN}', read back '${current:-(nothing)}' — a concurrent write won. Retrying."
+            if [ "${current}" = "${COLUMN}" ]; then
+              echo "Attempt ${attempt}: the field value reads '${COLUMN}' but the search index does not carry this item yet, so the board would not draw it. Re-writing to prompt a re-index."
+            else
+              echo "Attempt ${attempt}: wrote '${COLUMN}', read back '${current:-(nothing)}' — a concurrent write won. Retrying."
+            fi
           done
+
+          if [ "${current}" = "${COLUMN}" ]; then
+            echo "::error title=Board intake::The Status field reads '${COLUMN}' but after three attempts the project's SEARCH INDEX still does not list this item under it, and the board draws from the index. The data is right and the card is invisible — do not 'fix' the Status, it is already correct. Re-writing the same value is what repairs the index entry; if three did not take, the index is lagging and this needs a human to re-check later." >&2
+            exit 1
+          fi
 
           echo "::error title=Board intake::Wrote '${COLUMN}' three times and the board still reads '${current:-(nothing)}'. Something else is writing this item's Status and winning: check the project's built-in workflows for a rule that also fires on a pull request being added. The item IS on the board; only its column is wrong. Not exiting 0 on this — a job that writes and does not check is how the column silently reverted before." >&2
           exit 1
