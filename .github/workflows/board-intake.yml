@@ -207,6 +207,31 @@ jobs:
             return 1
           }
 
+          # `node(id: ID!)` IS NULLABLE, and a null node is an id that did not
+          # resolve rather than an empty reading. A stale id, a wrong
+          # PROJECT_ID, or a project this token lost access to returns
+          # `{"data":{"node":null}}` with NO GraphQL error, so `gql` exits 0
+          # and `--jq '.data.node.X'` prints the four bytes `null`.
+          #
+          # What that does downstream, measured:
+          #
+          #   jq '.data.node.fields'  on a null node   -> null,  exit 0
+          #   jq -r '[.nodes[] | …]'  on `null`        -> exit 5
+          #   jq -r '.pageInfo.hasNextPage' on `null`  -> null,  exit 0
+          #
+          # So `set -euo pipefail` does kill the job rather than write the
+          # wrong column — but it dies on jq's "Cannot iterate over null",
+          # naming jq and not the id, and the truncation guard above compares
+          # the string `null` against `true` and stays silent. Right exit
+          # code, unreadable cause, which is this workflow's own subject one
+          # layer down. BI-11 asserts it over all three reads.
+          require_node() {
+            if [ -z "$2" ] || [ "$2" = "null" ]; then
+              echo "::error title=Board intake::${1} is UNMEASURED and nothing was written: node(id: ${3}) came back null, so that id did not resolve — it is stale, it names an object this token cannot see, or PROJECT_ID is wrong. This is NOT a missing field, NOT an unset column and NOT an empty board." >&2
+              exit 1
+            fi
+          }
+
           # An empty item id means the add step did not produce one. Writing a
           # field against "" returns a confusing NOT_FOUND about the project,
           # so say which half actually failed.
@@ -243,6 +268,7 @@ jobs:
                 }
               }
             }' --jq '.data.node.fields')
+          require_node "the project's field list" "${fields}" "${PROJECT_ID}"
 
           status=$(printf '%s' "${fields}" | jq -r '[.nodes[] | select(.name == "Status")] | first // empty')
           field_id=$(printf '%s' "${status}" | jq -r '.id // empty')
@@ -311,6 +337,7 @@ jobs:
                   }
                 }
               }' --jq '.data.node.fieldValues')
+            require_node "the item's field values, read back after the write" "${values}" "${ITEM_ID}"
 
             current=$(printf '%s' "${values}" | jq -r '[.nodes[] | select(.field.name == "Status") | .name] | first // ""')
 
@@ -353,6 +380,7 @@ jobs:
                   }
                 }
               }' --jq '.data.node.items')
+            require_node "the search index for the '${COLUMN}' column" "${index_page}" "${PROJECT_ID}"
 
             # `--arg` rather than interpolating ITEM_ID into the jq program.
             # The id is minted by GitHub so this is not a sanitisation fix; a

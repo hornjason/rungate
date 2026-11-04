@@ -286,14 +286,83 @@ describe("board-intake workflow", () => {
         `absent AND the page was full. Found ${guards.length} for ${paged.length} ` +
         `connection(s):\n${guards.join("\n")}`,
     ).toBe(paged.length);
+    // Each guard's OWN message, not a count of the word in the step.
+    //
+    // This was `(body.match(/UNMEASURED/g) ?? []).length === paged.length`,
+    // which says "every guard names it" and measures "nothing else in the
+    // step does". BI-11 then added a fourth, correct use — a null-node
+    // refusal — and this row went red over an improvement. UNMEASURED is the
+    // project's word for a reading that could not be taken; a row that caps
+    // how often it may appear is pointed at the wrong object.
+    const guardMessages = code
+      .map((l, i) => (l.includes("hasNextPage')\" = \"true\" ]") ? code[i + 1] : null))
+      .filter((l): l is string => l !== null);
     expect(
-      (body.match(/UNMEASURED/g) ?? []).length,
-      "each truncation guard must name the reading UNMEASURED, not guess a cause",
-    ).toBe(paged.length);
+      guardMessages.length,
+      "every truncation guard must be followed by its own error line",
+    ).toBe(guards.length);
+    expect(
+      guardMessages.filter(l => !l.includes("UNMEASURED")),
+      "each truncation guard must name ITS OWN reading UNMEASURED, not guess a cause",
+    ).toEqual([]);
 
     // The specific spelling round 8 reported, kept as a named regression:
     // the sweep half of the same commit moved to 50 and this half did not.
     expect(body).not.toContain("fieldValues(first: 20)");
+  });
+
+  test("BI-11: every node(id:) read refuses a null node by naming the id", () => {
+    // Round 9's finding, and the same shape as BI-10 one layer down: a
+    // reading that could not be taken, reported as a fact about the board.
+    //
+    // `node(id: ID!)` IS NULLABLE in GitHub's schema. A stale id, a wrong
+    // `PROJECT_ID`, or a project the token lost access to returns
+    //
+    //     {"data": {"node": null}}
+    //
+    // with NO GraphQL error, so `gql` exits 0 and `--jq '.data.node.X'`
+    // prints the four bytes `null`. Measured:
+    //
+    //     echo '{"data":{"node":null}}' | jq '.data.node.fields'   → null, exit 0
+    //     printf 'null' | jq -r '[.nodes[] | …]'                   → exit 5
+    //     printf 'null' | jq -r '.pageInfo.hasNextPage'            → null, exit 0
+    //
+    // So under `set -euo pipefail` the job does die rather than write the
+    // wrong column — but it dies on jq's "Cannot iterate over null", which
+    // names jq and not the id, and BI-10's truncation guard reads
+    // `hasNextPage` as the string `null` rather than `true` and stays quiet.
+    // Right exit code, unreadable cause.
+    //
+    // Asserted as the POPULATION, the same way BI-10 is: all three reads, not
+    // the one the round reported. Two of three would leave a subtraction with
+    // one unguarded operand and read as covered.
+    //
+    // Breaking it: drop any one `require_node` call and this goes red naming
+    // the count.
+    const move = runBlocks().find(b => b.includes("updateProjectV2ItemFieldValue"));
+    expect(move, "no run block performs the Status mutation").toBeDefined();
+    const code = move!.split("\n").filter(l => !/^\s*#/.test(l));
+
+    const nodeReads = code.filter(l => /--jq '\.data\.node\./.test(l)).map(l => l.trim());
+    expect(
+      nodeReads.length,
+      `expected the three node(id:) reads (fields, fieldValues, index items); found:\n${nodeReads.join("\n")}`,
+    ).toBe(3);
+
+    const checks = code.filter(l => /^\s*require_node /.test(l)).map(l => l.trim());
+    expect(
+      checks.length,
+      `each node(id:) read must be followed by a require_node refusal that names which ` +
+        `id did not resolve. ${nodeReads.length} read(s), ${checks.length} check(s):\n` +
+        nodeReads.join("\n"),
+    ).toBe(nodeReads.length);
+
+    // The helper exists, exits, and says the id did not resolve — so a
+    // require_node that quietly returned could not satisfy the count above.
+    const body = code.join("\n");
+    expect(body, "require_node must be declared in this step").toContain("require_node() {");
+    expect(body).toMatch(/require_node\(\) \{[\s\S]*?did not resolve[\s\S]*?\n          \}/);
+    expect(body).toMatch(/require_node\(\) \{[\s\S]*?exit 1[\s\S]*?\n          \}/);
   });
 
   test("BI-4: no run block interpolates a value", () => {
