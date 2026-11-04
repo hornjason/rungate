@@ -43,21 +43,27 @@
 # GitHub's documented answer rather than a workaround here.
 #
 # `RUNGATE_PROJECT_TOKEN` was minted `read:project` on 2026-11-02 and used only
-# to READ the board from `ci.yml` and `release.yml`. **Jason widened it to
-# project write on 2026-11-04, for this workflow.** The review of this pull
-# request flagged the read-only scope twice at `high` and was correct against
-# every record in the tree at the time it ran; the scope changed after it ran,
-# which no finding could have known.
+# to READ the board from `ci.yml` and `release.yml`.
 #
-# That widening has a cost worth stating where it is visible: the same secret
-# is handed to `bun test` in `ci.yml` and `release.yml`, so the suite now runs
-# with a credential that can modify the board. Nothing in the suite writes to
-# it. If that ever stops being true, the fix is a second secret scoped to this
-# workflow alone, not a narrower reader here.
+# WHETHER IT NOW CARRIES WRITE IS NOT KNOWABLE FROM INSIDE THIS REPOSITORY, and
+# this comment does not claim it. A secret's scope is not readable by any job,
+# any test, or any reader of this tree; the only artifact that can settle it is
+# a run of this workflow. An earlier revision asserted the scope had been
+# widened, and a reviewer refused that correctly: the assertion's only evidence
+# was itself, added by the same diff it was defending. Prose about a credential
+# is not a reading of one.
 #
-# Do NOT silence a permission failure with `continue-on-error`: a job that
-# quietly fails to add items is indistinguishable from the state this file
-# exists to end.
+# So the first run IS the measurement, and `workflow_dispatch` is below so it
+# can be taken deliberately instead of waiting for an event. A refusal prints a
+# permission error naming the project, which is unambiguous and is the reading.
+# Do NOT silence it with `continue-on-error`: a job that quietly fails to add
+# items is indistinguishable from the state this file exists to end.
+#
+# ONE COST, IF IT IS WIDENED: the same secret is handed to `bun test` in
+# `ci.yml` and `release.yml`, so the suite would run with a credential that can
+# modify the board. Nothing in the suite writes to it. If that ever stops being
+# true, the fix is a second secret scoped to this workflow alone, not a
+# narrower reader here.
 #
 # IT ADDS NOTHING RETROSPECTIVELY, BY DESIGN. Every trigger below is an event,
 # so an issue or pull request opened BEFORE this merges is never added — which
@@ -75,6 +81,9 @@ on:
     types: [opened, reopened, transferred]
   pull_request_target:
     types: [opened, reopened, ready_for_review]
+  # The scope probe. A secret cannot be read, so the run is the only evidence
+  # that the credential can write the board — see the header.
+  workflow_dispatch:
 
 # `pull_request_target` runs in the context of the BASE repository and so can
 # see secrets, which `pull_request` cannot — and that is the whole reason it is
