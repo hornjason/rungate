@@ -1,6 +1,6 @@
 ---
 description: Documentation routing and file creation conventions
-generated-sha: 721180b2e20a4b2a
+generated-sha: e5ac4630183a2f8a
 ---
 
 ## Documentation Routing
@@ -13,7 +13,7 @@ generated-sha: 721180b2e20a4b2a
 | ADRs — architecture decisions (11 files) | `docs/adr/` |
 | Research — findings, evaluations, competitive analysis (28 files) | `docs/research/` |
 | Council — synthesis, design debates (10 files) | `docs/council/` |
-| Guides — setup, onboarding, reference (1 files) | `docs/guides/` |
+| Guides — setup, onboarding, reference (2 files) | `docs/guides/` |
 | Reference — historical and inactive docs (24 files) | `reference/` |
 
 ## Where to Create Things
