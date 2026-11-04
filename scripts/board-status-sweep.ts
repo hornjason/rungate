@@ -19,10 +19,16 @@
  * | Reading | Verdict |
  * |---|---|
  * | content MERGED or CLOSED, Status is not Done | correct it to Done |
- * | content OPEN, Status is Done, and it is a pull request | correct it to In review |
+ * | content OPEN, Status is Done, and it is a READY pull request | correct it to In review |
+ * | content OPEN, Status is Done, and it is a DRAFT pull request | REPORT, never correct |
  * | content OPEN, Status is Done, and it is an issue | REPORT, never correct |
  *
- * The third row is the one worth defending. An open issue in `Done` is
+ * The draft row exists because `board-intake.yml` — the other half of the
+ * same change — keeps drafts OUT of In review on purpose. A sweep that wrote
+ * In review for a draft would be a second decider contradicting the first,
+ * and the two would never meet in a single run to disagree visibly.
+ *
+ * The last row is the one worth defending. An open issue in `Done` is
  * certainly wrong, and the column it SHOULD be in is not derivable from
  * anything GitHub knows — `Backlog`, `Ready` and `In progress` are all
  * consistent with "open". Writing a guess there would replace a visibly wrong
@@ -64,6 +70,8 @@ export interface BoardItem {
   readonly state: ItemState;
   /** The Status cell, or null when the item has no Status at all. */
   readonly status: string | null;
+  /** Always false for an issue. Required, not optional: see `readBoard`. */
+  readonly draft: boolean;
 }
 
 export type Verdict =
@@ -92,7 +100,7 @@ export function verdictFor(item: BoardItem): Verdict {
   // Open from here down.
   if (item.status !== DONE) return { kind: "agrees" };
 
-  if (item.kind === "PullRequest") {
+  if (item.kind === "PullRequest" && !item.draft) {
     return {
       kind: "correct",
       to: IN_REVIEW,
@@ -100,12 +108,21 @@ export function verdictFor(item: BoardItem): Verdict {
     };
   }
 
-  return {
-    kind: "undecidable",
-    why:
-      "open issue marked Done. Done is wrong, but Backlog, Ready and In progress are all " +
-      "consistent with an open issue, so the right column is not derivable — a person has to pick it",
-  };
+  // A DRAFT pull request falls through to the same refusal as an open issue,
+  // and it must. `board-intake.yml` in this same change excludes drafts from
+  // In review on purpose — a draft there says somebody is waiting on a reader
+  // when nobody is — so a sweep that wrote In review for one would be a second
+  // decider contradicting the first, with no run in which they ever meet
+  // (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape).
+  const why =
+    item.kind === "PullRequest"
+      ? "open DRAFT pull request marked Done. Done is wrong, and In review is wrong too — " +
+        "board-intake.yml keeps drafts out of it deliberately — so the right column is not " +
+        "derivable: a person has to pick it, or mark the pull request ready for review"
+      : "open issue marked Done. Done is wrong, but Backlog, Ready and In progress are all " +
+        "consistent with an open issue, so the right column is not derivable — a person has to pick it";
+
+  return { kind: "undecidable", why };
 }
 
 export interface SweepReading {
@@ -129,7 +146,7 @@ export function sweep(items: readonly BoardItem[]): SweepReading {
   return { agrees, corrections, undecidable };
 }
 
-const BOARD_QUERY = `
+export const BOARD_QUERY = `
 query($project: ID!, $endCursor: String) {
   node(id: $project) {
     ... on ProjectV2 {
@@ -148,7 +165,7 @@ query($project: ID!, $endCursor: String) {
           content {
             __typename
             ... on Issue { number state }
-            ... on PullRequest { number state }
+            ... on PullRequest { number state isDraft }
           }
         }
       }
@@ -237,6 +254,12 @@ async function readBoard(token: string): Promise<BoardItem[]> {
         kind: content.__typename,
         state: content.state,
         status,
+        // `isDraft` is absent on the Issue fragment, and an undefined here
+        // would make `!item.draft` true for every item — the draft branch
+        // would never run and BS-13 would be green against a sweep that
+        // still moves drafts. Coerce, so the field is a boolean or nothing
+        // reaches the verdict.
+        draft: content.isDraft === true,
       });
     }
 

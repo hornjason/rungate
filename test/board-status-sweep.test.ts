@@ -14,6 +14,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  BOARD_QUERY,
   DONE,
   IN_REVIEW,
   interpretResponse,
@@ -29,8 +30,9 @@ function item(
   kind: ItemKind,
   state: ItemState,
   status: string | null,
+  draft = false,
 ): BoardItem {
-  return { itemId: `PVTI_${number}`, number, kind, state, status };
+  return { itemId: `PVTI_${number}`, number, kind, state, status, draft };
 }
 
 describe("board status sweep", () => {
@@ -60,11 +62,45 @@ describe("board status sweep", () => {
     expect(verdictFor(item(1645, "PullRequest", "MERGED", DONE)).kind).toBe("agrees");
   });
 
-  test("BS-5: an open pull request marked Done is corrected to In review", () => {
+  test("BS-5: an open READY pull request marked Done is corrected to In review", () => {
     // #1607, the instance that started this: OPEN and BLOCKED, board said Done.
+    // Ready, not draft — BS-13 is the draft half and they must not be merged
+    // into one row, because the two have opposite verdicts.
     const v = verdictFor(item(1607, "PullRequest", "OPEN", DONE));
     expect(v.kind).toBe("correct");
     expect(v.kind === "correct" && v.to).toBe(IN_REVIEW);
+  });
+
+  test("BS-13: an open DRAFT pull request marked Done is undecidable, never moved to In review", () => {
+    // The other half of BS-5, and the one that contradicts this PR's own
+    // other half if it is missed. `board-intake.yml` excludes drafts from
+    // In review deliberately — "a draft in In review says somebody is
+    // waiting on a reader when nobody is" — so a sweep that writes In review
+    // for a draft is a SECOND DECIDER disagreeing with the first
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape),
+    // and the two never meet because intake fires on an event and the sweep
+    // runs by hand.
+    //
+    // Undecidable rather than Backlog for the same reason BS-7 is: Done is
+    // certainly wrong and the right column is not derivable. Backlog, Ready
+    // and In progress are all consistent with an open draft.
+    const v = verdictFor(item(1700, "PullRequest", "OPEN", DONE, true));
+    expect(v.kind).toBe("undecidable");
+    expect(v.kind === "undecidable" && v.why).toContain("draft");
+  });
+
+  test("BS-14: the board query asks for isDraft, so the verdict is not taken blind", () => {
+    // BS-13 can be satisfied by a `verdictFor` that reads a field nothing
+    // ever populates: every real item would arrive with `draft` undefined,
+    // the draft branch would never run, and BS-13 would stay green against a
+    // sweep that still moves drafts
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, the third shape —
+    // a case that holds vacuously because the input is stripped upstream).
+    expect(BOARD_QUERY).toContain("isDraft");
+    // And on the PullRequest fragment specifically. `isDraft` does not exist
+    // on Issue, so a stray one elsewhere in the document is a GraphQL error
+    // at run time rather than a field.
+    expect(/\.\.\. on PullRequest \{[^}]*isDraft/.test(BOARD_QUERY)).toBe(true);
   });
 
   test("BS-6: an open item in any non-Done column is left alone", () => {
@@ -126,13 +162,14 @@ describe("board status sweep", () => {
       item(1645, "PullRequest", "MERGED", DONE), // agrees
       item(1607, "PullRequest", "OPEN", DONE), // correct -> In review
       item(1744, "Issue", "OPEN", DONE), // undecidable
+      item(1700, "PullRequest", "OPEN", DONE, true), // undecidable — draft
       item(1740, "PullRequest", "OPEN", "Backlog"), // agrees
     ];
     const r = sweep(items);
 
     expect(r.agrees).toBe(2);
     expect(r.corrections.map(c => c.number).sort()).toEqual([1607, 1749]);
-    expect(r.undecidable.map(u => u.number)).toEqual([1744]);
+    expect(r.undecidable.map(u => u.number).sort()).toEqual([1700, 1744]);
     expect(r.agrees + r.corrections.length + r.undecidable.length).toBe(items.length);
   });
 });
