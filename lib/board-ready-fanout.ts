@@ -152,7 +152,6 @@ export function fanoutDecisions(
   });
 }
 
-/** The credential, or the reason there is no reading to report. */
 /** A GraphQL connection, as far as truncation is concerned. */
 interface MaybeTruncated {
   readonly pageInfo?: { readonly hasNextPage?: boolean } | null;
@@ -210,6 +209,7 @@ export function actorMayWrite(permission: string | null): boolean {
   return WRITING_PERMISSIONS.includes(permission);
 }
 
+/** The credential, or the reason there is no reading to report. */
 export type CredentialReading =
   | { readonly kind: "present"; readonly token: string }
   | { readonly kind: "UNMEASURED"; readonly why: string };

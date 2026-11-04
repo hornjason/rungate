@@ -554,3 +554,62 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
     }
   });
 });
+
+/**
+ * BR-34..BR-36: an item with no Status value is still an item this job can
+ * move.
+ *
+ * The Status field id was read off the item's **own Status value node**:
+ * `statusValue?.field?.id`. An item carrying no Status at all therefore
+ * produced no entry in `itemOf`, and the write loop logged *"its Status field
+ * could not be located — UNMEASURED"* and moved on — for an item whose field
+ * id was perfectly resolvable, just not from there.
+ *
+ * That is the population this whole lane exists for in the worst case: an
+ * issue freshly added to the board with no column yet is exactly the one that
+ * should land in Ready, and it was the one guaranteed to be skipped. The id
+ * belongs to the PROJECT, not to the value, so it is resolved once from
+ * `ProjectV2.field(name: "Status")` — introspected 2026-11-04 to confirm the
+ * by-name lookup exists and takes no cursor, so BR-19's `first:` census is
+ * unaffected.
+ */
+describe("BR-34..BR-36: the Status field id comes from the project, not from the item's value", () => {
+  const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+  // Comments first: this file's own prose quotes the bad expression, and so
+  // does the script's new docblock (`.claude/rules/self-referential-tests.md`).
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+  test("BR-34: the detector finds the one population site", () => {
+    // Anti-vacuity. Zero means `itemOf` was renamed and BR-35 is asserting
+    // against nothing; more than one means a second population path appeared
+    // and both need checking.
+    expect(
+      (code.match(/itemOf\.set\(/g) ?? []).length,
+      "expected exactly one `itemOf.set(` in scripts/board-ready.ts — see the comment above.",
+    ).toBe(1);
+  });
+
+  test("BR-35: membership is not gated on the item having a Status value", () => {
+    // The defect, as source. `statusValue` may still be READ — `boardStatus`
+    // needs it — but it must not decide whether the item is writable.
+    const gate = /if\s*\([^)]*statusValue[^)]*\)\s*\{\s*\n\s*itemOf\.set\(/;
+    expect(
+      gate.test(code),
+      "`itemOf` must not be populated only when the item already has a Status value. " +
+        "An item with no column is the one this lane most needs to move, and reading " +
+        "the field id off its own value node makes that item unreachable. Resolve the " +
+        "field id from the project once.",
+    ).toBe(false);
+  });
+
+  test("BR-36: the field id is resolved from the project by name, exactly once", () => {
+    // The positive half. Without it, deleting the guard BR-35 forbids goes
+    // green while leaving nothing to write with.
+    expect(
+      code,
+      'the Status field must be resolved from the project: `field(name: "Status")`',
+    ).toMatch(/field\(name:\s*"Status"\)/);
+    // One resolve, not one per moved item — and one site to mutate.
+    expect((code.match(/field\(name:\s*"Status"\)/g) ?? []).length).toBe(1);
+  });
+});

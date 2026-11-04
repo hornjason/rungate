@@ -206,12 +206,20 @@ async function main(): Promise<number> {
     return EXIT_REFUSED;
   }
 
-  const itemOf = new Map<number, { itemId: string; fieldId: string; optionId: string | null }>();
+  // **The item id, and nothing else.** This used to carry the Status field
+  // id read off the item's OWN Status value node, so an item with no Status
+  // at all produced no entry here and the write loop below logged "its
+  // Status field could not be located — UNMEASURED" for an item whose field
+  // id was perfectly resolvable, just not from there. An issue freshly added
+  // to the board with no column yet is the one this lane most needs to move,
+  // and it was the one guaranteed to be skipped. The field belongs to the
+  // PROJECT; it is resolved once, below. BR-34..BR-36.
+  const itemOf = new Map<number, { itemId: string }>();
   const dependents: Dependent[] = blocking.map((b: any) => {
     const item = (b.projectItems?.nodes ?? []).find((i: any) => i.project?.id === project);
     const statusValue = item?.fieldValues?.nodes?.find((f: any) => f?.field?.name === "Status");
-    if (item && statusValue?.field?.id) {
-      itemOf.set(b.number, { itemId: item.id, fieldId: statusValue.field.id, optionId: null });
+    if (item) {
+      itemOf.set(b.number, { itemId: item.id });
     }
     return {
       number: b.number,
@@ -249,29 +257,44 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  // **One resolve, from the project, before the loop.** `ProjectV2.field` is
+  // a by-name lookup that takes no cursor — introspected 2026-11-04 against
+  // the live schema rather than read off this query — so it adds no `first:`
+  // for BR-19's census to police, and it costs one round trip instead of one
+  // per moved item.
+  const statusField = (
+    await gql(
+      token,
+      `query($p:ID!){node(id:$p){... on ProjectV2{
+         field(name: "Status"){... on ProjectV2SingleSelectField{id options{id name}}}}}}`,
+      { p: project },
+    )
+  ).node?.field;
+  if (!statusField?.id) {
+    console.log(`::warning::the board has no Status field — UNMEASURED, nothing written`);
+    return EXIT_REFUSED;
+  }
+  const option = (statusField.options ?? []).find((o: any) => o.name === READY_COLUMN);
+  if (!option) {
+    console.log(`::warning::the board has no "${READY_COLUMN}" option — UNMEASURED, nothing written`);
+    return EXIT_REFUSED;
+  }
+
   for (const dec of moving) {
     const target = itemOf.get(dec.number);
     if (!target) {
       // Decided to move and nothing to move it with. Loud, because a silent
-      // skip here is indistinguishable from "it moved".
-      console.log(`::warning::#${dec.number} is Ready but its Status field could not be located — UNMEASURED`);
+      // skip here is indistinguishable from "it moved". This now means only
+      // ONE thing — the issue is not on this board — because the field id no
+      // longer comes from the item.
+      console.log(`::warning::#${dec.number} is Ready but is not an item on this board — UNMEASURED`);
       continue;
-    }
-    const field = await gql(
-      token,
-      `query($f:ID!){node(id:$f){... on ProjectV2SingleSelectField{options{id name}}}}`,
-      { f: target.fieldId },
-    );
-    const option = (field.node.options ?? []).find((o: any) => o.name === READY_COLUMN);
-    if (!option) {
-      console.log(`::warning::the board has no "${READY_COLUMN}" option — UNMEASURED, nothing written`);
-      return EXIT_REFUSED;
     }
     await gql(
       token,
       `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(
          input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}`,
-      { p: project, i: target.itemId, f: target.fieldId, o: option.id },
+      { p: project, i: target.itemId, f: statusField.id, o: option.id },
     );
     console.log(`  wrote #${dec.number} -> ${READY_COLUMN}`);
   }
