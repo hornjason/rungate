@@ -52,6 +52,26 @@ const H = { authorization: `bearer ${token}`, accept: "application/vnd.github+js
 const MAX_REDIRECTS = 5;
 
 /**
+ * **Abandon a response, and release its socket on the way out.**
+ *
+ * An unconsumed body holds its connection out of the pool. The redirect hop in
+ * `send()` was fixed for this first, with a comment claiming it was the only
+ * place a Response is discarded unparsed — which review of #1740 showed was
+ * false: the four `throw` paths below abandon one too, and each leaks a
+ * connection on every error response.
+ *
+ * Today this script exits on the first such throw, so the leak is unobservable
+ * from here. That is an argument about the caller, not about the function, and
+ * it stops holding the moment anything wraps these in a `try` and continues.
+ * One helper, so there is a single binding to mutate rather than four sites to
+ * remember — see `.claude/rules/checks-must-be-able-to-fail.md`.
+ */
+async function releaseAndThrow(r: Response, message: string): Promise<never> {
+  await r.body?.cancel().catch(() => {});
+  throw new Error(message);
+}
+
+/**
  * One request, with the token, and **every hop checked before it is taken.**
  *
  * The first version of this checked `r.url` after the fetch returned. Security
@@ -80,7 +100,10 @@ async function send(url: string, init: RequestInit = {}): Promise<Response> {
     // or re-fetches, so there is no path that wanted it.
     await r.body?.cancel().catch(() => {});
     const location = r.headers.get("location");
-    if (location === null) throw new Error(`${r.status} from ${target} with no Location header`);
+    // `return`, not a bare `await`: the helper's `Promise<never>` only narrows
+    // `location` for the line below if control-flow analysis can see this
+    // branch does not fall through.
+    if (location === null) return releaseAndThrow(r, `${r.status} from ${target} with no Location header`);
     target = assertTokenMayReach(location, "Location header", target).toString();
   }
   throw new Error(`more than ${MAX_REDIRECTS} redirects starting at ${url}`);
@@ -88,7 +111,7 @@ async function send(url: string, init: RequestInit = {}): Promise<Response> {
 
 async function rest(path: string): Promise<any> {
   const r = await send(`https://api.github.com/${path}`);
-  if (!r.ok) throw new Error(`${r.status} on ${path}`);
+  if (!r.ok) await releaseAndThrow(r, `${r.status} on ${path}`);
   return r.json();
 }
 
@@ -113,7 +136,7 @@ async function restAll(path: string): Promise<any[]> {
   let url: string | null = `https://api.github.com/${path}${path.includes("?") ? "&" : "?"}per_page=100`;
   while (url) {
     const r: Response = await send(url);
-    if (!r.ok) throw new Error(`${r.status} on ${url}`);
+    if (!r.ok) await releaseAndThrow(r, `${r.status} on ${url}`);
     out.push(...((await r.json()) as any[]));
     const next = /<([^>]+)>;\s*rel="next"/.exec(r.headers.get("link") ?? "");
     url = next ? assertTokenMayReach(next[1], 'Link rel="next"', url).toString() : null;
@@ -144,7 +167,7 @@ async function gql(query: string, variables: Record<string, unknown> = {}): Prom
   // then read a property of undefined, or worse, treated it as an empty
   // reading. Round 8 of #1740, and the same class as the rest: a site the
   // neighbouring functions guard and this one did not.
-  if (!r.ok) throw new Error(`${r.status} from the GraphQL endpoint`);
+  if (!r.ok) await releaseAndThrow(r, `${r.status} from the GraphQL endpoint`);
   const j = (await r.json()) as { data?: unknown; errors?: unknown };
   if (j.errors) throw new Error(JSON.stringify(j.errors));
   return j.data;

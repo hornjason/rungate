@@ -299,8 +299,15 @@ describe("the status reader does not leak the token on any hop", () => {
   // Caught in review of #1740. A 3xx whose body is never read holds its
   // socket out of the connection pool, and this script is nothing but
   // sequential requests — one dependency call and one timeline page per open
-  // issue, ~80 of each. The redirect branch is the only place a response is
-  // discarded without being parsed, so it is the only place that needs this.
+  // issue, ~80 of each.
+  //
+  // The first version of this row said the redirect branch was "the only place
+  // a response is discarded without being parsed, so it is the only place that
+  // needs this". **That sentence was false, and review of #1740 said so:** the
+  // four `throw` paths — the missing `Location`, and the `!r.ok` in `rest()`,
+  // `restAll()` and `gql()` — each abandon a Response with its body untouched,
+  // which is the identical defect. Fixing the one site that was reported and
+  // writing a row shaped around it is how a population becomes four rounds.
   test("a redirect's body is released before the next hop", () => {
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
     // Anti-vacuity: the hop loop must still be here for the row to mean
@@ -314,5 +321,32 @@ describe("the status reader does not leak the token on any hop", () => {
       "the redirect branch must release the response before re-fetching — " +
         "an unconsumed body keeps its socket out of the pool",
     ).toMatch(/r\.body\?\.cancel\(\)/);
+  });
+
+  // The population the row above was too narrow to cover. Every abandonment of
+  // a Response goes through `releaseAndThrow`, so there is one binding to
+  // mutate rather than five sites to remember.
+  test("every path that abandons a response releases it — the whole population", () => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+    // Anti-vacuity. Four throw sites abandon a Response in this file: the
+    // absent `Location`, and `!r.ok` in rest(), restAll() and gql(). A fifth
+    // arriving must come through the helper too; zero means it was renamed and
+    // the assertion below is ranging over nothing.
+    expect(
+      (code.match(/releaseAndThrow\(/g) ?? []).length,
+      "expected one definition plus four call sites of `releaseAndThrow` in " +
+        "scripts/work-status.ts — the four places a Response is thrown away.",
+    ).toBe(5);
+
+    // The defect, as source: a bare throw that still holds the response.
+    const bare = [...code.matchAll(/^\s*(?:if \([^)]*\) )?throw new Error\(`\$\{r\.status\}/gm)];
+    expect(
+      bare.map(m => m[0].trim()),
+      "a `throw` that names `r.status` is abandoning a Response — route it " +
+        "through `releaseAndThrow(r, ...)` so the socket returns to the pool. " +
+        "An unconsumed body leaks a connection on every error response, which " +
+        "is the same defect the redirect hop above was fixed for.",
+    ).toEqual([]);
   });
 });
