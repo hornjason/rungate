@@ -9,6 +9,52 @@
  */
 
 /**
+ * A GraphQL object field that came back, or a refusal that says which read
+ * produced nothing.
+ *
+ * **The case this exists for is not an error.** `scripts/work-status.ts`'s
+ * `gql()` guards two states — a non-2xx through `releaseAndThrow`, and a
+ * populated `errors` array — and a valid query naming a missing object is
+ * neither. GitHub answers `200` with `data: { node: null }` and no `errors`
+ * at all when the id is stale, the project was restructured, or an issue was
+ * deleted or transferred. The `null` passes `if (j.errors) throw` untouched
+ * and reaches the caller, which reads a property of it.
+ *
+ * So the three readers that dereference an object field get a diagnosable
+ * refusal instead of `TypeError: Cannot read properties of null` raised deep
+ * inside a loop. That distinction is this script's entire subject: it spends
+ * real effort elsewhere on telling a reading apart from an absence —
+ * `releaseAndThrow`, the `(UNMEASURED — fields truncated)` value, the
+ * UNMEASURED annotations — and a bare stack trace is the one output shape
+ * that says nothing about which read failed or why. The reader is trying to
+ * establish ground truth, which is when a confusing failure costs most.
+ *
+ * **One function, three call sites, on purpose.** Three separate
+ * `if (!x) throw` guards would be three deciders answering one question, so
+ * no behavioural test could tell them apart and a mutation of any one would
+ * be held up by the other two — the fourth shape in
+ * `.claude/rules/checks-must-be-able-to-fail.md`. `what` is required and has
+ * no default, because a refusal that does not name the read is a stack trace
+ * with extra steps.
+ *
+ * Raised by the advisory `review` check on PR #1740 at head
+ * `adf37b3694f8d03fb6127491e1c32fcdbb18ce31`, naming all three sites and the
+ * mechanism on a first pass. The required `ai-review` check returned clean on
+ * the same head.
+ */
+export function mustResolve<T>(value: T | null | undefined, what: string): T {
+  if (value === null || value === undefined) {
+    throw new Error(
+      `UNMEASURED: ${what} resolved to ${value === null ? "null" : "undefined"}. ` +
+        "GitHub answers 200 with a null object and no `errors` entry when the id " +
+        "is stale, inaccessible, or the object was deleted or transferred, so this " +
+        "is not a transport failure and nothing upstream can report it.",
+    );
+  }
+  return value;
+}
+
+/**
  * Is this issue something anybody may pick up right now?
  *
  * **Takes the blockers, never a search qualifier.** One query string,
