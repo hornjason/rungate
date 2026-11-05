@@ -102,10 +102,51 @@ jobs:
           # The identity that TRIGGERED this run, through env: rather than
           # interpolated into the script line — BR-16.
           ACTOR: ${{ github.actor }}
+          # The account that owns this repository. Same reason, same rule, and
+          # GitHub sets it — a contributor cannot present themselves as it.
+          OWNER: ${{ github.repository_owner }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::warning::UNMEASURED — BOARD_PROJECT_TOKEN is not set, so the acting identity could not be authorised and nothing was read. This run is UNMEASURED, not clean."
             echo "trusted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # THE OWNER ARM, AND WHY IT IS FIRST (BR-34).
+          #
+          # Dispatch `42074926758` on 2026-11-05 is the first run this
+          # workflow has ever had past #1761's secret-name repair, and it
+          # refused the repository owner:
+          #
+          #   refusing to run: hornjason has permission "UNMEASURED" on
+          #   hornjason/rungate, and this job holds a board-writing credential.
+          #
+          # The endpoint below returned nothing this job could read, `perm`
+          # was empty, and the `case` fell to its refusing arm. That refusal is
+          # CORRECT and is not what changed — a permission nobody could read is
+          # not a permission anybody was granted, and defaulting it to trusted
+          # is the cheapest wrong fix available here.
+          #
+          # What the measurement says is that the endpoint is not the problem:
+          # the same call, same actor, same repository, made with an ordinary
+          # credential answers `admin` at once. The difference is the
+          # capability of the token this job holds, and nothing inside this
+          # repository can read a secret's capability — only a run can show it,
+          # and this run did.
+          #
+          # So the owner is authorised without asking anybody. This costs no
+          # API call and needs no scope, which is the point: the one identity
+          # that certainly may move this board stops depending on a credential
+          # that may not be able to say so.
+          #
+          # NOT A DUPLICATE DECIDER. Each arm answers an input the other
+          # cannot: this one cannot authorise a collaborator who is not the
+          # owner, and the endpoint cannot authorise anybody while the
+          # credential cannot read it. If either could answer every input the
+          # other can, they would be the fourth shape in
+          # `.claude/rules/checks-must-be-able-to-fail.md` — behaviourally one
+          # guard, with nothing able to say which half is live.
+          if [ "$ACTOR" = "$OWNER" ]; then
+            echo "trusted=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # GITHUB_TOKEN cannot answer this endpoint; it needs admin access.
