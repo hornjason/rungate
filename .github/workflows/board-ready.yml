@@ -1,0 +1,163 @@
+# Not managed by rungate — the scaffold owns ci.yml, gates.yml and the two
+# ai-review files, and regenerates them by job name. This one is caller-owned.
+#
+# #1744 — Ready is reachable today only by somebody running `board-mirror
+# --ready --write` by hand, which is Claim 7's third falsification verbatim:
+# "a board state reachable only by someone running a command by hand".
+#
+# There is no "became unblocked" event. `issue_dependencies` exists as a
+# webhook but is NOT a valid Actions `on:` trigger, and `blocked_by_removed`
+# fires when somebody unlinks a dependency rather than when the blocker
+# closes. So the trigger is the close itself, and the script fans out to that
+# issue's `blocking` list.
+#
+# **No schedule.** A cron is the thing this exists to remove; see #1744.
+#
+# Every `uses:` is pinned to a commit SHA, and both
+# `test/action-pin-parity.test.ts` and BR-14 assert it.
+name: Board — a closed blocker frees what it blocked
+
+on:
+  issues:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue number to fan out from"
+        required: true
+        type: string
+      write:
+        description: "Perform the moves (default: report only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  move-freed-issues-to-ready:
+    runs-on: "ubuntu-latest"
+    # `issues: [closed]` is triggerable by anyone who can close an issue, and
+    # an issue's own author can close it — so an outside contributor can start
+    # a job that holds a ProjectsV2 PAT.
+    #
+    # **The first gate here was wrong, and review caught it.** It read
+    # `github.event.issue.author_association`, which is the association of
+    # whoever OPENED the issue, not whoever closed it. Those differ in both
+    # directions, and the direction that bit is the ordinary one: a
+    # maintainer closing an outside contributor's issue would have been
+    # refused, so the feature would have silently not worked for exactly the
+    # issues most likely to be filed from outside.
+    #
+    # There is no actor permission in an Actions expression, so the check
+    # moved into the script, where the API can answer it:
+    # `GET /repos/{repo}/collaborators/{actor}/permission` must say `write`,
+    # `maintain` or `admin`. A control that needs a fact expressions cannot
+    # see does not belong in an expression.
+    #
+    # That relocation was then caught being too LATE: the check sat just
+    # before the write, so an untrusted close still started a job that read
+    # the whole board with the PAT. It now runs before the first `gql()`,
+    # and BR-27 asserts the ordering against every read rather than only
+    # against the mutation.
+    #
+    # What this deliberately does NOT do is the other suggested fix —
+    # defaulting the untrusted trigger to report-only and requiring a manual
+    # dispatch to write. That is precisely the hand-run command #1744 exists
+    # to remove; it would leave the feature looking present and doing nothing.
+    #
+    # And then caught being too EXPENSIVE, which is a different problem from
+    # being too late. `issues: [closed]` on a PUBLIC repository is triggerable
+    # by anybody with a GitHub account — open an issue, close your own issue —
+    # and the script cannot refuse anything until a checkout, a bun install
+    # and a full dependency fetch have already run. The gate below needs only
+    # `gh`, which is preinstalled, so the setup steps are now behind it.
+    #
+    # **This does not decide trust twice.** `WRITING_PERMISSIONS` in
+    # `lib/board-ready-fanout.ts` is the decider and the script still consults
+    # it — this step cannot import it without the checkout it exists to
+    # prevent. BR-33 asserts the two spellings are the same set, so they
+    # cannot drift into two guards that disagree.
+    steps:
+      - id: gate
+        name: May the acting identity move the board?
+        env:
+          GH_TOKEN: ${{ secrets.BOARD_PROJECT_TOKEN }}
+          # The identity that TRIGGERED this run, through env: rather than
+          # interpolated into the script line — BR-16.
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::UNMEASURED — BOARD_PROJECT_TOKEN is not set, so the acting identity could not be authorised and nothing was read. This run is UNMEASURED, not clean."
+            echo "trusted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # GITHUB_TOKEN cannot answer this endpoint; it needs admin access.
+          # A read that failed is "" and refuses with the rest — a permission
+          # we could not read is not a permission we were granted.
+          perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null) || perm=""
+          case "$perm" in
+            admin|maintain|write)
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::warning::refusing to run: $ACTOR has permission \"${perm:-UNMEASURED}\" on $GITHUB_REPOSITORY, and this job holds a board-writing credential."
+              echo "trusted=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+      - if: steps.gate.outputs.trusted == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - if: steps.gate.outputs.trusted == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version-file: ".bun-version"
+      # `--ignore-scripts`: this job carries a PAT, and a postinstall script in
+      # any transitive dependency runs as the job. The secret is scoped to the
+      # fan-out step's `env:` and not to this one, so it is not reachable from
+      # here today — but step-scoped env is one careless edit from job-scoped,
+      # and the flag costs nothing. `--frozen-lockfile` so the tree that runs
+      # is the tree that was reviewed.
+      - if: steps.gate.outputs.trusted == 'true'
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # The credential is resolved INSIDE `run:`, never in an `if:`.
+      # `secrets` is not available in `if:` at all, and a step skipped by
+      # `if:` reports SKIPPED — which reads as satisfied. The script emits a
+      # `::warning::UNMEASURED` naming BOARD_PROJECT_TOKEN and exits 2, so a
+      # repository that has never configured a PAT gets an annotation it can
+      # act on rather than a quiet green. See `.claude/rules/config-access.md`.
+      #
+      # GITHUB_TOKEN cannot write ProjectsV2, which is why this is a PAT and
+      # not the built-in token.
+      #
+      # ISSUE and WRITE go through env:, never interpolated into the script
+      # line — `${{ inputs.* }}` read directly is one input-type change away
+      # from the injection GitHub's own guidance opens with.
+      # No `continue-on-error`. It was here to keep an unconfigured
+      # repository from showing a red X, and review was right that it buys
+      # that by swallowing EVERY failure — a GraphQL error, a bad argument,
+      # a board with no Ready option all become green. That is the silent
+      # pass this file's credential handling exists to refuse, reintroduced
+      # one level up. This workflow is not scaffolded to consumers; it runs
+      # here, where the PAT is configured, and a red run is the signal.
+      - name: Fan out from the closed blocker
+        if: steps.gate.outputs.trusted == 'true'
+        env:
+          BOARD_PROJECT_TOKEN: ${{ secrets.BOARD_PROJECT_TOKEN }}
+          PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          WRITE: ${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
+          # The identity that TRIGGERED this run, which is the one the script
+          # asks the permission endpoint about. Not the issue's author.
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ -z "$PROJECT_ID" ]; then
+            echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
+            exit 0
+          fi
+          bun scripts/board-ready.ts \
+            --repo "$GITHUB_REPOSITORY" \
+            --closed-issue "$ISSUE" \
+            --project "$PROJECT_ID" \
+            --actor "$ACTOR" \
+            $WRITE

@@ -20,6 +20,7 @@
 
 import { Octokit } from "@octokit/rest";
 
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface GitHubClient {
@@ -193,31 +194,142 @@ export function createGitHubClient(): GitHubClient {
  * name hidden in the userinfo (`https://127.0.0.1@evil.com`) are both
  * refused. GitHub Enterprise needs a host outside this list and stays a
  * separate, deliberate decision rather than a side effect of a test seam.
+ *
+ * **A second caller is coming, and is not here yet** — a paginating reader
+ * following `Link: rel="next"`, which is a **response** header, so the host it
+ * names is chosen by whoever answered rather than by us. Same question,
+ * second input. That reader is `restAll()` in `scripts/work-status.ts` and it
+ * lands with #1740; this tree does not contain it.
+ *
+ * The check is therefore `tokenRefusalReason` below, exported so one decider
+ * can answer both: two copies of an allowlist are one guard with a dead twin,
+ * and no behavioural case can tell which half it exercised. Written in the
+ * future tense on purpose — the earlier wording said "appeared" and "both" of
+ * a tree holding one caller, and a reader going to check found nothing and
+ * could not tell a split from a sentence nobody updated.
+ *
+ * It stays in THIS file rather than moving to a leaf module, and the three
+ * red checks that settled it are worth recording: SC-528 binds the literals
+ * `loopback` and `url.hostname` to `lib/github.ts`, and #827's fixed-point
+ * battery copies this file into an `mkdtemp` alone, where a new relative
+ * import dies on module resolution — a mutant that fails to load reads as a
+ * refusal (`.claude/rules/self-referential-tests.md`, Tier 1, last row).
  */
-const ALLOWED_API_HOSTS = new Set([
-  "api.github.com",
-  "github.com",
-  "localhost",
-  "127.0.0.1",
-  "[::1]",
-  "::1",
-]);
-
 export function resolveApiBaseUrl(): string | undefined {
   const raw = process.env.GITHUB_API_URL?.trim();
   if (!raw) return undefined;
+  const reason = tokenRefusalReason(raw);
+  if (reason !== null) throw new Error(`GITHUB_API_URL ${reason}`);
+  return raw;
+}
+
+/**
+ * GitHub itself, or a port on this machine. Nothing else.
+ *
+ * Hostname is compared **exactly**, and the userinfo fields are checked
+ * separately — `https://127.0.0.1@evil.com` has hostname `evil.com`, and
+ * `https://evil.com@api.github.com` has an allowed hostname while still
+ * sending credentials nobody wrote. Neither may pass.
+ */
+// BRACKETED ONLY. These are compared against `url.hostname`, and WHATWG
+// always brackets an IPv6 host — `http://[::1]/x` and the longhand
+// `http://[0:0:0:0:0:0:0:1]/x` both yield `"[::1]"`, and `http://::1/x` is
+// not a parseable URL at all. An unbracketed `"::1"` was here and matched
+// nothing; its removal changes no outcome, which is why the row that holds
+// this is a source assertion rather than a behavioural case.
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+const ALLOWED_API_HOSTS = new Set([
+  "api.github.com",
+  "github.com",
+  ...LOOPBACK_HOSTS,
+]);
+
+/**
+ * Why this URL may not carry our bearer token, or `null` when it may.
+ *
+ * One decider, and these are its callers as this tree actually stands:
+ *
+ * | caller | where | passes `base` |
+ * |---|---|---|
+ * | `resolveApiBaseUrl` | ABOVE, over `GITHUB_API_URL` | no |
+ * | `assertTokenMayReach` | BELOW, the throwing wrapper | yes, passes through |
+ * | `test/token-host-allowlist.test.ts` | the suite | yes, directly |
+ *
+ * `assertTokenMayReach` has **no in-tree production caller**. It is the entry
+ * point `restAll()` in `scripts/work-status.ts` will use, and that lands with
+ * #1740 — so today only the suite reaches it, and only the suite exercises
+ * `base`, which resolves a relative `Link: rel="next"` against the page it
+ * arrived on.
+ *
+ * Spelled out as a table because prose got it wrong twice: once naming
+ * `scripts/work-status.ts` as a current input when this tree lacks the file,
+ * and once naming `assertTokenMayReach` as the `GITHUB_API_URL` caller — the
+ * wrong function, in the wrong direction, and the one with no caller at all.
+ */
+export function tokenRefusalReason(raw: string, base?: string): string | null {
   let url: URL;
   try {
-    url = new URL(raw);
+    url = new URL(raw, base);
   } catch {
-    throw new Error(`GITHUB_API_URL is not a valid URL: ${raw}`);
+    return `is not a valid URL: ${raw}`;
   }
+  // **The host check is first, and the order is asserted.** Every refusal
+  // here is a refusal whatever the order, so this is about the REASON, and a
+  // reason is the only part of a refusal anybody reads. `http://evil.com` and
+  // `https://127.0.0.1@evil.com` are host problems that also happen to be a
+  // scheme problem and a userinfo problem; reporting the incidental one sends
+  // the reader to fix the wrong thing. The existing cases in
+  // `test/github-client.test.ts` match on `/loopback/` and caught exactly
+  // this when the scheme check was added above them.
   if (!ALLOWED_API_HOSTS.has(url.hostname)) {
-    throw new Error(
-      `GITHUB_API_URL may only point at GitHub or loopback — refusing to send a token to ${url.hostname}`,
-    );
+    return `may only point at GitHub or loopback — refusing to send a token to ${url.hostname}`;
   }
-  return raw;
+  // `https://evil.com@api.github.com` has an ALLOWED hostname and still sends
+  // credentials nobody wrote, so this cannot be folded into the check above.
+  if (url.username || url.password) {
+    return `refuses to send a token to a URL carrying userinfo: ${url.host}`;
+  }
+  // THE SCHEME IS CHECKED WITHOUT REFERENCE TO THE HOST, and the single
+  // condition below used to do both at once:
+  //
+  //   url.protocol !== "https:" && !LOOPBACK_HOSTS.has(url.hostname)
+  //
+  // which is a conjunction, so a loopback host short-circuited the scheme
+  // test away entirely. `ftp://127.0.0.1/x`, `ws://localhost/x` and
+  // `gopher://[::1]/x` all returned null. The documented contract is "https
+  // everywhere, plain http only for loopback"; what was implemented was "any
+  // scheme at all for loopback".
+  //
+  // It survived six rounds of review on #1740 because the two cases around
+  // it each vary one axis and the gap sits on the pair neither visits: one
+  // tries a bad scheme on a REAL host, the other tries `http:` on LOOPBACK.
+  // Nothing tried a bad scheme on loopback until round 12 read the
+  // conjunction itself (`.claude/rules/checks-must-be-able-to-fail.md`, the
+  // seventh shape).
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    return `refuses to send a token over ${url.protocol}// to ${url.hostname}`;
+  }
+  // An allowed hostname over cleartext still puts the token on the wire.
+  // `http://api.github.com/x` passes every check above. Loopback keeps
+  // `http:` on purpose — a local test server has no certificate and the
+  // token never leaves the machine.
+  if (url.protocol !== "https:" && !LOOPBACK_HOSTS.has(url.hostname)) {
+    return `refuses to send a token over ${url.protocol}// to ${url.hostname}`;
+  }
+  return null;
+}
+
+/**
+ * Throw unless this URL may carry the token. `context` names where the URL
+ * came from, because "refused" is only actionable when the reader knows which
+ * input produced it — an environment variable and a response header are
+ * repaired differently.
+ */
+export function assertTokenMayReach(raw: string, context: string, base?: string): URL {
+  const reason = tokenRefusalReason(raw, base);
+  if (reason !== null) throw new Error(`${context} ${reason}`);
+  return new URL(raw, base);
 }
 
 /**
@@ -240,9 +352,18 @@ export function resolveApiBaseUrl(): string | undefined {
  * exported-but-unset variable must produce the clear error here rather than
  * an unauthenticated client that 401s somewhere less obvious.
  */
-export function resolveGitHubToken(): string | undefined {
+export function resolveGitHubToken(
+  // Injectable so a second implementation can be asserted to AGREE with this
+  // one on the same inputs. `scripts/check-state-record-closes.ts` must stay
+  // import-free — `test/state-record-closes-mutation.test.ts` asserts it,
+  // because its mutants run from a temp directory and a relative import
+  // makes every one of them die on module resolution, which reads as a
+  // refusal on the merits. So that file cannot call this; the next best
+  // thing is that the two cannot silently disagree.
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
   for (const name of ["GITHUB_TOKEN", "GH_TOKEN"]) {
-    const v = process.env[name];
+    const v = env[name];
     // Trimmed, not just tested: `GH_TOKEN=$(cat token)` carries a trailing
     // newline, and Octokit sends it in the Authorization header, where it
     // 401s with nothing pointing at the whitespace as the cause.

@@ -301,9 +301,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ steps.guard.outputs.pr }}
           REPO: ${{ github.repository }}
-          # 256 kB. GITHUB_OUTPUT accepts 1 MB in total and the prompt has a
-          # context budget of its own; a number here is a deliberate limit with
-          # a reading attached, not a silent default.
+          # 96 kB — 24 pages, three quarters of MAX_ARG_STRLEN. A number here
+          # is a deliberate limit with a reading attached, not a silent default.
+          #
+          # THE BINDING LIMIT IS NOT GITHUB_OUTPUT. The 2026-10-28 reading
+          # below derived 256 kB against GITHUB_OUTPUT's 1 MB, and that bound
+          # is true and is the looser of the two. The diff does not stop at
+          # GITHUB_OUTPUT: it is interpolated into `prompt:`, and the action
+          # marshals every input into ONE environment variable, `ALL_INPUTS`,
+          # before `execve`ing bash. Linux refuses a single env string over
+          # MAX_ARG_STRLEN — 32 pages, 131,072 bytes — with
+          #
+          #   An error occurred trying to start process '/usr/bin/bash' …
+          #   Argument list too long
+          #
+          # which names no variable, no step and no size. Run 41879146916 on
+          # PR #1753, 2026-11-04: `ALL_INPUTS` 161,683 bytes, step dead, review
+          # never ran, post-step `NO_REVIEW_POSTED`. The 256 kB cap never
+          # fired, because 161,683 is under it. AC-6 now asserts the real one.
+          #
+          # Three quarters rather than the whole limit because the variable
+          # also carries the prompt literal and every other input, and
+          # JSON-escaping a diff adds about a byte per line.
+          #
+          # The 2026-10-28 reading still stands, and the patch-series fix in
+          # the step below is what preserves it: that reading measured the
+          # API's combined diff while the step gathered a per-commit series
+          # four times the size on PR #1753. The two numbers were never of the
+          # same thing. Against the combined diff the reading measured, 96 kB
+          # cuts 3 of those 49 — the same 3 the old 100,000 cap cut, and the
+          # long-tail cost named below is the price of a reviewer that starts.
           #
           # THE READING, taken 2026-10-28 over the 49 pull requests numbered
           # #1573..#1635 that still resolve, measuring each one's own diff in
@@ -335,14 +362,23 @@ jobs:
           # and the cases survive this change by construction, because they
           # size their fixtures off this value rather than off a literal.
           #
-          # The ceiling on any future raise is GITHUB_OUTPUT's 1 MB, which is
-          # shared with every other output this job writes. AC-5 asserts it.
-          MAX_BYTES: "262144"
+          # TWO ceilings bound any future raise, and the tighter one is the
+          # one that killed a run: MAX_ARG_STRLEN's 131,072 bytes per single
+          # environment string (AC-6), and GITHUB_OUTPUT's 1 MB shared across
+          # every output this job writes (AC-5). AC-5 alone was satisfied
+          # throughout the failure above, so do not read it as sufficient.
+          MAX_BYTES: "98304"
         run: |
           set -euo pipefail
           # Passed through env:, never interpolated into the script body —
           # the argument issue-audit.yml's header makes, applied here.
-          gh pr diff "$PR" --repo "$REPO" --patch > /tmp/pr.diff
+          # NO patch-series flag. `git format-patch` output is one patch per
+          # COMMIT, each with its own header, so the subject grows with the
+          # ROUND COUNT rather than with the change. Measured on PR #1753 at
+          # round 8: 155,370 bytes with it, 37,160 without, same change. The
+          # pull requests that have needed the most review were the ones whose
+          # reviewer could not start. AC-7.
+          gh pr diff "$PR" --repo "$REPO" > /tmp/pr.diff
           full=$(wc -c < /tmp/pr.diff | tr -d ' ')
           if [ "$full" -gt "$MAX_BYTES" ]; then
             head -c "$MAX_BYTES" /tmp/pr.diff > /tmp/pr.diff.cut
@@ -384,7 +420,26 @@ jobs:
           # afterwards — including one that posted nothing, which is the state
           # #732 is about. A cumulative count makes the second run of any
           # reviewed pull request unfalsifiable.
-          echo "reviews_before=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq 'length' 2>/dev/null || echo unknown)" >> "$GITHUB_OUTPUT"
+          # `--paginate` IS LOAD-BEARING. Without it `gh api` returns the first
+          # page, 30 items, and this count is one half of the subtraction the
+          # post-step turns into NO_REVIEW_POSTED. At 30 reviews both halves
+          # saturate, the difference is 0 forever, and a required check fails
+          # on every run of that pull request whatever the reviewer did — on
+          # exactly the pull requests that have been reviewed the most, with
+          # no later run able to clear it. AC-8.
+          #
+          # Counted by EMITTING AN ID PER ITEM and counting lines, not by
+          # `--jq 'length'`: with `--paginate` the jq program runs once per
+          # page, so `length` prints one number per page and the caller reads
+          # whichever it happens to parse. A sum would work and this does not
+          # need one.
+          #
+          # The `|| unknown` is kept. Under `pipefail` a failed `gh` fails the
+          # whole substitution, and an absent reading is UNMEASURED rather
+          # than zero — zero here is indistinguishable from a real count of
+          # none, which is the state this check exists to report.
+          before=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq '.[].id' 2>/dev/null | wc -l | tr -d ' ') || before=unknown
+          echo "reviews_before=$before" >> "$GITHUB_OUTPUT"
 
       # Workload Identity Federation, and NO service-account key (#677, AC-15).
       #
@@ -569,7 +624,10 @@ jobs:
           REVIEWS_BEFORE: ${{ steps.subject.outputs.reviews_before }}
         run: |
           set -uo pipefail
-          after=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq 'length' 2>/dev/null || echo unknown)
+          # `--paginate`, and counted the same way as `reviews_before` — these
+          # are the two halves of one subtraction, and a saturated operand on
+          # either side makes the difference wrong. See that step. AC-8.
+          after=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq '.[].id' 2>/dev/null | wc -l | tr -d ' ') || after=unknown
           bun scripts/read-review-execution.ts \
             --execution-file "$EXECUTION_FILE" \
             --reviews-before "$REVIEWS_BEFORE" \
