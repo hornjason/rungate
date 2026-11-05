@@ -376,6 +376,48 @@ describe("the walk-through cleans up after itself", () => {
 
   // The run must be reachable ONLY by hand. A schedule is the thing #1744 was
   // filed to remove, and this one creates and deletes real issues.
+  // ## Probe the credential before creating three things it may not remove
+  //
+  // Automated security review of the pushed commit, finding 2: the driver
+  // was fail-open on a precondition it could cheaply have checked. "If the
+  // widening has not happened the first act 404s" is true for issue
+  // CREATION and says nothing about DELETION — the two need different
+  // scopes, and the bad case is precisely the one where create works and
+  // delete does not. That case strands three issues.
+  //
+  // **`permissions.admin` from `GET /repos/{repo}` is NOT the probe**, and
+  // reaching for it would be the wrong fix that goes green. That field
+  // reports the authenticated USER's role, and Jason is the owner, so a
+  // classic PAT carrying no `repo` scope at all still reads
+  // `admin: true` against a public repository while every write 404s. It
+  // would pass in exactly the state it exists to catch.
+  //
+  // So the probe is the act itself: create ONE throwaway and delete it. It
+  // exercises both scopes end to end, it leaves nothing behind when it
+  // succeeds, and when it fails it has stranded one issue instead of three.
+  test("SC-2643: the credential is probed by a real create-and-delete before anything else", () => {
+    // Comments stripped first. The prose in the driver explains WHY the
+    // permissions field is the wrong probe, and that explanation contains
+    // the very string this forbids — a needle that matches the warning
+    // against itself. Same shape as the markdown-emphasis miss on #1769:
+    // search the code, never the commentary about the code.
+    const code = src
+      .split("\n")
+      .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+    expect(
+      code,
+      "a capability probe must EXERCISE create and delete, not read a permissions field. " +
+        "`permissions.admin` reports the user's role and reads true for an owner's token " +
+        "that has no repo scope at all — it passes in the state it exists to catch.",
+    ).not.toMatch(/permissions\s*[?.]*\.admin/);
+    expect(
+      src,
+      "nothing calls a probe — the driver still creates three issues before discovering " +
+        "whether it can remove any of them",
+    ).toMatch(/probe/i);
+  });
+
   // ## The deletion credential must be one that CAN hold admin
   //
   // `ai-review` raised the admin finding twice, and the second time it was

@@ -295,6 +295,53 @@ async function main(): Promise<number> {
     return await f();
   };
 
+  // ## Probe the credential before creating three things it may not remove
+  //
+  // Automated security review of the pushed commit, finding 2. "If the
+  // widening has not happened, the first act 404s" is true of issue
+  // CREATION and silent about DELETION — they need different scopes, and
+  // the bad case is exactly the one where create works and delete does not.
+  // That case strands three issues on the tracker and lands them in the
+  // cancellation rate, which is the number the spec's Cancelled argument
+  // rests on.
+  //
+  // **The permissions field from `GET /repos/{repo}` is not the probe.** It
+  // reports the authenticated USER's role on the repository, and the
+  // owner's role is admin regardless of what the token is scoped for — so a
+  // classic PAT carrying no `repo` scope at all reads admin against a
+  // public repository while every write 404s. It would pass in precisely
+  // the state it exists to catch, which is the fifth shape in
+  // `.claude/rules/checks-must-be-able-to-fail.md`.
+  //
+  // The probe is therefore the act itself. It exercises both scopes end to
+  // end, leaves nothing behind when it succeeds, and costs one stranded
+  // issue instead of three when it does not.
+  try {
+    const probe = await createIssue(repoToken, repo, `walkthrough ${stamp} credential probe`);
+    try {
+      await deleteIssue(repoToken, probe.nodeId);
+    } catch (e) {
+      try {
+        await closeIssue(repoToken, repo, probe.number, "not_planned");
+      } catch {
+        /* the refusal below is the report either way */
+      }
+      console.log(
+        `::warning::UNMEASURED — the credential CREATED issue #${probe.number} but could not ` +
+          `DELETE it (${e}). Deleting an issue requires the repository ADMIN role: widen ` +
+          `RUNGATE_PROJECT_TOKEN to carry \`repo\` as well as \`project\`. Nothing further was ` +
+          `created. Issue #${probe.number} was closed as not_planned — delete it by hand.`,
+      );
+      return EXIT_REFUSED;
+    }
+  } catch (e) {
+    console.log(
+      `::warning::UNMEASURED — the credential could not create an issue (${e}). ` +
+        `Nothing was created, so nothing is stranded. This is not a board reading.`,
+    );
+    return EXIT_REFUSED;
+  }
+
   try {
     // Rows 1 and 2 — A blocks B, then A closes and B should become Ready.
     const a = await doing("create issue A (the blocker)", () =>
