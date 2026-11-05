@@ -185,6 +185,35 @@ describe("a lane count is only a reading against what should be in it", () => {
     ).toContain("DUPLICATE");
   });
 
+  // ## Round 2 security review — the spelling test came back as wording
+  //
+  // Removing the exclusion left a `startsWith("(")` choosing which sentence
+  // an unknown key gets. No row is suppressed by it any more, so this is
+  // misleading text rather than a data drop — but the commit that removed
+  // the exclusion claimed nothing was classified by spelling, and one line
+  // below it something was. A board lane genuinely named `"(parked)"` would
+  // be told its items "are in no lane", which is false.
+  //
+  // One honest sentence for every unknown key. Carrying the distinction
+  // properly means typed census fields rather than a leading parenthesis,
+  // and that is a change to `boardStatus()`, not to this decider.
+  //
+  // Asserted on CODE, not on commentary: the comments above and in the
+  // source both contain the forbidden string, and an unstripped search
+  // reddens against the correct fix.
+  test("SC-2670: nothing in the decider branches on a lane name's spelling", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "lib/board-lane-health.ts"), "utf-8");
+    const code = src
+      .split("\n")
+      .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+    expect(
+      code,
+      "a lane's spelling decided which explanation it got, so a board lane named " +
+        '"(parked)" would be told its items are in no lane',
+    ).not.toContain('startsWith("("');
+  });
+
   test("SC-2670: every lane the board uses appears in the report, in flow order", () => {
     const rs = laneHealth(census());
     expect(rs.map(r => r.lane)).toEqual([...LANES]);

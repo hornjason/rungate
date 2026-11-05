@@ -204,9 +204,16 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
       count: c.counts.get(lane) ?? 0,
       against: null,
       health: "UNMEASURED" as const,
-      why: lane.startsWith("(")
-        ? `these board items are in no lane — the reading above them is "${lane}" — so they belong to no row above`
-        : `this report does not know the lane "${lane}", so its items are unaccounted for above`,
+      // **One sentence for every unknown key, whatever it is spelled.** A
+      // first pass branched this on `startsWith("(")` to word the caller's
+      // own `"(no status)"` marker differently. No row was suppressed by
+      // it, so it was misleading text rather than a drop — but a board lane
+      // genuinely named `"(parked)"` would have been told its items are in
+      // no lane, which is false, and the commit that removed the exclusion
+      // claimed nothing was classified by spelling. Carrying that
+      // distinction honestly means typed census fields, which is a change
+      // to the caller and not to this decider. Round 2 security review.
+      why: `this report does not know the lane "${lane}", so its items are unaccounted for above`,
     })),
   ];
 }
