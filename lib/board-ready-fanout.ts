@@ -201,10 +201,28 @@ export function truncatedReadings(
  * Its `permission` field is one of `admin`, `write`, `read`, `none`, and an
  * unreadable response is `null` — which is UNMEASURED and refuses, because
  * a permission we could not read is not a permission we were granted.
+ *
+ * ## And the endpoint cannot answer about the owner
+ *
+ * `GITHUB_TOKEN` cannot read `collaborators/{actor}/permission` — it needs
+ * admin access — so on a run triggered by the repository owner the read comes
+ * back unreadable and `null` refuses the person who owns the board. Run
+ * `42080290624` is the record: the first execution of this lane that got as
+ * far as the decider, refusing `hornjason` on `hornjason/rungate`.
+ *
+ * The owner is trusted by identity rather than by a permission read, because
+ * the identity is a fact the run already holds and the permission is one it
+ * cannot obtain. An EMPTY actor never satisfies it: absent-and-absent are the
+ * same empty string, and `"" === ""` would hand a write to a run that
+ * identified nobody (BR-45).
  */
 export const WRITING_PERMISSIONS: readonly string[] = ["admin", "write", "maintain"];
 
-export function actorMayWrite(permission: string | null): boolean {
+export function actorMayWrite(
+  permission: string | null,
+  identity: { readonly actor: string; readonly owner: string },
+): boolean {
+  if (identity.actor !== "" && identity.actor === identity.owner) return true;
   if (permission === null) return false;
   return WRITING_PERMISSIONS.includes(permission);
 }
