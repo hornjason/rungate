@@ -49,10 +49,17 @@ on:
 # `permissions:` setting. The primary cleanup path would have failed on
 # every run, with a fallback quietly doing all the work.
 #
-# Jason's call, 2026-11-05: widen `RUNGATE_PROJECT_TOKEN` to carry `repo` as
-# well as `project`. As repository owner that credential holds admin, so it
-# can create, delete, open a pull request and merge — and it remains the
-# only credential that can read ProjectsV2 at all.
+# Jason's call, 2026-11-05, revised after an automated security review:
+# a DEDICATED credential, `RUNGATE_WALKTHROUGH_TOKEN`, carrying `repo` and
+# `project` and named by NO other workflow.
+#
+# The first answer was to widen the shared `RUNGATE_PROJECT_TOKEN`. The
+# review was right to refuse it: release.yml, ci.yml, board-ready.yml and
+# board-intake.yml all read that secret, so any scope this file needs
+# becomes a scope all five get — issue deletion and repository rewrite
+# handed to the release pipeline, to support a test that runs by hand about
+# monthly. `test/board-walkthrough.test.ts` asserts this file names the
+# shared secret nowhere, so the grant cannot creep back.
 #
 # IF THE WIDENING HAS NOT HAPPENED, THE FAILURE IS THE GOOD ONE: the first
 # act 404s, the abort verdict names it, and NOTHING IS CREATED — so there is
@@ -67,7 +74,7 @@ jobs:
   walk-every-lane:
     runs-on: "ubuntu-latest"
     steps:
-      # THE SECRET IS `RUNGATE_PROJECT_TOKEN`; THE ENV VAR IS
+      # THE SECRET IS `RUNGATE_WALKTHROUGH_TOKEN`; THE ENV VAR IS
       # `BOARD_PROJECT_TOKEN`. Two names on purpose — `readBoardCredential`
       # in `lib/board-ready-fanout.ts` reads the env var, and the repository
       # secret is the one that exists. Do not "tidy" either into the other:
@@ -112,8 +119,8 @@ jobs:
       - name: Walk every lane
         if: steps.gate.outputs.trusted == 'true'
         env:
-          BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
-          REPO_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_WALKTHROUGH_TOKEN }}
+          REPO_TOKEN: ${{ secrets.RUNGATE_WALKTHROUGH_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           WAIT: ${{ inputs.wait-seconds }}
           MERGE_WAIT: ${{ inputs.merge-wait-seconds }}

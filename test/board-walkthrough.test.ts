@@ -436,16 +436,36 @@ describe("the walk-through cleans up after itself", () => {
   // first act 404s, the abort verdict names it, and **nothing is created**,
   // so there is nothing to strand. That is strictly better than creating
   // three issues with a token that cannot remove them.
-  test("SC-2643: the repository acts do not run on a token that cannot delete", () => {
+  test("SC-2643: this workflow uses its own credential, not one four other workflows read", () => {
     const yml = readFileSync(join(ROOT, ".github/workflows/board-walkthrough.yml"), "utf-8");
-    const repoTokenLine = yml.split("\n").find(l => l.includes("REPO_TOKEN:")) ?? "";
+    const live = yml.split("\n").filter(l => !/^\s*#/.test(l));
+    const repoTokenLine = live.find(l => l.includes("REPO_TOKEN:")) ?? "";
     expect(repoTokenLine, "REPO_TOKEN is not set at all — the driver refuses without it").not.toBe("");
     expect(
       repoTokenLine,
       "`deleteIssue` requires repository ADMIN and GITHUB_TOKEN can never hold it at any " +
         "permissions setting, so wiring it here makes the primary cleanup path fail on every " +
-        "single run and leaves the catch doing the work. Use the PAT, which can.",
+        "single run and leaves the catch doing the work.",
     ).not.toContain("secrets.GITHUB_TOKEN");
+
+    // The blast-radius half, and the reason it is asserted rather than
+    // trusted: `RUNGATE_PROJECT_TOKEN` is read by release.yml, ci.yml,
+    // board-ready.yml and board-intake.yml as well as this file. Widening
+    // it to carry `repo` would hand issue-deletion and repository-rewrite
+    // power to all five, to support a test that runs by hand about monthly.
+    // Flagged by automated security review of the pushed commit; Jason's
+    // call, 2026-11-05, is a dedicated credential.
+    //
+    // Asserted over EVERY secret this workflow names, not just REPO_TOKEN,
+    // because moving the shared secret onto BOARD_PROJECT_TOKEN alone would
+    // leave this file reading it and the grant would creep back.
+    const shared = live.filter(l => l.includes("secrets.RUNGATE_PROJECT_TOKEN"));
+    expect(
+      shared,
+      "this workflow must not reference the SHARED board token at all. Four other " +
+        "workflows read it, so any scope this file needs becomes a scope all five get. " +
+        "Use a credential only this workflow names.",
+    ).toEqual([]);
   });
 
   test("SC-2643: the walk-through is dispatch-only, never scheduled", () => {
