@@ -1,0 +1,245 @@
+# Not managed by rungate — the scaffold owns ci.yml, gates.yml and the two
+# ai-review files, and regenerates them by job name. This one is caller-owned.
+#
+# EVERY LANE AN ISSUE'S CARD CAN REACH, WRITTEN BY ONE DECIDER.
+#
+# `specs/BOARD-FLOW-SPEC.md` settled each lane's entry and exit as a named
+# GitHub event, on the rule that a condition no event can decide is a
+# condition a person applies by hand. This workflow is the other half of
+# that: `lib/board-flow.ts` answers "which lane does this event mean" and
+# `scripts/board-flow.ts` performs the write.
+#
+# **No schedule.** A cron is the thing this exists to remove; see #1744.
+#
+# ## TWO BUILT-IN PROJECT WORKFLOWS ARE SWITCHED OFF, AND THIS FILE IS WHY
+#
+# GitHub's project settings page carries built-in automations, and two of
+# them wrote lanes this workflow now owns:
+#
+#   - **Item closed** — moved any closed item to Done, with no regard for
+#     `state_reason`. That is the whole of the Cancelled lane's problem: 23
+#     issues left the system through an exit nothing counted, every one of
+#     them reading as delivered.
+#   - **Pull request linked to issue** — moved the issue to In progress when
+#     a PR linked it, which is why the walk-through's row 4 landed in In
+#     progress where it expected In review.
+#
+# Both were turned OFF in the project's settings on 2026-11-05. **That is
+# not visible from inside this repository** — no API reads a project's
+# built-in workflow state and no test here can assert it — so the only
+# record is this comment and the matching one in `lib/board-flow.ts`.
+#
+# If either is switched back on, that transition has TWO writers racing for
+# one column: behaviourally one guard, with nothing able to say which half
+# is live (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth
+# shape). The symptom is a card that flickers or settles on the wrong lane
+# intermittently, which is the hardest version of this to diagnose.
+#
+# **Pull request merged** is still ON, and deliberately: it moves the PULL
+# REQUEST's own card to Done, which nothing here writes.
+#
+# ## THIS WORKFLOW WRITES ISSUE CARDS ONLY
+#
+# Two of the triggers below are pull-request events and they still move the
+# card of the ISSUE the pull request closes — the spec's In review entry is
+# "a linked PR is not a draft", and the walk-through's row 4 expects issue B
+# in In review after a PR saying `Fixes #B`.
+#
+# The PULL REQUEST's own card belongs to `board-intake.yml`, which moves it
+# to In review on `opened`/`ready_for_review`. Same lane name, different
+# item, so these are not two deciders — nothing here ever writes a PR's card
+# and nothing there ever writes an issue's. Do not merge the two files.
+#
+# ## WHAT THIS DELIBERATELY DOES NOT OWN
+#
+# **Ready.** `board-ready.yml` owns it, triggered by a blocker closing.
+# **Backlog on arrival.** The built-in "Item added to project" owns it.
+# A card reaching Backlog through this file is a card coming BACKWARDS.
+#
+# Every `uses:` is pinned to a commit SHA, as in `board-ready.yml`.
+name: Board — one decider writes every lane
+
+on:
+  issues:
+    types: [assigned, closed, reopened]
+  # `pull_request_target`, not `pull_request`, because this job needs a
+  # token that can write ProjectsV2 and `pull_request` cannot see secrets.
+  #
+  # The property that makes that safe is NOT the absence of a script — there
+  # is one — it is that no attacker-controlled value is ever executed. The
+  # checkout below takes the default ref (the BASE), never the pull
+  # request's head, so no contributor code runs in a job holding the PAT;
+  # and every value reaching a `run:` block arrives through `env:`, so a
+  # branch name or title carrying shell syntax stays data. If you ever need
+  # the head checked out, move this trigger back to `pull_request` first.
+  pull_request_target:
+    types: [opened, ready_for_review, closed]
+
+permissions:
+  contents: read
+
+jobs:
+  write-the-lane:
+    runs-on: "ubuntu-latest"
+    steps:
+      # WHICH EVENT IS THIS, IN THE DECIDER'S OWN VOCABULARY.
+      #
+      # Resolved in one step so there is a single place the payload is read,
+      # and resolved to the EMPTY STRING for events that mean no transition.
+      # The two that do:
+      #
+      #   - a DRAFT pull request opened. A draft in In review says somebody
+      #     is waiting on a reader when nobody is.
+      #   - a pull request that closed because it MERGED. The issue it closes
+      #     fires its own `issues: closed` with `state_reason = completed`,
+      #     and that is the event that writes Done. Handling the merge here
+      #     too would be two writers for one transition.
+      #
+      # Everything downstream is gated on a non-empty kind, so "no
+      # transition" costs a checkout that never happens rather than a run
+      # that writes something nobody decided.
+      - id: kind
+        name: Which event is this?
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          set -euo pipefail
+          kind=""
+          if [ "$EVENT" = "issues" ]; then
+            case "$ACTION" in
+              assigned) kind="issue_assigned" ;;
+              closed)   kind="issue_closed" ;;
+              reopened) kind="issue_reopened" ;;
+            esac
+          else
+            case "$ACTION" in
+              opened|ready_for_review)
+                if [ "$DRAFT" != "true" ]; then kind="pr_ready"; fi
+                ;;
+              closed)
+                if [ "$MERGED" != "true" ]; then kind="pr_closed_unmerged"; fi
+                ;;
+            esac
+          fi
+          if [ -z "$kind" ]; then
+            echo "::notice::${EVENT}/${ACTION} means no lane transition here. Nothing to do."
+          fi
+          echo "kind=${kind}" >> "$GITHUB_OUTPUT"
+
+      # THE TRUST GATE, BEFORE THE CHECKOUT.
+      #
+      # Every trigger above is reachable by an outside contributor — anyone
+      # may open an issue, close their own, or open a pull request — and the
+      # job below holds a ProjectsV2 PAT. `board-ready.yml` learned twice
+      # that this gate must be both correct and EARLY: its first version
+      # read the issue AUTHOR's association rather than the actor's, and its
+      # second ran after a checkout and a full dependency install.
+      #
+      # `gh` is preinstalled, so this needs neither.
+      #
+      # NOT A SECOND DECIDER. `WRITING_PERMISSIONS` in
+      # `lib/board-ready-fanout.ts` is the decider and `scripts/board-flow.ts`
+      # consults it; this step cannot import it without the checkout it
+      # exists to prevent. The owner arm is first for the reason recorded in
+      # `board-ready.yml`: the permission endpoint answered UNMEASURED for
+      # the repository owner under this very credential, and a permission
+      # nobody could read is not a permission anybody was granted.
+      - id: gate
+        if: steps.kind.outputs.kind != ''
+        name: May the acting identity move the board?
+        env:
+          GH_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::UNMEASURED — RUNGATE_PROJECT_TOKEN is not set, so the acting identity could not be authorised and nothing was read. This run is UNMEASURED, not clean."
+            echo "trusted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$ACTOR" = "$OWNER" ]; then
+            echo "trusted=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null) || perm=""
+          case "$perm" in
+            admin|maintain|write)
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::warning::refusing to run: $ACTOR has permission \"${perm:-UNMEASURED}\" on $GITHUB_REPOSITORY, and this job holds a board-writing credential."
+              echo "trusted=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - if: steps.gate.outputs.trusted == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - if: steps.gate.outputs.trusted == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version-file: ".bun-version"
+      # `--ignore-scripts`: this job carries a PAT, and a postinstall script
+      # in any transitive dependency would run as the job.
+      # `--frozen-lockfile` so the tree that runs is the tree reviewed.
+      - if: steps.gate.outputs.trusted == 'true'
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # The credential is resolved INSIDE `run:`, never in an `if:`.
+      # `secrets` is not available in `if:` at all, and a step skipped by
+      # `if:` reports SKIPPED — which reads as satisfied. The script emits a
+      # `::warning::UNMEASURED` naming the variable and exits 2.
+      # See `.claude/rules/config-access.md`.
+      #
+      # No `continue-on-error`. It would buy a clean-looking run by
+      # swallowing every failure — a GraphQL error, a renamed column, a
+      # close whose reason nobody could read — which is the silent pass this
+      # whole file exists to refuse.
+      #
+      # STATE_REASON is passed through only for a close, raw and lowercase
+      # as the webhook spells it. `scripts/board-flow.ts` upper-cases it and
+      # does not trim; an absent or unrecognised reason is a REFUSAL, never
+      # a default to Done.
+      - name: Write the lane this event means
+        if: steps.gate.outputs.trusted == 'true'
+        env:
+          BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
+          KIND: ${{ steps.kind.outputs.kind }}
+          ISSUE: ${{ github.event.issue.number }}
+          PR: ${{ github.event.pull_request.number }}
+          STATE_REASON: ${{ github.event.issue.state_reason }}
+          ACTOR: ${{ github.actor }}
+          # The author of the body the closing references come from. For a
+          # pull request event the script authorises this identity TOO — the
+          # actor fired the event, the author chose which issues it names,
+          # and gating only on the first answers a permission question about
+          # one party using a target set written by another.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PROJECT_ID" ]; then
+            echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
+            exit 0
+          fi
+          # `--state-reason` is omitted entirely when the payload has none,
+          # rather than passed as "". Absent and empty both refuse, but only
+          # one of them is honest about what the payload carried.
+          reason_arg=()
+          if [ -n "$STATE_REASON" ]; then
+            reason_arg=(--state-reason "$STATE_REASON")
+          fi
+          target=(--issue "$ISSUE")
+          case "$KIND" in
+            pr_*) target=(--pr "$PR" --pr-author "$PR_AUTHOR") ;;
+          esac
+          bun scripts/board-flow.ts \
+            --repo "$GITHUB_REPOSITORY" \
+            --project "$PROJECT_ID" \
+            --actor "$ACTOR" \
+            --event "$KIND" \
+            "${target[@]}" \
+            "${reason_arg[@]}" \
+            --write

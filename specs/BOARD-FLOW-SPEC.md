@@ -352,3 +352,15 @@ second: flow efficiency is the one metric this spec must not promise.**
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
+- [ ] SC-2690: one decider maps every lane event, and no event maps to two lanes
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2691: a close whose reason cannot be read refuses instead of saying Done
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2692: every backwards move returns to Backlog under one rule
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
