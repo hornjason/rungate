@@ -146,16 +146,31 @@ async function deleteBranch(token: string, repo: string, branch: string) {
 }
 
 /**
- * The scratch file one run commits, named after that run.
+ * The one scratch file every run rewrites.
  *
- * **Per-run, because row 5 merges into the default branch.** A fixed path
- * makes this a one-shot instrument: the first successful walk-through leaves
- * the file on main for good, and the next run's create is a 422 on a file
- * that already exists. A stamped path also survives a run that died between
- * the merge and the cleanup below — the leftover is inert rather than a
- * blocker, which is the case a `sha`-retry does not cover.
+ * **One fixed path, rewritten every run.** Row 5 has to squash-merge into
+ * the DEFAULT branch — GitHub's "pull request merged" built-in fires nowhere
+ * else — so whatever the throwaway PR contains lands on main. This file is
+ * therefore permanent, by design, and there is exactly one of it.
+ *
+ * It used to be stamped per run and deleted from main afterwards. Running it
+ * settled that: `42113465630` got
+ *
+ *   409 DELETE …/contents/.github/walkthrough-scratch-2026-11-05T21-31-56-655Z.md
+ *   "Could not delete file: 2 of 2 required status checks are expected."
+ *
+ * `enforce_admins` is on and main requires `test` and `ai-review`, so a
+ * direct contents DELETE against main is refused for every token there can
+ * be. The cleanup could never run, which made the stamped path **one
+ * permanent file per run** — the outcome it was chosen to prevent.
+ *
+ * The 422 that argued against a fixed path is not a property of the path.
+ * It is a property of a create that omits the blob `sha`; `PUT /contents`
+ * WITH one updates in place. So this is strictly better than both halves of
+ * the old design: one file for all time, and the operation branch
+ * protection refuses is never attempted.
  */
-const scratchPath = (stamp: string) => `.github/walkthrough-scratch-${stamp}.md`;
+const SCRATCH_PATH = ".github/walkthrough-scratch.md";
 
 /**
  * A branch with one throwaway commit, created entirely over REST.
@@ -176,31 +191,28 @@ async function createBranchWithCommit(
     ref: `refs/heads/${branch}`,
     sha: head.object.sha,
   });
+  // **Read before writing, so a fixed path can be rewritten.** `PUT
+  // /contents` CREATES when no `sha` is given and 422s if the file exists;
+  // with the current blob's `sha` it UPDATES. Every run after the first
+  // finds the file already on main, so the create-only form would make this
+  // a one-shot instrument — and the failure would look like a board fault
+  // rather than a writing fault.
+  //
+  // An absent file is the FIRST run and is not an error, so the 404 is
+  // caught to mean "nothing to update" and nothing else. A failure that is
+  // not a 404 must not be read as absence.
+  let sha: string | undefined;
+  try {
+    const cur = await rest(token, "GET", `/repos/${repo}/contents/${path}?ref=${base}`);
+    sha = cur.sha;
+  } catch (e) {
+    if (!String(e).includes("404")) throw e;
+  }
   await rest(token, "PUT", `/repos/${repo}/contents/${path}`, {
     message: "chore: throwaway commit for the board walk-through",
-    content: Buffer.from(`Created by the board walk-through at ${new Date().toISOString()}.\n`).toString("base64"),
+    content: Buffer.from(`Rewritten by the board walk-through at ${new Date().toISOString()}.\n`).toString("base64"),
     branch,
-  });
-}
-
-/**
- * Remove the scratch file from the default branch after row 5 merged it there.
- *
- * Row 5 has to squash-merge into the DEFAULT branch, because GitHub's "pull
- * request merged" built-in fires nowhere else — so a successful walk-through
- * necessarily puts its scratch file on main. Deleting the branch does not
- * undo that; the squashed commit is already on main.
- *
- * This leaves two commits of noise per run on a `walkthrough-scratch-*` path
- * and no file. That is the honest cost of driving a real merge, and it is
- * cheaper than a repository that accrues one scratch file per run forever.
- */
-async function deleteScratchFromBase(token: string, repo: string, path: string, base: string) {
-  const cur = await rest(token, "GET", `/repos/${repo}/contents/${path}?ref=${base}`);
-  await rest(token, "DELETE", `/repos/${repo}/contents/${path}`, {
-    message: "chore: remove the board walk-through's throwaway commit",
-    sha: cur.sha,
-    branch: base,
+    ...(sha === undefined ? {} : { sha }),
   });
 }
 
@@ -271,7 +283,6 @@ async function main(): Promise<number> {
   }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const scratch = scratchPath(stamp);
   const made: Made[] = [];
   const readings: Reading[] = [];
   let branch: string | null = null;
@@ -396,7 +407,7 @@ async function main(): Promise<number> {
     // one.
     branch = `walkthrough/${stamp}`;
     await doing("create the throwaway branch and commit", () =>
-      createBranchWithCommit(repoToken, repo, branch!, "main", scratch),
+      createBranchWithCommit(repoToken, repo, branch!, "main", SCRATCH_PATH),
     );
     const pr = await doing("open the throwaway pull request", () =>
       rest(repoToken, "POST", `/repos/${repo}/pulls`, {
@@ -474,19 +485,13 @@ async function main(): Promise<number> {
         console.log(`::warning::could not close throwaway pull request #${prNumber}: ${e}`);
       }
     }
-    // Only after a MERGE is the scratch file on main. An unmerged run never
-    // put it there, and asking for it would 404 — which would read as a
-    // cleanup failure for a file that was correctly absent.
-    if (mergedPr) {
-      try {
-        await deleteScratchFromBase(repoToken, repo, scratch, "main");
-      } catch (e) {
-        console.log(
-          `::warning::the throwaway commit ${scratch} is still on main (${e}). ` +
-            `Delete it by hand — a later run will not be blocked by it, but it is litter.`,
-        );
-      }
-    }
+    // **No scratch cleanup, deliberately.** `SCRATCH_PATH` is one permanent
+    // file that every run rewrites in place, so there is nothing to collect
+    // — and the DELETE that used to be here could never have run anyway:
+    // main requires two status checks with `enforce_admins` on, so a
+    // contents DELETE against it returns 409 for every token that exists.
+    // Run `42113465630` measured exactly that. Keeping a call that cannot
+    // succeed only ends each run on a warning about litter it cannot clear.
     if (branch !== null) {
       try {
         await deleteBranch(repoToken, repo, branch);
