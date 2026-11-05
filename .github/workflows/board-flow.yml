@@ -224,22 +224,31 @@ jobs:
             echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
             exit 0
           fi
+          # **ONE array, appended to, and never empty.** The obvious shape
+          # here is a separate `reason_arg=()` expanded as
+          # `"${reason_arg[@]}"`, and under `set -u` that is an UNBOUND
+          # VARIABLE error on bash before 4.4 — measured on bash 3.2.57:
+          #
+          #   /bin/bash: line 9: reason_arg[@]: unbound variable
+          #
+          # `ubuntu-latest` ships bash 5.x, where it is fine, so this would
+          # most likely have worked. That is not a reason to keep it: the
+          # runner's bash version is not something this repository can read,
+          # the failure mode is a workflow that runs and writes nothing, and
+          # a silent lane is the defect this whole file exists to end. One
+          # array that always holds at least `--repo` costs nothing and
+          # depends on no version.
+          #
           # `--state-reason` is omitted entirely when the payload has none,
           # rather than passed as "". Absent and empty both refuse, but only
           # one of them is honest about what the payload carried.
-          reason_arg=()
-          if [ -n "$STATE_REASON" ]; then
-            reason_arg=(--state-reason "$STATE_REASON")
-          fi
-          target=(--issue "$ISSUE")
+          args=(--repo "$GITHUB_REPOSITORY" --project "$PROJECT_ID" --actor "$ACTOR" --event "$KIND")
           case "$KIND" in
-            pr_*) target=(--pr "$PR" --pr-author "$PR_AUTHOR") ;;
+            pr_*) args+=(--pr "$PR" --pr-author "$PR_AUTHOR") ;;
+            *)    args+=(--issue "$ISSUE") ;;
           esac
-          bun scripts/board-flow.ts \
-            --repo "$GITHUB_REPOSITORY" \
-            --project "$PROJECT_ID" \
-            --actor "$ACTOR" \
-            --event "$KIND" \
-            "${target[@]}" \
-            "${reason_arg[@]}" \
-            --write
+          if [ -n "$STATE_REASON" ]; then
+            args+=(--state-reason "$STATE_REASON")
+          fi
+          args+=(--write)
+          bun scripts/board-flow.ts "${args[@]}"

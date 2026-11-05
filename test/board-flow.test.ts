@@ -6,6 +6,7 @@
  * the write lives in `scripts/board-flow.ts` and is not a decision.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "child_process";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -236,5 +237,105 @@ describe("one decider owns every lane transition", () => {
       "reading the reference's repository and not comparing it is the same bug with more " +
         "bytes. The filter is what makes the read mean anything.",
     ).toContain("filter");
+  });
+
+  // ## The workflow's shell is EXECUTED here, not described
+  //
+  // A `run:` block is the one part of this change no TypeScript test
+  // reaches, and its failure mode is the worst available: the job runs, the
+  // shell aborts, the lane is never written, and nothing on the board says
+  // so. `.claude/rules/checks-must-be-able-to-fail.md` calls the written
+  // version of this the fixture that is described rather than executed.
+  //
+  // So the block is cut out of the YAML, the one line that would hit the
+  // network is replaced with `echo`, and it is RUN — on this machine's bash
+  // 3.2.57, which is stricter than `ubuntu-latest`'s bash 5. A block that
+  // survives the strict one survives both; the converse does not hold, and
+  // the runner's bash version is not readable from here.
+  //
+  // This caught a real one: `reason_arg=()` expanded as `"${reason_arg[@]}"`
+  // is `unbound variable` under `set -u` before bash 4.4.
+  // Cut to the invoking line and re-append it, rather than slicing to the
+  // end of the file. "it is the last thing in the document" is an anchor
+  // that stops being true the moment somebody adds a step, and would then
+  // feed trailing YAML to bash. This way a change to the invocation raises
+  // `AnchorNotFoundError` by name.
+  const INVOKE = 'bun scripts/board-flow.ts "${args[@]}"';
+  const runBlock = (): string => {
+    const yml = read(".github/workflows/board-flow.yml");
+    const body = structuralCut(yml, "          args=(--repo", { endAnchor: INVOKE });
+    const dedented = body
+      .split("\n")
+      .map(l => l.replace(/^ {10}/, ""))
+      .join("\n");
+    return `${dedented}${INVOKE.replace("bun scripts/board-flow.ts ", "echo ARGV ")}`;
+  };
+
+  const runWith = (env: Record<string, string>): string => {
+    const r = spawnSync("/bin/bash", ["-euo", "pipefail", "-c", runBlock()], {
+      env: { ...env, PATH: process.env.PATH ?? "" },
+      encoding: "utf-8",
+    });
+    expect(
+      r.status,
+      `the workflow's own shell aborted: ${r.stderr}\nA run: block that exits non-zero ` +
+        `writes no lane and leaves the board silently stale.`,
+    ).toBe(0);
+    return r.stdout.trim();
+  };
+
+  test("SC-2690: the workflow's shell builds the issue argv without a close reason", () => {
+    const out = runWith({
+      GITHUB_REPOSITORY: "o/n",
+      PROJECT_ID: "PVT_x",
+      ACTOR: "someone",
+      KIND: "issue_assigned",
+      ISSUE: "42",
+      PR: "",
+      PR_AUTHOR: "",
+      STATE_REASON: "",
+    });
+    expect(out).toBe(
+      "ARGV --repo o/n --project PVT_x --actor someone --event issue_assigned --issue 42 --write",
+    );
+  });
+
+  test("SC-2691: a close carries its reason through, and only when the payload had one", () => {
+    const base = {
+      GITHUB_REPOSITORY: "o/n",
+      PROJECT_ID: "PVT_x",
+      ACTOR: "someone",
+      KIND: "issue_closed",
+      ISSUE: "42",
+      PR: "",
+      PR_AUTHOR: "",
+    };
+    expect(runWith({ ...base, STATE_REASON: "not_planned" })).toContain(
+      "--state-reason not_planned",
+    );
+    expect(
+      runWith({ ...base, STATE_REASON: "" }),
+      "an empty payload value must not become `--state-reason ''`. Both refuse, but only " +
+        "omission is honest about what the webhook actually carried.",
+    ).not.toContain("--state-reason");
+  });
+
+  test("SC-2690: a pull request event carries both the number and the author", () => {
+    const out = runWith({
+      GITHUB_REPOSITORY: "o/n",
+      PROJECT_ID: "PVT_x",
+      ACTOR: "maintainer",
+      KIND: "pr_closed_unmerged",
+      ISSUE: "",
+      PR: "99",
+      PR_AUTHOR: "drive-by",
+      STATE_REASON: "",
+    });
+    expect(out).toContain("--pr 99 --pr-author drive-by");
+    expect(
+      out,
+      "a pull request event must not also pass --issue: the script reads one target source " +
+        "per event kind, and passing both hides which one it used.",
+    ).not.toContain("--issue");
   });
 });
