@@ -3,6 +3,8 @@
  * AC-4: Tests generators with mock ProjectScan data
  */
 import { test, expect, describe } from "bun:test";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { FRESHNESS_NOTICE, generateCodeMap } from "../lib/generators/code-map";
 import { mockProjectScan, type ProjectScan } from "../lib/generators/types";
 
@@ -192,5 +194,63 @@ describe("#1163: CODE-MAP carries no per-directory census", () => {
     // fixed, or it is reassurance rather than a disclaimer.
     expect(FRESHNESS_NOTICE).toContain("scanned-at-sha");
     expect(FRESHNESS_NOTICE).toContain("#1163");
+  });
+});
+
+/**
+ * The re-run instruction is for whoever reads the file, not for whoever ran
+ * the generator.
+ *
+ * Caught in review of #1740, twice in one round. `scripts/generate-code-map.ts`
+ * interpolated its own `process.argv[2]` into the header, so a regeneration
+ * run as `bun bin/rungate.ts generate-code-map /Users/jhorn/Projects/rg-wt-flows`
+ * committed that absolute path into a tracked document. The instruction is then
+ * wrong for every other checkout, and it publishes one contributor's directory
+ * layout in a file nobody hand-writes.
+ */
+describe("#1740: the code-map re-run instruction is portable", () => {
+  const script = readFileSync(join(import.meta.dir, "..", "scripts", "generate-code-map.ts"), "utf-8");
+
+  // Comments first. This file's own prose quotes the bad spelling, and a
+  // detector that reads a whole file reads its comments
+  // (`.claude/rules/self-referential-tests.md`).
+  const code = script
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^[ \t]*\/\/.*$/gm, "");
+
+  const reRunLines = code.split("\n").filter(l => l.includes("Re-run \\`bun generate-code-map.ts"));
+
+  test("the detector finds the line it is about to judge", () => {
+    // Anti-vacuity. Zero matches means the generator stopped spelling the
+    // instruction this way and the row below is passing against nothing —
+    // fix the pattern, do not delete the row. More than one means a second
+    // emitter appeared and both need the same treatment.
+    expect(
+      reRunLines.length,
+      "expected exactly one `Re-run `bun generate-code-map.ts …`` line in " +
+        "scripts/generate-code-map.ts. See the comment above this row.",
+    ).toBe(1);
+  });
+
+  test("the instruction interpolates nothing — a path from argv is one machine's", () => {
+    expect(
+      reRunLines[0],
+      "the re-run instruction must be a literal. `${projectPath}` is this run's " +
+        "argv, so it bakes the generating machine's directory into a committed " +
+        "document and the instruction is wrong everywhere else. Emit `.`.",
+    ).not.toContain("${");
+  });
+
+  test("the committed CODE-MAP.md carries no absolute path", () => {
+    // The artefact, not the generator. A fixed generator and a stale
+    // committed file are different facts, and the reviewer read the second.
+    const md = readFileSync(join(import.meta.dir, "..", "CODE-MAP.md"), "utf-8");
+    const leaks = md.split("\n").filter(l => /(^|[\s`'"(])\/(Users|home|root)\//.test(l));
+    expect(
+      leaks,
+      "CODE-MAP.md is generated and committed. An absolute path in it came " +
+        "from whoever last ran the generator. Regenerate after fixing the " +
+        "generator rather than hand-editing the line.",
+    ).toEqual([]);
   });
 });

@@ -263,7 +263,7 @@ generator: rungate/scripts/generate-code-map.ts
 
 # Code Map — ${pkg.name}
 
-Auto-generated architecture snapshot. Re-run \`bun generate-code-map.ts ${projectPath}\` to refresh.
+Auto-generated architecture snapshot. Re-run \`bun generate-code-map.ts .\` to refresh.
 Regenerate when src/ has commits since scanned-at-sha.
 
 ${FRESHNESS_NOTICE}`);
