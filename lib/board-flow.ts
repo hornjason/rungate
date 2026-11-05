@@ -91,6 +91,53 @@ export interface LaneDecision {
  */
 const ABANDONED = new Set(["NOT_PLANNED", "DUPLICATE"]);
 
+/**
+ * The lanes a pull-request event may not pull an issue out of.
+ *
+ * Done and Cancelled are terminal: the work either shipped or was decided
+ * against, and in both cases the clock has stopped. `specs/BOARD-FLOW-SPEC.md`
+ * puts the whole forecast on that — Done defines throughput, Cancelled
+ * protects Little's Law's second assumption — so a card leaving either one
+ * by accident is not a cosmetic error.
+ */
+const TERMINAL: readonly string[] = ["Done", "Cancelled"];
+
+/**
+ * May a PULL REQUEST event write this issue's card, given where it sits now?
+ *
+ * **Authorisation and the target set are answered by different parties**,
+ * which is the confused deputy. `.github/workflows/board-flow.yml` gates on
+ * the ACTOR: for `opened` and `ready_for_review` that is the pull request's
+ * author, so an outside contributor is refused outright. For `closed` it is
+ * whoever closed it — ordinarily a maintainer — while the closing references
+ * naming which issues to move still come from the contributor's body.
+ *
+ * So a drive-by pull request saying `Fixes #N` would pull #N out of Done the
+ * moment anybody with write access closed it. The refusal below is also
+ * right on the merits: work that shipped did not become unshipped because
+ * somebody else's branch was abandoned.
+ *
+ * ISSUE events are deliberately not subject to this. An issue reopening IS
+ * the legitimate way out of Done, it is the spec's own rule, and the actor
+ * who reopens is the actor the gate authorised.
+ *
+ * `null` — a card with no Status at all — is allowed through. It is not a
+ * terminal lane, and refusing it would make an unset column unreachable.
+ */
+export function prEventMayWrite(currentLane: string | null): { allowed: boolean; why: string } {
+  if (currentLane !== null && TERMINAL.includes(currentLane)) {
+    return {
+      allowed: false,
+      why:
+        `the card is in ${currentLane}, which is terminal. A pull request event may not move ` +
+        `it out: the closing references that name this issue are authored by the pull ` +
+        `request, while the permission check answered for whoever closed it. Reopen the ` +
+        `issue if the work is genuinely not finished.`,
+    };
+  }
+  return { allowed: true, why: `${currentLane ?? "(no status)"} is not a terminal lane` };
+}
+
 export function laneFor(e: LaneEvent): LaneDecision {
   switch (e.kind) {
     case "issue_assigned":

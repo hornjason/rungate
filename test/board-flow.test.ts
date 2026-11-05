@@ -8,7 +8,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { LANE_EVENTS, laneFor, type LaneEvent } from "../lib/board-flow";
+import { LANE_EVENTS, laneFor, prEventMayWrite, type LaneEvent } from "../lib/board-flow";
+import { structuralCut } from "../lib/source-slice";
 
 const read = (p: string) => readFileSync(join(import.meta.dir, "..", p), "utf-8");
 
@@ -136,5 +137,63 @@ describe("one decider owns every lane transition", () => {
         "If that is not written down next to the code, the next person turns it back on " +
         "and two writers race for the same column.",
     ).toContain("Item closed");
+  });
+
+  // ## A pull request's closing references are contributor-authored
+  //
+  // Both of these come from the security review of the first commit, and
+  // both are correctness bugs as well as security ones.
+  //
+  // The gate in the workflow authorises the ACTOR. For `opened` and
+  // `ready_for_review` the actor is the pull request's author, so an outside
+  // contributor is already refused. For `closed` the actor is whoever closed
+  // it — ordinarily a maintainer — while the closing references still come
+  // from the contributor's body. Authorisation and target set are then
+  // answered by different parties, which is the confused deputy exactly.
+  test("SC-2692: a pull request event cannot drag an issue out of a terminal lane", () => {
+    for (const lane of ["Done", "Cancelled"]) {
+      const r = prEventMayWrite(lane);
+      expect(
+        r.allowed,
+        `a drive-by pull request whose body says "Fixes #N" would otherwise pull #N out of ` +
+          `${lane} the moment any maintainer closed that pull request. It is also wrong on ` +
+          `the merits: work that shipped did not become unshipped because somebody else's ` +
+          `branch was abandoned.`,
+      ).toBe(false);
+      expect(r.why).toContain(lane);
+    }
+  });
+
+  // The anti-vacuity half. A guard that refuses EVERYTHING satisfies the row
+  // above and silently switches the whole pull-request half of this workflow
+  // off — In review would never be written again and nothing would say so.
+  test("SC-2692: the terminal guard still lets ordinary lanes through", () => {
+    for (const lane of ["Backlog", "Ready", "In progress", "In review", null]) {
+      expect(
+        prEventMayWrite(lane).allowed,
+        `refusing "${lane}" would turn the pull-request half of this workflow off entirely, ` +
+          `which reads exactly like the silent lane this spec exists to end.`,
+      ).toBe(true);
+    }
+  });
+
+  // A cross-repo `Fixes owner/other#42` is a reference to ANOTHER
+  // repository's issue 42, and issue numbers are per-repository. Taking the
+  // bare number and resolving it here moves OUR #42 — an unrelated card,
+  // picked by a number somebody else chose.
+  test("SC-2690: the writer filters closing references to this repository", () => {
+    const src = read("scripts/board-flow.ts");
+    const fn = structuralCut(src, "async function closingIssues", { balanced: "{" });
+    expect(
+      fn,
+      "`closingIssuesReferences` resolves across repositories, and issue numbers are " +
+        "per-repository. Without reading each reference's own repository, `Fixes " +
+        "other/repo#42` moves THIS repository's #42 — a card nobody named.",
+    ).toContain("repository{owner{login} name}");
+    expect(
+      fn,
+      "reading the reference's repository and not comparing it is the same bug with more " +
+        "bytes. The filter is what makes the read mean anything.",
+    ).toContain("filter");
   });
 });

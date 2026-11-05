@@ -18,7 +18,7 @@
  * look has not found nothing.
  */
 import { actorMayWrite, readBoardCredential } from "../lib/board-ready-fanout";
-import { LANE_EVENTS, laneFor, type LaneEvent } from "../lib/board-flow";
+import { LANE_EVENTS, laneFor, prEventMayWrite, type LaneEvent } from "../lib/board-flow";
 
 /**
  * Every refusal leaves through this one constant, so a mutant copy with it
@@ -72,13 +72,24 @@ async function actorPermission(token: string, repo: string, actor: string): Prom
 }
 
 /**
- * The issues a pull request will close, from its closing references.
+ * The issues IN THIS REPOSITORY that a pull request will close.
+ *
+ * **Issue numbers are per-repository, and a closing reference is not.**
+ * `Fixes other/repo#42` is a perfectly ordinary cross-repository reference
+ * and GitHub resolves it; taking the bare `42` out of it and looking it up
+ * here moves THIS repository's #42 — an unrelated card, chosen by a number
+ * somebody else picked. Caught by security review of the first commit, and
+ * it is a correctness bug before it is a security one.
+ *
+ * Each reference therefore carries its own repository and is compared.
+ * A dropped reference is LOGGED rather than silently skipped: "this pull
+ * request moved nothing" and "this pull request pointed somewhere else" are
+ * different facts and only one of them needs looking at.
  *
  * `null` means the read was truncated — more references than one page holds
- * — which is UNMEASURED rather than "these are all of them". Paged rather
- * than refused outright because the limit is per connection, and the product
- * of every `first:` in a document is checked against GitHub's 500,000 node
- * ceiling BEFORE anything executes (BR-46).
+ * — which is UNMEASURED rather than "these are all of them". The page sizes
+ * stay small because the product of every `first:` in a document is checked
+ * against GitHub's 500,000 node ceiling BEFORE anything executes (BR-46).
  */
 async function closingIssues(
   token: string,
@@ -89,13 +100,26 @@ async function closingIssues(
   const d = await gql(
     token,
     `query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){
-       closingIssuesReferences(first:50){pageInfo{hasNextPage} nodes{number}}}}}`,
+       closingIssuesReferences(first:50){pageInfo{hasNextPage}
+         nodes{number repository{owner{login} name}}}}}}`,
     { o: owner, n: name, p: pr },
   );
   const refs = d.repository?.pullRequest?.closingIssuesReferences;
   if (!refs) return [];
   if (refs.pageInfo.hasNextPage) return null;
-  return refs.nodes.map((n: { number: number }) => n.number);
+  const mine = refs.nodes.filter(
+    (n: any) => n?.repository?.owner?.login === owner && n?.repository?.name === name,
+  );
+  for (const n of refs.nodes) {
+    if (mine.includes(n)) continue;
+    console.log(
+      `#${pr} also closes ${n?.repository?.owner?.login}/${n?.repository?.name}#${n?.number}, ` +
+        `which is another repository's issue and another board's card. Not moved here — ` +
+        `issue numbers are per-repository, so acting on that number locally would move an ` +
+        `unrelated card.`,
+    );
+  }
+  return mine.map((n: { number: number }) => n.number);
 }
 
 async function main(): Promise<number> {
@@ -270,7 +294,10 @@ async function main(): Promise<number> {
     const d = await gql(
       token,
       `query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){
-         projectItems(first:20){pageInfo{hasNextPage} nodes{id project{id}}}}}}`,
+         projectItems(first:20){pageInfo{hasNextPage} nodes{id project{id}
+           fieldValues(first:50){pageInfo{hasNextPage}
+             nodes{... on ProjectV2ItemFieldSingleSelectValue{
+               name field{... on ProjectV2FieldCommon{name}}}}}}}}}}`,
       { o: owner, n: name, i: issue },
     );
     // `issue(number:)` resolves to null with no `errors` for a number that
@@ -300,6 +327,39 @@ async function main(): Promise<number> {
       // here is not this script's job.
       console.log(`#${issue} is not on this board, so there is no card to move. Skipped.`);
       continue;
+    }
+
+    // **Where the card sits NOW, before anything is written.** A pull
+    // request event may not pull an issue out of a terminal lane: the
+    // closing references naming this issue are authored by the pull
+    // request, while the permission check answered for whoever closed it.
+    // See `prEventMayWrite`.
+    //
+    // A truncated field-value page here is the same UNMEASURED as anywhere
+    // else — "Status was on page two" and "this card has no Status" produce
+    // the same `null`, and one of them must not be read as "not terminal".
+    const before = item.fieldValues;
+    const beforeLane =
+      before?.nodes?.find((v: any) => v?.field?.name === "Status")?.name ?? null;
+    if (beforeLane === null && before?.pageInfo?.hasNextPage) {
+      console.log(
+        `::warning::UNMEASURED — Status was not among #${issue}'s first 50 field values and ` +
+          `there are more beyond that page, so its current lane could not be read. Nothing ` +
+          `written for it: an unread lane is not a lane that is safe to move out of.`,
+      );
+      refused = true;
+      continue;
+    }
+    if (!event.startsWith("issue_")) {
+      const may = prEventMayWrite(beforeLane);
+      if (!may.allowed) {
+        // Not a refusal of the RUN. Declining to move a terminal card is the
+        // correct outcome, not a fault, and exiting non-zero here would make
+        // an ordinary maintainer closing an old pull request look like a
+        // broken workflow.
+        console.log(`#${issue} not moved — ${may.why}`);
+        continue;
+      }
     }
 
     if (!apply) {
