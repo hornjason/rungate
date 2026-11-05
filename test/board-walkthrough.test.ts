@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { structuralCut } from "../lib/source-slice";
 import {
   WALKTHROUGH_STEPS,
   stepVerdict,
@@ -276,28 +277,75 @@ describe("the walk-through cleans up after itself", () => {
   // exists. The walk-through would have worked exactly once and then failed
   // forever, with the failure looking like a board problem.
   //
-  // Two properties fix it and BOTH are needed. A per-run path means a
-  // leftover never blocks a later run — including a leftover from a run
-  // that crashed between merge and cleanup, which is the case a `sha`
-  // retry does not cover. Deleting it from main afterwards stops the repo
-  // accumulating one scratch file per run forever.
-  test("SC-2643: the scratch path is unique per run, so a leftover cannot block the next", () => {
+  // ## That design was answered by running it, 2026-11-05
+  //
+  // The reasoning above chose a per-run path plus a delete-from-main. Run
+  // `42113465630` — the first walk-through to get far enough to merge —
+  // shows the second half CANNOT WORK ON THIS REPOSITORY:
+  //
+  //   409 DELETE /repos/hornjason/rungate/contents/.github/walkthrough-
+  //   scratch-2026-11-05T21-31-56-655Z.md: "Could not delete file: 2 of 2
+  //   required status checks are expected."
+  //
+  // `enforce_admins` is on and main requires `test` and `ai-review`, so a
+  // direct contents DELETE against main is refused no matter who holds the
+  // token. The cleanup was never going to run, which means the per-run path
+  // was not "a stamped file that gets removed" — it was **one permanent
+  // file per run, forever**, the exact outcome it was chosen to avoid. One
+  // is stranded on main right now and this PR removes it.
+  //
+  // The 422 the old reasoning feared is not a property of a fixed path, it
+  // is a property of a create that omits the `sha`. `PUT /contents` with the
+  // existing blob's `sha` UPDATES the file. So a fixed path plus a
+  // read-then-update is strictly better than both halves of the old design:
+  // main carries exactly one scratch file for all time, every run rewrites
+  // it, and the operation branch protection refuses is not performed at all.
+  //
+  // A crash between merge and cleanup — the case the stamp was also meant to
+  // cover — stops existing, because there is no cleanup to crash before.
+  test("SC-2643: the scratch path is FIXED, so main never accrues a second one", () => {
     const put = /contents\/([^`"']*)/.exec(src);
     expect(put, "no contents write found — the throwaway commit is not being made").not.toBeNull();
     expect(
       put![1],
-      "a FIXED scratch path becomes permanent on main at the first successful merge, " +
-        "and every later run 422s creating a file that already exists. Interpolate the " +
-        "run stamp into the path.",
-    ).toContain("${");
+      "a per-run path strands one file on main FOREVER, because the delete that was " +
+        "supposed to collect it is refused by branch protection (409, run 42113465630). " +
+        "Use one fixed path and update it.",
+    ).not.toContain("${");
   });
 
-  test("SC-2643: the scratch file is deleted from the default branch after the merge", () => {
+  // Scoped to the writing function on purpose. A bare search for `sha:` was
+  // satisfied by the DELETE's `sha: cur.sha`, so it would have passed
+  // against the very source this was written to reject — vacuous against
+  // the only input that matters.
+  //
+  // Cut structurally rather than by regex over the call's object literal:
+  // the first attempt stopped at the `}` closing a `${...}` INSIDE the
+  // template string for the file content, so it captured a prefix that
+  // ended mid-expression and reported a true failure for a false reason.
+  test("SC-2643: the throwaway commit updates in place, passing the existing blob sha", () => {
+    const writer = structuralCut(src, "async function createBranchWithCommit", { balanced: "{" });
     expect(
-      src,
-      "row 5 merges into main, so the scratch file lands on main. Without a DELETE the " +
-        "repository accumulates one per walk-through run, permanently.",
-    ).toMatch(/"DELETE",\s*`\/repos\/\$\{repo\}\/contents\//);
+      writer,
+      "a fixed path only works if the write can UPDATE. `PUT /contents` without a `sha` " +
+        "is a 422 on a file that already exists, which would make the walk-through a " +
+        "one-shot instrument that then failed forever looking like a board fault.",
+    ).toContain("sha");
+    expect(
+      writer,
+      "the sha has to be READ from the base branch before the write — a sha variable that " +
+        "nothing fetches is a parameter nobody passes.",
+    ).toContain("contents/${path}?ref=");
+  });
+
+  test("SC-2643: nothing tries to DELETE from the default branch, which is refused", () => {
+    const deletesFromBase = /"DELETE",\s*`\/repos\/\$\{repo\}\/contents\//.test(src);
+    expect(
+      deletesFromBase,
+      "main requires 2 status checks with enforce_admins on, so a contents DELETE against " +
+        "it returns 409 for every token. Keeping the call means every run ends on a warning " +
+        "about litter it cannot collect — a known-futile path is not a cleanup.",
+    ).toBe(false);
   });
 
   // ## The board credential has no repository scope — measured, not inferred
