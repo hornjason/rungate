@@ -35,20 +35,33 @@ on:
         default: "900"
         type: string
 
-# THE REPOSITORY ACTS RUN ON `GITHUB_TOKEN`, NOT ON THE PAT. Measured
-# 2026-11-05, run 42092949455: the PAT returns `404 POST /repos/.../issues`.
-# `board-intake.yml` records it as minted `read:project` and later measured
-# carrying project WRITE — project scope is not repository scope, and the
-# walk-through is the first thing that ever asked it to write a repository.
+# ONE CREDENTIAL PERFORMS EVERY ACT, AND IT IS THE PAT.
 #
-# So the two credentials are each scoped for what they do: the PAT reads the
-# board, because `GITHUB_TOKEN` cannot read ProjectsV2 at any permission
-# level, and `GITHUB_TOKEN` creates and deletes the throwaway artefacts in
-# the repository it is already scoped to. Neither carries the other's power.
+# Measured 2026-11-05, run 42092949455: the PAT returned `404 POST
+# /repos/.../issues`. `board-intake.yml` records it as minted `read:project`
+# and later measured carrying project WRITE — project scope is not
+# repository scope, and the walk-through is the first thing that ever asked
+# it to write a repository.
+#
+# The obvious repair was to hand the repository acts to `GITHUB_TOKEN`. That
+# was wrong, and `ai-review` refused it twice: `deleteIssue` requires the
+# repository ADMIN role and `GITHUB_TOKEN` can never hold it at ANY
+# `permissions:` setting. The primary cleanup path would have failed on
+# every run, with a fallback quietly doing all the work.
+#
+# Jason's call, 2026-11-05: widen `RUNGATE_PROJECT_TOKEN` to carry `repo` as
+# well as `project`. As repository owner that credential holds admin, so it
+# can create, delete, open a pull request and merge — and it remains the
+# only credential that can read ProjectsV2 at all.
+#
+# IF THE WIDENING HAS NOT HAPPENED, THE FAILURE IS THE GOOD ONE: the first
+# act 404s, the abort verdict names it, and NOTHING IS CREATED — so there is
+# nothing to strand. Creating three issues with a token that cannot remove
+# them is the worse outcome, and it is the one this avoids.
+#
+# `GITHUB_TOKEN` therefore needs nothing beyond the checkout.
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
 
 jobs:
   walk-every-lane:
@@ -100,7 +113,7 @@ jobs:
         if: steps.gate.outputs.trusted == 'true'
         env:
           BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
-          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           WAIT: ${{ inputs.wait-seconds }}
           MERGE_WAIT: ${{ inputs.merge-wait-seconds }}

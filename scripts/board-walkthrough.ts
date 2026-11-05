@@ -443,19 +443,20 @@ async function main(): Promise<number> {
         console.log(`::warning::could not delete throwaway branch ${branch}: ${e}`);
       }
     }
-    // **`deleteIssue` needs repository ADMIN, and `GITHUB_TOKEN` can never
-    // hold it** — the ceiling is `write`, at any `permissions:` setting.
-    // Blocking `ai-review` finding on PR #1772: moving the repository acts
-    // onto `GITHUB_TOKEN` fixed issue CREATION and broke issue DELETION, so
-    // every run would strand three throwaway issues on the tracker.
+    // **`deleteIssue` needs the repository ADMIN role.** Raised twice by
+    // `ai-review` on PR #1772, and the second time about the fix rather than
+    // the bug: handing this to `GITHUB_TOKEN` made the PRIMARY path fail
+    // deterministically on every run, with the fallback doing all the work.
+    // A known-futile call is not an attempt.
     //
-    // Closing as `not_planned` is damage control, not a fix. An OPEN
-    // throwaway sits in the pickable set and someone picks it up; a closed
-    // one is merely litter. But it is litter that lands in the cancellation
-    // rate, which is the number the spec's whole Cancelled argument rests
-    // on — so the warning says what is actually required rather than
-    // leaving the next reader to infer "admin" from a 403 that will not say
-    // so.
+    // `repoToken` is the PAT, which as the repository owner's credential can
+    // hold admin. The fallback below is for the case where it does not yet —
+    // and it is damage control, not a fix. An OPEN throwaway sits in the
+    // pickable set and someone picks it up; a closed one is merely litter.
+    // But it is litter that lands in the cancellation rate, which is the
+    // number the spec's whole Cancelled argument rests on, so the warning
+    // says what is actually required rather than leaving the next reader to
+    // infer "admin" from a 403 that will not say so.
     for (const m of made) {
       try {
         await deleteIssue(repoToken, m.nodeId);
@@ -468,8 +469,8 @@ async function main(): Promise<number> {
         console.log(
           `::warning::could not DELETE throwaway issue #${m.number} (${e}). Closed it as ` +
             `not_planned instead; delete it by hand. GitHub's deleteIssue mutation requires ` +
-            `the repository ADMIN role, which GITHUB_TOKEN cannot be granted at any ` +
-            `permissions level — a self-cleaning walk-through needs an admin-capable PAT.`,
+            `the repository ADMIN role: widen RUNGATE_PROJECT_TOKEN to carry \`repo\` as well ` +
+            `as \`project\`. GITHUB_TOKEN is not an alternative — it can never hold admin.`,
         );
       }
     }

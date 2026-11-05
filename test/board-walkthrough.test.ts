@@ -376,6 +376,36 @@ describe("the walk-through cleans up after itself", () => {
 
   // The run must be reachable ONLY by hand. A schedule is the thing #1744 was
   // filed to remove, and this one creates and deletes real issues.
+  // ## The deletion credential must be one that CAN hold admin
+  //
+  // `ai-review` raised the admin finding twice, and the second time it was
+  // right about something the first fix dodged: a fallback does not excuse a
+  // primary path that fails **deterministically**. Calling `deleteIssue`
+  // with `GITHUB_TOKEN` is not a cleanup attempt, it is a known-futile call
+  // whose failure handler is doing all the work.
+  //
+  // Jason's call, 2026-11-05: widen `RUNGATE_PROJECT_TOKEN` to carry `repo`
+  // as well as `project`. As the repository owner that credential then holds
+  // admin, so it can create, delete, open a pull request and merge — and it
+  // is also the only credential that can read ProjectsV2. One token, every
+  // act, each one actually permitted.
+  //
+  // The failure mode if the widening has not happened yet is GOOD: the very
+  // first act 404s, the abort verdict names it, and **nothing is created**,
+  // so there is nothing to strand. That is strictly better than creating
+  // three issues with a token that cannot remove them.
+  test("SC-2643: the repository acts do not run on a token that cannot delete", () => {
+    const yml = readFileSync(join(ROOT, ".github/workflows/board-walkthrough.yml"), "utf-8");
+    const repoTokenLine = yml.split("\n").find(l => l.includes("REPO_TOKEN:")) ?? "";
+    expect(repoTokenLine, "REPO_TOKEN is not set at all — the driver refuses without it").not.toBe("");
+    expect(
+      repoTokenLine,
+      "`deleteIssue` requires repository ADMIN and GITHUB_TOKEN can never hold it at any " +
+        "permissions setting, so wiring it here makes the primary cleanup path fail on every " +
+        "single run and leaves the catch doing the work. Use the PAT, which can.",
+    ).not.toContain("secrets.GITHUB_TOKEN");
+  });
+
   test("SC-2643: the walk-through is dispatch-only, never scheduled", () => {
     const yml = readFileSync(join(ROOT, ".github/workflows/board-walkthrough.yml"), "utf-8");
     const live = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
