@@ -86,14 +86,43 @@ This table is that answer, and it is the part of the spec the rest is
 derived from. **The last column is why each lane is testable at all**: a
 lane with no stated cost of being wrong cannot be given a target.
 
+**Every entry and exit below names a GitHub event.** That is a hard
+requirement, not a style: a condition no event can decide is a condition a
+person has to apply by hand, and a lane maintained by hand is a lane that
+drifts the moment nobody is looking. Jason, 2026-11-05: *"no handcrafting…
+we should be able to move something all the way through correctly."*
+
 | Lane | The question only it answers | May enter when | Leaves when | Who writes it | What it costs when wrong |
 |---|---|---|---|---|---|
-| **Backlog** | What might we do? | anything filed | it is committed to, or cancelled | GitHub native (on) | nothing directly — it is the option pool, and options are discardable |
-| **Ready** | What should be picked up **next**, and in what order? | zero open blockers **and** a free slot in the queue | a worker pulls it | automation proposes, the queue limit decides | **the lane we actually have.** 6 named, 34 eligible: the ordering decision does not disappear, it RELOCATES — each puller exhausts Ready, falls back to Backlog and applies its own heuristic, so prioritisation happens 28 more times, inconsistently, inside agents, leaving no record anybody can review |
-| **In progress** | What is being worked on **right now**, and by whom? | a worker performs a starting act | the change is submitted for review | the worker's own first act | 1 shown against 9 claimed. Eight sessions are invisible to each other. And because this lane carries the start timestamp, cycle time is not approximate — it is **absent**; a blocked item left here also consumes a slot, so if a limit ever binds a phantom throttles real throughput |
-| **In review** | What is finished but not yet landed? | a PR exists for it | the PR merges or closes | GitHub native (on) | this lane is WIP, so an unbounded In review means **unbounded WIP however tight In progress is** — "finishing" into an unlimited queue defeats the limit. For agent work this is where the real constraint sits: coding got ten times faster, review did not |
-| **Done** | What did we actually deliver? | closed as `completed` | never | GitHub native (on) | if it ever admits `not_planned`, throughput is overstated and cycle-time percentiles are contaminated |
-| **Cancelled** | What did we decide **not** to do, and how often? | closed as `not_planned` or `duplicate` | never | does not exist today | 23 issues have left the system through an exit nothing counts. Little's Law's second assumption is violated, so no forecast from this board is defensible |
+| **Backlog** | What might we do? | `issues: [opened]`, or **anything moving backwards** (below) | it is promoted to Ready, or it closes | `board-intake.yml` | nothing directly — it is the option pool, and options are discardable |
+| **Ready** | What should be picked up **next**, and in what order? | zero open blockers **and** Ready is below its limit | `issues: [assigned]` | `board-ready.yml` | **the lane we actually have.** 6 named, 34 eligible: the ordering decision does not disappear, it RELOCATES — each puller exhausts Ready, falls back to Backlog and applies its own heuristic, so prioritisation happens 28 more times, inconsistently, inside agents, leaving no record anybody can review |
+| **In progress** | What is being worked on **right now**, and by whom? | `issues: [assigned]` — assignment **is** our starting act (below) | a linked PR becomes ready for review | board-flow workflow | 1 shown against 9 claimed. Eight sessions are invisible to each other. And because this lane carries the start timestamp, cycle time is not approximate — it is **absent**; a blocked item left here also consumes a slot, so if a limit ever binds a phantom throttles real throughput |
+| **In review** | What is finished but not yet landed? | a linked PR is **not a draft** — `pull_request: [opened, ready_for_review]` with `draft == false` | the PR merges or closes | board-flow workflow | this lane is WIP, so an unbounded In review means **unbounded WIP however tight In progress is** — "finishing" into an unlimited queue defeats the limit. For agent work this is where the real constraint sits: coding got ten times faster, review did not |
+| **Done** | What did we actually deliver? | `issues: [closed]` with `state_reason: completed` | `issues: [reopened]` sends it to Backlog | board-flow workflow | if it ever admits `not_planned`, throughput is overstated and cycle-time percentiles are contaminated |
+| **Cancelled** | What did we decide **not** to do, and how often? | `issues: [closed]` with `state_reason` of `not_planned` or `duplicate` | `issues: [reopened]` sends it to Backlog | board-flow workflow | 23 issues have left the system through an exit nothing counts. Little's Law's second assumption is violated, so no forecast from this board is defensible |
+
+### Anything moving backwards returns to Backlog, and the return is counted
+
+One rule, no special cases: a **reopened** issue, and an issue whose **PR
+closed without merging**, both go to Backlog.
+
+Jason's reasoning, 2026-11-05, and it is better than the rule it replaced:
+*"if something was closed and you're reopening it, doesn't it go all the way
+back to the backlog? Someone needs to make sure it's ready to be picked up
+before just sticking it in Ready, because we don't know if there's
+dependencies or any edges on it."* An item that went backwards has an
+unknown blocker graph, and Ready's entry condition is precisely a statement
+about that graph. Putting it straight back into Ready asserts something
+nobody re-checked.
+
+**This costs nothing to recover from, which is why one rule is enough.**
+Ready's writer already tests blockers on every pass, so an item dropped to
+Backlog is re-promoted automatically the moment it is genuinely eligible.
+Backlog is not a penalty box here; it is "re-run the eligibility check".
+
+The return is recorded rather than silent, because a board where work
+bounces twice and a board where it goes through cleanly must not read the
+same.
 
 ### Five of these six are mechanisms. One is a display.
 
@@ -199,24 +228,74 @@ Cancelled exit. All three depend on readings Increment 1 has not taken, and
 two of them are the designs the research just overturned. Not to be started
 before Increment 1's decision criteria fire.
 
-## The decisions that are genuinely ours
+## The decisions that were genuinely ours — all four settled 2026-11-05
 
-Practice is split or silent on these four. They are recorded as open rather
-than resolved, so that nobody later reads a choice as a finding.
+Practice was split or silent on these four, so each is recorded with the
+reasoning that closed it. **A choice is not a finding**, and the research
+behind each is named so nobody later reads one as the other.
 
-1. **Is Ready a commitment or an eligibility filter?** The two canonical
-   Kanban sources answer differently. The variable nobody decides for us is
-   whether Ready is size-limited. No industry number exists for the limit.
-2. **Which act moves a card to In progress?** Industry is consistent that it
-   is *not* assignment. Ours to choose: worktree creation, first commit,
-   draft PR, or an explicit claim. No source addresses this for agents.
-3. **Where does Cancelled live** — a sixth lane, or `state_reason` alone?
-   A lane is visible but the Done-on-close automation must then branch on
-   the reason; the field alone is clean but every reader must remember to
-   filter.
-4. **Does a limit bind, or only report?** If hitting it does not stop new
-   work starting, it is decoration. If it binds, we have chosen to leave
-   agents idle to protect review attention.
+**1. Which act moves a card to In progress? — assignment, and ONLY because
+of a convention this repository already enforces.**
+
+**The industry finding stands and is not being overturned: the trigger is
+not assignment.** No mainstream tool moves a card on assignment; Jira and
+Linear both wait for the worker's first physical act, and nothing
+published addresses the question for agents at all. A board that promotes
+on assignment *in general* is #1758's original design, and it is wrong.
+
+What makes our case different is narrow and checkable.
+`.claude/rules/parallel-sessions.md` requires a worker to claim the issue
+by assigning themselves and **then** write code — assignment is already
+our first physical act, not a statement about who owns something
+eventually. So we are not adopting the rejected trigger; we are observing
+that our start act happens to be spelled the same way.
+
+**This justification is load-bearing. If that rule is ever relaxed so that
+assignment can mean "yours eventually", this decision dies with it** and
+In progress needs a different trigger. The 1-shown-against-9-assigned gap
+is the board failing to honour a rule the repository has had all along.
+
+**2. Is Ready size-limited, and does the limit bind? — yes, and yes, and
+the number is derived rather than chosen.** No published number exists, and
+the one source that examined coding agents makes the operative point: *the
+number is not the policy, the policy is what happens once it is reached.*
+So the limit binds — a Ready cap that does not stop promotion is
+decoration.
+
+**A binding Ready cap does not idle anyone**, and an earlier draft of this
+spec said it would. That was wrong. A worker pulling an item frees a slot,
+replenishment promotes the next eligible item, and the queue refills. The
+only thing a cap can starve is a worker with nothing eligible anywhere,
+which is a different problem. What the cap actually costs is that
+prioritisation has to really happen, in one reviewable place, instead of
+being deferred into each puller's private heuristic.
+
+**The number comes from Little's Law against our own throughput**, because
+copying a figure nobody published would be a guess wearing a citation.
+Depth = completion rate × the longest we are willing to let a ranked item
+wait. Measured 2026-11-05: 237 issues completed in 14 days, ~17/day, so a
+half-day tolerance gives a depth of 8 or 9. It is recomputed from live
+throughput, which is what makes it survive a swarm — the cap rises with
+the rate instead of throttling it.
+
+**3. Where does Cancelled live? — a sixth lane on the board.** The field
+alone is cleaner to write and requires every reader to remember to filter,
+which is the failure mode this whole spec exists to remove. The cost is
+named rather than discovered later: **GitHub's built-in close handler must
+be turned off**, because it sends every closure to Done and cannot branch
+on the reason. We trade a native feature for a workflow we own.
+
+The column does not exist yet and is created **mechanically**, not by
+hand. `updateProjectV2Field` takes the full option list, and
+`ProjectV2SingleSelectFieldOptionInput` accepts an `id` — verified against
+the schema 2026-11-05. Passing the five existing options back **with their
+ids** plus a sixth preserves every option id and every item's value.
+Omitting the ids is what regenerates them and silently blanks the board.
+
+**4. Does a draft pull request put an item in In review? — no.** A draft is
+work in flight, so the item stays In progress and moves on
+`ready_for_review`. In review has to mean "finished, waiting on a
+reviewer", or it cannot measure the constraint it exists to measure.
 
 Not a decision: counting `not_planned` as delivered. That is a defect.
 
