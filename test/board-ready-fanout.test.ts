@@ -400,6 +400,101 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
   });
 
   /**
+   * BR-34 / BR-35 — the gate authorises the repository owner without needing a
+   * credential that can answer the permission endpoint.
+   *
+   * **Measured, not predicted.** Dispatch `42074926758` on 2026-11-05 is the
+   * first time this workflow was ever run past the secret-name repair in
+   * #1761, and it refused:
+   *
+   * > refusing to run: hornjason has permission "UNMEASURED" on
+   * > hornjason/rungate, and this job holds a board-writing credential.
+   *
+   * `GET /repos/{repo}/collaborators/{actor}/permission` returned nothing the
+   * gate could read, so `perm` was empty and the `case` fell to its refusing
+   * arm. **The refusal is correct** — a permission nobody could read is not a
+   * permission anybody was granted — and the control says the endpoint is not
+   * the problem: the same call, same actor, same repository, made with an
+   * ordinary credential answers `admin` immediately. What differs is the
+   * capability of the token this job holds, and that is not knowable from
+   * inside the repository.
+   *
+   * So the owner comparison is added as a FIRST arm rather than a replacement.
+   * `github.repository_owner` is set by GitHub, is not forgeable by a
+   * contributor, costs no API call and needs no scope — and on a user-owned
+   * repository it is the exact question the endpoint was being asked.
+   *
+   * **This is a pair, not a duplicate decider.** Each arm answers an input the
+   * other cannot: the comparison cannot authorise a collaborator who is not
+   * the owner, and the endpoint cannot authorise anybody when the credential
+   * cannot read it. Were either able to answer every input the other can, they
+   * would be the fourth shape in
+   * `.claude/rules/checks-must-be-able-to-fail.md` and one of them would be
+   * dead with nothing able to say which.
+   */
+  test("BR-34: the owner is authorised without reading the permission endpoint", () => {
+    // A DETECTOR THAT READS A WHOLE FILE READS ITS COMMENTS. The paragraph
+    // above this row's own fix will quote `github.repository_owner`, so the
+    // position has to be taken on code.
+    const code = yml
+      .split("\n")
+      .filter(l => !/^\s*#/.test(l))
+      .join("\n");
+
+    expect(
+      code,
+      "the gate step must take the repository owner through `env:`, not interpolate it " +
+        "into a `run:` line — BR-16 is the sibling of that rule",
+    ).toContain("${{ github.repository_owner }}");
+
+    // The comparison itself, in the gate's shell. Spelled against the env
+    // names so a rename cannot leave this row matching a stale string.
+    const gateAt = code.indexOf("id: gate");
+    expect(gateAt, "no step with `id: gate` — this row would pass vacuously").toBeGreaterThan(-1);
+    const ownerCheck = /\[\s*"\$ACTOR"\s*=\s*"\$OWNER"\s*\]/.test(code);
+    expect(
+      ownerCheck,
+      'the gate does not compare "$ACTOR" against "$OWNER". Dispatch 42074926758 refused a ' +
+        "run the owner triggered, because the only trust path needed a credential that could " +
+        "not answer. Add the comparison; do not widen the `case` arm and do not fail open.",
+    ).toBe(true);
+
+    // The owner arm must come BEFORE the endpoint read, or the run still pays
+    // for the call that cannot answer and still refuses on its empty result.
+    const ownerAt = code.search(/\[\s*"\$ACTOR"\s*=\s*"\$OWNER"\s*\]/);
+    const apiAt = code.indexOf("collaborators/$ACTOR/permission");
+    expect(apiAt, "the permission endpoint read is gone — BR-33 measures nothing now").toBeGreaterThan(-1);
+    expect(ownerAt, "the owner comparison runs after the endpoint read").toBeLessThan(apiAt);
+  });
+
+  /**
+   * The anti-vacuity control for BR-34, and it is the row that matters.
+   *
+   * BR-34 is three `indexOf` positions over a stripped string, and every one
+   * of them reads `-1` as cleanly as it reads a position. A gate step deleted
+   * outright, a `run:` block emptied, or a strip that took the code with the
+   * comments would each leave BR-34 asserting things about an empty document.
+   * This row refuses that reading first, so BR-34 cannot be green because
+   * there was nothing to look at.
+   */
+  test("BR-35: the gate step still has a body to take a position inside", () => {
+    const code = yml
+      .split("\n")
+      .filter(l => !/^\s*#/.test(l))
+      .join("\n");
+    const gate = /id: gate\n([\s\S]*?)\n      - /.exec(code)?.[1] ?? "";
+    expect(
+      gate.length,
+      "the gate step's body did not parse — BR-34's positions would all be -1 and read as a pass",
+    ).toBeGreaterThan(200);
+    expect(gate, "the gate no longer reads the credential at all").toContain("GH_TOKEN");
+    expect(gate, "the gate no longer writes its verdict").toContain("trusted=");
+    // Both verdicts reachable: a gate that can only say yes is not a gate.
+    expect(gate).toContain("trusted=true");
+    expect(gate).toContain("trusted=false");
+  });
+
+  /**
    * The gate is before the expensive steps, and it spells the same set.
    *
    * `issues: [closed]` on a PUBLIC repository is triggerable by anybody with
