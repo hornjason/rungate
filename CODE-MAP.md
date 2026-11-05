@@ -1,8 +1,8 @@
 ---
 doc-type: code-map
 status: generated
-updated: 2026-11-04
-scanned-at-sha: 65d25bf7
+updated: 2026-11-05
+scanned-at-sha: 29658529
 generator: rungate/scripts/generate-code-map.ts
 ---
 
