@@ -89,11 +89,41 @@ lane with no stated cost of being wrong cannot be given a target.
 | Lane | The question only it answers | May enter when | Leaves when | Who writes it | What it costs when wrong |
 |---|---|---|---|---|---|
 | **Backlog** | What might we do? | anything filed | it is committed to, or cancelled | GitHub native (on) | nothing directly — it is the option pool, and options are discardable |
-| **Ready** | What should be picked up **next**, and in what order? | zero open blockers **and** a free slot in the queue | a worker pulls it | automation proposes, the queue limit decides | **the lane we actually have.** 6 named, 34 eligible: a picker reads six items, cannot see the other 28, and either duplicates work or picks by scrolling Backlog — which is how #1415 duplicated #1409 |
-| **In progress** | What is being worked on **right now**, and by whom? | a worker performs a starting act | the change is submitted for review | the worker's own first act | 1 shown against 9 claimed. Eight sessions are invisible to each other, which is the condition that produces duplicated work and the hallucinated status readings this spec exists to end |
-| **In review** | What is finished but not yet landed? | a PR exists for it | the PR merges or closes | GitHub native (on) | work completes into an unbounded queue; review becomes the constraint and nothing reports it |
+| **Ready** | What should be picked up **next**, and in what order? | zero open blockers **and** a free slot in the queue | a worker pulls it | automation proposes, the queue limit decides | **the lane we actually have.** 6 named, 34 eligible: the ordering decision does not disappear, it RELOCATES — each puller exhausts Ready, falls back to Backlog and applies its own heuristic, so prioritisation happens 28 more times, inconsistently, inside agents, leaving no record anybody can review |
+| **In progress** | What is being worked on **right now**, and by whom? | a worker performs a starting act | the change is submitted for review | the worker's own first act | 1 shown against 9 claimed. Eight sessions are invisible to each other. And because this lane carries the start timestamp, cycle time is not approximate — it is **absent**; a blocked item left here also consumes a slot, so if a limit ever binds a phantom throttles real throughput |
+| **In review** | What is finished but not yet landed? | a PR exists for it | the PR merges or closes | GitHub native (on) | this lane is WIP, so an unbounded In review means **unbounded WIP however tight In progress is** — "finishing" into an unlimited queue defeats the limit. For agent work this is where the real constraint sits: coding got ten times faster, review did not |
 | **Done** | What did we actually deliver? | closed as `completed` | never | GitHub native (on) | if it ever admits `not_planned`, throughput is overstated and cycle-time percentiles are contaminated |
 | **Cancelled** | What did we decide **not** to do, and how often? | closed as `not_planned` or `duplicate` | never | does not exist today | 23 issues have left the system through an exit nothing counts. Little's Law's second assumption is violated, so no forecast from this board is defensible |
+
+### Five of these six are mechanisms. One is a display.
+
+This decides where tests go, so it is stated rather than left to taste.
+
+**Backlog is a display.** Nothing downstream depends on its size; an oversized
+one costs readability and nothing else. It needs almost no automation and no
+test. Its only real failure is keeping items that should have been cancelled,
+which is a Cancelled-lane problem wearing a Backlog costume.
+
+**The other five are load-bearing.** Ready gates what gets pulled and in what
+order. In progress consumes capacity against a limit *and* starts the
+measurement clock. In review is WIP and is where the constraint actually sits.
+Done defines throughput and stops the clock. Cancelled protects all of them
+and carries its own signal. Each of those five earns a test.
+
+### Ready is two things, and they fail differently
+
+Worth separating, because we pass one and fail the other, and a single
+number cannot tell them apart.
+
+| Ready as… | Its test | Our reading |
+|---|---|---|
+| a **buffer** against the next worker idling | Ready is never empty while eligible work exists | **probably fine.** 6 is a plausible buffer depth; starvation is not our problem |
+| the **commitment point** — these items, in this order | every item in Ready has a rank and a reason, and eligible-but-unranked is a reportable count | **total failure.** 28 items are ranked nowhere a puller can see |
+
+The second failure also means the number reports *when somebody last curated*,
+not what is available. That is the precise mechanism behind "the board lies":
+Ready = 6 is a true fact about our replenishment habit and a false fact about
+our work.
 
 **One rule binds the whole table.** A transition caused by a *downstream*
 slot opening is a pull; a transition caused by an *upstream* event finishing
@@ -201,9 +231,21 @@ per-column entry/exit policies; Vacanti on Little's Law instability
 cancelled work; ProKanban on cancellation rate (2026-06-10); Yeret on WIP
 limits with coding agents (2026-07-22) — *the number is not the policy, the
 policy is what happens once it is reached*; GitHub Projects built-in
-automation docs. Full report with per-source caveats, including which claims
-are vendor marketing and which figure was checked and discarded as
-worthless, is in the session transcript.
+automation docs. Full report with per-source caveats, including which figure
+was checked and discarded as worthless, is in the session transcript.
+
+**Two sourcing caveats, recorded rather than smoothed over.** The
+buffer-versus-commitment material leans on vendor blogs (Businessmap, Nave,
+Teamhood, Kanban Zone) more than is comfortable — all of them sell Kanban
+tooling. The concepts are consistent across them and with Anderson's
+published board components, but neither Anderson's book nor Vacanti's
+*Actionable Agile Metrics* was read directly for this; the Little's Law
+material is from Vacanti via a primary interview. And three questions came
+back genuinely unanswered by the literature: assignment semantics when the
+assignee is a **bot**, a formal data requirement for per-lane timestamps,
+and whether automatic promotion to Ready is a named anti-pattern — it is
+neither catalogued nor endorsed anywhere. **The practical consequence of the
+second: flow efficiency is the one metric this spec must not promise.**
 
 ## Success Criteria
 
