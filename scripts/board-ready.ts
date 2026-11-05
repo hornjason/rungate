@@ -154,17 +154,32 @@ async function main(): Promise<number> {
   // fifty issues is unlikely and is exactly the case where silently moving
   // the first fifty is worst: the lane looks correct and the tail is
   // invisible.
+  //
+  // **And then the page sizes made the query unsendable.** `100 × 100 × 100`
+  // is 1,000,000 possible nodes against GitHub's limit of 500,000, and the
+  // limit is computed from the `first:` values BEFORE anything executes — so
+  // this failed identically on an empty board and a full one. Run
+  // `42083551881` is the record, and it is the first run that ever got far
+  // enough to find out, because five earlier faults refused before this line.
+  //
+  // The smaller pages cost nothing, because every one of these connections
+  // reports its own truncation through `truncatedReadings` and the run
+  // refuses rather than silently reading a prefix. An issue sits on one or
+  // two projects, and a project item carries a handful of field values;
+  // 100 × 20 × 50 is 100,000 and leaves a 5× margin for a nested read
+  // somebody adds later. BR-46 asserts the product over EVERY query here,
+  // because a page size that cannot be sent is a population.
   const BLOCKING_QUERY = `query($o:String!,$n:String!,$i:Int!,$c:String){repository(owner:$o,name:$n){issue(number:$i){
        blocking(first:100,after:$c){
          pageInfo{hasNextPage endCursor}
          nodes{
            number state milestone{title} assignees{totalCount}
            issueDependenciesSummary{blockedBy}
-           projectItems(first:100){
+           projectItems(first:20){
              pageInfo{hasNextPage endCursor}
              nodes{
                id project{id}
-               fieldValues(first:100){
+               fieldValues(first:50){
                  pageInfo{hasNextPage endCursor}
                  nodes{... on ProjectV2ItemFieldSingleSelectValue{
                    name optionId field{... on ProjectV2FieldCommon{id name}}}}}}}}}}}}`;

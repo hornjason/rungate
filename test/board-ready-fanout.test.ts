@@ -256,7 +256,28 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
       .join("\n");
     const firsts = [...code.matchAll(/\bfirst:\s*(\d+)/g)].map(m => Number(m[1]));
     expect(firsts.length).toBeGreaterThanOrEqual(5);
-    for (const n of firsts) expect(n, `a first:${n} asks for less than a page`).toBe(100);
+    // **This used to require every `first:` to be exactly 100, and that rule
+    // is unsatisfiable.** GitHub multiplies the page sizes down a nesting
+    // chain and rejects the query above 500,000 possible nodes, so a
+    // three-deep chain of `first:100` could never be sent — run
+    // `42083551881` is the record. BR-19 and BR-46 cannot both hold with the
+    // equality in place, and the equality is the one that is wrong: it was a
+    // PROXY for the property this case is named after, which is the pageInfo
+    // pairing on the last line.
+    //
+    // What the proxy was really guarding is still guarded, in two pieces:
+    // the cursored top-level lists are asserted at 100 by name above, and a
+    // floor stops a nested page being shrunk to a token value to dodge the
+    // node limit instead of restructuring the query. A page below the floor
+    // means the query is wrong, not that the page should be smaller.
+    const FLOOR = 20;
+    const tooSmall = firsts.filter(n => n < FLOOR);
+    expect(
+      tooSmall,
+      `a first: below ${FLOOR} is not a page, it is a guess. If the node-limit ` +
+        "product (BR-46) cannot be met with real pages, split the query rather " +
+        "than shrinking a selection until it fits.",
+    ).toEqual([]);
     expect([...code.matchAll(/pageInfo\{hasNextPage/g)].length).toBe(firsts.length);
   });
 
@@ -744,6 +765,59 @@ describe("BR-34..BR-36: the Status field id comes from the project, not from the
       (code.match(/itemOf\.set\(/g) ?? []).length,
       "expected exactly one `itemOf.set(` in scripts/board-ready.ts — see the comment above.",
     ).toBe(1);
+  });
+
+  // ## The sixth fault, and the first the trust gate ever let us see
+  //
+  // Run `42083551881` on 2026-11-05T18:22:21Z, dispatched against main with
+  // BOTH halves of the trust gate repaired. It cleared the gate, reached the
+  // first board read, and GitHub refused the query itself:
+  //
+  //   MAX_NODE_LIMIT_EXCEEDED — "By the time this query traverses to the
+  //   fieldValues connection, it is requesting up to 1,000,000 possible
+  //   nodes which exceeds the maximum limit of 500,000."
+  //
+  // `blocking(first:100)` → `projectItems(first:100)` → `fieldValues(first:100)`
+  // is 100 × 100 × 100 exactly. GitHub multiplies the `first:` values down a
+  // nesting chain before it executes anything, so this query could never have
+  // run — not against a big board, not against an empty one. Five previous
+  // faults hid it, because none of them got this far.
+  //
+  // The product is computed over EVERY query in the file rather than the one
+  // that failed. A repair to the single known query is the fourth shape in
+  // `.claude/rules/checks-must-be-able-to-fail.md`: a wrong page size is a
+  // POPULATION, and the next nested read anybody adds re-makes this defect.
+  //
+  // The arithmetic deliberately OVER-estimates: it multiplies every `first:`
+  // in a query, where GitHub multiplies down a nesting chain and takes the
+  // worst branch. Sibling connections are therefore counted as if nested.
+  // That errs toward refusing a query GitHub would have accepted, which is
+  // the direction this file's refusals are allowed to be wrong in.
+  test("BR-46: no query can exceed GitHub's node limit before it is sent", () => {
+    const MAX_NODES = 500_000;
+    // Template literals in the script, which is how every query is spelled.
+    const queries = [...code.matchAll(/`query\([\s\S]*?`/g)].map(m => m[0]);
+    // Anti-vacuity first: an empty population multiplies to nothing and
+    // every assertion below reads clean.
+    expect(
+      queries.length,
+      "no GraphQL query was found in scripts/board-ready.ts — the census is " +
+        "measuring nothing, which is not the same as measuring zero violations",
+    ).toBeGreaterThanOrEqual(3);
+    const over = queries
+      .map(q => ({
+        product: [...q.matchAll(/first:\s*(\d+)/g)].reduce((n, m) => n * Number(m[1]), 1),
+        head: q.slice(0, 60).replace(/\s+/g, " "),
+      }))
+      .filter(q => q.product > MAX_NODES);
+    expect(
+      over,
+      `GitHub rejects a query whose nested page sizes multiply above ${MAX_NODES} ` +
+        "BEFORE executing it, so the query fails identically against an empty board " +
+        "and a full one. Run 42083551881 is the record. Lower a `first:` — every " +
+        "connection here reports its own truncation through `truncatedReadings`, " +
+        "so a smaller page is refused loudly rather than silently cut short.",
+    ).toEqual([]);
   });
 
   test("BR-35: membership is not gated on the item having a Status value", () => {
