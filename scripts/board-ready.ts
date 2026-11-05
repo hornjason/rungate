@@ -319,6 +319,20 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  // **Nothing to move, so nothing to resolve.** This block ran whenever
+  // `--write` was passed, so a correctly-idle run — every dependent already
+  // Ready, still blocked, or claimed — against a board whose "Ready" column
+  // had been renamed exited `EXIT_REFUSED` instead of 0. A no-op success
+  // reported as a failure is red CI for a scenario where nothing needed
+  // writing, and the `blocking.length === 0` case above already short-circuits
+  // for exactly this reason. Caught in review of #1747; BR-42. Same class as
+  // BS-38 in `scripts/board-status-sweep.ts`, found one round earlier in the
+  // other script.
+  if (moving.length === 0) {
+    console.log(`\nNothing to move. No issue changed.`);
+    return 0;
+  }
+
   // **One resolve, from the project, before the loop.** `ProjectV2.field` is
   // a by-name lookup that takes no cursor — introspected 2026-11-04 against
   // the live schema rather than read off this query — so it adds no `first:`

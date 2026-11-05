@@ -672,6 +672,39 @@ describe("BR-38..BR-39: every credentialed fetch reads its status before its bod
     ).toBe(2);
   });
 
+  test("BR-42: a --write run with nothing to move resolves no Status field", () => {
+    // The Status field resolution and its two `EXIT_REFUSED` branches ran
+    // whenever `--write` was passed, even with `moving.length === 0`. So a
+    // correctly-idle run — every dependent already Ready, still blocked, or
+    // claimed — against a board whose "Ready" column had been renamed exited
+    // 2 instead of 0: a no-op success reported as a failure, red CI for a
+    // scenario where nothing needed writing. The `blocking.length === 0` case
+    // above already short-circuits; this one did not. Caught in review of
+    // #1747.
+    //
+    // **Same shape as BS-38 on #1754**, found independently in the other
+    // script one round earlier: a `--write` path doing setup work it does not
+    // need and failing on it. Two files, one class.
+    //
+    // Source-ORDER, like BS-38 and for the same reason: `main()` needs a live
+    // endpoint, and a mock deep enough to reach the resolution would assert
+    // against its own fixture.
+    const guard = code.search(/if \(moving\.length === 0\)/);
+    const resolve = code.search(/field\(name:\s*"Status"\)/);
+    // Anti-vacuity, both halves — `-1 < anything` would satisfy the ordering
+    // for free if either side were renamed away.
+    expect(resolve, "the Status field must still be resolved somewhere").toBeGreaterThan(-1);
+    expect(
+      guard,
+      "a `--write` run must short-circuit when nothing is moving",
+    ).toBeGreaterThan(-1);
+    expect(
+      guard < resolve,
+      "the nothing-to-move guard must come BEFORE the Status field is resolved, " +
+        "or an idle run exits EXIT_REFUSED over a column it never needed to find",
+    ).toBe(true);
+  });
+
   test("BR-40: the detector finds every project-node read", () => {
     // Anti-vacuity for BR-41, and it counts CALL SITES: the definition is an
     // arrow assignment (`const itemsPage = (d: any) =>`), so it does not match
