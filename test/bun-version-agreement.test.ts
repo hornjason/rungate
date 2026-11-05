@@ -148,9 +148,12 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // `ai-review-unmeasured` joined in #1488, which runs the unmeasured
     // classifier through `bunx` after the review job ends; and `board-ready`
     // joined in #1744, which runs the fan-out that moves a freed issue to
-    // Ready when its blocker closes; and `board-walkthrough` joined with
+    // Ready when its blocker closes; `board-walkthrough` joined with
     // BOARD-FLOW-SPEC.md's Increment 1, which drives one throwaway issue
-    // through every lane on real events. That makes twelve.
+    // through every lane on real events; and `board-flow` joined with
+    // SC-2690..2692, which runs the one decider that writes In progress,
+    // In review, Done, Cancelled and the return to Backlog. That makes
+    // thirteen.
     //
     // The floor and the list are two different claims, deliberately:
     // the floor says the scan read SOMETHING, so no case below is satisfied
@@ -160,12 +163,13 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // meant to turn this red once.
     const steps = setupBunStepsUnder(WORKFLOW_DIR);
     expect(steps.length, "fewer setup-bun steps than this repo has workflows that install bun")
-      .toBeGreaterThanOrEqual(12);
+      .toBeGreaterThanOrEqual(13);
     const files = new Set(steps.map(s => s.file));
     expect([...files].sort()).toEqual([
       "action-pins.yml",
       "ai-review-unmeasured.yml",
       "ai-review.yml",
+      "board-flow.yml",
       "board-ready.yml",
       "board-walkthrough.yml",
       "ci.yml",
