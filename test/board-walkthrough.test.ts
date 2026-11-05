@@ -303,14 +303,47 @@ describe("the walk-through cleans up after itself", () => {
   //
   // A crash between merge and cleanup — the case the stamp was also meant to
   // cover — stops existing, because there is no cleanup to crash before.
+  // **The first version of this test read neither half and could not fail.**
+  // `/contents\/([^`"']*)/.exec(src)` finds the FIRST `contents/` substring
+  // in the whole file, which is inside the block comment above recording the
+  // 409 — not either real call site. Scanning forward, the capture stopped at
+  // the double-quote opening the quoted API message, so the matched text was
+  // always the same fixed prose from a comment, containing no `${`. Reverting
+  // to a stamped path would have left it green: it never inspected the code.
+  // Caught by ai-review on #1780, round 1, and it is this repository's own
+  // standing rule — assert on code, never on commentary.
+  //
+  // The path is `SCRATCH_PATH`, a module constant handed to the writer as a
+  // parameter, so the property lives in two places and both are asserted. The
+  // declaration being fixed is useless if the call site passes something else,
+  // and a fixed call site is useless if the constant interpolates.
   test("SC-2643: the scratch path is FIXED, so main never accrues a second one", () => {
-    const put = /contents\/([^`"']*)/.exec(src);
-    expect(put, "no contents write found — the throwaway commit is not being made").not.toBeNull();
+    const decl = /^const SCRATCH_PATH = (.+);$/m.exec(src);
     expect(
-      put![1],
+      decl,
+      "no module-scope `const SCRATCH_PATH = ...;` — the scratch path is no longer a single " +
+        "named constant, so nothing here can say whether it is fixed.",
+    ).not.toBeNull();
+    expect(
+      decl![1],
       "a per-run path strands one file on main FOREVER, because the delete that was " +
         "supposed to collect it is refused by branch protection (409, run 42113465630). " +
         "Use one fixed path and update it.",
+    ).not.toContain("${");
+
+    // Cut structurally from the CALL, not the definition — the anchor
+    // includes the first argument, which the signature on the `async
+    // function` line does not have.
+    const call = structuralCut(src, "createBranchWithCommit(repoToken", { balanced: "(" });
+    expect(
+      call,
+      "the writer is being handed some path other than SCRATCH_PATH, so the constant being " +
+        "fixed says nothing about what reaches main.",
+    ).toContain("SCRATCH_PATH");
+    expect(
+      call,
+      "an interpolated path at the call site strands a file on main exactly as a stamped " +
+        "constant would.",
     ).not.toContain("${");
   });
 
