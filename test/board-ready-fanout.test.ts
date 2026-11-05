@@ -470,9 +470,29 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
   // is resolved inside `run:` (`.claude/rules/config-access.md`).
   test("BR-13: the credential is never read in an if: expression", () => {
     for (const line of yml.split("\n")) {
-      if (/^\s*if:/.test(line)) expect(line).not.toContain("BOARD_PROJECT_TOKEN");
+      if (/^\s*if:/.test(line)) expect(line).not.toContain("PROJECT_TOKEN");
     }
-    expect(yml).toContain("BOARD_PROJECT_TOKEN: ${{ secrets.BOARD_PROJECT_TOKEN }}");
+    expect(yml).toContain("BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}");
+
+    // EVERY `secrets.` reference, not the one this row used to name. A
+    // `secrets.<name>` for a secret that does not exist resolves to the EMPTY
+    // STRING with no error and no annotation, so a name nobody minted is
+    // byte-identical to a credential nobody set — the gate reports
+    // `UNMEASURED` forever and the Ready lane moves nothing, while the run
+    // itself reports success. `BOARD_PROJECT_TOKEN` was never a secret on
+    // this repository; `RUNGATE_PROJECT_TOKEN` has been since 2026-11-02.
+    //
+    // The census is both sites because the fix is a rename and a rename is a
+    // population: the gate step's `GH_TOKEN` and the fan-out step's
+    // `BOARD_PROJECT_TOKEN` each interpolate it, and repairing one leaves the
+    // workflow authorising its gate with nothing. The env var name is
+    // deliberately NOT renamed — `readBoardCredential` in
+    // `lib/board-ready-fanout.ts` reads `BOARD_PROJECT_TOKEN`, and only the
+    // secret side was ever wrong.
+    expect([...yml.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map(m => m[1]!)).toEqual([
+      "RUNGATE_PROJECT_TOKEN",
+      "RUNGATE_PROJECT_TOKEN",
+    ]);
   });
 
   // Every `uses:` pinned to a commit SHA — asserted here as well as by

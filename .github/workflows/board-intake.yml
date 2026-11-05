@@ -75,6 +75,15 @@
 # was itself, added by the same diff it was defending. Prose about a credential
 # is not a reading of one.
 #
+# IT HAS NOW BEEN MEASURED, AND IT CARRIES WRITE. The artifact this comment
+# asked for exists: run `42039773150`, 2026-11-05T13:53:19Z, opened by pull
+# request #1760. The reading is not that run's green conclusion — a job can
+# exit 0 having written nothing, which is the failure this whole file guards.
+# It is the BOARD: `#1760` resolves to project item `PVTI_lAHOAZTQCM4BpMuRzhGSYuQ`
+# on `PVT_kwHOAZTQCM4BpMuR` with `Status = "In review"`, which is a value only
+# `updateProjectV2ItemFieldValue` can have put there. A read-only token cannot
+# produce that row.
+#
 # So the FIRST REAL EVENT is the measurement — the next issue or pull request
 # opened after this merges. A refusal prints a permission error naming the
 # project, which is unambiguous and is the reading. Do NOT silence it with
