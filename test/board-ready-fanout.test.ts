@@ -672,6 +672,47 @@ describe("BR-38..BR-39: every credentialed fetch reads its status before its bod
     ).toBe(2);
   });
 
+  test("BR-40: the detector finds every project-node read", () => {
+    // Anti-vacuity for BR-41, and it counts CALL SITES: the definition is an
+    // arrow assignment (`const itemsPage = (d: any) =>`), so it does not match
+    // and must not be counted — a first version of this row expected 3 and
+    // went red against a correct fix. Two reads of the frontier query exist,
+    // the first page and every page after it, and both must be guarded; zero
+    // means the helper was renamed and BR-41 is ranging over nothing.
+    expect(
+      (code.match(/itemsPage\(/g) ?? []).length,
+      "expected exactly two `itemsPage(` CALL SITES — the first frontier page " +
+        "and the pagination loop's next page. The arrow definition is not a call.",
+    ).toBe(2);
+  });
+
+  test("BR-41: a project id that does not resolve refuses, it does not throw", () => {
+    // `node(id:)` returns null for an id GitHub cannot resolve, and the
+    // inline fragment resolves to an empty object for an id that exists but
+    // is not a ProjectV2. Either is a SUCCESSFUL response — no `errors`, so
+    // `gql()` returns normally — and `all.node.items` then threw
+    // `TypeError: Cannot read properties of null`. A stale or mistyped
+    // RUNGATE_PROJECT_ID crashed with a stack trace where every other
+    // unreadable node in this file reports UNMEASURED and returns
+    // EXIT_REFUSED. Caught in review of #1747; the same class BR-37 covers
+    // on the `issue(number:)` path, at the site it did not reach.
+    //
+    // POPULATION: both reads of that query, not the one the finding named.
+    const bare = [...code.matchAll(/\.node\.[A-Za-z_]/g)].map(m => m[0]);
+    expect(
+      bare,
+      "an unguarded `.node.` dereference turns an unresolvable project id into " +
+        "a TypeError instead of this file's own UNMEASURED refusal. Read it " +
+        "through `itemsPage()` and refuse when it is null.",
+    ).toEqual([]);
+    // The positive half: the refusal must go through the same exit as every
+    // other unreadable state here, not a bare throw.
+    expect(
+      code,
+      "the unresolvable-project refusal must return EXIT_REFUSED",
+    ).toMatch(/itemsPage\([\s\S]{0,700}?return EXIT_REFUSED;/);
+  });
+
   test("BR-39: no response body is parsed before its status is read", () => {
     const unguarded = SITES.filter(at => {
       const after = code.slice(at);

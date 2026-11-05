@@ -204,18 +204,52 @@ async function main(): Promise<number> {
        nodes{content{__typename ... on Issue{state milestone{title}}}}}}}}`,
     { p: project, c: null },
   );
+  // **`node(id:)` is null for an id GitHub cannot resolve**, and the inline
+  // fragment resolves to an empty object for an id that exists and is not a
+  // ProjectV2. Both are SUCCESSFUL responses — no `errors`, so `gql()` returns
+  // normally per its own contract — and `all.node.items` therefore threw
+  // `TypeError: Cannot read properties of null (reading 'items')`. A stale or
+  // mistyped `RUNGATE_PROJECT_ID` (project recreated, deleted, or a typo in
+  // the variable) crashed with an opaque stack trace, in the one script that
+  // reports UNMEASURED and returns EXIT_REFUSED for every other unreadable
+  // node. Caught in review of #1747 — the class BR-37 covers on the
+  // `issue(number:)` path, at the site it did not reach.
+  //
+  // Both reads of this query go through the helper, not just the one the
+  // finding named: the first page and every page after it. BR-40..BR-41.
+  const itemsPage = (d: any): any => d?.node?.items ?? null;
   const frontierItems: { state: string; phase: number | null }[] = [];
-  let page = all.node.items;
+  let page = itemsPage(all);
+  if (page === null) {
+    console.log(
+      `::warning::the project id ${project} did not resolve to a ProjectV2 with items — it may be ` +
+        `deleted, recreated under a new id, or not a project at all. UNMEASURED, nothing written.`,
+    );
+    return EXIT_REFUSED;
+  }
   for (;;) {
     for (const n of page.nodes) {
       if (n.content?.__typename !== "Issue") continue;
       frontierItems.push({ state: n.content.state, phase: phaseOf(n.content.milestone?.title) });
     }
     if (!page.pageInfo.hasNextPage) break;
-    page = (await gql(token, `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
+    const next = itemsPage(
+      await gql(token, `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
        pageInfo{hasNextPage endCursor}
        nodes{content{__typename ... on Issue{state milestone{title}}}}}}}}`,
-      { p: project, c: page.pageInfo.endCursor })).node.items;
+        { p: project, c: page.pageInfo.endCursor }),
+    );
+    if (next === null) {
+      // Mid-pagination, so a partial frontier is already in hand — and a
+      // frontier read from SOME of the board is the reading that moves the
+      // wrong issues to Ready. Refuse rather than finish with what arrived.
+      console.log(
+        `::warning::the project id ${project} stopped resolving part-way through the board, so the ` +
+          `frontier was read only in part. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
+    page = next;
   }
   const frontier = openFrontier(frontierItems);
 
