@@ -430,27 +430,45 @@ for (const s of status.values()) {
   if (s.startsWith("(UNMEASURED")) truncated = true;
   laneCounts.set(s, (laneCounts.get(s) ?? 0) + 1);
 }
-// One request rather than paging ~740 closed issues. The qualifier was
-// verified against its own control on 2026-11-05: `reason:"not planned"`
-// returned 23 and `reason:completed` returned 716, so it discriminates
-// rather than reporting a constant.
-// A failed or throttled search must not read as "nothing was ever
-// cancelled" — that is a green Cancelled lane produced by a measurement
-// that did not happen. `null` travels into the census and refuses the row.
-let notPlannedClosed: number | null = null;
+// **Cancelled is `not_planned` OR `duplicate`** — that is the spec's own
+// condition and `lib/work-status.ts` already maps both to ABANDONED. The
+// first version of this counted only the first and so would have read a
+// lane that is short by every duplicate as OK (ai-review round 1).
+//
+// This pages ~740 closed issues rather than running one search, because
+// **the search qualifier cannot see a duplicate closure.** Measured
+// 2026-11-05 with a control, which is why it is not one more search:
+// `reason:"not planned"` → 23, `reason:completed` → 716, `reason:duplicate`
+// → 0 — and `reason:bogusvalue` → 0 as well. A value the index does not
+// understand and a true zero are the same bytes, so a second search would
+// have reported 0 duplicates forever and nothing could have told that from
+// a repository that has none.
+//
+// A failed or throttled read must not say "nothing was ever cancelled" —
+// that is a green Cancelled lane produced by a measurement that did not
+// happen. `null` travels into the census and refuses the row.
+let cancelledClosed: number | null = null;
 try {
-  const r = await rest(
-    `search/issues?q=${encodeURIComponent(`repo:${REPO} is:issue is:closed reason:"not planned"`)}&per_page=1`,
-  );
-  if (typeof r.total_count === "number" && r.incomplete_results !== true) notPlannedClosed = r.total_count;
+  const [owner, name] = REPO.split("/");
+  const q = `query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
+    issues(states:CLOSED,first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{stateReason}}}}`;
+  let n = 0;
+  let c: string | null = null;
+  do {
+    const d = await gql(q, { o: owner, n: name, c });
+    const page = d.repository.issues;
+    for (const i of page.nodes) if (i?.stateReason === "NOT_PLANNED" || i?.stateReason === "DUPLICATE") n++;
+    c = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (c);
+  cancelledClosed = n;
 } catch (e) {
-  console.log(`  (the not_planned count could not be read: ${e})`);
+  console.log(`  (the cancelled-closure count could not be read: ${e})`);
 }
 const laneReadings = laneHealth({
   counts: laneCounts,
   pickable: pickable.length,
   openAssigned: open.filter((i: any) => !i.pull_request && (i.assignees ?? []).length > 0).length,
-  notPlannedClosed,
+  cancelledClosed,
   complete: !truncated && status.size > 0,
 });
 for (const line of laneHealthLines(laneReadings)) console.log(line);

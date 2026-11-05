@@ -57,16 +57,23 @@ export interface LaneCensus {
   /** Open issues with at least one assignee. */
   readonly openAssigned: number;
   /**
-   * Issues closed with `state_reason: not_planned`, or `null` when the
+   * Issues closed as `NOT_PLANNED` **or** `DUPLICATE`, or `null` when the
    * count could not be taken.
    *
+   * **Both reasons, because the spec's condition is both.**
+   * `specs/BOARD-FLOW-SPEC.md` defines Cancelled's entry as "closed as
+   * `not_planned` or `duplicate`" and `lib/work-status.ts` already maps both
+   * to ABANDONED. Counting only the first turns a lane that is SHORT by
+   * however many duplicates exist into one that reads OK — ai-review round 1,
+   * finding 1.
+   *
    * **`null` rather than `0`**, because they are opposite facts wearing the
-   * same digit: zero cancellations makes Cancelled correct, and a search
-   * that failed makes it unknown. Collapsing them produces a green lane out
-   * of a measurement that never happened — security review of the pushed
-   * commit, finding 1.
+   * same digit: zero cancellations makes Cancelled correct, and a read that
+   * failed makes it unknown. Collapsing them produces a green lane out of a
+   * measurement that never happened — security review of the pushed commit,
+   * finding 1.
    */
-  readonly notPlannedClosed: number | null;
+  readonly cancelledClosed: number | null;
   /**
    * False when the board could not be paged in full.
    *
@@ -103,7 +110,7 @@ export interface LaneReading {
 function target(lane: string, c: LaneCensus): { against: number | null; label: string } | undefined {
   if (lane === "Ready") return { against: c.pickable, label: "unblocked and unclaimed, repo-wide" };
   if (lane === "In progress") return { against: c.openAssigned, label: "open and assigned, repo-wide" };
-  if (lane === "Cancelled") return { against: c.notPlannedClosed, label: "closed as not_planned, repo-wide" };
+  if (lane === "Cancelled") return { against: c.cancelledClosed, label: "closed as not_planned or duplicate, repo-wide" };
   return undefined;
 }
 
@@ -115,15 +122,23 @@ function target(lane: string, c: LaneCensus): { against: number | null; label: s
  * fact from the outside, and both mean nothing is in it.
  */
 export function laneHealth(c: LaneCensus): LaneReading[] {
-  // **A lane the board has and this file does not know about gets its own
-  // row.** Mapping over LANES alone meant such a lane contributed items to
-  // no row at all, so the report stayed confident and complete-looking
-  // while part of the board was simply absent from it. Adding a lane on the
-  // board is two clicks and nobody would think to mirror it here. Security
-  // review of the pushed commit, finding 4.
-  const unknown = [...c.counts.keys()]
-    .filter(k => !LANES.includes(k) && !k.startsWith("("))
-    .sort();
+  // **Every key the census holds gets a row, and nothing is excluded by
+  // spelling.** Mapping over LANES alone meant a lane the board has and this
+  // file does not know about contributed items to no row at all, so the
+  // report stayed confident and complete-looking while part of the board was
+  // simply absent from it. Adding a lane on the board is two clicks and
+  // nobody would think to mirror it here. Security review of the pushed
+  // commit, finding 4.
+  //
+  // The first fix for that swept unknown keys up but skipped any beginning
+  // `"("`, which put the caller's own `"(no status)"` marker straight back
+  // into the hole it had just closed — the SAME omission, one line below the
+  // sweep written to stop it. Found independently by ai-review round 1 and
+  // by the security review of the pushed commit. A prefix exclusion is also
+  // forgeable: a lane somebody genuinely names `"(parked)"` on the board
+  // would be suppressed by impersonating a marker. So there is no exclusion
+  // left — a key that is not a known lane is reported, whatever it says.
+  const unknown = [...c.counts.keys()].filter(k => !LANES.includes(k)).sort();
   const known = LANES.map(lane => {
     const count = c.counts.get(lane) ?? 0;
     if (!c.complete) {
@@ -189,7 +204,9 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
       count: c.counts.get(lane) ?? 0,
       against: null,
       health: "UNMEASURED" as const,
-      why: `this report does not know the lane "${lane}", so its items are unaccounted for above`,
+      why: lane.startsWith("(")
+        ? `these board items are in no lane — the reading above them is "${lane}" — so they belong to no row above`
+        : `this report does not know the lane "${lane}", so its items are unaccounted for above`,
     })),
   ];
 }

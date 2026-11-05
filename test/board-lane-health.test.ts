@@ -17,7 +17,7 @@ const census = (over: Partial<LaneCensus> = {}): LaneCensus => ({
   ]),
   pickable: 34,
   openAssigned: 9,
-  notPlannedClosed: 23,
+  cancelledClosed: 23,
   complete: true,
   ...over,
 });
@@ -50,7 +50,7 @@ describe("a lane count is only a reading against what should be in it", () => {
     expect(by(census({ counts: new Map([["In progress", 0]]) }), "In progress").health).toBe("UNWRITTEN");
     // and the contrast, so UNWRITTEN is not simply what empty always says
     expect(
-      by(census({ notPlannedClosed: 0 }), "Cancelled").health,
+      by(census({ cancelledClosed: 0 }), "Cancelled").health,
       "an empty lane whose denominator is also empty is correct, not broken",
     ).toBe("OK");
   });
@@ -101,14 +101,14 @@ describe("a lane count is only a reading against what should be in it", () => {
   // "nothing was ever cancelled", which makes Cancelled read OK — a green
   // lane produced by a measurement that did not happen.
   test("SC-2670: an unmeasured cancellation count refuses Cancelled, never passes it", () => {
-    const r = by(census({ notPlannedClosed: null }), "Cancelled");
+    const r = by(census({ cancelledClosed: null }), "Cancelled");
     expect(
       r.health,
       "a search that returned nothing is not a repository with no cancelled work",
     ).toBe("UNMEASURED");
     expect(r.health).not.toBe("OK");
     // and the contrast — a real zero IS a reading, and reads OK
-    expect(by(census({ notPlannedClosed: 0 }), "Cancelled").health).toBe("OK");
+    expect(by(census({ cancelledClosed: 0 }), "Cancelled").health).toBe("OK");
   });
 
   // ## Finding 3 — the denominator must count the same population
@@ -124,6 +124,65 @@ describe("a lane count is only a reading against what should be in it", () => {
       "the lane counts board items and `pickable` counts the whole repository. A gap " +
         "computed across two populations must declare it rather than read as exact.",
     ).toMatch(/repo-wide|whole repository|not on the board/i);
+  });
+
+  // ## Round 1, finding 2 (ai-review) and findings 1+2 of the pushed-commit
+  // security review — two independent reviewers, the same silent drop
+  //
+  // `scripts/work-status.ts` records a board item with no Status value under
+  // the literal key `"(no status)"`. It matches no name in LANES, and the
+  // unknown-lane sweep added above excluded any key beginning `"("`, so those
+  // items landed in NO row at all — the exact omission that sweep exists to
+  // stop, reintroduced one line below it by the filter meant to tidy it.
+  //
+  // The filter is gone rather than narrowed. A prefix-based exclusion also
+  // means a lane somebody genuinely names `"(parked)"` on the board is
+  // suppressed by impersonating a sentinel, so nothing is excluded by
+  // spelling any more.
+  test("SC-2670: board items with no Status value are surfaced, not dropped", () => {
+    const counts = new Map([["Backlog", 80], ["(no status)", 5]]);
+    const rs = laneHealth(census({ counts }));
+    const row = rs.find(r => r.lane === "(no status)");
+    expect(
+      row,
+      "5 board items carry no Status value and appeared in no row. A report that " +
+        "silently omits part of the board is worse than one that refuses.",
+    ).toBeDefined();
+    expect(row!.count).toBe(5);
+    expect(row!.health).toBe("UNMEASURED");
+  });
+
+  // ## Round 1, finding 1 (ai-review) — half the spec's own condition
+  //
+  // specs/BOARD-FLOW-SPEC.md defines Cancelled's entry condition as "closed
+  // as `not_planned` or `duplicate`", and lib/work-status.ts already maps
+  // BOTH to ABANDONED. The denominator counted only `not_planned`, so a
+  // Cancelled lane holding every not_planned issue and no duplicate-closed
+  // one reads OK while being short by the duplicates.
+  test("SC-2670: the Cancelled denominator names both closure reasons the spec gives", () => {
+    const r = by(census(), "Cancelled");
+    expect(
+      r.why,
+      "the spec's condition is `not_planned` OR `duplicate`; a denominator counting " +
+        "half of it turns a SHORT lane into an OK one",
+    ).toContain("duplicate");
+  });
+
+  // ## The `reason:` search qualifier cannot measure `duplicate`
+  //
+  // Measured 2026-11-05 WITH A CONTROL, which is the whole point:
+  // `reason:"not planned"` → 23, `reason:completed` → 716, `reason:duplicate`
+  // → 0 — and `reason:bogusvalue` → 0 as well. An unrecognised value and a
+  // true zero are the same bytes, so that one search can never see a
+  // duplicate closure and adding a second search would have read 0 forever.
+  // The count is paged off `stateReason` instead.
+  test("SC-2670: the report reads stateReason, not a qualifier that cannot see duplicates", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "scripts/work-status.ts"), "utf-8");
+    expect(
+      src,
+      "`reason:duplicate` and `reason:bogusvalue` both return 0, so the search qualifier " +
+        "cannot distinguish a duplicate closure from a value it does not understand",
+    ).toContain("DUPLICATE");
   });
 
   test("SC-2670: every lane the board uses appears in the report, in flow order", () => {
