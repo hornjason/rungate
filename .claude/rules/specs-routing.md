@@ -6,7 +6,7 @@ paths:
   - "gates/**"
   - "hooks/**"
   - "scripts/**"
-generated-sha: a4d2fa8de3b99d9a
+generated-sha: 0e97944777c36b23
 ---
 
 Read the governing spec BEFORE making changes in that area.
@@ -15,6 +15,7 @@ Read the governing spec BEFORE making changes in that area.
 |------|---------|----------|
 | AGENT-BRIEF-TEMPLATE-SPEC.md | Agent brief templates — externalized markdown templates with variable substitution, not hardcoded TypeScript strings | true |
 | AGENTS-MD-TEMPLATE-SPEC.md | AGENTS.md template structure — what's baked in, what's scanned, how to update | true |
+| BOARD-FLOW-SPEC.md | Board flow — what each lane is FOR, what may enter it, who writes the transition, and what it costs when a lane is wrong | true |
 | BOOTSTRAP-DATA-FLOW-SPEC.md | STATES NO CRITERIA — Redirect stub — this spec was split into specs/bootstrap-data-flow/; it governs nothing itself and exists to point reade | false |
 | BOOTSTRAP-TEST-PLAN.md | Test strategy for BOOTSTRAP-DATA-FLOW-SPEC.md — verification approach, phased implementation, golden fixture, content as | true |
 | CODE-REVIEW-CONVERGENCE-SPEC.md | Automated code review convergence — the mechanisms from Anthropic's "Solving code review" that RunGate adopts, what each | true |
