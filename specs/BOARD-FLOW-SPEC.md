@@ -186,14 +186,25 @@ genuine activity or not at all.
 |---|---|---|---|
 | 1 | create issue A, and issue B `blocked by` A | B is **Backlog** | GitHub native |
 | 2 | close A | B is **Ready** | `board-ready.yml` |
-| 3 | B is started | B is **In progress** | nothing exists yet |
-| 4 | open a PR saying `Fixes #B` | B is **In review** | GitHub native |
-| 5 | merge the PR | B is **Done** | GitHub native |
-| 6 | close issue C as `not_planned` | C is **not** in Done | nothing exists yet |
+| 3 | B is started | B is **In progress** | `board-flow.yml` |
+| 4 | open a PR saying `Fixes #B` | B is **In review** | `board-flow.yml` |
+| 5 | merge the PR | B is **Done** | `board-flow.yml` |
+| 6 | close issue C as `not_planned` | C is **not** in Done | `board-flow.yml` |
 
-Rows 3 and 6 will be **red on arrival**, and that is the point: a failing row
+Rows 3 and 6 were **red on arrival**, and that was the point: a failing row
 naming the lane that did not move is worth more than the absence of a test,
 and it is how we learn a lane started working rather than being told it has.
+**That is exactly what happened.** Run `42124533332` reported both as
+`UNEXPECTED_PASS` — "expected RED and PASSED" — and the instrument demanded
+this table be corrected before the improvement was forgotten.
+
+Rows 4 and 5 said `GitHub native` and that was wrong by the time it was
+measured. The built-ins that covered them, "Pull request linked to issue"
+and "Item closed", are both **switched off** so that one decider writes each
+transition; run `42125045931` shows the merged pull request's own event
+declining with "no lane transition here", and the issue's close is what
+writes Done. Only rows 1 and 7 are still GitHub's — the "Item added to
+project" built-in, which puts a new card in Backlog.
 
 **Appetite:** one pull request. If the walk-through cannot be made to run
 inside it, this increment is **cancelled and re-scoped, not extended** — most
@@ -219,7 +230,68 @@ unmeasured and declared so.
 | any of rows 1, 4, 5 red | H3 — a lane we believe GitHub handles natively does not | re-measure the seven native workflows before trusting any of them |
 | the walk-through cannot be made to run at all | neither — **futility** | cancel; the board is not mechanically observable and every reading of it stays a person's claim |
 
-**Deviations record — written after the measurement, and empty until then.**
+**Deviations record — written after the measurement.**
+
+Measured 2026-11-05, run `42124533332`, dispatched with `wait-seconds=120`
+and `merge-wait-seconds=900`. The command and the full row readings:
+
+```
+gh workflow run board-walkthrough.yml -f wait-seconds=120 -f merge-wait-seconds=900
+
+row 1  PASS            expected Backlog, observed Backlog — GitHub native
+row 7  PASS            expected Backlog, observed Backlog — GitHub native
+row 2  FAIL            expected Ready, observed Backlog — board-ready.yml
+                       [bounded wait expired — a failure, not a retry]
+row 3  UNEXPECTED_PASS expected In progress, observed In progress
+row 4  PASS            expected In review, observed In review
+row 5  PASS            expected Done, observed Done
+row 6  UNEXPECTED_PASS expected Cancelled, observed Cancelled
+```
+
+**Six of seven lanes observed correct, against three before this increment.**
+
+**The selected hypothesis is H2, and the criteria were written before the
+measurement, so it binds: stop adding lanes and fix the one that has never
+run.** Rows 1, 4 and 5 are green, which rules out H3; row 2 is red, which
+selects H2 over H1.
+
+**What row 2 actually was, and why its own label is wrong.** The row reports
+"a lane with a writer did not move". The writer ran. Run `42124584288` reached
+its decision and declined, in its own words:
+
+```
+#1786 closed. Frontier is phase 0.
+  #1787 unchanged: no phase milestone — it serves no criterion (ADR-003)
+```
+
+`isReady` in `lib/board-mirror.ts` requires `item.phase === frontier`, and a
+milestone-less issue has `phase === null`. The walk-through creates its
+throwaway issues with no milestone, so **it cannot exercise Ready at all** —
+the one lane the whole increment was aimed at. A red row naming the wrong
+cause is worse than no row, because it sends the next reader to the writer.
+
+**And the same root makes the standing Ready reading permanently false.**
+`lib/board-lane-health.ts` targets Ready against `pickable` — unblocked and
+unclaimed, repo-wide — with no phase condition, while the writer additionally
+requires the frontier phase. Measured the same day over all 35 pickable
+issues:
+
+| Milestone | Count | `phaseOf` | Ready-eligible |
+|---|---|---|---|
+| (none) | 22 | `null` | no |
+| Convergence Machinery | 6 | `null` | no |
+| Issue intake | 4 | `null` | no |
+| Convergence Phase 0 | 2 | `0` | **yes** |
+| Pipeline Phase 0 | 1 | `0` | **yes** |
+
+So at most **3** of the 35 can ever reach Ready under the writer's own rule,
+and Ready currently holds **5**. The report says `SHORT by 30` and will say
+so forever. That is not a gap in the board; it is two rules disagreeing, with
+the instrument blaming the board — which is the failure mode this whole spec
+exists to remove.
+
+Settling which definition is right is Increment 2's subject and is tracked
+separately; it is a decision about what Ready means, not a repair.
 
 ## Increment 2 — not scoped until Increment 1 measures
 

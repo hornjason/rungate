@@ -65,13 +65,38 @@ export interface Step {
  * unconditionally — which is a board that lies in the other direction, and
  * an instrument that cannot tell the two apart is measuring nothing.
  */
+/**
+ * **Rows 3 to 6 gained a writer on 2026-11-05, and these are the readings
+ * that say so.** Run `42124533332` reported rows 3 and 6 as
+ * `UNEXPECTED_PASS` — "expected RED and PASSED" — because this table still
+ * said nothing wrote them, which is the walk-through correctly refusing to
+ * let a silent improvement go unrecorded.
+ *
+ * The attribution below is not inferred from the merge of #1781. It is read
+ * from the logs of the four `board-flow.yml` runs that fired during that
+ * walk-through, each line a read-back after the write:
+ *
+ *   42124868007  #1787 -> "In progress" (assignment is this repository's declared starting act)
+ *   42124912993  #1787 -> "In review"   (a non-draft pull request is finished work waiting on a reviewer)
+ *   42125576799  #1787 -> "Done"        (closed as completed)
+ *   42125611826  #1789 -> "Cancelled"   (closed as not_planned)
+ *
+ * Rows 4 and 5 used to read `GitHub native` and that is now wrong in a way
+ * worth naming: the built-ins that once covered them — "Pull request linked
+ * to issue" and "Item closed" — are both SWITCHED OFF, and run `42125045931`
+ * shows the merged pull request's own event declining with "no lane
+ * transition here". The issue's close is what writes Done.
+ *
+ * Only rows 1 and 7 are still GitHub's: the "Item added to project"
+ * built-in, which puts a new card in Backlog.
+ */
 export const WALKTHROUGH_STEPS: readonly Step[] = [
   { n: 1, action: "create issue A, and issue B blocked by A", expect: "Backlog", writer: "GitHub native" },
   { n: 2, action: "close A", expect: "Ready", writer: "board-ready.yml" },
-  { n: 3, action: "B is started", expect: "In progress", writer: null },
-  { n: 4, action: "open a PR saying Fixes #B", expect: "In review", writer: "GitHub native" },
-  { n: 5, action: "merge the PR", expect: "Done", writer: "GitHub native" },
-  { n: 6, action: "close issue C as not_planned", expect: "Cancelled", writer: null },
+  { n: 3, action: "B is started", expect: "In progress", writer: "board-flow.yml" },
+  { n: 4, action: "open a PR saying Fixes #B", expect: "In review", writer: "board-flow.yml" },
+  { n: 5, action: "merge the PR", expect: "Done", writer: "board-flow.yml" },
+  { n: 6, action: "close issue C as not_planned", expect: "Cancelled", writer: "board-flow.yml" },
   { n: 7, action: "NEGATIVE CONTROL — D is blocked by an OPEN issue", expect: "Backlog", writer: "GitHub native" },
 ];
 
