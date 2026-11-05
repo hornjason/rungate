@@ -250,17 +250,22 @@ second: flow efficiency is the one metric this spec must not promise.**
 ## Success Criteria
 
 - [ ] SC-2640: the walk-through drives a real issue through every lane
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: run
       proved-by:
 - [ ] SC-2641: a lane that does not move inside the bounded wait fails
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
 - [ ] SC-2642: an issue with an open blocker does not reach Ready
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
 - [ ] SC-2643: the walk-through deletes its own issues whether it passed
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
 - [ ] SC-2644: every lane in the purpose table names its cost of being wrong
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:

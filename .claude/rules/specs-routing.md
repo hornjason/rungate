@@ -6,10 +6,7 @@ paths:
   - "gates/**"
   - "hooks/**"
   - "scripts/**"
-generated-sha: a4d2fa8de3b99d9a
-doc-type: reference
-status: active
-updated: 2026-11-05
+generated-sha: 0e97944777c36b23
 ---
 
 Read the governing spec BEFORE making changes in that area.

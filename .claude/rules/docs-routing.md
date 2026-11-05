@@ -1,9 +1,6 @@
 ---
 description: Documentation routing and file creation conventions
-generated-sha: bc3b8b9b00c9a26b
-doc-type: reference
-status: active
-updated: 2026-11-05
+generated-sha: 8c9f43878f782f22
 ---
 
 ## Documentation Routing
