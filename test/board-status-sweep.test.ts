@@ -493,6 +493,37 @@ describe("board status sweep", () => {
     ).toMatch(/hasNextPage[\s\S]{0,600}?no Status field|no Status field[\s\S]{0,600}?hasNextPage/);
   });
 
+  test("BS-38: a --write run with nothing to write resolves no fields", () => {
+    // `--write` fell through to FIELDS_QUERY whatever the reading said, so a
+    // no-op run was exposed to two failures that have nothing to do with the
+    // work: the page-two Status refusal and "no Status field on this
+    // project". The equivalent report-only run cannot fail either way, which
+    // made passing --write on a clean board strictly more fragile than not
+    // passing it. Caught in review of #1754.
+    //
+    // **This is a source-ORDER assertion, not a behavioural one, and the
+    // review that raised it said so first** — exercising `main()` needs a
+    // live GraphQL endpoint, and a mock deep enough to reach line 544 would
+    // be asserting against its own fixture. The property that is checkable
+    // from here is the one that matters: the guard exists and precedes the
+    // fetch. BS-37 covers what happens when the fetch does run.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    const guard = code.search(/if \(reading\.corrections\.length === 0\)/);
+    const fetchFields = code.search(/graphql\(token, FIELDS_QUERY/);
+    // Anti-vacuity, both halves. A renamed query or a deleted guard gives -1,
+    // and -1 < anything would otherwise satisfy the ordering vacuously.
+    expect(fetchFields, "FIELDS_QUERY must still be fetched somewhere").toBeGreaterThan(-1);
+    expect(
+      guard,
+      "a `--write` run must short-circuit when `reading.corrections.length === 0`",
+    ).toBeGreaterThan(-1);
+    expect(
+      guard < fetchFields,
+      "the empty-corrections guard must come BEFORE the Status field is resolved, " +
+        "or a run with nothing to write can still abort on a field lookup it never needed",
+    ).toBe(true);
+  });
+
   test("BS-35: the re-run instruction is not printed when nothing is writable", () => {
     // One message served both branches, so a run finding only undecidable
     // rows said "re-run with --write to apply the corrections above" when

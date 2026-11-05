@@ -541,6 +541,25 @@ async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
+  // **Nothing to write, so nothing to resolve.** `--write` fell through to the
+  // field lookup whatever the reading said, which exposed a no-op run to two
+  // failure modes that have nothing to do with the work it was asked to do:
+  // the "Status field was not on the first page" refusal, and "no Status field
+  // on this project". A report-only run against the same board never touches
+  // this path and cannot fail that way, so `--write` on a clean board was
+  // strictly more fragile than not passing it. Undecidable rows are never
+  // written either, so they do not make a run writable. Caught in review of
+  // #1754; BS-38.
+  if (reading.corrections.length === 0) {
+    console.log(
+      reading.undecidable.length > 0
+        ? "\nNothing to write: every row above is UNDECIDABLE and those are never written, " +
+            "with or without --write. A person has to pick the column."
+        : "\nThe board agrees with GitHub. Nothing to write.",
+    );
+    return reading.undecidable.length > 0 ? DRIFT_EXIT : 0;
+  }
+
   const fields = await graphql(token, FIELDS_QUERY, { project: PROJECT_ID });
   const fieldPage = (requireNode(fields, "project fields") as any).fields;
   const statusField = fieldPage.nodes.find((f: any) => f?.name === "Status");
