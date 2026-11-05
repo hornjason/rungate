@@ -135,7 +135,11 @@ async function main(): Promise<number> {
     return EXIT_REFUSED;
   }
   const permission = await actorPermission(token, repo, actor);
-  if (!actorMayWrite(permission)) {
+  // `owner` is already destructured from `--repo` above — there is no new
+  // input to forget to wire. `GITHUB_TOKEN` cannot read the permission
+  // endpoint, so without the identity the person who owns the board is
+  // refused by an answer the run was never able to obtain.
+  if (!actorMayWrite(permission, { actor, owner: owner ?? "" })) {
     console.log(
       `::warning::refusing to run: ${actor} has permission "${permission ?? "UNMEASURED"}" on ${repo}, ` +
         `and this job holds a board-writing credential.`,

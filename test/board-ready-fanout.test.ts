@@ -626,15 +626,57 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
     expect(live).toContain("--actor");
   });
 
+  // An identity that is NOT the owner, so this row measures the permission
+  // and only the permission — the short-circuit must not be what carries it.
+  const outsider = { actor: "outsider", owner: "hornjason" } as const;
+
   test("BR-25: only a writing permission may move the board", () => {
-    for (const p of ["admin", "write", "maintain"]) expect(actorMayWrite(p), `${p} should write`).toBe(true);
-    for (const p of ["read", "none", "triage", ""]) expect(actorMayWrite(p), `${p} must not write`).toBe(false);
+    for (const p of ["admin", "write", "maintain"]) expect(actorMayWrite(p, outsider), `${p} should write`).toBe(true);
+    for (const p of ["read", "none", "triage", ""]) expect(actorMayWrite(p, outsider), `${p} must not write`).toBe(false);
   });
 
   // UNMEASURED, not zero, in the place it decides a write: a permission the
   // run could not read is not a permission it was granted.
   test("BR-26: an unreadable permission refuses", () => {
-    expect(actorMayWrite(null)).toBe(false);
+    expect(actorMayWrite(null, outsider)).toBe(false);
+  });
+
+  // ## The fifth fault in this one lane, and the first that failed loudly
+  //
+  // Run `42080290624` on 2026-11-05T18:01:51Z is the record. PR #1765 had just
+  // merged, so the workflow's shell gate short-circuited on the repository
+  // owner and the job reached the fan-out for the first time in this lane's
+  // existence. Then `scripts/board-ready.ts` ran the SAME permission read
+  // through this decider, got `null` from an endpoint `GITHUB_TOKEN` cannot
+  // answer, and refused: *hornjason has permission "UNMEASURED" on
+  // hornjason/rungate*.
+  //
+  // One guard, two halves, and #1765 repaired one of them —
+  // `.claude/rules/checks-must-be-able-to-fail.md`'s fourth shape arriving
+  // from the other direction. The owner short-circuit belongs in the decider
+  // both halves consult, not beside it, so `actorMayWrite` now takes the
+  // identity it is deciding about. The workflow still restates it in shell
+  // because a gate that runs before the checkout cannot import; BR-33 and
+  // BR-34 hold the two spellings together.
+  test("BR-43: the repository owner is trusted when the permission endpoint cannot be read", () => {
+    expect(actorMayWrite(null, { actor: "hornjason", owner: "hornjason" })).toBe(true);
+  });
+
+  // The direction that must NOT widen. An unreadable permission for anybody
+  // who is not the owner is still UNMEASURED, and UNMEASURED still refuses.
+  test("BR-44: a non-owner with an unreadable permission is still refused", () => {
+    expect(actorMayWrite(null, { actor: "outsider", owner: "hornjason" })).toBe(false);
+    expect(actorMayWrite("read", { actor: "outsider", owner: "hornjason" })).toBe(false);
+    expect(actorMayWrite("write", { actor: "outsider", owner: "hornjason" })).toBe(true);
+  });
+
+  // Anti-vacuity. An absent actor and an absent owner are the same empty
+  // string, and `"" === ""` would hand a write to a run that identified
+  // nobody — the silent pass this whole file exists to refuse.
+  test("BR-45: an empty identity does not satisfy the owner short-circuit", () => {
+    expect(actorMayWrite(null, { actor: "", owner: "" })).toBe(false);
+    expect(actorMayWrite(null, { actor: "hornjason", owner: "" })).toBe(false);
+    expect(actorMayWrite(null, { actor: "", owner: "hornjason" })).toBe(false);
   });
 
   // Asserted on ORDER, because a gate placed after the thing it guards is a
@@ -650,7 +692,7 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
   test("BR-27: the permission check precedes the first privileged read, not just the write", () => {
     const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
     const code = src.split("\n").filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
-    const gate = code.indexOf("actorMayWrite(permission)");
+    const gate = code.indexOf("actorMayWrite(permission,");
     expect(gate, "the gate is not called at all").toBeGreaterThan(-1);
     // every call of the GraphQL helper, and the mutation, come after it
     const reads = [...code.matchAll(/await gql\(/g)].map(m => m.index!);
