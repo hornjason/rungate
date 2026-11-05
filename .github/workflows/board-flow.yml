@@ -212,6 +212,12 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           STATE_REASON: ${{ github.event.issue.state_reason }}
           ACTOR: ${{ github.actor }}
+          # The author of the body the closing references come from. For a
+          # pull request event the script authorises this identity TOO — the
+          # actor fired the event, the author chose which issues it names,
+          # and gating only on the first answers a permission question about
+          # one party using a target set written by another.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then
@@ -227,7 +233,7 @@ jobs:
           fi
           target=(--issue "$ISSUE")
           case "$KIND" in
-            pr_*) target=(--pr "$PR") ;;
+            pr_*) target=(--pr "$PR" --pr-author "$PR_AUTHOR") ;;
           esac
           bun scripts/board-flow.ts \
             --repo "$GITHUB_REPOSITORY" \

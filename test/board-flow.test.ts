@@ -8,7 +8,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { LANE_EVENTS, laneFor, prEventMayWrite, type LaneEvent } from "../lib/board-flow";
+import {
+  LANE_EVENTS,
+  identitiesToAuthorise,
+  laneFor,
+  prEventMayWrite,
+  type LaneEvent,
+} from "../lib/board-flow";
 import { structuralCut } from "../lib/source-slice";
 
 const read = (p: string) => readFileSync(join(import.meta.dir, "..", p), "utf-8");
@@ -175,6 +181,41 @@ describe("one decider owns every lane transition", () => {
           `which reads exactly like the silent lane this spec exists to end.`,
       ).toBe(true);
     }
+  });
+
+  // ## Authorise the party that chose the targets, not only the one who fired
+  //
+  // The terminal-lane guard above narrows the damage and does not close the
+  // hole. A drive-by pull request saying `Fixes #N` where #N sits in Backlog,
+  // Ready, In progress or In review still moves #N the moment any maintainer
+  // closes that pull request — the lane is not terminal, so the guard passes
+  // it, and the card churns on a reference nobody with write access wrote.
+  //
+  // So for a pull request event BOTH identities are authorised: the one who
+  // fired the event, and the one who authored the body the targets came from.
+  test("SC-2690: a pull request event authorises its author as well as its actor", () => {
+    expect(
+      identitiesToAuthorise("pr_closed_unmerged", "maintainer", "drive-by"),
+      "authorising only the closer answers a permission question about one party using " +
+        "a target set chosen by another. That is the confused deputy, and the terminal-lane " +
+        "guard only removes its worst outcome.",
+    ).toEqual(["maintainer", "drive-by"]);
+  });
+
+  test("SC-2690: an issue event authorises only the actor", () => {
+    expect(
+      identitiesToAuthorise("issue_closed", "maintainer", null),
+      "an issue event carries no contributor-authored target set — the issue IS the " +
+        "target. Demanding a second identity here would refuse ordinary maintainer work.",
+    ).toEqual(["maintainer"]);
+  });
+
+  test("SC-2690: a pull request event with no readable author is UNMEASURED, not just the actor", () => {
+    expect(
+      identitiesToAuthorise("pr_ready", "maintainer", null),
+      "falling back to the actor alone is the silent default: an author nobody could read " +
+        "becomes an author nobody checked, and the run reports success.",
+    ).toBeNull();
   });
 
   // A cross-repo `Fixes owner/other#42` is a reference to ANOTHER

@@ -138,6 +138,40 @@ export function prEventMayWrite(currentLane: string | null): { allowed: boolean;
   return { allowed: true, why: `${currentLane ?? "(no status)"} is not a terminal lane` };
 }
 
+/**
+ * Which identities must clear the permission check before this event writes?
+ *
+ * **Authorise the party that chose the targets, not only the one who fired.**
+ * `prEventMayWrite` above removes the worst outcome of the confused deputy
+ * and does not close it: a drive-by pull request saying `Fixes #N`, where #N
+ * sits in Backlog, Ready, In progress or In review, still moves #N the moment
+ * any maintainer closes that pull request. The lane is not terminal, the
+ * guard passes it, and the card churns on a reference nobody with write
+ * access wrote.
+ *
+ * So a pull request event authorises two identities: the actor who fired it,
+ * and the author of the body the closing references came from. An issue event
+ * authorises one, because an issue event carries no contributor-authored
+ * target set — the issue IS the target — and demanding a second there would
+ * refuse ordinary maintainer work.
+ *
+ * `null` is UNMEASURED: a pull request event whose author could not be read.
+ * Falling back to the actor alone would be the silent default, turning an
+ * author nobody could read into an author nobody checked.
+ *
+ * Duplicates are collapsed, so a maintainer closing their own pull request
+ * is one permission call rather than two identical ones.
+ */
+export function identitiesToAuthorise(
+  kind: LaneEvent["kind"],
+  actor: string,
+  prAuthor: string | null,
+): string[] | null {
+  if (kind.startsWith("issue_")) return [actor];
+  if (prAuthor === null || prAuthor === "") return null;
+  return actor === prAuthor ? [actor] : [actor, prAuthor];
+}
+
 export function laneFor(e: LaneEvent): LaneDecision {
   switch (e.kind) {
     case "issue_assigned":

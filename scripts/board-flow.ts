@@ -18,7 +18,13 @@
  * look has not found nothing.
  */
 import { actorMayWrite, readBoardCredential } from "../lib/board-ready-fanout";
-import { LANE_EVENTS, laneFor, prEventMayWrite, type LaneEvent } from "../lib/board-flow";
+import {
+  LANE_EVENTS,
+  identitiesToAuthorise,
+  laneFor,
+  prEventMayWrite,
+  type LaneEvent,
+} from "../lib/board-flow";
 
 /**
  * Every refusal leaves through this one constant, so a mutant copy with it
@@ -193,13 +199,28 @@ async function main(): Promise<number> {
     console.log("::warning::UNMEASURED — --actor was not supplied, so nothing could be authorised. Nothing was read.");
     return EXIT_REFUSED;
   }
-  const permission = await actorPermission(token, repo, actor);
-  if (!actorMayWrite(permission, { actor, owner: owner ?? "" })) {
+  // For a pull request event this is TWO identities, not one — see
+  // `identitiesToAuthorise`. The actor fired the event; the author chose
+  // which issues it names.
+  const identities = identitiesToAuthorise(event as LaneEvent["kind"], actor, arg("pr-author"));
+  if (identities === null) {
     console.log(
-      `::warning::refusing to run: ${actor} has permission "${permission ?? "UNMEASURED"}" on ${repo}, ` +
-        `and this job holds a board-writing credential.`,
+      `::warning::UNMEASURED — --pr-author was not supplied for ${event}, so the identity that ` +
+        `authored the closing references could not be authorised. Nothing was read. Checking ` +
+        `only the actor would authorise one party for a target set chosen by another.`,
     );
     return EXIT_REFUSED;
+  }
+  for (const who of identities) {
+    const permission = await actorPermission(token, repo, who);
+    if (!actorMayWrite(permission, { actor: who, owner: owner ?? "" })) {
+      console.log(
+        `::warning::refusing to run: ${who} has permission "${permission ?? "UNMEASURED"}" on ${repo}, ` +
+          `and this job holds a board-writing credential.` +
+          (who === actor ? "" : ` ${who} authored the pull request whose body names the issues to move.`),
+      );
+      return EXIT_REFUSED;
+    }
   }
 
   // Which issues this event is about. An issue event names one; a pull
