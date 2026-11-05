@@ -255,20 +255,35 @@ describe("one decider owns every lane transition", () => {
   //
   // This caught a real one: `reason_arg=()` expanded as `"${reason_arg[@]}"`
   // is `unbound variable` under `set -u` before bash 4.4.
-  // Cut to the invoking line and re-append it, rather than slicing to the
-  // end of the file. "it is the last thing in the document" is an anchor
-  // that stops being true the moment somebody adds a step, and would then
-  // feed trailing YAML to bash. This way a change to the invocation raises
-  // `AnchorNotFoundError` by name.
-  const INVOKE = 'bun scripts/board-flow.ts "${args[@]}"';
+  // **The real invoking line is executed, not a copy of it.** The first
+  // version of this cut to the invocation as an end anchor and re-appended
+  // a hardcoded copy — so the one line that decides what argv the script
+  // receives was supplied by the test rather than read from the file. A
+  // mutant adding a second array to that line was silently dropped by the
+  // cut and the battery read 1 red where 3 was right. A fixture must not
+  // describe the runner.
+  //
+  // It therefore reads to the end of the document, and BINDS that: the last
+  // non-empty line must be the invocation. If somebody adds a step after
+  // this one, the cut would run past the step and feed YAML to bash — this
+  // says so by name instead.
   const runBlock = (): string => {
     const yml = read(".github/workflows/board-flow.yml");
-    const body = structuralCut(yml, "          args=(--repo", { endAnchor: INVOKE });
-    const dedented = body
+    const at = yml.indexOf("          args=(--repo");
+    expect(at, "the workflow's argv-building block moved or was renamed").toBeGreaterThan(-1);
+    const dedented = yml
+      .slice(at)
       .split("\n")
       .map(l => l.replace(/^ {10}/, ""))
       .join("\n");
-    return `${dedented}${INVOKE.replace("bun scripts/board-flow.ts ", "echo ARGV ")}`;
+    const lines = dedented.split("\n").filter(l => l.trim() !== "");
+    expect(
+      lines[lines.length - 1],
+      "the last non-empty line of the cut is not the script invocation, so the cut has run " +
+        "past the end of this step and would feed YAML to bash — or the step no longer ends " +
+        "by invoking the script. Either way these cases are measuring the wrong text.",
+    ).toMatch(/^bun scripts\/board-flow\.ts /);
+    return dedented.replace(/^bun scripts\/board-flow\.ts /m, "echo ARGV ");
   };
 
   const runWith = (env: Record<string, string>): string => {
