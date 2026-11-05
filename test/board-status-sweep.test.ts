@@ -22,6 +22,7 @@ import {
   DONE,
   IN_REVIEW,
   applyCorrections,
+  requireWrittenItem,
   interpretResponse,
   parseBoardItem,
   requireNode,
@@ -491,6 +492,47 @@ describe("board status sweep", () => {
       "the 'no Status field' refusal must distinguish a field that is absent " +
         "from one that was never fetched — otherwise reading pageInfo changes nothing",
     ).toMatch(/hasNextPage[\s\S]{0,600}?no Status field|no Status field[\s\S]{0,600}?hasNextPage/);
+  });
+
+  test("BS-39: a write nothing confirms is a FAILURE, not a success", () => {
+    // `SET_STATUS` returns `projectV2Item { id }` and the result was thrown
+    // away, so `applyCorrections` logged `wrote #N` for anything that did not
+    // throw. `updateProjectV2ItemFieldValue` can answer 200 with no `errors`
+    // and `{ projectV2Item: null }` — item concurrently removed, or a
+    // credential that writes some fields and not this one — and the board
+    // then went on disagreeing with GitHub while the tool said it had fixed
+    // it. Caught in review of #1754.
+    //
+    // Behavioural, through the exported binding, because the whole point is
+    // which BUCKET a null payload lands in.
+    expect(
+      requireWrittenItem({ updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_x" } } }, 7),
+    ).toBe("PVTI_x");
+    // The three shapes a 200-with-no-errors can carry.
+    for (const [label, payload] of [
+      ["a null item", { updateProjectV2ItemFieldValue: { projectV2Item: null } }],
+      ["a null mutation payload", { updateProjectV2ItemFieldValue: null }],
+      ["no key at all", {}],
+    ] as const) {
+      expect(() => requireWrittenItem(payload, 7), `${label} must refuse`).toThrow(/#7/);
+    }
+    // An empty-string id is "present" to a truthiness check and confirms
+    // nothing, which is the `?? 0` mistake in another costume.
+    expect(() =>
+      requireWrittenItem({ updateProjectV2ItemFieldValue: { projectV2Item: { id: "" } } }, 7),
+    ).toThrow();
+
+    // And the write path must actually call it — a validator nothing invokes
+    // is the comment-saying-it-was-checked failure.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      (code.match(/requireWrittenItem\(/g) ?? []).length,
+      "expected the definition plus exactly one call site on the write path",
+    ).toBe(2);
+    expect(
+      code,
+      "the SET_STATUS mutation's result must go through requireWrittenItem",
+    ).toMatch(/requireWrittenItem\(\s*await graphql\(token, SET_STATUS/);
   });
 
   test("BS-38: a --write run with nothing to write resolves no fields", () => {

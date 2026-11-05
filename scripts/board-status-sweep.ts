@@ -587,12 +587,15 @@ async function main(argv: readonly string[]): Promise<number> {
   };
 
   const applied = await applyCorrections(reading.corrections, async c => {
-    await graphql(token, SET_STATUS, {
-      project: PROJECT_ID,
-      item: c.itemId,
-      field: statusField.id,
-      option: optionId(c.to),
-    });
+    requireWrittenItem(
+      await graphql(token, SET_STATUS, {
+        project: PROJECT_ID,
+        item: c.itemId,
+        field: statusField.id,
+        option: optionId(c.to),
+      }),
+      c.number,
+    );
   });
 
   for (const w of applied.wrote) console.log(`  wrote #${w.number} -> ${w.to}`);
@@ -630,6 +633,39 @@ export interface Applied {
  * Each failure is NAMED and the exit stays non-zero, so a partial batch is a
  * reading rather than a crash.
  */
+/**
+ * The id the mutation says it wrote, or a throw naming what came back.
+ *
+ * **A write was validated nowhere.** `SET_STATUS` returns
+ * `projectV2Item { id }` and the result was discarded, so `applyCorrections`
+ * treated anything that did not throw as written and logged
+ * `wrote #N -> Status`. That is the exact shape this file guards against on
+ * every READ — `requireNode` exists because `node(id:)` resolves to `null`
+ * with no `errors` — applied to the one operation that changes the board.
+ *
+ * `updateProjectV2ItemFieldValue` can return `{ projectV2Item: null }` in a
+ * 200 with no `errors`: the item concurrently removed from the project, or a
+ * credential that may write some fields and not this one. The mutation then
+ * "succeeded", the correction was reported as applied, and the board went on
+ * disagreeing with GitHub — which is the single outcome this tool exists to
+ * detect and report honestly. Caught in review of #1754; BS-39.
+ *
+ * It THROWS rather than returning a verdict so the existing `applyCorrections`
+ * try/catch routes it into `failed`, where it is named and keeps the exit
+ * non-zero. One binding, so a mutation of it has one site.
+ */
+export function requireWrittenItem(data: unknown, issue: number): string {
+  const payload = (data as any)?.updateProjectV2ItemFieldValue;
+  const id = payload?.projectV2Item?.id;
+  if (typeof id !== "string" || id.length === 0) {
+    throw new Error(
+      `the Status write for #${issue} returned no item id, so nothing confirms it was applied — ` +
+        `the response carried ${JSON.stringify(payload ?? null)}. Treating it as NOT written.`,
+    );
+  }
+  return id;
+}
+
 export async function applyCorrections<T extends { number: number; to: string }>(
   corrections: readonly T[],
   write: (c: T) => Promise<void>,
