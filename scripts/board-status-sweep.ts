@@ -355,6 +355,31 @@ export function interpretResponse(status: number, ok: boolean, text: string): un
  * script, without sweeping back to this one. Population here is 2 of 2 and
  * both go through this binding. BS-40.
  */
+export function requireCursorAdvanced(previous: string | null, next: string): string {
+  // **Did the cursor actually move?** Returns `next` so the caller assigns
+  // THROUGH the check rather than beside it.
+  //
+  // `requireConnection` validates one response and structurally cannot answer
+  // this: whether a cursor advanced is a property of two consecutive
+  // responses. A well-formed, non-empty `endCursor` returned unchanged
+  // forever passes every shape check in this file and still spins `readBoard`
+  // forever.
+  //
+  // Repetition rather than a page cap. A cap cannot tell a board that grew
+  // from a server that stopped advancing, so it either fires on legitimate
+  // growth or sits so high it never fires; repetition is the exact signal and
+  // needs no threshold. Found in review of #1754 — the third of the three
+  // failures that finding named, and the one BS-43 cannot reach. BS-44.
+  if (previous !== null && previous === next) {
+    throw new Error(
+      `The board returned the same endCursor twice (${JSON.stringify(next)}) while still ` +
+        `reporting hasNextPage. The next request would repeat the page that produced it, ` +
+        `so this would not terminate. UNMEASURED — the board was read only in part.`,
+    );
+  }
+  return next;
+}
+
 export function requireConnection(data: unknown, key: string, what: string): Record<string, any> {
   const node = requireNode(data, what);
   const page = node[key];
@@ -395,6 +420,34 @@ export function requireConnection(data: unknown, key: string, what: string): Rec
         `non-boolean is falsy, which would end pagination here and report a SHORT ` +
         `${what} as a complete one. UNMEASURED.`,
     );
+  }
+  // **And the cursor, which is the half BS-42 missed.** A falsy `hasNextPage`
+  // ends pagination early and reports a short list as complete; the mirror
+  // image is a `hasNextPage: true` nothing can follow — `endCursor` null,
+  // empty or not a string. `readBoard` would assign it, the next request
+  // would carry an `after` that is effectively unset, GitHub would return
+  // page one again saying `hasNextPage: true`, and `for (;;)` would never
+  // exit: an unbounded loop burning API calls in a `--write` run with nobody
+  // watching. Worse than the short read it is the twin of.
+  //
+  // Keyed on whether the cursor was REQUESTED. A GraphQL response carries
+  // exactly the selection set, so an absent `endCursor` key means the query
+  // never asked — that is `FIELDS_QUERY`, which refuses rather than pages.
+  // Present-and-unusable and never-requested are different facts and only
+  // the first is a defect. Found in review of #1754; BS-43, which also
+  // asserts BOARD_QUERY still requests the cursor, so this cannot be
+  // switched off by editing the query.
+  const info = pageInfo as { hasNextPage: boolean; endCursor?: unknown };
+  if (info.hasNextPage && "endCursor" in info) {
+    const cursor = info.endCursor;
+    if (typeof cursor !== "string" || cursor.length === 0) {
+      throw new Error(
+        `The "${key}" connection on the ${what} says hasNextPage is true and gives an ` +
+          `endCursor of ${JSON.stringify(cursor ?? null)}, which cannot be followed. The ` +
+          `next request would repeat this page and the pagination loop would never ` +
+          `terminate. UNMEASURED.`,
+      );
+    }
   }
   return page as Record<string, any>;
 }
@@ -551,7 +604,10 @@ async function readBoard(token: string): Promise<BoardItem[]> {
     }
 
     if (!page.pageInfo.hasNextPage) break;
-    endCursor = page.pageInfo.endCursor;
+    // Through the invariant, not beside it — `requireConnection` has already
+    // proved this cursor is a usable string, and only this line can see
+    // whether it is a DIFFERENT one from last time. BS-44.
+    endCursor = requireCursorAdvanced(endCursor, page.pageInfo.endCursor);
   }
 
   return items;

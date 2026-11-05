@@ -26,6 +26,7 @@ import {
   interpretResponse,
   parseBoardItem,
   requireConnection,
+  requireCursorAdvanced,
   requireNode,
   sweep,
   withRetry,
@@ -630,6 +631,104 @@ describe("board status sweep", () => {
           `loop early and reports a SHORT board as a complete one`,
       ).toThrow(/pageInfo/);
     }
+  });
+
+  // BS-43. THE SYMMETRIC HALF OF BS-42, WHICH I MISSED BY FIXING THE
+  // MEMBER THE FINDING NAMED.
+  //
+  // BS-42 made a non-boolean `hasNextPage` refuse, because a falsy one ENDS
+  // pagination early and reports a short board as complete. The mirror image
+  // is a `hasNextPage: true` that cannot be followed: `endCursor` null, empty
+  // or non-string. `readBoard` assigns it, the next request carries an `after`
+  // that is effectively unset, GitHub returns page one again with
+  // `hasNextPage: true`, and `for (;;)` never exits — an unbounded loop
+  // burning API calls in a `--write` run with nobody watching. Worse than the
+  // short read it is the twin of.
+  //
+  // Keyed on whether the connection ASKED for a cursor. A GraphQL response
+  // carries exactly the selection set, so `endCursor` absent from `pageInfo`
+  // means the query never requested it — which is `FIELDS_QUERY`, a
+  // connection that refuses rather than pages. Present-and-unusable and
+  // never-requested are different facts and only the first is a defect.
+  // Found in review of #1754.
+  test("BS-43: a hasNextPage that cannot be followed must refuse, not spin", () => {
+    const conn = (pageInfo: unknown) => ({ node: { items: { nodes: [], pageInfo } } });
+
+    // Anti-vacuity, three passing controls. Without these the row is
+    // satisfied by a guard that refuses every connection in the file.
+    expect(
+      requireConnection(conn({ hasNextPage: true, endCursor: "c1" }), "items", "project board"),
+      "a followable next page must pass",
+    ).toBeDefined();
+    expect(
+      requireConnection(conn({ hasNextPage: false, endCursor: null }), "items", "project board"),
+      "a null cursor at the END of a list is normal and must pass",
+    ).toBeDefined();
+    expect(
+      requireConnection(conn({ hasNextPage: true }), "items", "project board"),
+      "no endCursor KEY means the query never asked for one — that is " +
+        "FIELDS_QUERY, which refuses rather than pages, and must not be " +
+        "caught by a rule about following cursors",
+    ).toBeDefined();
+
+    for (const [label, cursor] of [
+      ["endCursor null", null],
+      ["endCursor empty string", ""],
+      ["endCursor a number", 7],
+    ] as const) {
+      expect(
+        () => requireConnection(conn({ hasNextPage: true, endCursor: cursor }), "items", "project board"),
+        `${label} with hasNextPage true must refuse — the next request would ` +
+          `re-fetch page one and the loop would never terminate`,
+      ).toThrow(/endCursor/);
+    }
+
+    // THE GUARD MUST BE LIVE FOR THE ONE CALLER THAT PAGINATES. Because the
+    // rule keys on the cursor being requested, dropping `endCursor` from
+    // BOARD_QUERY would silently switch it off and leave the loop unguarded
+    // with every row above still green.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      code,
+      "BOARD_QUERY's items connection must request endCursor, or BS-43's " +
+        "refusal never applies to the only loop that can spin",
+    ).toMatch(/items\(first: 100, after: \$endCursor\)\s*\{\s*pageInfo\s*\{\s*hasNextPage endCursor \}/);
+  });
+
+  // BS-44. The finding behind BS-43 named THREE ways a next page can fail to
+  // be followable — `endCursor` null, undefined, "or a value that doesn't
+  // actually advance the cursor". BS-43 closes the first two. This is the
+  // third, and it is the one `requireConnection` structurally cannot see:
+  // whether a cursor advanced is a property of two consecutive responses, and
+  // that function is handed one. A well-formed, non-empty cursor returned
+  // unchanged forever is an unbounded loop that passes every shape check.
+  //
+  // A page cap would also stop it and would be the wrong instrument — it
+  // cannot tell a board that grew from a server that stopped advancing, so it
+  // either fires on legitimate growth or is set so high it never fires at
+  // all. Repetition is the exact signal and needs no threshold.
+  test("BS-44: a cursor that does not advance is refused, not followed forever", () => {
+    expect(requireCursorAdvanced(null, "c1"), "the first page must pass").toBe("c1");
+    expect(requireCursorAdvanced("c1", "c2"), "an advancing cursor must pass").toBe("c2");
+
+    expect(
+      () => requireCursorAdvanced("c1", "c1"),
+      "the same cursor twice is a server that stopped advancing — the next " +
+        "request would repeat the page that produced it",
+    ).toThrow(/same endCursor/);
+
+    // The loop must actually use it. A progress invariant nothing calls is
+    // the docblock-saying-it-was-checked failure.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      (code.match(/requireCursorAdvanced\(/g) ?? []).length,
+      "expected the definition plus exactly one call site — readBoard's loop, " +
+        "the only unbounded loop in this file",
+    ).toBe(2);
+    expect(
+      code,
+      "readBoard must assign its next cursor THROUGH the invariant, not beside it",
+    ).toMatch(/endCursor = requireCursorAdvanced\(/);
   });
 
   // BS-40. `requireNode` guards the TOP-LEVEL node being null — the case
