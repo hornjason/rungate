@@ -376,6 +376,29 @@ describe("the walk-through cleans up after itself", () => {
 
   // The run must be reachable ONLY by hand. A schedule is the thing #1744 was
   // filed to remove, and this one creates and deletes real issues.
+  // ## Each artefact joins the cleanup list the moment it exists
+  //
+  // `ai-review` finding, round 5 of this pull request, and it had survived
+  // since round 3 because every round bundled unrelated fixes around it.
+  // `made.push(a, b)` ran only after BOTH creations succeeded, so a throw
+  // while creating B leaked A with no deletion path — the `finally` iterates
+  // `made`, and A was not in it yet.
+  //
+  // Asserted by POSITION rather than presence, because presence was always
+  // true and is what made the defect invisible: the question is whether the
+  // registration happens before the next thing that can throw.
+  test("SC-2643: an artefact is registered for cleanup before the next one is created", () => {
+    const pushA = src.indexOf("made.push(a)");
+    const createB = src.indexOf("create issue B");
+    expect(
+      pushA,
+      "A is not registered on its own — `made.push(a, b)` runs only after BOTH creations " +
+        "succeed, so a throw creating B leaks A with no deletion path",
+    ).toBeGreaterThan(-1);
+    expect(createB).toBeGreaterThan(-1);
+    expect(pushA, "A must join the cleanup list BEFORE anything else can throw").toBeLessThan(createB);
+  });
+
   // ## Probe the credential before creating three things it may not remove
   //
   // Automated security review of the pushed commit, finding 2: the driver

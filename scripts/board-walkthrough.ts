@@ -344,13 +344,17 @@ async function main(): Promise<number> {
 
   try {
     // Rows 1 and 2 — A blocks B, then A closes and B should become Ready.
+    // Each artefact joins `made` the moment it exists, not once the pair is
+    // complete: the `finally` iterates `made`, so a throw creating B used to
+    // leak A with no deletion path.
     const a = await doing("create issue A (the blocker)", () =>
       createIssue(repoToken, repo, `walkthrough ${stamp} A (blocker)`),
     );
+    made.push(a);
     const b = await doing("create issue B (the blocked one)", () =>
       createIssue(repoToken, repo, `walkthrough ${stamp} B (blocked)`),
     );
-    made.push(a, b);
+    made.push(b);
     // **`issue_id` is the REST DATABASE id, and the number does not fail.**
     // Measured 2026-11-05 on two throwaway issues: `issue_id=1770` (a repo
     // number) returned 200 and linked issue #4; `issue_id=6229750699`
