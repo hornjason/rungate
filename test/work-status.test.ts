@@ -155,6 +155,33 @@ describe("orderReading: an item nothing can observe is UNMEASURED, never DONE", 
       }),
     ).toBe("OPEN");
   });
+
+  // The property that makes a whole branch of the printer unreachable, so it
+  // is worth asserting rather than reasoning about. A pull request is answered
+  // OPEN while open, and DONE or ABANDONED once closed — there is no
+  // fall-through to the `stateReason` ladder, because a pull request has no
+  // `stateReason`. Every closed-issue reason the ladder does not know reads
+  // UNMEASURED; no pull request ever does.
+  test("UNMEASURED is unreachable for a pull request — the whole cross product", () => {
+    const cases = [
+      { state: "open" as const, merged: false, expect: "OPEN" as const },
+      { state: "open" as const, merged: true, expect: "OPEN" as const },
+      { state: "closed" as const, merged: true, expect: "DONE" as const },
+      { state: "closed" as const, merged: false, expect: "ABANDONED" as const },
+    ];
+    // Anti-vacuity: the loop must actually range over four inputs, and each
+    // must land on a NAMED reading. "never UNMEASURED" alone is satisfied by
+    // a function that throws, or by an empty list.
+    expect(cases.length).toBe(4);
+    for (const c of cases) {
+      const reading = orderReading({
+        tracker: "PR #1",
+        facts: { kind: "pr", state: c.state, merged: c.merged },
+      });
+      expect(reading, `a ${c.state}/${c.merged ? "merged" : "unmerged"} pull request`).toBe(c.expect);
+      expect(reading).not.toBe("UNMEASURED");
+    }
+  });
 });
 
 describe("the script asks the dependencies endpoint, not a search qualifier", () => {
@@ -341,24 +368,48 @@ describe("the status reader does not leak the token on any hop", () => {
   // second printed "no tracker object" on the same line as the tracker's own
   // id. A status tool that contradicts itself inside one row is the failure
   // this whole file exists to stop.
-  test("UNMEASURED says WHICH of its two causes it is", () => {
+  // A second round of review of the same site said the repair had left a
+  // branch that cannot execute: `facts.kind === "issue" ? … : "pull request"`,
+  // in an arm only an UNMEASURED reading reaches — and the row above proves no
+  // pull request ever produces one. So the printer re-derived a fact it could
+  // not need, and the string it would have printed — "its closure reason is
+  // one this tool does not recognise (pull request)" — names a pull request
+  // where a closure reason belongs. The explanation is now written where the
+  // tracker is READ, which is the only place that knows what it is.
+  test("UNMEASURED says WHICH of its causes it is, and the printer does not re-derive the kind", () => {
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
-    // Anti-vacuity: one branch, so the assertion below cannot be satisfied by
+    // Anti-vacuity: one branch, so the assertions below cannot be satisfied by
     // some other UNMEASURED site elsewhere in the file.
     expect(
       (code.match(/reading === "UNMEASURED"/g) ?? []).length,
       "expected exactly one UNMEASURED branch in the order table",
     ).toBe(1);
-    const arm = code.slice(code.indexOf('reading === "UNMEASURED"'));
+
+    // Anti-vacuity for the census below: three assignments — the no-tracker
+    // default and one per fetched kind — plus the single read in the printer.
+    // A rename drops this to zero and reddens here rather than passing on an
+    // expression nothing evaluates.
     expect(
-      arm.slice(0, 500),
-      "the UNMEASURED arm must branch on whether a tracker was actually read — " +
-        "`facts` is defined exactly when one was named AND fetched. One fixed " +
-        "string tells a reader 'no tracker object' about a row that names one.",
-    ).toMatch(/facts === undefined/);
-    // Both messages must exist, or the branch is decorative.
-    expect(arm.slice(0, 500)).toMatch(/no tracker object/);
-    expect(arm.slice(0, 500)).toMatch(/tracker read, but its closure reason/);
+      (code.match(/\bunmeasuredWhy\b/g) ?? []).length,
+      "expected `unmeasuredWhy` declared with its default, assigned once in " +
+        "each of the two tracker branches, and read once by the printer",
+    ).toBe(4);
+
+    // All three causes must be spelled, or the variable is decorative.
+    expect(code).toMatch(/no tracker object/);
+    expect(code).toMatch(/tracker read, but its closure reason/);
+    expect(code).toMatch(/is a pull request, and this tool could not classify it/);
+
+    // The defect, as source. The printer may not ask what KIND the tracker
+    // was: by the row above, an UNMEASURED reading is never a pull request, so
+    // any branch on `facts.kind` has an arm that cannot be selected.
+    expect(
+      [...code.matchAll(/facts\.kind/g)].length,
+      "`facts.kind` in scripts/work-status.ts means the printer is branching " +
+        "on the tracker's kind inside the UNMEASURED arm, where one of the two " +
+        "arms is unreachable. Write the explanation in the branch that fetched " +
+        "the tracker instead — that branch knows the kind and runs for real.",
+    ).toBe(0);
   });
 
   // The population the row above was too narrow to cover. Every abandonment of

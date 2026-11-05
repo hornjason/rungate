@@ -257,6 +257,25 @@ bar("THE AGREED ORDER — order from project-state.json, state from GitHub");
 for (const it of ORDER) {
   let facts: TrackerFacts | undefined;
   let detail = "";
+  // **UNMEASURED has more than one cause and they are different facts.** This
+  // printed "no tracker object — cannot be measured" for all of them, so an
+  // item whose tracker WAS set and WAS fetched — closed with a `state_reason`
+  // outside completed/not_planned/duplicate, which `null` and `reopened` both
+  // are — got a line denying it had a tracker, printed next to the tracker's
+  // own id in the same row. A status tool contradicting itself inside one line
+  // is precisely the failure this file exists to stop. Caught in review of
+  // #1740.
+  //
+  // **Written here, not in the printer.** The first repair branched the
+  // printer on `facts.kind`, which review caught in the next round: the arm is
+  // only reached by an UNMEASURED reading, and `orderReading` answers every
+  // pull request OPEN, DONE or ABANDONED with no fall-through, so the `"pull
+  // request"` arm could not be selected — and would have read "its closure
+  // reason is one this tool does not recognise (pull request)" if it ever
+  // were. The unreachability is asserted in `test/work-status.test.ts`
+  // over the whole state x merged cross product. Here, each branch writes the
+  // sentence that is true of what it just fetched, and every branch runs.
+  let unmeasuredWhy = "no tracker object — cannot be measured";
   if (it.tracker) {
     const num = Number(it.tracker.replace(/\D/g, ""));
     const o = await rest(`repos/${REPO}/issues/${num}`);
@@ -267,8 +286,15 @@ for (const it of ORDER) {
       const pr = await rest(`repos/${REPO}/pulls/${num}`);
       facts = { kind: "pr", state, merged: Boolean(pr.merged) };
       detail = ` ${pr.mergeable_state ?? "?"}`;
+      unmeasuredWhy =
+        `${it.tracker} is a pull request, and this tool could not classify it — ` +
+        `every pull request is OPEN, DONE or ABANDONED, so this is a defect in ` +
+        `orderReading rather than a reading about the work`;
     } else {
       facts = { kind: "issue", state, stateReason: o.state_reason ?? null };
+      unmeasuredWhy =
+        `tracker read, but its closure reason is one this tool does not ` +
+        `recognise (${o.state_reason ?? "null"}) — cannot be measured`;
     }
   }
   // One decider, in `lib/work-status.ts`, so a mutation of it reddens
@@ -279,22 +305,10 @@ for (const it of ORDER) {
   // different facts: `x` means the tracker was read and says so, `~` means a
   // person wrote it down and nothing can confirm it.
   const mark = reading === "DONE" ? "x" : reading === "RECORDED" ? "~" : " ";
-  // **UNMEASURED has two causes and they are different facts.** This printed
-  // "no tracker object — cannot be measured" for both, so an item whose
-  // tracker WAS set and WAS fetched — closed with a `state_reason` outside
-  // completed/not_planned/duplicate, which `null` and `reopened` both are —
-  // got a line denying it had a tracker, printed next to the tracker's own id
-  // in the same row. A status tool contradicting itself inside one line is
-  // precisely the failure this file exists to stop. Caught in review of
-  // #1740. `facts` is the discriminator: it is defined exactly when a tracker
-  // was named AND read.
+  // One read of the sentence the fetch branch above already wrote.
   const shown =
     reading === "UNMEASURED"
-      ? facts === undefined
-        ? "no tracker object — cannot be measured"
-        : `tracker read, but its closure reason is one this tool does not ` +
-          `recognise (${facts.kind === "issue" ? (facts.stateReason ?? "null") : "pull request"}) — ` +
-          `cannot be measured`
+      ? unmeasuredWhy
       : reading === "RECORDED"
         ? `RECORDED, not observed — ${it.recordedDone}`
         : `${reading}${detail}`;
