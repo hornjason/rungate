@@ -75,7 +75,21 @@ export const WALKTHROUGH_STEPS: readonly Step[] = [
   { n: 7, action: "NEGATIVE CONTROL — D is blocked by an OPEN issue", expect: "Backlog", writer: "GitHub native" },
 ];
 
-export type Verdict = "PASS" | "FAIL" | "EXPECTED_RED" | "UNEXPECTED_PASS";
+/**
+ * `UNMEASURED` is the fourth verdict, and it is not a flag on `FAIL`.
+ *
+ * `ai-review` finding `04843009` on PR #1772: a row whose EVENT never
+ * happened was being recorded as a lane failure. A throwaway pull request
+ * that branch protection would not merge inside its budget made row 5 read
+ * "the Done writer did not move", naming a writer that was never given an
+ * event. The driver printed a warning saying exactly that, and the warning
+ * did not correct the verdict — **prose beside a reading is not a reading.**
+ *
+ * The two have opposite remedies, which is why they cannot share a value:
+ * `FAIL` means fix the writer, `UNMEASURED` means run it again with a bigger
+ * budget. Collapsing them sends every reader to the wrong place.
+ */
+export type Verdict = "PASS" | "FAIL" | "EXPECTED_RED" | "UNEXPECTED_PASS" | "UNMEASURED";
 
 /**
  * What one row's reading means.
@@ -99,6 +113,20 @@ export interface Reading {
   readonly verdict: Verdict;
   /** True when the bounded wait expired without the lane reaching `expect`. */
   readonly waitExpired: boolean;
+  /** Why this row measured nothing. Only ever set on an `UNMEASURED` row. */
+  readonly why?: string;
+}
+
+/**
+ * A row whose triggering event never happened.
+ *
+ * The lane is `(absent)` because nothing was observed — not because the item
+ * was off the board. The caller must say WHY in one clause, and the report
+ * prints it: "row 5 UNMEASURED" with no reason is the same dead end as the
+ * stack trace this driver used to produce.
+ */
+export function unmeasuredReading(step: Step, why: string): Reading {
+  return { step, observed: "(absent)", verdict: "UNMEASURED", waitExpired: false, why };
 }
 
 /**
@@ -112,11 +140,36 @@ export interface Reading {
  * An empty reading list REFUSES. Zero rows produce zero failures, and a
  * walk-through that drove nothing must never be the same reading as a
  * walk-through where every lane worked.
+ *
+ * ## `abortedAt` was added because the refusal above was unreachable
+ *
+ * The first real dispatch (run `42092949455`) died on `404 POST /issues`
+ * and printed a Bun stack trace. The UNMEASURED branch directly above is
+ * tested and correct, and nothing in the program could reach it: the throw
+ * escaped the driver's `try` and the process ended before any verdict was
+ * computed. A case that proves a function refuses proves nothing about
+ * whether the program asks it to.
+ *
+ * An abort is a THIRD state, not a flavour of the first two. Four rows
+ * observed and then a throw is a partial measurement, and the verdict says
+ * both halves — which act died, and how many rows survived it — because
+ * otherwise the next reader has to re-run the whole thing to find out.
  */
-export function runVerdict(readings: readonly Reading[]): {
+export function runVerdict(
+  readings: readonly Reading[],
+  abortedAt?: string,
+): {
   readonly ok: boolean;
   readonly why: string;
 } {
+  if (abortedAt !== undefined) {
+    return {
+      ok: false,
+      why:
+        `UNMEASURED — the run died performing "${abortedAt}". ${readings.length} row(s) ` +
+        `were observed before it, and every lane after it is unmeasured rather than working`,
+    };
+  }
   if (readings.length === 0) {
     return { ok: false, why: "UNMEASURED — no step produced a reading, so nothing was observed" };
   }
@@ -124,6 +177,21 @@ export function runVerdict(readings: readonly Reading[]): {
   if (failed.length > 0) {
     const lanes = failed.map(r => `row ${r.step.n} (${r.step.expect}, writer ${r.step.writer})`);
     return { ok: false, why: `a lane with a writer did not move: ${lanes.join("; ")}` };
+  }
+  // Checked AFTER failures, because a real lane failure is the more
+  // actionable finding and should be the headline when both are present.
+  // But an unmeasured row still refuses: a walk-through that did not
+  // observe Done has not shown Done works, and reporting that as success is
+  // the whole defect class this file exists inside.
+  const unmeasured = readings.filter(r => r.verdict === "UNMEASURED");
+  if (unmeasured.length > 0) {
+    const rows = unmeasured.map(r => `row ${r.step.n} (${r.step.expect}: ${r.why ?? "no reason given"})`);
+    return {
+      ok: false,
+      why:
+        `UNMEASURED — the event never happened for ${rows.join("; ")}. ` +
+        `This is not a lane failure; the writer was never given anything to react to`,
+    };
   }
   return { ok: true, why: `${readings.length} rows observed, no lane with a writer failed to move` };
 }
@@ -138,6 +206,10 @@ export function reportLines(readings: readonly Reading[]): string[] {
   return readings.map(r => {
     const wait = r.waitExpired ? " [bounded wait expired — a failure, not a retry]" : "";
     const writer = r.step.writer ?? "NOTHING WRITES THIS LANE YET";
-    return `row ${r.step.n}  ${r.verdict.padEnd(15)} expected ${r.step.expect}, observed ${r.observed} — ${writer}${wait}`;
+    // The reason rides on the row rather than on a separate warning line,
+    // because a warning printed somewhere else in the log is how row 5 came
+    // to carry a verdict its own warning contradicted.
+    const why = r.why === undefined ? "" : ` [${r.why}]`;
+    return `row ${r.step.n}  ${r.verdict.padEnd(15)} expected ${r.step.expect}, observed ${r.observed} — ${writer}${wait}${why}`;
   });
 }

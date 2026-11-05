@@ -15,6 +15,7 @@ import {
   stepVerdict,
   runVerdict,
   reportLines,
+  unmeasuredReading,
   type Lane,
   type Reading,
   type Step,
@@ -115,6 +116,83 @@ describe("the walk-through reports what each lane did", () => {
       expect(lines.some(l => l.startsWith(`row ${s.n} `)), `row ${s.n} is missing from the report`).toBe(true);
     }
     expect(lines.join("\n")).toContain("NOTHING WRITES THIS LANE YET");
+  });
+
+  // ## Measured by the first real dispatch, run 42092949455
+  //
+  // The first dispatch died 0.3s in, on `404 POST /repos/.../issues`, and
+  // what it printed was a Bun stack trace. Not the UNMEASURED refusal
+  // directly above, which is tested, correct, and was **unreachable**: the
+  // throw escaped `main`'s `try` after the `finally`, so no reading was ever
+  // handed to `runVerdict`.
+  //
+  // That is shape three in `.claude/rules/checks-must-be-able-to-fail.md` —
+  // an assertion that holds vacuously. The case proved the function refuses;
+  // nothing proved the program reaches the function. An instrument built to
+  // stop false readings reported its own first failure as a crash.
+  //
+  // An abort is also NOT the same reading as "no readings". Four rows
+  // observed and then a throw is a partial measurement, and the verdict has
+  // to say both halves or the next reader re-runs the whole thing.
+  test("SC-2641: an aborted run names the act that threw, and is not the same as an empty one", () => {
+    const empty = runVerdict([], "create issue A");
+    expect(empty.ok).toBe(false);
+    expect(
+      empty.why,
+      "a run that died must name WHICH act died. `404 POST /issues` and `the Ready " +
+        "lane did not move` are different problems and the report must not spell them alike.",
+    ).toContain("create issue A");
+    expect(runVerdict([]).why, "and an abort must be distinguishable from no dispatch at all").not.toContain(
+      "create issue A",
+    );
+  });
+
+  test("SC-2641: an abort after some rows reports the rows it DID observe", () => {
+    const v = runVerdict([reading(), reading()], "merge the PR");
+    expect(v.ok).toBe(false);
+    expect(
+      v.why,
+      "two rows were genuinely measured before the throw. Discarding them makes a " +
+        "partial reading indistinguishable from a dispatch that never started.",
+    ).toContain("2");
+    expect(v.why).toContain("merge the PR");
+  });
+
+  // ## A row whose EVENT never happened is not a lane failure
+  //
+  // `ai-review` finding `04843009` on PR #1772, and it is the sharpest kind
+  // of finding: the code contradicted its own pull request description. A
+  // timed-out `awaitMergeable` printed a warning saying row 5 measured
+  // nothing, and then recorded row 5 anyway — so the machine-read verdict
+  // said "a lane with a writer did not move", naming the Done writer, for a
+  // run in which the Done writer was never given an event.
+  //
+  // Prose in a warning does not correct a verdict. UNMEASURED is a fourth
+  // verdict rather than a flag on FAIL, because the two have opposite
+  // remedies: FAIL means fix the writer, UNMEASURED means run it again with
+  // a bigger budget.
+  test("SC-2641: a row whose event never happened is UNMEASURED, not a FAIL", () => {
+    const s = step({ n: 5, expect: "Done", writer: "GitHub native" });
+    const r = unmeasuredReading(s, "the throwaway pull request never became mergeable");
+    expect(r.verdict).toBe("UNMEASURED");
+    expect(
+      r.verdict,
+      "recording it as FAIL blames the Done writer for a merge that branch protection " +
+        "refused — the exact false reading this instrument exists to remove",
+    ).not.toBe("FAIL");
+    expect(reportLines([r]).join("\n")).toContain("never became mergeable");
+  });
+
+  test("SC-2641: UNMEASURED does not pass the run, and does not read as a lane failure", () => {
+    const s = step({ n: 5, expect: "Done", writer: "GitHub native" });
+    const v = runVerdict([unmeasuredReading(s, "CI was still running")]);
+    expect(v.ok, "a walk-through that did not measure Done has not shown Done works").toBe(false);
+    expect(
+      v.why,
+      "and it must NOT say a lane with a writer failed to move — that sentence sends the " +
+        "next reader to the Done writer, which is not where the problem is",
+    ).not.toContain("did not move");
+    expect(v.why).toContain("UNMEASURED");
   });
 
   test("SC-2641: an expired bounded wait is reported on the row, not swallowed", () => {
@@ -222,8 +300,197 @@ describe("the walk-through cleans up after itself", () => {
     ).toMatch(/"DELETE",\s*`\/repos\/\$\{repo\}\/contents\//);
   });
 
+  // ## The board credential has no repository scope — measured, not inferred
+  //
+  // Run `42092949455`, 2026-11-05T19:20:44Z: `404 POST
+  // /repos/hornjason/rungate/issues`. `.github/workflows/board-intake.yml`
+  // records `RUNGATE_PROJECT_TOKEN` as minted `read:project` on 2026-11-02
+  // and later measured carrying project WRITE (run `42039773150`, by the
+  // board row it produced). Project scope is not repository scope, and the
+  // walk-through is the first thing that ever asked it to write a repo.
+  //
+  // So the two credentials are separated by what they are each scoped for,
+  // rather than one token being asked to carry everything: the PAT reads the
+  // board because `GITHUB_TOKEN` cannot read ProjectsV2 at all, and the repo
+  // acts use the token that is actually scoped for this repository.
+  test("SC-2643: the board read and the repository acts use different credentials", () => {
+    expect(
+      src,
+      "the PAT carries project scope and no repository scope (measured: run 42092949455, " +
+        "404 on POST /issues). Asking it to create an issue is asking for a scope it was " +
+        "never minted with.",
+    ).toContain("repoToken");
+    expect(src, "and the board read still needs the PAT, because GITHUB_TOKEN cannot read ProjectsV2").toContain(
+      "boardToken",
+    );
+  });
+
+  test("SC-2643: a thrown act is caught and reported, never left as a stack trace", () => {
+    expect(
+      /catch\s*\(/.test(src),
+      "run 42092949455 printed a Bun stack trace because nothing caught the throw. " +
+        "The UNMEASURED verdict exists and was unreachable.",
+    ).toBe(true);
+    expect(
+      src,
+      "the catch must feed the failing act's name into runVerdict, or the report says " +
+        "something died without saying what",
+    ).toMatch(/runVerdict\(readings,\s*\w+/);
+  });
+
+  // ## `deleteIssue` needs repository ADMIN, which GITHUB_TOKEN never has
+  //
+  // Blocking `ai-review` finding on PR #1772. GitHub's `deleteIssue` GraphQL
+  // mutation requires the actor to hold the repository Admin role, and
+  // `GITHUB_TOKEN` cannot be granted that by any `permissions:` block — the
+  // ceiling is `write`. So moving the repository acts onto `GITHUB_TOKEN`
+  // fixed issue CREATION and silently broke issue DELETION, and the symptom
+  // is three throwaway issues left on the tracker per run.
+  //
+  // That matters beyond tidiness: the spec's whole Cancelled argument rests
+  // on the cancellation rate being observable, and throwaway `not_planned`
+  // closes pollute exactly that number. The fallback below is damage
+  // control, not a fix — a self-cleaning walk-through needs a credential
+  // carrying repository admin, and the driver has to say so out loud rather
+  // than leave a `::warning::` nobody reads.
+  test("SC-2643: a refused deletion falls back to closing, and says admin is why", () => {
+    expect(
+      src,
+      "deletion will be refused for GITHUB_TOKEN on every run. Leaving the issue OPEN " +
+        "puts throwaway work in the pickable set, which is worse than a closed one.",
+    ).toMatch(/could not DELETE[\s\S]{0,400}not_planned|not_planned[\s\S]{0,400}could not DELETE/);
+    expect(
+      src,
+      "and the warning must name ADMIN as the requirement, or the next reader re-derives " +
+        "it from a 403 that does not say so",
+    ).toMatch(/[Aa]dmin/);
+  });
+
+  test("SC-2643: row 5 is recorded as UNMEASURED when the merge never happened", () => {
+    expect(
+      src,
+      "the driver must build an UNMEASURED reading for row 5 on a merge that did not " +
+        "happen, not call record() and let the lane take the blame",
+    ).toContain("unmeasuredReading");
+  });
+
   // The run must be reachable ONLY by hand. A schedule is the thing #1744 was
   // filed to remove, and this one creates and deletes real issues.
+  // ## Each artefact joins the cleanup list the moment it exists
+  //
+  // `ai-review` finding, round 5 of this pull request, and it had survived
+  // since round 3 because every round bundled unrelated fixes around it.
+  // `made.push(a, b)` ran only after BOTH creations succeeded, so a throw
+  // while creating B leaked A with no deletion path — the `finally` iterates
+  // `made`, and A was not in it yet.
+  //
+  // Asserted by POSITION rather than presence, because presence was always
+  // true and is what made the defect invisible: the question is whether the
+  // registration happens before the next thing that can throw.
+  test("SC-2643: an artefact is registered for cleanup before the next one is created", () => {
+    const pushA = src.indexOf("made.push(a)");
+    const createB = src.indexOf("create issue B");
+    expect(
+      pushA,
+      "A is not registered on its own — `made.push(a, b)` runs only after BOTH creations " +
+        "succeed, so a throw creating B leaks A with no deletion path",
+    ).toBeGreaterThan(-1);
+    expect(createB).toBeGreaterThan(-1);
+    expect(pushA, "A must join the cleanup list BEFORE anything else can throw").toBeLessThan(createB);
+  });
+
+  // ## Probe the credential before creating three things it may not remove
+  //
+  // Automated security review of the pushed commit, finding 2: the driver
+  // was fail-open on a precondition it could cheaply have checked. "If the
+  // widening has not happened the first act 404s" is true for issue
+  // CREATION and says nothing about DELETION — the two need different
+  // scopes, and the bad case is precisely the one where create works and
+  // delete does not. That case strands three issues.
+  //
+  // **`permissions.admin` from `GET /repos/{repo}` is NOT the probe**, and
+  // reaching for it would be the wrong fix that goes green. That field
+  // reports the authenticated USER's role, and Jason is the owner, so a
+  // classic PAT carrying no `repo` scope at all still reads
+  // `admin: true` against a public repository while every write 404s. It
+  // would pass in exactly the state it exists to catch.
+  //
+  // So the probe is the act itself: create ONE throwaway and delete it. It
+  // exercises both scopes end to end, it leaves nothing behind when it
+  // succeeds, and when it fails it has stranded one issue instead of three.
+  test("SC-2643: the credential is probed by a real create-and-delete before anything else", () => {
+    // Comments stripped first. The prose in the driver explains WHY the
+    // permissions field is the wrong probe, and that explanation contains
+    // the very string this forbids — a needle that matches the warning
+    // against itself. Same shape as the markdown-emphasis miss on #1769:
+    // search the code, never the commentary about the code.
+    const code = src
+      .split("\n")
+      .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+    expect(
+      code,
+      "a capability probe must EXERCISE create and delete, not read a permissions field. " +
+        "`permissions.admin` reports the user's role and reads true for an owner's token " +
+        "that has no repo scope at all — it passes in the state it exists to catch.",
+    ).not.toMatch(/permissions\s*[?.]*\.admin/);
+    expect(
+      src,
+      "nothing calls a probe — the driver still creates three issues before discovering " +
+        "whether it can remove any of them",
+    ).toMatch(/probe/i);
+  });
+
+  // ## The deletion credential must be one that CAN hold admin
+  //
+  // `ai-review` raised the admin finding twice, and the second time it was
+  // right about something the first fix dodged: a fallback does not excuse a
+  // primary path that fails **deterministically**. Calling `deleteIssue`
+  // with `GITHUB_TOKEN` is not a cleanup attempt, it is a known-futile call
+  // whose failure handler is doing all the work.
+  //
+  // Jason's call, 2026-11-05: widen `RUNGATE_PROJECT_TOKEN` to carry `repo`
+  // as well as `project`. As the repository owner that credential then holds
+  // admin, so it can create, delete, open a pull request and merge — and it
+  // is also the only credential that can read ProjectsV2. One token, every
+  // act, each one actually permitted.
+  //
+  // The failure mode if the widening has not happened yet is GOOD: the very
+  // first act 404s, the abort verdict names it, and **nothing is created**,
+  // so there is nothing to strand. That is strictly better than creating
+  // three issues with a token that cannot remove them.
+  test("SC-2643: this workflow uses its own credential, not one four other workflows read", () => {
+    const yml = readFileSync(join(ROOT, ".github/workflows/board-walkthrough.yml"), "utf-8");
+    const live = yml.split("\n").filter(l => !/^\s*#/.test(l));
+    const repoTokenLine = live.find(l => l.includes("REPO_TOKEN:")) ?? "";
+    expect(repoTokenLine, "REPO_TOKEN is not set at all — the driver refuses without it").not.toBe("");
+    expect(
+      repoTokenLine,
+      "`deleteIssue` requires repository ADMIN and GITHUB_TOKEN can never hold it at any " +
+        "permissions setting, so wiring it here makes the primary cleanup path fail on every " +
+        "single run and leaves the catch doing the work.",
+    ).not.toContain("secrets.GITHUB_TOKEN");
+
+    // The blast-radius half, and the reason it is asserted rather than
+    // trusted: `RUNGATE_PROJECT_TOKEN` is read by release.yml, ci.yml,
+    // board-ready.yml and board-intake.yml as well as this file. Widening
+    // it to carry `repo` would hand issue-deletion and repository-rewrite
+    // power to all five, to support a test that runs by hand about monthly.
+    // Flagged by automated security review of the pushed commit; Jason's
+    // call, 2026-11-05, is a dedicated credential.
+    //
+    // Asserted over EVERY secret this workflow names, not just REPO_TOKEN,
+    // because moving the shared secret onto BOARD_PROJECT_TOKEN alone would
+    // leave this file reading it and the grant would creep back.
+    const shared = live.filter(l => l.includes("secrets.RUNGATE_PROJECT_TOKEN"));
+    expect(
+      shared,
+      "this workflow must not reference the SHARED board token at all. Four other " +
+        "workflows read it, so any scope this file needs becomes a scope all five get. " +
+        "Use a credential only this workflow names.",
+    ).toEqual([]);
+  });
+
   test("SC-2643: the walk-through is dispatch-only, never scheduled", () => {
     const yml = readFileSync(join(ROOT, ".github/workflows/board-walkthrough.yml"), "utf-8");
     const live = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");

@@ -29,7 +29,44 @@ on:
         required: false
         default: "90"
         type: string
+      merge-wait-seconds:
+        description: "How long to wait for the throwaway PR's required checks before giving up on row 5"
+        required: false
+        default: "900"
+        type: string
 
+# ONE CREDENTIAL PERFORMS EVERY ACT, AND IT IS THE PAT.
+#
+# Measured 2026-11-05, run 42092949455: the PAT returned `404 POST
+# /repos/.../issues`. `board-intake.yml` records it as minted `read:project`
+# and later measured carrying project WRITE — project scope is not
+# repository scope, and the walk-through is the first thing that ever asked
+# it to write a repository.
+#
+# The obvious repair was to hand the repository acts to `GITHUB_TOKEN`. That
+# was wrong, and `ai-review` refused it twice: `deleteIssue` requires the
+# repository ADMIN role and `GITHUB_TOKEN` can never hold it at ANY
+# `permissions:` setting. The primary cleanup path would have failed on
+# every run, with a fallback quietly doing all the work.
+#
+# Jason's call, 2026-11-05, revised after an automated security review:
+# a DEDICATED credential, `RUNGATE_WALKTHROUGH_TOKEN`, carrying `repo` and
+# `project` and named by NO other workflow.
+#
+# The first answer was to widen the shared `RUNGATE_PROJECT_TOKEN`. The
+# review was right to refuse it: release.yml, ci.yml, board-ready.yml and
+# board-intake.yml all read that secret, so any scope this file needs
+# becomes a scope all five get — issue deletion and repository rewrite
+# handed to the release pipeline, to support a test that runs by hand about
+# monthly. `test/board-walkthrough.test.ts` asserts this file names the
+# shared secret nowhere, so the grant cannot creep back.
+#
+# IF THE WIDENING HAS NOT HAPPENED, THE FAILURE IS THE GOOD ONE: the first
+# act 404s, the abort verdict names it, and NOTHING IS CREATED — so there is
+# nothing to strand. Creating three issues with a token that cannot remove
+# them is the worse outcome, and it is the one this avoids.
+#
+# `GITHUB_TOKEN` therefore needs nothing beyond the checkout.
 permissions:
   contents: read
 
@@ -37,7 +74,7 @@ jobs:
   walk-every-lane:
     runs-on: "ubuntu-latest"
     steps:
-      # THE SECRET IS `RUNGATE_PROJECT_TOKEN`; THE ENV VAR IS
+      # THE SECRET IS `RUNGATE_WALKTHROUGH_TOKEN`; THE ENV VAR IS
       # `BOARD_PROJECT_TOKEN`. Two names on purpose — `readBoardCredential`
       # in `lib/board-ready-fanout.ts` reads the env var, and the repository
       # secret is the one that exists. Do not "tidy" either into the other:
@@ -82,9 +119,11 @@ jobs:
       - name: Walk every lane
         if: steps.gate.outputs.trusted == 'true'
         env:
-          BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_WALKTHROUGH_TOKEN }}
+          REPO_TOKEN: ${{ secrets.RUNGATE_WALKTHROUGH_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           WAIT: ${{ inputs.wait-seconds }}
+          MERGE_WAIT: ${{ inputs.merge-wait-seconds }}
         run: |
           if [ -z "$PROJECT_ID" ]; then
             echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
@@ -93,4 +132,5 @@ jobs:
           bun scripts/board-walkthrough.ts \
             --repo "$GITHUB_REPOSITORY" \
             --project "$PROJECT_ID" \
-            --wait-seconds "$WAIT"
+            --wait-seconds "$WAIT" \
+            --merge-wait-seconds "$MERGE_WAIT"
