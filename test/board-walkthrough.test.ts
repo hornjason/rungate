@@ -152,6 +152,39 @@ describe("the walk-through cleans up after itself", () => {
     expect(src, "a throwaway pull request that was not merged must be closed").toContain(`state: "closed"`);
   });
 
+  // ## `issue_id` is a database id, and passing a number does not fail
+  //
+  // Caught by `ai-review` on this pull request, and the probe made it worse
+  // than the finding said. Measured 2026-11-05 on two throwaway issues,
+  // both since deleted:
+  //
+  //   POST …/issues/1771/dependencies/blocked_by  issue_id=1770
+  //     → 200, and 1771's blocked_by became [4]
+  //   POST …/issues/1771/dependencies/blocked_by  issue_id=6229750699
+  //     → 200, and 1771's blocked_by became [1770]
+  //
+  // `6229750699` is issue #1770's REST database id. Passing the repo-scoped
+  // NUMBER is not rejected — it is resolved as a database id and silently
+  // links a DIFFERENT issue. So the walk-through would have created a
+  // dependency on an unrelated issue, watched Ready not move, and reported
+  // the Ready lane broken. A false reading from the instrument built to
+  // stop false readings.
+  //
+  // Asserted on the source because the alternative is an API call in a unit
+  // test. `.number` next to `issue_id` is the whole defect and it is one
+  // token.
+  test("SC-2643: the dependency link uses the database id, never the issue number", () => {
+    const call = /issue_id:\s*([A-Za-z0-9_.]+)/.exec(src);
+    expect(call, "no issue_id is passed at all — the blocked_by link is not being created").not.toBeNull();
+    expect(
+      call![1],
+      "`issue_id` on the dependencies endpoint is the REST DATABASE id. A repo-scoped " +
+        "number is accepted and resolves to a different issue, so row 2 would watch the " +
+        "wrong blocker and report Ready broken. Measured: issue_id=1770 linked #4.",
+    ).not.toMatch(/\.number$/);
+    expect(call![1], "it must be the id read back from the created issue").toMatch(/\.id$/);
+  });
+
   // The run must be reachable ONLY by hand. A schedule is the thing #1744 was
   // filed to remove, and this one creates and deletes real issues.
   test("SC-2643: the walk-through is dispatch-only, never scheduled", () => {

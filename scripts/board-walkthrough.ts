@@ -112,6 +112,11 @@ async function awaitLane(
 
 interface Made {
   readonly number: number;
+  /**
+   * The REST DATABASE id, which is not the number and is not interchangeable
+   * with it. The dependencies endpoint takes this one — see the call site.
+   */
+  readonly id: number;
   readonly nodeId: string;
 }
 
@@ -123,7 +128,7 @@ async function createIssue(token: string, repo: string, title: string): Promise<
       "lane transition on a real event. It deletes itself. If you are reading this, " +
       "the run died between creation and cleanup — delete it.",
   });
-  return { number: j.number, nodeId: j.node_id };
+  return { number: j.number, id: j.id, nodeId: j.node_id };
 }
 
 async function closeIssue(token: string, repo: string, n: number, reason: "completed" | "not_planned") {
@@ -192,8 +197,16 @@ async function main(): Promise<number> {
     const a = await createIssue(token, repo, `walkthrough ${stamp} A (blocker)`);
     const b = await createIssue(token, repo, `walkthrough ${stamp} B (blocked)`);
     made.push(a, b);
+    // **`issue_id` is the REST DATABASE id, and the number does not fail.**
+    // Measured 2026-11-05 on two throwaway issues: `issue_id=1770` (a repo
+    // number) returned 200 and linked issue #4; `issue_id=6229750699`
+    // (#1770's database id) linked #1770. So the wrong value is accepted and
+    // resolves to a DIFFERENT issue — the walk-through would have blocked B
+    // on something unrelated, watched Ready not move, and reported the Ready
+    // lane broken. A false reading from the instrument built to stop false
+    // readings. Caught by `ai-review` on this pull request.
     await rest(token, "POST", `/repos/${repo}/issues/${b.number}/dependencies/blocked_by`, {
-      issue_id: a.number,
+      issue_id: a.id,
     });
     await record(1, b.nodeId);
 
