@@ -731,6 +731,36 @@ describe("board status sweep", () => {
     ).toMatch(/endCursor = requireCursorAdvanced\(/);
   });
 
+  // BS-45. THE SAME CLASS AS BS-41, INSIDE ONE FILE. BS-41 catches a comment
+  // quoting a SIBLING file and being wrong about it. This catches a docblock
+  // attached to the wrong function in THIS file, which is the same defect —
+  // a claim and the thing it is attributed to having drifted apart — and it
+  // arrived the same way both times: BS-39 and BS-44 each added an export
+  // immediately ABOVE an existing function, leaving that function's docblock
+  // stranded over the newcomer. `requireCursorAdvanced` wore `requireNode`'s
+  // and `requireConnection`'s; `requireWrittenItem` wore `applyCorrections`'.
+  //
+  // The syntax is the tell and needs no language model: a `*/` followed by a
+  // `/**` means two docblocks are stacked, and at most one of them can be
+  // describing whatever comes next. Found in review of #1754.
+  test("BS-45: no docblock is stranded above a function it does not describe", () => {
+    const stacked = SRC.match(/\*\/\s*\n\s*\/\*\*/g) ?? [];
+    expect(
+      stacked.length,
+      "two docblocks in a row means the upper one describes nothing that " +
+        "follows it — move it to the function it is about, or fold them " +
+        "together. This is BS-41's defect with the sibling file set to self.",
+    ).toBe(0);
+
+    // Anti-vacuity: the detector must actually fire on the shape, or a zero
+    // above is a reading about a regex that matches nothing.
+    const planted = "/**\n * one\n */\n/**\n * two\n */\nexport function f() {}";
+    expect(
+      (planted.match(/\*\/\s*\n\s*\/\*\*/g) ?? []).length,
+      "the detector must find a planted stack, or its zero means nothing",
+    ).toBe(1);
+  });
+
   // BS-40. `requireNode` guards the TOP-LEVEL node being null — the case
   // GitHub returns for an id the token cannot see — and both call sites then
   // reached straight into a nested connection it does not check:

@@ -327,15 +327,31 @@ export function interpretResponse(status: number, ok: boolean, text: string): un
 }
 
 /**
- * THE SAME CLASS, AT THE SITE THE REPORT DID NOT NAME, and this one fires on
- * an input GitHub really returns. `node(id: …)` resolves to **null** for an id
- * the token cannot see — not an error, a successful query with a null node —
- * so `data.node.items` was a property read on null exactly as `body.errors`
- * was. A `read:project` token hitting the `--write` path produces it.
+ * **Did the cursor actually move?** Returns `next` so the caller assigns
+ * THROUGH the check rather than beside it.
  *
- * `null` and "no such field" are the same bytes to a property read, so this
- * says which one it was and what to do about it.
+ * `requireConnection` validates one response and structurally cannot answer
+ * this: whether a cursor advanced is a property of two consecutive responses.
+ * A well-formed, non-empty `endCursor` returned unchanged forever passes every
+ * shape check in this file and still spins `readBoard` forever.
+ *
+ * Repetition rather than a page cap. A cap cannot tell a board that grew from
+ * a server that stopped advancing, so it either fires on legitimate growth or
+ * sits so high it never fires; repetition is the exact signal and needs no
+ * threshold. Found in review of #1754 — the third of the three failures that
+ * finding named, and the one BS-43 cannot reach. BS-44.
  */
+export function requireCursorAdvanced(previous: string | null, next: string): string {
+  if (previous !== null && previous === next) {
+    throw new Error(
+      `The board returned the same endCursor twice (${JSON.stringify(next)}) while still ` +
+        `reporting hasNextPage. The next request would repeat the page that produced it, ` +
+        `so this would not terminate. UNMEASURED — the board was read only in part.`,
+    );
+  }
+  return next;
+}
+
 /**
  * THE SAME CLASS AGAIN, ONE LEVEL DOWN. `requireNode` answers "did GitHub give
  * me a node at all", and both callers then reached straight into a nested
@@ -355,31 +371,6 @@ export function interpretResponse(status: number, ok: boolean, text: string): un
  * script, without sweeping back to this one. Population here is 2 of 2 and
  * both go through this binding. BS-40.
  */
-export function requireCursorAdvanced(previous: string | null, next: string): string {
-  // **Did the cursor actually move?** Returns `next` so the caller assigns
-  // THROUGH the check rather than beside it.
-  //
-  // `requireConnection` validates one response and structurally cannot answer
-  // this: whether a cursor advanced is a property of two consecutive
-  // responses. A well-formed, non-empty `endCursor` returned unchanged
-  // forever passes every shape check in this file and still spins `readBoard`
-  // forever.
-  //
-  // Repetition rather than a page cap. A cap cannot tell a board that grew
-  // from a server that stopped advancing, so it either fires on legitimate
-  // growth or sits so high it never fires; repetition is the exact signal and
-  // needs no threshold. Found in review of #1754 — the third of the three
-  // failures that finding named, and the one BS-43 cannot reach. BS-44.
-  if (previous !== null && previous === next) {
-    throw new Error(
-      `The board returned the same endCursor twice (${JSON.stringify(next)}) while still ` +
-        `reporting hasNextPage. The next request would repeat the page that produced it, ` +
-        `so this would not terminate. UNMEASURED — the board was read only in part.`,
-    );
-  }
-  return next;
-}
-
 export function requireConnection(data: unknown, key: string, what: string): Record<string, any> {
   const node = requireNode(data, what);
   const page = node[key];
@@ -452,6 +443,16 @@ export function requireConnection(data: unknown, key: string, what: string): Rec
   return page as Record<string, any>;
 }
 
+/**
+ * THE SAME CLASS, AT THE SITE THE REPORT DID NOT NAME, and this one fires on
+ * an input GitHub really returns. `node(id: …)` resolves to **null** for an id
+ * the token cannot see — not an error, a successful query with a null node —
+ * so `data.node.items` was a property read on null exactly as `body.errors`
+ * was. A `read:project` token hitting the `--write` path produces it.
+ *
+ * `null` and "no such field" are the same bytes to a property read, so this
+ * says which one it was and what to do about it.
+ */
 export function requireNode(data: unknown, what: string): Record<string, unknown> {
   if (typeof data !== "object" || data === null) {
     throw new Error(`GitHub returned no data object when asked for the ${what}.`);
@@ -752,18 +753,6 @@ export interface Applied {
 }
 
 /**
- * Apply every correction, and finish the batch even when one fails.
- *
- * THE LOOP USED TO THROW OUT OF `main()`. A transient failure on correction 3
- * of 5 crashed the process mid-batch, leaving the board partially corrected
- * with no record of which writes landed — only whatever `console.log` had
- * already printed. The run then reported nothing, which for a tool whose
- * whole job is to make the board legible is the worst available outcome.
- *
- * Each failure is NAMED and the exit stays non-zero, so a partial batch is a
- * reading rather than a crash.
- */
-/**
  * The id the mutation says it wrote, or a throw naming what came back.
  *
  * **A write was validated nowhere.** `SET_STATUS` returns
@@ -796,6 +785,18 @@ export function requireWrittenItem(data: unknown, issue: number): string {
   return id;
 }
 
+/**
+ * Apply every correction, and finish the batch even when one fails.
+ *
+ * THE LOOP USED TO THROW OUT OF `main()`. A transient failure on correction 3
+ * of 5 crashed the process mid-batch, leaving the board partially corrected
+ * with no record of which writes landed — only whatever `console.log` had
+ * already printed. The run then reported nothing, which for a tool whose
+ * whole job is to make the board legible is the worst available outcome.
+ *
+ * Each failure is NAMED and the exit stays non-zero, so a partial batch is a
+ * reading rather than a crash.
+ */
 export async function applyCorrections<T extends { number: number; to: string }>(
   corrections: readonly T[],
   write: (c: T) => Promise<void>,
