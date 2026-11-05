@@ -144,19 +144,30 @@ export function verdictFor(item: BoardItem): Verdict {
   }
 
   // A DRAFT pull request falls through to the same refusal as an open issue,
-  // and it must — but NOT for the reason this comment used to give.
+  // and `board-intake.yml` deliberately excludes drafts for the same reason.
   //
-  // It said `board-intake.yml` excludes drafts from In review on purpose, and
-  // that workflow does no such thing: its own header declares "WHAT IT
-  // DELIBERATELY DOES NOT DO: set a field", and GitHub's built-in project
-  // automation is the only thing in this repository that writes Status. A
-  // reader who went looking for the exclusion would not find it. Caught in
-  // review of #1754; the citation was carried over from a branch where the
-  // workflow DID have a Status step and was never re-read against main.
+  // Its "Move the pull request to In review" step is guarded by
+  // `github.event.pull_request.draft == false`, and the comment above that
+  // guard says why: "a draft in `In review` says somebody is waiting on a
+  // reader when nobody is". "Drafts stay in Backlog until" `ready_for_review`,
+  // which that workflow also subscribes to. So intake and this sweep agree,
+  // and a sweep that wrote In review for a draft would be a SECOND DECIDER
+  // disagreeing with the first — the fourth shape in
+  // `.claude/rules/checks-must-be-able-to-fail.md`, and the two would never
+  // meet, because intake fires on an event and this runs by hand.
   //
-  // The refusal stands on its own facts: a draft is not awaiting a reader, so
-  // In review is wrong, and Done is wrong because it is open. Nothing here can
-  // name the right column, which is what UNDECIDABLE means.
+  // **This comment has been wrong twice and the reason was the same both
+  // times.** Round 7 found it citing a mechanism that was not there; the
+  // round-8 repair replaced that with two further false claims, including a
+  // quotation that existed nowhere but in the comment making it. Both were
+  // written against a worktree whose `origin/main` was five merges stale, so
+  // the workflow was read accurately and was the wrong workflow. BS-41 now
+  // asserts every phrase quoted here against the real file, so a third
+  // version cannot be wrong quietly.
+  //
+  // The refusal also stands on its own facts: a draft is not awaiting a
+  // reader, so In review is wrong, and Done is wrong because it is open.
+  // Nothing here can name the right column, which is what UNDECIDABLE means.
   const why =
     item.kind === "PullRequest"
       ? "open DRAFT pull request marked Done. Done is wrong because it is open, and In " +
@@ -360,6 +371,29 @@ export function requireConnection(data: unknown, key: string, what: string): Rec
     throw new Error(
       `The "${key}" connection on the ${what} carries no nodes array, so there is nothing ` +
         `to read and an empty board and an unreadable one would look the same. UNMEASURED.`,
+    );
+  }
+  // **And the pagination flag, which is the half that loses rows silently.**
+  // `nodes` being wrong is loud — nothing to iterate. `pageInfo` being wrong
+  // is quiet: `page.pageInfo.hasNextPage` on an absent `pageInfo` throws a
+  // bare TypeError, and a non-boolean `hasNextPage` is falsy, which ENDS the
+  // pagination loop and reports a short board as a complete one. That is the
+  // same false-zero this file's header already records from a `first:100`
+  // read against a 118-item board, arriving through the guard instead of
+  // around it. Found in review of #1754; BS-42.
+  const pageInfo = (page as { pageInfo?: unknown }).pageInfo;
+  if (typeof pageInfo !== "object" || pageInfo === null) {
+    throw new Error(
+      `The "${key}" connection on the ${what} carries no pageInfo object, so this read ` +
+        `cannot tell a complete list from the first page of a longer one. UNMEASURED.`,
+    );
+  }
+  if (typeof (pageInfo as { hasNextPage?: unknown }).hasNextPage !== "boolean") {
+    throw new Error(
+      `The "${key}" connection on the ${what} has a pageInfo whose hasNextPage is ` +
+        `${typeof (pageInfo as { hasNextPage?: unknown }).hasNextPage}, not a boolean. A ` +
+        `non-boolean is falsy, which would end pagination here and report a SHORT ` +
+        `${what} as a complete one. UNMEASURED.`,
     );
   }
   return page as Record<string, any>;

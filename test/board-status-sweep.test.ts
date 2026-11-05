@@ -536,6 +536,102 @@ describe("board status sweep", () => {
     ).toMatch(/requireWrittenItem\(\s*await graphql\(token, SET_STATUS/);
   });
 
+  // BS-41. THIS FILE MAKES FACTUAL CLAIMS ABOUT A FILE IT DOES NOT CONTAIN,
+  // AND TWICE NOW THEY HAVE BEEN FALSE.
+  //
+  // Round 7 found the draft refusal citing a mechanism in `board-intake.yml`
+  // that was not there. The round-8 repair rewrote that one sentence and put
+  // TWO new false claims in its place — including a quotation ("WHAT IT
+  // DELIBERATELY DOES NOT DO: set a field") that exists nowhere in
+  // `board-intake.yml` and only ever existed in the comment quoting it. Both
+  // repairs were written against a worktree whose `origin/main` was five
+  // merges stale, so the file being described was read correctly and was the
+  // wrong file.
+  //
+  // Rewriting the sentence a third time fixes one sentence. This asserts the
+  // property instead: every string this file puts in quotation marks and
+  // attributes to `board-intake.yml` must be findable in `board-intake.yml`.
+  // A claim about a sibling file is now checked by CI on the merge ref, where
+  // the sibling is current by construction, rather than by whoever last
+  // remembered to go and look.
+  test("BS-41: every phrase this file quotes from board-intake.yml is in board-intake.yml", () => {
+    const workflow = readFileSync(join(ROOT, ".github/workflows/board-intake.yml"), "utf-8");
+
+    // Anti-vacuity, both directions. The workflow must have actually been
+    // read — an empty or missing file would make every `includes` below fail
+    // rather than pass, but a TRUNCATED one would quietly shrink what the
+    // claims are checked against. And the matcher must be able to say no.
+    expect(workflow.length, "board-intake.yml was not read").toBeGreaterThan(5000);
+    expect(
+      workflow.includes("WHAT IT DELIBERATELY DOES NOT DO: set a field"),
+      "control: the phrase the round-8 comment attributed to board-intake.yml " +
+        "must NOT be in it — if this ever passes, the control has stopped " +
+        "being able to disagree and every row below is vacuous",
+    ).toBe(false);
+
+    // The phrases `scripts/board-status-sweep.ts` attributes to the workflow.
+    // Adding a quoted claim to that file means adding it here.
+    const QUOTED = [
+      "a draft in `In review` says somebody is waiting",
+      "Drafts stay in Backlog until",
+    ];
+    expect(QUOTED.length, "the claim list must not be empty").toBeGreaterThan(0);
+
+    const src = SRC.replace(/\r/g, "");
+    for (const phrase of QUOTED) {
+      // Each phrase must be BOTH claimed by the script and true of the
+      // workflow. Checking only the second half would let a claim be deleted
+      // from the script and still pass.
+      // Compared verbatim on BOTH sides, backticks included. Normalising the
+      // punctuation away would let the script quote something the workflow
+      // does not actually say and still pass — the comparison has to be over
+      // the bytes the reader would go and look for.
+      expect(src.includes(phrase), `the script must actually claim: ${phrase}`).toBe(true);
+      expect(
+        workflow.includes(phrase),
+        `scripts/board-status-sweep.ts attributes "${phrase}" to board-intake.yml, ` +
+          `and board-intake.yml does not contain it. Re-read the workflow — on ` +
+          `the CURRENT main, not a stale worktree ref — before describing it.`,
+      ).toBe(true);
+    }
+  });
+
+  // BS-42. `requireConnection` validated `nodes` and said nothing about
+  // `pageInfo`, and `readBoard` then dereferenced `page.pageInfo.hasNextPage`
+  // and `page.pageInfo.endCursor` bare — no `?.`, no shape check — in the one
+  // list in this file with no pageInfo-shape row comparable to BS-37's for
+  // FIELDS_QUERY. Schema-non-null in a well-formed response, which is exactly
+  // the premise this file refuses to rest on everywhere else: if it is ever
+  // hit, `readBoard` dies with a bare TypeError instead of the legible
+  // refusal this script works hard to produce.
+  //
+  // Guarded in the single binding rather than at the two dereferences, so the
+  // `fields` page gets it too and there is one site to mutate. Found in
+  // review of #1754.
+  test("BS-42: a connection must carry a usable pageInfo, not just nodes", () => {
+    const ok = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    expect(requireConnection({ node: { items: ok } }, "items", "project board")).toEqual(ok);
+
+    // Anti-vacuity: a well-formed page with `hasNextPage: true` must also
+    // pass, so the row is not accidentally asserting "false only".
+    const more = { nodes: [], pageInfo: { hasNextPage: true, endCursor: "c1" } };
+    expect(requireConnection({ node: { items: more } }, "items", "project board")).toEqual(more);
+
+    for (const [label, page] of [
+      ["pageInfo absent entirely", { nodes: [] }],
+      ["pageInfo null", { nodes: [], pageInfo: null }],
+      ["pageInfo a scalar", { nodes: [], pageInfo: "yes" }],
+      ["hasNextPage missing", { nodes: [], pageInfo: { endCursor: "c1" } }],
+      ["hasNextPage a string, not a boolean", { nodes: [], pageInfo: { hasNextPage: "true" } }],
+    ] as const) {
+      expect(
+        () => requireConnection({ node: { items: page } }, "items", "project board"),
+        `${label} must refuse — a pagination flag that is not a boolean ends the ` +
+          `loop early and reports a SHORT board as a complete one`,
+      ).toThrow(/pageInfo/);
+    }
+  });
+
   // BS-40. `requireNode` guards the TOP-LEVEL node being null — the case
   // GitHub returns for an id the token cannot see — and both call sites then
   // reached straight into a nested connection it does not check:
@@ -551,8 +647,12 @@ describe("board status sweep", () => {
   // sibling. Population here is 2 of 2; both go through one binding.
   test("BS-40: a nested connection is guarded like the node that carries it", () => {
     expect(
-      requireConnection({ node: { items: { nodes: [], pageInfo: {} } } }, "items", "project board"),
-    ).toEqual({ nodes: [], pageInfo: {} });
+      requireConnection(
+        { node: { items: { nodes: [], pageInfo: { hasNextPage: false } } } },
+        "items",
+        "project board",
+      ),
+    ).toEqual({ nodes: [], pageInfo: { hasNextPage: false } });
 
     // Anti-vacuity: each refusal must be observed for its OWN shape, and the
     // top-level cases must still refuse through requireNode underneath.
