@@ -104,12 +104,6 @@
       "from": 2630,
       "to": 2631,
       "note": "#1038 - commits that exist on this machine and nowhere else. Exactly the two ids consumed rather than a block of twenty: PROJECT-STATE.md on main names SC-2636 as the board-identifier config reader and no block reserves it, so a wider block would have squatted on a published plan's id without colliding with anything a diff could show. 2600-2629 (rg/pipeline-spec) is the highest declared block. Delete when the PR merges."
-    },
-    {
-      "owner": "rg/board-flow-writer",
-      "from": 2690,
-      "to": 2709,
-      "note": "The board-flow writer \u2014 one workflow owning In progress, In review, Done, Cancelled and the return to Backlog, after BOARD-FLOW-SPEC.md settled every lane's trigger as a GitHub event. Starts at 2690 because the two blocks it replaces ran to 2689; they are pruned in this same commit, their branches having merged. The ids those blocks actually consumed (2640..2644 and 2670) stay safe without a reservation because BOARD-FLOW-SPEC.md spells them and lib/create-sc.ts counts ids spelled in spec content as taken \u2014 'a SPEC declaration is authoritative at any number, reserved or not'. Delete when the PR merges."
     }
   ]
 }

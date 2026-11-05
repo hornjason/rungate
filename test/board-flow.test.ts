@@ -6,6 +6,7 @@
  * the write lives in `scripts/board-flow.ts` and is not a decision.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "child_process";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -236,5 +237,120 @@ describe("one decider owns every lane transition", () => {
       "reading the reference's repository and not comparing it is the same bug with more " +
         "bytes. The filter is what makes the read mean anything.",
     ).toContain("filter");
+  });
+
+  // ## The workflow's shell is EXECUTED here, not described
+  //
+  // A `run:` block is the one part of this change no TypeScript test
+  // reaches, and its failure mode is the worst available: the job runs, the
+  // shell aborts, the lane is never written, and nothing on the board says
+  // so. `.claude/rules/checks-must-be-able-to-fail.md` calls the written
+  // version of this the fixture that is described rather than executed.
+  //
+  // So the block is cut out of the YAML, the one line that would hit the
+  // network is replaced with `echo`, and it is RUN — on this machine's bash
+  // 3.2.57, which is stricter than `ubuntu-latest`'s bash 5. A block that
+  // survives the strict one survives both; the converse does not hold, and
+  // the runner's bash version is not readable from here.
+  //
+  // This caught a real one: `reason_arg=()` expanded as `"${reason_arg[@]}"`
+  // is `unbound variable` under `set -u` before bash 4.4.
+  // **The real invoking line is executed, not a copy of it.** The first
+  // version of this cut to the invocation as an end anchor and re-appended
+  // a hardcoded copy — so the one line that decides what argv the script
+  // receives was supplied by the test rather than read from the file. A
+  // mutant adding a second array to that line was silently dropped by the
+  // cut and the battery read 1 red where 3 was right. A fixture must not
+  // describe the runner.
+  //
+  // It therefore reads to the end of the document, and BINDS that: the last
+  // non-empty line must be the invocation. If somebody adds a step after
+  // this one, the cut would run past the step and feed YAML to bash — this
+  // says so by name instead.
+  const runBlock = (): string => {
+    const yml = read(".github/workflows/board-flow.yml");
+    const at = yml.indexOf("          args=(--repo");
+    expect(at, "the workflow's argv-building block moved or was renamed").toBeGreaterThan(-1);
+    const dedented = yml
+      .slice(at)
+      .split("\n")
+      .map(l => l.replace(/^ {10}/, ""))
+      .join("\n");
+    const lines = dedented.split("\n").filter(l => l.trim() !== "");
+    expect(
+      lines[lines.length - 1],
+      "the last non-empty line of the cut is not the script invocation, so the cut has run " +
+        "past the end of this step and would feed YAML to bash — or the step no longer ends " +
+        "by invoking the script. Either way these cases are measuring the wrong text.",
+    ).toMatch(/^bun scripts\/board-flow\.ts /);
+    return dedented.replace(/^bun scripts\/board-flow\.ts /m, "echo ARGV ");
+  };
+
+  const runWith = (env: Record<string, string>): string => {
+    const r = spawnSync("/bin/bash", ["-euo", "pipefail", "-c", runBlock()], {
+      env: { ...env, PATH: process.env.PATH ?? "" },
+      encoding: "utf-8",
+    });
+    expect(
+      r.status,
+      `the workflow's own shell aborted: ${r.stderr}\nA run: block that exits non-zero ` +
+        `writes no lane and leaves the board silently stale.`,
+    ).toBe(0);
+    return r.stdout.trim();
+  };
+
+  test("SC-2690: the workflow's shell builds the issue argv without a close reason", () => {
+    const out = runWith({
+      GITHUB_REPOSITORY: "o/n",
+      PROJECT_ID: "PVT_x",
+      ACTOR: "someone",
+      KIND: "issue_assigned",
+      ISSUE: "42",
+      PR: "",
+      PR_AUTHOR: "",
+      STATE_REASON: "",
+    });
+    expect(out).toBe(
+      "ARGV --repo o/n --project PVT_x --actor someone --event issue_assigned --issue 42 --write",
+    );
+  });
+
+  test("SC-2691: a close carries its reason through, and only when the payload had one", () => {
+    const base = {
+      GITHUB_REPOSITORY: "o/n",
+      PROJECT_ID: "PVT_x",
+      ACTOR: "someone",
+      KIND: "issue_closed",
+      ISSUE: "42",
+      PR: "",
+      PR_AUTHOR: "",
+    };
+    expect(runWith({ ...base, STATE_REASON: "not_planned" })).toContain(
+      "--state-reason not_planned",
+    );
+    expect(
+      runWith({ ...base, STATE_REASON: "" }),
+      "an empty payload value must not become `--state-reason ''`. Both refuse, but only " +
+        "omission is honest about what the webhook actually carried.",
+    ).not.toContain("--state-reason");
+  });
+
+  test("SC-2690: a pull request event carries both the number and the author", () => {
+    const out = runWith({
+      GITHUB_REPOSITORY: "o/n",
+      PROJECT_ID: "PVT_x",
+      ACTOR: "maintainer",
+      KIND: "pr_closed_unmerged",
+      ISSUE: "",
+      PR: "99",
+      PR_AUTHOR: "drive-by",
+      STATE_REASON: "",
+    });
+    expect(out).toContain("--pr 99 --pr-author drive-by");
+    expect(
+      out,
+      "a pull request event must not also pass --issue: the script reads one target source " +
+        "per event kind, and passing both hides which one it used.",
+    ).not.toContain("--issue");
   });
 });
