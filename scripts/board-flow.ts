@@ -214,10 +214,20 @@ async function main(): Promise<number> {
   for (const who of identities) {
     const permission = await actorPermission(token, repo, who);
     if (!actorMayWrite(permission, { actor: who, owner: owner ?? "" })) {
+      // **The permission STRING is printed only for the actor.** These logs
+      // are public on a public repository, and a third party's access level
+      // on this repository is a fact about them rather than about this run.
+      // The actor already knows their own — they triggered the job — so
+      // printing it there is diagnostics, not disclosure. For the pull
+      // request's author only the decision is printed, which is everything
+      // a reader needs to act on and nothing more.
       console.log(
-        `::warning::refusing to run: ${who} has permission "${permission ?? "UNMEASURED"}" on ${repo}, ` +
-          `and this job holds a board-writing credential.` +
-          (who === actor ? "" : ` ${who} authored the pull request whose body names the issues to move.`),
+        who === actor
+          ? `::warning::refusing to run: ${who} has permission "${permission ?? "UNMEASURED"}" on ` +
+              `${repo}, and this job holds a board-writing credential.`
+          : `::warning::refusing to run: the author of this pull request is not authorised to ` +
+              `move this board, and its body is what names the issues to move. The actor who ` +
+              `triggered this run was authorised; the author was not.`,
       );
       return EXIT_REFUSED;
     }
