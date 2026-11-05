@@ -2,14 +2,14 @@
 doc-type: reference
 status: active
 owner: jason
-updated: 2026-11-01
+updated: 2026-11-04
 ---
 
 # rungate
 
 ## Project Identity
 
-Ship harness — conformity tests, scaffold, and agent briefs for AI-first development
+A ship harness for AI-first development: from issue to merged PR, with a report you can trust.
 **Tech:** Bun, TypeScript, ESM
 - **Repo:** https://github.com/hornjason/rungate
 
