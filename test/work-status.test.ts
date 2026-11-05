@@ -412,6 +412,34 @@ describe("the status reader does not leak the token on any hop", () => {
     ).toBe(0);
   });
 
+  // Caught in review of #1740. Two GraphQL queries spelled the owner and the
+  // repository as string literals while every REST path in the file was built
+  // from `REPO`. That is two deciders over one fact: after a rename — this
+  // repository was `hornjason/pai-harness` until 2026-10-28 — the REST reads
+  // follow the constant and these two keep pointing at the old name, and
+  // GitHub's redirect means they keep WORKING, against the wrong repository.
+  // A status tool reading two repositories and printing one table is the
+  // failure this file exists to stop.
+  test("the repository is named once — no query spells the owner itself", () => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+    // Anti-vacuity: the constant must exist and must be the thing the count
+    // below is counting. Without this the assertion passes on a file that
+    // renamed REPO away entirely.
+    expect(code, "scripts/work-status.ts must declare REPO").toMatch(
+      /const REPO = "hornjason\/rungate";/,
+    );
+
+    for (const word of ["hornjason", "rungate"]) {
+      expect(
+        (code.match(new RegExp(word, "g")) ?? []).length,
+        `"${word}" must appear exactly once in scripts/work-status.ts — inside ` +
+          `REPO. A query that spells it again is a second decider over which ` +
+          `repository this tool reports on, and a rename moves only one of them.`,
+      ).toBe(1);
+    }
+  });
+
   // The population the row above was too narrow to cover. Every abandonment of
   // a Response goes through `releaseAndThrow`, so there is one binding to
   // mutate rather than five sites to remember.

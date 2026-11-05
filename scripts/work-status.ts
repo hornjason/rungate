@@ -23,6 +23,14 @@ import { assertTokenMayReach, resolveGitHubToken } from "../lib/github";
 import { isPickable, orderReading, type TrackerFacts } from "../lib/work-status";
 
 const REPO = "hornjason/rungate";
+// **Split once, so GraphQL and REST cannot disagree about the repository.**
+// Two queries below spelled `owner:"hornjason",name:"rungate"` themselves
+// while every REST path was built from `REPO` — two deciders over one fact.
+// This repository was `hornjason/pai-harness` until 2026-10-28, and GitHub
+// redirects the old name, so after a rename the literals would have gone on
+// WORKING against the wrong repository while the REST reads followed the
+// constant: one table, two repositories, no error. Caught in review of #1740.
+const [OWNER, NAME] = REPO.split("/");
 const PROJECT = "PVT_kwHOAZTQCM4BpMuR";
 const MILESTONE = "Issue intake";
 
@@ -338,7 +346,7 @@ for (const i of issues) {
          timelineItems(first:100,after:$c,itemTypes:[CROSS_REFERENCED_EVENT]){
            pageInfo{hasNextPage endCursor}
            nodes{... on CrossReferencedEvent{source{... on PullRequest{number state}}}}}}}}`,
-      { o: "hornjason", n: "rungate", i: i.number, c: after },
+      { o: OWNER, n: NAME, i: i.number, c: after },
     );
     const page = linked.repository.issue.timelineItems;
     for (const n of page.nodes) {
@@ -357,9 +365,12 @@ for (const i of issues) {
 bar("OPEN PULL REQUESTS — rollup read from GitHub, not from a previous run");
 const prs = await restAll(`repos/${REPO}/pulls?state=open`);
 for (const p of prs) {
+  // Variables, not interpolation — the owner and name come from `REPO` like
+  // every other read, and the number stops being pasted into query text.
   const d = await gql(
-    `{repository(owner:"hornjason",name:"rungate"){pullRequest(number:${p.number}){
+    `query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){pullRequest(number:$i){
        mergeStateStatus commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}`,
+    { o: OWNER, n: NAME, i: p.number },
   );
   const pr = d.repository.pullRequest;
   const roll = pr.commits.nodes[0]?.commit?.statusCheckRollup?.state ?? "NO CHECKS REPORTED";
