@@ -145,22 +145,61 @@ async function deleteBranch(token: string, repo: string, branch: string) {
 }
 
 /**
+ * The scratch file one run commits, named after that run.
+ *
+ * **Per-run, because row 5 merges into the default branch.** A fixed path
+ * makes this a one-shot instrument: the first successful walk-through leaves
+ * the file on main for good, and the next run's create is a 422 on a file
+ * that already exists. A stamped path also survives a run that died between
+ * the merge and the cleanup below — the leftover is inert rather than a
+ * blocker, which is the case a `sha`-retry does not cover.
+ */
+const scratchPath = (stamp: string) => `.github/walkthrough-scratch-${stamp}.md`;
+
+/**
  * A branch with one throwaway commit, created entirely over REST.
  *
  * No `git` and no checkout: this runs before any clone and the walk-through
  * has no reason to hold a working tree. It also keeps every artefact this
  * script creates deletable by the same `finally` that deletes the issues.
  */
-async function createBranchWithCommit(token: string, repo: string, branch: string, base: string) {
+async function createBranchWithCommit(
+  token: string,
+  repo: string,
+  branch: string,
+  base: string,
+  path: string,
+) {
   const head = await rest(token, "GET", `/repos/${repo}/git/ref/heads/${base}`);
   await rest(token, "POST", `/repos/${repo}/git/refs`, {
     ref: `refs/heads/${branch}`,
     sha: head.object.sha,
   });
-  await rest(token, "PUT", `/repos/${repo}/contents/.github/walkthrough-scratch.md`, {
+  await rest(token, "PUT", `/repos/${repo}/contents/${path}`, {
     message: "chore: throwaway commit for the board walk-through",
     content: Buffer.from(`Created by the board walk-through at ${new Date().toISOString()}.\n`).toString("base64"),
     branch,
+  });
+}
+
+/**
+ * Remove the scratch file from the default branch after row 5 merged it there.
+ *
+ * Row 5 has to squash-merge into the DEFAULT branch, because GitHub's "pull
+ * request merged" built-in fires nowhere else — so a successful walk-through
+ * necessarily puts its scratch file on main. Deleting the branch does not
+ * undo that; the squashed commit is already on main.
+ *
+ * This leaves two commits of noise per run on a `walkthrough-scratch-*` path
+ * and no file. That is the honest cost of driving a real merge, and it is
+ * cheaper than a repository that accrues one scratch file per run forever.
+ */
+async function deleteScratchFromBase(token: string, repo: string, path: string, base: string) {
+  const cur = await rest(token, "GET", `/repos/${repo}/contents/${path}?ref=${base}`);
+  await rest(token, "DELETE", `/repos/${repo}/contents/${path}`, {
+    message: "chore: remove the board walk-through's throwaway commit",
+    sha: cur.sha,
+    branch: base,
   });
 }
 
@@ -180,6 +219,7 @@ async function main(): Promise<number> {
   const token = credential.token;
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const scratch = scratchPath(stamp);
   const made: Made[] = [];
   const readings: Reading[] = [];
   let branch: string | null = null;
@@ -233,7 +273,7 @@ async function main(): Promise<number> {
     // merged" built-in only fires for a PR into the DEFAULT branch carrying
     // one.
     branch = `walkthrough/${stamp}`;
-    await createBranchWithCommit(token, repo, branch, "main");
+    await createBranchWithCommit(token, repo, branch, "main", scratch);
     const pr = await rest(token, "POST", `/repos/${repo}/pulls`, {
       title: `walkthrough ${stamp} — throwaway, auto-deleted`,
       head: branch,
@@ -274,6 +314,19 @@ async function main(): Promise<number> {
         await rest(token, "PATCH", `/repos/${repo}/pulls/${prNumber}`, { state: "closed" });
       } catch (e) {
         console.log(`::warning::could not close throwaway pull request #${prNumber}: ${e}`);
+      }
+    }
+    // Only after a MERGE is the scratch file on main. An unmerged run never
+    // put it there, and asking for it would 404 — which would read as a
+    // cleanup failure for a file that was correctly absent.
+    if (mergedPr) {
+      try {
+        await deleteScratchFromBase(token, repo, scratch, "main");
+      } catch (e) {
+        console.log(
+          `::warning::the throwaway commit ${scratch} is still on main (${e}). ` +
+            `Delete it by hand — a later run will not be blocked by it, but it is litter.`,
+        );
       }
     }
     if (branch !== null) {

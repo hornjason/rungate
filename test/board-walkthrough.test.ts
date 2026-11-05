@@ -185,6 +185,43 @@ describe("the walk-through cleans up after itself", () => {
     expect(call![1], "it must be the id read back from the created issue").toMatch(/\.id$/);
   });
 
+  // ## Row 5 merges into main, so the scratch commit lands on main
+  //
+  // Caught by `ai-review` on this pull request, second round. Row 5 has to
+  // squash-merge into the DEFAULT branch — GitHub's "pull request merged"
+  // built-in fires nowhere else — so whatever the throwaway PR contains
+  // becomes part of main the moment the walk-through succeeds.
+  //
+  // With a FIXED scratch path that is a one-shot instrument: run one leaves
+  // `.github/walkthrough-scratch.md` on main for good, and run two's
+  // `PUT /contents/...` with no `sha` is a 422 because the file already
+  // exists. The walk-through would have worked exactly once and then failed
+  // forever, with the failure looking like a board problem.
+  //
+  // Two properties fix it and BOTH are needed. A per-run path means a
+  // leftover never blocks a later run — including a leftover from a run
+  // that crashed between merge and cleanup, which is the case a `sha`
+  // retry does not cover. Deleting it from main afterwards stops the repo
+  // accumulating one scratch file per run forever.
+  test("SC-2643: the scratch path is unique per run, so a leftover cannot block the next", () => {
+    const put = /contents\/([^`"']*)/.exec(src);
+    expect(put, "no contents write found — the throwaway commit is not being made").not.toBeNull();
+    expect(
+      put![1],
+      "a FIXED scratch path becomes permanent on main at the first successful merge, " +
+        "and every later run 422s creating a file that already exists. Interpolate the " +
+        "run stamp into the path.",
+    ).toContain("${");
+  });
+
+  test("SC-2643: the scratch file is deleted from the default branch after the merge", () => {
+    expect(
+      src,
+      "row 5 merges into main, so the scratch file lands on main. Without a DELETE the " +
+        "repository accumulates one per walk-through run, permanently.",
+    ).toMatch(/"DELETE",\s*`\/repos\/\$\{repo\}\/contents\//);
+  });
+
   // The run must be reachable ONLY by hand. A schedule is the thing #1744 was
   // filed to remove, and this one creates and deletes real issues.
   test("SC-2643: the walk-through is dispatch-only, never scheduled", () => {
