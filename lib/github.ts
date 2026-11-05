@@ -46,6 +46,12 @@ export interface GitHubClient {
        * `listMilestones` below passes `all` and does not expose the choice.
        */
       listMilestones: (params: { owner: string; repo: string; state?: string; per_page?: number }) => Promise<{ data: any[] }>;
+      /**
+       * One issue's comments. Paginated by the caller — `listIssueComments`
+       * below walks every page, because a single page silently truncates and
+       * a short list reads as a smaller answer rather than a wrong one.
+       */
+      listComments: (params: { owner: string; repo: string; issue_number: number; per_page?: number; page?: number }) => Promise<{ data: any[] }>;
       createMilestone: (params: { owner: string; repo: string; title: string; description?: string }) => Promise<{ data: any }>;
       updateMilestone: (params: { owner: string; repo: string; milestone_number: number; title?: string; description?: string }) => Promise<{ data: any }>;
     };
@@ -621,6 +627,79 @@ export async function listOpenIssues(
   // API cannot return more than was asked for, so `>` is a predicate that can
   // never fire. It is the cheapest wrong spelling of this line.
   return { considered: rows.length, perPage, truncated: rows.length >= perPage, droppedRows, issues };
+}
+
+/**
+ * Every comment on an issue, in creation order, across every page.
+ *
+ * SC-893: infrastructure reaches GitHub through Octokit, never through a `gh`
+ * subprocess. This replaced a `gh api --paginate --jq .[].created_at` call in
+ * `lib/filing-compliance.ts`, which was the last one in `lib/`.
+ *
+ * Pagination is a loop rather than a single `per_page: 100` read: a busy
+ * issue passes 100 comments, and a truncated list is not a smaller answer —
+ * it is a wrong one, and the reading it feeds is a compliance rate.
+ */
+export async function listIssueComments(
+  client: GitHubClient,
+  repoSlug: string,
+  issueNumber: number,
+): Promise<{ created_at: string }[]> {
+  const { owner, repo } = parseOwnerRepo(repoSlug);
+  const perPage = 100;
+  // AN UNBOUNDED PAGE WALK IS NOT A READING, IT IS A HANG. This loop used to
+  // terminate only on a short page, so a server-side paging bug, a `page`
+  // param silently ignored, or a client that always answers with a full page
+  // held the calling process open forever with no reading and no error. The
+  // sibling `listOpenIssues` above takes the opposite tradeoff on purpose —
+  // one page, and a `truncated` flag — so neither function should simply
+  // trust the server to end the walk.
+  //
+  // 100 pages is 10,000 comments on one issue. Reaching it means the
+  // assumption is wrong, which is UNMEASURED rather than a long answer.
+  const maxPages = 100;
+  const out: { created_at: string }[] = [];
+  for (let page = 1; ; page++) {
+    if (page > maxPages) {
+      throw new Error(
+        `listComments walked ${maxPages} pages without a short page, so this read is ` +
+          `UNMEASURED rather than complete. Either the issue has more than ${maxPages * perPage} ` +
+          `comments or the server is not honouring the page parameter.`,
+      );
+    }
+    const response = await client.rest.issues.listComments({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      per_page: perPage,
+      page,
+    });
+    // A SHAPE WE DID NOT EXPECT IS A FAILURE, NOT AN EMPTY PAGE. This read
+    // `Array.isArray(response?.data) ? response.data : []`, which turned any
+    // unexpected payload into a legitimately empty page: the loop then saw
+    // `rows.length < perPage`, returned what it had, and the caller reported
+    // MEASURED with zero comments. That is "nobody commented" where the truth
+    // is "we could not tell" — the exact conflation this module's header
+    // forbids, reached without any failure ever being observed. Throwing puts
+    // it back on the UNMEASURED path, which carries its own sentence.
+    if (!Array.isArray(response?.data)) {
+      throw new Error(
+        `listComments resolved with data of an unexpected shape (${
+          response?.data === null || response?.data === undefined
+            ? String(response?.data)
+            : typeof response.data
+        }), so this page is UNMEASURED rather than empty. ` +
+          `A non-array payload is not zero comments.`,
+      );
+    }
+    const rows = response.data;
+    for (const row of rows) {
+      if (row !== null && typeof row === "object" && typeof row.created_at === "string") {
+        out.push({ created_at: row.created_at as string });
+      }
+    }
+    if (rows.length < perPage) return out;
+  }
 }
 
 /**
