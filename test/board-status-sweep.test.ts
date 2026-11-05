@@ -25,6 +25,7 @@ import {
   requireWrittenItem,
   interpretResponse,
   parseBoardItem,
+  requireConnection,
   requireNode,
   sweep,
   withRetry,
@@ -533,6 +534,56 @@ describe("board status sweep", () => {
       code,
       "the SET_STATUS mutation's result must go through requireWrittenItem",
     ).toMatch(/requireWrittenItem\(\s*await graphql\(token, SET_STATUS/);
+  });
+
+  // BS-40. `requireNode` guards the TOP-LEVEL node being null — the case
+  // GitHub returns for an id the token cannot see — and both call sites then
+  // reached straight into a nested connection it does not check:
+  // `(requireNode(data, …) as any).items` and `… as any).fields`. An id that
+  // resolves to something which is not a ProjectV2 leaves the `... on
+  // ProjectV2` fragment unmatched, so `node` is a perfectly good object and
+  // the connection is `undefined` — and `page.nodes` threw a bare
+  // `Cannot read properties of undefined (reading 'nodes')` from the one
+  // script whose entire subject is telling a reading from an absence.
+  //
+  // Found in review of #1754 — and it is the SAME class as BR-40/BR-41, fixed
+  // in `scripts/board-ready.ts` in this same session without sweeping the
+  // sibling. Population here is 2 of 2; both go through one binding.
+  test("BS-40: a nested connection is guarded like the node that carries it", () => {
+    expect(
+      requireConnection({ node: { items: { nodes: [], pageInfo: {} } } }, "items", "project board"),
+    ).toEqual({ nodes: [], pageInfo: {} });
+
+    // Anti-vacuity: each refusal must be observed for its OWN shape, and the
+    // top-level cases must still refuse through requireNode underneath.
+    for (const [label, payload] of [
+      ["the fragment did not match, so the key is absent", { node: {} }],
+      ["the key is present and null", { node: { items: null } }],
+      ["the key is a scalar, not a connection", { node: { items: 7 } }],
+      ["the connection carries no nodes array", { node: { items: { pageInfo: {} } } }],
+    ] as const) {
+      expect(
+        () => requireConnection(payload, "items", "project board"),
+        `${label} must refuse`,
+      ).toThrow(/items/);
+    }
+    expect(() => requireConnection({ node: null }, "items", "project board")).toThrow(/SUCCEEDED/);
+
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      (code.match(/requireConnection\(/g) ?? []).length,
+      "expected the definition plus exactly two call sites — the board items " +
+        "page and the project fields page, which are the only two nested " +
+        "connections this script reaches into",
+    ).toBe(3);
+
+    // The defect, as source: a requireNode result cast and indexed directly.
+    expect(
+      [...code.matchAll(/requireNode\([^)]*\)\s*as any\)\s*\./g)].map(m => m[0]),
+      "a `(requireNode(…) as any).<key>` reach-through is the unguarded " +
+        "connection this row exists to stop — route it through " +
+        "requireConnection so the absence is named instead of thrown past.",
+    ).toEqual([]);
   });
 
   test("BS-38: a --write run with nothing to write resolves no fields", () => {

@@ -325,6 +325,46 @@ export function interpretResponse(status: number, ok: boolean, text: string): un
  * `null` and "no such field" are the same bytes to a property read, so this
  * says which one it was and what to do about it.
  */
+/**
+ * THE SAME CLASS AGAIN, ONE LEVEL DOWN. `requireNode` answers "did GitHub give
+ * me a node at all", and both callers then reached straight into a nested
+ * connection on it: `(requireNode(data, …) as any).items` and `… as
+ * any).fields`.
+ *
+ * An id that resolves to something which is NOT a ProjectV2 leaves the `... on
+ * ProjectV2` inline fragment unmatched. `node` is then a perfectly good
+ * object, the query carries no `errors`, `requireNode` is satisfied — and the
+ * connection is `undefined`, so `page.nodes` threw a bare `Cannot read
+ * properties of undefined (reading 'nodes')`. An opaque stack trace, out of
+ * the one script whose entire subject is telling a reading apart from an
+ * absence.
+ *
+ * Caught in review of #1754, and it is the same defect as BR-40/BR-41 in
+ * `scripts/board-ready.ts` — fixed there in this same session, in the sibling
+ * script, without sweeping back to this one. Population here is 2 of 2 and
+ * both go through this binding. BS-40.
+ */
+export function requireConnection(data: unknown, key: string, what: string): Record<string, any> {
+  const node = requireNode(data, what);
+  const page = node[key];
+  if (page === null || page === undefined || typeof page !== "object") {
+    throw new Error(
+      `GitHub answered the ${what} query with a node carrying no "${key}" connection ` +
+        `(it was ${page === undefined ? "absent" : JSON.stringify(page)}). The query ` +
+        `SUCCEEDED — this is not an error response. ${PROJECT_ID} resolved to something ` +
+        `that is not a ProjectV2, so the "... on ProjectV2" fragment matched nothing. ` +
+        `Check the id; nothing was read and nothing was written.`,
+    );
+  }
+  if (!Array.isArray((page as { nodes?: unknown }).nodes)) {
+    throw new Error(
+      `The "${key}" connection on the ${what} carries no nodes array, so there is nothing ` +
+        `to read and an empty board and an unreadable one would look the same. UNMEASURED.`,
+    );
+  }
+  return page as Record<string, any>;
+}
+
 export function requireNode(data: unknown, what: string): Record<string, unknown> {
   if (typeof data !== "object" || data === null) {
     throw new Error(`GitHub returned no data object when asked for the ${what}.`);
@@ -469,7 +509,7 @@ async function readBoard(token: string): Promise<BoardItem[]> {
 
   for (;;) {
     const data = await graphql(token, BOARD_QUERY, { project: PROJECT_ID, endCursor });
-    const page = (requireNode(data, "project board") as any).items;
+    const page = requireConnection(data, "items", "project board");
 
     for (const node of page.nodes) {
       const item = parseBoardItem(node);
@@ -561,7 +601,7 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   const fields = await graphql(token, FIELDS_QUERY, { project: PROJECT_ID });
-  const fieldPage = (requireNode(fields, "project fields") as any).fields;
+  const fieldPage = requireConnection(fields, "fields", "project fields");
   const statusField = fieldPage.nodes.find((f: any) => f?.name === "Status");
   if (statusField === undefined) {
     // **Absent and not-fetched are different facts**, and `find` returns the
