@@ -16,6 +16,7 @@ import {
   stepVerdict,
   runVerdict,
   reportLines,
+  unmeasuredReading,
   type Lane,
   type Reading,
   type Step,
@@ -370,6 +371,7 @@ async function main(): Promise<number> {
     // says so rather than blaming the Done writer.
     act = "wait for the throwaway pull request to become mergeable";
     const mergeable = await awaitMergeable(repoToken, repo, prNumber!, mergeBudgetMs);
+    let mergeBlocked: string | null = null;
     if (mergeable) {
       try {
         await doing("merge the throwaway pull request", () =>
@@ -377,16 +379,23 @@ async function main(): Promise<number> {
         );
         mergedPr = true;
       } catch (e) {
-        console.log(`::warning::row 5 UNMEASURED — the merge was refused (${e}).`);
+        mergeBlocked = `the merge was refused: ${e}`;
       }
     } else {
-      console.log(
-        `::warning::row 5 UNMEASURED — the throwaway pull request never became mergeable inside ` +
-          `${mergeBudgetMs / 1000}s. main requires the \`test\` and \`ai-review\` checks, so this is ` +
-          `about branch protection and CI duration, NOT about the Done lane. Row 5 below measured nothing.`,
-      );
+      mergeBlocked =
+        `the pull request never became mergeable inside ${mergeBudgetMs / 1000}s — main requires ` +
+        `the \`test\` and \`ai-review\` checks, so this is CI duration and branch protection`;
     }
-    await doing("read row 5 (Done)", () => record(5, b.nodeId));
+    // **A merge that did not happen is not a Done-lane failure.** Calling
+    // `record` here would compare the lane against `Done` and emit FAIL,
+    // naming the Done writer for an event it was never given — and the
+    // warning saying otherwise would sit elsewhere in the log, where no
+    // machine reads it. `ai-review` finding `04843009` on PR #1772.
+    if (mergeBlocked === null) {
+      await doing("read row 5 (Done)", () => record(5, b.nodeId));
+    } else {
+      readings.push(unmeasuredReading(byRow.get(5)!, mergeBlocked));
+    }
 
     // Row 6 — a not_planned close. Nothing moves it out of the lanes today.
     const c = await doing("create issue C (the cancelled one)", () =>
@@ -434,11 +443,34 @@ async function main(): Promise<number> {
         console.log(`::warning::could not delete throwaway branch ${branch}: ${e}`);
       }
     }
+    // **`deleteIssue` needs repository ADMIN, and `GITHUB_TOKEN` can never
+    // hold it** — the ceiling is `write`, at any `permissions:` setting.
+    // Blocking `ai-review` finding on PR #1772: moving the repository acts
+    // onto `GITHUB_TOKEN` fixed issue CREATION and broke issue DELETION, so
+    // every run would strand three throwaway issues on the tracker.
+    //
+    // Closing as `not_planned` is damage control, not a fix. An OPEN
+    // throwaway sits in the pickable set and someone picks it up; a closed
+    // one is merely litter. But it is litter that lands in the cancellation
+    // rate, which is the number the spec's whole Cancelled argument rests
+    // on — so the warning says what is actually required rather than
+    // leaving the next reader to infer "admin" from a 403 that will not say
+    // so.
     for (const m of made) {
       try {
         await deleteIssue(repoToken, m.nodeId);
       } catch (e) {
-        console.log(`::warning::could not delete throwaway issue #${m.number}: ${e}`);
+        try {
+          await closeIssue(repoToken, repo, m.number, "not_planned");
+        } catch {
+          /* the warning below is the report either way */
+        }
+        console.log(
+          `::warning::could not DELETE throwaway issue #${m.number} (${e}). Closed it as ` +
+            `not_planned instead; delete it by hand. GitHub's deleteIssue mutation requires ` +
+            `the repository ADMIN role, which GITHUB_TOKEN cannot be granted at any ` +
+            `permissions level — a self-cleaning walk-through needs an admin-capable PAT.`,
+        );
       }
     }
   }

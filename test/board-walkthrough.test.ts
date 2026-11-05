@@ -15,6 +15,7 @@ import {
   stepVerdict,
   runVerdict,
   reportLines,
+  unmeasuredReading,
   type Lane,
   type Reading,
   type Step,
@@ -155,6 +156,43 @@ describe("the walk-through reports what each lane did", () => {
         "partial reading indistinguishable from a dispatch that never started.",
     ).toContain("2");
     expect(v.why).toContain("merge the PR");
+  });
+
+  // ## A row whose EVENT never happened is not a lane failure
+  //
+  // `ai-review` finding `04843009` on PR #1772, and it is the sharpest kind
+  // of finding: the code contradicted its own pull request description. A
+  // timed-out `awaitMergeable` printed a warning saying row 5 measured
+  // nothing, and then recorded row 5 anyway — so the machine-read verdict
+  // said "a lane with a writer did not move", naming the Done writer, for a
+  // run in which the Done writer was never given an event.
+  //
+  // Prose in a warning does not correct a verdict. UNMEASURED is a fourth
+  // verdict rather than a flag on FAIL, because the two have opposite
+  // remedies: FAIL means fix the writer, UNMEASURED means run it again with
+  // a bigger budget.
+  test("SC-2641: a row whose event never happened is UNMEASURED, not a FAIL", () => {
+    const s = step({ n: 5, expect: "Done", writer: "GitHub native" });
+    const r = unmeasuredReading(s, "the throwaway pull request never became mergeable");
+    expect(r.verdict).toBe("UNMEASURED");
+    expect(
+      r.verdict,
+      "recording it as FAIL blames the Done writer for a merge that branch protection " +
+        "refused — the exact false reading this instrument exists to remove",
+    ).not.toBe("FAIL");
+    expect(reportLines([r]).join("\n")).toContain("never became mergeable");
+  });
+
+  test("SC-2641: UNMEASURED does not pass the run, and does not read as a lane failure", () => {
+    const s = step({ n: 5, expect: "Done", writer: "GitHub native" });
+    const v = runVerdict([unmeasuredReading(s, "CI was still running")]);
+    expect(v.ok, "a walk-through that did not measure Done has not shown Done works").toBe(false);
+    expect(
+      v.why,
+      "and it must NOT say a lane with a writer failed to move — that sentence sends the " +
+        "next reader to the Done writer, which is not where the problem is",
+    ).not.toContain("did not move");
+    expect(v.why).toContain("UNMEASURED");
   });
 
   test("SC-2641: an expired bounded wait is reported on the row, not swallowed", () => {
@@ -298,6 +336,42 @@ describe("the walk-through cleans up after itself", () => {
       "the catch must feed the failing act's name into runVerdict, or the report says " +
         "something died without saying what",
     ).toMatch(/runVerdict\(readings,\s*\w+/);
+  });
+
+  // ## `deleteIssue` needs repository ADMIN, which GITHUB_TOKEN never has
+  //
+  // Blocking `ai-review` finding on PR #1772. GitHub's `deleteIssue` GraphQL
+  // mutation requires the actor to hold the repository Admin role, and
+  // `GITHUB_TOKEN` cannot be granted that by any `permissions:` block — the
+  // ceiling is `write`. So moving the repository acts onto `GITHUB_TOKEN`
+  // fixed issue CREATION and silently broke issue DELETION, and the symptom
+  // is three throwaway issues left on the tracker per run.
+  //
+  // That matters beyond tidiness: the spec's whole Cancelled argument rests
+  // on the cancellation rate being observable, and throwaway `not_planned`
+  // closes pollute exactly that number. The fallback below is damage
+  // control, not a fix — a self-cleaning walk-through needs a credential
+  // carrying repository admin, and the driver has to say so out loud rather
+  // than leave a `::warning::` nobody reads.
+  test("SC-2643: a refused deletion falls back to closing, and says admin is why", () => {
+    expect(
+      src,
+      "deletion will be refused for GITHUB_TOKEN on every run. Leaving the issue OPEN " +
+        "puts throwaway work in the pickable set, which is worse than a closed one.",
+    ).toMatch(/could not DELETE[\s\S]{0,400}not_planned|not_planned[\s\S]{0,400}could not DELETE/);
+    expect(
+      src,
+      "and the warning must name ADMIN as the requirement, or the next reader re-derives " +
+        "it from a 403 that does not say so",
+    ).toMatch(/[Aa]dmin/);
+  });
+
+  test("SC-2643: row 5 is recorded as UNMEASURED when the merge never happened", () => {
+    expect(
+      src,
+      "the driver must build an UNMEASURED reading for row 5 on a merge that did not " +
+        "happen, not call record() and let the lane take the blame",
+    ).toContain("unmeasuredReading");
   });
 
   // The run must be reachable ONLY by hand. A schedule is the thing #1744 was
