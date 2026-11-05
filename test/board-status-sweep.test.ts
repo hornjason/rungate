@@ -508,7 +508,11 @@ describe("board status sweep", () => {
     // Behavioural, through the exported binding, because the whole point is
     // which BUCKET a null payload lands in.
     expect(
-      requireWrittenItem({ updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_x" } } }, 7),
+      requireWrittenItem(
+        { updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_x" } } },
+        7,
+        "PVTI_x",
+      ),
     ).toBe("PVTI_x");
     // The three shapes a 200-with-no-errors can carry.
     for (const [label, payload] of [
@@ -516,12 +520,16 @@ describe("board status sweep", () => {
       ["a null mutation payload", { updateProjectV2ItemFieldValue: null }],
       ["no key at all", {}],
     ] as const) {
-      expect(() => requireWrittenItem(payload, 7), `${label} must refuse`).toThrow(/#7/);
+      expect(() => requireWrittenItem(payload, 7, "PVTI_x"), `${label} must refuse`).toThrow(/#7/);
     }
     // An empty-string id is "present" to a truthiness check and confirms
     // nothing, which is the `?? 0` mistake in another costume.
     expect(() =>
-      requireWrittenItem({ updateProjectV2ItemFieldValue: { projectV2Item: { id: "" } } }, 7),
+      requireWrittenItem(
+        { updateProjectV2ItemFieldValue: { projectV2Item: { id: "" } } },
+        7,
+        "PVTI_x",
+      ),
     ).toThrow();
 
     // And the write path must actually call it — a validator nothing invokes
@@ -759,6 +767,53 @@ describe("board status sweep", () => {
       (planted.match(/\*\/\s*\n\s*\/\*\*/g) ?? []).length,
       "the detector must find a planted stack, or its zero means nothing",
     ).toBe(1);
+  });
+
+  // BS-46. BS-39 CHECKED PRESENCE WHERE THE QUESTION IS IDENTITY — the same
+  // shape as BS-27 (`errors` present vs populated) and BS-42 (`hasNextPage`
+  // present vs boolean), now on the one path that CHANGES the board.
+  //
+  // `requireWrittenItem` proved that the mutation echoed back *an* item id. It
+  // never asked whether that id was the item the correction targeted, and it
+  // structurally could not: `c.itemId` goes into the SET_STATUS variables at
+  // the call site and was never passed in. Every read helper in this file —
+  // `requireNode`, `requireConnection`, `requireCursorAdvanced` — validates
+  // that the response is about the thing that was asked for. The write helper
+  // was the one that stopped at well-formedness.
+  //
+  // The damage is the exact outcome this tool exists to detect: a stale or
+  // misrouted response echoes a different id, the write is reported as
+  // applied, `wrote #N -> Status` is printed, and the item that needed
+  // correcting goes on disagreeing with GitHub. Found in review of #1754.
+  test("BS-46: the write is confirmed for the item targeted, not merely for an item", () => {
+    expect(
+      requireWrittenItem(
+        { updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_a" } } },
+        7,
+        "PVTI_a",
+      ),
+      "the id that was targeted must pass",
+    ).toBe("PVTI_a");
+
+    expect(
+      () =>
+        requireWrittenItem(
+          { updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_b" } } },
+          7,
+          "PVTI_a",
+        ),
+      "a well-formed id for a DIFFERENT item confirms nothing about this " +
+        "correction and must refuse — presence is not identity",
+    ).toThrow(/PVTI_a/);
+
+    // The call site must hand it the id it targeted, or the comparison above
+    // is a property of the test rather than of the write path.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      code,
+      "requireWrittenItem must receive the same c.itemId that SET_STATUS was " +
+        "given, or it cannot tell which item GitHub answered about",
+    ).toMatch(/c\.number,\s*c\.itemId,/);
   });
 
   // BS-40. `requireNode` guards the TOP-LEVEL node being null — the case

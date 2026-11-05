@@ -726,6 +726,7 @@ async function main(argv: readonly string[]): Promise<number> {
         option: optionId(c.to),
       }),
       c.number,
+      c.itemId,
     );
   });
 
@@ -773,13 +774,20 @@ export interface Applied {
  * try/catch routes it into `failed`, where it is named and keeps the exit
  * non-zero. One binding, so a mutation of it has one site.
  */
-export function requireWrittenItem(data: unknown, issue: number): string {
+export function requireWrittenItem(data: unknown, issue: number, expected: string): string {
   const payload = (data as any)?.updateProjectV2ItemFieldValue;
   const id = payload?.projectV2Item?.id;
   if (typeof id !== "string" || id.length === 0) {
     throw new Error(
       `the Status write for #${issue} returned no item id, so nothing confirms it was applied — ` +
         `the response carried ${JSON.stringify(payload ?? null)}. Treating it as NOT written.`,
+    );
+  }
+  if (id !== expected) {
+    throw new Error(
+      `the Status write for #${issue} targeted item ${expected} and GitHub answered about ` +
+        `${id}. A well-formed id for a DIFFERENT item confirms nothing about this correction, ` +
+        `so #${issue} may still disagree with the board. Treating it as NOT written.`,
     );
   }
   return id;
