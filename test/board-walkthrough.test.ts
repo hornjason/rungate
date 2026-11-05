@@ -109,14 +109,47 @@ describe("the walk-through reports what each lane did", () => {
   // The report is asserted rather than the I/O, because a row missing from
   // the printed output is exactly the failure this increment exists to catch
   // and it is invisible if formatting lives inside the driver.
-  test("SC-2641: every reading appears in the report, and a writerless lane says so", () => {
+  test("SC-2641: every reading appears in the report", () => {
     const rs = WALKTHROUGH_STEPS.map(s => reading({ step: s, observed: "Backlog" }));
     const lines = reportLines(rs);
     expect(lines.length).toBe(WALKTHROUGH_STEPS.length);
     for (const s of WALKTHROUGH_STEPS) {
       expect(lines.some(l => l.startsWith(`row ${s.n} `)), `row ${s.n} is missing from the report`).toBe(true);
     }
-    expect(lines.join("\n")).toContain("NOTHING WRITES THIS LANE YET");
+  });
+
+  // **Its own fixture, and that is the fix rather than a weakening.** This
+  // assertion used to run over the live `WALKTHROUGH_STEPS`, which held two
+  // rows with `writer: null`. On 2026-11-05 `board-flow.yml` became the
+  // writer for all four of rows 3 to 6, no live row was writerless any
+  // more, and the case went red — correctly reporting that the string was
+  // absent, while saying nothing about whether the renderer could still
+  // produce it.
+  //
+  // The capability is still worth binding: the next unwritten lane must
+  // announce itself rather than render a blank. So it is tested against a
+  // step constructed here. Coupling it back to the live table would make it
+  // red again the day the table is complete, which is the day it should be
+  // most trusted.
+  test("SC-2641: a lane with no writer says so, rather than rendering blank", () => {
+    const orphan = { n: 99, action: "a lane nobody has wired yet", expect: "Ready" as Lane, writer: null };
+    const lines = reportLines([reading({ step: orphan, observed: "Backlog" })]);
+    expect(
+      lines.join("\n"),
+      "a row whose writer is null must name that, or an unwired lane is indistinguishable " +
+        "from a wired one that failed — and those have opposite fixes.",
+    ).toContain("NOTHING WRITES THIS LANE YET");
+  });
+
+  test("SC-2641: and a lane WITH a writer names it instead", () => {
+    const wired = { n: 98, action: "a wired lane", expect: "Ready" as Lane, writer: "board-ready.yml" };
+    const lines = reportLines([reading({ step: wired, observed: "Backlog" })]);
+    expect(lines.join("\n")).toContain("board-ready.yml");
+    expect(
+      lines.join("\n"),
+      "a renderer that printed the writerless notice unconditionally would satisfy the case " +
+        "above while telling the reader nothing.",
+    ).not.toContain("NOTHING WRITES THIS LANE YET");
   });
 
   // ## Measured by the first real dispatch, run 42092949455
