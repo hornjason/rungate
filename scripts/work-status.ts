@@ -21,6 +21,7 @@
  */
 import { assertTokenMayReach, resolveGitHubToken } from "../lib/github";
 import { isPickable, orderReading, type TrackerFacts } from "../lib/work-status";
+import { laneHealth, laneHealthLines } from "../lib/board-lane-health";
 
 const REPO = "hornjason/rungate";
 // **Split once, so GraphQL and REST cannot disagree about the repository.**
@@ -405,4 +406,71 @@ console.log(`  In "${MILESTONE}":`);
 for (const i of pickable.filter(x => x.milestone?.title === MILESTONE)) {
   console.log(`    #${i.number} ${i.title.slice(0, 62)}`);
 }
+// ## Board lane health — Jason asked for this, and a count alone would not
+// have answered him
+//
+// The counts were always available; they are not the point. Ready holding 6
+// is excellent if 6 is everything eligible and total failure if 34 are, and
+// the bare number cannot tell those apart. Every lane with a second source
+// is reported against it, and every lane without one says so rather than
+// borrowing a clean bill of health from the lanes that have one.
+//
+// `complete` is derived from the marker `boardStatus()` already plants when
+// an item's field page truncates — a partial read and an empty lane produce
+// the same count, and that ambiguity is this report's whole subject.
+// **Issues only, and the header says so.** `boardStatus()` keeps items whose
+// content is an Issue and drops every pull request on the board, so this
+// printed `Done 28` while the board's own UI showed 47. Both are correct and
+// a reader comparing them concludes one is broken — which is the precise
+// failure this whole report exists to remove.
+bar("BOARD LANE HEALTH — issues only, each lane against what should be in it");
+const laneCounts = new Map<string, number>();
+let truncated = false;
+for (const s of status.values()) {
+  if (s.startsWith("(UNMEASURED")) truncated = true;
+  laneCounts.set(s, (laneCounts.get(s) ?? 0) + 1);
+}
+// **Cancelled is `not_planned` OR `duplicate`** — that is the spec's own
+// condition and `lib/work-status.ts` already maps both to ABANDONED. The
+// first version of this counted only the first and so would have read a
+// lane that is short by every duplicate as OK (ai-review round 1).
+//
+// This pages ~740 closed issues rather than running one search, because
+// **the search qualifier cannot see a duplicate closure.** Measured
+// 2026-11-05 with a control, which is why it is not one more search:
+// `reason:"not planned"` → 23, `reason:completed` → 716, `reason:duplicate`
+// → 0 — and `reason:bogusvalue` → 0 as well. A value the index does not
+// understand and a true zero are the same bytes, so a second search would
+// have reported 0 duplicates forever and nothing could have told that from
+// a repository that has none.
+//
+// A failed or throttled read must not say "nothing was ever cancelled" —
+// that is a green Cancelled lane produced by a measurement that did not
+// happen. `null` travels into the census and refuses the row.
+let cancelledClosed: number | null = null;
+try {
+  const [owner, name] = REPO.split("/");
+  const q = `query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
+    issues(states:CLOSED,first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{stateReason}}}}`;
+  let n = 0;
+  let c: string | null = null;
+  do {
+    const d = await gql(q, { o: owner, n: name, c });
+    const page = d.repository.issues;
+    for (const i of page.nodes) if (i?.stateReason === "NOT_PLANNED" || i?.stateReason === "DUPLICATE") n++;
+    c = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (c);
+  cancelledClosed = n;
+} catch (e) {
+  console.log(`  (the cancelled-closure count could not be read: ${e})`);
+}
+const laneReadings = laneHealth({
+  counts: laneCounts,
+  pickable: pickable.length,
+  openAssigned: open.filter((i: any) => !i.pull_request && (i.assignees ?? []).length > 0).length,
+  cancelledClosed,
+  complete: !truncated && status.size > 0,
+});
+for (const line of laneHealthLines(laneReadings)) console.log(line);
+
 console.log("\n  Nothing above was remembered. Re-run to re-read.");
