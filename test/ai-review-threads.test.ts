@@ -32,6 +32,23 @@ function reading(
 
 const finding = { file: "src/a.ts", line: 12, summary: "off-by-one", failure_scenario: "n=0" };
 
+/** The #1740 shape: a carried finding on a path the pull request never touched. */
+const carried = { file: "lib/github.ts", line: 259, summary: "carried from an earlier round" };
+
+function withScope(reported: unknown[], files: string[]): AiReviewFindingsReading {
+  return {
+    outcome: "BLOCKED",
+    reported,
+    unlocatableReported: null,
+    scope: { status: "MEASURED", files, reason: null, detail: "" },
+  } as unknown as AiReviewFindingsReading;
+}
+
+/** Two findings on a path absent from the changed set — nothing is postable. */
+const outOfDiff = () => withScope([carried, { ...carried, line: 266 }], ["lib/work-status.ts"]);
+/** The same two, with the path present — both ARE postable, so a 422 is real. */
+const inDiff = () => withScope([carried, { ...carried, line: 266 }], ["lib/github.ts"]);
+
 /** Records what it was asked to send and answers however the case wants. */
 function recorder(answer: (n: number) => Awaited<ReturnType<AiReviewThreadPoster>>) {
   const sent: { path: string; line: number | null }[] = [];
@@ -103,6 +120,51 @@ describe("postReviewThreads", () => {
     // mutant passed 9 of 9 until this line was added.
     expect(aiReviewThreadsExitCode(r)).not.toBe(0);
     expect(aiReviewThreadsExitCode(r)).toBe(AI_REVIEW_THREADS_REFUSAL);
+  });
+
+  test("a carried finding whose file left the diff does not redden the job", async () => {
+    // #1740, head `1d95e1da457cf5fc91298bd017a94087b8244d46`, run
+    // `41950364518`: two findings carried onto `lib/github.ts`, which that
+    // pull request does not touch. GitHub answered the line AND the
+    // file-level retry with
+    //   422 pull_request_review_thread.path "could not be resolved"
+    // so both landed in `failed`, the job exited 1, and a required check
+    // sat red over a branch with nothing wrong in it.
+    //
+    // The finding is not dropped — it stays in `reported`, in the ledger,
+    // and in the adjudicator's annotation. It simply stops being posted to
+    // a diff that has no such path, which is the only honest thing to do
+    // with it and is not a defect in this producer.
+    const { sent, post } = recorder(() => ({
+      ok: false,
+      status: 422,
+      message: 'Validation Failed: {"field":"pull_request_review_thread.path"}',
+    }));
+    const r = await postReviewThreads(outOfDiff(), post);
+    expect(sent).toEqual([]);
+    expect(r.outcome).toBe("NOTHING_TO_POST");
+    expect(aiReviewThreadsExitCode(r)).toBe(0);
+  });
+
+  test("CONTROL: the identical 422 for a path IN the diff still refuses", async () => {
+    // The case above must not become a blanket excuse. This is the fifth
+    // shape in checks-must-be-able-to-fail.md — the cheap wrong fix here is
+    // "make a surviving 422 non-fatal", which turns a genuinely broken
+    // producer into a green required check. Same response, same assertion
+    // target, one input changed: the path is one the pull request touches.
+    const { sent, post } = recorder(() => ({
+      ok: false,
+      status: 422,
+      message: 'Validation Failed: {"field":"pull_request_review_thread.path"}',
+    }));
+    const r = await postReviewThreads(inDiff(), post);
+    // FOUR, not two: each finding is attempted at its line and then again at
+    // file level, because a 422 on a line is the documented answer for a
+    // line outside a hunk and the demotion is part of the contract. Both
+    // retries are what the out-of-diff case above must not spend.
+    expect(sent).toHaveLength(4);
+    expect(r.outcome).toBe("FAILED");
+    expect(aiReviewThreadsExitCode(r)).not.toBe(0);
   });
 
   test("a 403 is the fork token, and degrades instead of reddening the job", async () => {
