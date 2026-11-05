@@ -91,6 +91,32 @@ describe("BOARD-FLOW-SPEC: every lane says what it is for and what it costs", ()
     ).toContain("not assignment");
   });
 
+  // ## The finding above stopped being enough on 2026-11-05
+  //
+  // The spec now DOES trigger In progress on assignment, on the narrow
+  // ground that `.claude/rules/parallel-sessions.md` already requires a
+  // worker to assign themselves as their first physical act — so our
+  // assignment is the act the research points at, not the ownership
+  // statement it rejects.
+  //
+  // That makes the substring check above vacuous on its own: "not
+  // assignment" can now sit inside the paragraph explaining why we use
+  // assignment, and the guard would pass over a spec that had quietly
+  // reinstated #1758's design with no justification at all.
+  //
+  // So the departure has to carry its reason. A spec that triggers on
+  // assignment WITHOUT naming the convention that licenses it is exactly
+  // the thing the original finding was protecting us from.
+  test("SC-2644: departing from the research names the convention that licenses it", () => {
+    expect(
+      md,
+      "the spec moves In progress on assignment, which the research rejects in general. " +
+        "That is only defensible because parallel-sessions.md makes assignment our first " +
+        "physical act. Strip that reasoning and this is #1758's design with a citation " +
+        "stapled to it.",
+    ).toContain("parallel-sessions.md");
+  });
+
   test("SC-2644: the spec records that an unlimited mechanical Ready is a second Backlog", () => {
     expect(md).toContain("second Backlog");
   });
