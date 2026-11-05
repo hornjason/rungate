@@ -276,9 +276,20 @@ describe("the status reader does not leak the token on any hop", () => {
     // REQUEST url says nothing about where a 30x would send the token next.
     // An allowlist naming the exempt member proves only that somebody named
     // it. So the population is now asserted with no exemption at all.
-    const fetches = [...src.matchAll(/\bfetch\(/g)];
+    // **Comments stripped first.** The `{0,400}` below is a proxy for "inside
+    // `send()`", and measured against raw source it counts COMMENT
+    // characters — so adding a docblock to the function moves it past the
+    // window and the row goes red against code that did not change. That is
+    // exactly what happened: an eight-line comment naming `hop === 0` pushed
+    // the distance from 203 characters of code to 739 of source, and this row
+    // was the only red in CI on a commit whose behaviour was identical.
+    // `.claude/rules/self-referential-tests.md` — a detector that reads a
+    // whole file reads its comments. Counting `fetch(` on the stripped text
+    // is the same correction: one written inside a comment is not a call.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    const fetches = [...code.matchAll(/\bfetch\(/g)];
     expect(fetches.length).toBe(1);
-    expect(src).toMatch(/async function send\([\s\S]{0,400}?\bfetch\(/);
+    expect(code).toMatch(/async function send\([\s\S]{0,400}?\bfetch\(/);
   });
   // Same population, second property. `rest()` and `restAll()` both refuse a
   // non-2xx before parsing; `gql()` did not, and a 401 or a 502 returns a
