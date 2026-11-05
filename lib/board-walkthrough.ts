@@ -112,11 +112,36 @@ export interface Reading {
  * An empty reading list REFUSES. Zero rows produce zero failures, and a
  * walk-through that drove nothing must never be the same reading as a
  * walk-through where every lane worked.
+ *
+ * ## `abortedAt` was added because the refusal above was unreachable
+ *
+ * The first real dispatch (run `42092949455`) died on `404 POST /issues`
+ * and printed a Bun stack trace. The UNMEASURED branch directly above is
+ * tested and correct, and nothing in the program could reach it: the throw
+ * escaped the driver's `try` and the process ended before any verdict was
+ * computed. A case that proves a function refuses proves nothing about
+ * whether the program asks it to.
+ *
+ * An abort is a THIRD state, not a flavour of the first two. Four rows
+ * observed and then a throw is a partial measurement, and the verdict says
+ * both halves — which act died, and how many rows survived it — because
+ * otherwise the next reader has to re-run the whole thing to find out.
  */
-export function runVerdict(readings: readonly Reading[]): {
+export function runVerdict(
+  readings: readonly Reading[],
+  abortedAt?: string,
+): {
   readonly ok: boolean;
   readonly why: string;
 } {
+  if (abortedAt !== undefined) {
+    return {
+      ok: false,
+      why:
+        `UNMEASURED — the run died performing "${abortedAt}". ${readings.length} row(s) ` +
+        `were observed before it, and every lane after it is unmeasured rather than working`,
+    };
+  }
   if (readings.length === 0) {
     return { ok: false, why: "UNMEASURED — no step produced a reading, so nothing was observed" };
   }

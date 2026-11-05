@@ -29,9 +29,26 @@ on:
         required: false
         default: "90"
         type: string
+      merge-wait-seconds:
+        description: "How long to wait for the throwaway PR's required checks before giving up on row 5"
+        required: false
+        default: "900"
+        type: string
 
+# THE REPOSITORY ACTS RUN ON `GITHUB_TOKEN`, NOT ON THE PAT. Measured
+# 2026-11-05, run 42092949455: the PAT returns `404 POST /repos/.../issues`.
+# `board-intake.yml` records it as minted `read:project` and later measured
+# carrying project WRITE — project scope is not repository scope, and the
+# walk-through is the first thing that ever asked it to write a repository.
+#
+# So the two credentials are each scoped for what they do: the PAT reads the
+# board, because `GITHUB_TOKEN` cannot read ProjectsV2 at any permission
+# level, and `GITHUB_TOKEN` creates and deletes the throwaway artefacts in
+# the repository it is already scoped to. Neither carries the other's power.
 permissions:
-  contents: read
+  contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
   walk-every-lane:
@@ -83,8 +100,10 @@ jobs:
         if: steps.gate.outputs.trusted == 'true'
         env:
           BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           WAIT: ${{ inputs.wait-seconds }}
+          MERGE_WAIT: ${{ inputs.merge-wait-seconds }}
         run: |
           if [ -z "$PROJECT_ID" ]; then
             echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
@@ -93,4 +112,5 @@ jobs:
           bun scripts/board-walkthrough.ts \
             --repo "$GITHUB_REPOSITORY" \
             --project "$PROJECT_ID" \
-            --wait-seconds "$WAIT"
+            --wait-seconds "$WAIT" \
+            --merge-wait-seconds "$MERGE_WAIT"

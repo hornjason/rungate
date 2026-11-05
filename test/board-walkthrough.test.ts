@@ -117,6 +117,46 @@ describe("the walk-through reports what each lane did", () => {
     expect(lines.join("\n")).toContain("NOTHING WRITES THIS LANE YET");
   });
 
+  // ## Measured by the first real dispatch, run 42092949455
+  //
+  // The first dispatch died 0.3s in, on `404 POST /repos/.../issues`, and
+  // what it printed was a Bun stack trace. Not the UNMEASURED refusal
+  // directly above, which is tested, correct, and was **unreachable**: the
+  // throw escaped `main`'s `try` after the `finally`, so no reading was ever
+  // handed to `runVerdict`.
+  //
+  // That is shape three in `.claude/rules/checks-must-be-able-to-fail.md` —
+  // an assertion that holds vacuously. The case proved the function refuses;
+  // nothing proved the program reaches the function. An instrument built to
+  // stop false readings reported its own first failure as a crash.
+  //
+  // An abort is also NOT the same reading as "no readings". Four rows
+  // observed and then a throw is a partial measurement, and the verdict has
+  // to say both halves or the next reader re-runs the whole thing.
+  test("SC-2641: an aborted run names the act that threw, and is not the same as an empty one", () => {
+    const empty = runVerdict([], "create issue A");
+    expect(empty.ok).toBe(false);
+    expect(
+      empty.why,
+      "a run that died must name WHICH act died. `404 POST /issues` and `the Ready " +
+        "lane did not move` are different problems and the report must not spell them alike.",
+    ).toContain("create issue A");
+    expect(runVerdict([]).why, "and an abort must be distinguishable from no dispatch at all").not.toContain(
+      "create issue A",
+    );
+  });
+
+  test("SC-2641: an abort after some rows reports the rows it DID observe", () => {
+    const v = runVerdict([reading(), reading()], "merge the PR");
+    expect(v.ok).toBe(false);
+    expect(
+      v.why,
+      "two rows were genuinely measured before the throw. Discarding them makes a " +
+        "partial reading indistinguishable from a dispatch that never started.",
+    ).toContain("2");
+    expect(v.why).toContain("merge the PR");
+  });
+
   test("SC-2641: an expired bounded wait is reported on the row, not swallowed", () => {
     const [line] = reportLines([reading({ observed: "Backlog", waitExpired: true })]);
     expect(line).toContain("bounded wait expired");
@@ -220,6 +260,44 @@ describe("the walk-through cleans up after itself", () => {
       "row 5 merges into main, so the scratch file lands on main. Without a DELETE the " +
         "repository accumulates one per walk-through run, permanently.",
     ).toMatch(/"DELETE",\s*`\/repos\/\$\{repo\}\/contents\//);
+  });
+
+  // ## The board credential has no repository scope — measured, not inferred
+  //
+  // Run `42092949455`, 2026-11-05T19:20:44Z: `404 POST
+  // /repos/hornjason/rungate/issues`. `.github/workflows/board-intake.yml`
+  // records `RUNGATE_PROJECT_TOKEN` as minted `read:project` on 2026-11-02
+  // and later measured carrying project WRITE (run `42039773150`, by the
+  // board row it produced). Project scope is not repository scope, and the
+  // walk-through is the first thing that ever asked it to write a repo.
+  //
+  // So the two credentials are separated by what they are each scoped for,
+  // rather than one token being asked to carry everything: the PAT reads the
+  // board because `GITHUB_TOKEN` cannot read ProjectsV2 at all, and the repo
+  // acts use the token that is actually scoped for this repository.
+  test("SC-2643: the board read and the repository acts use different credentials", () => {
+    expect(
+      src,
+      "the PAT carries project scope and no repository scope (measured: run 42092949455, " +
+        "404 on POST /issues). Asking it to create an issue is asking for a scope it was " +
+        "never minted with.",
+    ).toContain("repoToken");
+    expect(src, "and the board read still needs the PAT, because GITHUB_TOKEN cannot read ProjectsV2").toContain(
+      "boardToken",
+    );
+  });
+
+  test("SC-2643: a thrown act is caught and reported, never left as a stack trace", () => {
+    expect(
+      /catch\s*\(/.test(src),
+      "run 42092949455 printed a Bun stack trace because nothing caught the throw. " +
+        "The UNMEASURED verdict exists and was unreachable.",
+    ).toBe(true);
+    expect(
+      src,
+      "the catch must feed the failing act's name into runVerdict, or the report says " +
+        "something died without saying what",
+    ).toMatch(/runVerdict\(readings,\s*\w+/);
   });
 
   // The run must be reachable ONLY by hand. A schedule is the thing #1744 was
