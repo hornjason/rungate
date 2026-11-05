@@ -56,8 +56,17 @@ export interface LaneCensus {
   readonly pickable: number;
   /** Open issues with at least one assignee. */
   readonly openAssigned: number;
-  /** Issues closed with `state_reason: not_planned`. */
-  readonly notPlannedClosed: number;
+  /**
+   * Issues closed with `state_reason: not_planned`, or `null` when the
+   * count could not be taken.
+   *
+   * **`null` rather than `0`**, because they are opposite facts wearing the
+   * same digit: zero cancellations makes Cancelled correct, and a search
+   * that failed makes it unknown. Collapsing them produces a green lane out
+   * of a measurement that never happened — security review of the pushed
+   * commit, finding 1.
+   */
+  readonly notPlannedClosed: number | null;
   /**
    * False when the board could not be paged in full.
    *
@@ -77,12 +86,25 @@ export interface LaneReading {
   readonly why: string;
 }
 
-/** The denominator for each lane that has one, and why it is that one. */
-function target(lane: string, c: LaneCensus): { against: number; label: string } | null {
-  if (lane === "Ready") return { against: c.pickable, label: "unblocked and unclaimed" };
-  if (lane === "In progress") return { against: c.openAssigned, label: "open and assigned" };
-  if (lane === "Cancelled") return { against: c.notPlannedClosed, label: "closed as not_planned" };
-  return null;
+/**
+ * The denominator for each lane that has one, and why it is that one.
+ *
+ * **Every label says the denominator is repo-wide.** The numerator counts
+ * items on the BOARD and all three denominators count the whole repository,
+ * so an eligible issue the board has never held inflates the gap. Security
+ * review of the pushed commit, finding 3. Scoping the denominators to board
+ * items would hide the more important failure — an eligible issue that
+ * never reached the board at all — so the populations stay as they are and
+ * the reading declares the mismatch instead of pretending to be exact.
+ *
+ * `undefined` means this lane has no denominator; `null` inside one means
+ * the denominator exists but could not be read.
+ */
+function target(lane: string, c: LaneCensus): { against: number | null; label: string } | undefined {
+  if (lane === "Ready") return { against: c.pickable, label: "unblocked and unclaimed, repo-wide" };
+  if (lane === "In progress") return { against: c.openAssigned, label: "open and assigned, repo-wide" };
+  if (lane === "Cancelled") return { against: c.notPlannedClosed, label: "closed as not_planned, repo-wide" };
+  return undefined;
 }
 
 /**
@@ -93,7 +115,16 @@ function target(lane: string, c: LaneCensus): { against: number; label: string }
  * fact from the outside, and both mean nothing is in it.
  */
 export function laneHealth(c: LaneCensus): LaneReading[] {
-  return LANES.map(lane => {
+  // **A lane the board has and this file does not know about gets its own
+  // row.** Mapping over LANES alone meant such a lane contributed items to
+  // no row at all, so the report stayed confident and complete-looking
+  // while part of the board was simply absent from it. Adding a lane on the
+  // board is two clicks and nobody would think to mirror it here. Security
+  // review of the pushed commit, finding 4.
+  const unknown = [...c.counts.keys()]
+    .filter(k => !LANES.includes(k) && !k.startsWith("("))
+    .sort();
+  const known = LANES.map(lane => {
     const count = c.counts.get(lane) ?? 0;
     if (!c.complete) {
       return {
@@ -105,13 +136,24 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
       };
     }
     const t = target(lane, c);
-    if (t === null) {
+    if (t === undefined) {
       return {
         lane,
         count,
         against: null,
         health: "NO_TARGET" as const,
         why: "no second source says what should be here, so the count is reported and nothing is judged",
+      };
+    }
+    // The denominator exists but could not be read. A failed search is not
+    // a repository with nothing in it.
+    if (t.against === null) {
+      return {
+        lane,
+        count,
+        against: null,
+        health: "UNMEASURED" as const,
+        why: `the ${t.label} count could not be read, so this lane has no denominator to judge against`,
       };
     }
     if (count === 0 && t.against > 0) {
@@ -129,7 +171,7 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
         count,
         against: t.against,
         health: "SHORT" as const,
-        why: `${t.against} ${t.label}, so ${t.against - count} are missing from this lane`,
+        why: `${t.against} ${t.label}, so up to ${t.against - count} are missing from this lane`,
       };
     }
     return {
@@ -140,6 +182,16 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
       why: `${t.against} ${t.label}, and the lane holds ${count}`,
     };
   });
+  return [
+    ...known,
+    ...unknown.map(lane => ({
+      lane,
+      count: c.counts.get(lane) ?? 0,
+      against: null,
+      health: "UNMEASURED" as const,
+      why: `this report does not know the lane "${lane}", so its items are unaccounted for above`,
+    })),
+  ];
 }
 
 /**

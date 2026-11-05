@@ -418,7 +418,12 @@ for (const i of pickable.filter(x => x.milestone?.title === MILESTONE)) {
 // `complete` is derived from the marker `boardStatus()` already plants when
 // an item's field page truncates — a partial read and an empty lane produce
 // the same count, and that ambiguity is this report's whole subject.
-bar("BOARD LANE HEALTH — each lane against what should be in it");
+// **Issues only, and the header says so.** `boardStatus()` keeps items whose
+// content is an Issue and drops every pull request on the board, so this
+// printed `Done 28` while the board's own UI showed 47. Both are correct and
+// a reader comparing them concludes one is broken — which is the precise
+// failure this whole report exists to remove.
+bar("BOARD LANE HEALTH — issues only, each lane against what should be in it");
 const laneCounts = new Map<string, number>();
 let truncated = false;
 for (const s of status.values()) {
@@ -429,15 +434,24 @@ for (const s of status.values()) {
 // verified against its own control on 2026-11-05: `reason:"not planned"`
 // returned 23 and `reason:completed` returned 716, so it discriminates
 // rather than reporting a constant.
-const notPlanned = await rest(
-  `search/issues?q=${encodeURIComponent(`repo:${REPO} is:issue is:closed reason:"not planned"`)}&per_page=1`,
-);
+// A failed or throttled search must not read as "nothing was ever
+// cancelled" — that is a green Cancelled lane produced by a measurement
+// that did not happen. `null` travels into the census and refuses the row.
+let notPlannedClosed: number | null = null;
+try {
+  const r = await rest(
+    `search/issues?q=${encodeURIComponent(`repo:${REPO} is:issue is:closed reason:"not planned"`)}&per_page=1`,
+  );
+  if (typeof r.total_count === "number" && r.incomplete_results !== true) notPlannedClosed = r.total_count;
+} catch (e) {
+  console.log(`  (the not_planned count could not be read: ${e})`);
+}
 const laneReadings = laneHealth({
   counts: laneCounts,
   pickable: pickable.length,
   openAssigned: open.filter((i: any) => !i.pull_request && (i.assignees ?? []).length > 0).length,
-  notPlannedClosed: notPlanned.total_count ?? 0,
-  complete: !truncated,
+  notPlannedClosed,
+  complete: !truncated && status.size > 0,
 });
 for (const line of laneHealthLines(laneReadings)) console.log(line);
 

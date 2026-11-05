@@ -269,3 +269,7 @@ second: flow efficiency is the one metric this spec must not promise.**
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
+- [ ] SC-2670: the status report reads every lane against what should be in it
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
