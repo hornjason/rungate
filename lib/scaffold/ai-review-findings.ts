@@ -1016,6 +1016,25 @@ export interface AiReviewThreadRequest {
  * a hunk, which is a separate 422 the caller has to be able to fall back
  * from. Dropping here would silently lose findings whose only defect is that
  * the reviewer wrote no line number.
+ *
+ * **A finding whose file is not in the diff is not requested, blocking or
+ * not.** `unlocatableReported` is populated by `readPayload`'s DEMOTION
+ * branch, and that branch only runs for a finding that BLOCKS — so the
+ * subtraction above cannot see a non-blocking finding carried forward onto a
+ * path this branch has since stopped touching. It was sent, and GitHub
+ * answered `422 pull_request_review_thread.path "could not be resolved"` at
+ * the line AND again at file level, because the caller's demotion answers
+ * "the line moved" and has no answer for "the file left". That lands in
+ * `failed`, the one refusing outcome. Observed on #1740 head
+ * `1d95e1da457cf5fc91298bd017a94087b8244d46`, run `41950364518`: two carried
+ * findings on `lib/github.ts`, `0 of 2 posted`, exit 1, and a required check
+ * permanently red over a branch with nothing wrong in it.
+ *
+ * The two skips are NOT the fourth shape in
+ * `.claude/rules/checks-must-be-able-to-fail.md`, because each has an input
+ * the other cannot answer: a MEASURED scope with `unlocatableReported` null
+ * is reachable only by the scope check, and a reading carrying no scope with
+ * `unlocatableReported` set is reachable only by the subtraction.
  */
 export function reviewThreadRequests(
   reading: AiReviewFindingsReading,
@@ -1025,11 +1044,31 @@ export function reviewThreadRequests(
   if (reading.reported === null) return [];
   const unlocatable = new Set(reading.unlocatableReported ?? []);
 
+  // Only a scope that was TAKEN can retire anything. `NOT_SUPPLIED` and
+  // `UNMEASURED` leave `touched` null, which `findingPathScope` answers
+  // `NOT_CHECKED` for every finding — a reading nobody took is not a pull
+  // request that touched nothing, and must never become a blanket excuse for
+  // posting less.
+  const scope = reading.scope;
+  let touched: ReadonlySet<string> | null = null;
+  if (scope?.status === "MEASURED") {
+    // The same conversion `readPayload` makes, through the same function, so
+    // the skip here and the demotion there cannot disagree about one finding.
+    const { readable } = partitionChangedFiles(scope.files);
+    // Nothing readable left is the input `readPayload` refuses the whole
+    // reading over, for the reason stated there: comparing against it would
+    // retire every finding. Here the equivalent is to decide nothing.
+    if (readable.length > 0) touched = new Set(readable);
+  }
+
   const requests: AiReviewThreadRequest[] = [];
   for (const item of reading.reported) {
     if (unlocatable.has(item)) continue;
     if (typeof item !== "object" || item === null) continue;
     const finding = item as Record<string, unknown>;
+    // `PRE_EXISTING` only. `UNDECIDABLE` is a path this reader could not
+    // compare, and it keeps the behaviour the line below already gives it.
+    if (findingPathScope(finding, touched) === "PRE_EXISTING") continue;
 
     const raw = finding[f.file];
     // Readability is asked of the normalised spelling; the answer is carried
