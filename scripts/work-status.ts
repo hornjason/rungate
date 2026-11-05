@@ -89,6 +89,13 @@ async function releaseAndThrow(r: Response, message: string): Promise<never> {
  */
 async function send(url: string, init: RequestInit = {}): Promise<Response> {
   let target = assertTokenMayReach(url, "request URL").toString();
+  // **`hop === 0` is the ORIGINAL request, not a redirect.** Hops 1..5 are the
+  // five redirects `MAX_REDIRECTS` permits, so `<=` is correct and six fetches
+  // is the right number: one request plus five redirects. Review of #1740 read
+  // this as an off-by-one that tolerates six redirects and proposed
+  // `hop < MAX_REDIRECTS`, which would allow only four — the bound and the
+  // name agree today and that change would break the agreement. The loop was
+  // legible enough to be wrong about, which is this comment's reason to exist.
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const r = await fetch(target, { ...init, headers: { ...H, ...(init.headers ?? {}) }, redirect: "manual" });
     if (r.status < 300 || r.status > 399) return r;
@@ -272,9 +279,22 @@ for (const it of ORDER) {
   // different facts: `x` means the tracker was read and says so, `~` means a
   // person wrote it down and nothing can confirm it.
   const mark = reading === "DONE" ? "x" : reading === "RECORDED" ? "~" : " ";
+  // **UNMEASURED has two causes and they are different facts.** This printed
+  // "no tracker object — cannot be measured" for both, so an item whose
+  // tracker WAS set and WAS fetched — closed with a `state_reason` outside
+  // completed/not_planned/duplicate, which `null` and `reopened` both are —
+  // got a line denying it had a tracker, printed next to the tracker's own id
+  // in the same row. A status tool contradicting itself inside one line is
+  // precisely the failure this file exists to stop. Caught in review of
+  // #1740. `facts` is the discriminator: it is defined exactly when a tracker
+  // was named AND read.
   const shown =
     reading === "UNMEASURED"
-      ? "no tracker object — cannot be measured"
+      ? facts === undefined
+        ? "no tracker object — cannot be measured"
+        : `tracker read, but its closure reason is one this tool does not ` +
+          `recognise (${facts.kind === "issue" ? (facts.stateReason ?? "null") : "pull request"}) — ` +
+          `cannot be measured`
       : reading === "RECORDED"
         ? `RECORDED, not observed — ${it.recordedDone}`
         : `${reading}${detail}`;

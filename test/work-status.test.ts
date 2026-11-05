@@ -323,6 +323,33 @@ describe("the status reader does not leak the token on any hop", () => {
     ).toMatch(/r\.body\?\.cancel\(\)/);
   });
 
+  // Caught in review of #1740. `orderReading` returns UNMEASURED for TWO
+  // different facts — no tracker named at all, and a tracker that WAS read
+  // whose closure reason is outside completed/not_planned/duplicate (`null`
+  // and `reopened` are both common). One fixed string served both, so the
+  // second printed "no tracker object" on the same line as the tracker's own
+  // id. A status tool that contradicts itself inside one row is the failure
+  // this whole file exists to stop.
+  test("UNMEASURED says WHICH of its two causes it is", () => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    // Anti-vacuity: one branch, so the assertion below cannot be satisfied by
+    // some other UNMEASURED site elsewhere in the file.
+    expect(
+      (code.match(/reading === "UNMEASURED"/g) ?? []).length,
+      "expected exactly one UNMEASURED branch in the order table",
+    ).toBe(1);
+    const arm = code.slice(code.indexOf('reading === "UNMEASURED"'));
+    expect(
+      arm.slice(0, 500),
+      "the UNMEASURED arm must branch on whether a tracker was actually read — " +
+        "`facts` is defined exactly when one was named AND fetched. One fixed " +
+        "string tells a reader 'no tracker object' about a row that names one.",
+    ).toMatch(/facts === undefined/);
+    // Both messages must exist, or the branch is decorative.
+    expect(arm.slice(0, 500)).toMatch(/no tracker object/);
+    expect(arm.slice(0, 500)).toMatch(/tracker read, but its closure reason/);
+  });
+
   // The population the row above was too narrow to cover. Every abandonment of
   // a Response goes through `releaseAndThrow`, so there is one binding to
   // mutate rather than five sites to remember.
