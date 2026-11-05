@@ -79,10 +79,26 @@ jobs:
     # prevent. BR-33 asserts the two spellings are the same set, so they
     # cannot drift into two guards that disagree.
     steps:
+      # THE SECRET IS `RUNGATE_PROJECT_TOKEN`; THE ENV VAR IS
+      # `BOARD_PROJECT_TOKEN`. Two names on purpose, and do not "tidy" either
+      # into the other. `readBoardCredential` in `lib/board-ready-fanout.ts`
+      # reads the env var, and the repository secret is the one that exists.
+      #
+      # This file shipped naming a secret nobody had minted, and the failure
+      # mode is the quiet one: `secrets.<name>` for an absent secret is the
+      # EMPTY STRING, with no error and no annotation of its own. So the gate
+      # below took the `-z "$GH_TOKEN"` branch on every run, reported
+      # `UNMEASURED — BOARD_PROJECT_TOKEN is not set`, exited 0, and the run
+      # went green. Run `41950972882` on 2026-11-05T01:48:16Z is the record:
+      # #1744 closed, the fan-out fired, and the Ready lane moved nothing.
+      #
+      # BR-13 censuses EVERY `secrets.` reference in this file rather than one
+      # of them, because a wrong secret name is a population and repairing one
+      # site leaves the gate authorising itself with nothing.
       - id: gate
         name: May the acting identity move the board?
         env:
-          GH_TOKEN: ${{ secrets.BOARD_PROJECT_TOKEN }}
+          GH_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           # The identity that TRIGGERED this run, through env: rather than
           # interpolated into the script line — BR-16.
           ACTOR: ${{ github.actor }}
@@ -143,7 +159,7 @@ jobs:
       - name: Fan out from the closed blocker
         if: steps.gate.outputs.trusted == 'true'
         env:
-          BOARD_PROJECT_TOKEN: ${{ secrets.BOARD_PROJECT_TOKEN }}
+          BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
           WRITE: ${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
