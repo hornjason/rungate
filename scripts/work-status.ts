@@ -21,6 +21,7 @@
  */
 import { assertTokenMayReach, resolveGitHubToken } from "../lib/github";
 import { isPickable, orderReading, type TrackerFacts } from "../lib/work-status";
+import { laneHealth, laneHealthLines } from "../lib/board-lane-health";
 
 const REPO = "hornjason/rungate";
 // **Split once, so GraphQL and REST cannot disagree about the repository.**
@@ -405,4 +406,39 @@ console.log(`  In "${MILESTONE}":`);
 for (const i of pickable.filter(x => x.milestone?.title === MILESTONE)) {
   console.log(`    #${i.number} ${i.title.slice(0, 62)}`);
 }
+// ## Board lane health — Jason asked for this, and a count alone would not
+// have answered him
+//
+// The counts were always available; they are not the point. Ready holding 6
+// is excellent if 6 is everything eligible and total failure if 34 are, and
+// the bare number cannot tell those apart. Every lane with a second source
+// is reported against it, and every lane without one says so rather than
+// borrowing a clean bill of health from the lanes that have one.
+//
+// `complete` is derived from the marker `boardStatus()` already plants when
+// an item's field page truncates — a partial read and an empty lane produce
+// the same count, and that ambiguity is this report's whole subject.
+bar("BOARD LANE HEALTH — each lane against what should be in it");
+const laneCounts = new Map<string, number>();
+let truncated = false;
+for (const s of status.values()) {
+  if (s.startsWith("(UNMEASURED")) truncated = true;
+  laneCounts.set(s, (laneCounts.get(s) ?? 0) + 1);
+}
+// One request rather than paging ~740 closed issues. The qualifier was
+// verified against its own control on 2026-11-05: `reason:"not planned"`
+// returned 23 and `reason:completed` returned 716, so it discriminates
+// rather than reporting a constant.
+const notPlanned = await rest(
+  `search/issues?q=${encodeURIComponent(`repo:${REPO} is:issue is:closed reason:"not planned"`)}&per_page=1`,
+);
+const laneReadings = laneHealth({
+  counts: laneCounts,
+  pickable: pickable.length,
+  openAssigned: open.filter((i: any) => !i.pull_request && (i.assignees ?? []).length > 0).length,
+  notPlannedClosed: notPlanned.total_count ?? 0,
+  complete: !truncated,
+});
+for (const line of laneHealthLines(laneReadings)) console.log(line);
+
 console.log("\n  Nothing above was remembered. Re-run to re-read.");
