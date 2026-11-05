@@ -42,8 +42,21 @@ function item(
   state: ItemState,
   status: string | null,
   draft = false,
+  // **Defaulted to null, not to COMPLETED.** A default of COMPLETED would
+  // make every existing row keep passing while hiding the one case this
+  // change is about, which is a fixture choosing the answer.
+  stateReason: string | null = null,
 ): BoardItem {
-  return { itemId: `PVTI_${number}`, number, kind, state, status, draft, statusUnread: false };
+  return {
+    itemId: `PVTI_${number}`,
+    number,
+    kind,
+    state,
+    status,
+    draft,
+    statusUnread: false,
+    stateReason,
+  };
 }
 
 describe("board status sweep", () => {
@@ -54,9 +67,66 @@ describe("board status sweep", () => {
   });
 
   test("BS-2: a closed issue not marked Done is corrected to Done", () => {
-    const v = verdictFor(item(1727, "Issue", "CLOSED", "In progress"));
+    const v = verdictFor(item(1727, "Issue", "CLOSED", "In progress", false, "COMPLETED"));
     expect(v.kind).toBe("correct");
     expect(v.kind === "correct" && v.to).toBe(DONE);
+  });
+
+  // ## Closed is not one outcome, and this script treated it as one
+  //
+  // Measured 2026-11-05: 23 issues are closed as `not_planned` or
+  // `duplicate`, the board's Cancelled lane holds 0, and THIS SCRIPT is the
+  // only path that can correct a card whose event has already fired. Its
+  // closed branch read `state` and never `state_reason`, so a `--write` run
+  // would have filed all 23 abandonments as deliveries.
+  //
+  // That is not cosmetic. `specs/BOARD-FLOW-SPEC.md` puts the forecast on
+  // the distinction: Done defines throughput and Cancelled protects Little's
+  // Law's second assumption. Folding 23 abandonments into throughput inflates
+  // it and contaminates every cycle-time percentile.
+  //
+  // The decision is NOT re-derived here. It is `laneFor` in
+  // `lib/board-flow.ts`, the same function `board-flow.yml` uses on the live
+  // event, so there is one decider for "which lane does a close mean" and
+  // the sweep cannot drift away from the writer.
+  test("BS-45: an issue closed as not_planned is corrected to Cancelled, not Done", () => {
+    const v = verdictFor(item(1700, "Issue", "CLOSED", "In progress", false, "NOT_PLANNED"));
+    expect(v.kind).toBe("correct");
+    expect(
+      v.kind === "correct" && v.to,
+      "the only path that can fix an already-closed card would otherwise file every " +
+        "abandonment as a delivery — 23 of them, measured on this board.",
+    ).toBe("Cancelled");
+  });
+
+  test("BS-46: and duplicate is the other half of that condition", () => {
+    const v = verdictFor(item(1701, "Issue", "CLOSED", null, false, "DUPLICATE"));
+    expect(
+      v.kind === "correct" && v.to,
+      "BOARD-FLOW-SPEC.md defines Cancelled as `not_planned` OR `duplicate`. Half the " +
+        "condition reads a cancellation as a delivery, which is the defect with one fewer " +
+        "instance.",
+    ).toBe("Cancelled");
+  });
+
+  test("BS-47: an issue already in Cancelled agrees, rather than being dragged to Done", () => {
+    const v = verdictFor(item(1702, "Issue", "CLOSED", "Cancelled", false, "NOT_PLANNED"));
+    expect(
+      v.kind,
+      "a sweep that corrects a correct card is a sweep that fights the writer every run.",
+    ).toBe("agrees");
+  });
+
+  test("BS-48: a close reason this script cannot read is REPORTED, never corrected to Done", () => {
+    for (const reason of [null, "", "ARCHIVED"]) {
+      const v = verdictFor(item(1703, "Issue", "CLOSED", "In progress", false, reason));
+      expect(
+        v.kind,
+        `state_reason ${JSON.stringify(reason)} is not one the decider knows. Correcting it ` +
+          `to Done counts an unknown outcome as delivered, which is the one direction this ` +
+          `must never be wrong in — and a sweep writes in bulk.`,
+      ).toBe("undecidable");
+    }
   });
 
   test("BS-3: an item with NO status at all is still corrected when closed", () => {

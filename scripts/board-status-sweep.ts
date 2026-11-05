@@ -59,6 +59,7 @@
  */
 import { parseArgs } from "util";
 import { resolveGitHubToken } from "../lib/github";
+import { laneFor } from "../lib/board-flow";
 
 /**
  * The one exit code this script refuses through.
@@ -93,6 +94,13 @@ export interface BoardItem {
    * and must not be allowed to read as agreement.
    */
   readonly statusUnread: boolean;
+  /**
+   * GitHub's `state_reason`, for a CLOSED issue. `null` for a pull request,
+   * for an open issue, and for a closed issue whose reason could not be
+   * read — and that last case is why this is never defaulted to
+   * `COMPLETED`. See `verdictFor`.
+   */
+  readonly stateReason: string | null;
 }
 
 export type Verdict =
@@ -123,6 +131,49 @@ export function verdictFor(item: BoardItem): Verdict {
   const closed = item.state === "MERGED" || item.state === "CLOSED";
 
   if (closed) {
+    // **CLOSED IS NOT ONE OUTCOME, AND THIS BRANCH TREATED IT AS ONE.**
+    // It read `state` and never `state_reason`, so every abandonment was a
+    // delivery. Measured 2026-11-05: 23 issues closed as `not_planned` or
+    // `duplicate`, Cancelled holding 0, and this script the only path that
+    // can correct a card whose event has already fired — so a `--write`
+    // would have filed all 23 as Done, in one run, silently.
+    //
+    // The lane is NOT decided here. `laneFor` is the same function
+    // `board-flow.yml` applies to the live event, so there is one decider
+    // for "which lane does a close mean" and the catch-up cannot drift
+    // away from the writer. Two copies of this rule would be two deciders
+    // that agree, with no behavioural test able to say which was live
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape).
+    if (item.kind === "Issue") {
+      const decision = laneFor({ kind: "issue_closed", stateReason: item.stateReason });
+      if (decision.lane === null) {
+        // Reported, never corrected. A sweep writes in BULK, so the one
+        // direction this must not be wrong in is the one where an unknown
+        // outcome becomes a delivery.
+        return {
+          kind: "undecidable",
+          why:
+            `closed on GitHub, and ${decision.why}. Done would count an unknown outcome as ` +
+            `delivered; the board says ${item.status ?? "nothing"} and this run is not ` +
+            `able to say what it should be`,
+        };
+      }
+      return item.status === decision.lane
+        ? { kind: "agrees" }
+        : {
+            kind: "correct",
+            to: decision.lane,
+            why: `${decision.why}, but the board says ${item.status ?? "nothing"}`,
+          };
+    }
+
+    // A PULL REQUEST, where this stays `Done` and the open question is
+    // named rather than decided. MERGED is unambiguous. A pull request
+    // CLOSED unmerged is abandoned work reading as delivered — the same
+    // shape as the issue defect above — but no lane table in
+    // `specs/BOARD-FLOW-SPEC.md` covers a pull request's OWN card, and
+    // inventing one here would be this script deciding spec. It is raised
+    // as a follow-up instead.
     return item.status === DONE
       ? { kind: "agrees" }
       : {
@@ -219,7 +270,7 @@ query($project: ID!, $endCursor: String) {
           }
           content {
             __typename
-            ... on Issue { number state }
+            ... on Issue { number state stateReason }
             ... on PullRequest { number state isDraft }
           }
         }
@@ -586,6 +637,7 @@ export function parseBoardItem(node: any): BoardItem | null {
     // still moves drafts. Coerce, so the field is a boolean or nothing
     // reaches the verdict.
     draft: content.isDraft === true,
+    stateReason: typeof content.stateReason === "string" ? content.stateReason : null,
     statusUnread,
   };
 }
