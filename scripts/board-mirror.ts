@@ -57,6 +57,27 @@ import {
 export const REFUSAL_EXIT = 1;
 
 /**
+ * `owner/name`, or `null` for anything that is not exactly that.
+ *
+ * **`split("/")[1]` is `undefined` for `--repo rungate`, and a `!` only
+ * silences the type checker.** That `undefined` reached
+ * `measureClosedIssues` and surfaced as an opaque GraphQL error far from
+ * the typo that caused it — ai-review on #1795.
+ *
+ * Exported because the first version of this guard was inline in
+ * `main()`, where no case could reach it: the mutation battery removed
+ * the whole condition and read ZERO. A guard no test can observe is a
+ * line in a file (`.claude/rules/checks-must-be-able-to-fail.md`).
+ */
+export function parseRepo(value: string): { owner: string; name: string } | null {
+  const parts = value.split("/");
+  if (parts.length !== 2) return null;
+  const [owner, name] = parts;
+  if (!owner || !name) return null;
+  return { owner, name };
+}
+
+/**
  * Split what this command MAY write into what the cap lets through.
  *
  * **The cap applies here too, and from the same function the workflow
@@ -188,12 +209,9 @@ export async function main(argv: string[]): Promise<number> {
   // `measureClosedIssues` and surfaces as an opaque GraphQL error far
   // from the typo that caused it. Validated here, where the message can
   // name the flag. ai-review on #1795.
-  if (values.repo !== undefined) {
-    const parts = values.repo.split("/");
-    if (parts.length !== 2 || parts[0] === "" || parts[1] === "") {
-      console.error(`board-mirror: --repo must be owner/name, got "${values.repo}"\n\n${USAGE}`);
-      return REFUSAL_EXIT;
-    }
+  if (values.repo !== undefined && parseRepo(values.repo) === null) {
+    console.error(`board-mirror: --repo must be owner/name, got "${values.repo}"\n\n${USAGE}`);
+    return REFUSAL_EXIT;
   }
   if (!values.project) {
     console.error(`board-mirror: --project is required\n\n${USAGE}`);
@@ -318,12 +336,12 @@ export async function main(argv: string[]): Promise<number> {
   // A board can span repositories, so there is no repository to default
   // to and no honest depth without one. UNMEASURED, and nothing is
   // promoted on a null cap.
-  const closedReadings = values.repo
-    ? await measureClosedIssues(
-        (q, v) => client.graphql(q, v),
-        values.repo.split("/")[0]!,
-        values.repo.split("/")[1]!,
-      )
+  // Re-parsed rather than carried, so there is one spelling of what a
+  // repository argument is. `main` has already refused anything this
+  // returns null for.
+  const repo = values.repo === undefined ? null : parseRepo(values.repo);
+  const closedReadings = repo
+    ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
     : null;
   const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
   const occupied = items.filter(i => i.status === READY).length;

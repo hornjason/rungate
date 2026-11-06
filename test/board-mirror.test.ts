@@ -55,7 +55,7 @@ import {
   unlocatableEntries,
 } from "../lib/board-mirror";
 import { parseCriteria } from "../lib/spec-evidence";
-import { splitReadyChanges } from "../scripts/board-mirror";
+import { parseRepo, splitReadyChanges } from "../scripts/board-mirror";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -861,5 +861,26 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       readyWritable.map(x => x.item.number),
       "the phased issue goes first, and the phase-less one is queued rather than excluded",
     ).toEqual([9]);
+  });
+});
+
+describe("SC-2722: a repository argument is owner/name or it is refused", () => {
+  test("a well-formed value parses", () => {
+    expect(parseRepo("hornjason/rungate")).toEqual({ owner: "hornjason", name: "rungate" });
+  });
+
+  // The shape ai-review named on #1795: `split("/")[1]` is undefined and
+  // the `!` only silences the type checker, so the undefined reaches
+  // measureClosedIssues and surfaces as an opaque GraphQL error far from
+  // the typo.
+  test("a bare name with no slash is refused, not half-parsed", () => {
+    expect(parseRepo("rungate")).toBeNull();
+  });
+
+  test("an empty side or an extra slash is refused", () => {
+    expect(parseRepo("/rungate")).toBeNull();
+    expect(parseRepo("hornjason/")).toBeNull();
+    expect(parseRepo("")).toBeNull();
+    expect(parseRepo("a/b/c")).toBeNull();
   });
 });
