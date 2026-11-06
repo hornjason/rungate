@@ -16,7 +16,7 @@
  *
  * | Lane | Against | Because |
  * |---|---|---|
- * | Ready | unblocked and unclaimed issues | Ready is Anderson's replenishment COMMITMENT POINT, so a Ready far below what is eligible means the ordering decision has relocated into each puller's private Backlog heuristic, leaving no reviewable record |
+ * | Ready | unblocked and unclaimed issues, **capped** at a depth derived from live throughput | Ready is Anderson's replenishment COMMITMENT POINT, so a Ready far below what it is allowed to hold means the ordering decision has relocated into each puller's private Backlog heuristic, leaving no reviewable record. It is capped because the commitment point is a queue, not a mirror of the backlog: comparing the lane against every eligible issue made a correctly-sized Ready read `SHORT by 30` on 2026-11-05 and would have forever |
  * | In progress | open AND assigned issues | somebody is working it; a lane that does not say so makes active work invisible and makes cycle time ABSENT rather than approximate |
  * | Cancelled | issues closed as `not_planned` | work that left without being done. Off the board entirely is worse than merged into Done: the cancellation rate becomes unobservable and Little's Law's second assumption breaks, so every forecast is unsound rather than merely imprecise |
  *
@@ -26,6 +26,8 @@
  * compare against. **An unmeasured lane must not spell the same as a healthy
  * one**, which is the defect this whole area keeps producing.
  */
+
+import { READY_TOLERANCE_DAYS, readyCap, readyTarget, type Throughput } from "./board-ready-rule";
 
 /** Every lane name the board uses, in flow order. */
 export const LANES: readonly string[] = [
@@ -75,6 +77,22 @@ export interface LaneCensus {
    */
   readonly cancelledClosed: number | null;
   /**
+   * How much the repository delivered, over how long — or `null` when that
+   * could not be read.
+   *
+   * Ready's denominator is **capped**, and the cap is derived from this
+   * rather than typed in (`lib/board-ready-rule.ts`). Before 2026-11-05 the
+   * row compared the lane against every pickable issue in the repository
+   * with no bound at all, which is how it came to report `SHORT by 30`
+   * against a writer that could never promote more than 3.
+   *
+   * It is a required field rather than an optional one so that every caller
+   * has to say what it measured. `null` makes the row UNMEASURED; there is
+   * no fallback depth, because a built-in default substituted for a failed
+   * read is indistinguishable from a real one.
+   */
+  readonly throughput: Throughput | null;
+  /**
    * False when the board could not be paged in full.
    *
    * A partial page and an empty lane produce the same count, and that
@@ -108,7 +126,22 @@ export interface LaneReading {
  * the denominator exists but could not be read.
  */
 function target(lane: string, c: LaneCensus): { against: number | null; label: string } | undefined {
-  if (lane === "Ready") return { against: c.pickable, label: "unblocked and unclaimed, repo-wide" };
+  if (lane === "Ready") {
+    // **The cap is half the denominator, and it is why this row stopped
+    // lying.** Ready is a commitment point, not a mirror of the backlog, so
+    // what it SHOULD hold is the smaller of "everything eligible" and "the
+    // depth the queue is allowed". Comparing against the eligible set alone
+    // made a correctly-sized lane read SHORT forever.
+    const cap = c.throughput === null ? null : readyCap(c.throughput);
+    return {
+      against: readyTarget(c.pickable, cap),
+      label:
+        cap === null
+          ? "throughput, which Ready's depth is derived from,"
+          : `allowed in the queue — ${c.pickable} unblocked and unclaimed repo-wide, capped at a ` +
+            `depth of ${cap} derived from ${READY_TOLERANCE_DAYS} day(s) of live throughput`,
+    };
+  }
   if (lane === "In progress") return { against: c.openAssigned, label: "open and assigned, repo-wide" };
   if (lane === "Cancelled") return { against: c.cancelledClosed, label: "closed as not_planned or duplicate, repo-wide" };
   return undefined;
