@@ -75,6 +75,47 @@ export const DRIFT_EXIT = 1;
 export const PROJECT_ID = "PVT_kwHOAZTQCM4BpMuR";
 export const DONE = "Done";
 export const IN_REVIEW = "In review";
+/**
+ * The lane an assigned, open issue belongs in.
+ *
+ * Spelled here rather than taken from `laneFor` at the call site for the
+ * same reason `DONE` and `IN_REVIEW` are: these three are the strings this
+ * script WRITES, and a test needs one import to name the expected value.
+ * `verdictFor` still routes the decision through `laneFor`, so the rule
+ * itself has one owner — this is the name, not the decision.
+ */
+export const IN_PROGRESS = "In progress";
+
+/**
+ * The lanes an assignment may pull an issue OUT of. Closed, not open-ended.
+ *
+ * Only these two contradict an assignment: `specs/BOARD-FLOW-SPEC.md` gives
+ * Ready the entry condition "nobody assigned", and Backlog is the option
+ * pool for work nobody has started. In progress is already right, In review
+ * means a pull request is out and the issue is still legitimately assigned,
+ * and Done and Cancelled are terminal — a bulk writer that could pull from
+ * those would drag finished work backwards. BS-49, BS-50.
+ */
+const ASSIGNMENT_CONTRADICTS: readonly string[] = ["Backlog", "Ready"];
+
+/** Where a released claim lands. The backlog is for unassigned work. */
+export const BACKLOG = "Backlog";
+
+/**
+ * Days of silence after which a claim is stale — Jason's call, 2026-11-06.
+ *
+ * **Stale is a conjunction**: this many days with no activity AND no open
+ * pull request. Either half alone is wrong, and in opposite directions — an
+ * issue somebody picked up this morning has no PR yet, and an issue with a
+ * PR in review is legitimately quiet. `verdictFor` requires both.
+ *
+ * Seven because `lib/behavioral-cache.ts` already uses it for the same kind
+ * of question, and because this board delivered 132 items in 14 days: a week
+ * of silence is far outside how long work here actually takes. Measured
+ * 2026-11-06, the seven strays were 8 to 16 days old, so the threshold is
+ * not sitting on top of the population it has to separate.
+ */
+export const STALE_CLAIM_DAYS = 7;
 
 export type ItemKind = "Issue" | "PullRequest";
 export type ItemState = "OPEN" | "CLOSED" | "MERGED";
@@ -101,12 +142,119 @@ export interface BoardItem {
    * `COMPLETED`. See `verdictFor`.
    */
   readonly stateReason: string | null;
+  /**
+   * Is anybody assigned to this issue?
+   *
+   * Three states, and the third is the point. `true` and `false` are
+   * readings; `null` is **NOT READ** — the query did not carry the field,
+   * or carried it as null. Those must not share an observable with "nobody
+   * is assigned", because a query that lost the field would otherwise make
+   * every stranded issue read as correctly unassigned and the sweep would
+   * report a clean board having checked nothing. Silent Default
+   * Substitution, `.claude/rules/config-access.md`.
+   *
+   * Always `null` for a pull request: the query asks for assignees on the
+   * Issue fragment only, so the sweep cannot see a fact no lane rule lets
+   * it act on. BS-52 asserts the resulting verdict, BS-53 the parse.
+   */
+  readonly assigned: boolean | null;
+  /**
+   * Days since anything happened on this issue, or `null` for NOT READ.
+   *
+   * Derived from the issue's `updatedAt` in `readBoard`, so the clock lives
+   * at the edge and `verdictFor` stays a pure function of its argument with
+   * no hidden input. A decider that reads the wall clock cannot be tested
+   * for a boundary without the test also controlling time.
+   *
+   * `updatedAt` deliberately does NOT move when a linked pull request is
+   * pushed to, which is exactly why staleness needs the second condition
+   * below rather than this one alone.
+   */
+  readonly idleDays: number | null;
+  /**
+   * How many OPEN pull requests DECLARE they close this issue, or `null`
+   * for NOT READ.
+   *
+   * Declare, not mention. The difference is the whole field: a mention is
+   * any sentence naming the number — including a status report, including
+   * this change's own pull-request body, which is how the first cut found
+   * "1 open pull request" on all seven stale claims and released none of
+   * them. `OPEN_PR_CLOSING_REFS_QUERY` has the measurement.
+   *
+   * Resolved only for the handful of rows that are already stale-claim
+   * candidates — see `isStaleClaimCandidate`. Every other row keeps `null`,
+   * and that is correct rather than lazy: no verdict outside the release
+   * branch asks the question.
+   *
+   * **`null` can never become a release.** A reading that was not taken is
+   * not a reading that came back empty, and the direction that matters here
+   * is the one where a fetch that silently failed unassigns somebody's live
+   * work. `verdictFor` returns UNDECIDABLE for it.
+   */
+  readonly openLinkedPRs: number | null;
 }
 
 export type Verdict =
   | { readonly kind: "agrees" }
   | { readonly kind: "correct"; readonly to: string; readonly why: string }
+  /**
+   * Release the claim: unassign everybody, and move the card to Backlog if
+   * it is not already there.
+   *
+   * A separate kind from `correct` because it is a separate ACT on a
+   * separate API — `correct` writes a project field, this writes the issue
+   * — and folding them together would let a failure of one be reported as
+   * the other. `to` is `null` when the card is already in Backlog and only
+   * the assignment needs removing.
+   */
+  | { readonly kind: "release"; readonly to: string | null; readonly why: string }
   | { readonly kind: "undecidable"; readonly why: string };
+
+/**
+ * Whole days between an ISO timestamp and `now`, or `null` for NOT READ.
+ *
+ * `now` is a parameter so a boundary case is testable without the test
+ * owning the clock. Absent, non-string and unparseable all return `null` —
+ * never `0`. Zero means "active today", which is the opposite answer to the
+ * one a missing timestamp supports, and conflating them would make every
+ * row with a malformed date look freshly worked.
+ */
+export function idleDaysSince(updatedAt: unknown, now: number): number | null {
+  if (typeof updatedAt !== "string") return null;
+  const then = Date.parse(updatedAt);
+  if (Number.isNaN(then)) return null;
+  // Clamped at 0 rather than going negative. Clock skew between GitHub and
+  // a runner is real and small; a negative age compares `false` against the
+  // threshold either way, so this only makes the printed figure believable.
+  return Math.max(0, Math.floor((now - then) / 86_400_000));
+}
+
+/**
+ * Is this row worth asking GitHub about its pull requests?
+ *
+ * **This is not a second decider.** It answers "do I need to fetch more
+ * before I can decide", and `verdictFor` answers "what do I write". They
+ * are different questions over different inputs, which is the test
+ * `.claude/rules/checks-must-be-able-to-fail.md` sets for the fourth shape:
+ * name the input on which the two must disagree. Here there is one by
+ * construction — a candidate whose fetch did not happen carries
+ * `openLinkedPRs: null`, and this function still says `true` while
+ * `verdictFor` says UNDECIDABLE.
+ *
+ * Deliberately cheap and deliberately WIDER than the release branch: it
+ * costs nothing to include a row that turns out not to need the answer,
+ * and it costs an unassignment to skip a row that did.
+ */
+export function isStaleClaimCandidate(item: BoardItem): boolean {
+  return (
+    item.kind === "Issue" &&
+    item.state === "OPEN" &&
+    item.assigned === true &&
+    ASSIGNMENT_CONTRADICTS.includes(item.status ?? "") &&
+    item.idleDays !== null &&
+    item.idleDays >= STALE_CLAIM_DAYS
+  );
+}
 
 /**
  * The single binding. Every decision this script makes is this function, so a
@@ -184,6 +332,136 @@ export function verdictFor(item: BoardItem): Verdict {
   }
 
   // Open from here down.
+
+  // ASSIGNMENT MAKES AN OPEN ISSUE'S LANE DERIVABLE — Jason's call of
+  // 2026-11-06: *"if they're assigned, that means someone's working on them…
+  // But the backlog is for unassigned work."*
+  //
+  // This is the branch the UNDECIDABLE refusal further down used to swallow.
+  // That refusal's stated reason was "Backlog, Ready and In progress are all
+  // consistent with an open issue" — true of an UNASSIGNED issue, and false
+  // once somebody is on it, because the lane table in
+  // `specs/BOARD-FLOW-SPEC.md` gives In progress the entry condition
+  // `issues: [assigned]` and gives Ready the entry condition "nobody
+  // assigned". An assigned issue in either lane contradicts the spec.
+  //
+  // **Why this is here and not only in `board-flow.yml`.** That workflow
+  // writes In progress on the `assigned` EVENT and it works — the
+  // end-to-end walk-through's row 3 passes. It cannot reach an issue that
+  // was assigned before it existed: no event will fire for those again, and
+  // GitHub has no trigger that replays one. Measured 2026-11-06 against
+  // `PVT_kwHOAZTQCM4BpMuR`: In progress held 1 card against 9 open assigned
+  // issues, and two of the strays sat in Ready, holding it at 5 against a
+  // cap of 4 so `board-ready.yml` correctly promoted nothing.
+  //
+  // NOT A SECOND DECIDER. `laneFor` is the same function `board-flow.yml`
+  // applies to the live event, so "what does an assignment mean" has one
+  // owner and this catch-up cannot drift away from the writer — the fourth
+  // shape in `.claude/rules/checks-must-be-able-to-fail.md`.
+  if (item.kind === "Issue" && ASSIGNMENT_CONTRADICTS.includes(item.status ?? "")) {
+    if (item.assigned === null) {
+      return {
+        kind: "undecidable",
+        why:
+          `the board says ${item.status} and this row's assignment was NOT READ — the query ` +
+          `did not carry \`assignees\`, which is not the same fact as nobody being assigned. ` +
+          `Correcting on it would move cards on an unread field; re-run against a query that ` +
+          `requests \`assignees { totalCount }\` on the Issue fragment`,
+      };
+    }
+    if (item.assigned) {
+      const decision = laneFor({ kind: "issue_assigned" });
+      if (decision.lane === null) {
+        return {
+          kind: "undecidable",
+          why: `assigned on GitHub, and ${decision.why}, so no lane is named for it`,
+        };
+      }
+
+      // IS THE CLAIM STILL LIVE? Jason's call, 2026-11-06, after the first
+      // cut of this branch sent all eight strays to In progress — which
+      // would have made the lane read 9 against one real, a different wrong
+      // number rather than a right one.
+      //
+      // Stale is a CONJUNCTION: silent for `STALE_CLAIM_DAYS` *and* no open
+      // pull request. Either half alone is wrong in a different direction,
+      // so neither is allowed to decide this on its own.
+      if (item.idleDays === null) {
+        return {
+          kind: "undecidable",
+          why:
+            `assigned on GitHub and the board says ${item.status}, but this row's last ` +
+            `activity was NOT READ, so whether the claim is live could not be established. ` +
+            `In progress would assert somebody is working on it and a release would assert ` +
+            `nobody is; neither is derivable from an unread field`,
+        };
+      }
+
+      if (item.idleDays >= STALE_CLAIM_DAYS) {
+        // The expensive half, and the one that must never be guessed. A
+        // candidate whose pull-request reading was never taken is
+        // UNDECIDABLE — a fetch that silently failed must not be able to
+        // unassign somebody's live work. Silent Default Substitution in the
+        // direction that costs the most.
+        if (item.openLinkedPRs === null) {
+          return {
+            kind: "undecidable",
+            why:
+              `assigned on GitHub, silent for ${item.idleDays} day(s), and the board says ` +
+              `${item.status} — but the open pull requests closing it were NOT READ, so the second half ` +
+              `of staleness is unmeasured. A claim is only released on silence AND no open ` +
+              `pull request; releasing on the first alone would unassign work in review`,
+          };
+        }
+        if (item.openLinkedPRs === 0) {
+          return {
+            kind: "release",
+            // Already in Backlog: release the claim and leave it. In Ready:
+            // the card must come back too, because Ready's entry condition
+            // is "nobody assigned" and an unassigned card there asserts it
+            // was re-checked as pickable, which nobody did. The spec's
+            // backwards rule, applied to a claim that was abandoned.
+            to: item.status === BACKLOG ? null : BACKLOG,
+            why:
+              `assigned on GitHub but silent for ${item.idleDays} day(s) with no open pull ` +
+              `request declaring it closes this, so the claim is stale. Releasing it: the backlog is for unassigned ` +
+              `work, and board-ready.yml promotes it on merit once a slot frees`,
+          };
+        }
+        // Silent, but a pull request is open against it. That is work in
+        // flight whose activity simply does not touch the issue's own
+        // `updatedAt`, which is the entire reason staleness is a
+        // conjunction. It belongs in the assigned lane.
+        return {
+          kind: "correct",
+          to: decision.lane,
+          why:
+            `assigned on GitHub with ${item.openLinkedPRs} open pull request(s) closing it, but the board ` +
+            `says ${item.status}. The issue itself has been quiet for ${item.idleDays} day(s), ` +
+            `which is why silence alone does not release a claim`,
+        };
+      }
+
+      return {
+        kind: "correct",
+        to: decision.lane,
+        why:
+          `assigned on GitHub but the board says ${item.status}, and ${decision.why}. ` +
+          // Lane-specific, because the two lanes are wrong for different
+          // reasons and a reader acting on this needs the right one:
+          // Backlog is the pool of work nobody has started, and Ready's
+          // entry condition in `specs/BOARD-FLOW-SPEC.md` is literally
+          // "nobody assigned" — an assigned card there also consumes a slot
+          // in a lane that is WIP-capped.
+          (item.status === "Ready"
+            ? "Ready's entry condition is `nobody assigned`, and the lane is capped — an " +
+              "assigned card here holds a slot against work that could be promoted"
+            : "Backlog is the pool of work nobody has started"),
+      };
+    }
+    // Unassigned in Backlog or Ready is exactly right. Fall through.
+  }
+
   if (item.status !== DONE) return { kind: "agrees" };
 
   if (item.kind === "PullRequest" && !item.draft) {
@@ -233,11 +511,22 @@ export function verdictFor(item: BoardItem): Verdict {
 export interface SweepReading {
   readonly agrees: number;
   readonly corrections: ReadonlyArray<BoardItem & { readonly to: string; readonly why: string }>;
+  /**
+   * Claims to release: unassign, and move to `to` when it is not null.
+   *
+   * Separate from `corrections` because it is a different act on a
+   * different API, and a merged count could report a field write as an
+   * unassignment.
+   */
+  readonly releases: ReadonlyArray<
+    BoardItem & { readonly to: string | null; readonly why: string }
+  >;
   readonly undecidable: ReadonlyArray<BoardItem & { readonly why: string }>;
 }
 
 export function sweep(items: readonly BoardItem[]): SweepReading {
   const corrections: Array<BoardItem & { to: string; why: string }> = [];
+  const releases: Array<BoardItem & { to: string | null; why: string }> = [];
   const undecidable: Array<BoardItem & { why: string }> = [];
   let agrees = 0;
 
@@ -245,10 +534,16 @@ export function sweep(items: readonly BoardItem[]): SweepReading {
     const v = verdictFor(item);
     if (v.kind === "agrees") agrees += 1;
     else if (v.kind === "correct") corrections.push({ ...item, to: v.to, why: v.why });
+    // A release is its own bucket, never folded into corrections. It is a
+    // different act on a different API — a correction writes a project
+    // field, a release writes the issue's assignees — so a count that mixed
+    // them could report a successful field write as a successful
+    // unassignment. BS-58 asserts the partition is still exact.
+    else if (v.kind === "release") releases.push({ ...item, to: v.to, why: v.why });
     else undecidable.push({ ...item, why: v.why });
   }
 
-  return { agrees, corrections, undecidable };
+  return { agrees, corrections, releases, undecidable };
 }
 
 export const BOARD_QUERY = `
@@ -270,7 +565,17 @@ query($project: ID!, $endCursor: String) {
           }
           content {
             __typename
-            ... on Issue { number state stateReason }
+            # \`assignees\` is asked for on the Issue fragment ONLY. A pull
+            # request is assignable too, but no row of the lane table in
+            # \`specs/BOARD-FLOW-SPEC.md\` says where a pull request's own
+            # card goes when somebody is on it — so the sweep must not be
+            # able to see a fact it is not allowed to act on. BS-52.
+            #
+            # \`totalCount\` rather than a page of nodes: the question is
+            # "is anybody on it", the count answers it in one field, and a
+            # \`first: N\` page would reintroduce the same truncation
+            # hazard \`statusUnread\` exists to handle one level up.
+            ... on Issue { number state stateReason updatedAt assignees { totalCount } }
             ... on PullRequest { number state isDraft }
           }
         }
@@ -578,6 +883,53 @@ async function graphql(token: string, query: string, variables: Record<string, u
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * Remove every assignee from one issue.
+ *
+ * REST, not GraphQL, and that is the cheap choice rather than a stylistic
+ * one: `removeAssigneesFromAssignable` needs the issue's node id AND the
+ * assignees' node ids, neither of which the board query carries, so it
+ * would cost two more reads per release. `PATCH` with an empty array sets
+ * the assignee list to empty in one call and needs only the number.
+ *
+ * **It verifies the result rather than trusting the status code.** A 200
+ * whose body still lists assignees is the same shape BS-39 caught on the
+ * field write: the mutation "succeeded" and the thing it was asked to
+ * change did not change. Throwing here lets `applyCorrections` record it as
+ * a failed release, which is what a reader needs to see.
+ */
+export async function clearAssignees(
+  token: string,
+  repo: string,
+  issue: number,
+): Promise<void> {
+  const res = await fetch(`https://api.github.com/repos/${repo}/issues/${issue}`, {
+    method: "PATCH",
+    headers: {
+      authorization: `bearer ${token}`,
+      "content-type": "application/json",
+      accept: "application/vnd.github+json",
+    },
+    body: JSON.stringify({ assignees: [] }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const body = interpretResponse(res.status, res.ok, await res.text());
+  const left = (body as any)?.assignees;
+  if (!Array.isArray(left)) {
+    throw new Error(
+      `#${issue}: the unassign response carried no 'assignees' array, so whether the claim ` +
+        `was released is UNMEASURED. Nothing may be reported as released on this reading.`,
+    );
+  }
+  if (left.length > 0) {
+    throw new Error(
+      `#${issue}: PATCH returned ${res.status} and the issue still has ${left.length} ` +
+        `assignee(s). The call succeeded and the claim was not released — this is the ` +
+        `shape a credential without issue-write produces, so check the token's scope.`,
+    );
+  }
+}
+
 async function rawGraphql(token: string, query: string, variables: Record<string, unknown>): Promise<any> {
   const res = await fetch("https://api.github.com/graphql", {
     method: "POST",
@@ -602,7 +954,7 @@ async function rawGraphql(token: string, query: string, variables: Record<string
  * against a value the test itself just set. `readBoard` remains a network
  * loop with nothing decided inside it.
  */
-export function parseBoardItem(node: any): BoardItem | null {
+export function parseBoardItem(node: any, now: number = Date.now()): BoardItem | null {
   const content = node?.content;
   if (content === null || content === undefined) return null;
   if (content.__typename !== "Issue" && content.__typename !== "PullRequest") return null;
@@ -638,6 +990,25 @@ export function parseBoardItem(node: any): BoardItem | null {
     // reaches the verdict.
     draft: content.isDraft === true,
     stateReason: typeof content.stateReason === "string" ? content.stateReason : null,
+    // `typeof === "number"` and not a truthiness check or a `?? 0`. An
+    // absent `assignees`, a null one, and a null `totalCount` are all
+    // things GraphQL really returns — a partial error nulls a nested field
+    // and delivers the rest of the row intact — and every one of them means
+    // NOT READ. `?? 0` would spell all three as "nobody assigned", which is
+    // the exact substitution the `assigned` docblock refuses. BS-53.
+    assigned:
+      typeof content.assignees?.totalCount === "number"
+        ? content.assignees.totalCount > 0
+        : null,
+    // `now` is injected rather than read here, so a boundary case is
+    // testable without the test controlling the clock — and so this stays
+    // a pure function of its two arguments. An unparseable or absent
+    // timestamp is `null`, NOT zero days: "no activity recorded" and
+    // "active today" are opposite answers to the staleness question.
+    idleDays: idleDaysSince(content.updatedAt, now),
+    // Never resolved here. `resolveLinkedPullRequests` fills it for
+    // stale-claim candidates only; no other verdict asks the question.
+    openLinkedPRs: null,
     statusUnread,
   };
 }
@@ -666,10 +1037,189 @@ async function readBoard(token: string): Promise<BoardItem[]> {
   return items;
 }
 
+/**
+ * Every open pull request, and the issues each one DECLARES it closes.
+ *
+ * ## Why not `CROSS_REFERENCED_EVENT`, which this read used first
+ *
+ * It was wrong, and it was caught by the artefact it produced. The first
+ * cut asked each candidate issue for its cross-referencing pull requests
+ * and counted the OPEN ones — the same relation `scripts/work-status.ts`
+ * reads. Run against the live board on 2026-11-06 it reported that all
+ * **7** stale claims had "1 open pull request" and released none of them.
+ * Every one of those pull requests was **#1823, this change's own**, whose
+ * body lists the seven issue numbers as its evidence. The instrument's own
+ * write-up became its input, and the answer it produced was the one that
+ * does nothing.
+ *
+ * A cross-reference is **any mention**: a comment linking two issues, a
+ * review quoting a number, a status report like this one. As a DISPLAY
+ * that is fine, and `work-status.ts` is a display — it prints the list for
+ * a person who can see what each pull request is. **This is a decider: it
+ * unassigns somebody or it does not.** A relation wide enough to match a
+ * sentence cannot carry that.
+ *
+ * ## What the narrow relation is, and the direction it is wrong in
+ *
+ * `closingIssuesReferences` is GitHub's own parse of a closing keyword in
+ * a pull request's body — the exact link `.claude/rules/ship-workflow.md`
+ * step 6 tells every agent in this repository to write, and the same field
+ * `lib/closing-reference-audit.ts` already treats as the authority on
+ * whether a pull request is attached to an issue. One answer, one owner.
+ *
+ * It is NARROWER than "a pull request someone is working on", so it errs
+ * toward **releasing** a claim whose pull request never declared the link.
+ * That is the direction to be wrong in here, and not because releasing is
+ * harmless — because such a pull request will not close its issue when it
+ * merges either. It is already broken, the repository already audits for
+ * it, and the release leaves the issue in the Backlog for its author to
+ * re-claim. The other direction is what shipped this morning: a relation
+ * so wide that nothing is ever stale and the whole conjunction is dead
+ * code that reads green.
+ *
+ * ## Direction of the query
+ *
+ * Asked PR-first rather than issue-first: one paginated read of the open
+ * pull requests serves every candidate, instead of a query per candidate,
+ * and `closingIssuesReferences` only exists on the pull-request side.
+ */
+export const OPEN_PR_CLOSING_REFS_QUERY = `
+query($owner: String!, $name: String!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 100, after: $endCursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        closingIssuesReferences(first: 50) {
+          pageInfo { hasNextPage }
+          nodes { number }
+        }
+      }
+    }
+  }
+}`;
+
+/**
+ * Issue number -> how many OPEN pull requests declare they close it.
+ *
+ * Pure, so the counting is testable without a network. A node missing its
+ * `closingIssuesReferences` connection contributes nothing and is not an
+ * error: a pull request that closes no issue is the ordinary case.
+ *
+ * A `Set` per issue rather than a running total — the same pull request
+ * reached twice across a page boundary must not count twice.
+ */
+export function countOpenPRsByIssue(nodes: readonly unknown[]): Map<number, number> {
+  const prsFor = new Map<number, Set<number>>();
+  for (const node of nodes) {
+    const pr = node as { number?: unknown; closingIssuesReferences?: { nodes?: unknown } };
+    if (typeof pr?.number !== "number") continue;
+    const refs = pr.closingIssuesReferences?.nodes;
+    if (!Array.isArray(refs)) continue;
+    for (const ref of refs) {
+      const issue = (ref as { number?: unknown })?.number;
+      if (typeof issue !== "number") continue;
+      const seen = prsFor.get(issue) ?? new Set<number>();
+      seen.add(pr.number);
+      prsFor.set(issue, seen);
+    }
+  }
+  return new Map([...prsFor].map(([issue, prs]) => [issue, prs.size]));
+}
+
+/**
+ * Fill `openLinkedPRs` from a counted map, for stale-claim candidates ONLY.
+ *
+ * A candidate absent from the map has **zero** open pull requests, not an
+ * unread one: the map is built from a complete read of every open pull
+ * request in the repository, so absence from it is an answer. That is the
+ * one place in this file where a missing key legitimately means zero, and
+ * it is only legitimate because the caller refuses to build the map at all
+ * unless the read completed.
+ *
+ * Everything that is not a candidate keeps `null`. No verdict outside the
+ * release branch asks the question.
+ */
+export function applyLinkedPullRequests(
+  items: readonly BoardItem[],
+  counts: ReadonlyMap<number, number>,
+): BoardItem[] {
+  return items.map(item =>
+    isStaleClaimCandidate(item) ? { ...item, openLinkedPRs: counts.get(item.number) ?? 0 } : item,
+  );
+}
+
+/**
+ * Read every open pull request, then fill the candidates.
+ *
+ * **A failed or incomplete read leaves every `openLinkedPRs` at `null`**,
+ * so each candidate comes out UNDECIDABLE and its claim stands. The whole
+ * point of the field is that an unread pull-request list must not be able
+ * to unassign anybody — and a PARTIAL list is an unread one here, because
+ * a missing page is indistinguishable from an issue with no pull request.
+ * So the map is discarded whole rather than used for the pages that did
+ * arrive.
+ */
+export async function resolveLinkedPullRequests(
+  token: string,
+  repo: string,
+  items: readonly BoardItem[],
+): Promise<BoardItem[]> {
+  const [owner, name] = repo.split("/");
+  const nodes: unknown[] = [];
+  let endCursor: string | null = null;
+  try {
+    for (;;) {
+      const data: any = await graphql(token, OPEN_PR_CLOSING_REFS_QUERY, {
+        owner,
+        name,
+        endCursor,
+      });
+      const page = data?.repository?.pullRequests;
+      if (!Array.isArray(page?.nodes) || typeof page?.pageInfo?.hasNextPage !== "boolean") {
+        throw new Error(
+          `the open pull requests of ${repo} came back with no readable nodes/pageInfo, so an ` +
+            `empty repository and an unreadable one would look the same`,
+        );
+      }
+      for (const node of page.nodes) {
+        // A pull request closing more than 50 issues has had its own list
+        // truncated, and the rows it would have covered would read as
+        // unclaimed. Refuse the whole read rather than release on it.
+        if (node?.closingIssuesReferences?.pageInfo?.hasNextPage === true) {
+          throw new Error(
+            `PR #${node.number} declares more closing references than one page holds, so the ` +
+              `list of claimed issues is short and some would read as having no pull request`,
+          );
+        }
+        nodes.push(node);
+      }
+      if (!page.pageInfo.hasNextPage) break;
+      endCursor = requireCursorAdvanced(endCursor, page.pageInfo.endCursor);
+    }
+  } catch (e) {
+    // Named, not swallowed. A silent catch here is the fail-open shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`; returning the items
+    // untouched keeps every candidate undecidable, and the line below is
+    // what tells a reader why a claim they expected to be released still
+    // stands.
+    console.log(
+      `::warning::could not read the open pull requests of ${repo} (${String(e)}), so every ` +
+        `stale-claim candidate is UNDECIDABLE rather than stale. Nothing was unassigned.`,
+    );
+    return [...items];
+  }
+  return applyLinkedPullRequests(items, countOpenPRsByIssue(nodes));
+}
+
 async function main(argv: readonly string[]): Promise<number> {
   const { values } = parseArgs({
     args: [...argv],
-    options: { write: { type: "boolean", default: false } },
+    options: {
+      write: { type: "boolean", default: false },
+      // Only a RELEASE needs this — it writes the issue, not the board.
+      repo: { type: "string" },
+    },
     allowPositionals: false,
   });
 
@@ -682,16 +1232,31 @@ async function main(argv: readonly string[]): Promise<number> {
     return DRIFT_EXIT;
   }
 
-  const items = await readBoard(token);
+  const repoForReads = (values.repo as string | undefined) ?? process.env.GITHUB_REPOSITORY ?? "";
+  const board = await readBoard(token);
+  // Stale-claim candidates only, and ONLY when a repository is resolvable.
+  // With no repo the pull-request half cannot be read, every candidate
+  // keeps `openLinkedPRs: null`, and `verdictFor` reports it UNDECIDABLE —
+  // which is the correct reading for "I could not check", not a silent
+  // decision to leave claims alone.
+  const items =
+    repoForReads === ""
+      ? board
+      : await resolveLinkedPullRequests(token, repoForReads, board);
   const reading = sweep(items);
 
   console.log(`Board status sweep — ${items.length} item(s) read from ${PROJECT_ID}\n`);
   console.log(`  agrees with GitHub : ${reading.agrees}`);
   console.log(`  disagrees          : ${reading.corrections.length}`);
+  console.log(`  stale claims       : ${reading.releases.length}`);
   console.log(`  undecidable        : ${reading.undecidable.length}\n`);
 
   for (const c of reading.corrections) {
     console.log(`  #${c.number} ${c.kind} ${c.status ?? "(no status)"} -> ${c.to}  (${c.why})`);
+  }
+  for (const r of reading.releases) {
+    const move = r.to === null ? "stays in Backlog" : `-> ${r.to}`;
+    console.log(`  #${r.number} ${r.kind} RELEASE unassign, ${move}  (${r.why})`);
   }
   for (const u of reading.undecidable) {
     console.log(`  #${u.number} ${u.kind} UNDECIDABLE  (${u.why})`);
@@ -706,8 +1271,8 @@ async function main(argv: readonly string[]): Promise<number> {
     // worse than none: the reader runs it, sees no change, and learns to
     // distrust the tool rather than to go and pick the column. Caught in
     // review of #1754.
-    if (reading.corrections.length > 0) {
-      console.log("\nReport only. Re-run with --write to apply the corrections above.");
+    if (reading.corrections.length > 0 || reading.releases.length > 0) {
+      console.log("\nReport only. Re-run with --write to apply the changes above.");
       if (reading.undecidable.length > 0) {
         console.log("Undecidable rows are never written, with or without --write.");
       }
@@ -733,7 +1298,7 @@ async function main(argv: readonly string[]): Promise<number> {
   // strictly more fragile than not passing it. Undecidable rows are never
   // written either, so they do not make a run writable. Caught in review of
   // #1754; BS-38.
-  if (reading.corrections.length === 0) {
+  if (reading.corrections.length === 0 && reading.releases.length === 0) {
     console.log(
       reading.undecidable.length > 0
         ? "\nNothing to write: every row above is UNDECIDABLE and those are never written, " +
@@ -741,6 +1306,21 @@ async function main(argv: readonly string[]): Promise<number> {
         : "\nThe board agrees with GitHub. Nothing to write.",
     );
     return reading.undecidable.length > 0 ? DRIFT_EXIT : 0;
+  }
+
+  // A release writes the ISSUE, which needs the repository; the board does
+  // not. Resolved once, here, and refused LOUDLY rather than skipped — a
+  // run that quietly performed the field writes and silently dropped the
+  // releases would report a partially-corrected board as a corrected one.
+  const repo = (values.repo as string | undefined) ?? process.env.GITHUB_REPOSITORY ?? "";
+  if (reading.releases.length > 0 && repo === "") {
+    console.error(
+      `UNMEASURED: ${reading.releases.length} stale claim(s) need unassigning, which writes the ` +
+        `ISSUE and therefore needs a repository. Pass --repo <owner/name> or set ` +
+        `GITHUB_REPOSITORY. Nothing was written, including the field corrections — a run that ` +
+        `did half of this and reported success is the outcome this script exists to prevent.`,
+    );
+    return DRIFT_EXIT;
   }
 
   const fields = await graphql(token, FIELDS_QUERY, { project: PROJECT_ID });
@@ -785,7 +1365,59 @@ async function main(argv: readonly string[]): Promise<number> {
   for (const w of applied.wrote) console.log(`  wrote #${w.number} -> ${w.to}`);
   for (const f of applied.failed) console.log(`  FAILED #${f.number} -> ${f.to}: ${f.error}`);
 
-  console.log(`\nWrote ${applied.wrote.length} correction(s).`);
+  // RELEASES, through the same recorder, so a failed unassign is reported
+  // the way a failed field write is.
+  //
+  // THE CARD MOVES FIRST, AND THE CLAIM IS RELEASED LAST. This was the
+  // other way round, with an argument: releasing first leaves a half-failed
+  // row visibly wrong to anybody reading the board, rather than plausibly
+  // right. Round 3 of #1823's review falsified it, and the falsification is
+  // worth keeping because the argument was not careless, it was aimed at
+  // the wrong reader.
+  //
+  // **A half-failure must be recoverable by the TOOL, not merely legible to
+  // a person.** Unassign-first leaves an UNASSIGNED card in READY, and
+  // `verdictFor` reads that as `agrees` — unassigned in Ready is the lane's
+  // own entry condition — so the card sits there for good, never re-checked
+  // against the blockers, the cap or the phase order that Ready actually
+  // asserts. Move-first leaves an ASSIGNED card in BACKLOG, which is the
+  // exact state this whole sweep exists to detect: the next run makes it a
+  // candidate again and finishes the job.
+  //
+  // So the ordering is chosen by which half-state the fixpoint can leave,
+  // not by which one looks worse in a screenshot.
+  const released = await applyCorrections(
+    reading.releases.map(r => ({ ...r, to: r.to ?? "(unassigned, already in Backlog)" })),
+    async r => {
+      const back = reading.releases.find(x => x.number === r.number)?.to ?? null;
+      if (back !== null) {
+        requireWrittenItem(
+          await graphql(token, SET_STATUS, {
+            project: PROJECT_ID,
+            item: r.itemId,
+            field: statusField.id,
+            option: optionId(back),
+          }),
+          r.number,
+          r.itemId,
+        );
+      }
+      await clearAssignees(token, repo, r.number);
+    },
+  );
+  for (const w of released.wrote) console.log(`  released #${w.number} — ${w.to}`);
+  for (const f of released.failed) console.log(`  FAILED release #${f.number}: ${f.error}`);
+
+  console.log(
+    `\nWrote ${applied.wrote.length} correction(s) and released ${released.wrote.length} claim(s).`,
+  );
+  if (released.failed.length > 0) {
+    console.log(
+      `${released.failed.length} release(s) FAILED. The most likely cause is a credential that ` +
+        `can write the board but not the issues — a board PAT needs issue-write to unassign.`,
+    );
+    return DRIFT_EXIT;
+  }
   if (applied.failed.length > 0) {
     console.log(
       `${applied.failed.length} correction(s) FAILED and the board is partially corrected. ` +
