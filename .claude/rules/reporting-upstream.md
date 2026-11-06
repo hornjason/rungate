@@ -2,7 +2,7 @@
 description: How to report a problem you found in rungate itself, from this repository
 paths:
   - "package.json"
-generated-sha: 93bd511b4bcf78ff
+generated-sha: 42ccda079c16b378
 ---
 
 ## You found something in rungate, not in this project
@@ -16,6 +16,26 @@ gh issue create --repo hornjason/rungate \
   --title "<the symptom, not the fix>" \
   --body-file <a file you wrote FIRST, in a separate command>
 ```
+
+## Show the body to your user before you send it
+
+**hornjason/rungate is somebody else's repository, and its issues are
+public.** Filing there publishes whatever you wrote, permanently — a
+deletion later does not un-cache or un-index it. So the body is not yours to
+send on your own judgement: write the file, show it to your user, and send
+it only once they have said yes.
+
+What goes in it is the **smallest thing that reproduces the problem**, and
+nothing else:
+
+- a reproducer you constructed, never a paste of this project's source,
+  config, logs, stack traces, test output or data
+- paths only where the path IS the symptom — and say so
+- no credentials, tokens, keys, internal hostnames, URLs or customer data,
+  including inside a quoted error message
+
+If you cannot describe the problem without one of those, that is the thing
+to tell your user. It is not a reason to send it anyway.
 
 ## The label is `from-consumer`, and it is not `external-audit`
 
