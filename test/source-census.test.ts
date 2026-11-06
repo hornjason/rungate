@@ -14,7 +14,7 @@
  * defect, in the module written to remove it.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { ABSENT_DIRECTORY, sourceFiles } from "../lib/source-census";
@@ -141,13 +141,54 @@ describe("SC-2733: every census over lib/ and scripts/ reads one lister", () => 
     "test/selection-path-safety.test.ts",
   ];
 
-  test("each converted census imports the shared lister", async () => {
-    const { readFileSync } = await import("fs");
+  test("each converted census imports the shared lister", () => {
     for (const path of CONVERTED) {
       expect(readFileSync(join(ROOT, path), "utf-8"), `${path} stopped using the shared lister`).toContain(
         "source-census",
       );
     }
+  });
+
+  // **No caller rebuilds a path the lister already returned.**
+  //
+  // ai-review round 2 of #1803. `test/selection-path-safety.test.ts` kept
+  // the `` `scripts/${name}` `` it needed when the value came from a bare
+  // `readdirSync`, and emitted `scripts/scripts/foo.ts` into its own
+  // failure message — the one diagnostic a future offender would read.
+  // The outcome never moved, because the list it corrupts is asserted
+  // empty, so no behavioural case over that file could have seen it.
+  //
+  // Swept rather than assumed: five call sites across four files, one
+  // affected. The surviving match set is empty, and a re-prefix at any
+  // caller puts it back.
+  test("no caller of the shared lister re-prefixes a returned path", () => {
+    const callers = readdirSync(join(ROOT, "test"))
+      .filter(f => f.endsWith(".test.ts"))
+      .filter(f => readFileSync(join(ROOT, "test", f), "utf-8").includes("lib/source-census"));
+    expect(callers.length, "nothing imports the lister, so this scan is vacuous").toBeGreaterThan(3);
+    const offenders: string[] = [];
+    for (const f of callers) {
+      const src = readFileSync(join(ROOT, "test", f), "utf-8");
+      for (const line of src.split("\n")) {
+        const t = line.trim();
+        // Comment lines are skipped, and this very case is why: the
+        // paragraph above quotes the offending expression, so a scan over
+        // raw text reports the explanation as the defect. A real offender
+        // written inside a comment is therefore missed — declared, not
+        // discovered later.
+        if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) continue;
+        // Composed without a template literal on purpose: this file is in
+        // its own population, and the first spelling reported its own
+        // offender label. Exempting the scanner would have been the wrong
+        // fix — a scan that cannot see itself is one nobody can trust.
+        if (/`[^`]*\/\$\{/.test(t)) offenders.push(join("test", f) + ": " + t);
+      }
+    }
+    expect(
+      offenders,
+      "sourceFiles returns a repo-relative path, so prefixing it with a directory emits " +
+        "scripts/scripts/foo.ts. Push the value as it came.",
+    ).toEqual([]);
   });
 
   // Anti-vacuity: the list above is worthless if it names files that are

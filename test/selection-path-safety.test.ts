@@ -172,11 +172,14 @@ describe("one guard, every producer of a bun test selection", () => {
     // Routed through the shared lister anyway, so a second spelling of
     // "list the sources" cannot drift from it — and so this narrowness is
     // a declared argument rather than an accident of readdirSync.
-    for (const name of sourceFiles(REPO, ["scripts"], { topLevelOnly: true })) {
-      const src = readFileSync(join(REPO, name), "utf-8");
+    // `path`, not `name`: the lister returns `scripts/foo.ts`, so a
+    // directory prefix here would read `scripts/scripts/foo.ts` in the
+    // failure message. ai-review round 2 of #1803.
+    for (const path of sourceFiles(REPO, ["scripts"], { topLevelOnly: true })) {
+      const src = readFileSync(join(REPO, path), "utf-8");
       // A local regex that both admits a test path and is anchored is a
       // second copy of this decision whatever its author called it.
-      if (/=\s*\/\^?\[[^\]]*\]\+?\\?\.test\\?\./.test(src)) offenders.push(`scripts/${name}`);
+      if (/=\s*\/\^?\[[^\]]*\]\+?\\?\.test\\?\./.test(src)) offenders.push(path);
     }
     expect(
       offenders,

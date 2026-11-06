@@ -684,8 +684,8 @@ describe("what a --prefix argument actually said", () => {
   test("every command taking a milestone prefix routes through this one reading", () => {
     const dir = join(import.meta.dir, "..");
     const offenders: string[] = [];
-    for (const name of sourceFiles(dir, ["scripts"])) {
-      const src = readFileSync(join(dir, name), "utf-8");
+    for (const path of sourceFiles(dir, ["scripts"])) {
+      const src = readFileSync(join(dir, path), "utf-8");
       if (!/prefix"?\s*:\s*\{\s*type:\s*"string"/.test(src)) continue;
       const importFree = !/from\s+"\.\.?\//.test(src);
       // A WHOLE-WORD match, and the module it comes from. `src.includes(...)`
@@ -694,7 +694,7 @@ describe("what a --prefix argument actually said", () => {
       // by doing exactly that, which is why this line is not `includes`.
       const routed = /\breadMilestonePrefix\b/.test(src) && /lib\/live-issues/.test(src);
       if (importFree || routed) continue;
-      offenders.push(name);
+      offenders.push(path);
     }
     expect(
       offenders,
