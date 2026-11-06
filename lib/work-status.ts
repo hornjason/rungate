@@ -269,3 +269,32 @@ export function resolveFocus(asked: string | undefined, known: readonly string[]
   if (asked === "all") return { kind: "all" };
   return { kind: "unknown", asked, known: [...known].sort() };
 }
+
+/**
+ * Whether a short Ready lane should refuse — #1842.
+ *
+ * The ONE decider for that question. The script restates its answer and
+ * decides nothing itself: a second condition spelled inline there would be
+ * two deciders over one input, and a mutation of either would leave the
+ * other holding every case up
+ * (`.claude/rules/checks-must-be-able-to-fail.md`).
+ *
+ * ## Why only SHORT
+ *
+ * `NO_TARGET` means nothing could say what the lane should hold. Refusing on
+ * it would fire the exit code on a reading that was never taken, which is
+ * precisely the confusion this whole report exists to remove — an UNMEASURED
+ * lane and a failing one must never produce the same bytes. `OK` and `OVER`
+ * are the lane doing its job and the lane doing too much of it; neither
+ * leaves a session with nothing to start.
+ *
+ * A board with no Ready row at all returns `null`, not a refusal: the lane
+ * being absent from the reading is itself unmeasured.
+ */
+export function readyRefusal(
+  readings: readonly { readonly lane: string; readonly count: number; readonly against: number | null; readonly health: string; readonly why: string }[],
+): { readonly count: number; readonly against: number | null; readonly why: string } | null {
+  const ready = readings.find(r => r.lane === "Ready");
+  if (ready === undefined || ready.health !== "SHORT") return null;
+  return { count: ready.count, against: ready.against, why: ready.why };
+}

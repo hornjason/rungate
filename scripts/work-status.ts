@@ -26,6 +26,7 @@ import {
   milestoneOf,
   milestoneRollup,
   orderReading,
+  readyRefusal,
   resolveFocus,
   type TrackerFacts,
 } from "../lib/work-status";
@@ -537,7 +538,21 @@ for (const p of prs) {
 // qualifier appears nowhere in GitHub's documentation, which is the same fact
 // seen from the other side. So this file pays for 80-odd requests rather than
 // trusting a qualifier that two of its three transports drop.
-bar("PICKABLE — computed per issue from the dependencies API, not from a search");
+// ## Which of these two lists a reader may start from — #1842
+//
+// This section used to be headed PICKABLE and printed the repo-wide
+// unblocked-and-unclaimed set, 36 issues on the day it was measured, while
+// the Ready lane held one. Nothing in the output said *take from Ready*, so
+// a session that read this report and started a sensible-looking number was
+// complying with the tool and bypassing the board in the same act. Observed
+// 2026-11-06: three issues in a row were worked from a dependency chain held
+// in a session's context, and no instrument objected — the board happened to
+// agree, which is not the same as being driven by it.
+//
+// The set is still computed and still printed, because it is what the
+// promotion step draws from and a lane nobody can see the input to is not
+// reviewable. It is printed SECOND and labelled as not startable.
+bar("START HERE — the Ready lane. Nothing else on this page is startable");
 // THE SAME BLOCKER READINGS THE ROLLUP USED. This loop re-fetched
 // `blocked_by` for every open issue, which was a second read of the one
 // endpoint and — worse than the cost — a second chance for the table above
@@ -546,7 +561,24 @@ const open = rollupInput.filter((i: any) => i.state === "open");
 const pickable = open.filter((i: any) =>
   isPickable({ state: i.state, assignees: i.assignees ?? [], blockers: i.blockers }),
 );
-console.log(`  ${pickable.length} unblocked and unclaimed across the repo.`);
+
+// The lane, read from the board — not re-derived from the candidate set.
+// Deriving it would make this list and the lane-health row below two
+// deciders about one question, and a board whose Ready column disagreed
+// with the rule would print as agreeing.
+const readyNow = open.filter((i: any) => status.get(i.number) === "Ready");
+if (readyNow.length === 0) {
+  console.log("  NOTHING IS READY. Promote before starting — see the candidates below.");
+} else {
+  for (const i of readyNow) console.log(`    #${i.number} ${i.title.slice(0, 62)}`);
+}
+
+bar("PROMOTION CANDIDATES — input to the Ready lane, NOT work to start");
+console.log(
+  `  ${pickable.length} unblocked and unclaimed across the repo. Computed per issue from\n` +
+    "  the dependencies API, not from a search. These are what Ready draws from;\n" +
+    "  starting one directly is how the board stops describing the work.",
+);
 if (focus.kind === "all") {
   // Listed per lane, because "34 startable" is a number nobody can act on
   // and "3 startable in Phase 2" is a decision.
@@ -651,3 +683,34 @@ const laneReadings = laneHealth({
 for (const line of laneHealthLines(laneReadings, offBoardCount)) console.log(line);
 
 console.log("\n  Nothing above was remembered. Re-run to re-read.");
+
+/**
+ * A Ready lane under its depth refuses — #1842.
+ *
+ * SHORT was a sentence in a report before this. The report is read by whoever
+ * already cared, which is the wrong population: the lane runs dry for the
+ * session that was not looking. An exit code is read by everybody, so the
+ * only thing standing between a drained lane and somebody noticing stops
+ * being somebody's memory of a conversation.
+ *
+ * **One site, so a mutation has one place to land.** Setting this to `0`
+ * removes the refusal and nothing else; `test/work-status.test.ts` asserts
+ * the constant appears exactly once, so a later branch cannot bypass the
+ * mutation by inlining its own literal
+ * (`.claude/rules/checks-must-be-able-to-fail.md`).
+ *
+ * SHORT and SHORT ONLY. `NO_TARGET` means nothing could say what the lane
+ * should hold, and refusing on it would make the exit code fire on a reading
+ * that was never taken — the shape this whole report exists to remove.
+ */
+export const EXIT_READY_SHORT = 3;
+
+const refusal = readyRefusal(laneReadings);
+if (refusal !== null) {
+  console.log(
+    `\n  REFUSING: Ready is ${refusal.count} of ${refusal.against} — ${refusal.why}\n` +
+      "  Promote from the candidate list above, or lower the depth on purpose.\n" +
+      "  A lane that is allowed to run dry is a lane nothing is working from.",
+  );
+  process.exit(EXIT_READY_SHORT);
+}

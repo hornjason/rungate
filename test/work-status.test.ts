@@ -14,6 +14,7 @@ import {
   milestoneOf,
   milestoneRollup,
   orderReading,
+  readyRefusal,
   resolveFocus,
 } from "../lib/work-status";
 
@@ -685,5 +686,111 @@ describe("the status reader does not leak the token on any hop", () => {
         "An unconsumed body leaks a connection on every error response, which " +
         "is the same defect the redirect hop above was fixed for.",
     ).toEqual([]);
+  });
+});
+
+// ── #1842: one startable list, and a lane that refuses when it runs dry ──
+
+describe("#1842: the report offers one startable list and it is Ready", () => {
+  const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+  test("the startable heading names Ready, and the candidate heading disowns itself", () => {
+    expect(code).toContain("START HERE — the Ready lane");
+    expect(code).toContain("PROMOTION CANDIDATES");
+    expect(code).toContain("NOT work to start");
+  });
+
+  test("no heading still presents the repo-wide set as pickable work", () => {
+    // The old heading was `PICKABLE — computed per issue …`, printed above a
+    // list of 36 while Ready held one. A reader could not tell which to
+    // start from, and chose the longer list.
+    expect(
+      code,
+      "a heading that reads as an instruction to pick is what this change removed",
+    ).not.toMatch(/bar\(\s*"PICKABLE/);
+  });
+
+  test("the Ready list is read from the board, not re-derived from the candidates", () => {
+    // Two deciders otherwise: a board whose Ready column disagreed with the
+    // rule would print as agreeing, which is the defect being fixed.
+    expect(code).toContain('status.get(i.number) === "Ready"');
+  });
+
+  test("an empty Ready lane says so instead of printing nothing", () => {
+    expect(code).toContain("NOTHING IS READY");
+  });
+});
+
+describe("#1842: a short Ready lane refuses", () => {
+  const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
+
+  const lane = (health: string, count = 1, against: number | null = 3) => [
+    { lane: "Backlog", count: 76, against: null, health: "NO_TARGET", why: "no second source" },
+    { lane: "Ready", count, against, health, why: `${against} allowed in the queue` },
+    { lane: "In progress", count: 1, against: 1, health: "OK", why: "one open and assigned" },
+  ];
+
+  test("SHORT refuses and carries the numbers a reader needs", () => {
+    const r = readyRefusal(lane("SHORT", 1, 3));
+    expect(r).not.toBeNull();
+    expect(r!.count).toBe(1);
+    expect(r!.against).toBe(3);
+    expect(r!.why).toContain("allowed in the queue");
+  });
+
+  test("THE CONTROL: a lane at depth does not refuse", () => {
+    // Without this the refusal fires on everyone, which reviews nothing and
+    // teaches people to ignore the exit code.
+    expect(readyRefusal(lane("OK", 3, 3))).toBeNull();
+  });
+
+  test("NO_TARGET is not a refusal — an unmeasured lane is not a failing one", () => {
+    // Refusing here would make a reading nobody could take look like a
+    // reading that failed, which is the confusion this report exists to end.
+    expect(readyRefusal(lane("NO_TARGET", 1, null))).toBeNull();
+  });
+
+  test("a board with no Ready row at all returns null, not a refusal", () => {
+    expect(readyRefusal(lane("SHORT").filter(r => r.lane !== "Ready"))).toBeNull();
+  });
+
+  test("every non-SHORT health is silent, so the predicate cannot widen by accident", () => {
+    for (const health of ["OK", "OVER", "NO_TARGET", "UNMEASURED"]) {
+      expect(readyRefusal(lane(health)), `${health} must not refuse`).toBeNull();
+    }
+    expect(readyRefusal(lane("SHORT")), "and SHORT still must").not.toBeNull();
+  });
+
+  test("the exit code is routed through ONE constant, so a mutation has one site", () => {
+    // A later branch inlining `process.exit(3)` would bypass the mutation
+    // and its case would go green having witnessed nothing —
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    const occurrences = src.match(/EXIT_READY_SHORT/g) ?? [];
+    expect(occurrences.length, "declaration plus exactly one use").toBe(2);
+    // Read from source, not imported: the script runs on import and would
+    // start reaching for a token and the network.
+    const declared = src.match(/export const EXIT_READY_SHORT = (\d+);/);
+    expect(declared, "the constant must be declared on one line").not.toBeNull();
+    const value = Number(declared![1]);
+    expect(value, "a zero here is the mutation, not the shipped value").toBeGreaterThan(0);
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(code, "a literal would bypass the mutation").not.toMatch(
+      new RegExp(`process\\.exit\\(\\s*${value}\\s*\\)`),
+    );
+    // And the code is SPECIFIC to this mechanism. The script already exits 2
+    // when its arguments refuse; sharing that code would make a drained lane
+    // and a typo'd flag the same observable, so no assertion on either could
+    // say which one it witnessed.
+    expect(code, "the argument refusals must keep their own code").toContain("process.exit(2)");
+    expect(value, "sharing exit 2 would make two mechanisms one signal").not.toBe(2);
+  });
+
+  test("the script restates the decider's answer and spells no condition of its own", () => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(code).toContain("readyRefusal(laneReadings)");
+    expect(code, "a second condition here would be a second decider").not.toMatch(
+      /health\s*===\s*"SHORT"/,
+    );
   });
 });
