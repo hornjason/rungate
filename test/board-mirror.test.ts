@@ -11,9 +11,12 @@
  *   criteriaNamedBy in mention order         1 red / 27 pass
  *   phaseOf without the `\b`                 1 red / 27 pass
  *   openFrontier ignores issue state         2 red / 26 pass
- *   isReady drops `phase !== frontier`       2 red / 26 pass
- *   isReady drops `frontier === null`        1 red / 27 pass
  *   isReady drops the assignee test          1 red / 27 pass
+ *
+ * The two `isReady` phase rows that stood here are gone with the gate they
+ * measured — `phase !== frontier` and `frontier === null` are not code any
+ * more, and a battery row naming a mutation nobody can perform is a number
+ * that can never come back wrong.
  *   restored                                 0 red / 28 pass
  *
  * **Two of those rows were GREEN on the first run and are the reason the
@@ -56,6 +59,7 @@ import {
 } from "../lib/board-mirror";
 import { parseCriteria } from "../lib/spec-evidence";
 import { parseRepo, readyPopulation, splitReadyChanges } from "../scripts/board-mirror";
+import { readyOrder } from "../lib/board-ready-rule";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -730,49 +734,77 @@ describe("#1647: the Ready lane", () => {
     });
   });
 
-  describe("isReady", () => {
-    const base = { state: "OPEN", phase: 0, blockedByOpen: 0, assignees: 0 };
+  describe("isReady — eligibility is unblocked and unclaimed, and phase is not a gate", () => {
+    const base = { state: "OPEN", blockedByOpen: 0, assignees: 0 };
 
-    test("open, at the frontier, unblocked, unclaimed", () => {
-      expect(isReady(base, 0)).toBe(true);
+    test("open, unblocked, unclaimed", () => {
+      expect(isReady(base)).toBe(true);
     });
 
-    test("a later phase is not ready, however unblocked it is", () => {
-      expect(isReady({ ...base, phase: 1 }, 0)).toBe(false);
-      expect(isReady({ ...base, phase: 6 }, 0)).toBe(false);
-    });
-
-    test("an issue in no phase is never ready", () => {
-      // There is no guard spelling this; `null !== frontier` carries it. The
-      // case stays because the PROPERTY is what matters, and a future edit
-      // that special-cases a null phase has to keep it true.
-      expect(isReady({ ...base, phase: null }, 0)).toBe(false);
-    });
-
-    test("an OPEN blocker refuses it even at the frontier", () => {
-      expect(isReady({ ...base, blockedByOpen: 1 }, 0)).toBe(false);
+    test("an OPEN blocker refuses it", () => {
+      expect(isReady({ ...base, blockedByOpen: 1 })).toBe(false);
     });
 
     test("a claimed issue is not ready — somebody already took it", () => {
-      expect(isReady({ ...base, assignees: 1 }, 0)).toBe(false);
+      expect(isReady({ ...base, assignees: 1 })).toBe(false);
     });
 
     test("a closed issue is never ready", () => {
-      expect(isReady({ ...base, state: "CLOSED" }, 0)).toBe(false);
+      expect(isReady({ ...base, state: "CLOSED" })).toBe(false);
     });
 
-    test("no frontier means nothing is ready", () => {
-      expect(isReady(base, null)).toBe(false);
+    // **The three cases the phase gate used to own, inverted.** They were
+    // "a later phase is not ready", "an issue in no phase is never ready"
+    // and "no frontier means nothing is ready", and each asserted FALSE.
+    // Jason's call of 2026-11-05 makes phase ordering rather than
+    // eligibility, so the same inputs must now be eligible.
+    //
+    // **The input must CARRY a phase, and the first version of these did
+    // not.** `{ ...base }` spreads an object the parameter type no longer
+    // declares a phase on, so both cases were byte-identical to the plain
+    // base case above and re-asserted it — vacuous in the exact shape
+    // `.claude/rules/checks-must-be-able-to-fail.md` names, while a comment
+    // right here claimed they stopped the gate returning. A gate spelled
+    // `"phase" in item && item.phase !== 0` would have left them green.
+    // Built through `withPhase` now, which puts the key on the object; a
+    // variable rather than an inline literal, because an object literal
+    // with a property the parameter type does not declare is refused by the
+    // excess-property check. ai-review round 2 of #1796.
+    const withPhase = (phase: number | null) => ({ ...base, phase });
+
+    test("phase is not an input at all — the signature cannot carry one", () => {
+      expect(isReady.length, "a frontier parameter coming back is the gate coming back").toBe(1);
     });
 
-    test("an unphased issue when NOTHING is phased is still not ready", () => {
-      // The case the `frontier === null` guard actually earns, and the only
-      // one: with both sides null, `item.phase !== frontier` is FALSE, so
-      // without the guard the function falls through and returns true for an
-      // issue that is in no plan at all. A battery removing the guard left
-      // every other case green.
-      expect(isReady({ ...base, phase: null }, null)).toBe(false);
+    test("an issue in a later phase is eligible, and is ordered later instead", () => {
+      expect(
+        isReady(withPhase(6)),
+        "a later phase is pickable when the lane has room — this input carries phase 6",
+      ).toBe(true);
+      expect(
+        readyOrder({ phase: 6, number: 1 }, { phase: 0, number: 99 }),
+        "phase still decides who goes FIRST — that is where it moved to",
+      ).toBeGreaterThan(0);
     });
+
+    test("an issue with no phase milestone is eligible, and sorts last", () => {
+      expect(
+        isReady(withPhase(null)),
+        "an explicit null phase is pickable, not refused",
+      ).toBe(true);
+      expect(
+        readyOrder({ phase: null, number: 1 }, { phase: 9, number: 99 }),
+        "a null phase ranks behind every numbered one rather than being refused",
+      ).toBeGreaterThan(0);
+    });
+
+    // The control the two above need: a phase-carrying input must be able
+    // to read FALSE for a non-phase reason, or "returns true" would be
+    // satisfied by `isReady` ignoring its argument entirely.
+    test("a phase-carrying issue is still refused when it is blocked", () => {
+      expect(isReady({ ...withPhase(6), blockedByOpen: 1 })).toBe(false);
+    });
+
   });
 
   describe("isUnblocked reads the OPEN count, which is why Ready is written and not filtered", () => {

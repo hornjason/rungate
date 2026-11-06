@@ -297,6 +297,9 @@ exists to remove.
 | before | unblocked + unclaimed + **current phase** | — | unbounded |
 | now | unblocked + unclaimed | by phase, then age | **capped, derived** |
 
+Both halves are live as of 2026-11-05: the cap through #1792/#1793/#1794/#1795,
+the eligibility change with the phase gate removed from `isReady`.
+
 **Phase moves from eligibility to ordering.** It was doing crowd-control
 work inside an eligibility test, and the cap is the thing that was actually
 missing. The unbounded version was tried: `lib/board-mirror.ts` records that
@@ -441,9 +444,19 @@ cursor advance and the two Ready definitions. The pattern is consistent
 enough to state plainly: **in this codebase, fixing an instance reliably
 leaves siblings, and only a check over the population closes it.**
 
-Still open, and the last piece: `isReady` keeps the phase gate. With both
-writers now bounded, dropping it no longer reproduces the 36-of-46
-reading, so it is next rather than blocked.
+**Closed, and it was the last piece: the phase gate is off `isReady`.**
+Eligibility is `state === "OPEN"` plus unblocked plus unclaimed; phase
+orders the lane through `readyOrder` and the cap bounds it. Dropping the
+gate no longer reproduces the 36-of-46 reading because the lane is sized
+by `readyCap`, not by being narrow — the two were conflated, and that is
+what the gate was really doing.
+
+An issue with **no phase milestone is now eligible** and sorts last.
+`isReady`'s docblock said "never Ready" and the fanout's BR-4 asserted it;
+both are inverted rather than deleted, so reintroducing the gate fails a
+test instead of passing silently. `openFrontier` survives with one
+consumer — `rootReady` in `scripts/board-snapshot.ts` — and is no longer
+read by either writer.
 
 Ready also still has **one** automatic trigger — `issues: [closed]`, fanning
 out to whatever the closed issue was blocking. Measured 2026-11-05: 34 of 34

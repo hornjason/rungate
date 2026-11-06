@@ -36,8 +36,8 @@
  * happens once it is reached.
  *
  * **This file is the SIZE and the ORDER. Eligibility is still elsewhere** —
- * `isReady` in `lib/board-mirror.ts`, with the phase gate attached. The
- * bound lands first deliberately: dropping the phase gate while nothing
+ * `isReady` in `lib/board-mirror.ts`, which carried the phase gate until
+ * 2026-11-05. The bound landed first deliberately: dropping the gate while nothing
  * caps the lane is the 36-of-46 reading again, so the bound has to exist
  * before the gate can go.
  */
