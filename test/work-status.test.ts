@@ -898,3 +898,39 @@ describe("#1842: a short Ready lane refuses", () => {
     );
   });
 });
+
+describe("#1842 G5: the report says what its reading could not see", () => {
+  const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+  test("a non-Issue card is counted against its lane BEFORE the skip", () => {
+    // Every reading below keys on an issue number, so a draft is invisible
+    // to all of them. The `continue` that drops it is the only point in the
+    // whole report where its existence is observable at all — counting
+    // after it would count nothing.
+    const skip = code.indexOf('n.content?.__typename !== "Issue"');
+    const count = code.indexOf("unseenByLane.set");
+    const bail = code.indexOf("continue;", skip);
+    expect(skip, "the non-Issue branch must still exist").toBeGreaterThan(-1);
+    expect(count, "the count must be inside that branch").toBeGreaterThan(skip);
+    expect(count, "and before the continue, or it never runs").toBeLessThan(bail);
+  });
+
+  test("the count reaches the Ready section and names the consequence", () => {
+    expect(code).toContain('unseenByLane.get("Ready")');
+    expect(code).toContain("NOT SHOWN");
+    // A number with no consequence attached is a number nobody acts on.
+    expect(code).toContain("holding a");
+  });
+
+  test("a lane with nothing hidden prints nothing — silence is the common case", () => {
+    expect(code, "an unconditional line would appear on every clean board").toMatch(
+      /readyUnseen > 0/,
+    );
+  });
+
+  test("boardStatus returns the per-lane count, so it is not re-derived downstream", () => {
+    expect(code).toContain("unseenByLane: Map<string, number>");
+    expect(code).toContain("return { statuses: out, abandonedOnBoard, unseenByLane };");
+  });
+});

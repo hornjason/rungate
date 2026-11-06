@@ -255,6 +255,21 @@ async function gql(query: string, variables: Record<string, unknown> = {}): Prom
 async function boardStatus(): Promise<{
   statuses: Map<number, string>;
   abandonedOnBoard: number;
+  /**
+   * Per lane, the cards this reading DROPPED — #1842.
+   *
+   * Everything below keys on an issue number, and a draft card has none, so
+   * a draft is invisible to every tool in this repository: the pickable
+   * list, the blocked-by edges, the stale-claim sweep and the lane counts
+   * all skip it. Ready reported `1` on 2026-11-06 while the column
+   * physically held two cards, and the second was a draft.
+   *
+   * That is a slot the depth rule budgeted for workable items, occupied by
+   * something nothing can dispatch. Counting it here does not make it
+   * dispatchable — it makes the gap SAYABLE, which is the difference
+   * between a lane that is short and a lane that looks full.
+   */
+  unseenByLane: Map<string, number>;
 }> {
   const q = `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
     pageInfo{hasNextPage endCursor}
@@ -263,12 +278,20 @@ async function boardStatus(): Promise<{
       name field{... on ProjectV2FieldCommon{name}}}}}
       content{__typename ... on Issue{number stateReason}}}}}}}`;
   const out = new Map<number, string>();
+  const unseenByLane = new Map<string, number>();
   let abandonedOnBoard = 0;
   let c: string | null = null;
   do {
     const d = await gql(q, { p: PROJECT, c });
     for (const n of d.node.items.nodes) {
-      if (n.content?.__typename !== "Issue") continue;
+      if (n.content?.__typename !== "Issue") {
+        // Counted BEFORE the skip, against the lane it sits in. A draft
+        // carries no `content.number`, so this is the only point in the
+        // whole report where its existence is observable at all.
+        const lane = n.fieldValues.nodes.find((f: any) => f?.field?.name === "Status")?.name;
+        if (lane !== undefined) unseenByLane.set(lane, (unseenByLane.get(lane) ?? 0) + 1);
+        continue;
+      }
       // Both reasons, matching Cancelled's entry condition in
       // specs/BOARD-FLOW-SPEC.md and ABANDONED in lib/board-flow.ts.
       if (n.content.stateReason === "NOT_PLANNED" || n.content.stateReason === "DUPLICATE") {
@@ -285,7 +308,7 @@ async function boardStatus(): Promise<{
     if (step.kind === "unreadable") throw new Error(`the board stopped paging — ${step.why}`);
     c = step.kind === "more" ? step.cursor : null;
   } while (c);
-  return { statuses: out, abandonedOnBoard };
+  return { statuses: out, abandonedOnBoard, unseenByLane };
 }
 
 /**
@@ -326,7 +349,7 @@ const ORDER: {
 
 const bar = (s: string) => console.log(`\n${s}\n${"─".repeat(s.length)}`);
 
-const { statuses: status, abandonedOnBoard } = await boardStatus();
+const { statuses: status, abandonedOnBoard, unseenByLane } = await boardStatus();
 
 // ── the agreed order ────────────────────────────────────────────────────────
 bar("THE AGREED ORDER — order from project-state.json, state from GitHub");
@@ -571,6 +594,20 @@ if (readyNow.length === 0) {
   console.log("  NOTHING IS READY. Promote before starting — see the candidates below.");
 } else {
   for (const i of readyNow) console.log(`    #${i.number} ${i.title.slice(0, 62)}`);
+}
+// #1842: say what this reading could not see. A draft has no issue number,
+// so it is invisible to every tool here while still occupying a slot the
+// depth rule budgeted for workable items. Reporting `1` on a column holding
+// two cards is how the lane ran dry without the number moving.
+const readyUnseen = unseenByLane.get("Ready") ?? 0;
+if (readyUnseen > 0) {
+  console.log(
+    `\n  NOT SHOWN: ${readyUnseen} card(s) in Ready ${readyUnseen === 1 ? "is" : "are"} not an issue — ` +
+      "a draft or a pull request.\n" +
+      "  Nothing in this repository can dispatch one: it has no number, so it cannot be\n" +
+      "  assigned, blocked, aged by the stale sweep, or closed by a PR. It is holding a\n" +
+      "  Ready slot. Convert it to an issue, or move it out of the lane.",
+  );
 }
 
 bar("PROMOTION CANDIDATES — input to the Ready lane, NOT work to start");
