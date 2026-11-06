@@ -1295,7 +1295,27 @@ describe.skipIf(process.env[MUTANT_GUARD] === "1")(
         if (run.status !== "MEASURED") return;
         expect(run.pass, "the mutant must still execute the rest of the suite").toBeGreaterThan(0);
 
-        const red = run.failingTests.map(n => n.split(" > ").at(-1)!.trim()).sort();
+        // **The COUNT comes from `fail`, the MEMBERSHIP from the names.**
+        // They are two readings and conflating them cost a red CI: the names
+        // were compared as a list, and under GitHub Actions bun prints each
+        // failure twice — once as a `(fail)` line and once as a `::error::`
+        // annotation — so a run that was correct arrived as 22 entries
+        // against 11. Locally, with no annotations, the same suite read 11.
+        // How many times a reporter names a failure is not a property of
+        // this module.
+        expect(
+          run.fail,
+          "the mutant must fail once per case that asserts a refusal",
+        ).toBe(PREDICTED_RED.length);
+
+        // A duplicate here would make the set smaller than the count and
+        // turn the two assertions against each other, so the declaration
+        // has to be a set before it is used as one.
+        expect(new Set(PREDICTED_RED).size, "the declared cases are distinct").toBe(
+          PREDICTED_RED.length,
+        );
+
+        const red = [...new Set(run.failingTests.map(n => n.split(" > ").at(-1)!.trim()))].sort();
         expect(
           red,
           "the skip mutant must redden exactly the cases that assert a refusal, " +
