@@ -696,5 +696,101 @@ Check the claim against the repo before you build on it.
 `,
   });
 
+  // #1742 — a consumer that cannot report what it found upstream has not
+  // been supported, it has been shipped to. Measured 2026-11-03: the
+  // `from-consumer` label did not exist among 23 labels, no milestone was a
+  // triage lane among 18, and there was no rule. Consumers reached for
+  // `external-audit` — the label Jason's decision (c) ruled out — and
+  // fifteen open issues carry it.
+  //
+  // **Inline here, like every other rule, and NOT in a module of its own.**
+  // #1742's file list predicted `lib/scaffold/reporting-upstream.ts`; that
+  // shape was built and withdrawn, because `test/harness-fixed-point.test.ts`
+  // copies this generator into an `mkdtemp` tree and the new import died
+  // there with `Cannot find module`. That is Tier 1 of
+  // `.claude/rules/self-referential-tests.md` exactly — and a battery whose
+  // mutant fails to load goes GREEN while witnessing nothing, so the cheap
+  // fix of teaching the copier one more path buys a second thing to keep in
+  // step. Every other rule in this file is inline; so is this one.
+  //
+  // **Path-scoped to `package.json`, and the scope is forced twice over.**
+  // `scripts/check-instruction-surface.ts` read 258 bytes of headroom under
+  // the 64,000-byte budget, so an unscoped rule reddens
+  // `.claude/agents/aditi.md` — a file with nothing to do with reporting
+  // upstream. A scoped rule is billed against every file its globs match,
+  // and `harness-managed.md` already claims `AGENTS.md`, both workflows,
+  // `.claude/agents/**`, `.claude/rules/**`, `CODE-MAP.md` and
+  // `test/scaffold-conformity.test.ts` — a second rule on any of those sums
+  // with it and goes over. The harness config directory was the first
+  // choice and CONFIG-1 refuses it: a config path spelled in a string is a
+  // direct access site, which is the same trap `STEPS_NOT_MINIMAL` in
+  // `lib/scaffold/profiles.ts` describes in its own comment.
+  //
+  // `package.json` is what is left, and it is the honest scope rather than
+  // the residue: it holds the `rungate` dependency entry, which is the
+  // version this rule tells the reporter to quote.
+  //
+  // Emitted into EVERY profile, including minimal. `RULES_NOT_MINIMAL`
+  // excludes a rule naming machinery the profile did not install, and this
+  // one names a tracker that exists either way — a minimal consumer is if
+  // anything the likeliest to hit something and have nowhere to put it.
+  rules.push({
+    filename: "reporting-upstream.md",
+    content: `---
+description: How to report a problem you found in rungate itself, from this repository
+paths:
+  - "package.json"
+---
+
+## You found something in rungate, not in this project
+
+File it on **hornjason/rungate**, not here, and not as a code comment that
+nobody upstream reads.
+
+\`\`\`bash
+gh issue create --repo hornjason/rungate \\
+  --label from-consumer \\
+  --title "<the symptom, not the fix>" \\
+  --body-file <a file you wrote FIRST, in a separate command>
+\`\`\`
+
+## The label is \`from-consumer\`, and it is not \`external-audit\`
+
+\`external-audit\` means *rungate audited something else*. A consumer report
+is the opposite direction, and conflating them is how a report from a real
+user lands in a queue nobody triages as user feedback.
+
+If \`from-consumer\` does not exist on the repository, say so in the body
+rather than substituting the nearest label. A label chosen because it was
+available is a routing decision nobody made.
+
+## What the body must carry
+
+The three sections every issue there needs. No criterion id — you cannot
+know one from here and you are not expected to:
+
+- **What must become true** — the symptom, with the numbers you measured
+- **Files this will change** — if you know; *unknown* is an honest answer
+- **How we will know** — what you would run to see it fixed
+
+Say which version you are on: the \`rungate\` entry in your
+\`package.json\`. A report against a version nobody can identify cannot be
+reproduced, and will be closed as such.
+
+## Do not open a pull request first
+
+File the issue, link it, and wait for a reply. A pull request from a
+consumer against a harness they do not own is expensive to review and
+frequently solves the wrong half of the problem — the maintainers may
+already know the cause.
+
+## What belongs here instead
+
+A problem in **this** project's own code, config or specs is an ordinary
+issue on this repository. The test is simple: if deleting rungate would
+make the problem go away it is upstream, and if it would not it is yours.
+`,
+  });
+
   return rules;
 }
