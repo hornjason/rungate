@@ -97,6 +97,7 @@ import {
   type CommentTarget,
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
+import { API_BOOLEAN_FLAGS } from "../lib/issue-create-override";
 import { loadRungateConfig } from "../lib/config-loader";
 import { DROPPED_CATEGORIES } from "../lib/finding-jury";
 import type { ArbiterRefusal } from "../lib/finding-arbiter";
@@ -5615,6 +5616,72 @@ describe("the filing cap under direct-ship mode", () => {
         "variables are the form gh's own docs recommend, and the dedupe saw an empty title",
       ).toBe("zqxj lands nothing");
       expect(a?.body, "and the symptom scan had nothing to read").toBe("b");
+    });
+
+    // ai-review round 3 of #1805, and the point at which I stopped
+    // guessing. `AGENTS.md` rule 5 puts the re-scope line here, and the
+    // thing to re-scope was the method: rounds 1 and 2 each repaired one
+    // spelling I had not known about, so round 3 read `gh api --help` and
+    // took the grammar off the tool instead.
+    //
+    // What that produced, beyond the two findings: `--allow-escape-sequences`
+    // was missing from the boolean set, and `-f` is `--raw-field` while
+    // `-F` is `--field` — the opposite of the round-1 comment. Neither was
+    // reachable by the reviewer and neither was going to be guessed.
+    test("FG-209: a fully-qualified endpoint is the same endpoint", () => {
+      for (const cmd of [
+        'gh api https://api.github.com/repos/hornjason/rungate/issues -f title="t" -f body="b"',
+        "gh api https://api.github.com/graphql -f query='mutation { createIssue(input: {title: \"t\"}) { issue { number } } }'",
+        'gh api https://ghe.example.com/api/v3/repos/hornjason/rungate/issues -f title="t"',
+      ]) {
+        expect(filingAttempts(cmd).length, `gh posts this exactly as the bare path: ${cmd}`).toBe(
+          1,
+        );
+      }
+      expect(
+        filingAttempts(
+          'gh api https://api.github.com/repos/hornjason/rungate/issues -f title="t"',
+        )[0]?.repo,
+        "and the slug still comes out of the path",
+      ).toBe("hornjason/rungate");
+    });
+
+    // The REST arm already read `--input` as evidence of a filing; the
+    // GraphQL arm did not, so the same body in a file was invisible on one
+    // path and not the other. A body nobody read is UNMEASURED, and
+    // UNMEASURED adjudicates — the gate's own doctrine, applied to itself.
+    test("FG-210: a mutation supplied in a file is still a filing", () => {
+      expect(
+        filingAttempts("gh api graphql --input mutation.json").length,
+        "the document is in the file, so the query field is empty and proves nothing",
+      ).toBe(1);
+      expect(
+        filingAttempts("gh api graphql --input -").length,
+        "stdin cannot be read at all, which is the same unknown",
+      ).toBe(1);
+    });
+
+    // The enumeration, recorded so a later widening has to disagree with
+    // something. This is an AGREEMENT between the set and what the tool
+    // printed, not a reading of the tool: it cannot catch `gh` changing
+    // its flags, only this repo guessing again. Stated rather than
+    // implied, because the previous two rounds were both guesses.
+    test("FG-211: the boolean set is what gh api --help listed", () => {
+      expect(
+        [...API_BOOLEAN_FLAGS].sort(),
+        "taken from `gh api --help` on 2026-11-06; a flag added here without the tool " +
+          "saying so is the guess that cost rounds 1 and 2",
+      ).toEqual(
+        [
+          "--allow-escape-sequences",
+          "--paginate",
+          "--silent",
+          "--slurp",
+          "--verbose",
+          "-i",
+          "--include",
+        ].sort(),
+      );
     });
 
     // One decider, per the issue's own instruction — "teach the parser the

@@ -280,6 +280,13 @@ const basename = (t: string) => t.split("/").pop()!;
 /**
  * `gh api` flags that do NOT consume the following token.
  *
+ * **Read off `gh api --help` on 2026-11-06, not guessed.** Rounds 1 and 2
+ * of #1805 each repaired one spelling of this parser that had been reasoned
+ * about rather than enumerated, and the enumeration immediately produced
+ * two things neither round had: `--allow-escape-sequences` was missing from
+ * this set, and `-f` is `--raw-field` while `-F` is `--field` — the
+ * opposite of what the round-1 comment said.
+ *
  * Everything else beginning with `-` is assumed to take a value, which is
  * the same conservative convention `BOOLEAN_FLAGS` follows above: guessing
  * that a flag takes a value makes the scan skip a token it should have
@@ -287,7 +294,8 @@ const basename = (t: string) => t.split("/").pop()!;
  * Guessing the other way desyncs the scan and makes a flag's VALUE read as
  * the endpoint, which is a filing recognised against the wrong URL.
  */
-const API_BOOLEAN_FLAGS = new Set([
+export const API_BOOLEAN_FLAGS = new Set([
+  "--allow-escape-sequences",
   "--paginate",
   "-i",
   "--include",
@@ -296,8 +304,19 @@ const API_BOOLEAN_FLAGS = new Set([
   "--verbose",
 ]);
 
-/** Flags of `gh api` whose value is a `key=value` field. */
-const API_FIELD_FLAGS = new Set(["--field", "-f", "--raw-field", "-F"]);
+/**
+ * Flags of `gh api` whose value is a `key=value` field.
+ *
+ * `-F`/`--field` is typed and `-f`/`--raw-field` is a string; the
+ * distinction does not matter to a gate reading titles. Both also accept
+ * `key=@path` and `key=@-` to take the value from a file or stdin — a
+ * DECLARED limit here: the key is seen, so the clause is still recognised
+ * as a filing, but the value resolves to the literal `@path` rather than
+ * the file's contents, so the dedupe compares a path. That is the safe
+ * direction — adjudicated, not missed — and it is written down rather than
+ * left for a sixth round to find.
+ */
+const API_FIELD_FLAGS = new Set(["--field", "-F", "--raw-field", "-f"]);
 
 /** A `gh api` clause, read in one walk. */
 export interface ApiCall {
@@ -353,7 +372,10 @@ export function apiCall(tokens: string[]): ApiCall | null {
     const t = rest[i];
     if (t === "--") continue;
     if (!t.startsWith("-") || t === "-") {
-      if (endpoint === null) endpoint = t;
+      // Normalised HERE and nowhere else. Five consumers read this field;
+      // normalising at each of them is five chances to forget, and round 3
+      // of #1805 is what forgetting once costs.
+      if (endpoint === null) endpoint = barePath(t);
       continue;
     }
     // **The attached short form is resolved BEFORE the `=` split, and the
@@ -392,6 +414,25 @@ export function apiCall(tokens: string[]): ApiCall | null {
 
 /** The REST issues COLLECTION — `repos/<owner>/<repo>/issues`, nothing deeper. */
 const ISSUES_COLLECTION = /^\/?repos\/([^/?]+)\/([^/?]+)\/issues\/?(?:\?.*)?$/;
+
+/**
+ * An endpoint as a bare path, whichever way it was written.
+ *
+ * `gh api` takes a fully-qualified URL as well as a path — it is how a
+ * Link-header pagination URL is replayed and how a GitHub Enterprise host
+ * is addressed — and posts it exactly the same way. ai-review round 3 of
+ * #1805: `https://api.github.com/repos/o/r/issues` matched neither the
+ * collection regex nor `graphql`, so a filing spelled that way walked
+ * around a gate that had just been widened twice.
+ *
+ * The `/api/v3` and `/api` prefixes are GHES's REST and GraphQL mounts.
+ * Stripping them makes the two hosts one shape, which is the point: a
+ * second regex per host is a second decider.
+ */
+function barePath(endpoint: string): string {
+  const withoutHost = endpoint.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, "");
+  return withoutHost.replace(/^\/api(?:\/v3)?\//, "/").replace(/^\//, "");
+}
 
 /**
  * The `owner/repo` a `gh api` filing targets, or `null`.
@@ -496,7 +537,13 @@ export function createsIssue(tokens: string[]): boolean {
   const { endpoint, method, fields, hasInput } = call;
   if (method === "GET" || method === "HEAD") return false;
   if (endpoint === "graphql") {
-    return CREATE_ISSUE_MUTATION.test(fields.get("query") ?? "");
+    // `--input` puts the document in a file, or on stdin, and this does
+    // not read it. A document nobody read is UNMEASURED, not absent, and
+    // UNMEASURED adjudicates — the same reading the REST arm below already
+    // takes of the same flag. ai-review round 3 of #1805 found the two
+    // arms disagreeing about one flag, which is the only fact that makes
+    // either of them wrong.
+    return hasInput || CREATE_ISSUE_MUTATION.test(fields.get("query") ?? "");
   }
   if (!ISSUES_COLLECTION.test(endpoint ?? "")) return false;
   return fields.size > 0 || hasInput || method === "POST";
