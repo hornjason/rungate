@@ -18,10 +18,14 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  BACKLOG,
   BOARD_QUERY,
   DONE,
   IN_PROGRESS,
   IN_REVIEW,
+  STALE_CLAIM_DAYS,
+  idleDaysSince,
+  isStaleClaimCandidate,
   applyCorrections,
   requireWrittenItem,
   interpretResponse,
@@ -54,6 +58,17 @@ function item(
   // reason none of them is about. BS-51 writes `null` explicitly and BS-53
   // proves the parser can produce all three.
   assigned: boolean | null = false,
+  // **Defaulted to 0 — "active today" — and that is also a claim.** Every
+  // case written before the staleness rule meant a live claim when it said
+  // nothing, and 0 is the reading that preserves their meaning. `null`
+  // would make them all undecidable for a reason none of them is about.
+  // BS-55 onward set this explicitly.
+  idleDays: number | null = 0,
+  // Defaulted to `null` — NOT READ — because that is what `parseBoardItem`
+  // really produces for every row. Only a stale-claim candidate ever gets
+  // it filled, so a fixture defaulting it to 0 would describe a board state
+  // the sweep cannot reach.
+  openLinkedPRs: number | null = null,
 ): BoardItem {
   return {
     itemId: `PVTI_${number}`,
@@ -65,6 +80,8 @@ function item(
     statusUnread: false,
     stateReason,
     assigned,
+    idleDays,
+    openLinkedPRs,
   };
 }
 
@@ -302,6 +319,140 @@ describe("board status sweep", () => {
         "agrees",
       );
     }
+  });
+
+  // ── BS-55..BS-60: a stale claim is released, not promoted ────────────────
+  //
+  // Jason, 2026-11-06, on seeing that the first cut of this branch sent all
+  // eight strays to In progress: that makes the lane read 9 when one is
+  // real, which is a different wrong number rather than a right one. His
+  // two decisions, asked as two questions:
+  //
+  //   1. A stale claim is UNASSIGNED and STAYS IN BACKLOG. Not Ready.
+  //   2. Stale means no activity for `STALE_CLAIM_DAYS` AND no open pull
+  //      request. Both.
+  //
+  // The conjunction is the part to defend. Each half alone is wrong in a
+  // DIFFERENT direction — an issue somebody picked up this morning has no
+  // pull request yet, and an issue whose pull request is in review is
+  // legitimately quiet because a push to a branch does not touch the
+  // issue's `updatedAt`. BS-56 and BS-57 are those two halves, and neither
+  // can pass if the other condition is the one being read.
+
+  test("BS-55: a stale claim with no open PR is RELEASED, and stays in Backlog", () => {
+    const v = verdictFor(item(312, "Issue", "OPEN", "Backlog", false, null, true, 16, 0));
+    expect(v.kind).toBe("release");
+    // `null` and not "Backlog": the card is already there, so the only act
+    // is removing the assignment. A redundant field write is a second
+    // mutation that can fail on its own and report the release as failed.
+    expect(v.kind === "release" && v.to).toBeNull();
+  });
+
+  test("BS-56: a stale claim in READY is released AND sent back to Backlog", () => {
+    // Ready's entry condition is "nobody assigned", so leaving an
+    // unassigned-but-stale card there would assert somebody re-checked it
+    // as pickable. Nobody did. That is the spec's backwards rule applied to
+    // an abandoned claim.
+    const v = verdictFor(item(1600, "Issue", "OPEN", "Ready", false, null, true, 8, 0));
+    expect(v.kind).toBe("release");
+    expect(v.kind === "release" && v.to).toBe(BACKLOG);
+  });
+
+  test("BS-57: silence alone does NOT release — an open PR keeps the claim", () => {
+    // The half that would be lost first if somebody "simplified" the
+    // conjunction. A push to a pull request branch does not move the
+    // issue's `updatedAt`, so an issue in review looks exactly as quiet as
+    // an abandoned one on that field alone.
+    const v = verdictFor(item(1168, "Issue", "OPEN", "Backlog", false, null, true, 90, 1));
+    expect(v.kind).toBe("correct");
+    expect(v.kind === "correct" && v.to).toBe(IN_PROGRESS);
+  });
+
+  test("BS-58: no open PR alone does NOT release — a fresh claim is kept", () => {
+    // The other half. Somebody who claimed an issue this morning has no
+    // pull request yet, and releasing them would make the claim registry
+    // useless exactly when it is doing its job.
+    const v = verdictFor(
+      item(1455, "Issue", "OPEN", "Backlog", false, null, true, STALE_CLAIM_DAYS - 1, 0),
+    );
+    expect(v.kind).toBe("correct");
+    expect(v.kind === "correct" && v.to).toBe(IN_PROGRESS);
+    // And the boundary is inclusive, asserted rather than assumed — an
+    // off-by-one here is a day of somebody's claim.
+    const atThreshold = verdictFor(
+      item(1455, "Issue", "OPEN", "Backlog", false, null, true, STALE_CLAIM_DAYS, 0),
+    );
+    expect(atThreshold.kind).toBe("release");
+  });
+
+  test("BS-59: an UNREAD pull-request list never releases a claim", () => {
+    // The dangerous direction, and the only one that costs somebody else
+    // something. A fetch that failed leaves `openLinkedPRs` null, and a
+    // `?? 0` anywhere in that path would turn every failed fetch into an
+    // unassignment. Silent Default Substitution where it does most harm.
+    const v = verdictFor(item(312, "Issue", "OPEN", "Backlog", false, null, true, 30, null));
+    expect(v.kind).toBe("undecidable");
+    expect(v.kind === "undecidable" && v.why).toContain("NOT READ");
+  });
+
+  test("BS-60: unread ACTIVITY is undecidable too, in either direction", () => {
+    // `idleDays` null means the timestamp was absent or unparseable. In
+    // progress would assert somebody is working and a release would assert
+    // nobody is; neither is derivable, so the row is reported and left.
+    const v = verdictFor(item(312, "Issue", "OPEN", "Backlog", false, null, true, null, 0));
+    expect(v.kind).toBe("undecidable");
+  });
+
+  test("BS-61: the candidate test is wider than the release, and that is deliberate", () => {
+    // `isStaleClaimCandidate` decides whether to SPEND A QUERY;
+    // `verdictFor` decides what to WRITE. Naming the input they must
+    // disagree on is what separates two questions from two deciders —
+    // `.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape.
+    // Here it is the unfetched candidate: a candidate by one, undecidable
+    // by the other, and if they ever agree on this row the fetch failure
+    // becomes an unassignment.
+    const unfetched = item(312, "Issue", "OPEN", "Backlog", false, null, true, 30, null);
+    expect(isStaleClaimCandidate(unfetched)).toBe(true);
+    expect(verdictFor(unfetched).kind).toBe("undecidable");
+    // And it never spends a query on a row no release could apply to.
+    expect(isStaleClaimCandidate(item(1, "Issue", "OPEN", "In progress", false, null, true, 30))).toBe(false);
+    expect(isStaleClaimCandidate(item(2, "PullRequest", "OPEN", "Backlog", false, null, true, 30))).toBe(false);
+    expect(isStaleClaimCandidate(item(3, "Issue", "OPEN", "Backlog", false, null, false, 30))).toBe(false);
+    expect(isStaleClaimCandidate(item(4, "Issue", "OPEN", "Backlog", false, null, null, 30))).toBe(false);
+  });
+
+  test("BS-62: idleDaysSince separates unread from active-today", () => {
+    const now = Date.parse("2026-11-06T12:00:00Z");
+    expect(idleDaysSince("2026-10-21T12:00:00Z", now)).toBe(16);
+    expect(idleDaysSince("2026-11-06T11:00:00Z", now)).toBe(0);
+    // NOT zero. A row whose timestamp could not be read is not a row that
+    // was touched today, and `verdictFor` must be able to tell them apart.
+    expect(idleDaysSince(undefined, now)).toBeNull();
+    expect(idleDaysSince(null, now)).toBeNull();
+    expect(idleDaysSince("not a date", now)).toBeNull();
+    // Clock skew clamps rather than going negative.
+    expect(idleDaysSince("2026-11-07T12:00:00Z", now)).toBe(0);
+  });
+
+  test("BS-63: the reading partitions releases apart from corrections", () => {
+    // A release writes the ISSUE's assignees; a correction writes a PROJECT
+    // field. Different APIs, so a merged bucket could report a successful
+    // field write as a successful unassignment. The partition must stay
+    // exact and every item must land in exactly one bucket.
+    const items = [
+      item(1, "Issue", "OPEN", "Backlog", false, null, true, 0), //      correct
+      item(2, "Issue", "OPEN", "Backlog", false, null, true, 30, 0), //  release
+      item(3, "Issue", "OPEN", "Backlog", false, null, true, 30, null), // undecidable
+      item(4, "Issue", "OPEN", "Backlog", false, null, false), //        agrees
+    ];
+    const r = sweep(items);
+    expect(r.corrections.map(c => c.number)).toEqual([1]);
+    expect(r.releases.map(c => c.number)).toEqual([2]);
+    expect(r.undecidable.map(c => c.number)).toEqual([3]);
+    expect(r.agrees).toBe(1);
+    expect(r.agrees + r.corrections.length + r.releases.length + r.undecidable.length).toBe(
+      items.length,
+    );
   });
 
   test("BS-9: a non-JSON error body reports the HTTP status, not a parse error", () => {
@@ -733,14 +884,24 @@ describe("board status sweep", () => {
     // And the write path must actually call it — a validator nothing invokes
     // is the comment-saying-it-was-checked failure.
     const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+    // **EVERY field write is confirmed — bound as an equality, not a
+    // count.** This used to pin the call sites at exactly one, which was
+    // right while there was one write path and became a number to bump the
+    // moment a second arrived (the release path, #1758). A number somebody
+    // raises to go green stops being a guard; the property it was standing
+    // in for is this: there are exactly as many confirmations as there are
+    // SET_STATUS mutations, so a new write path cannot skip one.
+    const mutations = (code.match(/graphql\(token, SET_STATUS/g) ?? []).length;
+    const confirmations = (code.match(/requireWrittenItem\(\s*await graphql\(token, SET_STATUS/g) ?? [])
+      .length;
+    expect(mutations, "SET_STATUS must still be issued somewhere").toBeGreaterThan(0);
     expect(
-      (code.match(/requireWrittenItem\(/g) ?? []).length,
-      "expected the definition plus exactly one call site on the write path",
-    ).toBe(2);
-    expect(
-      code,
-      "the SET_STATUS mutation's result must go through requireWrittenItem",
-    ).toMatch(/requireWrittenItem\(\s*await graphql\(token, SET_STATUS/);
+      confirmations,
+      `${mutations} SET_STATUS mutation(s) but ${confirmations} confirmed — every write path ` +
+        `must wrap its result in requireWrittenItem, or that path reports a write nothing ` +
+        `checked. GitHub returns { projectV2Item: null } in a 200 with no errors.`,
+    ).toBe(mutations);
   });
 
   // BS-41. THIS FILE MAKES FACTUAL CLAIMS ABOUT A FILE IT DOES NOT CONTAIN,
@@ -1083,14 +1244,22 @@ describe("board status sweep", () => {
     // from here is the one that matters: the guard exists and precedes the
     // fetch. BS-37 covers what happens when the fetch does run.
     const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
-    const guard = code.search(/if \(reading\.corrections\.length === 0\)/);
+    // **The writable set grew, so the guard did too.** A release is a write
+    // — it unassigns an issue and may move a card — so a run holding only
+    // releases must NOT short-circuit. Both halves are named here rather
+    // than loosened to a wildcard, because a guard that short-circuits on
+    // corrections alone would silently skip every stale claim.
+    const guard = code.search(
+      /if \(reading\.corrections\.length === 0 && reading\.releases\.length === 0\)/,
+    );
     const fetchFields = code.search(/graphql\(token, FIELDS_QUERY/);
     // Anti-vacuity, both halves. A renamed query or a deleted guard gives -1,
     // and -1 < anything would otherwise satisfy the ordering vacuously.
     expect(fetchFields, "FIELDS_QUERY must still be fetched somewhere").toBeGreaterThan(-1);
     expect(
       guard,
-      "a `--write` run must short-circuit when `reading.corrections.length === 0`",
+      "a `--write` run must short-circuit when there is nothing writable — that is " +
+        "`reading.corrections.length === 0 && reading.releases.length === 0`, naming both",
     ).toBeGreaterThan(-1);
     expect(
       guard < fetchFields,
@@ -1106,11 +1275,17 @@ describe("board status sweep", () => {
     // rows. An instruction that cannot work teaches the reader to distrust
     // the tool rather than to go and pick the column.
     const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
-    // The corrections branch must be guarded on corrections ALONE.
+    // The instruction must be guarded on the WRITABLE rows alone. Releases
+    // joined corrections in that set when the stale-claim rule landed —
+    // both are things `--write` performs — and the anti-vacuity check below
+    // is what keeps `undecidable` out of it, which is the actual defect.
     expect(
       code,
-      "the --write instruction must be reachable only when there are corrections",
-    ).toMatch(/if\s*\(reading\.corrections\.length > 0\)\s*\{\s*\n\s*console\.log\([^)]*--write/);
+      "the --write instruction must be reachable only when there is something writable: " +
+        "corrections or releases, never undecidable rows",
+    ).toMatch(
+      /if\s*\(reading\.corrections\.length > 0 \|\| reading\.releases\.length > 0\)\s*\{\s*\n\s*console\.log\([^)]*--write/,
+    );
     // And the undecidable-only case must say so rather than borrow it.
     expect(
       code,
