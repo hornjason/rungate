@@ -206,7 +206,28 @@ const UNCLAIMED_RATCHET = 150;
 // bound it would bind to the field names appearing somewhere, which is the
 // state that produced the finding: four copies named the three `waived-*`
 // fields and none named `needs:`.
-const CLAIMED_UNBINDABLE = 118;
+// 118 -> 145 on 2026-11-06 (#1834): the 27 criteria BOARD-FLOW-SPEC.md ticked
+// in one commit. Each already carried `<!-- REVIEW: unmatched (no registry
+// pattern was close enough) -->` while UNticked, so the population they moved
+// into is the one this number counts and not a new kind of gap: a tick is what
+// makes an unmatched criterion CLAIMED, and the claims were already there —
+// every one of the 27 was named by a test in a declaring position, which is
+// why `bun scripts/sync-sc-status.ts` ticked them.
+//
+// They are unbindable for the reason the rows above are. A lane rule is a
+// claim about what a DECIDER returns for a planted wrong state — "an
+// unreadable close reason refuses rather than defaulting to Done", "a lane
+// above its depth is OVER, not OK" — and no registered pattern expresses a
+// return value. The available ones would bind to `laneFor` appearing in
+// `lib/board-flow.ts`, which is satisfied by the symbol existing and says
+// nothing about what it answers.
+//
+// What the ticks rest on instead is three mutants, each predicted before it
+// ran: collapsing `laneFor` to one lane reddens 7 cases (membership exact),
+// reading an incomplete census as complete reddens 1 (exact), and turning an
+// unreadable cap into full eligibility reddens 2 where 3 were predicted — the
+// miss is recorded in the PR rather than retrofitted.
+const CLAIMED_UNBINDABLE = 145;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
