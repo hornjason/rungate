@@ -520,6 +520,43 @@ describe("#1176: the mechanisms, asserted directly", () => {
     expect(out).not.toContain("body line");
   });
 
+  test("#1741: a `#` line INSIDE an open quote is content, not a comment", () => {
+    // Found by building the filing gate's shape check. `#1176` blanks any
+    // line opening with `#`, because an apostrophe in a prose comment was
+    // opening a quote that swallowed a redirect two lines later. That rule
+    // is right for a comment and wrong for a markdown heading inside an
+    // argument: an issue body typed as `--body "…"` across several lines
+    // reached the filing gate with every `##` heading DELETED, so the
+    // dedupe and the symptom scan read a body with holes in it and no
+    // reader could tell.
+    //
+    // The quote opens on the `gh` line and never closes before the heading,
+    // so no new comment rule is needed — only the one the shell already
+    // has, which is that `#` is ordinary inside quotes.
+    const cmd = [
+      'gh issue create --title "t" --body "intro',
+      "",
+      "## Files this will change",
+      "",
+      "lib/x.ts",
+      '"',
+    ].join("\n");
+
+    expect(stripHeredocs(cmd)).toContain("## Files this will change");
+  });
+
+  test("#1741 CONTROL: #1176's own case still blanks, so the fix is not a revert", () => {
+    // The input the comment rule was added for. Its apostrophe must still
+    // not open a quote — if this line were kept, `> notes.md` two lines
+    // down would read as quoted text and the write would go unseen. The
+    // two cases differ in exactly one variable: whether a quote was already
+    // open when the `#` line arrived.
+    const cmd = "# First, check if there's a test workflow-state.json\necho x > notes.md";
+
+    expect(stripHeredocs(cmd)).not.toContain("workflow-state.json");
+    expect(stripHeredocs(cmd)).toContain("> notes.md");
+  });
+
   test("writeTargets collects every tee operand, not just the first", () => {
     expect(writeTargets(`tee /tmp/a /tmp/bw/${STATE}`)).toContain(`/tmp/bw/${STATE}`);
   });

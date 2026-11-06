@@ -98,7 +98,13 @@ import {
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
 import { API_BOOLEAN_FLAGS } from "../lib/issue-create-override";
-import { headingFor, missingSections, requiredSections } from "../lib/issue-shape";
+import { decomposedBody } from "../lib/issue-decomposition";
+import {
+  ISSUE_SECTIONS,
+  headingFor,
+  missingSections,
+  requiredSections,
+} from "../lib/issue-shape";
 import { loadRungateConfig } from "../lib/config-loader";
 import { DROPPED_CATEGORIES } from "../lib/finding-jury";
 import type { ArbiterRefusal } from "../lib/finding-arbiter";
@@ -113,6 +119,21 @@ import {
 
 const REPO = resolve(import.meta.dir, "..");
 const HOOK = join(REPO, "hooks", "VerifyPhaseLock.hook.ts");
+
+/**
+ * A multi-line operand as a caller would really type it.
+ *
+ * **Not `JSON.stringify`**, which these fixtures used until #1741 and which
+ * silently makes a multi-line body into a one-line one: it escapes a newline
+ * to the two characters `\` and `n`, and that is what the parser then sees. A
+ * single-quoted operand is the only spelling in which a real newline reaches
+ * the parser, because nothing escapes inside single quotes — so it is also
+ * the only spelling in which a fixture claiming to carry markdown headings
+ * actually carries any.
+ *
+ * The replacement is the standard `'\''` dance: close, escape, reopen.
+ */
+const shellQuoted = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /**
  * An `OpenIssuePage` holding exactly these issues and nothing else.
@@ -175,7 +196,7 @@ const DUPLICATE_BODY =
 
 const DUPLICATE_FILING =
   'gh issue create --title "retryBudget gives up early on long command sweeps" ' +
-  `--body ${JSON.stringify(DUPLICATE_BODY)}`;
+  `--body ${shellQuoted(DUPLICATE_BODY)}`;
 
 /**
  * A style/diagnostics finding. Refused before the tracker is ever read, which
@@ -202,6 +223,7 @@ const DROPPED_FILING =
 const FORM_SECTIONS = requiredSections("everyday-work")
   .map(s => `${headingFor(s)}\n\nx\n`)
   .join("\n");
+
 
 /**
  * What every ALLOW fixture in this file must now say, as the caller types it.
@@ -244,7 +266,7 @@ const NOVEL_BODY =
 
 const NOVEL_FILING =
   'gh issue create --title "pullRequestCache is never invalidated" ' +
-  `--body ${JSON.stringify(NOVEL_BODY)}`;
+  `--body ${shellQuoted(NOVEL_BODY)}`;
 
 /**
  * A SECOND novel filing, sharing nothing with the first.
@@ -2284,12 +2306,10 @@ describe("FG-72..FG-78: the corpus count is the population, not the survivors", 
  */
 describe("FG-79..FG-89: a filing names the claim it moves", () => {
   const claimless = (title: string, body: string) =>
-    `gh issue create --title ${JSON.stringify(title)} --body ${JSON.stringify(body)}`;
+    `gh issue create --title ${JSON.stringify(title)} --body ${shellQuoted(body)}`;
 
-  const NOVEL_NO_CLAIM = claimless(
-    "pullRequestCache is never invalidated",
-    "`pullRequestCache` in lib/pr-cache.ts holds 72 entries for 36 hours.",
-  );
+  const NO_CLAIM_BODY = "`pullRequestCache` in lib/pr-cache.ts holds 72 entries for 36 hours.";
+  const NOVEL_NO_CLAIM = claimless("pullRequestCache is never invalidated", NO_CLAIM_BODY);
 
   test("FG-79: a novel finding naming no claim is REFUSED", async () => {
     const v = await adjudicateFiling(filingAttempts(NOVEL_NO_CLAIM)[0], async () => measuredCorpus([]));
@@ -2421,7 +2441,14 @@ describe("FG-79..FG-89: a filing names the claim it moves", () => {
     // cleanup IS still postable. What it costs is one declared line, which
     // is the whole bargain #1595 struck. Without this row the assertions
     // above are satisfied by a gate that stopped honouring the label at all.
-    const declaredClaimless = `${NOVEL_NO_CLAIM.slice(0, -1)} ${DECLARED}"`;
+    // #1741: composed through `claimless` rather than by slicing the closing
+    // quote off the command string. The operand is single-quoted now, so the
+    // old surgery reopened it with a double quote and the body it produced
+    // was not the body this row claims to send.
+    const declaredClaimless = claimless(
+      "pullRequestCache is never invalidated",
+      `${NO_CLAIM_BODY} ${DECLARED}`,
+    );
     expect(namedClaim(declaredClaimless), "the control is still claimless").toBeNull();
     expect(declaredClaimless, "and it really declares").toContain(EXEMPTION_PREFIX);
     const r = await filingGate(`${declaredClaimless} --label ${FILING_OVERRIDE_LABEL}`, {
@@ -2683,12 +2710,16 @@ describe("FG-120..FG-135: a filing declares why it cannot be a comment", () => {
    * Every stage before the new one must clear it, or this block would be
    * measuring the stage it shares an input with rather than the new one.
    */
+  // #1741: it carries the form sections too, for the reason the docblock
+  // above gives. Without them the new MALFORMED stage clears it instead, and
+  // the pair below would differ on two axes rather than one.
   const UNDECLARED =
     'gh issue create --title "zqxjSweepBudget abandons a sweep it started" ' +
-    '--body "`zqxjSweepBudget` in lib/zqxj-sweep.ts drops 31 of 44 commands, over 9107 runs. Claim 4."';
+    '--body "`zqxjSweepBudget` in lib/zqxj-sweep.ts drops 31 of 44 commands, over 9107 runs. ' +
+    `Claim 4.\n\n${FORM_SECTIONS}"`;
 
   /** The same filing, declaring one of the three. The only axis that moves. */
-  const DECLARED_FILING = `${UNDECLARED.slice(0, -1)} ${DECLARED}"`;
+  const DECLARED_FILING = `${UNDECLARED.slice(0, -1)} ${EXEMPTION_PREFIX} out-of-pr-diff"`;
 
   const allow = async () => measuredCorpus([]);
   const gateOn = (cmd: string, target: CommentTarget = onPr) =>
@@ -3069,10 +3100,15 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
    */
   const M8 = "      v.exemption !== null &&";
 
+  // #1741: the form sections are part of the SHARED input, so the mutants
+  // below move the declaration and nothing else. A fixture short a section
+  // would be refused MALFORMED under both the real gate and M1, and M1's row
+  // would then read "still refused" while witnessing a different stage.
   const UNDECLARED =
     'gh issue create --title "zqxjMutantProbe abandons a sweep it started" ' +
-    '--body "`zqxjMutantProbe` in lib/zqxj-mutant.ts drops 23 of 58 commands, over 7731 runs. Claim 4."';
-  const DECLARED_FILING = `${UNDECLARED.slice(0, -1)} ${DECLARED}"`;
+    '--body "`zqxjMutantProbe` in lib/zqxj-mutant.ts drops 23 of 58 commands, over 7731 runs. ' +
+    `Claim 4.\n\n${FORM_SECTIONS}"`;
+  const DECLARED_FILING = `${UNDECLARED.slice(0, -1)} ${EXEMPTION_PREFIX} out-of-pr-diff"`;
   const NONSENSE = `${UNDECLARED.slice(0, -1)} ${EXEMPTION_PREFIX} i-just-want-it-tracked"`;
 
   type Gate = typeof import("../lib/issue-filing-gate");
@@ -5733,5 +5769,160 @@ describe("the filing cap under direct-ship mode", () => {
         "the gate must not grow its own opinion about what a gh api filing is",
       ).toBe(false);
     });
+  });
+});
+
+/**
+ * FG-216..FG-224 — #1741: the gate is a CONSUMER of `lib/issue-shape.ts`.
+ *
+ * The filing gate asked four questions and none of them was *is the thing
+ * about to land on the tracker readable by the things that read it*. An issue
+ * naming no files cannot be checked against rule 2, cannot be scanned for the
+ * file overlaps that put four agents on `lib/bash-write-guard.ts`, and tells
+ * a picker nothing about what they are picking up.
+ *
+ * **The floor is the EVERYDAY form.** The two forms differ in exactly one
+ * field — `Criteria this serves`, which a consumer reporting a problem
+ * upstream cannot know — so the sections common to both are the only ones
+ * this gate can demand. FG-218 is that boundary, asserted rather than
+ * assumed.
+ *
+ * **These rows exist because the other two consumers landed in the same
+ * commit.** On the day this check was written, `plan-issues --decompose`
+ * emitted two of the form's five sections, so this stage would have refused
+ * every row of every decomposed plan. FG-222 is the standing proof it no
+ * longer does, taken at the gate rather than in `test/issue-shape.test.ts`,
+ * because the two files could otherwise agree about a body neither sends.
+ */
+describe("FG-216..FG-224: a filing is readable by the things that read it", () => {
+  const TITLE = "zqxjShapeProbe drops a sweep it started";
+  const PREAMBLE =
+    "`zqxjShapeProbe` in lib/zqxj-shape.ts drops 17 of 41 commands, over 6204 runs. " +
+    `Claim 4. ${EXEMPTION_PREFIX} out-of-pr-diff`;
+
+  /** The command, with whichever sections are named carrying content. */
+  const filing = (sections: readonly string[], content = "x") =>
+    `gh issue create --title ${JSON.stringify(TITLE)} --body ` +
+    shellQuoted([PREAMBLE, ...sections.map(h => `${h}\n\n${content}`)].join("\n\n"));
+
+  const FLOOR = requiredSections("everyday-work").map(headingFor);
+  const verdict = async (cmd: string) =>
+    adjudicateFiling(filingAttempts(cmd)[0], async () => measuredCorpus([]));
+
+  test("FG-216: a body short a required section is REFUSED, and the heading is NAMED", async () => {
+    const files = headingFor(requiredSections("everyday-work").find(s => s.id === "files")!);
+    const v = await verdict(filing(FLOOR.filter(h => h !== files)));
+
+    expect(v.outcome).toBe("REFUSE");
+    expect(v.refusal).toBe("MALFORMED");
+    // The heading, not an id and not a count. It is what the agent has to
+    // type, and a refusal naming a different set from the one that produced
+    // it is a refusal nobody can satisfy.
+    expect(v.reason).toContain(files);
+  });
+
+  test("FG-217 CONTROL: the SAME filing carrying every section is ALLOWED", async () => {
+    const v = await verdict(filing(FLOOR));
+
+    // One axis. Without this row FG-216 is satisfied by a gate that refuses
+    // everything, which is also what a gate with a broken body reader does.
+    expect(v.outcome).toBe("ALLOW");
+    expect(v.refusal).toBeNull();
+  });
+
+  test("FG-218: the criterion section is NOT demanded — a consumer cannot know one", async () => {
+    const criteria = headingFor(requiredSections("spec-work").find(s => s.id === "criteria")!);
+    const v = await verdict(filing(FLOOR));
+
+    expect(FLOOR).not.toContain(criteria);
+    expect(v.outcome, "the everyday floor is the gate's bar, not the spec-work form's").toBe(
+      "ALLOW",
+    );
+  });
+
+  test("FG-219: every missing section is named, not just the first", async () => {
+    const v = await verdict(filing([FLOOR[0]]));
+
+    expect(v.refusal).toBe("MALFORMED");
+    for (const h of FLOOR.slice(1)) expect(v.reason).toContain(h);
+  });
+
+  test("FG-220: a heading with nothing under it is MISSING, not present", async () => {
+    // The body somebody pasted the template into and did not fill in. To a
+    // check that only looks for the string it is a complete issue —
+    // *assertions that hold vacuously*, in checks-must-be-able-to-fail.md.
+    const v = await verdict(filing(FLOOR, ""));
+
+    expect(v.refusal).toBe("MALFORMED");
+    for (const h of FLOOR) expect(v.reason).toContain(h);
+  });
+
+  test("FG-221: MALFORMED is LAST — a duplicate that is also malformed is a DUPLICATE", async () => {
+    const malformed = filing([]);
+    const v = await adjudicateFiling(filingAttempts(malformed)[0], async () =>
+      measuredCorpus([
+        {
+          id: 4242,
+          title: "zqxjShapeProbe drops a sweep it started",
+          body: "`zqxjShapeProbe` in lib/zqxj-shape.ts drops 17 of 41 commands, over 6204 runs.",
+        },
+      ]),
+    );
+
+    // "already filed as #4242" is actionable; "your body is short a heading"
+    // sends the agent to rewrite a body nobody needs. Placing a cheap string
+    // check ahead of the dedupe masked 34 of 78 cases when NO_CLAIM was
+    // briefly moved first, and this is the same hazard.
+    expect(v.refusal).toBe("DUPLICATE");
+  });
+
+  test("FG-222: a `--decompose` body clears this gate, which is the land-together proof", async () => {
+    const generated = decomposedBody(
+      {
+        criterion: "CRC-B5",
+        outcome: "a second round posts no thread for a finding already threaded",
+        files: ["lib/ai-review-suppression.ts"],
+        milestone: null,
+        blockedBy: [],
+        line: 3,
+      },
+      "## Criteria this serves",
+      "docs/plan.md",
+    );
+
+    // Measured at the gate, not against `missingSections` directly: the two
+    // could otherwise agree perfectly about a body the generator never
+    // produces, which is two deciders agreeing on an input nobody sends.
+    const cmd =
+      `gh issue create --title ${JSON.stringify(TITLE)} --body ` +
+      shellQuoted(`${generated}\n\nClaim 7. ${EXEMPTION_PREFIX} out-of-pr-diff`);
+
+    expect(missingSections(generated, "everyday-work")).toEqual([]);
+    expect((await verdict(cmd)).refusal).toBeNull();
+  });
+
+  test("FG-223: MALFORMED is waivable, unlike the three accounting refusals", async () => {
+    // It IS a claim about the filing — a named section is absent, which the
+    // agent refutes by adding it. The three unwaivable ones make no claim
+    // about the finding at all, which is the property `UNWAIVABLE_REFUSALS`
+    // records and the reason the label cannot open them.
+    expect(waivableRefusal("MALFORMED")).toBe(true);
+    expect("MALFORMED" in UNWAIVABLE_REFUSALS).toBe(false);
+  });
+
+  test("FG-224: the gate holds no second opinion about what a section is", () => {
+    const gate = readFileSync(
+      join(import.meta.dir, "..", "lib", "issue-filing-gate.ts"),
+      "utf-8",
+    ).replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+
+    // One decider. A heading spelled here as well as in lib/issue-shape.ts
+    // is the two-deciders shape: a mutation of either leaves the other
+    // holding every case up and both read as covered.
+    for (const section of ISSUE_SECTIONS) {
+      expect(gate, `the gate must not spell "${section.label}" itself`).not.toContain(
+        section.label,
+      );
+    }
   });
 });

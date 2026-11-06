@@ -804,10 +804,39 @@ export function stripQuoted(s: string): string {
  * body never is — it is the document being written, not a word of the
  * command writing it.
  */
+/**
+ * The quote open at the END of `line`, given the one open at its start (#1741).
+ *
+ * A backslash escapes the next character outside single quotes, which is the
+ * shell's rule and the one thing a naive counter gets wrong — `echo \"` opens
+ * nothing. Inside single quotes nothing escapes, not even a backslash.
+ *
+ * Deliberately NOT a general quote parser and not shared with
+ * `unquotedSpans`: that one answers *which positions on this line are
+ * unquoted* for a line read in isolation, and this one answers *what is still
+ * open when the next line starts*. Folding them together would be one
+ * function answering two questions, and the second question is the one
+ * `stripHeredocs` has always needed and never asked.
+ */
+function quoteStateAfter(line: string, open: '"' | "'" | null): '"' | "'" | null {
+  let q = open;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q !== "'" && c === "\\") {
+      i++;
+      continue;
+    }
+    if (q === null && (c === '"' || c === "'")) q = c;
+    else if (q === c) q = null;
+  }
+  return q;
+}
+
 export function stripHeredocs(s: string): string {
   const lines = s.split('\n');
   const out: string[] = [];
   let i = 0;
+  let open: '"' | "'" | null = null;
   while (i < lines.length) {
     const line = lines[i];
     // A whole-line `#` comment is prose, and its APOSTROPHE is not a quote.
@@ -817,7 +846,17 @@ export function stripHeredocs(s: string): string {
     // Two commands in a 5,513-command corpus did exactly this, both of them
     // genuine writes. Dropped here rather than in each caller because every
     // arm reaches this function first.
-    const isComment = /^\s*#/.test(line);
+    //
+    // **#1741: only when no quote is already open.** `#` is ordinary inside
+    // quotes — that is the shell's own rule, and it is the same rule #1176
+    // relies on from the other side. Without the condition, a multi-line
+    // `gh issue create --body "…"` reached the filing gate with every `##`
+    // markdown heading DELETED, so the dedupe and the symptom scan read a
+    // body with holes and nothing reported the loss. It can only make this
+    // function keep MORE of the command, never less, which is the direction
+    // a guard is allowed to be wrong in.
+    const isComment = open === null && /^\s*#/.test(line);
+    if (!isComment) open = quoteStateAfter(line, open);
     out.push(isComment ? '' : line); // #1176: the OPERATOR's line is kept — see below.
     i++;
     if (isComment) continue; // a comment cannot open a heredoc
