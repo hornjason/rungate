@@ -5,9 +5,9 @@
  * SC-370 (HOOK-ARCHITECTURE-SPEC): Hook SC traceability
  * SC-371 (HOOK-ARCHITECTURE-SPEC): No hook exceeds 150 lines
  *
- * TWO independent gates on one chokepoint — `gh issue create` reaching Bash.
- * Both decisions live in lib/ and not here (#365, HOOK-ARCHITECTURE-SPEC:
- * hooks are thin triggers).
+ * TWO independent gates on one chokepoint — a filing reaching Bash, in any
+ * spelling `createsIssue` knows (#1759). Both decisions live in lib/ and
+ * not here (#365, HOOK-ARCHITECTURE-SPEC: hooks are thin triggers).
  *
  * 1. **The VERIFY-phase lock** (#443, #365). Workflow discipline: during
  *    VERIFY, use verifyBlockers[] instead. Waived by the override labels in

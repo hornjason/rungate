@@ -97,6 +97,7 @@ import {
   type CommentTarget,
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
+import { API_BOOLEAN_FLAGS } from "../lib/issue-create-override";
 import { loadRungateConfig } from "../lib/config-loader";
 import { DROPPED_CATEGORIES } from "../lib/finding-jury";
 import type { ArbiterRefusal } from "../lib/finding-arbiter";
@@ -5464,5 +5465,241 @@ describe("the filing cap under direct-ship mode", () => {
       raised.map(r => r.outcome),
       "at the direct-ship cap the first three all win",
     ).toEqual(["WON", "WON", "WON"]);
+  });
+
+  // #1759. The gate saw ONE of three ways to create an issue, so two of
+  // three filings walked around it — measured by execution on 2026-11-02,
+  // not read off the source:
+  //
+  //   gh issue create …                       1
+  //   gh api repos/<o>/<r>/issues …           0
+  //   a createIssue GraphQL mutation          0
+  //
+  // Every row below probes the same way, by handing a command to the live
+  // parser. A source-text census would assert that three spellings appear
+  // somewhere, which is a different claim and a satisfiable one.
+  describe("#1759: a filing is a filing however it is spelled", () => {
+    const REST = 'gh api repos/hornjason/rungate/issues -f title="zqxj lands nothing" -f body="b"';
+    const GQL =
+      "gh api graphql -f query='mutation { createIssue(input: {repositoryId: \"R_1\", " +
+      'title: "zqxj lands nothing", body: "b"}) { issue { number } } }\'';
+
+    test("FG-199: gh api against the issues collection is a filing", () => {
+      expect(filingAttempts(REST).length, "the REST creation path is invisible to the gate").toBe(
+        1,
+      );
+    });
+
+    test("FG-200: a createIssue GraphQL mutation is a filing", () => {
+      expect(
+        filingAttempts(GQL).length,
+        "the GraphQL creation path is invisible to the gate",
+      ).toBe(1);
+    });
+
+    // **Recognising is not enough, and this is the row that says so.** The
+    // gate dedupes on the title and reads the body for symptom keys, so a
+    // path that is counted but resolves to an empty attempt refuses nothing
+    // and allows everything — it would turn the table above green while
+    // leaving the hole exactly where it was.
+    test("FG-201: the title, body and repo reach the attempt from all three paths", () => {
+      const CREATE =
+        'gh issue create --repo hornjason/rungate --title "zqxj lands nothing" --body "b"';
+      for (const [name, cmd] of [
+        ["gh issue create", CREATE],
+        ["gh api REST", REST],
+        ["GraphQL", GQL],
+      ] as const) {
+        const [a] = filingAttempts(cmd);
+        expect(a?.title, `${name}: the dedupe has no title to compare`).toBe("zqxj lands nothing");
+        expect(a?.body, `${name}: the symptom scan has no body to read`).toBe("b");
+      }
+      expect(
+        filingAttempts(REST)[0]?.repo,
+        "the REST path carries its target in the URL, and the dedupe needs it",
+      ).toBe("hornjason/rungate");
+    });
+
+    // **The controls, and they are the half that can be got wrong.** A
+    // widening that reads any `gh api` touching the word `issues` turns
+    // every list and every comment into a filing, and the gate's own
+    // refusals are themselves `gh issue comment` — so an over-wide parser
+    // makes the gate refuse the thing it tells you to do instead.
+    test("FG-202: reading issues is not filing one", () => {
+      for (const cmd of [
+        "gh api repos/hornjason/rungate/issues",
+        "gh api repos/hornjason/rungate/issues?state=open",
+        "gh api -X GET repos/hornjason/rungate/issues",
+        // The row that makes the explicit-GET arm load-bearing. Without
+        // it the others are all field-free, so dropping the GET check
+        // changes no outcome and the battery reads 0 for a mutant that
+        // genuinely weakens the parser — `gh api` sends fields as query
+        // parameters on a GET, and this is how a filter is spelled.
+        "gh api -X GET repos/hornjason/rungate/issues -f state=open -f labels=bug",
+        'gh api repos/hornjason/rungate/issues/1759/comments -f body="not a filing"',
+        "gh api graphql -f query='query { repository(owner: \"x\", name: \"y\") { issues(first: 1) { nodes { number } } } }'",
+        'gh issue comment 1759 --body "not a filing"',
+      ]) {
+        expect(filingAttempts(cmd), `this reads or comments, it does not file: ${cmd}`).toEqual([]);
+      }
+    });
+
+    // ai-review round 1 of #1805, four findings, all four of them the same
+    // root: the first cut parsed `gh api` tokens with a scanner built for
+    // `gh issue create` and never told it which flags `gh api` takes
+    // without a value. One walk per token now, with the grammar handed in.
+    //
+    // Each row is a filing that `gh` performs and the first cut did not
+    // see, so each is #1759's own hole reopened one spelling further in.
+    test("FG-204: the end-of-options marker does not become the endpoint", () => {
+      expect(
+        filingAttempts('gh api -- repos/hornjason/rungate/issues -f title="t" -f body="b"').length,
+        "`--` was read as the endpoint, so the collection never matched",
+      ).toBe(1);
+    });
+
+    test("FG-205: a boolean flag of gh api does not eat the field that follows", () => {
+      const cmd = 'gh api --silent -f title="t" -f body="b" repos/hornjason/rungate/issues';
+      const [a] = filingAttempts(cmd);
+      expect(a, "--silent was assumed to take a value, so the scan desynced").toBeDefined();
+      expect(a?.title, "and the title it skipped is what the dedupe compares").toBe("t");
+    });
+
+    test("FG-206: the last field on the LINE wins, across both spellings", () => {
+      const [a] = filingAttempts(
+        'gh api repos/hornjason/rungate/issues -F title="first" -f title="second" -f body="b"',
+      );
+      expect(
+        a?.title,
+        "gh sends the last one typed; reading all of one flag's spelling before the other inverts it",
+      ).toBe("second");
+    });
+
+    // ai-review round 2 of #1805, and the third time on this PR that the
+    // thing added to close a hole reopened it one spelling further in.
+    //
+    // Round 1 added attached-short-flag handling with a comment saying
+    // `-ftitle=x` was read. It was not: the generic `=` split ran first
+    // and took the `=` INSIDE the value, so the flag resolved to
+    // `-ftitle`, which is in no set and was dropped. The one attached form
+    // that matters is the only one that could not work, because a field
+    // flag's value is always a `key=value` pair — and no case exercised
+    // it, so a comment was standing in for the check
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, *the reason nobody
+    // checked is a comment saying it was checked*).
+    test("FG-208: a field attached to its short flag is read", () => {
+      const [a] = filingAttempts(
+        'gh api repos/hornjason/rungate/issues -ftitle="zqxj lands nothing" -fbody="b"',
+      );
+      expect(a, "pflag attaches a short flag's value, and gh runs this").toBeDefined();
+      expect(a?.title, "the = inside the value was read as the flag's own separator").toBe(
+        "zqxj lands nothing",
+      );
+      expect(a?.body).toBe("b");
+      // The form WITHOUT an internal `=` already worked, which is why the
+      // broken one passed by inspection. Both, so the split is asserted
+      // rather than the easier half of it.
+      expect(
+        filingAttempts('gh api -XPOST repos/hornjason/rungate/issues -f title="t"').length,
+        "an attached value with no = of its own",
+      ).toBe(1);
+    });
+
+    test("FG-207: a parameterised mutation resolves its variables", () => {
+      const [a] = filingAttempts(
+        "gh api graphql -f query='mutation($title: String!, $body: String!) { " +
+          'createIssue(input: {repositoryId: "R_1", title: $title, body: $body}) ' +
+          "{ issue { number } } }' -f title=\"zqxj lands nothing\" -f body=\"b\"",
+      );
+      expect(
+        a?.title,
+        "variables are the form gh's own docs recommend, and the dedupe saw an empty title",
+      ).toBe("zqxj lands nothing");
+      expect(a?.body, "and the symptom scan had nothing to read").toBe("b");
+    });
+
+    // ai-review round 3 of #1805, and the point at which I stopped
+    // guessing. `AGENTS.md` rule 5 puts the re-scope line here, and the
+    // thing to re-scope was the method: rounds 1 and 2 each repaired one
+    // spelling I had not known about, so round 3 read `gh api --help` and
+    // took the grammar off the tool instead.
+    //
+    // What that produced, beyond the two findings: `--allow-escape-sequences`
+    // was missing from the boolean set, and `-f` is `--raw-field` while
+    // `-F` is `--field` — the opposite of the round-1 comment. Neither was
+    // reachable by the reviewer and neither was going to be guessed.
+    test("FG-209: a fully-qualified endpoint is the same endpoint", () => {
+      for (const cmd of [
+        'gh api https://api.github.com/repos/hornjason/rungate/issues -f title="t" -f body="b"',
+        "gh api https://api.github.com/graphql -f query='mutation { createIssue(input: {title: \"t\"}) { issue { number } } }'",
+        'gh api https://ghe.example.com/api/v3/repos/hornjason/rungate/issues -f title="t"',
+      ]) {
+        expect(filingAttempts(cmd).length, `gh posts this exactly as the bare path: ${cmd}`).toBe(
+          1,
+        );
+      }
+      expect(
+        filingAttempts(
+          'gh api https://api.github.com/repos/hornjason/rungate/issues -f title="t"',
+        )[0]?.repo,
+        "and the slug still comes out of the path",
+      ).toBe("hornjason/rungate");
+    });
+
+    // The REST arm already read `--input` as evidence of a filing; the
+    // GraphQL arm did not, so the same body in a file was invisible on one
+    // path and not the other. A body nobody read is UNMEASURED, and
+    // UNMEASURED adjudicates — the gate's own doctrine, applied to itself.
+    test("FG-210: a mutation supplied in a file is still a filing", () => {
+      expect(
+        filingAttempts("gh api graphql --input mutation.json").length,
+        "the document is in the file, so the query field is empty and proves nothing",
+      ).toBe(1);
+      expect(
+        filingAttempts("gh api graphql --input -").length,
+        "stdin cannot be read at all, which is the same unknown",
+      ).toBe(1);
+    });
+
+    // The enumeration, recorded so a later widening has to disagree with
+    // something. This is an AGREEMENT between the set and what the tool
+    // printed, not a reading of the tool: it cannot catch `gh` changing
+    // its flags, only this repo guessing again. Stated rather than
+    // implied, because the previous two rounds were both guesses.
+    test("FG-211: the boolean set is what gh api --help listed", () => {
+      expect(
+        [...API_BOOLEAN_FLAGS].sort(),
+        "taken from `gh api --help` on 2026-11-06; a flag added here without the tool " +
+          "saying so is the guess that cost rounds 1 and 2",
+      ).toEqual(
+        [
+          "--allow-escape-sequences",
+          "--paginate",
+          "--silent",
+          "--slurp",
+          "--verbose",
+          "-i",
+          "--include",
+        ].sort(),
+      );
+    });
+
+    // One decider, per the issue's own instruction — "teach the parser the
+    // other two", not "add a second matcher". Two functions answering *is
+    // this a filing* are behaviourally one: a mutation of either leaves the
+    // other holding every case up, and both read as covered.
+    test("FG-203: all three paths are decided in one place", () => {
+      const src = readFileSync(join(import.meta.dir, "..", "lib", "issue-create-override.ts"), "utf-8");
+      const definitions = src.match(/export function createsIssue\b/g) ?? [];
+      expect(definitions.length, "createsIssue must have exactly one definition to mutate").toBe(1);
+      const gate = readFileSync(
+        join(import.meta.dir, "..", "lib", "issue-filing-gate.ts"),
+        "utf-8",
+      );
+      expect(
+        /\bgh\s+api\b/.test(gate.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "")),
+        "the gate must not grow its own opinion about what a gh api filing is",
+      ).toBe(false);
+    });
   });
 });

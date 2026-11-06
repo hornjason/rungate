@@ -278,11 +278,253 @@ function commandArguments(tokens: string[]): string[] {
 const basename = (t: string) => t.split("/").pop()!;
 
 /**
- * Does this clause invoke `gh issue create`?
+ * `gh api` flags that do NOT consume the following token.
+ *
+ * **Read off `gh api --help` on 2026-11-06, not guessed.** Rounds 1 and 2
+ * of #1805 each repaired one spelling of this parser that had been reasoned
+ * about rather than enumerated, and the enumeration immediately produced
+ * two things neither round had: `--allow-escape-sequences` was missing from
+ * this set, and `-f` is `--raw-field` while `-F` is `--field` — the
+ * opposite of what the round-1 comment said.
+ *
+ * Everything else beginning with `-` is assumed to take a value, which is
+ * the same conservative convention `BOOLEAN_FLAGS` follows above: guessing
+ * that a flag takes a value makes the scan skip a token it should have
+ * read, and the failure is a filing the gate does not recognise — visible.
+ * Guessing the other way desyncs the scan and makes a flag's VALUE read as
+ * the endpoint, which is a filing recognised against the wrong URL.
+ */
+export const API_BOOLEAN_FLAGS = new Set([
+  "--allow-escape-sequences",
+  "--paginate",
+  "-i",
+  "--include",
+  "--silent",
+  "--slurp",
+  "--verbose",
+]);
+
+/**
+ * Flags of `gh api` whose value is a `key=value` field.
+ *
+ * `-F`/`--field` is typed and `-f`/`--raw-field` is a string; the
+ * distinction does not matter to a gate reading titles. Both also accept
+ * `key=@path` and `key=@-` to take the value from a file or stdin — a
+ * DECLARED limit here: the key is seen, so the clause is still recognised
+ * as a filing, but the value resolves to the literal `@path` rather than
+ * the file's contents, so the dedupe compares a path. That is the safe
+ * direction — adjudicated, not missed — and it is written down rather than
+ * left for a sixth round to find.
+ */
+const API_FIELD_FLAGS = new Set(["--field", "-F", "--raw-field", "-f"]);
+
+/** A `gh api` clause, read in one walk. */
+export interface ApiCall {
+  /** The first positional token — the endpoint — or `null`. */
+  readonly endpoint: string | null;
+  /** `-X`/`--method`, upper-cased, or `null` when it was not given. */
+  readonly method: string | null;
+  /** Every `key=value` field, last on the LINE wins, as `gh` reads them. */
+  readonly fields: Map<string, string>;
+  /** Was a body supplied with `--input`? */
+  readonly hasInput: boolean;
+}
+
+/**
+ * ONE walk over a `gh api` clause's tokens.
+ *
+ * ai-review round 1 of #1805 raised four findings and all four were this
+ * function not existing. The first cut read the endpoint with its own loop
+ * and the method and fields with `flagValues`, which consults
+ * `BOOLEAN_FLAGS` — the set belonging to `gh issue create`. So
+ * `gh api --silent -f title=… repos/o/r/issues`, which files an issue,
+ * desynced: `--silent` was assumed to take a value, the scan skipped the
+ * `-f`, and the clause resolved to no fields and no method. Two scanners
+ * with two grammars over one command, and only one of them had been told
+ * which command it was reading.
+ *
+ * Reading the fields in one pass is also what makes *last wins* true. The
+ * first cut collected every `-f` and then every `-F`, so
+ * `-F title=A -f title=B` landed on `A` — the opposite of what `gh` sends.
+ *
+ * ## Two deliberate readings
+ *
+ * **`--` does not end the walk.** pflag treats it as end-of-options, so a
+ * real `gh` may well reject what follows; this skips it and keeps reading,
+ * which can only make a clause MORE likely to be seen as a filing. That is
+ * the safe direction for a gate, and `--` becoming the endpoint was a
+ * filing that walked straight through.
+ *
+ * **An unknown flag takes a value**, the same convention `BOOLEAN_FLAGS`
+ * follows: guessing that way costs a skipped token and an unrecognised
+ * filing, which is visible. Guessing the other way desyncs the scan and
+ * reads a flag's value as the endpoint — a filing recognised against the
+ * wrong URL, which is worse and quieter.
+ */
+export function apiCall(tokens: string[]): ApiCall | null {
+  const rest = afterGhSubcommand(tokens, "api");
+  if (rest === null) return null;
+  let endpoint: string | null = null;
+  let method: string | null = null;
+  let hasInput = false;
+  const fields = new Map<string, string>();
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (t === "--") continue;
+    if (!t.startsWith("-") || t === "-") {
+      // Normalised HERE and nowhere else. Five consumers read this field;
+      // normalising at each of them is five chances to forget, and round 3
+      // of #1805 is what forgetting once costs.
+      if (endpoint === null) endpoint = barePath(t);
+      continue;
+    }
+    // **The attached short form is resolved BEFORE the `=` split, and the
+    // order is the whole of it.** `-ftitle=x` is one token whose value is
+    // itself a `key=value` pair, so splitting on the first `=` reads the
+    // flag as `-ftitle` and drops the field — and a field flag's value is
+    // ALWAYS a pair, so the one attached form that matters was the only
+    // one that could not work. ai-review round 2 of #1805; the round
+    // before it shipped this as a comment with no case behind it.
+    let name = t;
+    let value: string | null = null;
+    const attached = t.startsWith("--") ? null : /^-([A-Za-z])(.+)$/.exec(t);
+    if (attached !== null) {
+      name = `-${attached[1]}`;
+      value = attached[2];
+    } else {
+      const eq = t.indexOf("=");
+      if (eq !== -1) {
+        name = t.slice(0, eq);
+        value = t.slice(eq + 1);
+      }
+    }
+    if (value === null && !API_BOOLEAN_FLAGS.has(name) && i + 1 < rest.length) {
+      value = rest[++i];
+    }
+    if (name === "--input") hasInput = true;
+    else if (name === "-X" || name === "--method") {
+      if (value !== null) method = value.toUpperCase();
+    } else if (API_FIELD_FLAGS.has(name) && value !== null) {
+      const at = value.indexOf("=");
+      if (at > 0) fields.set(value.slice(0, at), value.slice(at + 1));
+    }
+  }
+  return { endpoint, method, fields, hasInput };
+}
+
+/** The REST issues COLLECTION — `repos/<owner>/<repo>/issues`, nothing deeper. */
+const ISSUES_COLLECTION = /^\/?repos\/([^/?]+)\/([^/?]+)\/issues\/?(?:\?.*)?$/;
+
+/**
+ * An endpoint as a bare path, whichever way it was written.
+ *
+ * `gh api` takes a fully-qualified URL as well as a path — it is how a
+ * Link-header pagination URL is replayed and how a GitHub Enterprise host
+ * is addressed — and posts it exactly the same way. ai-review round 3 of
+ * #1805: `https://api.github.com/repos/o/r/issues` matched neither the
+ * collection regex nor `graphql`, so a filing spelled that way walked
+ * around a gate that had just been widened twice.
+ *
+ * The `/api/v3` and `/api` prefixes are GHES's REST and GraphQL mounts.
+ * Stripping them makes the two hosts one shape, which is the point: a
+ * second regex per host is a second decider.
+ */
+function barePath(endpoint: string): string {
+  const withoutHost = endpoint.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, "");
+  return withoutHost.replace(/^\/api(?:\/v3)?\//, "/").replace(/^\//, "");
+}
+
+/**
+ * The `owner/repo` a `gh api` filing targets, or `null`.
+ *
+ * The REST path carries it; a GraphQL `createIssue` carries a
+ * `repositoryId`, which is an opaque node id and not a slug, so that one is
+ * honestly `null` rather than guessed at. `null` means the dedupe runs
+ * against the session's default repo, which is the existing behaviour for
+ * a `gh issue create` with no `--repo`.
+ */
+export function apiFilingRepo(tokens: string[]): string | null {
+  const call = apiCall(tokens);
+  const m = call === null ? null : ISSUES_COLLECTION.exec(call.endpoint ?? "");
+  return m === null ? null : `${m[1]}/${m[2]}`;
+}
+
+/**
+ * The fields of a REST issues-collection filing, or `null`.
+ *
+ * `null` for every clause that is not one — including `graphql`, which has
+ * its own reader — so a caller gets a map only when the map means what it
+ * thinks it means.
+ */
+export function apiRestFields(tokens: string[]): Map<string, string> | null {
+  const call = apiCall(tokens);
+  if (call === null || !ISSUES_COLLECTION.test(call.endpoint ?? "")) return null;
+  return call.fields;
+}
+
+/**
+ * The GraphQL `query` variables this clause passes, or `null`.
+ *
+ * `gh api graphql -f query='mutation($title: String!){…}' -f title="…"` is
+ * the form `gh`'s own documentation recommends, because it avoids escaping
+ * quotes by hand. ai-review round 1 of #1805: the first cut read literals
+ * out of the document only, so the idiomatic spelling resolved to an empty
+ * title and an empty body — counted as a filing and compared against
+ * nothing, which is the one outcome worse than not counting it.
+ */
+export function graphqlVariables(tokens: string[]): Map<string, string> | null {
+  const call = apiCall(tokens);
+  if (call === null || call.endpoint !== "graphql") return null;
+  return call.fields;
+}
+
+/** The tokens after `gh <sub>`, or `null` when this clause is not that. */
+function afterGhSubcommand(tokens: string[], sub: string): string[] | null {
+  for (let i = 0; i + 1 < tokens.length; i++) {
+    if (basename(tokens[i]) === "gh" && tokens[i + 1] === sub) return tokens.slice(i + 2);
+  }
+  return null;
+}
+
+/** A `mutation { … createIssue( … ) … }` in a GraphQL document. */
+const CREATE_ISSUE_MUTATION = /\bmutation\b[\s\S]*\bcreateIssue\s*\(/;
+
+/**
+ * The GraphQL document this clause sends, or `null`.
+ *
+ * `gh api graphql` takes it as the `query` field whichever field flag
+ * spells it.
+ */
+export function graphqlDocument(tokens: string[]): string | null {
+  return graphqlVariables(tokens)?.get("query") ?? null;
+}
+
+/**
+ * Does this clause create an issue?
+ *
+ * Three spellings, one decider (#1759). Measured on 2026-11-02, the first
+ * two of these returned nothing: `gh api repos/<o>/<r>/issues` and a
+ * `createIssue` GraphQL mutation both file an issue and neither is spelled
+ * `gh issue create`, so two of three filings walked around the gate that
+ * exists to count them.
  *
  * Compared on the basename, because `/usr/bin/gh issue create` and
  * `./gh issue create` are the same command and the first version of this
  * function allowed both.
+ *
+ * ## Reading is not filing, and that is the hard half
+ *
+ * `repos/<o>/<r>/issues` is the LIST endpoint as well as the create
+ * endpoint; the method is what separates them, and `gh api` chooses POST
+ * implicitly when any field is supplied. So a create is *fields present or
+ * POST asked for*, and an explicit `GET`/`HEAD` is a read whatever else is
+ * on the line.
+ *
+ * The regex stops at the collection — `issues/1759/comments` is deeper and
+ * is not a filing. That boundary is load-bearing rather than tidy: this
+ * gate's own refusals tell an agent to post a comment instead, so a parser
+ * that read any `gh api` touching `issues` would refuse the remedy it
+ * prescribes.
  */
 export function createsIssue(tokens: string[]): boolean {
   for (let i = 0; i + 2 < tokens.length; i++) {
@@ -290,7 +532,21 @@ export function createsIssue(tokens: string[]): boolean {
       return true;
     }
   }
-  return false;
+  const call = apiCall(tokens);
+  if (call === null) return false;
+  const { endpoint, method, fields, hasInput } = call;
+  if (method === "GET" || method === "HEAD") return false;
+  if (endpoint === "graphql") {
+    // `--input` puts the document in a file, or on stdin, and this does
+    // not read it. A document nobody read is UNMEASURED, not absent, and
+    // UNMEASURED adjudicates — the same reading the REST arm below already
+    // takes of the same flag. ai-review round 3 of #1805 found the two
+    // arms disagreeing about one flag, which is the only fact that makes
+    // either of them wrong.
+    return hasInput || CREATE_ISSUE_MUTATION.test(fields.get("query") ?? "");
+  }
+  if (!ISSUES_COLLECTION.test(endpoint ?? "")) return false;
+  return fields.size > 0 || hasInput || method === "POST";
 }
 
 /**
