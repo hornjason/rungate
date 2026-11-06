@@ -187,7 +187,13 @@ function reportCoverage(root: string, asJson: boolean): number {
   console.log(`  PLANNED      ${r.planned.length}`);
   console.log(`  UNPLANNED    ${r.unplanned.length}`);
   console.log(`  NO_CRITERIA  ${r.noCriteria.length}\n`);
-  for (const s of r.specs.filter(s => s.state === "UNPLANNED")) {
+  // `r.unplanned`, never a second `state === "UNPLANNED"` filter here. The
+  // roll-up already decides which specs are unplanned, and a filter of my
+  // own is a second decider answering the same question: found by the
+  // mutation battery, which blanked `unplanned` and left these rows printing
+  // (`.claude/rules/checks-must-be-able-to-fail.md`, *two deciders agree*).
+  for (const path of r.unplanned) {
+    const s = r.specs.find(s => s.path === path)!;
     console.log(`  UNPLANNED  ${s.path} — ${s.criteria} criteria, ${s.placed} placed`);
     for (const why of s.reasons) console.log(`             ${why}`);
   }
