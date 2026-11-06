@@ -884,6 +884,59 @@ async function graphql(token: string, query: string, variables: Record<string, u
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 /**
+ * The environment variable carrying the credential for the ISSUE write.
+ *
+ * TWO CREDENTIALS, BECAUSE THEY ARE TWO DIFFERENT PERMISSIONS. The board
+ * write needs ProjectsV2, which `GITHUB_TOKEN` cannot do at any permission
+ * level, so it needs a PAT. The issue write needs `issues: write`, which
+ * `GITHUB_TOKEN` CAN do and which the PAT does not have.
+ *
+ * Measured 2026-11-06 on run `42248314060`, the first live fire of
+ * `board-sweep.yml` on a real event: it read 177 items, found 6 stale
+ * claims, and refused all six with
+ * `HTTP 403: {"message":"Must have admin rights to Repository."}` on
+ * `PATCH /repos/{repo}/issues/{n}`.
+ *
+ * The alternative was widening `RUNGATE_PROJECT_TOKEN` to carry issue-write.
+ * One click, and it widens the same credential for `release.yml`,
+ * `board-ready.yml`, `board-walkthrough.yml`, `board-flow.yml`, `ci.yml`
+ * and `board-intake.yml` at the same time. One job needs the permission;
+ * six would get it. Jason's call, 2026-11-06: "let's try option A".
+ */
+export const ISSUE_TOKEN_ENV = "BOARD_ISSUE_TOKEN";
+
+/**
+ * Which credential signs the issue write, and WHICH ONE IT WAS.
+ *
+ * The fallback to the board token is deliberate — a local `--write` run and
+ * every consumer that has not added the variable keep working exactly as
+ * before. What is not acceptable is the fallback being silent: a run using
+ * the board token and a run using a correctly configured issue token would
+ * then print the same thing, and the 403 above is what that looks like from
+ * the outside. *Silent Default Substitution*,
+ * `.claude/rules/config-access.md`.
+ *
+ * So this returns the SOURCE beside the token, and `main()` prints it. The
+ * source is the reason this is a function rather than a `??`: a `??` has no
+ * place to put the answer to "which one did you use".
+ *
+ * An empty or whitespace-only variable is ABSENT, not a credential —
+ * `secrets.X` for a secret that does not exist is the empty string with no
+ * error, which is how the Ready lane spent a day authorising itself with
+ * nothing (#1761).
+ */
+export function resolveIssueWriteToken(
+  env: Record<string, string | undefined>,
+  boardToken: string,
+): { readonly token: string; readonly source: "issue-token" | "board-token" } {
+  const v = env[ISSUE_TOKEN_ENV];
+  if (typeof v === "string" && v.trim() !== "") {
+    return { token: v.trim(), source: "issue-token" };
+  }
+  return { token: boardToken, source: "board-token" };
+}
+
+/**
  * Remove every assignee from one issue.
  *
  * REST, not GraphQL, and that is the cheap choice rather than a stylistic
@@ -1386,6 +1439,21 @@ async function main(argv: readonly string[]): Promise<number> {
   //
   // So the ordering is chosen by which half-state the fixpoint can leave,
   // not by which one looks worse in a screenshot.
+  //
+  // A DIFFERENT CREDENTIAL SIGNS THE ISSUE WRITE. `token` is the board PAT
+  // and cannot write issues; see `ISSUE_TOKEN_ENV`. The source is printed
+  // because a silent fallback to the board token looks exactly like a
+  // correct configuration until the 403 arrives.
+  const issueWrite = resolveIssueWriteToken(process.env, token);
+  if (reading.releases.length > 0) {
+    console.log(
+      issueWrite.source === "issue-token"
+        ? `\n  issue writes signed by ${ISSUE_TOKEN_ENV}; the board writes by the project credential.`
+        : `\n  ${ISSUE_TOKEN_ENV} is not set, so the issue writes are signed by the BOARD ` +
+            `credential. That is the configuration that returned HTTP 403 on run 42248314060 — ` +
+            `a project PAT cannot write issues. Set it to a token with issues:write.`,
+    );
+  }
   const released = await applyCorrections(
     reading.releases.map(r => ({ ...r, to: r.to ?? "(unassigned, already in Backlog)" })),
     async r => {
@@ -1402,7 +1470,7 @@ async function main(argv: readonly string[]): Promise<number> {
           r.itemId,
         );
       }
-      await clearAssignees(token, repo, r.number);
+      await clearAssignees(issueWrite.token, repo, r.number);
     },
   );
   for (const w of released.wrote) console.log(`  released #${w.number} — ${w.to}`);

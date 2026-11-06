@@ -21,24 +21,34 @@
 # board and corrects every row it can decide. The board converges on the next
 # event rather than on the next hour, and nobody has to remember anything.
 #
-# IT DOES RETRIGGER ITSELF, AND THAT IS THE SAFE PROPERTY — not the absence
-# of a retrigger. This comment used to claim "a `--write` here mutates PROJECT
-# CARDS, not issues, and a card write emits no `issues` event, so this cannot
-# retrigger itself". The first half is true of a CORRECTION and false of a
-# RELEASE: releasing a stale claim PATCHes the issue's assignees, which fires
-# a genuine `issues: unassigned` webhook, which is in the trigger list above.
-# A PAT authors it, so GitHub's recursion guard for the default token does not
-# apply. Round 3 of #1823's review found the claim and it was false.
+# THE RETRIGGER QUESTION, AND ITS THIRD ANSWER. This paragraph has been
+# wrong twice and the history is the point.
 #
-# What actually has to hold is TERMINATION, and it does, because the write is
-# a fixpoint: once a claim is released the issue is unassigned and its card is
-# in Backlog, and `verdictFor` reads that row as `agrees`. The follow-on run
-# performs no write, so it emits no event, so there is no third run. One extra
-# no-op run per batch, bounded, not a cascade. BS-68 asserts it on the
-# decider rather than leaving it as this paragraph.
+#   1. "A `--write` mutates PROJECT CARDS, not issues, and a card write emits
+#      no `issues` event, so this cannot retrigger itself." TRUE of a
+#      correction, FALSE of a release — releasing PATCHes the issue's
+#      assignees. Round 3 of #1823's review found it.
+#   2. "It retriggers itself and that is safe, because the write is a
+#      fixpoint." True while a PAT authored the issue write.
+#   3. TODAY: the issue write is signed by the job's built-in GITHUB_TOKEN,
+#      and GitHub does not trigger workflows from events it authors. So
+#      there is NO self-retrigger. The bounded no-op follow-on run from (2)
+#      is gone with it.
 #
-# And the follow-on run is useful rather than merely harmless: it is the run
-# that retries a release whose card move succeeded and whose unassign did not.
+# The property that actually matters survived all three, which is why it is
+# the one asserted: the write is a FIXPOINT. Once a claim is released the
+# issue is unassigned and its card is in Backlog, and `verdictFor` reads that
+# row as `agrees`. Whether a follow-on run happens in two seconds or at the
+# next real event, it writes nothing. BS-68 asserts that on the decider
+# rather than leaving it as this paragraph — and a paragraph is exactly what
+# was wrong the first two times.
+#
+# What (3) costs: a half-failed release — card moved, unassign refused — is
+# no longer retried seconds later. It waits for the next `issues` event.
+# Acceptable, because the half-state move-first leaves is ASSIGNED-IN-BACKLOG,
+# which this sweep re-detects. Unassign-first would leave UNASSIGNED-IN-READY,
+# which `verdictFor` reads as `agrees` forever; that is why the order is what
+# it is, and run 42248314060 is the live instance.
 #
 # Every `uses:` is pinned to a commit SHA, and `test/action-pin-parity.test.ts`
 # asserts it.
@@ -56,6 +66,17 @@ on:
 
 permissions:
   contents: read
+  # THE ISSUE WRITE, AND ONLY IT. Releasing a stale claim unassigns the
+  # issue, which `GITHUB_TOKEN` can do and `RUNGATE_PROJECT_TOKEN` cannot —
+  # run 42248314060 refused 6 of 6 with HTTP 403 "Must have admin rights to
+  # Repository". The board write still needs the PAT, because GITHUB_TOKEN
+  # cannot write ProjectsV2 at any permission level.
+  #
+  # Granted here rather than on the PAT: widening RUNGATE_PROJECT_TOKEN
+  # would widen it for release.yml, board-ready.yml, board-walkthrough.yml,
+  # board-flow.yml, ci.yml and board-intake.yml at the same time. One job
+  # needs the permission. Jason's call, 2026-11-06.
+  issues: write
 
 jobs:
   reconcile-the-board:
@@ -141,6 +162,11 @@ jobs:
         if: steps.gate.outputs.trusted == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          # The ISSUE write, which the line above cannot perform. The script
+          # falls back to GITHUB_TOKEN when this is absent and SAYS SO — a
+          # silent fallback is indistinguishable from a working setup right
+          # up to the 403.
+          BOARD_ISSUE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WRITE: ${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
         run: |
           bun scripts/board-status-sweep.ts $WRITE
