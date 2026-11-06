@@ -20,6 +20,7 @@ import { join } from "path";
 import {
   BOARD_QUERY,
   DONE,
+  IN_PROGRESS,
   IN_REVIEW,
   applyCorrections,
   requireWrittenItem,
@@ -46,6 +47,13 @@ function item(
   // make every existing row keep passing while hiding the one case this
   // change is about, which is a fixture choosing the answer.
   stateReason: string | null = null,
+  // **Defaulted to `false`, and the default is a claim about the fixture,
+  // not a convenience.** `false` means "nobody is assigned", which is what
+  // every case written before 2026-11-06 meant by saying nothing. `null`
+  // would mean "not read" and would make those cases undecidable for a
+  // reason none of them is about. BS-51 writes `null` explicitly and BS-53
+  // proves the parser can produce all three.
+  assigned: boolean | null = false,
 ): BoardItem {
   return {
     itemId: `PVTI_${number}`,
@@ -56,6 +64,7 @@ function item(
     draft,
     statusUnread: false,
     stateReason,
+    assigned,
   };
 }
 
@@ -184,10 +193,16 @@ describe("board status sweep", () => {
     expect(/\.\.\. on PullRequest \{[^}]*isDraft/.test(BOARD_QUERY)).toBe(true);
   });
 
-  test("BS-6: an open item in any non-Done column is left alone", () => {
+  test("BS-6: an open UNASSIGNED item in any non-Done column is left alone", () => {
     // The sweep is not a second opinion on where open work sits. Backlog,
     // Ready and In progress are all legitimate for an open item, and moving
     // them would make this a competing decider against board-intake.yml.
+    //
+    // **`assigned` defaults to `false` in the helper, and that is this case's
+    // whole subject rather than an incidental.** Jason's call of 2026-11-06
+    // made an ASSIGNED open issue decidable — BS-47 below — so without the
+    // word UNASSIGNED in this title the two cases contradict each other and
+    // whichever ran second would look like the bug.
     for (const status of ["Backlog", "Ready", "In progress", IN_REVIEW, null]) {
       expect(verdictFor(item(1740, "PullRequest", "OPEN", status)).kind).toBe("agrees");
       expect(verdictFor(item(1741, "Issue", "OPEN", status)).kind).toBe("agrees");
@@ -200,6 +215,93 @@ describe("board status sweep", () => {
     // The reason has to name why a guess is refused, or the next reader
     // deletes the branch as an oversight and writes Backlog.
     expect(v.kind === "undecidable" && v.why).toContain("not derivable");
+  });
+
+  // ── BS-47..BS-51: assignment makes an open issue's lane derivable ────────
+  //
+  // Jason, 2026-11-06: *"if they're assigned, that means someone's working on
+  // them, right? Because they're assigned to somebody… But the backlog is for
+  // unassigned work."*
+  //
+  // That decision is what these cases rest on, and it is the reason the
+  // docblock's old defence of UNDECIDABLE no longer covers every open issue.
+  // The defence was *"Backlog, Ready and In progress are all consistent with
+  // an open issue"* — true of an UNASSIGNED one, and false the moment
+  // somebody is on it, because `specs/BOARD-FLOW-SPEC.md` gives In progress
+  // the entry condition `issues: [assigned]` and gives Ready the entry
+  // condition "nobody assigned".
+  //
+  // **Why the sweep and not the workflow.** `board-flow.yml` already writes
+  // In progress on the `assigned` EVENT and it works — run `42150403168` row
+  // 3 PASS. It cannot help the nine issues assigned before it existed,
+  // because no event will ever fire for them again and GitHub has no "replay
+  // a past event" trigger. Measured 2026-11-06: In progress held 1 against 9
+  // open and assigned.
+
+  test("BS-47: an open ASSIGNED issue in Backlog is corrected to In progress", () => {
+    const v = verdictFor(item(1455, "Issue", "OPEN", "Backlog", false, null, true));
+    expect(v.kind).toBe("correct");
+    expect(v.kind === "correct" && v.to).toBe(IN_PROGRESS);
+  });
+
+  test("BS-48: an open ASSIGNED issue in Ready is corrected to In progress", () => {
+    // Ready's entry condition is "nobody assigned", so an assigned issue
+    // sitting there is not merely mis-filed — it is consuming a slot in the
+    // WIP-capped lane. On 2026-11-06 Ready read 5 of its cap of 4 with two
+    // such issues in it, and `board-ready.yml` correctly refused to promote
+    // anything into a full lane. The over-cap reading and the stranded
+    // assignments are the same defect seen from two ends.
+    const v = verdictFor(item(1600, "Issue", "OPEN", "Ready", false, null, true));
+    expect(v.kind).toBe("correct");
+    expect(v.kind === "correct" && v.to).toBe(IN_PROGRESS);
+  });
+
+  test("BS-49: an assigned open issue already past Backlog/Ready is left alone", () => {
+    // In progress is where it belongs; In review means a pull request is out
+    // and the issue is still legitimately assigned. Writing In progress over
+    // In review would drag finished work backwards, and this sweep runs in
+    // bulk — so the lane set it may pull FROM is closed, not open-ended.
+    for (const status of ["In progress", IN_REVIEW]) {
+      expect(verdictFor(item(1601, "Issue", "OPEN", status, false, null, true)).kind).toBe(
+        "agrees",
+      );
+    }
+  });
+
+  test("BS-50: an open assigned issue marked Done stays UNDECIDABLE", () => {
+    // BS-7's refusal is NOT relaxed by the assignment rule, and this case
+    // exists so nobody relaxes it by analogy. An open issue in Done is a
+    // different corruption from an open issue in Backlog: something wrote a
+    // terminal lane for work that has not ended, and In progress is a
+    // plausible-looking cover for it. Replacing a visibly wrong board with a
+    // plausibly wrong one is the fifth shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    const v = verdictFor(item(1744, "Issue", "OPEN", DONE, false, null, true));
+    expect(v.kind).toBe("undecidable");
+  });
+
+  test("BS-51: an assignment that was NOT READ is undecidable, never corrected", () => {
+    // `null` is "the query did not carry assignees", which is a different
+    // fact from "nobody is assigned" and must not share its observable.
+    // Silent Default Substitution — `.claude/rules/config-access.md`. A
+    // query that loses the field would otherwise make every stranded issue
+    // read as correctly unassigned, and the sweep would report a clean board
+    // having checked nothing.
+    const v = verdictFor(item(1455, "Issue", "OPEN", "Backlog", false, null, null));
+    expect(v.kind).toBe("undecidable");
+    expect(v.kind === "undecidable" && v.why).toContain("NOT READ");
+  });
+
+  test("BS-52: a PULL REQUEST's own card is never moved by the assignment rule", () => {
+    // The lane table in `specs/BOARD-FLOW-SPEC.md` governs ISSUES. A pull
+    // request is assignable too, and no row of that table says where its own
+    // card goes — the existing CLOSED branch already declines to invent one.
+    // Deciding it here would be this script writing spec.
+    for (const status of ["Backlog", "Ready"]) {
+      expect(verdictFor(item(1740, "PullRequest", "OPEN", status, false, null, true)).kind).toBe(
+        "agrees",
+      );
+    }
   });
 
   test("BS-9: a non-JSON error body reports the HTTP status, not a parse error", () => {
@@ -432,6 +534,32 @@ describe("board status sweep", () => {
   const values = (names: Record<string, string>, hasNextPage = false) => ({
     pageInfo: { hasNextPage },
     nodes: Object.entries(names).map(([field, name]) => ({ name, field: { name: field } })),
+  });
+
+  test("BS-53: parseBoardItem reads assignment from the node, and absence is null", () => {
+    // The fixture helper at the top of this file sets `assigned` as a
+    // literal, so every case from BS-47 down is green against a parser that
+    // never populates it — the third shape, an assertion holding against a
+    // value the test itself set. This is the half only a node can catch.
+    expect(parseBoardItem(node({ assignees: { totalCount: 1 } }))?.assigned).toBe(true);
+    expect(parseBoardItem(node({ assignees: { totalCount: 3 } }))?.assigned).toBe(true);
+    expect(parseBoardItem(node({ assignees: { totalCount: 0 } }))?.assigned).toBe(false);
+    // The field absent entirely — a query that lost it, or a fragment that
+    // never asked for it. NOT false: see BS-51.
+    expect(parseBoardItem(node({}))?.assigned).toBeNull();
+    // Present but not a number is also unread, not zero. A GraphQL error
+    // can null a nested field while the rest of the row arrives intact.
+    expect(parseBoardItem(node({ assignees: null }))?.assigned).toBeNull();
+    expect(parseBoardItem(node({ assignees: { totalCount: null } }))?.assigned).toBeNull();
+  });
+
+  test("BS-54: BOARD_QUERY asks for assignees, or BS-53's parser has no input", () => {
+    // BS-53 proves the parser reads the field. It cannot prove the QUERY
+    // sends it, and a parser with nothing to parse returns null for every
+    // row — which BS-51 then reports as undecidable, for every issue on the
+    // board, forever, with no error anywhere. The two halves are a pair.
+    expect(BOARD_QUERY).toContain("assignees");
+    expect(BOARD_QUERY).toContain("totalCount");
   });
 
   test("BS-29: Status is read from the nested field name, not from position", () => {

@@ -1,0 +1,130 @@
+# Not managed by rungate — the scaffold owns ci.yml, gates.yml and the two
+# ai-review files, and regenerates them by job name. This one is caller-owned.
+#
+# #1758 — `board-flow.yml` writes In progress on the `assigned` EVENT, and it
+# works: the end-to-end walk-through's row 3 passes against a real event. What
+# an event-driven writer cannot do is reach the issues that were assigned
+# BEFORE it existed. No event will fire for those again, and GitHub has no
+# trigger that replays a past one.
+#
+# Measured 2026-11-06 against `PVT_kwHOAZTQCM4BpMuR`: In progress held 1 card
+# against 9 open assigned issues. Two of the eight strays sat in Ready,
+# holding it at 5 against a cap of 4 — so `board-ready.yml` correctly
+# promoted nothing, and the end-to-end walk-through recorded that correct
+# refusal as a failing lane. One backlog of stale cards, three symptoms.
+#
+# **No schedule.** A cron is the thing #1744 exists to remove, and a one-off
+# hand-run backfill is the other thing it exists to remove — "a board state
+# reachable only by someone running a command by hand" is Claim 7's own
+# falsification. So the reconcile rides the events the board already emits:
+# any issue being assigned, unassigned, closed or reopened re-reads the whole
+# board and corrects every row it can decide. The board converges on the next
+# event rather than on the next hour, and nobody has to remember anything.
+#
+# A `--write` here mutates PROJECT CARDS, not issues, and a card write emits
+# no `issues` event — so this cannot retrigger itself.
+#
+# Every `uses:` is pinned to a commit SHA, and `test/action-pin-parity.test.ts`
+# asserts it.
+name: Board — reconcile every card against GitHub
+
+on:
+  issues:
+    types: [assigned, unassigned, closed, reopened]
+  workflow_dispatch:
+    inputs:
+      write:
+        description: "Perform the corrections (default: report only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile-the-board:
+    runs-on: "ubuntu-latest"
+    steps:
+      # THE SECRET IS `RUNGATE_PROJECT_TOKEN`; the script reads `GITHUB_TOKEN`
+      # or `GH_TOKEN` through `resolveGitHubToken`. Do not "tidy" the names
+      # into each other: `secrets.<name>` for an absent secret is the EMPTY
+      # STRING with no error and no annotation, and that is how the Ready lane
+      # spent a day reporting green while authorising itself with nothing
+      # (run `41950972882`, #1761).
+      #
+      # GITHUB_TOKEN cannot write ProjectsV2 at any permission level, which is
+      # why this is a PAT.
+      #
+      # The gate is BEFORE the checkout and the install, and that ordering is
+      # the point rather than an optimisation: `issues: [reopened]` is
+      # reachable by an issue's own author, so an untrusted actor must not be
+      # able to start a job that fetches a dependency tree while holding a
+      # board-writing credential. `gh` is preinstalled, so this step needs
+      # nothing fetched.
+      - id: gate
+        name: May the acting identity move the board?
+        env:
+          GH_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          # Through env:, never interpolated into the script line.
+          ACTOR: ${{ github.actor }}
+          # GitHub sets this; a contributor cannot present themselves as it.
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::UNMEASURED — RUNGATE_PROJECT_TOKEN is not set, so the acting identity could not be authorised and nothing was read. This run is UNMEASURED, not clean."
+            echo "trusted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # THE OWNER ARM, AND WHY IT IS FIRST. The permission endpoint below
+          # needs admin access to answer, and a PAT scoped to projects may not
+          # have it — dispatch `42074926758` is the record: the endpoint
+          # returned nothing this job could read, so `perm` was empty and the
+          # owner was refused. That refusal is CORRECT (a permission nobody
+          # could read is not a permission anybody was granted) and defaulting
+          # it to trusted is the cheapest wrong fix available here. Answering
+          # it without an API call is the right one.
+          #
+          # NOT A DUPLICATE DECIDER: this arm cannot authorise a collaborator
+          # who is not the owner, and the endpoint cannot authorise anybody
+          # while the credential cannot read it. Each answers an input the
+          # other cannot.
+          if [ "$ACTOR" = "$OWNER" ]; then
+            echo "trusted=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null) || perm=""
+          case "$perm" in
+            admin|maintain|write)
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::warning::refusing to run: $ACTOR has permission \"${perm:-UNMEASURED}\" on $GITHUB_REPOSITORY, and this job holds a board-writing credential."
+              echo "trusted=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+      - if: steps.gate.outputs.trusted == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - if: steps.gate.outputs.trusted == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version-file: ".bun-version"
+      # `--ignore-scripts`: this job carries a PAT, and a postinstall script in
+      # any transitive dependency would run as the job. `--frozen-lockfile` so
+      # the tree that runs is the tree that was reviewed.
+      - if: steps.gate.outputs.trusted == 'true'
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # No `continue-on-error`. A red run IS the signal. Swallowing it turns a
+      # GraphQL error, an expired PAT and a board with no In progress option
+      # all into green — the silent pass this file's credential handling
+      # exists to refuse, reintroduced one level up.
+      #
+      # An EVENT reconciles for real; a dispatch reports unless asked to
+      # write, so the lane can be inspected without moving anything.
+      - name: Reconcile every card
+        if: steps.gate.outputs.trusted == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          WRITE: ${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
+        run: |
+          bun scripts/board-status-sweep.ts $WRITE

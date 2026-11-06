@@ -96,10 +96,73 @@ we should be able to move something all the way through correctly."*
 |---|---|---|---|---|---|
 | **Backlog** | What might we do? | `issues: [opened]`, or **anything moving backwards** (below) | it is promoted to Ready, or it closes | `board-intake.yml` | nothing directly — it is the option pool, and options are discardable |
 | **Ready** | What should be picked up **next**, and in what order? | zero open blockers, nobody assigned, **and** Ready is below the depth derived from live throughput — ordered by phase, then by age | `issues: [assigned]`, or a pull frees a slot | `board-ready.yml` | **the lane we actually have.** 6 named, 34 eligible: the ordering decision does not disappear, it RELOCATES — each puller exhausts Ready, falls back to Backlog and applies its own heuristic, so prioritisation happens 28 more times, inconsistently, inside agents, leaving no record anybody can review |
-| **In progress** | What is being worked on **right now**, and by whom? | `issues: [assigned]` — assignment **is** our starting act (below) | a linked PR becomes ready for review | board-flow workflow | 1 shown against 9 claimed. Eight sessions are invisible to each other. And because this lane carries the start timestamp, cycle time is not approximate — it is **absent**; a blocked item left here also consumes a slot, so if a limit ever binds a phantom throttles real throughput |
+| **In progress** | What is being worked on **right now**, and by whom? | `issues: [assigned]` — assignment **is** our starting act (below) | a linked PR becomes ready for review | `board-flow.yml` on the event, `board-sweep.yml` for cards whose event predates it (below) | 1 shown against 9 claimed. Eight sessions are invisible to each other. And because this lane carries the start timestamp, cycle time is not approximate — it is **absent**; a blocked item left here also consumes a slot, so if a limit ever binds a phantom throttles real throughput |
 | **In review** | What is finished but not yet landed? | a linked PR is **not a draft** — `pull_request: [opened, ready_for_review]` with `draft == false` | the PR merges or closes | board-flow workflow | this lane is WIP, so an unbounded In review means **unbounded WIP however tight In progress is** — "finishing" into an unlimited queue defeats the limit. For agent work this is where the real constraint sits: coding got ten times faster, review did not |
 | **Done** | What did we actually deliver? | `issues: [closed]` with `state_reason: completed` | `issues: [reopened]` sends it to Backlog | board-flow workflow | if it ever admits `not_planned`, throughput is overstated and cycle-time percentiles are contaminated |
 | **Cancelled** | What did we decide **not** to do, and how often? | `issues: [closed]` with `state_reason` of `not_planned` or `duplicate` | `issues: [reopened]` sends it to Backlog | board-flow workflow | 23 issues have left the system through an exit nothing counts. Little's Law's second assumption is violated, so no forecast from this board is defensible |
+
+### An event-driven writer cannot reach a card whose event already fired
+
+Every entry above names a GitHub event, which is the requirement that makes
+this board testable. It also carries a consequence worth stating once: a
+writer that fires on an event can only ever correct the cards whose event
+happens *after* it ships. Nothing replays a past event, and GitHub offers no
+trigger that does.
+
+Measured 2026-11-06, with `board-flow.yml` live and demonstrably working —
+the end-to-end walk-through's In progress row passes on a real event:
+
+| Lane | Held | Should hold |
+|---|---|---|
+| In progress | 1 | 9 open and assigned |
+| Ready | 5 | at most 4, its throughput-derived cap |
+
+Eight of those nine were assigned before any workflow wrote this lane, so
+the writer was correct and the board was wrong at the same time. Two of the
+strays sat in **Ready**, whose entry condition is "nobody assigned", holding
+it over its cap — so `board-ready.yml` correctly promoted nothing into a
+full lane, and the walk-through recorded that correct refusal as a failing
+lane. **One backlog of stale cards produced three separate symptoms, none of
+which was a defect in any writer.**
+
+`board-sweep.yml` closes it, and the shape of the fix is the part to keep:
+
+- **It rides the events the board already emits** — any issue assigned,
+  unassigned, closed or reopened re-reads the whole board and corrects every
+  row it can decide. **No schedule, and no hand-run backfill.** Both are the
+  thing this spec exists to remove; "a board state reachable only by someone
+  running a command by hand" is Claim 7's own falsification, and a one-off
+  catch-up is that verbatim.
+- **It decides nothing of its own.** `verdictFor` in
+  `scripts/board-status-sweep.ts` routes through `laneFor`, the same
+  function the live writer applies, so "what does an assignment mean" has
+  one owner and the catch-up cannot drift away from the writer.
+- **It corrects only what is derivable, and the set is closed.** An
+  assignment contradicts **Backlog** and **Ready** and no other lane. In
+  review means a pull request is out and the issue is still legitimately
+  assigned; Done and Cancelled are terminal, and a bulk writer able to pull
+  from those would drag finished work backwards.
+- **An unread field is not an empty one.** A query that fails to carry
+  `assignees` makes every row UNDECIDABLE and says so, rather than reading
+  as a board where nobody is assigned to anything.
+
+### Assignment means it is being worked, and the Backlog is for unassigned work
+
+Jason's call, 2026-11-06: *"if they're assigned, that means someone's
+working on them, right? Because they're assigned to somebody… But the
+backlog is for unassigned work."*
+
+This is what makes the row above decidable at all. An open issue used to be
+undecidable on purpose — Backlog, Ready and In progress are all consistent
+with "open", and guessing a column replaces a visibly wrong board with a
+plausibly wrong one. Adding an assignee removes the ambiguity: the lane
+table already gives In progress the entry condition `issues: [assigned]` and
+Ready the entry condition "nobody assigned", so exactly one lane is
+consistent with an assigned open issue.
+
+It does **not** extend to an open issue marked **Done**. That is a different
+corruption — something wrote a terminal lane for work that has not ended —
+and In progress is a plausible-looking cover for it. It stays UNDECIDABLE.
 
 ### Anything moving backwards returns to Backlog, and the return is counted
 

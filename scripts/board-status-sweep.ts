@@ -75,6 +75,28 @@ export const DRIFT_EXIT = 1;
 export const PROJECT_ID = "PVT_kwHOAZTQCM4BpMuR";
 export const DONE = "Done";
 export const IN_REVIEW = "In review";
+/**
+ * The lane an assigned, open issue belongs in.
+ *
+ * Spelled here rather than taken from `laneFor` at the call site for the
+ * same reason `DONE` and `IN_REVIEW` are: these three are the strings this
+ * script WRITES, and a test needs one import to name the expected value.
+ * `verdictFor` still routes the decision through `laneFor`, so the rule
+ * itself has one owner — this is the name, not the decision.
+ */
+export const IN_PROGRESS = "In progress";
+
+/**
+ * The lanes an assignment may pull an issue OUT of. Closed, not open-ended.
+ *
+ * Only these two contradict an assignment: `specs/BOARD-FLOW-SPEC.md` gives
+ * Ready the entry condition "nobody assigned", and Backlog is the option
+ * pool for work nobody has started. In progress is already right, In review
+ * means a pull request is out and the issue is still legitimately assigned,
+ * and Done and Cancelled are terminal — a bulk writer that could pull from
+ * those would drag finished work backwards. BS-49, BS-50.
+ */
+const ASSIGNMENT_CONTRADICTS: readonly string[] = ["Backlog", "Ready"];
 
 export type ItemKind = "Issue" | "PullRequest";
 export type ItemState = "OPEN" | "CLOSED" | "MERGED";
@@ -101,6 +123,22 @@ export interface BoardItem {
    * `COMPLETED`. See `verdictFor`.
    */
   readonly stateReason: string | null;
+  /**
+   * Is anybody assigned to this issue?
+   *
+   * Three states, and the third is the point. `true` and `false` are
+   * readings; `null` is **NOT READ** — the query did not carry the field,
+   * or carried it as null. Those must not share an observable with "nobody
+   * is assigned", because a query that lost the field would otherwise make
+   * every stranded issue read as correctly unassigned and the sweep would
+   * report a clean board having checked nothing. Silent Default
+   * Substitution, `.claude/rules/config-access.md`.
+   *
+   * Always `null` for a pull request: the query asks for assignees on the
+   * Issue fragment only, so the sweep cannot see a fact no lane rule lets
+   * it act on. BS-52 asserts the resulting verdict, BS-53 the parse.
+   */
+  readonly assigned: boolean | null;
 }
 
 export type Verdict =
@@ -184,6 +222,71 @@ export function verdictFor(item: BoardItem): Verdict {
   }
 
   // Open from here down.
+
+  // ASSIGNMENT MAKES AN OPEN ISSUE'S LANE DERIVABLE — Jason's call of
+  // 2026-11-06: *"if they're assigned, that means someone's working on them…
+  // But the backlog is for unassigned work."*
+  //
+  // This is the branch the UNDECIDABLE refusal further down used to swallow.
+  // That refusal's stated reason was "Backlog, Ready and In progress are all
+  // consistent with an open issue" — true of an UNASSIGNED issue, and false
+  // once somebody is on it, because the lane table in
+  // `specs/BOARD-FLOW-SPEC.md` gives In progress the entry condition
+  // `issues: [assigned]` and gives Ready the entry condition "nobody
+  // assigned". An assigned issue in either lane contradicts the spec.
+  //
+  // **Why this is here and not only in `board-flow.yml`.** That workflow
+  // writes In progress on the `assigned` EVENT and it works — the
+  // end-to-end walk-through's row 3 passes. It cannot reach an issue that
+  // was assigned before it existed: no event will fire for those again, and
+  // GitHub has no trigger that replays one. Measured 2026-11-06 against
+  // `PVT_kwHOAZTQCM4BpMuR`: In progress held 1 card against 9 open assigned
+  // issues, and two of the strays sat in Ready, holding it at 5 against a
+  // cap of 4 so `board-ready.yml` correctly promoted nothing.
+  //
+  // NOT A SECOND DECIDER. `laneFor` is the same function `board-flow.yml`
+  // applies to the live event, so "what does an assignment mean" has one
+  // owner and this catch-up cannot drift away from the writer — the fourth
+  // shape in `.claude/rules/checks-must-be-able-to-fail.md`.
+  if (item.kind === "Issue" && ASSIGNMENT_CONTRADICTS.includes(item.status ?? "")) {
+    if (item.assigned === null) {
+      return {
+        kind: "undecidable",
+        why:
+          `the board says ${item.status} and this row's assignment was NOT READ — the query ` +
+          `did not carry \`assignees\`, which is not the same fact as nobody being assigned. ` +
+          `Correcting on it would move cards on an unread field; re-run against a query that ` +
+          `requests \`assignees { totalCount }\` on the Issue fragment`,
+      };
+    }
+    if (item.assigned) {
+      const decision = laneFor({ kind: "issue_assigned" });
+      if (decision.lane === null) {
+        return {
+          kind: "undecidable",
+          why: `assigned on GitHub, and ${decision.why}, so no lane is named for it`,
+        };
+      }
+      return {
+        kind: "correct",
+        to: decision.lane,
+        why:
+          `assigned on GitHub but the board says ${item.status}, and ${decision.why}. ` +
+          // Lane-specific, because the two lanes are wrong for different
+          // reasons and a reader acting on this needs the right one:
+          // Backlog is the pool of work nobody has started, and Ready's
+          // entry condition in `specs/BOARD-FLOW-SPEC.md` is literally
+          // "nobody assigned" — an assigned card there also consumes a slot
+          // in a lane that is WIP-capped.
+          (item.status === "Ready"
+            ? "Ready's entry condition is `nobody assigned`, and the lane is capped — an " +
+              "assigned card here holds a slot against work that could be promoted"
+            : "Backlog is the pool of work nobody has started"),
+      };
+    }
+    // Unassigned in Backlog or Ready is exactly right. Fall through.
+  }
+
   if (item.status !== DONE) return { kind: "agrees" };
 
   if (item.kind === "PullRequest" && !item.draft) {
@@ -270,7 +373,17 @@ query($project: ID!, $endCursor: String) {
           }
           content {
             __typename
-            ... on Issue { number state stateReason }
+            # \`assignees\` is asked for on the Issue fragment ONLY. A pull
+            # request is assignable too, but no row of the lane table in
+            # \`specs/BOARD-FLOW-SPEC.md\` says where a pull request's own
+            # card goes when somebody is on it — so the sweep must not be
+            # able to see a fact it is not allowed to act on. BS-52.
+            #
+            # \`totalCount\` rather than a page of nodes: the question is
+            # "is anybody on it", the count answers it in one field, and a
+            # \`first: N\` page would reintroduce the same truncation
+            # hazard \`statusUnread\` exists to handle one level up.
+            ... on Issue { number state stateReason assignees { totalCount } }
             ... on PullRequest { number state isDraft }
           }
         }
@@ -638,6 +751,16 @@ export function parseBoardItem(node: any): BoardItem | null {
     // reaches the verdict.
     draft: content.isDraft === true,
     stateReason: typeof content.stateReason === "string" ? content.stateReason : null,
+    // `typeof === "number"` and not a truthiness check or a `?? 0`. An
+    // absent `assignees`, a null one, and a null `totalCount` are all
+    // things GraphQL really returns — a partial error nulls a nested field
+    // and delivers the rest of the row intact — and every one of them means
+    // NOT READ. `?? 0` would spell all three as "nobody assigned", which is
+    // the exact substitution the `assigned` docblock refuses. BS-53.
+    assigned:
+      typeof content.assignees?.totalCount === "number"
+        ? content.assignees.totalCount > 0
+        : null,
     statusUnread,
   };
 }
