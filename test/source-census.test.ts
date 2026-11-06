@@ -134,6 +134,13 @@ describe("SC-2733: every census over lib/ and scripts/ reads one lister", () => 
    * spelling for a semantic defect — the shape this repository keeps
    * writing. It is still a spelling list and not a type, so the failure
    * message says which three, rather than implying the set is closed.
+   *
+   * It is also broader than the property it serves: it reads the text,
+   * not the value's origin, so `join("test", f)` fires whether or not `f`
+   * came from the lister. Found by writing exactly that line in a control
+   * and watching the control redden for its own reason. Over-firing is
+   * the safe direction and the remedy is one line — bind the directory to
+   * a name — but a reader has to be told, so the failure message says it.
    */
   const REPREFIX = [
     /`[^`]*\/\$\{/, //            `scripts/${path}`
@@ -215,9 +222,12 @@ describe("SC-2733: every census over lib/ and scripts/ reads one lister", () => 
     expect(
       offenders,
       "sourceFiles returns a repo-relative path, so prefixing it with a directory emits " +
-        "scripts/scripts/foo.ts. Push the value as it came. This scan reads three " +
-        "spellings — a template literal, a string concatenation and a join() — and not " +
-        "a path composed any other way.",
+        "scripts/scripts/foo.ts. Push the value as it came. Two limits, both deliberate: " +
+        "this reads three spellings — a template literal, a string concatenation and a " +
+        "join() with a literal first argument — and not a path composed any other way; " +
+        "and it does not track where the value came from, so it also fires on a literal " +
+        "prefix applied to something the lister never returned. Bind the directory to a " +
+        "name if that is what you meant.",
     ).toEqual([]);
   });
 
