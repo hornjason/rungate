@@ -22,6 +22,8 @@ import {
   type Dependent,
 } from "../lib/board-ready-fanout";
 import { phaseOf, openFrontier } from "../lib/board-mirror";
+import { readyCap, selectReady } from "../lib/board-ready-rule";
+import { measureThroughput } from "../lib/board-throughput";
 
 /**
  * Every refusal leaves through this one constant, so a mutant copy with it
@@ -31,6 +33,20 @@ import { phaseOf, openFrontier } from "../lib/board-mirror";
 export const EXIT_REFUSED = 2;
 
 const READY_COLUMN = "Ready";
+
+/**
+ * One query for the first page and every page after it.
+ *
+ * It was typed out twice, which is one edit away from two pages reading
+ * different fields — and a page that stopped carrying `fieldValues` would
+ * undercount Ready's occupancy and promote past the cap with nothing red.
+ */
+const BOARD_PAGE_QUERY = `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
+       pageInfo{hasNextPage endCursor}
+       nodes{
+         fieldValues(first:50){pageInfo{hasNextPage} nodes{
+           ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}}}
+         content{__typename ... on Issue{state milestone{title}}}}}}}}`;
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(`--${name}`);
@@ -216,13 +232,13 @@ async function main(): Promise<number> {
   // The frontier is a property of the whole board, not of this fan-out: the
   // earliest phase with open work. Reading it from the dependents alone would
   // make "what is next" depend on which blocker happened to close.
-  const all = await gql(
-    token,
-    `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
-       pageInfo{hasNextPage endCursor}
-       nodes{content{__typename ... on Issue{state milestone{title}}}}}}}}`,
-    { p: project, c: null },
-  );
+  //
+  // **The same pass counts how full Ready is**, because the cap needs it
+  // and a second trip round the board would be a second answer to the same
+  // question. One query string, used for the first page and every page
+  // after it: it used to be typed out twice, which is one edit away from
+  // two pages reading different fields.
+  const all = await gql(token, BOARD_PAGE_QUERY, { p: project, c: null });
   // **`node(id:)` is null for an id GitHub cannot resolve**, and the inline
   // fragment resolves to an empty object for an id that exists and is not a
   // ProjectV2. Both are SUCCESSFUL responses — no `errors`, so `gql()` returns
@@ -246,18 +262,28 @@ async function main(): Promise<number> {
     );
     return EXIT_REFUSED;
   }
+  let occupied = 0;
+  let occupancyTruncated = false;
   for (;;) {
     for (const n of page.nodes) {
+      // **Occupancy counts every card in Ready, issue or not.** The lane's
+      // size is what a puller sees, and a pull request parked there takes a
+      // slot exactly as an issue does. Filtering to issues here would let
+      // the lane exceed its depth by however many PRs it holds, silently.
+      const status = (n.fieldValues?.nodes ?? []).find(
+        (f: any) => f?.field?.name === "Status",
+      )?.name;
+      if (status === READY_COLUMN) occupied++;
+      // A Status on page two and no Status at all produce the same
+      // `undefined`, and one means "this card is not in Ready" while the
+      // other means "I could not look". An undercount here promotes past
+      // the cap, so it refuses rather than guesses.
+      if (n.fieldValues?.pageInfo?.hasNextPage) occupancyTruncated = true;
       if (n.content?.__typename !== "Issue") continue;
       frontierItems.push({ state: n.content.state, phase: phaseOf(n.content.milestone?.title) });
     }
     if (!page.pageInfo.hasNextPage) break;
-    const next = itemsPage(
-      await gql(token, `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
-       pageInfo{hasNextPage endCursor}
-       nodes{content{__typename ... on Issue{state milestone{title}}}}}}}}`,
-        { p: project, c: page.pageInfo.endCursor }),
-    );
+    const next = itemsPage(await gql(token, BOARD_PAGE_QUERY, { p: project, c: page.pageInfo.endCursor }));
     if (next === null) {
       // Mid-pagination, so a partial frontier is already in hand — and a
       // frontier read from SOME of the board is the reading that moves the
@@ -332,7 +358,46 @@ async function main(): Promise<number> {
     console.log(dec.move ? `  #${dec.number} -> ${READY_COLUMN}` : `  #${dec.number} unchanged: ${dec.why}`);
   }
 
-  const moving = decisions.filter(dec => dec.move);
+  // **The cap, between deciding and writing.** `fanoutDecisions` answers
+  // "may this issue be in Ready"; it does not and must not answer "is there
+  // room", because that is a property of the lane rather than of the issue,
+  // and putting both in one function means no mutation can tell them apart.
+  if (occupancyTruncated) {
+    console.log(
+      `::warning::at least one card's field values were read only in part, so Ready's occupancy ` +
+        `is a floor and not a count. UNMEASURED, nothing written.`,
+    );
+    return EXIT_REFUSED;
+  }
+  const throughput = await measureThroughput(
+    (query, variables) => gql(token, query, variables),
+    owner,
+    name,
+  );
+  const cap = throughput === null ? null : readyCap(throughput);
+  const phaseOfNumber = new Map(dependents.map(d => [d.number, d.phase]));
+  const eligible = decisions
+    .filter(dec => dec.move)
+    .map(dec => ({ ...dec, phase: phaseOfNumber.get(dec.number) ?? null }));
+  const selection = selectReady(eligible, cap, occupied);
+  console.log(
+    `  depth: ${cap ?? "UNMEASURED"}` +
+      (throughput === null
+        ? " (throughput could not be read)"
+        : ` (${throughput.delivered} delivered in ${throughput.days} days)`) +
+      `. ${selection.why}`,
+  );
+  // Named, not merely dropped. An eligible issue that did not move because
+  // the queue is full is a different fact from one that was never eligible,
+  // and a reader who cannot tell them apart goes looking for a bug in the
+  // decider.
+  for (const dec of eligible) {
+    if (!selection.promote.includes(dec)) {
+      console.log(`  #${dec.number} eligible but held: Ready is at its depth`);
+    }
+  }
+
+  const moving = selection.promote;
   if (!apply) {
     console.log(`\nDry run. ${moving.length} issue(s) would move. Pass --write to perform it.`);
     return 0;

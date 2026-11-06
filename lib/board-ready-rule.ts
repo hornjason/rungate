@@ -2,7 +2,7 @@
  * What Ready holds, in one place — read by the writer AND by the health
  * reading, so the two cannot disagree.
  *
- * Covers SC-2710, SC-2711, SC-2712 (specs/BOARD-FLOW-SPEC.md).
+ * Covers SC-2710, SC-2711, SC-2712, SC-2715, SC-2716 (specs/BOARD-FLOW-SPEC.md).
  *
  * ## Why this file exists at all
  *
@@ -35,13 +35,11 @@
  * the one that matters: the number is not the policy, the policy is what
  * happens once it is reached.
  *
- * **This file is the SIZE, and only the size, today.** Eligibility still
- * lives in `isReady` in `lib/board-mirror.ts` with the phase gate attached,
- * and ordering has no caller yet. The cap lands first deliberately:
- * dropping the phase gate while nothing bounds the lane is the 36-of-46
- * reading again, so the bound has to exist before the gate can go. Ordering
- * and selection arrive with the writers that use them — an export with no
- * call site is a decision nothing performs.
+ * **This file is the SIZE and the ORDER. Eligibility is still elsewhere** —
+ * `isReady` in `lib/board-mirror.ts`, with the phase gate attached. The
+ * bound lands first deliberately: dropping the phase gate while nothing
+ * caps the lane is the 36-of-46 reading again, so the bound has to exist
+ * before the gate can go.
  */
 
 /**
@@ -104,4 +102,70 @@ export function readyCap(t: Throughput): number | null {
 export function readyTarget(eligible: number, cap: number | null): number | null {
   if (cap === null) return null;
   return Math.min(eligible, cap);
+}
+
+/** Everything ordering reads. Phase `null` means "no phase milestone". */
+export interface Rankable {
+  readonly phase: number | null;
+  readonly number: number;
+}
+
+/**
+ * ORDERING: which eligible issue should be pulled first.
+ *
+ * Phase ascending, because the phase placement table is the project's own
+ * declared order and is data rather than a judgement made here. **A
+ * phase-less issue sorts last, not never** — that is the whole difference
+ * between ordering and the eligibility gate it replaces, and on 2026-11-05
+ * it was the difference between 3 candidates and 35. Ties break on issue
+ * number ascending, which is age: the oldest eligible work goes first, so
+ * nothing is starved by a steady arrival of newer items.
+ */
+export function readyOrder(a: Rankable, b: Rankable): number {
+  const pa = a.phase === null ? Number.POSITIVE_INFINITY : a.phase;
+  const pb = b.phase === null ? Number.POSITIVE_INFINITY : b.phase;
+  if (pa !== pb) return pa - pb;
+  return a.number - b.number;
+}
+
+/**
+ * SELECTION: which eligible issues to promote right now.
+ *
+ * `occupied` is what Ready already holds, so a full lane promotes nothing
+ * and a lane with two free slots promotes the two highest-ranked. This is
+ * the replenishment half of the commitment point, and it is what makes the
+ * cap something other than a ceiling nobody reaches: a pull frees a slot
+ * and the next event refills it.
+ *
+ * **An unreadable cap promotes nothing, and says so.** The tempting
+ * fallback — promote everything eligible and let a human trim it — is the
+ * exact failure the cap exists to prevent, performed automatically.
+ */
+export function selectReady<T extends Rankable>(
+  eligible: readonly T[],
+  cap: number | null,
+  occupied: number,
+): { readonly promote: readonly T[]; readonly why: string } {
+  if (cap === null) {
+    return {
+      promote: [],
+      why: "UNMEASURED — throughput could not be read, so Ready's depth is unknown and nothing was promoted",
+    };
+  }
+  const slots = Math.max(0, cap - occupied);
+  if (slots === 0) {
+    return {
+      promote: [],
+      why: `Ready holds ${occupied} of its cap of ${cap}, so it is full and nothing was promoted`,
+    };
+  }
+  // A copy, not a sort in place: the caller's array is its own decision
+  // record and reordering it changes what its log prints.
+  const promote = [...eligible].sort(readyOrder).slice(0, slots);
+  return {
+    promote,
+    why:
+      `Ready holds ${occupied} of its cap of ${cap}, so ${slots} slot(s) are free; ` +
+      `${eligible.length} eligible, promoting ${promote.length} in phase then age order`,
+  };
 }
