@@ -716,7 +716,9 @@ export const EXIT_READY_SHORT = 3;
  */
 export const EXIT_READY_UNMEASURED = 4;
 
-const refusal = readyRefusal(laneReadings);
+// `readyNow` is the list this report printed as startable. The gate judges
+// the same number, so the page cannot disagree with itself.
+const refusal = readyRefusal(laneReadings, readyNow.length);
 if (refusal?.verdict === "REFUSE") {
   console.log(
     `\n  REFUSING: Ready is ${refusal.count} of ${refusal.against} — ${refusal.why}\n` +

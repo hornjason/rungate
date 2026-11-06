@@ -326,7 +326,21 @@ export interface ReadyRefusal {
  * `Set` of strings, would let a seventh health value default to "fine" — and
  * that is precisely how UNWRITTEN slipped through the first time.
  */
-export function readyRefusal(readings: readonly LaneReading[]): ReadyRefusal | null {
+export function readyRefusal(
+  readings: readonly LaneReading[],
+  /**
+   * Open issues in the Ready column — the SAME number the report prints as
+   * startable.
+   *
+   * The lane's own count is every board item in the column, closed ones
+   * included, so a Ready holding three closed cards read `3 of 3 OK` while
+   * the startable list showed nothing. The gate passed with no work to
+   * start, which is the state it exists to catch. The count and the list
+   * must come from one number or the report can disagree with itself inside
+   * one page.
+   */
+  openInReady: number,
+): ReadyRefusal | null {
   const ready = readings.find(r => r.lane === "Ready");
   // A board with no Ready row cannot be judged, and must not read as fine.
   if (ready === undefined) {
@@ -337,7 +351,21 @@ export function readyRefusal(readings: readonly LaneReading[]): ReadyRefusal | n
       why: "the board reading contains no Ready lane at all",
     };
   }
-  const seen = { count: ready.count, against: ready.against, why: ready.why };
+  // Closed cards parked in Ready. Named rather than silently subtracted: the
+  // lane disagreeing with itself is a board defect somebody has to clear,
+  // and a gate that quietly corrects for it hides the thing to fix.
+  const stale = ready.count - openInReady;
+  const why =
+    stale > 0
+      ? `${ready.why} — and ${stale} of the ${ready.count} card(s) in this lane ` +
+        `${stale === 1 ? "is" : "are"} not an open issue, so only ${openInReady} can be started`
+      : ready.why;
+  const seen = { count: openInReady, against: ready.against, why };
+  // Judged on the OPEN count, so a lane filled with closed cards cannot
+  // clear the gate on a number nobody can act on.
+  if (ready.against !== null && openInReady < ready.against && ready.health !== "UNMEASURED") {
+    return { verdict: "REFUSE", ...seen };
+  }
   switch (ready.health) {
     case "SHORT":
     case "UNWRITTEN":

@@ -733,7 +733,7 @@ describe("#1842: a short Ready lane refuses", () => {
   ];
 
   test("SHORT refuses and carries the numbers a reader needs", () => {
-    const r = readyRefusal(lane("SHORT", 1, 3));
+    const r = readyRefusal(lane("SHORT", 1, 3), 1);
     expect(r?.verdict).toBe("REFUSE");
     expect(r!.count).toBe(1);
     expect(r!.against).toBe(3);
@@ -752,7 +752,7 @@ describe("#1842: a short Ready lane refuses", () => {
   // mutation battery: the battery varied the health VALUE and never asked
   // which value the producer emits at the boundary.
   test("an EMPTY Ready lane refuses — it is UNWRITTEN, not SHORT", () => {
-    expect(readyRefusal(lane("UNWRITTEN", 0, 3))?.verdict).toBe("REFUSE");
+    expect(readyRefusal(lane("UNWRITTEN", 0, 3), 0)?.verdict).toBe("REFUSE");
   });
 
   test("the producer really does emit UNWRITTEN at zero, so the case above is not hypothetical", () => {
@@ -771,27 +771,47 @@ describe("#1842: a short Ready lane refuses", () => {
     expect(ready?.against ?? 0).toBeGreaterThan(0);
     expect(ready?.health, "if this is ever SHORT, the case above stops testing the boundary")
       .toBe("UNWRITTEN");
-    expect(readyRefusal(readings)?.verdict).toBe("REFUSE");
+    expect(readyRefusal(readings, 0)?.verdict).toBe("REFUSE");
+  });
+
+  // THE SECOND BYPASS, found by the security review of the pushed commit.
+  //
+  // The lane's own count is every board item in the column, closed ones
+  // included. A Ready holding three CLOSED cards read `3 of 3 OK` while the
+  // startable list printed nothing — the gate passed with no work to start,
+  // which is the state it exists to catch. Two numbers for one question, on
+  // one page, disagreeing.
+  test("a Ready lane full of CLOSED cards refuses, however healthy the lane count looks", () => {
+    const r = readyRefusal(lane("OK", 3, 3), 0);
+    expect(r?.verdict).toBe("REFUSE");
+    expect(r!.count, "the refusal reports what can be STARTED, not what is parked").toBe(0);
+    expect(r!.why).toContain("not an open issue");
+  });
+
+  test("and it names how many are stale rather than silently subtracting them", () => {
+    // A gate that quietly corrects for closed cards hides the board defect
+    // somebody has to clear.
+    expect(readyRefusal(lane("OK", 3, 3), 1)!.why).toContain("2 of the 3 card(s)");
   });
 
   test("THE CONTROL: a lane at depth does not refuse", () => {
     // Without this the refusal fires on everyone, which reviews nothing and
     // teaches people to ignore the exit code.
-    expect(readyRefusal(lane("OK", 3, 3))).toBeNull();
+    expect(readyRefusal(lane("OK", 3, 3), 3)).toBeNull();
   });
 
   test("NO_TARGET is not a refusal — there is nothing it could be short OF", () => {
-    expect(readyRefusal(lane("NO_TARGET", 1, null))).toBeNull();
+    expect(readyRefusal(lane("NO_TARGET", 1, null), 1)).toBeNull();
   });
 
   test("UNMEASURED is its own verdict, never silence", () => {
     // Returning null here would make "the census failed" and "the lane is
     // fine" the same bytes, which is the confusion this report exists to end.
-    expect(readyRefusal(lane("UNMEASURED", 0, null))?.verdict).toBe("UNMEASURED");
+    expect(readyRefusal(lane("UNMEASURED", 0, null), 0)?.verdict).toBe("UNMEASURED");
   });
 
   test("a board with no Ready row is UNMEASURED, not fine", () => {
-    const r = readyRefusal(lane("SHORT").filter(x => x.lane !== "Ready"));
+    const r = readyRefusal(lane("SHORT").filter(x => x.lane !== "Ready"), 1);
     expect(r?.verdict).toBe("UNMEASURED");
     expect(r!.why).toContain("no Ready lane");
   });
@@ -805,8 +825,21 @@ describe("#1842: a short Ready lane refuses", () => {
       OVER: "fine",
       NO_TARGET: "fine",
     };
+    // Each row carries the shape the PRODUCER emits for that health, not a
+    // uniform fixture: NO_TARGET and UNMEASURED always have a null
+    // denominator, and a row claiming otherwise would test an input
+    // `laneHealth` cannot return.
+    const shape: Record<LaneHealth, [count: number, against: number | null, open: number]> = {
+      SHORT: [1, 3, 1],
+      UNWRITTEN: [0, 3, 0],
+      UNMEASURED: [0, null, 0],
+      NO_TARGET: [1, null, 1],
+      OK: [3, 3, 3],
+      OVER: [5, 3, 5],
+    };
     for (const [health, want] of Object.entries(expected) as [LaneHealth, string][]) {
-      const got = readyRefusal(lane(health))?.verdict ?? "fine";
+      const [count, against, open] = shape[health];
+      const got = readyRefusal(lane(health, count, against), open)?.verdict ?? "fine";
       expect(got, `${health} must be ${want}`).toBe(want);
     }
     // The population is the producer's own, so a seventh member cannot be
@@ -854,7 +887,12 @@ describe("#1842: a short Ready lane refuses", () => {
 
   test("the script restates the decider's answer and spells no condition of its own", () => {
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
-    expect(code).toContain("readyRefusal(laneReadings)");
+    expect(code).toContain("readyRefusal(laneReadings, readyNow.length)");
+    // The gate judges the same number the page printed as startable. Any
+    // other count here lets the report disagree with itself in one page.
+    expect(code, "the gate must not re-derive its own Ready count").toMatch(
+      /readyRefusal\(laneReadings, readyNow\.length\)/,
+    );
     expect(code, "a second condition here would be a second decider").not.toMatch(
       /health\s*===\s*"SHORT"/,
     );
