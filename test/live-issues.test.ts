@@ -17,6 +17,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
+import { sourceFiles } from "../lib/source-census";
 import {
   FIELD_BATCH,
   ISSUE_PAGE,
@@ -592,16 +593,14 @@ describe("which milestones belong to a spec's family", () => {
     // of this case reported two files and both hits were documentation.
     const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
     const found: string[] = [];
-    for (const dir of ["lib", "scripts"]) {
-      const at = join(import.meta.dir, "..", dir);
-      for (const name of readdirSync(at).filter(f => f.endsWith(".ts"))) {
-        // A prefix interpolated immediately before ` Phase ` — the shape of
-        // an anchored family parse, however the rest is spelled.
-        for (const _ of code(readFileSync(join(at, name), "utf-8")).matchAll(
-          /\$\{(?:escapeRe\()?prefix\)?\}\s*Phase /g,
-        )) {
-          found.push(`${dir}/${name}`);
-        }
+    const root = join(import.meta.dir, "..");
+    for (const path of sourceFiles(root, ["lib", "scripts"])) {
+      // A prefix interpolated immediately before ` Phase ` — the shape of
+      // an anchored family parse, however the rest is spelled.
+      for (const _ of code(readFileSync(join(root, path), "utf-8")).matchAll(
+        /\$\{(?:escapeRe\()?prefix\)?\}\s*Phase /g,
+      )) {
+        found.push(path);
       }
     }
     expect(
@@ -683,9 +682,9 @@ describe("what a --prefix argument actually said", () => {
    * evidence is that somebody wrote the name down.
    */
   test("every command taking a milestone prefix routes through this one reading", () => {
-    const dir = join(import.meta.dir, "..", "scripts");
+    const dir = join(import.meta.dir, "..");
     const offenders: string[] = [];
-    for (const name of readdirSync(dir).filter(f => f.endsWith(".ts"))) {
+    for (const name of sourceFiles(dir, ["scripts"])) {
       const src = readFileSync(join(dir, name), "utf-8");
       if (!/prefix"?\s*:\s*\{\s*type:\s*"string"/.test(src)) continue;
       const importFree = !/from\s+"\.\.?\//.test(src);

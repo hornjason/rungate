@@ -26,9 +26,10 @@
  * asserted over the population instead.
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "fs";
+import { readFileSync } from "fs";
 import { join } from "path";
 import { nextCursor } from "../lib/graphql-cursor";
+import { sourceFiles } from "../lib/source-census";
 
 describe("SC-2720: a page that cannot say is UNREADABLE, never done", () => {
   test("a well-formed last page is done", () => {
@@ -129,13 +130,9 @@ describe("SC-2721: no pager advances a cursor on its own", () => {
 
   test("no NEW file advances a cursor from hasNextPage itself", () => {
     const offenders: string[] = [];
-    for (const dir of DIRS) {
-      for (const f of readdirSync(join(ROOT, dir)).sort()) {
-        if (!f.endsWith(".ts")) continue;
-        const path = `${dir}/${f}`;
-        if (path === "lib/graphql-cursor.ts") continue;
-        if (ADVANCE.test(codeOf(readFileSync(join(ROOT, path), "utf-8")))) offenders.push(path);
-      }
+    for (const path of sourceFiles(ROOT, DIRS)) {
+      if (path === "lib/graphql-cursor.ts") continue;
+      if (ADVANCE.test(codeOf(readFileSync(join(ROOT, path), "utf-8")))) offenders.push(path);
     }
     expect(
       offenders.sort(),
@@ -148,12 +145,18 @@ describe("SC-2721: no pager advances a cursor on its own", () => {
 
   // Anti-vacuity: the scan above is worthless if it reads no files, and a
   // wrong directory name or a changed layout would make it green forever.
-  test("the scan read the files it claims to police", () => {
-    let seen = 0;
-    for (const dir of DIRS) {
-      for (const f of readdirSync(join(ROOT, dir))) if (f.endsWith(".ts")) seen++;
-    }
-    expect(seen, "an empty population is not a clean one").toBeGreaterThan(50);
+  test("the scan read the files it claims to police, SUBDIRECTORIES INCLUDED", () => {
+    const seen = sourceFiles(ROOT, DIRS);
+    expect(seen.length, "an empty population is not a clean one").toBeGreaterThan(50);
+    // **A floor only a recursive walk can clear.** The old one was `> 50`
+    // against a flat listing, which the flat listing passed — so the
+    // eighteen files under lib/generators, lib/scaffold and lib/validators
+    // could go unscanned forever with this test green. The count, not a
+    // comment, is what makes the walk going flat again a red suite.
+    expect(
+      seen.filter(p => p.split("/").length > 2).length,
+      "no nested file was listed, so the walk has gone flat again",
+    ).toBeGreaterThan(10);
   });
 
   test("the scan can find the shape it looks for, and ignores the query text", () => {
