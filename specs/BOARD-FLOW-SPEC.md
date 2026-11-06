@@ -352,9 +352,23 @@ because the lane was filled under the rule the cap replaces. `OVER` is now
 a verdict of its own — SHORT means promote more, OVER means stop promoting
 and let the queue drain.
 
-Still open, and deliberately a separate change: `isReady` keeps the phase
-gate until the two writers (`scripts/board-mirror.ts`, `scripts/board-ready.ts`)
-respect the cap. Dropping the gate first is the 36-of-46 reading again.
+**The writer now fills to the depth the reading judges against.**
+`scripts/board-ready.ts` counts Ready's occupancy in the board pass it
+already makes for the frontier, derives the cap from
+`lib/board-throughput.ts`, and promotes only what fits — in phase order,
+then age. An eligible issue held back by a full queue is named in the log,
+because *not eligible* and *no room* send a reader to different places.
+
+Occupancy counts every card in Ready, issue or pull request: the lane's
+size is what a puller sees, and a PR parked there takes a slot. It refuses
+rather than guesses when a card's field values were read only in part — a
+Status on page two and no Status at all produce the same `undefined`, and
+an undercount promotes past the cap.
+
+Still open, and deliberately separate: `isReady` keeps the phase gate, and
+`scripts/board-mirror.ts --ready --write` — the hand-run second writer — is
+still uncapped. Both land together, because they are the same expression.
+Dropping the gate before that is the 36-of-46 reading again.
 
 Ready also still has **one** automatic trigger — `issues: [closed]`, fanning
 out to whatever the closed issue was blocking. Measured 2026-11-05: 34 of 34
@@ -513,6 +527,22 @@ second: flow efficiency is the one metric this spec must not promise.**
       needs: test
       proved-by:
 - [ ] SC-2712: the writer and the health reading read ONE definition of Ready's size
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2713: throughput counts delivery inside a stated window, and nothing else
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2714: a throughput pass that did not complete is UNMEASURED, never zero
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2715: phase orders Ready and never empties it
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2716: the writer promotes only what fits, and replenishes as slots free
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
