@@ -5862,7 +5862,7 @@ describe("FG-216..FG-224: a filing is readable by the things that read it", () =
     const v = await adjudicateFiling(filingAttempts(malformed)[0], async () =>
       measuredCorpus([
         {
-          id: 4242,
+          id: "4242",
           title: "zqxjShapeProbe drops a sweep it started",
           body: "`zqxjShapeProbe` in lib/zqxj-shape.ts drops 17 of 41 commands, over 6204 runs.",
         },
