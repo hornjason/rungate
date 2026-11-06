@@ -204,12 +204,17 @@ describe("the report covers every lane, and can be pointed at one", () => {
     milestone: string | null,
     assignees: unknown[] = [],
     blockers: { state: string }[] = [],
+    // **Defaulted to null, never to "completed".** A default of completed
+    // would let every closed fixture count as done without saying so, which
+    // is the fixture choosing the answer to the question under test.
+    state_reason: string | null = null,
   ) => ({
     number: n,
     state,
     milestone: milestone === null ? null : { title: milestone },
     assignees,
     blockers,
+    state_reason,
   });
 
   test("an issue with no milestone lands in a named lane, not in nothing", () => {
@@ -222,18 +227,48 @@ describe("the report covers every lane, and can be pointed at one", () => {
     expect(milestoneOf(iss(1, "open", "Phase 2"))).toBe("Phase 2");
   });
 
-  test("the rollup counts open, claimed, blocked, pickable and closed apart", () => {
+  test("the rollup counts open, claimed, blocked, pickable, done and dropped apart", () => {
     const rows = milestoneRollup([
-      iss(1, "open", "A"), //                             pickable
-      iss(2, "open", "A", ["me"]), //                      claimed
-      iss(3, "open", "A", [], [{ state: "open" }]), //     blocked
-      iss(4, "open", "A", [], [{ state: "closed" }]), //   pickable: a closed blocker does not block
-      iss(5, "closed", "A"), //                            closed
-      iss(6, "open", null), //                             the unmilestoned lane
+      iss(1, "open", "A"), //                                      pickable
+      iss(2, "open", "A", ["me"]), //                               claimed
+      iss(3, "open", "A", [], [{ state: "open" }]), //              blocked
+      iss(4, "open", "A", [], [{ state: "closed" }]), //            pickable: a closed blocker does not block
+      iss(5, "closed", "A", [], [], "completed"), //                done
+      iss(6, "open", null), //                                      the unmilestoned lane
     ]);
     const a = rows.find(r => r.milestone === "A")!;
-    expect(a).toEqual({ milestone: "A", open: 4, closed: 1, claimed: 1, blocked: 1, pickable: 2 });
+    expect(a).toEqual({
+      milestone: "A",
+      open: 4,
+      done: 1,
+      dropped: 0,
+      claimed: 1,
+      blocked: 1,
+      pickable: 2,
+    });
     expect(rows.find(r => r.milestone === NO_MILESTONE)!.open).toBe(1);
+  });
+
+  test("CLOSED IS NOT DONE — only `completed` counts as done", () => {
+    // `orderReading` three functions up exists entirely to stop this
+    // conflation, and the first version of the rollup reintroduced it one
+    // table later: it printed `closed` under a header reading `done`, so a
+    // lane that abandoned four of ten closures reported ten completed.
+    // Caught by the AI review of #1825.
+    //
+    // CLOSED FAILS CLOSED, the same direction orderReading takes it: `null`
+    // is the absence of a reason, not a completion, and a reason added to
+    // GitHub after this was written must not arrive pre-counted as done.
+    const rows = milestoneRollup([
+      iss(1, "closed", "A", [], [], "completed"),
+      iss(2, "closed", "A", [], [], "not_planned"),
+      iss(3, "closed", "A", [], [], "duplicate"),
+      iss(4, "closed", "A", [], [], null),
+      iss(5, "closed", "A", [], [], "a_reason_invented_in_2027"),
+    ]);
+    const a = rows.find(r => r.milestone === "A")!;
+    expect(a.done, "only the `completed` closure is done").toBe(1);
+    expect(a.dropped, "the other four are closed and were not completed").toBe(4);
   });
 
   test("a pull request is not an issue — /issues returns both", () => {
@@ -259,8 +294,20 @@ describe("the report covers every lane, and can be pointed at one", () => {
 
   test("absent focus is EVERY lane — the hardcoded default is gone", () => {
     expect(resolveFocus(undefined, ["A", "B"])).toEqual({ kind: "all" });
-    expect(resolveFocus("", ["A", "B"])).toEqual({ kind: "all" });
     expect(resolveFocus("all", ["A", "B"])).toEqual({ kind: "all" });
+  });
+
+  test("`--milestone` with no value is a MISTAKE, not a default", () => {
+    // Absent and present-and-empty were one branch, so `--milestone` typed
+    // as the last argument printed the unpinned report and read as if the
+    // pin had been honoured — the same Silent Default Substitution the
+    // unknown-name refusal exists to stop, reached by a shorter route.
+    // Caught by the AI review of #1825.
+    for (const empty of ["", "   "]) {
+      const r = resolveFocus(empty, ["A", "B"]);
+      expect(r.kind, `--milestone ${JSON.stringify(empty)} must refuse`).toBe("unknown");
+      expect(r.kind === "unknown" && r.known).toEqual(["A", "B"]);
+    }
   });
 
   test("the unmilestoned lane is reachable by both of its names", () => {
@@ -268,6 +315,21 @@ describe("the report covers every lane, and can be pointed at one", () => {
     // the table and pass it straight back.
     expect(resolveFocus("none", ["A"])).toEqual({ kind: "one", title: NO_MILESTONE });
     expect(resolveFocus(NO_MILESTONE, ["A"])).toEqual({ kind: "one", title: NO_MILESTONE });
+  });
+
+  test("a REAL milestone named `all` or `none` beats the keyword", () => {
+    // GitHub milestone titles are free text, so both names are legal. The
+    // keywords were checked first, so a milestone actually titled `none`
+    // could never be selected: the keyword answered, the real lane was never
+    // consulted, and the unmilestoned issues were shown in its place with no
+    // error. Caught by the AI review of #1825.
+    expect(resolveFocus("none", ["none", "A"])).toEqual({ kind: "one", title: "none" });
+    expect(resolveFocus("all", ["all", "A"])).toEqual({ kind: "one", title: "all" });
+
+    // And the keywords still work wherever no such milestone exists, which
+    // is every repository but the unlucky one.
+    expect(resolveFocus("none", ["A"])).toEqual({ kind: "one", title: NO_MILESTONE });
+    expect(resolveFocus("all", ["A"])).toEqual({ kind: "all" });
   });
 
   test("a milestone that does not exist is REFUSED, and says what does", () => {

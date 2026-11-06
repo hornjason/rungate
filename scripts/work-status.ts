@@ -68,7 +68,14 @@ const PROJECT = "PVT_kwHOAZTQCM4BpMuR";
  */
 const askedMilestone = (() => {
   const i = Bun.argv.indexOf("--milestone");
-  return i === -1 ? undefined : Bun.argv[i + 1];
+  if (i === -1) return undefined;
+  // **`--milestone` as the last argument is a MISTAKE, not a default.**
+  // `Bun.argv[i + 1]` is `undefined` there, which `resolveFocus` cannot tell
+  // from the flag never being passed — so a typed-and-truncated command
+  // printed the whole report and looked like it had honoured the pin. The
+  // empty string is the flag-present-value-absent reading, and `resolveFocus`
+  // refuses it the way it refuses a name that matches nothing.
+  return Bun.argv[i + 1] ?? "";
 })();
 
 // `resolveGitHubToken()`, never the raw environment variable — this file
@@ -427,13 +434,14 @@ if (focus.kind === "unknown") {
 bar("EVERY MILESTONE — open, and what is actually startable in each");
 console.log(
   `  ${"milestone".padEnd(52)} ${"open".padStart(5)} ${"claim".padStart(5)} ` +
-    `${"block".padStart(5)} ${"pick".padStart(5)} ${"done".padStart(5)}`,
+    `${"block".padStart(5)} ${"pick".padStart(5)} ${"done".padStart(5)} ${"drop".padStart(5)}`,
 );
 for (const r of rollup) {
   console.log(
     `  ${r.milestone.slice(0, 52).padEnd(52)} ${String(r.open).padStart(5)} ` +
       `${String(r.claimed).padStart(5)} ${String(r.blocked).padStart(5)} ` +
-      `${String(r.pickable).padStart(5)} ${String(r.closed).padStart(5)}`,
+      `${String(r.pickable).padStart(5)} ${String(r.done).padStart(5)} ` +
+      `${String(r.dropped).padStart(5)}`,
   );
 }
 const totals = rollup.reduce(
