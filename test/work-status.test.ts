@@ -8,7 +8,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { isPickable, orderReading } from "../lib/work-status";
+import {
+  NO_MILESTONE,
+  isPickable,
+  milestoneOf,
+  milestoneRollup,
+  orderReading,
+  resolveFocus,
+} from "../lib/work-status";
 
 const ROOT = join(import.meta.dir, "..");
 const open = (blockers: { state: string }[] = [], assignees: unknown[] = []) =>
@@ -184,6 +191,173 @@ describe("orderReading: an item nothing can observe is UNMEASURED, never DONE", 
   });
 });
 
+describe("the report covers every lane, and can be pointed at one", () => {
+  // THE DEFECT THESE EXIST FOR WAS A CONSTANT. `scripts/work-status.ts` read
+  // `const MILESTONE = "Issue intake"`, and on 2026-11-06 that milestone held
+  // 1 open issue of the repository's 82. Eight Convergence lanes, nine
+  // Pipeline lanes and 26 issues with NO milestone were absent from the
+  // report the status was read from. Nothing was forgotten; the instrument
+  // was narrower than the work.
+  const iss = (
+    n: number,
+    state: string,
+    milestone: string | null,
+    assignees: unknown[] = [],
+    blockers: { state: string }[] = [],
+    // **Defaulted to null, never to "completed".** A default of completed
+    // would let every closed fixture count as done without saying so, which
+    // is the fixture choosing the answer to the question under test.
+    state_reason: string | null = null,
+  ) => ({
+    number: n,
+    state,
+    milestone: milestone === null ? null : { title: milestone },
+    assignees,
+    blockers,
+    state_reason,
+  });
+
+  test("an issue with no milestone lands in a named lane, not in nothing", () => {
+    // 26 of 82 on the day this was written. A rollup that drops them loses
+    // the largest group it has, and loses it SILENTLY — the table still adds
+    // up, against a smaller population.
+    expect(milestoneOf(iss(1, "open", null))).toBe(NO_MILESTONE);
+    expect(milestoneOf(iss(1, "open", ""))).toBe(NO_MILESTONE);
+    expect(milestoneOf(iss(1, "open", "   "))).toBe(NO_MILESTONE);
+    expect(milestoneOf(iss(1, "open", "Phase 2"))).toBe("Phase 2");
+  });
+
+  test("the rollup counts open, claimed, blocked, pickable, done and dropped apart", () => {
+    const rows = milestoneRollup([
+      iss(1, "open", "A"), //                                      pickable
+      iss(2, "open", "A", ["me"]), //                               claimed
+      iss(3, "open", "A", [], [{ state: "open" }]), //              blocked
+      iss(4, "open", "A", [], [{ state: "closed" }]), //            pickable: a closed blocker does not block
+      iss(5, "closed", "A", [], [], "completed"), //                done
+      iss(6, "open", null), //                                      the unmilestoned lane
+    ]);
+    const a = rows.find(r => r.milestone === "A")!;
+    expect(a).toEqual({
+      milestone: "A",
+      open: 4,
+      done: 1,
+      dropped: 0,
+      claimed: 1,
+      blocked: 1,
+      pickable: 2,
+    });
+    expect(rows.find(r => r.milestone === NO_MILESTONE)!.open).toBe(1);
+  });
+
+  test("CLOSED IS NOT DONE — only `completed` counts as done", () => {
+    // `orderReading` three functions up exists entirely to stop this
+    // conflation, and the first version of the rollup reintroduced it one
+    // table later: it printed `closed` under a header reading `done`, so a
+    // lane that abandoned four of ten closures reported ten completed.
+    // Caught by the AI review of #1825.
+    //
+    // CLOSED FAILS CLOSED, the same direction orderReading takes it: `null`
+    // is the absence of a reason, not a completion, and a reason added to
+    // GitHub after this was written must not arrive pre-counted as done.
+    const rows = milestoneRollup([
+      iss(1, "closed", "A", [], [], "completed"),
+      iss(2, "closed", "A", [], [], "not_planned"),
+      iss(3, "closed", "A", [], [], "duplicate"),
+      iss(4, "closed", "A", [], [], null),
+      iss(5, "closed", "A", [], [], "a_reason_invented_in_2027"),
+    ]);
+    const a = rows.find(r => r.milestone === "A")!;
+    expect(a.done, "only the `completed` closure is done").toBe(1);
+    expect(a.dropped, "the other four are closed and were not completed").toBe(4);
+  });
+
+  test("a pull request is not an issue — /issues returns both", () => {
+    // A PR counted as an issue inflates every lane it lands in, and the
+    // endpoint hands them over in the same array with no flag the caller is
+    // forced to read.
+    const rows = milestoneRollup([
+      iss(1, "open", "A"),
+      { ...iss(2, "open", "A"), pull_request: { url: "…" } },
+    ]);
+    expect(rows.find(r => r.milestone === "A")!.open).toBe(1);
+  });
+
+  test("lanes sort by open work, so the biggest pile is read first", () => {
+    const rows = milestoneRollup([
+      iss(1, "open", "small"),
+      iss(2, "open", "big"),
+      iss(3, "open", "big"),
+      iss(4, "open", null),
+    ]);
+    expect(rows.map(r => r.milestone)).toEqual(["big", NO_MILESTONE, "small"]);
+  });
+
+  test("absent focus is EVERY lane — the hardcoded default is gone", () => {
+    expect(resolveFocus(undefined, ["A", "B"])).toEqual({ kind: "all" });
+    expect(resolveFocus("all", ["A", "B"])).toEqual({ kind: "all" });
+  });
+
+  test("`--milestone` with no value is a MISTAKE, not a default", () => {
+    // Absent and present-and-empty were one branch, so `--milestone` typed
+    // as the last argument printed the unpinned report and read as if the
+    // pin had been honoured — the same Silent Default Substitution the
+    // unknown-name refusal exists to stop, reached by a shorter route.
+    // Caught by the AI review of #1825.
+    for (const empty of ["", "   "]) {
+      const r = resolveFocus(empty, ["A", "B"]);
+      expect(r.kind, `--milestone ${JSON.stringify(empty)} must refuse`).toBe("unknown");
+      expect(r.kind === "unknown" && r.known).toEqual(["A", "B"]);
+    }
+  });
+
+  test("the unmilestoned lane is reachable by both of its names", () => {
+    // `none` to type, and the rendered label so a reader can copy it out of
+    // the table and pass it straight back.
+    expect(resolveFocus("none", ["A"])).toEqual({ kind: "one", title: NO_MILESTONE });
+    expect(resolveFocus(NO_MILESTONE, ["A"])).toEqual({ kind: "one", title: NO_MILESTONE });
+  });
+
+  test("a REAL milestone named `all` or `none` beats the keyword", () => {
+    // GitHub milestone titles are free text, so both names are legal. The
+    // keywords were checked first, so a milestone actually titled `none`
+    // could never be selected: the keyword answered, the real lane was never
+    // consulted, and the unmilestoned issues were shown in its place with no
+    // error. Caught by the AI review of #1825.
+    expect(resolveFocus("none", ["none", "A"])).toEqual({ kind: "one", title: "none" });
+    expect(resolveFocus("all", ["all", "A"])).toEqual({ kind: "one", title: "all" });
+
+    // And the keywords still work wherever no such milestone exists, which
+    // is every repository but the unlucky one.
+    expect(resolveFocus("none", ["A"])).toEqual({ kind: "one", title: NO_MILESTONE });
+    expect(resolveFocus("all", ["A"])).toEqual({ kind: "all" });
+  });
+
+  test("a milestone that does not exist is REFUSED, and says what does", () => {
+    // THE WHOLE REASON THIS IS A FUNCTION. A focus that selects zero issues
+    // prints a correct-looking report with an empty body, and then a typo is
+    // indistinguishable from a milestone whose work is finished — Silent
+    // Default Substitution, in the tool whose entire purpose is that the
+    // status is not hallucinated.
+    const r = resolveFocus("Issue Intake", ["Issue intake", "Convergence Phase 2"]);
+    expect(r.kind).toBe("unknown");
+    expect(r.kind === "unknown" && r.asked).toBe("Issue Intake");
+    // Sorted, and complete — a refusal that does not say what WAS available
+    // is a refusal nobody can act on.
+    expect(r.kind === "unknown" && r.known).toEqual(["Convergence Phase 2", "Issue intake"]);
+  });
+
+  test("the script no longer carries a milestone constant", () => {
+    const src = readFileSync(join(ROOT, "scripts", "work-status.ts"), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      code,
+      "a hardcoded milestone is what made 81 of 82 issues invisible — the " +
+        "focus comes from --milestone and defaults to every lane",
+    ).not.toMatch(/const MILESTONE\s*=/);
+    expect(code, "the flag must actually be read").toContain('"--milestone"');
+  });
+});
+
 describe("the script asks the dependencies endpoint, not a search qualifier", () => {
   const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
 
@@ -227,13 +401,28 @@ describe("the script asks the dependencies endpoint, not a search qualifier", ()
   // the three sites, so a FOURTH list read added later is caught too
   // (`.claude/rules/checks-must-be-able-to-fail.md`, two deciders that agree).
   test("every list endpoint is read through the paginating helper", () => {
-    for (const path of [
-      "issues?state=all&milestone=*",
-      "pulls?state=open",
-      "issues?state=open",
-    ]) {
-      expect(src).toContain(`restAll(\`repos/\${REPO}/${path}`);
-    }
+    // DERIVED FROM THE SOURCE, NOT A LIST OF THREE. This named the three
+    // paths as literals, which made it a thing to edit whenever a query
+    // changed rather than a thing that could be wrong: widening the
+    // milestone read from `issues?state=all&milestone=*` to `issues?state=all`
+    // turned it red for a reason that had nothing to do with pagination.
+    //
+    // A query string is what makes a path a LIST. Every one of them must go
+    // through the paginating helper, and the population is whatever the file
+    // contains today — so a fourth list read added later is caught without
+    // anybody remembering to add a row.
+    const listCalls = [...src.matchAll(/(\w+)\(`repos\/\$\{REPO\}\/([^`]*\?[^`]*)`/g)];
+    expect(
+      listCalls.length,
+      "no paginated list read was found at all — either the file stopped " +
+        "reading lists, or the spelling changed and this assertion is now " +
+        "vacuous, and those are not the same thing",
+    ).toBeGreaterThan(0);
+    expect(
+      listCalls.filter(m => m[1] !== "restAll").map(m => `${m[1]}(… ${m[2]})`),
+      "a query string makes a path a list, and a single-page read of a list " +
+        "silently returns a smaller answer that looks like a correct one",
+    ).toEqual([]);
     // the per-issue dependency read, interpolated number and all
     expect(src).toMatch(/restAll\(`repos\/\$\{REPO\}\/issues\/\$\{[^}]+\}\/dependencies\/blocked_by`\)/);
     // and nothing is left taking a single page: the only `rest(` calls that
