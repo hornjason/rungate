@@ -1462,6 +1462,48 @@
       "goal": "Convergence goes through the engine untouched",
       "serves": 3,
       "retro": null
+    },
+    {
+      "id": "G",
+      "name": "The board dispatches the work",
+      "agreed": "2026-11-06 Jason",
+      "goal": "Ready is always full of workable items, and the only thing a session may start is in Ready",
+      "serves": 3,
+      "issue": 1842,
+      "why": "Promotion to Ready exists and is event-driven with no cron (board-ready.yml, issues:[closed]), but it fans out only from a closing BLOCKER — an issue that was never blocked has no event that can reach it, so 36 unblocked candidates sat in Backlog while Ready held 1 of 3. On the draw side nothing points a session at the lane at all: work-status's loudest section is 36 repo-wide numbers, so a session can comply with the tool and bypass the board at the same time. Observed 2026-11-06: three issues in a row were worked from a dependency chain in context, not from the lane, and no instrument objected.",
+      "items": [
+        {
+          "id": "G1",
+          "what": "a never-blocked, unblocked, unassigned issue can reach Ready from an event the repo already emits — no cron, no hand-run command",
+          "done": false,
+          "verify": "bun test test/board-ready-fanout.test.ts -t 'never blocked'"
+        },
+        {
+          "id": "G2",
+          "what": "work-status names exactly ONE startable list and it is the Ready lane; the repo-wide set is printed as promotion candidates, explicitly not startable",
+          "done": false,
+          "verify": "bun test test/work-status.test.ts -t 'one startable list'"
+        },
+        {
+          "id": "G3",
+          "what": "a short Ready is a NON-ZERO EXIT, not a sentence in a report — this is the item that stops the agreement decaying, because after it nobody has to remember the conversation",
+          "done": false,
+          "verify": "bun test test/work-status.test.ts -t 'short Ready exits non-zero'"
+        },
+        {
+          "id": "G4",
+          "what": "THE CONTROL: a board already at depth promotes nothing, or the refill fires on everyone and Ready stops meaning anything",
+          "done": false,
+          "verify": "bun test test/board-ready-fanout.test.ts -t 'already at depth'"
+        },
+        {
+          "id": "G5",
+          "what": "the report states how many Ready cards it could NOT see — a draft has no issue number and is invisible to every tool here, so it silently holds a slot nothing can dispatch",
+          "done": false,
+          "verify": "bun test test/work-status.test.ts -t 'cards it could not see'"
+        }
+      ],
+      "retro": null
     }
   ],
   "goal": {
