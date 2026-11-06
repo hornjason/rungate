@@ -23,6 +23,7 @@ import {
   DONE,
   IN_PROGRESS,
   IN_REVIEW,
+  ISSUE_TOKEN_ENV,
   OPEN_PR_CLOSING_REFS_QUERY,
   STALE_CLAIM_DAYS,
   applyLinkedPullRequests,
@@ -36,6 +37,7 @@ import {
   requireConnection,
   requireCursorAdvanced,
   requireNode,
+  resolveIssueWriteToken,
   sweep,
   withRetry,
   verdictFor,
@@ -563,14 +565,19 @@ describe("board status sweep", () => {
   // ── BS-68, BS-69: the sweep's own write is an input to the sweep ────────
   //
   // `board-sweep.yml` triggers on `issues: [assigned, unassigned, ...]` and
-  // a RELEASE PATCHes the issue's assignees, so a release fires an event in
-  // that list and starts another run. The workflow comment claimed it could
-  // not; round 3 of #1823's review found that false. The property that has
-  // to hold is not "no retrigger" — it is TERMINATION, and termination is a
-  // property of the DECIDER, which is why it is asserted here and not in a
-  // paragraph of YAML.
+  // a RELEASE PATCHes the issue's assignees. WHETHER THAT STARTS ANOTHER RUN
+  // HAS NOW CHANGED TWICE: a PAT-authored write did fire the event (round 3
+  // of #1823's review found the comment claiming otherwise), and the issue
+  // write is now signed by the job's GITHUB_TOKEN, which GitHub does not
+  // trigger workflows from.
+  //
+  // So "does it retrigger" is the wrong thing to bind — it is a fact about
+  // which credential happens to sign a write, and it has been restated
+  // wrongly in a YAML comment twice. TERMINATION is the property that
+  // survived both changes, it is a property of the DECIDER, and it is what
+  // is asserted here.
 
-  test("BS-68: a released claim is a fixpoint, so the retriggered run writes nothing", () => {
+  test("BS-68: a released claim is a fixpoint, whenever the next run happens", () => {
     const stale = item(312, "Issue", "OPEN", "Ready", false, null, true, 30, 0);
     expect(verdictFor(stale).kind).toBe("release");
 
@@ -578,8 +585,9 @@ describe("board status sweep", () => {
     const afterRelease = { ...stale, assigned: false, status: BACKLOG };
     expect(
       verdictFor(afterRelease).kind,
-      "the run this release triggers must find nothing to do — a second " +
-        "write would emit a third event and the sweep would not terminate",
+      "the next run must find nothing to do — a second write on the same " +
+        "row means the sweep does not converge, whether the run that makes " +
+        "it was triggered by this release or by an unrelated event",
     ).toBe("agrees");
     // Through the reading as well as the verdict, because `main()` decides
     // whether to write from the buckets, not from one verdict.
@@ -603,17 +611,25 @@ describe("board status sweep", () => {
     ).toBe("agrees");
 
     // Move-first leaves this, and the sweep owns it: assigned in Backlog is
-    // precisely the row it exists to find, so the retriggered run finishes
-    // the release.
+    // precisely the row it exists to find, so the next run finishes the
+    // release. (It used to be the run this release itself triggered. The
+    // issue write is now signed by GITHUB_TOKEN, which triggers nothing, so
+    // the repair waits for the next real event instead — later, same
+    // outcome. See BS-70.)
     const assignedInBacklog = item(312, "Issue", "OPEN", BACKLOG, false, null, true, 30, 0);
     expect(verdictFor(assignedInBacklog).kind).toBe("release");
 
     // And the source must actually write in that order. A comment arguing
     // for it is the docblock-saying-it-was-checked failure.
+    //
+    // Matched on the CALL, not on the argument it is passed: the first
+    // spelling here was `clearAssignees(token`, and this assertion went red
+    // the moment the issue write took its own credential — correctly, but
+    // for a reason that has nothing to do with ordering.
     const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
     const releaseBody = code.slice(code.indexOf("reading.releases.map"));
     const move = releaseBody.indexOf("option: optionId(back)");
-    const unassign = releaseBody.indexOf("clearAssignees(token");
+    const unassign = releaseBody.indexOf("clearAssignees(");
     expect(move, "the release pass must still move the card").toBeGreaterThan(-1);
     expect(unassign, "the release pass must still clear the assignees").toBeGreaterThan(-1);
     expect(
@@ -622,6 +638,102 @@ describe("board status sweep", () => {
         "leaves an unassigned card in Ready, which `verdictFor` reads as " +
         "`agrees` and no later run repairs",
     ).toBe(true);
+  });
+
+  // ── BS-70, BS-71: two credentials, two permissions ──────────────────────
+  //
+  // The board write needs ProjectsV2, which GITHUB_TOKEN cannot do at any
+  // permission level. The issue write needs `issues: write`, which the board
+  // PAT does not have. One token cannot sign both, and run 42248314060 is
+  // the measurement: 177 items read, 6 stale claims found, 6 of 6 refused
+  // with HTTP 403 "Must have admin rights to Repository".
+
+  test("BS-70: the issue credential is separate, and the fallback is not silent", () => {
+    const BOARD = "board-pat";
+
+    // Configured: the issue token signs the issue write.
+    expect(resolveIssueWriteToken({ [ISSUE_TOKEN_ENV]: "issue-tok" }, BOARD)).toEqual({
+      token: "issue-tok",
+      source: "issue-token",
+    });
+
+    // THREE SPELLINGS OF ABSENT, and all three must fall back rather than
+    // sign a request with nothing. `secrets.X` for a secret that does not
+    // exist is the EMPTY STRING with no error — that is how the Ready lane
+    // spent a day authorising itself with nothing (#1761).
+    for (const absent of [{}, { [ISSUE_TOKEN_ENV]: "" }, { [ISSUE_TOKEN_ENV]: "   " }]) {
+      expect(resolveIssueWriteToken(absent, BOARD)).toEqual({
+        token: BOARD,
+        source: "board-token",
+      });
+    }
+
+    // Trimmed, like `resolveGitHubToken`: a token read from a file carries a
+    // newline, and it 401s in the Authorization header with nothing pointing
+    // at the whitespace.
+    expect(resolveIssueWriteToken({ [ISSUE_TOKEN_ENV]: " t\n" }, BOARD).token).toBe("t");
+
+    // THE SOURCE IS THE POINT. A plain `??` would return the right token and
+    // leave the run unable to say which one it used, and a fallback nobody
+    // can see is identical to a correct configuration until the 403 lands.
+    // So the two cases must be distinguishable, not merely both non-empty.
+    expect(
+      resolveIssueWriteToken({ [ISSUE_TOKEN_ENV]: BOARD }, BOARD).source,
+      "even when the two credentials are the same string, the source must " +
+        "say which one was configured",
+    ).toBe("issue-token");
+  });
+
+  test("BS-71: the workflow grants issues:write and passes the Actions token", () => {
+    // BS-70 proves the script reads a second credential. It cannot prove
+    // anything SETS it — a resolver whose variable nobody populates falls
+    // back on every run and the 403 is unchanged. This is the other half.
+    const wf = readFileSync(
+      join(import.meta.dir, "..", ".github", "workflows", "board-sweep.yml"),
+      "utf8",
+    );
+    expect(wf, "the env var the resolver reads must be the one the job sets").toContain(
+      `${ISSUE_TOKEN_ENV}: \${{ secrets.GITHUB_TOKEN }}`,
+    );
+    expect(
+      wf,
+      "GITHUB_TOKEN can only unassign if the job asks for the permission — " +
+        "without this line the fallback is invisible and the write still 403s",
+    ).toMatch(/^ {2}issues: write$/m);
+    // The board write keeps the PAT. GITHUB_TOKEN cannot write ProjectsV2 at
+    // any permission level, so a tidy-up that unified the two credentials
+    // would trade one 403 for another.
+    expect(wf).toContain("GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}");
+  });
+
+  test("BS-72: the issue write is signed by the issue credential, not the board one", () => {
+    // FOUND BY THE BATTERY, NOT BY DESIGN. With BS-70 and BS-71 both green,
+    // reverting the one call site to `clearAssignees(token, ...)` — the
+    // exact line that produced run 42248314060's six 403s — left 73 pass /
+    // 0 fail. BS-70 proves the resolver works and BS-71 proves the workflow
+    // supplies the variable; neither can see whether the WRITE uses what
+    // they resolved. The defect reintroduces itself through a gap between
+    // two green checks, which is the fourth shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+    // Exactly one resolution, so there is one thing to mutate and no second
+    // site that could quietly disagree about which credential is current.
+    expect(
+      (code.match(/resolveIssueWriteToken\(/g) ?? []).length,
+      "expected the definition plus exactly one call — main()'s",
+    ).toBe(2);
+
+    // Every call to the issue write takes the resolved credential. Asserted
+    // over ALL call sites rather than the first, so a second release path
+    // cannot be added signing with the board token.
+    const calls = code.match(/clearAssignees\([^,)]*/g) ?? [];
+    expect(calls.length, "the release pass must still clear assignees").toBeGreaterThan(0);
+    expect(
+      calls.filter(c => !c.includes("issueWrite.token") && !c.includes("token: string")),
+      "a board credential cannot write issues — run 42248314060 refused 6 of " +
+        "6 with HTTP 403. Pass resolveIssueWriteToken(...).token",
+    ).toEqual([]);
   });
 
   test("BS-9: a non-JSON error body reports the HTTP status, not a parse error", () => {
