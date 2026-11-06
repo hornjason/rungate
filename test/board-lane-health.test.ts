@@ -18,9 +18,13 @@ const census = (over: Partial<LaneCensus> = {}): LaneCensus => ({
   pickable: 34,
   openAssigned: 9,
   cancelledClosed: 23,
-  // The live reading of 2026-11-05: 237 issues delivered over 14 days, so a
-  // cap of 8. Typed out as a measurement rather than imported, so a mutation
-  // of `readyCap` has to break this file too and not just its own.
+  // A FIXTURE, not a measurement. It was labelled "the live reading of
+  // 2026-11-05: 237 issues delivered over 14 days, so a cap of 8" — and
+  // that reading does not reproduce. Paging every closed issue with a
+  // `closedAt` gives 9 over 7 days, 132 over 14 and 646 over 30, so the
+  // live depth is 4. The number below is kept because the cases are
+  // written against it, and relabelled because a comment claiming a
+  // provenance it does not have is worse than no comment.
   throughput: { delivered: 237, days: 14 },
   complete: true,
   ...over,
@@ -99,7 +103,9 @@ describe("a lane count is only a reading against what should be in it", () => {
   });
 
   // UNWRITTEN and SHORT are separated because the remedies differ: SHORT
-  // means the writer is not keeping up, UNWRITTEN means there is no writer.
+  // means the writer is not keeping up, UNWRITTEN means the lane is empty
+  // while things that belong in it exist. **Not "there is no writer"** —
+  // see SC-2731 below for why that sentence had to go.
   // Both of these lanes are genuinely in the second state today.
   test("SC-2670: an empty lane with a non-empty denominator is UNWRITTEN, not SHORT", () => {
     expect(by(census(), "Cancelled").health).toBe("UNWRITTEN");
@@ -156,6 +162,33 @@ describe("a lane count is only a reading against what should be in it", () => {
   // `notPlanned.total_count ?? 0` turned a failed or throttled search into
   // "nothing was ever cancelled", which makes Cancelled read OK — a green
   // lane produced by a measurement that did not happen.
+  // The row said `Cancelled 0 of 23 UNWRITTEN — nothing writes it` on
+  // 2026-11-05, while lib/board-flow.ts:210 had been moving issues to
+  // Cancelled on a not_planned close since that same day, with a recorded
+  // run. A census over two numbers cannot see whether a writer exists, so
+  // it may not report that one does not.
+  test("SC-2731: UNWRITTEN does not claim a writer is missing", () => {
+    const why = by(census(), "Cancelled").why;
+    expect(by(census(), "Cancelled").health).toBe("UNWRITTEN");
+    expect(
+      why,
+      "the census reads two counts and cannot observe a writer, so it must not name one",
+    ).not.toContain("nothing writes it");
+    expect(why, "it still has to say what it counted").toContain("this lane is empty");
+  });
+
+  // The denominator and the numerator must describe the same population.
+  // The label is the only place a reader can check that, so it is asserted
+  // rather than left to the field name.
+  test("SC-2730: Cancelled is measured against this board, not the repository", () => {
+    const why = by(census(), "Cancelled").why;
+    expect(
+      why,
+      "a board lane compared against a repo-wide count reports a gap no writer could close",
+    ).toContain("on this board");
+    expect(why).not.toContain("repo-wide");
+  });
+
   test("SC-2670: an unmeasured cancellation count refuses Cancelled, never passes it", () => {
     const r = by(census({ cancelledClosed: null }), "Cancelled");
     expect(
@@ -167,19 +200,34 @@ describe("a lane count is only a reading against what should be in it", () => {
     expect(by(census({ cancelledClosed: 0 }), "Cancelled").health).toBe("OK");
   });
 
-  // ## Finding 3 — the denominator must count the same population
+  // ## Finding 3, and its reversal
   //
-  // `pickable` is repo-wide while the lane counts are board-only, so an
-  // unblocked unclaimed issue that is not on the board inflates the gap.
-  // "29 are missing from Ready" would overstate by however many eligible
-  // issues the board has never held.
-  test("SC-2670: a denominator from a wider population than the lane says so", () => {
-    const line = laneHealthLines([by(census(), "Ready")])[0]!;
+  // This asserted the opposite: that a repo-wide denominator must DECLARE
+  // the mismatch in its label. It was satisfied by the word "repo-wide",
+  // and the row was still misread — `Cancelled 0 of 23 UNWRITTEN — nothing
+  // writes it` reads as a broken writer no matter what the label says. A
+  // declared mismatch is still a mismatch; the populations now agree
+  // instead, and the membership signal the old denominators carried has
+  // its own line (SC-2730).
+  test("SC-2730: no lane declares a denominator from a wider population", () => {
+    for (const lane of LANES) {
+      const r = by(census(), lane);
+      if (r.against === null) continue;
+      expect(
+        r.why,
+        `${lane} compares a board count against a population the board does not hold, so its ` +
+          `gap names work no lane writer could move`,
+      ).not.toMatch(/repo-wide|whole repository/i);
+    }
+  });
+
+  test("SC-2730: the membership signal survives as its own reading", () => {
+    expect(laneHealthLines([], 4).at(-1)).toContain("NOT on the board");
+    expect(laneHealthLines([], 0).at(-1)).toContain("every open issue is on the board");
     expect(
-      line + by(census(), "Ready").why,
-      "the lane counts board items and `pickable` counts the whole repository. A gap " +
-        "computed across two populations must declare it rather than read as exact.",
-    ).toMatch(/repo-wide|whole repository|not on the board/i);
+      laneHealthLines([], null).at(-1),
+      "unread and none-missing must not spell the same",
+    ).toContain("UNMEASURED");
   });
 
   // ## Round 1, finding 2 (ai-review) and findings 1+2 of the pushed-commit
@@ -237,16 +285,36 @@ describe("a lane count is only a reading against what should be in it", () => {
   // asserts at the file that now holds it AND that the report routes
   // through that file. Pointing only at the report would have gone green
   // on a report that stopped counting duplicates entirely.
-  test("SC-2670: the report reads stateReason, not a qualifier that cannot see duplicates", () => {
-    const lib = readFileSync(join(import.meta.dir, "..", "lib/board-throughput.ts"), "utf-8");
-    expect(
-      lib,
-      "`reason:duplicate` and `reason:bogusvalue` both return 0, so the search qualifier " +
-        "cannot distinguish a duplicate closure from a value it does not understand",
-    ).toContain("DUPLICATE");
+  // **Pointed at the site that computes the denominator, which moved.**
+  // This asserted `lib/board-throughput.ts` contains "DUPLICATE", and that
+  // stayed true after the Cancelled denominator moved to `boardStatus()` —
+  // true because the now-unused repo-wide `cancelled` field still spells
+  // it. Deleting `|| ... === "DUPLICATE"` from the live site would have
+  // reintroduced the exact bug this guards (a lane short by every
+  // duplicate, reading OK) with the whole suite green. A guard left
+  // pointing at the old site is the third instance of this shape on this
+  // branch. ai-review round 2 of #1802.
+  test("SC-2670: the board's abandoned count reads BOTH reasons, at the site that counts", () => {
     const src = readFileSync(join(import.meta.dir, "..", "scripts/work-status.ts"), "utf-8");
-    expect(src, "the report must read the shared pass, not its own count").toContain(
-      "measureClosedIssues",
+    const counter = src.slice(src.indexOf("async function boardStatus"), src.indexOf("abandonedOnBoard }"));
+    expect(counter, "boardStatus() is where the Cancelled denominator is computed").not.toBe("");
+    // **The closing quote is load-bearing.** `toContain("NOT_PLANNED")`
+    // is satisfied by `"NOT_PLANNEDX"`, so a corrupted spelling — which
+    // matches no issue and silently zeroes that half of the count — read
+    // 0 in the battery. Matching the whole comparison catches a deletion
+    // AND a typo; the first version caught only the deletion.
+    for (const reason of ["NOT_PLANNED", "DUPLICATE"]) {
+      expect(
+        counter,
+        `the lane's entry condition is both reasons, and dropping or misspelling ${reason} ` +
+          `makes a lane short by every one of them read OK`,
+      ).toContain(`=== "${reason}"`);
+    }
+    // The search qualifier this replaced could not tell a duplicate from a
+    // value the index does not understand: `reason:duplicate` and
+    // `reason:bogusvalue` both returned 0, measured with that control.
+    expect(counter, "a qualifier cannot distinguish an unknown reason from a true zero").toContain(
+      "stateReason",
     );
   });
 
@@ -282,8 +350,9 @@ describe("a lane count is only a reading against what should be in it", () => {
   test("SC-2670: every lane the board uses appears in the report, in flow order", () => {
     const rs = laneHealth(census());
     expect(rs.map(r => r.lane)).toEqual([...LANES]);
-    const lines = laneHealthLines(rs);
-    expect(lines.length).toBe(LANES.length);
+    const lines = laneHealthLines(rs, 0);
+    // Lanes, then the membership line, which belongs to no lane.
+    expect(lines.length).toBe(LANES.length + 1);
     for (const lane of LANES) {
       expect(lines.some(l => l.includes(lane)), `${lane} is missing from the printed report`).toBe(true);
     }
@@ -297,7 +366,7 @@ describe("a lane count is only a reading against what should be in it", () => {
   // work is queued; the eligible count alone is what used to be printed and
   // is what made the row read `SHORT by 30` forever.
   test("SC-2670: the printed line carries the denominator and the reason", () => {
-    const line = laneHealthLines([by(census(), "Ready")])[0]!;
+    const line = laneHealthLines([by(census(), "Ready")], 0)[0]!;
     // `"of 8"` is NOT enough and the mutation battery proved it: the label
     // itself says "a depth of 8", so dropping the `Math.min` in
     // `readyTarget` left this row green against a denominator of 34. The

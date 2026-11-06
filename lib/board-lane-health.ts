@@ -59,7 +59,17 @@ export type LaneHealth =
    * what the negative control in the walk-through exists to catch.
    */
   | "OVER"
-  /** Empty while its denominator is not. Nothing writes this lane. */
+  /**
+   * Empty while its denominator is not.
+   *
+   * **It does not mean "nothing writes this lane", and it used to say so.**
+   * That sentence named a mechanism the census never looked at, and it was
+   * false from 2026-11-05: `lib/board-flow.ts` moves an issue to Cancelled
+   * on a `not_planned` close, with a recorded run, while this row still
+   * reported the lane unwritten. An empty lane has at least two causes —
+   * no writer, or a writer whose population the denominator does not
+   * share — and only the second was true (SC-2731).
+   */
   | "UNWRITTEN"
   /** No denominator exists, so the count is reported and nothing is judged. */
   | "NO_TARGET"
@@ -69,13 +79,38 @@ export type LaneHealth =
 export interface LaneCensus {
   /** Lane name to the number of items the board shows in it. */
   readonly counts: ReadonlyMap<string, number>;
-  /** Open issues that are unblocked and unclaimed. */
+  /**
+   * Open issues that are unblocked and unclaimed **on this board**.
+   *
+   * Board-scoped like the others. Today the cap hides the difference —
+   * `readyTarget` takes the smaller of this and the depth, and this is far
+   * the larger — but a board holding fewer pickable issues than the cap
+   * would read SHORT against work that does not exist.
+   */
   readonly pickable: number;
-  /** Open issues with at least one assignee. */
+  /**
+   * Open issues with at least one assignee **that are on this board**.
+   *
+   * Scoped for the same reason `cancelledClosed` is: the numerator counts
+   * board items, so a denominator counting repository issues reports a gap
+   * no writer could close. Read repo-wide it said `In progress 1 of 10`
+   * while the board held far fewer assigned issues than the repository did
+   * (SC-2730).
+   */
   readonly openAssigned: number;
   /**
-   * Issues closed as `NOT_PLANNED` **or** `DUPLICATE`, or `null` when the
-   * count could not be taken.
+   * Issues **on this board** closed as `NOT_PLANNED` or `DUPLICATE`, or
+   * `null` when the count could not be taken.
+   *
+   * ## On this board, because the numerator is
+   *
+   * It used to be the repository-wide count, and that made the row compare
+   * a board lane against a population the board's writer never sees. On
+   * 2026-11-05 it read `Cancelled 0 of 23 UNWRITTEN`, and all 23 were
+   * issues closed before `lib/board-flow.ts` had a Cancelled branch or
+   * never added to the board at all. A denominator that counts things the
+   * numerator cannot contain reports a gap that no writer could close
+   * (SC-2730).
    *
    * **Both reasons, because the spec's condition is both.**
    * `specs/BOARD-FLOW-SPEC.md` defines Cancelled's entry as "closed as
@@ -129,13 +164,25 @@ export interface LaneReading {
 /**
  * The denominator for each lane that has one, and why it is that one.
  *
- * **Every label says the denominator is repo-wide.** The numerator counts
- * items on the BOARD and all three denominators count the whole repository,
- * so an eligible issue the board has never held inflates the gap. Security
- * review of the pushed commit, finding 3. Scoping the denominators to board
- * items would hide the more important failure — an eligible issue that
- * never reached the board at all — so the populations stay as they are and
- * the reading declares the mismatch instead of pretending to be exact.
+ * ## The denominators are board-scoped, reversing an earlier decision
+ *
+ * They were repo-wide, deliberately: the security review of the pushed
+ * commit (finding 3) argued that scoping them to board items would hide a
+ * more important failure — an eligible issue that never reached the board
+ * at all — so the mismatch was declared rather than removed.
+ *
+ * **That traded a readable row for an unreadable one, and the cost showed
+ * up on 2026-11-05.** The Cancelled row read `0 of 23 UNWRITTEN — nothing
+ * writes it`, which says the writer is broken. The writer was fine; all 23
+ * were issues the board had never held. A row whose two numbers describe
+ * different populations cannot be read correctly by anyone, and declaring
+ * the mismatch in a label does not fix that — the label said "repo-wide"
+ * the whole time and the row was still misread, by me, for a day.
+ *
+ * The earlier concern was right about the failure being important and
+ * wrong about where it belongs: **it is a fact about board MEMBERSHIP, not
+ * about any lane.** It is now its own reading — `offBoard` — so both
+ * survive and neither is inferred from the other. One row, one population.
  *
  * `undefined` means this lane has no denominator; `null` inside one means
  * the denominator exists but could not be read.
@@ -153,12 +200,19 @@ function target(lane: string, c: LaneCensus): { against: number | null; label: s
       label:
         cap === null
           ? "throughput, which Ready's depth is derived from,"
-          : `allowed in the queue — ${c.pickable} unblocked and unclaimed repo-wide, capped at a ` +
+          : `allowed in the queue — ${c.pickable} unblocked and unclaimed on this board, capped at a ` +
             `depth of ${cap} derived from ${READY_TOLERANCE_DAYS} day(s) of live throughput`,
     };
   }
-  if (lane === "In progress") return { against: c.openAssigned, label: "open and assigned, repo-wide" };
-  if (lane === "Cancelled") return { against: c.cancelledClosed, label: "closed as not_planned or duplicate, repo-wide" };
+  if (lane === "In progress") {
+    return { against: c.openAssigned, label: "on this board are open and assigned" };
+  }
+  if (lane === "Cancelled") {
+    return {
+      against: c.cancelledClosed,
+      label: "on this board are closed as not_planned or duplicate",
+    };
+  }
   return undefined;
 }
 
@@ -225,7 +279,12 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
         count,
         against: t.against,
         health: "UNWRITTEN" as const,
-        why: `${t.against} ${t.label}, and this lane is empty — nothing writes it`,
+        // States what was counted, not why. A census over two numbers
+        // cannot see whether a writer exists, and the previous wording
+        // asserted it did not.
+        why:
+          `${t.against} ${t.label}, and this lane is empty — either nothing moves them ` +
+          `or whatever does has not run`,
       };
     }
     if (count < t.against) {
@@ -282,9 +341,41 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
  * missing from the printed output is the failure this exists to catch, and
  * it is invisible when the formatting lives inside the I/O.
  */
-export function laneHealthLines(readings: readonly LaneReading[]): string[] {
-  return readings.map(r => {
+/**
+ * `offBoard` is **a required parameter and not a census field**, because it
+ * was briefly both.
+ *
+ * It was declared on `LaneCensus`, documented at length, and never read —
+ * the printed line came from this parameter, and the two agreed only
+ * because one caller passed the same variable to each. A caller using the
+ * one-argument form, which the optional default allowed, would have
+ * printed `UNMEASURED` with the correct value sitting on the census it had
+ * just built. A field with no reader and a default that invents a reading,
+ * in the change written to remove exactly that. ai-review round 2 of
+ * #1802.
+ *
+ * Required, so there is no form of this call that can omit the reading;
+ * `null` has to be passed deliberately and still means UNMEASURED.
+ */
+export function laneHealthLines(
+  readings: readonly LaneReading[],
+  offBoard: number | null,
+): string[] {
+  const lines = readings.map(r => {
     const against = r.against === null ? "" : ` of ${r.against}`;
     return `  ${r.lane.padEnd(12)} ${String(r.count).padStart(4)}${against.padEnd(8)} ${r.health.padEnd(11)} ${r.why}`;
   });
+  // **Printed whatever it reads, including zero.** Omitting the line when
+  // nothing is off the board makes "none are missing" and "nobody looked"
+  // the same output, which is the distinction every other row here exists
+  // to keep (SC-2730). `null` is the third state and says so.
+  lines.push(
+    offBoard === null
+      ? `  (board membership UNMEASURED — whether any open issue is missing from the board was not read)`
+      : offBoard === 0
+        ? `  every open issue is on the board`
+        : `  ${offBoard} open issue(s) are NOT on the board at all — no lane writer can move them, ` +
+          `and no row above counts them`,
+  );
+  return lines;
 }

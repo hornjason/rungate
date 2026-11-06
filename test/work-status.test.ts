@@ -282,6 +282,37 @@ describe("the script asks the dependencies endpoint, not a search qualifier", ()
  * allowlist library. Keeping them in the library suite is a large part of
  * what made the library and the tool inseparable in review.
  */
+describe("SC-2731: a reading is UNMEASURED only when its OWN source failed", () => {
+  const code = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  // The Cancelled denominator moved from the repo-wide closed-issue pass
+  // to the board traversal, and its null-guard was left pointing at the
+  // old source. A throttled throughput pass would have blanked a count
+  // boardStatus() had already read, reporting the lane UNMEASURED when it
+  // was measured. ai-review round 1 of #1802.
+  test("the board-scoped cancelled count is not gated on the throughput pass", () => {
+    const line = code.split("\n").find(l => l.includes("const cancelledClosed"))!;
+    expect(line, "the assignment moved out of the script").toBeDefined();
+    expect(
+      line,
+      "cancelledClosed comes from boardStatus(), so gating it on the closed-issue pass makes " +
+        "an unrelated failure blank a reading that succeeded",
+    ).not.toContain("closedReadings");
+    expect(line).toContain("abandonedOnBoard");
+  });
+
+  // The message named two readings and now feeds one. A refusal naming
+  // the wrong reading sends whoever reads the log to the wrong pass.
+  test("the closed-issue failure message claims only what that pass feeds", () => {
+    const msg = code.split("\n").find(l => l.includes("the closed-issue pass failed"))!;
+    expect(msg).toBeDefined();
+    expect(msg, "this pass no longer feeds the cancelled count").not.toContain("cancelled count");
+    expect(msg).toContain("depth");
+  });
+});
+
 describe("the status reader does not leak the token on any hop", () => {
   const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
 

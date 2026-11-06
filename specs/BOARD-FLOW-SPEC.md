@@ -666,3 +666,11 @@ second: flow efficiency is the one metric this spec must not promise.**
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
+- [ ] SC-2730: every lane row measures its count against a denominator drawn from the same population
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2731: a verdict names only what the census observed, never a writer it did not look for
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
