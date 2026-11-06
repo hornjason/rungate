@@ -139,6 +139,17 @@ export interface PushCiReading {
   /** Required contexts with no such trigger. Non-empty blocks `strict: false`. */
   missing: string[];
   /**
+   * Required contexts that DECLARE a push trigger and still cannot contribute
+   * the semantic-conflict net, because the action they run rejects the event
+   * at its own entry point — #1503.
+   *
+   * Counted apart from both other lists on purpose. In `onPush` it clears the
+   * precondition vacuously, which is the defect. In `missing` the remedy
+   * printed is *add a push trigger*, which is the change PR #1502 made: it
+   * empties `missing`, lifts the refusal, and reviews nothing.
+   */
+  cannotRunOnPush: string[];
+  /**
    * Non-null when the workflows could not be read at all, so neither list
    * means anything. An empty `missing` from an unread directory is the
    * fail-open this field exists to prevent.
@@ -325,6 +336,33 @@ export function readMergeSerialisation(
         "only thing that catches it and main breaks quietly. Do this first: add " +
         `\`on: push: branches: [${facts.branch ?? "main"}]\` to the workflow(s) providing ` +
         `${pushCi.missing.join(", ")}, confirm a push run reports, and only then set strict: false.`,
+      mergeQueuePossible: false,
+    };
+  }
+
+  // #1503: a context that DECLARES a push trigger but runs an action which
+  // rejects the `push` event provides no net. It is deliberately not in
+  // `missing` — the remedy printed there is *add a push trigger*, which this
+  // context already has, and adding one is what produced this state.
+  if (pushCi.cannotRunOnPush.length > 0) {
+    const names = pushCi.cannotRunOnPush.join(", ");
+    const plural = pushCi.cannotRunOnPush.length === 1;
+    return {
+      verdict: "FAIL",
+      reason:
+        `${base} Whether it is safe to turn strict off here is UNMEASURED: ${names} ` +
+        `${plural ? "declares" : "declare"} a push: trigger but ${plural ? "runs" : "run"} ` +
+        `${plural ? "an action" : "actions"} that ${plural ? "rejects" : "reject"} the push ` +
+        `event at ${plural ? "its" : "their"} own entry point, so the run fails immediately ` +
+        "and reviews nothing.",
+      remedy:
+        "REFUSING to recommend strict: false, and NOT because a push trigger is missing — " +
+        `${names} ${plural ? "has" : "have"} one. The run it produces cannot go red for a ` +
+        "semantic conflict (two PRs each green alone, broken together), so the trigger clears " +
+        "this precondition without providing the net strict: true is being traded against. " +
+        "Adding more push triggers will not fix it. Either give the default branch a required " +
+        `context that genuinely runs the suite on push, or leave strict: true. The ` +
+        `event-restricted actions this check knows about: ${EVENT_RESTRICTED_ACTIONS.join(", ")}.`,
       mergeQueuePossible: false,
     };
   }
@@ -581,6 +619,7 @@ export function readPushCi(root: string, contexts: string[], branch: string): Pu
 
   const unreadable: string[] = [];
   const pushContexts = new Set<string>();
+  const restricted = new Set<string>();
   for (const name of entries) {
     let text: string;
     try {
@@ -593,6 +632,7 @@ export function readPushCi(root: string, contexts: string[], branch: string): Pu
     }
     if (!runsOnPushTo(text, branch)) continue;
     for (const job of jobContextNames(text)) pushContexts.add(job);
+    for (const job of eventRestrictedContexts(text)) restricted.add(job);
   }
 
   if (unreadable.length > 0) {
@@ -603,18 +643,77 @@ export function readPushCi(root: string, contexts: string[], branch: string): Pu
   }
 
   return {
-    onPush: contexts.filter(c => pushContexts.has(c)),
-    missing: contexts.filter(c => !pushContexts.has(c)),
+    // A restricted context is in NEITHER of the first two lists. `onPush`
+    // would clear the precondition with a run that throws; `missing` would
+    // print "add a push trigger", which is the change that produced it.
+    onPush: contexts.filter(c => pushContexts.has(c) && !restricted.has(c)),
+    missing: contexts.filter(c => !pushContexts.has(c) && !restricted.has(c)),
+    cannotRunOnPush: contexts.filter(c => restricted.has(c)),
     unmeasured: null,
   };
 }
 
-function unmeasuredPushCi(why: string): PushCiReading {
+/**
+ * The refusal shape for a push-CI reading that could not be taken.
+ *
+ * Exported since #1503 so `lib/conformity.ts` stops hand-building the same
+ * object literal: two spellings of one refusal are two deciders, and the
+ * inline one silently lacked `cannotRunOnPush` the moment the field existed.
+ */
+export function unmeasuredPushCi(why: string): PushCiReading {
   return {
     onPush: [],
     missing: [],
+    cannotRunOnPush: [],
     unmeasured: `UNMEASURED push-CI: ${why}.`,
   };
+}
+
+/**
+ * Actions that reject a `push` event at their own entry point — #1503.
+ *
+ * A closed set in SOURCE, never config and never an allowlist a repository
+ * can append to. The issue names why: a list anybody can extend turns the
+ * refusal into an opt-out, and the first thing a blocked operator would add
+ * is whichever context is blocking them.
+ *
+ * `anthropics/claude-code-action` is the measured instance. At the SHA this
+ * repository pins, `src/github/context.ts` throws `Unsupported event type`
+ * for anything outside `pull_request`, `issue_comment`, `issues`, `schedule`
+ * and `workflow_dispatch`. So a job running it under `on: push` produces a
+ * run that fails immediately and reviews nothing — it can never go red for
+ * the semantic conflict `strict: false` is traded against.
+ *
+ * Adding a row here is a source change with a review, and it needs the same
+ * evidence this one has: the line in the action that rejects the event.
+ */
+export const EVENT_RESTRICTED_ACTIONS = ["anthropics/claude-code-action"] as const;
+
+/**
+ * The context names of jobs that run an {@link EVENT_RESTRICTED_ACTIONS}
+ * action, judged from the same per-job walk {@link jobContextNames} does.
+ *
+ * Same walk deliberately: two walks of the `jobs:` block would be two
+ * deciders for "where does this job end", and a job whose context name one
+ * of them resolved differently would be restricted under one and not the
+ * other (`.claude/rules/checks-must-be-able-to-fail.md`).
+ */
+export function eventRestrictedContexts(text: string): string[] {
+  return jobBlocks(text)
+    .filter(j => j.body.some(line => EVENT_RESTRICTED_ACTIONS.some(a => usesAction(line, a))))
+    .map(j => j.context);
+}
+
+/** `uses: <action>@<ref>` on this line, matching the action and not a prefix. */
+function usesAction(line: string, action: string): boolean {
+  // The trailing `# v1` is not decoration — every pinned action in this repo
+  // carries one, and a `\s*$` anchor that forgets it matches nothing at all.
+  const m = line.trim().match(/^-?\s*uses\s*:\s*(["']?)([^"'\s]+)\1\s*(?:#.*)?$/);
+  if (!m) return false;
+  const ref = m[2];
+  // `owner/name@sha` and `owner/name/sub@sha` both count; `owner/name-2` does
+  // not, which is the prefix a bare `startsWith` would wrongly accept.
+  return ref === action || ref.startsWith(`${action}@`) || ref.startsWith(`${action}/`);
 }
 
 // ── The small amount of YAML this needs ─────────────────
@@ -768,12 +867,35 @@ export function runsOnPushTo(text: string, branch: string): boolean {
  * would call a configured repo unconfigured.
  */
 export function jobContextNames(text: string): string[] {
+  return jobBlocks(text).map(j => j.context);
+}
+
+/** One job of a workflow: the context name it reports, and its own lines. */
+export interface JobBlock {
+  /** `name:` when the job has one, its key otherwise. */
+  context: string;
+  /** The job's significant lines, excluding the key line itself. */
+  body: string[];
+}
+
+/**
+ * Every job in a workflow, with the context name each reports.
+ *
+ * The single decider for *where a job ends and what it is called* — #1503.
+ * {@link jobContextNames} and {@link eventRestrictedContexts} both read it
+ * rather than walking `jobs:` themselves, because two walks would be two
+ * deciders answering the same question: a job whose extent they resolved
+ * differently would be restricted under one and named under the other, and
+ * no behavioural test could tell which of them was live
+ * (`.claude/rules/checks-must-be-able-to-fail.md`).
+ */
+export function jobBlocks(text: string): JobBlock[] {
   const lines = significantLines(text);
   const jobs = topLevelBlock(lines, ["jobs"]);
   if (!jobs || jobs.body.length === 0) return [];
   const base = Math.min(...jobs.body.map(indentOf));
 
-  const names: string[] = [];
+  const out: JobBlock[] = [];
   for (let i = 0; i < jobs.body.length; i++) {
     if (indentOf(jobs.body[i]) !== base) continue;
     const key = jobs.body[i].trim().match(/^(["']?)([A-Za-z_][A-Za-z0-9_-]*)\1\s*:\s*$/);
@@ -784,7 +906,7 @@ export function jobContextNames(text: string): string[] {
       block.push(jobs.body[j]);
     }
     const name = childBlock(block, "name");
-    names.push(name?.header ? unquote(name.header) : key[2]);
+    out.push({ context: name?.header ? unquote(name.header) : key[2], body: block });
   }
-  return names;
+  return out;
 }

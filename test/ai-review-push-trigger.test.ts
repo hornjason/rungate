@@ -329,9 +329,24 @@ describe("#1469 AC-3: the reading this exists to move", () => {
       for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
 
       const contexts = ["test", AI_REVIEW_JOB];
+      // #1503 REVISED THIS EXPECTATION, and the revision is the finding.
+      //
+      // It used to read `onPush: contexts, missing: []` — i.e. the trigger
+      // this file adds was credited as providing the semantic-conflict net.
+      // It does not. The docblock at the top of this file establishes, from
+      // the pinned SHA, that `anthropics/claude-code-action` throws
+      // `Unsupported event type: push`; and the generated job runs it with
+      // `continue-on-error: true`, so the step goes red, the JOB reports
+      // success, and PROTECT-1 saw a green required context on push.
+      //
+      // So `ai-review` belongs in neither of the original two lists. In
+      // `onPush` it clears `strict: false` vacuously. In `missing` the
+      // remedy printed is *add a push trigger* — which is the change THIS
+      // FILE made, so the advice would be to re-make the defect.
       expect(readPushCi(root, contexts, FIXTURE_BRANCH)).toEqual({
-        onPush: contexts,
+        onPush: ["test"],
         missing: [],
+        cannotRunOnPush: [AI_REVIEW_JOB],
         unmeasured: null,
       });
 
@@ -343,9 +358,14 @@ describe("#1469 AC-3: the reading this exists to move", () => {
       expect(stripped, "the strip did not remove anything — the control is vacuous")
         .not.toEqual(files["ai-review.yml"]);
       writeFileSync(join(dir, "ai-review.yml"), stripped);
+      // Still `missing`, not `cannotRunOnPush`: with the push block stripped
+      // the job never enters the per-file scan at all, so the restriction is
+      // never reached. The two states stay distinguishable, which is the
+      // whole point of splitting them (#1503).
       expect(readPushCi(root, contexts, FIXTURE_BRANCH)).toEqual({
         onPush: ["test"],
         missing: [AI_REVIEW_JOB],
+        cannotRunOnPush: [],
         unmeasured: null,
       });
     } finally {

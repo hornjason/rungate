@@ -41,6 +41,7 @@ import {
   protectionSubject,
   readMergeSerialisation,
   readPushCi,
+  unmeasuredPushCi,
 } from "./branch-protection";
 import { stripJsComments } from "./strip-js-comments";
 import { remedyMessage } from "./check-remedy";
@@ -4993,7 +4994,7 @@ export function runBranchProtectionValidation(
       // here would answer a question about a branch the repo may not protect.
       const pushCi = facts.branch
         ? readPushCi(root, facts.contexts, facts.branch)
-        : { onPush: [], missing: [], unmeasured: "UNMEASURED push-CI: the default branch is unknown, so no trigger could be matched against it." };
+        : unmeasuredPushCi("the default branch is unknown, so no trigger could be matched against it");
       const reading = readMergeSerialisation(facts, pushCi);
 
       if (reading.verdict === "UNMEASURED") {

@@ -57,6 +57,7 @@ import {
   branchPatternMatches,
   jobContextNames,
   protectionFactsFromPayload,
+  EVENT_RESTRICTED_ACTIONS,
   readMergeSerialisation,
   readPushCi,
   runsOnPushTo,
@@ -423,7 +424,12 @@ describe("#909: an unreadable repo reports UNMEASURED and does not look like a c
 
 // ── The classification, unit by unit ────────────────────
 
-const PUSH_OK: PushCiReading = { onPush: ["test", "gates"], missing: [], unmeasured: null };
+const PUSH_OK: PushCiReading = {
+  onPush: ["test", "gates"],
+  missing: [],
+  cannotRunOnPush: [],
+  unmeasured: null,
+};
 
 describe("#909: readMergeSerialisation reaches PASS only on positive evidence", () => {
   test("strict:false passes and says what it kept", () => {
@@ -508,6 +514,166 @@ describe("#909: readPushCi distinguishes 'no push trigger' from 'did not look'",
   test("a context required by protection but declared in no workflow is missing", () => {
     const root = project({ ".github/workflows/ci.yml": PUSH_CI });
     expect(readPushCi(root, ["test", "ai-review"], "main").missing).toEqual(["ai-review"]);
+  });
+});
+
+// ── #1503: a push trigger it can SEE is not a review it can GET ─────────
+
+/**
+ * A push-triggered `ai-review` job that runs the event-restricted action.
+ *
+ * This is the shape PR #1502 produces, and it is the defect: the trigger is
+ * real, PROTECT-1's parser reads it correctly, and the action throws
+ * `Unsupported event type: push` the moment it starts. The generated job
+ * wraps it in `continue-on-error: true`, so the JOB reports success — which
+ * is why nothing downstream ever noticed.
+ */
+const RESTRICTED_CI = `name: AI Review
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the AI review
+        continue-on-error: true
+        uses: anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6 # v1
+`;
+
+/**
+ * Byte-identical to {@link RESTRICTED_CI} except for the action it runs.
+ *
+ * The control for every case below: ONE variable differs, so a reading that
+ * classified on anything else — the job name, the `continue-on-error`, the
+ * presence of a `uses:` at all — would answer the same for both and the
+ * contrast would measure nothing
+ * (`.claude/rules/checks-must-be-able-to-fail.md`).
+ */
+const UNRESTRICTED_CI = RESTRICTED_CI.replace(
+  "anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6",
+  "some-org/an-ordinary-action@5eb090f3c3afd701a0672cd32981197ca27688f6",
+);
+
+describe("#1503: readPushCi counts a context that cannot run on push apart", () => {
+  test("a restricted context is in cannotRunOnPush and in NEITHER other list", () => {
+    const root = project({ ".github/workflows/ai-review.yml": RESTRICTED_CI });
+    const r = readPushCi(root, ["ai-review"], "main");
+    expect(r.unmeasured).toBeNull();
+    expect(r.cannotRunOnPush).toEqual(["ai-review"]);
+    // Both of these would hide the defect, in opposite directions: `onPush`
+    // clears strict:false vacuously, `missing` prints "add a push trigger".
+    expect(r.onPush).toEqual([]);
+    expect(r.missing).toEqual([]);
+  });
+
+  test("THE CONTROL: the same file running an ordinary action is plain onPush", () => {
+    expect(UNRESTRICTED_CI, "the action swap changed nothing — the control is vacuous")
+      .not.toEqual(RESTRICTED_CI);
+    const root = project({ ".github/workflows/ai-review.yml": UNRESTRICTED_CI });
+    const r = readPushCi(root, ["ai-review"], "main");
+    expect(r.onPush).toEqual(["ai-review"]);
+    expect(r.cannotRunOnPush).toEqual([]);
+  });
+
+  test("a genuine context beside a restricted one keeps its credit", () => {
+    const root = project({
+      ".github/workflows/ci.yml": PUSH_CI,
+      ".github/workflows/ai-review.yml": RESTRICTED_CI,
+    });
+    const r = readPushCi(root, ["test", "gates", "ai-review"], "main");
+    expect(r.onPush).toEqual(["test", "gates"]);
+    expect(r.cannotRunOnPush).toEqual(["ai-review"]);
+    expect(r.missing).toEqual([]);
+  });
+
+  test("a restricted action in a workflow with NO push trigger stays missing", () => {
+    // The restriction is only reachable through the push scan, so the two
+    // states cannot collapse into each other.
+    const root = project({
+      ".github/workflows/ai-review.yml": RESTRICTED_CI.replace(/\n  push:\n    branches:\n      - main\n/, "\n"),
+    });
+    const r = readPushCi(root, ["ai-review"], "main");
+    expect(r.missing).toEqual(["ai-review"]);
+    expect(r.cannotRunOnPush).toEqual([]);
+  });
+
+  test("the action match is not a prefix match", () => {
+    const root = project({
+      ".github/workflows/ai-review.yml": RESTRICTED_CI.replace(
+        "anthropics/claude-code-action@",
+        "anthropics/claude-code-action-nightly@",
+      ),
+    });
+    expect(readPushCi(root, ["ai-review"], "main").cannotRunOnPush).toEqual([]);
+  });
+
+  test("the restricted set is closed in source and names the measured action", () => {
+    expect(EVENT_RESTRICTED_ACTIONS).toContain("anthropics/claude-code-action");
+    expect(EVENT_RESTRICTED_ACTIONS.length).toBeGreaterThan(0);
+  });
+});
+
+describe("#1503: the verdict refuses on a context that cannot run on push", () => {
+  const RESTRICTED_ONLY: PushCiReading = {
+    onPush: [],
+    missing: [],
+    cannotRunOnPush: ["ai-review"],
+    unmeasured: null,
+  };
+
+  test("a repo whose only push context throws is NOT told strict:false is safe", () => {
+    const r = readMergeSerialisation(
+      facts({ strict: true, ownerType: "User", contexts: ["ai-review"] }),
+      RESTRICTED_ONLY,
+    );
+    expect(r.verdict).toBe("FAIL");
+    expect(r.reason).toContain("UNMEASURED");
+    expect(r.reason).toContain("ai-review");
+    // It must not reach the clear, whose sentence is the one that was wrong.
+    expect(r.reason).not.toContain("so the safe remedy is available");
+    // And it must not print the remedy that produced this state.
+    expect(r.remedy).not.toContain("on: push: branches:");
+    expect(r.remedy).toContain("Adding more push triggers will not fix it");
+  });
+
+  test("a repo where the suite GENUINELY runs on push is still cleared", () => {
+    // Or the fix is a refusal that fires on everyone, which reviews nothing
+    // and teaches people to click past it.
+    const r = readMergeSerialisation(
+      facts({ strict: true, ownerType: "User", contexts: ["test", "gates"] }),
+      PUSH_OK,
+    );
+    expect(r.reason).toContain("so the safe remedy is available");
+    expect(r.remedy).toContain("Set required_status_checks.strict = false");
+  });
+
+  test("THE MUTATION the issue names: restore the trigger-presence proxy", () => {
+    // The old reading credited any context whose workflow declared a push
+    // trigger, which for the input above means `onPush: ["ai-review"]` and
+    // an empty `cannotRunOnPush`. Fed that, the verdict clears — so the
+    // refusal above is carried by the split and by nothing else.
+    const proxy: PushCiReading = { ...RESTRICTED_ONLY, onPush: ["ai-review"], cannotRunOnPush: [] };
+    const r = readMergeSerialisation(
+      facts({ strict: true, ownerType: "User", contexts: ["ai-review"] }),
+      proxy,
+    );
+    expect(r.reason).toContain("so the safe remedy is available");
+  });
+
+  test("no contexts at all still reads as nothing lost, not as a restriction", () => {
+    const r = readMergeSerialisation(
+      facts({ strict: true, ownerType: "User", contexts: [] }),
+      { onPush: [], missing: [], cannotRunOnPush: [], unmeasured: null },
+    );
+    expect(r.reason).toContain("No contexts are required");
   });
 });
 
