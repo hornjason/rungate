@@ -5529,6 +5529,12 @@ describe("the filing cap under direct-ship mode", () => {
         "gh api repos/hornjason/rungate/issues",
         "gh api repos/hornjason/rungate/issues?state=open",
         "gh api -X GET repos/hornjason/rungate/issues",
+        // The row that makes the explicit-GET arm load-bearing. Without
+        // it the others are all field-free, so dropping the GET check
+        // changes no outcome and the battery reads 0 for a mutant that
+        // genuinely weakens the parser — `gh api` sends fields as query
+        // parameters on a GET, and this is how a filter is spelled.
+        "gh api -X GET repos/hornjason/rungate/issues -f state=open -f labels=bug",
         'gh api repos/hornjason/rungate/issues/1759/comments -f body="not a filing"',
         "gh api graphql -f query='query { repository(owner: \"x\", name: \"y\") { issues(first: 1) { nodes { number } } } }'",
         'gh issue comment 1759 --body "not a filing"',

@@ -278,11 +278,141 @@ function commandArguments(tokens: string[]): string[] {
 const basename = (t: string) => t.split("/").pop()!;
 
 /**
- * Does this clause invoke `gh issue create`?
+ * `gh api` flags that do NOT consume the following token.
+ *
+ * Everything else beginning with `-` is assumed to take a value, which is
+ * the same conservative convention `BOOLEAN_FLAGS` follows above: guessing
+ * that a flag takes a value makes the scan skip a token it should have
+ * read, and the failure is a filing the gate does not recognise — visible.
+ * Guessing the other way desyncs the scan and makes a flag's VALUE read as
+ * the endpoint, which is a filing recognised against the wrong URL.
+ */
+const API_BOOLEAN_FLAGS = new Set([
+  "--paginate",
+  "-i",
+  "--include",
+  "--silent",
+  "--slurp",
+  "--verbose",
+]);
+
+/** Flags of `gh api` whose value is a `key=value` field. */
+const API_FIELD_FLAGS = [
+  { long: "--field", short: "-f" },
+  { long: "--raw-field", short: "-F" },
+];
+
+/** `-X`/`--method`, upper-cased, or `null` when it was not given. */
+function apiMethod(rest: string[]): string | null {
+  const [m] = flagValues(rest, { long: "--method", short: "-X" });
+  return m === undefined ? null : m.toUpperCase();
+}
+
+/** The first positional token after `api` — the endpoint, or `null`. */
+function apiEndpoint(rest: string[]): string | null {
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i];
+    if (!t.startsWith("-") || t === "-" || t === "--") return t;
+    if (t.includes("=")) continue; // `--flag=value` carries its own value
+    if (!API_BOOLEAN_FLAGS.has(t)) i++; // this flag eats the next token
+  }
+  return null;
+}
+
+/** Every `key=value` passed with a field flag, last-wins, as `gh` reads it. */
+export function apiFields(rest: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const q of API_FIELD_FLAGS) {
+    for (const pair of flagValues(rest, q)) {
+      const eq = pair.indexOf("=");
+      if (eq > 0) out.set(pair.slice(0, eq), pair.slice(eq + 1));
+    }
+  }
+  return out;
+}
+
+/** The REST issues COLLECTION — `repos/<owner>/<repo>/issues`, nothing deeper. */
+const ISSUES_COLLECTION = /^\/?repos\/([^/?]+)\/([^/?]+)\/issues\/?(?:\?.*)?$/;
+
+/**
+ * The `owner/repo` a `gh api` filing targets, or `null`.
+ *
+ * The REST path carries it; a GraphQL `createIssue` carries a
+ * `repositoryId`, which is an opaque node id and not a slug, so that one is
+ * honestly `null` rather than guessed at. `null` means the dedupe runs
+ * against the session's default repo, which is the existing behaviour for
+ * a `gh issue create` with no `--repo`.
+ */
+export function apiFilingRepo(tokens: string[]): string | null {
+  const rest = afterGhSubcommand(tokens, "api");
+  if (rest === null) return null;
+  const m = ISSUES_COLLECTION.exec(apiEndpoint(rest) ?? "");
+  return m === null ? null : `${m[1]}/${m[2]}`;
+}
+
+/**
+ * The fields of a REST issues-collection filing, or `null`.
+ *
+ * `null` for every clause that is not one — including `graphql`, which has
+ * its own reader — so a caller gets a map only when the map means what it
+ * thinks it means.
+ */
+export function apiRestFields(tokens: string[]): Map<string, string> | null {
+  const rest = afterGhSubcommand(tokens, "api");
+  if (rest === null) return null;
+  if (!ISSUES_COLLECTION.test(apiEndpoint(rest) ?? "")) return null;
+  return apiFields(rest);
+}
+
+/** The tokens after `gh <sub>`, or `null` when this clause is not that. */
+function afterGhSubcommand(tokens: string[], sub: string): string[] | null {
+  for (let i = 0; i + 1 < tokens.length; i++) {
+    if (basename(tokens[i]) === "gh" && tokens[i + 1] === sub) return tokens.slice(i + 2);
+  }
+  return null;
+}
+
+/** A `mutation { … createIssue( … ) … }` in a GraphQL document. */
+const CREATE_ISSUE_MUTATION = /\bmutation\b[\s\S]*\bcreateIssue\s*\(/;
+
+/**
+ * The GraphQL document this clause sends, or `null`.
+ *
+ * `gh api graphql` takes it as the `query` field whichever field flag
+ * spells it.
+ */
+export function graphqlDocument(tokens: string[]): string | null {
+  const rest = afterGhSubcommand(tokens, "api");
+  if (rest === null || apiEndpoint(rest) !== "graphql") return null;
+  return apiFields(rest).get("query") ?? null;
+}
+
+/**
+ * Does this clause create an issue?
+ *
+ * Three spellings, one decider (#1759). Measured on 2026-11-02, the first
+ * two of these returned nothing: `gh api repos/<o>/<r>/issues` and a
+ * `createIssue` GraphQL mutation both file an issue and neither is spelled
+ * `gh issue create`, so two of three filings walked around the gate that
+ * exists to count them.
  *
  * Compared on the basename, because `/usr/bin/gh issue create` and
  * `./gh issue create` are the same command and the first version of this
  * function allowed both.
+ *
+ * ## Reading is not filing, and that is the hard half
+ *
+ * `repos/<o>/<r>/issues` is the LIST endpoint as well as the create
+ * endpoint; the method is what separates them, and `gh api` chooses POST
+ * implicitly when any field is supplied. So a create is *fields present or
+ * POST asked for*, and an explicit `GET`/`HEAD` is a read whatever else is
+ * on the line.
+ *
+ * The regex stops at the collection — `issues/1759/comments` is deeper and
+ * is not a filing. That boundary is load-bearing rather than tidy: this
+ * gate's own refusals tell an agent to post a comment instead, so a parser
+ * that read any `gh api` touching `issues` would refuse the remedy it
+ * prescribes.
  */
 export function createsIssue(tokens: string[]): boolean {
   for (let i = 0; i + 2 < tokens.length; i++) {
@@ -290,7 +420,20 @@ export function createsIssue(tokens: string[]): boolean {
       return true;
     }
   }
-  return false;
+  const rest = afterGhSubcommand(tokens, "api");
+  if (rest === null) return false;
+  const method = apiMethod(rest);
+  if (method === "GET" || method === "HEAD") return false;
+  const endpoint = apiEndpoint(rest) ?? "";
+  if (endpoint === "graphql") {
+    return CREATE_ISSUE_MUTATION.test(apiFields(rest).get("query") ?? "");
+  }
+  if (!ISSUES_COLLECTION.test(endpoint)) return false;
+  const writes =
+    apiFields(rest).size > 0 ||
+    flagValues(rest, { long: "--input", short: "--input" }).length > 0 ||
+    method === "POST";
+  return writes;
 }
 
 /**

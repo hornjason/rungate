@@ -127,7 +127,15 @@ import {
   type JuryReading,
   type Severity,
 } from "./finding-jury";
-import { clauses, createsIssue, flagValues, labelValues } from "./issue-create-override";
+import {
+  apiFilingRepo,
+  apiRestFields,
+  clauses,
+  createsIssue,
+  flagValues,
+  graphqlDocument,
+  labelValues,
+} from "./issue-create-override";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
 import { tryLoadRungateConfig } from "./config-loader";
@@ -1585,7 +1593,49 @@ export function ghRepoTarget(value: string): string | null {
  * corpus, finds nothing, and the filing is allowed. `--repo` IS read,
  * because it is in the clause and costs one more query.
  */
+/**
+ * A `title: "…"` / `body: "…"` argument inside a GraphQL document.
+ *
+ * Crude on purpose: the alternative is a GraphQL parser, and what the gate
+ * needs is the two strings it compares and scans. A document this cannot
+ * read yields `null`, the attempt resolves empty, and the gate lands on its
+ * existing "names no symbol" arm — the same place an unreadable
+ * `--body-file` already lands.
+ */
+function graphqlArgument(doc: string, name: string): string | null {
+  const m = new RegExp(`\\b${name}\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(doc);
+  return m === null ? null : m[1].replace(/\\(.)/g, "$1");
+}
+
 export function resolveFiling(tokens: string[]): FilingAttempt {
+  const doc = graphqlDocument(tokens);
+  if (doc !== null) {
+    return {
+      title: graphqlArgument(doc, "title") ?? "",
+      body: graphqlArgument(doc, "body") ?? "",
+      labels: [],
+      bodyFile: null,
+      // A createIssue carries `repositoryId`, an opaque node id rather than
+      // a slug, so this is honestly unknown rather than guessed. `null` is
+      // what a `gh issue create` with no `--repo` already resolves to.
+      repo: null,
+      repeatedValueFlag: false,
+    };
+  }
+  const apiRest = apiRestFields(tokens);
+  if (apiRest !== null) {
+    return {
+      title: apiRest.get("title") ?? "",
+      body: apiRest.get("body") ?? "",
+      labels: (apiRest.get("labels") ?? "")
+        .split(",")
+        .map(l => l.trim())
+        .filter(l => l !== ""),
+      bodyFile: null,
+      repo: apiFilingRepo(tokens),
+      repeatedValueFlag: false,
+    };
+  }
   const titles = flagValues(tokens, TITLE_FLAG);
   const bodies = flagValues(tokens, BODY_FLAG);
   const bodyFiles = flagValues(tokens, BODY_FILE_FLAG);
