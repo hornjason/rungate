@@ -292,9 +292,24 @@ function heredocView(cmd: string): string {
  * read it from: the hook payload carries the SESSION's directory, which is
  * the value that was already wrong.
  *
- * Parenthesis-aware, because the shell is: a `cd` inside `( … )` is undone
- * by the `)`, so `(cd /a && echo) && gh issue create` files from `from` and
- * not from `/a`. `entered` is that stack.
+ * **Subshell-aware, because the shell is.** A `cd` inside `( … )` or a
+ * backtick pair is undone when that scope closes, so
+ * `(cd /a && echo) && gh issue create` files from `from` and not from `/a`.
+ * `entered` is that stack. A backtick is a TOGGLE and not an opener —
+ * backticks do not nest, so the second one pops the scope the first pushed.
+ * Pushing on both was the first spelling of this, and it leaked a
+ * command-substitution's `cd` into everything after the closing backtick.
+ *
+ * **It descends into `-c` and `eval` arguments, exactly where `clauses()`
+ * does and for the same reason.** `bash -c "cd /wt/a && gh issue create …"`
+ * is a filing — `createsIssue` sees it through that recursion — so a reader
+ * of the top-level token stream alone would detect the filing and attribute
+ * it to the session, which is the whole of #1833 reached by another route.
+ * The inner scope's directory is discarded and only a filing found inside it
+ * is kept, because a wrapper's `cd` does not outlive the wrapper.
+ *
+ * `$(…)` needs nothing: `tokenize` already emits `$` and `(` separately, so
+ * a command substitution pushes and pops through the same stack.
  *
  * ## Two documented limits, both asserted rather than assumed
  *
@@ -309,8 +324,26 @@ function heredocView(cmd: string): string {
  * the command's text. A bare `cd` IS resolvable and goes to `homedir()`.
  */
 export function filingDirectory(cmd: string, from: string): string {
+  return scanForFiling(cmd, from, 0).found ?? from;
+}
+
+/**
+ * One scope's worth of the scan: the filing's directory if this text files,
+ * and the directory the text ends in.
+ *
+ * `depth` bounds the `-c` recursion at the same 4 `clauses()` uses — a
+ * wrapper chain that deep is not an accident, and the two readers must agree
+ * about which commands exist or one of them attributes a filing the other
+ * cannot see.
+ */
+function scanForFiling(
+  cmd: string,
+  from: string,
+  depth: number,
+): { found: string | null; dir: string } {
   let dir = from;
   const entered: string[] = [];
+  let inBacktick = false;
   let clause: string[] = [];
   let found: string | null = null;
 
@@ -320,22 +353,47 @@ export function filingDirectory(cmd: string, from: string): string {
       found = dir;
       return;
     }
+    // Before the `cd`, not after: a wrapper's argument runs in the directory
+    // the wrapper was invoked from, and the clause cannot be both.
+    if (depth < 4) {
+      for (const inner of commandArguments(clause)) {
+        const nested = scanForFiling(inner, dir, depth + 1);
+        if (nested.found !== null) {
+          found = nested.found;
+          return;
+        }
+      }
+    }
     if (clause[0] === "cd") dir = cdTarget(clause.slice(1), dir);
   };
 
+  const close = (): void => {
+    settle();
+    clause = [];
+    // An unbalanced closer is a malformed command, not a reason to pop an
+    // empty stack and lose the directory the filing actually ran in.
+    if (entered.length > 0) dir = entered.pop()!;
+  };
+
   for (const t of tokenize(heredocView(cmd))) {
-    if (t === "(" || t === "`") {
+    if (t === "`") {
+      if (inBacktick) close();
+      else {
+        settle();
+        clause = [];
+        entered.push(dir);
+      }
+      inBacktick = !inBacktick;
+      continue;
+    }
+    if (t === "(") {
       settle();
       clause = [];
       entered.push(dir);
       continue;
     }
     if (t === ")") {
-      settle();
-      clause = [];
-      // An unbalanced `)` is a malformed command, not a reason to pop an
-      // empty stack and lose the directory the filing actually ran in.
-      if (entered.length > 0) dir = entered.pop()!;
+      close();
       continue;
     }
     if (SEPARATORS.has(t)) {
@@ -346,7 +404,7 @@ export function filingDirectory(cmd: string, from: string): string {
     clause.push(t);
   }
   settle();
-  return found ?? dir;
+  return { found, dir };
 }
 
 /** Where a `cd` with these arguments lands, or `dir` when it cannot be read. */

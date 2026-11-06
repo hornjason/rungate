@@ -6206,6 +6206,56 @@ describe("#1833: the filing's directory comes from the command", () => {
     expect(r.rows[0].run).toBe(runOf(sessionDir));
   });
 
+  test("FG-246: a filing inside a `-c` or `eval` wrapper is attributed to its own `cd`", async () => {
+    // Round 1 of #1835, and correct. `clauses()` descends into a `-c`
+    // argument, so `createsIssue` sees this filing and the gate proceeds —
+    // while a reader of the TOP-LEVEL token stream alone sees `bash`, `-c`
+    // and one quoted blob, finds no filing, and hands back the session.
+    // That is #1833 exactly, reached through a wrapper instead of a bare
+    // command, so the two readers have to agree about which commands exist.
+    const inner = `cd ${fromDir} && ${NOVEL_FILING}`;
+    const r = await gateFrom(`bash -c ${shellQuoted(inner)}`);
+    expect(r.rows, "the wrapper's argument is a filing, as `clauses` reads it").toHaveLength(1);
+    expect(r.rows[0].run).toBe(runOf(fromDir));
+  });
+
+  test("FG-247: a wrapper's `cd` does not outlive the wrapper", async () => {
+    // The other half of FG-246, and the reason the recursion keeps only
+    // `found`: `bash -c "cd X && echo"` leaves the parent where it was.
+    const r = await gateFrom(`bash -c ${shellQuoted(`cd ${fromDir} && echo`)} && ${NOVEL_FILING}`);
+    expect(r.rows[0].run).toBe(runOf(sessionDir));
+  });
+
+  test("FG-248: a backtick closes the scope it opened", async () => {
+    // Round 1 of #1835, and correct. Backticks do not nest, so the second
+    // one POPS what the first pushed. Treating both as openers leaked a
+    // command substitution's `cd` into everything after it — bash runs the
+    // substitution in a subshell and the parent never moves.
+    const r = await gateFrom(
+      `echo \`cd ${fromDir} && git rev-parse HEAD\` && ${NOVEL_FILING}`,
+    );
+    expect(r.rows[0].run).toBe(runOf(sessionDir));
+  });
+
+  test("FG-249: a filing INSIDE a backtick runs where the backtick put it", async () => {
+    // The control for FG-248 — the pop must not also discard a directory a
+    // filing genuinely ran in. Same two tokens, the filing on the other side
+    // of the closing backtick.
+    const r = await gateFrom(`echo \`cd ${fromDir} && ${NOVEL_FILING}\``);
+    expect(r.rows[0].run).toBe(runOf(fromDir));
+  });
+
+  test("FG-250: `$(…)` pops through the same stack", async () => {
+    // No special case: `tokenize` already emits `$` and `(` separately, so a
+    // command substitution is a balanced pair. Asserted rather than assumed,
+    // because the alternative — an unmatched `)` — pops the ENCLOSING
+    // subshell's entry and strands the directory after it.
+    const r = await gateFrom(
+      `(cd ${fromDir} && echo $(cd ${sessionDir} && pwd) && ${NOVEL_FILING})`,
+    );
+    expect(r.rows[0].run).toBe(runOf(fromDir));
+  });
+
   test("FG-245: a control row computes exactly what the pre-fix line computed", async () => {
     // The pre-fix line was `const root = options.projectRoot` — one value,
     // every input. This asserts the controls above reproduce it rather than
