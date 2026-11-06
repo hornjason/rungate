@@ -1,5 +1,5 @@
 /**
- * Covers SC-2601, SC-2603, SC-2604, SC-2605, SC-2607 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ * Covers SC-2601, SC-2602, SC-2603, SC-2604, SC-2605, SC-2607 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
  *
  * Step 4 of ADR-003: one criterion into the right number of issues.
  *
@@ -10,6 +10,7 @@
  * (`.claude/rules/checks-must-be-able-to-fail.md`, the seventh shape).
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, relative } from "path";
@@ -24,6 +25,7 @@ import {
   parseDecompositionPlan,
   planDecomposition,
 } from "../lib/issue-decomposition";
+import { readSuiteRun } from "../lib/suite-run-reading";
 
 const HEAD = ["| Criterion | Outcome | Files | Milestone | Blocked by |", "|---|---|---|---|---|"];
 
@@ -1157,3 +1159,152 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
     ).toBe(REFUSAL_EXIT);
   });
 });
+
+/**
+ * covers SC-2602 — the refusals are proved able to fail.
+ *
+ * Every case above asserts a row is REJECTED. None of them can tell a working
+ * refusal from a refusal that was never reachable, because a rejection and an
+ * absence produce the same shorter list — the thing this file's own header
+ * warns about, turned on the file itself.
+ *
+ * So the whole suite is re-run against a copy of `lib/issue-decomposition.ts`
+ * whose one rejection binding is a no-op. `reject(...)` is followed by
+ * `continue` at every site, so emptying it does not make a bad row pass: it
+ * makes the row **vanish**, which is the exact failure mode the module was
+ * written to prevent.
+ *
+ * **The membership is declared, not counted.** A total alone would be
+ * satisfied by eleven unrelated cases going red
+ * (`.claude/rules/checks-must-be-able-to-fail.md`, the seventh shape).
+ */
+const MUTANT_GUARD = "RUNGATE_DECOMPOSITION_SKIP_MUTANT";
+
+// Eleven, and SC-2602's own sentence says seven — *"the six refusal cases
+// plus the whole-reading case"*. The criterion was written from the six
+// `reject(` call sites in the source. Measured 2026-11-06, the suite names
+// eleven, and the extra four are all real:
+//
+//   - the cells check is ONE call site with TWO cases, too few and too many,
+//     so six sites are eight named refusals
+//   - `SIX values and no trailing pipe` and `TWO backslashes before a pipe`
+//     both assert a refusal as their point, through the same site
+//
+// The spec line is corrected rather than this list trimmed to match it: the
+// prediction was a count of call sites, and what a mutant can redden is a
+// count of CASES.
+const PREDICTED_RED = [
+  "REFUSED: no criterion id in the first cell",
+  "REFUSED: two criteria in one row — one row is one issue serving one criterion",
+  "REFUSED: an outcome too short to be a title",
+  "REFUSED: an outcome containing a comma — nothing could ever reference it",
+  "REFUSED: names no file — AGENTS.md rule 2 says it is not ready",
+  "REFUSED: names more than 9 files — AGENTS.md rule 3",
+  "REFUSED: too few cells to be a row at all",
+  "REFUSED: TOO MANY cells — an unescaped `|` leaked into a cell",
+  "SIX values and no trailing pipe is REFUSED, not quietly trimmed to five",
+  "TWO backslashes before a pipe: the pipe stays escaped, as GFM reads it",
+  "one bad row makes the WHOLE reading unmeasured, not a partial plan",
+];
+
+describe.skipIf(process.env[MUTANT_GUARD] === "1")(
+  "a bad row skipped instead of rejected turns the refusals red",
+  () => {
+    test("SC-2602: the skip mutant reddens exactly the declared cases", () => {
+      // The guard is the recursion stop: the copy below contains this block,
+      // and without it the mutant would spawn its own mutant forever. Assert
+      // we are the REAL run before trusting anything downstream.
+      expect(process.env[MUTANT_GUARD], "this is the unmutated run").toBeUndefined();
+
+      const root = join(import.meta.dir, "..");
+      const dir = mkdtempSync(join(tmpdir(), "rungate-decomp-skip-"));
+      try {
+        // ── the mutant source ──────────────────────────────────────────────
+        const lib = readFileSync(join(root, "lib", "issue-decomposition.ts"), "utf8");
+        const BINDING =
+          "    const reject = (why: string): void => {\n" +
+          "      rejected.push({ line: at, text: line.slice(0, 70), why });\n" +
+          "    };";
+        // An anchor that no longer matches is UNMEASURED, not a clean run:
+        // the copy would be byte-identical to the original and every case
+        // would pass, which reads exactly like a suite that cannot fail.
+        expect(
+          lib.includes(BINDING),
+          "the single rejection binding moved — this battery would copy the " +
+            "source unchanged and report a green mutant, witnessing nothing",
+        ).toBe(true);
+        // Exactly one, so no refusal can push onto `rejected` around the
+        // mutation and hold a case up that the mutant was meant to drop.
+        expect(
+          (lib.match(/rejected\.push\(/g) ?? []).length,
+          "every refusal must leave through the one binding this mutates",
+        ).toBe(1);
+        const mutantLib = join(dir, "issue-decomposition.ts");
+        writeFileSync(
+          mutantLib,
+          lib.replace(BINDING, "    const reject = (_why: string): void => {};"),
+        );
+
+        // ── the mutant suite ───────────────────────────────────────────────
+        // A copy, so every case runs against the mutant rather than a hand-
+        // picked subset. Its three relative references are rewritten to
+        // absolute ones; each rewrite is asserted, because a substitution
+        // that silently matched nothing produces a suite that fails to load,
+        // and a suite that fails to load reports zero named failures.
+        const suite = readFileSync(join(import.meta.dir, "issue-decomposition.test.ts"), "utf8");
+        // **Patterns, not the literal specifiers.** A table of plain strings
+        // rewrote ITSELF — the copy's own `'"../lib/issue-decomposition"'`
+        // entry became an absolute path inside its own quotes, and the
+        // mutant died on a syntax error: `0 pass`, which is indistinguishable
+        // from a mutant nothing could redden. An escaped pattern cannot match
+        // its own source.
+        const rewrites: [RegExp, string][] = [
+          [/from "\.\.\/lib\/issue-decomposition"/g, `from ${JSON.stringify(mutantLib)}`],
+          [
+            /from "\.\.\/scripts\/plan-issues"/g,
+            `from ${JSON.stringify(join(root, "scripts", "plan-issues.ts"))}`,
+          ],
+          [
+            /from "\.\.\/lib\/suite-run-reading"/g,
+            `from ${JSON.stringify(join(root, "lib", "suite-run-reading.ts"))}`,
+          ],
+          [/import\.meta\.dir/g, JSON.stringify(import.meta.dir)],
+        ];
+        let text = suite;
+        for (const [from, to] of rewrites) {
+          expect(from.test(text), `the copy has nothing matching ${from} to rewrite`).toBe(true);
+          from.lastIndex = 0;
+          text = text.replace(from, to);
+        }
+        const mutantSuite = join(dir, "mutant.test.ts");
+        writeFileSync(mutantSuite, text);
+
+        // ── run it ─────────────────────────────────────────────────────────
+        const r = spawnSync("bun", ["test", mutantSuite], {
+          cwd: root,
+          encoding: "utf-8",
+          env: { ...process.env, [MUTANT_GUARD]: "1" },
+        });
+        const run = readSuiteRun(`${r.stdout ?? ""}\n${r.stderr ?? ""}`);
+        // UNMEASURED first. A mutant that did not load and a mutant that
+        // passed everything are the same zero on the channel being watched.
+        expect(
+          run.status,
+          `the mutant run produced no reading: ${run.status === "UNMEASURED" ? run.reason : ""}`,
+        ).toBe("MEASURED");
+        if (run.status !== "MEASURED") return;
+        expect(run.pass, "the mutant must still execute the rest of the suite").toBeGreaterThan(0);
+
+        const red = run.failingTests.map(n => n.split(" > ").at(-1)!.trim()).sort();
+        expect(
+          red,
+          "the skip mutant must redden exactly the cases that assert a refusal, " +
+            "and nothing else — a different set means either a refusal has no " +
+            "case or a case passes for a reason unrelated to the rejection",
+        ).toEqual([...PREDICTED_RED].sort());
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  },
+);
