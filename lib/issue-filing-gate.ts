@@ -138,6 +138,7 @@ import {
   labelValues,
 } from "./issue-create-override";
 import { headingFor, missingSections, requiredSections } from "./issue-shape";
+import { asIssueFiles, overlapNote } from "./issue-file-overlap";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
 import { tryLoadRungateConfig } from "./config-loader";
@@ -3092,6 +3093,33 @@ export async function filingGate(
     // the honest filer who labels the override and the filer who reworded
     // until it passed stop producing the same ledger.
     else if (prior !== null && verdict.outcome !== "REFUSE") notes.push(refiledNote(attempt.title, prior));
+
+    // ── #1743: this body names a file an open issue already names ──────────
+    //
+    // **A NOTE, never a refusal.** `AGENTS.md` rule 2 already makes every
+    // issue name its files and nothing read them, so two issues rewriting one
+    // file both sit in the pickable set with nothing saying so. Measured over
+    // the 20 milestone-less open issues on 2026-11-03: 16 declare a file, 10
+    // pairs overlap, and four of them — #1407, #1425, #1585, #1355 — rewrite
+    // the same one.
+    //
+    // A refusal here would be wrong twice. It would argue with every second
+    // issue about a busy file, and it would be a reading about OTHER issues
+    // deciding whether THIS one may exist. The gate's refusals are all about
+    // the filing in hand.
+    //
+    // **Only on a clause that is actually filing**, and only on a MEASURED
+    // corpus. A warning derived from a tracker nobody could read would be a
+    // reading presented as a fact — `unmeasuredNote` above already says the
+    // corpus was unreadable, and saying "no overlap" in the same breath is
+    // the silent default `.claude/rules/config-access.md` names.
+    if (cleared) {
+      const corpus = await readFor(attempt.repo);
+      if (corpus.reading === "MEASURED") {
+        const note = overlapNote(finding.body, asIssueFiles(corpus.findings));
+        if (note !== null) notes.push(note);
+      }
+    }
   }
 
   // ── A refusal blocks the COMMAND, and every clean clause is NAMED in the

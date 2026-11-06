@@ -104,6 +104,13 @@
       "from": 2630,
       "to": 2631,
       "note": "#1038 - commits that exist on this machine and nowhere else. Exactly the two ids consumed rather than a block of twenty: PROJECT-STATE.md on main names SC-2636 as the board-identifier config reader and no block reserves it, so a wider block would have squatted on a published plan's id without colliding with anything a diff could show. 2600-2629 (rg/pipeline-spec) is the highest declared block. Delete when the PR merges."
+    },
+    {
+      "owner": "rg/1743-file-overlap",
+      "from": 225,
+      "to": 254,
+      "namespace": "FG",
+      "note": "#1743 - two issues editing the same file both sit in the pickable set with nothing saying so. FG-224 is the highest id on main (rg/1741-issue-shape's 216-245 block was pruned when #1808 merged, and those ids are SPENT rather than freed) and FG-100..119 is the highest declared block, so this sits above both, which is what the allocator would hand an owner who has none. FG has no allocator, so this is the eyeballed-headroom method .claude/rules/parallel-sessions.md names, declared before any id is consumed. Cannot be pushed to main ahead of the branch (main requires the `test` and `ai-review` checks with enforce_admins on), so it reaches main through this PR. Delete when the PR merges."
     }
   ]
 }
