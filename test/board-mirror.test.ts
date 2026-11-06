@@ -790,6 +790,20 @@ describe("#1647: the Ready lane", () => {
   });
 });
 
+/**
+ * ## The mutation battery on `splitReadyChanges`
+ *
+ *   mutant                                         reading   predicted
+ *   the cap ignored entirely                         5          4
+ *   demotions dropped from writable                  2          2
+ *   demotions capped too (the naive version)         2          1
+ *
+ * Two misses, both low, both the same arithmetic error I keep making:
+ * counting the cases that NAME a behaviour and forgetting the ones that
+ * assert it incidentally. Row 1 also reddens the unmeasured-depth case;
+ * row 3 also reddens the phase-ordering case, because capping the
+ * demotions changes how many slots the promotions see.
+ */
 describe("SC-2722: the hand-run writer fills to the same depth as the workflow", () => {
   const c = (number: number, phase: number | null, to: string) => ({ item: { number, phase }, to });
   const promote = (n: number) => c(n, 0, "Ready");
