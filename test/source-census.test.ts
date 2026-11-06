@@ -127,6 +127,20 @@ describe("SC-2732: the population includes files in subdirectories", () => {
 describe("SC-2733: every census over lib/ and scripts/ reads one lister", () => {
   const ROOT = join(import.meta.dir, "..");
 
+  /**
+   * Three spellings of "glue a directory in front of a path the lister
+   * already returned". ai-review round 3 of #1803 asked for more than the
+   * template literal, and was right that the first version named one
+   * spelling for a semantic defect — the shape this repository keeps
+   * writing. It is still a spelling list and not a type, so the failure
+   * message says which three, rather than implying the set is closed.
+   */
+  const REPREFIX = [
+    /`[^`]*\/\$\{/, //            `scripts/${path}`
+    /["'][^"']*\/["']\s*\+/, //   "scripts/" + path
+    /\bjoin\(\s*["'][^"']+["']\s*,/, // join("scripts", path)
+  ];
+
   // The four that scanned flat, found by enumerating rather than assuming:
   // two were named in the finding, `test/live-issues.test.ts` was not, and
   // `test/selection-path-safety.test.ts` declares its narrowness in its own
@@ -161,33 +175,49 @@ describe("SC-2733: every census over lib/ and scripts/ reads one lister", () => 
   // Swept rather than assumed: five call sites across four files, one
   // affected. The surviving match set is empty, and a re-prefix at any
   // caller puts it back.
+  //
+  // **Its own population comes from the lister**, which ai-review round 3
+  // of #1803 is why: the first spelling was a flat
+  // `readdirSync(join(ROOT, "test"))`, so the ~70 files under `test/unit/`
+  // were outside the scan — this PR's exact defect, written into the guard
+  // against it while writing it, by someone who had the rule open. A guard
+  // over a population must take the population the same way everything
+  // else does.
   test("no caller of the shared lister re-prefixes a returned path", () => {
-    const callers = readdirSync(join(ROOT, "test"))
-      .filter(f => f.endsWith(".test.ts"))
-      .filter(f => readFileSync(join(ROOT, "test", f), "utf-8").includes("lib/source-census"));
+    const callers = sourceFiles(ROOT, ["test"], { ext: ".test.ts" }).filter(p =>
+      readFileSync(join(ROOT, p), "utf-8").includes("lib/source-census"),
+    );
     expect(callers.length, "nothing imports the lister, so this scan is vacuous").toBeGreaterThan(3);
+    expect(
+      sourceFiles(ROOT, ["test"], { ext: ".test.ts" }).filter(p => p.split("/").length > 2).length,
+      "no nested test file is in this scan's own population, so it has gone flat again",
+    ).toBeGreaterThan(10);
     const offenders: string[] = [];
     for (const f of callers) {
-      const src = readFileSync(join(ROOT, "test", f), "utf-8");
+      const src = readFileSync(join(ROOT, f), "utf-8");
       for (const line of src.split("\n")) {
-        const t = line.trim();
-        // Comment lines are skipped, and this very case is why: the
-        // paragraph above quotes the offending expression, so a scan over
-        // raw text reports the explanation as the defect. A real offender
-        // written inside a comment is therefore missed — declared, not
+        // Comments are cut, whole-line and trailing both, and this case is
+        // why: the paragraphs here quote every offending spelling, so a
+        // scan over raw text reports its own explanation as the defect —
+        // first the docblock, then the three patterns' own examples. The
+        // cut needs the space before `//` so a `https://` survives it. A
+        // real offender written inside a comment is missed; declared, not
         // discovered later.
+        const t = line.trim().replace(/\s\/\/.*$/, "");
         if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) continue;
         // Composed without a template literal on purpose: this file is in
         // its own population, and the first spelling reported its own
         // offender label. Exempting the scanner would have been the wrong
         // fix — a scan that cannot see itself is one nobody can trust.
-        if (/`[^`]*\/\$\{/.test(t)) offenders.push(join("test", f) + ": " + t);
+        if (REPREFIX.some(re => re.test(t))) offenders.push(f + ": " + t);
       }
     }
     expect(
       offenders,
       "sourceFiles returns a repo-relative path, so prefixing it with a directory emits " +
-        "scripts/scripts/foo.ts. Push the value as it came.",
+        "scripts/scripts/foo.ts. Push the value as it came. This scan reads three " +
+        "spellings — a template literal, a string concatenation and a join() — and not " +
+        "a path composed any other way.",
     ).toEqual([]);
   });
 
