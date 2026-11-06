@@ -33,6 +33,7 @@ import {
 } from "../evals/ai-review-control/variance-capture";
 import { quantityKeys, type Finding } from "../lib/finding-arbiter";
 import { adjudicateFiling, EXEMPTION_PREFIX, measuredCorpus } from "../lib/issue-filing-gate";
+import { headingFor, requiredSections } from "../lib/issue-shape";
 
 /**
  * Both bodies name a `SUCCESS.md` claim, and the reason is the hold-out
@@ -61,20 +62,36 @@ import { adjudicateFiling, EXEMPTION_PREFIX, measuredCorpus } from "../lib/issue
  * in the file did, which is exactly the population that depends on a replay
  * being ALLOWed in the base run.
  */
+/**
+ * The sections every issue form requires, derived (#1741).
+ *
+ * The replay of `EXISTING[0]` must be ALLOWed in the base run, or the twinned
+ * run withholds exactly what the base run did and the hashes match — the
+ * control then detects nothing while reporting a clean comparison. That is
+ * the third time a stage added to `adjudicateFiling` has emptied this file's
+ * allowed set; `PLANT_CLAIM_LINE` and `PLANT_EXEMPTION_LINE` in
+ * `evals/ai-review-control/variance-capture.ts` are the first two, and both
+ * docblocks say the same thing about a zero from an instrument that stopped
+ * reporting.
+ */
+const FORM_SECTIONS = requiredSections("everyday-work")
+  .map(s => `${headingFor(s)}\n\nx\n`)
+  .join("\n");
+
 const EXISTING: Finding[] = [
   {
     id: "900",
     title: "`loadThing` returns the wrong count and the off-by-one is silent",
     body:
       "`loadThing()` in `lib/thing.ts` reports 41 rows where the fixture holds 42. " +
-      `Measured 41 against 42. Claim 1. ${EXEMPTION_PREFIX} out-of-pr-diff`,
+      `Measured 41 against 42. Claim 1. ${EXEMPTION_PREFIX} out-of-pr-diff\n\n${FORM_SECTIONS}`,
   },
   {
     id: "901",
     title: "the scaffold crashes when `roles.json` is absent",
     body:
       "`scaffoldProject()` in `lib/scaffold-project.ts` throws on a tree with no roles file. " +
-      `3 of 7 consumers. Claim 1. ${EXEMPTION_PREFIX} out-of-pr-diff`,
+      `3 of 7 consumers. Claim 1. ${EXEMPTION_PREFIX} out-of-pr-diff\n\n${FORM_SECTIONS}`,
   },
 ];
 
