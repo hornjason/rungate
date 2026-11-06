@@ -317,6 +317,23 @@ describe("FO-50: what is NOT a path", () => {
     expect(paths("- `package.json`", "- `AGENTS.md`")).toEqual(["package.json", "AGENTS.md"]);
   });
 
+  test("FO-55: a bullet naming two paths declares BOTH", () => {
+    // Round three's finding. The reader took the first backticked span and
+    // dropped the rest, silently, on a line that was perfectly clear —
+    // within the under-read bias, but a different failure from the two
+    // misses below and not one that bias was meant to excuse.
+    expect(paths("- `lib/a.ts` and `test/a.test.ts`")).toEqual([
+      "lib/a.ts",
+      "test/a.test.ts",
+    ]);
+  });
+
+  test("FO-56: a backticked span that is not a path drops, the one beside it stays", () => {
+    // Taking every span cannot become taking every span UNCHECKED: the
+    // per-candidate rule still runs on each.
+    expect(paths("- `lib/a.ts`, roughly `2.0` worth of work")).toEqual(["lib/a.ts"]);
+  });
+
   test("FO-53: `N/A` is not a file, and it is the likeliest wrong input there is", () => {
     // The files section is REQUIRED and `missingSections` demands content
     // under the heading, so `N/A` is exactly what somebody writes when they

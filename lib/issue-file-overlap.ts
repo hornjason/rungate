@@ -79,8 +79,7 @@ const FILES_HEADING = headingFor(FILES_SECTION);
 export function declaredFiles(body: string): string[] {
   const out: string[] = [];
   for (const line of filesSectionLines(body)) {
-    const path = pathOnLine(line);
-    if (path !== null && !out.includes(path)) out.push(path);
+    for (const path of pathsOnLine(line)) if (!out.includes(path)) out.push(path);
   }
   return out;
 }
@@ -107,10 +106,18 @@ function filesSectionLines(body: string): string[] {
 /**
  * The path a list line names, or null when the line is prose.
  *
- * ONE rule, and it took two review rounds to get to it: a single word ending
- * in an alphabetic extension of two to five characters, over a last segment
- * that contains a letter. A `/` is allowed anywhere and proves nothing on its
- * own.
+ * ONE rule for what a path is, and it took two review rounds to get to it: a
+ * single word ending in an alphabetic extension of two to five characters,
+ * over a last segment that contains a letter. A `/` is allowed anywhere and
+ * proves nothing on its own.
+ *
+ * **EVERY backticked span on the line, not the first.** Round three: a bullet
+ * reading ``- `lib/a.ts` and `test/a.test.ts` `` declared two files and the
+ * reader took one, silently. Within the stated bias — a missed path costs a
+ * warning nobody gets — but it is a partial read of a line that was perfectly
+ * clear, which is a different failure from the two below and not one the bias
+ * was meant to excuse. `FO-55`. A line with no backticks at all is still read
+ * whole, so `FO-2`'s bare `lib/a.ts` is untouched.
  *
  * ## Why not two rules
  *
@@ -147,15 +154,18 @@ function filesSectionLines(body: string): string[] {
  * report against a file that is not there, which is how the channel becomes
  * noise people skip.
  */
-function pathOnLine(line: string): string | null {
+function pathsOnLine(line: string): string[] {
   const bare = line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").trim();
-  const quoted = /`([^`]+)`/.exec(bare);
-  const candidate = quoted !== null ? quoted[1].trim() : bare;
+  const quoted = [...bare.matchAll(/`([^`]+)`/g)].map(m => m[1].trim());
+  const candidates = quoted.length > 0 ? quoted : [bare];
 
-  if (candidate === "" || /\s/.test(candidate)) return null;
-  if (!/[A-Za-z][^/]*\.[A-Za-z]{2,5}$/.test(candidate)) return null;
+  return candidates.filter(isPath).map(c => c.replace(/^\.\//, ""));
+}
 
-  return candidate.replace(/^\.\//, "");
+/** One word, ending in an alphabetic extension over a segment with a letter. */
+function isPath(candidate: string): boolean {
+  if (candidate === "" || /\s/.test(candidate)) return false;
+  return /[A-Za-z][^/]*\.[A-Za-z]{2,5}$/.test(candidate);
 }
 
 /**
