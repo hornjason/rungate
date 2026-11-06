@@ -1,3 +1,6 @@
+import { homedir } from "os";
+import { join, resolve } from "path";
+
 import { interpreterPrograms, stripHeredocs } from "./bash-write-guard";
 
 /**
@@ -269,6 +272,92 @@ function heredocView(cmd: string): string {
     stripHeredocs(cmd, false),
     ...interpreterPrograms(cmd).map(p => p.program),
   ].join("\n");
+}
+
+/**
+ * The directory the first `gh issue create` in this command runs in (#1833).
+ *
+ * **An issue is a repository object, so nothing about a filing may depend on
+ * the session that happened to type it.** The gate used to hand every stage
+ * `process.cwd()` — the directory the HOOK was spawned in, which is the
+ * session's launch directory and not the command's. Measured 2026-11-06: one
+ * `gh issue create` run in `rg-wt-1675` was attributed to `rg-wt-threads2`,
+ * named a branch the command never touched, and reported a 735-byte
+ * `--body-file` as unreadable because it looked for it in the other checkout.
+ *
+ * **The directory is IN the command, and that is not a coincidence.** This
+ * repository forbids a top-level `cd` (`hooks/TopLevelCdGuard.hook.ts`), so
+ * every command that runs somewhere other than the session's directory
+ * spells that directory out — `(cd <path> && …)`. There is nowhere else to
+ * read it from: the hook payload carries the SESSION's directory, which is
+ * the value that was already wrong.
+ *
+ * Parenthesis-aware, because the shell is: a `cd` inside `( … )` is undone
+ * by the `)`, so `(cd /a && echo) && gh issue create` files from `from` and
+ * not from `/a`. `entered` is that stack.
+ *
+ * ## Two documented limits, both asserted rather than assumed
+ *
+ * **One answer per command, taken at the FIRST filing.** A command filing
+ * twice from two different directories would need two, and no such command
+ * has ever been written here; one binding that is sometimes coarse beats two
+ * that can disagree (`.claude/rules/checks-must-be-able-to-fail.md`, the
+ * fourth shape).
+ *
+ * **A `cd` this cannot resolve leaves the directory alone.** `cd -` is the
+ * only such spelling — it needs `OLDPWD`, which is the shell's state and not
+ * the command's text. A bare `cd` IS resolvable and goes to `homedir()`.
+ */
+export function filingDirectory(cmd: string, from: string): string {
+  let dir = from;
+  const entered: string[] = [];
+  let clause: string[] = [];
+  let found: string | null = null;
+
+  const settle = (): void => {
+    if (found !== null || clause.length === 0) return;
+    if (createsIssue(clause)) {
+      found = dir;
+      return;
+    }
+    if (clause[0] === "cd") dir = cdTarget(clause.slice(1), dir);
+  };
+
+  for (const t of tokenize(heredocView(cmd))) {
+    if (t === "(" || t === "`") {
+      settle();
+      clause = [];
+      entered.push(dir);
+      continue;
+    }
+    if (t === ")") {
+      settle();
+      clause = [];
+      // An unbalanced `)` is a malformed command, not a reason to pop an
+      // empty stack and lose the directory the filing actually ran in.
+      if (entered.length > 0) dir = entered.pop()!;
+      continue;
+    }
+    if (SEPARATORS.has(t)) {
+      settle();
+      clause = [];
+      continue;
+    }
+    clause.push(t);
+  }
+  settle();
+  return found ?? dir;
+}
+
+/** Where a `cd` with these arguments lands, or `dir` when it cannot be read. */
+function cdTarget(args: string[], dir: string): string {
+  const path = args.filter(a => !a.startsWith("-"));
+  if (path.length === 0) return args.includes("-") ? dir : homedir();
+  if (path.length > 1) return dir;
+  const target = path[0];
+  if (target === "~") return homedir();
+  if (target.startsWith("~/")) return join(homedir(), target.slice(2));
+  return resolve(dir, target);
 }
 
 /** Arguments of this clause that are themselves commands. */
