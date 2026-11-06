@@ -18,9 +18,14 @@ const census = (over: Partial<LaneCensus> = {}): LaneCensus => ({
   pickable: 34,
   openAssigned: 9,
   cancelledClosed: 23,
-  // The live reading of 2026-11-05: 237 issues delivered over 14 days, so a
-  // cap of 8. Typed out as a measurement rather than imported, so a mutation
-  // of `readyCap` has to break this file too and not just its own.
+  offBoard: 0,
+  // A FIXTURE, not a measurement. It was labelled "the live reading of
+  // 2026-11-05: 237 issues delivered over 14 days, so a cap of 8" — and
+  // that reading does not reproduce. Paging every closed issue with a
+  // `closedAt` gives 9 over 7 days, 132 over 14 and 646 over 30, so the
+  // live depth is 4. The number below is kept because the cases are
+  // written against it, and relabelled because a comment claiming a
+  // provenance it does not have is worse than no comment.
   throughput: { delivered: 237, days: 14 },
   complete: true,
   ...over,
@@ -196,19 +201,34 @@ describe("a lane count is only a reading against what should be in it", () => {
     expect(by(census({ cancelledClosed: 0 }), "Cancelled").health).toBe("OK");
   });
 
-  // ## Finding 3 — the denominator must count the same population
+  // ## Finding 3, and its reversal
   //
-  // `pickable` is repo-wide while the lane counts are board-only, so an
-  // unblocked unclaimed issue that is not on the board inflates the gap.
-  // "29 are missing from Ready" would overstate by however many eligible
-  // issues the board has never held.
-  test("SC-2670: a denominator from a wider population than the lane says so", () => {
-    const line = laneHealthLines([by(census(), "Ready")])[0]!;
+  // This asserted the opposite: that a repo-wide denominator must DECLARE
+  // the mismatch in its label. It was satisfied by the word "repo-wide",
+  // and the row was still misread — `Cancelled 0 of 23 UNWRITTEN — nothing
+  // writes it` reads as a broken writer no matter what the label says. A
+  // declared mismatch is still a mismatch; the populations now agree
+  // instead, and the membership signal the old denominators carried has
+  // its own line (SC-2730).
+  test("SC-2730: no lane declares a denominator from a wider population", () => {
+    for (const lane of LANES) {
+      const r = by(census(), lane);
+      if (r.against === null) continue;
+      expect(
+        r.why,
+        `${lane} compares a board count against a population the board does not hold, so its ` +
+          `gap names work no lane writer could move`,
+      ).not.toMatch(/repo-wide|whole repository/i);
+    }
+  });
+
+  test("SC-2730: the membership signal survives as its own reading", () => {
+    expect(laneHealthLines([], 4).at(-1)).toContain("NOT on the board");
+    expect(laneHealthLines([], 0).at(-1)).toContain("every open issue is on the board");
     expect(
-      line + by(census(), "Ready").why,
-      "the lane counts board items and `pickable` counts the whole repository. A gap " +
-        "computed across two populations must declare it rather than read as exact.",
-    ).toMatch(/repo-wide|whole repository|not on the board/i);
+      laneHealthLines([], null).at(-1),
+      "unread and none-missing must not spell the same",
+    ).toContain("UNMEASURED");
   });
 
   // ## Round 1, finding 2 (ai-review) and findings 1+2 of the pushed-commit
@@ -312,7 +332,8 @@ describe("a lane count is only a reading against what should be in it", () => {
     const rs = laneHealth(census());
     expect(rs.map(r => r.lane)).toEqual([...LANES]);
     const lines = laneHealthLines(rs);
-    expect(lines.length).toBe(LANES.length);
+    // Lanes, then the membership line, which belongs to no lane.
+    expect(lines.length).toBe(LANES.length + 1);
     for (const lane of LANES) {
       expect(lines.some(l => l.includes(lane)), `${lane} is missing from the printed report`).toBe(true);
     }

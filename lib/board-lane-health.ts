@@ -79,9 +79,33 @@ export type LaneHealth =
 export interface LaneCensus {
   /** Lane name to the number of items the board shows in it. */
   readonly counts: ReadonlyMap<string, number>;
-  /** Open issues that are unblocked and unclaimed. */
+  /**
+   * Open issues that are unblocked and unclaimed **on this board**.
+   *
+   * Board-scoped like the others. Today the cap hides the difference —
+   * `readyTarget` takes the smaller of this and the depth, and this is far
+   * the larger — but a board holding fewer pickable issues than the cap
+   * would read SHORT against work that does not exist.
+   */
   readonly pickable: number;
-  /** Open issues with at least one assignee. */
+  /**
+   * Open issues the board does not hold at all, or `null` when unknown.
+   *
+   * **The signal the repo-wide denominators used to carry.** It is a fact
+   * about membership rather than about any lane, so it is reported on its
+   * own line instead of inflating every gap. Nothing a lane writer does
+   * can change it; what changes it is adding the issue to the board.
+   */
+  readonly offBoard: number | null;
+  /**
+   * Open issues with at least one assignee **that are on this board**.
+   *
+   * Scoped for the same reason `cancelledClosed` is: the numerator counts
+   * board items, so a denominator counting repository issues reports a gap
+   * no writer could close. Read repo-wide it said `In progress 1 of 10`
+   * while the board held far fewer assigned issues than the repository did
+   * (SC-2730).
+   */
   readonly openAssigned: number;
   /**
    * Issues **on this board** closed as `NOT_PLANNED` or `DUPLICATE`, or
@@ -149,13 +173,25 @@ export interface LaneReading {
 /**
  * The denominator for each lane that has one, and why it is that one.
  *
- * **Every label says the denominator is repo-wide.** The numerator counts
- * items on the BOARD and all three denominators count the whole repository,
- * so an eligible issue the board has never held inflates the gap. Security
- * review of the pushed commit, finding 3. Scoping the denominators to board
- * items would hide the more important failure — an eligible issue that
- * never reached the board at all — so the populations stay as they are and
- * the reading declares the mismatch instead of pretending to be exact.
+ * ## The denominators are board-scoped, reversing an earlier decision
+ *
+ * They were repo-wide, deliberately: the security review of the pushed
+ * commit (finding 3) argued that scoping them to board items would hide a
+ * more important failure — an eligible issue that never reached the board
+ * at all — so the mismatch was declared rather than removed.
+ *
+ * **That traded a readable row for an unreadable one, and the cost showed
+ * up on 2026-11-05.** The Cancelled row read `0 of 23 UNWRITTEN — nothing
+ * writes it`, which says the writer is broken. The writer was fine; all 23
+ * were issues the board had never held. A row whose two numbers describe
+ * different populations cannot be read correctly by anyone, and declaring
+ * the mismatch in a label does not fix that — the label said "repo-wide"
+ * the whole time and the row was still misread, by me, for a day.
+ *
+ * The earlier concern was right about the failure being important and
+ * wrong about where it belongs: **it is a fact about board MEMBERSHIP, not
+ * about any lane.** It is now its own reading — `offBoard` — so both
+ * survive and neither is inferred from the other. One row, one population.
  *
  * `undefined` means this lane has no denominator; `null` inside one means
  * the denominator exists but could not be read.
@@ -173,11 +209,13 @@ function target(lane: string, c: LaneCensus): { against: number | null; label: s
       label:
         cap === null
           ? "throughput, which Ready's depth is derived from,"
-          : `allowed in the queue — ${c.pickable} unblocked and unclaimed repo-wide, capped at a ` +
+          : `allowed in the queue — ${c.pickable} unblocked and unclaimed on this board, capped at a ` +
             `depth of ${cap} derived from ${READY_TOLERANCE_DAYS} day(s) of live throughput`,
     };
   }
-  if (lane === "In progress") return { against: c.openAssigned, label: "open and assigned, repo-wide" };
+  if (lane === "In progress") {
+    return { against: c.openAssigned, label: "on this board are open and assigned" };
+  }
   if (lane === "Cancelled") {
     return {
       against: c.cancelledClosed,
@@ -312,9 +350,25 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
  * missing from the printed output is the failure this exists to catch, and
  * it is invisible when the formatting lives inside the I/O.
  */
-export function laneHealthLines(readings: readonly LaneReading[]): string[] {
-  return readings.map(r => {
+export function laneHealthLines(
+  readings: readonly LaneReading[],
+  offBoard: number | null = null,
+): string[] {
+  const lines = readings.map(r => {
     const against = r.against === null ? "" : ` of ${r.against}`;
     return `  ${r.lane.padEnd(12)} ${String(r.count).padStart(4)}${against.padEnd(8)} ${r.health.padEnd(11)} ${r.why}`;
   });
+  // **Printed whatever it reads, including zero.** Omitting the line when
+  // nothing is off the board makes "none are missing" and "nobody looked"
+  // the same output, which is the distinction every other row here exists
+  // to keep (SC-2730). `null` is the third state and says so.
+  lines.push(
+    offBoard === null
+      ? `  (board membership UNMEASURED — whether any open issue is missing from the board was not read)`
+      : offBoard === 0
+        ? `  every open issue is on the board`
+        : `  ${offBoard} open issue(s) are NOT on the board at all — no lane writer can move them, ` +
+          `and no row above counts them`,
+  );
+  return lines;
 }

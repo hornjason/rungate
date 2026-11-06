@@ -493,14 +493,25 @@ if (closedReadings === null) {
 const cancelledClosed: number | null = closedReadings === null ? null : abandonedOnBoard;
 const throughput: Throughput | null = closedReadings?.throughput ?? null;
 
+const offBoardCount = open.filter((i: any) => !i.pull_request && !status.has(i.number)).length;
+
 const laneReadings = laneHealth({
   counts: laneCounts,
-  pickable: pickable.length,
-  openAssigned: open.filter((i: any) => !i.pull_request && (i.assignees ?? []).length > 0).length,
+  pickable: pickable.filter((i: any) => status.has(i.number)).length,
+  // **On the board, for the same reason Cancelled is.** An assigned issue
+  // that was never added to the project cannot appear in the In progress
+  // lane however well the writer works, so counting it reports a gap no
+  // writer could close — the sibling of the Cancelled defect, found by
+  // reading the row right above it rather than by a second review round
+  // (SC-2730).
+  openAssigned: open.filter(
+    (i: any) => !i.pull_request && (i.assignees ?? []).length > 0 && status.has(i.number),
+  ).length,
+  offBoard: offBoardCount,
   cancelledClosed,
   throughput,
   complete: !truncated && status.size > 0,
 });
-for (const line of laneHealthLines(laneReadings)) console.log(line);
+for (const line of laneHealthLines(laneReadings, offBoardCount)) console.log(line);
 
 console.log("\n  Nothing above was remembered. Re-run to re-read.");
