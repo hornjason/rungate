@@ -61,6 +61,7 @@ import {
   SUCCESS_CLAIM_COUNT,
   trustedCorpus,
   unmeasuredCorpus,
+  UNRESOLVED_COMMENT_TARGET,
   withTimeout,
   FILING_OVERRIDE_LABEL,
   LEDGER_SESSION_ENV,
@@ -97,7 +98,7 @@ import {
   type CommentTarget,
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
-import { API_BOOLEAN_FLAGS } from "../lib/issue-create-override";
+import { API_BOOLEAN_FLAGS, filingDirectory } from "../lib/issue-create-override";
 import { decomposedBody } from "../lib/issue-decomposition";
 import {
   ISSUE_SECTIONS,
@@ -6089,5 +6090,184 @@ describe("FG-225..FG-231: a filing is told when an open issue names the same fil
 
     expect(r.refusal, "the premise: something else refused it").not.toBeNull();
     expect(r.note ?? "").not.toContain("--add-blocked-by");
+  });
+});
+
+/**
+ * #1833 — a filing resolves from where the COMMAND ran, not from the session.
+ *
+ * An issue is a repository object. GitHub never sees the filer's branch, so
+ * no part of a filing's outcome may depend on which checkout the session
+ * happened to be launched in. The gate handed every stage `process.cwd()`;
+ * measured 2026-11-06, one `gh issue create` run in `rg-wt-1675` was
+ * attributed to `rg-wt-threads2`, named a branch the command never touched,
+ * and called a 735-byte `--body-file` unreadable because it looked for it in
+ * the other checkout.
+ *
+ * **Every case here sets the session directory to a DIFFERENT checkout from
+ * the one the command runs in.** That is the whole design: if the two are
+ * ever read from one source again, these rows cannot stay green — there is
+ * no value a single source could return that satisfies both the case and its
+ * control.
+ *
+ * The controls are not approximations of the old code. `filingDirectory`
+ * returns the fallback for a command with no `cd`, so a control row computes
+ * `root === sessionDir`, which is byte-for-byte what the pre-fix line
+ * produced for every input. `FG-245` asserts that equivalence rather than
+ * leaving it as a claim in this comment.
+ */
+describe("#1833: the filing's directory comes from the command", () => {
+  const AT = "2026-11-06T18:00:00.000Z";
+  /** Where the command runs. */
+  let fromDir: string;
+  /** What the caller passes as `projectRoot` — the session's launch directory. */
+  let sessionDir: string;
+
+  beforeAll(() => {
+    fromDir = join(scratch, "filed-from");
+    sessionDir = join(scratch, "session-elsewhere");
+    for (const dir of [fromDir, sessionDir]) {
+      mkdirSync(dir, { recursive: true });
+      checkoutAt(dir);
+    }
+    expect(runOf(fromDir), "two checkouts, or every row below is vacuous").not.toBe(
+      runOf(sessionDir),
+    );
+  });
+
+  /** The novel filing, optionally wrapped in a subshell `cd`. */
+  const filedFrom = (dir: string | null, filing: string = NOVEL_FILING) =>
+    dir === null ? filing : `(cd ${dir} && ${filing})`;
+
+  const gateFrom = (cmd: string) =>
+    filingGate(cmd, {
+      projectRoot: sessionDir,
+      now: AT,
+      readExisting: async () => measuredCorpus([]),
+      readTarget: async () => UNRESOLVED_COMMENT_TARGET,
+      ...noCap,
+    });
+
+  test("FG-240: the run is the checkout the command ran in", async () => {
+    const r = await gateFrom(filedFrom(fromDir));
+    expect(r.rows, "one clause, one row").toHaveLength(1);
+    expect(r.rows[0].run).toBe(runOf(fromDir));
+  });
+
+  test("FG-241 CONTROL: with no `cd`, the run is the session's checkout", async () => {
+    // The only axis that moves between this row and FG-240 is whether the
+    // command names a directory. Both are run with the SAME `projectRoot`,
+    // so neither row can be satisfied by reading one of them twice.
+    const r = await gateFrom(filedFrom(null));
+    expect(r.rows[0].run).toBe(runOf(sessionDir));
+    expect(r.rows[0].run, "and that is not the other checkout").not.toBe(runOf(fromDir));
+  });
+
+  test("FG-242: a relative `--body-file` resolves against the command's directory", async () => {
+    // The same relative NAME in both checkouts would let a case pass by
+    // reading the wrong one, so it exists in exactly one of them — and the
+    // observable is positive: only a body that WAS read declares an
+    // exemption and names a claim, and only that combination is allowed.
+    const name = "finding-240.md";
+    writeFileSync(join(fromDir, name), NOVEL_BODY);
+    const cmd = filedFrom(
+      fromDir,
+      `gh issue create --title "pullRequestCache is never invalidated" --body-file ${name}`,
+    );
+    const r = await gateFrom(cmd);
+    expect(r.rows[0].refusal, "the body was read, so the filing stands on its own merits").toBeNull();
+    expect(r.refusal ?? "", "and nothing said it could not be read").not.toContain(
+      "could not be read",
+    );
+  });
+
+  test("FG-243 CONTROL: the same name in the SESSION's checkout is not read", async () => {
+    // Identical bytes, identical relative name, one directory over. If the
+    // gate still resolved from the session this row would be green for the
+    // same reason FG-242 is, and the pair would be measuring nothing.
+    const name = "finding-241.md";
+    writeFileSync(join(sessionDir, name), NOVEL_BODY);
+    const cmd = filedFrom(
+      fromDir,
+      `gh issue create --title "pullRequestCache is never invalidated" --body-file ${name}`,
+    );
+    const r = await gateFrom(cmd);
+    expect(r.rows[0].refusal, "absent from the directory the command ran in").toBe("UNMEASURED");
+    expect(r.note ?? "", "and the note names the file it could not open").toContain(
+      `the body file \`${name}\` could not be read`,
+    );
+  });
+
+  test("FG-244: a `cd` the shell would undo does not move the filing", async () => {
+    // `(cd X && …) && gh issue create` runs the filing where it started.
+    // Parenthesis-aware, because the shell is — and because the alternative
+    // is a parser that attributes a filing to a directory it never saw.
+    const r = await gateFrom(`(cd ${fromDir} && echo planted) && ${NOVEL_FILING}`);
+    expect(r.rows[0].run).toBe(runOf(sessionDir));
+  });
+
+  test("FG-246: a filing inside a `-c` or `eval` wrapper is attributed to its own `cd`", async () => {
+    // Round 1 of #1835, and correct. `clauses()` descends into a `-c`
+    // argument, so `createsIssue` sees this filing and the gate proceeds —
+    // while a reader of the TOP-LEVEL token stream alone sees `bash`, `-c`
+    // and one quoted blob, finds no filing, and hands back the session.
+    // That is #1833 exactly, reached through a wrapper instead of a bare
+    // command, so the two readers have to agree about which commands exist.
+    const inner = `cd ${fromDir} && ${NOVEL_FILING}`;
+    const r = await gateFrom(`bash -c ${shellQuoted(inner)}`);
+    expect(r.rows, "the wrapper's argument is a filing, as `clauses` reads it").toHaveLength(1);
+    expect(r.rows[0].run).toBe(runOf(fromDir));
+  });
+
+  test("FG-247: a wrapper's `cd` does not outlive the wrapper", async () => {
+    // The other half of FG-246, and the reason the recursion keeps only
+    // `found`: `bash -c "cd X && echo"` leaves the parent where it was.
+    const r = await gateFrom(`bash -c ${shellQuoted(`cd ${fromDir} && echo`)} && ${NOVEL_FILING}`);
+    expect(r.rows[0].run).toBe(runOf(sessionDir));
+  });
+
+  test("FG-248: a backtick closes the scope it opened", async () => {
+    // Round 1 of #1835, and correct. Backticks do not nest, so the second
+    // one POPS what the first pushed. Treating both as openers leaked a
+    // command substitution's `cd` into everything after it — bash runs the
+    // substitution in a subshell and the parent never moves.
+    const r = await gateFrom(
+      `echo \`cd ${fromDir} && git rev-parse HEAD\` && ${NOVEL_FILING}`,
+    );
+    expect(r.rows[0].run).toBe(runOf(sessionDir));
+  });
+
+  test("FG-249: a filing INSIDE a backtick runs where the backtick put it", async () => {
+    // The control for FG-248 — the pop must not also discard a directory a
+    // filing genuinely ran in. Same two tokens, the filing on the other side
+    // of the closing backtick.
+    const r = await gateFrom(`echo \`cd ${fromDir} && ${NOVEL_FILING}\``);
+    expect(r.rows[0].run).toBe(runOf(fromDir));
+  });
+
+  test("FG-250: `$(…)` pops through the same stack", async () => {
+    // No special case: `tokenize` already emits `$` and `(` separately, so a
+    // command substitution is a balanced pair. Asserted rather than assumed,
+    // because the alternative — an unmatched `)` — pops the ENCLOSING
+    // subshell's entry and strands the directory after it.
+    const r = await gateFrom(
+      `(cd ${fromDir} && echo $(cd ${sessionDir} && pwd) && ${NOVEL_FILING})`,
+    );
+    expect(r.rows[0].run).toBe(runOf(fromDir));
+  });
+
+  test("FG-245: a control row computes exactly what the pre-fix line computed", async () => {
+    // The pre-fix line was `const root = options.projectRoot` — one value,
+    // every input. This asserts the controls above reproduce it rather than
+    // approximate it, so "the mutant would redden these" is a reading and
+    // not a sentence.
+    expect(filingDirectory(filedFrom(null), sessionDir)).toBe(sessionDir);
+    expect(filingDirectory(`(cd ${fromDir} && echo planted) && ${NOVEL_FILING}`, sessionDir)).toBe(
+      sessionDir,
+    );
+    expect(
+      filingDirectory(filedFrom(fromDir), sessionDir),
+      "and the measured rows do not",
+    ).toBe(fromDir);
   });
 });

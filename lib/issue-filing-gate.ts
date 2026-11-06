@@ -131,6 +131,7 @@ import {
   apiFilingRepo,
   apiRestFields,
   clauses,
+  filingDirectory,
   createsIssue,
   flagValues,
   graphqlDocument,
@@ -2676,13 +2677,27 @@ export async function filingGate(
 
   const at = options.now ?? new Date().toISOString();
   const read = options.readExisting ?? openFindings;
-  const planSource = options.readPlan ?? gitSource(options.projectRoot);
+  // **Where the command ran, which is not necessarily where the session
+  // lives** (#1833). `options.projectRoot` is the caller's directory — for
+  // the live caller, `hooks/VerifyPhaseLock.hook.ts`, that is the session's
+  // launch directory. Every stage below reads this instead, because every
+  // one of them is asking about the checkout the filing was made FROM: its
+  // config, its tracker, its branch's PR, its run id, and the plans on its
+  // `origin/main`. See `filingDirectory` for why the answer is in the
+  // command text and for the two cases it cannot resolve.
+  const root = filingDirectory(cmd, options.projectRoot);
+  // A relative `--body-file` is relative to the command's directory too, and
+  // this is the one place that can say so. `"-"` is stdin and has no path to
+  // resolve; `readBodyFile` is what decides that, so it stays its decision.
+  const readBody = (path: string): string | null =>
+    readBodyFile(path === "-" ? path : resolve(root, path));
+  const planSource = options.readPlan ?? gitSource(root);
   // The run's allowance, resolved ONCE per command. Per clause would let two
   // clauses of one command be adjudicated against two different caps if the
   // config moved underneath them, which is the shape `readFor` is cached to
   // avoid one line below. A config that cannot be read resolves to the
   // STRICT cap — `filingsPerRunFor`.
-  const allowance = filingsPerRunFor(() => tryLoadRungateConfig(options.projectRoot));
+  const allowance = filingsPerRunFor(() => tryLoadRungateConfig(root));
   const cap = allowance.cap;
   // Read once per TARGET TRACKER, not once per command and not once per
   // clause. Once per clause would adjudicate two creates against two
@@ -2695,7 +2710,7 @@ export async function filingGate(
     const key = repo ?? "";
     const hit = cached.get(key);
     if (hit !== undefined) return hit;
-    const started = read(options.projectRoot, repo);
+    const started = read(root, repo);
     cached.set(key, started);
     return started;
   };
@@ -2711,7 +2726,7 @@ export async function filingGate(
     const key = repo ?? "";
     const hit = targets.get(key);
     if (hit !== undefined) return hit;
-    const started = readTarget(options.projectRoot, repo);
+    const started = readTarget(root, repo);
     targets.set(key, started);
     return started;
   };
@@ -2793,7 +2808,7 @@ export async function filingGate(
   // directory that simply has no origin, which is an answer and buckets.
   // Without the split the timeout silently re-keys a real checkout into the
   // shared allowance, which is the denominator changing underneath the count.
-  const reading = runIdFor(options.projectRoot, options.readRemote);
+  const reading = runIdFor(root, options.readRemote);
   const run = reading.run ?? NON_CHECKOUT_RUN;
   const nowMs = Date.parse(at);
   const uncountable = priorRows === null || reading.run === null;
@@ -2814,7 +2829,7 @@ export async function filingGate(
     const read1 = await adjudicateFiling(
       attempt,
       () => readFor(attempt.repo),
-      readBodyFile,
+      readBody,
       () => targetFor(attempt.repo),
     );
     // The in-run class check, applied to anything the per-filing stages did
@@ -2823,7 +2838,7 @@ export async function filingGate(
     // tracker is no reason to let one command file a class twice. The note
     // below is keyed off `read1` rather than `verdict` so the unreadable
     // tracker is still said out loud when that happens.
-    const { finding } = filingFinding(attempt);
+    const { finding } = filingFinding(attempt, readBody);
     // **The cap is applied before anything READS THE TRACKER'S ANSWER, and
     // it converts an UNMEASURED.** Every other
     // UNMEASURED arm in this file allows, which is right for a reading about
