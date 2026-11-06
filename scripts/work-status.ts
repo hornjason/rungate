@@ -699,18 +699,38 @@ console.log("\n  Nothing above was remembered. Re-run to re-read.");
  * mutation by inlining its own literal
  * (`.claude/rules/checks-must-be-able-to-fail.md`).
  *
- * SHORT and SHORT ONLY. `NO_TARGET` means nothing could say what the lane
- * should hold, and refusing on it would make the exit code fire on a reading
- * that was never taken — the shape this whole report exists to remove.
+ * WHICH readings refuse is `readyRefusal`'s decision and not this file's —
+ * SHORT and UNWRITTEN both do, and the second of those is the empty lane,
+ * which is the case the gate exists for.
  */
 export const EXIT_READY_SHORT = 3;
 
+/**
+ * A Ready lane whose state could not be established — #1842.
+ *
+ * Its OWN code, distinct from both success and from the refusal above. A
+ * census that failed is not a lane that is fine, and it is not a lane that is
+ * short either; collapsing any two of the three into one number means no
+ * caller can say which it witnessed. The argument refusals keep `2`, so all
+ * four outcomes this script can reach are distinguishable from each other.
+ */
+export const EXIT_READY_UNMEASURED = 4;
+
 const refusal = readyRefusal(laneReadings);
-if (refusal !== null) {
+if (refusal?.verdict === "REFUSE") {
   console.log(
     `\n  REFUSING: Ready is ${refusal.count} of ${refusal.against} — ${refusal.why}\n` +
       "  Promote from the candidate list above, or lower the depth on purpose.\n" +
       "  A lane that is allowed to run dry is a lane nothing is working from.",
   );
   process.exit(EXIT_READY_SHORT);
+}
+if (refusal?.verdict === "UNMEASURED") {
+  console.log(
+    `\n  UNMEASURED: the Ready lane's state could not be established — ${refusal.why}\n` +
+      "  This is NOT a passing reading. Nothing here says the lane is full, and\n" +
+      "  nothing here says it is empty. Re-run, and if it persists the board read\n" +
+      "  is what to fix — not this gate.",
+  );
+  process.exit(EXIT_READY_UNMEASURED);
 }

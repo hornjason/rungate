@@ -8,6 +8,8 @@
  * being wrong about 44 issues.
  */
 
+import type { LaneReading } from "./board-lane-health";
+
 /**
  * Is this issue something anybody may pick up right now?
  *
@@ -270,31 +272,89 @@ export function resolveFocus(asked: string | undefined, known: readonly string[]
   return { kind: "unknown", asked, known: [...known].sort() };
 }
 
+/** What a Ready reading means for whether the script may exit 0 — #1842. */
+export type ReadyVerdict =
+  /** The lane is below its depth, or empty while its depth is positive. */
+  | "REFUSE"
+  /** The lane's state could not be established. NEVER the same as fine. */
+  | "UNMEASURED";
+
+export interface ReadyRefusal {
+  readonly verdict: ReadyVerdict;
+  readonly count: number;
+  readonly against: number | null;
+  readonly why: string;
+}
+
 /**
- * Whether a short Ready lane should refuse — #1842.
+ * Whether the Ready lane's reading lets this run exit 0 — #1842.
  *
- * The ONE decider for that question. The script restates its answer and
- * decides nothing itself: a second condition spelled inline there would be
- * two deciders over one input, and a mutation of either would leave the
- * other holding every case up
+ * The ONE decider. The script restates its answer and spells no condition of
+ * its own: a second condition there would be two deciders over one input, and
+ * a mutation of either would leave the other holding every case up
  * (`.claude/rules/checks-must-be-able-to-fail.md`).
  *
- * ## Why only SHORT
+ * ## UNWRITTEN refuses, and the first version of this missed it
  *
- * `NO_TARGET` means nothing could say what the lane should hold. Refusing on
- * it would fire the exit code on a reading that was never taken, which is
- * precisely the confusion this whole report exists to remove — an UNMEASURED
- * lane and a failing one must never produce the same bytes. `OK` and `OVER`
- * are the lane doing its job and the lane doing too much of it; neither
- * leaves a session with nothing to start.
+ * `laneHealth` returns `UNWRITTEN`, not `SHORT`, when `count === 0` and the
+ * denominator is positive — so **the SHORT branch is unreachable at zero**
+ * and a gate keyed on SHORT alone exits 0 on a completely empty Ready lane,
+ * which is the single case it exists for. Worse, the first control written
+ * for this asserted that pass as correct, which is the "case that goes green
+ * under the wrong fix" shape: it would have certified the bypass.
  *
- * A board with no Ready row at all returns `null`, not a refusal: the lane
- * being absent from the reading is itself unmeasured.
+ * Caught by the automated security review of the pushed commit, not by the
+ * battery — the battery varied the health value and never asked which value
+ * the producer emits at the boundary.
+ *
+ * ## UNMEASURED is its own answer, not silence
+ *
+ * A census that could not be taken is not a lane that is fine, and returning
+ * `null` for it would make those two states the same bytes — the exact
+ * confusion this whole report exists to remove. It gets its own verdict and
+ * its own exit code at the call site.
+ *
+ * `NO_TARGET` is different and is NOT a refusal: it means no denominator
+ * exists, so there is nothing the lane could be short OF. `OK` and `OVER` are
+ * the lane working and the lane over-full; neither leaves a session with
+ * nothing to start.
+ *
+ * ## The switch is exhaustive on purpose
+ *
+ * `LaneHealth` is the producer's own type and the `never` arm makes adding a
+ * member a COMPILE error here rather than a silent pass. A `!==` test, or a
+ * `Set` of strings, would let a seventh health value default to "fine" — and
+ * that is precisely how UNWRITTEN slipped through the first time.
  */
-export function readyRefusal(
-  readings: readonly { readonly lane: string; readonly count: number; readonly against: number | null; readonly health: string; readonly why: string }[],
-): { readonly count: number; readonly against: number | null; readonly why: string } | null {
+export function readyRefusal(readings: readonly LaneReading[]): ReadyRefusal | null {
   const ready = readings.find(r => r.lane === "Ready");
-  if (ready === undefined || ready.health !== "SHORT") return null;
-  return { count: ready.count, against: ready.against, why: ready.why };
+  // A board with no Ready row cannot be judged, and must not read as fine.
+  if (ready === undefined) {
+    return {
+      verdict: "UNMEASURED",
+      count: 0,
+      against: null,
+      why: "the board reading contains no Ready lane at all",
+    };
+  }
+  const seen = { count: ready.count, against: ready.against, why: ready.why };
+  switch (ready.health) {
+    case "SHORT":
+    case "UNWRITTEN":
+      return { verdict: "REFUSE", ...seen };
+    case "UNMEASURED":
+      return { verdict: "UNMEASURED", ...seen };
+    case "OK":
+    case "OVER":
+    case "NO_TARGET":
+      return null;
+    default: {
+      const unhandled: never = ready.health;
+      throw new Error(
+        `readyRefusal: unclassified lane health ${JSON.stringify(unhandled)}. ` +
+          "Every LaneHealth must be sorted into refuse, unmeasured or fine — " +
+          "defaulting a new one to fine is how UNWRITTEN bypassed this gate.",
+      );
+    }
+  }
 }

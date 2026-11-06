@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { laneHealth, type LaneHealth, type LaneReading } from "../lib/board-lane-health";
 import {
   NO_MILESTONE,
   isPickable,
@@ -725,7 +726,7 @@ describe("#1842: the report offers one startable list and it is Ready", () => {
 describe("#1842: a short Ready lane refuses", () => {
   const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
 
-  const lane = (health: string, count = 1, against: number | null = 3) => [
+  const lane = (health: LaneHealth, count = 1, against: number | null = 3): LaneReading[] => [
     { lane: "Backlog", count: 76, against: null, health: "NO_TARGET", why: "no second source" },
     { lane: "Ready", count, against, health, why: `${against} allowed in the queue` },
     { lane: "In progress", count: 1, against: 1, health: "OK", why: "one open and assigned" },
@@ -733,10 +734,44 @@ describe("#1842: a short Ready lane refuses", () => {
 
   test("SHORT refuses and carries the numbers a reader needs", () => {
     const r = readyRefusal(lane("SHORT", 1, 3));
-    expect(r).not.toBeNull();
+    expect(r?.verdict).toBe("REFUSE");
     expect(r!.count).toBe(1);
     expect(r!.against).toBe(3);
     expect(r!.why).toContain("allowed in the queue");
+  });
+
+  // THE BOUNDARY THIS GATE EXISTS FOR, and the first version of it passed.
+  //
+  // `laneHealth` returns UNWRITTEN, not SHORT, when `count === 0` and the
+  // denominator is positive — so the SHORT branch is UNREACHABLE at zero and
+  // a gate keyed on SHORT alone exits 0 on a completely empty Ready lane.
+  // The control first written here asserted that pass as correct, which
+  // would have certified the bypass at the moment it arrived.
+  //
+  // Found by the automated security review of the pushed commit, not by the
+  // mutation battery: the battery varied the health VALUE and never asked
+  // which value the producer emits at the boundary.
+  test("an EMPTY Ready lane refuses — it is UNWRITTEN, not SHORT", () => {
+    expect(readyRefusal(lane("UNWRITTEN", 0, 3))?.verdict).toBe("REFUSE");
+  });
+
+  test("the producer really does emit UNWRITTEN at zero, so the case above is not hypothetical", () => {
+    // Asserted against `laneHealth` itself rather than described, or this
+    // whole section rests on a reading of the source that nothing re-takes.
+    const readings = laneHealth({
+      counts: new Map([["Ready", 0]]),
+      pickable: 9,
+      openAssigned: 0,
+      cancelledClosed: 0,
+      throughput: { delivered: 84, days: 14 },
+      complete: true,
+    });
+    const ready = readings.find(r => r.lane === "Ready");
+    expect(ready?.count).toBe(0);
+    expect(ready?.against ?? 0).toBeGreaterThan(0);
+    expect(ready?.health, "if this is ever SHORT, the case above stops testing the boundary")
+      .toBe("UNWRITTEN");
+    expect(readyRefusal(readings)?.verdict).toBe("REFUSE");
   });
 
   test("THE CONTROL: a lane at depth does not refuse", () => {
@@ -745,29 +780,60 @@ describe("#1842: a short Ready lane refuses", () => {
     expect(readyRefusal(lane("OK", 3, 3))).toBeNull();
   });
 
-  test("NO_TARGET is not a refusal — an unmeasured lane is not a failing one", () => {
-    // Refusing here would make a reading nobody could take look like a
-    // reading that failed, which is the confusion this report exists to end.
+  test("NO_TARGET is not a refusal — there is nothing it could be short OF", () => {
     expect(readyRefusal(lane("NO_TARGET", 1, null))).toBeNull();
   });
 
-  test("a board with no Ready row at all returns null, not a refusal", () => {
-    expect(readyRefusal(lane("SHORT").filter(r => r.lane !== "Ready"))).toBeNull();
+  test("UNMEASURED is its own verdict, never silence", () => {
+    // Returning null here would make "the census failed" and "the lane is
+    // fine" the same bytes, which is the confusion this report exists to end.
+    expect(readyRefusal(lane("UNMEASURED", 0, null))?.verdict).toBe("UNMEASURED");
   });
 
-  test("every non-SHORT health is silent, so the predicate cannot widen by accident", () => {
-    for (const health of ["OK", "OVER", "NO_TARGET", "UNMEASURED"]) {
-      expect(readyRefusal(lane(health)), `${health} must not refuse`).toBeNull();
+  test("a board with no Ready row is UNMEASURED, not fine", () => {
+    const r = readyRefusal(lane("SHORT").filter(x => x.lane !== "Ready"));
+    expect(r?.verdict).toBe("UNMEASURED");
+    expect(r!.why).toContain("no Ready lane");
+  });
+
+  test("every LaneHealth is classified, and the three outcomes are disjoint", () => {
+    const expected: Record<LaneHealth, "REFUSE" | "UNMEASURED" | "fine"> = {
+      SHORT: "REFUSE",
+      UNWRITTEN: "REFUSE",
+      UNMEASURED: "UNMEASURED",
+      OK: "fine",
+      OVER: "fine",
+      NO_TARGET: "fine",
+    };
+    for (const [health, want] of Object.entries(expected) as [LaneHealth, string][]) {
+      const got = readyRefusal(lane(health))?.verdict ?? "fine";
+      expect(got, `${health} must be ${want}`).toBe(want);
     }
-    expect(readyRefusal(lane("SHORT")), "and SHORT still must").not.toBeNull();
+    // The population is the producer's own, so a seventh member cannot be
+    // added without this going red — a default-to-fine arm is how UNWRITTEN
+    // bypassed the gate the first time.
+    const src = readFileSync(join(ROOT, "lib/board-lane-health.ts"), "utf-8");
+    const declared = src
+      .slice(src.indexOf("export type LaneHealth ="))
+      .slice(0, src.slice(src.indexOf("export type LaneHealth =")).indexOf(";"))
+      .match(/"([A-Z_]+)"/g)!
+      .map(s => s.replaceAll('"', ""));
+    expect([...declared].sort()).toEqual(Object.keys(expected).sort());
   });
 
   test("the exit code is routed through ONE constant, so a mutation has one site", () => {
     // A later branch inlining `process.exit(3)` would bypass the mutation
     // and its case would go green having witnessed nothing —
     // `.claude/rules/checks-must-be-able-to-fail.md`.
-    const occurrences = src.match(/EXIT_READY_SHORT/g) ?? [];
-    expect(occurrences.length, "declaration plus exactly one use").toBe(2);
+    for (const name of ["EXIT_READY_SHORT", "EXIT_READY_UNMEASURED"]) {
+      const uses = src.match(new RegExp(name, "g")) ?? [];
+      expect(uses.length, `${name}: declaration plus exactly one use`).toBe(2);
+    }
+    // All four outcomes this script can reach are distinguishable: 0, the
+    // argument refusals' 2, a drained lane, and a reading that failed.
+    const codes = [...src.matchAll(/export const EXIT_READY_\w+ = (\d+);/g)].map(m => Number(m[1]));
+    expect(codes).toHaveLength(2);
+    expect(new Set([0, 2, ...codes]).size, "a shared code makes two mechanisms one signal").toBe(4);
     // Read from source, not imported: the script runs on import and would
     // start reaching for a token and the network.
     const declared = src.match(/export const EXIT_READY_SHORT = (\d+);/);
