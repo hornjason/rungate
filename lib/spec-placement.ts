@@ -203,6 +203,114 @@ export function placementReading(content: string): PlacementReading {
   };
 }
 
+/** What one spec's planning state is, across the whole tree — SC-2611. */
+export type PlacementState = "PLANNED" | "UNPLANNED" | "NO_CRITERIA" | "UNREADABLE";
+
+export interface SpecPlacement {
+  /** Repo-relative, as the sweep spells it. */
+  path: string;
+  state: PlacementState;
+  /** Why it is not PLANNED. Empty exactly when it is. */
+  reasons: string[];
+  /** How many criteria the spec states, and how many the table places. */
+  criteria: number;
+  placed: number;
+}
+
+export interface PlacementCoverage {
+  /** UNMEASURED FAILS. An empty list from a sweep that failed is not a clean one. */
+  reading: "MEASURED" | "UNMEASURED";
+  unmeasuredReasons: string[];
+  /** Every spec the sweep located, in its order. */
+  specs: SpecPlacement[];
+  /** The paths in each state, so a caller reports names rather than a count. */
+  planned: string[];
+  unplanned: string[];
+  noCriteria: string[];
+}
+
+/** THE one way out of {@link placementCoverage} without a reading. */
+function unmeasuredCoverage(reasons: string[]): PlacementCoverage {
+  return { reading: "UNMEASURED", unmeasuredReasons: reasons, specs: [], planned: [], unplanned: [], noCriteria: [] };
+}
+
+/**
+ * Every spec in the tree, and whether its criteria are placed — SC-2611.
+ *
+ * **The gap this closes.** {@link placementReading} answers the question for
+ * ONE spec, and both of its callers are given a spec on the command line. So
+ * a spec with no `### Phase placement` table contributed nothing to any
+ * repository-wide view: it had no phases, so it raised no milestone, so it
+ * appeared in no lane. 1 of 26 specs had a table on 2026-10-29 and the other
+ * 25 were indistinguishable from specs with no work left — which is the
+ * flattering reading of the two, and the wrong one.
+ *
+ * **`NO_CRITERIA` is separate from `UNPLANNED` deliberately.** A spec that
+ * states nothing to place genuinely has no work in it; a spec that states
+ * twelve criteria and places none has twelve. Folding them together
+ * reproduces the defect one level up — the count would be honest and the
+ * reader still could not act on it.
+ *
+ * **One unreadable spec makes the whole reading UNMEASURED**, not a shorter
+ * list: a shorter list is exactly what a tree with fewer specs produces. The
+ * spec is still carried in `specs` as `UNREADABLE` so the reason names it.
+ *
+ * The enumeration is `listSpecs`, not a second directory walk. `specs/` is
+ * already swept in one place, and a second walk is a second decider for
+ * "which files are specs" that no behavioural test of either could separate
+ * (`.claude/rules/checks-must-be-able-to-fail.md`).
+ */
+export function placementCoverage(
+  root: string,
+  listSpecs: (root: string) => { reading: "MEASURED" | "UNMEASURED"; unmeasuredReasons: string[]; paths: string[] },
+  readSpec: (root: string, path: string) => string,
+): PlacementCoverage {
+  const sweep = listSpecs(root);
+  if (sweep.reading === "UNMEASURED") {
+    return unmeasuredCoverage([
+      `the specs/ sweep could not be taken, so nothing below is a reading of this tree: ` +
+        sweep.unmeasuredReasons.join("; "),
+    ]);
+  }
+
+  const specs: SpecPlacement[] = [];
+  const reasons: string[] = [];
+  for (const path of sweep.paths) {
+    let content: string;
+    try {
+      content = readSpec(root, path);
+    } catch (e) {
+      specs.push({ path, state: "UNREADABLE", reasons: [(e as Error).message], criteria: 0, placed: 0 });
+      reasons.push(`could not read ${path}: ${(e as Error).message}`);
+      continue;
+    }
+    const r = placementReading(content);
+    const placed = r.criteria.length - r.unplaced.length;
+    const state: PlacementState =
+      r.criteria.length === 0 ? "NO_CRITERIA" : r.reading === "MEASURED" ? "PLANNED" : "UNPLANNED";
+    specs.push({
+      path,
+      state,
+      reasons: state === "PLANNED" ? [] : r.unmeasuredReasons,
+      criteria: r.criteria.length,
+      placed,
+    });
+  }
+
+  if (reasons.length > 0) {
+    // Carry the per-spec rows: the refusal has to be able to NAME the file.
+    return { ...unmeasuredCoverage(reasons), specs };
+  }
+  return {
+    reading: "MEASURED",
+    unmeasuredReasons: [],
+    specs,
+    planned: specs.filter(s => s.state === "PLANNED").map(s => s.path),
+    unplanned: specs.filter(s => s.state === "UNPLANNED").map(s => s.path),
+    noCriteria: specs.filter(s => s.state === "NO_CRITERIA").map(s => s.path),
+  };
+}
+
 /** One criterion, and what the board says about it — item **B2**. */
 export interface CriterionCoverage {
   id: string;

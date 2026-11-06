@@ -21,7 +21,7 @@
  * criterion unplaced and every case passes for the instrument's reason.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -31,6 +31,7 @@ import {
   milestonePlan,
   parsePhaseHeadings,
   parsePlacementRows,
+  placementCoverage,
   placementReading,
   uncoveredByMilestone,
 } from "../lib/spec-placement";
@@ -76,6 +77,93 @@ function plant(opts: {
     "Nothing here.",
   ].join("\n");
 }
+
+/**
+ * Covers SC-2611 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ *
+ * `placementReading` answers the question for ONE spec and both of its
+ * callers are handed a spec on the command line, so a spec with no
+ * `### Phase placement` table contributed nothing to any whole-tree view:
+ * no phases, so no milestone, so no lane. 1 of 26 specs had a table on
+ * 2026-10-29 and the other 25 were indistinguishable from specs with no
+ * work left (#1681).
+ *
+ * Every case hands `placementCoverage` its own enumerator and reader, so
+ * none of them depends on what `specs/` happens to contain today.
+ */
+describe("SC-2611: a spec with no placement table is UNPLANNED, not absent", () => {
+  const sweep = (...paths: string[]) => () =>
+    ({ reading: "MEASURED" as const, unmeasuredReasons: [], paths });
+  const files = (m: Record<string, string>) => (_root: string, path: string) => {
+    const c = m[path];
+    if (c === undefined) throw new Error(`no such planted spec: ${path}`);
+    return c;
+  };
+
+  const NO_TABLE = plant({ heading: "### Something else entirely" });
+  const NO_CRITERIA_SPEC = plant({ criteria: [], rows: [] });
+
+  test("a spec stating criteria and placing none is NAMED as UNPLANNED", () => {
+    const r = placementCoverage("/x", sweep("specs/A.md"), files({ "specs/A.md": NO_TABLE }));
+    expect(r.reading).toBe("MEASURED");
+    // The membership, not the count: a reader has to be able to open it.
+    expect(r.unplanned).toEqual(["specs/A.md"]);
+    expect(r.specs[0]!.criteria).toBe(3);
+    expect(r.specs[0]!.placed).toBe(0);
+    // And the reason travels with it, or the name is a number again.
+    expect(r.specs[0]!.reasons.join(" ")).toContain(PLACEMENT_HEADING);
+  });
+
+  test("a spec that places its criteria is PLANNED, and carries no reason", () => {
+    const r = placementCoverage("/x", sweep("specs/A.md"), files({ "specs/A.md": plant({}) }));
+    expect(r.planned).toEqual(["specs/A.md"]);
+    expect(r.unplanned).toEqual([]);
+    expect(r.specs[0]!.reasons).toEqual([]);
+    expect(r.specs[0]!.placed).toBe(3);
+  });
+
+  test("NO_CRITERIA is NOT unplanned — that distinction is the whole criterion", () => {
+    // Folding "nothing to place" into "placed nothing" reproduces the defect
+    // one level up: the count would be honest and still unactionable.
+    const r = placementCoverage(
+      "/x",
+      sweep("specs/A.md", "specs/B.md"),
+      files({ "specs/A.md": NO_CRITERIA_SPEC, "specs/B.md": NO_TABLE }),
+    );
+    expect(r.noCriteria).toEqual(["specs/A.md"]);
+    expect(r.unplanned).toEqual(["specs/B.md"]);
+    expect(r.planned).toEqual([]);
+  });
+
+  test("one unreadable spec makes the WHOLE reading unmeasured, and names the file", () => {
+    // A shorter list is exactly what a tree with fewer specs produces.
+    const r = placementCoverage(
+      "/x",
+      sweep("specs/A.md", "specs/GONE.md"),
+      files({ "specs/A.md": plant({}) }),
+    );
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.unmeasuredReasons.join(" ")).toContain("specs/GONE.md");
+    expect(r.specs.find(s => s.path === "specs/GONE.md")!.state).toBe("UNREADABLE");
+    // The three roll-ups must be EMPTY on a refusal: a populated `planned`
+    // beside UNMEASURED is the partial result the refusal exists to prevent.
+    expect([r.planned, r.unplanned, r.noCriteria]).toEqual([[], [], []]);
+  });
+
+  test("an unmeasured sweep reads nothing at all — not a partial tree", () => {
+    const read = (_r: string, _p: string): string => {
+      throw new Error("the reader must not be called when the sweep refused");
+    };
+    const r = placementCoverage(
+      "/x",
+      () => ({ reading: "UNMEASURED", unmeasuredReasons: ["this runtime cannot locate them"], paths: ["specs/A.md"] }),
+      read,
+    );
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.specs).toEqual([]);
+    expect(r.unmeasuredReasons.join(" ")).toContain("cannot locate them");
+  });
+});
 
 describe("lib/spec-placement: the table parses, and parses only the table", () => {
   test("rows come from the second cell, and prose outside the section is not a placement", () => {
@@ -402,6 +490,71 @@ describe("scripts/plan-spec --write: nothing reaches GitHub on an unsound table"
       rmSync(dir, { recursive: true, force: true });
     }
   }
+
+  /**
+   * Covers SC-2611 (SPEC-TO-BOARD-PIPELINE-SPEC.md) at the command.
+   *
+   * `jsonRefusal` plants ONE spec under the temp root and spies the GitHub
+   * client, so a `--coverage` run that reached the network or demanded a
+   * `--repo` would be visible here rather than inferred.
+   */
+  describe("SC-2611: --coverage reads the tree, reaches nothing, writes nothing", () => {
+    /**
+     * Like `jsonRefusal`, but the spec is planted under `specs/` — which is
+     * the directory the sweep reads, and the reason this cannot reuse it.
+     */
+    async function coverageRun(argv: string[], onDisk = SOUND) {
+      const dir = mkdtempSync(join(tmpdir(), "rg-plan-spec-coverage-"));
+      const out: string[] = [];
+      const err: string[] = [];
+      const log = console.log;
+      const error = console.error;
+      console.log = (...a: unknown[]) => void out.push(a.join(" "));
+      console.error = (...a: unknown[]) => void err.push(a.join(" "));
+      try {
+        mkdirSync(join(dir, "specs"), { recursive: true });
+        writeFileSync(join(dir, "specs", "SPEC.md"), onDisk);
+        const s = spy([]);
+        const code = await planSpecMain(["--project-root", dir, ...argv], s.gh);
+        return { code, stdout: out.join("\n"), stderr: err.join("\n"), created: s.created };
+      } finally {
+        console.log = log;
+        console.error = error;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    test("an unplanned spec is REPORTED and the exit is 0 — a finding, not a refusal", async () => {
+      // Non-zero here would be a gate nobody could get green: 22 of 34 specs
+      // in this repository are unplanned today, so everyone would learn to
+      // append `|| true` and the reading would stop being read.
+      const r = await coverageRun(["--coverage"], plant({ heading: "### Something else entirely" }));
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("UNPLANNED");
+      expect(r.stdout).toContain("SPEC.md");
+      expect(r.created, "--coverage wrote a milestone").toEqual([]);
+    });
+
+    test("a planted spec WITH a table reports no unplanned row — one input, one difference", async () => {
+      const r = await coverageRun(["--coverage"], plant({}));
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("every spec stating criteria places them");
+    });
+
+    test("--coverage with a spec argument REFUSES rather than silently reading one", async () => {
+      const r = await coverageRun(["--coverage", "SPEC.md"]);
+      expect(r.code).toBe(REFUSAL_EXIT);
+      expect(r.stderr).toContain("takes none");
+    });
+
+    test("--coverage --json puts the whole reading on stdout", async () => {
+      const r = await coverageRun(["--coverage", "--json"], plant({}));
+      expect(r.code).toBe(0);
+      const parsedOut = JSON.parse(r.stdout);
+      expect(parsedOut.reading).toBe("MEASURED");
+      expect(parsedOut.planned).toEqual(["specs/SPEC.md"]);
+    });
+  });
 
   const PLAN_SPEC_REFUSALS: { why: string; argv: string[]; names: string; spec?: string }[] = [
     { why: "an unparseable argument", argv: ["SPEC.md", "--repo", "o/r", "--prefix", "C", "--nope"], names: "nope" },
