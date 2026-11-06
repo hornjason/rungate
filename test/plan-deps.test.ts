@@ -19,7 +19,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "path";
-import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
+import { chainAdjacentPhases, dependencyPlan, groupByBlocked } from "../lib/spec-deps";
 import type { DepIssue } from "../lib/spec-deps";
 import { REFUSAL_EXIT, main as planDepsMain } from "../scripts/plan-deps";
 import type { PlanDepsGitHub } from "../scripts/plan-deps";
@@ -72,6 +72,56 @@ describe("lib/spec-deps: the edges are the adjacent-phase cross product", () => 
     const plan = dependencyPlan([iss(10, 0), iss(20, 1)]);
     expect(plan.missing.some(e => e.blocked === 10)).toBe(false);
     expect(plan.frontier).toBe(0);
+  });
+});
+
+/**
+ * Covers SC-2606 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ *
+ * The criterion used to read `lib/spec-deps.ts contains [adjacent]`, and the
+ * word sat in a header comment. A comment satisfies a `file-contains` match
+ * and names nothing a reader can open or a mutation can move — #1680. The
+ * rule now has one symbol, and these cases call it rather than reaching it
+ * through `dependencyPlan`: a mutation of `chainAdjacentPhases` that
+ * `dependencyPlan`'s own cases would survive still reddens here.
+ */
+describe("SC-2606: chainAdjacentPhases is where adjacency is decided", () => {
+  /** The phase buckets the planner builds, stated directly. */
+  const buckets = (m: Record<number, number[]>): Map<number, DepIssue[]> =>
+    new Map(Object.entries(m).map(([p, ns]) => [Number(p), ns.map(n => iss(n, Number(p)))]));
+
+  test("each phase is chained to the one BEFORE it in the list, not to all earlier ones", () => {
+    const edges = chainAdjacentPhases([0, 1, 2], buckets({ 0: [10], 1: [20], 2: [30] }));
+    expect(keys(edges)).toEqual(["20<-10", "30<-20"]);
+    // The full-prefix implementation is the other plausible one and has a
+    // different count; name the edge it would add rather than the number.
+    expect(keys(edges)).not.toContain("30<-10");
+  });
+
+  test("the pairing is by POSITION in the list, so a gap chains 1 to 3", () => {
+    // `phases[k] - 1` is the wrong implementation with the right answer on
+    // every contiguous input. This is the input that separates them.
+    const edges = chainAdjacentPhases([0, 1, 3], buckets({ 0: [10], 1: [20], 3: [30] }));
+    expect(keys(edges)).toEqual(["20<-10", "30<-20"]);
+  });
+
+  test("the direction is blocked←blocker, and the reversal has the same count", () => {
+    const edges = chainAdjacentPhases([0, 1], buckets({ 0: [10, 11], 1: [20] }));
+    expect(keys(edges)).toEqual(["20<-10", "20<-11"]);
+    expect(edges.every(e => e.blocked === 20)).toBe(true);
+  });
+
+  test("one phase states no order, so it yields no edge at all", () => {
+    expect(chainAdjacentPhases([0], buckets({ 0: [10, 11] }))).toEqual([]);
+    expect(chainAdjacentPhases([], new Map())).toEqual([]);
+  });
+
+  test("dependencyPlan reports exactly what this function returns — one binding, not two", () => {
+    // If the planner ever grows its own copy of the rule, these diverge.
+    const issues = [iss(10, 0), iss(11, 0), iss(20, 1), iss(30, 3)];
+    const byPhase = buckets({ 0: [10, 11], 1: [20], 3: [30] });
+    const plan = dependencyPlan(issues);
+    expect(keys(plan.missing)).toEqual(keys(chainAdjacentPhases(plan.phases, byPhase)));
   });
 });
 
