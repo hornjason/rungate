@@ -25,6 +25,7 @@ import {
   fanoutDecisions,
   readBoardCredential,
   truncatedReadings,
+  whyNotReady,
   type Dependent,
 } from "../lib/board-ready-fanout";
 
@@ -399,6 +400,66 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
     // the shrink deliberate rather than a quiet loss of coverage.
     expect(compared).toBe(24);
     expect(unmeasured).toBe(30);
+  });
+
+  // **The exhaustiveness the removed fallback used to stand in for.**
+  // `whyNotReady` ends on "somebody has claimed it" with no catch-all, so
+  // if `isReady` ever grows a condition this list does not know about, some
+  // input will be refused for a reason that is not its cause. Deriving the
+  // expected reason from the input independently — rather than from the
+  // function — is what makes this able to fail. ai-review round 1 of #1796.
+  test("BR-7b: every refusal names its actual cause, over the whole grid", () => {
+    let checked = 0;
+    for (const state of ["OPEN", "CLOSED"])
+      for (const phase of [null, 3, 7])
+        for (const blockedByOpen of [0, 2, null])
+          for (const assignees of [0, 1, null]) {
+            const d = dep({ state, phase, blockedByOpen, assignees });
+            const ready =
+              blockedByOpen !== null && assignees !== null && isReady({ ...d, blockedByOpen, assignees });
+            if (ready) continue;
+            // Derived from the input, in the order the function must use.
+            const expected =
+              state !== "OPEN"
+                ? `the issue is ${state}`
+                : blockedByOpen === null
+                  ? "UNMEASURED — the dependency summary could not be read"
+                  : blockedByOpen !== 0
+                    ? `${blockedByOpen} open blocker${blockedByOpen === 1 ? "" : "s"} remain`
+                    : assignees === null
+                      ? "UNMEASURED — the assignee count could not be read"
+                      : "somebody has claimed it";
+            expect(
+              whyNotReady(d),
+              `the reason for ${JSON.stringify({ state, phase, blockedByOpen, assignees })} ` +
+                `does not name what actually refused it`,
+            ).toBe(expected);
+            // **The half that catches a NEW condition in `isReady`.** The
+            // assertion above cannot: `expected` is derived from the same
+            // input and ends on the same "claimed" string, so a row that
+            // became un-ready for an unknown reason agrees with itself and
+            // stays green. This says the refusal has a cause in the list at
+            // all — if `isReady` starts refusing something none of these
+            // branches describes, the row lands here with every cause
+            // absent. Found by predicting the mutant before running it.
+            expect(
+              state !== "OPEN" || blockedByOpen !== 0 || assignees !== 0,
+              `isReady refused ${JSON.stringify({ state, blockedByOpen, assignees })} and not one ` +
+                `of whyNotReady's branches explains why — it has grown a condition this list ` +
+                `does not know about, so every log line for it is now wrong`,
+            ).toBe(true);
+            checked++;
+          }
+    // Non-vacuous: the grid has 54 rows and the ready ones are skipped.
+    expect(checked, "a grid that refused nothing would pass this vacuously").toBe(51);
+  });
+
+  // The gap that had to close before the fallback could go. `isUnblocked`
+  // refuses anything that is not exactly 0, and these guards asked `> 0`,
+  // so a negative count made isReady false and reached the fallback.
+  test("BR-7c: a negative blocker count is refused and named, not left to a fallback", () => {
+    expect(isReady({ state: "OPEN", blockedByOpen: -1, assignees: 0 })).toBe(false);
+    expect(whyNotReady(dep({ blockedByOpen: -1 }))).toContain("-1 open blocker");
   });
 
   test("BR-8: and a row of that grid genuinely moves — the grid is not all false", () => {

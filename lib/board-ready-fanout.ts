@@ -92,18 +92,35 @@ export type FanoutDecision =
  * after `isReady` has already returned false, so a wrong or incomplete reason
  * costs a confusing log line and cannot move an issue. Keeping that ordering
  * is what stops it becoming the second decider described above.
+ *
+ * ## There is no "did not anticipate it" fallback, and that is deliberate
+ *
+ * One stood here until the phase gate was removed. With the two phase
+ * branches gone the remaining tests enumerate every input `isReady` reads,
+ * so the fallback became a line that could not run — the shape
+ * `.claude/rules/checks-must-be-able-to-fail.md` names, reading as a live
+ * safety net while catching nothing. ai-review round 1 of #1796.
+ *
+ * **Removing it required fixing a real gap first.** `isUnblocked` refuses
+ * anything that is not exactly `0`, and these guards asked `> 0`, so a
+ * negative count — which no GraphQL response produces, but nothing here
+ * rejected either — made `isReady` false and reached the fallback. The
+ * guards now match the contract they explain, which is what makes the
+ * enumeration genuinely exhaustive rather than nearly so.
+ *
+ * Exhaustiveness is asserted over the whole input grid in
+ * `test/board-ready-fanout.test.ts`, not claimed here: a condition added to
+ * `isReady` and not to this list makes a row return the wrong reason, and
+ * that row goes red.
  */
-function whyNotReady(d: Dependent): string {
+export function whyNotReady(d: Dependent): string {
   if (d.state !== "OPEN") return `the issue is ${d.state}`;
   if (d.blockedByOpen === null) return "UNMEASURED — the dependency summary could not be read";
-  if (d.blockedByOpen > 0) {
+  if (d.blockedByOpen !== 0) {
     return `${d.blockedByOpen} open blocker${d.blockedByOpen === 1 ? "" : "s"} remain`;
   }
   if (d.assignees === null) return "UNMEASURED — the assignee count could not be read";
-  if (d.assignees > 0) return "somebody has claimed it";
-  // The phase branches that stood here went with the gate: phase no longer
-  // decides eligibility, so it can no longer be a reason for a refusal.
-  return "isReady said no and this reason list did not anticipate it";
+  return "somebody has claimed it";
 }
 
 /**
