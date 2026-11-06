@@ -1,5 +1,5 @@
 /**
- * Covers SC-2713, SC-2714 (specs/BOARD-FLOW-SPEC.md).
+ * Covers SC-2713, SC-2714, SC-2717, SC-2718 (specs/BOARD-FLOW-SPEC.md).
  *
  * ## The mutation battery, predicted before it was run
  *
@@ -8,6 +8,22 @@
  *   the window test dropped (every closure counts)      3          2
  *   the catch returns {delivered:0} instead of null     2          1
  *   the unresolvable-page guard dropped                 0          1
+ *   the hasNextPage type guard dropped                  1          2
+ *   the endCursor guard dropped                         1          1
+ *   DUPLICATE dropped from the cancelled count          2          3
+ *   the endCursor NON-EMPTY check dropped               1          1
+ *
+ * **The hasNextPage guard read ZERO on its first battery and that was a
+ * wrong case, not a wrong guard.** The case planted `pageInfo: undefined`,
+ * which throws one line later and is converted by the catch — green on a
+ * mechanism it was not pointed at, the same shape as the dead guard
+ * removed one commit earlier. Repointed at `pageInfo: {}`, which is what
+ * actually falls through silently, and the mutant reads 1.
+ *
+ * It reads 1 rather than the 2 predicted because the string case
+ * (`hasNextPage: "no"`) is caught by the CURSOR guard instead. Both guards
+ * refuse it; only one of them is the reason, which is worth knowing and
+ * is not a gap.
  *
  * **Three of four predictions were wrong, and the fourth is the finding.**
  * The three misses are all the same error — I predicted a TOTAL instead of
@@ -29,13 +45,23 @@
  * this file guards is the one that sizes Ready.
  */
 import { describe, expect, test } from "bun:test";
-import { CLOSED_ISSUES_QUERY, THROUGHPUT_DAYS, measureThroughput } from "../lib/board-throughput";
+import { CLOSED_ISSUES_QUERY, THROUGHPUT_DAYS, measureClosedIssues } from "../lib/board-throughput";
+
+/**
+ * Throughput only, for the cases that are about the rate.
+ *
+ * The cancelled count rides on the same pass and has its own cases below;
+ * threading it through every rate assertion would make each one read like
+ * it cared about both.
+ */
+const measureThroughput = async (...a: Parameters<typeof measureClosedIssues>) =>
+  (await measureClosedIssues(...a))?.throughput ?? null;
 
 const NOW = Date.parse("2026-11-05T00:00:00Z");
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
 
 /** A fake client that serves fixed pages and records what it was asked. */
-function fake(pages: { nodes: unknown[]; next?: string | null }[]) {
+function fake(pages: { nodes: unknown[]; next?: string | null; pageInfo?: unknown }[]) {
   const asked: Record<string, unknown>[] = [];
   const gql = async (_q: string, v: Record<string, unknown>) => {
     asked.push(v);
@@ -44,7 +70,11 @@ function fake(pages: { nodes: unknown[]; next?: string | null }[]) {
       repository: {
         issues: {
           nodes: page.nodes,
-          pageInfo: { hasNextPage: page.next != null, endCursor: page.next ?? null },
+          // `"pageInfo" in page` rather than `page.pageInfo ?? …`, so a
+          // case can plant an ABSENT pageInfo and a case can plant an
+          // explicitly undefined one. `??` would spell those the same, and
+          // the absent one is the shape the finding was about.
+          pageInfo: "pageInfo" in page ? page.pageInfo : { hasNextPage: page.next != null, endCursor: page.next ?? null },
         },
       },
     };
@@ -170,5 +200,125 @@ describe("SC-2714: a pass that did not complete is UNMEASURED, never zero", () =
     }, "o", "n", NOW);
     expect(quiet).not.toBeNull();
     expect(failed).toBeNull();
+  });
+});
+
+describe("SC-2717: a page whose pageInfo cannot be read is UNMEASURED, not the last page", () => {
+  // ai-review on #1793. `page.pageInfo?.hasNextPage` ended the loop for a
+  // malformed page and returned a CONFIDENT partial count — silent
+  // truncation reported as a measurement, and inconsistent with the line
+  // above where a missing `nodes` throws into the catch.
+  // **A pageInfo OBJECT that lacks the field, not an absent pageInfo**, and
+  // the battery is why. The first version of this case planted
+  // `pageInfo: undefined`, which throws one line later and is converted by
+  // the catch — so the mutant that removed the guard read ZERO and the
+  // case was green on a mechanism it was not pointed at. `{}` is the shape
+  // that falls through silently: `undefined && …` is false, the loop ends,
+  // and a partial count is returned as a confident reading.
+  test("a pageInfo object with no hasNextPage refuses, rather than ending the loop", async () => {
+    const { gql } = fake([
+      { nodes: [{ stateReason: "COMPLETED", closedAt: daysAgo(1) }], pageInfo: {} },
+    ]);
+    expect(
+      await measureThroughput(gql, "o", "n", NOW),
+      "ending the loop here returns 1 delivered from a page that may have had a thousand more",
+    ).toBeNull();
+  });
+
+  test("an absent pageInfo refuses too", async () => {
+    const { gql } = fake([{ nodes: [], pageInfo: undefined }]);
+    expect(await measureThroughput(gql, "o", "n", NOW)).toBeNull();
+  });
+
+  test("a hasNextPage that is a string, not a boolean, refuses", async () => {
+    const { gql } = fake([
+      { nodes: [{ stateReason: "COMPLETED", closedAt: daysAgo(1) }], pageInfo: { hasNextPage: "no" } },
+    ]);
+    expect(await measureThroughput(gql, "o", "n", NOW)).toBeNull();
+  });
+
+  // The cursor half. `hasNextPage: true` with no usable cursor would loop
+  // forever or re-request page one; refusing is the only honest answer.
+  test("a page that says there is more and gives no cursor refuses", async () => {
+    const { gql } = fake([{ nodes: [], pageInfo: { hasNextPage: true, endCursor: null } }]);
+    expect(await measureThroughput(gql, "o", "n", NOW)).toBeNull();
+  });
+
+  // ai-review round 1 of #1794. An empty cursor is a STRING, so a type
+  // check passes it — and then `while (c)` is falsy on it and the loop
+  // ends anyway, returning a partial count as a confident reading. The
+  // same silent truncation, wearing a different value.
+  test("a page that says there is more and gives an EMPTY cursor refuses", async () => {
+    const { gql } = fake([
+      {
+        nodes: [{ stateReason: "COMPLETED", closedAt: daysAgo(1) }],
+        pageInfo: { hasNextPage: true, endCursor: "" },
+      },
+    ]);
+    expect(
+      await measureThroughput(gql, "o", "n", NOW),
+      "a type check is not a usability check: `\"\"` is a string and is not a cursor",
+    ).toBeNull();
+  });
+
+  // The control: a well-formed terminal page must still be a reading, or
+  // the three cases above are just "everything refuses".
+  test("a well-formed last page is a reading, not a refusal", async () => {
+    const { gql } = fake([{ nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }]);
+    expect(await measureThroughput(gql, "o", "n", NOW)).toEqual({ delivered: 0, days: 14 });
+  });
+});
+
+describe("SC-2718: one pass answers both readings", () => {
+  test("cancellations and delivery come from the same pass", async () => {
+    const { gql, asked } = fake([
+      {
+        nodes: [
+          { stateReason: "COMPLETED", closedAt: daysAgo(1) },
+          { stateReason: "NOT_PLANNED", closedAt: daysAgo(1) },
+          { stateReason: "DUPLICATE", closedAt: daysAgo(900) },
+        ],
+      },
+    ]);
+    expect(await measureClosedIssues(gql, "o", "n", NOW)).toEqual({
+      throughput: { delivered: 1, days: 14 },
+      cancelled: 2,
+    });
+    expect(asked.length, "two passes over every closed issue is the cost ai-review flagged").toBe(1);
+  });
+
+  // Both reasons, because the spec's condition is both. Counting only
+  // `not_planned` turns a Cancelled lane short by every duplicate into one
+  // that reads OK.
+  test("a duplicate closure is a cancellation", async () => {
+    const { gql } = fake([{ nodes: [{ stateReason: "DUPLICATE", closedAt: daysAgo(1) }] }]);
+    expect((await measureClosedIssues(gql, "o", "n", NOW))?.cancelled).toBe(1);
+  });
+
+  // The window applies to delivery and NOT to cancellations: one is a
+  // rate, the other is the Cancelled lane's denominator over all time.
+  test("cancellations are counted over all time, delivery only inside the window", async () => {
+    const { gql } = fake([
+      {
+        nodes: [
+          { stateReason: "NOT_PLANNED", closedAt: daysAgo(900) },
+          { stateReason: "COMPLETED", closedAt: daysAgo(900) },
+        ],
+      },
+    ]);
+    expect(await measureClosedIssues(gql, "o", "n", NOW)).toEqual({
+      throughput: { delivered: 0, days: 14 },
+      cancelled: 1,
+    });
+  });
+
+  test("a failed pass gives neither reading, rather than one of them", async () => {
+    const boom = async () => {
+      throw new Error("502");
+    };
+    expect(
+      await measureClosedIssues(boom, "o", "n", NOW),
+      "two separate nulls invite a caller to believe one of them",
+    ).toBeNull();
   });
 });

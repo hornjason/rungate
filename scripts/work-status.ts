@@ -23,7 +23,8 @@ import { assertTokenMayReach, resolveGitHubToken } from "../lib/github";
 import { isPickable, orderReading, type TrackerFacts } from "../lib/work-status";
 import { laneHealth, laneHealthLines } from "../lib/board-lane-health";
 import type { Throughput } from "../lib/board-ready-rule";
-import { measureThroughput } from "../lib/board-throughput";
+import { measureClosedIssues } from "../lib/board-throughput";
+import { nextCursor } from "../lib/graphql-cursor";
 
 const REPO = "hornjason/rungate";
 // **Split once, so GraphQL and REST cannot disagree about the repository.**
@@ -218,7 +219,12 @@ async function boardStatus(): Promise<Map<number, string>> {
       const unreadable = n.fieldValues.pageInfo?.hasNextPage === true && s === undefined;
       out.set(n.content.number, s ?? (unreadable ? "(UNMEASURED — fields truncated)" : "(no status)"));
     }
-    c = d.node.items.pageInfo.hasNextPage ? d.node.items.pageInfo.endCursor : null;
+    // A board read only in part makes every lane count a floor. It
+    // throws rather than returning what arrived, because the caller
+    // derives `complete` from a marker and a short map would set none.
+    const step = nextCursor(d.node.items.pageInfo);
+    if (step.kind === "unreadable") throw new Error(`the board stopped paging — ${step.why}`);
+    c = step.kind === "more" ? step.cursor : null;
   } while (c);
   return out;
 }
@@ -355,7 +361,14 @@ for (const i of issues) {
     for (const n of page.nodes) {
       if (n?.source?.number) prs.push(`PR#${n.source.number} ${n.source.state}`);
     }
-    after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    // A silently short list of linked pull requests reads as "none yet",
+    // which is the sentence this whole report exists to stop printing
+    // when it is not known to be true.
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      throw new Error(`#${i.number}'s linked pull requests stopped paging — ${step.why}`);
+    }
+    after = step.kind === "more" ? step.cursor : null;
   } while (after);
   console.log(`\n  #${i.number}  ${i.state.toUpperCase()}  board=${status.get(i.number) ?? "NOT ON BOARD"}`);
   console.log(`        ${i.title.slice(0, 72)}`);
@@ -432,52 +445,31 @@ for (const s of status.values()) {
   if (s.startsWith("(UNMEASURED")) truncated = true;
   laneCounts.set(s, (laneCounts.get(s) ?? 0) + 1);
 }
-// **Cancelled is `not_planned` OR `duplicate`** — that is the spec's own
-// condition and `lib/work-status.ts` already maps both to ABANDONED. The
-// first version of this counted only the first and so would have read a
-// lane that is short by every duplicate as OK (ai-review round 1).
+// **Cancelled is `not_planned` OR `duplicate`**, and Ready's depth is the
+// delivery rate — both decided in `lib/board-throughput.ts`, which is the
+// one place either is spelled. The condition is the spec's own and
+// `lib/work-status.ts` already maps both reasons to ABANDONED; counting
+// only the first read a lane short by every duplicate as OK (ai-review
+// round 1 of #1773).
 //
-// This pages ~740 closed issues rather than running one search, because
-// **the search qualifier cannot see a duplicate closure.** Measured
-// 2026-11-05 with a control, which is why it is not one more search:
-// `reason:"not planned"` → 23, `reason:completed` → 716, `reason:duplicate`
-// → 0 — and `reason:bogusvalue` → 0 as well. A value the index does not
-// understand and a true zero are the same bytes, so a second search would
-// have reported 0 duplicates forever and nothing could have told that from
-// a repository that has none.
+// **One pass answers both.** The Cancelled lane's denominator and Ready's
+// depth both come from the closed issues, and they fail together, so
+// `lib/board-throughput.ts` reads them once. Two passes was ai-review's
+// finding on #1793 and it was right — the version before that had combined
+// them, and the refactor to share a single definition of "delivered" undid
+// it for no reason: both properties were available from the same page.
 //
-// A failed or throttled read must not say "nothing was ever cancelled" —
-// that is a green Cancelled lane produced by a measurement that did not
-// happen. `null` travels into the census and refuses the row.
-let cancelledClosed: number | null = null;
-try {
-  const [owner, name] = REPO.split("/");
-  const q = `query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
-    issues(states:CLOSED,first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{stateReason}}}}`;
-  let n = 0;
-  let c: string | null = null;
-  do {
-    const d = await gql(q, { o: owner, n: name, c });
-    const page = d.repository.issues;
-    for (const i of page.nodes) if (i?.stateReason === "NOT_PLANNED" || i?.stateReason === "DUPLICATE") n++;
-    c = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-  } while (c);
-  cancelledClosed = n;
-} catch (e) {
-  console.log(`  (the cancelled-closure count could not be read: ${e})`);
-}
-
-// **Ready's depth comes from `lib/board-throughput.ts`, not from a window
-// chosen here.** The writer (`scripts/board-ready.ts`) derives its cap from
-// the same function, so the lane this report judges and the lane the
-// workflow fills are the same size by construction. A second window typed
-// out in this file is the two-definitions defect the ready rule exists to
-// remove, reintroduced one layer down.
+// It pages rather than searching, for the reason measured with a control on
+// 2026-11-05: `reason:duplicate` returns 0 and so does `reason:bogusvalue`,
+// so a qualifier the index does not understand is the same bytes as a true
+// zero.
 const [tOwner, tName] = REPO.split("/");
-const throughput: Throughput | null = await measureThroughput(gql, tOwner!, tName!);
-if (throughput === null) {
-  console.log(`  (throughput could not be read, so Ready has no depth and is UNMEASURED)`);
+const closedReadings = await measureClosedIssues(gql, tOwner!, tName!);
+if (closedReadings === null) {
+  console.log(`  (the closed-issue pass failed, so the cancelled count and Ready's depth are UNMEASURED)`);
 }
+const cancelledClosed: number | null = closedReadings?.cancelled ?? null;
+const throughput: Throughput | null = closedReadings?.throughput ?? null;
 
 const laneReadings = laneHealth({
   counts: laneCounts,

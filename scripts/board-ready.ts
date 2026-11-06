@@ -22,8 +22,9 @@ import {
   type Dependent,
 } from "../lib/board-ready-fanout";
 import { phaseOf, openFrontier } from "../lib/board-mirror";
-import { readyCap, selectReady } from "../lib/board-ready-rule";
-import { measureThroughput } from "../lib/board-throughput";
+import { heldReason, readyCap, selectReady } from "../lib/board-ready-rule";
+import { measureClosedIssues } from "../lib/board-throughput";
+import { nextCursor } from "../lib/graphql-cursor";
 
 /**
  * Every refusal leaves through this one constant, so a mutant copy with it
@@ -222,7 +223,16 @@ async function main(): Promise<number> {
     }
     const page = d.repository.issue.blocking;
     blocking.push(...page.nodes);
-    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      console.log(
+        `::warning::#${closed}'s blocking list stopped paging — ${step.why}. ` +
+          `A partial list moves SOME of the issues this close unblocked, which is worse ` +
+          `than moving none. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
+    cursor = step.kind === "more" ? step.cursor : null;
   } while (cursor);
   if (blocking.length === 0) {
     console.log(`#${closed} was blocking nothing. No issue changed.`);
@@ -282,8 +292,16 @@ async function main(): Promise<number> {
       if (n.content?.__typename !== "Issue") continue;
       frontierItems.push({ state: n.content.state, phase: phaseOf(n.content.milestone?.title) });
     }
-    if (!page.pageInfo.hasNextPage) break;
-    const next = itemsPage(await gql(token, BOARD_PAGE_QUERY, { p: project, c: page.pageInfo.endCursor }));
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      console.log(
+        `::warning::the board stopped paging — ${step.why}. The frontier and Ready's ` +
+          `occupancy were read only in part. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
+    if (step.kind === "done") break;
+    const next = itemsPage(await gql(token, BOARD_PAGE_QUERY, { p: project, c: step.cursor }));
     if (next === null) {
       // Mid-pagination, so a partial frontier is already in hand — and a
       // frontier read from SOME of the board is the reading that moves the
@@ -369,11 +387,12 @@ async function main(): Promise<number> {
     );
     return EXIT_REFUSED;
   }
-  const throughput = await measureThroughput(
+  const closedReadings = await measureClosedIssues(
     (query, variables) => gql(token, query, variables),
     owner,
     name,
   );
+  const throughput = closedReadings?.throughput ?? null;
   const cap = throughput === null ? null : readyCap(throughput);
   const phaseOfNumber = new Map(dependents.map(d => [d.number, d.phase]));
   const eligible = decisions
@@ -393,7 +412,7 @@ async function main(): Promise<number> {
   // decider.
   for (const dec of eligible) {
     if (!selection.promote.includes(dec)) {
-      console.log(`  #${dec.number} eligible but held: Ready is at its depth`);
+      console.log(`  #${dec.number} eligible but held: ${heldReason(cap)}`);
     }
   }
 

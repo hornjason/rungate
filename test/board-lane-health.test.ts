@@ -232,13 +232,22 @@ describe("a lane count is only a reading against what should be in it", () => {
   // true zero are the same bytes, so that one search can never see a
   // duplicate closure and adding a second search would have read 0 forever.
   // The count is paged off `stateReason` instead.
+  // The decider moved to `lib/board-throughput.ts` when the two passes over
+  // the closed issues were combined into one (ai-review on #1793), so this
+  // asserts at the file that now holds it AND that the report routes
+  // through that file. Pointing only at the report would have gone green
+  // on a report that stopped counting duplicates entirely.
   test("SC-2670: the report reads stateReason, not a qualifier that cannot see duplicates", () => {
-    const src = readFileSync(join(import.meta.dir, "..", "scripts/work-status.ts"), "utf-8");
+    const lib = readFileSync(join(import.meta.dir, "..", "lib/board-throughput.ts"), "utf-8");
     expect(
-      src,
+      lib,
       "`reason:duplicate` and `reason:bogusvalue` both return 0, so the search qualifier " +
         "cannot distinguish a duplicate closure from a value it does not understand",
     ).toContain("DUPLICATE");
+    const src = readFileSync(join(import.meta.dir, "..", "scripts/work-status.ts"), "utf-8");
+    expect(src, "the report must read the shared pass, not its own count").toContain(
+      "measureClosedIssues",
+    );
   });
 
   // ## Round 2 security review — the spelling test came back as wording

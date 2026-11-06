@@ -365,6 +365,44 @@ rather than guesses when a card's field values were read only in part — a
 Status on page two and no Status at all produce the same `undefined`, and
 an undercount promotes past the cap.
 
+### Every pager reads one decider, because three variants of one bug were not enough
+
+`lib/graphql-cursor.ts`. Every GraphQL pager here spelled
+`c = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null`, and every
+one of them **ends the loop and returns a confident partial reading** for
+three malformed pages: a `pageInfo` that is absent, one that exists
+without `hasNextPage`, and one whose `endCursor` is `""`. The last is the
+nastiest — an empty string passes a `typeof` check and is then falsy, so a
+guard that reads correctly admits the value it was written to exclude.
+
+All three were found on one file, one at a time, across #1793 and #1794,
+while four sibling pagers held all three. The siblings were found by
+ai-review rather than by anything in the repository. A behavioural case per
+site catches only the last one to regress, so the property is asserted over
+the population: `test/graphql-cursor.test.ts` fails the build when a file
+in `lib/` or `scripts/` advances a cursor itself.
+
+Three sites outside this work still do — `lib/live-issues.ts`,
+`scripts/board-mirror.ts`, `scripts/board-status-sweep.ts`. They are an
+**equality** ratchet rather than an allowlist: a file leaving the list
+fails as loudly as one joining it.
+
+### The cap can be overshot by concurrent runs, and is not locked
+
+ai-review, #1793, and it is real. Occupancy is read once per run and there
+is no lock, so two `board-ready.yml` runs triggered by two near-simultaneous
+closures each see the same free slots and each fill them. Ready holding 2
+against a depth of 4 can end at 6.
+
+**Not fixed, and that is a choice with a reason.** The overshoot is bounded
+by the number of concurrent runs, it is visible — the health row reads
+`OVER` rather than `OK`, which is what that verdict was added for — and it
+self-corrects, because the next run promotes nothing until the lane drains.
+A lock or a compare-and-set would be a new failure mode (a stuck lease
+blocks the lane entirely) traded against a transient overshoot that the
+report already names. If `OVER` starts appearing in readings rather than in
+this paragraph, that is the evidence to revisit it.
+
 Still open, and deliberately separate: `isReady` keeps the phase gate, and
 `scripts/board-mirror.ts --ready --write` — the hand-run second writer — is
 still uncapped. Both land together, because they are the same expression.
@@ -543,6 +581,26 @@ second: flow efficiency is the one metric this spec must not promise.**
       needs: test
       proved-by:
 - [ ] SC-2716: the writer promotes only what fits, and replenishes as slots free
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2717: a page whose pageInfo cannot be read is UNMEASURED, not the last page
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2718: one pass over the closed issues answers both readings
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2719: a held issue is told which of the two causes held it
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2720: a page that cannot say whether more exist is UNREADABLE, never done
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2721: no pager decides for itself that a page it could not read was the last
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
