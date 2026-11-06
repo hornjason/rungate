@@ -356,15 +356,25 @@ export function apiCall(tokens: string[]): ApiCall | null {
       if (endpoint === null) endpoint = t;
       continue;
     }
-    const eq = t.indexOf("=");
-    let name = eq === -1 ? t : t.slice(0, eq);
-    let value: string | null = eq === -1 ? null : t.slice(eq + 1);
-    // `-ftitle=x` — a short flag carrying its value attached, which pflag
-    // accepts and which `gh`'s own examples use.
-    const attached = /^-([A-Za-z])(.+)$/.exec(name);
-    if (attached !== null && !name.startsWith("--") && value === null) {
+    // **The attached short form is resolved BEFORE the `=` split, and the
+    // order is the whole of it.** `-ftitle=x` is one token whose value is
+    // itself a `key=value` pair, so splitting on the first `=` reads the
+    // flag as `-ftitle` and drops the field — and a field flag's value is
+    // ALWAYS a pair, so the one attached form that matters was the only
+    // one that could not work. ai-review round 2 of #1805; the round
+    // before it shipped this as a comment with no case behind it.
+    let name = t;
+    let value: string | null = null;
+    const attached = t.startsWith("--") ? null : /^-([A-Za-z])(.+)$/.exec(t);
+    if (attached !== null) {
       name = `-${attached[1]}`;
       value = attached[2];
+    } else {
+      const eq = t.indexOf("=");
+      if (eq !== -1) {
+        name = t.slice(0, eq);
+        value = t.slice(eq + 1);
+      }
     }
     if (value === null && !API_BOOLEAN_FLAGS.has(name) && i + 1 < rest.length) {
       value = rest[++i];

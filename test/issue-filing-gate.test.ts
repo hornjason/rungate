@@ -5574,6 +5574,36 @@ describe("the filing cap under direct-ship mode", () => {
       ).toBe("second");
     });
 
+    // ai-review round 2 of #1805, and the third time on this PR that the
+    // thing added to close a hole reopened it one spelling further in.
+    //
+    // Round 1 added attached-short-flag handling with a comment saying
+    // `-ftitle=x` was read. It was not: the generic `=` split ran first
+    // and took the `=` INSIDE the value, so the flag resolved to
+    // `-ftitle`, which is in no set and was dropped. The one attached form
+    // that matters is the only one that could not work, because a field
+    // flag's value is always a `key=value` pair — and no case exercised
+    // it, so a comment was standing in for the check
+    // (`.claude/rules/checks-must-be-able-to-fail.md`, *the reason nobody
+    // checked is a comment saying it was checked*).
+    test("FG-208: a field attached to its short flag is read", () => {
+      const [a] = filingAttempts(
+        'gh api repos/hornjason/rungate/issues -ftitle="zqxj lands nothing" -fbody="b"',
+      );
+      expect(a, "pflag attaches a short flag's value, and gh runs this").toBeDefined();
+      expect(a?.title, "the = inside the value was read as the flag's own separator").toBe(
+        "zqxj lands nothing",
+      );
+      expect(a?.body).toBe("b");
+      // The form WITHOUT an internal `=` already worked, which is why the
+      // broken one passed by inspection. Both, so the split is asserted
+      // rather than the easier half of it.
+      expect(
+        filingAttempts('gh api -XPOST repos/hornjason/rungate/issues -f title="t"').length,
+        "an attached value with no = of its own",
+      ).toBe(1);
+    });
+
     test("FG-207: a parameterised mutation resolves its variables", () => {
       const [a] = filingAttempts(
         "gh api graphql -f query='mutation($title: String!, $body: String!) { " +
