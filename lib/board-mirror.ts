@@ -273,8 +273,27 @@ export interface MirrorRow {
   readonly text: string;
 }
 
-/** The text used when an issue names no criterion at all. */
-export const NAMES_NONE = "";
+/**
+ * The text used when an issue names no criterion at all — SC-2609.
+ *
+ * **This was `""` until #1716, and the reason it changed is worth keeping.**
+ * The original case read *"A cell reading 'none' sorts and filters as a
+ * value. Empty is absence."* Both halves are true and the conclusion is
+ * backwards: sorting and filtering as a value is the point, and *absence* is
+ * precisely the state a reader cannot act on. A blank cell says **not yet
+ * filled in**, **the tool could not tell** and **deliberately none** with the
+ * same zero bytes, so the one reading that means the board is in good order
+ * is indistinguishable from the two that mean it is not. 28 cells on the live
+ * board were blank on 2026-10-29 and nothing could say which kind they were.
+ *
+ * So the value is spelled, and a cell this module has never written stays
+ * `""`. That difference is the whole of SC-2609: `NAMES_NONE !== ""` is what
+ * lets a reader tell a judgement from a gap.
+ *
+ * It must not be mistakable for a criterion id — no `SC-`, no `CRC-`, nothing
+ * a reader scanning the column would try to look up.
+ */
+export const NAMES_NONE = "serves no criterion";
 
 /**
  * Every id, never a summary.
