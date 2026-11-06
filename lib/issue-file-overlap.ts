@@ -107,24 +107,45 @@ function filesSectionLines(body: string): string[] {
 /**
  * The path a list line names, or null when the line is prose.
  *
- * Two ways to be a path, and the second is the narrow one:
+ * ONE rule, and it took two review rounds to get to it: a single word ending
+ * in an alphabetic extension of two to five characters, over a last segment
+ * that contains a letter. A `/` is allowed anywhere and proves nothing on its
+ * own.
  *
- * - it contains a `/` — every file under `lib/`, `test/`, `.github/`
- * - OR it ends in an ALPHABETIC extension of two to five characters over a
- *   stem containing a letter — `package.json`, `AGENTS.md`, `tsconfig.json`
+ * ## Why not two rules
  *
- * **`2.0`, `v2.1` and `i.e` are not files, and the second rule exists to say
- * so.** `/\.[A-Za-z0-9]+$/` alone accepted all three, which cut against the
- * bias `declaredFiles` declares two paragraphs up: this reader may read too
- * few files, never a file that does not exist. A version number alone on a
- * line of the files section would have been reported as contested with
- * whichever other issue happened to name the same version. `FO-50`.
+ * It was two — *contains a `/`*, OR *has an extension* — and each round found
+ * a token the branch it landed on let through:
  *
- * **A root file with NO extension — `Makefile`, `Dockerfile` — is missed**, and
- * `FO-52` asserts it rather than leaving it in a comment. An earlier version of
- * this docblock claimed the opposite while the code rejected them. There is no
- * rule that admits `Makefile` and rejects `i.e`; they are the same shape, and
- * the cost falls on the side this reader is allowed to be wrong on.
+ * | round | token | branch |
+ * |---|---|---|
+ * | 1 | `2.0`, `v2.1`, `i.e` | the extension branch, which took any dotted word |
+ * | 2 | `N/A` | the slash branch, which validated nothing at all |
+ *
+ * `N/A` is the one that mattered. The files section is REQUIRED and
+ * `missingSections` demands content under the heading, so *N/A* is precisely
+ * what somebody writes when they have nothing to put there — and under the
+ * slash branch every issue that wrote it collided with every other one. Not a
+ * rare input: the single most likely wrong one.
+ *
+ * Patching the second branch would have left two predicates answering one
+ * question, which is `.claude/rules/checks-must-be-able-to-fail.md`'s *two
+ * deciders that agree* and the reason `AGENTS.md` rule 5 says to stop
+ * repairing and re-scope. So the branches were collapsed instead, and this is
+ * shorter than what it replaced.
+ *
+ * ## What this MISSES, said out loud
+ *
+ * An extension-less file — `Makefile`, `Dockerfile`, `lib/issue-shape` — and a
+ * dotfile like `.gitignore`. `FO-52` asserts the first rather than leaving it
+ * in prose, because an earlier version of this comment claimed `Makefile` was
+ * read while the code rejected it.
+ *
+ * All of that is the direction `declaredFiles` declares two paragraphs up:
+ * this reader may read too few files, never a file that does not exist. A
+ * missed path costs a warning nobody gets; an invented one costs a collision
+ * report against a file that is not there, which is how the channel becomes
+ * noise people skip.
  */
 function pathOnLine(line: string): string | null {
   const bare = line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").trim();
@@ -132,7 +153,7 @@ function pathOnLine(line: string): string | null {
   const candidate = quoted !== null ? quoted[1].trim() : bare;
 
   if (candidate === "" || /\s/.test(candidate)) return null;
-  if (!candidate.includes("/") && !/[A-Za-z][^/]*\.[A-Za-z]{2,5}$/.test(candidate)) return null;
+  if (!/[A-Za-z][^/]*\.[A-Za-z]{2,5}$/.test(candidate)) return null;
 
   return candidate.replace(/^\.\//, "");
 }

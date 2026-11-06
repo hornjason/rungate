@@ -317,6 +317,24 @@ describe("FO-50: what is NOT a path", () => {
     expect(paths("- `package.json`", "- `AGENTS.md`")).toEqual(["package.json", "AGENTS.md"]);
   });
 
+  test("FO-53: `N/A` is not a file, and it is the likeliest wrong input there is", () => {
+    // The files section is REQUIRED and `missingSections` demands content
+    // under the heading, so `N/A` is exactly what somebody writes when they
+    // have nothing to put there. Under the old "contains a slash" branch
+    // every issue that wrote it collided with every other one — a warning
+    // channel firing on its own placeholder.
+    expect(paths("- `N/A`", "- `n/a`", "- `TBD/unknown`")).toEqual([]);
+  });
+
+  test("FO-54 CONTROL: a slashed path with an extension still reads", () => {
+    // One axis against FO-53. Without it, a reader that rejects every
+    // slashed token satisfies that row and the whole feature stops working.
+    expect(paths("- `lib/a.ts`", "- `.github/workflows/ci.yml`")).toEqual([
+      "lib/a.ts",
+      ".github/workflows/ci.yml",
+    ]);
+  });
+
   test("FO-52: a root file with NO extension is MISSED, and that is declared", () => {
     // `Makefile` and `i.e` are the same shape to any rule this file could
     // hold. Asserted rather than left in a comment: an earlier version of
