@@ -11,6 +11,7 @@
  *   the hasNextPage type guard dropped                  1          2
  *   the endCursor guard dropped                         1          1
  *   DUPLICATE dropped from the cancelled count          2          3
+ *   the endCursor NON-EMPTY check dropped               1          1
  *
  * **The hasNextPage guard read ZERO on its first battery and that was a
  * wrong case, not a wrong guard.** The case planted `pageInfo: undefined`,
@@ -241,6 +242,23 @@ describe("SC-2717: a page whose pageInfo cannot be read is UNMEASURED, not the l
   test("a page that says there is more and gives no cursor refuses", async () => {
     const { gql } = fake([{ nodes: [], pageInfo: { hasNextPage: true, endCursor: null } }]);
     expect(await measureThroughput(gql, "o", "n", NOW)).toBeNull();
+  });
+
+  // ai-review round 1 of #1794. An empty cursor is a STRING, so a type
+  // check passes it — and then `while (c)` is falsy on it and the loop
+  // ends anyway, returning a partial count as a confident reading. The
+  // same silent truncation, wearing a different value.
+  test("a page that says there is more and gives an EMPTY cursor refuses", async () => {
+    const { gql } = fake([
+      {
+        nodes: [{ stateReason: "COMPLETED", closedAt: daysAgo(1) }],
+        pageInfo: { hasNextPage: true, endCursor: "" },
+      },
+    ]);
+    expect(
+      await measureThroughput(gql, "o", "n", NOW),
+      "a type check is not a usability check: `\"\"` is a string and is not a cursor",
+    ).toBeNull();
   });
 
   // The control: a well-formed terminal page must still be a reading, or

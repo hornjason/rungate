@@ -126,7 +126,16 @@ export async function measureClosedIssues(
       // throws into the catch.
       const info = page.pageInfo;
       if (typeof info?.hasNextPage !== "boolean") return null;
-      if (info.hasNextPage && typeof info.endCursor !== "string") return null;
+      // **Non-empty, not merely a string.** ai-review round 1 of #1794:
+      // `endCursor: ""` passes a type check and then ends the loop anyway,
+      // because `while (c)` is falsy on it — the same silent truncation
+      // this guard was added to stop, wearing a different value.
+      // `scripts/board-status-sweep.ts` already spells it
+      // `typeof cursor !== "string" || cursor.length === 0`; the precedent
+      // was in the tree and I did not apply it.
+      if (info.hasNextPage && (typeof info.endCursor !== "string" || info.endCursor.length === 0)) {
+        return null;
+      }
       c = info.hasNextPage ? info.endCursor : null;
     } while (c);
   } catch {
