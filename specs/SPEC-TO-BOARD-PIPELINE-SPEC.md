@@ -83,7 +83,8 @@ different facts and only one is actionable — *Silent Default Substitution*,
 
 ### Ordering is data, not prose
 
-- [ ] SC-2606: lib/spec-deps.ts contains [adjacent] — the phase order in the placement table becomes `blocked by` edges on the tracker, so *what is next* is everything unblocked rather than a sentence a human has to read
+- [x] SC-2606: lib/spec-deps.ts contains [chainAdjacentPhases] — the phase order in the placement table becomes `blocked by` edges on the tracker, so *what is next* is everything unblocked rather than a sentence a human has to read
+      proved-by: test/plan-deps.test.ts "SC-2606: chainAdjacentPhases is where adjacency is decided" — 58 pass, 0 fail, 2026-11-06; the token was [adjacent] and it matched a header comment, so the criterion named nothing a mutation could move (#1680). Two mutants of the extracted symbol: N-1 arithmetic reddens 3 cases, predicted and observed the same 3; a full-prefix chain reddens 6, where 4 were predicted — the two unpredicted are the live-board shape cases, and the number is not retrofitted
 - [x] SC-2607: test/issue-decomposition.test.ts contains [an edge to a row created in the same run is wired, not dropped] — creation and wiring are two passes, because a row blocked by another row in the same plan has no number until that row exists and a one-pass implementation loses every forward reference silently
       proved-by: test/issue-decomposition.test.ts "an edge to a row created in the same run is wired, not dropped" — 63 pass, 0 fail, 2026-11-02
 
