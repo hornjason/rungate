@@ -321,11 +321,14 @@ describe("the live plan", () => {
    * acceptance text asked for the verify version; that contradiction is
    * recorded on the issue.
    */
-  const OPEN_WITHOUT_ISSUE = [
-    "A: Repairing past the third review round is a decision, not a drift",
-    "B: A measurement published in a PR body stops being a second copy that nothing compares.",
-    "B: A finding naming one member of a population is checked for whether it IS a population before the sweep is called done.",
-  ];
+  // Emptied 2026-11-06. All three were filed through ADR-012's plan route:
+  // #1816 (A), #1817 (B) and #1818 (B). #1817 is no longer open at all — it
+  // shipped in #1819/#1820 and is now `in-place` with a verify command — so
+  // the two that remain open both carry an `issue` and neither is unfiled.
+  //
+  // This list only ever shrinks, and it is now empty. A new entry here is not
+  // the way to record a new outstanding improvement: file it (#1745).
+  const OPEN_WITHOUT_ISSUE: string[] = [];
 
   test("every open improvement is on the tracker, or declared here as not yet", () => {
     const unfiled = openImprovements(stages)

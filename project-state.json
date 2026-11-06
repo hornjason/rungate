@@ -1181,7 +1181,8 @@
             "what": "Repairing past the third review round is a decision, not a drift",
             "mechanism": "NONE YET, needs a decision. AI_REVIEW_ROUND_CAP=3 bounds the reviewer's carry-forward rounds, a different quantity: #1687's 14 runs were 13 pushes, each a legitimate round 1. Nothing in this repository can see 'the author pushed another fix instead of re-scoping'.",
             "status": "open",
-            "verify": null
+            "verify": null,
+            "issue": 1816
           }
         ]
       }
@@ -1270,8 +1271,9 @@
           {
             "what": "A measurement published in a PR body stops being a second copy that nothing compares.",
             "mechanism": "INTENDED: generate the PR's evidence block from the command output — write the counts to a file as the suite runs and compose the body from it — so a figure cannot be typed once and corrected only in the file. NOT BUILT. THIS ENTRY CARRIES NO RUNNING TALLY, AND THAT IS DELIBERATE. It used to say 'three stale figures', then 'eight', and each value went stale on the next review round — a hand-maintained count inside the entry documenting hand-maintained counts is the defect describing itself, and incrementing it is the instance fix this improvement exists to replace. A reviewer caught exactly that on #1739, and the first attempt at this very paragraph then mis-stated a population size in the sentence removing the tally. The evidence is the review history of #1739, which is live and needs no maintaining: the session entry declaring Stage B COMPLETE drew findings round after round, every one accepted. Do not count them here; read them there. They are of two kinds. MOST are the defect this improvement names — a figure typed once, into prose, with nothing comparing it to the command or file it came from: a prior ratio value relayed from a carry-forward note instead of read from the file that holds it; a closed-count read minutes before the last close landed; an opened-count delta left unaccounted while the sentence claimed to account for the whole movement; SUCCESS.md still naming the previously published version after the publish succeeded; a dropped todo count from a suite line; and the tally this paragraph used to carry. ONE is a different and worse class and must not be folded in: a population of verify commands took their exit code from `grep` through a pipe, so each reported success whenever its expected line appeared — including beside a failure line. Those are checks that cannot fail, not figures that went stale. Fixed as a population, and the population is enumerable from the diff rather than from a number in this sentence. Stating this as open rather than implying the discipline will hold is the point. The discipline did not hold, on the entry whose subject is that it does not hold.",
-            "status": "open",
-            "verify": null
+            "status": "in-place",
+            "verify": "out=$(bun test test/body-evidence.test.ts -t '#1817' 2>&1) && printf '%s' \"$out\" | grep -qE '^ [1-9][0-9]* pass'",
+            "issue": 1817
           },
           {
             "what": "The engine's own board is verifiable by CI, not only by an operator holding a PAT.",
@@ -1283,7 +1285,8 @@
             "what": "A finding naming one member of a population is checked for whether it IS a population before the sweep is called done.",
             "mechanism": "INTENDED: nothing enforces this and nothing obviously can — it is a judgement each time. Stage B ran it in both directions and the record is the whole mechanism: eleven unawaited `.rejects` WERE a population and all eleven were fixed; eighty-seven stacked docblock pairs were NOT one, because a section docblock above a symbol docblock is this tree's ordinary spelling, and treating them as a population would have rewritten a convention. The sweep is cheap; deciding what it found is the work.",
             "status": "open",
-            "verify": null
+            "verify": null,
+            "issue": 1818
           },
           {
             "what": "A writer that puts issues on the engine board also makes them conform to the readings that measure it.",
