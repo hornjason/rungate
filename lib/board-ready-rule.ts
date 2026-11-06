@@ -2,7 +2,7 @@
  * What Ready holds, in one place — read by the writer AND by the health
  * reading, so the two cannot disagree.
  *
- * Covers SC-2710, SC-2711, SC-2712, SC-2713 (specs/BOARD-FLOW-SPEC.md).
+ * Covers SC-2710, SC-2711, SC-2712 (specs/BOARD-FLOW-SPEC.md).
  *
  * ## Why this file exists at all
  *

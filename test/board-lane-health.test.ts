@@ -271,7 +271,12 @@ describe("a lane count is only a reading against what should be in it", () => {
   // is what made the row read `SHORT by 30` forever.
   test("SC-2670: the printed line carries the denominator and the reason", () => {
     const line = laneHealthLines([by(census(), "Ready")])[0]!;
-    expect(line, "the lane is judged against its depth, not against everything eligible").toContain("of 8");
+    // `"of 8"` is NOT enough and the mutation battery proved it: the label
+    // itself says "a depth of 8", so dropping the `Math.min` in
+    // `readyTarget` left this row green against a denominator of 34. The
+    // count has to be in the match, or the assertion is forgeable by the
+    // text it is reading.
+    expect(line, "the lane is judged against its depth, not against everything eligible").toContain("6 of 8");
     expect(line, "and the eligible count is still shown, or the depth looks arbitrary").toContain("34 unblocked and unclaimed");
     expect(line, "a derived number has to say what it was derived from").toContain("live throughput");
   });

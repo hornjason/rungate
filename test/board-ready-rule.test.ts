@@ -9,11 +9,19 @@
  * no single site a mutation could move
  * (`.claude/rules/checks-must-be-able-to-fail.md`, *two deciders*).
  *
- *   mutant                                   this file     lane-health
- *   READY_TOLERANCE_DAYS 0.5 -> 1            predicted 3   predicted 3
- *   readyCap drops the `days <= 0` refusal   predicted 1   predicted 0
- *   readyCap drops the floor of 1            predicted 1   predicted 1
- *   readyTarget drops the Math.min           predicted 1   predicted 4
+ *   mutant                                   this file      lane-health
+ *   READY_TOLERANCE_DAYS 0.5 -> 1            3, predicted 3  3, predicted 3
+ *   readyCap drops the `days <= 0` refusal   1, predicted 1  0, predicted 0
+ *   readyCap drops the floor of 1            1, predicted 1  1, predicted 1
+ *   readyTarget drops the Math.min           1, predicted 1  4, predicted 4
+ *
+ * **Mutant 4 read 3 against a prediction of 4 on the first pass, and the
+ * missing row was a forgeable assertion rather than a bad prediction.** The
+ * printed-line case matched `"of 8"`, which the LABEL also contains — "a
+ * depth of 8" — so the row stayed green while the denominator it was
+ * checking had become 34. Tightened to `"6 of 8"`, which only the count can
+ * supply, and the mutant then read 4. Predicting the membership rather than
+ * the total is what surfaced it.
  *
  * Readings are in the PR body and in `specs/BOARD-FLOW-SPEC.md`.
  *

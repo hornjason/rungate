@@ -95,7 +95,7 @@ we should be able to move something all the way through correctly."*
 | Lane | The question only it answers | May enter when | Leaves when | Who writes it | What it costs when wrong |
 |---|---|---|---|---|---|
 | **Backlog** | What might we do? | `issues: [opened]`, or **anything moving backwards** (below) | it is promoted to Ready, or it closes | `board-intake.yml` | nothing directly — it is the option pool, and options are discardable |
-| **Ready** | What should be picked up **next**, and in what order? | zero open blockers **and** Ready is below its limit | `issues: [assigned]` | `board-ready.yml` | **the lane we actually have.** 6 named, 34 eligible: the ordering decision does not disappear, it RELOCATES — each puller exhausts Ready, falls back to Backlog and applies its own heuristic, so prioritisation happens 28 more times, inconsistently, inside agents, leaving no record anybody can review |
+| **Ready** | What should be picked up **next**, and in what order? | zero open blockers, nobody assigned, **and** Ready is below the depth derived from live throughput — ordered by phase, then by age | `issues: [assigned]`, or a pull frees a slot | `board-ready.yml` | **the lane we actually have.** 6 named, 34 eligible: the ordering decision does not disappear, it RELOCATES — each puller exhausts Ready, falls back to Backlog and applies its own heuristic, so prioritisation happens 28 more times, inconsistently, inside agents, leaving no record anybody can review |
 | **In progress** | What is being worked on **right now**, and by whom? | `issues: [assigned]` — assignment **is** our starting act (below) | a linked PR becomes ready for review | board-flow workflow | 1 shown against 9 claimed. Eight sessions are invisible to each other. And because this lane carries the start timestamp, cycle time is not approximate — it is **absent**; a blocked item left here also consumes a slot, so if a limit ever binds a phantom throttles real throughput |
 | **In review** | What is finished but not yet landed? | a linked PR is **not a draft** — `pull_request: [opened, ready_for_review]` with `draft == false` | the PR merges or closes | board-flow workflow | this lane is WIP, so an unbounded In review means **unbounded WIP however tight In progress is** — "finishing" into an unlimited queue defeats the limit. For agent work this is where the real constraint sits: coding got ten times faster, review did not |
 | **Done** | What did we actually deliver? | `issues: [closed]` with `state_reason: completed` | `issues: [reopened]` sends it to Backlog | board-flow workflow | if it ever admits `not_planned`, throughput is overstated and cycle-time percentiles are contaminated |
@@ -290,8 +290,47 @@ so forever. That is not a gap in the board; it is two rules disagreeing, with
 the instrument blaming the board — which is the failure mode this whole spec
 exists to remove.
 
-Settling which definition is right is Increment 2's subject and is tracked
-separately; it is a decision about what Ready means, not a repair.
+**Settled by Jason on 2026-11-05** — `#1758` comment `6672873406`.
+
+| | Eligibility | Ordering | Size |
+|---|---|---|---|
+| before | unblocked + unclaimed + **current phase** | — | unbounded |
+| now | unblocked + unclaimed | by phase, then age | **capped at 8** |
+
+**Phase moves from eligibility to ordering.** It was doing crowd-control
+work inside an eligibility test, and the cap is the thing that was actually
+missing. The unbounded version was tried: `lib/board-mirror.ts` records that
+it made 36 of 46 open issues Ready — "the backlog with a different name".
+A cap answers that; a phase filter answers it by excluding 32 of 35
+candidates.
+
+**The depth is derived, not typed in.** Little's Law on live throughput —
+237 delivered over 14 days ≈ 17/day, half a day of cover → 8 — recomputed on
+every reading, so it rises when a swarm runs and falls when one stops. A
+literal goes stale in both directions and a number nobody can re-derive is a
+number nobody changes. `READY_TOLERANCE_DAYS` in `lib/board-ready-rule.ts`
+is the only constant, and it is a *tolerance*, not a depth.
+
+**A binding cap does not idle agents.** A pull frees a slot and the next
+event refills it; replenishment is the policy, the number is not.
+
+### What landed, and what has not
+
+`lib/board-ready-rule.ts` is the one definition of the SIZE, read by
+`lib/board-lane-health.ts` and fed by `scripts/work-status.ts`. The mutation
+battery is in `test/board-ready-rule.test.ts`: four mutants, readings
+`3/3`, `1/0`, `1/1`, `1/4` against predictions `3/3`, `1/0`, `1/1`, `1/4` —
+every mutant that changes a NUMBER reddens both files, which is the property
+two separate definitions could not have.
+
+Still open, and deliberately a separate change: `isReady` keeps the phase
+gate until the two writers (`scripts/board-mirror.ts`, `scripts/board-ready.ts`)
+respect the cap. Dropping the gate first is the 36-of-46 reading again.
+
+Ready also still has **one** automatic trigger — `issues: [closed]`, fanning
+out to whatever the closed issue was blocking. Measured 2026-11-05: 34 of 34
+pickable issues had never had a blocker, so none was reachable by it.
+Replenishing on a freed slot fixes that by construction.
 
 ## Increment 2 — not scoped until Increment 1 measures
 
@@ -433,6 +472,18 @@ second: flow efficiency is the one metric this spec must not promise.**
       needs: test
       proved-by:
 - [ ] SC-2692: every backwards move returns to Backlog under one rule
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2710: Ready's depth is derived from live throughput, never typed in
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2711: a throughput that could not be read leaves Ready unjudged, not healthy
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2712: the writer and the health reading read ONE definition of Ready's size
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
