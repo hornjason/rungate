@@ -8,12 +8,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { laneHealth, type LaneHealth, type LaneReading } from "../lib/board-lane-health";
 import {
   NO_MILESTONE,
   isPickable,
   milestoneOf,
   milestoneRollup,
   orderReading,
+  readyRefusal,
   resolveFocus,
 } from "../lib/work-status";
 
@@ -685,5 +687,214 @@ describe("the status reader does not leak the token on any hop", () => {
         "An unconsumed body leaks a connection on every error response, which " +
         "is the same defect the redirect hop above was fixed for.",
     ).toEqual([]);
+  });
+});
+
+// ── #1842: one startable list, and a lane that refuses when it runs dry ──
+
+describe("#1842: the report offers one startable list and it is Ready", () => {
+  const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+  test("the startable heading names Ready, and the candidate heading disowns itself", () => {
+    expect(code).toContain("START HERE — the Ready lane");
+    expect(code).toContain("PROMOTION CANDIDATES");
+    expect(code).toContain("NOT work to start");
+  });
+
+  test("no heading still presents the repo-wide set as pickable work", () => {
+    // The old heading was `PICKABLE — computed per issue …`, printed above a
+    // list of 36 while Ready held one. A reader could not tell which to
+    // start from, and chose the longer list.
+    expect(
+      code,
+      "a heading that reads as an instruction to pick is what this change removed",
+    ).not.toMatch(/bar\(\s*"PICKABLE/);
+  });
+
+  test("the Ready list is read from the board, not re-derived from the candidates", () => {
+    // Two deciders otherwise: a board whose Ready column disagreed with the
+    // rule would print as agreeing, which is the defect being fixed.
+    expect(code).toContain('status.get(i.number) === "Ready"');
+  });
+
+  test("an empty Ready lane says so instead of printing nothing", () => {
+    expect(code).toContain("NOTHING IS READY");
+  });
+});
+
+describe("#1842: a short Ready lane refuses", () => {
+  const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
+
+  const lane = (health: LaneHealth, count = 1, against: number | null = 3): LaneReading[] => [
+    { lane: "Backlog", count: 76, against: null, health: "NO_TARGET", why: "no second source" },
+    { lane: "Ready", count, against, health, why: `${against} allowed in the queue` },
+    { lane: "In progress", count: 1, against: 1, health: "OK", why: "one open and assigned" },
+  ];
+
+  test("SHORT refuses and carries the numbers a reader needs", () => {
+    const r = readyRefusal(lane("SHORT", 1, 3), 1);
+    expect(r?.verdict).toBe("REFUSE");
+    expect(r!.count).toBe(1);
+    expect(r!.against).toBe(3);
+    expect(r!.why).toContain("allowed in the queue");
+  });
+
+  // THE BOUNDARY THIS GATE EXISTS FOR, and the first version of it passed.
+  //
+  // `laneHealth` returns UNWRITTEN, not SHORT, when `count === 0` and the
+  // denominator is positive — so the SHORT branch is UNREACHABLE at zero and
+  // a gate keyed on SHORT alone exits 0 on a completely empty Ready lane.
+  // The control first written here asserted that pass as correct, which
+  // would have certified the bypass at the moment it arrived.
+  //
+  // Found by the automated security review of the pushed commit, not by the
+  // mutation battery: the battery varied the health VALUE and never asked
+  // which value the producer emits at the boundary.
+  test("an EMPTY Ready lane refuses — it is UNWRITTEN, not SHORT", () => {
+    expect(readyRefusal(lane("UNWRITTEN", 0, 3), 0)?.verdict).toBe("REFUSE");
+  });
+
+  test("the producer really does emit UNWRITTEN at zero, so the case above is not hypothetical", () => {
+    // Asserted against `laneHealth` itself rather than described, or this
+    // whole section rests on a reading of the source that nothing re-takes.
+    const readings = laneHealth({
+      counts: new Map([["Ready", 0]]),
+      pickable: 9,
+      openAssigned: 0,
+      cancelledClosed: 0,
+      throughput: { delivered: 84, days: 14 },
+      complete: true,
+    });
+    const ready = readings.find(r => r.lane === "Ready");
+    expect(ready?.count).toBe(0);
+    expect(ready?.against ?? 0).toBeGreaterThan(0);
+    expect(ready?.health, "if this is ever SHORT, the case above stops testing the boundary")
+      .toBe("UNWRITTEN");
+    expect(readyRefusal(readings, 0)?.verdict).toBe("REFUSE");
+  });
+
+  // THE SECOND BYPASS, found by the security review of the pushed commit.
+  //
+  // The lane's own count is every board item in the column, closed ones
+  // included. A Ready holding three CLOSED cards read `3 of 3 OK` while the
+  // startable list printed nothing — the gate passed with no work to start,
+  // which is the state it exists to catch. Two numbers for one question, on
+  // one page, disagreeing.
+  test("a Ready lane full of CLOSED cards refuses, however healthy the lane count looks", () => {
+    const r = readyRefusal(lane("OK", 3, 3), 0);
+    expect(r?.verdict).toBe("REFUSE");
+    expect(r!.count, "the refusal reports what can be STARTED, not what is parked").toBe(0);
+    expect(r!.why).toContain("not an open issue");
+  });
+
+  test("and it names how many are stale rather than silently subtracting them", () => {
+    // A gate that quietly corrects for closed cards hides the board defect
+    // somebody has to clear.
+    expect(readyRefusal(lane("OK", 3, 3), 1)!.why).toContain("2 of the 3 card(s)");
+  });
+
+  test("THE CONTROL: a lane at depth does not refuse", () => {
+    // Without this the refusal fires on everyone, which reviews nothing and
+    // teaches people to ignore the exit code.
+    expect(readyRefusal(lane("OK", 3, 3), 3)).toBeNull();
+  });
+
+  test("NO_TARGET is not a refusal — there is nothing it could be short OF", () => {
+    expect(readyRefusal(lane("NO_TARGET", 1, null), 1)).toBeNull();
+  });
+
+  test("UNMEASURED is its own verdict, never silence", () => {
+    // Returning null here would make "the census failed" and "the lane is
+    // fine" the same bytes, which is the confusion this report exists to end.
+    expect(readyRefusal(lane("UNMEASURED", 0, null), 0)?.verdict).toBe("UNMEASURED");
+  });
+
+  test("a board with no Ready row is UNMEASURED, not fine", () => {
+    const r = readyRefusal(lane("SHORT").filter(x => x.lane !== "Ready"), 1);
+    expect(r?.verdict).toBe("UNMEASURED");
+    expect(r!.why).toContain("no Ready lane");
+  });
+
+  test("every LaneHealth is classified, and the three outcomes are disjoint", () => {
+    const expected: Record<LaneHealth, "REFUSE" | "UNMEASURED" | "fine"> = {
+      SHORT: "REFUSE",
+      UNWRITTEN: "REFUSE",
+      UNMEASURED: "UNMEASURED",
+      OK: "fine",
+      OVER: "fine",
+      NO_TARGET: "fine",
+    };
+    // Each row carries the shape the PRODUCER emits for that health, not a
+    // uniform fixture: NO_TARGET and UNMEASURED always have a null
+    // denominator, and a row claiming otherwise would test an input
+    // `laneHealth` cannot return.
+    const shape: Record<LaneHealth, [count: number, against: number | null, open: number]> = {
+      SHORT: [1, 3, 1],
+      UNWRITTEN: [0, 3, 0],
+      UNMEASURED: [0, null, 0],
+      NO_TARGET: [1, null, 1],
+      OK: [3, 3, 3],
+      OVER: [5, 3, 5],
+    };
+    for (const [health, want] of Object.entries(expected) as [LaneHealth, string][]) {
+      const [count, against, open] = shape[health];
+      const got = readyRefusal(lane(health, count, against), open)?.verdict ?? "fine";
+      expect(got, `${health} must be ${want}`).toBe(want);
+    }
+    // The population is the producer's own, so a seventh member cannot be
+    // added without this going red — a default-to-fine arm is how UNWRITTEN
+    // bypassed the gate the first time.
+    const src = readFileSync(join(ROOT, "lib/board-lane-health.ts"), "utf-8");
+    const declared = src
+      .slice(src.indexOf("export type LaneHealth ="))
+      .slice(0, src.slice(src.indexOf("export type LaneHealth =")).indexOf(";"))
+      .match(/"([A-Z_]+)"/g)!
+      .map(s => s.replaceAll('"', ""));
+    expect([...declared].sort()).toEqual(Object.keys(expected).sort());
+  });
+
+  test("the exit code is routed through ONE constant, so a mutation has one site", () => {
+    // A later branch inlining `process.exit(3)` would bypass the mutation
+    // and its case would go green having witnessed nothing —
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    for (const name of ["EXIT_READY_SHORT", "EXIT_READY_UNMEASURED"]) {
+      const uses = src.match(new RegExp(name, "g")) ?? [];
+      expect(uses.length, `${name}: declaration plus exactly one use`).toBe(2);
+    }
+    // All four outcomes this script can reach are distinguishable: 0, the
+    // argument refusals' 2, a drained lane, and a reading that failed.
+    const codes = [...src.matchAll(/export const EXIT_READY_\w+ = (\d+);/g)].map(m => Number(m[1]));
+    expect(codes).toHaveLength(2);
+    expect(new Set([0, 2, ...codes]).size, "a shared code makes two mechanisms one signal").toBe(4);
+    // Read from source, not imported: the script runs on import and would
+    // start reaching for a token and the network.
+    const declared = src.match(/export const EXIT_READY_SHORT = (\d+);/);
+    expect(declared, "the constant must be declared on one line").not.toBeNull();
+    const value = Number(declared![1]);
+    expect(value, "a zero here is the mutation, not the shipped value").toBeGreaterThan(0);
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(code, "a literal would bypass the mutation").not.toMatch(
+      new RegExp(`process\\.exit\\(\\s*${value}\\s*\\)`),
+    );
+    // And the code is SPECIFIC to this mechanism. The script already exits 2
+    // when its arguments refuse; sharing that code would make a drained lane
+    // and a typo'd flag the same observable, so no assertion on either could
+    // say which one it witnessed.
+    expect(code, "the argument refusals must keep their own code").toContain("process.exit(2)");
+    expect(value, "sharing exit 2 would make two mechanisms one signal").not.toBe(2);
+  });
+
+  test("the script restates the decider's answer and spells no condition of its own", () => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(code).toContain("readyRefusal(laneReadings, readyNow.length)");
+    // The gate judges the same number the page printed as startable. Any
+    // other count here lets the report disagree with itself in one page.
+    expect(code, "the gate must not re-derive its own Ready count").toMatch(
+      /readyRefusal\(laneReadings, readyNow\.length\)/,
+    );
+    expect(code, "a second condition here would be a second decider").not.toMatch(
+      /health\s*===\s*"SHORT"/,
+    );
   });
 });
