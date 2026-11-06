@@ -38,6 +38,8 @@ import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
+import { heldReason, readyCap, selectReady } from "../lib/board-ready-rule";
+import { measureClosedIssues } from "../lib/board-throughput";
 import {
   criterionIdsIn,
   isReady,
@@ -54,6 +56,112 @@ import {
  */
 export const REFUSAL_EXIT = 1;
 
+/**
+ * `owner/name`, or `null` for anything that is not exactly that.
+ *
+ * **`split("/")[1]` is `undefined` for `--repo rungate`, and a `!` only
+ * silences the type checker.** That `undefined` reached
+ * `measureClosedIssues` and surfaced as an opaque GraphQL error far from
+ * the typo that caused it — ai-review on #1795.
+ *
+ * Exported because the first version of this guard was inline in
+ * `main()`, where no case could reach it: the mutation battery removed
+ * the whole condition and read ZERO. A guard no test can observe is a
+ * line in a file (`.claude/rules/checks-must-be-able-to-fail.md`).
+ */
+export function parseRepo(value: string): { owner: string; name: string } | null {
+  const parts = value.split("/");
+  if (parts.length !== 2) return null;
+  const [owner, name] = parts;
+  if (!owner || !name) return null;
+  return { owner, name };
+}
+
+/**
+ * Split what this command MAY write into what the cap lets through.
+ *
+ * **The cap applies here too, and from the same function the workflow
+ * uses.** This command is the hand-run second CALLER of Ready's rule —
+ * not a second rule, which is the distinction that matters: it and
+ * `board-ready.yml` both read `lib/board-ready-rule.ts`, so they cannot
+ * size the lane differently. Before this, the workflow filled to a
+ * derived depth and one hand-run of this command refilled the lane to
+ * whatever happened to be eligible.
+ *
+ * **A demotion to Backlog is never capped**, and that is the half a
+ * naive implementation gets wrong. The cap bounds what may ENTER Ready;
+ * applying it to departures would pin a claimed or newly-blocked card in
+ * the lane for as long as the lane stayed full — the cap would start
+ * preserving exactly the staleness it exists to prevent.
+ *
+ * Exported so a case can hold it. Inline, the only way to observe it was
+ * to run the command against a live board.
+ */
+/**
+ * The items this command may move, and how many of them hold Ready.
+ *
+ * **One array, read twice — not two filters that happen to agree.**
+ * `occupied` used to be counted over EVERY board item while the
+ * transitions were computed over the open ones, so anything the command
+ * can never move counted against the cap forever and silently starved
+ * promotions. A closed issue whose Status was never taken off Ready is
+ * the case ai-review named; a DRAFT board item, which has no state at
+ * all, is the one that was live on the board when this was written.
+ *
+ * Returning both from one pass is the point. Re-spelling
+ * `state === "OPEN"` beside the count would be two deciders answering one
+ * question, which no behavioural test can tell apart
+ * (`.claude/rules/checks-must-be-able-to-fail.md`) — and that is exactly
+ * how the two came to disagree. ai-review round 3 of #1795.
+ */
+export function readyPopulation<T extends { state: string; status: string }>(
+  items: readonly T[],
+): { writable: T[]; occupied: number } {
+  const writable = items.filter(i => i.state === "OPEN");
+  return { writable, occupied: writable.filter(i => i.status === READY).length };
+}
+
+export function splitReadyChanges<
+  T extends { item: { number: number; phase: number | null; status: string }; to: string },
+>(
+  eligible: readonly T[],
+  cap: number | null,
+  occupied: number,
+): { readyWritable: T[]; heldByCap: T[]; selection: ReturnType<typeof selectReady> } {
+  const promotions = eligible.filter(c => c.to === READY);
+  const demotions = eligible.filter(c => c.to !== READY);
+  // **A demotion in THIS batch frees a slot in this batch.** `occupied`
+  // is the pre-write count, so handing it to `selectReady` unchanged
+  // under-promotes by however many cards are leaving Ready in the same
+  // run — a frontier move that demotes three and promotes three would
+  // promote none. ai-review round 2 of #1795.
+  //
+  // Only demotions FROM Ready free anything. This command may also
+  // overwrite a card with no Status at all, and counting those would
+  // over-promote past the cap — the opposite error, reached by the
+  // obvious fix.
+  const freed = demotions.filter(c => c.item.status === READY).length;
+  const selection = selectReady(
+    promotions.map(c => ({ number: c.item.number, phase: c.item.phase })),
+    cap,
+    Math.max(0, occupied - freed),
+  );
+  // **Written in the order `selectReady` chose, not in board order.**
+  // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
+  // wrong SEQUENCE, so the log and the write order stop matching the
+  // phase-then-age ranking the lane is supposed to express — and a run
+  // that dies part-way through would have written an arbitrary subset
+  // rather than the highest-ranked one. ai-review round 2 of #1795.
+  const byNumber = new Map(promotions.map(c => [c.item.number, c]));
+  const chosen = selection.promote.map(p => byNumber.get(p.number)!).filter(Boolean);
+  const chosenNumbers = new Set(chosen.map(c => c.item.number));
+  return {
+    readyWritable: [...demotions, ...chosen],
+    heldByCap: promotions.filter(c => !chosenNumbers.has(c.item.number)),
+    selection,
+  };
+}
+
 const USAGE = `rungate board-mirror --project <node-id> [--spec <spec.md>] [--field <name>] [--write] [--ready] [--json]
 
   --project  the ProjectV2 node id, e.g. PVT_kwHO…
@@ -65,6 +173,10 @@ const USAGE = `rungate board-mirror --project <node-id> [--spec <spec.md>] [--fi
              already exist on the project — this does not create one, because
              a typo would silently add a column nobody looks at.
   --write    write the field. Without it nothing is mutated.
+  --repo     owner/name — required with --ready, which derives Ready's depth
+             from how much that repository delivered. A board can span
+             repositories and carries no single answer, so there is no
+             default: without it the depth is UNMEASURED and nothing moves.
   --ready    also move Status between Backlog and Ready from the OPEN
              blocked-by count. Implies nothing unless --write is given too.
   --json     the whole reading.`;
@@ -128,6 +240,7 @@ export async function main(argv: string[]): Promise<number> {
         ready: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         "project-root": { type: "string" },
+        repo: { type: "string" },
       },
       allowPositionals: false,
     });
@@ -136,6 +249,15 @@ export async function main(argv: string[]): Promise<number> {
     return REFUSAL_EXIT;
   }
   const { values } = parsed;
+  // **`split("/")[1]` is `undefined` for `--repo rungate`, and the `!`
+  // only silences the type checker.** That `undefined` reaches
+  // `measureClosedIssues` and surfaces as an opaque GraphQL error far
+  // from the typo that caused it. Validated here, where the message can
+  // name the flag. ai-review on #1795.
+  if (values.repo !== undefined && parseRepo(values.repo) === null) {
+    console.error(`board-mirror: --repo must be owner/name, got "${values.repo}"\n\n${USAGE}`);
+    return REFUSAL_EXIT;
+  }
   if (!values.project) {
     console.error(`board-mirror: --project is required\n\n${USAGE}`);
     return REFUSAL_EXIT;
@@ -241,8 +363,8 @@ export async function main(argv: string[]): Promise<number> {
     .map(i => ({ item: i, to: byNumber.get(i.number)!.text }));
 
   const frontier = openFrontier(items);
-  const readyChanges = items
-    .filter(i => i.state === "OPEN")
+  const { writable, occupied } = readyPopulation(items);
+  const readyChanges = writable
     .map(i => ({ item: i, to: isReady(i, frontier) ? READY : BACKLOG }))
     .filter(c => c.to !== c.item.status);
 
@@ -253,8 +375,26 @@ export async function main(argv: string[]): Promise<number> {
   // may have claimed the issue.
   const mayWrite = (c: { item: Item }) =>
     MAY_OVERWRITE.includes(c.item.status) && c.item.assignees === 0;
-  const readyWritable = readyChanges.filter(mayWrite);
+  const eligible = readyChanges.filter(mayWrite);
   const readySkipped = readyChanges.filter(c => !mayWrite(c));
+
+  // A board can span repositories, so there is no repository to default
+  // to and no honest depth without one. UNMEASURED, and nothing is
+  // promoted on a null cap.
+  // Re-parsed rather than carried, so there is one spelling of what a
+  // repository argument is. `main` has already refused anything this
+  // returns null for.
+  const repo = values.repo === undefined ? null : parseRepo(values.repo);
+  // **Gated on `--ready`, not merely on `--repo`.** This pages every
+  // closed issue in the repository, and a plain Criteria sync that
+  // happens to pass `--repo` has no use for a depth. ai-review round 2
+  // of #1795.
+  const closedReadings =
+    values.ready && repo
+      ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
+      : null;
+  const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
+  const { readyWritable, heldByCap, selection } = splitReadyChanges(eligible, cap, occupied);
 
   if (values.json) {
     console.log(
@@ -267,6 +407,13 @@ export async function main(argv: string[]): Promise<number> {
           fieldChanges: fieldChanges.map(c => ({ number: c.item.number, from: c.item.criteriaCell, to: c.to })),
           readyWritable: readyWritable.map(c => ({ number: c.item.number, from: c.item.status, to: c.to })),
           readySkipped: readySkipped.map(c => ({ number: c.item.number, status: c.item.status })),
+          // The depth and what it held back, so a consumer reading this
+          // JSON can tell "nothing was eligible" from "the lane is full"
+          // from "the depth could not be read". Three different facts
+          // that all used to come out as an empty `readyWritable`.
+          readyCap: cap,
+          readyOccupied: occupied,
+          readyHeldByCap: heldByCap.map(c => c.item.number),
           wrote: values.write,
         },
         null,
@@ -288,6 +435,22 @@ export async function main(argv: string[]): Promise<number> {
         `\n  Ready lane — the frontier is ` +
           (frontier === null ? `nowhere: no open issue sits in a phase` : `Phase ${frontier}`),
       );
+      console.log(`    depth: ${cap ?? "UNMEASURED"}. ${selection.why}`);
+      if (cap === null && !values.repo) {
+        console.log(
+          `    pass --repo owner/name to derive the depth; a board can span repositories ` +
+            `so there is nothing to default to, and nothing is promoted without it`,
+        );
+      }
+      for (const c of heldByCap) {
+        // `heldReason(cap)`, never a literal. The literal was the exact
+        // defect ai-review found in `scripts/board-ready.ts` on #1794 —
+        // an unmeasured depth reported as a full lane — and I wrote it
+        // fresh here one pull request later, with the fix exported and
+        // in the tree. `test/board-ready-rule.test.ts` now refuses the
+        // string anywhere but its own binding.
+        console.log(`    #${c.item.number} eligible but held: ${heldReason(cap)}`);
+      }
       for (const c of readyWritable) {
         console.log(`    #${c.item.number}  ${c.item.status || "(none)"} -> ${c.to}  (${c.item.milestone || "no milestone"}; ${c.item.blockedByOpen} open of ${c.item.blockedByTotal} blockers, ${c.item.assignees} assignee(s))`);
       }

@@ -55,6 +55,7 @@ import {
   unlocatableEntries,
 } from "../lib/board-mirror";
 import { parseCriteria } from "../lib/spec-evidence";
+import { parseRepo, readyPopulation, splitReadyChanges } from "../scripts/board-mirror";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -786,5 +787,247 @@ describe("#1647: the Ready lane", () => {
     test("an assignee is a claim, not a block, but it still leaves the lane", () => {
       expect(isUnblocked({ blockedBy: 0 }, 1)).toBe(false);
     });
+  });
+});
+
+/**
+ * ## The mutation batteries
+ *
+ *   mutant                                         reading   predicted
+ *   the cap ignored entirely                         5          4
+ *   demotions dropped from writable                  2          2
+ *   demotions capped too (the naive version)         2          1
+ *   --repo validation dropped (FIRST attempt)        0          2
+ *   parseRepo drops the arity check                  1          2
+ *   parseRepo drops the empty-side check             1          1
+ *   main stops calling parseRepo (FIRST attempt)     0          0
+ *
+ * **Two rows read ZERO, and both were real gaps rather than wrong
+ * predictions.** The `--repo` guard was inline in `main()` where no case
+ * could reach it — four assertions later added over an exported
+ * `parseRepo`. Then removing `main`'s CALL to it read zero as well: a
+ * validator nothing invokes is four green cases and no guard, which is
+ * `runVerdict`'s unreachable branch one layer out. Both are closed.
+ *
+ * The arity miss is instructive: dropping `parts.length !== 2` still
+ * refuses `"rungate"`, because the empty-side check catches it. Only
+ * `"a/b/c"` survives, so one case moves and not two. Predicting the
+ * MEMBERSHIP rather than the total is what would have got this right.
+ */
+describe("SC-2722: the hand-run writer fills to the same depth as the workflow", () => {
+  const c = (number: number, phase: number | null, to: string, status = "Backlog") => ({
+    item: { number, phase, status },
+    to,
+  });
+  const promote = (n: number) => c(n, 0, "Ready");
+  /** A card LEAVING Ready. Its status is what frees a slot in this batch. */
+  const demote = (n: number) => c(n, 0, "Backlog", "Ready");
+
+  test("more eligible promotions than depth writes exactly the depth, in order", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges(
+      [promote(5), promote(1), promote(9), promote(3)],
+      2,
+      0,
+    );
+    expect(readyWritable.map(x => x.item.number)).toEqual([1, 3]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([5, 9]);
+  });
+
+  test("a full lane promotes nothing", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges([promote(1), promote(2)], 2, 2);
+    expect(readyWritable).toEqual([]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([1, 2]);
+  });
+
+  // The half a naive implementation gets wrong. Capping departures would
+  // pin a claimed or newly-blocked card in the lane for as long as the
+  // lane stayed full — the cap preserving the staleness it exists to
+  // prevent.
+  test("a demotion to Backlog is NEVER capped, even when the lane is over its depth", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges(
+      [demote(7), demote(8), promote(1)],
+      2,
+      99,
+    );
+    expect(
+      readyWritable.map(x => x.item.number).sort(),
+      "the cap bounds what may ENTER Ready, not what may leave it",
+    ).toEqual([7, 8]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([1]);
+  });
+
+  // A board can span repositories, so there is no repository to derive a
+  // depth from and no honest default. Promoting everything on an unread
+  // depth is the uncapped behaviour this replaces.
+  test("an unmeasured depth promotes nothing but still demotes", () => {
+    const { readyWritable, heldByCap, selection } = splitReadyChanges(
+      [demote(7), promote(1), promote(2)],
+      null,
+      0,
+    );
+    expect(readyWritable.map(x => x.item.number)).toEqual([7]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([1, 2]);
+    expect(selection.why).toContain("UNMEASURED");
+  });
+
+  test("phase orders the promotions, and a phase-less issue is still promotable", () => {
+    const { readyWritable } = splitReadyChanges([c(4, null, "Ready"), c(9, 2, "Ready")], 1, 0);
+    expect(
+      readyWritable.map(x => x.item.number),
+      "the phased issue goes first, and the phase-less one is queued rather than excluded",
+    ).toEqual([9]);
+  });
+
+  // ROUND 2, finding 1. The case above cannot see this: its board order
+  // and its ranked order are the same list, so a `filter` over the
+  // candidates reproduces the right answer by luck. Here they disagree —
+  // #2 outranks #1 on phase while #1 comes first on the board — and a
+  // re-derived subset writes them backwards.
+  test("the promotions are written in RANKED order, not in board order", () => {
+    const { readyWritable } = splitReadyChanges([c(1, 5, "Ready"), c(2, 0, "Ready")], 2, 0);
+    expect(
+      readyWritable.map(x => x.item.number),
+      "membership can be right while the sequence is wrong, and the log then " +
+        "claims a phase-then-age ranking it did not write",
+    ).toEqual([2, 1]);
+  });
+
+  // ROUND 2, finding 3 — the HIGH one. `occupied` is counted before the
+  // write, so a frontier move that demotes one and promotes one promoted
+  // NOTHING: the departing card was still counted as holding its slot.
+  test("a card leaving Ready in this batch frees its slot in this batch", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges(
+      [demote(7), promote(1), promote(2)],
+      2,
+      2,
+    );
+    expect(
+      readyWritable.map(x => x.item.number),
+      "Ready holds 2 of 2 and one card is leaving, so exactly one may enter",
+    ).toEqual([7, 1]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([2]);
+  });
+
+  // The control for the case above, and the error the obvious fix makes.
+  // This command may also overwrite a card carrying NO status at all;
+  // that card was never in Ready, so counting it as a departure would
+  // promote past the cap — the opposite failure, reached by subtracting
+  // `demotions.length`.
+  test("a demotion of a card that was never in Ready frees nothing", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges(
+      [c(7, 0, "Backlog", ""), promote(1)],
+      2,
+      2,
+    );
+    expect(
+      readyWritable.map(x => x.item.number),
+      "the lane is still full — nothing left it — so the promotion waits",
+    ).toEqual([7]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([1]);
+  });
+});
+
+describe("SC-2724: occupancy is counted over the items the command can move", () => {
+  const it_ = (number: number, state: string, status: string) => ({ number, state, status });
+
+  // ai-review round 3. `occupied` was counted over EVERY board item while
+  // the transitions were computed over the open ones, so anything this
+  // command can never move counted against the cap forever.
+  test("a closed issue left at Ready does not hold a slot", () => {
+    const { writable, occupied } = readyPopulation([
+      it_(1, "OPEN", "Ready"),
+      it_(2, "CLOSED", "Ready"),
+    ]);
+    expect(occupied, "nothing demotes a closed issue, so counting it starves Ready forever").toBe(1);
+    expect(writable.map(i => i.number)).toEqual([1]);
+  });
+
+  // The case the finding did not name and the board actually held: a
+  // DRAFT project item has no issue behind it and so no state at all.
+  // Measured 2026-11-05 — Ready carried six items, five open issues and
+  // one draft, which is why the lane read 5 of 4 OVER.
+  test("a draft board item, which has no state, holds no slot", () => {
+    const { writable, occupied } = readyPopulation([
+      it_(1, "OPEN", "Ready"),
+      { number: 2, state: undefined as unknown as string, status: "Ready" },
+    ]);
+    expect(occupied).toBe(1);
+    expect(writable.map(i => i.number)).toEqual([1]);
+  });
+
+  // The control. A guard that refused everything would also pass both
+  // cases above while making the cap unreachable.
+  test("open issues in Ready are still counted", () => {
+    const { occupied } = readyPopulation([
+      it_(1, "OPEN", "Ready"),
+      it_(2, "OPEN", "Ready"),
+      it_(3, "OPEN", "Backlog"),
+    ]);
+    expect(occupied).toBe(2);
+  });
+
+  // **The two readings come from one array.** Re-spelling the open filter
+  // beside the count is what let them drift apart, and two deciders
+  // agreeing is invisible to every behavioural case above.
+  test("the writable list and the occupancy count never disagree", () => {
+    const items = [
+      it_(1, "OPEN", "Ready"),
+      it_(2, "CLOSED", "Ready"),
+      it_(3, "OPEN", "Backlog"),
+      it_(4, "CLOSED", "Backlog"),
+    ];
+    const { writable, occupied } = readyPopulation(items);
+    expect(
+      occupied,
+      "occupancy must be a count OF the writable list, not a second pass over the board",
+    ).toBe(writable.filter(i => i.status === "Ready").length);
+  });
+});
+
+describe("SC-2722: a repository argument is owner/name or it is refused", () => {
+  test("a well-formed value parses", () => {
+    expect(parseRepo("hornjason/rungate")).toEqual({ owner: "hornjason", name: "rungate" });
+  });
+
+  // The shape ai-review named on #1795: `split("/")[1]` is undefined and
+  // the `!` only silences the type checker, so the undefined reaches
+  // measureClosedIssues and surfaces as an opaque GraphQL error far from
+  // the typo.
+  test("a bare name with no slash is refused, not half-parsed", () => {
+    expect(parseRepo("rungate")).toBeNull();
+  });
+
+  // **The decider is called.** Mutant G2c removed `main`'s call to
+  // `parseRepo` and read ZERO: four green cases over a function nothing
+  // invokes. That is the same shape as the inline guard they replaced,
+  // one layer out — `runVerdict`'s unreachable UNMEASURED branch is the
+  // worked instance. Asserted on code with comments stripped, because
+  // this very block names the symbol in prose.
+  test("main refuses a malformed --repo before any network call", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "scripts/board-mirror.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src, "a validator nothing calls is four green cases and no guard").toContain(
+      "parseRepo(values.repo) === null",
+    );
+  });
+
+  // ROUND 2, finding 2. Gated on `repo` alone, a plain Criteria sync that
+  // happens to pass `--repo` paged every closed issue in the repository to
+  // compute a depth it then never used.
+  test("the throughput pass runs only when --ready asked for a depth", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "scripts/board-mirror.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src, "a depth nothing reads is not worth a full pass over the closed issues").toContain(
+      "values.ready && repo",
+    );
+  });
+
+  test("an empty side or an extra slash is refused", () => {
+    expect(parseRepo("/rungate")).toBeNull();
+    expect(parseRepo("hornjason/")).toBeNull();
+    expect(parseRepo("")).toBeNull();
+    expect(parseRepo("a/b/c")).toBeNull();
   });
 });

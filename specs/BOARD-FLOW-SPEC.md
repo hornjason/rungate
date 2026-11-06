@@ -403,10 +403,47 @@ blocks the lane entirely) traded against a transient overshoot that the
 report already names. If `OVER` starts appearing in readings rather than in
 this paragraph, that is the evidence to revisit it.
 
-Still open, and deliberately separate: `isReady` keeps the phase gate, and
-`scripts/board-mirror.ts --ready --write` — the hand-run second writer — is
-still uncapped. Both land together, because they are the same expression.
-Dropping the gate before that is the 36-of-46 reading again.
+**Both callers now fill to the same depth.** `scripts/board-mirror.ts
+--ready --write` is the hand-run one, and it was refilling the lane to
+whatever happened to be eligible — undoing the workflow's cap in a single
+command. It is a second CALLER, not a second rule, which is the
+distinction that matters: both read `lib/board-ready-rule.ts`, so they
+cannot size the lane differently.
+
+It is not refused outright because `scripts/plan-issues.ts` names it as
+the step-4 advice for a project bootstrapping its board, and
+`board-ready.yml`'s dispatch fans out from one closed issue rather than
+sweeping. Refusing would cost a consumer the only full-board path there
+is.
+
+It takes `--repo owner/name`, and without it the depth is UNMEASURED and
+nothing is promoted. A board can span repositories and so carries no
+single delivery rate; defaulting to one would be a number with no claim
+to being that board's.
+
+**Only ENTRY is capped. A demotion to Backlog never is** — that is the
+half a naive implementation gets wrong. Applying the cap to departures
+would pin a claimed or newly-blocked card in the lane for as long as the
+lane stayed full, so the cap would start preserving exactly the staleness
+it exists to prevent.
+
+**The same defect was written three times, and the third was after the
+fix shipped.** ai-review found a hardcoded "Ready is at its depth" in
+`scripts/board-ready.ts` on #1794 — an unmeasured depth reported as a
+full lane. `heldReason` was created, exported and merged. One pull
+request later the literal was typed fresh into the sibling script and
+ai-review found it again. A case per script catches only the script that
+has one, so the string is now a population check: it may appear in its
+own binding and nowhere else in `lib/` or `scripts/`.
+
+This is the third class in this area to need that treatment, after the
+cursor advance and the two Ready definitions. The pattern is consistent
+enough to state plainly: **in this codebase, fixing an instance reliably
+leaves siblings, and only a check over the population closes it.**
+
+Still open, and the last piece: `isReady` keeps the phase gate. With both
+writers now bounded, dropping it no longer reproduces the 36-of-46
+reading, so it is next rather than blocked.
 
 Ready also still has **one** automatic trigger — `issues: [closed]`, fanning
 out to whatever the closed issue was blocking. Measured 2026-11-05: 34 of 34
@@ -601,6 +638,18 @@ second: flow efficiency is the one metric this spec must not promise.**
       needs: test
       proved-by:
 - [ ] SC-2721: no pager decides for itself that a page it could not read was the last
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2722: both callers of the Ready rule fill to the same depth, and only entry is capped
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2723: no site spells a held reason for itself
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2724: Ready's occupancy is counted over the items the writer can actually move
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:

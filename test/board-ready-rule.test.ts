@@ -1,5 +1,5 @@
 /**
- * Covers SC-2710, SC-2711, SC-2712, SC-2715, SC-2716, SC-2719 (specs/BOARD-FLOW-SPEC.md).
+ * Covers SC-2710, SC-2711, SC-2712, SC-2715, SC-2716, SC-2719, SC-2723 (specs/BOARD-FLOW-SPEC.md).
  *
  * ## The mutation battery, predicted before it was run
  *
@@ -37,6 +37,8 @@
  * typed out in both files and the mutant has to break it in both.
  */
 import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "fs";
+import { join } from "path";
 import {
   READY_TOLERANCE_DAYS,
   heldReason,
@@ -210,5 +212,45 @@ describe("SC-2719: a held issue is told WHY it was held", () => {
   // Zero is a real cap, not a missing one, and the two must not collapse.
   test("a depth of zero is a full lane, not an unread one", () => {
     expect(heldReason(0)).toContain("at its depth");
+  });
+});
+
+describe("SC-2723: nothing spells a held reason for itself", () => {
+  const ROOT = join(import.meta.dir, "..");
+  const codeOf = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  /**
+   * **Three sites, one defect, and the third was written AFTER the fix
+   * existed.** ai-review found the hardcoded "Ready is at its depth" in
+   * `scripts/board-ready.ts` on #1794 — an unmeasured depth reported as
+   * a full lane. `heldReason` was created, exported and merged. One pull
+   * request later I typed the literal fresh into
+   * `scripts/board-mirror.ts`, the sibling script, and ai-review found
+   * it again.
+   *
+   * A case per script would have caught only the script that had one.
+   * This is the population, so the next site fails the build instead of
+   * waiting for a reviewer.
+   */
+  test("the held-reason string appears only in its own binding", () => {
+    const offenders: string[] = [];
+    for (const dir of ["lib", "scripts"]) {
+      for (const f of readdirSync(join(ROOT, dir)).sort()) {
+        if (!f.endsWith(".ts")) continue;
+        const path = `${dir}/${f}`;
+        if (path === "lib/board-ready-rule.ts") continue;
+        if (codeOf(readFileSync(join(ROOT, path), "utf-8")).includes("at its depth")) offenders.push(path);
+      }
+    }
+    expect(
+      offenders,
+      "spelling the reason inline reports an UNMEASURED depth as a full lane — the exact " +
+        "finding ai-review raised on #1794 and again on #1795. Call heldReason(cap) instead",
+    ).toEqual([]);
+  });
+
+  test("the scan can find the string it looks for, and ignores comments", () => {
+    expect(codeOf('console.log("at its depth");').includes("at its depth")).toBe(true);
+    expect(codeOf("// never say at its depth here\nconst x = 1;").includes("at its depth")).toBe(false);
   });
 });
