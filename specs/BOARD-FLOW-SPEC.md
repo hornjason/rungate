@@ -637,111 +637,138 @@ second: flow efficiency is the one metric this spec must not promise.**
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: run
       proved-by:
-- [ ] SC-2641: a lane that does not move inside the bounded wait fails
+- [x] SC-2641: a lane that does not move inside the bounded wait fails
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2642: an issue with an open blocker does not reach Ready
+      proved-by: test/board-walkthrough.test.ts — 28 pass, 0 fail, 2026-11-06
+      fingerprint: 1a12f4f4
+- [x] SC-2642: an issue with an open blocker does not reach Ready
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2643: the walk-through deletes its own issues whether it passed
+      proved-by: test/board-walkthrough.test.ts — 28 pass, 0 fail, 2026-11-06
+      fingerprint: bbad6cec
+- [x] SC-2643: the walk-through deletes its own issues whether it passed
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2644: every lane in the purpose table names its cost of being wrong
+      proved-by: test/board-walkthrough.test.ts — 28 pass, 0 fail, 2026-11-06
+      fingerprint: 15e8e7ef
+- [x] SC-2644: every lane in the purpose table names its cost of being wrong
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2670: the status report reads every lane against what should be in it
+      proved-by: test/board-flow-spec.test.ts — 6 pass, 0 fail, 2026-11-06
+      fingerprint: b649cd76
+- [x] SC-2670: the status report reads every lane against what should be in it
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2690: one decider maps every lane event, and no event maps to two lanes
+      proved-by: test/board-lane-health.test.ts — 24 pass, 0 fail, 2026-11-06; the mutant reading an incomplete census as complete reddens 1 case, the one predicted
+      fingerprint: 308702db
+- [x] SC-2690: one decider maps every lane event, and no event maps to two lanes
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2691: a close whose reason cannot be read refuses instead of saying Done
+      proved-by: test/board-flow.test.ts — 19 pass, 0 fail, 2026-11-06; the mutant collapsing `laneFor` to one lane reddens 7 cases, exactly the predicted membership
+      fingerprint: be75eb66
+- [x] SC-2691: a close whose reason cannot be read refuses instead of saying Done
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2692: every backwards move returns to Backlog under one rule
+      proved-by: test/board-flow.test.ts — 19 pass, 0 fail, 2026-11-06; the mutant collapsing `laneFor` to one lane reddens 7 cases, exactly the predicted membership
+      fingerprint: 235a8c3f
+- [x] SC-2692: every backwards move returns to Backlog under one rule
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2710: Ready's depth is derived from live throughput, never typed in
+      proved-by: test/board-flow.test.ts — 19 pass, 0 fail, 2026-11-06
+      fingerprint: 74191ffe
+- [x] SC-2710: Ready's depth is derived from live throughput, never typed in
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2711: a throughput that could not be read leaves Ready unjudged, not healthy
+      proved-by: test/board-ready-rule.test.ts — 25 pass, 0 fail, 2026-11-06
+      fingerprint: 106d0e35
+- [x] SC-2711: a throughput that could not be read leaves Ready unjudged, not healthy
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2712: the writer and the health reading read ONE definition of Ready's size
+      proved-by: test/board-ready-rule.test.ts — 25 pass, 0 fail; test/board-lane-health.test.ts — 24 pass, 0 fail, 2026-11-06; the mutant turning an unreadable cap into full eligibility reddens this case
+      fingerprint: 7cc82f39
+- [x] SC-2712: the writer and the health reading read ONE definition of Ready's size
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2713: throughput counts delivery inside a stated window, and nothing else
+      proved-by: test/board-ready-rule.test.ts — 25 pass, 0 fail; test/board-lane-health.test.ts — 24 pass, 0 fail, 2026-11-06
+      fingerprint: 5f19acb5
+- [x] SC-2713: throughput counts delivery inside a stated window, and nothing else
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2714: a throughput pass that did not complete is UNMEASURED, never zero
+      proved-by: test/board-throughput.test.ts — 20 pass, 0 fail, 2026-11-06
+      fingerprint: 91844a62
+- [x] SC-2714: a throughput pass that did not complete is UNMEASURED, never zero
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2715: phase orders Ready and never empties it
+      proved-by: test/board-throughput.test.ts — 20 pass, 0 fail, 2026-11-06
+      fingerprint: 24d90590
+- [x] SC-2715: phase orders Ready and never empties it
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2716: the writer promotes only what fits, and replenishes as slots free
+      proved-by: test/board-ready-rule.test.ts — 25 pass, 0 fail, 2026-11-06
+      fingerprint: c2bf19d1
+- [x] SC-2716: the writer promotes only what fits, and replenishes as slots free
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2717: a page whose pageInfo cannot be read is UNMEASURED, not the last page
+      proved-by: test/board-ready-rule.test.ts — 25 pass, 0 fail, 2026-11-06
+      fingerprint: 54e8110e
+- [x] SC-2717: a page whose pageInfo cannot be read is UNMEASURED, not the last page
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2718: one pass over the closed issues answers both readings
+      proved-by: test/board-throughput.test.ts — 20 pass, 0 fail, 2026-11-06
+      fingerprint: fdc4f67e
+- [x] SC-2718: one pass over the closed issues answers both readings
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2719: a held issue is told which of the two causes held it
+      proved-by: test/board-throughput.test.ts — 20 pass, 0 fail, 2026-11-06
+      fingerprint: 53576aee
+- [x] SC-2719: a held issue is told which of the two causes held it
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2720: a page that cannot say whether more exist is UNREADABLE, never done
+      proved-by: test/board-ready-rule.test.ts — 25 pass, 0 fail, 2026-11-06
+      fingerprint: 4473c458
+- [x] SC-2720: a page that cannot say whether more exist is UNREADABLE, never done
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2721: no pager decides for itself that a page it could not read was the last
+      proved-by: test/graphql-cursor.test.ts — 12 pass, 0 fail, 2026-11-06
+      fingerprint: b3a0a9d8
+- [x] SC-2721: no pager decides for itself that a page it could not read was the last
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2722: both callers of the Ready rule fill to the same depth, and only entry is capped
+      proved-by: test/graphql-cursor.test.ts — 12 pass, 0 fail, 2026-11-06
+      fingerprint: c4d9aeaa
+- [x] SC-2722: both callers of the Ready rule fill to the same depth, and only entry is capped
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2723: no site spells a held reason for itself
+      proved-by: test/board-mirror.test.ts — 63 pass, 0 fail, 2026-11-06
+      fingerprint: 59fac479
+- [x] SC-2723: no site spells a held reason for itself
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2724: Ready's occupancy is counted over the items the writer can actually move
+      proved-by: test/board-ready-rule.test.ts — 25 pass, 0 fail, 2026-11-06; the mutant turning an unreadable cap into full eligibility reddens this case
+      fingerprint: 2b37aec4
+- [x] SC-2724: Ready's occupancy is counted over the items the writer can actually move
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2730: every lane row measures its count against a denominator drawn from the same population
+      proved-by: test/board-mirror.test.ts — 63 pass, 0 fail, 2026-11-06
+      fingerprint: 9f50364e
+- [x] SC-2730: every lane row measures its count against a denominator drawn from the same population
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2731: a verdict names only what the census observed, never a writer it did not look for
+      proved-by: test/board-lane-health.test.ts — 24 pass, 0 fail, 2026-11-06
+      fingerprint: 494216cc
+- [x] SC-2731: a verdict names only what the census observed, never a writer it did not look for
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2732: a population census reaches files in subdirectories, not only the top level
+      proved-by: test/board-lane-health.test.ts — 24 pass, 0 fail; test/work-status.test.ts — 45 pass, 0 fail, 2026-11-06
+      fingerprint: 4ec7bb30
+- [x] SC-2732: a population census reaches files in subdirectories, not only the top level
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
-- [ ] SC-2733: every census over lib/ and scripts/ lists its population through one binding
+      proved-by: test/source-census.test.ts — 8 pass, 0 fail, 2026-11-06
+      fingerprint: 5fcf4645
+- [x] SC-2733: every census over lib/ and scripts/ lists its population through one binding
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by:
+      proved-by: test/source-census.test.ts — 8 pass, 0 fail, 2026-11-06
+      fingerprint: 0e65db21

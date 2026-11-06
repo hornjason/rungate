@@ -100,13 +100,6 @@
       "note": "The spec-to-board pipeline spec (SPEC-TO-BOARD-PIPELINE-SPEC.md). The highest SC in specs/ on main was 2581 and the highest declared block ended at 2599, so this sits above both. SC-2600..2614 and SC-2615..2624 are consumed; 2625..2629 are free. SC-2615..2624 were added by ADR-009 and allocated INSIDE this block rather than a new one, because test/spec-to-board-pipeline.test.ts requires every id this spec consumes to sit in the single reservation owned by rg/pipeline-spec \u2014 a second block for the same spec fails it. Delete when both PRs merge."
     },
     {
-      "owner": "rg/1833-filing-dir",
-      "from": 240,
-      "to": 259,
-      "namespace": "FG",
-      "note": "#1833 - a filing resolves from where the command ran, not from the session's directory. FG-100..119 is the highest declared block and FG-231 the highest id on main, so this sits above both; FG has no allocator, so this is the eyeballed-headroom method .claude/rules/parallel-sessions.md names, declared before any id is consumed. Cannot be pushed to main ahead of the branch (main requires the `test` and `ai-review` checks with enforce_admins on), so it reaches main through this PR. Delete when the PR merges."
-    },
-    {
       "owner": "rg/stranded-work-visible",
       "from": 2630,
       "to": 2631,
