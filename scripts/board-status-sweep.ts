@@ -172,7 +172,14 @@ export interface BoardItem {
    */
   readonly idleDays: number | null;
   /**
-   * How many OPEN pull requests reference this issue, or `null` for NOT READ.
+   * How many OPEN pull requests DECLARE they close this issue, or `null`
+   * for NOT READ.
+   *
+   * Declare, not mention. The difference is the whole field: a mention is
+   * any sentence naming the number — including a status report, including
+   * this change's own pull-request body, which is how the first cut found
+   * "1 open pull request" on all seven stale claims and released none of
+   * them. `OPEN_PR_CLOSING_REFS_QUERY` has the measurement.
    *
    * Resolved only for the handful of rows that are already stale-claim
    * candidates — see `isStaleClaimCandidate`. Every other row keeps `null`,
@@ -235,7 +242,7 @@ export function idleDaysSince(updatedAt: unknown, now: number): number | null {
  * `verdictFor` says UNDECIDABLE.
  *
  * Deliberately cheap and deliberately WIDER than the release branch: it
- * costs one extra query to ask about a row that turns out not to need it,
+ * costs nothing to include a row that turns out not to need the answer,
  * and it costs an unassignment to skip a row that did.
  */
 export function isStaleClaimCandidate(item: BoardItem): boolean {
@@ -401,7 +408,7 @@ export function verdictFor(item: BoardItem): Verdict {
             kind: "undecidable",
             why:
               `assigned on GitHub, silent for ${item.idleDays} day(s), and the board says ` +
-              `${item.status} — but its open pull requests were NOT READ, so the second half ` +
+              `${item.status} — but the open pull requests closing it were NOT READ, so the second half ` +
               `of staleness is unmeasured. A claim is only released on silence AND no open ` +
               `pull request; releasing on the first alone would unassign work in review`,
           };
@@ -417,7 +424,7 @@ export function verdictFor(item: BoardItem): Verdict {
             to: item.status === BACKLOG ? null : BACKLOG,
             why:
               `assigned on GitHub but silent for ${item.idleDays} day(s) with no open pull ` +
-              `request, so the claim is stale. Releasing it: the backlog is for unassigned ` +
+              `request declaring it closes this, so the claim is stale. Releasing it: the backlog is for unassigned ` +
               `work, and board-ready.yml promotes it on merit once a slot frees`,
           };
         }
@@ -429,7 +436,7 @@ export function verdictFor(item: BoardItem): Verdict {
           kind: "correct",
           to: decision.lane,
           why:
-            `assigned on GitHub with ${item.openLinkedPRs} open pull request(s) but the board ` +
+            `assigned on GitHub with ${item.openLinkedPRs} open pull request(s) closing it, but the board ` +
             `says ${item.status}. The issue itself has been quiet for ${item.idleDays} day(s), ` +
             `which is why silence alone does not release a claim`,
         };
@@ -999,8 +1006,8 @@ export function parseBoardItem(node: any, now: number = Date.now()): BoardItem |
     // timestamp is `null`, NOT zero days: "no activity recorded" and
     // "active today" are opposite answers to the staleness question.
     idleDays: idleDaysSince(content.updatedAt, now),
-    // Never resolved here. `readBoard` fills it for stale-claim candidates
-    // only, because it costs a query per row and no other verdict asks.
+    // Never resolved here. `resolveLinkedPullRequests` fills it for
+    // stale-claim candidates only; no other verdict asks the question.
     openLinkedPRs: null,
     statusUnread,
   };
@@ -1031,29 +1038,61 @@ async function readBoard(token: string): Promise<BoardItem[]> {
 }
 
 /**
- * The open pull requests referencing one issue.
+ * Every open pull request, and the issues each one DECLARES it closes.
  *
- * `CROSS_REFERENCED_EVENT` is the same relation `scripts/work-status.ts`
- * reads, deliberately: "what counts as a linked pull request" already has
- * an owner in this repository and a second spelling here would be two
- * answers to one question with nothing comparing them.
+ * ## Why not `CROSS_REFERENCED_EVENT`, which this read used first
  *
- * `last: 100` rather than a paging loop. The question is "is there at least
- * one OPEN pull request", and an issue with more than a hundred cross
- * references whose only open one fell off the end is not a case this has to
- * be right about — a row that busy is not a stale claim. The truncation
- * direction is also the safe one: the worst it can do is leave a claim
- * standing.
+ * It was wrong, and it was caught by the artefact it produced. The first
+ * cut asked each candidate issue for its cross-referencing pull requests
+ * and counted the OPEN ones — the same relation `scripts/work-status.ts`
+ * reads. Run against the live board on 2026-11-06 it reported that all
+ * **7** stale claims had "1 open pull request" and released none of them.
+ * Every one of those pull requests was **#1823, this change's own**, whose
+ * body lists the seven issue numbers as its evidence. The instrument's own
+ * write-up became its input, and the answer it produced was the one that
+ * does nothing.
+ *
+ * A cross-reference is **any mention**: a comment linking two issues, a
+ * review quoting a number, a status report like this one. As a DISPLAY
+ * that is fine, and `work-status.ts` is a display — it prints the list for
+ * a person who can see what each pull request is. **This is a decider: it
+ * unassigns somebody or it does not.** A relation wide enough to match a
+ * sentence cannot carry that.
+ *
+ * ## What the narrow relation is, and the direction it is wrong in
+ *
+ * `closingIssuesReferences` is GitHub's own parse of a closing keyword in
+ * a pull request's body — the exact link `.claude/rules/ship-workflow.md`
+ * step 6 tells every agent in this repository to write, and the same field
+ * `lib/closing-reference-audit.ts` already treats as the authority on
+ * whether a pull request is attached to an issue. One answer, one owner.
+ *
+ * It is NARROWER than "a pull request someone is working on", so it errs
+ * toward **releasing** a claim whose pull request never declared the link.
+ * That is the direction to be wrong in here, and not because releasing is
+ * harmless — because such a pull request will not close its issue when it
+ * merges either. It is already broken, the repository already audits for
+ * it, and the release leaves the issue in the Backlog for its author to
+ * re-claim. The other direction is what shipped this morning: a relation
+ * so wide that nothing is ever stale and the whole conjunction is dead
+ * code that reads green.
+ *
+ * ## Direction of the query
+ *
+ * Asked PR-first rather than issue-first: one paginated read of the open
+ * pull requests serves every candidate, instead of a query per candidate,
+ * and `closingIssuesReferences` only exists on the pull-request side.
  */
-export const LINKED_PRS_QUERY = `
-query($owner: String!, $name: String!, $number: Int!) {
+export const OPEN_PR_CLOSING_REFS_QUERY = `
+query($owner: String!, $name: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
-    issue(number: $number) {
-      timelineItems(last: 100, itemTypes: [CROSS_REFERENCED_EVENT]) {
-        nodes {
-          ... on CrossReferencedEvent {
-            source { ... on PullRequest { number state } }
-          }
+    pullRequests(states: OPEN, first: 100, after: $endCursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        closingIssuesReferences(first: 50) {
+          pageInfo { hasNextPage }
+          nodes { number }
         }
       }
     }
@@ -1061,17 +1100,65 @@ query($owner: String!, $name: String!, $number: Int!) {
 }`;
 
 /**
- * Fill `openLinkedPRs` for the stale-claim candidates, and ONLY for those.
+ * Issue number -> how many OPEN pull requests declare they close it.
  *
- * One query per candidate, which is why the candidate test exists at all:
- * on 2026-11-06 that was 7 queries against a 176-item board rather than
- * 176. Everything else keeps `null`, and no verdict outside the release
- * branch asks the question.
+ * Pure, so the counting is testable without a network. A node missing its
+ * `closingIssuesReferences` connection contributes nothing and is not an
+ * error: a pull request that closes no issue is the ordinary case.
  *
- * **A failed fetch leaves `null` rather than assuming zero**, so the row
- * comes out UNDECIDABLE and the claim stands. The whole point of the field
- * is that an unread pull-request list must not be able to unassign
- * somebody.
+ * A `Set` per issue rather than a running total — the same pull request
+ * reached twice across a page boundary must not count twice.
+ */
+export function countOpenPRsByIssue(nodes: readonly unknown[]): Map<number, number> {
+  const prsFor = new Map<number, Set<number>>();
+  for (const node of nodes) {
+    const pr = node as { number?: unknown; closingIssuesReferences?: { nodes?: unknown } };
+    if (typeof pr?.number !== "number") continue;
+    const refs = pr.closingIssuesReferences?.nodes;
+    if (!Array.isArray(refs)) continue;
+    for (const ref of refs) {
+      const issue = (ref as { number?: unknown })?.number;
+      if (typeof issue !== "number") continue;
+      const seen = prsFor.get(issue) ?? new Set<number>();
+      seen.add(pr.number);
+      prsFor.set(issue, seen);
+    }
+  }
+  return new Map([...prsFor].map(([issue, prs]) => [issue, prs.size]));
+}
+
+/**
+ * Fill `openLinkedPRs` from a counted map, for stale-claim candidates ONLY.
+ *
+ * A candidate absent from the map has **zero** open pull requests, not an
+ * unread one: the map is built from a complete read of every open pull
+ * request in the repository, so absence from it is an answer. That is the
+ * one place in this file where a missing key legitimately means zero, and
+ * it is only legitimate because the caller refuses to build the map at all
+ * unless the read completed.
+ *
+ * Everything that is not a candidate keeps `null`. No verdict outside the
+ * release branch asks the question.
+ */
+export function applyLinkedPullRequests(
+  items: readonly BoardItem[],
+  counts: ReadonlyMap<number, number>,
+): BoardItem[] {
+  return items.map(item =>
+    isStaleClaimCandidate(item) ? { ...item, openLinkedPRs: counts.get(item.number) ?? 0 } : item,
+  );
+}
+
+/**
+ * Read every open pull request, then fill the candidates.
+ *
+ * **A failed or incomplete read leaves every `openLinkedPRs` at `null`**,
+ * so each candidate comes out UNDECIDABLE and its claim stands. The whole
+ * point of the field is that an unread pull-request list must not be able
+ * to unassign anybody — and a PARTIAL list is an unread one here, because
+ * a missing page is indistinguishable from an issue with no pull request.
+ * So the map is discarded whole rather than used for the pages that did
+ * arrive.
  */
 export async function resolveLinkedPullRequests(
   token: string,
@@ -1079,41 +1166,50 @@ export async function resolveLinkedPullRequests(
   items: readonly BoardItem[],
 ): Promise<BoardItem[]> {
   const [owner, name] = repo.split("/");
-  const out: BoardItem[] = [];
-  for (const item of items) {
-    if (!isStaleClaimCandidate(item)) {
-      out.push(item);
-      continue;
-    }
-    let openLinkedPRs: number | null = null;
-    try {
-      const data: any = await graphql(token, LINKED_PRS_QUERY, {
+  const nodes: unknown[] = [];
+  let endCursor: string | null = null;
+  try {
+    for (;;) {
+      const data: any = await graphql(token, OPEN_PR_CLOSING_REFS_QUERY, {
         owner,
         name,
-        number: item.number,
+        endCursor,
       });
-      const nodes = data?.repository?.issue?.timelineItems?.nodes;
-      if (Array.isArray(nodes)) {
-        const open = new Set<number>();
-        for (const n of nodes) {
-          const pr = n?.source;
-          if (pr && typeof pr.number === "number" && pr.state === "OPEN") open.add(pr.number);
-        }
-        openLinkedPRs = open.size;
+      const page = data?.repository?.pullRequests;
+      if (!Array.isArray(page?.nodes) || typeof page?.pageInfo?.hasNextPage !== "boolean") {
+        throw new Error(
+          `the open pull requests of ${repo} came back with no readable nodes/pageInfo, so an ` +
+            `empty repository and an unreadable one would look the same`,
+        );
       }
-    } catch (e) {
-      // Named, not swallowed. A silent catch here is the fail-open shape
-      // in `.claude/rules/checks-must-be-able-to-fail.md`; leaving `null`
-      // keeps the row undecidable, and the line below is what tells a
-      // reader why a claim they expected to be released still stands.
-      console.log(
-        `::warning::#${item.number}: could not read linked pull requests (${String(e)}), so ` +
-          `its claim is UNDECIDABLE rather than stale. Nothing was unassigned.`,
-      );
+      for (const node of page.nodes) {
+        // A pull request closing more than 50 issues has had its own list
+        // truncated, and the rows it would have covered would read as
+        // unclaimed. Refuse the whole read rather than release on it.
+        if (node?.closingIssuesReferences?.pageInfo?.hasNextPage === true) {
+          throw new Error(
+            `PR #${node.number} declares more closing references than one page holds, so the ` +
+              `list of claimed issues is short and some would read as having no pull request`,
+          );
+        }
+        nodes.push(node);
+      }
+      if (!page.pageInfo.hasNextPage) break;
+      endCursor = requireCursorAdvanced(endCursor, page.pageInfo.endCursor);
     }
-    out.push({ ...item, openLinkedPRs });
+  } catch (e) {
+    // Named, not swallowed. A silent catch here is the fail-open shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`; returning the items
+    // untouched keeps every candidate undecidable, and the line below is
+    // what tells a reader why a claim they expected to be released still
+    // stands.
+    console.log(
+      `::warning::could not read the open pull requests of ${repo} (${String(e)}), so every ` +
+        `stale-claim candidate is UNDECIDABLE rather than stale. Nothing was unassigned.`,
+    );
+    return [...items];
   }
-  return out;
+  return applyLinkedPullRequests(items, countOpenPRsByIssue(nodes));
 }
 
 async function main(argv: readonly string[]): Promise<number> {

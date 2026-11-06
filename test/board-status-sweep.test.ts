@@ -23,7 +23,10 @@ import {
   DONE,
   IN_PROGRESS,
   IN_REVIEW,
+  OPEN_PR_CLOSING_REFS_QUERY,
   STALE_CLAIM_DAYS,
+  applyLinkedPullRequests,
+  countOpenPRsByIssue,
   idleDaysSince,
   isStaleClaimCandidate,
   applyCorrections,
@@ -453,6 +456,108 @@ describe("board status sweep", () => {
     expect(r.agrees + r.corrections.length + r.releases.length + r.undecidable.length).toBe(
       items.length,
     );
+  });
+
+  // ── BS-64..BS-67: a MENTION is not a claim ──────────────────────────────
+  //
+  // The defect these exist for shipped and was caught by its own output.
+  // The first cut read `CROSS_REFERENCED_EVENT` — any mention of the issue
+  // number — and against the live board on 2026-11-06 it reported that all
+  // 7 stale claims had "1 open pull request". Every one was PR #1823, this
+  // change's own, whose body lists the seven numbers as evidence. The
+  // release branch was live, correct, and unreachable.
+  //
+  // Nothing above could have caught it: BS-55..BS-63 all set
+  // `openLinkedPRs` as a literal, so every one is green against any
+  // relation at all, including one that always answers 1. The relation is
+  // chosen by the QUERY, so the query is where it has to be asserted.
+
+  test("BS-64: the pull-request read asks what CLOSES an issue, not what mentions it", () => {
+    // `closingIssuesReferences` is GitHub's own parse of a closing keyword,
+    // the link `.claude/rules/ship-workflow.md` step 6 requires and the
+    // field `lib/closing-reference-audit.ts` already treats as the
+    // authority. One answer, one owner.
+    expect(OPEN_PR_CLOSING_REFS_QUERY).toContain("closingIssuesReferences");
+    // The wide relation, named so it cannot come back by a refactor that
+    // looks like a tidy-up.
+    expect(OPEN_PR_CLOSING_REFS_QUERY).not.toContain("CROSS_REFERENCED_EVENT");
+    expect(OPEN_PR_CLOSING_REFS_QUERY).not.toContain("timelineItems");
+    // OPEN only — a merged or closed pull request is not live work, and
+    // every stray on the board would have one.
+    expect(OPEN_PR_CLOSING_REFS_QUERY).toContain("states: OPEN");
+    // Both connections page, and both are read for truncation.
+    expect(OPEN_PR_CLOSING_REFS_QUERY.match(/hasNextPage/g)?.length).toBe(2);
+  });
+
+  test("BS-65: counting is per-issue and de-duplicates a pull request seen twice", () => {
+    const counts = countOpenPRsByIssue([
+      { number: 900, closingIssuesReferences: { nodes: [{ number: 312 }, { number: 523 }] } },
+      { number: 901, closingIssuesReferences: { nodes: [{ number: 312 }] } },
+      // The same pull request arriving twice across a page boundary is one
+      // pull request. A running total would say 312 has three.
+      { number: 900, closingIssuesReferences: { nodes: [{ number: 312 }] } },
+      // Closes nothing: the ordinary case, not an error.
+      { number: 902, closingIssuesReferences: { nodes: [] } },
+      // Shapes GraphQL really returns when a nested field is nulled.
+      { number: 903 },
+      { number: 903, closingIssuesReferences: { nodes: null } },
+      { closingIssuesReferences: { nodes: [{ number: 312 }] } },
+    ]);
+    expect(counts.get(312)).toBe(2);
+    expect(counts.get(523)).toBe(1);
+    expect(counts.has(902)).toBe(false);
+  });
+
+  test("BS-66: only candidates are filled, and an absent key is zero for them alone", () => {
+    const candidate = item(312, "Issue", "OPEN", "Backlog", false, null, true, 30, null);
+    const withPR = item(523, "Issue", "OPEN", "Ready", false, null, true, 30, null);
+    // Not a candidate: fresh. It must stay `null`, because `null` is what
+    // every verdict outside the release branch expects to see.
+    const fresh = item(713, "Issue", "OPEN", "Backlog", false, null, true, 0, null);
+    const out = applyLinkedPullRequests(
+      [candidate, withPR, fresh],
+      new Map([[523, 1]]),
+    );
+    // Absent from a COMPLETE read of every open pull request is an answer,
+    // and this is the only place in the file where a missing key is zero.
+    expect(out[0].openLinkedPRs).toBe(0);
+    expect(out[1].openLinkedPRs).toBe(1);
+    expect(out[2].openLinkedPRs).toBeNull();
+    // And the verdicts that follow from it, so the mapping is not just a
+    // field assignment nobody reads.
+    expect(verdictFor(out[0]).kind).toBe("release");
+    expect(verdictFor(out[1]).kind).toBe("correct");
+  });
+
+  test("BS-67: the seven live rows of 2026-11-06, under both relations", () => {
+    // The regression, stated as the input that walked around the first
+    // cut. Each of the seven was assigned, silent 8-16 days, and mentioned
+    // by exactly one open pull request — #1823 — which declares it closes
+    // #1758 and nothing else. Under the mention relation every row scored
+    // 1 and nothing was released; under the closing relation every row
+    // scores 0 and every one is a release.
+    const strays = [312, 523, 713, 1168, 1455].map(n =>
+      item(n, "Issue", "OPEN", "Backlog", false, null, true, 15, null),
+    );
+    const counts = countOpenPRsByIssue([
+      { number: 1823, closingIssuesReferences: { nodes: [{ number: 1758 }] } },
+    ]);
+    const out = applyLinkedPullRequests(strays, counts);
+    expect(out.map(i => verdictFor(i).kind)).toEqual(Array(5).fill("release"));
+    // The control: had #1823 actually declared it closes #312, that one row
+    // is live work and must NOT be released. Without this the case above is
+    // green against a function that returns an empty map for anything.
+    const declared = countOpenPRsByIssue([
+      { number: 1823, closingIssuesReferences: { nodes: [{ number: 312 }] } },
+    ]);
+    const guarded = applyLinkedPullRequests(strays, declared);
+    expect(guarded.map(i => verdictFor(i).kind)).toEqual([
+      "correct",
+      "release",
+      "release",
+      "release",
+      "release",
+    ]);
   });
 
   test("BS-9: a non-JSON error body reports the HTTP status, not a parse error", () => {
@@ -1084,18 +1189,37 @@ describe("board status sweep", () => {
         "request would repeat the page that produced it",
     ).toThrow(/same endCursor/);
 
-    // The loop must actually use it. A progress invariant nothing calls is
+    // The loops must actually use it. A progress invariant nothing calls is
     // the docblock-saying-it-was-checked failure.
+    //
+    // BOUND TO THE INVARIANT, NOT TO A COUNT. This asserted "the definition
+    // plus exactly one call site" until a second legitimate paging loop
+    // arrived — `resolveLinkedPullRequests` — and then the only thing it
+    // measured was whether somebody had remembered to bump a 2 to a 3. A
+    // number a correct change makes you edit teaches the next agent to edit
+    // it, which is how BS-39 lost its meaning too. The property is: EVERY
+    // cursor advance goes through the invariant, and the invariant is called
+    // exactly as many times as there are advances.
     const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    const advances = code.match(/^[ \t]*endCursor = .*$/gm) ?? [];
+    expect(
+      advances.length,
+      "no paging loop advances a cursor at all — either this file stopped " +
+        "paginating, or the advance is spelled in a way this cannot see, and " +
+        "both make every assertion below vacuous",
+    ).toBeGreaterThan(0);
+    expect(
+      advances.filter(line => !/= requireCursorAdvanced\(/.test(line)),
+      "every paging loop must assign its next cursor THROUGH the invariant, " +
+        "not beside it — a loop that advances its own cursor is the unbounded " +
+        "one this check exists to refuse",
+    ).toEqual([]);
     expect(
       (code.match(/requireCursorAdvanced\(/g) ?? []).length,
-      "expected the definition plus exactly one call site — readBoard's loop, " +
-        "the only unbounded loop in this file",
-    ).toBe(2);
-    expect(
-      code,
-      "readBoard must assign its next cursor THROUGH the invariant, not beside it",
-    ).toMatch(/endCursor = requireCursorAdvanced\(/);
+      "expected the definition plus one call per cursor advance — a call site " +
+        "that is not an advance means something is checking progress it does " +
+        "not then follow",
+    ).toBe(advances.length + 1);
   });
 
   // BS-45. THE SAME CLASS AS BS-41, INSIDE ONE FILE. BS-41 catches a comment
