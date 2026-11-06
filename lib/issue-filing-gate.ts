@@ -137,6 +137,7 @@ import {
   graphqlVariables,
   labelValues,
 } from "./issue-create-override";
+import { headingFor, missingSections, requiredSections } from "./issue-shape";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
 import { tryLoadRungateConfig } from "./config-loader";
@@ -1043,6 +1044,32 @@ export type CommentExemption = keyof typeof COMMENT_EXEMPTIONS;
  * this gate behind an unrelated error.
  */
 export const EXEMPTION_PREFIX = "Cannot be a comment:";
+
+/**
+ * The `MALFORMED` sentence, naming every section the body is short (#1741).
+ *
+ * Composed here rather than at the refusal site so the refusal carries one
+ * string the suite can assert on, and so the list comes from
+ * `requiredSections` rather than being retyped — a refusal that names a
+ * different set of sections from the one that produced it is a refusal an
+ * agent cannot satisfy.
+ *
+ * **It names the headings, not the field ids.** The heading is what an agent
+ * has to type into the body; an id is a fact about a YAML file they are not
+ * editing.
+ */
+export function malformedReason(missing: readonly string[]): string {
+  const both = requiredSections("everyday-work").map(headingFor);
+  return (
+    `the body is short ${missing.length} section(s) every issue needs: ${missing.join(", ")}. ` +
+    `An issue naming no files cannot be checked against rule 2 and cannot be scanned for the ` +
+    `file overlaps that put four agents on one file, and an issue with no "how we will know" ` +
+    `is one nobody can close on evidence. The floor is ${both.join(", ")} — spec work also ` +
+    `needs ${headingFor(requiredSections("spec-work").find(s => s.id === "criteria")!)}, ` +
+    `which the form asks for and this gate does not, because a consumer reporting a problem ` +
+    `upstream cannot know a criterion id`
+  );
+}
 
 /**
  * Which declaration a filing makes, or `null` for none.
@@ -1962,6 +1989,39 @@ export async function adjudicateFiling(
       outcome: "REFUSE",
       refusal: "COMMENT_INSTEAD",
       reason: exemptionReason(await readTarget()),
+    };
+  }
+
+  // ── it belongs on the tracker. is it READABLE by the things that read it? ──
+  //
+  // **#1741, and it is LAST for the reason every late stage here is last.**
+  // Only an ALLOW reaches this line, so it can mask nothing: a duplicate is
+  // still refused as DUPLICATE, an unreadable ledger is still UNMEASURED_CAP,
+  // and a filing with no declaration still hears about the comment default
+  // first. Placing a cheap string check ahead of those would convert every
+  // one of them into "your body is short a heading", which is the mask
+  // measured at 34 of 78 cases when `NO_CLAIM` was briefly moved first.
+  //
+  // **The floor is the EVERYDAY form, not the spec-work one.** The two forms
+  // differ in exactly one field — `Criteria this serves`, which a consumer
+  // reporting upstream cannot know — so the sections common to both are the
+  // only ones this gate can demand without refusing a legitimate consumer
+  // report. The spec-work form enforces its extra field where it belongs, on
+  // the form. A gate that demanded it would be a second, stricter decider
+  // sitting over the first.
+  //
+  // This is the half of #1741 that could not be built before the other two
+  // consumers: `plan-issues --decompose` emitted two of the form's five
+  // sections, so this check on the day it was written would have refused
+  // every row of every decomposed plan. `test/issue-shape.test.ts`'s IS-31
+  // is the standing proof that it no longer does.
+  const malformed = missingSections(body, "everyday-work");
+  if (malformed.length > 0) {
+    return {
+      ...base,
+      outcome: "REFUSE",
+      refusal: "MALFORMED",
+      reason: malformedReason(malformed),
     };
   }
 

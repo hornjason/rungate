@@ -98,6 +98,7 @@ import {
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
 import { API_BOOLEAN_FLAGS } from "../lib/issue-create-override";
+import { headingFor, missingSections, requiredSections } from "../lib/issue-shape";
 import { loadRungateConfig } from "../lib/config-loader";
 import { DROPPED_CATEGORIES } from "../lib/finding-jury";
 import type { ArbiterRefusal } from "../lib/finding-arbiter";
@@ -186,13 +187,44 @@ const DROPPED_FILING =
   `${EXEMPTION_PREFIX} out-of-pr-diff"`;
 
 /**
+ * The sections `requiredSections("everyday-work")` demands, with content.
+ *
+ * **Derived, never typed.** A fixture listing the headings by hand would be a
+ * second decider: `lib/issue-shape.ts` could drop one and every ALLOW here
+ * would go on supplying it, so the suite would certify a gate that had
+ * stopped asking. Built from the decider, it follows.
+ *
+ * `x` is enough content because `missingSections` asks whether a heading has
+ * non-blank text under it, not whether the text is good — judging the prose
+ * is not this gate's job and would be the worthiness score the arbiter's own
+ * header excludes in those words.
+ */
+const FORM_SECTIONS = requiredSections("everyday-work")
+  .map(s => `${headingFor(s)}\n\nx\n`)
+  .join("\n");
+
+/**
  * What every ALLOW fixture in this file must now say, as the caller types it.
  *
  * One constant, built from the library's own prefix and one of its own
  * tokens, so a fixture cannot declare something `declaredExemption` does not
  * accept and no spelling of the declaration lives in two places.
+ *
+ * **#1741 added the form sections to it, and the precedent is the two stages
+ * above.** When `NO_CLAIM` landed, 17 ALLOW controls went red and the remedy
+ * was to make every fixture name a claim; when `COMMENT_INSTEAD` landed, 25
+ * did and the remedy was to make every fixture declare. `MALFORMED` turned
+ * **66** red, every one an ALLOW control, and the remedy is the same one a
+ * third time: an ALLOW is a filing that would really be allowed, and the bar
+ * for that has risen.
+ *
+ * The two halves stay separable deliberately — `EXEMPTION_PREFIX` and
+ * `FORM_SECTIONS` are each usable alone, because the `MALFORMED` rows need a
+ * filing that is declared and shapeless, and the declaration-parser rows need
+ * one that is shaped and undeclared. A single fused constant would make
+ * neither writable.
  */
-const DECLARED = `${EXEMPTION_PREFIX} out-of-pr-diff`;
+const DECLARED = `${EXEMPTION_PREFIX} out-of-pr-diff\n\n${FORM_SECTIONS}`;
 
 /**
  * A novel correctness finding. Must be allowed.

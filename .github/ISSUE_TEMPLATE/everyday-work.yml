@@ -1,0 +1,90 @@
+name: Everyday work
+description: Housekeeping, a bug, or a problem reported from a project using this harness
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Use this form when the work serves no spec criterion.** Housekeeping,
+        a bug, and a consumer reporting a problem upstream all belong here.
+
+        It exists because the other form requires *Criteria this serves*, and
+        a consumer agent has no way to know a criterion id in this repository.
+        Measured 2026-11-03: that left no correct way to file anything that was
+        not spec work, so agents reached for the `external-audit` label — the
+        one labelling decision this project had already ruled out.
+
+        **Files is required here too, and that is the point of the form.**
+        Rule 2 is *"work is an issue, and the issue names the files it will
+        change. Cannot name them → not ready → split it before starting, not
+        during review."* Measured over the 20 unblocked ad-hoc issues on
+        2026-11-03: 16 named at least one file, and there were 10 overlapping
+        pairs including four issues all rewriting `lib/bash-write-guard.ts`.
+        Hand four agents the pickable list and four collide on one file. The
+        file list is what makes that visible before it happens.
+
+        The fields on this form, and which are required, come from
+        `requiredSections` in `lib/issue-shape.ts`. Editing this file alone
+        fails `test/issue-shape.test.ts`.
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What must become true
+      description: The state of the world when this is done. Not the steps.
+      placeholder: A worktree whose branch was deleted on the remote is reported ABANDONED, not UNMEASURED.
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files this will change
+      description: >-
+        One per line. If you cannot name them, this is not ready — split it
+        first. Over ten files is the shape that predicts a failed change. If
+        you are reporting from another repository and genuinely cannot know,
+        name the files you were reading when you hit it and say so.
+      placeholder: |
+        scripts/worktree-census.ts
+        test/worktree-census.test.ts
+    validations:
+      required: true
+
+  - type: input
+    id: blocked-by
+    attributes:
+      label: Blocked by
+      description: >-
+        Issue numbers that must land first. Leave empty if nothing blocks it —
+        empty is what puts this in the pickable set. This field is a note; set
+        the real link with `gh issue edit <this> --add-blocked-by <N>`, because
+        only that version is readable by anything.
+      placeholder: "1600, 1601"
+    validations:
+      required: false
+
+  - type: textarea
+    id: proof
+    attributes:
+      label: How we will know
+      description: >-
+        What runs, and what it reads, when this is done. A test, a command, or
+        a reading somebody can take again. "It works now" is not one.
+      placeholder: bun test test/worktree-census.test.ts — the deleted-branch row goes from UNMEASURED to ABANDONED.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **No milestone, deliberately.** Milestones here are spec phases, and
+        ad-hoc work belongs to none. Its lane is the live query
+
+        ```
+        gh issue list --search "is:open -is:blocked no:assignee"
+        ```
+
+        which GitHub computes on every read, so it cannot go stale and needs
+        nothing running. That is a different lane from the board's Ready
+        column, and conflating the two is how the board starts lying.

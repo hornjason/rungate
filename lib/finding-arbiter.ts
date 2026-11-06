@@ -857,6 +857,29 @@ export type ArbiterRefusal =
    * answer at all and refuses, naming the path so an operator can act.
    */
   | "UNMEASURED_CAP"
+  /**
+   * The body is short a section the issue form requires (#1741).
+   *
+   * **The last stage, and it converts an ALLOW only.** Everything before it
+   * asks whether this should be on the tracker at all; this one asks whether
+   * what is about to land on the tracker is readable by the things that read
+   * it. An issue naming no files cannot be checked against rule 2, cannot be
+   * scanned for the file-overlap conflicts that put four agents on
+   * `lib/bash-write-guard.ts`, and cannot tell a picker what they are picking
+   * up.
+   *
+   * **Waivable, and deliberately so.** Unlike the three above, this one IS a
+   * claim about the filing — it says a named section is absent, which is a
+   * fact the agent can refute by adding it or override when they genuinely
+   * mean to file a stub. A count takes no argument; a shape does.
+   *
+   * The sections come from `requiredSections` in `lib/issue-shape.ts`, which
+   * is the same decider the two issue forms and `plan-issues --decompose`
+   * read. That is the whole of #1741: before it, a gate requiring the form's
+   * fields would have refused every row of every decomposed plan, because
+   * the generator emitted two of the five.
+   */
+  | "MALFORMED"
   /** Something could not be evaluated. Fails; never skips. */
   | "UNMEASURED";
 
