@@ -97,22 +97,43 @@ export function parseRepo(value: string): { owner: string; name: string } | null
  * Exported so a case can hold it. Inline, the only way to observe it was
  * to run the command against a live board.
  */
-export function splitReadyChanges<T extends { item: { number: number; phase: number | null }; to: string }>(
+export function splitReadyChanges<
+  T extends { item: { number: number; phase: number | null; status: string }; to: string },
+>(
   eligible: readonly T[],
   cap: number | null,
   occupied: number,
 ): { readyWritable: T[]; heldByCap: T[]; selection: ReturnType<typeof selectReady> } {
   const promotions = eligible.filter(c => c.to === READY);
   const demotions = eligible.filter(c => c.to !== READY);
+  // **A demotion in THIS batch frees a slot in this batch.** `occupied`
+  // is the pre-write count, so handing it to `selectReady` unchanged
+  // under-promotes by however many cards are leaving Ready in the same
+  // run — a frontier move that demotes three and promotes three would
+  // promote none. ai-review round 2 of #1795.
+  //
+  // Only demotions FROM Ready free anything. This command may also
+  // overwrite a card with no Status at all, and counting those would
+  // over-promote past the cap — the opposite error, reached by the
+  // obvious fix.
+  const freed = demotions.filter(c => c.item.status === READY).length;
   const selection = selectReady(
     promotions.map(c => ({ number: c.item.number, phase: c.item.phase })),
     cap,
-    occupied,
+    Math.max(0, occupied - freed),
   );
-  const chosen = new Set(selection.promote.map(p => p.number));
+  // **Written in the order `selectReady` chose, not in board order.**
+  // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
+  // wrong SEQUENCE, so the log and the write order stop matching the
+  // phase-then-age ranking the lane is supposed to express — and a run
+  // that dies part-way through would have written an arbitrary subset
+  // rather than the highest-ranked one. ai-review round 2 of #1795.
+  const byNumber = new Map(promotions.map(c => [c.item.number, c]));
+  const chosen = selection.promote.map(p => byNumber.get(p.number)!).filter(Boolean);
+  const chosenNumbers = new Set(chosen.map(c => c.item.number));
   return {
-    readyWritable: [...demotions, ...promotions.filter(c => chosen.has(c.item.number))],
-    heldByCap: promotions.filter(c => !chosen.has(c.item.number)),
+    readyWritable: [...demotions, ...chosen],
+    heldByCap: promotions.filter(c => !chosenNumbers.has(c.item.number)),
     selection,
   };
 }
@@ -340,9 +361,14 @@ export async function main(argv: string[]): Promise<number> {
   // repository argument is. `main` has already refused anything this
   // returns null for.
   const repo = values.repo === undefined ? null : parseRepo(values.repo);
-  const closedReadings = repo
-    ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
-    : null;
+  // **Gated on `--ready`, not merely on `--repo`.** This pages every
+  // closed issue in the repository, and a plain Criteria sync that
+  // happens to pass `--repo` has no use for a depth. ai-review round 2
+  // of #1795.
+  const closedReadings =
+    values.ready && repo
+      ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
+      : null;
   const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
   const occupied = items.filter(i => i.status === READY).length;
   const { readyWritable, heldByCap, selection } = splitReadyChanges(eligible, cap, occupied);

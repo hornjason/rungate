@@ -815,8 +815,13 @@ describe("#1647: the Ready lane", () => {
  * MEMBERSHIP rather than the total is what would have got this right.
  */
 describe("SC-2722: the hand-run writer fills to the same depth as the workflow", () => {
-  const c = (number: number, phase: number | null, to: string) => ({ item: { number, phase }, to });
+  const c = (number: number, phase: number | null, to: string, status = "Backlog") => ({
+    item: { number, phase, status },
+    to,
+  });
   const promote = (n: number) => c(n, 0, "Ready");
+  /** A card LEAVING Ready. Its status is what frees a slot in this batch. */
+  const demote = (n: number) => c(n, 0, "Backlog", "Ready");
 
   test("more eligible promotions than depth writes exactly the depth, in order", () => {
     const { readyWritable, heldByCap } = splitReadyChanges(
@@ -840,7 +845,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
   // prevent.
   test("a demotion to Backlog is NEVER capped, even when the lane is over its depth", () => {
     const { readyWritable, heldByCap } = splitReadyChanges(
-      [c(7, 0, "Backlog"), c(8, 0, "Backlog"), promote(1)],
+      [demote(7), demote(8), promote(1)],
       2,
       99,
     );
@@ -856,7 +861,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
   // depth is the uncapped behaviour this replaces.
   test("an unmeasured depth promotes nothing but still demotes", () => {
     const { readyWritable, heldByCap, selection } = splitReadyChanges(
-      [c(7, 0, "Backlog"), promote(1), promote(2)],
+      [demote(7), promote(1), promote(2)],
       null,
       0,
     );
@@ -871,6 +876,54 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       readyWritable.map(x => x.item.number),
       "the phased issue goes first, and the phase-less one is queued rather than excluded",
     ).toEqual([9]);
+  });
+
+  // ROUND 2, finding 1. The case above cannot see this: its board order
+  // and its ranked order are the same list, so a `filter` over the
+  // candidates reproduces the right answer by luck. Here they disagree —
+  // #2 outranks #1 on phase while #1 comes first on the board — and a
+  // re-derived subset writes them backwards.
+  test("the promotions are written in RANKED order, not in board order", () => {
+    const { readyWritable } = splitReadyChanges([c(1, 5, "Ready"), c(2, 0, "Ready")], 2, 0);
+    expect(
+      readyWritable.map(x => x.item.number),
+      "membership can be right while the sequence is wrong, and the log then " +
+        "claims a phase-then-age ranking it did not write",
+    ).toEqual([2, 1]);
+  });
+
+  // ROUND 2, finding 3 — the HIGH one. `occupied` is counted before the
+  // write, so a frontier move that demotes one and promotes one promoted
+  // NOTHING: the departing card was still counted as holding its slot.
+  test("a card leaving Ready in this batch frees its slot in this batch", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges(
+      [demote(7), promote(1), promote(2)],
+      2,
+      2,
+    );
+    expect(
+      readyWritable.map(x => x.item.number),
+      "Ready holds 2 of 2 and one card is leaving, so exactly one may enter",
+    ).toEqual([7, 1]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([2]);
+  });
+
+  // The control for the case above, and the error the obvious fix makes.
+  // This command may also overwrite a card carrying NO status at all;
+  // that card was never in Ready, so counting it as a departure would
+  // promote past the cap — the opposite failure, reached by subtracting
+  // `demotions.length`.
+  test("a demotion of a card that was never in Ready frees nothing", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges(
+      [c(7, 0, "Backlog", ""), promote(1)],
+      2,
+      2,
+    );
+    expect(
+      readyWritable.map(x => x.item.number),
+      "the lane is still full — nothing left it — so the promotion waits",
+    ).toEqual([7]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([1]);
   });
 });
 
@@ -899,6 +952,18 @@ describe("SC-2722: a repository argument is owner/name or it is refused", () => 
       .replace(/^\s*\/\/.*$/gm, "");
     expect(src, "a validator nothing calls is four green cases and no guard").toContain(
       "parseRepo(values.repo) === null",
+    );
+  });
+
+  // ROUND 2, finding 2. Gated on `repo` alone, a plain Criteria sync that
+  // happens to pass `--repo` paged every closed issue in the repository to
+  // compute a depth it then never used.
+  test("the throughput pass runs only when --ready asked for a depth", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "scripts/board-mirror.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src, "a depth nothing reads is not worth a full pass over the closed issues").toContain(
+      "values.ready && repo",
     );
   });
 
