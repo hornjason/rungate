@@ -31,8 +31,10 @@ import {
   idleDaysSince,
   isStaleClaimCandidate,
   applyCorrections,
+  clearAssignees,
   requireWrittenItem,
   interpretResponse,
+  interpretTransport,
   parseBoardItem,
   requireConnection,
   requireCursorAdvanced,
@@ -734,6 +736,79 @@ describe("board status sweep", () => {
       "a board credential cannot write issues — run 42248314060 refused 6 of " +
         "6 with HTTP 403. Pass resolveIssueWriteToken(...).token",
     ).toEqual([]);
+  });
+
+  // ── BS-73, BS-74: a REST body is not a GraphQL envelope ──────────────────
+  //
+  // Found live, watching run 42254789078 drain the board after #1824 gave the
+  // unassign a credential that can write issues. All six releases threw *"the
+  // unassign response carried no 'assignees' array"* against six responses
+  // that carried one.
+  //
+  // `clearAssignees` is REST and passed its response through
+  // `interpretResponse`, which ends `return body.data`. A REST body has no
+  // `data` key, so the verified reading was `undefined` and
+  // `Array.isArray(undefined)` is false. The sixth shape in
+  // `.claude/rules/checks-must-be-able-to-fail.md`: BS-39's verify-the-result
+  // guard fired correctly, on an input its own transport layer had emptied.
+  //
+  // It was invisible for as long as the call could not get past HTTP 403.
+  // Two refusals, two causes, one message.
+
+  test("BS-73: clearAssignees reads the assignees GitHub actually returned", async () => {
+    const saved = globalThis.fetch;
+    const seen: { url: string; method: string }[] = [];
+    // The body GitHub really sends back for `PATCH /repos/{repo}/issues/{n}`:
+    // the issue, at the top level, with no `data` wrapper anywhere in it.
+    globalThis.fetch = (async (url: any, init: any) => {
+      seen.push({ url: String(url), method: init?.method ?? "GET" });
+      return new Response(JSON.stringify({ number: 1600, state: "open", assignees: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      // Resolves. Before the split this threw, because the reading it
+      // verified was `undefined` rather than the `[]` above.
+      await clearAssignees("tok", "o/r", 1600);
+      expect(seen).toEqual([{ url: "https://api.github.com/repos/o/r/issues/1600", method: "PATCH" }]);
+
+      // And the guard BS-39 put here is still live — it must refuse a 200
+      // whose body still lists an assignee. If this half stopped failing, the
+      // fix above would have been "stop checking", which is the wrong repair
+      // for a check that reported UNMEASURED.
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ number: 1600, assignees: [{ login: "someone" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as unknown as typeof fetch;
+      await expect(clearAssignees("tok", "o/r", 1600)).rejects.toThrow(/still has 1 assignee/);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  test("BS-74: the GraphQL envelope reader has exactly one call site", () => {
+    // BS-73 proves this one REST path is fixed. It cannot see the NEXT REST
+    // call somebody adds — `.claude/rules/checks-must-be-able-to-fail.md`,
+    // "replace one name, sweep for the others". So the property is asserted
+    // over the whole file: `interpretResponse` is GraphQL-only, and the body
+    // of a REST response is read through `interpretTransport`.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+    expect(
+      (code.match(/interpretResponse\(/g) ?? []).length,
+      "expected the definition plus exactly one call — rawGraphql's. A REST " +
+        "response read through the envelope loses its whole body to `return " +
+        "body.data`: run 42254789078 refused 6 of 6 releases that way. Use " +
+        "interpretTransport for REST.",
+    ).toBe(2);
+
+    // The one call site is the GraphQL one, named rather than assumed: a
+    // count of two is also what a REST caller plus a deleted GraphQL caller
+    // would produce.
+    const graphqlFn = code.slice(code.indexOf("function rawGraphql("));
+    expect(graphqlFn.slice(0, graphqlFn.indexOf("\n}\n"))).toContain("interpretResponse(");
   });
 
   test("BS-9: a non-JSON error body reports the HTTP status, not a parse error", () => {
