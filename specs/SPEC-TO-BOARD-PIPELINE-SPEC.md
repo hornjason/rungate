@@ -69,7 +69,7 @@ different facts and only one is actionable — *Silent Default Substitution*,
       proved-by: test/plan-spec.test.ts — 40 pass, 0 fail, 2026-11-02; claims the id in a declaring position
 - [x] SC-2601: lib/issue-decomposition.ts contains [DecompositionReading, unmeasuredReasons] — one unreadable row makes the WHOLE reading UNMEASURED, because a plan that is partly unreadable is not a plan that is partly done and creating issues is not an operation to perform from half a table
       proved-by: test/issue-decomposition.test.ts "one bad row makes the WHOLE reading unmeasured, not a partial plan" — 63 pass, 0 fail, 2026-11-02
-- [ ] SC-2602: test/issue-decomposition.test.ts contains [a bad row skipped instead of rejected] — the refusals are proved able to fail by a mutant that converts every rejection into a skip, and the predicted membership is the six refusal cases plus the whole-reading case
+- [ ] SC-2602: test/issue-decomposition.test.ts contains [a bad row skipped instead of rejected] — the refusals are proved able to fail by a mutant that converts every rejection into a skip, and the membership is DECLARED rather than counted. This line used to predict seven, "the six refusal cases plus the whole-reading case"; measured 2026-11-06 the mutant reddens eleven, because the prediction counted `reject(` CALL SITES and what a mutant can redden is CASES — the cells check is one site with two cases, and two further cases assert a refusal through a site they share
 
 ### One criterion becomes the right number of issues
 
