@@ -351,6 +351,16 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
   // A grid over every axis isReady reads. If the module ever grows its own
   // opinion — a reason string that also decides, a short-circuit that looks
   // like an optimisation — one of these rows disagrees.
+  //
+  // **It is a consistency check and it cannot catch `isReady` being wrong.**
+  // Both sides of the comparison call `isReady`, so a mutation of `isReady`
+  // moves the expectation with the reading and every row stays green —
+  // measured 2026-11-05, two mutants (assignees ignored, blockers ignored)
+  // reddened four cases between them and not one row here. The same shape
+  // as a `toBe(CONSTANT)` whose mutant edits the constant. A mutant that
+  // adds a refusal to THIS module reddens it immediately, which is the
+  // property it is for. Do not read a green grid as evidence about
+  // `isReady`; `test/board-mirror.test.ts` owns that.
   test("BR-7: move equals isReady on every combination, for a board issue", () => {
     const states = ["OPEN", "CLOSED"];
     // **The phase axis stays, and its job reversed.** It used to prove the
