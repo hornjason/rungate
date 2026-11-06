@@ -31,6 +31,8 @@
  * `AGENTS.md` rule 7 asks us to watch.
  */
 
+import { headingOccurrencesOf } from "./issue-shape";
+
 /** The section a repaired body carries. One spelling, by fiat. */
 export const CRITERIA_HEADING = "## Criteria this serves";
 
@@ -194,17 +196,19 @@ export function annotatedBody(body: string, criteria: readonly string[]): string
  *
  * Returns every occurrence, because more than one is a body
  * {@link multiplyAnnotated} refuses rather than a first match to edit.
+ *
+ * **#1741: the body of this is now `lib/issue-shape.ts`.** Everything above
+ * is why the obvious version is wrong, and that reasoning was correct and
+ * hard-won — but it lived here, bound to one hard-coded heading, while the
+ * filing gate and the issue forms were growing a need for the same reading
+ * of a different heading. Two heading parsers answering the same question
+ * about the same input is *two deciders that agree*
+ * (`.claude/rules/checks-must-be-able-to-fail.md`): no behavioural test can
+ * tell them apart and a mutation of either leaves the other holding the case
+ * up. One parser, parameterised by the heading.
  */
 export function headingOccurrences(body: string): number[] {
-  const out: number[] = [];
-  let fenced = false;
-  let at = 0;
-  for (const line of body.split("\n")) {
-    if (/^\s*```/.test(line)) fenced = !fenced;
-    else if (!fenced && line.trimEnd() === CRITERIA_HEADING) out.push(at);
-    at += line.length + 1;
-  }
-  return out;
+  return headingOccurrencesOf(body, CRITERIA_HEADING);
 }
 
 /**

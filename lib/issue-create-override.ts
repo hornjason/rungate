@@ -259,7 +259,16 @@ export function clauses(cmd: string, depth = 0): string[][] {
  * is worse than either position.
  */
 function heredocView(cmd: string): string {
-  return [stripHeredocs(cmd), ...interpreterPrograms(cmd).map(p => p.program)].join("\n");
+  // `blankComments: false` (#1741). The blanking is #1176's write-guard
+  // safety measure and this parser never wanted it: it deleted every `##`
+  // markdown heading from a multi-line `gh issue create --body "…"`, so the
+  // dedupe and the symptom scan read bodies with holes. `tokenize` below
+  // implements the shell's comment rule for this side of the fence, where a
+  // wrong answer costs a misparsed flag rather than an unseen write.
+  return [
+    stripHeredocs(cmd, false),
+    ...interpreterPrograms(cmd).map(p => p.program),
+  ].join("\n");
 }
 
 /** Arguments of this clause that are themselves commands. */

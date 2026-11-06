@@ -93,6 +93,7 @@ import {
   type FilingAttempt,
   type FilingAdjudication,
 } from "../../lib/issue-filing-gate";
+import { headingFor, requiredSections } from "../../lib/issue-shape";
 import type { Finding } from "../../lib/finding-arbiter";
 
 /** Non-zero for every refusal, through one constant. */
@@ -294,6 +295,28 @@ const PLANT_CLAIM_LINE = "Claim 1.";
 const PLANT_EXEMPTION_LINE = `${EXEMPTION_PREFIX} out-of-pr-diff`;
 
 /**
+ * What a plant says to satisfy the `MALFORMED` gate (#1741), and it is here
+ * for the third time for exactly the reason the two above are.
+ *
+ * `adjudicateFiling` withholds a filing whose body is short a section every
+ * issue form requires. Without these sections `plant-allowed` — the known
+ * positive that proves the adjudicator is LIVE rather than refusing
+ * everything — lands on `MALFORMED`, the batch's `allowed` set empties, every
+ * plant "agrees", and the capture reports a variance of zero. That is this
+ * file's one failure mode, stated in its own docblock: *a zero that came from
+ * an instrument that stopped reporting, rather than from an adjudicator that
+ * did not move.*
+ *
+ * **Derived from `requiredSections`, never typed.** A plant listing the
+ * headings by hand would be a second decider: `lib/issue-shape.ts` could drop
+ * one and these plants would go on supplying it, so the instrument would be
+ * calibrated against a gate that had stopped asking.
+ */
+const PLANT_FORM_SECTIONS = requiredSections("everyday-work")
+  .map(s => `${headingFor(s)}\n\nzqxj\n`)
+  .join("\n");
+
+/**
  * The twin the duplicate plant collides with.
  *
  * Synthetic and carried in the plant's own `extraExisting`, so the plant is a
@@ -314,7 +337,7 @@ export const DUPLICATE_PLANT_TWIN: Finding = {
   body:
     "`zqxjPlantTwin()` in `lib/zqxj-plant-twin.ts` reports 60571 rows where the fixture holds 60572, " +
     "across 60573 entries. Measured 60571 against 60572 on 60573. " +
-    `${PLANT_CLAIM_LINE} ${PLANT_EXEMPTION_LINE}`,
+    `${PLANT_CLAIM_LINE} ${PLANT_EXEMPTION_LINE}\n\n${PLANT_FORM_SECTIONS}`,
 };
 
 /**
@@ -350,7 +373,7 @@ export function plantsFor(_existing: readonly Finding[], batch: string): BatchRo
         "`zqxjVarianceProbe` returns the wrong count and the off-by-one is silent",
         "`zqxjVarianceProbe()` in `lib/zqxj-variance-probe.ts` reports 81731 rows where the fixture holds " +
           "81732. Measured 81731 against 81732 on a corpus of 40771 entries. " +
-          `${PLANT_CLAIM_LINE} ${PLANT_EXEMPTION_LINE}`,
+          `${PLANT_CLAIM_LINE} ${PLANT_EXEMPTION_LINE}\n\n${PLANT_FORM_SECTIONS}`,
       ),
       holdOut: null,
     },

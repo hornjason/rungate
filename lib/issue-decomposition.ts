@@ -496,6 +496,22 @@ export function planDecomposition(
  * spelling of, so one reader finds both a created issue and a repaired one.
  * The files are listed because rule 2 is about the issue, not about the plan:
  * an issue whose file list lives only in a plan file is one nobody can check.
+ *
+ * ## #1741 — this is a CONSUMER of `lib/issue-shape.ts`, not a second opinion
+ *
+ * It used to emit two of the form's five fields under headings of its own
+ * choosing (`## Criterion` for what the form calls *What must become true*,
+ * and no proof section at all), which is exactly why the filing gate could
+ * not require the form's fields: doing so would have refused every row of
+ * every plan. `test/issue-shape.test.ts` now binds the headings here to
+ * `requiredSections("spec-work")` by EQUALITY in both directions, so this
+ * generator cannot drift from the form and the form cannot drift from it.
+ *
+ * **The proof section is derived, not a placeholder.** Every decomposed row
+ * has exactly one honest answer to *how we will know* — a test naming the
+ * criterion id, which is AGENTS.md rule 6 — and it names `row.criterion`, so
+ * a row that lost its criterion produces a body that says so rather than a
+ * body carrying a sentence true of anything.
  */
 export function decomposedBody(
   row: DecompositionRow,
@@ -503,17 +519,31 @@ export function decomposedBody(
   planPath: string,
 ): string {
   return [
-    `## Criterion`,
+    `## What must become true`,
     ``,
     `${row.outcome}`,
+    ``,
+    // Criteria BEFORE files, which is the order `ISSUE_SECTIONS` declares
+    // and the order both forms show. It used to be the other way round, and
+    // `lib/issue-shape.ts`'s docblock claimed the order was load-bearing
+    // here while the two disagreed — caught by review. `IS-30` now asserts
+    // the ORDER and not just the set, so the claim is tested rather than
+    // written down.
+    criteriaHeading,
+    ``,
+    row.criterion,
     ``,
     `## Files this will change`,
     ``,
     ...row.files.map(f => `- \`${f}\``),
     ``,
-    criteriaHeading,
+    `## How we will know`,
     ``,
-    row.criterion,
+    `A test names \`${row.criterion}\` in a declaring position, and`,
+    `\`bun scripts/sync-sc-status.ts\` ticks the criterion from that claim.`,
+    `The tick comes from the test, never from closing this issue — AGENTS.md`,
+    `rule 6, and \`.claude/rules/claiming-sc-coverage.md\` for what counts as`,
+    `a claim rather than a citation.`,
     ``,
     `---`,
     ``,

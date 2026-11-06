@@ -520,6 +520,81 @@ describe("#1176: the mechanisms, asserted directly", () => {
     expect(out).not.toContain("body line");
   });
 
+  test("#1741: the two readers get different views, and the CALLER chooses", () => {
+    // Found by building the filing gate's shape check. #1176 blanks any
+    // line opening with `#`, because an apostrophe in a prose comment was
+    // opening a quote that swallowed a redirect two lines later. That rule
+    // is right for the write guard and wrong for a markdown heading inside
+    // an argument: an issue body typed as `--body "…"` across several lines
+    // reached the filing gate with every `##` heading DELETED, so the dedupe
+    // and the symptom scan read a body with holes and no reader could tell.
+    //
+    // Three revisions tried to decide per line whether the `#` was inside a
+    // quote so one output could serve both. Each hand-rolled predicate had a
+    // narrower view than the shell and each cost a review round. The caller
+    // already knows which reader it is, so it says.
+    const cmd = [
+      'gh issue create --title "t" --body "intro',
+      "",
+      "## Files this will change",
+      "",
+      "lib/x.ts",
+      '"',
+    ].join("\n");
+
+    expect(stripHeredocs(cmd, false)).toContain("## Files this will change");
+    // The default is #1176's behaviour, unchanged, and this is the half that
+    // makes the pair a contrast rather than two statements of one fact.
+    expect(stripHeredocs(cmd)).not.toContain("## Files this will change");
+  });
+
+  test("#1741: a `#` line inside a quote still cannot OPEN A HEREDOC", () => {
+    // Found by the security review of this change, and it was a real new
+    // bypass. #1176 skipped heredoc detection for every `#`-leading line;
+    // scoping the comment test to `open === null` let a `#` line inside a
+    // quoted operand reach `heredocDelimiter`, and a terminated heredoc body
+    // is DELETED from the guard's view — so the write two lines down
+    // vanished. The docblock claimed the change "can only keep MORE of the
+    // command, never less", and this input is the counter-example.
+    //
+    // The exemption reads the RAW line, so it does not move when
+    // `blankComments` does. Kept after the re-scope removed the quote
+    // tracker, because the property is about heredoc detection and not
+    // about which view the caller asked for.
+    //
+    // **The quote CLOSES before the write, and that is what makes this a
+    // bypass rather than a curiosity.** A redirect still inside the quoted
+    // operand is not a write in any shell, so the guard is right to pass it
+    // and an assertion there would be asserting a defect. Here the operand
+    // ends on line 3 and line 4 is a real command — which the heredoc
+    // opened on line 2 would swallow all the way to its terminator.
+    const cmd = [
+      'gh issue create --body "intro',
+      "# cat <<EOF",
+      '"',
+      `echo x > ${LIVE}/${STATE}`,
+      "EOF",
+    ].join("\n");
+
+    expect(stripHeredocs(cmd)).toContain(`> ${LIVE}/${STATE}`);
+    expect(decideBashWrite(cmd).blocked).toBe(true);
+  });
+
+  test("#1741 CONTROL: #1176's own case still blanks, so the re-scope is not a revert", () => {
+    // The input the comment rule was added for, on the DEFAULT path every
+    // write-guard arm takes. Its apostrophe must not open a quote — if this
+    // line were kept, `> notes.md` on the next line would read as quoted
+    // text and the write would go unseen.
+    //
+    // This is what the parameter buys: #1176's behaviour is reachable
+    // unchanged and is the default, so none of the three hand-rolled
+    // predicates is needed to get it.
+    const cmd = "# First, check if there's a test workflow-state.json\necho x > notes.md";
+
+    expect(stripHeredocs(cmd)).not.toContain("workflow-state.json");
+    expect(stripHeredocs(cmd)).toContain("> notes.md");
+  });
+
   test("writeTargets collects every tee operand, not just the first", () => {
     expect(writeTargets(`tee /tmp/a /tmp/bw/${STATE}`)).toContain(`/tmp/bw/${STATE}`);
   });
