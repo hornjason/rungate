@@ -1317,26 +1317,26 @@
         {
           "id": "C1",
           "what": "SC-2609, 'serves no criterion' must be SAYABLE — NAMES_NONE is still the empty string on main, so the criterion passes while being false. This is #1173. Tracker: #1716",
-          "done": false,
-          "verify": "/usr/bin/grep -rq \"SC-2609\" test/"
+          "done": true,
+          "verify": "bun test test/board-mirror.test.ts -t \"SC-2609\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "C2",
           "what": "SC-2611, a spec with no placement table is REPORTED as unplanned — 25 of 27 specs are indistinguishable from specs with no work left. Tracker: #1681",
-          "done": false,
-          "verify": "/usr/bin/grep -rq \"SC-2611\" test/"
+          "done": true,
+          "verify": "bun test test/plan-spec.test.ts -t \"SC-2611\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "C3",
           "what": "SC-2612, lib/finding-promotion.ts — turns a review finding that names real work into a criterion, and is the only thing that DRAINS the criterion-less issues rather than tagging them. Tracker: #1678",
           "done": false,
-          "verify": "/usr/bin/grep -rq \"SC-2612\" test/"
+          "verify": "bun test test/finding-promotion.test.ts -t \"SC-2612\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "C4",
           "what": "SC-2613, filingGate in lib/github.ts — without it a tool that creates issues bypasses the cap a `gh issue create` is metered by. Tracker: #1677",
           "done": false,
-          "verify": "/usr/bin/grep -rq \"SC-2613\" test/"
+          "verify": "bun test test/github-client.test.ts -t \"SC-2613\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "C5",
@@ -1347,8 +1347,8 @@
         {
           "id": "C6",
           "what": "SC-2602, SC-2606 and SC-2610 are credited on a word in a comment — each needs real behaviour and a test that goes red without it. Tracker: #1683",
-          "done": false,
-          "verify": "/usr/bin/grep -rq \"SC-2602\" test/ && /usr/bin/grep -rq \"SC-2606\" test/ && /usr/bin/grep -rq \"SC-2610\" test/"
+          "done": true,
+          "verify": "bun test test/issue-decomposition.test.ts -t \"SC-2602\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\" && bun test test/plan-deps.test.ts -t \"SC-2606\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\" && bun test test/board-mirror.test.ts -t \"SC-2610\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         }
       ],
       "goal": "The things the engine spec names that do not exist or are false get built",
@@ -1468,7 +1468,7 @@
       "name": "The board dispatches the work",
       "agreed": "2026-11-06 Jason",
       "goal": "Ready is always full of workable items, and the only thing a session may start is in Ready",
-      "serves": 3,
+      "serves": 1,
       "issue": 1842,
       "why": "Promotion to Ready exists and is event-driven with no cron (board-ready.yml, issues:[closed]), but it fans out only from a closing BLOCKER — an issue that was never blocked has no event that can reach it, so 36 unblocked candidates sat in Backlog while Ready held 1 of 3. On the draw side nothing points a session at the lane at all: work-status's loudest section is 36 repo-wide numbers, so a session can comply with the tool and bypass the board at the same time. Observed 2026-11-06: three issues in a row were worked from a dependency chain in context, not from the lane, and no instrument objected.",
       "items": [
