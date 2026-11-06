@@ -791,18 +791,28 @@ describe("#1647: the Ready lane", () => {
 });
 
 /**
- * ## The mutation battery on `splitReadyChanges`
+ * ## The mutation batteries
  *
  *   mutant                                         reading   predicted
  *   the cap ignored entirely                         5          4
  *   demotions dropped from writable                  2          2
  *   demotions capped too (the naive version)         2          1
+ *   --repo validation dropped (FIRST attempt)        0          2
+ *   parseRepo drops the arity check                  1          2
+ *   parseRepo drops the empty-side check             1          1
+ *   main stops calling parseRepo (FIRST attempt)     0          0
  *
- * Two misses, both low, both the same arithmetic error I keep making:
- * counting the cases that NAME a behaviour and forgetting the ones that
- * assert it incidentally. Row 1 also reddens the unmeasured-depth case;
- * row 3 also reddens the phase-ordering case, because capping the
- * demotions changes how many slots the promotions see.
+ * **Two rows read ZERO, and both were real gaps rather than wrong
+ * predictions.** The `--repo` guard was inline in `main()` where no case
+ * could reach it — four assertions later added over an exported
+ * `parseRepo`. Then removing `main`'s CALL to it read zero as well: a
+ * validator nothing invokes is four green cases and no guard, which is
+ * `runVerdict`'s unreachable branch one layer out. Both are closed.
+ *
+ * The arity miss is instructive: dropping `parts.length !== 2` still
+ * refuses `"rungate"`, because the empty-side check catches it. Only
+ * `"a/b/c"` survives, so one case moves and not two. Predicting the
+ * MEMBERSHIP rather than the total is what would have got this right.
  */
 describe("SC-2722: the hand-run writer fills to the same depth as the workflow", () => {
   const c = (number: number, phase: number | null, to: string) => ({ item: { number, phase }, to });
@@ -875,6 +885,21 @@ describe("SC-2722: a repository argument is owner/name or it is refused", () => 
   // the typo.
   test("a bare name with no slash is refused, not half-parsed", () => {
     expect(parseRepo("rungate")).toBeNull();
+  });
+
+  // **The decider is called.** Mutant G2c removed `main`'s call to
+  // `parseRepo` and read ZERO: four green cases over a function nothing
+  // invokes. That is the same shape as the inline guard they replaced,
+  // one layer out — `runVerdict`'s unreachable UNMEASURED branch is the
+  // worked instance. Asserted on code with comments stripped, because
+  // this very block names the symbol in prose.
+  test("main refuses a malformed --repo before any network call", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "scripts/board-mirror.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src, "a validator nothing calls is four green cases and no guard").toContain(
+      "parseRepo(values.repo) === null",
+    );
   });
 
   test("an empty side or an extra slash is refused", () => {
