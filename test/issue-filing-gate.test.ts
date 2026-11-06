@@ -98,6 +98,7 @@ import {
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
 import { API_BOOLEAN_FLAGS } from "../lib/issue-create-override";
+import { UNFILED_FILING } from "../lib/issue-file-overlap";
 import { decomposedBody } from "../lib/issue-decomposition";
 import {
   ISSUE_SECTIONS,
@@ -5943,5 +5944,143 @@ describe("FG-216..FG-224: a filing is readable by the things that read it", () =
         section.label,
       );
     }
+  });
+});
+
+/**
+ * FG-225..FG-231 — #1743: two issues editing one file, with something saying so.
+ *
+ * #1741 made every filing name its files. This is the first thing that READS
+ * them. Measured over the 20 milestone-less open issues on 2026-11-03: 16
+ * declare at least one file, 10 pairs overlap, and four — #1407, #1425, #1585,
+ * #1355 — all rewrite `lib/bash-write-guard.ts`. Hand four agents the
+ * unblocked, unassigned set and four of them collide.
+ *
+ * **These rows are at the GATE and not only in
+ * `test/issue-file-overlap.test.ts`.** That file can prove the clustering is
+ * right about a corpus it builds itself; only this one can prove the gate
+ * hands it the body that arrived on `--body` and the corpus the tracker
+ * returned. The issue names that explicitly: *a mutation that stops reading
+ * `--body` must turn it red*, and FG-225 is where that lands.
+ *
+ * **Every row asserts a NOTE and no row asserts a refusal.** A conflict is not
+ * a dependency: 20 of the 23 milestone-less issues are genuinely unblocked,
+ * and a gate that refused here would argue with every second issue about a
+ * busy file and would be deciding whether THIS filing may exist out of a
+ * reading about OTHER ones.
+ */
+describe("FG-225..FG-231: a filing is told when an open issue names the same file", () => {
+  const CONTESTED = "lib/bash-write-guard.ts";
+
+  /** A body declaring `paths`, otherwise exactly what every ALLOW fixture says. */
+  const bodyNaming = (paths: readonly string[]) =>
+    [
+      "`zqxjOverlapProbe` in lib/zqxj-overlap.ts drops 17 of 41 commands. Claim 7.",
+      `${EXEMPTION_PREFIX} out-of-pr-diff`,
+      ...requiredSections("everyday-work").map(s =>
+        s.id === "files"
+          ? `${headingFor(s)}\n\n${paths.map(p => `- \`${p}\``).join("\n")}\n`
+          : `${headingFor(s)}\n\nx\n`,
+      ),
+    ].join("\n\n");
+
+  const filingNaming = (paths: readonly string[]) =>
+    'gh issue create --title "zqxjOverlapProbe drops a sweep it started" ' +
+    `--body ${shellQuoted(bodyNaming(paths))}`;
+
+  /** An open issue on the tracker, declaring the files it names. */
+  const openIssue = (id: number, paths: readonly string[]) => ({
+    id: String(id),
+    title: `an open issue about ${paths[0]}`,
+    // Each one a DIFFERENT symptom, or the dedupe refuses the filing as a
+    // DUPLICATE and the row goes green having measured a stage that runs
+    // before this one.
+    body: `\`probe${id}\` in lib/probe-${id}.ts drops ${id} of 41 commands.\n\n${headingFor(
+      ISSUE_SECTIONS.find(s => s.id === "files")!,
+    )}\n\n${paths.map(p => `- \`${p}\``).join("\n")}\n`,
+  });
+
+  const gateWith = async (cmd: string, corpus: ReturnType<typeof openIssue>[]) =>
+    filingGate(cmd, {
+      projectRoot: freshRun(),
+      readExisting: async () => measuredCorpus(corpus),
+      readLedger: () => [],
+    });
+
+  test("FG-225: an open issue naming the same file is NAMED in the note", async () => {
+    const r = await gateWith(filingNaming([CONTESTED]), [openIssue(1407, [CONTESTED])]);
+
+    expect(r.refusal, "a conflict is not a refusal").toBeNull();
+    expect(r.note ?? "").toContain("#1407");
+    expect(r.note ?? "", "and the file, so the reader can tell WHY").toContain(CONTESTED);
+  });
+
+  test("FG-226 CONTROL: the SAME filing against the SAME corpus, different file, is SILENT", async () => {
+    const r = await gateWith(filingNaming(["lib/nobody-else.ts"]), [openIssue(1407, [CONTESTED])]);
+
+    // One axis. Without this row FG-225 is satisfied by a gate that appends
+    // the note to every filing, which is also what a reader that ignores
+    // `--body` and always returns the whole corpus does.
+    expect(r.refusal).toBeNull();
+    expect(r.note ?? "").not.toContain("#1407");
+  });
+
+  test("FG-227: the note names the command, so it is actionable", async () => {
+    const r = await gateWith(filingNaming([CONTESTED]), [openIssue(1407, [CONTESTED])]);
+
+    // `.claude/rules/config-access.md`, about UNMEASURED and true of every
+    // channel this gate writes to: a warning that does not say what to type
+    // is a warning nobody can act on.
+    expect(r.note ?? "").toContain("--add-blocked-by 1407");
+  });
+
+  test("FG-228: the #1407/#1425/#1585/#1355 cluster — all three others are named", async () => {
+    // The fixture the issue names, arriving the way production delivers it:
+    // one body on `--body`, three bodies out of the tracker.
+    const r = await gateWith(filingNaming([CONTESTED]), [
+      openIssue(1407, [CONTESTED]),
+      openIssue(1425, [CONTESTED, "lib/issue-create-override.ts"]),
+      openIssue(1585, [CONTESTED]),
+      openIssue(1355, [CONTESTED, "test/bash-write-guard.test.ts"]),
+      openIssue(1600, ["lib/somewhere-else.ts"]),
+    ]);
+
+    for (const id of [1407, 1425, 1585, 1355]) expect(r.note ?? "").toContain(`#${id}`);
+    expect(r.note ?? "", "and not the one sharing nothing with anybody").not.toContain("#1600");
+  });
+
+  test("FG-229: the stand-in for the unfiled filing never reaches the text", async () => {
+    const r = await gateWith(filingNaming([CONTESTED]), [openIssue(1407, [CONTESTED])]);
+
+    // It has no number yet and needs one to go through the clustering with
+    // everything else. A nine-quadrillion issue number in a warning is how a
+    // reader stops believing the rest of it.
+    expect(r.note ?? "").not.toContain(String(UNFILED_FILING));
+    expect(r.note ?? "").not.toContain("NaN");
+  });
+
+  test("FG-230: an UNMEASURED corpus produces NO overlap note", async () => {
+    const r = await filingGate(filingNaming([CONTESTED]), {
+      projectRoot: freshRun(),
+      readExisting: async () => unmeasuredCorpus("the tracker could not be read"),
+      readLedger: () => [],
+    });
+
+    // A warning derived from a tracker nobody could read is a reading
+    // presented as a fact. The UNMEASURED is already said out loud; saying
+    // "and nothing overlaps" in the same breath is the silent default.
+    expect(r.note ?? "", "the UNMEASURED is still said").toContain("UNMEASURED");
+    expect(r.note ?? "").not.toContain("--add-blocked-by");
+  });
+
+  test("FG-231: a REFUSED filing gets no overlap note", async () => {
+    // The clause never reaches the tracker, so an ordering suggestion for it
+    // is advice about work that is not happening. `cleared` is the gate's own
+    // word for this and it is READ here rather than restated.
+    const undeclared = filingNaming([CONTESTED]).replace(`${EXEMPTION_PREFIX} out-of-pr-diff`, "");
+    const r = await gateWith(undeclared, [openIssue(1407, [CONTESTED])]);
+
+    expect(r.refusal, "the premise: something else refused it").not.toBeNull();
+    expect(r.note ?? "").not.toContain("--add-blocked-by");
   });
 });

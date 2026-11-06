@@ -196,31 +196,99 @@ function contestedFiles(members: readonly IssueFiles[]): string[] {
 }
 
 /**
- * The note an agent reads when the issue they are filing collides, or null.
+ * Corpus rows as the thing this file reasons about.
  *
- * Null rather than an empty string: a channel that always has something in it
- * is a channel people stop reading, and `lib/issue-filing-gate.ts` joins its
- * notes, so an empty one would show up as blank space nobody can account for.
+ * Takes the structural shape rather than importing `Finding`, so the direction
+ * of the dependency stays one way: `lib/issue-filing-gate.ts` reads this file,
+ * and this file knows nothing about the gate.
+ *
+ * **A row whose id is not a number is dropped, not coerced.** The corpus also
+ * carries in-command siblings keyed by position and the `new` marker for an
+ * unfiled finding, and `Number("new")` is `NaN` — an id that would print as
+ * `#NaN` in a warning and point at nothing.
+ */
+export function asIssueFiles(rows: readonly { id: string; body: string }[]): IssueFiles[] {
+  const out: IssueFiles[] = [];
+  for (const row of rows) {
+    const id = Number(row.id);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    const files = declaredFiles(row.body);
+    if (files.length > 0) out.push({ id, files });
+  }
+  return out;
+}
+
+/**
+ * The id standing in for the filing that has not happened yet.
+ *
+ * A body on its way through `lib/issue-filing-gate.ts` has no number, and it
+ * needs one to go through `fileClusters` with everything else — one decider,
+ * rather than a second pairwise rule living in the gate.
+ *
+ * **The largest safe integer, so the unfiled row is never the lead.** The lead
+ * is the lowest number, which is the oldest issue, and a filing that does not
+ * exist yet is newer than every issue that does. Picking `0` would have told
+ * the filer that the three issues already open are blocked on the one they are
+ * still typing.
+ */
+export const UNFILED_FILING = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The cluster a body would join, or null when it collides with nothing.
+ *
+ * Runs the WHOLE set — the open issues plus this body — through
+ * `fileClusters`, rather than asking a separate pairwise question here. The
+ * grouping is transitive, so the answer can name an issue this body shares no
+ * file with directly; that is the reading, not a leak. Those issues are in the
+ * same contested set and picking any two of them up at once has the same cost.
+ */
+export function contestedWith(body: string, corpus: readonly IssueFiles[]): FileCluster | null {
+  const files = declaredFiles(body);
+  if (files.length === 0) return null;
+
+  const mine = corpus.filter(i => i.id !== UNFILED_FILING);
+  const cluster = fileClusters([...mine, { id: UNFILED_FILING, files }]).find(
+    c => c.lead === UNFILED_FILING || c.blocked.includes(UNFILED_FILING),
+  );
+  return cluster ?? null;
+}
+
+/**
+ * The note an agent reads when the body they are filing collides, or null.
+ *
+ * Null rather than an empty string: `lib/issue-filing-gate.ts` joins its
+ * notes, so an empty one is blank space in a refusal nobody can account for,
+ * and a channel that always has something in it is a channel people skip.
  *
  * It names the remedy. A warning that does not say what to type is a warning
  * nobody can act on — `.claude/rules/config-access.md` makes that point about
- * UNMEASURED and it is true of every channel the gate writes to.
+ * UNMEASURED and it is true of every channel this gate writes to.
+ *
+ * `UNFILED_FILING` never reaches the text. It is an internal stand-in, and a
+ * nine-quadrillion issue number in a warning is the kind of detail that makes
+ * a reader stop believing the rest of it.
  */
-export function overlapNote(collisions: readonly IssueFiles[], issue: number): string | null {
-  if (collisions.length === 0) return null;
+export function overlapNote(cluster: FileCluster | null): string | null {
+  if (cluster === null) return null;
 
-  const lines = collisions.map(c => `- #${c.id} — ${c.files.map(f => `\`${f}\``).join(", ")}`);
-  const flags = collisions.map(c => `--add-blocked-by ${c.id}`).join(" ");
-  const subject = Number.isFinite(issue) ? `#${issue}` : "this issue";
+  const others = [cluster.lead, ...cluster.blocked].filter(id => id !== UNFILED_FILING);
+  if (others.length === 0) return null;
+
+  const paths = cluster.files.map(f => `\`${f}\``).join(", ");
+  const flags = others.map(id => `--add-blocked-by ${id}`).join(" ");
 
   return [
-    `**Open issues already name the same file(s).** Picking ${subject} up alongside`,
-    "one of these means two sessions editing one file with nothing saying so.",
+    `**${plural(others.length)} already open ${others.length === 1 ? "names" : "name"} the same work: ` +
+      `${paths}.** ${others.map(id => `#${id}`).join(", ")}.`,
     "",
-    ...lines,
+    "Two sessions editing one file, with nothing on the tracker saying so, is",
+    "the conflict this is warning about — it is NOT a dependency, and the board",
+    "should not grow an ordering nobody meant. Order them only if you do:",
     "",
-    "This is a conflict, not a dependency — order them only if you mean to:",
-    "",
-    `    gh issue edit ${issue} ${flags}`,
+    `    gh issue edit <this issue> ${flags}`,
   ].join("\n");
+}
+
+function plural(n: number): string {
+  return n === 1 ? "An issue" : `${n} issues`;
 }

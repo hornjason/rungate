@@ -31,6 +31,8 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  UNFILED_FILING,
+  contestedWith,
   declaredFiles,
   fileClusters,
   overlapNote,
@@ -204,31 +206,58 @@ describe("FO-30: the #1407/#1425/#1585/#1355 cluster is the fixture", () => {
 });
 
 describe("FO-40: the sentence an agent reads", () => {
+  const CORPUS = [
+    { id: 1407, files: ["lib/bash-write-guard.ts"] },
+    { id: 1425, files: ["lib/bash-write-guard.ts", "lib/issue-create-override.ts"] },
+    { id: 1600, files: ["lib/somewhere-else.ts"] },
+  ];
+
   test("FO-40: it names the issue, the file, and the command that fixes it", () => {
-    const note = overlapNote([{ id: 1407, files: ["lib/bash-write-guard.ts"] }], 1743);
+    const note = overlapNote(contestedWith(bodyWith(["lib/bash-write-guard.ts"]), CORPUS));
 
     expect(note).toContain("#1407");
     expect(note).toContain("lib/bash-write-guard.ts");
     // A warning that does not name the remedy is a warning nobody can act
     // on — .claude/rules/config-access.md says this about UNMEASURED and it
     // is true of every channel this gate writes to.
-    expect(note).toContain("--add-blocked-by");
+    expect(note).toContain("--add-blocked-by 1407");
   });
 
-  test("FO-41: no overlap produces NO note, not an empty one", () => {
-    expect(overlapNote([], 1743)).toBeNull();
+  test("FO-41: a body colliding with nothing produces NO cluster and NO note", () => {
+    const clear = bodyWith(["lib/nobody-else-touches-this.ts"]);
+
+    expect(contestedWith(clear, CORPUS)).toBeNull();
+    expect(overlapNote(contestedWith(clear, CORPUS))).toBeNull();
   });
 
-  test("FO-42: several collisions are one sentence naming all of them", () => {
-    const note = overlapNote(
-      [
-        { id: 1407, files: ["lib/bash-write-guard.ts"] },
-        { id: 1425, files: ["lib/issue-create-override.ts"] },
-      ],
-      1743,
-    );
+  test("FO-42: a body declaring no files at all collides with nothing", () => {
+    // Not "collides with everyone". The gate refuses a body with no file
+    // section as MALFORMED long before this runs, so the only way here is a
+    // section with prose in it — and prose is not a claim on a file.
+    expect(contestedWith("no headings, just prose", CORPUS)).toBeNull();
+  });
+
+  test("FO-43: every colliding issue is named, not just the first", () => {
+    const note = overlapNote(contestedWith(bodyWith(["lib/bash-write-guard.ts"]), CORPUS));
 
     expect(note).toContain("#1407");
     expect(note).toContain("#1425");
+    // And not the one that shares nothing with anybody.
+    expect(note).not.toContain("#1600");
+  });
+
+  test("FO-44: the unfiled filing is never the lead, and never reaches the text", () => {
+    const cluster = contestedWith(bodyWith(["lib/bash-write-guard.ts"]), CORPUS)!;
+
+    // Lowest number leads, which is oldest-first, and a filing that does not
+    // exist yet is newer than every issue that does. A stand-in of 0 would
+    // have told the filer that three open issues are blocked on the one they
+    // are still typing.
+    expect(cluster.lead).toBe(1407);
+    expect(cluster.blocked).toContain(UNFILED_FILING);
+
+    // A nine-quadrillion issue number in a warning is how a reader stops
+    // believing the rest of it.
+    expect(overlapNote(cluster)).not.toContain(String(UNFILED_FILING));
   });
 });
