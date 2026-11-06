@@ -138,7 +138,7 @@ import {
   labelValues,
 } from "./issue-create-override";
 import { headingFor, missingSections, requiredSections } from "./issue-shape";
-import { asIssueFiles, contestedWith, overlapNote } from "./issue-file-overlap";
+import { asIssueFiles, overlapNote } from "./issue-file-overlap";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
 import { tryLoadRungateConfig } from "./config-loader";
@@ -3116,7 +3116,7 @@ export async function filingGate(
     if (cleared) {
       const corpus = await readFor(attempt.repo);
       if (corpus.reading === "MEASURED") {
-        const note = overlapNote(contestedWith(finding.body, asIssueFiles(corpus.findings)));
+        const note = overlapNote(finding.body, asIssueFiles(corpus.findings));
         if (note !== null) notes.push(note);
       }
     }

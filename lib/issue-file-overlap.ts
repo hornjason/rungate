@@ -41,14 +41,14 @@ export interface IssueFiles {
   readonly files: readonly string[];
 }
 
-/** A set of issues that cannot all be picked up at once. */
-export interface FileCluster {
+/** One file, and the open issues contending for it. */
+export interface FileContention {
+  /** The path they all declare. */
+  readonly file: string;
   /** The issue to do FIRST. Lowest number, so a re-run names the same one. */
   readonly lead: number;
   /** The rest, ascending — the ones a `blocked by` edge would point at. */
   readonly blocked: readonly number[];
-  /** The paths more than one member of the cluster declares. */
-  readonly files: readonly string[];
 }
 
 const FILES_SECTION = ISSUE_SECTIONS.find(s => s.id === "files");
@@ -104,16 +104,35 @@ function filesSectionLines(body: string): string[] {
   return out;
 }
 
-/** The path a list line names, or null when the line is prose. */
+/**
+ * The path a list line names, or null when the line is prose.
+ *
+ * Two ways to be a path, and the second is the narrow one:
+ *
+ * - it contains a `/` — every file under `lib/`, `test/`, `.github/`
+ * - OR it ends in an ALPHABETIC extension of two to five characters over a
+ *   stem containing a letter — `package.json`, `AGENTS.md`, `tsconfig.json`
+ *
+ * **`2.0`, `v2.1` and `i.e` are not files, and the second rule exists to say
+ * so.** `/\.[A-Za-z0-9]+$/` alone accepted all three, which cut against the
+ * bias `declaredFiles` declares two paragraphs up: this reader may read too
+ * few files, never a file that does not exist. A version number alone on a
+ * line of the files section would have been reported as contested with
+ * whichever other issue happened to name the same version. `FO-50`.
+ *
+ * **A root file with NO extension — `Makefile`, `Dockerfile` — is missed**, and
+ * `FO-52` asserts it rather than leaving it in a comment. An earlier version of
+ * this docblock claimed the opposite while the code rejected them. There is no
+ * rule that admits `Makefile` and rejects `i.e`; they are the same shape, and
+ * the cost falls on the side this reader is allowed to be wrong on.
+ */
 function pathOnLine(line: string): string | null {
   const bare = line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").trim();
   const quoted = /`([^`]+)`/.exec(bare);
   const candidate = quoted !== null ? quoted[1].trim() : bare;
 
   if (candidate === "" || /\s/.test(candidate)) return null;
-  // A `/` or an extension. Not both: `Makefile` has no extension and
-  // `rungate.json` sits at the root, and both are files an issue may name.
-  if (!candidate.includes("/") && !/\.[A-Za-z0-9]+$/.test(candidate)) return null;
+  if (!candidate.includes("/") && !/[A-Za-z][^/]*\.[A-Za-z]{2,5}$/.test(candidate)) return null;
 
   return candidate.replace(/^\.\//, "");
 }
@@ -131,68 +150,39 @@ export function sharedFiles(a: readonly string[], b: readonly string[]): string[
 }
 
 /**
- * The issues that cannot all be picked up at once, lowest lead first.
+ * Every file more than one of these issues declares, lowest lead first.
  *
- * Grouping is TRANSITIVE. Two issues sharing nothing directly still belong to
- * one cluster when both collide with a third — handing them out as independent
- * pairs would put that third issue in two clusters at once and the lead becomes
- * whichever pair somebody read first.
+ * **The unit is a FILE, and that is the correction this went through.** The
+ * first version clustered ISSUES by transitive union: two issues sharing
+ * nothing directly landed in one group when both collided with a third, and
+ * the group then carried the union of everyone's contested paths. Reported to
+ * a reader it over-claimed — #100 on `lib/a.ts` and a filing on `lib/b.ts`
+ * were told they shared work, on the strength of a #200 that declares both.
  *
- * An issue declaring no files joins nothing. An absent reading is not an
- * overlap with everybody, and an edge nobody can act on is an edge somebody has
- * to clear.
+ * A file is the thing two issues actually contend for, so it is the thing this
+ * reading is keyed on. Every id in a row declares that row's path. There is
+ * nothing left to over-claim with, and the union-find went with it.
+ *
+ * `lead` is the LOWEST number, which is the oldest issue and the one the rest
+ * queue behind. Stable by construction: a reading whose lead moved between
+ * runs would hand out a different set of edges each time and the board would
+ * churn.
  */
-export function fileClusters(issues: readonly IssueFiles[]): FileCluster[] {
-  const present = issues.filter(i => i.files.length > 0);
-  const parent = new Map<number, number>(present.map(i => [i.id, i.id]));
-
-  const find = (id: number): number => {
-    let at = id;
-    while (parent.get(at) !== at) at = parent.get(at)!;
-    return at;
-  };
-  const union = (a: number, b: number) => {
-    const [x, y] = [find(a), find(b)];
-    if (x !== y) parent.set(Math.max(x, y), Math.min(x, y));
-  };
-
-  for (let i = 0; i < present.length; i++) {
-    for (let j = i + 1; j < present.length; j++) {
-      if (sharedFiles(present[i].files, present[j].files).length > 0) {
-        union(present[i].id, present[j].id);
-      }
+export function contestedFiles(issues: readonly IssueFiles[]): FileContention[] {
+  const by = new Map<string, number[]>();
+  for (const issue of issues) {
+    for (const path of new Set(issue.files)) {
+      by.set(path, [...(by.get(path) ?? []), issue.id]);
     }
   }
 
-  const groups = new Map<number, IssueFiles[]>();
-  for (const issue of present) {
-    const root = find(issue.id);
-    groups.set(root, [...(groups.get(root) ?? []), issue]);
-  }
-
-  return [...groups.values()]
-    .filter(members => members.length > 1)
-    .map(members => {
-      const ids = members.map(m => m.id).sort((a, b) => a - b);
-      return {
-        lead: ids[0],
-        blocked: ids.slice(1),
-        files: contestedFiles(members),
-      };
+  return [...by.entries()]
+    .filter(([, ids]) => ids.length > 1)
+    .map(([file, ids]) => {
+      const sorted = [...ids].sort((a, b) => a - b);
+      return { file, lead: sorted[0], blocked: sorted.slice(1) };
     })
-    .sort((a, b) => a.lead - b.lead);
-}
-
-/** The paths more than one member declares — the reason the cluster exists. */
-function contestedFiles(members: readonly IssueFiles[]): string[] {
-  const seen = new Map<string, number>();
-  for (const m of members) {
-    for (const p of new Set(m.files)) seen.set(p, (seen.get(p) ?? 0) + 1);
-  }
-  return [...seen.entries()]
-    .filter(([, n]) => n > 1)
-    .map(([p]) => p)
-    .sort();
+    .sort((a, b) => a.lead - b.lead || a.file.localeCompare(b.file));
 }
 
 /**
@@ -219,38 +209,37 @@ export function asIssueFiles(rows: readonly { id: string; body: string }[]): Iss
 }
 
 /**
- * The id standing in for the filing that has not happened yet.
+ * The open issues this body shares a file with, and WHICH files, ascending.
  *
- * A body on its way through `lib/issue-filing-gate.ts` has no number, and it
- * needs one to go through `fileClusters` with everything else — one decider,
- * rather than a second pairwise rule living in the gate.
+ * **DIRECT overlap, and the word is load-bearing.** The first version ran the
+ * body through a transitive clustering with the rest and reported the group it
+ * landed in, on the argument that everything in a contested set costs the same
+ * to pick up. The review of this PR showed that argument is false, with a case
+ * I had written no test for:
  *
- * **The largest safe integer, so the unfiled row is never the lead.** The lead
- * is the lowest number, which is the oldest issue, and a filing that does not
- * exist yet is newer than every issue that does. Picking `0` would have told
- * the filer that the three issues already open are blocked on the one they are
- * still typing.
+ *     #100 declares lib/a.ts
+ *     #200 declares lib/a.ts AND lib/b.ts
+ *     the filing declares lib/b.ts
+ *
+ * One group, transitively — and the note then told the filer they shared
+ * `lib/a.ts` with #100, which neither of them is true of, and offered
+ * `--add-blocked-by 100` on that basis. A warning that names a file the reader
+ * never wrote is the fastest way to teach them to skip the channel. `FO-45`
+ * and `FG-229` are that case.
+ *
+ * Transitivity is still right for the question `contestedFiles` answers —
+ * *what does the pickable set look like* — because there every id in a row
+ * declares that row's path. It is wrong for *what does THIS body collide
+ * with*, and those are two questions.
  */
-export const UNFILED_FILING = Number.MAX_SAFE_INTEGER;
+export function collisionsWith(body: string, corpus: readonly IssueFiles[]): IssueFiles[] {
+  const mine = declaredFiles(body);
+  if (mine.length === 0) return [];
 
-/**
- * The cluster a body would join, or null when it collides with nothing.
- *
- * Runs the WHOLE set — the open issues plus this body — through
- * `fileClusters`, rather than asking a separate pairwise question here. The
- * grouping is transitive, so the answer can name an issue this body shares no
- * file with directly; that is the reading, not a leak. Those issues are in the
- * same contested set and picking any two of them up at once has the same cost.
- */
-export function contestedWith(body: string, corpus: readonly IssueFiles[]): FileCluster | null {
-  const files = declaredFiles(body);
-  if (files.length === 0) return null;
-
-  const mine = corpus.filter(i => i.id !== UNFILED_FILING);
-  const cluster = fileClusters([...mine, { id: UNFILED_FILING, files }]).find(
-    c => c.lead === UNFILED_FILING || c.blocked.includes(UNFILED_FILING),
-  );
-  return cluster ?? null;
+  return corpus
+    .map(issue => ({ id: issue.id, files: sharedFiles(mine, issue.files) }))
+    .filter(hit => hit.files.length > 0)
+    .sort((a, b) => a.id - b.id);
 }
 
 /**
@@ -260,26 +249,41 @@ export function contestedWith(body: string, corpus: readonly IssueFiles[]): File
  * notes, so an empty one is blank space in a refusal nobody can account for,
  * and a channel that always has something in it is a channel people skip.
  *
+ * **Every path printed here is one the filing itself declared**, and it is
+ * attributed to an issue that declared it too — `collisionsWith` carries the
+ * intersection rather than either side's whole list, so there is nothing for
+ * this function to over-claim with.
+ *
  * It names the remedy. A warning that does not say what to type is a warning
  * nobody can act on — `.claude/rules/config-access.md` makes that point about
  * UNMEASURED and it is true of every channel this gate writes to.
  *
- * `UNFILED_FILING` never reaches the text. It is an internal stand-in, and a
- * nine-quadrillion issue number in a warning is the kind of detail that makes
- * a reader stop believing the rest of it.
+ * The closing line is `contestedFiles` over the OPEN corpus alone, with this
+ * body nowhere in it: a file two or more issues already contend for is a queue
+ * the filer is joining, not a pair they are forming, and the oldest is the one
+ * the rest go behind. `FO-46` pins the count at three where four issues would
+ * be the tempting number.
  */
-export function overlapNote(cluster: FileCluster | null): string | null {
-  if (cluster === null) return null;
+export function overlapNote(body: string, corpus: readonly IssueFiles[]): string | null {
+  const collisions = collisionsWith(body, corpus);
+  if (collisions.length === 0) return null;
 
-  const others = [cluster.lead, ...cluster.blocked].filter(id => id !== UNFILED_FILING);
-  if (others.length === 0) return null;
-
-  const paths = cluster.files.map(f => `\`${f}\``).join(", ");
-  const flags = others.map(id => `--add-blocked-by ${id}`).join(" ");
+  const flags = collisions.map(c => `--add-blocked-by ${c.id}`).join(" ");
+  const mine = new Set(collisions.flatMap(c => c.files));
+  const queues = contestedFiles(corpus)
+    .filter(c => mine.has(c.file))
+    .map(
+      c =>
+        `\`${c.file}\` already has ${c.blocked.length + 1} open issues on it — ` +
+        `#${c.lead} is the oldest.`,
+    );
 
   return [
-    `**${plural(others.length)} already open ${others.length === 1 ? "names" : "name"} the same work: ` +
-      `${paths}.** ${others.map(id => `#${id}`).join(", ")}.`,
+    `**${plural(collisions.length)} already open ${collisions.length === 1 ? "names" : "name"} ` +
+      "a file this one names:**",
+    "",
+    ...collisions.map(c => `- #${c.id} — ${c.files.map(f => `\`${f}\``).join(", ")}`),
+    ...(queues.length > 0 ? ["", ...queues] : []),
     "",
     "Two sessions editing one file, with nothing on the tracker saying so, is",
     "the conflict this is warning about — it is NOT a dependency, and the board",

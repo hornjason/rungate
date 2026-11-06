@@ -31,10 +31,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  UNFILED_FILING,
-  contestedWith,
+  collisionsWith,
+  contestedFiles,
   declaredFiles,
-  fileClusters,
   overlapNote,
   sharedFiles,
 } from "../lib/issue-file-overlap";
@@ -133,112 +132,120 @@ describe("FO-20: what two issues share", () => {
 });
 
 describe("FO-30: the #1407/#1425/#1585/#1355 cluster is the fixture", () => {
+  const GUARD = "lib/bash-write-guard.ts";
+
   // The four real issues from the 2026-11-03 measurement, by number, each
   // declaring the file they were measured to share.
   const CLUSTER = [
-    { id: 1355, files: ["lib/bash-write-guard.ts", "test/bash-write-guard.test.ts"] },
-    { id: 1407, files: ["lib/bash-write-guard.ts"] },
-    { id: 1425, files: ["lib/bash-write-guard.ts", "lib/issue-create-override.ts"] },
-    { id: 1585, files: ["lib/bash-write-guard.ts"] },
+    { id: 1355, files: [GUARD, "test/bash-write-guard.test.ts"] },
+    { id: 1407, files: [GUARD] },
+    { id: 1425, files: [GUARD, "lib/issue-create-override.ts"] },
+    { id: 1585, files: [GUARD] },
   ];
 
   test("FO-30: four issues on one file resolve to ONE lead and THREE edges", () => {
-    const out = fileClusters(CLUSTER);
+    const out = contestedFiles(CLUSTER);
 
     expect(out).toHaveLength(1);
+    expect(out[0].file).toBe(GUARD);
     expect(out[0].lead).toBe(1355);
     expect(out[0].blocked).toEqual([1407, 1425, 1585]);
-    expect(out[0].files).toEqual(["lib/bash-write-guard.ts"]);
   });
 
   test("FO-31: the LOWEST number leads, so a re-run names the same lead", () => {
     // Any stable rule would do; this one is the only one that does not
-    // depend on the order the tracker happened to return. A cluster whose
-    // lead moves between runs produces a different set of edges each time
+    // depend on the order the tracker happened to return. A reading whose
+    // lead moves between runs hands out a different set of edges each time
     // and the board churns.
     const shuffled = [...CLUSTER].reverse();
 
-    expect(fileClusters(shuffled)[0].lead).toBe(fileClusters(CLUSTER)[0].lead);
+    expect(contestedFiles(shuffled)).toEqual(contestedFiles(CLUSTER));
   });
 
-  test("FO-32: issues sharing nothing form NO cluster", () => {
-    expect(fileClusters([
+  test("FO-32: issues sharing nothing contend for nothing", () => {
+    expect(contestedFiles([
       { id: 1, files: ["lib/a.ts"] },
       { id: 2, files: ["lib/b.ts"] },
     ])).toEqual([]);
   });
 
   test("FO-33: an issue declaring no files joins nothing", () => {
-    // Not a cluster with everyone. An empty declaration is an absent
+    // Not a contention with everyone. An empty declaration is an absent
     // reading, and a reading nobody took must not become an edge somebody
     // has to clear.
-    expect(fileClusters([
+    expect(contestedFiles([
       { id: 1, files: [] },
       { id: 2, files: [] },
     ])).toEqual([]);
   });
 
-  test("FO-34: two disjoint clusters stay two", () => {
-    const out = fileClusters([
+  test("FO-34: two contested files stay two rows", () => {
+    const out = contestedFiles([
       { id: 1, files: ["lib/a.ts"] },
       { id: 2, files: ["lib/a.ts"] },
       { id: 3, files: ["lib/z.ts"] },
       { id: 4, files: ["lib/z.ts"] },
     ]);
 
-    expect(out.map(c => c.lead)).toEqual([1, 3]);
+    expect(out.map(c => [c.file, c.lead])).toEqual([
+      ["lib/a.ts", 1],
+      ["lib/z.ts", 3],
+    ]);
   });
 
-  test("FO-35: a chain through a shared file is ONE cluster, not two pairs", () => {
-    // 1 and 3 share nothing directly, but both collide with 2. Handing them
-    // out as two independent pairs puts 2 in two clusters and the lead
-    // becomes ambiguous — so the grouping is transitive.
-    const out = fileClusters([
+  test("FO-35: one issue in two contentions is in BOTH rows, not merged", () => {
+    // The row this correction turns on. Issue 2 contends with 1 over a.ts
+    // and with 3 over z.ts; 1 and 3 contend over nothing. The first version
+    // unioned all three and reported one group carrying both paths, which
+    // told 1 it shared z.ts — a file it never declared.
+    const out = contestedFiles([
       { id: 1, files: ["lib/a.ts"] },
       { id: 2, files: ["lib/a.ts", "lib/z.ts"] },
       { id: 3, files: ["lib/z.ts"] },
     ]);
 
-    expect(out).toHaveLength(1);
-    expect(out[0].lead).toBe(1);
-    expect(out[0].blocked).toEqual([2, 3]);
+    expect(out).toEqual([
+      { file: "lib/a.ts", lead: 1, blocked: [2] },
+      { file: "lib/z.ts", lead: 2, blocked: [3] },
+    ]);
   });
 });
 
 describe("FO-40: the sentence an agent reads", () => {
+  const GUARD = "lib/bash-write-guard.ts";
   const CORPUS = [
-    { id: 1407, files: ["lib/bash-write-guard.ts"] },
-    { id: 1425, files: ["lib/bash-write-guard.ts", "lib/issue-create-override.ts"] },
+    { id: 1407, files: [GUARD] },
+    { id: 1425, files: [GUARD, "lib/issue-create-override.ts"] },
     { id: 1600, files: ["lib/somewhere-else.ts"] },
   ];
 
   test("FO-40: it names the issue, the file, and the command that fixes it", () => {
-    const note = overlapNote(contestedWith(bodyWith(["lib/bash-write-guard.ts"]), CORPUS));
+    const note = overlapNote(bodyWith([GUARD]), CORPUS);
 
     expect(note).toContain("#1407");
-    expect(note).toContain("lib/bash-write-guard.ts");
+    expect(note).toContain(GUARD);
     // A warning that does not name the remedy is a warning nobody can act
     // on — .claude/rules/config-access.md says this about UNMEASURED and it
     // is true of every channel this gate writes to.
     expect(note).toContain("--add-blocked-by 1407");
   });
 
-  test("FO-41: a body colliding with nothing produces NO cluster and NO note", () => {
+  test("FO-41: a body colliding with nothing produces NO note", () => {
     const clear = bodyWith(["lib/nobody-else-touches-this.ts"]);
 
-    expect(contestedWith(clear, CORPUS)).toBeNull();
-    expect(overlapNote(contestedWith(clear, CORPUS))).toBeNull();
+    expect(collisionsWith(clear, CORPUS)).toEqual([]);
+    expect(overlapNote(clear, CORPUS)).toBeNull();
   });
 
   test("FO-42: a body declaring no files at all collides with nothing", () => {
     // Not "collides with everyone". The gate refuses a body with no file
     // section as MALFORMED long before this runs, so the only way here is a
     // section with prose in it — and prose is not a claim on a file.
-    expect(contestedWith("no headings, just prose", CORPUS)).toBeNull();
+    expect(overlapNote("no headings, just prose", CORPUS)).toBeNull();
   });
 
   test("FO-43: every colliding issue is named, not just the first", () => {
-    const note = overlapNote(contestedWith(bodyWith(["lib/bash-write-guard.ts"]), CORPUS));
+    const note = overlapNote(bodyWith([GUARD]), CORPUS);
 
     expect(note).toContain("#1407");
     expect(note).toContain("#1425");
@@ -246,18 +253,75 @@ describe("FO-40: the sentence an agent reads", () => {
     expect(note).not.toContain("#1600");
   });
 
-  test("FO-44: the unfiled filing is never the lead, and never reaches the text", () => {
-    const cluster = contestedWith(bodyWith(["lib/bash-write-guard.ts"]), CORPUS)!;
+  test("FO-45: a file reached only THROUGH another issue is not reported", () => {
+    // The review finding this PR went a round on, as a case rather than a
+    // sentence. #100 and the filing share nothing. They are joined only by
+    // #200, which declares both — and the first version unioned all three
+    // and told the filer they shared `lib/a.ts` with #100, offering
+    // `--add-blocked-by 100` on the strength of it. A warning naming a file
+    // the reader never wrote is how the channel stops being read.
+    const indirect = [
+      { id: 100, files: ["lib/a.ts"] },
+      { id: 200, files: ["lib/a.ts", "lib/b.ts"] },
+    ];
+    const note = overlapNote(bodyWith(["lib/b.ts"]), indirect);
 
-    // Lowest number leads, which is oldest-first, and a filing that does not
-    // exist yet is newer than every issue that does. A stand-in of 0 would
-    // have told the filer that three open issues are blocked on the one they
-    // are still typing.
-    expect(cluster.lead).toBe(1407);
-    expect(cluster.blocked).toContain(UNFILED_FILING);
+    expect(collisionsWith(bodyWith(["lib/b.ts"]), indirect)).toEqual([
+      { id: 200, files: ["lib/b.ts"] },
+    ]);
+    expect(note).toContain("#200");
+    expect(note, "#100 declares no file this filing declares").not.toContain("#100");
+    expect(note, "and lib/a.ts is nobody's shared work here").not.toContain("lib/a.ts");
+  });
 
-    // A nine-quadrillion issue number in a warning is how a reader stops
-    // believing the rest of it.
-    expect(overlapNote(cluster)).not.toContain(String(UNFILED_FILING));
+  test("FO-46: the closing line counts the OPEN queue, with this body out of it", () => {
+    const busy = [
+      { id: 1355, files: [GUARD] },
+      { id: 1407, files: [GUARD] },
+      { id: 1425, files: [GUARD] },
+    ];
+    const note = overlapNote(bodyWith([GUARD]), busy)!;
+
+    // Three, not four. The filing is not on the tracker yet, and a count
+    // that included it would be reporting the reader back to themselves.
+    expect(note).toContain("3 open issues on it");
+    expect(note).toContain("#1355 is the oldest");
+  });
+
+  test("FO-47: a file only THIS filing and one other share gets no queue line", () => {
+    const note = overlapNote(bodyWith([GUARD]), [{ id: 1407, files: [GUARD] }])!;
+
+    // One open issue is not a queue. Saying "1 open issues on it" beside a
+    // bullet that already named #1407 is the same fact twice, and a channel
+    // that repeats itself is one people stop reading.
+    expect(note).not.toContain("open issues on it");
+    expect(note).toContain("#1407");
+  });
+});
+
+describe("FO-50: what is NOT a path", () => {
+  const paths = (...lines: string[]) => declaredFiles(`${FILES}\n\n${lines.join("\n")}\n`);
+
+  test("FO-50: a version number is not a file", () => {
+    // `/\.[A-Za-z0-9]+$/` accepted `2.0`, `v2.1` and `i.e`, which cut
+    // against the bias declaredFiles declares: too few files is a warning
+    // nobody gets, an invented one is a collision report against a file
+    // that does not exist.
+    expect(paths("- `2.0`", "- `v2.1`", "- `i.e`")).toEqual([]);
+  });
+
+  test("FO-51 CONTROL: a root file WITH an extension still reads", () => {
+    // Without this row FO-50 is satisfied by a reader that takes nothing
+    // without a slash, and `package.json` and `AGENTS.md` are contested
+    // more often than most files under `lib/`.
+    expect(paths("- `package.json`", "- `AGENTS.md`")).toEqual(["package.json", "AGENTS.md"]);
+  });
+
+  test("FO-52: a root file with NO extension is MISSED, and that is declared", () => {
+    // `Makefile` and `i.e` are the same shape to any rule this file could
+    // hold. Asserted rather than left in a comment: an earlier version of
+    // the docblock claimed `Makefile` was read while the code rejected it,
+    // and a sentence a test cannot contradict is not a property.
+    expect(paths("- `Makefile`")).toEqual([]);
   });
 });

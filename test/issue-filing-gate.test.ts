@@ -98,7 +98,6 @@ import {
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
 import { API_BOOLEAN_FLAGS } from "../lib/issue-create-override";
-import { UNFILED_FILING } from "../lib/issue-file-overlap";
 import { decomposedBody } from "../lib/issue-decomposition";
 import {
   ISSUE_SECTIONS,
@@ -6049,13 +6048,21 @@ describe("FG-225..FG-231: a filing is told when an open issue names the same fil
     expect(r.note ?? "", "and not the one sharing nothing with anybody").not.toContain("#1600");
   });
 
-  test("FG-229: the stand-in for the unfiled filing never reaches the text", async () => {
-    const r = await gateWith(filingNaming([CONTESTED]), [openIssue(1407, [CONTESTED])]);
+  test("FG-229: a file reached only THROUGH another issue is not attributed", async () => {
+    // The review finding this PR went a round on, at the gate. #100 and the
+    // filing share nothing; only #200 declares both. The first version
+    // unioned all three and offered `--add-blocked-by 100` for a file the
+    // filer never wrote.
+    const r = await gateWith(filingNaming(["lib/zqxj-b.ts"]), [
+      openIssue(100, ["lib/zqxj-a.ts"]),
+      openIssue(200, ["lib/zqxj-a.ts", "lib/zqxj-b.ts"]),
+    ]);
 
-    // It has no number yet and needs one to go through the clustering with
-    // everything else. A nine-quadrillion issue number in a warning is how a
-    // reader stops believing the rest of it.
-    expect(r.note ?? "").not.toContain(String(UNFILED_FILING));
+    expect(r.note ?? "").toContain("#200");
+    expect(r.note ?? "", "#100 declares no file this filing declares").not.toContain("#100");
+    expect(r.note ?? "").not.toContain("--add-blocked-by 100");
+    // And no `#NaN`: the corpus also carries in-command siblings keyed by
+    // position and the `new` marker, and `Number("new")` is `NaN`.
     expect(r.note ?? "").not.toContain("NaN");
   });
 
