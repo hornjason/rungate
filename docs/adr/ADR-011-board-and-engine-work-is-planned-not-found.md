@@ -77,6 +77,8 @@ grants nothing.
 | — | work-status read 8 of 82 open issues: the milestone was hardcoded | lib/work-status.ts, scripts/work-status.ts, test/work-status.test.ts | — | — |
 | — | The board PAT cannot write issues, so 6 of 6 stale-claim releases were refused | scripts/board-status-sweep.ts, .github/workflows/board-sweep.yml, test/board-status-sweep.test.ts | — | — |
 | — | clearAssignees reads a REST response through the GraphQL envelope, so every release is UNMEASURED | scripts/board-status-sweep.ts, test/board-status-sweep.test.ts | — | The board PAT cannot write issues, so 6 of 6 stale-claim releases were refused |
+| — | The filing gate resolves a filing against the session directory, not the checkout it was filed from | lib/issue-filing-gate.ts, test/issue-filing-gate.test.ts | — | — |
+| — | Nothing proves the board can fail: 0 of 28 BOARD-FLOW-SPEC criteria are ticked | test/board-intake.test.ts, test/board-flow.test.ts, specs/BOARD-FLOW-SPEC.md | — | The filing gate resolves a filing against the session directory, not the checkout it was filed from |
 
 The third row is live, found while watching run `42254789078` drain the
 board. `clearAssignees` is REST — `PATCH /repos/{repo}/issues/{n}` — and it
@@ -101,3 +103,34 @@ second one findable at all.
   decompositions of a spec, and writing a criterion id beside work that does
   not serve one would make `criterion-inventory` report a trace that is not
   there.
+
+## Amended 2026-11-06 — filing is a repository act, not a branch act
+
+Jason, reading a live refusal: *"shouldn’t we open the issue on main? We
+shouldn’t be checked out of a branch and opening an issue."*
+
+He is right, and the gate’s own docblock already agrees with him without the
+code doing so. `runIdFor` says the unit is **“the checkout it was filed
+from”**. Measured 2026-11-06: a `gh issue create` run from
+`/Users/jhorn/Projects/rg-wt-1675` on branch `rg/1675-skip-mutant` was
+refused with advice naming branch `rg/ai-review-threads` and run
+`/Users/jhorn/Projects/rg-wt-threads2` — the session’s launch directory. The
+same misresolution made `--body-file .rg-new.md` unreadable (735 bytes, present
+in the command’s directory, absent from the session’s), so the dedupe recorded
+UNMEASURED on a file that reads fine, and one output said both “refused” and
+“allowed through”.
+
+An issue is a REPOSITORY object. GitHub never sees the filer’s branch, so no
+part of a filing’s outcome may depend on it. The cap keying on a checkout is
+defensible — it bounds a review swarm, which is per-worktree — but three
+things follow that the gate does not do:
+
+- resolve the run and every relative path from **where the command ran**
+- never advise “comment on your PR instead” to a filing that is not a review
+  finding about a diff. A person filing board work is in no diff at all.
+- one output states one verdict. A refusal and an allow-through cannot both be
+  printed for one attempt.
+
+The second row below follows from the first: until an agent can file
+ordinarily, nothing about intake can be exercised the way a new agent or a
+consumer would exercise it.
