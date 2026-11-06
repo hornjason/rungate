@@ -605,9 +605,21 @@ mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
 }`;
 
 /**
- * Turn one HTTP response into data or a legible error. Exported because it is
- * the single binding for "what went wrong", and a network call is not needed
- * to test any of its branches.
+ * Turn one HTTP response into its body object or a legible error. Exported
+ * because it is the single binding for "what went wrong", and a network call
+ * is not needed to test any of its branches.
+ *
+ * **Protocol-free, and that is the whole of #1826's third row.** This half
+ * knows about HTTP: the status, the bytes, and whether they parse. It knows
+ * nothing about GraphQL envelopes, and REST and GraphQL both come through it.
+ * They used to share `interpretResponse` instead, which ends `return
+ * body.data` — so the REST unassign had its entire body replaced by
+ * `undefined` on the way out, `Array.isArray(undefined)` was false, and all
+ * six releases in run 42254789078 threw *"the unassign response carried no
+ * 'assignees' array"* against six responses that carried one. A protocol's
+ * envelope rule applied to another protocol's body is Silent Default
+ * Substitution (`.claude/rules/config-access.md`): the reading was not wrong,
+ * it was absent, and absent read as "GitHub did not say".
  *
  * THE ORDER MATTERS AND THE FIRST VERSION HAD IT WRONG. It parsed before
  * checking the status, so a 502 from an outage, an HTML rate-limit page or a
@@ -616,7 +628,12 @@ mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
  * as TEXT first keeps both facts available: the status, and what the server
  * actually said.
  */
-export function interpretResponse(status: number, ok: boolean, text: string): unknown {
+export function interpretTransport(
+  status: number,
+  ok: boolean,
+  text: string,
+  envelope?: (body: Record<string, unknown>) => void,
+): Record<string, unknown> {
   const snippet = text.trim().slice(0, 200) || "(empty body)";
 
   let parsed: unknown;
@@ -646,40 +663,66 @@ export function interpretResponse(status: number, ok: boolean, text: string): un
     );
   }
 
-  const body = parsed as { errors?: unknown; data?: unknown };
+  const body = parsed as Record<string, unknown>;
 
-  // A GraphQL error arrives with HTTP 200, so the status alone is not a
-  // reading.
-  //
-  // PRESENT IS NOT POPULATED, and the first version of this tested the wrong
-  // one: `body.errors !== undefined` fires on `"errors": null` and on
-  // `"errors": []`. A response that SUCCEEDED and carried an empty errors key
-  // was then reported as a GraphQL failure whose entire message was
-  // `GraphQL: null` or `GraphQL: []` — naming no defect and sending the
-  // reader after a query problem that does not exist.
-  //
-  // "A compliant server does not send either on success" is not a defence
-  // here. This function exists only to be defensive about responses that are
-  // not well formed; that is its premise, not an excuse.
-  //
-  // A non-array truthy `errors` is an envelope shape this function does not
-  // understand, and it refuses rather than returning `data` underneath it —
-  // returning data on an unrecognised envelope is Silent Default
-  // Substitution (`.claude/rules/config-access.md`).
-  const errors = body.errors;
-  const failed = Array.isArray(errors) ? errors.length > 0 : errors !== undefined && errors !== null;
-  if (failed) throw new Error(`GraphQL: ${JSON.stringify(errors)}`);
+  // **Run the protocol's own envelope rule HERE, before the status.** The
+  // order is load-bearing and is why this is a callback rather than something
+  // the caller does afterwards: a GraphQL error arrives with HTTP 200, and a
+  // GraphQL failure that ALSO carries a non-2xx must report the envelope's
+  // message rather than the status line, which is what it did before REST and
+  // GraphQL were separated. Hoisting `!ok` above this would quietly reword
+  // every such failure.
+  envelope?.(body);
 
   // **The status AND what the server said**, which is what the docblock above
   // promises and what this throw used to drop. A bad or scopeless token comes
   // back 401/403 with a well-formed body — `{"message": "Bad credentials"}` —
-  // and no `errors` key, so `failed` above is false and both branches that
-  // preserve `snippet` are skipped. The reader was then handed `3 attempts
-  // failed, last: HTTP 401` by `withRetry`, for a permanent, non-retryable
-  // credential problem whose cause was in a sentence this line threw away.
-  // Caught in review of #1754; BS-36.
+  // and no `errors` key, so the envelope check above is silent and both
+  // branches that preserve `snippet` are skipped. The reader was then handed
+  // `3 attempts failed, last: HTTP 401` by `withRetry`, for a permanent,
+  // non-retryable credential problem whose cause was in a sentence this line
+  // threw away. Caught in review of #1754; BS-36.
   if (!ok) throw new Error(`HTTP ${status}: ${snippet}`);
+  return body;
+}
+
+/**
+ * Read a GraphQL envelope: refuse on `errors`, otherwise hand back `data`.
+ *
+ * **This is the GraphQL reader and only the GraphQL reader.** `rawGraphql` is
+ * its one call site and `test/board-status-sweep.test.ts` asserts that, because
+ * the defect it exists to prevent is a REST response being read as an envelope
+ * — see `interpretTransport`.
+ */
+export function interpretResponse(status: number, ok: boolean, text: string): unknown {
+  const body = interpretTransport(status, ok, text, graphqlEnvelope);
   return body.data;
+}
+
+/**
+ * Refuse a GraphQL response that carried errors. A GraphQL error arrives with
+ * HTTP 200, so the status alone is not a reading.
+ *
+ * PRESENT IS NOT POPULATED, and the first version of this tested the wrong
+ * one: `body.errors !== undefined` fires on `"errors": null` and on
+ * `"errors": []`. A response that SUCCEEDED and carried an empty errors key
+ * was then reported as a GraphQL failure whose entire message was
+ * `GraphQL: null` or `GraphQL: []` — naming no defect and sending the
+ * reader after a query problem that does not exist.
+ *
+ * "A compliant server does not send either on success" is not a defence
+ * here. This function exists only to be defensive about responses that are
+ * not well formed; that is its premise, not an excuse.
+ *
+ * A non-array truthy `errors` is an envelope shape this function does not
+ * understand, and it refuses rather than letting `data` underneath it
+ * through — returning data on an unrecognised envelope is Silent Default
+ * Substitution (`.claude/rules/config-access.md`).
+ */
+function graphqlEnvelope(body: Record<string, unknown>): void {
+  const errors = body.errors;
+  const failed = Array.isArray(errors) ? errors.length > 0 : errors !== undefined && errors !== null;
+  if (failed) throw new Error(`GraphQL: ${JSON.stringify(errors)}`);
 }
 
 /**
@@ -966,8 +1009,13 @@ export async function clearAssignees(
     body: JSON.stringify({ assignees: [] }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  const body = interpretResponse(res.status, res.ok, await res.text());
-  const left = (body as any)?.assignees;
+  // `interpretTransport`, NOT `interpretResponse`. This is REST; the envelope
+  // reader ends `return body.data`, a key no REST body has, so routing this
+  // response through it replaced the whole issue with `undefined` and every
+  // release below reported UNMEASURED against a response that said exactly
+  // what was asked. Run 42254789078, all six.
+  const body = interpretTransport(res.status, res.ok, await res.text());
+  const left = body.assignees;
   if (!Array.isArray(left)) {
     throw new Error(
       `#${issue}: the unassign response carried no 'assignees' array, so whether the claim ` +
