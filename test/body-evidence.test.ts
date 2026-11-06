@@ -25,6 +25,7 @@ import {
   BODY_EVIDENCE_EXIT,
   bodyEvidenceViolations,
   renderEvidenceBlock,
+  statedCounts,
 } from "../lib/body-evidence";
 import { readSuiteRun } from "../lib/suite-run-reading";
 
@@ -125,9 +126,38 @@ describe("#1817: the body's figures are compared to the run they claim to report
   // module rendered must never be one it then refuses — otherwise the honest
   // path produces a violation, which is how a guard gets switched off.
   test("AC-6: a rendered block always clears the checker that reads it", () => {
-    for (const run of [run1283, runFailing]) {
+    // The UNMEASURED runs are the point. #1819's review found this loop ran
+    // only over MEASURED runs, so the invariant the module claims for
+    // `renderEvidenceBlock` was unasserted on the branch that could break it
+    // — and it WAS broken, reachably, not hypothetically.
+    //
+    // `readSuiteRun` quotes the runner's last output in an unmeasured reason.
+    // The second run below produces an UNMEASURED reason containing the text
+    // `0 failing`, and the renderer used to interpolate that reason straight
+    // into the block. Before the fix this case reports 1 violation of kind
+    // `unmeasured`: the composer wrote a block its own checker refused.
+    const unmeasuredPlain = readSuiteRun("nothing resembling a summary");
+    const unmeasuredFigureShaped = readSuiteRun("some harness note: 0 failing checks so far");
+    expect(unmeasuredPlain.status).toBe("UNMEASURED");
+    expect(unmeasuredFigureShaped.status).toBe("UNMEASURED");
+
+    for (const run of [run1283, runFailing, unmeasuredPlain, unmeasuredFigureShaped]) {
       expect(bodyEvidenceViolations(renderEvidenceBlock(run), run)).toEqual([]);
     }
+  });
+
+  // AC-11: the property AC-6 depends on, stated directly rather than left as
+  // a consequence. A block bound for a pull request body may contain only
+  // text this module controls — never the runner's free-text reason, which is
+  // where the figure-shaped phrase came from.
+  test("AC-11: an unmeasured block never carries the runner's reason", () => {
+    const run = readSuiteRun("some harness note: 0 failing checks so far");
+    const block = renderEvidenceBlock(run);
+    expect(block).toContain("UNMEASURED");
+    expect(block).not.toContain("0 failing");
+    expect(block).not.toContain("some harness note");
+    expect(statedCounts(block, "fail")).toEqual([]);
+    expect(statedCounts(block, "pass")).toEqual([]);
   });
 
   // AC-7: the rendered block carries the numbers rather than describing them.

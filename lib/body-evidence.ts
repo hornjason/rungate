@@ -167,7 +167,30 @@ export function bodyEvidenceViolations(body: string, run: SuiteRun): EvidenceVio
  */
 export function renderEvidenceBlock(run: SuiteRun): string {
   if (run.status === "UNMEASURED") {
-    return `**Suite: UNMEASURED** — ${run.reason}. No count is quoted here, because none was read.`;
+    // The reason is NOT interpolated, and that is the whole of #1819's second
+    // finding. `readSuiteRun` builds an unmeasured reason that quotes the
+    // runner's last output, so the reason is attacker-shaped free text — and
+    // an input as ordinary as `some harness note: 0 failing checks so far`
+    // produces an UNMEASURED run whose reason contains `0 failing`. Embedding
+    // it here put a figure-shaped phrase inside a block destined for a pull
+    // request body, and `bodyEvidenceViolations` then refused the block its
+    // own renderer had just written.
+    //
+    // Measured before the fix: violations 1, kind `unmeasured`. The composer
+    // and the checker disagreed about a block neither a human nor an agent
+    // had touched, which is the precise way an honest path teaches people to
+    // ignore a guard.
+    //
+    // The reason is not lost — `scripts/body-evidence.ts` prints it on
+    // stderr, where it is a diagnostic rather than a claim. A block that goes
+    // into a body may only contain text this module controls.
+    return (
+      "**Suite: UNMEASURED** — the run reported no result, so no count is quoted here. " +
+      "This is a run that measured nothing, not a run that found nothing wrong. " +
+      "The runner's reason is on stderr; it is kept out of this block because a " +
+      "free-text reason can contain a figure-shaped phrase, and a block carrying one " +
+      "is a block this module's own checker would refuse."
+    );
   }
   const parts = [`${run.pass} pass`, `${run.fail} fail`];
   if (run.tests !== null) parts.push(`${run.tests} tests`);

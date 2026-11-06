@@ -71,6 +71,13 @@ try {
 
 const run = readSuiteRun(output);
 
+// The reason goes to stderr, never into the block. `renderEvidenceBlock`
+// deliberately does not interpolate it: the reason quotes the runner's last
+// output, so it can contain a figure-shaped phrase, and a block carrying one
+// is a block the checker refuses (#1819). stdout stays pasteable; stderr
+// carries the diagnostic.
+if (run.status === "UNMEASURED") console.error(`UNMEASURED: ${run.reason}`);
+
 if (emit) {
   console.log(renderEvidenceBlock(run));
   // Emitting over an unmeasured run is not a refusal — the block says
@@ -78,7 +85,17 @@ if (emit) {
   process.exit(0);
 }
 
-const body = readFileSync(checkPath as string, "utf8");
+let body: string;
+try {
+  body = readFileSync(checkPath as string, "utf8");
+} catch (e) {
+  // Symmetric with the --output read above, and #1819's first finding was
+  // that it was not: an unreadable --check path threw an uncaught ENOENT and
+  // printed a stack trace, in a script whose entire point is that a reading
+  // which could not be taken is reported rather than crashed through.
+  console.error(`UNMEASURED: cannot read --check ${checkPath}: ${(e as Error).message}`);
+  process.exit(BODY_EVIDENCE_EXIT);
+}
 const violations = bodyEvidenceViolations(body, run);
 
 if (violations.length === 0) {
