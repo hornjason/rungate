@@ -484,13 +484,22 @@ for (const s of status.values()) {
 const [tOwner, tName] = REPO.split("/");
 const closedReadings = await measureClosedIssues(gql, tOwner!, tName!);
 if (closedReadings === null) {
-  console.log(`  (the closed-issue pass failed, so the cancelled count and Ready's depth are UNMEASURED)`);
+  // **Ready's depth only.** This pass no longer feeds the cancelled count,
+  // and saying it did would name the wrong reading as unmeasured.
+  console.log(`  (the closed-issue pass failed, so Ready's depth is UNMEASURED)`);
 }
-// **The board's own abandoned count, not the repository's.** The repo-wide
-// figure is still read above and still sizes nothing: it counted 23 where
-// the board held 0, and every one of the 23 was closed before
-// lib/board-flow.ts had a Cancelled branch or was never a board item.
-const cancelledClosed: number | null = closedReadings === null ? null : abandonedOnBoard;
+// **The board's own abandoned count, and NOT gated on the pass above.**
+// The repo-wide figure is still read and still sizes nothing: it counted
+// 23 where the board held 0, every one closed before lib/board-flow.ts had
+// a Cancelled branch or never a board item.
+//
+// This was `closedReadings === null ? null : abandonedOnBoard` — the guard
+// left behind when the value's source moved. A throttled closed-issue pass
+// would have blanked a count `boardStatus()` had already read correctly,
+// reporting the lane UNMEASURED when it was measured. A reading is
+// UNMEASURED only when ITS OWN source failed, and this one's source throws
+// rather than returning a partial board. ai-review round 1 of #1802.
+const cancelledClosed: number | null = abandonedOnBoard;
 const throughput: Throughput | null = closedReadings?.throughput ?? null;
 
 const offBoardCount = open.filter((i: any) => !i.pull_request && !status.has(i.number)).length;
