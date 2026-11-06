@@ -118,3 +118,117 @@ export function orderReading(item: {
   // and will not stay closed. UNMEASURED is the only honest default.
   return "UNMEASURED";
 }
+
+/**
+ * The bucket for issues carrying no milestone — A LANE, NOT A GAP.
+ *
+ * Measured on this repository 2026-11-06: of 82 open issues, **26 carry no
+ * milestone at all**. They are maintenance and backlog work, they are real,
+ * and a report that groups by milestone and silently omits them loses the
+ * single largest group it has. Jason, 2026-11-06: *"not all issues will have
+ * milestones right, like there's stuff that's just maintenance stuff in the
+ * backlog — how do we track that"*.
+ *
+ * So it is a named row with its own count, and `--milestone none` focuses on
+ * it exactly as a title does. The parenthesis is deliberate: GitHub cannot
+ * have a milestone of this name, so the row can never collide with a real
+ * one.
+ */
+export const NO_MILESTONE = "(no milestone)";
+
+/** One milestone's standing, in the five numbers that decide what to do next. */
+export type MilestoneRow = {
+  readonly milestone: string;
+  readonly open: number;
+  readonly closed: number;
+  /** Open AND assigned — somebody says they are on it. */
+  readonly claimed: number;
+  /** Open with at least one OPEN blocker. A closed blocker does not block. */
+  readonly blocked: number;
+  /** Open, unclaimed, unblocked — anybody may start it today. */
+  readonly pickable: number;
+};
+
+/** An issue as this module needs it: the five fields, and nothing else. */
+export type RollupIssue = {
+  readonly number: number;
+  readonly state: string;
+  readonly milestone?: { readonly title?: string | null } | null;
+  readonly assignees?: readonly unknown[] | null;
+  readonly pull_request?: unknown;
+  /** From `GET /issues/{n}/dependencies/blocked_by` — never a search qualifier. */
+  readonly blockers: readonly { readonly state: string }[];
+};
+
+/** The milestone an issue belongs to, with absence spelled as a lane. */
+export function milestoneOf(issue: RollupIssue): string {
+  const t = issue.milestone?.title;
+  return typeof t === "string" && t.trim() !== "" ? t : NO_MILESTONE;
+}
+
+/**
+ * Every milestone's standing, including the one that is not a milestone.
+ *
+ * Pull requests are dropped: `/issues` returns them too, and a PR counted as
+ * an issue inflates every lane it touches. `isPickable` is reused rather
+ * than re-derived — "what may anybody start" has one owner, and a second
+ * spelling here would be two deciders over one question with nothing
+ * comparing them.
+ *
+ * Sorted by open count descending, then by name, so the biggest pile of
+ * unfinished work is the first thing read. `NO_MILESTONE` sorts with the
+ * rest rather than being pinned anywhere: it is a lane.
+ */
+export function milestoneRollup(issues: readonly RollupIssue[]): MilestoneRow[] {
+  const rows = new Map<string, { open: number; closed: number; claimed: number; blocked: number; pickable: number }>();
+  for (const i of issues) {
+    if (i.pull_request) continue;
+    const key = milestoneOf(i);
+    const r = rows.get(key) ?? { open: 0, closed: 0, claimed: 0, blocked: 0, pickable: 0 };
+    if (i.state === "open") {
+      r.open += 1;
+      if ((i.assignees?.length ?? 0) > 0) r.claimed += 1;
+      if (i.blockers.some(b => b.state === "open")) r.blocked += 1;
+      if (isPickable({ state: i.state, assignees: i.assignees ?? [], blockers: i.blockers })) {
+        r.pickable += 1;
+      }
+    } else {
+      r.closed += 1;
+    }
+    rows.set(key, r);
+  }
+  return [...rows]
+    .map(([milestone, r]) => ({ milestone, ...r }))
+    .sort((a, b) => b.open - a.open || a.milestone.localeCompare(b.milestone));
+}
+
+/** What `--milestone` resolved to, including the two ways it can fail. */
+export type Focus =
+  | { readonly kind: "all" }
+  | { readonly kind: "one"; readonly title: string }
+  | { readonly kind: "unknown"; readonly asked: string; readonly known: readonly string[] };
+
+/**
+ * Resolve `--milestone`, and REFUSE a name that matches nothing.
+ *
+ * This is the whole reason it is a function. A focus that quietly selects
+ * zero issues prints a correct-looking report with an empty body, and a typo
+ * is then indistinguishable from a milestone whose work is finished — the
+ * *Silent Default Substitution* shape in `.claude/rules/config-access.md`,
+ * in a tool whose entire purpose is that the status is not hallucinated.
+ *
+ * `unknown` carries the names that DO exist, because a refusal that does not
+ * say what was available is a refusal nobody can act on.
+ *
+ * Absent means `all`. That is the change of 2026-11-06: the default used to
+ * be one hardcoded title, `"Issue intake"`, which on that day was 1 open
+ * issue of 82 — so 81 were invisible in the report the status was read from.
+ */
+export function resolveFocus(asked: string | undefined, known: readonly string[]): Focus {
+  if (asked === undefined || asked.trim() === "" || asked === "all") return { kind: "all" };
+  // `none` and the rendered label both reach the unmilestoned lane, so a
+  // reader can copy the name out of the table and pass it straight back.
+  if (asked === "none" || asked === NO_MILESTONE) return { kind: "one", title: NO_MILESTONE };
+  if (known.includes(asked)) return { kind: "one", title: asked };
+  return { kind: "unknown", asked, known: [...known].sort() };
+}

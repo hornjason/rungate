@@ -20,7 +20,15 @@
  * Read-only. It opens nothing, edits nothing and writes nothing.
  */
 import { assertTokenMayReach, resolveGitHubToken } from "../lib/github";
-import { isPickable, orderReading, type TrackerFacts } from "../lib/work-status";
+import {
+  NO_MILESTONE,
+  isPickable,
+  milestoneOf,
+  milestoneRollup,
+  orderReading,
+  resolveFocus,
+  type TrackerFacts,
+} from "../lib/work-status";
 import { laneHealth, laneHealthLines } from "../lib/board-lane-health";
 import type { Throughput } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
@@ -36,7 +44,32 @@ const REPO = "hornjason/rungate";
 // constant: one table, two repositories, no error. Caught in review of #1740.
 const [OWNER, NAME] = REPO.split("/");
 const PROJECT = "PVT_kwHOAZTQCM4BpMuR";
-const MILESTONE = "Issue intake";
+
+/**
+ * WHICH MILESTONE TO DETAIL — and the default is EVERY ONE.
+ *
+ * This was `const MILESTONE = "Issue intake"`, a hardcoded title, and on
+ * 2026-11-06 that milestone held **1 open issue of the repository's 82**.
+ * The other 81 — eight Convergence lanes, nine Pipeline lanes, and 26 issues
+ * with no milestone at all — did not appear in the report anybody read the
+ * status from. Nobody forgot them; the instrument was narrower than the
+ * work, which is a quieter way to lose things than forgetting.
+ *
+ * Jason, 2026-11-06: *"it should read everything, not just one milestone …
+ * and we should be able to pin it to, or say what milestone we want to
+ * check, whichever one we're working on"*.
+ *
+ *   bun scripts/work-status.ts                        every milestone
+ *   bun scripts/work-status.ts --milestone "Issue intake"
+ *   bun scripts/work-status.ts --milestone none       the unmilestoned lane
+ *
+ * A name matching nothing is REFUSED, naming what exists. An empty focused
+ * report and a typo are the same bytes otherwise.
+ */
+const askedMilestone = (() => {
+  const i = Bun.argv.indexOf("--milestone");
+  return i === -1 ? undefined : Bun.argv[i + 1];
+})();
 
 // `resolveGitHubToken()`, never the raw environment variable — this file
 // read it by name and printed "UNMEASURED: no credential" on a machine
@@ -350,14 +383,84 @@ for (const it of ORDER) {
   console.log(`  [${mark}] ${it.n}. ${it.what.padEnd(44)} ${(it.tracker ?? "—").padEnd(9)} ${shown}`);
 }
 
-// ── the milestone ───────────────────────────────────────────────────────────
-bar(`MILESTONE "${MILESTONE}" — every field below is a live read`);
-const issues = (await restAll(`repos/${REPO}/issues?state=all&milestone=*`))
-  .filter((i: any) => i.milestone?.title === MILESTONE && !i.pull_request)
-  .sort((a: any, b: any) => a.number - b.number);
+// ── every milestone, and the lane that is not one ───────────────────────────
+//
+// THE BLOCKERS ARE FETCHED ONCE AND SHARED. The rollup needs them per issue
+// (how many are blocked, how many are startable) and so does the detail
+// block below. Two reads of the same endpoint would be two deciders over one
+// fact and twice the API budget, and the table and the detail could then
+// disagree about the same issue inside one report.
+//
+// `/issues` returns pull requests too, which is why `pull_request` is
+// filtered rather than assumed absent: a PR counted as an issue inflates
+// every lane it lands in.
+const allIssues = (await restAll(`repos/${REPO}/issues?state=all`)).filter(
+  (i: any) => !i.pull_request,
+);
+const blockersByIssue = new Map<number, { state: string; number: number }[]>();
+for (const i of allIssues) {
+  blockersByIssue.set(
+    i.number,
+    await restAll(`repos/${REPO}/issues/${i.number}/dependencies/blocked_by`),
+  );
+}
+const rollupInput = allIssues.map((i: any) => ({
+  ...i,
+  blockers: blockersByIssue.get(i.number) ?? [],
+}));
+const rollup = milestoneRollup(rollupInput);
+const focus = resolveFocus(
+  askedMilestone,
+  rollup.map(r => r.milestone).filter(m => m !== NO_MILESTONE),
+);
+
+if (focus.kind === "unknown") {
+  console.error(
+    `\nUNMEASURED: no milestone is called "${focus.asked}", so nothing was selected and an ` +
+      `empty report would look exactly like a milestone whose work is finished.\n\nThese exist:\n` +
+      focus.known.map(k => `  ${k}`).join("\n") +
+      `\n  none   — the ${NO_MILESTONE} lane\n  all    — every one (the default)\n`,
+  );
+  process.exit(2);
+}
+
+bar("EVERY MILESTONE — open, and what is actually startable in each");
+console.log(
+  `  ${"milestone".padEnd(52)} ${"open".padStart(5)} ${"claim".padStart(5)} ` +
+    `${"block".padStart(5)} ${"pick".padStart(5)} ${"done".padStart(5)}`,
+);
+for (const r of rollup) {
+  console.log(
+    `  ${r.milestone.slice(0, 52).padEnd(52)} ${String(r.open).padStart(5)} ` +
+      `${String(r.claimed).padStart(5)} ${String(r.blocked).padStart(5)} ` +
+      `${String(r.pickable).padStart(5)} ${String(r.closed).padStart(5)}`,
+  );
+}
+const totals = rollup.reduce(
+  (a, r) => ({ open: a.open + r.open, pick: a.pick + r.pickable }),
+  { open: 0, pick: 0 },
+);
+console.log(
+  `\n  ${String(totals.open)} open across ${rollup.length} lane(s); ${totals.pick} startable today.` +
+    (focus.kind === "all"
+      ? `  Detail: --milestone "<name>", or --milestone none.`
+      : ""),
+);
+
+// ── the focused milestone ───────────────────────────────────────────────────
+const issues =
+  focus.kind === "all"
+    ? []
+    : rollupInput
+        .filter((i: any) => milestoneOf(i) === focus.title)
+        .sort((a: any, b: any) => a.number - b.number);
+
+if (focus.kind !== "all") {
+  bar(`MILESTONE "${focus.title}" — every field below is a live read`);
+}
 
 for (const i of issues) {
-  const blockers = await restAll(`repos/${REPO}/issues/${i.number}/dependencies/blocked_by`);
+  const blockers = blockersByIssue.get(i.number) ?? [];
   const openB = blockers.filter((b: any) => b.state === "open").map((b: any) => `#${b.number}`);
   const who = i.assignees?.length ? i.assignees.map((a: any) => a.login).join(",") : "unclaimed";
   // Paginated, like every other list in this file. `first: 20` was the last
@@ -427,17 +530,34 @@ for (const p of prs) {
 // seen from the other side. So this file pays for 80-odd requests rather than
 // trusting a qualifier that two of its three transports drop.
 bar("PICKABLE — computed per issue from the dependencies API, not from a search");
-const open = await restAll(`repos/${REPO}/issues?state=open`);
-const pickable: any[] = [];
-for (const i of open) {
-  if (i.pull_request) continue;
-  const blockers = await restAll(`repos/${REPO}/issues/${i.number}/dependencies/blocked_by`);
-  if (isPickable({ state: i.state, assignees: i.assignees ?? [], blockers })) pickable.push(i);
-}
+// THE SAME BLOCKER READINGS THE ROLLUP USED. This loop re-fetched
+// `blocked_by` for every open issue, which was a second read of the one
+// endpoint and — worse than the cost — a second chance for the table above
+// and the list below to disagree about the same issue inside one report.
+const open = rollupInput.filter((i: any) => i.state === "open");
+const pickable = open.filter((i: any) =>
+  isPickable({ state: i.state, assignees: i.assignees ?? [], blockers: i.blockers }),
+);
 console.log(`  ${pickable.length} unblocked and unclaimed across the repo.`);
-console.log(`  In "${MILESTONE}":`);
-for (const i of pickable.filter(x => x.milestone?.title === MILESTONE)) {
-  console.log(`    #${i.number} ${i.title.slice(0, 62)}`);
+if (focus.kind === "all") {
+  // Listed per lane, because "34 startable" is a number nobody can act on
+  // and "3 startable in Phase 2" is a decision.
+  for (const r of rollup) {
+    const here = pickable.filter((i: any) => milestoneOf(i) === r.milestone);
+    if (here.length === 0) continue;
+    console.log(`\n  ${r.milestone} — ${here.length}`);
+    for (const i of here.slice(0, 5)) {
+      console.log(`    #${i.number} ${i.title.slice(0, 62)}`);
+    }
+    if (here.length > 5) {
+      console.log(`    … and ${here.length - 5} more — --milestone "${r.milestone}" for all of them`);
+    }
+  }
+} else {
+  console.log(`  In "${focus.title}":`);
+  const here = pickable.filter((i: any) => milestoneOf(i) === focus.title);
+  if (here.length === 0) console.log("    nothing — every open issue here is claimed or blocked");
+  for (const i of here) console.log(`    #${i.number} ${i.title.slice(0, 62)}`);
 }
 // ## Board lane health — Jason asked for this, and a count alone would not
 // have answered him
