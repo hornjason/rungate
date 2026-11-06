@@ -59,7 +59,17 @@ export type LaneHealth =
    * what the negative control in the walk-through exists to catch.
    */
   | "OVER"
-  /** Empty while its denominator is not. Nothing writes this lane. */
+  /**
+   * Empty while its denominator is not.
+   *
+   * **It does not mean "nothing writes this lane", and it used to say so.**
+   * That sentence named a mechanism the census never looked at, and it was
+   * false from 2026-11-05: `lib/board-flow.ts` moves an issue to Cancelled
+   * on a `not_planned` close, with a recorded run, while this row still
+   * reported the lane unwritten. An empty lane has at least two causes —
+   * no writer, or a writer whose population the denominator does not
+   * share — and only the second was true (SC-2731).
+   */
   | "UNWRITTEN"
   /** No denominator exists, so the count is reported and nothing is judged. */
   | "NO_TARGET"
@@ -74,8 +84,18 @@ export interface LaneCensus {
   /** Open issues with at least one assignee. */
   readonly openAssigned: number;
   /**
-   * Issues closed as `NOT_PLANNED` **or** `DUPLICATE`, or `null` when the
-   * count could not be taken.
+   * Issues **on this board** closed as `NOT_PLANNED` or `DUPLICATE`, or
+   * `null` when the count could not be taken.
+   *
+   * ## On this board, because the numerator is
+   *
+   * It used to be the repository-wide count, and that made the row compare
+   * a board lane against a population the board's writer never sees. On
+   * 2026-11-05 it read `Cancelled 0 of 23 UNWRITTEN`, and all 23 were
+   * issues closed before `lib/board-flow.ts` had a Cancelled branch or
+   * never added to the board at all. A denominator that counts things the
+   * numerator cannot contain reports a gap that no writer could close
+   * (SC-2730).
    *
    * **Both reasons, because the spec's condition is both.**
    * `specs/BOARD-FLOW-SPEC.md` defines Cancelled's entry as "closed as
@@ -158,7 +178,12 @@ function target(lane: string, c: LaneCensus): { against: number | null; label: s
     };
   }
   if (lane === "In progress") return { against: c.openAssigned, label: "open and assigned, repo-wide" };
-  if (lane === "Cancelled") return { against: c.cancelledClosed, label: "closed as not_planned or duplicate, repo-wide" };
+  if (lane === "Cancelled") {
+    return {
+      against: c.cancelledClosed,
+      label: "on this board are closed as not_planned or duplicate",
+    };
+  }
   return undefined;
 }
 
@@ -225,7 +250,12 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
         count,
         against: t.against,
         health: "UNWRITTEN" as const,
-        why: `${t.against} ${t.label}, and this lane is empty — nothing writes it`,
+        // States what was counted, not why. A census over two numbers
+        // cannot see whether a writer exists, and the previous wording
+        // asserted it did not.
+        why:
+          `${t.against} ${t.label}, and this lane is empty — either nothing moves them ` +
+          `or whatever does has not run`,
       };
     }
     if (count < t.against) {

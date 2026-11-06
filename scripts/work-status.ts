@@ -202,19 +202,37 @@ async function gql(query: string, variables: Record<string, unknown> = {}): Prom
  * produce the same `undefined`, and telling a reading apart from an absence
  * is this script's entire subject, so a truncated page says so.
  */
-async function boardStatus(): Promise<Map<number, string>> {
+/**
+ * **`abandonedOnBoard` comes from the same pass as the lane counts, and
+ * that is the point.** The Cancelled row's numerator is a count of board
+ * items; its denominator used to be a count of repository issues, so the
+ * row compared two populations and reported a gap no writer could close.
+ * Taking both from one traversal makes them the same set by construction —
+ * a second query would be a second population one edit away from drifting
+ * apart again (SC-2730).
+ */
+async function boardStatus(): Promise<{
+  statuses: Map<number, string>;
+  abandonedOnBoard: number;
+}> {
   const q = `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
     pageInfo{hasNextPage endCursor}
     nodes{fieldValues(first:100){pageInfo{hasNextPage}
       nodes{... on ProjectV2ItemFieldSingleSelectValue{
       name field{... on ProjectV2FieldCommon{name}}}}}
-      content{__typename ... on Issue{number}}}}}}}`;
+      content{__typename ... on Issue{number stateReason}}}}}}}`;
   const out = new Map<number, string>();
+  let abandonedOnBoard = 0;
   let c: string | null = null;
   do {
     const d = await gql(q, { p: PROJECT, c });
     for (const n of d.node.items.nodes) {
       if (n.content?.__typename !== "Issue") continue;
+      // Both reasons, matching Cancelled's entry condition in
+      // specs/BOARD-FLOW-SPEC.md and ABANDONED in lib/board-flow.ts.
+      if (n.content.stateReason === "NOT_PLANNED" || n.content.stateReason === "DUPLICATE") {
+        abandonedOnBoard++;
+      }
       const s = n.fieldValues.nodes.find((f: any) => f?.field?.name === "Status")?.name;
       const unreadable = n.fieldValues.pageInfo?.hasNextPage === true && s === undefined;
       out.set(n.content.number, s ?? (unreadable ? "(UNMEASURED — fields truncated)" : "(no status)"));
@@ -226,7 +244,7 @@ async function boardStatus(): Promise<Map<number, string>> {
     if (step.kind === "unreadable") throw new Error(`the board stopped paging — ${step.why}`);
     c = step.kind === "more" ? step.cursor : null;
   } while (c);
-  return out;
+  return { statuses: out, abandonedOnBoard };
 }
 
 /**
@@ -267,7 +285,7 @@ const ORDER: {
 
 const bar = (s: string) => console.log(`\n${s}\n${"─".repeat(s.length)}`);
 
-const status = await boardStatus();
+const { statuses: status, abandonedOnBoard } = await boardStatus();
 
 // ── the agreed order ────────────────────────────────────────────────────────
 bar("THE AGREED ORDER — order from project-state.json, state from GitHub");
@@ -468,7 +486,11 @@ const closedReadings = await measureClosedIssues(gql, tOwner!, tName!);
 if (closedReadings === null) {
   console.log(`  (the closed-issue pass failed, so the cancelled count and Ready's depth are UNMEASURED)`);
 }
-const cancelledClosed: number | null = closedReadings?.cancelled ?? null;
+// **The board's own abandoned count, not the repository's.** The repo-wide
+// figure is still read above and still sizes nothing: it counted 23 where
+// the board held 0, and every one of the 23 was closed before
+// lib/board-flow.ts had a Cancelled branch or was never a board item.
+const cancelledClosed: number | null = closedReadings === null ? null : abandonedOnBoard;
 const throughput: Throughput | null = closedReadings?.throughput ?? null;
 
 const laneReadings = laneHealth({

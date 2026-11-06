@@ -99,7 +99,9 @@ describe("a lane count is only a reading against what should be in it", () => {
   });
 
   // UNWRITTEN and SHORT are separated because the remedies differ: SHORT
-  // means the writer is not keeping up, UNWRITTEN means there is no writer.
+  // means the writer is not keeping up, UNWRITTEN means the lane is empty
+  // while things that belong in it exist. **Not "there is no writer"** —
+  // see SC-2731 below for why that sentence had to go.
   // Both of these lanes are genuinely in the second state today.
   test("SC-2670: an empty lane with a non-empty denominator is UNWRITTEN, not SHORT", () => {
     expect(by(census(), "Cancelled").health).toBe("UNWRITTEN");
@@ -156,6 +158,33 @@ describe("a lane count is only a reading against what should be in it", () => {
   // `notPlanned.total_count ?? 0` turned a failed or throttled search into
   // "nothing was ever cancelled", which makes Cancelled read OK — a green
   // lane produced by a measurement that did not happen.
+  // The row said `Cancelled 0 of 23 UNWRITTEN — nothing writes it` on
+  // 2026-11-05, while lib/board-flow.ts:210 had been moving issues to
+  // Cancelled on a not_planned close since that same day, with a recorded
+  // run. A census over two numbers cannot see whether a writer exists, so
+  // it may not report that one does not.
+  test("SC-2731: UNWRITTEN does not claim a writer is missing", () => {
+    const why = by(census(), "Cancelled").why;
+    expect(by(census(), "Cancelled").health).toBe("UNWRITTEN");
+    expect(
+      why,
+      "the census reads two counts and cannot observe a writer, so it must not name one",
+    ).not.toContain("nothing writes it");
+    expect(why, "it still has to say what it counted").toContain("this lane is empty");
+  });
+
+  // The denominator and the numerator must describe the same population.
+  // The label is the only place a reader can check that, so it is asserted
+  // rather than left to the field name.
+  test("SC-2730: Cancelled is measured against this board, not the repository", () => {
+    const why = by(census(), "Cancelled").why;
+    expect(
+      why,
+      "a board lane compared against a repo-wide count reports a gap no writer could close",
+    ).toContain("on this board");
+    expect(why).not.toContain("repo-wide");
+  });
+
   test("SC-2670: an unmeasured cancellation count refuses Cancelled, never passes it", () => {
     const r = by(census({ cancelledClosed: null }), "Cancelled");
     expect(
