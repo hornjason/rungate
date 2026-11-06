@@ -55,6 +55,7 @@ import {
   unlocatableEntries,
 } from "../lib/board-mirror";
 import { parseCriteria } from "../lib/spec-evidence";
+import { splitReadyChanges } from "../scripts/board-mirror";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -786,5 +787,65 @@ describe("#1647: the Ready lane", () => {
     test("an assignee is a claim, not a block, but it still leaves the lane", () => {
       expect(isUnblocked({ blockedBy: 0 }, 1)).toBe(false);
     });
+  });
+});
+
+describe("SC-2722: the hand-run writer fills to the same depth as the workflow", () => {
+  const c = (number: number, phase: number | null, to: string) => ({ item: { number, phase }, to });
+  const promote = (n: number) => c(n, 0, "Ready");
+
+  test("more eligible promotions than depth writes exactly the depth, in order", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges(
+      [promote(5), promote(1), promote(9), promote(3)],
+      2,
+      0,
+    );
+    expect(readyWritable.map(x => x.item.number)).toEqual([1, 3]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([5, 9]);
+  });
+
+  test("a full lane promotes nothing", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges([promote(1), promote(2)], 2, 2);
+    expect(readyWritable).toEqual([]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([1, 2]);
+  });
+
+  // The half a naive implementation gets wrong. Capping departures would
+  // pin a claimed or newly-blocked card in the lane for as long as the
+  // lane stayed full — the cap preserving the staleness it exists to
+  // prevent.
+  test("a demotion to Backlog is NEVER capped, even when the lane is over its depth", () => {
+    const { readyWritable, heldByCap } = splitReadyChanges(
+      [c(7, 0, "Backlog"), c(8, 0, "Backlog"), promote(1)],
+      2,
+      99,
+    );
+    expect(
+      readyWritable.map(x => x.item.number).sort(),
+      "the cap bounds what may ENTER Ready, not what may leave it",
+    ).toEqual([7, 8]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([1]);
+  });
+
+  // A board can span repositories, so there is no repository to derive a
+  // depth from and no honest default. Promoting everything on an unread
+  // depth is the uncapped behaviour this replaces.
+  test("an unmeasured depth promotes nothing but still demotes", () => {
+    const { readyWritable, heldByCap, selection } = splitReadyChanges(
+      [c(7, 0, "Backlog"), promote(1), promote(2)],
+      null,
+      0,
+    );
+    expect(readyWritable.map(x => x.item.number)).toEqual([7]);
+    expect(heldByCap.map(x => x.item.number)).toEqual([1, 2]);
+    expect(selection.why).toContain("UNMEASURED");
+  });
+
+  test("phase orders the promotions, and a phase-less issue is still promotable", () => {
+    const { readyWritable } = splitReadyChanges([c(4, null, "Ready"), c(9, 2, "Ready")], 1, 0);
+    expect(
+      readyWritable.map(x => x.item.number),
+      "the phased issue goes first, and the phase-less one is queued rather than excluded",
+    ).toEqual([9]);
   });
 });

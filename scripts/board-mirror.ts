@@ -38,6 +38,8 @@ import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
+import { readyCap, selectReady } from "../lib/board-ready-rule";
+import { measureClosedIssues } from "../lib/board-throughput";
 import {
   criterionIdsIn,
   isReady,
@@ -54,6 +56,46 @@ import {
  */
 export const REFUSAL_EXIT = 1;
 
+/**
+ * Split what this command MAY write into what the cap lets through.
+ *
+ * **The cap applies here too, and from the same function the workflow
+ * uses.** This command is the hand-run second CALLER of Ready's rule —
+ * not a second rule, which is the distinction that matters: it and
+ * `board-ready.yml` both read `lib/board-ready-rule.ts`, so they cannot
+ * size the lane differently. Before this, the workflow filled to a
+ * derived depth and one hand-run of this command refilled the lane to
+ * whatever happened to be eligible.
+ *
+ * **A demotion to Backlog is never capped**, and that is the half a
+ * naive implementation gets wrong. The cap bounds what may ENTER Ready;
+ * applying it to departures would pin a claimed or newly-blocked card in
+ * the lane for as long as the lane stayed full — the cap would start
+ * preserving exactly the staleness it exists to prevent.
+ *
+ * Exported so a case can hold it. Inline, the only way to observe it was
+ * to run the command against a live board.
+ */
+export function splitReadyChanges<T extends { item: { number: number; phase: number | null }; to: string }>(
+  eligible: readonly T[],
+  cap: number | null,
+  occupied: number,
+): { readyWritable: T[]; heldByCap: T[]; selection: ReturnType<typeof selectReady> } {
+  const promotions = eligible.filter(c => c.to === READY);
+  const demotions = eligible.filter(c => c.to !== READY);
+  const selection = selectReady(
+    promotions.map(c => ({ number: c.item.number, phase: c.item.phase })),
+    cap,
+    occupied,
+  );
+  const chosen = new Set(selection.promote.map(p => p.number));
+  return {
+    readyWritable: [...demotions, ...promotions.filter(c => chosen.has(c.item.number))],
+    heldByCap: promotions.filter(c => !chosen.has(c.item.number)),
+    selection,
+  };
+}
+
 const USAGE = `rungate board-mirror --project <node-id> [--spec <spec.md>] [--field <name>] [--write] [--ready] [--json]
 
   --project  the ProjectV2 node id, e.g. PVT_kwHO…
@@ -65,6 +107,10 @@ const USAGE = `rungate board-mirror --project <node-id> [--spec <spec.md>] [--fi
              already exist on the project — this does not create one, because
              a typo would silently add a column nobody looks at.
   --write    write the field. Without it nothing is mutated.
+  --repo     owner/name — required with --ready, which derives Ready's depth
+             from how much that repository delivered. A board can span
+             repositories and carries no single answer, so there is no
+             default: without it the depth is UNMEASURED and nothing moves.
   --ready    also move Status between Backlog and Ready from the OPEN
              blocked-by count. Implies nothing unless --write is given too.
   --json     the whole reading.`;
@@ -128,6 +174,7 @@ export async function main(argv: string[]): Promise<number> {
         ready: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         "project-root": { type: "string" },
+        repo: { type: "string" },
       },
       allowPositionals: false,
     });
@@ -253,8 +300,22 @@ export async function main(argv: string[]): Promise<number> {
   // may have claimed the issue.
   const mayWrite = (c: { item: Item }) =>
     MAY_OVERWRITE.includes(c.item.status) && c.item.assignees === 0;
-  const readyWritable = readyChanges.filter(mayWrite);
+  const eligible = readyChanges.filter(mayWrite);
   const readySkipped = readyChanges.filter(c => !mayWrite(c));
+
+  // A board can span repositories, so there is no repository to default
+  // to and no honest depth without one. UNMEASURED, and nothing is
+  // promoted on a null cap.
+  const closedReadings = values.repo
+    ? await measureClosedIssues(
+        (q, v) => client.graphql(q, v),
+        values.repo.split("/")[0]!,
+        values.repo.split("/")[1]!,
+      )
+    : null;
+  const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
+  const occupied = items.filter(i => i.status === READY).length;
+  const { readyWritable, heldByCap, selection } = splitReadyChanges(eligible, cap, occupied);
 
   if (values.json) {
     console.log(
@@ -267,6 +328,13 @@ export async function main(argv: string[]): Promise<number> {
           fieldChanges: fieldChanges.map(c => ({ number: c.item.number, from: c.item.criteriaCell, to: c.to })),
           readyWritable: readyWritable.map(c => ({ number: c.item.number, from: c.item.status, to: c.to })),
           readySkipped: readySkipped.map(c => ({ number: c.item.number, status: c.item.status })),
+          // The depth and what it held back, so a consumer reading this
+          // JSON can tell "nothing was eligible" from "the lane is full"
+          // from "the depth could not be read". Three different facts
+          // that all used to come out as an empty `readyWritable`.
+          readyCap: cap,
+          readyOccupied: occupied,
+          readyHeldByCap: heldByCap.map(c => c.item.number),
           wrote: values.write,
         },
         null,
@@ -288,6 +356,16 @@ export async function main(argv: string[]): Promise<number> {
         `\n  Ready lane — the frontier is ` +
           (frontier === null ? `nowhere: no open issue sits in a phase` : `Phase ${frontier}`),
       );
+      console.log(`    depth: ${cap ?? "UNMEASURED"}. ${selection.why}`);
+      if (cap === null && !values.repo) {
+        console.log(
+          `    pass --repo owner/name to derive the depth; a board can span repositories ` +
+            `so there is nothing to default to, and nothing is promoted without it`,
+        );
+      }
+      for (const c of heldByCap) {
+        console.log(`    #${c.item.number} eligible but held: Ready is at its depth`);
+      }
       for (const c of readyWritable) {
         console.log(`    #${c.item.number}  ${c.item.status || "(none)"} -> ${c.to}  (${c.item.milestone || "no milestone"}; ${c.item.blockedByOpen} open of ${c.item.blockedByTotal} blockers, ${c.item.assignees} assignee(s))`);
       }
