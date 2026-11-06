@@ -523,13 +523,19 @@ export function decomposedBody(
     ``,
     `${row.outcome}`,
     ``,
-    `## Files this will change`,
-    ``,
-    ...row.files.map(f => `- \`${f}\``),
-    ``,
+    // Criteria BEFORE files, which is the order `ISSUE_SECTIONS` declares
+    // and the order both forms show. It used to be the other way round, and
+    // `lib/issue-shape.ts`'s docblock claimed the order was load-bearing
+    // here while the two disagreed — caught by review. `IS-30` now asserts
+    // the ORDER and not just the set, so the claim is tested rather than
+    // written down.
     criteriaHeading,
     ``,
     row.criterion,
+    ``,
+    `## Files this will change`,
+    ``,
+    ...row.files.map(f => `- \`${f}\``),
     ``,
     `## How we will know`,
     ``,

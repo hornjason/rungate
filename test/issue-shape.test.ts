@@ -242,20 +242,28 @@ describe("IS-30: consumer — the decomposition generator", () => {
     line: 3,
   };
 
-  test("IS-30: a decomposed body carries EXACTLY the spec-work headings", () => {
+  test("IS-30: a decomposed body carries EXACTLY the spec-work headings, IN ORDER", () => {
     const body = decomposedBody(ROW, "## Criteria this serves", "docs/plan.md");
-    const present = ISSUE_SECTIONS.filter(s => headingOccurrencesOf(body, headingFor(s)).length > 0)
-      .map(s => s.id)
-      .sort();
+    const present = ISSUE_SECTIONS.map(s => ({
+      id: s.id,
+      at: headingOccurrencesOf(body, headingFor(s))[0],
+    }))
+      .filter(x => x.at !== undefined)
+      .sort((a, b) => a.at - b.at)
+      .map(x => x.id);
 
     // Equality again, and in this direction it is the half that matters: the
     // generator emitted four headings before the decider knew about any of
     // them, so a containment assertion here was satisfied by the status quo.
-    expect(present).toEqual(
-      requiredSections("spec-work")
-        .map(s => s.id)
-        .sort(),
-    );
+    //
+    // **By POSITION, not as a sorted set.** `lib/issue-shape.ts` says the
+    // declaration order is load-bearing for this generator, and when that
+    // sentence was written it was false — the generator emitted Files
+    // before Criteria while the decider and both forms declare Criteria
+    // first. A sorted comparison could not see it, which is how the claim
+    // survived into review. A sentence a test cannot contradict is not a
+    // property, it is a hope.
+    expect(present).toEqual(requiredSections("spec-work").map(s => s.id));
   });
 
   test("IS-31: a decomposed body is short nothing the gate would refuse it for", () => {
