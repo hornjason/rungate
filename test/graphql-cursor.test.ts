@@ -3,11 +3,17 @@
  *
  * ## The mutation battery, predicted before it was run
  *
- *   mutant                                              predicted
- *   the hasNextPage type check dropped                  2
- *   the endCursor non-empty check dropped               1
- *   the non-object guard dropped                        1
- *   `done` returned where `unreadable` belongs          3
+ *   mutant                                       reading   predicted
+ *   the hasNextPage type check dropped             2          2
+ *   the endCursor non-empty check dropped          2          1
+ *   the non-object guard dropped                   2          1
+ *   `done` returned where `unreadable` belongs     5          3
+ *
+ * **Every miss is the same arithmetic error and it is worth naming.**
+ * "every unreadable reading says why" loops over all four malformed
+ * inputs, so it reddens for EVERY guard — each per-guard prediction is
+ * one low by construction. The first row matched only by accident: I
+ * counted two cases and the real two are the variant case plus that loop.
  *
  * Readings are in the PR body.
  *
