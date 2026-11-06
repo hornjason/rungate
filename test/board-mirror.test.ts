@@ -757,19 +757,30 @@ describe("#1647: the Ready lane", () => {
     // "a later phase is not ready", "an issue in no phase is never ready"
     // and "no frontier means nothing is ready", and each asserted FALSE.
     // Jason's call of 2026-11-05 makes phase ordering rather than
-    // eligibility, so the same inputs must now be eligible — and keeping
-    // them as cases is what stops the gate being reintroduced quietly by
-    // somebody reading the old docblock.
+    // eligibility, so the same inputs must now be eligible.
+    //
+    // **The input must CARRY a phase, and the first version of these did
+    // not.** `{ ...base }` spreads an object the parameter type no longer
+    // declares a phase on, so both cases were byte-identical to the plain
+    // base case above and re-asserted it — vacuous in the exact shape
+    // `.claude/rules/checks-must-be-able-to-fail.md` names, while a comment
+    // right here claimed they stopped the gate returning. A gate spelled
+    // `"phase" in item && item.phase !== 0` would have left them green.
+    // Built through `withPhase` now, which puts the key on the object; a
+    // variable rather than an inline literal, because an object literal
+    // with a property the parameter type does not declare is refused by the
+    // excess-property check. ai-review round 2 of #1796.
+    const withPhase = (phase: number | null) => ({ ...base, phase });
+
     test("phase is not an input at all — the signature cannot carry one", () => {
-      expect(
-        isReady.length,
-        "a frontier parameter coming back is the gate coming back",
-      ).toBe(1);
+      expect(isReady.length, "a frontier parameter coming back is the gate coming back").toBe(1);
     });
 
     test("an issue in a later phase is eligible, and is ordered later instead", () => {
-      const later = { ...base };
-      expect(isReady(later), "a later phase is pickable when the lane has room").toBe(true);
+      expect(
+        isReady(withPhase(6)),
+        "a later phase is pickable when the lane has room — this input carries phase 6",
+      ).toBe(true);
       expect(
         readyOrder({ phase: 6, number: 1 }, { phase: 0, number: 99 }),
         "phase still decides who goes FIRST — that is where it moved to",
@@ -777,12 +788,23 @@ describe("#1647: the Ready lane", () => {
     });
 
     test("an issue with no phase milestone is eligible, and sorts last", () => {
-      expect(isReady({ ...base })).toBe(true);
+      expect(
+        isReady(withPhase(null)),
+        "an explicit null phase is pickable, not refused",
+      ).toBe(true);
       expect(
         readyOrder({ phase: null, number: 1 }, { phase: 9, number: 99 }),
         "a null phase ranks behind every numbered one rather than being refused",
       ).toBeGreaterThan(0);
     });
+
+    // The control the two above need: a phase-carrying input must be able
+    // to read FALSE for a non-phase reason, or "returns true" would be
+    // satisfied by `isReady` ignoring its argument entirely.
+    test("a phase-carrying issue is still refused when it is blocked", () => {
+      expect(isReady({ ...withPhase(6), blockedByOpen: 1 })).toBe(false);
+    });
+
   });
 
   describe("isUnblocked reads the OPEN count, which is why Ready is written and not filtered", () => {
