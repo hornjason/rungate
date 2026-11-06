@@ -106,50 +106,54 @@ function filesSectionLines(body: string): string[] {
 /**
  * The path a list line names, or null when the line is prose.
  *
- * ONE rule for what a path is, and it took two review rounds to get to it: a
- * single word ending in an alphabetic extension of two to five characters,
- * over a last segment that contains a letter. A `/` is allowed anywhere and
- * proves nothing on its own.
+ * A path is **a single word containing a `/` and ending in an alphabetic
+ * extension of two to five characters**, and every backticked span on the line
+ * is offered to that rule rather than only the first.
  *
- * **EVERY backticked span on the line, not the first.** Round three: a bullet
- * reading ``- `lib/a.ts` and `test/a.test.ts` `` declared two files and the
- * reader took one, silently. Within the stated bias — a missed path costs a
- * warning nobody gets — but it is a partial read of a line that was perfectly
- * clear, which is a different failure from the two below and not one the bias
- * was meant to excuse. `FO-55`. A line with no backticks at all is still read
- * whole, so `FO-2`'s bare `lib/a.ts` is untouched.
+ * ## The separator is there because four rounds of review said so
  *
- * ## Why not two rules
+ * Three of this PR's five review rounds asked one question — *which token is a
+ * path* — and each found a token the then-current rule let through:
  *
- * It was two — *contains a `/`*, OR *has an extension* — and each round found
- * a token the branch it landed on let through:
- *
- * | round | token | branch |
+ * | round | token | what was admitting it |
  * |---|---|---|
- * | 1 | `2.0`, `v2.1`, `i.e` | the extension branch, which took any dotted word |
- * | 2 | `N/A` | the slash branch, which validated nothing at all |
+ * | 1 | `2.0`, `v2.1`, `i.e` | any dotted word counted |
+ * | 2 | `N/A` | a `/` alone counted, with nothing else checked |
+ * | 4 | `Node.js`, `GitHub.com` | an extension alone counted |
  *
- * `N/A` is the one that mattered. The files section is REQUIRED and
- * `missingSections` demands content under the heading, so *N/A* is precisely
- * what somebody writes when they have nothing to put there — and under the
- * slash branch every issue that wrote it collided with every other one. Not a
- * rare input: the single most likely wrong one.
+ * Round 2's `N/A` was the costly one: the files section is REQUIRED and
+ * `missingSections` demands content under the heading, so *N/A* is exactly
+ * what somebody writes when they have nothing to put there, and every issue
+ * that wrote it collided with every other one.
  *
- * Patching the second branch would have left two predicates answering one
- * question, which is `.claude/rules/checks-must-be-able-to-fail.md`'s *two
- * deciders that agree* and the reason `AGENTS.md` rule 5 says to stop
- * repairing and re-scope. So the branches were collapsed instead, and this is
- * shorter than what it replaced.
+ * Rounds 1 and 2 were repaired by widening and narrowing one predicate, and
+ * round 4 arrived on the half the last repair had loosened. `AGENTS.md` rule 5
+ * says stop repairing at the third round and re-scope, so: **a path needs both
+ * halves — a separator AND an extension — and the class is closed.** There is
+ * no third shape left for a fifth token to arrive through. The alternative was
+ * a fourth special case, and a predicate accumulating special cases is the
+ * `stripHeredocs` shape from #1808, which cost four rounds before it was
+ * deleted.
  *
  * ## What this MISSES, said out loud
  *
- * An extension-less file — `Makefile`, `Dockerfile`, `lib/issue-shape` — and a
- * dotfile like `.gitignore`. `FO-52` asserts the first rather than leaving it
- * in prose, because an earlier version of this comment claimed `Makefile` was
- * read while the code rejected it.
+ * - **Every root file** — `package.json`, `AGENTS.md`, `CLAUDE.md`. The
+ *   deliberate cost of the separator, and the one real loss: those files are
+ *   contested often. Buying them back needs a mechanism rather than a
+ *   heuristic — the repository's own tracked-file list, which this module
+ *   cannot see and should not grow a repo handle for at round five. That is a
+ *   second issue, not a fourth branch.
+ * - An extension-less file — `Makefile`, `lib/issue-shape` — and a dotfile
+ *   like `.gitignore`.
+ * - A URL is rejected outright on `://`, so a link to a file in another
+ *   repository is not read as a file in this one.
  *
- * All of that is the direction `declaredFiles` declares two paragraphs up:
- * this reader may read too few files, never a file that does not exist. A
+ * `FO-52` and `FO-57` assert the misses rather than leaving them in prose,
+ * because an earlier version of this comment claimed `Makefile` was read while
+ * the code rejected it.
+ *
+ * Every one of those is the direction `declaredFiles` declares two paragraphs
+ * up: this reader may read too few files, never a file that does not exist. A
  * missed path costs a warning nobody gets; an invented one costs a collision
  * report against a file that is not there, which is how the channel becomes
  * noise people skip.
@@ -162,10 +166,17 @@ function pathsOnLine(line: string): string[] {
   return candidates.filter(isPath).map(c => c.replace(/^\.\//, ""));
 }
 
-/** One word, ending in an alphabetic extension over a segment with a letter. */
+/**
+ * One word, containing a `/`, ending in an alphabetic extension.
+ *
+ * **A repo-relative path, and nothing else.** The separator is the whole of
+ * the rule that was missing. See `pathsOnLine` for why it is here rather than
+ * a fourth special case.
+ */
 function isPath(candidate: string): boolean {
   if (candidate === "" || /\s/.test(candidate)) return false;
-  return /[A-Za-z][^/]*\.[A-Za-z]{2,5}$/.test(candidate);
+  if (candidate.includes("://")) return false; // a URL, not a file
+  return candidate.includes("/") && /[A-Za-z][^/]*\.[A-Za-z]{2,5}$/.test(candidate);
 }
 
 /**

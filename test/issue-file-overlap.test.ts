@@ -310,11 +310,31 @@ describe("FO-50: what is NOT a path", () => {
     expect(paths("- `2.0`", "- `v2.1`", "- `i.e`")).toEqual([]);
   });
 
-  test("FO-51 CONTROL: a root file WITH an extension still reads", () => {
-    // Without this row FO-50 is satisfied by a reader that takes nothing
-    // without a slash, and `package.json` and `AGENTS.md` are contested
-    // more often than most files under `lib/`.
-    expect(paths("- `package.json`", "- `AGENTS.md`")).toEqual(["package.json", "AGENTS.md"]);
+  test("FO-51: a ROOT file is MISSED, and it is the deliberate cost", () => {
+    // This row asserted the opposite until round four. `package.json` and
+    // `AGENTS.md` are contested more often than most files under `lib/`, so
+    // this is a real loss — taken because the alternative was a fourth
+    // special case in a predicate that had already produced three rounds of
+    // findings, and a predicate accumulating special cases is the
+    // `stripHeredocs` shape from #1808.
+    //
+    // Buying them back needs the repository's own tracked-file list, which
+    // this module cannot see. A second issue, not a fourth branch.
+    expect(paths("- `package.json`", "- `AGENTS.md`")).toEqual([]);
+  });
+
+  test("FO-57: a dotted PRODUCT NAME is not a file", () => {
+    // Round four's finding. Taking every backticked span on a line (round
+    // three) widened the surface this arrived through: a sentence in the
+    // files section mentioning `Node.js` yielded a file nobody declared.
+    expect(paths("- `lib/a.ts` — needs `Node.js` 22, see `GitHub.com`")).toEqual(["lib/a.ts"]);
+  });
+
+  test("FO-58: a URL is not a file, even pointing at one", () => {
+    // It has a separator and an extension, and it names a file in somebody
+    // else's repository. Reporting it as contested here is a collision
+    // against a path this tree does not have.
+    expect(paths("- `https://github.com/o/r/blob/main/lib/a.ts`")).toEqual([]);
   });
 
   test("FO-55: a bullet naming two paths declares BOTH", () => {
