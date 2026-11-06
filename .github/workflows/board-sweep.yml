@@ -21,8 +21,24 @@
 # board and corrects every row it can decide. The board converges on the next
 # event rather than on the next hour, and nobody has to remember anything.
 #
-# A `--write` here mutates PROJECT CARDS, not issues, and a card write emits
-# no `issues` event — so this cannot retrigger itself.
+# IT DOES RETRIGGER ITSELF, AND THAT IS THE SAFE PROPERTY — not the absence
+# of a retrigger. This comment used to claim "a `--write` here mutates PROJECT
+# CARDS, not issues, and a card write emits no `issues` event, so this cannot
+# retrigger itself". The first half is true of a CORRECTION and false of a
+# RELEASE: releasing a stale claim PATCHes the issue's assignees, which fires
+# a genuine `issues: unassigned` webhook, which is in the trigger list above.
+# A PAT authors it, so GitHub's recursion guard for the default token does not
+# apply. Round 3 of #1823's review found the claim and it was false.
+#
+# What actually has to hold is TERMINATION, and it does, because the write is
+# a fixpoint: once a claim is released the issue is unassigned and its card is
+# in Backlog, and `verdictFor` reads that row as `agrees`. The follow-on run
+# performs no write, so it emits no event, so there is no third run. One extra
+# no-op run per batch, bounded, not a cascade. BS-68 asserts it on the
+# decider rather than leaving it as this paragraph.
+#
+# And the follow-on run is useful rather than merely harmless: it is the run
+# that retries a release whose card move succeeded and whose unassign did not.
 #
 # Every `uses:` is pinned to a commit SHA, and `test/action-pin-parity.test.ts`
 # asserts it.

@@ -1366,16 +1366,29 @@ async function main(argv: readonly string[]): Promise<number> {
   for (const f of applied.failed) console.log(`  FAILED #${f.number} -> ${f.to}: ${f.error}`);
 
   // RELEASES, through the same recorder, so a failed unassign is reported
-  // the way a failed field write is. The assignment goes first: if the move
-  // to Backlog succeeded and the unassign then failed, the card would sit
-  // unassigned-looking in Backlog while the claim still stood — a board
-  // that reads correct and is not. Releasing first means a half-failure
-  // leaves the card where it was, which is visibly wrong and therefore
-  // safe.
+  // the way a failed field write is.
+  //
+  // THE CARD MOVES FIRST, AND THE CLAIM IS RELEASED LAST. This was the
+  // other way round, with an argument: releasing first leaves a half-failed
+  // row visibly wrong to anybody reading the board, rather than plausibly
+  // right. Round 3 of #1823's review falsified it, and the falsification is
+  // worth keeping because the argument was not careless, it was aimed at
+  // the wrong reader.
+  //
+  // **A half-failure must be recoverable by the TOOL, not merely legible to
+  // a person.** Unassign-first leaves an UNASSIGNED card in READY, and
+  // `verdictFor` reads that as `agrees` — unassigned in Ready is the lane's
+  // own entry condition — so the card sits there for good, never re-checked
+  // against the blockers, the cap or the phase order that Ready actually
+  // asserts. Move-first leaves an ASSIGNED card in BACKLOG, which is the
+  // exact state this whole sweep exists to detect: the next run makes it a
+  // candidate again and finishes the job.
+  //
+  // So the ordering is chosen by which half-state the fixpoint can leave,
+  // not by which one looks worse in a screenshot.
   const released = await applyCorrections(
     reading.releases.map(r => ({ ...r, to: r.to ?? "(unassigned, already in Backlog)" })),
     async r => {
-      await clearAssignees(token, repo, r.number);
       const back = reading.releases.find(x => x.number === r.number)?.to ?? null;
       if (back !== null) {
         requireWrittenItem(
@@ -1389,6 +1402,7 @@ async function main(argv: readonly string[]): Promise<number> {
           r.itemId,
         );
       }
+      await clearAssignees(token, repo, r.number);
     },
   );
   for (const w of released.wrote) console.log(`  released #${w.number} — ${w.to}`);

@@ -560,6 +560,70 @@ describe("board status sweep", () => {
     ]);
   });
 
+  // ── BS-68, BS-69: the sweep's own write is an input to the sweep ────────
+  //
+  // `board-sweep.yml` triggers on `issues: [assigned, unassigned, ...]` and
+  // a RELEASE PATCHes the issue's assignees, so a release fires an event in
+  // that list and starts another run. The workflow comment claimed it could
+  // not; round 3 of #1823's review found that false. The property that has
+  // to hold is not "no retrigger" — it is TERMINATION, and termination is a
+  // property of the DECIDER, which is why it is asserted here and not in a
+  // paragraph of YAML.
+
+  test("BS-68: a released claim is a fixpoint, so the retriggered run writes nothing", () => {
+    const stale = item(312, "Issue", "OPEN", "Ready", false, null, true, 30, 0);
+    expect(verdictFor(stale).kind).toBe("release");
+
+    // The state the release leaves behind: unassigned, and in Backlog.
+    const afterRelease = { ...stale, assigned: false, status: BACKLOG };
+    expect(
+      verdictFor(afterRelease).kind,
+      "the run this release triggers must find nothing to do — a second " +
+        "write would emit a third event and the sweep would not terminate",
+    ).toBe("agrees");
+    // Through the reading as well as the verdict, because `main()` decides
+    // whether to write from the buckets, not from one verdict.
+    const r = sweep([afterRelease]);
+    expect(r.releases).toEqual([]);
+    expect(r.corrections).toEqual([]);
+    expect(r.agrees).toBe(1);
+  });
+
+  test("BS-69: the half-failed release is a state the sweep still repairs", () => {
+    // WHY THE WRITE ORDER IS MOVE-THEN-UNASSIGN. Either write can fail on
+    // its own, and the two half-states are not equally recoverable.
+    //
+    // Unassign-first leaves this, and it is permanent: unassigned in Ready
+    // is Ready's own entry condition, so no later run looks at it again.
+    const unassignedInReady = item(312, "Issue", "OPEN", "Ready", false, null, false, 30, 0);
+    expect(
+      verdictFor(unassignedInReady).kind,
+      "if this ever stops being `agrees`, the ordering argument below has " +
+        "changed and this test is the place to re-decide it",
+    ).toBe("agrees");
+
+    // Move-first leaves this, and the sweep owns it: assigned in Backlog is
+    // precisely the row it exists to find, so the retriggered run finishes
+    // the release.
+    const assignedInBacklog = item(312, "Issue", "OPEN", BACKLOG, false, null, true, 30, 0);
+    expect(verdictFor(assignedInBacklog).kind).toBe("release");
+
+    // And the source must actually write in that order. A comment arguing
+    // for it is the docblock-saying-it-was-checked failure.
+    const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    const releaseBody = code.slice(code.indexOf("reading.releases.map"));
+    const move = releaseBody.indexOf("option: optionId(back)");
+    const unassign = releaseBody.indexOf("clearAssignees(token");
+    expect(move, "the release pass must still move the card").toBeGreaterThan(-1);
+    expect(unassign, "the release pass must still clear the assignees").toBeGreaterThan(-1);
+    expect(
+      move < unassign,
+      "the card must move BEFORE the claim is released — unassign-first " +
+        "leaves an unassigned card in Ready, which `verdictFor` reads as " +
+        "`agrees` and no later run repairs",
+    ).toBe(true);
+  });
+
   test("BS-9: a non-JSON error body reports the HTTP status, not a parse error", () => {
     // 502s, HTML rate-limit pages and proxy errors all arrive as non-JSON.
     // Parsing before checking the status turned the one failure this function
