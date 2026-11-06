@@ -37,7 +37,8 @@
  * typed out in both files and the mutant has to break it in both.
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "fs";
+import { readFileSync } from "fs";
+import { sourceFiles } from "../lib/source-census";
 import { join } from "path";
 import {
   READY_TOLERANCE_DAYS,
@@ -234,13 +235,17 @@ describe("SC-2723: nothing spells a held reason for itself", () => {
    */
   test("the held-reason string appears only in its own binding", () => {
     const offenders: string[] = [];
-    for (const dir of ["lib", "scripts"]) {
-      for (const f of readdirSync(join(ROOT, dir)).sort()) {
-        if (!f.endsWith(".ts")) continue;
-        const path = `${dir}/${f}`;
-        if (path === "lib/board-ready-rule.ts") continue;
-        if (codeOf(readFileSync(join(ROOT, path), "utf-8")).includes("at its depth")) offenders.push(path);
-      }
+    const population = sourceFiles(ROOT, ["lib", "scripts"]);
+    // The population is the point, so its reach is asserted beside it: a
+    // flat listing silently drops the eighteen files under lib/generators,
+    // lib/scaffold and lib/validators. ai-review round 4 of #1795.
+    expect(
+      population.filter(p => p.split("/").length > 2).length,
+      "no nested file is in this population, so the census has gone flat",
+    ).toBeGreaterThan(10);
+    for (const path of population) {
+      if (path === "lib/board-ready-rule.ts") continue;
+      if (codeOf(readFileSync(join(ROOT, path), "utf-8")).includes("at its depth")) offenders.push(path);
     }
     expect(
       offenders,

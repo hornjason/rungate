@@ -334,6 +334,16 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
       "test/consumer-no-rebuild-delegation.test.ts",
       "test/ai-review-runner-shell-parity.test.ts",
       "test/unit/ambiguous-anchor.test.ts",
+      // Its re-prefix scan reads the whole test/ population, so a new test
+      // file importing lib/source-census can redden it (#1803 round 2).
+      "test/source-census.test.ts",
+      // #1547 itself. Its subject IS "a new test file censuses the test
+      // population and nothing routes it", so adding one is exactly the
+      // event that reddens it — and it was absent from this row, so the
+      // guard against #1286 was the one suite #1286 could still happen to.
+      // Found by it going red in CI on a branch whose local routed set was
+      // green, which is the #1624 shape over again (#1803 round 2).
+      "test/census-routing.test.ts",
     ],
     fires: c => c.isNew && /^test\/.*\.test\.tsx?$/.test(c.path),
   },

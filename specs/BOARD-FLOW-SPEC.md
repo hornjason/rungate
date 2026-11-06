@@ -674,3 +674,11 @@ second: flow efficiency is the one metric this spec must not promise.**
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
+- [ ] SC-2732: a population census reaches files in subdirectories, not only the top level
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2733: every census over lib/ and scripts/ lists its population through one binding
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:

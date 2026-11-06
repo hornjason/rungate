@@ -131,7 +131,7 @@ events.** Why a `--name-only` router cannot tell them apart:
 | added a doc, or edited one containing file:line citations | `test/line-citation-ratchet.test.ts` `test/agents-md-refs.test.ts` |
 | edited any markdown outside test/fixtures/ | `test/prose-self-distance.test.ts` |
 | added or edited CLAUDE.md, AGENTS.md or a .claude/rules/ doc | `test/rule-provenance.test.ts` `test/instruction-surface-budget.test.ts` `test/harness-fixed-point.test.ts` |
-| added a test file | `test/sc-id-namespace.test.ts` `test/sc-fixture-namespace.test.ts` `test/scratch-paths-unique.test.ts` `test/scratch-cleanup.test.ts` `test/consumer-no-rebuild-delegation.test.ts` `test/ai-review-runner-shell-parity.test.ts` `test/unit/ambiguous-anchor.test.ts` |
+| added a test file | `test/sc-id-namespace.test.ts` `test/sc-fixture-namespace.test.ts` `test/scratch-paths-unique.test.ts` `test/scratch-cleanup.test.ts` `test/consumer-no-rebuild-delegation.test.ts` `test/ai-review-runner-shell-parity.test.ts` `test/unit/ambiguous-anchor.test.ts` `test/source-census.test.ts` `test/census-routing.test.ts` |
 | touched specs/ | `test/agents-md-spec-listing.test.ts` `test/spec-requirements.test.ts` |
 | added a specs/ file | `test/audit-specs.test.ts` `test/scanner.test.ts` |
 | ticked or unticked an SC (ran sync-sc-status) | `test/sc-binding-split.test.ts` `test/ticked-sc-cover.test.ts` `test/behavioral-sc-ratchet.test.ts` `test/ticked-sc-absent-symbol.test.ts` |
@@ -143,18 +143,16 @@ events.** Why a `--name-only` router cannot tell them apart:
 
 **That table is rendered from `CENSUS_TRIGGERS` in `scripts/census-routing.ts`
 and compared byte-for-byte by that script's own test file**, in both
-directions: a row the router does not have is red, and a census test named
-here that no row routes to is red. So it is not a list anybody has to remember
-to update — which is the only honest answer to "what keeps prose correct when
-the census set moves". Add a row to the router and this table goes red until
-it carries it.
+directions: a row the router lacks is red, and a census test named here that
+no row routes to is red. Nobody has to remember to update it, which is the
+only honest answer to "what keeps prose correct when the census set moves":
+add a row to the router and this table goes red until it carries it.
 
 Bounded and cheap. The point is not to run everything; it is that the file
-you changed is never the only file with an opinion about your change.
-**This does not enforce** — it prints a command. A ship run no longer
-depends on you reading it (#1004), and why the two routers are
-complements: `reference/self-referential-tests-worked-instances.md`, *the
-selector*.
+you changed is never the only file with an opinion about it. **This does
+not enforce** — it prints a command. A ship run no longer depends on you
+reading it (#1004); why the two routers are complements:
+`reference/self-referential-tests-worked-instances.md`, *the selector*.
 
 ## If you are writing one of these
 
@@ -175,8 +173,7 @@ expect(
 ```
 
 The `fix` argument has no default and the pointer back to this file is
-DERIVED rather than hardcoded; both choices, and the two-references-to-321
-count that motivated #813, are in
+DERIVED, not hardcoded; both choices and the count behind #813 are in
 `reference/self-referential-tests-worked-instances.md`.
 
 Every Tier 1 check above now carries one, and `test/check-remedy.test.ts`
