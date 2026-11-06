@@ -55,7 +55,7 @@ import {
   unlocatableEntries,
 } from "../lib/board-mirror";
 import { parseCriteria } from "../lib/spec-evidence";
-import { parseRepo, splitReadyChanges } from "../scripts/board-mirror";
+import { parseRepo, readyPopulation, splitReadyChanges } from "../scripts/board-mirror";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -924,6 +924,63 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       "the lane is still full — nothing left it — so the promotion waits",
     ).toEqual([7]);
     expect(heldByCap.map(x => x.item.number)).toEqual([1]);
+  });
+});
+
+describe("SC-2724: occupancy is counted over the items the command can move", () => {
+  const it_ = (number: number, state: string, status: string) => ({ number, state, status });
+
+  // ai-review round 3. `occupied` was counted over EVERY board item while
+  // the transitions were computed over the open ones, so anything this
+  // command can never move counted against the cap forever.
+  test("a closed issue left at Ready does not hold a slot", () => {
+    const { writable, occupied } = readyPopulation([
+      it_(1, "OPEN", "Ready"),
+      it_(2, "CLOSED", "Ready"),
+    ]);
+    expect(occupied, "nothing demotes a closed issue, so counting it starves Ready forever").toBe(1);
+    expect(writable.map(i => i.number)).toEqual([1]);
+  });
+
+  // The case the finding did not name and the board actually held: a
+  // DRAFT project item has no issue behind it and so no state at all.
+  // Measured 2026-11-05 — Ready carried six items, five open issues and
+  // one draft, which is why the lane read 5 of 4 OVER.
+  test("a draft board item, which has no state, holds no slot", () => {
+    const { writable, occupied } = readyPopulation([
+      it_(1, "OPEN", "Ready"),
+      { number: 2, state: undefined as unknown as string, status: "Ready" },
+    ]);
+    expect(occupied).toBe(1);
+    expect(writable.map(i => i.number)).toEqual([1]);
+  });
+
+  // The control. A guard that refused everything would also pass both
+  // cases above while making the cap unreachable.
+  test("open issues in Ready are still counted", () => {
+    const { occupied } = readyPopulation([
+      it_(1, "OPEN", "Ready"),
+      it_(2, "OPEN", "Ready"),
+      it_(3, "OPEN", "Backlog"),
+    ]);
+    expect(occupied).toBe(2);
+  });
+
+  // **The two readings come from one array.** Re-spelling the open filter
+  // beside the count is what let them drift apart, and two deciders
+  // agreeing is invisible to every behavioural case above.
+  test("the writable list and the occupancy count never disagree", () => {
+    const items = [
+      it_(1, "OPEN", "Ready"),
+      it_(2, "CLOSED", "Ready"),
+      it_(3, "OPEN", "Backlog"),
+      it_(4, "CLOSED", "Backlog"),
+    ];
+    const { writable, occupied } = readyPopulation(items);
+    expect(
+      occupied,
+      "occupancy must be a count OF the writable list, not a second pass over the board",
+    ).toBe(writable.filter(i => i.status === "Ready").length);
   });
 });
 

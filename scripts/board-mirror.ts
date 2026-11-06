@@ -97,6 +97,30 @@ export function parseRepo(value: string): { owner: string; name: string } | null
  * Exported so a case can hold it. Inline, the only way to observe it was
  * to run the command against a live board.
  */
+/**
+ * The items this command may move, and how many of them hold Ready.
+ *
+ * **One array, read twice — not two filters that happen to agree.**
+ * `occupied` used to be counted over EVERY board item while the
+ * transitions were computed over the open ones, so anything the command
+ * can never move counted against the cap forever and silently starved
+ * promotions. A closed issue whose Status was never taken off Ready is
+ * the case ai-review named; a DRAFT board item, which has no state at
+ * all, is the one that was live on the board when this was written.
+ *
+ * Returning both from one pass is the point. Re-spelling
+ * `state === "OPEN"` beside the count would be two deciders answering one
+ * question, which no behavioural test can tell apart
+ * (`.claude/rules/checks-must-be-able-to-fail.md`) — and that is exactly
+ * how the two came to disagree. ai-review round 3 of #1795.
+ */
+export function readyPopulation<T extends { state: string; status: string }>(
+  items: readonly T[],
+): { writable: T[]; occupied: number } {
+  const writable = items.filter(i => i.state === "OPEN");
+  return { writable, occupied: writable.filter(i => i.status === READY).length };
+}
+
 export function splitReadyChanges<
   T extends { item: { number: number; phase: number | null; status: string }; to: string },
 >(
@@ -339,8 +363,8 @@ export async function main(argv: string[]): Promise<number> {
     .map(i => ({ item: i, to: byNumber.get(i.number)!.text }));
 
   const frontier = openFrontier(items);
-  const readyChanges = items
-    .filter(i => i.state === "OPEN")
+  const { writable, occupied } = readyPopulation(items);
+  const readyChanges = writable
     .map(i => ({ item: i, to: isReady(i, frontier) ? READY : BACKLOG }))
     .filter(c => c.to !== c.item.status);
 
@@ -370,7 +394,6 @@ export async function main(argv: string[]): Promise<number> {
       ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
       : null;
   const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
-  const occupied = items.filter(i => i.status === READY).length;
   const { readyWritable, heldByCap, selection } = splitReadyChanges(eligible, cap, occupied);
 
   if (values.json) {

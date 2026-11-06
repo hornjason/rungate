@@ -649,3 +649,7 @@ second: flow efficiency is the one metric this spec must not promise.**
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
+- [ ] SC-2724: Ready's occupancy is counted over the items the writer can actually move
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:

@@ -109,7 +109,7 @@
       "owner": "rg/ready-eligibility",
       "from": 2722,
       "to": 2729,
-      "note": "Jason's Ready decision of 2026-11-05 on #1758, last pieces. 2722 consumed by scripts/board-mirror.ts and test/board-mirror.test.ts; the rest is headroom for the follow-up that drops the phase gate from isReady. Replaces rg/ready-findings 2717-2729, pruned here on the merge of #1794 (2717-2721 stay consumed). Delete when the PR merges."
+      "note": "Jason's Ready decision of 2026-11-05 on #1758, last pieces. 2722, 2723 and 2724 are consumed — 2722 by scripts/board-mirror.ts and test/board-mirror.test.ts, 2723 by the held-reason population check in test/board-ready-rule.test.ts, 2724 by the occupancy population check added in ai-review round 3 — so headroom starts at 2725 and is for the follow-up that drops the phase gate from isReady. Replaces rg/ready-findings 2717-2729, pruned here on the merge of #1794 (2717-2721 stay consumed). Delete when the PR merges."
     }
   ]
 }
