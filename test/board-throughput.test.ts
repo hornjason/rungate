@@ -1,5 +1,5 @@
 /**
- * Covers SC-2713, SC-2714 (specs/BOARD-FLOW-SPEC.md).
+ * Covers SC-2713, SC-2714, SC-2717, SC-2718 (specs/BOARD-FLOW-SPEC.md).
  *
  * ## The mutation battery, predicted before it was run
  *
@@ -29,13 +29,23 @@
  * this file guards is the one that sizes Ready.
  */
 import { describe, expect, test } from "bun:test";
-import { CLOSED_ISSUES_QUERY, THROUGHPUT_DAYS, measureThroughput } from "../lib/board-throughput";
+import { CLOSED_ISSUES_QUERY, THROUGHPUT_DAYS, measureClosedIssues } from "../lib/board-throughput";
+
+/**
+ * Throughput only, for the cases that are about the rate.
+ *
+ * The cancelled count rides on the same pass and has its own cases below;
+ * threading it through every rate assertion would make each one read like
+ * it cared about both.
+ */
+const measureThroughput = async (...a: Parameters<typeof measureClosedIssues>) =>
+  (await measureClosedIssues(...a))?.throughput ?? null;
 
 const NOW = Date.parse("2026-11-05T00:00:00Z");
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
 
 /** A fake client that serves fixed pages and records what it was asked. */
-function fake(pages: { nodes: unknown[]; next?: string | null }[]) {
+function fake(pages: { nodes: unknown[]; next?: string | null; pageInfo?: unknown }[]) {
   const asked: Record<string, unknown>[] = [];
   const gql = async (_q: string, v: Record<string, unknown>) => {
     asked.push(v);
@@ -44,7 +54,11 @@ function fake(pages: { nodes: unknown[]; next?: string | null }[]) {
       repository: {
         issues: {
           nodes: page.nodes,
-          pageInfo: { hasNextPage: page.next != null, endCursor: page.next ?? null },
+          // `"pageInfo" in page` rather than `page.pageInfo ?? …`, so a
+          // case can plant an ABSENT pageInfo and a case can plant an
+          // explicitly undefined one. `??` would spell those the same, and
+          // the absent one is the shape the finding was about.
+          pageInfo: "pageInfo" in page ? page.pageInfo : { hasNextPage: page.next != null, endCursor: page.next ?? null },
         },
       },
     };
@@ -170,5 +184,94 @@ describe("SC-2714: a pass that did not complete is UNMEASURED, never zero", () =
     }, "o", "n", NOW);
     expect(quiet).not.toBeNull();
     expect(failed).toBeNull();
+  });
+});
+
+describe("SC-2717: a page whose pageInfo cannot be read is UNMEASURED, not the last page", () => {
+  // ai-review on #1793. `page.pageInfo?.hasNextPage` ended the loop for a
+  // malformed page and returned a CONFIDENT partial count — silent
+  // truncation reported as a measurement, and inconsistent with the line
+  // above where a missing `nodes` throws into the catch.
+  test("a page carrying nodes but no pageInfo refuses", async () => {
+    const { gql } = fake([
+      { nodes: [{ stateReason: "COMPLETED", closedAt: daysAgo(1) }], pageInfo: undefined },
+    ]);
+    expect(
+      await measureThroughput(gql, "o", "n", NOW),
+      "ending the loop here returns 1 delivered from a page that may have had a thousand more",
+    ).toBeNull();
+  });
+
+  test("a pageInfo whose hasNextPage is not a boolean refuses", async () => {
+    const { gql } = fake([{ nodes: [], pageInfo: { hasNextPage: "yes", endCursor: "c1" } }]);
+    expect(await measureThroughput(gql, "o", "n", NOW)).toBeNull();
+  });
+
+  // The cursor half. `hasNextPage: true` with no usable cursor would loop
+  // forever or re-request page one; refusing is the only honest answer.
+  test("a page that says there is more and gives no cursor refuses", async () => {
+    const { gql } = fake([{ nodes: [], pageInfo: { hasNextPage: true, endCursor: null } }]);
+    expect(await measureThroughput(gql, "o", "n", NOW)).toBeNull();
+  });
+
+  // The control: a well-formed terminal page must still be a reading, or
+  // the three cases above are just "everything refuses".
+  test("a well-formed last page is a reading, not a refusal", async () => {
+    const { gql } = fake([{ nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }]);
+    expect(await measureThroughput(gql, "o", "n", NOW)).toEqual({ delivered: 0, days: 14 });
+  });
+});
+
+describe("SC-2718: one pass answers both readings", () => {
+  test("cancellations and delivery come from the same pass", async () => {
+    const { gql, asked } = fake([
+      {
+        nodes: [
+          { stateReason: "COMPLETED", closedAt: daysAgo(1) },
+          { stateReason: "NOT_PLANNED", closedAt: daysAgo(1) },
+          { stateReason: "DUPLICATE", closedAt: daysAgo(900) },
+        ],
+      },
+    ]);
+    expect(await measureClosedIssues(gql, "o", "n", NOW)).toEqual({
+      throughput: { delivered: 1, days: 14 },
+      cancelled: 2,
+    });
+    expect(asked.length, "two passes over every closed issue is the cost ai-review flagged").toBe(1);
+  });
+
+  // Both reasons, because the spec's condition is both. Counting only
+  // `not_planned` turns a Cancelled lane short by every duplicate into one
+  // that reads OK.
+  test("a duplicate closure is a cancellation", async () => {
+    const { gql } = fake([{ nodes: [{ stateReason: "DUPLICATE", closedAt: daysAgo(1) }] }]);
+    expect((await measureClosedIssues(gql, "o", "n", NOW))?.cancelled).toBe(1);
+  });
+
+  // The window applies to delivery and NOT to cancellations: one is a
+  // rate, the other is the Cancelled lane's denominator over all time.
+  test("cancellations are counted over all time, delivery only inside the window", async () => {
+    const { gql } = fake([
+      {
+        nodes: [
+          { stateReason: "NOT_PLANNED", closedAt: daysAgo(900) },
+          { stateReason: "COMPLETED", closedAt: daysAgo(900) },
+        ],
+      },
+    ]);
+    expect(await measureClosedIssues(gql, "o", "n", NOW)).toEqual({
+      throughput: { delivered: 0, days: 14 },
+      cancelled: 1,
+    });
+  });
+
+  test("a failed pass gives neither reading, rather than one of them", async () => {
+    const boom = async () => {
+      throw new Error("502");
+    };
+    expect(
+      await measureClosedIssues(boom, "o", "n", NOW),
+      "two separate nulls invite a caller to believe one of them",
+    ).toBeNull();
   });
 });

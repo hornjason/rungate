@@ -2,7 +2,7 @@
  * What Ready holds, in one place — read by the writer AND by the health
  * reading, so the two cannot disagree.
  *
- * Covers SC-2710, SC-2711, SC-2712, SC-2715, SC-2716 (specs/BOARD-FLOW-SPEC.md).
+ * Covers SC-2710, SC-2711, SC-2712, SC-2715, SC-2716, SC-2719 (specs/BOARD-FLOW-SPEC.md).
  *
  * ## Why this file exists at all
  *
@@ -168,4 +168,23 @@ export function selectReady<T extends Rankable>(
       `Ready holds ${occupied} of its cap of ${cap}, so ${slots} slot(s) are free; ` +
       `${eligible.length} eligible, promoting ${promote.length} in phase then age order`,
   };
+}
+
+/**
+ * Why an eligible issue did not move.
+ *
+ * **Two causes, two sentences.** The writer printed "Ready is at its
+ * depth" for every eligible issue it held back, including when the depth
+ * was never read — so a run that measured nothing told the reader the lane
+ * was full, one line below its own UNMEASURED warning. ai-review found it
+ * on #1793 and it is the same defect in miniature as the lane health row
+ * that blamed the board: a reading that names the wrong cause sends the
+ * next person to the wrong place.
+ *
+ * It lives here rather than inline in the script so a case can hold it.
+ */
+export function heldReason(cap: number | null): string {
+  return cap === null
+    ? "Ready's depth could not be measured, so nothing was promoted"
+    : "Ready is at its depth";
 }

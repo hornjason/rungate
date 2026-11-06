@@ -22,8 +22,8 @@ import {
   type Dependent,
 } from "../lib/board-ready-fanout";
 import { phaseOf, openFrontier } from "../lib/board-mirror";
-import { readyCap, selectReady } from "../lib/board-ready-rule";
-import { measureThroughput } from "../lib/board-throughput";
+import { heldReason, readyCap, selectReady } from "../lib/board-ready-rule";
+import { measureClosedIssues } from "../lib/board-throughput";
 
 /**
  * Every refusal leaves through this one constant, so a mutant copy with it
@@ -369,11 +369,12 @@ async function main(): Promise<number> {
     );
     return EXIT_REFUSED;
   }
-  const throughput = await measureThroughput(
+  const closedReadings = await measureClosedIssues(
     (query, variables) => gql(token, query, variables),
     owner,
     name,
   );
+  const throughput = closedReadings?.throughput ?? null;
   const cap = throughput === null ? null : readyCap(throughput);
   const phaseOfNumber = new Map(dependents.map(d => [d.number, d.phase]));
   const eligible = decisions
@@ -393,7 +394,7 @@ async function main(): Promise<number> {
   // decider.
   for (const dec of eligible) {
     if (!selection.promote.includes(dec)) {
-      console.log(`  #${dec.number} eligible but held: Ready is at its depth`);
+      console.log(`  #${dec.number} eligible but held: ${heldReason(cap)}`);
     }
   }
 

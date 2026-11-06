@@ -1,5 +1,5 @@
 /**
- * Covers SC-2710, SC-2711, SC-2712, SC-2715, SC-2716 (specs/BOARD-FLOW-SPEC.md).
+ * Covers SC-2710, SC-2711, SC-2712, SC-2715, SC-2716, SC-2719 (specs/BOARD-FLOW-SPEC.md).
  *
  * ## The mutation battery, predicted before it was run
  *
@@ -39,6 +39,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   READY_TOLERANCE_DAYS,
+  heldReason,
   readyCap,
   readyOrder,
   readyTarget,
@@ -187,5 +188,27 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
       // returns null for an unreadable cap, which the case above covers.
       ).toBe(readyTarget(eligible, 4)!);
     }
+  });
+});
+
+describe("SC-2719: a held issue is told WHY it was held", () => {
+  // ai-review on #1793: every eligible issue was told "Ready is at its
+  // depth", including on a run where the depth was never read — one line
+  // below the run's own UNMEASURED warning.
+  test("an unmeasured depth does not claim the lane is full", () => {
+    expect(heldReason(null)).toContain("could not be measured");
+    expect(
+      heldReason(null),
+      "a reading that names the wrong cause sends the next person to the wrong place",
+    ).not.toContain("at its depth");
+  });
+
+  test("a measured depth does say the lane is full", () => {
+    expect(heldReason(4)).toContain("at its depth");
+  });
+
+  // Zero is a real cap, not a missing one, and the two must not collapse.
+  test("a depth of zero is a full lane, not an unread one", () => {
+    expect(heldReason(0)).toContain("at its depth");
   });
 });
