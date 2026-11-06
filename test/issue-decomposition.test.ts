@@ -1280,11 +1280,31 @@ describe.skipIf(process.env[MUTANT_GUARD] === "1")(
         writeFileSync(mutantSuite, text);
 
         // ── run it ─────────────────────────────────────────────────────────
+        // **Both timeouts, and the pair is the point.** `bunfig.toml` sets
+        // `[test] timeout = 5000` and bun enforces it, so a nested run — a
+        // second bun process, TypeScript loading, and this suite's own cases
+        // including several that touch the filesystem — is killed on a loaded
+        // runner and reported FAILED whatever the mutant did. That is a
+        // correct harness reported as a wrong one: the "unmeasured read as
+        // measured" shape this file's header warns about, arriving through
+        // the clock. It takes ~300ms here, which is exactly why no local run
+        // would ever show it. The repo's other nested spawns all pair a
+        // `spawnSync` timeout with a `test(..., N)` override above it —
+        // test/phase-0-collection-stability.test.ts is 170_000 and 180_000.
+        // Found by the AI review of #1831, twice.
         const r = spawnSync("bun", ["test", mutantSuite], {
           cwd: root,
           encoding: "utf-8",
+          timeout: 60_000,
           env: { ...process.env, [MUTANT_GUARD]: "1" },
         });
+        // A killed spawn leaves empty output, which `readSuiteRun` reports
+        // UNMEASURED — but it would name the output rather than the clock,
+        // so say which happened here.
+        expect(
+          r.signal,
+          `the mutant run was killed after 60s, so nothing it would have said was read`,
+        ).toBeNull();
         const run = readSuiteRun(`${r.stdout ?? ""}\n${r.stderr ?? ""}`);
         // UNMEASURED first. A mutant that did not load and a mutant that
         // passed everything are the same zero on the channel being watched.
@@ -1325,6 +1345,9 @@ describe.skipIf(process.env[MUTANT_GUARD] === "1")(
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-    });
+      // Above the spawn's own 60s, so a nested run that hangs is killed by
+      // the spawn — which this case REPORTS — rather than by the outer
+      // runner, which would report a timeout naming nothing.
+    }, 90_000);
   },
 );
