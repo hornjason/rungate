@@ -38,7 +38,7 @@ import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
-import { readyCap, selectReady } from "../lib/board-ready-rule";
+import { heldReason, readyCap, selectReady } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
 import {
   criterionIdsIn,
@@ -183,6 +183,18 @@ export async function main(argv: string[]): Promise<number> {
     return REFUSAL_EXIT;
   }
   const { values } = parsed;
+  // **`split("/")[1]` is `undefined` for `--repo rungate`, and the `!`
+  // only silences the type checker.** That `undefined` reaches
+  // `measureClosedIssues` and surfaces as an opaque GraphQL error far
+  // from the typo that caused it. Validated here, where the message can
+  // name the flag. ai-review on #1795.
+  if (values.repo !== undefined) {
+    const parts = values.repo.split("/");
+    if (parts.length !== 2 || parts[0] === "" || parts[1] === "") {
+      console.error(`board-mirror: --repo must be owner/name, got "${values.repo}"\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+  }
   if (!values.project) {
     console.error(`board-mirror: --project is required\n\n${USAGE}`);
     return REFUSAL_EXIT;
@@ -364,7 +376,13 @@ export async function main(argv: string[]): Promise<number> {
         );
       }
       for (const c of heldByCap) {
-        console.log(`    #${c.item.number} eligible but held: Ready is at its depth`);
+        // `heldReason(cap)`, never a literal. The literal was the exact
+        // defect ai-review found in `scripts/board-ready.ts` on #1794 —
+        // an unmeasured depth reported as a full lane — and I wrote it
+        // fresh here one pull request later, with the fix exported and
+        // in the tree. `test/board-ready-rule.test.ts` now refuses the
+        // string anywhere but its own binding.
+        console.log(`    #${c.item.number} eligible but held: ${heldReason(cap)}`);
       }
       for (const c of readyWritable) {
         console.log(`    #${c.item.number}  ${c.item.status || "(none)"} -> ${c.to}  (${c.item.milestone || "no milestone"}; ${c.item.blockedByOpen} open of ${c.item.blockedByTotal} blockers, ${c.item.assignees} assignee(s))`);

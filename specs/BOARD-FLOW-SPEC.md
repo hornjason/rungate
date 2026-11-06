@@ -427,6 +427,20 @@ would pin a claimed or newly-blocked card in the lane for as long as the
 lane stayed full, so the cap would start preserving exactly the staleness
 it exists to prevent.
 
+**The same defect was written three times, and the third was after the
+fix shipped.** ai-review found a hardcoded "Ready is at its depth" in
+`scripts/board-ready.ts` on #1794 — an unmeasured depth reported as a
+full lane. `heldReason` was created, exported and merged. One pull
+request later the literal was typed fresh into the sibling script and
+ai-review found it again. A case per script catches only the script that
+has one, so the string is now a population check: it may appear in its
+own binding and nowhere else in `lib/` or `scripts/`.
+
+This is the third class in this area to need that treatment, after the
+cursor advance and the two Ready definitions. The pattern is consistent
+enough to state plainly: **in this codebase, fixing an instance reliably
+leaves siblings, and only a check over the population closes it.**
+
 Still open, and the last piece: `isReady` keeps the phase gate. With both
 writers now bounded, dropping it no longer reproduces the 36-of-46
 reading, so it is next rather than blocked.
@@ -628,6 +642,10 @@ second: flow efficiency is the one metric this spec must not promise.**
       needs: test
       proved-by:
 - [ ] SC-2722: both callers of the Ready rule fill to the same depth, and only entry is capped
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2723: no site spells a held reason for itself
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
