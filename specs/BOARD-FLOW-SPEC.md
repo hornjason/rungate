@@ -365,6 +365,28 @@ rather than guesses when a card's field values were read only in part — a
 Status on page two and no Status at all produce the same `undefined`, and
 an undercount promotes past the cap.
 
+### Every pager reads one decider, because three variants of one bug were not enough
+
+`lib/graphql-cursor.ts`. Every GraphQL pager here spelled
+`c = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null`, and every
+one of them **ends the loop and returns a confident partial reading** for
+three malformed pages: a `pageInfo` that is absent, one that exists
+without `hasNextPage`, and one whose `endCursor` is `""`. The last is the
+nastiest — an empty string passes a `typeof` check and is then falsy, so a
+guard that reads correctly admits the value it was written to exclude.
+
+All three were found on one file, one at a time, across #1793 and #1794,
+while four sibling pagers held all three. The siblings were found by
+ai-review rather than by anything in the repository. A behavioural case per
+site catches only the last one to regress, so the property is asserted over
+the population: `test/graphql-cursor.test.ts` fails the build when a file
+in `lib/` or `scripts/` advances a cursor itself.
+
+Three sites outside this work still do — `lib/live-issues.ts`,
+`scripts/board-mirror.ts`, `scripts/board-status-sweep.ts`. They are an
+**equality** ratchet rather than an allowlist: a file leaving the list
+fails as loudly as one joining it.
+
 ### The cap can be overshot by concurrent runs, and is not locked
 
 ai-review, #1793, and it is real. Occupancy is read once per run and there
@@ -571,6 +593,14 @@ second: flow efficiency is the one metric this spec must not promise.**
       needs: test
       proved-by:
 - [ ] SC-2719: a held issue is told which of the two causes held it
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2720: a page that cannot say whether more exist is UNREADABLE, never done
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by:
+- [ ] SC-2721: no pager decides for itself that a page it could not read was the last
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by:
