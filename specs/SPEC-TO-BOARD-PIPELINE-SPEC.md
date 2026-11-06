@@ -92,8 +92,10 @@ different facts and only one is actionable — *Silent Default Substitution*,
 
 - [x] SC-2608: lib/issue-repair.ts contains [CRITERIA_HEADING] — a created issue and a repaired one name their criterion under ONE heading, or an inventory reading sees half the population and reports the other half as uncovered
       proved-by: test/plan-issues.test.ts — 33 pass, 0 fail, 2026-11-02; CRITERIA_HEADING is the one heading both paths write
-- [ ] SC-2609: lib/board-mirror.ts contains [NAMES_NONE] — "this issue serves no criterion" is spelled, never left as an empty cell: a blank reads as *not yet filled in*, *the tool could not tell* and *deliberately none* at once, and 28 cells on the live board were blank for this reason on 2026-10-29
-- [ ] SC-2610: lib/board-mirror.ts contains [every spec] — the mirror reads every spec in `specs/`, not one named on the command line, because a board built from one spec reports every criterion of the other 25 as having no issue
+- [x] SC-2609: lib/board-mirror.ts contains [NAMES_NONE] — "this issue serves no criterion" is spelled, never left as an empty cell: a blank reads as *not yet filled in*, *the tool could not tell* and *deliberately none* at once, and 28 cells on the live board were blank for this reason on 2026-10-29
+      proved-by: test/board-mirror.test.ts "SC-2609: no criteria is SPELLED, and a cell nobody wrote stays blank" — 64 pass, 0 fail, 2026-11-06; the constant was `""` and a shipped case asserted it, so this criterion and the suite disagreed (#1716). Two mutants: blanking the constant reddens 2 cases, predicted and observed the same 2; making `mirrorText` return it for every input reddens 5, predicted and observed the same 5. Two assertions are anchored on the empty-string LITERAL, because `toBe(NAMES_NONE)` moves with any mutation of it
+- [x] SC-2610: lib/board-mirror.ts contains [specCriteriaIn] — the mirror reads every spec in `specs/`, not one named on the command line, because a board built from one spec reports every criterion of the other 25 as having no issue
+      proved-by: test/board-mirror.test.ts "SC-2610: every spec contributes, not the one on the command line" — 64 pass, 0 fail, 2026-11-06; the token was [every spec] and it matched a header comment, so the criterion named nothing a mutation could move. `specCriteriaIn` is the sweep the default path calls, and `mirrorText` returning a constant for every input reddens one of this describe's cases (#1716)
 
 ### The gaps the board has to make visible
 
