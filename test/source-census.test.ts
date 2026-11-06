@@ -7,14 +7,17 @@
  *   the directory descent removed             planted-file, depth   2
  *   topLevelOnly ignored (always recurse)     the declared-narrow   1
  *   the extension filter dropped              the extension case    1
+ *   the ENOENT narrowing widened to `catch`   the non-ENOENT case   ?
  *
  * The first row is the one that matters: it is the live defect, restored.
+ * The last row is ai-review round 1 of #1803 — the same silent-shrink
+ * defect, in the module written to remove it.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { sourceFiles } from "../lib/source-census";
+import { ABSENT_DIRECTORY, sourceFiles } from "../lib/source-census";
 
 describe("SC-2732: the population includes files in subdirectories", () => {
   let root: string;
@@ -86,6 +89,35 @@ describe("SC-2732: the population includes files in subdirectories", () => {
         "lib/nested/mid.ts",
         "lib/top.ts",
       ]);
+    } finally {
+      teardown();
+    }
+  });
+
+  // **The other direction, and the control for the case above.** ai-review
+  // round 1 of #1803: the catch was bare, so EACCES, EMFILE and a `dirs`
+  // entry that is a file all read as "this directory is empty" and shrank
+  // the population in silence — the fail-open shape in
+  // `.claude/rules/checks-must-be-able-to-fail.md`, inside the module
+  // written to remove a silent-shrink defect.
+  //
+  // ENOTDIR is used because it is plantable without mocking: `readdirSync`
+  // on a regular file raises it. The error's `code` is asserted so a throw
+  // for some unrelated reason cannot stand in for the refusal.
+  test("a read error that is not ENOENT propagates, rather than reading as empty", () => {
+    const r = setup();
+    try {
+      let code: string | undefined;
+      expect(() => {
+        try {
+          sourceFiles(r, ["lib/top.ts"]);
+        } catch (e) {
+          code = (e as NodeJS.ErrnoException).code;
+          throw e;
+        }
+      }, "a non-ENOENT read error was absorbed, so a short population reads as a clean one").toThrow();
+      expect(code, "it threw, but not from the read this case is about").toBe("ENOTDIR");
+      expect(ABSENT_DIRECTORY, "widening this absorbs every read error again").toBe("ENOENT");
     } finally {
       teardown();
     }

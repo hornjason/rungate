@@ -42,6 +42,12 @@
 import { readdirSync } from "fs";
 import { join } from "path";
 
+/**
+ * The only read error `sourceFiles` absorbs. One exported site, so a
+ * mutation can widen it and a case can observe that it did.
+ */
+export const ABSENT_DIRECTORY = "ENOENT";
+
 export interface SourceCensusOptions {
   /** File extension to keep, with the dot. */
   readonly ext?: string;
@@ -60,9 +66,18 @@ export interface SourceCensusOptions {
 /**
  * Every source file under `dirs`, repo-relative, sorted.
  *
- * Directories that do not exist are skipped rather than thrown on: a census
- * naming a directory the tree has not got should fail on its own empty
- * population, with its own message, not on an ENOENT from here.
+ * A directory that does not **exist** is skipped rather than thrown on: a
+ * census naming a directory the tree has not got should fail on its own
+ * empty population, with its own message, not on an `ENOENT` from here.
+ *
+ * **Every other read error is rethrown**, and the narrowness is the whole
+ * point. A bare `catch { return; }` here is the fail-open shape in
+ * `.claude/rules/checks-must-be-able-to-fail.md` — an `EACCES`, an `EMFILE`
+ * part-way through a large walk, or a `dirs` entry that is a file rather
+ * than a directory would shrink the population with no signal, and a short
+ * population is indistinguishable from a clean one to every caller. Worse
+ * now than before the fix: this is the single binding all of them read, so
+ * one absorbed error goes quiet across every census at once.
  */
 export function sourceFiles(
   root: string,
@@ -75,7 +90,8 @@ export function sourceFiles(
     let entries;
     try {
       entries = readdirSync(join(root, rel), { withFileTypes: true });
-    } catch {
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== ABSENT_DIRECTORY) throw e;
       return;
     }
     for (const e of entries) {
