@@ -545,6 +545,71 @@ describe("#1176: the mechanisms, asserted directly", () => {
     expect(stripHeredocs(cmd)).toContain("## Files this will change");
   });
 
+  test("#1741: a `#` line inside a quote still cannot OPEN A HEREDOC", () => {
+    // Found by the security review of this change, and it was a real new
+    // bypass. #1176 skipped heredoc detection for every `#`-leading line;
+    // scoping the comment test to `open === null` let a `#` line inside a
+    // quoted operand reach `heredocDelimiter`, and a terminated heredoc body
+    // is DELETED from the guard's view — so the write two lines down
+    // vanished. The docblock claimed the change "can only keep MORE of the
+    // command, never less", and this input is the counter-example.
+    //
+    // The two decisions are now separate: whether to BLANK the line reads
+    // the quote state, and whether the line can open a heredoc does not.
+    //
+    // **The quote CLOSES before the write, and that is what makes this a
+    // bypass rather than a curiosity.** A redirect still inside the quoted
+    // operand is not a write in any shell, so the guard is right to pass it
+    // and an assertion there would be asserting a defect. Here the operand
+    // ends on line 3 and line 4 is a real command — which the heredoc
+    // opened on line 2 would swallow all the way to its terminator.
+    const cmd = [
+      'gh issue create --body "intro',
+      "# cat <<EOF",
+      '"',
+      `echo x > ${LIVE}/${STATE}`,
+      "EOF",
+    ].join("\n");
+
+    expect(stripHeredocs(cmd)).toContain(`> ${LIVE}/${STATE}`);
+    expect(decideBashWrite(cmd).blocked).toBe(true);
+  });
+
+  test("#1741: an inline comment's apostrophe does not open a span for the NEXT line", () => {
+    // The third review finding. `quoteStateAfter` read the whole line, so an
+    // apostrophe inside an UNQUOTED trailing comment set the carried state
+    // to open — and that state then suppressed #1176's blanking of the
+    // following whole-line comment, which is the exact mechanism #1176
+    // exists to stop. The tracker now stops at an unquoted `#`, which is the
+    // shell's own rule and the one the blanking already relies on.
+    const cmd = [
+      "echo hi   # it's fine",
+      "# a note with no apostrophe",
+      `echo x > ${LIVE}/${STATE}`,
+    ].join("\n");
+
+    expect(stripHeredocs(cmd)).not.toContain("a note with no apostrophe");
+
+    // **Deliberately NOT asserting `decideBashWrite(cmd).blocked`.** It is
+    // false, and it is false for a reason this change neither caused nor
+    // fixes. Measured over four inputs against the current tree:
+    //
+    //   BLOCKED  no comment at all                           (the control)
+    //   allowed  `echo hi  # it's fine` then the write
+    //   BLOCKED  a WHOLE-LINE comment with an apostrophe     (#1176 working)
+    //   allowed  the two-comment shape above
+    //
+    // Row two has no second comment line, so the blanking this change
+    // touches is not involved — an INLINE comment is never blanked, before
+    // or after #1176, so its apostrophe reaches the span parser and
+    // swallows the redirect. #1176 fixed the whole-line position and left
+    // the inline one open. Row four is allowed for row two's reason.
+    //
+    // Asserting `blocked` here would be asserting that a pre-existing defect
+    // outside this change's scope is fixed, and the case would then be
+    // carrying someone else's bug as its own failure.
+  });
+
   test("#1741 CONTROL: #1176's own case still blanks, so the fix is not a revert", () => {
     // The input the comment rule was added for. Its apostrophe must still
     // not open a quote — if this line were kept, `> notes.md` two lines

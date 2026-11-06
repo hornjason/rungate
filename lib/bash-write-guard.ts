@@ -811,6 +811,24 @@ export function stripQuoted(s: string): string {
  * shell's rule and the one thing a naive counter gets wrong — `echo \"` opens
  * nothing. Inside single quotes nothing escapes, not even a backslash.
  *
+ * **It stops at an unquoted `#`, and that is a safety property rather than
+ * fidelity.** The rest of such a line is a comment, so its apostrophes are
+ * prose — which is the whole of #1176, applied here instead of one line
+ * later. Without it, `echo hi  # it's fine` carried an open single quote to
+ * the next line, and that carried state SUPPRESSED the blanking of a
+ * following whole-line comment: #1176's own defect, reintroduced through
+ * its own fix. Found by this change's security review.
+ *
+ * **Known gap, stated rather than papered over: `$(…)` and backticks.** A
+ * command substitution resets quoting inside itself and this tracker does
+ * not model that, so a line mixing one with an unbalanced quote can leave
+ * the state wrong. It is bounded by what the state is USED for — the single
+ * decision of whether to blank a `#`-leading line — and by the direction:
+ * a wrong `open` keeps a comment line that #1176 would have dropped, which
+ * is the pre-#1176 behaviour rather than something new. Widening it means
+ * reusing the `unquotedSpans` stack, which answers a different question and
+ * is a change to #1176's own mechanism, not to this one.
+ *
  * Deliberately NOT a general quote parser and not shared with
  * `unquotedSpans`: that one answers *which positions on this line are
  * unquoted* for a line read in isolation, and this one answers *what is still
@@ -826,6 +844,10 @@ function quoteStateAfter(line: string, open: '"' | "'" | null): '"' | "'" | null
       i++;
       continue;
     }
+    // The shell's own comment rule: `#` starts one only at the start of a
+    // word and only outside quotes. `tokenize` in lib/issue-create-override.ts
+    // reads it the same way.
+    if (q === null && c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return null;
     if (q === null && (c === '"' || c === "'")) q = c;
     else if (q === c) q = null;
   }
@@ -847,19 +869,32 @@ export function stripHeredocs(s: string): string {
     // genuine writes. Dropped here rather than in each caller because every
     // arm reaches this function first.
     //
-    // **#1741: only when no quote is already open.** `#` is ordinary inside
-    // quotes — that is the shell's own rule, and it is the same rule #1176
-    // relies on from the other side. Without the condition, a multi-line
-    // `gh issue create --body "…"` reached the filing gate with every `##`
-    // markdown heading DELETED, so the dedupe and the symptom scan read a
-    // body with holes and nothing reported the loss. It can only make this
-    // function keep MORE of the command, never less, which is the direction
-    // a guard is allowed to be wrong in.
-    const isComment = open === null && /^\s*#/.test(line);
+    // **#1741 BLANKS only when no quote is already open.** `#` is ordinary
+    // inside quotes — that is the shell's own rule, and it is the same rule
+    // #1176 relies on from the other side. Without the condition, a
+    // multi-line `gh issue create --body "…"` reached the filing gate with
+    // every `##` markdown heading DELETED, so the dedupe and the symptom
+    // scan read a body with holes and nothing reported the loss.
+    //
+    // **The two decisions are SEPARATE, and conflating them was a bypass.**
+    // An earlier revision of this change wrote one `isComment` and used it
+    // for both, which let a `#` line inside a quoted operand reach
+    // `heredocDelimiter` — and a terminated heredoc body is deleted from
+    // everything downstream, so `"intro⏎# cat <<EOF⏎echo x > …settings.json⏎EOF"`
+    // hid a real write. That revision's docblock asserted it "can only keep
+    // MORE of the command, never less"; the input above is the
+    // counter-example, found by this change's security review and now held
+    // by a case in `test/bash-write-guard.test.ts`.
+    //
+    // So: BLANKING reads the quote state, and HEREDOC EXEMPTION does not.
+    // A `#`-leading line has never been able to open a heredoc here and
+    // still cannot, quoted or not.
+    const looksComment = /^\s*#/.test(line);
+    const isComment = open === null && looksComment;
     if (!isComment) open = quoteStateAfter(line, open);
     out.push(isComment ? '' : line); // #1176: the OPERATOR's line is kept — see below.
     i++;
-    if (isComment) continue; // a comment cannot open a heredoc
+    if (looksComment) continue; // a `#` line cannot open a heredoc, quoted or not
     const delim = heredocDelimiter(line);
     if (!delim) continue;
     // #1184: buffer the body rather than consuming to end-of-input. A
