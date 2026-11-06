@@ -8,6 +8,21 @@
  *   the window test dropped (every closure counts)      3          2
  *   the catch returns {delivered:0} instead of null     2          1
  *   the unresolvable-page guard dropped                 0          1
+ *   the hasNextPage type guard dropped                  1          2
+ *   the endCursor guard dropped                         1          1
+ *   DUPLICATE dropped from the cancelled count          2          3
+ *
+ * **The hasNextPage guard read ZERO on its first battery and that was a
+ * wrong case, not a wrong guard.** The case planted `pageInfo: undefined`,
+ * which throws one line later and is converted by the catch — green on a
+ * mechanism it was not pointed at, the same shape as the dead guard
+ * removed one commit earlier. Repointed at `pageInfo: {}`, which is what
+ * actually falls through silently, and the mutant reads 1.
+ *
+ * It reads 1 rather than the 2 predicted because the string case
+ * (`hasNextPage: "no"`) is caught by the CURSOR guard instead. Both guards
+ * refuse it; only one of them is the reason, which is worth knowing and
+ * is not a gap.
  *
  * **Three of four predictions were wrong, and the fourth is the finding.**
  * The three misses are all the same error — I predicted a TOTAL instead of
@@ -192,9 +207,16 @@ describe("SC-2717: a page whose pageInfo cannot be read is UNMEASURED, not the l
   // malformed page and returned a CONFIDENT partial count — silent
   // truncation reported as a measurement, and inconsistent with the line
   // above where a missing `nodes` throws into the catch.
-  test("a page carrying nodes but no pageInfo refuses", async () => {
+  // **A pageInfo OBJECT that lacks the field, not an absent pageInfo**, and
+  // the battery is why. The first version of this case planted
+  // `pageInfo: undefined`, which throws one line later and is converted by
+  // the catch — so the mutant that removed the guard read ZERO and the
+  // case was green on a mechanism it was not pointed at. `{}` is the shape
+  // that falls through silently: `undefined && …` is false, the loop ends,
+  // and a partial count is returned as a confident reading.
+  test("a pageInfo object with no hasNextPage refuses, rather than ending the loop", async () => {
     const { gql } = fake([
-      { nodes: [{ stateReason: "COMPLETED", closedAt: daysAgo(1) }], pageInfo: undefined },
+      { nodes: [{ stateReason: "COMPLETED", closedAt: daysAgo(1) }], pageInfo: {} },
     ]);
     expect(
       await measureThroughput(gql, "o", "n", NOW),
@@ -202,8 +224,15 @@ describe("SC-2717: a page whose pageInfo cannot be read is UNMEASURED, not the l
     ).toBeNull();
   });
 
-  test("a pageInfo whose hasNextPage is not a boolean refuses", async () => {
-    const { gql } = fake([{ nodes: [], pageInfo: { hasNextPage: "yes", endCursor: "c1" } }]);
+  test("an absent pageInfo refuses too", async () => {
+    const { gql } = fake([{ nodes: [], pageInfo: undefined }]);
+    expect(await measureThroughput(gql, "o", "n", NOW)).toBeNull();
+  });
+
+  test("a hasNextPage that is a string, not a boolean, refuses", async () => {
+    const { gql } = fake([
+      { nodes: [{ stateReason: "COMPLETED", closedAt: daysAgo(1) }], pageInfo: { hasNextPage: "no" } },
+    ]);
     expect(await measureThroughput(gql, "o", "n", NOW)).toBeNull();
   });
 
