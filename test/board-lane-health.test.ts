@@ -18,7 +18,6 @@ const census = (over: Partial<LaneCensus> = {}): LaneCensus => ({
   pickable: 34,
   openAssigned: 9,
   cancelledClosed: 23,
-  offBoard: 0,
   // A FIXTURE, not a measurement. It was labelled "the live reading of
   // 2026-11-05: 237 issues delivered over 14 days, so a cap of 8" — and
   // that reading does not reproduce. Paging every closed issue with a
@@ -286,16 +285,31 @@ describe("a lane count is only a reading against what should be in it", () => {
   // asserts at the file that now holds it AND that the report routes
   // through that file. Pointing only at the report would have gone green
   // on a report that stopped counting duplicates entirely.
-  test("SC-2670: the report reads stateReason, not a qualifier that cannot see duplicates", () => {
-    const lib = readFileSync(join(import.meta.dir, "..", "lib/board-throughput.ts"), "utf-8");
-    expect(
-      lib,
-      "`reason:duplicate` and `reason:bogusvalue` both return 0, so the search qualifier " +
-        "cannot distinguish a duplicate closure from a value it does not understand",
-    ).toContain("DUPLICATE");
+  // **Pointed at the site that computes the denominator, which moved.**
+  // This asserted `lib/board-throughput.ts` contains "DUPLICATE", and that
+  // stayed true after the Cancelled denominator moved to `boardStatus()` —
+  // true because the now-unused repo-wide `cancelled` field still spells
+  // it. Deleting `|| ... === "DUPLICATE"` from the live site would have
+  // reintroduced the exact bug this guards (a lane short by every
+  // duplicate, reading OK) with the whole suite green. A guard left
+  // pointing at the old site is the third instance of this shape on this
+  // branch. ai-review round 2 of #1802.
+  test("SC-2670: the board's abandoned count reads BOTH reasons, at the site that counts", () => {
     const src = readFileSync(join(import.meta.dir, "..", "scripts/work-status.ts"), "utf-8");
-    expect(src, "the report must read the shared pass, not its own count").toContain(
-      "measureClosedIssues",
+    const counter = src.slice(src.indexOf("async function boardStatus"), src.indexOf("abandonedOnBoard }"));
+    expect(counter, "boardStatus() is where the Cancelled denominator is computed").not.toBe("");
+    for (const reason of ["NOT_PLANNED", "DUPLICATE"]) {
+      expect(
+        counter,
+        `the lane's entry condition is both reasons, and dropping ${reason} makes a lane ` +
+          `short by every one of them read OK`,
+      ).toContain(reason);
+    }
+    // The search qualifier this replaced could not tell a duplicate from a
+    // value the index does not understand: `reason:duplicate` and
+    // `reason:bogusvalue` both returned 0, measured with that control.
+    expect(counter, "a qualifier cannot distinguish an unknown reason from a true zero").toContain(
+      "stateReason",
     );
   });
 
@@ -331,7 +345,7 @@ describe("a lane count is only a reading against what should be in it", () => {
   test("SC-2670: every lane the board uses appears in the report, in flow order", () => {
     const rs = laneHealth(census());
     expect(rs.map(r => r.lane)).toEqual([...LANES]);
-    const lines = laneHealthLines(rs);
+    const lines = laneHealthLines(rs, 0);
     // Lanes, then the membership line, which belongs to no lane.
     expect(lines.length).toBe(LANES.length + 1);
     for (const lane of LANES) {
@@ -347,7 +361,7 @@ describe("a lane count is only a reading against what should be in it", () => {
   // work is queued; the eligible count alone is what used to be printed and
   // is what made the row read `SHORT by 30` forever.
   test("SC-2670: the printed line carries the denominator and the reason", () => {
-    const line = laneHealthLines([by(census(), "Ready")])[0]!;
+    const line = laneHealthLines([by(census(), "Ready")], 0)[0]!;
     // `"of 8"` is NOT enough and the mutation battery proved it: the label
     // itself says "a depth of 8", so dropping the `Math.min` in
     // `readyTarget` left this row green against a denominator of 34. The

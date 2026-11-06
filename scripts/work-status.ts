@@ -516,7 +516,6 @@ const laneReadings = laneHealth({
   openAssigned: open.filter(
     (i: any) => !i.pull_request && (i.assignees ?? []).length > 0 && status.has(i.number),
   ).length,
-  offBoard: offBoardCount,
   cancelledClosed,
   throughput,
   complete: !truncated && status.size > 0,

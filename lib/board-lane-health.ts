@@ -89,15 +89,6 @@ export interface LaneCensus {
    */
   readonly pickable: number;
   /**
-   * Open issues the board does not hold at all, or `null` when unknown.
-   *
-   * **The signal the repo-wide denominators used to carry.** It is a fact
-   * about membership rather than about any lane, so it is reported on its
-   * own line instead of inflating every gap. Nothing a lane writer does
-   * can change it; what changes it is adding the issue to the board.
-   */
-  readonly offBoard: number | null;
-  /**
    * Open issues with at least one assignee **that are on this board**.
    *
    * Scoped for the same reason `cancelledClosed` is: the numerator counts
@@ -350,9 +341,25 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
  * missing from the printed output is the failure this exists to catch, and
  * it is invisible when the formatting lives inside the I/O.
  */
+/**
+ * `offBoard` is **a required parameter and not a census field**, because it
+ * was briefly both.
+ *
+ * It was declared on `LaneCensus`, documented at length, and never read —
+ * the printed line came from this parameter, and the two agreed only
+ * because one caller passed the same variable to each. A caller using the
+ * one-argument form, which the optional default allowed, would have
+ * printed `UNMEASURED` with the correct value sitting on the census it had
+ * just built. A field with no reader and a default that invents a reading,
+ * in the change written to remove exactly that. ai-review round 2 of
+ * #1802.
+ *
+ * Required, so there is no form of this call that can omit the reading;
+ * `null` has to be passed deliberately and still means UNMEASURED.
+ */
 export function laneHealthLines(
   readings: readonly LaneReading[],
-  offBoard: number | null = null,
+  offBoard: number | null,
 ): string[] {
   const lines = readings.map(r => {
     const against = r.against === null ? "" : ` of ${r.against}`;
