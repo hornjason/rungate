@@ -599,10 +599,30 @@ describe("SC-2610: every spec contributes, not the one on the command line", () 
 
 describe("#1647: the Criteria column", () => {
   describe("mirrorText carries every id", () => {
-    test("no criteria is an empty cell, not a word", () => {
-      // A cell reading "none" sorts and filters as a value. Empty is absence.
+    /**
+     * Covers SC-2609 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+     *
+     * This case asserted `NAMES_NONE === ""` until #1716, on the grounds that
+     * a word "sorts and filters as a value" and empty is absence. Absence is
+     * the defect: a blank spells *not yet filled in*, *the tool could not
+     * tell* and *deliberately none* identically, so the only reading that
+     * means the board is fine cannot be told from the two that do not.
+     */
+    test("SC-2609: no criteria is SPELLED, and a cell nobody wrote stays blank", () => {
       expect(mirrorText([])).toBe(NAMES_NONE);
-      expect(NAMES_NONE).toBe("");
+      // The whole of the criterion, in one line: a judgement is not a gap.
+      // Anchored on the literal, NOT on the constant — `toBe(NAMES_NONE)`
+      // above moves with any mutation of it and so can never come back wrong.
+      expect(NAMES_NONE).not.toBe("");
+      expect(mirrorText([])).not.toBe("");
+      expect(NAMES_NONE.trim()).toBe(NAMES_NONE);
+    });
+
+    test("SC-2609: the phrase cannot be mistaken for a criterion it names", () => {
+      // A reader scanning the column must not try to look this up. Assert on
+      // the id SHAPE rather than on two prefixes a third id class walks past.
+      expect(NAMES_NONE).not.toMatch(/[A-Z]{2,}-[A-Z]?\d/);
+      expect(mirrorText(["SC-2609"])).not.toBe(NAMES_NONE);
     });
 
     test("one id is just the id", () => {
@@ -666,8 +686,14 @@ describe("#1647: the Criteria column", () => {
     );
     expect(rows).toEqual([
       { number: 1, criteria: ["CRC-B3", "CRC-B4"], text: "CRC-B3 CRC-B4" },
-      { number: 2, criteria: [], text: "" },
+      // SC-2609: the row for an issue naming nothing carries the spelled
+      // phrase, not a blank. `criteria` stays empty — the list is the data,
+      // the cell is what a reader sees.
+      { number: 2, criteria: [], text: NAMES_NONE },
     ]);
+    // Against the literal too: the line above compares the row to the same
+    // constant the row is built from, so it survives any value of it.
+    expect(rows[1]!.text).not.toBe("");
   });
 });
 
