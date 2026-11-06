@@ -3,11 +3,24 @@
  *
  * ## The mutation battery, predicted before it was run
  *
- *   mutant                                              predicted
- *   the COMPLETED filter dropped                        2
- *   the window test dropped (every closure counts)      2
- *   the catch returns {delivered:0} instead of null     1
- *   the unresolvable-page guard dropped                 1
+ *   mutant                                            reading   predicted
+ *   the COMPLETED filter dropped                        1          2
+ *   the window test dropped (every closure counts)      3          2
+ *   the catch returns {delivered:0} instead of null     2          1
+ *   the unresolvable-page guard dropped                 0          1
+ *
+ * **Three of four predictions were wrong, and the fourth is the finding.**
+ * The three misses are all the same error — I predicted a TOTAL instead of
+ * naming the rows, so I missed that the window mutant also breaks the
+ * override case and the unparseable-date case, and that the `null` mutant
+ * breaks its own control as well as its case.
+ *
+ * Mutant 4 reading **zero** is not a weak test, it is dead code: the guard
+ * `if (!page?.nodes) return null` caught nothing the `catch` below did not
+ * already convert to the same value, so no behavioural case could ever
+ * distinguish them. The guard is gone; the case stays, because the
+ * BEHAVIOUR it asserts is still required — it was only the second decider
+ * that was redundant.
  *
  * Readings are in the PR body.
  *

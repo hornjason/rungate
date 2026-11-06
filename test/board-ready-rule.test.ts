@@ -183,7 +183,9 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
       expect(
         selectReady(items, 4, 0).promote.length,
         `with ${eligible} eligible the reading and the writer must not disagree`,
-      ).toBe(readyTarget(eligible, 4));
+      // Non-null because the cap is a literal 4 here; `readyTarget` only
+      // returns null for an unreadable cap, which the case above covers.
+      ).toBe(readyTarget(eligible, 4)!);
     }
   });
 });

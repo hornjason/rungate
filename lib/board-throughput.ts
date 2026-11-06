@@ -72,11 +72,15 @@ export async function measureThroughput(
   try {
     do {
       const d = await gql(CLOSED_ISSUES_QUERY, { o: owner, n: name, c });
+      // **No `if (!page?.nodes) return null` guard, and the mutation
+      // battery is why.** It was here, reading well and covered by a case,
+      // and removing it changed nothing: every shape it caught — a null
+      // repository, an absent node list — throws one line later and the
+      // `catch` below converts it to the same `null`. Two deciders, one
+      // answer, and no behavioural test can tell which is live
+      // (`.claude/rules/checks-must-be-able-to-fail.md`). The case that
+      // "covered" it was green on the catch.
       const page = d?.repository?.issues;
-      // A response that resolved to no page is not an empty repository.
-      // `gql` returns normally for a successful query against a node it
-      // could not resolve, so this is the only place the difference shows.
-      if (!page?.nodes) return null;
       for (const i of page.nodes) {
         if (i?.stateReason !== "COMPLETED") continue;
         const at = Date.parse(i.closedAt ?? "");
