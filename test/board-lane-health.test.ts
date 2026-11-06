@@ -298,12 +298,17 @@ describe("a lane count is only a reading against what should be in it", () => {
     const src = readFileSync(join(import.meta.dir, "..", "scripts/work-status.ts"), "utf-8");
     const counter = src.slice(src.indexOf("async function boardStatus"), src.indexOf("abandonedOnBoard }"));
     expect(counter, "boardStatus() is where the Cancelled denominator is computed").not.toBe("");
+    // **The closing quote is load-bearing.** `toContain("NOT_PLANNED")`
+    // is satisfied by `"NOT_PLANNEDX"`, so a corrupted spelling — which
+    // matches no issue and silently zeroes that half of the count — read
+    // 0 in the battery. Matching the whole comparison catches a deletion
+    // AND a typo; the first version caught only the deletion.
     for (const reason of ["NOT_PLANNED", "DUPLICATE"]) {
       expect(
         counter,
-        `the lane's entry condition is both reasons, and dropping ${reason} makes a lane ` +
-          `short by every one of them read OK`,
-      ).toContain(reason);
+        `the lane's entry condition is both reasons, and dropping or misspelling ${reason} ` +
+          `makes a lane short by every one of them read OK`,
+      ).toContain(`=== "${reason}"`);
     }
     // The search qualifier this replaced could not tell a duplicate from a
     // value the index does not understand: `reason:duplicate` and
