@@ -5543,6 +5543,50 @@ describe("the filing cap under direct-ship mode", () => {
       }
     });
 
+    // ai-review round 1 of #1805, four findings, all four of them the same
+    // root: the first cut parsed `gh api` tokens with a scanner built for
+    // `gh issue create` and never told it which flags `gh api` takes
+    // without a value. One walk per token now, with the grammar handed in.
+    //
+    // Each row is a filing that `gh` performs and the first cut did not
+    // see, so each is #1759's own hole reopened one spelling further in.
+    test("FG-204: the end-of-options marker does not become the endpoint", () => {
+      expect(
+        filingAttempts('gh api -- repos/hornjason/rungate/issues -f title="t" -f body="b"').length,
+        "`--` was read as the endpoint, so the collection never matched",
+      ).toBe(1);
+    });
+
+    test("FG-205: a boolean flag of gh api does not eat the field that follows", () => {
+      const cmd = 'gh api --silent -f title="t" -f body="b" repos/hornjason/rungate/issues';
+      const [a] = filingAttempts(cmd);
+      expect(a, "--silent was assumed to take a value, so the scan desynced").toBeDefined();
+      expect(a?.title, "and the title it skipped is what the dedupe compares").toBe("t");
+    });
+
+    test("FG-206: the last field on the LINE wins, across both spellings", () => {
+      const [a] = filingAttempts(
+        'gh api repos/hornjason/rungate/issues -F title="first" -f title="second" -f body="b"',
+      );
+      expect(
+        a?.title,
+        "gh sends the last one typed; reading all of one flag's spelling before the other inverts it",
+      ).toBe("second");
+    });
+
+    test("FG-207: a parameterised mutation resolves its variables", () => {
+      const [a] = filingAttempts(
+        "gh api graphql -f query='mutation($title: String!, $body: String!) { " +
+          'createIssue(input: {repositoryId: "R_1", title: $title, body: $body}) ' +
+          "{ issue { number } } }' -f title=\"zqxj lands nothing\" -f body=\"b\"",
+      );
+      expect(
+        a?.title,
+        "variables are the form gh's own docs recommend, and the dedupe saw an empty title",
+      ).toBe("zqxj lands nothing");
+      expect(a?.body, "and the symptom scan had nothing to read").toBe("b");
+    });
+
     // One decider, per the issue's own instruction — "teach the parser the
     // other two", not "add a second matcher". Two functions answering *is
     // this a filing* are behaviourally one: a mutation of either leaves the

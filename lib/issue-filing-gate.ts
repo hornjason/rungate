@@ -134,6 +134,7 @@ import {
   createsIssue,
   flagValues,
   graphqlDocument,
+  graphqlVariables,
   labelValues,
 } from "./issue-create-override";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
@@ -1594,25 +1595,36 @@ export function ghRepoTarget(value: string): string | null {
  * because it is in the clause and costs one more query.
  */
 /**
- * A `title: "…"` / `body: "…"` argument inside a GraphQL document.
+ * A `title:` / `body:` argument inside a GraphQL document, resolved.
  *
- * Crude on purpose: the alternative is a GraphQL parser, and what the gate
- * needs is the two strings it compares and scans. A document this cannot
- * read yields `null`, the attempt resolves empty, and the gate lands on its
- * existing "names no symbol" arm — the same place an unreadable
- * `--body-file` already lands.
+ * Two spellings, because both are ordinary. A literal — `title: "…"` — is
+ * read out of the document. A variable — `title: $title` — is looked up in
+ * the fields the clause passes alongside the query, which is the form
+ * `gh`'s own documentation recommends because it avoids escaping quotes by
+ * hand. ai-review round 1 of #1805: reading only the literal left the
+ * idiomatic form resolving to an empty title, counted as a filing and
+ * compared against nothing.
+ *
+ * Crude on purpose beyond those two: the alternative is a GraphQL parser,
+ * and what the gate needs is the two strings it compares and scans. A
+ * document this cannot read yields `null`, the attempt resolves empty, and
+ * the gate lands on its existing "names no symbol" arm — the same place an
+ * unreadable `--body-file` already lands.
  */
-function graphqlArgument(doc: string, name: string): string | null {
-  const m = new RegExp(`\\b${name}\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(doc);
-  return m === null ? null : m[1].replace(/\\(.)/g, "$1");
+function graphqlArgument(doc: string, name: string, vars: Map<string, string>): string | null {
+  const m = new RegExp(`\\b${name}\\s*:\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|\\$(\\w+))`).exec(doc);
+  if (m === null) return null;
+  if (m[2] !== undefined) return vars.get(m[2]) ?? null;
+  return m[1].replace(/\\(.)/g, "$1");
 }
 
 export function resolveFiling(tokens: string[]): FilingAttempt {
   const doc = graphqlDocument(tokens);
   if (doc !== null) {
+    const vars = graphqlVariables(tokens) ?? new Map<string, string>();
     return {
-      title: graphqlArgument(doc, "title") ?? "",
-      body: graphqlArgument(doc, "body") ?? "",
+      title: graphqlArgument(doc, "title", vars) ?? "",
+      body: graphqlArgument(doc, "body", vars) ?? "",
       labels: [],
       bodyFile: null,
       // A createIssue carries `repositoryId`, an opaque node id rather than

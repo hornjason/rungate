@@ -297,38 +297,87 @@ const API_BOOLEAN_FLAGS = new Set([
 ]);
 
 /** Flags of `gh api` whose value is a `key=value` field. */
-const API_FIELD_FLAGS = [
-  { long: "--field", short: "-f" },
-  { long: "--raw-field", short: "-F" },
-];
+const API_FIELD_FLAGS = new Set(["--field", "-f", "--raw-field", "-F"]);
 
-/** `-X`/`--method`, upper-cased, or `null` when it was not given. */
-function apiMethod(rest: string[]): string | null {
-  const [m] = flagValues(rest, { long: "--method", short: "-X" });
-  return m === undefined ? null : m.toUpperCase();
+/** A `gh api` clause, read in one walk. */
+export interface ApiCall {
+  /** The first positional token — the endpoint — or `null`. */
+  readonly endpoint: string | null;
+  /** `-X`/`--method`, upper-cased, or `null` when it was not given. */
+  readonly method: string | null;
+  /** Every `key=value` field, last on the LINE wins, as `gh` reads them. */
+  readonly fields: Map<string, string>;
+  /** Was a body supplied with `--input`? */
+  readonly hasInput: boolean;
 }
 
-/** The first positional token after `api` — the endpoint, or `null`. */
-function apiEndpoint(rest: string[]): string | null {
+/**
+ * ONE walk over a `gh api` clause's tokens.
+ *
+ * ai-review round 1 of #1805 raised four findings and all four were this
+ * function not existing. The first cut read the endpoint with its own loop
+ * and the method and fields with `flagValues`, which consults
+ * `BOOLEAN_FLAGS` — the set belonging to `gh issue create`. So
+ * `gh api --silent -f title=… repos/o/r/issues`, which files an issue,
+ * desynced: `--silent` was assumed to take a value, the scan skipped the
+ * `-f`, and the clause resolved to no fields and no method. Two scanners
+ * with two grammars over one command, and only one of them had been told
+ * which command it was reading.
+ *
+ * Reading the fields in one pass is also what makes *last wins* true. The
+ * first cut collected every `-f` and then every `-F`, so
+ * `-F title=A -f title=B` landed on `A` — the opposite of what `gh` sends.
+ *
+ * ## Two deliberate readings
+ *
+ * **`--` does not end the walk.** pflag treats it as end-of-options, so a
+ * real `gh` may well reject what follows; this skips it and keeps reading,
+ * which can only make a clause MORE likely to be seen as a filing. That is
+ * the safe direction for a gate, and `--` becoming the endpoint was a
+ * filing that walked straight through.
+ *
+ * **An unknown flag takes a value**, the same convention `BOOLEAN_FLAGS`
+ * follows: guessing that way costs a skipped token and an unrecognised
+ * filing, which is visible. Guessing the other way desyncs the scan and
+ * reads a flag's value as the endpoint — a filing recognised against the
+ * wrong URL, which is worse and quieter.
+ */
+export function apiCall(tokens: string[]): ApiCall | null {
+  const rest = afterGhSubcommand(tokens, "api");
+  if (rest === null) return null;
+  let endpoint: string | null = null;
+  let method: string | null = null;
+  let hasInput = false;
+  const fields = new Map<string, string>();
   for (let i = 0; i < rest.length; i++) {
     const t = rest[i];
-    if (!t.startsWith("-") || t === "-" || t === "--") return t;
-    if (t.includes("=")) continue; // `--flag=value` carries its own value
-    if (!API_BOOLEAN_FLAGS.has(t)) i++; // this flag eats the next token
-  }
-  return null;
-}
-
-/** Every `key=value` passed with a field flag, last-wins, as `gh` reads it. */
-export function apiFields(rest: string[]): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const q of API_FIELD_FLAGS) {
-    for (const pair of flagValues(rest, q)) {
-      const eq = pair.indexOf("=");
-      if (eq > 0) out.set(pair.slice(0, eq), pair.slice(eq + 1));
+    if (t === "--") continue;
+    if (!t.startsWith("-") || t === "-") {
+      if (endpoint === null) endpoint = t;
+      continue;
+    }
+    const eq = t.indexOf("=");
+    let name = eq === -1 ? t : t.slice(0, eq);
+    let value: string | null = eq === -1 ? null : t.slice(eq + 1);
+    // `-ftitle=x` — a short flag carrying its value attached, which pflag
+    // accepts and which `gh`'s own examples use.
+    const attached = /^-([A-Za-z])(.+)$/.exec(name);
+    if (attached !== null && !name.startsWith("--") && value === null) {
+      name = `-${attached[1]}`;
+      value = attached[2];
+    }
+    if (value === null && !API_BOOLEAN_FLAGS.has(name) && i + 1 < rest.length) {
+      value = rest[++i];
+    }
+    if (name === "--input") hasInput = true;
+    else if (name === "-X" || name === "--method") {
+      if (value !== null) method = value.toUpperCase();
+    } else if (API_FIELD_FLAGS.has(name) && value !== null) {
+      const at = value.indexOf("=");
+      if (at > 0) fields.set(value.slice(0, at), value.slice(at + 1));
     }
   }
-  return out;
+  return { endpoint, method, fields, hasInput };
 }
 
 /** The REST issues COLLECTION — `repos/<owner>/<repo>/issues`, nothing deeper. */
@@ -344,9 +393,8 @@ const ISSUES_COLLECTION = /^\/?repos\/([^/?]+)\/([^/?]+)\/issues\/?(?:\?.*)?$/;
  * a `gh issue create` with no `--repo`.
  */
 export function apiFilingRepo(tokens: string[]): string | null {
-  const rest = afterGhSubcommand(tokens, "api");
-  if (rest === null) return null;
-  const m = ISSUES_COLLECTION.exec(apiEndpoint(rest) ?? "");
+  const call = apiCall(tokens);
+  const m = call === null ? null : ISSUES_COLLECTION.exec(call.endpoint ?? "");
   return m === null ? null : `${m[1]}/${m[2]}`;
 }
 
@@ -358,10 +406,25 @@ export function apiFilingRepo(tokens: string[]): string | null {
  * thinks it means.
  */
 export function apiRestFields(tokens: string[]): Map<string, string> | null {
-  const rest = afterGhSubcommand(tokens, "api");
-  if (rest === null) return null;
-  if (!ISSUES_COLLECTION.test(apiEndpoint(rest) ?? "")) return null;
-  return apiFields(rest);
+  const call = apiCall(tokens);
+  if (call === null || !ISSUES_COLLECTION.test(call.endpoint ?? "")) return null;
+  return call.fields;
+}
+
+/**
+ * The GraphQL `query` variables this clause passes, or `null`.
+ *
+ * `gh api graphql -f query='mutation($title: String!){…}' -f title="…"` is
+ * the form `gh`'s own documentation recommends, because it avoids escaping
+ * quotes by hand. ai-review round 1 of #1805: the first cut read literals
+ * out of the document only, so the idiomatic spelling resolved to an empty
+ * title and an empty body — counted as a filing and compared against
+ * nothing, which is the one outcome worse than not counting it.
+ */
+export function graphqlVariables(tokens: string[]): Map<string, string> | null {
+  const call = apiCall(tokens);
+  if (call === null || call.endpoint !== "graphql") return null;
+  return call.fields;
 }
 
 /** The tokens after `gh <sub>`, or `null` when this clause is not that. */
@@ -382,9 +445,7 @@ const CREATE_ISSUE_MUTATION = /\bmutation\b[\s\S]*\bcreateIssue\s*\(/;
  * spells it.
  */
 export function graphqlDocument(tokens: string[]): string | null {
-  const rest = afterGhSubcommand(tokens, "api");
-  if (rest === null || apiEndpoint(rest) !== "graphql") return null;
-  return apiFields(rest).get("query") ?? null;
+  return graphqlVariables(tokens)?.get("query") ?? null;
 }
 
 /**
@@ -420,20 +481,15 @@ export function createsIssue(tokens: string[]): boolean {
       return true;
     }
   }
-  const rest = afterGhSubcommand(tokens, "api");
-  if (rest === null) return false;
-  const method = apiMethod(rest);
+  const call = apiCall(tokens);
+  if (call === null) return false;
+  const { endpoint, method, fields, hasInput } = call;
   if (method === "GET" || method === "HEAD") return false;
-  const endpoint = apiEndpoint(rest) ?? "";
   if (endpoint === "graphql") {
-    return CREATE_ISSUE_MUTATION.test(apiFields(rest).get("query") ?? "");
+    return CREATE_ISSUE_MUTATION.test(fields.get("query") ?? "");
   }
-  if (!ISSUES_COLLECTION.test(endpoint)) return false;
-  const writes =
-    apiFields(rest).size > 0 ||
-    flagValues(rest, { long: "--input", short: "--input" }).length > 0 ||
-    method === "POST";
-  return writes;
+  if (!ISSUES_COLLECTION.test(endpoint ?? "")) return false;
+  return fields.size > 0 || hasInput || method === "POST";
 }
 
 /**
