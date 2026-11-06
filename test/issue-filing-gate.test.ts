@@ -5465,4 +5465,94 @@ describe("the filing cap under direct-ship mode", () => {
       "at the direct-ship cap the first three all win",
     ).toEqual(["WON", "WON", "WON"]);
   });
+
+  // #1759. The gate saw ONE of three ways to create an issue, so two of
+  // three filings walked around it — measured by execution on 2026-11-02,
+  // not read off the source:
+  //
+  //   gh issue create …                       1
+  //   gh api repos/<o>/<r>/issues …           0
+  //   a createIssue GraphQL mutation          0
+  //
+  // Every row below probes the same way, by handing a command to the live
+  // parser. A source-text census would assert that three spellings appear
+  // somewhere, which is a different claim and a satisfiable one.
+  describe("#1759: a filing is a filing however it is spelled", () => {
+    const REST = 'gh api repos/hornjason/rungate/issues -f title="zqxj lands nothing" -f body="b"';
+    const GQL =
+      "gh api graphql -f query='mutation { createIssue(input: {repositoryId: \"R_1\", " +
+      'title: "zqxj lands nothing", body: "b"}) { issue { number } } }\'';
+
+    test("FG-199: gh api against the issues collection is a filing", () => {
+      expect(filingAttempts(REST).length, "the REST creation path is invisible to the gate").toBe(
+        1,
+      );
+    });
+
+    test("FG-200: a createIssue GraphQL mutation is a filing", () => {
+      expect(
+        filingAttempts(GQL).length,
+        "the GraphQL creation path is invisible to the gate",
+      ).toBe(1);
+    });
+
+    // **Recognising is not enough, and this is the row that says so.** The
+    // gate dedupes on the title and reads the body for symptom keys, so a
+    // path that is counted but resolves to an empty attempt refuses nothing
+    // and allows everything — it would turn the table above green while
+    // leaving the hole exactly where it was.
+    test("FG-201: the title, body and repo reach the attempt from all three paths", () => {
+      const CREATE =
+        'gh issue create --repo hornjason/rungate --title "zqxj lands nothing" --body "b"';
+      for (const [name, cmd] of [
+        ["gh issue create", CREATE],
+        ["gh api REST", REST],
+        ["GraphQL", GQL],
+      ] as const) {
+        const [a] = filingAttempts(cmd);
+        expect(a?.title, `${name}: the dedupe has no title to compare`).toBe("zqxj lands nothing");
+        expect(a?.body, `${name}: the symptom scan has no body to read`).toBe("b");
+      }
+      expect(
+        filingAttempts(REST)[0]?.repo,
+        "the REST path carries its target in the URL, and the dedupe needs it",
+      ).toBe("hornjason/rungate");
+    });
+
+    // **The controls, and they are the half that can be got wrong.** A
+    // widening that reads any `gh api` touching the word `issues` turns
+    // every list and every comment into a filing, and the gate's own
+    // refusals are themselves `gh issue comment` — so an over-wide parser
+    // makes the gate refuse the thing it tells you to do instead.
+    test("FG-202: reading issues is not filing one", () => {
+      for (const cmd of [
+        "gh api repos/hornjason/rungate/issues",
+        "gh api repos/hornjason/rungate/issues?state=open",
+        "gh api -X GET repos/hornjason/rungate/issues",
+        'gh api repos/hornjason/rungate/issues/1759/comments -f body="not a filing"',
+        "gh api graphql -f query='query { repository(owner: \"x\", name: \"y\") { issues(first: 1) { nodes { number } } } }'",
+        'gh issue comment 1759 --body "not a filing"',
+      ]) {
+        expect(filingAttempts(cmd), `this reads or comments, it does not file: ${cmd}`).toEqual([]);
+      }
+    });
+
+    // One decider, per the issue's own instruction — "teach the parser the
+    // other two", not "add a second matcher". Two functions answering *is
+    // this a filing* are behaviourally one: a mutation of either leaves the
+    // other holding every case up, and both read as covered.
+    test("FG-203: all three paths are decided in one place", () => {
+      const src = readFileSync(join(import.meta.dir, "..", "lib", "issue-create-override.ts"), "utf-8");
+      const definitions = src.match(/export function createsIssue\b/g) ?? [];
+      expect(definitions.length, "createsIssue must have exactly one definition to mutate").toBe(1);
+      const gate = readFileSync(
+        join(import.meta.dir, "..", "lib", "issue-filing-gate.ts"),
+        "utf-8",
+      );
+      expect(
+        /\bgh\s+api\b/.test(gate.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "")),
+        "the gate must not grow its own opinion about what a gh api filing is",
+      ).toBe(false);
+    });
+  });
 });
