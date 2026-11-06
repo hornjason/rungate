@@ -344,12 +344,27 @@ export function claimedImprovements(
   return out;
 }
 
-/** Improvements a retro declares outstanding — reported, never hidden. */
-export function openImprovements(stages: readonly Stage[]): { stage: string; what: string }[] {
+/**
+ * Improvements a retro declares outstanding — reported, never hidden.
+ *
+ * **The WHOLE improvement, not a two-field summary** (#1745). It used to
+ * return `{stage, what}`, and the only caller printed it to a `console.log`
+ * nobody reads — so three improvements that nothing could measure were
+ * invisible to the document every session is told to read first, while
+ * `test/stage-ladder.test.ts` scored stage ITEMS and reported the ladder
+ * healthy. That is the fail-open SUCCESS.md claim 4 names: *could not
+ * measure* reading as *nothing wrong*.
+ *
+ * `mechanism` and `issue` ride along because a reader needs both: the first
+ * says whether anybody has decided HOW, the second whether it is on the
+ * tracker at all. One function answers *what is outstanding* — a renderer
+ * that re-filtered `status === "open"` itself would be a second decider over
+ * one input, and a mutation of either would leave the other holding the case
+ * up.
+ */
+export function openImprovements(stages: readonly Stage[]): ({ stage: string } & Improvement)[] {
   return stages.flatMap(s =>
-    (s.retro?.improvements ?? [])
-      .filter(im => im.status === "open")
-      .map(im => ({ stage: s.id, what: im.what })),
+    (s.retro?.improvements ?? []).filter(im => im.status === "open").map(im => ({ stage: s.id, ...im })),
   );
 }
 

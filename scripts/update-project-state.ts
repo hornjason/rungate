@@ -15,6 +15,7 @@ import { execSync } from "child_process";
 const RENDERED_SESSIONS = 3;
 import { missingStateVerdict, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
 import { localCalendarDay } from "../lib/local-calendar-day";
+import { openImprovements, type Stage } from "../lib/stage-ladder";
 
 /**
  * The one exit code every refusal here routes through, per
@@ -78,6 +79,15 @@ interface ProjectState {
   sessions: Session[];
   /** Written every session; was never declared here and never rendered. */
   session?: CurrentSession;
+  /**
+   * The ladder. Declared here so its retros' OPEN improvements can be
+   * rendered (#1745); the shape itself is owned by `lib/stage-ladder.ts` and
+   * validated by `test/stage-ladder.test.ts`, not re-described here.
+   *
+   * Optional, because a project that has not written a ladder yet is a real
+   * state and the renderer must not refuse it.
+   */
+  stages?: Stage[];
 }
 
 function scanSpecSCStatus(): Record<string, boolean> {
@@ -206,6 +216,39 @@ function render(state: ProjectState): string {
   if (state.priorities.length > 0) {
     lines.push("**Next priorities:**");
     state.priorities.forEach((p, i) => lines.push(`${i + 1}. ${p}`));
+    lines.push("");
+  }
+
+  // Outstanding improvements (#1745)
+  //
+  // These were written into project-state.json and rendered NOWHERE. The only
+  // thing that read them printed them to a `console.log` inside a passing
+  // test, so three improvements nothing can measure were invisible in the
+  // document every session is told to read first — while the ladder reported
+  // healthy, because `test/stage-ladder.test.ts` scores stage ITEMS and an
+  // improvement is not an item. *Could not measure* reading as *nothing
+  // wrong* is SUCCESS.md claim 4 exactly.
+  //
+  // Rendered ABOVE the phases, with the priorities, because that is where a
+  // reader looks for what is outstanding. Below the phase tables it would be
+  // present and unread, which is most of the way back to where it was.
+  //
+  // `openImprovements` decides which ones are open. Re-filtering on
+  // `status === "open"` here would be a second decider over one input, and a
+  // mutation of either would leave the other holding every case up.
+  const outstanding = openImprovements(state.stages ?? []);
+  if (outstanding.length > 0) {
+    lines.push(`**Outstanding improvements (${outstanding.length}):**`);
+    lines.push("");
+    for (const im of outstanding) {
+      // The issue reference, or the absence of one SAID. An improvement with
+      // no tracker issue lives only in this file, which is the state rule 10
+      // exists to refuse — and a blank where a link belongs is
+      // indistinguishable from a link nobody noticed.
+      const where = im.issue === undefined ? "**not on the tracker**" : `#${im.issue}`;
+      lines.push(`- Stage ${im.stage} — ${im.what} (${where})`);
+      lines.push(`  - mechanism: ${im.mechanism}`);
+    }
     lines.push("");
   }
 

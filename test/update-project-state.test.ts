@@ -307,6 +307,86 @@ describe("update-project-state", () => {
     expect(run()).toContain("Issues closed: #1676");
   });
 
+  /**
+   * #1745 — the three open improvements were written into project-state.json
+   * and rendered nowhere. The only thing reading them was a `console.log`
+   * inside a passing test, so what nothing could measure was invisible in the
+   * document every session is told to read first, while the ladder reported
+   * healthy because it scores stage ITEMS and an improvement is not an item.
+   */
+  const withStages = (improvements: unknown[]) => ({
+    updated: "2026-01-01",
+    priorities: [],
+    phases: [{ name: "Phase 0", scs: [{ id: "SC-9441", what: "A", done: true }] }],
+    sessions: [],
+    stages: [{ id: "A", retro: { wentWell: [], wentPoorly: [], improvements } }],
+  });
+
+  test("an OPEN improvement is rendered, with its mechanism", () => {
+    writeTestJson(
+      withStages([
+        { what: "stop at round three", mechanism: "nothing yet, needs a decision", status: "open", verify: null },
+      ]),
+    );
+    const md = run();
+
+    expect(md).toContain("Outstanding improvements (1)");
+    expect(md).toContain("stop at round three");
+    // The mechanism, not only the title. "Nothing yet, needs a decision" is
+    // a different state from a named mechanism nobody has built, and a line
+    // that shows only the title cannot tell a reader which one this is.
+    expect(md).toContain("nothing yet, needs a decision");
+  });
+
+  test("an improvement with no tracker issue SAYS so, rather than leaving a blank", () => {
+    writeTestJson(
+      withStages([{ what: "stop at round three", mechanism: "none yet", status: "open", verify: null }]),
+    );
+
+    // A blank where a link belongs is indistinguishable from a link nobody
+    // noticed — the Silent Default Substitution this file already guards
+    // against for the issue lists.
+    expect(run()).toContain("not on the tracker");
+  });
+
+  test("an improvement WITH an issue renders the reference instead", () => {
+    writeTestJson(
+      withStages([{ what: "stop at round three", mechanism: "none yet", status: "open", verify: null, issue: 1745 }]),
+    );
+    const md = run();
+
+    expect(md).toContain("#1745");
+    expect(md, "it is on the tracker, so the absence notice must not fire too").not.toContain(
+      "not on the tracker",
+    );
+  });
+
+  test("an IN-PLACE improvement is not rendered — this section is what is outstanding", () => {
+    writeTestJson(
+      withStages([{ what: "already enforced", mechanism: "a test", status: "in-place", verify: "true" }]),
+    );
+    const md = run();
+
+    // The control. Without it the section is satisfied by a renderer that
+    // lists every improvement, which would make the count meaningless on a
+    // ladder where thirteen of sixteen are done.
+    expect(md).not.toContain("Outstanding improvements");
+    expect(md).not.toContain("already enforced");
+  });
+
+  test("no stages at all renders NO section, not an empty heading", () => {
+    writeTestJson({
+      updated: "2026-01-01",
+      priorities: [],
+      phases: [{ name: "Phase 0", scs: [{ id: "SC-9441", what: "A", done: true }] }],
+      sessions: [],
+    });
+
+    // A project with no ladder is a real state and the renderer must not
+    // refuse it or print a heading over nothing.
+    expect(run()).not.toContain("Outstanding improvements");
+  });
+
   test("promote-only: spec [x] promotes SC, spec [ ] does not demote", () => {
     writeFileSync(join(SPECS_DIR, "test-promote.md"), `- [x] SC-9441: promoted\n- [ ] SC-9442: still open in spec`);
     writeTestJson({
