@@ -370,6 +370,27 @@ describe("the live plan", () => {
     expect(filed.filter(im => im.issue === undefined).map(im => im.what)).toEqual(["unfiled"]);
   });
 
+  test("an improvement cannot name its own stage — the computed field wins", () => {
+    // Security review of #1812. `{ stage: s.id, ...im }` lets data in
+    // project-state.json overwrite the stage computed from the stage the
+    // improvement is actually IN — and OPEN_WITHOUT_ISSUE above matches on
+    // `${stage}: ${what}`, so a forged `stage` key could tick a ratchet line
+    // reserved for a different improvement. The computed field is the
+    // identity, so it goes last.
+    const out = openImprovements([
+      {
+        id: "Z",
+        retro: {
+          wentWell: [],
+          wentPoorly: [],
+          improvements: [{ what: "x", mechanism: "none yet", status: "open", verify: null, stage: "A" }],
+        },
+      } as never,
+    ]);
+
+    expect(out[0].stage, "data overrode the stage this improvement is in").toBe("Z");
+  });
+
   test("the goal names a SUCCESS.md claim, and that claim is really there", () => {
     // SUCCESS.md stays the charter and keeps the claim; project-state keeps
     // the living plan and REFERENCES it. That is a checked cross-reference

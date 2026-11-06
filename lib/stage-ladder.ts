@@ -364,7 +364,17 @@ export function claimedImprovements(
  */
 export function openImprovements(stages: readonly Stage[]): ({ stage: string } & Improvement)[] {
   return stages.flatMap(s =>
-    (s.retro?.improvements ?? []).filter(im => im.status === "open").map(im => ({ stage: s.id, ...im })),
+    (s.retro?.improvements ?? [])
+      .filter(im => im.status === "open")
+      // `stage` LAST. Spelled `{ stage: s.id, ...im }` for one commit, which
+      // lets an improvement carrying its own `stage` key overwrite the one
+      // computed from the stage it is actually in — and the key
+      // `OPEN_WITHOUT_ISSUE` matches on in `test/stage-ladder.test.ts` is
+      // `${stage}: ${what}`, so data in `project-state.json` could forge a
+      // ratchet key and tick a line reserved for a different improvement.
+      // Found by the security review of #1812. The computed field is the
+      // identity here, so it goes last and the data cannot reach it.
+      .map(im => ({ ...im, stage: s.id })),
   );
 }
 

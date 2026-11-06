@@ -314,12 +314,29 @@ describe("update-project-state", () => {
    * document every session is told to read first, while the ladder reported
    * healthy because it scores stage ITEMS and an improvement is not an item.
    */
+  /**
+   * A VALID ladder. Minimal was enough until the security review of #1812
+   * made the renderer run `stageLadderViolations` on `stages` before
+   * rendering — so these fixtures must now be stages the validator accepts,
+   * which is the right bar: a fixture the real refusal would reject cannot
+   * tell anyone what the renderer does with real data.
+   */
   const withStages = (improvements: unknown[]) => ({
     updated: "2026-01-01",
     priorities: [],
     phases: [{ name: "Phase 0", scs: [{ id: "SC-9441", what: "A", done: true }] }],
     sessions: [],
-    stages: [{ id: "A", retro: { wentWell: [], wentPoorly: [], improvements } }],
+    stages: [
+      {
+        id: "A",
+        name: "Write it down",
+        goal: "the documents exist and say what they must",
+        serves: 1,
+        agreed: "2026-10-30 Jason",
+        items: [{ id: "A1", what: "a thing", done: true, verify: "true" }],
+        retro: { wentWell: ["a thing"], wentPoorly: ["another thing"], improvements },
+      },
+    ],
   });
 
   test("an OPEN improvement is rendered, with its mechanism", () => {
@@ -372,6 +389,36 @@ describe("update-project-state", () => {
     // ladder where thirteen of sixteen are done.
     expect(md).not.toContain("Outstanding improvements");
     expect(md).not.toContain("already enforced");
+  });
+
+  test("a malformed ladder REFUSES, rather than rendering whatever is there", () => {
+    // Security review of #1812. `projectStateViolations` has no `stages`
+    // branch, so teaching this renderer to read `state.stages` had it
+    // consuming a structure nothing on this path validated.
+    writeTestJson(
+      withStages([{ what: "x", mechanism: "none yet", status: "open", verify: null, issue: 0 }]),
+    );
+    const r = exec();
+
+    // `issue: 0` reads as a link and resolves to nothing. The refusal for
+    // it already existed in `stageLadderViolations` and this script never
+    // called it, so the renderer would have printed `#0` and the
+    // OPEN_WITHOUT_ISSUE ratchet would have counted the improvement as
+    // filed — a ratchet satisfied by malformed data.
+    expect(r.status, `the renderer accepted an invalid issue number:\n${r.out}`).toBe(1);
+    expect(r.out).toContain("stage ladder the renderer cannot trust");
+    expect(r.out, "and it names what to fix").toContain("issue");
+  });
+
+  test("CONTROL: the same ladder with a VALID issue number renders", () => {
+    // Without this row the refusal above is satisfied by a renderer that
+    // rejects every ladder, which is also what a broken validator call
+    // produces — and that would have been invisible, because the four rows
+    // above would then be failing for the same reason.
+    writeTestJson(
+      withStages([{ what: "x", mechanism: "none yet", status: "open", verify: null, issue: 1745 }]),
+    );
+    expect(run()).toContain("#1745");
   });
 
   test("no stages at all renders NO section, not an empty heading", () => {

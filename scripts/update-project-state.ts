@@ -15,7 +15,7 @@ import { execSync } from "child_process";
 const RENDERED_SESSIONS = 3;
 import { missingStateVerdict, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
 import { localCalendarDay } from "../lib/local-calendar-day";
-import { openImprovements, type Stage } from "../lib/stage-ladder";
+import { openImprovements, stageLadderViolations, type Stage } from "../lib/stage-ladder";
 
 /**
  * The one exit code every refusal here routes through, per
@@ -325,6 +325,41 @@ if (shapeProblems.length > 0) {
   for (const p of shapeProblems) console.error(`  - ${p}`);
   console.error(`project-state: nothing was written. Fix the entries above and re-run.`);
   process.exit(PROJECT_STATE_REFUSE_EXIT);
+}
+
+/**
+ * The ladder is validated by the module that OWNS it, before it is rendered.
+ *
+ * `projectStateViolations` has no `stages` branch, so when #1745 taught this
+ * renderer to read `state.stages` it began consuming a structure nothing on
+ * this path had checked — found by the security review of that commit. The
+ * consequence was not hypothetical: `Improvement.issue` is documented as
+ * *refused unless it is a positive integer*, and that refusal lives in
+ * `stageLadderViolations`, which this script never called. So `issue: 0` and
+ * `issue: "1745"` would both have rendered as a link, and both would have
+ * dropped the improvement out of `OPEN_WITHOUT_ISSUE` in
+ * `test/stage-ladder.test.ts` — a ratchet quietly satisfied by malformed
+ * data.
+ *
+ * **Delegated, not re-implemented.** A `typeof im.issue === "number" &&
+ * Number.isInteger(...)` guard in the renderer would answer a question
+ * `stageLadderViolations` already answers, and a mutation of either would
+ * leave the other holding every case up — `.claude/rules/
+ * checks-must-be-able-to-fail.md`'s *two deciders that agree*.
+ *
+ * Only when the key is PRESENT. A project that has written no ladder is a
+ * real state, and `stageLadderViolations(undefined)` refuses it as "not an
+ * array" — which would make this renderer unusable in any tree that has not
+ * adopted the ladder.
+ */
+if (parsed !== null && typeof parsed === "object" && "stages" in parsed) {
+  const ladderProblems = stageLadderViolations((parsed as { stages: unknown }).stages);
+  if (ladderProblems.length > 0) {
+    console.error(`project-state: ${STATE_JSON} has a stage ladder the renderer cannot trust:`);
+    for (const p of ladderProblems) console.error(`  - ${p}`);
+    console.error(`project-state: nothing was written. Fix the entries above and re-run.`);
+    process.exit(PROJECT_STATE_REFUSE_EXIT);
+  }
 }
 
 const state: ProjectState = parsed as ProjectState;
