@@ -5806,12 +5806,31 @@ describe("FG-216..FG-224: a filing is readable by the things that read it", () =
     shellQuoted([PREAMBLE, ...sections.map(h => `${h}\n\n${content}`)].join("\n\n"));
 
   const FLOOR = requiredSections("everyday-work").map(headingFor);
+
+  /**
+   * A section's heading, resolved from `ISSUE_SECTIONS` and NOT from the
+   * decider under test.
+   *
+   * Measured: resolving it through `requiredSections(...).find(...)!` made
+   * four of these rows die on a non-null assertion when the decider was
+   * short-circuited — red, but red because the row threw rather than because
+   * the gate reached a different verdict. A battery row that crashes under
+   * the mutant proves the mutant ran; it does not prove the row can SEE the
+   * weakening. The heading is a fact about the section; whether it is
+   * required is the decider's call, and only the second belongs in the
+   * mutation's path.
+   */
+  const section = (id: string) => headingFor(ISSUE_SECTIONS.find(s => s.id === id)!);
+
+  /** Every section the everyday form SHOWS. Unmoved by the mutation. */
+  const SHOWN = ISSUE_SECTIONS.filter(s => s.forms.includes("everyday-work")).map(headingFor);
+
   const verdict = async (cmd: string) =>
     adjudicateFiling(filingAttempts(cmd)[0], async () => measuredCorpus([]));
 
   test("FG-216: a body short a required section is REFUSED, and the heading is NAMED", async () => {
-    const files = headingFor(requiredSections("everyday-work").find(s => s.id === "files")!);
-    const v = await verdict(filing(FLOOR.filter(h => h !== files)));
+    const files = section("files");
+    const v = await verdict(filing(SHOWN.filter(h => h !== files)));
 
     expect(v.outcome).toBe("REFUSE");
     expect(v.refusal).toBe("MALFORMED");
@@ -5831,7 +5850,7 @@ describe("FG-216..FG-224: a filing is readable by the things that read it", () =
   });
 
   test("FG-218: the criterion section is NOT demanded — a consumer cannot know one", async () => {
-    const criteria = headingFor(requiredSections("spec-work").find(s => s.id === "criteria")!);
+    const criteria = section("criteria");
     const v = await verdict(filing(FLOOR));
 
     expect(FLOOR).not.toContain(criteria);
@@ -5841,17 +5860,17 @@ describe("FG-216..FG-224: a filing is readable by the things that read it", () =
   });
 
   test("FG-219: every missing section is named, not just the first", async () => {
-    const v = await verdict(filing([FLOOR[0]]));
+    const v = await verdict(filing([section("outcome")]));
 
     expect(v.refusal).toBe("MALFORMED");
-    for (const h of FLOOR.slice(1)) expect(v.reason).toContain(h);
+    for (const h of FLOOR.filter(h => h !== section("outcome"))) expect(v.reason).toContain(h);
   });
 
   test("FG-220: a heading with nothing under it is MISSING, not present", async () => {
     // The body somebody pasted the template into and did not fill in. To a
     // check that only looks for the string it is a complete issue —
     // *assertions that hold vacuously*, in checks-must-be-able-to-fail.md.
-    const v = await verdict(filing(FLOOR, ""));
+    const v = await verdict(filing(SHOWN, ""));
 
     expect(v.refusal).toBe("MALFORMED");
     for (const h of FLOOR) expect(v.reason).toContain(h);
