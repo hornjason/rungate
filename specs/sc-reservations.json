@@ -104,12 +104,6 @@
       "from": 2630,
       "to": 2631,
       "note": "#1038 - commits that exist on this machine and nowhere else. Exactly the two ids consumed rather than a block of twenty: PROJECT-STATE.md on main names SC-2636 as the board-identifier config reader and no block reserves it, so a wider block would have squatted on a published plan's id without colliding with anything a diff could show. 2600-2629 (rg/pipeline-spec) is the highest declared block. Delete when the PR merges."
-    },
-    {
-      "owner": "rg/census-recursive",
-      "from": 2732,
-      "to": 2739,
-      "note": "Population censuses listed lib/ and scripts/ with a non-recursive readdirSync, so 18 files under lib/generators, lib/scaffold and lib/validators were outside every population that reported itself clean. 2732 and 2733 consumed; headroom to 2739. Above every declared block and above SC-2731, the highest consumed id. Cannot be pushed to main ahead of the branch (main requires the `test` and `ai-review` checks with enforce_admins on), so it reaches main through this PR. Delete when the PR merges."
     }
   ]
 }
