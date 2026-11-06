@@ -24,6 +24,7 @@ import { isPickable, orderReading, type TrackerFacts } from "../lib/work-status"
 import { laneHealth, laneHealthLines } from "../lib/board-lane-health";
 import type { Throughput } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
+import { nextCursor } from "../lib/graphql-cursor";
 
 const REPO = "hornjason/rungate";
 // **Split once, so GraphQL and REST cannot disagree about the repository.**
@@ -218,7 +219,12 @@ async function boardStatus(): Promise<Map<number, string>> {
       const unreadable = n.fieldValues.pageInfo?.hasNextPage === true && s === undefined;
       out.set(n.content.number, s ?? (unreadable ? "(UNMEASURED — fields truncated)" : "(no status)"));
     }
-    c = d.node.items.pageInfo.hasNextPage ? d.node.items.pageInfo.endCursor : null;
+    // A board read only in part makes every lane count a floor. It
+    // throws rather than returning what arrived, because the caller
+    // derives `complete` from a marker and a short map would set none.
+    const step = nextCursor(d.node.items.pageInfo);
+    if (step.kind === "unreadable") throw new Error(`the board stopped paging — ${step.why}`);
+    c = step.kind === "more" ? step.cursor : null;
   } while (c);
   return out;
 }
@@ -355,7 +361,14 @@ for (const i of issues) {
     for (const n of page.nodes) {
       if (n?.source?.number) prs.push(`PR#${n.source.number} ${n.source.state}`);
     }
-    after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    // A silently short list of linked pull requests reads as "none yet",
+    // which is the sentence this whole report exists to stop printing
+    // when it is not known to be true.
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      throw new Error(`#${i.number}'s linked pull requests stopped paging — ${step.why}`);
+    }
+    after = step.kind === "more" ? step.cursor : null;
   } while (after);
   console.log(`\n  #${i.number}  ${i.state.toUpperCase()}  board=${status.get(i.number) ?? "NOT ON BOARD"}`);
   console.log(`        ${i.title.slice(0, 72)}`);

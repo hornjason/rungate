@@ -16,6 +16,7 @@
  */
 
 import type { Throughput } from "./board-ready-rule";
+import { nextCursor } from "./graphql-cursor";
 
 /**
  * The window throughput is measured over.
@@ -116,27 +117,14 @@ export async function measureClosedIssues(
         const at = Date.parse(i.closedAt ?? "");
         if (Number.isFinite(at) && at >= since) delivered++;
       }
-      // **A page whose `pageInfo` cannot be read is UNMEASURED, not the
-      // last page.** This was `page.pageInfo?.hasNextPage ? … : null`, and
-      // ai-review was right about it on #1793: a malformed page carrying
-      // `nodes` but no `pageInfo` ended the loop and returned a confident
-      // partial count. Silent truncation reported as a measurement is the
-      // defect this whole module exists to avoid, one level down — and it
-      // was inconsistent with the line above, where a missing `nodes`
-      // throws into the catch.
-      const info = page.pageInfo;
-      if (typeof info?.hasNextPage !== "boolean") return null;
-      // **Non-empty, not merely a string.** ai-review round 1 of #1794:
-      // `endCursor: ""` passes a type check and then ends the loop anyway,
-      // because `while (c)` is falsy on it — the same silent truncation
-      // this guard was added to stop, wearing a different value.
-      // `scripts/board-status-sweep.ts` already spells it
-      // `typeof cursor !== "string" || cursor.length === 0`; the precedent
-      // was in the tree and I did not apply it.
-      if (info.hasNextPage && (typeof info.endCursor !== "string" || info.endCursor.length === 0)) {
-        return null;
-      }
-      c = info.hasNextPage ? info.endCursor : null;
+      // **One decider for every pager** — `lib/graphql-cursor.ts`. This
+      // site held three variants of the same silent truncation, found one
+      // at a time across two pull requests, while four sibling loops held
+      // all three. Repairing them site by site is what kept producing
+      // them (`.claude/rules/checks-must-be-able-to-fail.md`).
+      const step = nextCursor(page.pageInfo);
+      if (step.kind === "unreadable") return null;
+      c = step.kind === "more" ? step.cursor : null;
     } while (c);
   } catch {
     // Deliberately swallowed and converted to the UNMEASURED value, which

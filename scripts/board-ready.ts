@@ -24,6 +24,7 @@ import {
 import { phaseOf, openFrontier } from "../lib/board-mirror";
 import { heldReason, readyCap, selectReady } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
+import { nextCursor } from "../lib/graphql-cursor";
 
 /**
  * Every refusal leaves through this one constant, so a mutant copy with it
@@ -222,7 +223,16 @@ async function main(): Promise<number> {
     }
     const page = d.repository.issue.blocking;
     blocking.push(...page.nodes);
-    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      console.log(
+        `::warning::#${closed}'s blocking list stopped paging — ${step.why}. ` +
+          `A partial list moves SOME of the issues this close unblocked, which is worse ` +
+          `than moving none. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
+    cursor = step.kind === "more" ? step.cursor : null;
   } while (cursor);
   if (blocking.length === 0) {
     console.log(`#${closed} was blocking nothing. No issue changed.`);
@@ -282,8 +292,16 @@ async function main(): Promise<number> {
       if (n.content?.__typename !== "Issue") continue;
       frontierItems.push({ state: n.content.state, phase: phaseOf(n.content.milestone?.title) });
     }
-    if (!page.pageInfo.hasNextPage) break;
-    const next = itemsPage(await gql(token, BOARD_PAGE_QUERY, { p: project, c: page.pageInfo.endCursor }));
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      console.log(
+        `::warning::the board stopped paging — ${step.why}. The frontier and Ready's ` +
+          `occupancy were read only in part. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
+    if (step.kind === "done") break;
+    const next = itemsPage(await gql(token, BOARD_PAGE_QUERY, { p: project, c: step.cursor }));
     if (next === null) {
       // Mid-pagination, so a partial frontier is already in hand — and a
       // frontier read from SOME of the board is the reading that moves the
