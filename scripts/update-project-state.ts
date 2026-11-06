@@ -15,6 +15,7 @@ import { execSync } from "child_process";
 const RENDERED_SESSIONS = 3;
 import { missingStateVerdict, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
 import { localCalendarDay } from "../lib/local-calendar-day";
+import { openImprovements, stageLadderViolations, type Stage } from "../lib/stage-ladder";
 
 /**
  * The one exit code every refusal here routes through, per
@@ -78,6 +79,15 @@ interface ProjectState {
   sessions: Session[];
   /** Written every session; was never declared here and never rendered. */
   session?: CurrentSession;
+  /**
+   * The ladder. Declared here so its retros' OPEN improvements can be
+   * rendered (#1745); the shape itself is owned by `lib/stage-ladder.ts` and
+   * validated by `test/stage-ladder.test.ts`, not re-described here.
+   *
+   * Optional, because a project that has not written a ladder yet is a real
+   * state and the renderer must not refuse it.
+   */
+  stages?: Stage[];
 }
 
 function scanSpecSCStatus(): Record<string, boolean> {
@@ -209,6 +219,39 @@ function render(state: ProjectState): string {
     lines.push("");
   }
 
+  // Outstanding improvements (#1745)
+  //
+  // These were written into project-state.json and rendered NOWHERE. The only
+  // thing that read them printed them to a `console.log` inside a passing
+  // test, so three improvements nothing can measure were invisible in the
+  // document every session is told to read first — while the ladder reported
+  // healthy, because `test/stage-ladder.test.ts` scores stage ITEMS and an
+  // improvement is not an item. *Could not measure* reading as *nothing
+  // wrong* is SUCCESS.md claim 4 exactly.
+  //
+  // Rendered ABOVE the phases, with the priorities, because that is where a
+  // reader looks for what is outstanding. Below the phase tables it would be
+  // present and unread, which is most of the way back to where it was.
+  //
+  // `openImprovements` decides which ones are open. Re-filtering on
+  // `status === "open"` here would be a second decider over one input, and a
+  // mutation of either would leave the other holding every case up.
+  const outstanding = openImprovements(state.stages ?? []);
+  if (outstanding.length > 0) {
+    lines.push(`**Outstanding improvements (${outstanding.length}):**`);
+    lines.push("");
+    for (const im of outstanding) {
+      // The issue reference, or the absence of one SAID. An improvement with
+      // no tracker issue lives only in this file, which is the state rule 10
+      // exists to refuse — and a blank where a link belongs is
+      // indistinguishable from a link nobody noticed.
+      const where = im.issue === undefined ? "**not on the tracker**" : `#${im.issue}`;
+      lines.push(`- Stage ${im.stage} — ${im.what} (${where})`);
+      lines.push(`  - mechanism: ${im.mechanism}`);
+    }
+    lines.push("");
+  }
+
   // Phases
   for (const phase of state.phases) {
     const emoji = phaseEmoji(phase);
@@ -282,6 +325,41 @@ if (shapeProblems.length > 0) {
   for (const p of shapeProblems) console.error(`  - ${p}`);
   console.error(`project-state: nothing was written. Fix the entries above and re-run.`);
   process.exit(PROJECT_STATE_REFUSE_EXIT);
+}
+
+/**
+ * The ladder is validated by the module that OWNS it, before it is rendered.
+ *
+ * `projectStateViolations` has no `stages` branch, so when #1745 taught this
+ * renderer to read `state.stages` it began consuming a structure nothing on
+ * this path had checked — found by the security review of that commit. The
+ * consequence was not hypothetical: `Improvement.issue` is documented as
+ * *refused unless it is a positive integer*, and that refusal lives in
+ * `stageLadderViolations`, which this script never called. So `issue: 0` and
+ * `issue: "1745"` would both have rendered as a link, and both would have
+ * dropped the improvement out of `OPEN_WITHOUT_ISSUE` in
+ * `test/stage-ladder.test.ts` — a ratchet quietly satisfied by malformed
+ * data.
+ *
+ * **Delegated, not re-implemented.** A `typeof im.issue === "number" &&
+ * Number.isInteger(...)` guard in the renderer would answer a question
+ * `stageLadderViolations` already answers, and a mutation of either would
+ * leave the other holding every case up — `.claude/rules/
+ * checks-must-be-able-to-fail.md`'s *two deciders that agree*.
+ *
+ * Only when the key is PRESENT. A project that has written no ladder is a
+ * real state, and `stageLadderViolations(undefined)` refuses it as "not an
+ * array" — which would make this renderer unusable in any tree that has not
+ * adopted the ladder.
+ */
+if (parsed !== null && typeof parsed === "object" && "stages" in parsed) {
+  const ladderProblems = stageLadderViolations((parsed as { stages: unknown }).stages);
+  if (ladderProblems.length > 0) {
+    console.error(`project-state: ${STATE_JSON} has a stage ladder the renderer cannot trust:`);
+    for (const p of ladderProblems) console.error(`  - ${p}`);
+    console.error(`project-state: nothing was written. Fix the entries above and re-run.`);
+    process.exit(PROJECT_STATE_REFUSE_EXIT);
+  }
 }
 
 const state: ProjectState = parsed as ProjectState;

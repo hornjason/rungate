@@ -307,6 +307,133 @@ describe("update-project-state", () => {
     expect(run()).toContain("Issues closed: #1676");
   });
 
+  /**
+   * #1745 — the three open improvements were written into project-state.json
+   * and rendered nowhere. The only thing reading them was a `console.log`
+   * inside a passing test, so what nothing could measure was invisible in the
+   * document every session is told to read first, while the ladder reported
+   * healthy because it scores stage ITEMS and an improvement is not an item.
+   */
+  /**
+   * A VALID ladder. Minimal was enough until the security review of #1812
+   * made the renderer run `stageLadderViolations` on `stages` before
+   * rendering — so these fixtures must now be stages the validator accepts,
+   * which is the right bar: a fixture the real refusal would reject cannot
+   * tell anyone what the renderer does with real data.
+   */
+  const withStages = (improvements: unknown[]) => ({
+    updated: "2026-01-01",
+    priorities: [],
+    phases: [{ name: "Phase 0", scs: [{ id: "SC-9441", what: "A", done: true }] }],
+    sessions: [],
+    stages: [
+      {
+        id: "A",
+        name: "Write it down",
+        goal: "the documents exist and say what they must",
+        serves: 1,
+        agreed: "2026-10-30 Jason",
+        items: [{ id: "A1", what: "a thing", done: true, verify: "true" }],
+        retro: { wentWell: ["a thing"], wentPoorly: ["another thing"], improvements },
+      },
+    ],
+  });
+
+  test("an OPEN improvement is rendered, with its mechanism", () => {
+    writeTestJson(
+      withStages([
+        { what: "stop at round three", mechanism: "nothing yet, needs a decision", status: "open", verify: null },
+      ]),
+    );
+    const md = run();
+
+    expect(md).toContain("Outstanding improvements (1)");
+    expect(md).toContain("stop at round three");
+    // The mechanism, not only the title. "Nothing yet, needs a decision" is
+    // a different state from a named mechanism nobody has built, and a line
+    // that shows only the title cannot tell a reader which one this is.
+    expect(md).toContain("nothing yet, needs a decision");
+  });
+
+  test("an improvement with no tracker issue SAYS so, rather than leaving a blank", () => {
+    writeTestJson(
+      withStages([{ what: "stop at round three", mechanism: "none yet", status: "open", verify: null }]),
+    );
+
+    // A blank where a link belongs is indistinguishable from a link nobody
+    // noticed — the Silent Default Substitution this file already guards
+    // against for the issue lists.
+    expect(run()).toContain("not on the tracker");
+  });
+
+  test("an improvement WITH an issue renders the reference instead", () => {
+    writeTestJson(
+      withStages([{ what: "stop at round three", mechanism: "none yet", status: "open", verify: null, issue: 1745 }]),
+    );
+    const md = run();
+
+    expect(md).toContain("#1745");
+    expect(md, "it is on the tracker, so the absence notice must not fire too").not.toContain(
+      "not on the tracker",
+    );
+  });
+
+  test("an IN-PLACE improvement is not rendered — this section is what is outstanding", () => {
+    writeTestJson(
+      withStages([{ what: "already enforced", mechanism: "a test", status: "in-place", verify: "true" }]),
+    );
+    const md = run();
+
+    // The control. Without it the section is satisfied by a renderer that
+    // lists every improvement, which would make the count meaningless on a
+    // ladder where thirteen of sixteen are done.
+    expect(md).not.toContain("Outstanding improvements");
+    expect(md).not.toContain("already enforced");
+  });
+
+  test("a malformed ladder REFUSES, rather than rendering whatever is there", () => {
+    // Security review of #1812. `projectStateViolations` has no `stages`
+    // branch, so teaching this renderer to read `state.stages` had it
+    // consuming a structure nothing on this path validated.
+    writeTestJson(
+      withStages([{ what: "x", mechanism: "none yet", status: "open", verify: null, issue: 0 }]),
+    );
+    const r = exec();
+
+    // `issue: 0` reads as a link and resolves to nothing. The refusal for
+    // it already existed in `stageLadderViolations` and this script never
+    // called it, so the renderer would have printed `#0` and the
+    // OPEN_WITHOUT_ISSUE ratchet would have counted the improvement as
+    // filed — a ratchet satisfied by malformed data.
+    expect(r.status, `the renderer accepted an invalid issue number:\n${r.out}`).toBe(1);
+    expect(r.out).toContain("stage ladder the renderer cannot trust");
+    expect(r.out, "and it names what to fix").toContain("issue");
+  });
+
+  test("CONTROL: the same ladder with a VALID issue number renders", () => {
+    // Without this row the refusal above is satisfied by a renderer that
+    // rejects every ladder, which is also what a broken validator call
+    // produces — and that would have been invisible, because the four rows
+    // above would then be failing for the same reason.
+    writeTestJson(
+      withStages([{ what: "x", mechanism: "none yet", status: "open", verify: null, issue: 1745 }]),
+    );
+    expect(run()).toContain("#1745");
+  });
+
+  test("no stages at all renders NO section, not an empty heading", () => {
+    writeTestJson({
+      updated: "2026-01-01",
+      priorities: [],
+      phases: [{ name: "Phase 0", scs: [{ id: "SC-9441", what: "A", done: true }] }],
+      sessions: [],
+    });
+
+    // A project with no ladder is a real state and the renderer must not
+    // refuse it or print a heading over nothing.
+    expect(run()).not.toContain("Outstanding improvements");
+  });
+
   test("promote-only: spec [x] promotes SC, spec [ ] does not demote", () => {
     writeFileSync(join(SPECS_DIR, "test-promote.md"), `- [x] SC-9441: promoted\n- [ ] SC-9442: still open in spec`);
     writeTestJson({

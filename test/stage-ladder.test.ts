@@ -297,8 +297,98 @@ describe("the live plan", () => {
     ).toEqual([]);
 
     // Open ones are declared, not hidden. Printed so a reader of a green
-    // run still sees what is outstanding.
+    // run still sees what is outstanding — and COUNTED by the case below,
+    // because a `console.log` in a passing run is not a reader.
     for (const o of openImprovements(stages)) console.log(`  OPEN improvement (stage ${o.stage}): ${o.what}`);
+  });
+
+  /**
+   * #1745 — an open improvement that is on nothing but this file.
+   *
+   * `openImprovements` was printed into a passing run and counted nowhere,
+   * so three improvements that nothing can measure were invisible: this
+   * suite scores stage ITEMS, an improvement is not an item, and Stage B
+   * therefore read complete while two of its improvements were outstanding.
+   * That is how *is Stage B done?* got two different answers in one session,
+   * and it is SUCCESS.md claim 4 — *could not measure* reading as *nothing
+   * wrong*.
+   *
+   * **The rule being ratcheted toward: an `open` improvement carries an
+   * `issue`.** Not a `verify` — `Improvement.verify` is REFUSED on `open`
+   * ("an open improvement with a command would be claiming the thing it says
+   * is missing"), so demanding one would make `open` unrepresentable and the
+   * only way to satisfy both rules would be to delete the record. #1745's
+   * acceptance text asked for the verify version; that contradiction is
+   * recorded on the issue.
+   */
+  const OPEN_WITHOUT_ISSUE = [
+    "A: Repairing past the third review round is a decision, not a drift",
+    "B: A measurement published in a PR body stops being a second copy that nothing compares.",
+    "B: A finding naming one member of a population is checked for whether it IS a population before the sweep is called done.",
+  ];
+
+  test("every open improvement is on the tracker, or declared here as not yet", () => {
+    const unfiled = openImprovements(stages)
+      .filter(im => im.issue === undefined)
+      .map(im => `${im.stage}: ${im.what}`);
+
+    // An EQUALITY, both directions, which is the whole point of a ratchet.
+    // Over it: a fourth improvement became outstanding with no issue and
+    // nobody declared it. Under it: one was filed and this constant was not
+    // edited in the same commit, so the number drifts downward on its own
+    // and stops meaning anything — the shape `.claude/rules/
+    // checks-must-be-able-to-fail.md` calls a ratchet nobody can interpret.
+    expect(
+      unfiled,
+      `${OPEN_WITHOUT_ISSUE.length} open improvement(s) are declared as not yet filed and ${unfiled.length} are.\n` +
+        "If you filed one, set `issue` on it in project-state.json AND delete its line from " +
+        "OPEN_WITHOUT_ISSUE in this file, in the same commit. If a NEW one is outstanding, file it " +
+        "(#1745) rather than adding a line here — this list only shrinks.",
+    ).toEqual(OPEN_WITHOUT_ISSUE);
+  });
+
+  test("CONTROL: an open improvement carrying an issue is NOT in the unfiled set", () => {
+    // Without this row the case above is satisfied by a reading that calls
+    // every open improvement unfiled, which is also what a broken `issue`
+    // field produces. Stage B has two improvements that DO carry issues —
+    // #1727 and #1728 — and they are in-place, so the live ladder cannot
+    // supply this contrast. It is constructed.
+    const filed = openImprovements([
+      {
+        id: "Z",
+        retro: {
+          wentWell: [],
+          wentPoorly: [],
+          improvements: [
+            { what: "filed", mechanism: "none yet", status: "open", verify: null, issue: 4242 },
+            { what: "unfiled", mechanism: "none yet", status: "open", verify: null },
+          ],
+        },
+      } as never,
+    ]);
+
+    expect(filed.filter(im => im.issue === undefined).map(im => im.what)).toEqual(["unfiled"]);
+  });
+
+  test("an improvement cannot name its own stage — the computed field wins", () => {
+    // Security review of #1812. `{ stage: s.id, ...im }` lets data in
+    // project-state.json overwrite the stage computed from the stage the
+    // improvement is actually IN — and OPEN_WITHOUT_ISSUE above matches on
+    // `${stage}: ${what}`, so a forged `stage` key could tick a ratchet line
+    // reserved for a different improvement. The computed field is the
+    // identity, so it goes last.
+    const out = openImprovements([
+      {
+        id: "Z",
+        retro: {
+          wentWell: [],
+          wentPoorly: [],
+          improvements: [{ what: "x", mechanism: "none yet", status: "open", verify: null, stage: "A" }],
+        },
+      } as never,
+    ]);
+
+    expect(out[0].stage, "data overrode the stage this improvement is in").toBe("Z");
   });
 
   test("the goal names a SUCCESS.md claim, and that claim is really there", () => {
