@@ -6,6 +6,8 @@ import { test, expect, describe } from "bun:test";
 import { generateAgentsMd, generateScopedRules } from "../lib/generators/agents-md";
 import { mockProjectScan, type ProjectScan } from "../lib/generators/types";
 import { isRuleIncluded } from "../lib/scaffold/profiles";
+import { scanProject } from "../lib/scanner";
+import { join } from "path";
 
 describe("generateAgentsMd with mock ProjectScan", () => {
   test("returns string containing project name and identity", () => {
@@ -170,5 +172,43 @@ describe("#1742: reporting-upstream, the rule a consumer files from", () => {
   test("#1742 / AC-3: the filing command targets the upstream repository explicitly", () => {
     const body = ruleFor("full")!.content;
     expect(body).toContain("gh issue create --repo hornjason/rungate");
+  });
+
+  /**
+   * Raised by the AI review of #1813: the rule told the reporter to quote
+   * "the `rungate` entry in your `package.json`", and this repository's own
+   * `package.json` is `"name": "rungate"` with a top-level `version` — no
+   * such entry. Nor has a workspace-linked consumer one: its entry is a
+   * path.
+   *
+   * The review's suggested fix was an `isHarnessItself(scan.root)` branch,
+   * and that is the half-fix. It catches rungate's own repo and NOT the
+   * linked consumer named in the same paragraph, so it would close one of
+   * the two cases while reading as if it closed both — the shape #1810 spent
+   * three rounds on. The rule enumerates all three layouts in prose instead.
+   *
+   * So the property is that there IS no branch: scan the real harness root
+   * and a consumer mock, and the rule's bytes must agree. A future
+   * `isHarnessItself` branch in this rule makes them differ and this goes
+   * red naming it — which is the only thing standing between the next agent
+   * and the half-fix.
+   */
+  test("#1742 / AC-4: no harness-vs-consumer branch — one body, every layout named", () => {
+    const harness = generateScopedRules(scanProject(join(import.meta.dir, "..")))
+      .find(r => r.filename === "reporting-upstream.md")!;
+    const consumer = ruleFor("full")!;
+
+    expect(
+      harness.content,
+      "the reporting-upstream rule now differs between the harness and a consumer. " +
+        "An isHarnessItself branch here closes rungate's own repo and NOT a " +
+        "workspace-linked consumer, which is half the population the AI review of " +
+        "#1813 named. Name every layout in the prose instead.",
+    ).toBe(consumer.content);
+
+    // All three layouts, and the honest answer when none of them resolves.
+    for (const layout of ["dependencies", "link:", "this project IS rungate", "UNMEASURED"]) {
+      expect(harness.content, `the rule stopped naming the \`${layout}\` case`).toContain(layout);
+    }
   });
 });

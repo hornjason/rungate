@@ -2,7 +2,7 @@
 description: How to report a problem you found in rungate itself, from this repository
 paths:
   - "package.json"
-generated-sha: 42ccda079c16b378
+generated-sha: 169dad95f6f0a4cc
 ---
 
 ## You found something in rungate, not in this project
@@ -56,9 +56,24 @@ know one from here and you are not expected to:
 - **Files this will change** — if you know; *unknown* is an honest answer
 - **How we will know** — what you would run to see it fixed
 
-Say which version you are on: the `rungate` entry in your
-`package.json`. A report against a version nobody can identify cannot be
-reproduced, and will be closed as such.
+**Say which version of rungate you are on, and how you know.** A report
+against a version nobody can identify cannot be reproduced, and will be
+closed as such.
+
+Where that number lives depends on how rungate reached this project, and
+there is no one key to read:
+
+- a declared dependency — the `rungate` entry under `dependencies` or
+  `devDependencies` in `package.json`
+- a workspace or `link:` resolution — the entry is a path, not a version,
+  so read `version` out of the resolved package's own `package.json`
+- **this project IS rungate** — then nothing below applies. There is no
+  upstream to report to: what you found is an ordinary issue on this
+  repository, and the version is the top-level `version` field.
+
+If none of those resolves, write **UNMEASURED** and say which you tried.
+Guessing a version is worse than not supplying one — it sends the
+maintainers to the wrong tree.
 
 ## Do not open a pull request first
 

@@ -726,9 +726,27 @@ Check the claim against the repo before you build on it.
   // direct access site, which is the same trap `STEPS_NOT_MINIMAL` in
   // `lib/scaffold/profiles.ts` describes in its own comment.
   //
-  // `package.json` is what is left, and it is the honest scope rather than
-  // the residue: it holds the `rungate` dependency entry, which is the
-  // version this rule tells the reporter to quote.
+  // `package.json` is what is left, and the first version of this comment
+  // justified it with "it holds the `rungate` dependency entry, which is the
+  // version this rule tells the reporter to quote." **That was false**, and
+  // the AI review of #1813 said so: this repository's own `package.json` is
+  // `"name": "rungate"` with a top-level `version`, no such entry — and a
+  // workspace-linked consumer's entry is a path, not a version.
+  //
+  // The scope stands on the honest reading instead. `package.json` is the
+  // file that answers *what is rungate to this project* — a dependency, a
+  // link, or the project itself — and that is precisely the question an
+  // agent is holding when it needs this rule. The rule now enumerates all
+  // three and says UNMEASURED when none resolves.
+  //
+  // **No `isHarnessItself` branch**, which is where the review's own fix
+  // pointed. It catches rungate's own repo and NOT the workspace-linked
+  // consumer the review named in the same paragraph, so it closes one of
+  // the two cases and reads as if it closed both — the shape #1810 spent
+  // three rounds on, each repair loosening the branch the next one arrived
+  // through. Prose covering every case has no branch to drift, and
+  // `test/gen-agents-md.test.ts` asserts the harness and a consumer get
+  // byte-identical content so none can be added without being noticed.
   //
   // Emitted into EVERY profile, including minimal. `RULES_NOT_MINIMAL`
   // excludes a rule naming machinery the profile did not install, and this
@@ -793,9 +811,24 @@ know one from here and you are not expected to:
 - **Files this will change** — if you know; *unknown* is an honest answer
 - **How we will know** — what you would run to see it fixed
 
-Say which version you are on: the \`rungate\` entry in your
-\`package.json\`. A report against a version nobody can identify cannot be
-reproduced, and will be closed as such.
+**Say which version of rungate you are on, and how you know.** A report
+against a version nobody can identify cannot be reproduced, and will be
+closed as such.
+
+Where that number lives depends on how rungate reached this project, and
+there is no one key to read:
+
+- a declared dependency — the \`rungate\` entry under \`dependencies\` or
+  \`devDependencies\` in \`package.json\`
+- a workspace or \`link:\` resolution — the entry is a path, not a version,
+  so read \`version\` out of the resolved package's own \`package.json\`
+- **this project IS rungate** — then nothing below applies. There is no
+  upstream to report to: what you found is an ordinary issue on this
+  repository, and the version is the top-level \`version\` field.
+
+If none of those resolves, write **UNMEASURED** and say which you tried.
+Guessing a version is worse than not supplying one — it sends the
+maintainers to the wrong tree.
 
 ## Do not open a pull request first
 
