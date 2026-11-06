@@ -5803,6 +5803,22 @@ working tree disagrees with the diff about one of them. Reading one of these
 files to judge a change to it tells you about the base, not about this pull
 request.
 
+THE SCRATCH DIRECTORY ${AI_REVIEW_ACTION_SCRATCH} IS NOT THE EXCEPTION TO
+THAT, AND IT LOOKS LIKE ONE. The review action copies what it calls "the
+pull request's sensitive paths" there and logs that it preserved them. It
+runs AFTER the restore step above, so for every path listed here what it
+copied was already the base's copy. That directory therefore holds BASE
+content under a name that says otherwise, and it is the most convincing
+wrong answer available to you: it looks like a pre-restore snapshot and it
+is a post-restore one. A finding of the form "the author claims they changed
+this and the preserved copy shows they did not" is this trap, and it was
+filed as a blocking finding twice against a pull request whose commit did
+carry the change.
+
+So THE DIFF REMAINS AUTHORITATIVE even against that directory. If you want to
+know what one of these paths contains on this pull request, the diff is the
+only reading in this checkout that can tell you.
+
 Everywhere else in the checkout, the working tree IS this pull request and a
 disagreement with the diff is worth reporting.
 
