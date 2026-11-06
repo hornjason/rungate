@@ -49,10 +49,33 @@ import {
 import {
   milestoneBody,
   milestonePlan,
+  placementCoverage,
   placementReading,
   uncoveredByMilestone,
 } from "../lib/spec-placement";
+import { specCriteriaIn } from "../lib/board-mirror";
 import { readMilestonePrefix } from "../lib/live-issues";
+
+/**
+ * Which files are specs, asked of the one sweep that already decides it.
+ *
+ * `specCriteriaIn` excludes `NOT_A_SPEC`, locates nested specs, and refuses
+ * rather than returning a short list. Walking `specs/` here instead would be
+ * a second decider for the same question, and no behavioural test of either
+ * could see the two disagree.
+ */
+function listSpecPaths(root: string): {
+  reading: "MEASURED" | "UNMEASURED";
+  unmeasuredReasons: string[];
+  paths: string[];
+} {
+  const sweep = specCriteriaIn(root);
+  return {
+    reading: sweep.reading,
+    unmeasuredReasons: [...sweep.unmeasuredReasons],
+    paths: sweep.specs.map(s => s.path),
+  };
+}
 
 /**
  * THE one non-zero exit. One site, so `test/plan-spec.test.ts` can build a
@@ -128,13 +151,49 @@ const LIVE_GITHUB: PlanSpecGitHub = {
 };
 
 const USAGE = `rungate plan-spec <spec.md> --repo <owner/name> --prefix <name> [--write] [--json]
+rungate plan-spec --coverage [--project-root <dir>] [--json]
 
   --repo     owner/name. Defaults to $GITHUB_REPOSITORY.
   --prefix   the milestone name prefix, e.g. "Convergence" gives
              "Convergence Phase 1 — stop the repeats". Required: deriving it
              from the filename would call the live milestones something else.
   --write    create and rename milestones. Without it, nothing is mutated.
-  --json     the whole reading, for something other than a person.`;
+  --json     the whole reading, for something other than a person.
+  --coverage every spec in the tree and whether its criteria are placed,
+             instead of one spec. Takes no spec, reaches no network and
+             writes nothing. A spec with no placement table is named as
+             UNPLANNED rather than contributing nothing (SC-2611).`;
+
+/**
+ * The repo-wide reading, printed. Reaches no network and writes nothing.
+ *
+ * It exits non-zero on UNMEASURED and on nothing else. An unplanned spec is
+ * a FINDING, not a refusal: 25 of 26 were unplanned when this was written, so
+ * a non-zero exit would be a gate nobody could ever get green and everybody
+ * would learn to pass `|| true`.
+ */
+function reportCoverage(root: string, asJson: boolean): number {
+  const r = placementCoverage(root, listSpecPaths, (base, path) =>
+    readFileSync(join(base, path), "utf-8"),
+  );
+  if (asJson) {
+    console.log(JSON.stringify(r, null, 2));
+    return r.reading === "UNMEASURED" ? REFUSAL_EXIT : 0;
+  }
+  if (r.reading === "UNMEASURED") {
+    return refuse(false, `UNMEASURED — ${r.unmeasuredReasons.join("; ")}`);
+  }
+  console.log(`placement coverage — ${r.specs.length} spec(s) under ${join(root, "specs")}\n`);
+  console.log(`  PLANNED      ${r.planned.length}`);
+  console.log(`  UNPLANNED    ${r.unplanned.length}`);
+  console.log(`  NO_CRITERIA  ${r.noCriteria.length}\n`);
+  for (const s of r.specs.filter(s => s.state === "UNPLANNED")) {
+    console.log(`  UNPLANNED  ${s.path} — ${s.criteria} criteria, ${s.placed} placed`);
+    for (const why of s.reasons) console.log(`             ${why}`);
+  }
+  if (r.unplanned.length === 0) console.log("  every spec stating criteria places them.");
+  return 0;
+}
 
 export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Promise<number> {
   let parsed;
@@ -146,6 +205,7 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
         prefix: { type: "string" },
         write: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
+        coverage: { type: "boolean", default: false },
         "project-root": { type: "string" },
       },
       allowPositionals: true,
@@ -159,6 +219,18 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
   }
 
   const { values, positionals } = parsed;
+  // Before the spec argument is demanded: --coverage is the whole-tree
+  // reading and there is no one spec it could be given.
+  if (values.coverage) {
+    if (positionals.length > 0) {
+      return refuse(
+        values.json,
+        `--coverage reads every spec, so it takes none; got ${JSON.stringify(positionals[0])}`,
+        true,
+      );
+    }
+    return reportCoverage(values["project-root"] ?? process.cwd(), values.json);
+  }
   const specArg = positionals[0];
   if (!specArg) {
     return refuse(values.json, `no spec given`, true);
