@@ -20,9 +20,9 @@
  *
  * ## The phase sequence is the phases that EXIST, never N-1 arithmetic
  *
- * {@link dependencyPlan} sorts the phases that actually carry issues and
- * chains adjacent members of that list. A spec whose placement table skips a
- * number — Phase 0, 1, 3 with nothing in 2 — would otherwise leave Phase 3
+ * {@link dependencyPlan} sorts the phases that actually carry issues and hands
+ * that list to {@link chainAdjacentPhases}. A spec whose placement table skips
+ * a number — Phase 0, 1, 3 with nothing in 2 — would otherwise leave Phase 3
  * blocked by a phase that does not exist, which reads as *unblocked* and puts
  * the last phase in the Ready lane beside the first.
  *
@@ -165,6 +165,36 @@ export function degenerateReasons(r: {
 }
 
 /**
+ * The cross product of each phase with the one immediately before it in the
+ * list it is handed — the whole of the ordering rule, in one symbol.
+ *
+ * `phases` must be the phases that EXIST, ascending. This function does no
+ * arithmetic on the numbers: it pairs index `k` with index `k - 1`, so a
+ * placement table that skips Phase 2 chains 1 → 3 rather than leaving Phase 3
+ * blocked by a phase carrying nothing. Passing an unsorted list, or one
+ * containing a phase with no issues, is what a caller must not do.
+ *
+ * It lives here rather than inline in {@link dependencyPlan} because SC-2606
+ * is the criterion that this rule is *named*: a reader looking for where
+ * adjacency is decided has one symbol to open, and a mutation of it moves
+ * every edge the plan reports.
+ */
+export function chainAdjacentPhases(
+  phases: readonly number[],
+  byPhase: ReadonlyMap<number, readonly DepIssue[]>,
+): DepEdge[] {
+  const edges: DepEdge[] = [];
+  for (let k = 1; k < phases.length; k++) {
+    for (const blocked of byPhase.get(phases[k]) ?? []) {
+      for (const blocker of byPhase.get(phases[k - 1]) ?? []) {
+        edges.push({ blocked: blocked.number, blocker: blocker.number });
+      }
+    }
+  }
+  return edges;
+}
+
+/**
  * What the repository's `blocked by` edges should be, given the phases its
  * issues sit in.
  *
@@ -202,14 +232,7 @@ export function dependencyPlan(
 
   // Adjacent members of the phases that EXIST. See the header: `p - 1` would
   // leave a phase after a gap blocked by nothing and reading as startable.
-  const derived: DepEdge[] = [];
-  for (let k = 1; k < phases.length; k++) {
-    for (const blocked of byPhase.get(phases[k])!) {
-      for (const blocker of byPhase.get(phases[k - 1])!) {
-        derived.push({ blocked: blocked.number, blocker: blocker.number });
-      }
-    }
-  }
+  const derived = chainAdjacentPhases(phases, byPhase);
 
   const key = (e: DepEdge): string => `${e.blocked}<-${e.blocker}`;
   const derivedKeys = new Set(derived.map(key));
