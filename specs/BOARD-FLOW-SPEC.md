@@ -295,7 +295,7 @@ exists to remove.
 | | Eligibility | Ordering | Size |
 |---|---|---|---|
 | before | unblocked + unclaimed + **current phase** | — | unbounded |
-| now | unblocked + unclaimed | by phase, then age | **capped at 8** |
+| now | unblocked + unclaimed | by phase, then age | **capped, derived** |
 
 **Phase moves from eligibility to ordering.** It was doing crowd-control
 work inside an eligibility test, and the cap is the thing that was actually
@@ -304,12 +304,33 @@ it made 36 of 46 open issues Ready — "the backlog with a different name".
 A cap answers that; a phase filter answers it by excluding 32 of 35
 candidates.
 
-**The depth is derived, not typed in.** Little's Law on live throughput —
-237 delivered over 14 days ≈ 17/day, half a day of cover → 8 — recomputed on
-every reading, so it rises when a swarm runs and falls when one stops. A
-literal goes stale in both directions and a number nobody can re-derive is a
-number nobody changes. `READY_TOLERANCE_DAYS` in `lib/board-ready-rule.ts`
-is the only constant, and it is a *tolerance*, not a depth.
+**The depth is derived, not typed in.** Little's Law on live throughput,
+recomputed on every reading, so it rises when a swarm runs and falls when
+one stops. A literal goes stale in both directions and a number nobody can
+re-derive is a number nobody changes. `READY_TOLERANCE_DAYS` in
+`lib/board-ready-rule.ts` is the only constant, and it is a *tolerance*, not
+a depth.
+
+**The depth is 4 today, not the 8 quoted when the decision was taken.** The
+`237 over 14 days ≈ 17/day` figure put to Jason does not reproduce. Measured
+2026-11-05 by paging every closed issue and reading `closedAt`:
+
+| window | delivered | not_planned | per day | depth |
+|---|---|---|---|---|
+| 7 days | 9 | 0 | 1.3 | 1 |
+| **14 days** | **132** | 4 | **9.4** | **4** |
+| 30 days | 646 | 23 | 21.5 | 10 |
+
+So the mechanism Jason chose — *derived from live throughput* — is what
+shipped, and it currently yields 4. **The window is the live decision here,
+not the depth**: the 7-day and 30-day readings differ by a factor of ten,
+because 30 days contains a swarm and the last 7 do not. 14 days is the
+compromise and it is stated in `scripts/work-status.ts` with its reasoning,
+not buried in a constant.
+
+Only delivered closures count. A cancellation leaves the system without
+adding capacity, so including it would deepen the queue exactly when the
+repository is abandoning work.
 
 **A binding cap does not idle agents.** A pull frees a slot and the next
 event refills it; replenishment is the policy, the number is not.
@@ -322,6 +343,14 @@ battery is in `test/board-ready-rule.test.ts`: four mutants, readings
 `3/3`, `1/0`, `1/1`, `1/4` against predictions `3/3`, `1/0`, `1/1`, `1/4` —
 every mutant that changes a NUMBER reddens both files, which is the property
 two separate definitions could not have.
+
+**The first live run found a defect no fixture had.** Ready held 5 against
+a derived depth of 4 and the row read `OK`: `count > against` was
+unreachable for a lane judged against an unbounded repo-wide count, so the
+OK branch had quietly absorbed it. A cap makes it reachable immediately,
+because the lane was filled under the rule the cap replaces. `OVER` is now
+a verdict of its own — SHORT means promote more, OVER means stop promoting
+and let the queue drain.
 
 Still open, and deliberately a separate change: `isReady` keeps the phase
 gate until the two writers (`scripts/board-mirror.ts`, `scripts/board-ready.ts`)

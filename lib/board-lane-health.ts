@@ -44,6 +44,21 @@ export type LaneHealth =
   | "OK"
   /** Has a writer and a denominator, and is below it. */
   | "SHORT"
+  /**
+   * Above its denominator.
+   *
+   * Only reachable since Ready gained a cap, and it appeared on the first
+   * live run: the lane held 5 against a derived depth of 4, filled under
+   * the uncapped rule. Before the cap, `count > against` could not happen
+   * for any lane with a repo-wide denominator, so OK absorbed it.
+   *
+   * It is a verdict of its own for the reason SHORT and UNWRITTEN are:
+   * **the remedy is different.** SHORT means promote more, OVER means stop
+   * promoting and let the queue drain. Reporting an over-full commitment
+   * point as OK is the lane lying in the other direction, which is exactly
+   * what the negative control in the walk-through exists to catch.
+   */
+  | "OVER"
   /** Empty while its denominator is not. Nothing writes this lane. */
   | "UNWRITTEN"
   /** No denominator exists, so the count is reported and nothing is judged. */
@@ -220,6 +235,15 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
         against: t.against,
         health: "SHORT" as const,
         why: `${t.against} ${t.label}, so up to ${t.against - count} are missing from this lane`,
+      };
+    }
+    if (count > t.against) {
+      return {
+        lane,
+        count,
+        against: t.against,
+        health: "OVER" as const,
+        why: `${t.against} ${t.label}, and the lane holds ${count} — ${count - t.against} too many`,
       };
     }
     return {

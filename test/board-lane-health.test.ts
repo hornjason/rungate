@@ -70,6 +70,24 @@ describe("a lane count is only a reading against what should be in it", () => {
     expect(by(slow, "Ready").against, "20/14 is 1.4 a day; half a day is 0, floored up to 1").toBe(1);
   });
 
+  // Found on the FIRST live run of the capped reading, not in review: the
+  // board held 5 in Ready against a derived depth of 4 — filled under the
+  // uncapped rule — and the row read OK. Before the cap, `count > against`
+  // could not happen for a lane with a repo-wide denominator, so OK
+  // absorbed it silently. SHORT and OVER have opposite remedies.
+  test("SC-2712: a lane above its depth is OVER, not OK", () => {
+    const r = by(census({ counts: new Map([["Ready", 5]]), throughput: { delivered: 132, days: 14 } }), "Ready");
+    expect(r.against, "132/14 is 9.4 a day; half a day is 4").toBe(4);
+    expect(r.health, "an over-full commitment point reported as OK is the lane lying the other way").toBe("OVER");
+    expect(r.why).toContain("1 too many");
+  });
+
+  // The converse, so OVER is not simply what a non-empty lane always says.
+  test("SC-2712: a lane exactly at its depth is OK, not OVER", () => {
+    const r = by(census({ counts: new Map([["Ready", 4]]), throughput: { delivered: 132, days: 14 } }), "Ready");
+    expect(r.health).toBe("OK");
+  });
+
   // `.claude/rules/config-access.md`: a built-in default substituted for a
   // failed read is indistinguishable from a real one, so there is no
   // fallback depth.
