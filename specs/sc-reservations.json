@@ -106,10 +106,10 @@
       "note": "#1038 - commits that exist on this machine and nowhere else. Exactly the two ids consumed rather than a block of twenty: PROJECT-STATE.md on main names SC-2636 as the board-identifier config reader and no block reserves it, so a wider block would have squatted on a published plan's id without colliding with anything a diff could show. 2600-2629 (rg/pipeline-spec) is the highest declared block. Delete when the PR merges."
     },
     {
-      "owner": "rg/ready-cap",
-      "from": 2710,
+      "owner": "rg/ready-writers",
+      "from": 2713,
       "to": 2729,
-      "note": "Jason's Ready decision of 2026-11-05 on #1758: Ready is capped at a depth derived from live throughput. 2710-2712 consumed by lib/board-ready-rule.ts and test/board-ready-rule.test.ts; the rest is headroom for the follow-up that drops the phase gate from isReady and caps the two writers. Declared above every consumed id (the highest in the tree was SC-2692) rather than above every DECLARED block, because blocks are pruned on merge and the declared maximum is below several ids already in use. Delete when the PR merges."
+      "note": "Continues Jason's Ready decision of 2026-11-05 on #1758: the writer fills to the same derived depth the reading judges against. 2713-2716 consumed by lib/board-throughput.ts and lib/board-ready-rule.ts; the rest is headroom for the follow-up that drops the phase gate from isReady and caps the hand-run board-mirror writer. Replaces rg/ready-cap 2710-2729, pruned here on the merge of #1792 (2710-2712 stay consumed in the spec). Delete when the PR merges."
     }
   ]
 }

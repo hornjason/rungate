@@ -23,17 +23,7 @@ import { assertTokenMayReach, resolveGitHubToken } from "../lib/github";
 import { isPickable, orderReading, type TrackerFacts } from "../lib/work-status";
 import { laneHealth, laneHealthLines } from "../lib/board-lane-health";
 import type { Throughput } from "../lib/board-ready-rule";
-
-/**
- * The window throughput is measured over.
- *
- * Two weeks: long enough that one quiet day does not halve Ready's depth,
- * short enough that a swarm starting is visible inside a day or two. It is
- * a raw day count rather than working days on purpose — a window that
- * skipped weekends would raise the rate above the speed the queue actually
- * drains.
- */
-const THROUGHPUT_DAYS = 14;
+import { measureThroughput } from "../lib/board-throughput";
 
 const REPO = "hornjason/rungate";
 // **Split once, so GraphQL and REST cannot disagree about the repository.**
@@ -459,42 +449,36 @@ for (const s of status.values()) {
 // A failed or throttled read must not say "nothing was ever cancelled" —
 // that is a green Cancelled lane produced by a measurement that did not
 // happen. `null` travels into the census and refuses the row.
-//
-// **The same pass measures throughput**, which Ready's depth is derived
-// from. It costs nothing extra: the page already carries every closed issue
-// and only needed `closedAt` adding. Doing it as a separate `closed:>DATE`
-// search would reintroduce exactly the qualifier problem described above,
-// where an unparsed value and a true zero are the same bytes.
 let cancelledClosed: number | null = null;
-let throughput: Throughput | null = null;
 try {
   const [owner, name] = REPO.split("/");
   const q = `query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
-    issues(states:CLOSED,first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{stateReason closedAt}}}}`;
+    issues(states:CLOSED,first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{stateReason}}}}`;
   let n = 0;
-  let delivered = 0;
-  const since = Date.now() - THROUGHPUT_DAYS * 86_400_000;
   let c: string | null = null;
   do {
     const d = await gql(q, { o: owner, n: name, c });
     const page = d.repository.issues;
-    for (const i of page.nodes) {
-      if (i?.stateReason === "NOT_PLANNED" || i?.stateReason === "DUPLICATE") n++;
-      // Delivered, not merely closed: a cancellation leaves the system
-      // without adding capacity, so counting it would inflate the depth
-      // exactly when the repository is abandoning work.
-      if (i?.stateReason === "COMPLETED" && Date.parse(i.closedAt ?? "") >= since) delivered++;
-    }
+    for (const i of page.nodes) if (i?.stateReason === "NOT_PLANNED" || i?.stateReason === "DUPLICATE") n++;
     c = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
   } while (c);
   cancelledClosed = n;
-  throughput = { delivered, days: THROUGHPUT_DAYS };
 } catch (e) {
-  // Both readings come from the one pass, so both are unknown together —
-  // and `null` rather than zero for the same reason in both cases: a failed
-  // read must not spell the same as a quiet fortnight.
-  console.log(`  (the closed-issue pass failed, so the cancelled count and throughput are unread: ${e})`);
+  console.log(`  (the cancelled-closure count could not be read: ${e})`);
 }
+
+// **Ready's depth comes from `lib/board-throughput.ts`, not from a window
+// chosen here.** The writer (`scripts/board-ready.ts`) derives its cap from
+// the same function, so the lane this report judges and the lane the
+// workflow fills are the same size by construction. A second window typed
+// out in this file is the two-definitions defect the ready rule exists to
+// remove, reintroduced one layer down.
+const [tOwner, tName] = REPO.split("/");
+const throughput: Throughput | null = await measureThroughput(gql, tOwner!, tName!);
+if (throughput === null) {
+  console.log(`  (throughput could not be read, so Ready has no depth and is UNMEASURED)`);
+}
+
 const laneReadings = laneHealth({
   counts: laneCounts,
   pickable: pickable.length,

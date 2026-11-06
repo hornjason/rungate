@@ -1,5 +1,5 @@
 /**
- * Covers SC-2710, SC-2711, SC-2712 (specs/BOARD-FLOW-SPEC.md).
+ * Covers SC-2710, SC-2711, SC-2712, SC-2715, SC-2716 (specs/BOARD-FLOW-SPEC.md).
  *
  * ## The mutation battery, predicted before it was run
  *
@@ -37,7 +37,16 @@
  * typed out in both files and the mutant has to break it in both.
  */
 import { describe, expect, test } from "bun:test";
-import { READY_TOLERANCE_DAYS, readyCap, readyTarget } from "../lib/board-ready-rule";
+import {
+  READY_TOLERANCE_DAYS,
+  readyCap,
+  readyOrder,
+  readyTarget,
+  selectReady,
+  type Rankable,
+} from "../lib/board-ready-rule";
+
+const item = (number: number, phase: number | null): Rankable => ({ number, phase });
 
 /** The live reading of 2026-11-05: 237 issues delivered over 14 days. */
 const LIVE = { delivered: 237, days: 14 } as const;
@@ -98,5 +107,85 @@ describe("SC-2712: the lane is judged against the capped target", () => {
       readyTarget(3, 8),
       "a lane holding every eligible item is healthy however far below its cap it sits",
     ).toBe(3);
+  });
+});
+
+describe("SC-2715: phase orders the queue, and never empties it", () => {
+  test("lower phase first, then older issue first", () => {
+    const got = [item(50, 1), item(10, 1), item(99, 0), item(7, 2)].sort(readyOrder).map(i => i.number);
+    expect(got).toEqual([99, 10, 50, 7]);
+  });
+
+  // The decision of 2026-11-05, as a case. Under the rule this replaces a
+  // phase-less issue was not merely last, it was INELIGIBLE — and 22 of the
+  // 35 pickable issues that day had no milestone at all.
+  test("a phase-less issue sorts LAST, and is still in the queue", () => {
+    const got = [item(3, null), item(9, 2), item(4, null), item(1, 0)].sort(readyOrder).map(i => i.number);
+    expect(
+      got,
+      "phase-less items come after every phased one and before nothing — ordering, not a gate",
+    ).toEqual([1, 9, 3, 4]);
+  });
+
+  test("a queue of only phase-less issues is ordered by age, not discarded", () => {
+    expect([item(8, null), item(2, null)].sort(readyOrder).map(i => i.number)).toEqual([2, 8]);
+  });
+});
+
+describe("SC-2716: the cap binds, and replenishes as slots free", () => {
+  const twelve = Array.from({ length: 12 }, (_, i) => item(i + 1, 0));
+
+  test("more eligible work than depth promotes exactly the depth, in order", () => {
+    expect(selectReady(twelve, 4, 0).promote.map(i => i.number)).toEqual([1, 2, 3, 4]);
+  });
+
+  test("a full lane promotes nothing", () => {
+    const r = selectReady(twelve, 4, 4);
+    expect(r.promote).toEqual([]);
+    expect(r.why).toContain("full");
+  });
+
+  test("a pull frees a slot and the next event refills exactly that many", () => {
+    expect(selectReady(twelve, 4, 2).promote.map(i => i.number)).toEqual([1, 2]);
+    expect(selectReady(twelve, 4, 3).promote.map(i => i.number)).toEqual([1]);
+  });
+
+  test("a lane over its depth promotes nothing rather than a negative count", () => {
+    expect(selectReady(twelve, 4, 11).promote).toEqual([]);
+  });
+
+  test("less eligible work than depth promotes all of it", () => {
+    expect(selectReady([item(5, 1), item(2, 0), item(9, null)], 4, 0).promote.map(i => i.number)).toEqual([
+      2, 5, 9,
+    ]);
+  });
+
+  // Promoting everything eligible on an unreadable cap is the 36-of-46
+  // reading performed automatically, which is the failure the cap exists
+  // to prevent.
+  test("an unreadable cap promotes nothing and says UNMEASURED", () => {
+    const r = selectReady(twelve, null, 0);
+    expect(r.promote).toEqual([]);
+    expect(r.why).toContain("UNMEASURED");
+  });
+
+  test("selection does not mutate its input", () => {
+    const given = [item(3, 1), item(1, 0)];
+    selectReady(given, 4, 0);
+    expect(given.map(i => i.number), "sorting in place reorders the caller's decision record").toEqual([3, 1]);
+  });
+
+  // The binding between the two halves, as behaviour: what the health
+  // reading demands and what the writer supplies are the same number.
+  test("what the writer promotes into an empty lane equals the target the reading judges against", () => {
+    for (const eligible of [0, 1, 3, 4, 12, 34]) {
+      const items = Array.from({ length: eligible }, (_, i) => item(i + 1, 0));
+      expect(
+        selectReady(items, 4, 0).promote.length,
+        `with ${eligible} eligible the reading and the writer must not disagree`,
+      // Non-null because the cap is a literal 4 here; `readyTarget` only
+      // returns null for an unreadable cap, which the case above covers.
+      ).toBe(readyTarget(eligible, 4)!);
+    }
   });
 });
