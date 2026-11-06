@@ -45,7 +45,7 @@ describe("BR-1..BR-6: the fan-out from one closed blocker", () => {
   // The case in the issue, exactly: two dependents, one of which has a second
   // open blocker. The first moves; the second does not.
   test("BR-1: a freed dependent moves, one still blocked does not", () => {
-    const out = fanoutDecisions([dep({ number: 10 }), dep({ number: 11, blockedByOpen: 1 })], 3, "Ready");
+    const out = fanoutDecisions([dep({ number: 10 }), dep({ number: 11, blockedByOpen: 1 })], "Ready");
     expect(out.filter(d => d.move).map(d => d.number)).toEqual([10]);
     const held = out.find(d => d.number === 11)!;
     expect(held.move).toBe(false);
@@ -56,7 +56,7 @@ describe("BR-1..BR-6: the fan-out from one closed blocker", () => {
   // the board's contents depend on which issues happened to close, which is
   // a different and much larger claim than the one #1744 makes.
   test("BR-2: an issue that is not on the board is left alone, not added", () => {
-    const [d] = fanoutDecisions([dep({ onBoard: false, boardStatus: null })], 3, "Ready");
+    const [d] = fanoutDecisions([dep({ onBoard: false, boardStatus: null })], "Ready");
     expect(d.move).toBe(false);
     if (!d.move) expect(d.why).toContain("not on the board");
   });
@@ -64,26 +64,36 @@ describe("BR-1..BR-6: the fan-out from one closed blocker", () => {
   // Idempotence. The trigger is `issues: [closed]`, and a close can be
   // delivered more than once; a second delivery must write nothing.
   test("BR-3: an issue already in Ready is not rewritten", () => {
-    const [d] = fanoutDecisions([dep({ boardStatus: "Ready" })], 3, "Ready");
+    const [d] = fanoutDecisions([dep({ boardStatus: "Ready" })], "Ready");
     expect(d.move).toBe(false);
     if (!d.move) expect(d.why).toContain("already");
   });
 
-  // The phase-frontier rule, inherited rather than restated. A dependent in
-  // a later phase is unblocked and still not next.
-  test("BR-4: a later phase is unblocked and still not Ready", () => {
-    const [d] = fanoutDecisions([dep({ phase: 7 })], 3, "Ready");
-    expect(d.move).toBe(false);
+  // **Inverted on 2026-11-05 with the phase gate.** This read "a later
+  // phase is unblocked and still not Ready" and asserted false. Phase is
+  // ordering now, not eligibility, so the same dependent must move — and
+  // the case stays, inverted, because deleting it would let the gate come
+  // back without a single test objecting.
+  test("BR-4: a later phase is unblocked and therefore Ready", () => {
+    const [d] = fanoutDecisions([dep({ phase: 7 })], "Ready");
+    expect(d.move, "phase orders the lane; it does not gate entry to it").toBe(true);
+  });
+
+  test("BR-4b: a dependent in NO phase is Ready too", () => {
+    const [d] = fanoutDecisions([dep({ phase: null })], "Ready");
+    expect(d.move, "an unphased issue was refused by the gate and is now merely ranked last").toBe(
+      true,
+    );
   });
 
   test("BR-5: an assigned dependent is somebody's, not Ready", () => {
-    expect(fanoutDecisions([dep({ assignees: 1 })], 3, "Ready")[0].move).toBe(false);
+    expect(fanoutDecisions([dep({ assignees: 1 })], "Ready")[0].move).toBe(false);
   });
 
   // The blocker that closed is itself a dependent of nothing; but a dependent
   // that closed in the same window must not be moved into Ready.
   test("BR-6: a CLOSED dependent is never moved", () => {
-    expect(fanoutDecisions([dep({ state: "CLOSED" })], 3, "Ready")[0].move).toBe(false);
+    expect(fanoutDecisions([dep({ state: "CLOSED" })], "Ready")[0].move).toBe(false);
   });
 });
 
@@ -93,7 +103,7 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
   // genuinely blocked issue to Ready — the fail-open shape, in the one place
   // where it writes to the board.
   test("BR-17: an unreadable blocker count does not move the issue", () => {
-    const [d] = fanoutDecisions([dep({ blockedByOpen: null })], 3, "Ready");
+    const [d] = fanoutDecisions([dep({ blockedByOpen: null })], "Ready");
     expect(d.move).toBe(false);
     if (!d.move) expect(d.why).toContain("UNMEASURED");
   });
@@ -101,7 +111,7 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
   // The positive control: the same issue with a READ count of zero does
   // move, so BR-17 is not green because nothing ever moves.
   test("BR-18: a measured zero is not the same reading, and does move", () => {
-    expect(fanoutDecisions([dep({ blockedByOpen: 0 })], 3, "Ready")[0].move).toBe(true);
+    expect(fanoutDecisions([dep({ blockedByOpen: 0 })], "Ready")[0].move).toBe(true);
   });
 
   /**
@@ -119,8 +129,8 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
    * through — is never named. `onBoard` is the axis that separates them.
    */
   test("BR-28: on the board with no Status is not the same reading as absent from it", () => {
-    const [absent] = fanoutDecisions([dep({ onBoard: false, boardStatus: null })], 3, "Ready");
-    const [unset] = fanoutDecisions([dep({ onBoard: true, boardStatus: null })], 3, "Ready");
+    const [absent] = fanoutDecisions([dep({ onBoard: false, boardStatus: null })], "Ready");
+    const [unset] = fanoutDecisions([dep({ onBoard: true, boardStatus: null })], "Ready");
     expect(absent.move).toBe(false);
     expect(unset.move).toBe(false);
     if (absent.move || unset.move) throw new Error("unreachable — both are refusals");
@@ -144,14 +154,14 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
    * structural half, so a third field cannot arrive with `?? 0`.
    */
   test("BR-29: an unreadable assignee count does not move the issue", () => {
-    const [d] = fanoutDecisions([dep({ assignees: null })], 3, "Ready");
+    const [d] = fanoutDecisions([dep({ assignees: null })], "Ready");
     expect(d.move).toBe(false);
     if (!d.move) expect(d.why).toContain("UNMEASURED");
   });
 
   // The positive control, so BR-29 is not green because nothing moves.
   test("BR-30: a measured zero assignees is a reading, and does move", () => {
-    expect(fanoutDecisions([dep({ assignees: 0 })], 3, "Ready")[0].move).toBe(true);
+    expect(fanoutDecisions([dep({ assignees: 0 })], "Ready")[0].move).toBe(true);
   });
 
   /**
@@ -343,8 +353,11 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
   // like an optimisation — one of these rows disagrees.
   test("BR-7: move equals isReady on every combination, for a board issue", () => {
     const states = ["OPEN", "CLOSED"];
+    // **The phase axis stays, and its job reversed.** It used to prove the
+    // module inherited the gate; it now proves the module did not KEEP one
+    // after `isReady` dropped it. A grid that lost this axis when the gate
+    // went would be green for a fanout that still refused phase 7.
     const phases: (number | null)[] = [null, 3, 7];
-    const frontiers: (number | null)[] = [null, 3];
     let compared = 0;
     let unmeasured = 0;
     for (const state of states)
@@ -356,29 +369,30 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
           // `assignees: null` joined the same axis in round 8 for the same
           // reason — `isReady` takes a number, so an unread count is a
           // question it cannot be asked rather than one it answers false.
-          for (const assignees of [0, 1, null])
-            for (const frontier of frontiers) {
-              const d = dep({ state, phase, blockedByOpen, assignees });
-              const [got] = fanoutDecisions([d], frontier, "Ready");
-              if (blockedByOpen === null || assignees === null) {
-                expect(got.move).toBe(false);
-                unmeasured++;
-              } else {
-                expect(got.move).toBe(isReady({ ...d, blockedByOpen, assignees }, frontier));
-                compared++;
-              }
+          for (const assignees of [0, 1, null]) {
+            const d = dep({ state, phase, blockedByOpen, assignees });
+            const [got] = fanoutDecisions([d], "Ready");
+            if (blockedByOpen === null || assignees === null) {
+              expect(got.move).toBe(false);
+              unmeasured++;
+            } else {
+              expect(got.move).toBe(isReady({ ...d, blockedByOpen, assignees }));
+              compared++;
             }
+          }
     // The grid is the instrument; one that shrank to nothing would pass
     // vacuously, and both halves have to be non-empty for the split above
     // to mean anything. 2 states x 3 phases x 3 blocker readings x 3
-    // assignee readings x 2 frontiers = 108, of which the 48 fully-measured
-    // rows are the ones isReady can be asked about.
-    expect(compared).toBe(48);
-    expect(unmeasured).toBe(60);
+    // assignee readings = 54, of which the 24 fully-measured rows are the
+    // ones isReady can be asked about. It was 108 and 48 with a frontier
+    // axis that no longer exists; asserting the new totals is what makes
+    // the shrink deliberate rather than a quiet loss of coverage.
+    expect(compared).toBe(24);
+    expect(unmeasured).toBe(30);
   });
 
   test("BR-8: and a row of that grid genuinely moves — the grid is not all false", () => {
-    expect(fanoutDecisions([dep()], 3, "Ready").filter(d => d.move).length).toBe(1);
+    expect(fanoutDecisions([dep()], "Ready").filter(d => d.move).length).toBe(1);
   });
 });
 

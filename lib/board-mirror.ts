@@ -397,42 +397,41 @@ export function openFrontier(
 }
 
 /**
- * READY means *pick this up next*, which is narrower than *nothing is
- * blocking it*.
+ * READY means *pick this up next*: open, nothing blocking it, nobody on it.
+ *
+ * ## The phase gate used to be here, and the cap replaced it
  *
  * The first run of this made 36 of 46 open issues Ready, because the
- * repository has almost no dependency edges and an issue with no blockers is
- * trivially unblocked. A lane holding 36 items is the backlog with a
- * different name, and it answers the question Jason actually asked — *what
- * can I pick up* — with "anything", which is the same as not answering.
+ * repository has almost no dependency edges and an issue with no blockers
+ * is trivially unblocked. A lane holding 36 items is the backlog with a
+ * different name, and it answers *what can I pick up* with "anything",
+ * which is the same as not answering.
  *
- * So readiness carries the phase order too: an issue is Ready when it is
- * unblocked, unassigned, AND sits in the earliest phase that still has open
- * work. Later phases are not ready because the spec says they come later,
- * and that ordering is data — the placement table — not a judgement made
- * here.
+ * The fix at the time was to require the earliest phase with open work.
+ * That made the lane small by making it **narrow**, and the two are not
+ * the same thing: an unblocked, unclaimed issue in a later phase could not
+ * enter Ready even when the lane sat under its depth and the earlier phase
+ * had nothing available. The lane refused to answer the question it exists
+ * for, and called that an ordering.
  *
- * An issue with no phase milestone is never Ready. That is not a
- * demotion: 19 of the 46 open issues are reviewer findings that serve no
- * criterion and belong to no phase (ADR-003), and putting them in the lane
- * that means "this is the next convergence work" would make the lane lie.
+ * Size is now `readyCap` in `lib/board-ready-rule.ts`, derived from
+ * measured throughput, and phase is `readyOrder` in the same file. The
+ * lane is small because it is capped and phase-ordered — so the gate was
+ * doing a job two other mechanisms already do, and taking it off is
+ * Jason's call of 2026-11-05 on #1758.
+ *
+ * **An issue with no phase milestone is now eligible.** This docblock used
+ * to say "never Ready", on the grounds that a reviewer finding serving no
+ * criterion would make the lane lie. It sorts last instead — `readyOrder`
+ * ranks a null phase behind every numbered one — which keeps the ordering
+ * claim true without refusing work that is genuinely pickable.
  */
-export function isReady(
-  item: {
-    readonly state: string;
-    readonly phase: number | null;
-    readonly blockedByOpen: number;
-    readonly assignees: number;
-  },
-  frontier: number | null,
-): boolean {
+export function isReady(item: {
+  readonly state: string;
+  readonly blockedByOpen: number;
+  readonly assignees: number;
+}): boolean {
   if (item.state !== "OPEN") return false;
-  // No separate `item.phase === null` guard. It was here, and the mutation
-  // battery removed it with every case still green: `null !== frontier` is
-  // already false for any non-null frontier, so the two lines were one
-  // decider spelled twice, and no behavioural test could ever tell which of
-  // them was live (`.claude/rules/checks-must-be-able-to-fail.md`).
-  if (frontier === null) return false;
-  if (item.phase !== frontier) return false;
   return isUnblocked({ blockedBy: item.blockedByOpen }, item.assignees);
 }
+

@@ -44,7 +44,6 @@ import {
   criterionIdsIn,
   isReady,
   mirrorRows,
-  openFrontier,
   phaseOf,
   specCriteriaIn,
 } from "../lib/board-mirror";
@@ -362,10 +361,9 @@ export async function main(argv: string[]): Promise<number> {
     .filter(i => (byNumber.get(i.number)?.text ?? "") !== i.criteriaCell)
     .map(i => ({ item: i, to: byNumber.get(i.number)!.text }));
 
-  const frontier = openFrontier(items);
   const { writable, occupied } = readyPopulation(items);
   const readyChanges = writable
-    .map(i => ({ item: i, to: isReady(i, frontier) ? READY : BACKLOG }))
+    .map(i => ({ item: i, to: isReady(i) ? READY : BACKLOG }))
     .filter(c => c.to !== c.item.status);
 
   // An assignee is a person saying "mine". Where their card sits is then
@@ -432,8 +430,7 @@ export async function main(argv: string[]): Promise<number> {
     if (fieldChanges.length === 0) console.log(`  every cell already agrees with its issue body`);
     if (values.ready) {
       console.log(
-        `\n  Ready lane — the frontier is ` +
-          (frontier === null ? `nowhere: no open issue sits in a phase` : `Phase ${frontier}`),
+        `\n  Ready lane — eligibility is unblocked and unclaimed; phase orders, it does not gate`,
       );
       console.log(`    depth: ${cap ?? "UNMEASURED"}. ${selection.why}`);
       if (cap === null && !values.repo) {

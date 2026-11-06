@@ -29,7 +29,7 @@
  * ## What this file deliberately does NOT do
  *
  * **It does not decide readiness.** `isReady` does, and it carries the
- * phase-frontier rule that stopped the Ready lane holding 36 of 46 open
+ * cap and ordering that stop the Ready lane holding 36 of 46 open
  * issues. A second decider here would agree with it on every input anybody
  * thought to test, so no behavioural case could tell which was live and a
  * mutation of either would leave the other holding the case up. `BR-7`
@@ -93,7 +93,7 @@ export type FanoutDecision =
  * costs a confusing log line and cannot move an issue. Keeping that ordering
  * is what stops it becoming the second decider described above.
  */
-function whyNotReady(d: Dependent, frontier: number | null): string {
+function whyNotReady(d: Dependent): string {
   if (d.state !== "OPEN") return `the issue is ${d.state}`;
   if (d.blockedByOpen === null) return "UNMEASURED — the dependency summary could not be read";
   if (d.blockedByOpen > 0) {
@@ -101,9 +101,8 @@ function whyNotReady(d: Dependent, frontier: number | null): string {
   }
   if (d.assignees === null) return "UNMEASURED — the assignee count could not be read";
   if (d.assignees > 0) return "somebody has claimed it";
-  if (frontier === null) return "no phase has open work, so nothing is next";
-  if (d.phase === null) return "no phase milestone — it serves no criterion (ADR-003)";
-  if (d.phase !== frontier) return `phase ${d.phase} is behind the frontier at phase ${frontier}`;
+  // The phase branches that stood here went with the gate: phase no longer
+  // decides eligibility, so it can no longer be a reason for a refusal.
   return "isReady said no and this reason list did not anticipate it";
 }
 
@@ -112,7 +111,6 @@ function whyNotReady(d: Dependent, frontier: number | null): string {
  */
 export function fanoutDecisions(
   dependents: readonly Dependent[],
-  frontier: number | null,
   readyColumn: string,
 ): FanoutDecision[] {
   return dependents.map((d): FanoutDecision => {
@@ -142,11 +140,11 @@ export function fanoutDecisions(
     // answered false. Refusing before the decider is what keeps `isReady` the
     // only thing that says yes.
     if (d.blockedByOpen === null || d.assignees === null) {
-      return { number: d.number, move: false, why: whyNotReady(d, frontier) };
+      return { number: d.number, move: false, why: whyNotReady(d) };
     }
     const measured = { ...d, blockedByOpen: d.blockedByOpen, assignees: d.assignees };
-    if (!isReady(measured, frontier)) {
-      return { number: d.number, move: false, why: whyNotReady(d, frontier) };
+    if (!isReady(measured)) {
+      return { number: d.number, move: false, why: whyNotReady(d) };
     }
     return { number: d.number, move: true };
   });

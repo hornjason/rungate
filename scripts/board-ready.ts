@@ -21,7 +21,7 @@ import {
   truncatedReadings,
   type Dependent,
 } from "../lib/board-ready-fanout";
-import { phaseOf, openFrontier } from "../lib/board-mirror";
+import { phaseOf } from "../lib/board-mirror";
 import { heldReason, readyCap, selectReady } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
@@ -239,15 +239,13 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  // The frontier is a property of the whole board, not of this fan-out: the
-  // earliest phase with open work. Reading it from the dependents alone would
-  // make "what is next" depend on which blocker happened to close.
-  //
-  // **The same pass counts how full Ready is**, because the cap needs it
-  // and a second trip round the board would be a second answer to the same
-  // question. One query string, used for the first page and every page
-  // after it: it used to be typed out twice, which is one edit away from
-  // two pages reading different fields.
+  // **This pass counts how full Ready is**, which the cap needs. It also
+  // used to read the phase frontier; that went with the phase gate, and the
+  // pass stayed because occupancy still has to come from the whole board
+  // rather than from the dependents this fan-out happens to be holding.
+  // One query string, used for the first page and every page after it: it
+  // used to be typed out twice, which is one edit away from two pages
+  // reading different fields.
   const all = await gql(token, BOARD_PAGE_QUERY, { p: project, c: null });
   // **`node(id:)` is null for an id GitHub cannot resolve**, and the inline
   // fragment resolves to an empty object for an id that exists and is not a
@@ -263,7 +261,6 @@ async function main(): Promise<number> {
   // Both reads of this query go through the helper, not just the one the
   // finding named: the first page and every page after it. BR-40..BR-41.
   const itemsPage = (d: any): any => d?.node?.items ?? null;
-  const frontierItems: { state: string; phase: number | null }[] = [];
   let page = itemsPage(all);
   if (page === null) {
     console.log(
@@ -289,32 +286,29 @@ async function main(): Promise<number> {
       // other means "I could not look". An undercount here promotes past
       // the cap, so it refuses rather than guesses.
       if (n.fieldValues?.pageInfo?.hasNextPage) occupancyTruncated = true;
-      if (n.content?.__typename !== "Issue") continue;
-      frontierItems.push({ state: n.content.state, phase: phaseOf(n.content.milestone?.title) });
     }
     const step = nextCursor(page.pageInfo);
     if (step.kind === "unreadable") {
       console.log(
-        `::warning::the board stopped paging — ${step.why}. The frontier and Ready's ` +
-          `occupancy were read only in part. UNMEASURED, nothing written.`,
+        `::warning::the board stopped paging — ${step.why}. Ready's occupancy ` +
+          `was read only in part. UNMEASURED, nothing written.`,
       );
       return EXIT_REFUSED;
     }
     if (step.kind === "done") break;
     const next = itemsPage(await gql(token, BOARD_PAGE_QUERY, { p: project, c: step.cursor }));
     if (next === null) {
-      // Mid-pagination, so a partial frontier is already in hand — and a
-      // frontier read from SOME of the board is the reading that moves the
-      // wrong issues to Ready. Refuse rather than finish with what arrived.
+      // Mid-pagination, so a partial occupancy is already in hand — and an
+      // occupancy read from SOME of the board undercounts, which promotes
+      // past the cap. Refuse rather than finish with what arrived.
       console.log(
-        `::warning::the project id ${project} stopped resolving part-way through the board, so the ` +
-          `frontier was read only in part. UNMEASURED, nothing written.`,
+        `::warning::the project id ${project} stopped resolving part-way through the board, so ` +
+          `Ready's occupancy was read only in part. UNMEASURED, nothing written.`,
       );
       return EXIT_REFUSED;
     }
     page = next;
   }
-  const frontier = openFrontier(frontierItems);
 
   // A truncated sub-selection means this run saw PART of a dependent's board
   // membership or part of its fields, and "I did not find the Status field"
@@ -370,8 +364,8 @@ async function main(): Promise<number> {
     };
   });
 
-  const decisions = fanoutDecisions(dependents, frontier, READY_COLUMN);
-  console.log(`#${closed} closed. Frontier is phase ${frontier ?? "none"}.`);
+  const decisions = fanoutDecisions(dependents, READY_COLUMN);
+  console.log(`#${closed} closed.`);
   for (const dec of decisions) {
     console.log(dec.move ? `  #${dec.number} -> ${READY_COLUMN}` : `  #${dec.number} unchanged: ${dec.why}`);
   }
