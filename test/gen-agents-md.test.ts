@@ -5,6 +5,7 @@
 import { test, expect, describe } from "bun:test";
 import { generateAgentsMd, generateScopedRules } from "../lib/generators/agents-md";
 import { mockProjectScan, type ProjectScan } from "../lib/generators/types";
+import { isRuleIncluded } from "../lib/scaffold/profiles";
 
 describe("generateAgentsMd with mock ProjectScan", () => {
   test("returns string containing project name and identity", () => {
@@ -105,5 +106,69 @@ describe("generateAgentsMd with mock ProjectScan", () => {
     });
     const result = generateAgentsMd(scan);
     expect(result).toContain("npm test");
+  });
+});
+
+/**
+ * #1742 — the scaffolded rule that tells a consumer where an upstream problem
+ * goes.
+ *
+ * Three properties, and each is here because nothing else in the tree can see
+ * it go wrong. The budget is deliberately NOT one of them:
+ * `test/instruction-surface-budget.test.ts` already decides whether the
+ * surface fits, and a second assertion over that same reading would be two
+ * deciders agreeing — a mutation of either would leave the other holding
+ * every case up (`.claude/rules/checks-must-be-able-to-fail.md`).
+ */
+describe("#1742: reporting-upstream, the rule a consumer files from", () => {
+  const ruleFor = (profile: "full" | "minimal") =>
+    generateScopedRules(mockProjectScan({ name: "consumer" }))
+      .filter(r => isRuleIncluded(r.filename, profile))
+      .find(r => r.filename === "reporting-upstream.md");
+
+  /**
+   * A minimal consumer is if anything the LIKELIEST to find something and
+   * have nowhere to put it, so `RULES_NOT_MINIMAL` must not acquire this
+   * filename. That map is hand-maintained and adding a line to it is the
+   * cheapest way to shave the minimal profile — this is the case that makes
+   * it cost something.
+   */
+  test("#1742 / AC-1: emitted into the minimal profile, not only full", () => {
+    expect(ruleFor("full")).toBeDefined();
+    expect(
+      ruleFor("minimal"),
+      "reporting-upstream.md is excluded from the minimal profile — remove it " +
+        "from RULES_NOT_MINIMAL in lib/scaffold/profiles.ts. A minimal consumer " +
+        "still has an upstream to report to (#1742).",
+    ).toBeDefined();
+  });
+
+  /**
+   * The label is the decision, and it is the half most likely to be lost to a
+   * tidy-up. `external-audit` means *rungate audited something else* — the
+   * opposite direction — and fifteen open issues already carry it because
+   * consumers reached for the nearest available label. A rule that permits it
+   * re-creates the exact state #1742 was filed about, with every suite green.
+   */
+  test("#1742 / AC-2: names `from-consumer`, and rules `external-audit` out by name", () => {
+    const body = ruleFor("full")!.content;
+    expect(body).toContain("--label from-consumer");
+    expect(
+      body.includes("external-audit"),
+      "the rule no longer mentions `external-audit`. Naming the wrong label and " +
+        "saying why is the point — a consumer who cannot see it ruled out picks " +
+        "it, which is what #1742 measured.",
+    ).toBe(true);
+  });
+
+  /**
+   * `--repo hornjason/rungate`, spelled out. A consumer running
+   * `gh issue create` with no `--repo` files against THEIR OWN repository,
+   * which is where the report is invisible to the people who can act on it —
+   * and the command would still look right in review.
+   */
+  test("#1742 / AC-3: the filing command targets the upstream repository explicitly", () => {
+    const body = ruleFor("full")!.content;
+    expect(body).toContain("gh issue create --repo hornjason/rungate");
   });
 });
