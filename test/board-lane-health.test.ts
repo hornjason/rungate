@@ -18,6 +18,10 @@ const census = (over: Partial<LaneCensus> = {}): LaneCensus => ({
   pickable: 34,
   openAssigned: 9,
   cancelledClosed: 23,
+  // The live reading of 2026-11-05: 237 issues delivered over 14 days, so a
+  // cap of 8. Typed out as a measurement rather than imported, so a mutation
+  // of `readyCap` has to break this file too and not just its own.
+  throughput: { delivered: 237, days: 14 },
   complete: true,
   ...over,
 });
@@ -27,11 +31,16 @@ describe("a lane count is only a reading against what should be in it", () => {
   // The measurement that motivated the whole spec, as a case. Ready holding
   // 6 is excellent if 6 is everything eligible and total failure if 34 are,
   // and the bare count cannot tell those apart.
-  test("SC-2670: Ready below the pickable set is SHORT, and names the gap", () => {
+  test("SC-2670: Ready below what it is allowed to hold is SHORT, and names the gap", () => {
     const r = by(census(), "Ready");
     expect(r.health).toBe("SHORT");
-    expect(r.against, "a lane judged against nothing is a number, not a reading").toBe(34);
-    expect(r.why).toContain("28");
+    expect(
+      r.against,
+      "34 are eligible but the depth is 8, so 8 is what the lane should hold. Judging it " +
+        "against all 34 is what made this row report `SHORT by 30` against a writer that " +
+        "could never promote more than 3 (SC-2712)",
+    ).toBe(8);
+    expect(r.why).toContain("2");
   });
 
   test("SC-2670: Ready holding everything eligible is OK", () => {
@@ -40,6 +49,53 @@ describe("a lane count is only a reading against what should be in it", () => {
       r.health,
       "the same count of 6 must read OK here and SHORT above, or the denominator is decorative",
     ).toBe("OK");
+  });
+
+  // SC-2712, the decision of 2026-11-05: Ready is a commitment point, so a
+  // full lane is correct however much eligible work is queued behind it.
+  // Before the cap this case read SHORT and no amount of promotion fixed it.
+  test("SC-2712: a lane at its depth is OK even with far more eligible work", () => {
+    const r = by(census({ counts: new Map([["Ready", 8]]), pickable: 34 }), "Ready");
+    expect(r.health).toBe("OK");
+    expect(r.against).toBe(8);
+    expect(r.why, "the reading has to say what the depth came from").toContain("throughput");
+  });
+
+  // The control for the case above: the depth is derived, so a repository
+  // delivering a tenth as much gets a tenth of the queue and the SAME lane
+  // count reads differently. A hardcoded 8 would pass both of the cases
+  // above and fail this one.
+  test("SC-2712: a slower repository gets a shallower queue", () => {
+    const slow = census({ counts: new Map([["Ready", 8]]), throughput: { delivered: 20, days: 14 } });
+    expect(by(slow, "Ready").against, "20/14 is 1.4 a day; half a day is 0, floored up to 1").toBe(1);
+  });
+
+  // Found on the FIRST live run of the capped reading, not in review: the
+  // board held 5 in Ready against a derived depth of 4 — filled under the
+  // uncapped rule — and the row read OK. Before the cap, `count > against`
+  // could not happen for a lane with a repo-wide denominator, so OK
+  // absorbed it silently. SHORT and OVER have opposite remedies.
+  test("SC-2712: a lane above its depth is OVER, not OK", () => {
+    const r = by(census({ counts: new Map([["Ready", 5]]), throughput: { delivered: 132, days: 14 } }), "Ready");
+    expect(r.against, "132/14 is 9.4 a day; half a day is 4").toBe(4);
+    expect(r.health, "an over-full commitment point reported as OK is the lane lying the other way").toBe("OVER");
+    expect(r.why).toContain("1 too many");
+  });
+
+  // The converse, so OVER is not simply what a non-empty lane always says.
+  test("SC-2712: a lane exactly at its depth is OK, not OVER", () => {
+    const r = by(census({ counts: new Map([["Ready", 4]]), throughput: { delivered: 132, days: 14 } }), "Ready");
+    expect(r.health).toBe("OK");
+  });
+
+  // `.claude/rules/config-access.md`: a built-in default substituted for a
+  // failed read is indistinguishable from a real one, so there is no
+  // fallback depth.
+  test("SC-2711: an unread throughput leaves Ready UNMEASURED, not healthy", () => {
+    const r = by(census({ throughput: null }), "Ready");
+    expect(r.health).toBe("UNMEASURED");
+    expect(r.against).toBeNull();
+    expect(r.why).toContain("throughput");
   });
 
   // UNWRITTEN and SHORT are separated because the remedies differ: SHORT
@@ -225,12 +281,22 @@ describe("a lane count is only a reading against what should be in it", () => {
   });
 
   // The report must carry the reason, not just the verdict. "Ready SHORT"
-  // sends the reader to look it up; "28 missing of 34 unblocked and
-  // unclaimed" is the finding itself.
+  // sends the reader to look it up; "6 of 8, 34 eligible behind it, depth
+  // derived from throughput" is the finding itself.
+  //
+  // SC-2712: the line carries BOTH numbers. The depth alone hides how much
+  // work is queued; the eligible count alone is what used to be printed and
+  // is what made the row read `SHORT by 30` forever.
   test("SC-2670: the printed line carries the denominator and the reason", () => {
     const line = laneHealthLines([by(census(), "Ready")])[0]!;
-    expect(line).toContain("of 34");
-    expect(line).toContain("unblocked and unclaimed");
+    // `"of 8"` is NOT enough and the mutation battery proved it: the label
+    // itself says "a depth of 8", so dropping the `Math.min` in
+    // `readyTarget` left this row green against a denominator of 34. The
+    // count has to be in the match, or the assertion is forgeable by the
+    // text it is reading.
+    expect(line, "the lane is judged against its depth, not against everything eligible").toContain("6 of 8");
+    expect(line, "and the eligible count is still shown, or the depth looks arbitrary").toContain("34 unblocked and unclaimed");
+    expect(line, "a derived number has to say what it was derived from").toContain("live throughput");
   });
 
   // The script must actually print it. A decider nothing calls is the shape
