@@ -33,6 +33,7 @@ import {
   programBody,
   segments,
   stripQuoted,
+  quoteStateAfter,
   stripHeredocs,
   dequote,
   commandWord,
@@ -608,6 +609,34 @@ describe("#1176: the mechanisms, asserted directly", () => {
     // Asserting `blocked` here would be asserting that a pre-existing defect
     // outside this change's scope is fixed, and the case would then be
     // carrying someone else's bug as its own failure.
+  });
+
+  test("#1741: a `#` after a control operator starts a comment too, with no space", () => {
+    // Second review round, and the same over-claim as the first: the
+    // docblock said "the shell's own rule" while implementing one of the
+    // several ways the shell opens a comment. `echo hi;#it's a trick` IS a
+    // comment in bash — a control operator ends a word, so the `#` starts a
+    // new one — and reading past it picked up the apostrophe in `it's` as a
+    // real quote that never closes. The carried state then suppressed the
+    // blanking of the next whole-line comment, which is precisely the
+    // failure the whitespace-preceded case above was added to fix.
+    const cmd = [
+      "echo hi;#it's a trick",
+      "# a note with no apostrophe",
+      `echo x > ${LIVE}/${STATE}`,
+    ].join("\n");
+
+    expect(stripHeredocs(cmd)).not.toContain("a note with no apostrophe");
+  });
+
+  test("#1741 CONTROL: a `#` INSIDE a word is not a comment", () => {
+    // The negative control for widening the predicate. `foo#bar` is one
+    // word and the `#` is literal, so the apostrophe after it is a real
+    // quote-open — if this stopped scanning there, the widening would have
+    // gone too far and the carried state would be wrong in the other
+    // direction.
+    expect(quoteStateAfter("echo foo#bar'", null)).toBe("'");
+    expect(quoteStateAfter("echo foo;#bar'", null)).toBeNull();
   });
 
   test("#1741 CONTROL: #1176's own case still blanks, so the fix is not a revert", () => {

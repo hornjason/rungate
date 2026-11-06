@@ -811,13 +811,22 @@ export function stripQuoted(s: string): string {
  * shell's rule and the one thing a naive counter gets wrong — `echo \"` opens
  * nothing. Inside single quotes nothing escapes, not even a backslash.
  *
- * **It stops at an unquoted `#`, and that is a safety property rather than
- * fidelity.** The rest of such a line is a comment, so its apostrophes are
- * prose — which is the whole of #1176, applied here instead of one line
- * later. Without it, `echo hi  # it's fine` carried an open single quote to
- * the next line, and that carried state SUPPRESSED the blanking of a
- * following whole-line comment: #1176's own defect, reintroduced through
- * its own fix. Found by this change's security review.
+ * **It stops at an unquoted word-initial `#`, and that is a safety property
+ * rather than fidelity.** The rest of such a line is a comment, so its
+ * apostrophes are prose — which is the whole of #1176, applied here instead
+ * of one line later. Without it, `echo hi  # it's fine` carried an open
+ * single quote to the next line, and that carried state SUPPRESSED the
+ * blanking of a following whole-line comment: #1176's own defect,
+ * reintroduced through its own fix. Found by this change's security review.
+ *
+ * **Two review rounds in a row, this docblock claimed more than the code
+ * did, and both over-claims were caught rather than noticed.** The first
+ * said the change "can only keep MORE of the command, never less" — false,
+ * a `#` line inside a quote could open a heredoc and delete lines. The
+ * second said the comment test was "the shell's own rule" while testing
+ * whitespace alone, which missed `echo hi;#…`. The predicate below now
+ * names the three word-start positions it actually covers, and this
+ * paragraph is here because the pattern is worth more than either fix.
  *
  * **Known gap, stated rather than papered over: `$(…)` and backticks.** A
  * command substitution resets quoting inside itself and this tracker does
@@ -836,7 +845,7 @@ export function stripQuoted(s: string): string {
  * function answering two questions, and the second question is the one
  * `stripHeredocs` has always needed and never asked.
  */
-function quoteStateAfter(line: string, open: '"' | "'" | null): '"' | "'" | null {
+export function quoteStateAfter(line: string, open: '"' | "'" | null): '"' | "'" | null {
   let q = open;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
@@ -844,10 +853,19 @@ function quoteStateAfter(line: string, open: '"' | "'" | null): '"' | "'" | null
       i++;
       continue;
     }
-    // The shell's own comment rule: `#` starts one only at the start of a
-    // word and only outside quotes. `tokenize` in lib/issue-create-override.ts
-    // reads it the same way.
-    if (q === null && c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return null;
+    // `#` starts a comment only at the start of a WORD and only outside
+    // quotes. A word begins at the line start, after whitespace, and after
+    // a control operator — `echo hi;#it's a trick` is a comment in bash,
+    // and the first revision of this line tested whitespace alone, read
+    // past the `#`, and took the apostrophe in `it's` as a real quote-open.
+    // That carried state then suppressed the blanking of the next
+    // whole-line comment, which is the exact failure this function was
+    // added to prevent. Found by the second review round of this change.
+    //
+    // A `#` INSIDE a word is literal — `foo#bar` is one word — so the
+    // predicate must not be a bare "is there a `#`". That is the negative
+    // control in `test/bash-write-guard.test.ts`.
+    if (q === null && c === '#' && (i === 0 || /[\s;|&()<>]/.test(line[i - 1]))) return null;
     if (q === null && (c === '"' || c === "'")) q = c;
     else if (q === c) q = null;
   }
