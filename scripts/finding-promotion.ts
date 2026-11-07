@@ -23,6 +23,7 @@ import { join } from "path";
 import { promote, specPath, type PromotableIssue } from "../lib/finding-promotion";
 import { readScRegistry } from "./sync-sc-status";
 import { currentScOwner } from "../lib/sc-reservations";
+import { ghWithoutGhToken } from "../lib/live-issues";
 import { skipLine } from "../lib/derived-spec";
 import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
 
@@ -59,25 +60,20 @@ const write = args.includes("--write");
 // The issue's own text decides ALREADY_SERVES, so a title typed by hand here
 // would let a promotion through that the board can see is a second criterion
 // for one piece of work. Read it from the tracker.
-const issue: PromotableIssue = await (async () => {
-  // DELETE the key, do not blank it. `GH_TOKEN: ""` leaves it present, and
-  // what a tool does with a present-but-empty credential is its own choice
-  // rather than ours — measured on gh 2.97.0 it falls through to the
-  // keychain, so this is not a live failure here, but the intent is
-  // `env -u GH_TOKEN` and only deletion spells that in every version.
-  const env = { ...process.env };
-  delete env.GH_TOKEN;
-  const proc = Bun.spawn(
-    ["gh", "issue", "view", String(issueNumber), "--json", "number,title,body"],
-    { cwd: ROOT, stdout: "pipe", stderr: "pipe", env },
-  );
-  const out = await new Response(proc.stdout).text();
-  if ((await proc.exited) !== 0) {
+// `ghWithoutGhToken`, not a second spawn here. It DELETES the key rather
+// than blanking it — `{ ...process.env, GH_TOKEN: "" }` leaves it present,
+// which is the gotcha that helper exists to hold, and a second copy of this
+// decision is a second place for it to be got wrong.
+const issue: PromotableIssue = (() => {
+  try {
+    return JSON.parse(
+      ghWithoutGhToken(["issue", "view", String(issueNumber), "--json", "number,title,body"]),
+    ) as PromotableIssue;
+  } catch (e) {
     console.error(`ERROR: could not read #${issueNumber} from the tracker`);
-    console.error(await new Response(proc.stderr).text());
+    console.error(e instanceof Error ? e.message : String(e));
     process.exit(PROMOTION_EXIT);
   }
-  return JSON.parse(out) as PromotableIssue;
 })();
 
 const result = promote(
@@ -93,11 +89,6 @@ if (!result.promoted) {
 console.log(result.line);
 for (const gap of result.unmeasured) console.log(`  UNMEASURED: ${gap}`);
 
-if (!write) {
-  console.log(`\n(dry run — nothing written. Add --write to append to ${spec}.)`);
-  process.exit(0);
-}
-
 // `specPath` from the lib, not a second `join` here. They disagreed on an
 // absolute --spec, so the file the guard validated and the file this wrote
 // were different files.
@@ -107,10 +98,19 @@ const content = readFileSync(target, "utf8");
 // #1286, the same refusal create-sc makes: appending to a spec a generator
 // owns writes a criterion that disappears at the next regeneration, having
 // consumed an id nothing then declares. One decider, called from both CLIs.
+//
+// BEFORE the dry-run exit, not after. A preview that reports success for a
+// run that would immediately refuse is not a preview — it is a second
+// answer to "will this work", given by a path that never asked the question.
 const early = maySpecBeWritten(content);
 if (!early.allowed) {
   console.error(skipLine(target, early.reading));
   process.exit(PROMOTION_EXIT);
+}
+
+if (!write) {
+  console.log(`\n(dry run — nothing written. Add --write to append to ${spec}.)`);
+  process.exit(0);
 }
 
 writeSpec(target, `${content.trimEnd()}\n${result.line}\n`);
