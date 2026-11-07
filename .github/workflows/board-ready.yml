@@ -11,20 +11,46 @@
 # closes. So the trigger is the close itself, and the script fans out to that
 # issue's `blocking` list.
 #
-# **No schedule.** A cron is the thing this exists to remove; see #1744.
+# ## And a close cannot reach an issue nobody blocked — #1842, G1
+#
+# That fan-out answers "what did this close free", which is all it can answer.
+# An issue with no dependencies appears in no `blocking` list, so for a
+# repository whose next piece of work was never blocked there was no event at
+# all that could put it in Ready: the lane drained and was refilled by
+# somebody running a command by hand. Claim 7's third falsification, surviving
+# inside the mechanism written to remove it.
+#
+# So the other four `issues:` types below run `--top-up`, which asks the same
+# question of every OPEN issue. They are the events that change whether Ready
+# SHOULD be refilled:
+#
+#   closed      → fan out from what that close freed (unchanged)
+#   assigned    → somebody pulled an item; a Ready slot just freed
+#   unassigned  → a claim was dropped; that issue is eligible again
+#   opened      → new work exists that no close will ever mention
+#   reopened    → likewise, for work that came back
+#
+# **Still no schedule.** A cron is the thing this exists to remove; see #1744.
+# Every trigger here is an event a person caused, and BR-12 asserts the
+# absence of `schedule:` and `cron:` over this whole file.
 #
 # Every `uses:` is pinned to a commit SHA, and both
 # `test/action-pin-parity.test.ts` and BR-14 assert it.
-name: Board — a closed blocker frees what it blocked
+name: Board — keep Ready full from the events the repo already emits
 
 on:
   issues:
-    types: [closed]
+    types: [closed, assigned, unassigned, opened, reopened]
   workflow_dispatch:
     inputs:
+      mode:
+        description: "closed = fan out from `issue`; top-up = consider every open issue"
+        type: choice
+        default: closed
+        options: [closed, "top-up"]
       issue:
-        description: "Issue number to fan out from"
-        required: true
+        description: "Issue number to fan out from (mode: closed only)"
+        required: false
         type: string
       write:
         description: "Perform the moves (default: report only)"
@@ -197,13 +223,19 @@ jobs:
       # pass this file's credential handling exists to refuse, reintroduced
       # one level up. This workflow is not scaffolded to consumers; it runs
       # here, where the PAT is configured, and a red run is the signal.
-      - name: Fan out from the closed blocker
+      - name: Fill Ready from whatever this event changed
         if: steps.gate.outputs.trusted == 'true'
         env:
           BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
           WRITE: ${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
+          # WHICH candidate source. `github.event.action` is set on every
+          # `issues:` trigger and absent on a dispatch, where the operator's
+          # `mode` choice answers instead. Both are closed-set values GitHub
+          # or the `choice` input produces — never free text — so the `case`
+          # below cannot be reached with anything it has no arm for.
+          MODE: ${{ github.event.action || inputs.mode }}
           # The identity that TRIGGERED this run, which is the one the script
           # asks the permission endpoint about. Not the issue's author.
           ACTOR: ${{ github.actor }}
@@ -212,9 +244,34 @@ jobs:
             echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
             exit 0
           fi
+          # `closed` keeps the fan-out; everything else tops Ready up. An
+          # unrecognised mode REFUSES rather than falling through to either —
+          # a default here would silently run the wrong source, and "which
+          # candidates did this consider" is the one thing the log must not
+          # have to be guessed from.
+          case "$MODE" in
+            closed)
+              if [ -z "$ISSUE" ]; then
+                echo "::warning::UNMEASURED — mode is 'closed' and no issue number was supplied."
+                exit 1
+              fi
+              SOURCE="--closed-issue $ISSUE"
+              ;;
+            top-up|assigned|unassigned|opened|reopened)
+              SOURCE="--top-up"
+              ;;
+            *)
+              echo "::warning::UNMEASURED — unrecognised mode \"$MODE\", so no candidate source was chosen. Nothing was read."
+              exit 1
+              ;;
+          esac
+          echo "mode=$MODE, source=$SOURCE"
+          # SOURCE and WRITE are unquoted on purpose: each is a flag pair this
+          # file composed from the closed set above, and quoting would pass
+          # "--closed-issue 7" as one argument.
           bun scripts/board-ready.ts \
             --repo "$GITHUB_REPOSITORY" \
-            --closed-issue "$ISSUE" \
+            $SOURCE \
             --project "$PROJECT_ID" \
             --actor "$ACTOR" \
             $WRITE
