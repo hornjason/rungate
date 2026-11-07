@@ -1117,3 +1117,45 @@ describe("AS-11 (#1168): a prior finding re-raised in different words", () => {
     expect(verdict.repeat[0]).toBeNull();
   });
 });
+
+// ── AS-12 (#1861 round 1): the anchor rule does NOT reach inside one round ──
+//
+// `seen` grows as candidates are walked and `anchors` deliberately does not.
+// The asymmetry is the finding from #1861's first round: growing `anchors`
+// would suppress a second, differently-worded finding at one line because a
+// SIBLING in this very round cited it, under a sentence that says "an earlier
+// round" and would be false.
+//
+// It is also unmeasured. #1168's reading is 8-of-8 on CROSS-round
+// restatements and says nothing about two findings a reviewer raises while
+// looking at one line once — which is the likelier place for two genuine
+// defects to share an anchor.
+
+describe("AS-12 (#1861): two differently-worded findings at one line in ONE round", () => {
+  const first = advisory({ summary: "the variable could be named better" });
+  const second = advisory({ summary: "this allocation is not freed on the error path" });
+
+  test("AS-12a: both are reported — a same-round sibling is not an earlier round", () => {
+    const verdict = gate({})([first, second]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat).toEqual([null, null]);
+  });
+
+  test("AS-12b: the EXACT duplicate in one round is still suppressed", () => {
+    // The control for AS-12a. A gate that had simply stopped looking within
+    // the round would also pass it, and within-round exact dedupe is
+    // pre-existing behaviour this change must not have removed.
+    const verdict = gate({})([first, advisory()]);
+    expect(verdict.repeat[0]).toBeNull();
+    expect(verdict.repeat[1]).toBeTypeOf("string");
+  });
+
+  test("AS-12c: a PRIOR round still reaches both of them", () => {
+    // And the control on the other side: the anchor rule is not switched off,
+    // it is scoped. With the same two candidates and a thread from an earlier
+    // round at that anchor, both are suppressed.
+    const verdict = gate({ threads: raisedBefore() })([first, second]);
+    expect(verdict.repeat[0]).toBeTypeOf("string");
+    expect(verdict.repeat[1]).toBeTypeOf("string");
+  });
+});

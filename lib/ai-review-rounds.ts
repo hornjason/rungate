@@ -588,6 +588,14 @@ export function carryKey(finding: unknown, lineText?: unknown): string | null {
 /**
  * THE SAME KEY WITH THE WORDING DROPPED — `file \0 t:<text>` (#1168).
  *
+ * @identity file+text — `file` and the TEXT of the cited line, and nothing
+ * else. It answers a THIRD question, which is why it has a third name: not
+ * *is this the same finding* (`carryKey`, which adds the summary) and not
+ * *is this worth adjudicating* (`advisoryKey`), but **is this the same PLACE
+ * an earlier round already objected to**. It is derived from a `carryKey`
+ * string rather than from a finding, so the two cannot drift apart: there is
+ * no second parse of a finding here to disagree with the first.
+ *
  * `carryKey` ends in the summary, and `suppressRepeats`' docblock below
  * states what that buys: *a finding whose summary changed is not [a repeat]*.
  * That was a deliberate trade — protect a genuinely different finding that

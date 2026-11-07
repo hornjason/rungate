@@ -204,7 +204,22 @@ export function aiReviewSuppressionGate(inputs: SuppressionInputs): AiReviewSupp
         );
       }
       seen.add(key);
-      if (anchor !== null) anchors.add(anchor);
+      // `anchors` is NOT grown here, and the asymmetry with `seen` above is
+      // deliberate (#1861 round 1).
+      //
+      // `seen` growing is the established within-round rule and is safe on an
+      // EXACT key: two candidates with the same file, anchor AND wording are
+      // the same finding listed twice. The anchor key drops the wording, so
+      // growing it would suppress a second, differently-worded finding at the
+      // same line because a SIBLING in this very round cited it — and the
+      // sentence above, which says "an earlier round", would be false.
+      //
+      // It is also unmeasured: #1168's reading characterises cross-round
+      // collisions only, 8 of 8 restatements. It says nothing about two
+      // findings a reviewer raises at one line while looking at it once,
+      // which is the more plausible place for two genuine defects to share an
+      // anchor. Suppressing on evidence that was never taken is the thing
+      // this whole increment is a correction for.
       return null;
     });
     return { repeat, unmeasured: null };
