@@ -619,6 +619,22 @@ export function carryKey(finding: unknown, lineText?: unknown): string | null {
  * which also keeps the asymmetry `checkoutLineText`'s docblock describes from
  * turning into over-suppression when a checkout cannot be read.
  *
+ * ## A TEXT anchor is not automatically a DISTINCTIVE one
+ *
+ * A line reading `}` or `return null;` keys the same anchor wherever it
+ * recurs in its file, so two findings at two different occurrences collide
+ * here and this cannot tell them apart. That screen is the CALLER's, not
+ * this function's — it needs the file, and this takes a string. See
+ * `checkoutLineReader` and the uniqueness condition in
+ * `lib/ai-review-suppression.ts`.
+ *
+ * Measured on the same 25 pull requests, 60 findings carrying a text anchor:
+ * **5 — 8.3% — cite a line whose text recurs in its own file.** A minimum
+ * anchor LENGTH does not separate them and was the fix not taken: four of the
+ * five normalise to over twenty characters and one to forty-five
+ * (`for (const t of tokenize(heredocView(cmd))) {`). Counting occurrences is
+ * the only screen the reading supports.
+ *
  * ## The direction this is allowed to be wrong in has CHANGED, deliberately
  *
  * Everything else here errs toward reporting a repeat twice. This errs toward
@@ -638,6 +654,34 @@ export function anchorOnlyKey(key: string | null): string | null {
   if (!anchor.startsWith("t:") || anchor === "t:") return null;
   if (file === "") return null;
   return `${file}\u0000${anchor}`;
+}
+
+/**
+ * The normalised TEXT out of an anchor key, so the distinctiveness screen
+ * counts occurrences of the same string the key was built from (#1861).
+ *
+ * Not an identity and never used as one — it returns a component, and that
+ * is why it is not named `…Key`. It exists so the caller does not re-derive
+ * the text from the finding: a second derivation is a second decider, and the
+ * two would agree until one of them was mutated, at which point the other
+ * holds every case up. `null` for anything `anchorOnlyKey` would reject.
+ */
+export function anchorTextOf(anchorKey: string | null): string | null {
+  if (typeof anchorKey !== "string") return null;
+  const parts = anchorKey.split("\u0000");
+  if (parts.length !== 2) return null;
+  const anchor = parts[1] as string;
+  if (!anchor.startsWith("t:") || anchor === "t:") return null;
+  return anchor.slice(2);
+}
+
+/**
+ * The normalisation `carryKey` applies to a cited line, exported so a reader
+ * counting occurrences of that line compares like with like. One binding; a
+ * private copy in the reader would be the two-deciders fault again.
+ */
+export function normaliseLineText(v: unknown): string {
+  return normalise(v);
 }
 
 export interface SuppressionReading {

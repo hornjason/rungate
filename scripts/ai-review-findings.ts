@@ -94,7 +94,7 @@
 import { aiReviewJuryGate } from "../lib/ai-review-jury";
 import {
   aiReviewSuppressionGate,
-  checkoutLineText,
+  checkoutLineReader,
   readOrNull,
 } from "../lib/ai-review-suppression";
 import { main } from "../lib/scaffold/ai-review-findings";
@@ -107,12 +107,16 @@ const jury =
     : (blocking: readonly unknown[]) => aiReviewJuryGate(blocking, ballotDir);
 
 const threadsPath = process.env[AI_REVIEW_THREADS_PATH_VAR];
+// One reader, so the text the key is built from and the occurrences of that
+// text are read out of the same files on the same cache (#1861).
+const reader = checkoutLineReader(process.cwd());
 const suppress =
   threadsPath === undefined || threadsPath === ""
     ? null
     : aiReviewSuppressionGate({
         threads: readOrNull(threadsPath),
-        lineTextFor: checkoutLineText(process.cwd()),
+        lineTextFor: reader.lineTextFor,
+        anchorOccurrences: reader.occurrencesOf,
       });
 
 // One line, and `process.exit(main(` is load-bearing text: AC-4 in
