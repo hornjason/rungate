@@ -149,13 +149,58 @@ describe("AC-2 (#1678): every refusal is named, and none is a guess", () => {
     }
   });
 
-  test("a spec stating no criteria refuses rather than placing the first one blind", () => {
+  test("a tree whose sweep could not be taken refuses SWEEP_UNMEASURED, not 'no criteria'", () => {
+    // This case used to assert SPEC_STATES_NO_CRITERIA and PASSED — for the
+    // wrong reason. `specCriteriaIn` answers UNMEASURED with `specs: []`, so
+    // the lookup below it found nothing and the "no criteria" branch fired
+    // on a tree nobody had successfully read. Two different facts, one
+    // message. Found by the AI review of 4d48c7a3; probed directly before
+    // changing anything, and the probe is what this case now holds:
+    //   reading UNMEASURED, specs 0, ids 0,
+    //   reasons ["no spec under …/specs states a criterion, so no cell could be filled"]
     const root = scratch(SPEC_NO_CRITERIA);
     try {
       const out = promote(inputFor(root), REGISTRY);
       expect(out.promoted).toBe(false);
       if (out.promoted) return;
+      expect(out.refusal).toBe("SWEEP_UNMEASURED");
+      expect(out.why).toContain("states a criterion");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a MEASURED sweep where the target contributes nothing refuses SPEC_STATES_NO_CRITERIA", () => {
+    // The state the case above was mistaken for, and the only one that can
+    // distinguish the two: another spec DOES state criteria, so the sweep is
+    // MEASURED, and the target still has none of its own.
+    const root = scratch(SPEC_NO_CRITERIA, "EMPTY-SPEC.md");
+    try {
+      writeFileSync(join(root, "specs", "FULL-SPEC.md"), SPEC_WITH_CRITERIA);
+      const out = promote(inputFor(root, { spec: "specs/EMPTY-SPEC.md" }), REGISTRY);
+      expect(out.promoted).toBe(false);
+      if (out.promoted) return;
       expect(out.refusal).toBe("SPEC_STATES_NO_CRITERIA");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a spec that exists and cannot be read refuses SPEC_UNREADABLE, not an uncaught throw", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      // A directory where the file was: `existsSync` is true and
+      // `readFileSync` throws EISDIR. The guard in `promotionViolations`
+      // cannot see this, which is the point — "exists" and "readable" are
+      // different readings, and a docblock promising fail-closed has to mean
+      // it for the second one too.
+      rmSync(join(root, "specs", "FIXTURE-SPEC.md"));
+      mkdirSync(join(root, "specs", "FIXTURE-SPEC.md"));
+      writeFileSync(join(root, "specs", "OTHER-SPEC.md"), SPEC_WITH_CRITERIA);
+      const out = promote(inputFor(root), REGISTRY);
+      expect(out.promoted).toBe(false);
+      if (out.promoted) return;
+      expect(out.refusal).toBe("SPEC_UNREADABLE");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -283,11 +328,15 @@ describe("AC-2 (#1678): every refusal is named, and none is a guess", () => {
   });
 
   test("every refusal in the closed set is reachable, so none is decorative", () => {
-    // ID_UNAVAILABLE is the allocator's, raised on an unreadable reservation
-    // store — reached in its own case rather than here.
+    // Two are raised by `promote` rather than `promotionViolations` — the
+    // allocator's refusal and the unreadable read — and each has its own
+    // case above. Named here so this assertion stays an equality over the
+    // whole closed set rather than quietly shrinking to the easy members.
     const reached = new Set<string>(["ID_UNAVAILABLE"]);
     const root = scratch(SPEC_WITH_CRITERIA);
     const noCriteria = scratch(SPEC_NO_CRITERIA);
+    const measuredEmpty = scratch(SPEC_NO_CRITERIA, "EMPTY-SPEC.md");
+    writeFileSync(join(measuredEmpty, "specs", "FULL-SPEC.md"), SPEC_WITH_CRITERIA);
     try {
       for (const over of [
         { spec: "../outside/NOPE-SPEC.md" },
@@ -299,12 +348,22 @@ describe("AC-2 (#1678): every refusal is named, and none is a guess", () => {
       ] as Partial<PromotionInput>[]) {
         for (const v of promotionViolations(inputFor(root, over))) reached.add(v.refusal);
       }
+      // A directory where the spec should be: exists, unreadable.
+      const unreadable = scratch(SPEC_WITH_CRITERIA);
+      rmSync(join(unreadable, "specs", "FIXTURE-SPEC.md"));
+      mkdirSync(join(unreadable, "specs", "FIXTURE-SPEC.md"));
+      for (const v of promotionViolations(inputFor(unreadable))) reached.add(v.refusal);
+      rmSync(unreadable, { recursive: true, force: true });
       for (const v of promotionViolations(inputFor(noCriteria))) reached.add(v.refusal);
+      for (const v of promotionViolations(inputFor(measuredEmpty, { spec: "specs/EMPTY-SPEC.md" }))) {
+        reached.add(v.refusal);
+      }
 
       expect([...reached].sort()).toEqual([...PROMOTION_REFUSALS].sort());
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(noCriteria, { recursive: true, force: true });
+      rmSync(measuredEmpty, { recursive: true, force: true });
     }
   });
 

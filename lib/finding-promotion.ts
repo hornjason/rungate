@@ -82,6 +82,8 @@ export interface PromotionInput {
 export const PROMOTION_REFUSALS = [
   "SPEC_OUTSIDE_TREE",
   "SPEC_ABSENT",
+  "SPEC_UNREADABLE",
+  "SWEEP_UNMEASURED",
   "SPEC_STATES_NO_CRITERIA",
   "ALREADY_SERVES",
   "NO_OUTCOME",
@@ -197,11 +199,50 @@ export function promotionViolations(input: PromotionInput): PromotionViolation[]
     return out;
   }
 
+  // EXISTS is not READABLE, and the two refusals must not share a message.
+  // A directory where a file was, or a permission, satisfies `existsSync`
+  // and throws here. Checked before the sweep because the sweep answers a
+  // target it cannot parse by simply contributing no ids, which reads
+  // downstream as "this spec states no criteria" — a true-sounding sentence
+  // about a file nobody managed to open.
+  try {
+    readFileSync(path, "utf8");
+  } catch (e) {
+    out.push({
+      refusal: "SPEC_UNREADABLE",
+      why: `${input.spec} exists and could not be read: ${e instanceof Error ? e.message : String(e)}`,
+    });
+    return out;
+  }
+
   // The WHOLE tree, not this spec's ids. Scoping the duplicate check to the
   // target let an issue serving a criterion in spec A promote into spec B
   // unopposed — which is the outcome the refusal below says it prevents, so
   // the detector was narrower than the thing it detects.
   const sweep = specCriteriaIn(input.projectRoot);
+
+  // FIRST, and returning. `specCriteriaIn` answers UNMEASURED with
+  // `specs: []` and `ids: []`, so every reading below it is the reading for
+  // an empty tree: `hereIds` is empty and SPEC_STATES_NO_CRITERIA fires,
+  // reporting "this spec states no criteria" when the fact is "the sweep
+  // could not be taken". Two different states, one message, and the
+  // UNMEASURED branch that used to sit further down could never be reached.
+  //
+  // Found by the AI review of `4d48c7a3`, and the measurement is worse than
+  // the finding: `test/finding-promotion.test.ts`'s own
+  // SPEC_STATES_NO_CRITERIA case was passing through this path, so the
+  // criterion it claimed to cover was green for the wrong reason.
+  if (sweep.reading === "UNMEASURED") {
+    out.push({
+      refusal: "SWEEP_UNMEASURED",
+      why:
+        "the spec sweep could not be taken, so neither 'this spec states no criteria' nor " +
+        "'this issue serves none' is a reading anything here can make: " +
+        sweep.unmeasuredReasons.join("; "),
+    });
+    return out;
+  }
+
   const allIds = sweep.ids;
   const hereIds = sweep.specs.find(s => resolve(input.projectRoot, s.path) === path)?.ids ?? [];
 
@@ -222,16 +263,6 @@ export function promotionViolations(input: PromotionInput): PromotionViolation[]
       why:
         `#${input.issue.number} already names ${alreadyServes.join(", ")}, so promoting it ` +
         "would give one piece of work two criteria and make both of them partly true",
-    });
-  } else if (sweep.reading === "UNMEASURED") {
-    // An UNMEASURED sweep read SOME of the tree. "No criterion found" from a
-    // partial read and from a complete one are the same value and different
-    // facts, and only one of them clears this refusal.
-    out.push({
-      refusal: "ALREADY_SERVES",
-      why:
-        "the spec sweep is UNMEASURED, so a criterion this issue already serves may sit in a " +
-        `spec that was not read: ${sweep.unmeasuredReasons.join("; ")}`,
     });
   }
 
@@ -279,7 +310,22 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
     return { promoted: false, refusal: first.refusal, why: first.why };
   }
 
-  const specText = readFileSync(specPath(input), "utf8");
+  // Inside a guard, because `promotionViolations` proved the file EXISTS and
+  // existing is not the same as readable — a permission, a directory where a
+  // file was, or a removal between the two calls. An uncaught throw out of a
+  // function whose docblock says it fails closed is the one shape a caller
+  // cannot handle as a refusal.
+  let specText: string;
+  try {
+    specText = readFileSync(specPath(input), "utf8");
+  } catch (e) {
+    return {
+      promoted: false,
+      refusal: "SPEC_UNREADABLE",
+      why: `${input.spec} exists and could not be read: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+
   let allocated: { number: number; namespace: { unmeasured: string[] } };
   try {
     allocated = allocateScNumber(input.projectRoot, specText, registry, {

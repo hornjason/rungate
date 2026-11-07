@@ -60,9 +60,16 @@ const write = args.includes("--write");
 // would let a promotion through that the board can see is a second criterion
 // for one piece of work. Read it from the tracker.
 const issue: PromotableIssue = await (async () => {
+  // DELETE the key, do not blank it. `GH_TOKEN: ""` leaves it present, and
+  // what a tool does with a present-but-empty credential is its own choice
+  // rather than ours — measured on gh 2.97.0 it falls through to the
+  // keychain, so this is not a live failure here, but the intent is
+  // `env -u GH_TOKEN` and only deletion spells that in every version.
+  const env = { ...process.env };
+  delete env.GH_TOKEN;
   const proc = Bun.spawn(
     ["gh", "issue", "view", String(issueNumber), "--json", "number,title,body"],
-    { cwd: ROOT, stdout: "pipe", stderr: "pipe", env: { ...process.env, GH_TOKEN: "" } },
+    { cwd: ROOT, stdout: "pipe", stderr: "pipe", env },
   );
   const out = await new Response(proc.stdout).text();
   if ((await proc.exited) !== 0) {
