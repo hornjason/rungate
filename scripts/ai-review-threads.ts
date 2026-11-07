@@ -43,11 +43,7 @@ import {
   readAiReviewFindingsFile,
 } from "../lib/scaffold/ai-review-findings";
 import { carryKey } from "../lib/ai-review-rounds";
-import {
-  aiReviewSuppressionGate,
-  checkoutLineText,
-  readOrNull,
-} from "../lib/ai-review-suppression";
+import { productionSuppression } from "../lib/ai-review-suppression";
 import { AI_REVIEW_THREADS_PATH_VAR } from "../lib/scaffold/ai-review-step";
 
 const COMMAND = "ai-review-threads";
@@ -132,14 +128,17 @@ if (!parsed.ok) {
 // agree until they do not. This step runs BEFORE the adjudicator in the
 // emitted job, so it cannot be handed the adjudicator's answer — it has to
 // form its own from the same input.
-const threadsPath = process.env[AI_REVIEW_THREADS_PATH_VAR];
-const suppress =
-  threadsPath === undefined || threadsPath === ""
-    ? null
-    : aiReviewSuppressionGate({
-        threads: readOrNull(threadsPath),
-        lineTextFor: checkoutLineText(process.cwd()),
-      });
+//
+// That sentence was true of the FUNCTION and false of its INPUTS while each
+// command wrote its own object literal: #1861 added `anchorOccurrences` to
+// the adjudicator alone, and the whole anchor rule was dead here — in the
+// command that posts the threads, which is the half #1616's 11-threads-for-3
+// measurement is about. `productionSuppression` is now the only assembly
+// site, and AS-15 holds it that way.
+const { gate: suppress, lineTextFor } = productionSuppression(
+  process.env[AI_REVIEW_THREADS_PATH_VAR],
+  process.cwd(),
+);
 
 const reading = readAiReviewFindingsFile(
   parsed.findings,
@@ -175,12 +174,12 @@ const post: AiReviewThreadPoster = async request => {
 
 // THE KEY-SYMMETRY HALF, on the producing side. The thread carries the key
 // a later round's suppression gate will form for the same finding, so the
-// text anchor must be read the same way both sides read it — which is why
-// this is `checkoutLineText` and not a second line reader. A caller that
+// text anchor must be read the same way both sides read it. A caller that
 // supplied no text would key `n:<line>` while the gate keys `t:<text>`, and
 // the two namespaces never collide: the gate would suppress nothing and
-// every round would re-post every thread.
-const lineTextFor = checkoutLineText(process.cwd());
+// every round would re-post every thread. `lineTextFor` comes off the SAME
+// reader the gate above was built from, so it is the same cache and the same
+// normalisation rather than a second one that happens to agree.
 const result = await postReviewThreads(reading, post, f => carryKey(f, lineTextFor(f)));
 for (const line of result.detail) console.log(`${COMMAND}: ${line}`);
 console.log(

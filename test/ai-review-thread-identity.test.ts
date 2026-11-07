@@ -217,9 +217,17 @@ describe("the production path emits the key, not just the library", () => {
       "the command must not call the unkeyed arity — that is the state this increment exists to leave",
     ).toBe(false);
     expect(src, "the command must form the key with the shared rule").toContain("carryKey");
+    // Spelled `productionSuppression` since #1861 round 4, and the property
+    // is STRONGER than the one this used to assert. It read `checkoutLineText`
+    // — the right reader, built separately from the gate's — and the command
+    // now takes the gate and the line reader out of ONE call, so they cannot
+    // be the same function over different inputs. `test/ai-review-suppression.test.ts`
+    // (AS-15b) forbids the old spelling outright, because a second
+    // hand-assembly is what let `anchorOccurrences` reach the adjudicator and
+    // not the poster.
     expect(
       src,
       "and anchor it on the SAME line text the suppression gate reads, or the two key in different namespaces",
-    ).toContain("checkoutLineText");
+    ).toContain("const { gate: suppress, lineTextFor } = productionSuppression(");
   });
 });

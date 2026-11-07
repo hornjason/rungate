@@ -69,6 +69,7 @@ import {
   aiReviewSuppressionGate,
   checkoutLineReader,
   checkoutLineText,
+  productionSuppression,
   priorKeysFrom,
   readOrNull,
 } from "../lib/ai-review-suppression";
@@ -671,7 +672,12 @@ describe("AS-4: the list is taken before this round can add to it", () => {
     // `null`, which is the state it shipped in and the state that looks
     // identical in a workflow diff.
     const poster = readFileSync(join(ROOT, "scripts", "ai-review-threads.ts"), "utf-8");
-    expect(poster, "the poster builds no suppression gate").toContain("aiReviewSuppressionGate({");
+    // Spelled `productionSuppression(` since #1861 round 4 — the two commands
+    // used to write the inputs out by hand and one of them fell behind. The
+    // property asserted is unchanged: the poster forms a gate rather than
+    // leaving the argument `null`, which is the state it shipped in and the
+    // state a workflow diff cannot distinguish. AS-15 holds the factory.
+    expect(poster, "the poster builds no suppression gate").toContain("productionSuppression(");
     expect(poster).toContain("readAiReviewFindingsFile(");
   });
 
@@ -1287,6 +1293,87 @@ describe("AS-13 (#1861): the anchor rule fires only on a DISTINCTIVE line", () =
 // used to report both as "already raised on an earlier round of this pull
 // request", which is false for a payload that listed one finding twice — and
 // it reaches a human verbatim through the suppressed-findings notice.
+
+// ── AS-15 (#1861 round 4): ONE assembly site, enforced ───────────────────
+//
+// The round-4 review read three rounds of findings as one root cause, and it
+// was right: `SuppressionInputs` was hand-written as an object literal in two
+// commands, so #1861 added `anchorOccurrences` to the adjudicator and left the
+// POSTER — the half that produces #1168's symptom, 11 threads for 3 findings
+// on #1616 — with the anchor rule dead.
+//
+// A behavioural test cannot catch the next one. Both commands would pass every
+// case while differing in a field neither test supplied. So this asserts the
+// STRUCTURE: `productionSuppression` is the only thing that builds the inputs,
+// and neither command may reach past it.
+
+describe("AS-15 (#1861): both commands form the gate through one function", () => {
+  const COMMANDS = ["ai-review-findings.ts", "ai-review-threads.ts"] as const;
+
+  test("AS-15a: each command calls productionSuppression", () => {
+    for (const name of COMMANDS) {
+      const src = readFileSync(join(ROOT, "scripts", name), "utf-8");
+      expect(src, `${name} must build its gate through productionSuppression`)
+        .toContain("productionSuppression(");
+    }
+  });
+
+  test("AS-15b: neither command assembles SuppressionInputs itself", () => {
+    // The thing that actually went wrong. `aiReviewSuppressionGate({...})` in
+    // a command is an object literal somebody has to remember to keep level
+    // with the other one, and nobody did.
+    for (const name of COMMANDS) {
+      const src = readFileSync(join(ROOT, "scripts", name), "utf-8");
+      for (const reaching of [
+        "aiReviewSuppressionGate",
+        "checkoutLineText",
+        "checkoutLineReader",
+      ]) {
+        // The CALL, not the name. Both commands discuss these in prose and
+        // should keep being able to; a detector that caught a docblock would
+        // be fixed by deleting the explanation, which is the wrong repair.
+        expect(
+          src.includes(`${reaching}(`),
+          `${name} must not call ${reaching} directly — add the field to ` +
+            "productionSuppression in lib/ai-review-suppression.ts instead, " +
+            "so both commands get it",
+        ).toBe(false);
+      }
+    }
+  });
+
+  test("AS-15c: the assembly site passes every field the gate reads", () => {
+    // The control. AS-15a and AS-15b are both satisfied by a
+    // `productionSuppression` that forgot a field, which is the original
+    // defect wearing the fix's name.
+    const src = readFileSync(join(LIB, "ai-review-suppression.ts"), "utf-8");
+    const body = src.slice(src.indexOf("export function productionSuppression"));
+    for (const field of ["threads:", "lineTextFor:", "anchorOccurrences:"]) {
+      expect(body, `productionSuppression must pass ${field}`).toContain(field);
+    }
+  });
+
+  test("AS-15d: the poster really does suppress a reworded repeat now", () => {
+    // And the behavioural half, because AS-15a..c are all about text. Built
+    // the way the poster builds it — through the factory, with a thread file
+    // on disk — rather than through the test's own `gate()` helper, which
+    // would prove nothing about the command.
+    const root = checkout("production-assembly");
+    const threadsFile = join(SCRATCH, "production-threads.json");
+    writeFileSync(threadsFile, raisedBefore());
+    const { gate: g, lineTextFor } = productionSuppression(threadsFile, root);
+    expect(g).not.toBeNull();
+    const reworded = advisory({ summary: "this name does not say what it holds" });
+    expect(g!([reworded]).repeat[0]).toBeTypeOf("string");
+    // One reader: the key the poster writes is the key the gate forms.
+    expect(lineTextFor(advisory() as ReviewFinding)).toBe(CITED_LINE);
+  });
+
+  test("AS-15e: no thread list still means no gate, in both commands", () => {
+    expect(productionSuppression(undefined, checkout("no-threads")).gate).toBeNull();
+    expect(productionSuppression("", checkout("empty-threads")).gate).toBeNull();
+  });
+});
 
 describe("AS-14 (#1861): an exact duplicate says WHICH round raised it first", () => {
   test("AS-14a: a prior round's key says 'an earlier round'", () => {

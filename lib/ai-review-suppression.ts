@@ -287,6 +287,49 @@ export function aiReviewSuppressionGate(inputs: SuppressionInputs): AiReviewSupp
 }
 
 /**
+ * THE ONE PLACE A PRODUCTION `SuppressionInputs` IS ASSEMBLED (#1861 round 4).
+ *
+ * Two commands form this gate — `scripts/ai-review-findings.ts`, which decides
+ * the exit code, and `scripts/ai-review-threads.ts`, which posts the threads.
+ * `ai-review-threads.ts`' own comment states the invariant: the gate is *"the
+ * same function the adjudicator builds, over the same file, which is what
+ * makes 'already raised' one decision rather than two that agree until they
+ * do not"*. They ran BEFORE this existed as two hand-written object literals,
+ * and the round-4 review found the predicted consequence: `anchorOccurrences`
+ * was added to one of them, so the whole anchor rule was dead in the poster —
+ * the half that produces #1168's actual symptom, 11 threads for 3 findings.
+ *
+ * Returning the reader alongside the gate is the other half. The poster needs
+ * `lineTextFor` again for the key it writes INTO each thread, and it used to
+ * build a second `checkoutLineText` with a second cache. One reader, one
+ * cache, one normalisation — and nothing left for a future field to be wired
+ * into unevenly.
+ *
+ * `gate` is `null` when no thread list is plumbed, which is each command's
+ * pre-existing behaviour and is NOT the same as a gate that finds no repeats.
+ * `test/ai-review-suppression.test.ts` (AS-15) asserts neither command
+ * assembles its own.
+ */
+export function productionSuppression(
+  threadsPath: string | undefined,
+  root: string,
+): {
+  gate: AiReviewSuppressionGate | null;
+  lineTextFor: (finding: ReviewFinding) => string | undefined;
+} {
+  const reader = checkoutLineReader(root);
+  const gate =
+    threadsPath === undefined || threadsPath === ""
+      ? null
+      : aiReviewSuppressionGate({
+          threads: readOrNull(threadsPath),
+          lineTextFor: reader.lineTextFor,
+          anchorOccurrences: reader.occurrencesOf,
+        });
+  return { gate, lineTextFor: reader.lineTextFor };
+}
+
+/**
  * THE KEY-SYMMETRY HALF. The text at a finding's cited line, read out of the
  * checkout.
  *
