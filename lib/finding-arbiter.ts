@@ -564,11 +564,56 @@ export const DUPLICATE_MIN_SHARED_LOCATIONS = 1;
  * deleting: a measurement that names a mechanism it never varied will read
  * as settled for as long as nobody varies it.
  *
- * **The 946-pair table above is not reproducible.** It was measured live
- * against a tracker that has moved and no corpus was stored, so neither
- * constant can be re-derived by anyone — including anyone who disagrees with
- * leaving them. **Tracked as #1365**; until a fixture exists, treat every
- * number in this docblock as a reading someone took once.
+ * **The 946-pair table above is not reproducible, and never will be.** It was
+ * measured live against a tracker that has moved and no corpus was stored.
+ * Those 44 findings are gone; #1365 did not recover them and nothing here
+ * claims it did. Treat every number above this line as a reading someone took
+ * once.
+ *
+ * ## WHAT IS REPRODUCIBLE, FROM HERE ON (#1365)
+ *
+ * A corpus is now frozen in `test/fixtures/finding-dedupe-corpus.json` — the
+ * fourteen findings these docblocks name inside a PAIR or a CLUSTER, fetched
+ * once by `scripts/freeze-dedupe-corpus.ts` and committed. The table below is
+ * the stdout of `bun scripts/print-dedupe-pair-table.ts` over that fixture,
+ * and `test/dedupe-corpus-table.test.ts` fails when the two differ. So it is
+ * a command's output rather than a reading, and it cannot go stale quietly.
+ *
+ * <!-- BEGIN dedupe-pair-table -->
+ * Corpus: 14 findings, 91 pairs, frozen 2026-11-07.
+ * Regenerate with `bun scripts/print-dedupe-pair-table.ts`.
+ *
+ * | rule | pairs | which |
+ * |---|---|---|
+ * | `qty>=2 AND loc>=1` | 1 | 1176/1187 |
+ * | containment >= 0.6 | 3 | 1175/1177, 1195/1196, 1454/1456 |
+ * | containment >= 0.8 (shipped) | 3 | 1175/1177, 1195/1196, 1454/1456 |
+ * | either arm — what the arbiter calls DUPLICATE | 4 | 1175/1177, 1176/1187, 1195/1196, 1454/1456 |
+ *
+ * Findings under the floor of 4 identity keys, which the containment arm scores 0 against everything: #1239.
+ * <!-- END dedupe-pair-table -->
+ *
+ * ### Four claims above reproduce. One does not.
+ *
+ * Reproduced exactly, against the live bodies: #1175/#1177 at 1.000 and
+ * #1454/#1456 at 0.900 and #1195/#1196 at **0.833**, and #1195/#1239 scoring
+ * **0.000** because #1239 carries three identity keys and sits under the
+ * floor. That is the whole of the #1536 table, re-derived from a fixture.
+ *
+ * **The `qty>=2 AND loc>=1` row does not.** It reads *4 — 1175/1177,
+ * 1195/1196, 1269/1286, 1162/1226*; over the frozen corpus that arm flags
+ * **one** pair, and the pair is #1176/#1187 — the shape this file already
+ * names as the one it cannot tell from a duplicate, since #1187 quotes other
+ * findings' readings because it is *about* them.
+ *
+ * **This is a failure to reproduce, not a demonstration that the row was
+ * false.** The fixture holds the bodies as the tracker had them on the freeze
+ * date, and an issue body is editable: six of these fourteen were closed and
+ * several edited in the weeks between. What can be said is the thing #1365
+ * exists to make sayable at all — *the row cannot be checked against anything,
+ * and the arm it justifies is the one tuned on the corpus that was lost.*
+ * Neither constant is moved on this reading; a re-tune needs a corpus
+ * collected for the purpose, which is a different issue from freezing one.
  *
  * The floor exists because containment is meaningless on a tiny key set — a
  * one-key finding is wholly contained in anything mentioning that key, which
