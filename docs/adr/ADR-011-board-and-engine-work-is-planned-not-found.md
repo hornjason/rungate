@@ -2,7 +2,7 @@
 doc-type: adr
 status: accepted
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-07
 ---
 
 # ADR-011 — board and engine work is planned, not found
