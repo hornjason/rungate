@@ -39,6 +39,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { sourceFiles } from "../lib/source-census";
+import { structuralCut } from "../lib/source-slice";
 import { join } from "path";
 import {
   LABEL_RANK,
@@ -491,10 +492,14 @@ describe("#1853: a truncated label list is refused, in every file that reads one
       `${file} reads the label pageInfo and does not act on it, which is worse than not ` +
         "asking: the truncation is visible and discarded",
     ).toMatch(/labels\?\.pageInfo\?\.hasNextPage/);
-    const at = code.search(/labels\?\.pageInfo\?\.hasNextPage/);
+    // The branch itself, bounded by its own braces — #664 forbids a
+    // fixed-character window, and rightly: a 600-character slice would
+    // start passing the day somebody adds a refusal 601 characters later
+    // in an unrelated branch.
+    const branch = structuralCut(code, "labels?.pageInfo?.hasNextPage", { balanced: "{" });
     expect(
-      code.slice(at, at + 600),
-      `${file} must REFUSE on a truncated label list, not warn and continue`,
+      branch,
+      `${file} must REFUSE inside the truncation branch, not warn and continue`,
     ).toMatch(/return\s+(EXIT_REFUSED|REFUSAL_EXIT)/);
   });
 });
