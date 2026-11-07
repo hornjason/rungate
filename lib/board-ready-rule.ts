@@ -270,13 +270,153 @@ export function placementCensus(items: readonly Rankable[]): PlacementCensus {
 }
 
 /**
+ * How full Ready is — the ONE answer, read by the writer and by the report.
+ *
+ * ## Why this exists (#1852)
+ *
+ * Two files answered "how full is Ready" and answered differently.
+ * `scripts/board-ready.ts` counted **every card**, arguing correctly that a
+ * pull request parked in the lane occupies a slot a puller can see.
+ * `scripts/work-status.ts` counted **open issues only**, arguing equally
+ * correctly that a lane of closed cards has nothing to start. Neither was
+ * wrong about the question it asked; they were asking different questions
+ * and the plan treated the answers as one number.
+ *
+ * Measured on main 2026-11-07, with a draft card and issue #1650 in the
+ * lane at a cap of 2: the writer reported `2 of 2, so it is full and nothing
+ * was promoted` and refused 37 eligible issues, while the report reported
+ * `1 of 2 SHORT` and exited non-zero. **The lane was physically full and
+ * functionally empty, and no single integer could say so.**
+ *
+ * That is `.claude/rules/checks-must-be-able-to-fail.md`'s fourth shape
+ * inverted — not two deciders that agree, but two that disagree with no
+ * single site a mutation could move — and this module's own header records
+ * it happening here before, on 2026-11-05, between `isReady` and `target()`.
+ *
+ * ## Both numbers, because the state needs both
+ *
+ * `cards` bounds promotion: a slot held by anything is not free, so the
+ * writer cannot exceed the depth by however many non-issues the lane holds.
+ * `dispatchable` is what a session can actually start. `WEDGED` is the state
+ * that needed naming: full by cards, empty by work, and reachable by one
+ * undispatchable card at a cap of 2.
+ */
+export type OccupancyVerdict = "ROOM" | "FULL" | "WEDGED" | "UNMEASURED";
+
+export interface ReadyOccupancy {
+  /** Every card in the lane — an issue, a pull request, a draft. */
+  readonly cards: number;
+  /** Cards a session can start: open issues. Never above `cards`. */
+  readonly dispatchable: number;
+  /** `cards - dispatchable`. Named, because it is the thing to clear. */
+  readonly undispatchable: number;
+  readonly cap: number | null;
+  /** Slots a promoter may fill. Always 0 when the cap is unreadable. */
+  readonly free: number;
+  readonly verdict: OccupancyVerdict;
+  readonly why: string;
+}
+
+/**
+ * The one reading. `dispatchable` above `cards` is a caller bug, not a lane
+ * state — it means the two were counted over different populations, which is
+ * the defect this function exists to end — so it is refused rather than
+ * clamped. A clamp would make the wrong call site look right.
+ */
+export function readyOccupancy(
+  cards: number,
+  dispatchable: number,
+  /**
+   * How deep the lane is allowed to be. The WRITER passes `readyCap`; the
+   * REPORT passes `readyTarget`, which is the smaller of the cap and the
+   * eligible count. Both are "the depth", and the sentences below say depth
+   * for that reason — calling a target a cap in the report's own output is
+   * the drift this module exists to stop.
+   */
+  cap: number | null,
+): ReadyOccupancy {
+  if (!Number.isInteger(cards) || !Number.isInteger(dispatchable) || cards < 0 || dispatchable < 0) {
+    throw new Error(
+      `readyOccupancy: cards and dispatchable must be non-negative integers, got ` +
+        `${cards} and ${dispatchable}. A count that could not be taken is not a count of zero.`,
+    );
+  }
+  if (dispatchable > cards) {
+    throw new Error(
+      `readyOccupancy: dispatchable (${dispatchable}) exceeds cards (${cards}), so the two were ` +
+        "counted over different populations — which is exactly the defect #1852 closed. " +
+        "Both must be read from one pass over one lane.",
+    );
+  }
+  const undispatchable = cards - dispatchable;
+  if (cap === null) {
+    return {
+      cards,
+      dispatchable,
+      undispatchable,
+      cap: null,
+      free: 0,
+      verdict: "UNMEASURED",
+      why:
+        "UNMEASURED — throughput could not be read, so Ready's depth is unknown and nothing was promoted",
+    };
+  }
+  const free = Math.max(0, cap - cards);
+  if (free > 0) {
+    return {
+      cards,
+      dispatchable,
+      undispatchable,
+      cap,
+      free,
+      verdict: "ROOM",
+      why: `Ready holds ${cards} of its depth of ${cap}, so ${free} slot(s) are free`,
+    };
+  }
+  // Full by cards. WEDGED is the half that had no name: the lane is at its
+  // depth and nothing in it can be started, so the writer will not refill it
+  // and the reader will keep refusing. It unsticks only by hand.
+  if (dispatchable === 0) {
+    return {
+      cards,
+      dispatchable,
+      undispatchable,
+      cap,
+      free: 0,
+      verdict: "WEDGED",
+      why:
+        `Ready holds ${cards} of its depth of ${cap} and NONE of them can be started — ` +
+        `${undispatchable} card(s) in the lane ${undispatchable === 1 ? "is" : "are"} not an open ` +
+        "issue. Nothing can dispatch a draft or a pull request, and nothing ages one out, so this " +
+        "lane is full and empty at the same time and no event will refill it. Clear the lane.",
+    };
+  }
+  return {
+    cards,
+    dispatchable,
+    undispatchable,
+    cap,
+    free: 0,
+    verdict: "FULL",
+    why:
+      `Ready holds ${cards} of its depth of ${cap}, so it is full and nothing was promoted` +
+      (undispatchable > 0
+        ? ` — and ${undispatchable} of them cannot be started, so only ${dispatchable} is real work`
+        : ""),
+  };
+}
+
+/**
  * SELECTION: which eligible issues to promote right now.
  *
- * `occupied` is what Ready already holds, so a full lane promotes nothing
- * and a lane with two free slots promotes the two highest-ranked. This is
- * the replenishment half of the commitment point, and it is what makes the
- * cap something other than a ceiling nobody reaches: a pull frees a slot
- * and the next event refills it.
+ * It takes a `ReadyOccupancy` rather than a cap and a count, so the free-slot
+ * arithmetic exists exactly once (#1852). It used to compute
+ * `max(0, cap - occupied)` itself, which made it the second site that decided
+ * how full the lane was.
+ *
+ * This is the replenishment half of the commitment point, and it is what
+ * makes the cap something other than a ceiling nobody reaches: a pull frees a
+ * slot and the next event refills it.
  *
  * **An unreadable cap promotes nothing, and says so.** The tempting
  * fallback — promote everything eligible and let a human trim it — is the
@@ -284,30 +424,22 @@ export function placementCensus(items: readonly Rankable[]): PlacementCensus {
  */
 export function selectReady<T extends Rankable>(
   eligible: readonly T[],
-  cap: number | null,
-  occupied: number,
+  occ: ReadyOccupancy,
 ): { readonly promote: readonly T[]; readonly why: string } {
-  if (cap === null) {
-    return {
-      promote: [],
-      why: "UNMEASURED — throughput could not be read, so Ready's depth is unknown and nothing was promoted",
-    };
-  }
-  const slots = Math.max(0, cap - occupied);
-  if (slots === 0) {
-    return {
-      promote: [],
-      why: `Ready holds ${occupied} of its cap of ${cap}, so it is full and nothing was promoted`,
-    };
+  if (occ.free === 0) {
+    // One branch for every reason there is no room — UNMEASURED, FULL and
+    // WEDGED each carry their own sentence on the reading itself, so this
+    // does not restate them and cannot disagree with them.
+    return { promote: [], why: occ.why };
   }
   // A copy, not a sort in place: the caller's array is its own decision
   // record and reordering it changes what its log prints.
-  const promote = [...eligible].sort(readyOrder).slice(0, slots);
+  const promote = [...eligible].sort(readyOrder).slice(0, occ.free);
   return {
     promote,
     why:
-      `Ready holds ${occupied} of its cap of ${cap}, so ${slots} slot(s) are free; ` +
-      `${eligible.length} eligible, promoting ${promote.length} in phase then age order`,
+      `${occ.why}; ${eligible.length} eligible, promoting ${promote.length} ` +
+      "in phase then age order",
   };
 }
 
@@ -323,9 +455,91 @@ export function selectReady<T extends Rankable>(
  * next person to the wrong place.
  *
  * It lives here rather than inline in the script so a case can hold it.
+ *
+ * **Three causes now, not two** (#1852). "Ready is at its depth" is true of a
+ * WEDGED lane and sends the reader to the depth — which is not the thing to
+ * change. A lane held at its cap by cards nobody can start needs clearing,
+ * and the held issues are the evidence that something wants the slot.
  */
-export function heldReason(cap: number | null): string {
-  return cap === null
-    ? "Ready's depth could not be measured, so nothing was promoted"
-    : "Ready is at its depth";
+export function heldReason(occ: ReadyOccupancy): string {
+  switch (occ.verdict) {
+    case "UNMEASURED":
+      return "Ready's depth could not be measured, so nothing was promoted";
+    case "WEDGED":
+      return (
+        `Ready is at its depth of ${occ.cap} and WEDGED — every card in it is undispatchable, ` +
+        "so clearing the lane is the fix, not lowering the depth"
+      );
+    case "FULL":
+    case "ROOM":
+      return "Ready is at its depth";
+    default: {
+      const unhandled: never = occ.verdict;
+      throw new Error(
+        `heldReason: unclassified occupancy verdict ${JSON.stringify(unhandled)}. ` +
+          "Every verdict must name its own cause — defaulting a new one to 'at its depth' is " +
+          "how WEDGED read as a lane that only needed a bigger cap.",
+      );
+    }
+  }
+}
+
+/**
+ * What to do about cards in Ready nobody can start — the REPORT's question.
+ *
+ * ## Not the same question as `heldReason`, which is why it is not the same
+ * sentence
+ *
+ * ai-review round 1 of #1857. `heldReason` answers *why did this eligible
+ * issue not move*, and both callers ask it while iterating items they held
+ * back. In a `ROOM` reading those items are held because promoting into the
+ * free slots reaches the depth, so "Ready is at its depth" is true of them.
+ *
+ * `scripts/work-status.ts` promotes nothing. It is describing a lane, and it
+ * says this whenever the lane holds a card that is not an open issue —
+ * including when the lane is SHORT. Routing that through `heldReason` printed
+ * "Ready is at its depth" over a lane holding 2 of a depth of 5. That is
+ * false, and it is the wrong instruction besides: a short lane is fixed by
+ * promoting, not by clearing.
+ *
+ * ## Two renderings, one decider
+ *
+ * Both switch on a verdict neither computes. `readyOccupancy` remains the only
+ * thing that decides how full Ready is, so a mutation of the reading moves
+ * both sentences together and neither can drift from the other's arithmetic —
+ * which is the property #1852 bought and the thing a second *decider* would
+ * have given back.
+ */
+export function undispatchableRemedy(occ: ReadyOccupancy): string {
+  switch (occ.verdict) {
+    case "UNMEASURED":
+      return (
+        "Ready's depth could not be read, so whether those card(s) are costing a slot " +
+        "is unknown too"
+      );
+    case "WEDGED":
+      return (
+        `Ready is at its depth of ${occ.cap} and WEDGED — NOTHING in the lane can be started, ` +
+        "so clearing the lane is the fix. Promotion cannot help: there is no slot to promote into"
+      );
+    case "FULL":
+      return (
+        `Ready is at its depth of ${occ.cap}, so each of them holds a slot a startable issue ` +
+        "could be in — clear them and the next promotion fills the lane"
+      );
+    case "ROOM":
+      return (
+        `Ready is NOT full — it holds ${occ.cards} of its depth of ${occ.cap}, so ${occ.free} ` +
+        "slot(s) are free and PROMOTING is what fixes this lane. Clearing the undispatchable " +
+        "card(s) is worth doing and is not what is holding it short"
+      );
+    default: {
+      const unhandled: never = occ.verdict;
+      throw new Error(
+        `undispatchableRemedy: unclassified occupancy verdict ${JSON.stringify(unhandled)}. ` +
+          "Every verdict must name its own remedy — defaulting a new one to 'clear the lane' " +
+          "sends a SHORT lane's reader to the one fix that cannot work.",
+      );
+    }
+  }
 }

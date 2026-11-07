@@ -48,9 +48,11 @@ import {
   placementCensus,
   placementOf,
   readyCap,
+  readyOccupancy,
   readyOrder,
   readyTarget,
   selectReady,
+  undispatchableRemedy,
   type Rankable,
 } from "../lib/board-ready-rule";
 
@@ -62,6 +64,17 @@ const item = (number: number, phase: number | null, labels: readonly string[] = 
 
 /** The live reading of 2026-11-05: 237 issues delivered over 14 days. */
 const LIVE = { delivered: 237, days: 14 } as const;
+
+/**
+ * The old `selectReady(eligible, cap, occupied)` spelling, re-expressed
+ * through the one occupancy reading (#1852).
+ *
+ * Every pre-#1852 case passed a lane whose cards were all dispatchable,
+ * because that is all the writer could see. Keeping the shorthand keeps
+ * those cases readable AND routes them through `readyOccupancy`, so a
+ * mutation of the free-slot arithmetic reddens them too.
+ */
+const atDepth = (occupied: number, cap: number | null) => readyOccupancy(occupied, occupied, cap);
 
 describe("SC-2710: the cap is derived from live throughput, not typed in", () => {
   test("the 2026-11-05 reading of 237 over 14 days gives a depth of 8", () => {
@@ -148,26 +161,26 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
   const twelve = Array.from({ length: 12 }, (_, i) => item(i + 1, 0));
 
   test("more eligible work than depth promotes exactly the depth, in order", () => {
-    expect(selectReady(twelve, 4, 0).promote.map(i => i.number)).toEqual([1, 2, 3, 4]);
+    expect(selectReady(twelve, atDepth(0, 4)).promote.map(i => i.number)).toEqual([1, 2, 3, 4]);
   });
 
   test("a full lane promotes nothing", () => {
-    const r = selectReady(twelve, 4, 4);
+    const r = selectReady(twelve, atDepth(4, 4));
     expect(r.promote).toEqual([]);
     expect(r.why).toContain("full");
   });
 
   test("a pull frees a slot and the next event refills exactly that many", () => {
-    expect(selectReady(twelve, 4, 2).promote.map(i => i.number)).toEqual([1, 2]);
-    expect(selectReady(twelve, 4, 3).promote.map(i => i.number)).toEqual([1]);
+    expect(selectReady(twelve, atDepth(2, 4)).promote.map(i => i.number)).toEqual([1, 2]);
+    expect(selectReady(twelve, atDepth(3, 4)).promote.map(i => i.number)).toEqual([1]);
   });
 
   test("a lane over its depth promotes nothing rather than a negative count", () => {
-    expect(selectReady(twelve, 4, 11).promote).toEqual([]);
+    expect(selectReady(twelve, atDepth(11, 4)).promote).toEqual([]);
   });
 
   test("less eligible work than depth promotes all of it", () => {
-    expect(selectReady([item(5, 1), item(2, 0), item(9, null)], 4, 0).promote.map(i => i.number)).toEqual([
+    expect(selectReady([item(5, 1), item(2, 0), item(9, null)], atDepth(0, 4)).promote.map(i => i.number)).toEqual([
       2, 5, 9,
     ]);
   });
@@ -176,14 +189,14 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
   // reading performed automatically, which is the failure the cap exists
   // to prevent.
   test("an unreadable cap promotes nothing and says UNMEASURED", () => {
-    const r = selectReady(twelve, null, 0);
+    const r = selectReady(twelve, atDepth(0, null));
     expect(r.promote).toEqual([]);
     expect(r.why).toContain("UNMEASURED");
   });
 
   test("selection does not mutate its input", () => {
     const given = [item(3, 1), item(1, 0)];
-    selectReady(given, 4, 0);
+    selectReady(given, atDepth(0, 4));
     expect(given.map(i => i.number), "sorting in place reorders the caller's decision record").toEqual([3, 1]);
   });
 
@@ -193,7 +206,7 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
     for (const eligible of [0, 1, 3, 4, 12, 34]) {
       const items = Array.from({ length: eligible }, (_, i) => item(i + 1, 0));
       expect(
-        selectReady(items, 4, 0).promote.length,
+        selectReady(items, atDepth(0, 4)).promote.length,
         `with ${eligible} eligible the reading and the writer must not disagree`,
       // Non-null because the cap is a literal 4 here; `readyTarget` only
       // returns null for an unreadable cap, which the case above covers.
@@ -207,20 +220,20 @@ describe("SC-2719: a held issue is told WHY it was held", () => {
   // depth", including on a run where the depth was never read — one line
   // below the run's own UNMEASURED warning.
   test("an unmeasured depth does not claim the lane is full", () => {
-    expect(heldReason(null)).toContain("could not be measured");
+    expect(heldReason(atDepth(0, null))).toContain("could not be measured");
     expect(
-      heldReason(null),
+      heldReason(atDepth(0, null)),
       "a reading that names the wrong cause sends the next person to the wrong place",
     ).not.toContain("at its depth");
   });
 
   test("a measured depth does say the lane is full", () => {
-    expect(heldReason(4)).toContain("at its depth");
+    expect(heldReason(atDepth(0, 4))).toContain("at its depth");
   });
 
   // Zero is a real cap, not a missing one, and the two must not collapse.
   test("a depth of zero is a full lane, not an unread one", () => {
-    expect(heldReason(0)).toContain("at its depth");
+    expect(heldReason(atDepth(0, 0))).toContain("at its depth");
   });
 });
 
@@ -501,5 +514,195 @@ describe("#1853: a truncated label list is refused, in every file that reads one
       branch,
       `${file} must REFUSE inside the truncation branch, not warn and continue`,
     ).toMatch(/return\s+(EXIT_REFUSED|REFUSAL_EXIT)/);
+  });
+});
+
+/**
+ * #1852: how full Ready is, decided once.
+ *
+ * ## The reading that caused it, measured on main 2026-11-07
+ *
+ * Ready held issue #1650 and one DRAFT card at a depth of 2.
+ *
+ * | reader | counted | said |
+ * |---|---|---|
+ * | `scripts/board-ready.ts` | every card | `2 of 2, full` — refused 37 eligible issues |
+ * | `scripts/work-status.ts` | open issues | `1 of 2 SHORT` — exited non-zero |
+ *
+ * Neither was wrong about the question it asked. **The lane was physically
+ * full and functionally empty, and no single integer could say so** — the
+ * writer would never refill it and the reader would never stop refusing, and
+ * no event exists that clears it.
+ *
+ * ## The battery, membership predicted before it was run
+ *
+ *   mutant                                       predicted red
+ *   free = cap - dispatchable, not cards         "a draft holds a slot"
+ *   WEDGED folded into FULL                      "WEDGED is its own verdict", "heldReason", "the gate refuses"
+ *   dispatchable > cards clamped, not thrown     "counted over different populations"
+ *   an unreadable depth yields free = cap        "an unreadable depth frees nothing"
+ *   a second cap - occupied in a script          "THE CONTROL: one free-slot site"
+ */
+describe("#1852: Ready has ONE occupancy reading", () => {
+  test("a draft holds a slot: free space counts CARDS, not startable work", () => {
+    const occ = readyOccupancy(2, 1, 2);
+    expect(occ.free, "the draft occupies a slot a puller can see, so nothing may be promoted").toBe(0);
+    expect(occ.undispatchable).toBe(1);
+  });
+
+  test("WEDGED is its own verdict — full by cards, empty by work", () => {
+    const occ = readyOccupancy(2, 0, 2);
+    expect(occ.verdict).toBe("WEDGED");
+    expect(
+      occ.why,
+      "FULL sends the reader to the depth, which is not the thing to change here",
+    ).toContain("Clear the lane");
+  });
+
+  test("full with SOME startable work is FULL, not WEDGED", () => {
+    // The control the row above needs: without it, "returns WEDGED" is
+    // satisfied by a reading that calls every full lane wedged.
+    expect(readyOccupancy(2, 1, 2).verdict).toBe("FULL");
+    expect(readyOccupancy(1, 1, 2).verdict).toBe("ROOM");
+  });
+
+  test("an unreadable depth frees nothing and is never a lane state", () => {
+    const occ = readyOccupancy(5, 5, null);
+    expect(occ.verdict).toBe("UNMEASURED");
+    expect(occ.free, "a depth nobody read must not promote; that is the 36-of-46 reading").toBe(0);
+    expect(selectReady([item(1, 0)], occ).promote).toEqual([]);
+  });
+
+  test("dispatchable above cards is REFUSED, not clamped", () => {
+    // A clamp makes the wrong call site look right. The two numbers coming
+    // from different populations is the entire defect #1852 closed, so it
+    // throws rather than producing a plausible reading.
+    expect(() => readyOccupancy(1, 2, 2)).toThrow(/counted over different populations/);
+    expect(() => readyOccupancy(-1, 0, 2)).toThrow(/non-negative integers/);
+    expect(() => readyOccupancy(1.5, 1, 2)).toThrow(/non-negative integers/);
+  });
+
+  test("heldReason sends a WEDGED lane to the cards, not to the depth", () => {
+    const wedged = heldReason(readyOccupancy(2, 0, 2));
+    expect(wedged).toContain("WEDGED");
+    expect(
+      wedged,
+      "clearing the lane is the fix; telling the reader to raise the depth is the wrong place",
+    ).toContain("clearing the lane");
+    expect(heldReason(readyOccupancy(2, 2, 2)), "a FULL lane is still just at its depth").toBe(
+      "Ready is at its depth",
+    );
+  });
+
+  test("THE CONTROL: one site computes free slots", () => {
+    // Two deciders that agree are behaviourally one, and this module's own
+    // header records that happening here before, between `isReady` and
+    // `target()`. `selectReady` used to spell `max(0, cap - occupied)`
+    // itself, which made it the second site.
+    const root = join(import.meta.dir, "..");
+    const owner = "lib/board-ready-rule.ts";
+    const scanned = sourceFiles(root, ["lib", "scripts", "bin", "gates", "hooks"]);
+    expect(scanned, "an empty sweep is not a clean one").toContain(owner);
+    const offenders = scanned.filter(f => {
+      if (f === owner) return false;
+      const code = readFileSync(join(root, f), "utf-8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^[ \t]*\/\/.*$/gm, "");
+      return /Math\.max\(\s*0\s*,\s*cap\s*-/.test(code) || /\bcap\s*-\s*(occupied|cards)\b/.test(code);
+    });
+    expect(
+      offenders,
+      "these files compute free Ready slots themselves, so a mutation of readyOccupancy " +
+        "would leave them holding the case up: " + offenders.join(", "),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * #1857 round 1: two renderings of one reading, and they must stay different.
+ *
+ * `heldReason` answers the PROMOTERS' question — why this eligible issue did
+ * not move — and both call it while iterating items they held back. In a
+ * `ROOM` reading those items are held because promoting into the free slots
+ * reaches the depth, so "Ready is at its depth" is true of them.
+ *
+ * `scripts/work-status.ts` promotes nothing. It was reusing `heldReason` to
+ * explain undispatchable cards, which printed "Ready is at its depth" over a
+ * lane holding 2 of a depth of 5 — false, and the wrong instruction, because
+ * that lane is fixed by promoting.
+ *
+ * The collapse is the mutation to watch: a later edit that points one of them
+ * at the other, or gives `undispatchableRemedy` a ROOM arm copied from
+ * `heldReason`, restores the bug with both functions still present. The ROOM
+ * row below is the one that catches it.
+ */
+describe("#1857: the gate's remedy is not the promoter's", () => {
+  const occAt = (cards: number, dispatchable: number, cap: number | null) =>
+    readyOccupancy(cards, dispatchable, cap);
+
+  test("ROOM: the gate is sent to promote and the promoter is not", () => {
+    const room = occAt(2, 1, 5);
+    expect(room.verdict).toBe("ROOM");
+    expect(
+      undispatchableRemedy(room),
+      "two of a depth of five is not at its depth, and saying so sends the reader to the " +
+        "one fix that cannot work",
+    ).not.toContain("at its depth");
+    expect(undispatchableRemedy(room)).toContain("PROMOTING");
+    // The other half of the contrast, asserted so a mutant that "fixes"
+    // heldReason instead goes red here: the promoter's sentence is CORRECT
+    // as it stands and must not be changed to match.
+    expect(
+      heldReason(room),
+      "an item a promoter held back in a ROOM reading is held because the promotion ahead " +
+        "of it reaches the depth — this sentence is right for that question",
+    ).toContain("at its depth");
+    expect(undispatchableRemedy(room)).not.toBe(heldReason(room));
+  });
+
+  test("WEDGED: both say clear the lane, because both readers must", () => {
+    const wedged = occAt(2, 0, 2);
+    expect(wedged.verdict).toBe("WEDGED");
+    expect(undispatchableRemedy(wedged)).toContain("clearing the lane is the fix");
+    expect(heldReason(wedged)).toContain("clearing the lane is the fix");
+  });
+
+  test("FULL and UNMEASURED each get their own sentence", () => {
+    const full = occAt(2, 1, 2);
+    expect(full.verdict).toBe("FULL");
+    expect(undispatchableRemedy(full)).toContain("at its depth of 2");
+    expect(undispatchableRemedy(full)).not.toContain("WEDGED");
+
+    const unmeasured = occAt(2, 1, null);
+    expect(unmeasured.verdict).toBe("UNMEASURED");
+    expect(
+      undispatchableRemedy(unmeasured),
+      "an unread depth is not a full lane — that is the #1794 defect in miniature",
+    ).not.toContain("at its depth");
+    expect(undispatchableRemedy(unmeasured)).toContain("could not be read");
+  });
+
+  test("every verdict gets a distinct remedy, so none falls through to another's", () => {
+    const readings = [occAt(2, 1, 5), occAt(2, 1, 2), occAt(2, 0, 2), occAt(2, 1, null)];
+    const verdicts: string[] = readings.map(r => r.verdict);
+    // The population is the producer's own, so a fifth verdict cannot be
+    // added without this going red.
+    const src = readFileSync(join(import.meta.dir, "..", "lib/board-ready-rule.ts"), "utf-8");
+    const declared = structuralCut(src, "export type OccupancyVerdict", { endAnchor: ";" })
+      .match(/"([A-Z]+)"/g)!
+      .map(s => s.replaceAll('"', ""));
+    expect([...verdicts].sort()).toEqual([...declared].sort());
+    expect(new Set(readings.map(undispatchableRemedy)).size).toBe(readings.length);
+  });
+
+  test("the gate calls the gate's renderer, and nothing calls both", () => {
+    const code = readFileSync(join(import.meta.dir, "..", "lib/work-status.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(code).toContain("undispatchableRemedy(occ)");
+    expect(
+      code,
+      "this file promotes nothing, so the promoters' sentence is never the right one here",
+    ).not.toContain("heldReason(");
   });
 });
