@@ -1221,6 +1221,35 @@ describe("BR-47..BR-52: an issue that was never blocked reaches Ready", () => {
     ).toEqual([]);
   });
 
+  // ai-review round 1 of #1846, and it was right. Occupancy is read ONCE per
+  // run and the write happens later, so two overlapping runs each compute
+  // `slots = cap - occupied` from the same snapshot and each promote that
+  // many — Ready ends up over its cap with no warning, which is the property
+  // BR-52 below is there to protect. The race existed under `closed` alone
+  // and needed two closes in the same few seconds; the four added types
+  // cluster during any triage session, so the widening is what obliges the
+  // group. Asserted rather than left to the reviewer who widens it next.
+  test("BR-53: two events cannot race past the cap for a never blocked issue", () => {
+    expect(
+      ymlLive,
+      "the workflow has no `concurrency:` group, so two issue events seconds " +
+        "apart each read the same occupancy and each promote `cap - occupied` " +
+        "items. The cap is what makes top-up safe on an ordinary event; without " +
+        "serialisation it is advisory.",
+    ).toMatch(/^concurrency:/m);
+    expect(ymlLive).toMatch(/group:\s*board-ready/);
+    // `cancel-in-progress: true` would cancel the RUNNING job, which can be
+    // mid-write — the one thing here that is not a pure function of live
+    // state. A superseded PENDING run costs nothing and is not what this
+    // forbids.
+    expect(
+      ymlLive,
+      "cancel-in-progress must be false: the running job can be part-way " +
+        "through its writes, and every run re-reads live state anyway, so " +
+        "cancelling the one in flight is the only option that loses anything.",
+    ).toMatch(/cancel-in-progress:\s*false/);
+  });
+
   // The bound, named where the source is. Top-up's eligible set is the
   // 36-of-46 population `lib/board-ready-rule.ts` was written about; without
   // the cap this mode is "move the backlog to Ready" on every issue event.

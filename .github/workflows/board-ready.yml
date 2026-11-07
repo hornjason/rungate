@@ -60,6 +60,27 @@ on:
 permissions:
   contents: read
 
+# ONE RUN AT A TIME, REPOSITORY-WIDE — ai-review round 1 of #1846, and it was
+# right. Occupancy is read once per run and the write happens later, so two
+# overlapping runs each compute `slots = cap - occupied` from the SAME snapshot
+# and each promote that many: Ready ends up over its cap with no warning, and
+# the cap is the property #1846's own description calls what makes top-up safe.
+#
+# That race existed with `issues: [closed]` alone and needed two closes in the
+# same few seconds. Adding `assigned`/`unassigned`/`opened`/`reopened` makes it
+# ordinary — those cluster during any triage session — so the widening is what
+# obliges the group, not the group that was always missing.
+#
+# `cancel-in-progress: false`, and a superseded PENDING run costs nothing.
+# Every mode here is a pure function of LIVE state: both walks re-read the
+# board, the throughput and the dependency summaries on each run, and neither
+# consumes anything. So a run dropped from the queue would have done exactly
+# what the run that replaces it does, against fresher data. Cancelling the
+# RUNNING one is the option that would lose something — it can be mid-write.
+concurrency:
+  group: board-ready
+  cancel-in-progress: false
+
 jobs:
   move-freed-issues-to-ready:
     runs-on: "ubuntu-latest"
