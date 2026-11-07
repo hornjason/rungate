@@ -265,6 +265,42 @@ describe("#1849: a verify command names a test that exists", () => {
       ).toEqual(["outer", "outer inner"]);
     });
 
+    test("every spelling of a declaration HEAD is seen by the title scan", () => {
+      // Rounds 6 and 7 each found one character on which the title scan
+      // and the unresolved scan disagreed — the modifier chain, then the
+      // space before the paren. Round 7's finding was round 6's with one
+      // name replaced, which is the population I failed to sweep
+      // (`.claude/rules/self-referential-tests.md`). So this is the
+      // population, not the two instances: every head spelling, each
+      // asserted to yield the SAME title set.
+      //
+      // The gap is damaging in one direction only. A head the title scan
+      // cannot see contributes no name, while the unresolved scan — which
+      // reads a quote as the first argument — calls the file readable. A
+      // missing name in a set reported as WHOLE is a false refusal, and
+      // everywhere else an unreadable declaration degrades to UNMEASURED.
+      const heads = [
+        `${T}(`,
+        `${T} (`,
+        `${T}.skip(`,
+        `${T}.skip (`,
+        `${T}.only.skip(`,
+        `${T}.only.skip (`,
+        `${T}\n  (`,
+      ];
+      for (const head of heads) {
+        const src = `${D}("outer", () => {\n  ${head}"inner", () => {});\n});\n`;
+        expect(paths(src), `the title scan could not see a declaration spelled ${JSON.stringify(head)}`).toEqual([
+          "outer",
+          "outer inner",
+        ]);
+        expect(
+          namesAreComplete(src).complete,
+          `${JSON.stringify(head)} dropped a title and still reported the name set whole`,
+        ).toBe(true);
+      }
+    });
+
     test("a declaration's chained modifiers do not hide its title", () => {
       // Round 6. `TITLE_CALL` allowed ONE chained modifier and
       // `UNRESOLVED_CALL` allowed any number, so a two-modifier call with

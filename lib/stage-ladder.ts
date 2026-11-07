@@ -711,18 +711,29 @@ const BUN_TEST_T = /bun test\s+(\S+)\s+-t\s+(["'])(.*?)\2/g;
  * AC-4's mutation failing to redden anything: the victim it picked was a
  * fragment this parser had quietly given up on.
  *
- * `MODIFIERS` is shared with `UNRESOLVED_CALL`, and the sharing is the
- * point rather than a tidy-up. Round 6: this pattern took ONE modifier
- * and that one took any number, so `test.only.skip("inner", …)` fell
- * between them — no title recorded, and not flagged unresolved either,
- * because the unresolved scan saw a quote as the first argument and
- * called the file readable. A name missing from a set reported as whole
- * turns a verify command naming a real test into a refusal, which is
- * the one direction this module may not be wrong in.
+ * The HEAD of the declaration — everything up to and including the open
+ * paren — is `DECLARATION_HEAD`, shared verbatim with `UNRESOLVED_CALL`.
+ * Rounds 6 and 7 each found the two patterns disagreeing about one
+ * character of it: first the modifier chain (`?` against `*`, so
+ * `test.only.skip("inner", …)` fell between them), then the space before
+ * the paren (`describe ("outer", …)`, same gap). The second was round 6's
+ * finding with one name replaced, and the sweep I should have run then is
+ * this constant: every part they must agree on in ONE place, rather than
+ * a third round finding the third character.
+ *
+ * Why the gap is the damaging direction: a declaration this pattern
+ * cannot see contributes no title, and the unresolved scan — seeing a
+ * quote as the first argument — calls the file readable anyway. A name
+ * missing from a set reported as WHOLE turns a verify command naming a
+ * real test into a refusal, and everywhere else in this module an
+ * unreadable declaration degrades to UNMEASURED instead.
+ *
+ * Group 1 is the name, and the two patterns' later groups are numbered
+ * from it: `TITLE_CALL` takes 2 and 3, `UNRESOLVED_CALL` takes 2.
  */
-const MODIFIERS = String.raw`(?:\.\w+)*`;
+const DECLARATION_HEAD = String.raw`(?<![.\w$])(describe|test|it)(?:\.\w+)*\s*\(\s*`;
 const TITLE_CALL = new RegExp(
-  String.raw`(?<![.\w$])(describe|test|it)${MODIFIERS}\(\s*(["'\`])((?:\\.|(?!\2).)*)\2`,
+  String.raw`${DECLARATION_HEAD}(["'\`])((?:\\.|(?!\2).)*)\2`,
   "g",
 );
 
@@ -1235,21 +1246,21 @@ function endOfSubstitution(text: string, from: number): number {
  * holding one of these has names this cannot see, so a pattern matching
  * nothing in it is UNMEASURED — never the false refusal review predicted.
  *
- * It spells the modifier chain with `MODIFIERS`, the same constant
- * `TITLE_CALL` uses, because the two must agree on what a declaration
- * IS. They did not in round 6 and the gap between them was silent — see
- * `TITLE_CALL`'s note. One constant is the only version of that
- * agreement a later edit cannot break one-sidedly.
+ * It opens with `DECLARATION_HEAD`, the same string `TITLE_CALL` opens
+ * with, because the two must agree on what a declaration IS. They did
+ * not in round 6 (the modifier chain) and again in round 7 (the space
+ * before the paren), and both gaps were silent — see `TITLE_CALL`'s
+ * note. One constant is the only version of that agreement a later edit
+ * cannot break one-sidedly.
  */
-const UNRESOLVED_CALL = new RegExp(
-  String.raw`(?<![.\w$])(?:describe|test|it)${MODIFIERS}\s*\(\s*(.)`,
-  "g",
-);
+const UNRESOLVED_CALL = new RegExp(String.raw`${DECLARATION_HEAD}(.)`, "g");
 
 function hasUnresolvedDeclaration(masked: string): boolean {
   UNRESOLVED_CALL.lastIndex = 0;
   for (const m of masked.matchAll(UNRESOLVED_CALL)) {
-    const first = m[1]!;
+    // Group 2: group 1 is the declaration name, captured by the shared
+    // `DECLARATION_HEAD`.
+    const first = m[2]!;
     if (first !== '"' && first !== "'" && first !== "`") return true;
   }
   return false;
