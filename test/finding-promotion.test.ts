@@ -90,7 +90,7 @@ function inputFor(root: string, over: Partial<PromotionInput> = {}): PromotionIn
 
 const REGISTRY = buildScRegistry([]);
 
-describe("AC-1 (#1678): a promotable finding becomes a criterion", () => {
+describe("SC-2612 / AC-1 (#1678): a promotable finding becomes a criterion", () => {
   test("the one case that must SUCCEED, so the refusals below are not vacuous", () => {
     const root = scratch(SPEC_WITH_CRITERIA);
     try {
@@ -136,7 +136,7 @@ describe("AC-1 (#1678): a promotable finding becomes a criterion", () => {
   });
 });
 
-describe("AC-2 (#1678): every refusal is named, and none is a guess", () => {
+describe("SC-2612 / AC-2 (#1678): every refusal is named, and none is a guess", () => {
   test("a spec that is not in the tree refuses SPEC_ABSENT", () => {
     const root = scratch(SPEC_WITH_CRITERIA);
     try {
@@ -446,7 +446,7 @@ describe("AC-2 (#1678): every refusal is named, and none is a guess", () => {
   });
 });
 
-describe("AC-3 (#1678): the module does not answer a question board-mirror already answers", () => {
+describe("SC-2612 / AC-3 (#1678): the module does not answer a question board-mirror already answers", () => {
   const source = readFileSync(SOURCE, "utf8");
 
   test("'does this issue serve a criterion' is imported, never reimplemented", () => {
@@ -498,7 +498,7 @@ describe("AC-3 (#1678): the module does not answer a question board-mirror alrea
   });
 });
 
-describe("AC-4 (#1678): the refusals are proved able to fail", () => {
+describe("SC-2612 / AC-4 (#1678): the refusals are proved able to fail", () => {
   /**
    * ## One binding, mutated
    *
@@ -587,7 +587,7 @@ describe("AC-4 (#1678): the refusals are proved able to fail", () => {
   });
 });
 
-describe("AC-6 (#1678): the CLI refuses a bad flag by NAME, for every flag", () => {
+describe("SC-2612 / AC-6 (#1678): the CLI refuses a bad flag by NAME, for every flag", () => {
   /**
    * ## The population the earlier sweep missed
    *
@@ -666,7 +666,7 @@ describe("AC-6 (#1678): the CLI refuses a bad flag by NAME, for every flag", () 
   });
 });
 
-describe("AC-5 (#1678): the statement a promotion produces", () => {
+describe("SC-2612 / AC-5 (#1678): the statement a promotion produces", () => {
   test("names the module and the symbol, so a mutation can move it", () => {
     const root = scratch(SPEC_WITH_CRITERIA);
     try {
