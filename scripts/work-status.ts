@@ -31,7 +31,14 @@ import {
   type TrackerFacts,
 } from "../lib/work-status";
 import { laneHealth, laneHealthLines } from "../lib/board-lane-health";
-import type { Throughput } from "../lib/board-ready-rule";
+import {
+  LABEL_RANK,
+  placementCensus,
+  placementOf,
+  readyOrder,
+  type Throughput,
+} from "../lib/board-ready-rule";
+import { phaseOf } from "../lib/board-mirror";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
 
@@ -616,6 +623,51 @@ console.log(
     "  the dependencies API, not from a search. These are what Ready draws from;\n" +
     "  starting one directly is how the board stops describing the work.",
 );
+
+// ## What places each candidate — #1853
+//
+// The list below groups by milestone, and on 2026-11-06 that put 28 of 38
+// candidates in one undifferentiated `(no milestone)` row. Every one of them
+// ranked `POSITIVE_INFINITY` in `readyOrder` and fell through to the issue
+// number, so **the lane was ordered by age** and nothing in this report said
+// so. The census is printed from `placementCensus`, the same module the
+// writer sorts with, so a mutation of the placement rule moves the promotion
+// order AND these three numbers.
+//
+// UNPLACED is its own count rather than part of `(no milestone)`: an issue
+// nothing can rank reads identically to one ranked last, which is the
+// distinction every row in the lane-health report below exists to keep.
+const candidateRankables = pickable.map((i: any) => ({
+  number: i.number,
+  phase: phaseOf(i.milestone?.title),
+  labels: (i.labels ?? [])
+    .map((l: any) => (typeof l === "string" ? l : l?.name))
+    .filter((n: any) => typeof n === "string"),
+}));
+const census = placementCensus(candidateRankables);
+console.log(
+  `\n  placed by milestone ${census.phase}, by label ${census.label}, UNPLACED ${census.unplaced}` +
+    ` — of ${pickable.length}`,
+);
+if (census.unplaced > 0) {
+  const names = candidateRankables
+    .filter(r => placementOf(r).tier === "UNPLACED")
+    .map(r => `#${r.number}`);
+  console.log(
+    `  UNPLACED means no milestone and no ranked label, so nothing in the repository says\n` +
+      "  where these belong and they sort behind everything else by construction. Give each\n" +
+      `  one a milestone or a ranked label (${[...LABEL_RANK.keys()].join(", ")}):\n` +
+      `    ${names.join(" ")}`,
+  );
+}
+if (census.phase + census.label > 0) {
+  const top = [...candidateRankables].sort(readyOrder).slice(0, 5);
+  console.log("\n  next out of the backlog, in plan order:");
+  for (const r of top) {
+    const title = pickable.find((i: any) => i.number === r.number)?.title ?? "";
+    console.log(`    #${r.number} ${String(title).slice(0, 54).padEnd(54)} ${placementOf(r).why}`);
+  }
+}
 if (focus.kind === "all") {
   // Listed per lane, because "34 startable" is a number nobody can act on
   // and "3 startable in Phase 2" is a decision.

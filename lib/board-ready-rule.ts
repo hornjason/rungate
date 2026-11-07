@@ -104,28 +104,169 @@ export function readyTarget(eligible: number, cap: number | null): number | null
   return Math.min(eligible, cap);
 }
 
-/** Everything ordering reads. Phase `null` means "no phase milestone". */
+/**
+ * Everything ordering reads. Phase `null` means "no phase milestone".
+ *
+ * `labels` is **required, with no default** (#1853). An optional field here
+ * would let a caller omit it and receive UNPLACED, which is a reading rather
+ * than an absence — the same defect `laneHealthLines` records about its own
+ * `offBoard` parameter, where a default invented a value the caller already
+ * had. Both callers now have to say what they read.
+ */
 export interface Rankable {
   readonly phase: number | null;
   readonly number: number;
+  readonly labels: readonly string[];
+}
+
+/**
+ * The order labels rank in when no milestone places an issue — Jason's call,
+ * 2026-11-06. **This is the only place it is spelled.**
+ *
+ * `engine` leads because it is the work that reduces the backlog itself:
+ * AGENTS.md rule 7 watches issues opened against issues closed, and above 1
+ * the backlog diverges however fast the work goes, so engine work compounds
+ * and a follow-up does not.
+ *
+ * **A label outside this map does not place an issue.** The set is closed
+ * deliberately: ranking an unknown label by guessing is the silent default
+ * `.claude/rules/config-access.md` names, and `arbiter-override` is the live
+ * instance — one eligible issue carries it and nothing else, and the honest
+ * answer is UNPLACED rather than a tier somebody invented for it.
+ */
+export const LABEL_RANK: ReadonlyMap<string, number> = new Map([
+  ["engine", 0],
+  ["spec:convergence", 1],
+  ["follow-up", 2],
+  ["external-audit", 3],
+]);
+
+/** Which source placed an issue — or that nothing did. */
+export type PlacementTier = "PHASE" | "LABEL" | "UNPLACED";
+
+export interface Placement {
+  readonly tier: PlacementTier;
+  /** Rank inside the tier. `POSITIVE_INFINITY` for UNPLACED. */
+  readonly rank: number;
+  readonly why: string;
+}
+
+/** PHASE before LABEL before UNPLACED. A milestone always beats a label. */
+const TIER_ORDER: Readonly<Record<PlacementTier, number>> = { PHASE: 0, LABEL: 1, UNPLACED: 2 };
+
+/**
+ * Where an issue sits in the plan — milestone, else label, else nowhere.
+ *
+ * ## Why a second source exists at all (#1853)
+ *
+ * Phase comes from `phaseOf`, which reads a number out of a MILESTONE TITLE
+ * and nothing else. Measured 2026-11-06: of 38 unblocked, unclaimed issues,
+ * **10** carried a milestone and **28** did not, so 74% of what Ready draws
+ * from sorted as `POSITIVE_INFINITY` and fell through to the tiebreak. The
+ * tiebreak is issue number. **The lane was ordered by age.**
+ *
+ * The obvious repair is to backfill `### Phase placement` tables so
+ * `plan-spec` derives a milestone for everything. It cannot reach this
+ * backlog: only **16 of 80** open issues name an `SC-` id at all. The other
+ * 64 are review follow-ups, audit findings and engine work that never passed
+ * through a spec, and no table placed on any spec can rank them.
+ *
+ * So the label is the fallback, and it is the signal this repository already
+ * produces for work with no spec. A milestone still wins, because the
+ * milestone is the declared plan and the label is a category.
+ *
+ * **An issue with several ranked labels takes the best of them.** A
+ * follow-up that is also engine work is engine work; taking the worst would
+ * let adding a label demote an issue, which makes the rank punish labelling.
+ */
+export function placementOf(r: Rankable): Placement {
+  if (r.phase !== null) {
+    return { tier: "PHASE", rank: r.phase, why: `milestone places it in phase ${r.phase}` };
+  }
+  let best: { label: string; rank: number } | null = null;
+  for (const label of r.labels) {
+    const rank = LABEL_RANK.get(label);
+    if (rank === undefined) continue;
+    if (best === null || rank < best.rank) best = { label, rank };
+  }
+  if (best !== null) {
+    return {
+      tier: "LABEL",
+      rank: best.rank,
+      why: `no milestone, and "${best.label}" ranks ${best.rank} of ${LABEL_RANK.size}`,
+    };
+  }
+  return {
+    tier: "UNPLACED",
+    rank: Number.POSITIVE_INFINITY,
+    why:
+      r.labels.length === 0
+        ? "no milestone and no label at all — nothing in the repository says where this belongs"
+        : `no milestone, and none of its labels (${r.labels.join(", ")}) is ranked — ` +
+          "add one to LABEL_RANK deliberately, or give it a milestone",
+  };
 }
 
 /**
  * ORDERING: which eligible issue should be pulled first.
  *
+ * Tier first (phase, then label, then unplaced), rank inside the tier, then
+ * issue number. **Age still breaks ties and no longer decides the tier** —
+ * before #1853 it decided the tier for 28 of 38 candidates, because every
+ * one of them ranked `POSITIVE_INFINITY` and the tiebreak was the whole
+ * ordering.
+ *
  * Phase ascending, because the phase placement table is the project's own
  * declared order and is data rather than a judgement made here. **A
  * phase-less issue sorts last, not never** — that is the whole difference
  * between ordering and the eligibility gate it replaces, and on 2026-11-05
- * it was the difference between 3 candidates and 35. Ties break on issue
- * number ascending, which is age: the oldest eligible work goes first, so
- * nothing is starved by a steady arrival of newer items.
+ * it was the difference between 3 candidates and 35. Issue number ascending
+ * is age: the oldest work in a tier goes first, so nothing is starved by a
+ * steady arrival of newer items.
+ *
+ * Two UNPLACED items compare `Infinity !== Infinity`, which is false, so the
+ * rank test falls through to the number rather than producing `NaN`.
  */
 export function readyOrder(a: Rankable, b: Rankable): number {
-  const pa = a.phase === null ? Number.POSITIVE_INFINITY : a.phase;
-  const pb = b.phase === null ? Number.POSITIVE_INFINITY : b.phase;
-  if (pa !== pb) return pa - pb;
+  const pa = placementOf(a);
+  const pb = placementOf(b);
+  if (TIER_ORDER[pa.tier] !== TIER_ORDER[pb.tier]) {
+    return TIER_ORDER[pa.tier] - TIER_ORDER[pb.tier];
+  }
+  if (pa.rank !== pb.rank) return pa.rank - pb.rank;
   return a.number - b.number;
+}
+
+/** How many candidates each source placed. The report's one reading. */
+export interface PlacementCensus {
+  readonly phase: number;
+  readonly label: number;
+  readonly unplaced: number;
+}
+
+/**
+ * The census the report prints.
+ *
+ * It lives here rather than inline in `scripts/work-status.ts` so that a
+ * mutation of the placement rule moves the writer's ordering AND the
+ * reader's count — which is the property `lib/board-lane-health.ts`'s own
+ * header says was missing the last two times this area went wrong.
+ *
+ * **UNPLACED is counted, not folded into "no milestone".** An issue nothing
+ * can rank currently reads identically to one ranked last, and that is the
+ * distinction every row in the lane-health report exists to keep.
+ */
+export function placementCensus(items: readonly Rankable[]): PlacementCensus {
+  let phase = 0;
+  let label = 0;
+  let unplaced = 0;
+  for (const i of items) {
+    const t = placementOf(i).tier;
+    if (t === "PHASE") phase++;
+    else if (t === "LABEL") label++;
+    else unplaced++;
+  }
+  return { phase, label, unplaced };
 }
 
 /**

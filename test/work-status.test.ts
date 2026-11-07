@@ -934,3 +934,61 @@ describe("#1842 G5: the report says what its reading could not see", () => {
     expect(code).toContain("return { statuses: out, abandonedOnBoard, unseenByLane };");
   });
 });
+
+/**
+ * #1853 H4: the report names how many candidates nothing can rank.
+ *
+ * Measured 2026-11-06: 38 promotion candidates, 28 of them printed under one
+ * `(no milestone)` heading. All 28 ranked `POSITIVE_INFINITY` in `readyOrder`
+ * and fell through to the issue-number tiebreak, so **the lane was ordered by
+ * age** and this report said nothing about it. Nine of the 28 carried no
+ * rankable label either — UNPLACED — and read exactly like an issue ranked
+ * last, which is the distinction every row in BOARD LANE HEALTH exists to
+ * keep.
+ *
+ * Asserted on the source, like the G5 block above: the printing happens after
+ * three network reads, and the shape of the report is the thing that
+ * regresses. The RULE these lines call is covered behaviourally in
+ * `test/board-ready-rule.test.ts`.
+ */
+describe("#1853 H4: the candidate list says how many are UNPLACED", () => {
+  const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+  test("the census comes from the shared rule, not from a count written here", () => {
+    // Two deciders that agree are behaviourally one. If this file counted
+    // tiers itself, a mutation of `placementOf` would leave the report
+    // agreeing with a writer that had changed underneath it.
+    expect(code, "placementCensus is the one reading").toContain("placementCensus(");
+    expect(
+      code.match(/tier\s*===\s*"(PHASE|LABEL)"/g),
+      "the report must not re-derive the placed tiers — that is a second decider",
+    ).toBeNull();
+  });
+
+  test("UNPLACED is printed as its own number, beside the two placed tiers", () => {
+    expect(code).toContain("UNPLACED ${census.unplaced}");
+    expect(code, "a bare count is a number nobody can act on — it must name the issues").toContain(
+      'tier === "UNPLACED"',
+    );
+  });
+
+  test("the UNPLACED line is conditional — a fully placed board prints nothing", () => {
+    expect(
+      code,
+      "an unconditional line would appear on every clean board and stop being read",
+    ).toMatch(/if\s*\(census\.unplaced\s*>\s*0\)/);
+  });
+
+  test("the remedy names the ranked labels from the rule, never a typed-out list", () => {
+    // A hardcoded list here would go stale the first time the rank changes,
+    // and it would be the second site #1853 exists to prevent.
+    expect(code).toContain("[...LABEL_RANK.keys()]");
+  });
+
+  test("the candidates are sorted with readyOrder, so the report shows plan order", () => {
+    expect(code, "sorting by anything else makes this list disagree with the writer").toContain(
+      ".sort(readyOrder)",
+    );
+  });
+});

@@ -121,7 +121,10 @@ export function readyPopulation<T extends { state: string; status: string }>(
 }
 
 export function splitReadyChanges<
-  T extends { item: { number: number; phase: number | null; status: string }; to: string },
+  T extends {
+    item: { number: number; phase: number | null; labels: readonly string[]; status: string };
+    to: string;
+  },
 >(
   eligible: readonly T[],
   cap: number | null,
@@ -141,7 +144,7 @@ export function splitReadyChanges<
   // obvious fix.
   const freed = demotions.filter(c => c.item.status === READY).length;
   const selection = selectReady(
-    promotions.map(c => ({ number: c.item.number, phase: c.item.phase })),
+    promotions.map(c => ({ number: c.item.number, phase: c.item.phase, labels: c.item.labels })),
     cap,
     Math.max(0, occupied - freed),
   );
@@ -198,6 +201,8 @@ interface Item {
   criteriaCell: string;
   milestone: string;
   phase: number | null;
+  /** Ordering's second source when no milestone places the issue (#1853). */
+  labels: readonly string[];
 }
 
 const ITEMS_QUERY = `query($project: ID!, $field: String!, $after: String) {
@@ -216,6 +221,7 @@ const ITEMS_QUERY = `query($project: ID!, $field: String!, $after: String) {
             ... on Issue {
               number title body state
               milestone { title }
+              labels(first: 20) { nodes { name } }
               assignees { totalCount }
               issueDependenciesSummary { blockedBy totalBlockedBy }
             }
@@ -348,6 +354,12 @@ export async function main(argv: string[]): Promise<number> {
         criteriaCell: n.fieldValueByName?.text ?? "",
         milestone: n.content.milestone?.title ?? "",
         phase: phaseOf(n.content.milestone?.title),
+        // Ordering's second source (#1853). This writer promotes too, so a
+        // mirror run that ranked everything milestone-less as UNPLACED
+        // would order by age exactly where the fan-out no longer does.
+        labels: (n.content.labels?.nodes ?? [])
+          .map((l: any) => l?.name)
+          .filter((x: any) => typeof x === "string"),
       });
     }
     if (!node.items.pageInfo.hasNextPage) break;
