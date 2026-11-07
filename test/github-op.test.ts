@@ -84,6 +84,29 @@ async function runOp(args: string[], env: Record<string, string> = {}) {
   return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode };
 }
 
+/**
+ * What an `issue-create` needs now that the tool path is metered (#1677).
+ *
+ * `--project-root` is REQUIRED and is deliberately not `process.cwd()`: every
+ * production caller runs this script as `bun --cwd ${HARNESS_ROOT} …`, so the
+ * child's cwd names the harness checkout for every run on the machine rather
+ * than the project being shipped.
+ *
+ * The ledger is redirected to scratch. Reserving APPENDS, so a test left on
+ * the default path would spend the developer's own filing allowance and leave
+ * rows in `~/.rungate/finding-ledger.jsonl` that no filing produced.
+ */
+function filingScratch(): { root: string; env: Record<string, string> } {
+  const root = mkdtempSync(join(tmpdir(), "github-op-run-"));
+  return {
+    root,
+    env: {
+      RUNGATE_FINDING_LEDGER: join(root, "finding-ledger.jsonl"),
+      CLAUDE_CODE_SESSION_ID: "testsess",
+    },
+  };
+}
+
 function reset() {
   captured = [];
   responders = [];
@@ -344,9 +367,11 @@ describe("#137: scripts/github-op.ts performs the GitHub write the prompt used t
     reset();
     stub("POST", "/repos/owner/name/issues", { number: 99, html_url: "https://x/99" });
 
+    const scratch = filingScratch();
     const { stdout, exitCode } = await runOp([
       "issue-create", "--repo", "owner/name", "--title", "Phase 2", "--body", "split out", "--labels", "p2-this-week",
-    ]);
+      "--project-root", scratch.root,
+    ], scratch.env);
 
     expect(exitCode).toBe(0);
     expect(JSON.parse(stdout)).toEqual({ number: 99, html_url: "https://x/99" });
@@ -424,9 +449,39 @@ describe("#137: an issue title never crosses a shell", () => {
     const file = join(dir, "title.txt");
     writeFileSync(file, "#12 Phase 2: the rest\nRUNGATE_EOF\nrm -rf /\n");
 
-    const { exitCode } = await runOp(["issue-create", "--repo", "owner/name", "--title-file", file, "--body", "b"]);
+    const scratch = filingScratch();
+    const { exitCode } = await runOp(
+      ["issue-create", "--repo", "owner/name", "--title-file", file, "--body", "b",
+       "--project-root", scratch.root],
+      scratch.env,
+    );
     expect(exitCode).toBe(0);
     expect(captured[0].body.title).toBe("#12 Phase 2: the rest");
+  });
+
+  /**
+   * #1873 review, `high`. `reserveFiling` keyed the cap off `process.cwd()`,
+   * and every production caller runs `bun --cwd ${HARNESS_ROOT} …` — so one
+   * shared run identity for every project on the machine, and the second
+   * project to file would be refused for issues the first one opened.
+   *
+   * The flag is required rather than defaulted to cwd, because a default
+   * reinstates exactly that bug the moment a caller omits it.
+   */
+  test("issue-create REFUSES without --project-root rather than keying the cap off cwd", async () => {
+    reset();
+    stub("POST", "/repos/owner/name/issues", { number: 7, html_url: "u" });
+    const scratch = filingScratch();
+
+    const { stderr, exitCode } = await runOp(
+      ["issue-create", "--repo", "owner/name", "--title", "t", "--body", "b"],
+      scratch.env,
+    );
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("project-root");
+    // The assertion that matters: nothing was filed.
+    expect(captured).toHaveLength(0);
   });
 
   test("an empty --title-file fails rather than creating an untitled issue", async () => {

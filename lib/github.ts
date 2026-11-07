@@ -737,25 +737,109 @@ export async function addLabels(client: GitHubClient, repoSlug: string, issueNum
 }
 
 /**
- * Create a new issue.
+ * What a filing gate answered about one proposed issue (#1677, SC-2613).
+ *
+ * `release` exists because `reserveAllowance` takes a position in the run's
+ * queue BEFORE the outcome is known, and a caller that goes on to file
+ * nothing has to give it back or it strands the run's allowance. It is called
+ * only when the create itself fails: a successful create spent the
+ * reservation, and releasing it there would make the cap undercount.
+ */
+export type FilingDecision =
+  | { allowed: true; release: () => void }
+  | { allowed: false; reason: string };
+
+/**
+ * The one refusal `createIssue` raises, and the only site that raises it.
+ *
+ * Exported and used exactly once so a mutation can remove the guard and be
+ * observed doing it — `.claude/rules/checks-must-be-able-to-fail.md`. A later
+ * branch that inlines its own `throw` would bypass the mutation and the case
+ * would go green having witnessed nothing.
+ */
+export const REFUSED_UNGATED = "refusing to create an issue the filing gate did not allow";
+
+/**
+ * Create a new issue, **metered** (#1677, SC-2613).
  *
  * Used by ship.js when Discovery rescopes a large issue into phases: phase 1
  * stays on the parent, the rest become sub-issues.
+ *
+ * ## Why this takes a gate at all
+ *
+ * `lib/issue-create-override.ts` meters filing by PARSING A BASH COMMAND —
+ * it tokenizes, walks clauses, and recognises `gh issue create`. That is the
+ * whole of its reach. This function is the other path: Octokit, no command,
+ * nothing for a parser to see. Until #1677 a run that called the tool filed
+ * as many issues as it liked and the ledger never heard about it, so the cap
+ * measured one of the two ways this repository creates issues and reported
+ * that number as the run's total. A cap with a second unmetered door is not a
+ * cap, and the door nobody counts is the one a tool uses by default.
+ *
+ * The gate itself is NOT reimplemented here. `scripts/github-op.ts` builds
+ * the decision out of `reserveAllowance`, `runIdFor` and `filingsPerRunFor`,
+ * which is the same apparatus the CLI path reserves against — one ledger, one
+ * ordering, both doors counted in it. Two deciders answering the same
+ * question would be behaviourally one decider with a dead half nobody can
+ * identify, which is the fourth shape in
+ * `.claude/rules/checks-must-be-able-to-fail.md`.
+ *
+ * ## `gate` has no default, and that is the point
+ *
+ * Same reasoning as `reserveAllowance`'s `cap: number`: a defaulted gate
+ * makes a call site that forgot to pass one a silent behaviour change,
+ * catchable only by a reviewer or a text-matching test, one occurrence at a
+ * time. With no default the compiler catches it at every site for free.
+ *
+ * ## It fails CLOSED
+ *
+ * A gate that throws, or returns something that is not a decision, refuses.
+ * Reserving is a write to the ledger, so a failure to reserve is a failure to
+ * update the cap's STATE — indistinguishable from an attempt to switch the
+ * cap off. `issue-filing-gate.ts` refuses on exactly that
+ * (`unreservedCapReason`), and spelling it differently here would put the
+ * fail-open behind the door that has no parser watching it.
  */
 export async function createIssue(
   client: GitHubClient,
   repoSlug: string,
   opts: { title: string; body?: string; labels?: string[] },
+  gate: () => FilingDecision,
 ): Promise<any> {
+  let decision: FilingDecision;
+  try {
+    const answer = gate();
+    // A gate that returned nothing usable has not allowed anything. Treating
+    // an unreadable answer as permission is the fail-open this exists to
+    // close, and `undefined` is what a stubbed or half-written gate returns.
+    decision =
+      answer !== null && typeof answer === "object" && "allowed" in answer
+        ? answer
+        : { allowed: false, reason: "the filing gate returned no decision" };
+  } catch (e) {
+    decision = { allowed: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+
+  if (!decision.allowed) {
+    throw new Error(`${REFUSED_UNGATED}: ${decision.reason}`);
+  }
+
   const { owner, repo } = parseOwnerRepo(repoSlug);
-  const response = await client.rest.issues.create({
-    owner,
-    repo,
-    title: opts.title,
-    ...(opts.body !== undefined ? { body: opts.body } : {}),
-    ...(opts.labels?.length ? { labels: opts.labels } : {}),
-  });
-  return response.data;
+  try {
+    const response = await client.rest.issues.create({
+      owner,
+      repo,
+      title: opts.title,
+      ...(opts.body !== undefined ? { body: opts.body } : {}),
+      ...(opts.labels?.length ? { labels: opts.labels } : {}),
+    });
+    return response.data;
+  } catch (e) {
+    // The reservation was taken and nothing was filed against it. Give it
+    // back, or an API error costs the run an allowance it never spent.
+    decision.release();
+    throw e;
+  }
 }
 
 /**

@@ -61,8 +61,149 @@ import {
   updateIssue,
   upsertPR,
   waitForCi,
+  type FilingDecision,
 } from "../lib/github";
 import { commitSubject } from "../lib/commit-subject";
+import {
+  filingBatch,
+  filingsPerRunFor,
+  ledgerPath,
+  readLedgerRows,
+  recordAdjudication,
+  releaseAllowance,
+  RUN_WINDOW_MS,
+  reserveAllowance,
+  runIdFor,
+  type FilingLedgerRow,
+} from "../lib/issue-filing-gate";
+import { UNFILED_ID } from "../lib/finding-arbiter";
+import { tryLoadRungateConfig } from "../lib/config-loader";
+
+/**
+ * Take this run's filing allowance for one tool-path issue (#1677, SC-2613).
+ *
+ * ## What this closes
+ *
+ * `lib/issue-create-override.ts` meters filing by parsing a bash command, so
+ * it sees `gh issue create` and nothing else. `issue-create` here is Octokit:
+ * no command exists, nothing parses, and before this the run filed as many
+ * issues as it liked while the ledger recorded none of them. The cap then
+ * measured one of the two doors and reported that as the run's total.
+ *
+ * ## It reserves against the SAME ledger, and decides nothing itself
+ *
+ * `reserveAllowance` appends an intent and reads its own position back, and
+ * appends to one file are serialised by the filesystem — so the CLI path and
+ * this path take positions in one total order rather than keeping two
+ * counts that drift. Nothing about the cap is re-decided here: the cap comes
+ * from `filingsPerRunFor`, the run from `runIdFor`, the ordering from the
+ * ledger. A second decider over the same question would be behaviourally one
+ * decider with a dead half (`.claude/rules/checks-must-be-able-to-fail.md`,
+ * the fourth shape).
+ *
+ * ## Every failure refuses
+ *
+ * An unreadable run, an unappendable ledger, a ledger that cannot be read
+ * back: each is a failure to establish or update the cap's state, which is
+ * indistinguishable from an attempt to switch the cap off. `createIssue`
+ * turns a throw into a refusal, so throwing here IS the refusal.
+ *
+ * The planned-filing exemption is deliberately **not** reimplemented. This
+ * path has no finding body to match a plan title against — it has a title
+ * and nothing else — and a second, weaker spelling of an exemption is how
+ * the cap acquires a third door. A planned filing goes through the CLI
+ * path, where `plannedFiling` reads `origin/main`.
+ */
+function reserveFiling(title: string, projectRoot: string): FilingDecision {
+  const reading = runIdFor(projectRoot);
+  if (reading.run === null) {
+    throw new Error(
+      `the run could not be read, so this filing cannot be counted against a cap: ${reading.why ?? "no reason given"}`,
+    );
+  }
+  const run = reading.run;
+  const { cap, unreadable } = filingsPerRunFor(
+    () => tryLoadRungateConfig(projectRoot) as Record<string, unknown> | null,
+  );
+  // **A corrupt ship policy refuses rather than quietly enforcing the strict
+  // fallback.** `filingsPerRunFor` reports `unreadable` precisely so a caller
+  // can tell "no policy" from "a policy nobody could parse", and the CLI path
+  // reads it and raises `unreadableShipPolicyNote`. Discarding it here would
+  // be Silent Default Substitution — `.claude/rules/config-access.md` — on
+  // the door that has no parser watching it, which is the combination this
+  // whole change exists to remove.
+  if (unreadable) {
+    throw new Error(
+      `the ship policy in this project's rungate config is present and could not be parsed, so the ` +
+        `filing cap for this run is unknown. Refusing rather than enforcing the strict fallback of ` +
+        `${cap} silently: a cap substituted for one nobody could read is indistinguishable from the ` +
+        `configured one.`,
+    );
+  }
+
+  const at = new Date().toISOString();
+  const row: FilingLedgerRow = {
+    at,
+    key: filingBatch(at) === null ? null : `${filingBatch(at)}/0`,
+    id: UNFILED_ID,
+    title,
+    symptomHash: "",
+    category: "unclassified",
+    severity: null,
+    disposition: "ISSUE",
+    refusal: null,
+    emitted: true,
+    withheldBy: null,
+    jury: null,
+    duplicateOf: [],
+    overridden: false,
+    refiledAfter: null,
+    // No comment exemption is claimed. This path has no finding body to
+    // declare one in, and inventing a value here would put an exemption on
+    // the ledger that nothing adjudicated.
+    exemption: null,
+    run,
+  };
+
+  const outcome = reserveAllowance(row, run, {
+    now: Date.parse(at),
+    append: (r: FilingLedgerRow) => recordAdjudication(r),
+    readLedger: () => readLedgerRows(),
+    cap,
+  });
+
+  if (outcome.outcome === "WON") {
+    return { allowed: true, release: () => void releaseAllowance(outcome.intent, recordAdjudication) };
+  }
+  if (outcome.outcome === "LOST") {
+    // Give the losing position back before refusing. A reservation that won
+    // nothing and is never released strands the run's allowance by a rarer
+    // route than the one the race fix was written for, and it is the same
+    // stranding.
+    releaseAllowance(outcome.intent, recordAdjudication);
+    throw new Error(
+      // The window is DERIVED, never spelled. `overCapReason` already composes
+      // it as `${RUN_WINDOW_MS / 3_600_000}h`, and a second literal spelling
+      // of a value with one authoritative source goes stale silently the day
+      // that source moves.
+      `this run has already filed ${outcome.already} issue(s) in the last ` +
+        `${RUN_WINDOW_MS / 3_600_000}h, and the cap is ${cap}. Tool-path filings are metered too as ` +
+        `of #1677 — this is the same ledger the CLI path reserves against, at ${ledgerPath()}, and ` +
+        `the overflow is a comment.`,
+    );
+  }
+  if (outcome.outcome === "UNCOUNTABLE") {
+    releaseAllowance(outcome.intent, recordAdjudication);
+    throw new Error(
+      `the filing ledger at ${ledgerPath()} was appended to and could not be read back, so this run's ` +
+        `position is unknown. Refusing rather than filing against a cap nobody can count.`,
+    );
+  }
+  throw new Error(
+    `the filing ledger at ${ledgerPath()} could not be appended to, so this filing cannot take a ` +
+      `position in the run's queue. A cap whose state cannot be written is not a cap.`,
+  );
+}
 
 export type Flags = Record<string, string>;
 
@@ -329,11 +470,31 @@ export async function run(command: string, flags: Flags): Promise<unknown> {
     }
 
     case "issue-create": {
-      const data = await createIssue(client, repo, {
-        title: titleFrom(flags),
-        body: readBody(flags, { allowEmpty: true }),
-        labels: labels(flags),
-      });
+      const title = titleFrom(flags);
+      const data = await createIssue(
+        client,
+        repo,
+        {
+          title,
+          body: readBody(flags, { allowEmpty: true }),
+          labels: labels(flags),
+        },
+        // **`--project-root`, and never `process.cwd()`.** Every production
+        // caller invokes this script as
+        // `bun --cwd ${HARNESS_ROOT} scripts/github-op.ts issue-create`, so
+        // the child's cwd is the HARNESS's checkout for every run on the
+        // machine — not the project being shipped. Keying the cap off it
+        // would put every concurrent ship run in one shared allowance, and
+        // the second project to file would be refused for issues the first
+        // one opened. Caught by review of #1873; it is the same
+        // misresolution ADR-011's 2026-11-06 amendment records, arriving by
+        // a different route.
+        //
+        // Required, with no fallback to cwd, for the reason `gate` has no
+        // default: a silent wrong answer here is a cap measured against the
+        // wrong denominator, and nothing downstream could tell.
+        () => reserveFiling(title, required(flags, "project-root")),
+      );
       return { number: data.number, html_url: data.html_url };
     }
 

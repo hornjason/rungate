@@ -3361,6 +3361,7 @@ ${acListBlock(discovery.acs)}
    quote or a backtick in that heading would otherwise be read by the shell:
 
    bun --cwd ${shellQuote(HARNESS_ROOT)} scripts/github-op.ts issue-create --repo ${ISSUE_REPO} \\
+     --project-root "$PWD" \\
      --title-file ${WORK_DIR}/subissue-N-title.txt --body-file ${WORK_DIR}/subissue-N.md
 
    The title file holds one line: "#${ISSUE} Phase N: [phase description]".
