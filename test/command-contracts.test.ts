@@ -113,17 +113,34 @@ describe("the commands #1746 creates are executable, not prose", () => {
     expect(blocks.length).toBeGreaterThan(0);
     const block = blocks[0] as string;
 
-    // No argument. Broken to prove it: removing the `/^[0-9]+$/` guard makes
-    // this build a `gh pr view ` with no number and emit gh's usage text.
+    // No argument. Asserted on the USAGE string, which only the `/^[0-9]+$/`
+    // guard can emit — not on the bare word UNMEASURED, which both paths
+    // produce.
+    //
+    // This is the correction the battery forced, and it is worth the
+    // paragraph. Replacing that guard with `if(false)` was predicted to
+    // redden this case and left it GREEN: without the guard the block runs
+    // `gh pr view ""`, gh fails, and the next branch prints "UNMEASURED: gh
+    // could not read pull request #". Two mechanisms, one observable, and
+    // the assertion was reading the observable — the sixth shape in
+    // .claude/rules/checks-must-be-able-to-fail.md. Only the prediction
+    // mismatch showed it.
     const none = runBlock(block, "");
     expect(none.code).toBe(0);
-    expect(none.out).toContain("UNMEASURED");
+    expect(
+      none.out,
+      "a missing argument must be refused by the usage guard, not by gh failing on an empty number",
+    ).toContain("Usage: /round-rca <pr-number>");
 
     // A real pull request. Where `gh` cannot reach the API — CI without a
     // token, or offline — the block must SAY so rather than exit non-zero or
     // report a zero. An absent credential is UNMEASURED, never a reading.
     const live = runBlock(block, "1725");
     expect(live.code, `the block exited ${live.code}:\n${live.out}`).toBe(0);
+    // Whatever else is true, a real number must never reach the usage guard.
+    expect(live.out, "a valid pull request number was refused as malformed").not.toContain(
+      "Usage: /round-rca <pr-number>",
+    );
     const measured = !live.out.includes("UNMEASURED");
     if (measured) {
       // Both halves of the comparison must be present, or the reader cannot
