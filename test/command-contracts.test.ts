@@ -203,16 +203,21 @@ describe("the commands #1746 creates are executable, not prose", () => {
     // clean main — the one place it is legitimate to run the audit. There
     // the probe correctly prints "Proceed." and the case would have failed
     // for being right.
+    // Every git call spells `"-C", <dir>` in its own argv literal. Composing
+    // it from a shared prefix is the same behaviour and a different source
+    // text, and `test/unit/git-identity-isolation.test.ts` reads the source
+    // text — an earlier revision of this case built the argv in a loop and
+    // reddened that suite in CI while passing here.
     const planted = join(scratch, "planted-tree");
     require("fs").mkdirSync(planted, { recursive: true });
     for (const argv of [
-      ["init", "-q", "-b", "not-main"],
-      ["config", "user.email", "t@example.invalid"],
-      ["config", "user.name", "t"],
-      ["commit", "-q", "--allow-empty", "-m", "seed"],
+      ["git", "-C", planted, "init", "-q", "-b", "not-main"],
+      ["git", "-C", planted, "config", "user.email", "t@example.invalid"],
+      ["git", "-C", planted, "config", "user.name", "t"],
+      ["git", "-C", planted, "commit", "-q", "--allow-empty", "-m", "seed"],
     ]) {
-      const p = Bun.spawnSync(["git", "-C", planted, ...argv]);
-      expect(p.exitCode, `git ${argv[0]} failed building the planted tree`).toBe(0);
+      const p = Bun.spawnSync(argv);
+      expect(p.exitCode, `git ${argv[3]} failed building the planted tree`).toBe(0);
     }
 
     // A repository on a branch that is not `main...origin/main`, with no
@@ -225,6 +230,48 @@ describe("the commands #1746 creates are executable, not prose", () => {
       "not main...origin/main",
     );
     expect(refused.out, "no worktree was linked and nothing was left uncommitted").not.toContain("LINKED WORKTREE");
+  });
+
+  test("stage-audit refuses a main that has diverged from origin/main", () => {
+    // `git status --porcelain --branch` prints `## main...origin/main [ahead 1]`
+    // when local main holds commits origin does not. An unanchored prefix
+    // match reads that as the clean case, so the audit would re-take every
+    // stage reading against a tree origin has never seen and report it as
+    // the state of main. Round 4 of this PR's review found it.
+    //
+    // Broken to prove it: restoring the unanchored `/^main\.\.\.origin\/main/`
+    // test makes this print "Proceed." and turns this red.
+    const probe = executableBlocks(read("stage-audit")).find(b => b.includes("--git-common-dir")) as string;
+
+    const bare = join(scratch, "ahead-origin.git");
+    const ahead = join(scratch, "ahead-clone");
+    require("fs").mkdirSync(bare, { recursive: true });
+    for (const argv of [
+      ["git", "-C", bare, "init", "-q", "--bare", "-b", "main"],
+      ["git", "clone", "-q", bare, ahead],
+      ["git", "-C", ahead, "config", "user.email", "t@example.invalid"],
+      ["git", "-C", ahead, "config", "user.name", "t"],
+      ["git", "-C", ahead, "checkout", "-q", "-B", "main"],
+      ["git", "-C", ahead, "commit", "-q", "--allow-empty", "-m", "first"],
+      ["git", "-C", ahead, "push", "-q", "-u", "origin", "main"],
+      ["git", "-C", ahead, "commit", "-q", "--allow-empty", "-m", "unpushed"],
+    ]) {
+      const p = Bun.spawnSync(argv);
+      expect(p.exitCode, `${argv.join(" ")} failed:\n${new TextDecoder().decode(p.stderr)}`).toBe(0);
+    }
+
+    // The control on the fixture itself: if git did not actually report a
+    // divergence, this case would be asserting against the ordinary clean
+    // line and would pass for the wrong reason.
+    const status = Bun.spawnSync(["git", "-C", ahead, "status", "--porcelain", "--branch"]);
+    const branchLine = new TextDecoder().decode(status.stdout).split("\n")[0] ?? "";
+    expect(branchLine, `the fixture did not produce a diverged branch line: ${branchLine}`).toContain("[ahead 1]");
+
+    const out = runBlock(probe, "", { cwd: ahead });
+    expect(out.code, out.out).toBe(0);
+    expect(out.out, `a main ahead of origin/main must be refused:\n${out.out}`).toContain("REFUSE:");
+    expect(out.out, "the reason must name the divergence, not just say the branch is wrong").toContain("ahead 1");
+    expect(out.out).not.toContain("PRIMARY CHECKOUT ON MAIN");
   });
 
   test("stage-audit says UNMEASURED when the plan is absent, and says so differently when it is corrupt", () => {
