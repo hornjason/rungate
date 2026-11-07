@@ -360,6 +360,33 @@ describe("AC-2 (#1678): every refusal is named, and none is a guess", () => {
     }
   });
 
+  test("an issue naming a COLLIDED criterion still refuses ALREADY_SERVES", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      // Two specs state SC-9001, so `specCriteriaIn` drops it from `ids` and
+      // reports it under `collisions` — correct for the board, which has to
+      // pick one spec to attribute to. Wrong for this question: an issue
+      // naming SC-9001 serves a criterion whichever spec it meant, and
+      // reading only `ids` let exactly those issues through.
+      writeFileSync(join(root, "specs", "TWIN-SPEC.md"), SPEC_WITH_CRITERIA);
+      // A third, unambiguous spec keeps the sweep MEASURED — with only the
+      // two twins, every id collides and the sweep is UNMEASURED, so this
+      // case would pass on SWEEP_UNMEASURED and witness nothing.
+      writeFileSync(
+        join(root, "specs", "SOLO-SPEC.md"),
+        SPEC_WITH_CRITERIA.replace("SC-9001", "SC-9801").replace("SC-9002", "SC-9802"),
+      );
+      const serving = { number: 79, title: "Work on SC-9001", body: "Serves SC-9001." };
+      const out = promote(inputFor(root, { spec: "specs/SOLO-SPEC.md", issue: serving }), REGISTRY);
+      expect(out.promoted).toBe(false);
+      if (out.promoted) return;
+      expect(out.refusal).toBe("ALREADY_SERVES");
+      expect(out.why).toContain("SC-9001");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("every refusal in the closed set is reachable, so none is decorative", () => {
     // Two are raised by `promote` rather than `promotionViolations` — the
     // allocator's refusal and the unreadable read — and each has its own

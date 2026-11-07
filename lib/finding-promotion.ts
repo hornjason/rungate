@@ -275,7 +275,16 @@ export function promotionViolations(input: PromotionInput): PromotionViolation[]
     return out;
   }
 
-  const allIds = sweep.ids;
+  // `sweep.ids` keeps only criteria stated by exactly ONE spec — an id two
+  // specs both state is dropped and reported under `collisions`, because the
+  // board's cell has no room to say which spec was meant.
+  //
+  // That exclusion answers "which criterion do I attribute this issue to".
+  // The question here is "does this issue serve ANY criterion", and for that
+  // the ambiguity is irrelevant: an issue naming `SC-A1`, which three specs
+  // in this tree state, serves a criterion whichever one it meant. Reusing
+  // the narrower set let exactly those issues promote.
+  const allIds = [...sweep.ids, ...sweep.collisions.map(c => c.id)];
   const hereIds = sweep.specs.find(s => resolve(input.projectRoot, s.path) === path)?.ids ?? [];
 
   if (hereIds.length === 0) {
