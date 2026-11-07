@@ -52,6 +52,7 @@ import {
   readyOrder,
   readyTarget,
   selectReady,
+  undispatchableRemedy,
   type Rankable,
 } from "../lib/board-ready-rule";
 
@@ -614,5 +615,94 @@ describe("#1852: Ready has ONE occupancy reading", () => {
       "these files compute free Ready slots themselves, so a mutation of readyOccupancy " +
         "would leave them holding the case up: " + offenders.join(", "),
     ).toEqual([]);
+  });
+});
+
+/**
+ * #1857 round 1: two renderings of one reading, and they must stay different.
+ *
+ * `heldReason` answers the PROMOTERS' question — why this eligible issue did
+ * not move — and both call it while iterating items they held back. In a
+ * `ROOM` reading those items are held because promoting into the free slots
+ * reaches the depth, so "Ready is at its depth" is true of them.
+ *
+ * `scripts/work-status.ts` promotes nothing. It was reusing `heldReason` to
+ * explain undispatchable cards, which printed "Ready is at its depth" over a
+ * lane holding 2 of a depth of 5 — false, and the wrong instruction, because
+ * that lane is fixed by promoting.
+ *
+ * The collapse is the mutation to watch: a later edit that points one of them
+ * at the other, or gives `undispatchableRemedy` a ROOM arm copied from
+ * `heldReason`, restores the bug with both functions still present. The ROOM
+ * row below is the one that catches it.
+ */
+describe("#1857: the gate's remedy is not the promoter's", () => {
+  const occAt = (cards: number, dispatchable: number, cap: number | null) =>
+    readyOccupancy(cards, dispatchable, cap);
+
+  test("ROOM: the gate is sent to promote and the promoter is not", () => {
+    const room = occAt(2, 1, 5);
+    expect(room.verdict).toBe("ROOM");
+    expect(
+      undispatchableRemedy(room),
+      "two of a depth of five is not at its depth, and saying so sends the reader to the " +
+        "one fix that cannot work",
+    ).not.toContain("at its depth");
+    expect(undispatchableRemedy(room)).toContain("PROMOTING");
+    // The other half of the contrast, asserted so a mutant that "fixes"
+    // heldReason instead goes red here: the promoter's sentence is CORRECT
+    // as it stands and must not be changed to match.
+    expect(
+      heldReason(room),
+      "an item a promoter held back in a ROOM reading is held because the promotion ahead " +
+        "of it reaches the depth — this sentence is right for that question",
+    ).toContain("at its depth");
+    expect(undispatchableRemedy(room)).not.toBe(heldReason(room));
+  });
+
+  test("WEDGED: both say clear the lane, because both readers must", () => {
+    const wedged = occAt(2, 0, 2);
+    expect(wedged.verdict).toBe("WEDGED");
+    expect(undispatchableRemedy(wedged)).toContain("clearing the lane is the fix");
+    expect(heldReason(wedged)).toContain("clearing the lane is the fix");
+  });
+
+  test("FULL and UNMEASURED each get their own sentence", () => {
+    const full = occAt(2, 1, 2);
+    expect(full.verdict).toBe("FULL");
+    expect(undispatchableRemedy(full)).toContain("at its depth of 2");
+    expect(undispatchableRemedy(full)).not.toContain("WEDGED");
+
+    const unmeasured = occAt(2, 1, null);
+    expect(unmeasured.verdict).toBe("UNMEASURED");
+    expect(
+      undispatchableRemedy(unmeasured),
+      "an unread depth is not a full lane — that is the #1794 defect in miniature",
+    ).not.toContain("at its depth");
+    expect(undispatchableRemedy(unmeasured)).toContain("could not be read");
+  });
+
+  test("every verdict gets a distinct remedy, so none falls through to another's", () => {
+    const readings = [occAt(2, 1, 5), occAt(2, 1, 2), occAt(2, 0, 2), occAt(2, 1, null)];
+    const verdicts: string[] = readings.map(r => r.verdict);
+    // The population is the producer's own, so a fifth verdict cannot be
+    // added without this going red.
+    const src = readFileSync(join(import.meta.dir, "..", "lib/board-ready-rule.ts"), "utf-8");
+    const declared = structuralCut(src, "export type OccupancyVerdict", { endAnchor: ";" })
+      .match(/"([A-Z]+)"/g)!
+      .map(s => s.replaceAll('"', ""));
+    expect([...verdicts].sort()).toEqual([...declared].sort());
+    expect(new Set(readings.map(undispatchableRemedy)).size).toBe(readings.length);
+  });
+
+  test("the gate calls the gate's renderer, and nothing calls both", () => {
+    const code = readFileSync(join(import.meta.dir, "..", "lib/work-status.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(code).toContain("undispatchableRemedy(occ)");
+    expect(
+      code,
+      "this file promotes nothing, so the promoters' sentence is never the right one here",
+    ).not.toContain("heldReason(");
   });
 });

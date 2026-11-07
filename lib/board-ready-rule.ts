@@ -483,3 +483,63 @@ export function heldReason(occ: ReadyOccupancy): string {
     }
   }
 }
+
+/**
+ * What to do about cards in Ready nobody can start — the REPORT's question.
+ *
+ * ## Not the same question as `heldReason`, which is why it is not the same
+ * sentence
+ *
+ * ai-review round 1 of #1857. `heldReason` answers *why did this eligible
+ * issue not move*, and both callers ask it while iterating items they held
+ * back. In a `ROOM` reading those items are held because promoting into the
+ * free slots reaches the depth, so "Ready is at its depth" is true of them.
+ *
+ * `scripts/work-status.ts` promotes nothing. It is describing a lane, and it
+ * says this whenever the lane holds a card that is not an open issue —
+ * including when the lane is SHORT. Routing that through `heldReason` printed
+ * "Ready is at its depth" over a lane holding 2 of a depth of 5. That is
+ * false, and it is the wrong instruction besides: a short lane is fixed by
+ * promoting, not by clearing.
+ *
+ * ## Two renderings, one decider
+ *
+ * Both switch on a verdict neither computes. `readyOccupancy` remains the only
+ * thing that decides how full Ready is, so a mutation of the reading moves
+ * both sentences together and neither can drift from the other's arithmetic —
+ * which is the property #1852 bought and the thing a second *decider* would
+ * have given back.
+ */
+export function undispatchableRemedy(occ: ReadyOccupancy): string {
+  switch (occ.verdict) {
+    case "UNMEASURED":
+      return (
+        "Ready's depth could not be read, so whether those card(s) are costing a slot " +
+        "is unknown too"
+      );
+    case "WEDGED":
+      return (
+        `Ready is at its depth of ${occ.cap} and WEDGED — NOTHING in the lane can be started, ` +
+        "so clearing the lane is the fix. Promotion cannot help: there is no slot to promote into"
+      );
+    case "FULL":
+      return (
+        `Ready is at its depth of ${occ.cap}, so each of them holds a slot a startable issue ` +
+        "could be in — clear them and the next promotion fills the lane"
+      );
+    case "ROOM":
+      return (
+        `Ready is NOT full — it holds ${occ.cards} of its depth of ${occ.cap}, so ${occ.free} ` +
+        "slot(s) are free and PROMOTING is what fixes this lane. Clearing the undispatchable " +
+        "card(s) is worth doing and is not what is holding it short"
+      );
+    default: {
+      const unhandled: never = occ.verdict;
+      throw new Error(
+        `undispatchableRemedy: unclassified occupancy verdict ${JSON.stringify(unhandled)}. ` +
+          "Every verdict must name its own remedy — defaulting a new one to 'clear the lane' " +
+          "sends a SHORT lane's reader to the one fix that cannot work.",
+      );
+    }
+  }
+}

@@ -9,7 +9,7 @@
  */
 
 import type { LaneReading } from "./board-lane-health";
-import { heldReason, readyOccupancy } from "./board-ready-rule";
+import { readyOccupancy, undispatchableRemedy } from "./board-ready-rule";
 
 /**
  * Is this issue something anybody may pick up right now?
@@ -341,6 +341,24 @@ export function readyRefusal(
    * one page.
    */
   openInReady: number,
+  /**
+   * Cards in Ready this board reading could NOT see as issues — a draft, a
+   * pull request. **Required, and there is no default** (ai-review round 1 of
+   * #1857).
+   *
+   * `readyOccupancy`'s `cards` means every physical card in the lane, and the
+   * only number this file had was issues-only: `boardStatus()` keeps items
+   * whose content is an Issue and buckets the rest into `unseenByLane`, which
+   * never reached here. So the gate read the live 2026-11-07 lane — one open
+   * issue and one draft at a depth of 2 — as `1 of 2, one free slot, ROOM`,
+   * while `scripts/board-ready.ts`, counting every card, read it as full.
+   * **The exact disagreement #1852 exists to end survived inside the fix.**
+   *
+   * A default of `0` would have let a caller stay silent and be wrong, which
+   * is how it was wrong in the first place. A caller that genuinely cannot
+   * take the count must say so by other means; it may not say zero.
+   */
+  unseenInReady: number,
 ): ReadyRefusal | null {
   const ready = readings.find(r => r.lane === "Ready");
   // A board with no Ready row cannot be judged, and must not read as fine.
@@ -362,16 +380,20 @@ export function readyRefusal(
   // Named rather than silently subtracted, as before: the lane disagreeing
   // with itself is a board defect somebody has to clear, and a gate that
   // quietly corrects for it hides the thing to fix.
-  const occ = readyOccupancy(ready.count, openInReady, ready.against);
+  // **`ready.count` is issues only; the lane is not.** The sum is the whole
+  // of the lane, and it is taken here rather than in the caller so the one
+  // thing `readyOccupancy` is handed is the population its contract names.
+  const occ = readyOccupancy(ready.count + unseenInReady, openInReady, ready.against);
   const why =
     occ.undispatchable > 0
       ? `${ready.why} — and ${occ.undispatchable} of the ${occ.cards} card(s) in this lane ` +
         `${occ.undispatchable === 1 ? "is" : "are"} not an open issue, so only ` +
         `${occ.dispatchable} can be started` +
-        // The REMEDY, which is the half a count cannot carry: a lane holding
-        // cards nobody can start is not short of promotions. `heldReason`
-        // branches on the verdict, so there is no second branch here.
-        `. ${heldReason(occ)}`
+        // The REMEDY, which is the half a count cannot carry. NOT
+        // `heldReason` — that one answers the promoters' question, and its
+        // ROOM arm says "Ready is at its depth", which is false of a lane
+        // this gate is refusing for being SHORT. One reading, two renderings.
+        `. ${undispatchableRemedy(occ)}`
       : ready.why;
   const seen = { count: openInReady, against: ready.against, why };
   // Judged on the OPEN count, so a lane filled with closed cards cannot

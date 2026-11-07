@@ -807,7 +807,11 @@ export const EXIT_READY_UNMEASURED = 4;
 
 // `readyNow` is the list this report printed as startable. The gate judges
 // the same number, so the page cannot disagree with itself.
-const refusal = readyRefusal(laneReadings, readyNow.length);
+// `readyUnseen` is the third: the lane's drafts and pull requests, which
+// `laneCounts` drops by design (the header says "issues only"). Without it the
+// gate judged a population one card smaller than the writer's and the two
+// disagreed again — inside the change that exists to stop them.
+const refusal = readyRefusal(laneReadings, readyNow.length, readyUnseen);
 if (refusal?.verdict === "REFUSE") {
   console.log(
     `\n  REFUSING: Ready is ${refusal.count} of ${refusal.against} — ${refusal.why}\n` +
