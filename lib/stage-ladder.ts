@@ -903,6 +903,30 @@ const REGEX_AFTER_WORD = new Set([
   "void", "do", "else", "case", "yield", "await", "throw",
 ]);
 
+/**
+ * Is the `/` at `at` opening a regex, or dividing? ONE decider.
+ *
+ * It lives at module scope because there are two walkers that have to
+ * answer it — `scanSource` over the file, and `endOfSubstitution` inside
+ * a `${…}` — and round 5 found them holding two copies, of which the
+ * inner one had missed round 3's two fixes. Two guards answering the
+ * same question about the same input are behaviourally ONE guard: no
+ * case over the outer scanner can tell them apart, and the stale copy
+ * reads as covered. `.claude/rules/checks-must-be-able-to-fail.md`
+ * names the shape.
+ *
+ * `prev` is the last significant token, which each caller tracks itself
+ * — a whole word, or one character, or the two-character `++`/`--`.
+ * Both callers must merge those two, or `i++ / n` arrives here spelled
+ * `+` and is indistinguishable from binary plus.
+ */
+function opensARegexAfter(text: string, at: number, prev: string): boolean {
+  if (REGEX_AFTER_WORD.has(prev)) return true;
+  if (prev === "++" || prev === "--") return false;
+  if (prev === "!") return endOfRegex(text, at) !== -1;
+  return prev.length === 1 && REGEX_MAY_FOLLOW.has(prev);
+}
+
 function scanSource(text: string): Scan {
   const titles = text.split("");
   const depth = text.split("");
@@ -947,16 +971,14 @@ function scanSource(text: string): Scan {
    *
    * Known remaining ambiguity, stated rather than papered over: `a.b! / c
    * / d`, two divisions on one line after a non-null assertion, reads as
-   * a regex. No instance exists in this tree; a fourth round on this
-   * function is writing a JavaScript tokenizer, which is a different
-   * problem and would be a different issue.
+   * a regex. No instance exists in this tree; a further round on the
+   * decision itself is writing a JavaScript tokenizer, which is a
+   * different problem and would be a different issue.
+   *
+   * The decision is `opensARegexAfter`, at module scope, because
+   * `endOfSubstitution` has to make it too — see its own note.
    */
-  const opensARegex = (at: number) => {
-    if (REGEX_AFTER_WORD.has(prev)) return true;
-    if (prev === "++" || prev === "--") return false;
-    if (prev === "!") return endOfRegex(text, at) !== -1;
-    return prev.length === 1 && REGEX_MAY_FOLLOW.has(prev);
-  };
+  const opensARegex = (at: number) => opensARegexAfter(text, at, prev);
   const remember = (tok: string) => {
     prev = tok;
   };
@@ -1122,6 +1144,12 @@ function endOfTemplate(text: string, from: number): number {
  * strings and comments and **not** about regex literals, so it repeated
  * the exact defect the outer scanner had just been fixed for. One level
  * down, same blind spot. It is here now, with the regex branch.
+ *
+ * And the branch calls `opensARegexAfter`, the SAME decider the outer
+ * scanner uses. Round 5 found this walker holding its own copy of the
+ * rule, missing round 3's two fixes — so `${i++ / 2}` and `${a.b! / c}`
+ * each opened a phantom regex and the whole file went UNMEASURED. One
+ * question, one decider; a copy of it is a guard nothing can mutate.
  */
 function endOfSubstitution(text: string, from: number): number {
   let i = from + 1;
@@ -1136,6 +1164,9 @@ function endOfSubstitution(text: string, from: number): number {
       i = j;
       continue;
     }
+    // `++`/`--` as one token, for the reason `opensARegexAfter` states:
+    // split, postfix increment arrives there spelled `+`.
+    if ((c === "+" || c === "-") && text[i + 1] === c) { prev = c + c; i += 2; continue; }
     if (c === "/" && text[i + 1] === "/") {
       const e = text.indexOf("\n", i);
       i = e === -1 ? text.length : e;
@@ -1147,7 +1178,7 @@ function endOfSubstitution(text: string, from: number): number {
       i = e + 2;
       continue;
     }
-    if (c === "/" && (REGEX_AFTER_WORD.has(prev) || (prev.length === 1 && REGEX_MAY_FOLLOW.has(prev)))) {
+    if (c === "/" && opensARegexAfter(text, i, prev)) {
       const e = endOfRegex(text, i);
       if (e === -1) return -1;
       i = e;

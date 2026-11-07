@@ -232,6 +232,39 @@ describe("#1849: a verify command names a test that exists", () => {
       expect(paths(src)).toEqual(["outer", "outer inner"]);
     });
 
+    test("the substitution walker decides regex-vs-division the same way the outer scanner does", () => {
+      // Round 5, found independently by two reviewers. `endOfSubstitution`
+      // held a SECOND copy of the regex-vs-division rule and it was the
+      // copy that had not received round 3's two fixes — no `++`/`--`
+      // merging and no trial-parse for `!`. Two deciders answering one
+      // question is one decider plus a dead one, and no behavioural case
+      // over the outer scanner could tell which was which.
+      //
+      // MEASURED before the fix: both rows below lost `inner` entirely and
+      // reported `complete: false`, while the control kept all three. A
+      // file that silently stops being checked is the false UNMEASURED.
+      const BT = "`";
+      const DL = "$";
+      const withSub = (expr: string) =>
+        `${D}("outer", () => {\n` +
+        `  const s = ${BT}x${DL}{${expr}}y${BT};\n` +
+        `  ${T}("inner", () => { void s; });\n` +
+        `});\n`;
+
+      expect(paths(withSub("i + 1")), "the control could not read a plain substitution").toEqual([
+        "outer",
+        "outer inner",
+      ]);
+      expect(
+        paths(withSub("i++ / 2")),
+        "postfix `++` then division inside `${…}` was read as a regex open",
+      ).toEqual(["outer", "outer inner"]);
+      expect(
+        paths(withSub("a.b! / c")),
+        "a non-null assertion then division inside `${…}` was read as a regex open",
+      ).toEqual(["outer", "outer inner"]);
+    });
+
     test("a brace inside a TITLE does not open a block", () => {
       const src = `${D}("a {curly} name", () => {\n  ${T}("inner", () => {});\n});\n${T}("after", () => {});\n`;
       expect(paths(src)).toEqual(["a {curly} name", "a {curly} name inner", "after"]);
