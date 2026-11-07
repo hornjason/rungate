@@ -914,6 +914,26 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
     });
   });
 
+  test("and with --repo given a cache hit calls nothing at all", () => {
+    // The pair for the case above, and the reason it exists: the module
+    // header has now been wrong about this count twice — "no API call at
+    // all" after the identity read was added, then "exactly one call" as a
+    // flat fact, which is false on this path. A sentence about what the
+    // program does is a claim; this is the claim, asserted.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, "--repo", "o/one", ...args], stub).exitCode).toBe(0);
+      const before = calls(stub).length;
+      expect(run(["--snapshot", snap, "--repo", "o/one", ...args], stub).exitCode).toBe(0);
+      expect(calls(stub).slice(before)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
   test("a gh call that FAILS is not reported as unreadable output", () => {
     // Round 5. One `try` around the call and the parse reported every
     // failure as "did not emit readable JSON", so an auth failure or a rate
