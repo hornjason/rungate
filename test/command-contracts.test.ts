@@ -178,6 +178,58 @@ describe("the commands #1746 creates are executable, not prose", () => {
     ).toHaveLength(1);
   });
 
+  /**
+   * The population is every block on disk, for the same reason the
+   * `$ARGUMENTS` case draws its own: a sweep around the instance somebody
+   * named is still a patch.
+   */
+  function blocksContainingBacktick(dir: string): string[] {
+    const hits: string[] = [];
+    for (const f of readdirSync(dir).filter(x => x.endsWith(".md"))) {
+      for (const block of executableBlocks(readFileSync(join(dir, f), "utf-8"))) {
+        for (const m of block.matchAll(/`[^`]*`/g)) hits.push(`${f}: ${m[0]}`);
+      }
+    }
+    return hits;
+  }
+
+  test("no executable block contains a backtick, and the check that says so can fail", () => {
+    // A `!`…`` block is delimited by ONE backtick on each side. A backtick
+    // inside it closes the span early, so the runtime executes a truncated
+    // command and the remainder lands in the prompt as prose. The command
+    // is then silently broken in a way the author cannot see by reading it.
+    //
+    // This happened here. Round 7's fix added an UNMEASURED message reading
+    // "Run `gh auth status` to tell the two apart" and round 8 caught it —
+    // a repair that introduced the next defect. `executableBlocks` above
+    // cannot see it, because it takes the whole LINE: its view of a block
+    // is wider than the runtime's, which is the detector-narrower-than-the-
+    // thing-detected shape inverted. So this asserts on the content.
+    expect(
+      readdirSync(COMMANDS).filter(f => f.endsWith(".md")).length,
+      "no command files found, so this case measured nothing",
+    ).toBeGreaterThan(0);
+
+    expect(
+      blocksContainingBacktick(COMMANDS),
+      "an executable block contains a backtick. A `!`…`` block is delimited by a single " +
+        "backtick, so the span closes at the first one inside and the rest of the command " +
+        "is never executed. Say it without backticks — inside a block there is no code span, " +
+        "only a shell line.",
+    ).toEqual([]);
+
+    // The control. Without it this is an empty-collection comparison and
+    // would read identically if the scan returned [] for everything.
+    const planted = join(scratch, "planted-backtick");
+    require("fs").mkdirSync(planted, { recursive: true });
+    writeFileSync(join(planted, "bad.md"), "---\nargument-hint: <n>\n---\n\n!`echo run `the thing` now`\n");
+    expect(
+      blocksContainingBacktick(planted),
+      "the scan returned nothing for a directory whose only command nests a backtick, " +
+        "so its empty answer above proves nothing",
+    ).toHaveLength(1);
+  });
+
   test("stage-audit decides whether this tree can be measured, and refuses this one", () => {
     const blocks = executableBlocks(read("stage-audit"));
     const probe = blocks.find(b => b.includes("--git-common-dir"));
