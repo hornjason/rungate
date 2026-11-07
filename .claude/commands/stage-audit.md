@@ -12,7 +12,7 @@ updated: 2026-11-07
 
 ## The stage, and the commands it was closed on
 
-!`RG_STAGE="$ARGUMENTS" bun -e 'const id=(process.env.RG_STAGE??"").trim().toUpperCase(); const s=JSON.parse(await Bun.file("project-state.json").text()); const st=(s.stages??[]).find(x=>String(x.id).toUpperCase()===id); if(!st){console.log("UNMEASURED: project-state.json declares no stage "+JSON.stringify(id)+". It has: "+(s.stages??[]).map(x=>x.id).join(", "));process.exit(0);} console.log("stage "+st.id+" — "+st.name); console.log("goal: "+st.goal); for(const i of st.items??[]){console.log("\n"+i.id+"  done="+i.done); console.log("  what:   "+i.what); console.log("  verify: "+(i.verify??"(none)"));}'`
+!`bun -e 'const s=JSON.parse(await Bun.file("project-state.json").text()); const st=s.stages??[]; if(!st.length){console.log("UNMEASURED: project-state.json declares no stages.");process.exit(0);} console.log("id  done/items  with-verify  name"); for(const x of st){const it=x.items??[]; const done=it.filter(i=>i.done); const withV=done.filter(i=>typeof i.verify==="string"&&i.verify.length>0); console.log(" "+String(x.id).padEnd(3)+" "+String(done.length+"/"+it.length).padEnd(10)+" "+String(withV.length).padEnd(12)+" "+(x.name??""));} console.log("\nevery DONE item above must carry a verify, or the stage cannot be audited at all.");'`
 
 ---
 
@@ -83,13 +83,21 @@ somebody read four tools' output correctly is not the same as a stage that is
 green. Stage B was audited by hand on 2026-11-03 and it took most of a
 session. This is that session as a command.
 
-## On the argument
+## Why the blocks take no argument
 
-The stage id reaches the block through `RG_STAGE="$ARGUMENTS"` rather than as a
-bare word on the command line, so `;`, `|`, `&`, a newline and a glob are inert
-data by the time any code reads them — measured, not assumed. **Command
-substitution is not neutralised**: a backtick or `$(…)` still expands, because
-the runtime substitutes `$ARGUMENTS` textually before the shell parses the
-line and no quoting inside the line can undo that. The argument here is typed
-by the operator into their own shell, so that residue is the operator's own
-input; it is written down because an unstated limit reads as an absent one.
+Neither block above reads `$ARGUMENTS`. That is deliberate and it is the third
+answer to the same problem.
+
+The runtime substitutes `$ARGUMENTS` **textually** into the command line before
+the shell parses it, so nothing written inside the line can contain it. Passing
+it bare was plainly unsafe. Quoting it as `RG_STAGE="$ARGUMENTS"` looked safe
+and was not: an argument holding a `"` closes the quoting early, and
+`B" ; rm -f <file> ; #` executed — measured, with the file gone and the
+interpreter never reached. A guard inside the script cannot help, because the
+shell has finished by the time the script starts.
+
+So the shell never sees the argument at all. The blocks take a reading that
+needs no argument, and the stage id stays in the prose below, where it is text
+in a prompt and never a command. `test/command-contracts.test.ts` refuses any
+executable block in this directory that interpolates `$ARGUMENTS`, and proves
+that refusal fires against a planted one.

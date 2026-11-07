@@ -5,11 +5,16 @@ status: active
 updated: 2026-11-07
 ---
 
-!`RG_ISSUE="$ARGUMENTS" sh -c 'gh issue view "$RG_ISSUE" --repo hornjason/pai-harness 2>/dev/null || echo "Issue $RG_ISSUE not found"'`
+Ship issue **$ARGUMENTS** through the harness. Follow the pipeline:
 
-Ship this issue through the harness. Follow the pipeline:
-
-1. Read the issue above and understand the goal
+0. Read the issue with the Read-equivalent tool call, not through this file:
+   `gh issue view <the number above> --repo hornjason/rungate`.
+   It used to be fetched by an executable block here. That block interpolated
+   `$ARGUMENTS` into a shell line, and the runtime substitutes it textually
+   before the shell parses — so an argument containing a quote closed the
+   quoting and ran as commands. No quoting inside the line can fix that, so
+   the block was removed rather than patched (#1746 review, round 3).
+1. Read the issue and understand the goal
 2. Read the governing spec (check specs-routing rule)
 3. Invoke Skill("harness") to orchestrate implementation
 4. The harness delegates to Marcus (code), Quinn (test), Rook (security)

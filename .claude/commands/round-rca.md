@@ -8,7 +8,7 @@ updated: 2026-11-07
 
 ## Runs against reviewed commits, for this pull request
 
-!`RG_PR="$ARGUMENTS" bun -e 'const n=(process.env.RG_PR??"").trim(); if(!/^[0-9]+$/.test(n)){console.log("UNMEASURED: give a pull request number. Usage: /round-rca <pr-number>");process.exit(0);} const sh=async a=>{const p=Bun.spawnSync(["gh",...a],{env:Object.fromEntries(Object.entries(process.env).filter(([k,v])=>k!=="GH_TOKEN"&&v!==undefined))}); return p.exitCode===0?new TextDecoder().decode(p.stdout):null;}; const meta=await sh(["pr","view",n,"--json","headRefName,createdAt,state,url"]); if(meta===null){console.log("UNMEASURED: gh could not read pull request #"+n+". A count that could not be taken is not a count of zero.");process.exit(0);} const m=JSON.parse(meta); const runs=await sh(["api","-X","GET","repos/{owner}/{repo}/actions/workflows/ai-review.yml/runs","-f","event=pull_request","-f","branch="+m.headRefName,"-f","created=>="+m.createdAt,"-f","per_page=100"]); if(runs===null){console.log("UNMEASURED: the workflow-runs API did not answer. This is the same reading ai-review.yml takes; without it the round number is unreadable, not 1.");process.exit(0);} const r=JSON.parse(runs); const list=r.workflow_runs??[]; console.log("pull request #"+n+"  "+m.state+"  "+m.url); console.log("head branch:      "+m.headRefName); if(list.length!==r.total_count){console.log("UNMEASURED: the API reports "+r.total_count+" matching runs and returned "+list.length+" on one page. total_count spans the whole result set and the commit count would span only the page, so comparing them would be two different populations. Paginate before answering.");process.exit(0);} const shas=new Set(list.map(x=>x.head_sha)); console.log("runs counted:     "+r.total_count+"   <- this is the number ai-review.yml calls the round"); console.log("distinct commits: "+shas.size+"   <- this is how many trees were actually reviewed"); console.log(r.total_count===shas.size?"\nAGREE. The round count is not inflated by re-runs on this reading.":"\nDISAGREE by "+(r.total_count-shas.size)+". The round number counts RUNS, not reviewed commits."); console.log("\nper run:"); for(const x of list.slice(0,30)) console.log("  "+x.head_sha.slice(0,8)+"  "+x.event+"  "+x.conclusion+"  "+x.created_at);'`
+!`bun -e 'const sh=async a=>{const p=Bun.spawnSync(["gh",...a],{env:Object.fromEntries(Object.entries(process.env).filter(([k,v])=>k!=="GH_TOKEN"&&v!==undefined))}); return p.exitCode===0?new TextDecoder().decode(p.stdout):null;}; const meta=await sh(["pr","view","--json","number,headRefName,createdAt,state,url"]); if(meta===null){console.log("UNMEASURED: gh could not resolve a pull request for the current branch. Run this from the branch whose pull request you are reviewing.");process.exit(0);} const m=JSON.parse(meta); const n=String(m.number); const runs=await sh(["api","-X","GET","repos/{owner}/{repo}/actions/workflows/ai-review.yml/runs","-f","event=pull_request","-f","branch="+m.headRefName,"-f","created=>="+m.createdAt,"-f","per_page=100"]); if(runs===null){console.log("UNMEASURED: the workflow-runs API did not answer. This is the same reading ai-review.yml takes; without it the round number is unreadable, not 1.");process.exit(0);} const r=JSON.parse(runs); const list=r.workflow_runs??[]; console.log("pull request #"+n+"  "+m.state+"  "+m.url); console.log("head branch:      "+m.headRefName); if(list.length!==r.total_count){console.log("UNMEASURED: the API reports "+r.total_count+" matching runs and returned "+list.length+" on one page. total_count spans the whole result set and the commit count would span only the page, so comparing them would be two different populations. Paginate before answering.");process.exit(0);} const shas=new Set(list.map(x=>x.head_sha)); console.log("runs counted:     "+r.total_count+"   <- this is the number ai-review.yml calls the round"); console.log("distinct commits: "+shas.size+"   <- this is how many trees were actually reviewed"); console.log(r.total_count===shas.size?"\nAGREE. The round count is not inflated by re-runs on this reading.":"\nDISAGREE by "+(r.total_count-shas.size)+". The round number counts RUNS, not reviewed commits."); console.log("\nper run:"); for(const x of list.slice(0,30)) console.log("  "+x.head_sha.slice(0,8)+"  "+x.event+"  "+x.conclusion+"  "+x.created_at);'`
 
 ---
 
@@ -74,15 +74,23 @@ pr #<n>: COUNT REAL? yes|no|unmeasured  ->  FINDING REAL? yes|no|-  ->  RE-SCOPE
 Stop at the first `no`. Three noes in a row has never happened; one is the
 common case and it means keep working.
 
-## On the argument
+## Why the block takes no argument
 
-The number reaches the block through `RG_PR="$ARGUMENTS"` rather than as a bare
-word on the command line, so `;`, `|`, `&`, a newline and a glob are inert data
-by the time the `/^[0-9]+$/` guard reads them — measured, not assumed. Before
-this, `-- $ARGUMENTS` was interpolated raw and the guard ran *after* the shell
-had already split and executed anything in it, which made it no guard at all.
-**Command substitution is still not neutralised**: a backtick or `$(…)` expands,
-because the runtime substitutes `$ARGUMENTS` textually before the shell parses
-the line and no quoting inside the line can undo that. The argument here is
-typed by the operator into their own shell, so that residue is the operator's
-own input; it is written down because an unstated limit reads as an absent one.
+The block reads no `$ARGUMENTS`. It resolves the pull request from the branch
+you are standing on — `gh pr view` with no number — so **run it from that
+branch**. If you are somewhere else it says `UNMEASURED` and tells you so
+rather than reading the wrong pull request.
+
+That is the third answer to the same problem, and the first two are worth
+recording because both looked fine. The runtime substitutes `$ARGUMENTS`
+**textually** into the command line before the shell parses it. Passing it bare
+was plainly unsafe: `1725; rm -f <file>` deleted the file, and the
+`/^[0-9]+$/` guard ran afterwards, which made it no guard at all. Quoting it as
+`RG_PR="$ARGUMENTS"` fixed that case and still failed, because an argument
+holding a `"` closes the quoting early — `1882" ; rm -f <file> ; #` executed,
+file gone, interpreter never reached. No quoting inside the line survives a
+substitution that happens before parsing.
+
+So the shell never sees an argument. `test/command-contracts.test.ts` refuses
+any executable block in this directory that interpolates `$ARGUMENTS`, and
+proves that refusal fires against a planted one.

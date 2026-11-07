@@ -75,9 +75,13 @@ function runBlock(block: string, args: string, opts: { stubGh?: string } = {}): 
 }
 
 /** A `gh` that answers from fixtures, so the comparison logic always runs. */
-function plantGh(label: string, runs: { total_count: number; workflow_runs: { head_sha: string }[] }): string {
+function plantGh(
+  label: string,
+  runs: { total_count: number; workflow_runs: { head_sha: string }[] },
+  opts: { failPrView?: boolean } = {},
+): string {
   const dir = join(scratch, label);
-  const meta = { headRefName: "rg/planted", createdAt: "2026-11-01T00:00:00Z", state: "OPEN", url: "u" };
+  const meta = { number: 1725, headRefName: "rg/planted", createdAt: "2026-11-01T00:00:00Z", state: "OPEN", url: "u" };
   rmSync(dir, { recursive: true, force: true });
   writeFileSync(join(scratch, `${label}.runs.json`), JSON.stringify(runs));
   writeFileSync(join(scratch, `${label}.meta.json`), JSON.stringify(meta));
@@ -85,7 +89,8 @@ function plantGh(label: string, runs: { total_count: number; workflow_runs: { he
   const gh = join(dir, "gh");
   writeFileSync(
     gh,
-    `#!/bin/sh\ncase "$1" in\n  pr) cat ${JSON.stringify(join(scratch, `${label}.meta.json`))} ;;\n` +
+    `#!/bin/sh\ncase "$1" in\n` +
+      `  pr) ${opts.failPrView === true ? "exit 1" : `cat ${JSON.stringify(join(scratch, `${label}.meta.json`))}`} ;;\n` +
       `  api) cat ${JSON.stringify(join(scratch, `${label}.runs.json`))} ;;\n  *) exit 1 ;;\nesac\n`,
   );
   chmodSync(gh, 0o755);
@@ -117,43 +122,56 @@ describe("the commands #1746 creates are executable, not prose", () => {
     });
   }
 
-  test("no command interpolates its argument as a bare word, and the shell cannot execute it", () => {
-    // The population is every command on disk, not the two this issue names.
-    // #1746's own two had this defect; so did ship-issue.md, which nobody
-    // reported — a sweep drawn around the named members is still a patch.
-    const files = readdirSync(COMMANDS).filter(f => f.endsWith(".md"));
-    expect(files.length, "no command files found, so this case measured nothing").toBeGreaterThan(0);
-
-    const bare: string[] = [];
-    for (const f of files) {
-      for (const block of executableBlocks(readFileSync(join(COMMANDS, f), "utf-8"))) {
-        if (!block.includes("$ARGUMENTS")) continue;
-        // The only accepted shape: assigned to a NAME, inside double quotes,
-        // so the shell has finished parsing before any code reads the value.
-        for (const at of [...block.matchAll(/\$ARGUMENTS/g)].map(m => m.index ?? 0)) {
-          if (!/[A-Z_]+="$/.test(block.slice(0, at))) bare.push(`${f}: …${block.slice(Math.max(0, at - 40), at + 10)}…`);
-        }
+  /**
+   * The one binding that decides whether a command file is safe to run. The
+   * population is every command on disk, not the two this issue names —
+   * `ship-issue.md` had the same defect and nobody reported it, and a sweep
+   * drawn around the members somebody named is still a patch.
+   */
+  function blocksTakingArguments(dir: string): string[] {
+    const hits: string[] = [];
+    for (const f of readdirSync(dir).filter(x => x.endsWith(".md"))) {
+      for (const block of executableBlocks(readFileSync(join(dir, f), "utf-8"))) {
+        if (block.includes("$ARGUMENTS")) hits.push(`${f}: ${block.slice(0, 60)}…`);
       }
     }
+    return hits;
+  }
+
+  test("no executable block takes an argument, and the check that says so can fail", () => {
     expect(
-      bare,
-      "a command interpolates $ARGUMENTS as a bare word. The runtime substitutes it textually " +
-        "BEFORE the shell parses the line, so any validation inside the script runs after the " +
-        'shell has already executed it. Use NAME="$ARGUMENTS" and read it from the environment.',
+      readdirSync(COMMANDS).filter(f => f.endsWith(".md")).length,
+      "no command files found, so this case measured nothing",
+    ).toBeGreaterThan(0);
+
+    // Why the rule is absolute rather than "quote it": the runtime
+    // substitutes $ARGUMENTS TEXTUALLY before the shell parses the line, so
+    // nothing written inside the line can contain it. Both weaker rules were
+    // tried on this branch and both were broken by measurement —
+    //   bare:    `1725; rm -f <f>`          deleted the file
+    //   quoted:  `1882" ; rm -f <f> ; #`    deleted the file, closing RG_PR="…" early
+    // In the second the interpreter was never reached, so no guard inside the
+    // script could have run. The only safe amount of argument in a block is
+    // none.
+    expect(
+      blocksTakingArguments(COMMANDS),
+      "an executable block interpolates $ARGUMENTS. The runtime substitutes it textually " +
+        "before the shell parses the line, so an argument containing a quote escapes any " +
+        "quoting and runs as commands. Make the block take a reading that needs no argument " +
+        "and leave the argument in the prose, where it is never a command.",
     ).toEqual([]);
 
-    // Asserted by execution, not by the pattern above. Broken to prove it:
-    // reverting round-rca to `-- $ARGUMENTS` deletes this canary and this
-    // goes red. Measured before the fix: it did.
-    const canary = join(scratch, "canary.txt");
-    for (const f of files) {
-      for (const block of executableBlocks(readFileSync(join(COMMANDS, f), "utf-8"))) {
-        if (!block.includes("$ARGUMENTS")) continue;
-        writeFileSync(canary, "alive");
-        runBlock(block, `1725; rm -f ${canary}`);
-        expect(existsSync(canary), `${f} executed a semicolon in its argument as a command`).toBe(true);
-      }
-    }
+    // The control. Without it this case is an empty-collection comparison —
+    // it would read identically if `blocksTakingArguments` returned [] for a
+    // directory full of violations. Planted violation in, violation out.
+    const planted = join(scratch, "planted-commands");
+    require("fs").mkdirSync(planted, { recursive: true });
+    writeFileSync(join(planted, "bad.md"), "---\nargument-hint: <n>\n---\n\n!`echo $ARGUMENTS`\n");
+    expect(
+      blocksTakingArguments(planted),
+      "the check returned nothing for a directory whose only command interpolates $ARGUMENTS, " +
+        "so its empty answer above proves nothing",
+    ).toHaveLength(1);
   });
 
   test("stage-audit decides whether this tree can be measured, and refuses this one", () => {
@@ -181,42 +199,55 @@ describe("the commands #1746 creates are executable, not prose", () => {
     expect(here.out).toMatch(/LINKED WORKTREE|not main\.\.\.origin\/main|uncommitted change/);
   });
 
-  test("stage-audit takes a reading for a stage that exists, and refuses one that does not", () => {
+  test("stage-audit indexes every stage and says how many DONE items can be audited", () => {
     const stageBlock = executableBlocks(read("stage-audit")).find(b => b.includes("project-state.json"));
     expect(stageBlock, "no block in stage-audit.md reads project-state.json").toBeDefined();
 
-    const real = runBlock(stageBlock as string, "B");
-    expect(real.code, `the block exited ${real.code}:\n${real.out}`).toBe(0);
-    expect(real.out).toContain("stage B");
-    expect(real.out, "a stage's items are what the audit re-takes").toContain("verify:");
+    const out = runBlock(stageBlock as string, "").out;
+    // Every stage, not the one the operator asked for — the block takes no
+    // argument, so it cannot be asked. The agent picks from this index.
+    const state = JSON.parse(readFileSync(join(ROOT, "project-state.json"), "utf-8")) as {
+      stages: { id: string; items?: { done?: boolean; verify?: string | null }[] }[];
+    };
+    expect(state.stages.length, "project-state.json declares no stages, so this measured nothing").toBeGreaterThan(0);
+    for (const st of state.stages) {
+      expect(out, `stage ${st.id} is missing from the index`).toContain(st.id);
+    }
 
-    // Broken to prove it: deleting the `if(!st)` branch throws a TypeError
-    // into the agent's context instead, and both assertions go red.
-    const absent = runBlock(stageBlock as string, "ZZ");
-    expect(absent.code, "an unknown stage must report, not crash").toBe(0);
-    expect(absent.out, "an unknown stage is UNMEASURED and says so").toContain("UNMEASURED");
-    expect(absent.out).toContain("A, B, C, D, E, F, G, H");
+    // The count it prints is the audit's own precondition: a DONE item with
+    // no verify cannot be re-taken. Computed here from the file rather than
+    // copied from the output, so the two can disagree.
+    //
+    // Broken to prove it: counting `it.filter(i=>i.done)` instead of the
+    // ones that also carry a verify makes a stage with an unverifiable item
+    // report a number this comparison rejects.
+    const d = state.stages.find(s => s.id === "D");
+    expect(d, "stage D is gone, so the row below measured nothing").toBeDefined();
+    const items = d?.items ?? [];
+    const done = items.filter(i => i.done === true);
+    const withVerify = done.filter(i => typeof i.verify === "string" && i.verify.length > 0);
+    const row = out.split("\n").find(l => l.trimStart().startsWith("D "));
+    expect(row, "no row for stage D in the index").toBeDefined();
+    expect(row).toContain(`${done.length}/${items.length}`);
+    expect(row).toContain(String(withVerify.length));
   });
 
   test("round-rca compares runs against reviewed commits, on a reading it controls", () => {
     const block = executableBlocks(read("round-rca"))[0] as string;
     expect(block).toBeDefined();
 
-    // No argument. Asserted on the USAGE string, which only the `/^[0-9]+$/`
-    // guard emits — not on the bare word UNMEASURED, which both this path
-    // and a failing `gh` produce.
+    // No pull request for this branch. The block resolves one from the
+    // branch rather than from an argument, so this is the refusal path, and
+    // it must name the branch as the cause — "gh failed" is not something a
+    // reader can act on.
     //
-    // This is the correction a mutation forced. Replacing that guard with
-    // `if(false)` was predicted to redden this case and left it GREEN:
-    // without the guard the block ran `gh pr view ""`, gh failed, and the
-    // next branch printed its own UNMEASURED. Two mechanisms, one
-    // observable, and the assertion was reading the observable — the sixth
-    // shape in `.claude/rules/checks-must-be-able-to-fail.md`.
-    const none = runBlock(block, "");
-    expect(none.code).toBe(0);
-    expect(none.out, "a missing argument must be refused by the usage guard, not by gh failing").toContain(
-      "Usage: /round-rca <pr-number>",
-    );
+    // Broken to prove it: deleting the `if(meta===null)` branch makes
+    // `JSON.parse(null)` throw a stack trace into the agent's context and
+    // the exit-code assertion goes red.
+    const noPr = runBlock(block, "", { stubGh: plantGh("nopr", runsOf([]), { failPrView: true }) });
+    expect(noPr.code, `a branch with no pull request must report, not crash:\n${noPr.out}`).toBe(0);
+    expect(noPr.out).toContain("UNMEASURED");
+    expect(noPr.out, "the refusal must say the branch is why, so the reader knows to move").toContain("branch");
 
     // Four runs over four commits: honest count.
     const agree = runBlock(block, "1725", { stubGh: plantGh("agree", runsOf(["a1", "b2", "c3", "d4"])) });
