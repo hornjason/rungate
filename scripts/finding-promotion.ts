@@ -157,7 +157,22 @@ if (!write) {
   process.exit(0);
 }
 
-writeSpec(target, `${content.trimEnd()}\n${result.line}\n`);
+// KEEP the result. `writeSpec` re-reads the target and runs its own
+// `mayWrite` against those bytes, so it can refuse after the early
+// `maySpecBeWritten(content)` above passed — the file changed between the
+// two reads, which is the concurrent-session window
+// `.claude/rules/parallel-sessions.md` is about. Discarding it prints
+// "Appended to …" for a write that did not happen, and a false success is
+// the one report this repository exists to stop producing.
+//
+// 18 of the 22 `writeSpec` callers in this tree discard it, `create-sc.ts`
+// among them. That population is out of this pull request's scope and is
+// filed separately rather than fixed here.
+const wrote = writeSpec(target, `${content.trimEnd()}\n${result.line}\n`);
+if (!wrote.written) {
+  console.error(`REFUSED: ${wrote.refusal ?? `${spec} was not written, and gave no reason`}`);
+  process.exit(PROMOTION_EXIT);
+}
 console.log(`Appended to ${spec}: ${result.line}`);
 console.log(`  owner: ${currentScOwner(ROOT) ?? "(none — allocated above every reserved block)"}`);
 console.log(`\nNow make #${issueNumber} name it: add "${result.id}" under its Criteria heading.`);
