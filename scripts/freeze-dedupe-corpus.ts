@@ -32,6 +32,7 @@
  */
 import { writeFileSync } from "fs";
 import { join } from "path";
+import { localCalendarDay } from "../lib/local-calendar-day";
 
 /**
  * THE CORPUS, DECLARED RATHER THAN DISCOVERED.
@@ -104,7 +105,7 @@ writeFileSync(
   OUT,
   `${JSON.stringify(
     {
-      frozenAt: new Date().toISOString().slice(0, 10),
+      frozenAt: localCalendarDay(),
       repo: REPO,
       declaredBy: "scripts/freeze-dedupe-corpus.ts — CORPUS",
       note:
