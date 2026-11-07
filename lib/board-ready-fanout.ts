@@ -48,6 +48,16 @@ export interface Dependent {
   readonly state: string;
   readonly phase: number | null;
   /**
+   * Every label on the issue, verbatim — the ordering's SECOND source
+   * (#1853). An empty array means the issue carries none; this script never
+   * reads a page that can truncate labels, so there is no third state.
+   *
+   * It is not filtered to the ranked set here. `placementOf` owns which
+   * labels rank, and filtering on the way in would put a second opinion
+   * about that in this file.
+   */
+  readonly labels: readonly string[];
+  /**
    * OPEN blockers only — the lifetime count never goes back down.
    *
    * **`null` means the dependency summary could not be read**, which is not

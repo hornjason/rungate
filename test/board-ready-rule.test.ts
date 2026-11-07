@@ -39,10 +39,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { sourceFiles } from "../lib/source-census";
+import { structuralCut } from "../lib/source-slice";
 import { join } from "path";
 import {
+  LABEL_RANK,
   READY_TOLERANCE_DAYS,
   heldReason,
+  placementCensus,
+  placementOf,
   readyCap,
   readyOrder,
   readyTarget,
@@ -50,7 +54,11 @@ import {
   type Rankable,
 } from "../lib/board-ready-rule";
 
-const item = (number: number, phase: number | null): Rankable => ({ number, phase });
+const item = (number: number, phase: number | null, labels: readonly string[] = []): Rankable => ({
+  number,
+  phase,
+  labels,
+});
 
 /** The live reading of 2026-11-05: 237 issues delivered over 14 days. */
 const LIVE = { delivered: 237, days: 14 } as const;
@@ -257,5 +265,241 @@ describe("SC-2723: nothing spells a held reason for itself", () => {
   test("the scan can find the string it looks for, and ignores comments", () => {
     expect(codeOf('console.log("at its depth");').includes("at its depth")).toBe(true);
     expect(codeOf("// never say at its depth here\nconst x = 1;").includes("at its depth")).toBe(false);
+  });
+});
+
+/**
+ * #1853 / Stage H: the label is the ordering's second source.
+ *
+ * ## The reading that caused it, 2026-11-06
+ *
+ * Of 38 unblocked and unclaimed issues, **10** carried a milestone and 28 did
+ * not. `readyOrder` ranked on phase alone, so those 28 all ranked
+ * `POSITIVE_INFINITY` and fell through to the tiebreak — the issue number.
+ * **The lane was ordered by age for 74% of what it draws from**, and nothing
+ * in the report said so.
+ *
+ * ## The mutation battery, membership predicted before it was run
+ *
+ *   mutant                                        predicted red
+ *   LABEL_RANK reordered (engine last)            "engine beats", "best of several"
+ *   an unknown label ranks 0 instead of UNPLACED  "unknown label", "no label at all"
+ *   a label beats a milestone phase               "a milestone always beats"
+ *   placementOf takes the WORST label, not best   "best of several"
+ *   placementCensus folds UNPLACED into label     "census counts UNPLACED apart"
+ *   the rank table copied into a script           "one site"
+ *
+ * Readings are in the PR body for #1853.
+ */
+describe("#1853: a label places an issue the milestone could not", () => {
+  test("engine beats spec:convergence beats follow-up beats external-audit", () => {
+    const got = [
+      item(10, null, ["external-audit"]),
+      item(20, null, ["follow-up"]),
+      item(30, null, ["engine"]),
+      item(40, null, ["spec:convergence"]),
+    ]
+      .sort(readyOrder)
+      .map(i => i.number);
+    expect(
+      got,
+      "Jason's rank of 2026-11-06 — engine leads because it is the work that reduces the backlog",
+    ).toEqual([30, 40, 20, 10]);
+  });
+
+  test("a milestone always beats a label, however high the label ranks", () => {
+    const got = [item(5, null, ["engine"]), item(900, 6)].sort(readyOrder).map(i => i.number);
+    expect(
+      got,
+      "phase 6 is the LAST phase and engine is the FIRST label, and the phase still wins — " +
+        "the milestone is the declared plan and the label is only a category",
+    ).toEqual([900, 5]);
+  });
+
+  test("an issue with several ranked labels takes the BEST of them", () => {
+    const got = [item(1, null, ["follow-up"]), item(2, null, ["follow-up", "engine"])]
+      .sort(readyOrder)
+      .map(i => i.number);
+    expect(
+      got,
+      "#2 is newer and still first: taking the worst label would let ADDING a label demote an " +
+        "issue, which makes the rank punish labelling",
+    ).toEqual([2, 1]);
+    expect(placementOf(item(2, null, ["follow-up", "engine"])).rank).toBe(0);
+  });
+
+  test("age still breaks ties INSIDE a tier, and no longer decides the tier", () => {
+    const got = [item(99, null, ["engine"]), item(1, null, ["external-audit"]), item(50, null, ["engine"])]
+      .sort(readyOrder)
+      .map(i => i.number);
+    expect(
+      got,
+      "#1 is the oldest and sorts last: before #1853 the number was the whole ordering for " +
+        "every milestone-less issue",
+    ).toEqual([50, 99, 1]);
+  });
+
+  test("an unknown label does not place an issue — it is UNPLACED, never guessed", () => {
+    const p = placementOf(item(7, null, ["arbiter-override"]));
+    expect(p.tier, "arbiter-override is outside LABEL_RANK and is the live case on this repo").toBe(
+      "UNPLACED",
+    );
+    expect(p.rank).toBe(Number.POSITIVE_INFINITY);
+    expect(p.why, "the refusal has to name the labels it could not rank").toContain(
+      "arbiter-override",
+    );
+    expect(LABEL_RANK.has("arbiter-override")).toBe(false);
+  });
+
+  test("no label at all is UNPLACED too, and says something different", () => {
+    const none = placementOf(item(7, null, []));
+    const unknown = placementOf(item(7, null, ["arbiter-override"]));
+    expect(none.tier).toBe("UNPLACED");
+    expect(
+      none.why,
+      "nothing-said and nothing-ranked are different facts and must not share a sentence",
+    ).not.toBe(unknown.why);
+  });
+
+  test("two UNPLACED items order by age and never produce NaN", () => {
+    // Infinity - Infinity is NaN, and a NaN comparator silently leaves an
+    // array in input order — which would look exactly like a correct
+    // age sort for an already-sorted input. So the input is NOT sorted.
+    const got = [item(8, null, []), item(2, null, ["arbiter-override"])]
+      .sort(readyOrder)
+      .map(i => i.number);
+    expect(got).toEqual([2, 8]);
+    expect(readyOrder(item(8, null, []), item(2, null, []))).toBeGreaterThan(0);
+  });
+
+  test("the census counts UNPLACED apart from the two placed tiers", () => {
+    const got = placementCensus([
+      item(1, 0),
+      item(2, null, ["engine"]),
+      item(3, null, ["follow-up"]),
+      item(4, null, ["arbiter-override"]),
+      item(5, null, []),
+    ]);
+    expect(
+      got,
+      "folding UNPLACED into the label count is the defect one level up — an issue nothing " +
+        "can rank would read identically to one ranked last",
+    ).toEqual({ phase: 1, label: 2, unplaced: 2 });
+  });
+
+  test("THE CONTROL: the label rank is spelled at exactly one site", () => {
+    // Two deciders that agree are behaviourally ONE decider, so a mutation
+    // of either leaves the other holding every case up and the battery above
+    // reads zero. `.claude/rules/checks-must-be-able-to-fail.md`, fourth
+    // shape. The rank is data, so the check is on where the data is written.
+    const root = join(import.meta.dir, "..");
+    const owner = "lib/board-ready-rule.ts";
+    const scanned = sourceFiles(root, ["lib", "scripts", "bin", "gates", "hooks"]);
+    expect(
+      scanned,
+      "the sweep read nothing, so an empty offender list would witness nothing",
+    ).toContain(owner);
+    // **A rank, not a mention.** `lib/issue-create-override.ts` maps every
+    // one of these labels to a HELP STRING, which is a legitimate second
+    // naming and not a second decider — a first pass flagged it and would
+    // have taught the next person that this check cries wolf. So the
+    // predicate is the two shapes a copied rank actually takes: a label
+    // beside a number, or two labels in one literal, which is a rank
+    // expressed as array order.
+    const labels = [...LABEL_RANK.keys()];
+    const quoted = labels.map(l => `"${l}"`);
+    const ranksLabel = (src: string): boolean => {
+      const named = quoted.filter(q => src.includes(q));
+      if (named.length < 2) return false;
+      return src.split("\n").some(line => {
+        const here = quoted.filter(q => line.includes(q));
+        if (here.length >= 2) return true;
+        return here.length === 1 && /"[^"\n]+"[^A-Za-z\n]{0,8}\d/.test(line);
+      });
+    };
+    const offenders = scanned
+      .filter(f => f !== owner)
+      .filter(f => ranksLabel(readFileSync(join(root, f), "utf-8")));
+    // The predicate must be able to say yes. Without this the check is the
+    // third shape — an assertion that holds because nothing reaches it.
+    expect(
+      ranksLabel(readFileSync(join(root, owner), "utf-8")),
+      "the predicate does not fire on the real rank table, so an empty offender list means nothing",
+    ).toBe(true);
+    expect(
+      offenders,
+      `${owner} is the only place the label rank may be written. These files name two or more ` +
+        "ranked labels, which is how a second rank gets built beside the first: " +
+        offenders.join(", "),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * #1853, ai-review round 1: every label reader refuses a truncated list.
+ *
+ * I added the guard to `scripts/board-ready.ts` and not to
+ * `scripts/board-mirror.ts`, which selects labels for the same ordering and
+ * promotes with it. Both reviewers found it. That is
+ * `feedback-replace-one-name-scan-sweep-for-the-others` exactly — so this is
+ * a sweep over the POPULATION rather than a second per-file case, and the
+ * next file that selects labels is covered before it is written.
+ *
+ * A truncated label list is not a short one. The ranked label can be the one
+ * on page two, and an issue ranked without it is placed as though nothing
+ * ranked it — indistinguishable from an issue nothing ranks.
+ */
+describe("#1853: a truncated label list is refused, in every file that reads one", () => {
+  const root = join(import.meta.dir, "..");
+  // **The population is files that RANK with labels, not files that read
+  // them.** A first pass swept every `labels(first:` and caught two that are
+  // not ordering readers: `lib/live-issues.ts`, which records a
+  // `labelsTruncated` flag on a snapshot and is right to report rather than
+  // refuse, and `scripts/audit-issue-closures.ts`, which is a closure audit.
+  // Widening a new refusal onto them would be this PR's scope leaking into
+  // code it has no finding about, and the check would read as crying wolf.
+  // Importing the ordering module is what makes truncation a WRONG POSITION
+  // rather than a short list.
+  const readers = sourceFiles(root, ["lib", "scripts", "bin", "gates", "hooks"]).filter(f => {
+    const src = readFileSync(join(root, f), "utf-8");
+    return /labels\s*\(\s*first\s*:/.test(src) && /board-ready-rule"/.test(src);
+  });
+
+  test("the sweep found the files it polices", () => {
+    expect(
+      readers,
+      "an empty population is not a clean one — these two select labels today",
+    ).toEqual(expect.arrayContaining(["scripts/board-ready.ts", "scripts/board-mirror.ts"]));
+  });
+
+  test.each(readers)("%s asks for the label connection's pageInfo", file => {
+    const src = readFileSync(join(root, file), "utf-8");
+    // The selection and its truncation marker, in one expression: a
+    // `pageInfo` belonging to some OTHER connection in the same file would
+    // satisfy a bare `.toContain("pageInfo")`.
+    expect(
+      src,
+      `${file} selects labels without asking whether the list was cut short, so a ranked ` +
+        "label on page two is read as absent and the issue is placed as if nothing ranked it",
+    ).toMatch(/labels\s*\(\s*first\s*:[^)]*\)\s*\{[^}]*pageInfo/);
+  });
+
+  test.each(readers)("%s refuses rather than ranking a cut-short list", file => {
+    const src = readFileSync(join(root, file), "utf-8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      code,
+      `${file} reads the label pageInfo and does not act on it, which is worse than not ` +
+        "asking: the truncation is visible and discarded",
+    ).toMatch(/labels\?\.pageInfo\?\.hasNextPage/);
+    // The branch itself, bounded by its own braces — #664 forbids a
+    // fixed-character window, and rightly: a 600-character slice would
+    // start passing the day somebody adds a refusal 601 characters later
+    // in an unrelated branch.
+    const branch = structuralCut(code, "labels?.pageInfo?.hasNextPage", { balanced: "{" });
+    expect(
+      branch,
+      `${file} must REFUSE inside the truncation branch, not warn and continue`,
+    ).toMatch(/return\s+(EXIT_REFUSED|REFUSAL_EXIT)/);
   });
 });

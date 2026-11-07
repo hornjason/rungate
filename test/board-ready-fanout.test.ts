@@ -35,6 +35,7 @@ const dep = (over: Partial<Dependent> = {}): Dependent => ({
   number: 1,
   state: "OPEN",
   phase: 3,
+  labels: [],
   blockedByOpen: 0,
   assignees: 0,
   onBoard: true,

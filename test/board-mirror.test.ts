@@ -808,7 +808,7 @@ describe("#1647: the Ready lane", () => {
         "a later phase is pickable when the lane has room — this input carries phase 6",
       ).toBe(true);
       expect(
-        readyOrder({ phase: 6, number: 1 }, { phase: 0, number: 99 }),
+        readyOrder({ phase: 6, number: 1, labels: [] }, { phase: 0, number: 99, labels: [] }),
         "phase still decides who goes FIRST — that is where it moved to",
       ).toBeGreaterThan(0);
     });
@@ -819,7 +819,7 @@ describe("#1647: the Ready lane", () => {
         "an explicit null phase is pickable, not refused",
       ).toBe(true);
       expect(
-        readyOrder({ phase: null, number: 1 }, { phase: 9, number: 99 }),
+        readyOrder({ phase: null, number: 1, labels: [] }, { phase: 9, number: 99, labels: [] }),
         "a null phase ranks behind every numbered one rather than being refused",
       ).toBeGreaterThan(0);
     });
@@ -873,8 +873,14 @@ describe("#1647: the Ready lane", () => {
  * MEMBERSHIP rather than the total is what would have got this right.
  */
 describe("SC-2722: the hand-run writer fills to the same depth as the workflow", () => {
-  const c = (number: number, phase: number | null, to: string, status = "Backlog") => ({
-    item: { number, phase, status },
+  const c = (
+    number: number,
+    phase: number | null,
+    to: string,
+    status = "Backlog",
+    labels: readonly string[] = [],
+  ) => ({
+    item: { number, phase, labels, status },
     to,
   });
   const promote = (n: number) => c(n, 0, "Ready");

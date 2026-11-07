@@ -407,6 +407,78 @@ async function main(): Promise<number> {
     page = next;
   }
 
+  // ── Labels, in a query of their own — #1853 ──────────────────────────────
+  //
+  // Ordering reads a label when no milestone places the issue, so every
+  // candidate needs its labels. **They are not a sub-selection of the two
+  // queries above**, and the reason is BR-46: that detector multiplies every
+  // `first:` in a query, the two big ones are already at 100 × 20 × 50 =
+  // 100,000, and any further selection puts them over GitHub's 500,000 node
+  // ceiling as the detector models it. BR-45's own message says what to do —
+  // *split the query rather than shrinking a selection until it fits* — so
+  // this is the split. 100 × 20 = 2,000, five hundred times under.
+  //
+  // It is one pass over the repository's open issues rather than a lookup per
+  // candidate: the candidate set is a subset of it on both source paths, and
+  // one paged read cannot disagree with itself the way N reads can.
+  const LABELS_QUERY = `query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
+       issues(first:100,after:$c,states:[OPEN]){
+         pageInfo{hasNextPage endCursor}
+         nodes{number labels(first:20){pageInfo{hasNextPage endCursor} nodes{name}}}}}}`;
+  const labelsOf = new Map<number, string[]>();
+  let labelCursor: string | null = null;
+  for (;;) {
+    const d = await gql(token, LABELS_QUERY, { o: owner, n: name, c: labelCursor });
+    const page = d?.repository?.issues;
+    if (!page) {
+      console.log(
+        "::warning::UNMEASURED — the open-issue label read returned no issues connection, so " +
+          "no candidate could be ranked by label and every one would have read UNPLACED. " +
+          "Nothing written.",
+      );
+      return EXIT_REFUSED;
+    }
+    for (const n2 of page.nodes ?? []) {
+      // A truncated label list is UNMEASURED, not a short list: the ranked
+      // label could be the one on page two, and ranking without it silently
+      // demotes the issue. Refusing here is the same choice the field-value
+      // read above makes.
+      if (n2?.labels?.pageInfo?.hasNextPage) {
+        console.log(
+          `::warning::UNMEASURED — #${n2.number} carries more than 20 labels, so its ranked ` +
+            "label may be unread and its position would be wrong. Nothing written.",
+        );
+        return EXIT_REFUSED;
+      }
+      labelsOf.set(
+        n2.number,
+        (n2?.labels?.nodes ?? []).map((l: any) => l?.name).filter((x: any) => typeof x === "string"),
+      );
+    }
+    // SC-2721: `hasNextPage` is never read here. A file that decides "is
+    // there another page" itself is how three variants of one silent
+    // truncation reached main one at a time — `nextCursor` is the single
+    // binding, and an unreadable pageInfo is UNMEASURED rather than the end
+    // of the list. ai-review round 1 of #1855 caught this shape in the
+    // sibling file; the suite caught it here.
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      console.log(
+        `::warning::UNMEASURED — the open-issue label read could not tell whether more pages ` +
+          `exist: ${step.why}. Candidates past this page would have ranked UNPLACED for an ` +
+          "instrument reason. Nothing written.",
+      );
+      return EXIT_REFUSED;
+    }
+    if (step.kind === "done") break;
+    labelCursor = step.cursor;
+  }
+  for (const c of candidates) {
+    // Shaped as the GraphQL response so the mapping below reads one way,
+    // whichever query produced the candidate.
+    c.labels = { nodes: (labelsOf.get(c.number) ?? []).map(name2 => ({ name: name2 })) };
+  }
+
   // A truncated sub-selection means this run saw PART of a dependent's board
   // membership or part of its fields, and "I did not find the Status field"
   // and "the Status field was on page two" produce the same `null`. Refuse
@@ -441,6 +513,13 @@ async function main(): Promise<number> {
       number: b.number,
       state: b.state,
       phase: phaseOf(b.milestone?.title),
+      // The ordering's second source (#1853). Not `?? []` as a convenience:
+      // a page that could not carry labels would read as an issue with none,
+      // and that is UNPLACED rather than unmeasured. The LABELS_QUERY pass
+      // above refuses the run on a truncated label list and sets this on
+      // every candidate, so the only way it is empty is that the issue
+      // genuinely has none.
+      labels: (b.labels?.nodes ?? []).map((l: any) => l?.name).filter((n: any) => typeof n === "string"),
       // NOT `?? 0`. An absent summary means the field could not be read —
       // a token not scoped for it returns no object — and calling that zero
       // says "nothing is blocking this", which moves a genuinely blocked
@@ -495,9 +574,18 @@ async function main(): Promise<number> {
   const throughput = closedReadings?.throughput ?? null;
   const cap = throughput === null ? null : readyCap(throughput);
   const phaseOfNumber = new Map(dependents.map(d => [d.number, d.phase]));
+  // Labels travel with the phase because ordering now reads both (#1853).
+  // A decision whose issue is not in `dependents` cannot be ranked by label
+  // either, and `[]` is the honest reading for it: UNPLACED, sorted behind
+  // everything the plan does place.
+  const labelsOfNumber = new Map(dependents.map(d => [d.number, d.labels]));
   const eligible = decisions
     .filter(dec => dec.move)
-    .map(dec => ({ ...dec, phase: phaseOfNumber.get(dec.number) ?? null }));
+    .map(dec => ({
+      ...dec,
+      phase: phaseOfNumber.get(dec.number) ?? null,
+      labels: labelsOfNumber.get(dec.number) ?? [],
+    }));
   const selection = selectReady(eligible, cap, occupied);
   console.log(
     `  depth: ${cap ?? "UNMEASURED"}` +
