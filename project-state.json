@@ -1439,7 +1439,8 @@
       ],
       "goal": "The other specs get placement tables and reach the board",
       "serves": 3,
-      "retro": null
+      "retro": null,
+      "why": "Measured 2026-11-06 and kept here so it is not re-derived: this stage is NOT the fix for Ready being ordered by age. plan-spec can only place work that came from a criterion, and only 16 of 80 open issues name an SC id. Placement tables order the spec-derived fifth; the label rank in Stage H orders the rest. Also measured: 22 specs carry no table, but 7 of them have ZERO open criteria and HARNESS-STANDARD.md has 12 open out of 648 — so E1 is 15 specs and 194 open criteria, not 22 specs and 1,828."
     },
     {
       "id": "F",
@@ -1540,6 +1541,41 @@
           }
         ]
       }
+    },
+    {
+      "id": "H",
+      "name": "The board dispatches the RIGHT work",
+      "agreed": "2026-11-06 Jason",
+      "goal": "A session that takes the top of Ready is taking the highest-priority work, not the oldest — and an issue nothing can rank says so instead of sorting last",
+      "serves": 1,
+      "issue": 1853,
+      "why": "Stage G made the board dispatch; operating it showed it dispatches by AGE. readyOrder ranks on phase, phase comes from phaseOf, and phaseOf reads a milestone title and nothing else — so the 28 of 38 eligible issues with no milestone all sort as POSITIVE_INFINITY and fall through to issue number. The obvious repair is Stage E's placement-table backfill, and it would not reach this backlog: only 16 of 80 open issues name an SC id at all. The other 64 are review follow-ups (30), external-audit (14) and engine work (9) that never passed through a spec, so no table placed on any spec can rank them. Jason named the second source himself — 'it's specs, and if no specs, it puts different labels on there' — and set the rank on 2026-11-06: engine, then spec:convergence, then follow-up, then external-audit. Engine leads because it is the work that reduces the backlog itself (AGENTS.md rule 7). Measured 2026-11-06: 38 eligible, 10 with a milestone, 9 with no rankable label at all.",
+      "items": [
+        {
+          "id": "H1",
+          "what": "readyOrder ranks milestone phase first, then label rank, then UNPLACED — with issue number as the tiebreak INSIDE each tier, so age still breaks ties but never decides the tier",
+          "done": false,
+          "verify": "bun test test/board-ready-rule.test.ts -t 'label' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
+        },
+        {
+          "id": "H2",
+          "what": "THE CONTROL: the label rank exists at exactly ONE site, so a mutation of it reddens every caller. scripts/board-ready.ts and scripts/board-mirror.ts must not each compute a rank — two deciders that agree are behaviourally one, and a mutation of either leaves the other holding the case up",
+          "done": false,
+          "verify": "bun test test/board-ready-rule.test.ts -t 'one site' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
+        },
+        {
+          "id": "H3",
+          "what": "an UNRANKED label does not place an issue — it is UNPLACED, reported, never guessed into a tier. arbiter-override is deliberately outside the rank and is the live case",
+          "done": false,
+          "verify": "bun test test/board-ready-rule.test.ts -t 'unknown label' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
+        },
+        {
+          "id": "H4",
+          "what": "work-status states how many promotion candidates are UNPLACED. An issue nothing can rank currently reads identically to one ranked last, which is the lane-health defect one level up (Claim 4)",
+          "done": false,
+          "verify": "bun test test/work-status.test.ts -t 'UNPLACED' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
+        }
+      ]
     }
   ],
   "goal": {
