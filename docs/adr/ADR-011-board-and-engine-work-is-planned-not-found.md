@@ -81,6 +81,7 @@ grants nothing.
 | — | Nothing proves the board can fail: 0 of 28 BOARD-FLOW-SPEC criteria are ticked | test/board-intake.test.ts, test/board-flow.test.ts, specs/BOARD-FLOW-SPEC.md | — | The filing gate resolves a filing against the session directory, not the checkout it was filed from |
 | — | A leading quote disarms the newline escape, so a scratch path can forge a record | lib/scaffold/ai-review-step.ts, .github/workflows/ai-review.yml, test/ai-review-workflow.test.ts | — | — |
 | — | Measure the anchor-suppression rate on rungate@0.8.14 across 10 multi-round pull requests | reporting only — no production file is expected to change | — | — |
+| — | Run the reviewer five times per round and merge the drafts | lib/scaffold/ai-review-step.ts, lib/scaffold/ai-review-findings.ts, .claude/rungate/config.json, test/ai-review-findings.test.ts | — | — |
 
 The third row is live, found while watching run `42254789078` drain the
 board. `clearAssignees` is REST — `PATCH /repos/{repo}/issues/{n}` — and it
