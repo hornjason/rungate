@@ -8,7 +8,7 @@ status: active
 owner: jason
 created: 2026-10-22
 source: https://claude.dev/blog/solving-code-review-at-anthropic/
-updated: 2026-10-28
+updated: 2026-11-07
 ---
 
 # Code Review Convergence
