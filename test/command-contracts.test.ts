@@ -62,12 +62,16 @@ function read(name: string): string {
  * running — see the UNMEASURED-is-not-a-pass rule in
  * `.claude/rules/config-access.md`.
  */
-function runBlock(block: string, args: string, opts: { stubGh?: string } = {}): { code: number; out: string } {
+function runBlock(
+  block: string,
+  args: string,
+  opts: { stubGh?: string; cwd?: string } = {},
+): { code: number; out: string } {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   delete env.GH_TOKEN;
   if (opts.stubGh !== undefined) env.PATH = `${opts.stubGh}:${env.PATH ?? ""}`;
-  const p = Bun.spawnSync(["bash", "-c", block.replaceAll("$ARGUMENTS", args)], { cwd: ROOT, env });
+  const p = Bun.spawnSync(["bash", "-c", block.replaceAll("$ARGUMENTS", args)], { cwd: opts.cwd ?? ROOT, env });
   return {
     code: p.exitCode ?? -1,
     out: new TextDecoder().decode(p.stdout) + new TextDecoder().decode(p.stderr),
@@ -215,21 +219,43 @@ describe("the commands #1746 creates are executable, not prose", () => {
     }
 
     // The count it prints is the audit's own precondition: a DONE item with
-    // no verify cannot be re-taken. Computed here from the file rather than
-    // copied from the output, so the two can disagree.
+    // no verify cannot be re-taken, so done-count and verify-count must be
+    // separate numbers.
     //
-    // Broken to prove it: counting `it.filter(i=>i.done)` instead of the
-    // ones that also carry a verify makes a stage with an unverifiable item
-    // report a number this comparison rejects.
-    const d = state.stages.find(s => s.id === "D");
-    expect(d, "stage D is gone, so the row below measured nothing").toBeDefined();
-    const items = d?.items ?? [];
-    const done = items.filter(i => i.done === true);
-    const withVerify = done.filter(i => typeof i.verify === "string" && i.verify.length > 0);
-    const row = out.split("\n").find(l => l.trimStart().startsWith("D "));
-    expect(row, "no row for stage D in the index").toBeDefined();
-    expect(row).toContain(`${done.length}/${items.length}`);
-    expect(row).toContain(String(withVerify.length));
+    // Measured against a PLANTED state, not the live one. Every stage in the
+    // live file has a verify on every DONE item, so there the two counts are
+    // equal for every row — a mutation collapsing one into the other moves
+    // nothing, and asserting against live data would be green by
+    // construction. That mutation was run and did stay green; this fixture
+    // is the repair.
+    const planted = join(scratch, "planted-state");
+    require("fs").mkdirSync(planted, { recursive: true });
+    writeFileSync(
+      join(planted, "project-state.json"),
+      JSON.stringify({
+        stages: [
+          {
+            id: "Q",
+            name: "planted",
+            items: [
+              { id: "Q1", done: true, verify: "true" },
+              { id: "Q2", done: true, verify: null }, // DONE and unverifiable
+              { id: "Q3", done: false, verify: null },
+            ],
+          },
+        ],
+      }),
+    );
+    const p = runBlock(stageBlock as string, "", { cwd: planted });
+    const row = p.out.split("\n").find(l => l.trimStart().startsWith("Q "));
+    expect(row, `no row for the planted stage:\n${p.out}`).toBeDefined();
+    // Two of three done, but only ONE of them auditable. A block that
+    // reports "2" for both has lost the distinction the audit depends on.
+    expect(row, "the done count must be 2 of 3").toContain("2/3");
+    expect(
+      (row ?? "").replace("2/3", "").includes("1"),
+      `the verify count must be 1, not 2 — a DONE item with a null verify cannot be re-taken. Row: ${row}`,
+    ).toBe(true);
   });
 
   test("round-rca compares runs against reviewed commits, on a reading it controls", () => {
