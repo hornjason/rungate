@@ -651,3 +651,294 @@ export function ladderViolations(raw: unknown): string[] {
 
   return out;
 }
+
+/* ────────────────────────────────────────────────────────────────────────
+ * #1849 — a verify command may not name a test that does not exist.
+ *
+ * `verify` is free text. Nothing related it to the set of test titles that
+ * exist, so a command could name a case nobody wrote and its item could be
+ * ticked against it. Three of Stage G's five verify commands did exactly
+ * that; two of Stage C's six did, and one of those named a FILE whose 47
+ * tests contain nothing matching — which is the half the runtime guard
+ * cannot see, because `grep -qE '^ [1-9][0-9]* pass'` only catches a title
+ * that matches nothing IN THE FILE NAMED.
+ *
+ * Static, by AC-1: this reads the file, it does not run it. A check that
+ * had to run the suite to know whether the suite would be selected is the
+ * thing it is checking.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/**
+ * What a single `bun test <file> -t <name>` fragment turned out to be.
+ *
+ * `UNMEASURED` is a first-class reading and not a quiet pass, for the
+ * reason `.claude/rules/config-access.md` gives: a fragment this cannot
+ * read has not been checked, and "not checked" and "fine" are different
+ * facts. Every one is reported.
+ */
+export const VERIFY_TITLE_READINGS = ["MATCHED", "NO_SUCH_TITLE", "FILE_ABSENT", "UNMEASURED"] as const;
+export type VerifyTitleReading = (typeof VERIFY_TITLE_READINGS)[number];
+
+export interface VerifyTitleFragment {
+  /** The item, improvement or goal the command belongs to. */
+  where: string;
+  /** The path as the command spells it, relative to the project root. */
+  file: string;
+  /** The `-t` pattern, verbatim. */
+  name: string;
+  reading: VerifyTitleReading;
+  /** What the reader saw. Empty only on `MATCHED`. */
+  why: string;
+}
+
+/**
+ * `bun test <file> -t "<name>"`, wherever it appears in a command.
+ *
+ * Global and non-anchored because a verify may chain several with `&&` —
+ * C6 chains three — and a chain whose FIRST command is checked and whose
+ * second is not is the population defect this repository keeps paying for
+ * (#1818).
+ */
+const BUN_TEST_T = /bun test\s+(\S+)\s+-t\s+(["'])(.*?)\2/g;
+
+/**
+ * `describe(` / `test(` / `it(`, with a quoted title and any modifier.
+ *
+ * The lookbehind is load-bearing. `\b` alone matches between the `.` and
+ * the `t` of `RegExp.prototype.test`, so `/^ 1 pass$/m.test(\`${out}\`)` —
+ * an ordinary line in this file's own suite — read as a declaration with
+ * an interpolated title, and marked the whole file UNMEASURED. Found by
+ * AC-4's mutation failing to redden anything: the victim it picked was a
+ * fragment this parser had quietly given up on.
+ */
+const TITLE_CALL = /(?<![.\w$])(describe|test|it)(?:\.\w+)?\(\s*(["'`])((?:\\.|(?!\2).)*)\2/g;
+
+/**
+ * Every name `bun test -t` could match in one source file.
+ *
+ * **Measured, not assumed** (2026-11-07, bun 1.3.14). Against
+ * `describe("outer group") > test("inner case")`:
+ *
+ * | `-t` pattern                 | result |
+ * |------------------------------|--------|
+ * | `inner case`                 | runs   |
+ * | `outer group`                | runs   |
+ * | `outer group inner case`     | runs   |
+ * | `outer group > inner case`   | NO     |
+ * | `group.*inner`               | runs   |
+ *
+ * So the thing matched is a regular expression against the **space-joined**
+ * path of enclosing describes plus the title — not the reporter's `>`
+ * spelling, and not a substring test. Getting this from the documentation
+ * rather than from the binary would have produced a check that refuses
+ * every path pattern in the tree.
+ *
+ * Returns `null` when the source cannot be parsed into a path set with
+ * confidence. A file whose nesting this cannot follow is UNMEASURED, never
+ * a refusal: the cost of reading it wrong is a red row for a command that
+ * is correct, which is how a check becomes an obstacle people route around.
+ */
+export function titlePathsIn(raw: string): string[] | null {
+  // Comments first. A `describe("outer group", …)` written INSIDE a
+  // comment is not a declaration, and reading it as one adds a name no
+  // test has. Found here: the docblock in `test/stage-ladder.test.ts`
+  // explaining this very hazard became a title path of that file.
+  // Blanked rather than removed, so every offset below still lines up.
+  const source = blankComments(raw);
+
+  const stack: { title: string; depth: number }[] = [];
+  const paths: string[] = [];
+  let depth = 0;
+  let interpolated = false;
+
+  // One pass, walking the braces between title calls. `lastIndex` on a
+  // global regex is the cursor; the text between two calls is where the
+  // depth moves.
+  TITLE_CALL.lastIndex = 0;
+  let cursor = 0;
+  for (const m of source.matchAll(TITLE_CALL)) {
+    const at = m.index!;
+    depth += braceDelta(source.slice(cursor, at));
+    cursor = at;
+    // Pop on STRICTLY greater. A describe records the depth INSIDE its own
+    // body, which is the depth every call it encloses is read at, so `>=`
+    // pops the enclosing describe at its own first child and every path
+    // comes out as the bare test title. The first draft had `>=` and the
+    // probe caught it: `test/stage-ladder.test.ts` read 41 paths of which
+    // not one carried its describe.
+    while (stack.length > 0 && stack[stack.length - 1]!.depth > depth) stack.pop();
+
+    const [, kind, quote, raw] = m as unknown as [string, string, string, string];
+    if (quote === "`" && raw.includes("${")) {
+      // An interpolated title is a name this cannot know. One is enough to
+      // make the whole file's path set incomplete, and an incomplete set
+      // can only produce false refusals.
+      interpolated = true;
+      continue;
+    }
+    const title = raw.replace(/\\(.)/g, "$1");
+    const path = [...stack.map(s => s.title), title].join(" ");
+    paths.push(path);
+    if (kind === "describe") stack.push({ title, depth: depth + 1 });
+  }
+
+  if (interpolated) return null;
+  return paths;
+}
+
+/**
+ * Every comment replaced by spaces of the same length, newlines kept.
+ *
+ * Same length because the caller indexes into the result and compares
+ * those indices against brace depth computed from the same string; a
+ * shorter output would silently shift every path's nesting.
+ *
+ * Strings are walked, not skipped, so a `//` inside a quoted path does not
+ * blank the rest of the line.
+ */
+function blankComments(text: string): string {
+  const out = text.split("");
+  let i = 0;
+  const blank = (from: number, to: number) => {
+    for (let k = from; k < to && k < out.length; k++) if (out[k] !== "\n") out[k] = " ";
+  };
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === "/" && text[i + 1] === "/") {
+      const end = text.indexOf("\n", i);
+      blank(i, end === -1 ? text.length : end);
+      i = end === -1 ? text.length : end;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      i = endOfString(text, i);
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+
+/** Net `{` minus `}`, ignoring braces inside strings, comments and regexes. */
+function braceDelta(text: string): number {
+  let d = 0;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === "/" && text[i + 1] === "/") { i = nextIndex(text, "\n", i); continue; }
+    if (c === "/" && text[i + 1] === "*") { i = nextIndex(text, "*/", i) + 1; continue; }
+    if (c === '"' || c === "'" || c === "`") { i = endOfString(text, i); continue; }
+    if (c === "{") d++;
+    else if (c === "}") d--;
+    i++;
+  }
+  return d;
+}
+
+function nextIndex(text: string, token: string, from: number): number {
+  const at = text.indexOf(token, from + 1);
+  return at === -1 ? text.length : at + token.length;
+}
+
+function endOfString(text: string, from: number): number {
+  const quote = text[from]!;
+  let i = from + 1;
+  while (i < text.length) {
+    if (text[i] === "\\") { i += 2; continue; }
+    if (text[i] === quote) return i + 1;
+    i++;
+  }
+  return text.length;
+}
+
+/**
+ * Every `bun test … -t …` in one command, read against the tree.
+ *
+ * `readSource` returns the file's text, or `null` when there is no such
+ * file. Injected rather than read here so the caller owns the root and so
+ * a test can plant a corpus without a temp directory — the same reason
+ * `promote` takes its registry.
+ *
+ * A command containing no such fragment yields NOTHING. That is not a
+ * pass: `verifyTitleViolations` counts it separately, so "this shape was
+ * not checked" stays visible instead of being absorbed into a green.
+ */
+export function verifyTitleFragments(
+  where: string,
+  verify: string,
+  readSource: (file: string) => string | null,
+): VerifyTitleFragment[] {
+  const out: VerifyTitleFragment[] = [];
+  BUN_TEST_T.lastIndex = 0;
+  for (const m of verify.matchAll(BUN_TEST_T)) {
+    const file = m[1]!;
+    const name = m[3]!;
+    const push = (reading: VerifyTitleReading, why: string) => out.push({ where, file, name, reading, why });
+
+    const src = readSource(file);
+    if (src === null) {
+      push("FILE_ABSENT", `${file} does not exist, so this command selects nothing`);
+      continue;
+    }
+    const paths = titlePathsIn(src);
+    if (paths === null) {
+      push("UNMEASURED", `${file} builds at least one title by interpolation, so its set of names is not knowable here`);
+      continue;
+    }
+    if (paths.length === 0) {
+      push("UNMEASURED", `${file} states no describe/test title this can read`);
+      continue;
+    }
+    let re: RegExp;
+    try {
+      re = new RegExp(name);
+    } catch (e) {
+      push("UNMEASURED", `-t ${JSON.stringify(name)} is not a regular expression: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+    if (paths.some(p => re.test(p))) push("MATCHED", "");
+    else push("NO_SUCH_TITLE", `no describe/test title in ${file} matches ${JSON.stringify(name)} — ${paths.length} title path(s) read`);
+  }
+  return out;
+}
+
+/**
+ * The refusal. One line per fragment that is not `MATCHED`, naming the
+ * item, the file and the title — AC-2, because a bare count sends the next
+ * reader back through every command in the plan.
+ *
+ * `UNMEASURED` is reported and does NOT refuse. It is a statement that
+ * this instrument could not see the fragment, and turning that into a red
+ * row would make the honest reading the expensive one.
+ */
+export function verifyTitleViolations(
+  commands: readonly { where: string; verify: string | null }[],
+  readSource: (file: string) => string | null,
+): { violations: string[]; unmeasured: string[]; matched: number; outOfShape: number } {
+  const violations: string[] = [];
+  const unmeasured: string[] = [];
+  let matched = 0;
+  let outOfShape = 0;
+
+  for (const c of commands) {
+    if (c.verify === null || c.verify.trim().length === 0) continue;
+    const frags = verifyTitleFragments(c.where, c.verify, readSource);
+    if (frags.length === 0) {
+      outOfShape++;
+      continue;
+    }
+    for (const f of frags) {
+      if (f.reading === "MATCHED") matched++;
+      else if (f.reading === "UNMEASURED") unmeasured.push(`${f.where}: ${f.why}`);
+      else violations.push(`${f.where}: ${f.why}`);
+    }
+  }
+  return { violations, unmeasured, matched, outOfShape };
+}

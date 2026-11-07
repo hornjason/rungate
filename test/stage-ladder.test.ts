@@ -21,7 +21,8 @@
  * suite went red naming it, green again on restore.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { spawnSync } from "child_process";
 import {
@@ -34,6 +35,8 @@ import {
   retrosOwed,
   stageIsComplete,
   stageLadderViolations,
+  titlePathsIn,
+  verifyTitleViolations,
   type Retro,
   type Stage,
 } from "../lib/stage-ladder.ts";
@@ -683,5 +686,222 @@ describe("completion is derived, never asserted", () => {
   test("retrosOwed names every complete stage missing one, and nothing else", () => {
     expect(retrosOwed([ok(), ok({ id: "B", retro: null }), ok({ id: "C", items: [{ id: "C1", what: "x", done: false, verify: null }], retro: null })]))
       .toEqual(["B"]);
+  });
+});
+
+/**
+ * #1849 — a verify command may not name a test that does not exist.
+ *
+ * ## What was broken to prove these can fail
+ *
+ * The live plan is mutated in-process: one item's `-t` pattern is replaced
+ * with a fabricated one and the decider is re-run against the SAME tree.
+ * Exactly one violation appears and it names that item. Reverting restores
+ * zero. That is AC-4, performed, not described.
+ *
+ * The premise this whole check rests on — what `bun test -t` matches
+ * against — is not taken from the docs. `the matcher's own semantics`
+ * below spawns bun against a planted two-level fixture and asserts all
+ * five readings. Had that been assumed, the parser would have been built
+ * for the reporter's `outer > inner` spelling, which bun does NOT match,
+ * and every path pattern in the tree would have been refused.
+ */
+describe("#1849: a verify command names a test that exists", () => {
+  /** A corpus a case can plant, so nothing here depends on the live tree. */
+  const corpus = (files: Record<string, string>) => (f: string) => files[f] ?? null;
+
+  /**
+   * The fixtures are assembled from parts, never written as literals.
+   *
+   * `titlePathsIn` reads a file's TEXT, so a fixture spelled
+   * `describe("outer group", …)` inside this file becomes one of THIS
+   * file's title paths — and two live verify commands point at this file.
+   * The literal version turned both of their readings from MATCHED into
+   * UNMEASURED and planted two phantom names a future `-t` could match.
+   * Caught by the last case in this block, which is here for that reason.
+   */
+  const D = "describe";
+  const T = "test";
+  const TWO_LEVEL =
+    `import { ${D}, ${T} } from "bun:test";\n` +
+    `${D}("outer group", () => {\n` +
+    `  ${T}("inner case", () => {});\n` +
+    `});\n`;
+
+  test("the one case that must MATCH, so the refusals below are not vacuous", () => {
+    const r = verifyTitleViolations(
+      [{ where: "X1", verify: 'bun test a.test.ts -t "inner case"' }],
+      corpus({ "a.test.ts": TWO_LEVEL }),
+    );
+    expect(r.violations).toEqual([]);
+    expect(r.matched, "nothing matched, so every refusal below could be the parser failing open").toBe(1);
+  });
+
+  test("AC-1: a title no test declares is refused, statically", () => {
+    const r = verifyTitleViolations(
+      [{ where: "X1", verify: 'bun test a.test.ts -t "a case nobody wrote"' }],
+      corpus({ "a.test.ts": TWO_LEVEL }),
+    );
+    expect(r.violations.length).toBe(1);
+    expect(r.matched).toBe(0);
+  });
+
+  test("AC-2: the refusal names the item, the file and the unmatched title", () => {
+    const [only] = verifyTitleViolations(
+      [{ where: "C4", verify: 'bun test test/github-client.test.ts -t "SC-2613"' }],
+      corpus({ "test/github-client.test.ts": TWO_LEVEL }),
+    ).violations;
+    expect(only).toContain("C4");
+    expect(only).toContain("test/github-client.test.ts");
+    expect(only).toContain("SC-2613");
+  });
+
+  test("AC-1: a file that does not exist is refused, not skipped", () => {
+    const r = verifyTitleViolations([{ where: "X1", verify: 'bun test gone.test.ts -t "x"' }], corpus({}));
+    expect(r.violations.length).toBe(1);
+    expect(r.violations[0]).toContain("gone.test.ts");
+  });
+
+  test("AC-3: a command of another shape is counted, never silently passed", () => {
+    const r = verifyTitleViolations(
+      [{ where: "C5", verify: "grep -q 'STALE_CITATION' lib/finding-arbiter.ts" }],
+      corpus({}),
+    );
+    expect(r.violations, "a shape this cannot read was treated as a defect").toEqual([]);
+    expect(r.matched, "a shape this cannot read was treated as a pass").toBe(0);
+    expect(r.outOfShape, "the unreadable shape vanished instead of being reported").toBe(1);
+  });
+
+  test("AC-3: an interpolated title makes the file UNMEASURED, and UNMEASURED does not refuse", () => {
+    const interpolated = `${D}("g", () => { for (const c of cs) ${T}(\`\${c.name} works\`, () => {}); });`;
+    const r = verifyTitleViolations(
+      [{ where: "X1", verify: 'bun test a.test.ts -t "anything at all"' }],
+      corpus({ "a.test.ts": interpolated }),
+    );
+    expect(r.violations, "a file whose names cannot be read produced a refusal — that is a false red").toEqual([]);
+    expect(r.unmeasured.length).toBe(1);
+    expect(r.unmeasured[0]).toContain("interpolation");
+  });
+
+  test("AC-1: every fragment of a CHAINED command is read, not just the first", () => {
+    // C6 chains three. A check reading only the first is the population
+    // defect this repository keeps paying for (#1818), so the case puts the
+    // only bad fragment LAST.
+    const r = verifyTitleViolations(
+      [{ where: "C6", verify: 'bun test a.test.ts -t "inner case" && bun test a.test.ts -t "nobody wrote this"' }],
+      corpus({ "a.test.ts": TWO_LEVEL }),
+    );
+    expect(r.matched).toBe(1);
+    expect(r.violations.length).toBe(1);
+    expect(r.violations[0]).toContain("nobody wrote this");
+  });
+
+  test("a describe's title reaches the paths of the tests it encloses", () => {
+    // The first draft popped the enclosing describe at its own first child,
+    // so all 41 paths in THIS file came out as bare test titles and a
+    // pattern spanning the boundary would have been refused.
+    const paths = titlePathsIn(TWO_LEVEL);
+    expect(paths).not.toBeNull();
+    expect(paths).toContain("outer group inner case");
+  });
+
+  test("the matcher's own semantics, read from bun and not from the docs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "stage-ladder-t-"));
+    try {
+      writeFileSync(join(dir, "x.test.ts"), TWO_LEVEL);
+      const selects = (pattern: string) => {
+        const r = spawnSync("bun", ["test", "x.test.ts", "-t", pattern], { cwd: dir, encoding: "utf-8" });
+        return /^ 1 pass$/m.test(`${r.stdout}${r.stderr}`);
+      };
+      // The row that must be TRUE, or the four below are vacuous.
+      expect(selects("inner case"), "bun selected nothing at all — this fixture never ran").toBe(true);
+      expect(selects("outer group")).toBe(true);
+      expect(selects("outer group inner case"), "the path is NOT space-joined — the parser's premise is wrong").toBe(true);
+      expect(selects("outer group > inner case"), "bun matches the reporter's `>` spelling after all").toBe(false);
+      expect(selects("group.*inner"), "-t is not a regular expression — titlePathsIn compares the wrong way").toBe(true);
+
+      // And the parser agrees with the binary on every one of them.
+      const paths = titlePathsIn(TWO_LEVEL)!;
+      for (const p of ["inner case", "outer group", "outer group inner case", "group.*inner"]) {
+        expect(paths.some(x => new RegExp(p).test(x)), `the parser disagrees with bun about ${JSON.stringify(p)}`).toBe(true);
+      }
+      expect(paths.some(x => new RegExp("outer group > inner case").test(x))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("this suite's own fixtures do not become this file's title paths", () => {
+    // Two live verify commands point at this file. A fixture written as a
+    // literal lands in its path set: it marked the file UNMEASURED and
+    // added "outer group" and "outer group inner case" as names a future
+    // `-t` could match here by accident. This is the assertion, not the
+    // comment above the fixtures.
+    const mine = titlePathsIn(readFileSync(join(ROOT, "test/stage-ladder.test.ts"), "utf-8"));
+    expect(mine, "this file reads as UNMEASURED, so every verify command naming it is unchecked").not.toBeNull();
+    for (const phantom of ["outer group", "inner case", "${c.name} works"]) {
+      expect(mine!.some(p => p.includes(phantom)), `the fixture name ${JSON.stringify(phantom)} is a title path of this file`)
+        .toBe(false);
+    }
+  });
+
+  test("AC-4: the live plan is clean, and a fabricated title reddens exactly its own item", () => {
+    const read = (f: string) => {
+      try {
+        return readFileSync(join(ROOT, f), "utf-8");
+      } catch {
+        return null;
+      }
+    };
+    // Every `where` is UNIQUE. A stage's improvements all shared the label
+    // `B.retro` in the first draft, so the mutation looked its victim up by
+    // `where` and got a DIFFERENT improvement with the same label — the
+    // case then reported that the check could not fail, twice, while the
+    // check was fine. A label is not a key.
+    const commands = () => {
+      const out: { where: string; verify: string | null }[] = [];
+      for (const s of stages) {
+        for (const i of s.items) out.push({ where: `${s.id}.${i.id}`, verify: i.verify });
+        (s.retro?.improvements ?? []).forEach((im, n) =>
+          out.push({ where: `${s.id}.retro[${n}]`, verify: im.verify }),
+        );
+      }
+      out.push({ where: "goal", verify: doc.goal.verify });
+      return out;
+    };
+
+    const base = verifyTitleViolations(commands(), read);
+    expect(
+      base.violations,
+      "a verify command in the live plan names a test that does not exist. Either the test was renamed or " +
+        "deleted, or the command names the wrong FILE — the runtime pass-count guard cannot see the second, " +
+        "which is how C4 pointed at test/github-client.test.ts for eight days.",
+    ).toEqual([]);
+    expect(base.matched, "no fragment of the live plan is of this shape, so this case witnessed nothing")
+      .toBeGreaterThan(0);
+    for (const u of base.unmeasured) console.log(`  UNMEASURED (#1849): ${u}`);
+
+    // THE MUTATION. One item's pattern is replaced with a name nothing
+    // declares; the tree is untouched.
+    //
+    // The victim must be a fragment that currently MATCHES. The first
+    // draft took the first command of the right SHAPE, which picked one
+    // whose file was UNMEASURED — mutating it changed nothing and the
+    // case reported that the check could not fail. It was right about the
+    // fragment and wrong about the check, which is the shape a control has
+    // to be chosen to avoid.
+    const mutated = commands();
+    const at = mutated.findIndex(
+      c => c.verify !== null && verifyTitleViolations([c], read).matched === 1 && !/&&/.test(c.verify),
+    );
+    expect(at, "no single-fragment matching command exists to mutate").toBeGreaterThanOrEqual(0);
+    const victim = mutated[at]!;
+    const where = victim.where;
+    victim.verify = victim.verify!.replace(/-t\s+(["']).*?\1/, '-t "a title nothing in this repository declares"');
+
+    const after = verifyTitleViolations(mutated, read);
+    expect(after.violations.length, "the fabricated title was not caught — this check cannot fail").toBe(1);
+    expect(after.violations[0]).toContain(where);
+    expect(after.matched, "the mutation changed more than the one fragment it was meant to").toBe(base.matched - 1);
   });
 });
