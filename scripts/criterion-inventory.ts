@@ -31,12 +31,17 @@
  * Pass it and the first run writes the three readings there, beside a
  * {@link PROVENANCE} file recording when, from which repository, and a
  * digest of what was written. A later run reads all three back and retakes
- * none of the three readings — it makes exactly one call, the identity read
- * that says which repository this tree is, which the comparison below needs
- * and which {@link resolveRepo} explains. This said "no API call at all"
- * until the identity read was added in review of #1878, and then kept
- * saying it; the test for the cache hit asserts the one call by name, so
- * the sentence was contradicted by the case below it.
+ * none of the three readings. It makes one further call only when `--repo`
+ * was omitted — the identity read the comparison below needs, which
+ * {@link resolveRepo} explains; with `--repo` given there is nothing left
+ * to resolve and a cache hit calls nothing.
+ *
+ * This paragraph has now been wrong about that count twice. It said "no API
+ * call at all" after the identity read was added in review of #1878, and
+ * the correction then said "exactly one call" as a flat fact, which is
+ * false on the `--repo` path. Neither is a hard question; both were written
+ * without reading the function one screen below. A sentence about what a
+ * program does is a claim, and a claim needs the same evidence as a number.
  *
  * A cache is refused rather than believed whenever the record cannot settle
  * what it is for — a record nobody consults settles nothing, which is this
