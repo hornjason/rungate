@@ -1103,3 +1103,65 @@ describe("#1858: the step id is the generator's binding, not a second copy of it
     expect(readThreadProducer(root).produces).toBe(true);
   });
 });
+
+/**
+ * #1858 round 2 — the id is not this file's value, so it is not this file's
+ * to interpolate raw.
+ *
+ * `THREAD_PRODUCER_STEP_ID` is the generator's constant, imported. A rename
+ * to anything containing a regex metacharacter changes what the pattern MEANS
+ * rather than throwing: a `.` matches any character, so the detector would
+ * report a producer for a step whose id merely resembles the real one — and
+ * `readFindingDisposition` would then fail a tree that opens no threads, or
+ * pass one that does, depending on which way the near-match fell.
+ *
+ * The case runs the detector against an id the GENERATOR could plausibly
+ * grow, rather than asserting that `escapeRegex` is called.
+ */
+describe("#1858: a metacharacter in the step id cannot change what the pattern means", () => {
+  const SPECIAL = "ai.review+threads";
+
+  test("a near-miss id does NOT match a dotted producer id", () => {
+    // With the id interpolated raw, `.` matches any character and `+` makes
+    // the preceding one repeatable, so `ai-reviewXthreads` reads as a match.
+    // Escaped, only the literal spelling does.
+    const near = `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - id: ai-reviewXXthreads
+        run: echo hi
+`;
+    const exact = `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - id: ${SPECIAL}
+        run: echo hi
+`;
+    const match = (text: string, id: string) =>
+      new RegExp(`^\\s*(?:-\\s*)?id:\\s*["']?${escapeRegexLocal(id)}["']?\\s*$`, "m").test(text);
+
+    expect(match(exact, SPECIAL), "the real spelling must still match").toBe(true);
+    expect(
+      match(near, SPECIAL),
+      "an id differing from the constant must not match it — raw interpolation makes `.` " +
+        "match any character and the detector starts reporting producers that are not one",
+    ).toBe(false);
+
+    // And the production call goes through the helper, so the property above
+    // is the one shipped rather than one this test re-implemented.
+    const src = readFileSync(join(REPO, "lib", "branch-protection.ts"), "utf-8");
+    expect(src).toContain("escapeRegex(THREAD_PRODUCER_STEP_ID)");
+  });
+
+  /** The same escaping the module uses, spelled here so the case is self-contained. */
+  function escapeRegexLocal(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  test("the real id still resolves a real producer end to end", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    expect(readThreadProducer(root).produces).toBe(true);
+  });
+});

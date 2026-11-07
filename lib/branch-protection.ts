@@ -1025,7 +1025,14 @@ export function readThreadProducer(root: string): ThreadProducerReading {
     // this required the line to BEGIN with whitespace then `id:`, so a step
     // written the other way read as no producer at all. Found by a fixture
     // that spelled it the legal second way (#1858).
-    if (new RegExp(`^\\s*(?:-\\s*)?id:\\s*["']?${THREAD_PRODUCER_STEP_ID}["']?\\s*$`, "m").test(text)) {
+    //
+    // `escapeRegex`, because the id is not this file's value to trust. It is
+    // the generator's constant, imported — which is the whole point of the
+    // re-export above — and a rename to anything containing `.`, `+` or `(`
+    // would change what this pattern MEANS rather than throw. A `.` in the id
+    // would quietly match any character. Round 2 of #1858; the helper was
+    // already in use a few dozen lines up for exactly this reason.
+    if (new RegExp(`^\\s*(?:-\\s*)?id:\\s*["']?${escapeRegex(THREAD_PRODUCER_STEP_ID)}["']?\\s*$`, "m").test(text)) {
       return { produces: true, where: name, unmeasured: null };
     }
   }
