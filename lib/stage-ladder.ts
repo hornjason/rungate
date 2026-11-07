@@ -862,6 +862,19 @@ interface Scan {
   forTitles: string;
   forDepth: string;
   ok: boolean;
+  /**
+   * How far the scan actually got. Everything from here on is RAW — not
+   * masked, comments included.
+   *
+   * Round 2 of review found `titlesIn` reading `forTitles` whole while
+   * ignoring `ok`, so a `describe("phantom")` sitting in a comment in the
+   * unscanned tail of an unparseable file was returned as a declared
+   * title, and the literal fast path reported MATCHED for a test that
+   * exists nowhere. The mitigation for a confidently-wrong answer was
+   * itself confidently wrong. A reader of a failed scan may only trust
+   * the prefix the scan completed.
+   */
+  scannedUpTo: number;
 }
 
 /**
@@ -971,7 +984,14 @@ function scanSource(text: string): Scan {
     i++;
   }
 
-  return { forTitles: titles.join(""), forDepth: depth.join(""), ok: ok && braces === 0 };
+  return {
+    forTitles: titles.join(""),
+    forDepth: depth.join(""),
+    ok: ok && braces === 0,
+    // Where the loop stopped. On a clean run that is the end; on a bail
+    // it is the token that defeated it, and nothing past it was masked.
+    scannedUpTo: i,
+  };
 }
 
 /** Index just past a regex literal's closing `/` and flags, or -1. */
@@ -1043,9 +1063,103 @@ function endOfTemplate(text: string, from: number): number {
   while (i < text.length) {
     if (text[i] === "\\") { i += 2; continue; }
     if (text[i] === "`") return i + 1;
+    if (text[i] === "$" && text[i + 1] === "{") {
+      const end = endOfSubstitution(text, i + 1);
+      if (end === -1) return -1;
+      i = end;
+      continue;
+    }
     i++;
   }
   return -1;
+}
+
+/**
+ * Index just past the `}` closing a `${…}`, or -1.
+ *
+ * The first attempt at this was deleted for taking the unparseable
+ * corpus from 4 files to 11, and the reason was precise: it knew about
+ * strings and comments and **not** about regex literals, so it repeated
+ * the exact defect the outer scanner had just been fixed for. One level
+ * down, same blind spot. It is here now, with the regex branch.
+ */
+function endOfSubstitution(text: string, from: number): number {
+  let i = from + 1;
+  let open = 1;
+  let prev = "{";
+  while (i < text.length) {
+    const c = text[i]!;
+    if (/[A-Za-z_$]/.test(c)) {
+      let j = i;
+      while (j < text.length && /[\w$]/.test(text[j]!)) j++;
+      prev = text.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      const e = text.indexOf("\n", i);
+      i = e === -1 ? text.length : e;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const e = text.indexOf("*/", i + 2);
+      if (e === -1) return -1;
+      i = e + 2;
+      continue;
+    }
+    if (c === "/" && (REGEX_AFTER_WORD.has(prev) || (prev.length === 1 && REGEX_MAY_FOLLOW.has(prev)))) {
+      const e = endOfRegex(text, i);
+      if (e === -1) return -1;
+      i = e;
+      prev = "/re/";
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const e = endOfString(text, i);
+      if (e === -1) return -1;
+      i = e;
+      prev = c;
+      continue;
+    }
+    if (c === "{") open++;
+    else if (c === "}") {
+      open--;
+      if (open === 0) return i + 1;
+    }
+    if (!/\s/.test(c)) prev = c;
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * A `describe` / `test` / `it` whose call does NOT open with a quote.
+ *
+ * Review round 2 named `test.each(CASES)("%s", fn)` — 46 files here use
+ * it — and the general shape is wider than that one spelling: anything
+ * whose first argument is not a string literal declares names this
+ * cannot resolve.
+ *
+ * | spelling | first argument |
+ * |---|---|
+ * | `test.each(CASES)("%s", fn)` | `CASES`, and the title is printf bun fills in |
+ * | `test.skipIf(cond)("title")` | `cond` |
+ * | `test(NAME, fn)` | a variable |
+ *
+ * Enumerated as a SHAPE rather than repaired per spelling, because the
+ * finding named one member of exactly this population (#1818). A file
+ * holding one of these has names this cannot see, so a pattern matching
+ * nothing in it is UNMEASURED — never the false refusal review predicted.
+ */
+const UNRESOLVED_CALL = /(?<![.\w$])(?:describe|test|it)(?:\.\w+)*\s*\(\s*(.)/g;
+
+function hasUnresolvedDeclaration(masked: string): boolean {
+  UNRESOLVED_CALL.lastIndex = 0;
+  for (const m of masked.matchAll(UNRESOLVED_CALL)) {
+    const first = m[1]!;
+    if (first !== '"' && first !== "'" && first !== "`") return true;
+  }
+  return false;
 }
 
 /**
@@ -1055,9 +1169,16 @@ function endOfTemplate(text: string, from: number): number {
  * but nothing here depends on brace depth — which is the half that can
  * be confidently wrong. This is what a file the scanner cannot nest
  * falls back to.
+ *
+ * **Only the prefix the scan completed is read.** Past that point
+ * nothing was masked, so a `describe("phantom")` inside a COMMENT in the
+ * tail of an unparseable file would be returned as a declared name, and
+ * the literal fast path in `verifyTitleFragments` would report MATCHED
+ * for a test that exists nowhere. Round 2 of review on #1877.
  */
 export function titlesIn(raw: string): string[] {
-  const source = scanSource(raw).forTitles;
+  const scan = scanSource(raw);
+  const source = scan.forTitles.slice(0, scan.scannedUpTo);
   const out: string[] = [];
   TITLE_CALL.lastIndex = 0;
   for (const m of source.matchAll(TITLE_CALL)) {
@@ -1066,6 +1187,27 @@ export function titlesIn(raw: string): string[] {
     out.push(text.replace(/\\(.)/g, "$1"));
   }
   return out;
+}
+
+/**
+ * Can this file's set of names be known in full?
+ *
+ * The single predicate behind every UNMEASURED, so there is one place
+ * that decides and one place to mutate. `false` means a pattern matching
+ * nothing here is UNMEASURED rather than a refusal.
+ */
+export function namesAreComplete(raw: string): { complete: boolean; why: string | null } {
+  const scan = scanSource(raw);
+  if (!scan.ok) {
+    return { complete: false, why: "the scanner could not read the whole file — an unterminated string, comment or regex, or braces that do not balance" };
+  }
+  if (hasUnresolvedDeclaration(scan.forTitles)) {
+    return { complete: false, why: "it declares at least one test whose title is not a string literal (`.each`, `.skipIf(…)(…)`, or a variable)" };
+  }
+  if (pathsFrom(scan) === null) {
+    return { complete: false, why: "it builds at least one title by interpolation" };
+  }
+  return { complete: true, why: null };
 }
 
 /** Net `{` minus `}` over an already-masked slice. */
@@ -1127,22 +1269,27 @@ export function verifyTitleFragments(
       continue;
     }
 
-    // Only now does nesting matter: the pattern may name a PATH that
-    // spans a describe and the test inside it. Two outcomes, and the
-    // difference between them is whether the parse can be believed.
-    const { paths, why } = titleReading(src);
-    if (paths === null) {
-      push(
-        "UNMEASURED",
-        why === "INTERPOLATED"
-          ? `${file} builds at least one title by interpolation, so the name may be one this cannot see`
-          : `${file} could not be scanned into a confident nesting, and ${JSON.stringify(name)} matches no title ` +
-            `literal in it — so this is either a wrong name or a path the parser cannot assemble`,
-      );
+    // Then nesting: the pattern may name a PATH spanning a describe and
+    // the test inside it.
+    const paths = titlePathsIn(src);
+    if (paths !== null && paths.some(p => re.test(p))) {
+      push("MATCHED", "");
       continue;
     }
-    if (paths.some(p => re.test(p))) push("MATCHED", "");
-    else push("NO_SUCH_TITLE", `no describe/test title in ${file} matches ${JSON.stringify(name)} — ${paths.length} title path(s) read`);
+
+    // Nothing matched. Whether that is a REFUSAL or an UNMEASURED turns
+    // on one question, asked in one place: could this file's names be
+    // known in full? Refusing a file whose names this cannot see is the
+    // false red that makes a check an obstacle.
+    const { complete, why } = namesAreComplete(src);
+    if (!complete) {
+      push("UNMEASURED", `${JSON.stringify(name)} matches nothing in ${file}, and ${file} cannot be read in full: ${why}`);
+      continue;
+    }
+    push(
+      "NO_SUCH_TITLE",
+      `no describe/test title in ${file} matches ${JSON.stringify(name)} — ${(paths ?? literals).length} name(s) read`,
+    );
   }
   return out;
 }

@@ -21,6 +21,7 @@ import { spawnSync } from "child_process";
 import {
   titlePathsIn,
   titleReading,
+  namesAreComplete,
   titlesIn,
   verifyTitleViolations,
   type Stage,
@@ -235,64 +236,135 @@ describe("#1849: a verify command names a test that exists", () => {
       expect(paths(`}\n${D}("outer", () => {});\n`), "a negative depth was read confidently").toBeNull();
     });
 
-    test("a file the scanner cannot nest still yields its title literals", () => {
-      // The re-scope. A nested template defeats the nesting parse, and the
-      // check must degrade to "does any title literal match" rather than
-      // dropping the file. `test/issue-file-overlap.test.ts` is the live
-      // instance; it is named so this case fails loudly if it is ever
-      // cleaned up and stops being an example.
-      const src = readFileSync(join(ROOT, "test/issue-file-overlap.test.ts"), "utf-8");
-      expect(titleReading(src).paths, "this file now nests cleanly — pick another unparseable example").toBeNull();
-      expect(titlesIn(src).length, "a file the scanner cannot nest yielded no literals either").toBeGreaterThan(5);
+    test("a nested template inside a substitution is read, not given up on", () => {
+      // `${xs.map(p => \`-${p}\`)}` is ordinary here. The first attempt at
+      // this was deleted for taking the unparseable corpus from 4 files to
+      // 11; it knew about strings and comments and NOT about regexes, one
+      // level down, which is the same blind spot the outer scanner had just
+      // been fixed for. With the regex branch it reads cleanly.
+      const src =
+        `const body = (xs) => \`\${xs.map(p => \`- \${p}\`).join("\\n")}\`;\n` +
+        `${D}("outer", () => {\n  ${T}("inner", () => {});\n});\n`;
+      expect(titleReading(src).why, "a nested template still defeats the scanner").toBeNull();
+      expect(titlePathsIn(src)).toEqual(["outer", "outer inner"]);
+
+      // And the live instance that found it.
+      const live = readFileSync(join(ROOT, "test/issue-file-overlap.test.ts"), "utf-8");
+      expect(titleReading(live).why, "test/issue-file-overlap.test.ts still cannot be read").toBeNull();
+    });
+
+    test("a file the scan gives up on still yields the literals it DID read", () => {
+      // The re-scope: an imperfect parse degrades rather than dropping the
+      // file — but only as far as the scan actually got. The tail case
+      // below is the other half of this pair.
+      const broken = `${D}("before the break", () => {});\nconst s = "unterminated\n`;
+      expect(titleReading(broken).why).toBe("UNPARSEABLE");
+      expect(titlesIn(broken), "the prefix the scan completed was discarded too").toEqual(["before the break"]);
       expect(
-        verifyTitleViolations([{ where: "X", verify: 'bun test test/issue-file-overlap.test.ts -t "FO-1"' }], f =>
-          f === "test/issue-file-overlap.test.ts" ? src : null,
-        ).matched,
-        "a real title in an unparseable file was not matched",
+        verifyTitleViolations([{ where: "X", verify: 'bun test b.test.ts -t "before the break"' }], corpus({ "b.test.ts": broken }))
+          .matched,
+        "a title the scan DID read was not matched",
       ).toBe(1);
     });
 
-    test("the whole repository's test corpus scans, and the two unmeasured causes are counted apart", () => {
-      // A guard whose honest answer is UNMEASURED can pass by refusing
-      // everything, so the share it can read is bounded here. The two
-      // causes are counted SEPARATELY and only one of them is mine:
-      // UNPARSEABLE is a scanner I have not finished, INTERPOLATED is a
-      // table-driven suite whose names genuinely are not in the file.
-      // Totalling them hid a 1%-of-corpus scanner bug inside a 17% number.
+    test("a title in the UNSCANNED tail of a broken file is not a declared name", () => {
+      // Review round 2, verbatim. `titlesIn` read the whole masked buffer
+      // while ignoring `ok`, so when the scan bailed at the unterminated
+      // string the trailing COMMENT was never blanked and "phantom title"
+      // came back as a declared name — the literal fast path then reported
+      // MATCHED for a test that exists nowhere. The mitigation for a
+      // confidently-wrong answer was itself confidently wrong.
+      const evil =
+        `${D}("real one", () => {\n` +
+        `  const s = "unterminated\n` +
+        `});\n` +
+        `// ${D}("phantom", () => { ${T}("phantom title", () => {}); });\n`;
+
+      expect(titleReading(evil).why, "this fixture no longer breaks the scanner").toBe("UNPARSEABLE");
+      expect(titlesIn(evil), "a name from the unmasked tail was returned as declared").toEqual(["real one"]);
+
+      const r = verifyTitleViolations(
+        [{ where: "X1", verify: 'bun test evil.test.ts -t "phantom title"' }],
+        corpus({ "evil.test.ts": evil }),
+      );
+      expect(r.matched, "a phantom name inside a comment was reported MATCHED").toBe(0);
+      expect(r.violations, "an unreadable file produced a refusal instead of UNMEASURED").toEqual([]);
+      expect(r.unmeasured.length).toBe(1);
+    });
+
+    test("a test declared by .each is UNMEASURED, not a false refusal", () => {
+      // The other round-2 finding. `test.each(CASES)("%s", fn)` has an
+      // identifier where the title goes, so TITLE_CALL never saw it and a
+      // verify naming one of its generated titles would have been refused
+      // as NO_SUCH_TITLE — a red row for a test that exists.
+      const each = `${D}("outer", () => {\n  ${T}.each(CASES)("%s is handled", () => {});\n});\n`;
+      expect(namesAreComplete(each).complete).toBe(false);
+      expect(namesAreComplete(each).why).toContain(".each");
+
+      const r = verifyTitleViolations(
+        [{ where: "X1", verify: 'bun test each.test.ts -t "widget is handled"' }],
+        corpus({ "each.test.ts": each }),
+      );
+      expect(r.violations, "a test declared by .each was refused as nonexistent").toEqual([]);
+      expect(r.unmeasured.length).toBe(1);
+    });
+
+    test("the SHAPE is enumerated, not the one spelling review named", () => {
+      // `.each` was the instance. The population is any declaration whose
+      // first argument is not a string literal.
+      for (const body of [
+        `${T}.each(CASES)("%s", () => {});`,
+        `${T}.skipIf(cond)("a conditional case", () => {});`,
+        `${T}(NAME_FROM_A_VARIABLE, () => {});`,
+        `${D}.each(ROWS)("%s", () => {});`,
+      ]) {
+        expect(namesAreComplete(body).complete, `this spelling reads as fully known: ${body}`).toBe(false);
+      }
+      // And the ordinary form is still complete, or the four above are
+      // passing because nothing is ever complete.
+      expect(namesAreComplete(`${T}("an ordinary case", () => {});`).complete).toBe(true);
+    });
+
+    test("the whole corpus scans, and every cause of UNMEASURED is counted apart", () => {
+      // A guard whose honest answer is UNMEASURED can pass by refusing to
+      // read anything, so the corpus is split by CAUSE rather than
+      // totalled. Totalling hid a 1%-of-corpus scanner bug inside a 17%
+      // number, and review round 2 found a cause the previous split could
+      // not see at all: a `.each` file also has ordinary titles, so it was
+      // neither silent nor unparseable and fell through both bounds.
       const files = readdirSync(join(ROOT, "test"))
         .filter(f => f.endsWith(".test.ts"))
         .map(f => join("test", f));
-      const readings = files.map(f => ({ f, r: titleReading(readFileSync(join(ROOT, f), "utf-8")) }));
-      const unparseable = readings.filter(x => x.r.why === "UNPARSEABLE").map(x => x.f);
-      const interpolated = readings.filter(x => x.r.why === "INTERPOLATED").length;
-
       expect(files.length, "no test files were found, so this case witnessed nothing").toBeGreaterThan(50);
+
+      const by = { complete: 0, unresolved: 0, interpolated: 0, unparseable: [] as string[] };
+      for (const f of files) {
+        const src = readFileSync(join(ROOT, f), "utf-8");
+        const { complete, why } = namesAreComplete(src);
+        if (complete) by.complete++;
+        else if (why!.includes("scanner could not")) by.unparseable.push(f);
+        else if (why!.includes(".each")) by.unresolved++;
+        else by.interpolated++;
+      }
       console.log(
-        `  corpus (#1849): ${files.length} files — ${files.length - unparseable.length - interpolated} nested, ` +
-          `${interpolated} interpolated, ${unparseable.length} unparseable`,
+        `  corpus (#1849): ${files.length} files — ${by.complete} fully known, ${by.unresolved} with a ` +
+          `non-literal declaration, ${by.interpolated} interpolated, ${by.unparseable.length} unparseable`,
       );
 
-      // The nesting parse is allowed to fail. What is NOT allowed is a
-      // file contributing nothing at all, because that silently removes
-      // it from the check. Every file must yield title literals.
-      // A handful of suites build EVERY title at runtime — the conformity
-      // and spec-drift generators have no literal in them at all. That is
-      // honest, and `verifyTitleFragments` reports it as UNMEASURED rather
-      // than passing. It is bounded because each one is a file any verify
-      // command can name and none can be checked.
-      const silent = files.filter(f => titlesIn(readFileSync(join(ROOT, f), "utf-8")).length === 0);
+      // The scanner has no excuse left. Each of these is a token kind it
+      // does not know, and the four it had were all found this way.
       expect(
-        silent.length / files.length,
-        `${silent.length} of ${files.length} test files state no title literal at all, so a verify command ` +
-          `naming one is UNMEASURED however it is written: ${silent.join(", ")}`,
-      ).toBeLessThan(0.02);
+        by.unparseable,
+        "a test file defeats the scanner. Add the token to the block above and teach scanSource — do not " +
+          "raise this bound.",
+      ).toEqual([]);
 
-      // And the nesting parse is bounded, so a regression that quietly
-      // stops nesting everything cannot pass as "degraded gracefully".
+      // And it must still be reading most of the corpus, or it is passing
+      // by calling everything unknowable.
       expect(
-        unparseable.length / files.length,
-        `${unparseable.length} of ${files.length} files cannot be nested: ${unparseable.slice(0, 8).join(", ")}`,
-      ).toBeLessThan(0.05);
+        by.complete / files.length,
+        `only ${by.complete} of ${files.length} test files have a fully known name set`,
+      ).toBeGreaterThan(0.6);
     });
   });
 
