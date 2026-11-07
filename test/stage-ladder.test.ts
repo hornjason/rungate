@@ -102,13 +102,16 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  * as a rise: completing a stage is a deliberate edit here, and a stage
  * going backwards is a regression rather than a number somebody lowers.
  *
- * Stage A completed 2026-10-31, Stage B 2026-11-02, Stage G 2026-11-06.
+ * Stage A completed 2026-10-31, Stage B 2026-11-02, Stage G 2026-11-06,
+ * Stage C 2026-11-07. Stage H is the fourth and this comment never named
+ * it — the constant read 4 while the prose listed three, which is how a
+ * ratchet stops being readable.
  *
- * Stage G is complete ahead of C through F, which the ladder permits —
- * stages are a dependency order, not a queue, and G's five items depend on
- * nothing those four carry.
+ * Stages G and H are complete ahead of C through F, which the ladder
+ * permits — stages are a dependency order, not a queue, and their items
+ * depend on nothing those stages carry.
  */
-const COMPLETE_STAGES = 4;
+const COMPLETE_STAGES = 5;
 
 /**
  * Every verify command in the plan file runs through here.
