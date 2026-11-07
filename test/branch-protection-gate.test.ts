@@ -1165,3 +1165,54 @@ describe("#1858: a metacharacter in the step id cannot change what the pattern m
     expect(readThreadProducer(root).produces).toBe(true);
   });
 });
+
+/**
+ * #1858 round 3 — the remedy has to be true for BOTH populations that reach
+ * FAIL, and one of them has no protection to amend.
+ *
+ * `githubProtectionProbe` sets `conversationResolution: false` for a branch
+ * with no protection at all, which is a measured fact rather than an unread
+ * one: nothing is requiring anything, so nothing can hold a merge for an
+ * unanswered finding. That reaches the same FAIL as a protected branch with
+ * the setting off — and the remedy was written only for the second, telling
+ * an operator to "restate every other field" of an object that does not
+ * exist.
+ *
+ * See the thread on the PR for what was re-scoped rather than built here: a
+ * remedy TAILORED per population needs a `protected` fact on
+ * `ProtectionFacts` that nothing carries today, and testing the probe's own
+ * `!isProtected` branch needs a client seam `githubProtectionProbe` does not
+ * have. Both are a different change. This makes the sentence true for both.
+ */
+describe("#1858: the FAIL remedy is actionable for an unprotected branch too", () => {
+  const produces: ThreadProducerReading = { produces: true, where: "ai-review.yml", unmeasured: null };
+
+  test("it names the no-protection case rather than presupposing a protection object", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: false }), produces);
+    expect(r.verdict).toBe("FAIL");
+    expect(
+      r.remedy,
+      "an operator on an unprotected branch following this literally has nothing to amend",
+    ).toContain("NO protection at all");
+    expect(r.remedy).toContain("create the protection rather than amend it");
+    // The PUT's own requirement, which is why "just toggle the checkbox" is
+    // wrong for a first-time enable.
+    expect(
+      r.remedy,
+      "the endpoint rejects a partial payload, so the remedy has to name the required fields",
+    ).toContain("required_status_checks");
+    expect(r.remedy).toContain("enforce_admins");
+  });
+
+  test("the unprotected branch really does reach FAIL — the premise above is not hypothetical", () => {
+    // `conversationResolution: false` is what the probe sets for !isProtected,
+    // asserted here so this describe block is about a reachable state rather
+    // than a shape nothing produces.
+    const unprotected = facts({
+      strict: false,
+      conversationResolution: false,
+      unreadable: null,
+    });
+    expect(readFindingDisposition(unprotected, produces).verdict).toBe("FAIL");
+  });
+});

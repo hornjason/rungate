@@ -1165,10 +1165,16 @@ export function readFindingDisposition(
       "unanswered. The review runs, writes its findings onto the diff, and gates nothing — " +
       "which reads as a reviewed change and is not one.",
     remedy:
-      "Turn on \"Require conversation resolution before merging\" on the protected branch. It " +
-      "is a setting, not engineering. Do it with a FULL PUT that restates every other field: " +
-      "the endpoint replaces the whole object, so an update that omits a field silently " +
-      "disables it, which is how this regressed once already. Clearing a false positive is a " +
-      "documented step, not a judgement call — reference/clearing-a-false-positive.md.",
+      "Require conversation resolution before merging on this branch. It is a setting, not " +
+      "engineering. **A branch with NO protection at all reaches this same verdict** — nothing " +
+      "is requiring anything, so nothing can hold a merge for an unanswered finding — and there " +
+      "the fix is to create the protection rather than amend it. Either way, write it with a " +
+      "FULL PUT: `PUT /repos/{owner}/{repo}/branches/{branch}/protection` replaces the whole " +
+      "object and requires required_status_checks, enforce_admins, " +
+      "required_pull_request_reviews and restrictions to be present even when you are only " +
+      "turning one thing on — so read the current protection first and restate every field you " +
+      "want to keep. An update that omits a field silently disables it, which is how this regressed " +
+      "once already. Clearing a false positive is a documented step, not a judgement call — " +
+      "reference/clearing-a-false-positive.md.",
   };
 }
