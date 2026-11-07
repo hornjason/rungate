@@ -560,6 +560,85 @@ describe("AC-4 (#1678): the refusals are proved able to fail", () => {
   });
 });
 
+describe("AC-6 (#1678): the CLI refuses a bad flag by NAME, for every flag", () => {
+  /**
+   * ## The population the earlier sweep missed
+   *
+   * AC-3 sweeps `STATEMENT_FIELD_NAMES` — the fields the LIBRARY interpolates.
+   * `--issue` is not one of them, so it had no named refusal while
+   * `outcome`, `symbol` and `module` all did, and review found it in round
+   * five as the fifth instance of one class: the named instance repaired,
+   * its siblings left.
+   *
+   * So the subject here is the CLI's whole required-flag set, derived from
+   * the script's own `required(...)` calls rather than typed out, and a
+   * sixth flag added without a refusal is red.
+   */
+  const CLI = join(import.meta.dir, "..", "scripts", "finding-promotion.ts");
+
+  /** Every flag the script marks required, read from the script. */
+  const requiredFlags = [
+    ...new Set(
+      [...readFileSync(CLI, "utf8").matchAll(/required(?:PositiveInt)?\("([a-z-]+)"\)/g)].map(
+        m => m[1]!,
+      ),
+    ),
+  ];
+
+  function run(argv: string[]): { code: number; err: string } {
+    const p = Bun.spawnSync(["bun", CLI, ...argv], { cwd: join(import.meta.dir, "..") });
+    return { code: p.exitCode ?? -1, err: new TextDecoder().decode(p.stderr) };
+  }
+
+  test("the flag set was read, not assumed", () => {
+    // A regex that matched nothing would make every case below vacuous.
+    expect([...requiredFlags].sort()).toEqual(["issue", "module", "outcome", "spec", "symbol"]);
+  });
+
+  /** A complete, well-formed command line. One flag gets corrupted per case. */
+  const VALID: Record<string, string> = {
+    issue: "1678",
+    spec: "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
+    symbol: "promote",
+    module: "lib/finding-promotion.ts",
+    outcome: "an outcome",
+  };
+
+  test("EVERY required flag refuses by name when its value is the next flag", () => {
+    for (const flag of requiredFlags) {
+      // Every OTHER flag valid, so the refusal can only be about this one.
+      // The first version corrupted one flag and omitted the rest, and
+      // `--issue is required` answered every case — four of five passing
+      // for a reason that had nothing to do with the flag under test.
+      const argv = Object.entries(VALID).flatMap(([k, v]) => [
+        `--${k}`,
+        k === flag ? "--write" : v,
+      ]);
+      const { code, err } = run(argv);
+      expect(code, `--${flag} with a flag as its value must refuse`).toBe(1);
+      expect(err, `the refusal for --${flag} must name it`).toContain(`--${flag}`);
+      expect(err, `the refusal for --${flag} must say what went wrong`).toContain(
+        "is the next flag",
+      );
+    }
+  });
+
+  test("a non-numeric --issue refuses up front, not as a gh error about issue #NaN", () => {
+    const { code, err } = run([
+      "--issue", "abc",
+      "--spec", "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
+      "--symbol", "promote",
+      "--module", "lib/finding-promotion.ts",
+      "--outcome", "an outcome",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("--issue must be a positive integer");
+    // The shape this replaces. A tracker error for an argument typo sends
+    // the reader to GitHub to debug their own command line.
+    expect(err).not.toContain("#NaN");
+  });
+});
+
 describe("AC-5 (#1678): the statement a promotion produces", () => {
   test("names the module and the symbol, so a mutation can move it", () => {
     const root = scratch(SPEC_WITH_CRITERIA);

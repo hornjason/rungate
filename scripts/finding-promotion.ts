@@ -41,16 +41,49 @@ function getFlag(name: string): string | undefined {
   return args[idx + 1];
 }
 
+/**
+ * A required flag's value, refused by NAME when it is missing or is the next
+ * flag.
+ *
+ * The second half is the one that bit: `getFlag` returns `args[idx + 1]`
+ * unconditionally, so `--issue --spec x` hands back the string `"--spec"`
+ * and the run continues on a value nobody passed. Every flag has this, not
+ * just the one review named — the first four rounds of this pull request
+ * were all "the named instance repaired, its siblings left", and `--issue`
+ * was the fifth because the previous sweep covered the LIBRARY's fields and
+ * stopped at the CLI's.
+ */
 function required(name: string): string {
   const v = getFlag(name);
   if (v === undefined) {
     console.error(`ERROR: --${name} is required`);
     process.exit(PROMOTION_EXIT);
   }
+  if (v.startsWith("--")) {
+    console.error(
+      `ERROR: --${name} was given '${v}', which is the next flag. Its value is missing, ` +
+        "and continuing would run against a value nobody passed.",
+    );
+    process.exit(PROMOTION_EXIT);
+  }
   return v;
 }
 
-const issueNumber = Number(required("issue"));
+/** A required flag that must be a positive integer, refused by name. */
+function requiredPositiveInt(name: string): number {
+  const raw = required(name);
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    // Without this, `Number("abc")` is NaN, `String(NaN)` is "NaN", and the
+    // failure arrives as `gh`'s own error about issue #NaN — a downstream
+    // message about a tracker lookup, for what is a typo in an argument.
+    console.error(`ERROR: --${name} must be a positive integer, got '${raw}'`);
+    process.exit(PROMOTION_EXIT);
+  }
+  return n;
+}
+
+const issueNumber = requiredPositiveInt("issue");
 const spec = required("spec");
 const outcome = required("outcome");
 const symbol = required("symbol");
