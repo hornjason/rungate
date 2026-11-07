@@ -17,9 +17,9 @@
 import { describe, expect, test } from "bun:test";
 import { localCalendarDay } from "../lib/local-calendar-day";
 import { hasContent } from "../lib/spec-evidence";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   CODE_DIRS,
@@ -31,8 +31,11 @@ import {
   collectTestFiles,
   falseTicks,
   inventory,
+  PROVENANCE,
   renderMarkdown,
+  snapshotDigest,
   waiverProblem,
+  writeSnapshotDir,
   type Snapshot,
   type Tracked,
 } from "../scripts/criterion-inventory";
@@ -62,6 +65,31 @@ function pr(number: number, text: string): Tracked {
 
 function snapshot(partial: Partial<Snapshot>): Snapshot {
   return { issues: [], prs: [], prChangedCode: {}, ...partial };
+}
+
+/**
+ * The repository every planted snapshot below is stamped with.
+ *
+ * Passed as `--repo` by the cases that plant one, so the command's own
+ * repository resolution short-circuits and the cache matches. Without it
+ * those cases resolve THIS repository from the ambient tree and meet the
+ * repo-mismatch refusal instead of the one they are each pointed at —
+ * which would be two guards answering one case.
+ */
+const PLANTED_REPO = "o/r";
+
+/**
+ * Re-record the digest after a case deliberately alters a taken snapshot.
+ *
+ * A case about `prs.json` being absent, or about a truncated reading, must
+ * meet the refusal it is pointed at and not the digest one — otherwise two
+ * guards answer it and a mutation of either leaves the other holding it up.
+ * It uses the command's own {@link snapshotDigest} rather than hashing the
+ * files itself, so there is one answer to what the digest covers.
+ */
+function restamp(dir: string): void {
+  const taken = JSON.parse(readFileSync(join(dir, PROVENANCE), "utf-8")) as Record<string, unknown>;
+  writeFileSync(join(dir, PROVENANCE), `${JSON.stringify({ ...taken, digest: snapshotDigest(dir) }, null, 2)}\n`);
 }
 
 describe("a spec revision is not work on the criteria it names", () => {
@@ -327,21 +355,30 @@ describe("an absent pr-files.jsonl is the first pass, not a failed fetch", () =>
   // a subprocess because the refusal lives in `readSnapshot`, which the
   // recipe reaches only through the command line.
   const run = (dir: string, spec: string) =>
-    Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json"]);
+    Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json", "--repo", PLANTED_REPO]);
 
+  // Planted through `writeSnapshotDir`, the command's OWN writer, because
+  // SC-2619 refuses a directory it did not write. Spelling `taken.json`
+  // here instead would be a second answer to *what a taken snapshot looks
+  // like*, free to drift from the fetcher's.
   const plant = (opts: { prs: boolean }): { dir: string; spec: string } => {
     const dir = mkdtempSync(join(tmpdir(), "rg-inventory-snap-"));
-    writeFileSync(
-      join(dir, "issues.json"),
-      JSON.stringify([{ number: 1, title: "CRC-Z2 is wrong", body: "", state: "OPEN" }]),
+    writeSnapshotDir(
+      dir,
+      {
+        issues: [{ number: 1, title: "CRC-Z2 is wrong", body: "", state: "OPEN" }],
+        prs: [{ number: 900, title: "CRC-Z2", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }],
+        files: {},
+      },
+      { takenAt: "2026-10-28T00:00:00Z", repo: PLANTED_REPO },
     );
-    if (opts.prs) {
-      writeFileSync(
-        join(dir, "prs.json"),
-        JSON.stringify([
-          { number: 900, title: "CRC-Z2", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" },
-        ]),
-      );
+    // Removed AFTER the write, so the provenance record stays and the
+    // refusal under test is the one about `prs.json` rather than the one
+    // about an unprovenanced directory — and re-stamped, so it is not the
+    // digest refusal either. One case, one refusal.
+    if (!opts.prs) {
+      rmSync(join(dir, "prs.json"));
+      restamp(dir);
     }
     const spec = join(dir, "spec.md");
     writeFileSync(spec, SPEC);
@@ -409,12 +446,19 @@ describe("the expiry comparison is anchored in UTC, like the gate that enforces 
     const spec = join(mkdtempSync(join(tmpdir(), "rg-inv-tz-")), "s.md");
     writeFileSync(spec, SPEC);
     const dir = mkdtempSync(join(tmpdir(), "rg-inv-tzsnap-"));
-    writeFileSync(join(dir, "issues.json"), JSON.stringify([{ number: 1, title: "x", body: "", state: "OPEN" }]));
-    writeFileSync(join(dir, "prs.json"), JSON.stringify([{ number: 9, title: "x", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }]));
+    writeSnapshotDir(
+      dir,
+      {
+        issues: [{ number: 1, title: "x", body: "", state: "OPEN" }],
+        prs: [{ number: 9, title: "x", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }],
+        files: {},
+      },
+      { takenAt: "2026-10-28T00:00:00Z", repo: PLANTED_REPO },
+    );
     try {
       const day = (TZ: string) =>
         JSON.parse(
-          Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json"], {
+          Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json", "--repo", PLANTED_REPO], {
             env: { ...process.env, TZ },
           }).stdout.toString(),
         ).taken;
@@ -543,10 +587,16 @@ describe("a wrong-shaped snapshot is a failed fetch, not a measurement", () => {
     const dir = mkdtempSync(join(tmpdir(), "rg-inv-shape-"));
     const spec = join(dir, "s.md");
     writeFileSync(spec, SPEC);
+    // Taken first, then corrupted: the directory's provenance is real and
+    // the shape is what is wrong with it, which is the case being made. A
+    // directory with neither would refuse for the other reason and prove
+    // nothing about the shape guards.
+    writeSnapshotDir(dir, { issues: [], prs: [], files: {} }, { takenAt: "2026-10-28T00:00:00Z", repo: PLANTED_REPO });
     writeFileSync(join(dir, "issues.json"), issues);
     writeFileSync(join(dir, "prs.json"), prs);
+    restamp(dir);
     try {
-      return Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json"]);
+      return Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json", "--repo", PLANTED_REPO]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -570,5 +620,452 @@ describe("a wrong-shaped snapshot is a failed fetch, not a measurement", () => {
     // The control: the guard was tightened, not turned into a refusal of
     // everything.
     expect(run(ISSUES, PRS).exitCode).toBe(0);
+  });
+});
+
+/**
+ * SC-2619, and item **D1** of the ladder in `project-state.json`.
+ *
+ * The input directory was assembled by hand, with two `gh` commands copied
+ * out of this script's own header and a third appended per pull request. So
+ * the number it printed on 2026-10-30 was reproducible by nobody else: there
+ * is no way to tell, from the directory or from the output, which tracker it
+ * was taken from, when, or whether a line was edited afterwards.
+ *
+ * Two halves, and both have to hold or the criterion is half-built:
+ *
+ * - the command takes its own reading when nobody hands it one, and
+ * - a directory it did not write is a **refusal naming it**, rather than a
+ *   measurement it silently believes.
+ *
+ * ## Predicted membership, written before the cases ran
+ *
+ * All four below were predicted RED against the script as it stood, and all
+ * four were: the first because a hand-built directory exited 0, and the
+ * other three because no `--snapshot` printed usage and refused. The cost
+ * was predicted too — the six existing subprocess cases above plant a
+ * directory by hand, so every one of them was predicted to flip to the new
+ * refusal, and every one did until their planting went through
+ * {@link writeSnapshotDir}. They use the command's own writer rather than
+ * spelling `taken.json` themselves, so there is one binding for what a
+ * taken snapshot looks like and a test cannot drift from the fetcher.
+ */
+describe("the command takes its own snapshot, and refuses one assembled by hand", () => {
+  /**
+   * A `gh` that answers from canned files and records what it was asked.
+   *
+   * A raw string is emitted verbatim, so a case can hand the command a
+   * truncated or wrong-shaped payload — the shapes a real `gh` produces on
+   * a rate-limited page or an error it does not surface as a non-zero exit.
+   */
+  const stubGh = (answers: { issues: unknown; prs: unknown }): string => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-inv-gh-"));
+    const body = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
+    writeFileSync(join(dir, "issues.json"), body(answers.issues));
+    writeFileSync(join(dir, "prs.json"), body(answers.prs));
+    writeFileSync(
+      join(dir, "gh"),
+      [
+        "#!/bin/sh",
+        'echo "$@" >> "$RG_STUB/calls.log"',
+        'case "$1 $2" in',
+        '  "repo view") printf \'{"nameWithOwner":"%s"}\\n\' "${RG_STUB_REPO:-o/r}" ;;',
+        '  "issue list") cat "$RG_STUB/issues.json" ;;',
+        '  "pr list") cat "$RG_STUB/prs.json" ;;',
+        '  "pr view") if [ -n "$RG_STUB_PRVIEW" ]; then echo "$RG_STUB_PRVIEW";',
+        '             else printf \'{"number":%s,"files":[{"path":"lib/x.ts"}]}\\n\' "$3"; fi ;;',
+        "  *) echo \"stub gh: unexpected $*\" >&2; exit 64 ;;",
+        "esac",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    return dir;
+  };
+
+  const calls = (stub: string): string[] =>
+    existsSync(join(stub, "calls.log"))
+      ? readFileSync(join(stub, "calls.log"), "utf-8").split("\n").filter(l => l !== "")
+      : [];
+
+  const ISSUES = [{ number: 1, title: "CRC-Z2 is wrong", body: "", state: "OPEN" }];
+  const PRS = [{ number: 900, title: "CRC-Z2", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }];
+
+  const run = (args: string[], stub: string | null, asRepo?: string, prView?: string) =>
+    Bun.spawnSync(["bun", SCRIPT, ...args], {
+      env: {
+        ...process.env,
+        ...(stub === null ? {} : { RG_STUB: stub, PATH: `${stub}:${process.env.PATH ?? ""}` }),
+        ...(asRepo === undefined ? {} : { RG_STUB_REPO: asRepo }),
+        ...(prView === undefined ? {} : { RG_STUB_PRVIEW: prView }),
+      },
+    });
+
+  /** The three expensive readings, as the call log spells them. */
+  const READINGS = ["issue list", "pr list", "pr view"];
+
+  /**
+   * A project root of its own, not this repository's.
+   *
+   * `--project-root` matters here beyond tidiness: with the default root the
+   * scan reaches THIS file, which spells `CRC-Z2` in the lines above, so the
+   * criterion reads BOUND and the pull-request reading it is supposed to
+   * demonstrate is outranked by the ladder. A fixture that describes the
+   * tree it happens to be running in cannot show what it says it shows.
+   */
+  const withRoot = (): { dir: string; args: string[] } => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-inv-own-"));
+    mkdirSync(join(dir, "test"));
+    writeFileSync(join(dir, "test", "placeholder.test.ts"), "// names no criterion\n");
+    const spec = join(dir, "s.md");
+    writeFileSync(spec, SPEC);
+    return { dir, args: ["--project-root", dir, "--spec", spec, "--json"] };
+  };
+
+  test("a snapshot directory this command did not take is refused, naming it", () => {
+    // The defect, stated as a case: two hand-written files and the command
+    // believed them. Nothing in the directory says where they came from.
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    mkdirSync(snap);
+    writeFileSync(join(snap, "issues.json"), JSON.stringify(ISSUES));
+    writeFileSync(join(snap, "prs.json"), JSON.stringify(PRS));
+    try {
+      const got = run(["--snapshot", snap, ...args], null);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain(snap);
+      expect(got.stderr.toString()).toContain(PROVENANCE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no --snapshot the command takes its own reading", () => {
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    try {
+      const got = run(args, stub);
+      expect(got.stderr.toString()).not.toContain("usage:");
+      expect(got.exitCode).toBe(0);
+      expect(calls(stub).some(c => c.startsWith("issue list"))).toBe(true);
+      expect(calls(stub).some(c => c.startsWith("pr list"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("what it fetched reaches the report, so the fetch is not a no-op that exits 0", () => {
+    // Green on the exit code witnesses nothing. #900 is MERGED and names
+    // CRC-Z2, so a reading that really happened puts it on that criterion's
+    // row — and having fetched its changed files, in CODE_DIRS, as TOUCHED.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    try {
+      const got = run(args, stub);
+      expect(got.exitCode).toBe(0);
+      const out = JSON.parse(got.stdout.toString());
+      const z2 = out.rows.find((r: { id: string }) => r.id === "CRC-Z2");
+      expect(z2.mergedPrs).toEqual([900]);
+      expect(out.unclassified).toEqual([]);
+      expect(z2.state).toBe("TOUCHED");
+      expect(calls(stub).some(c => c.startsWith("pr view 900"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("a directory the command wrote is read back, and the second run retakes no reading", () => {
+    // The cache half, and the control that `--snapshot` still means
+    // something: run one writes the directory, run two reads it and takes
+    // none of the three readings again.
+    //
+    // Not "makes no call at all" any more. Round 2 of review showed the
+    // repository comparison declined to answer whenever `--repo` was
+    // omitted, which is the ordinary case, so the repository is now
+    // RESOLVED on both paths — one cheap identity call on a cache hit. The
+    // saving the cache exists for is the sixty-odd readings, and that is
+    // what this asserts.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub).exitCode).toBe(0);
+      expect(existsSync(join(snap, PROVENANCE))).toBe(true);
+      const before = calls(stub).length;
+      const second = run(["--snapshot", snap, ...args], stub);
+      expect(second.exitCode).toBe(0);
+      const added = calls(stub).slice(before);
+      expect(added.filter(c => READINGS.some(r => c.startsWith(r)))).toEqual([]);
+      expect(added.every(c => c.startsWith("repo view"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  // Three findings from round 1 of review, and the shape they share: the
+  // record was written from the first commit and nothing read it back. A
+  // provenance nobody consults settles exactly as much as no provenance.
+
+  test("a cache edited after it was taken is refused, not believed", () => {
+    // The header claimed `taken.json` answered "whether a line had been
+    // edited after the fetch". It did not — the record is untouched by an
+    // edit to the readings beside it. Made true rather than narrowed.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub).exitCode).toBe(0);
+      const edited = JSON.parse(readFileSync(join(snap, "issues.json"), "utf-8")) as { state: string }[];
+      edited[0]!.state = "CLOSED";
+      writeFileSync(join(snap, "issues.json"), JSON.stringify(edited));
+      const got = run(["--snapshot", snap, ...args], stub);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("have changed since");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("a cache taken for another repository is refused, naming both", () => {
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, "--repo", "o/one", ...args], stub).exitCode).toBe(0);
+      const got = run(["--snapshot", snap, "--repo", "o/two", ...args], stub);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("o/one");
+      expect(got.stderr.toString()).toContain("o/two");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("and it is refused when NEITHER run passed --repo, which is the ordinary case", () => {
+    // The first draft compared only when both sides were concrete, so a
+    // fetch with the flag omitted stamped `null` and the guard had nothing
+    // to compare. Two trees for different repositories sharing one cache
+    // directory, neither passing `--repo`, is the everyday shape on this
+    // machine — and it was precisely the input the guard could not see.
+    // Raised in round 2 of review; the repository is now RESOLVED rather
+    // than copied from the flag, so there is no input it declines to
+    // answer about.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub, "o/one").exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(join(snap, PROVENANCE), "utf-8")).repo).toBe("o/one");
+      const got = run(["--snapshot", snap, ...args], stub, "o/two");
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("o/one");
+      expect(got.stderr.toString()).toContain("o/two");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  // The live path had NONE of the guards the cache path has carried since
+  // #1642, and the asymmetry is the finding: a `gh issue list` that exits 0
+  // and returns `[]` — a wrong repository, a rate-limited page, an error gh
+  // does not surface — would have reported every criterion NOT STARTED,
+  // which is the one direction that reads as good news. Raised in round 3
+  // of review. The decisions are now one pair of functions both paths call,
+  // so there is nothing for two guards to drift apart about.
+  describe.each([
+    {
+      what: "an empty pull-request list",
+      answers: { issues: ISSUES, prs: [] },
+      says: "An empty reading is a failed fetch",
+    },
+    {
+      what: "an empty issue list",
+      answers: { issues: [], prs: PRS },
+      says: "An empty reading is a failed fetch",
+    },
+    {
+      what: "a JSON error object",
+      answers: { issues: ISSUES, prs: '{"message":"API rate limit exceeded"}' },
+      says: "parsed to object, not an array",
+    },
+    {
+      what: "a truncated page",
+      answers: { issues: '[{"number":1,', prs: PRS },
+      says: "exited 0 and what it emitted is not readable JSON",
+    },
+  ])("the live reading refuses $what, like the cache path does", ({ answers, says }) => {
+    test("exit non-zero, and the message names what it saw", () => {
+      const stub = stubGh(answers);
+      const { dir, args } = withRoot();
+      try {
+        const got = run(args, stub);
+        expect(got.exitCode).not.toBe(0);
+        expect(got.stderr.toString()).toContain(says);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(stub, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("a gh call that FAILS is not reported as unreadable output", () => {
+    // Round 5. One `try` around the call and the parse reported every
+    // failure as "did not emit readable JSON", so an auth failure or a rate
+    // limit — gh exiting non-zero with no output at all — sent the reader
+    // looking for truncated output. The real stderr was in the
+    // parentheses; the framing named the wrong kind of failure.
+    //
+    // The PAIR is the case. The truncated-page row above asserts the other
+    // message against the same command, so a refusal that collapsed them
+    // again could not satisfy both.
+    const stub = mkdtempSync(join(tmpdir(), "rg-inv-ghfail-"));
+    const { dir, args } = withRoot();
+    try {
+      // `repo view` succeeds, so the run gets past the identity read and
+      // the failure lands on the list call this case is about. A gh that
+      // fails at the first call is refused by `resolveRepo` with its own
+      // message and never reaches the reading at all.
+      writeFileSync(
+        join(stub, "gh"),
+        [
+          "#!/bin/sh",
+          'if [ "$1 $2" = "repo view" ]; then echo \'{"nameWithOwner":"o/r"}\'; exit 0; fi',
+          'echo "gh: HTTP 401 Bad credentials" >&2',
+          "exit 1",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const got = Bun.spawnSync(["bun", SCRIPT, ...args], {
+        env: { ...process.env, PATH: `${stub}:${process.env.PATH ?? ""}` },
+      });
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("failed and produced no reading");
+      expect(got.stderr.toString()).toContain("401");
+      expect(got.stderr.toString()).not.toContain("not readable JSON");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  // Round 4, and it is the sweep I said I had done and had not: the SAME
+  // direction-that-reads-as-good-news, in the third fetch, one function
+  // below the two I had just fixed. `raw.files ?? []` read a missing key as
+  // "this pull request touched nothing", so an error payload with a zero
+  // exit silently downgraded a criterion from TOUCHED.
+  test("a pull-request view that reports no files array is refused, not read as touching nothing", () => {
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    try {
+      const got = run(args, stub, undefined, '{"message":"API rate limit exceeded"}');
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("gh pr view 900");
+      expect(got.stderr.toString()).toContain("is not one that changed nothing");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("and an EMPTY files array is a reading, not a refusal", () => {
+    // The control, and the reason the guard is on the key rather than on
+    // the count: GitHub really does report a pull request with no changed
+    // files, and refusing that would turn a true reading into UNMEASURED.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    try {
+      const got = run(args, stub, undefined, '{"number":900,"files":[]}');
+      expect(got.exitCode).toBe(0);
+      const z2 = JSON.parse(got.stdout.toString()).rows.find((r: { id: string }) => r.id === "CRC-Z2");
+      expect(z2.state).toBe("DOCUMENT ONLY");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("a cache written before the repository was recorded is refused, not waved through", () => {
+    // "I cannot tell which repository this is about" is not the same fact
+    // as "it is the right one", and only one of them is reportable.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub).exitCode).toBe(0);
+      const taken = JSON.parse(readFileSync(join(snap, PROVENANCE), "utf-8")) as Record<string, unknown>;
+      delete taken.repo;
+      writeFileSync(join(snap, PROVENANCE), `${JSON.stringify(taken, null, 2)}\n`);
+      const got = run(["--snapshot", snap, ...args], stub);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("does not say which repository");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("a cache missing a reading refuses in words, not with a stack trace", () => {
+    // `readSnapshot` writes careful UNMEASURED sentences and the call site
+    // did not catch them, so the one failure whose message was already in
+    // hand printed a stack trace instead.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub).exitCode).toBe(0);
+      rmSync(join(snap, "prs.json"));
+      restamp(snap);
+      const got = run(["--snapshot", snap, ...args], stub);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("prs.json is absent");
+      // ONE line, and that is the discriminator. Both states exit non-zero
+      // and both print the sentence, so asserting either proves nothing:
+      // measured against a mutant that rethrows, the uncaught path adds a
+      // source listing and five `at …` frames. A first draft of this case
+      // asserted the absence of `at <anonymous>`, which the real trace does
+      // not contain — it passed under the mutation and witnessed nothing.
+      expect(got.stderr.toString().trim().split("\n")).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("the fetch runs in the tree --project-root names, not the process's own", () => {
+    // `gh` infers the repository from its working directory when no --repo
+    // is given, and --project-root is an independent value — so a caller
+    // pointing the spec at one tree while standing in another read a second
+    // repository's tracker with nothing saying so. The stub records its own
+    // cwd, which is the only thing that can tell the two apart.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    writeFileSync(
+      join(stub, "gh"),
+      ["#!/bin/sh", 'pwd >> "$RG_STUB/cwd.log"', 'echo "[]"', ""].join("\n"),
+      { mode: 0o755 },
+    );
+    const { dir, args } = withRoot();
+    try {
+      // Spawned from THIS repository's directory, pointed at the temp root.
+      Bun.spawnSync(["bun", SCRIPT, ...args], {
+        cwd: join(import.meta.dir, ".."),
+        env: { ...process.env, RG_STUB: stub, PATH: `${stub}:${process.env.PATH ?? ""}` },
+      });
+      const seen = readFileSync(join(stub, "cwd.log"), "utf-8").split("\n").filter(l => l !== "");
+      expect(seen.length).toBeGreaterThan(0);
+      // `realpathSync`, because macOS resolves /var to /private/var and the
+      // child reports the resolved form — a raw compare would fail for a
+      // reason that has nothing to do with the property.
+      expect([...new Set(seen)]).toEqual([realpathSync(dir)]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
   });
 });

@@ -8,8 +8,11 @@ governs: Increment 1 of the code-review convergence work — which criteria have
 
 # Increment 1 — what has actually been built, criterion by criterion
 
-**Generated. Do not hand-edit** — `bun scripts/criterion-inventory.ts --snapshot <dir> --markdown`.
-That script's header states the commands that take a snapshot.
+**Generated. Do not hand-edit** — `bun scripts/criterion-inventory.ts --markdown`.
+The command takes its own reading of the tracker (SC-2619, #1718); the
+numbers below were taken on the date in the frontmatter and re-running it
+retakes them. `--snapshot <dir>` is a cache it writes and reads back, not an
+input anybody assembles.
 
 Every criterion in `specs/CODE-REVIEW-CONVERGENCE-SPEC.md`, with the issues and the pull
 requests that name it. This is the baseline for a board: one row is one card, and the state
