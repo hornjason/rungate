@@ -2,7 +2,7 @@
 doc-type: reference
 status: active
 owner: jason
-updated: 2026-10-31
+updated: 2026-11-07
 ---
 
 # What we are building, and how we will know it worked
@@ -186,7 +186,7 @@ registry, and goes red when either drifts. Bumping `package.json` without
 updating this line turns it red, which is what makes a release a two-commit
 operation rather than a tag somebody remembers to annotate.
 
-- **Distribution standing (2026-11-07)** — tree `0.8.14`, published `rungate@0.8.13`.
+- **Distribution standing (2026-11-07)** — tree `0.8.14`, published `rungate@0.8.14`.
 
 **This is the follow-up commit the two-commit operation refers to, and the
 numbers now agree.** `distributionViolations` compares the first to
