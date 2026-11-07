@@ -1143,10 +1143,24 @@ describe("AS-11 (#1168): a prior finding re-raised in different words", () => {
 // SIBLING in this very round cited it, under a sentence that says "an earlier
 // round" and would be false.
 //
-// It is also unmeasured. #1168's reading is 8-of-8 on CROSS-round
-// restatements and says nothing about two findings a reviewer raises while
-// looking at one line once — which is the likelier place for two genuine
-// defects to share an anchor.
+// It was also unmeasured when the decision was taken, and #1168's 8-of-8 is
+// on CROSS-round restatements only. It is measured now, and the conservative
+// choice was the right one. Widening the reading to the last 40 merged pull
+// requests turns up **three** same-round anchor collisions, and they do not
+// behave like the cross-round ones:
+//
+// | pair | the two summaries |
+// |---|---|
+// | #1823 r2 | the SAME defect twice — unassign succeeds, the status write fails |
+// | #1810 r4 | the defect, AND the round-budget finding, at one line |
+// | #1810 r5 | the same pairing again |
+//
+// One of three is a genuine duplicate. **Two of three are a real finding
+// sitting at the same line as the round-budget finding** — which is AC-3's
+// only current signal and the regression this change already names. A gate
+// that grew `anchors` within the round would have eaten it twice in forty
+// pull requests. Re-read with
+// `bun scripts/print-review-repeat-pairs.ts 1823 1810`.
 
 describe("AS-12 (#1861): two differently-worded findings at one line in ONE round", () => {
   const first = advisory({ summary: "the variable could be named better" });
