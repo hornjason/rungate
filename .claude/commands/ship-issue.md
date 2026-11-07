@@ -1,8 +1,11 @@
 ---
 argument-hint: <issue-number>
+doc-type: reference
+status: active
+updated: 2026-11-07
 ---
 
-!`gh issue view $ARGUMENTS --repo hornjason/pai-harness 2>/dev/null || echo "Issue $ARGUMENTS not found"`
+!`RG_ISSUE="$ARGUMENTS" sh -c 'gh issue view "$RG_ISSUE" --repo hornjason/pai-harness 2>/dev/null || echo "Issue $RG_ISSUE not found"'`
 
 Ship this issue through the harness. Follow the pipeline:
 
