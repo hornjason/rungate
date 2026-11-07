@@ -106,7 +106,33 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  */
 const COMPLETE_STAGES = 2;
 
-const run = (cmd: string) => spawnSync("sh", ["-c", cmd], { cwd: ROOT, encoding: "utf-8" });
+/**
+ * Every verify command in the plan file runs through here.
+ *
+ * **`bash -o pipefail`, not `sh -c`.** Stage C and Stage G both spell their
+ * verify commands as `bun test <file> -t '<name>' | grep -qE '^ [1-9][0-9]* pass'`,
+ * because a `-t` matching nothing reports zero failures and exits 0. Under a
+ * plain pipeline the exit status is the GREP's, so a run that was half red —
+ * `5 pass`, `1 fail`, bun exiting 1 — still matched `pass` and this harness
+ * read exit 0. Measured 2026-11-06 against `board-ready-fanout`'s G1 block
+ * with one mutation applied:
+ *
+ *   bun's own exit code                   1
+ *   sh -c "... | grep -q '... pass'"      0   <- the item stays ticked
+ *   bash -o pipefail -c "same string"     1
+ *
+ * So a ticked item could hold a live regression and this suite would agree
+ * with it — the fail-open shape in `.claude/rules/checks-must-be-able-to-fail.md`,
+ * sitting in the one test whose entire job is to refuse that. Fixed at the
+ * single site rather than in five command strings, so no future item can
+ * re-make it by spelling its own pipe.
+ *
+ * **`bash`, explicitly, not `sh`.** `sh` on ubuntu-latest is dash, which has
+ * no `pipefail` at all; on macOS it is bash in POSIX mode, which does. The
+ * same string would have been fail-closed here and fail-open in CI.
+ */
+const run = (cmd: string) =>
+  spawnSync("bash", ["-o", "pipefail", "-c", cmd], { cwd: ROOT, encoding: "utf-8" });
 
 const retro = (over: Partial<Retro> = {}): Retro => ({
   wentWell: ["a thing"],
@@ -130,6 +156,40 @@ const ok = (over: Partial<Stage> = {}): Stage => ({
 describe("the live plan", () => {
   test("is internally consistent — goal, goals and stages together", () => {
     expect(ladderViolations(doc), "project-state.json's plan is malformed").toEqual([]);
+  });
+
+  /**
+   * THE RUNNER ITSELF, before anything it runs.
+   *
+   * Found by security review of #1847, and the finding was right: the verify
+   * commands Stage C and Stage G use are pipelines, and a pipeline's exit
+   * status is its LAST command's. `bun test` exiting 1 on a real failure was
+   * invisible to this suite the moment a `| grep` was added — a half-red run
+   * printed `5 pass` AND `1 fail`, the grep matched `pass`, and the item
+   * stayed ticked.
+   *
+   * This is the shape `run()` exists to catch, in `run()`. Asserted here
+   * rather than described in its docblock, because a comment saying a
+   * property holds is the reason nobody checks it (#1322).
+   */
+  test("a verify command's failure survives a pipe — the runner is fail-closed", () => {
+    // Left side fails, right side succeeds, exactly like a half-red `bun test`
+    // whose summary still contains the word the grep is looking for.
+    const piped = run("{ echo ' 5 pass'; exit 1; } | /usr/bin/grep -qE '^ [1-9][0-9]* pass'");
+    expect(
+      piped.status,
+      "a verify command whose TEST RUNNER failed still exited 0, because the " +
+        "pipeline reported the grep's status. Every piped `-t` command in the " +
+        "plan would stay ticked through a live regression. Run commands with " +
+        "`bash -o pipefail -c`, not `sh -c`.",
+    ).not.toBe(0);
+    // ANTI-VACUITY, both directions. Without these the row above passes for a
+    // runner that refuses everything, or one that cannot find `bash`.
+    expect(run("{ echo ' 5 pass'; exit 0; } | /usr/bin/grep -qE '^ [1-9][0-9]* pass'").status).toBe(0);
+    expect(run("true").status, "the runner cannot execute a trivial command").toBe(0);
+    // And the zero-match case the grep is there for in the first place: a
+    // `-t` matching nothing prints ` 0 pass`, which must not satisfy it.
+    expect(run("echo ' 0 pass' | /usr/bin/grep -qE '^ [1-9][0-9]* pass'").status).not.toBe(0);
   });
 
   test("every DONE item's verify command exits 0 — this is what 'done' means", () => {

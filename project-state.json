@@ -1492,9 +1492,9 @@
         },
         {
           "id": "G4",
-          "what": "THE CONTROL: a board already at depth promotes nothing. Needed no new code — selectReady in lib/board-ready-rule.ts already promotes nothing when slots===0 and refuses with a reason when cap is null. Verified against it rather than rebuilt.",
-          "done": true,
-          "verify": "bun test test/board-ready-rule.test.ts -t 'promotes nothing' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
+          "what": "THE CONTROL: a board already at depth promotes nothing — the RULE and the WIRING, because a correct selectReady that the writer never hands the live cap to promotes the whole backlog. The rule needed no new code: selectReady in lib/board-ready-rule.ts already promotes nothing when slots===0 and refuses with a reason when cap is null.",
+          "done": false,
+          "verify": "bun test test/board-ready-rule.test.ts -t 'promotes nothing' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\" && bun test test/board-ready-fanout.test.ts -t 'promoted against is the cap' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "G5",
