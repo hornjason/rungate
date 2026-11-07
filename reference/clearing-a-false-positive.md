@@ -70,8 +70,15 @@ nothing.
 
 **Merging past it.** `required_conversation_resolution` exists so that is not
 an option. If it is possible, the setting is off and that is its own defect —
-`readFindingDisposition` in `lib/branch-protection.ts` is the check, and it
-has caught this exact regression once.
+`readFindingDisposition` in `lib/branch-protection.ts` is the check.
+
+It has **never** caught that regression, and an earlier draft of this
+paragraph said it had. The setting went off some time after 2026-10-27 and was
+found on 2026-11-07 by a person running `gh api` by hand; the check is newer
+than the incident and has no live history at all. Its only evidence is the
+battery in `test/branch-protection-gate.test.ts`. Writing it the other way
+credited a new instrument with a catch nobody's code made — in a file about
+not letting a record say more than was measured.
 
 **Marking it false because three rounds have gone by.** Round pressure is real
 (AGENTS.md rule 5) and the remedy for it is re-scoping, not reclassifying. A

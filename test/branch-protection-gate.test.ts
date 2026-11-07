@@ -69,6 +69,7 @@ import {
   type PushCiReading,
   type ThreadProducerReading,
 } from "../lib/branch-protection";
+import { AI_REVIEW_THREADS_STEP_ID } from "../lib/scaffold/ai-review-step";
 
 const REPO = resolve(import.meta.dir, "..");
 const CONFORMITY = join(REPO, "lib", "conformity.ts");
@@ -1006,5 +1007,99 @@ describe("#1650: the field is parsed from the shape the endpoint actually answer
     });
     expect(f.conversationResolution).toBe(false);
     expect(f.strict, "the rest of the payload must still parse").toBe(false);
+  });
+});
+
+/**
+ * #1858 round 1 — the three findings ai-review raised on the PR that added
+ * PROTECT-2, each with the case that would have caught it.
+ *
+ * All three were real and all three were mine. The first two are the ones
+ * worth a permanent case: a branch ORDER that only misfires on a combination
+ * no case paired, and a constant that agreed with the generator's by
+ * coincidence.
+ */
+describe("#1858: the verdict does not depend on a fact that cannot change it", () => {
+  const produces: ThreadProducerReading = { produces: true, where: "ai-review.yml", unmeasured: null };
+  const none: ThreadProducerReading = { produces: false, where: null, unmeasured: null };
+
+  // THE COMBINATION NOTHING PAIRED. The unreadable-protection case only ever
+  // ran against a tree that DID produce threads, and the no-producer case
+  // only ever ran against READABLE facts — so the ordinary state of a
+  // consumer (neither adopted nor admin-scoped) was the one square of the
+  // grid no case occupied, and it is the square the bug was in.
+  test("no producer plus UNREADABLE protection is a clean PASS, not a warning", () => {
+    const r = readFindingDisposition(unreadableFacts("someone/consumer", "403 from the API"), none);
+    expect(
+      r.verdict,
+      "nothing here depends on reading protection, so an unreadable reading cannot change " +
+        "the answer — warning about it on every run is how a gate gets switched off",
+    ).toBe("PASS");
+    expect(r.reason).toContain("nothing for required_conversation_resolution to gate");
+  });
+
+  test("CONTROL: the SAME unreadable facts ARE unmeasured once something opens threads", () => {
+    const r = readFindingDisposition(unreadableFacts("someone/consumer", "403 from the API"), produces);
+    expect(r.verdict, "one variable differs from the case above: the producer").toBe("UNMEASURED");
+  });
+
+  // The full grid, so the next branch added here cannot reintroduce an
+  // ordering that only shows up on a pairing nobody wrote.
+  test("every producer/protection pairing has a stated verdict", () => {
+    const grid: Array<[ThreadProducerReading, ProtectionFacts, string]> = [
+      [none, unreadableFacts("o/n", "403"), "PASS"],
+      [none, dispositionFacts({ conversationResolution: false }), "PASS"],
+      [none, dispositionFacts({ conversationResolution: true }), "PASS"],
+      [none, dispositionFacts({ conversationResolution: null }), "PASS"],
+      [produces, unreadableFacts("o/n", "403"), "UNMEASURED"],
+      [produces, dispositionFacts({ conversationResolution: null }), "UNMEASURED"],
+      [produces, dispositionFacts({ conversationResolution: false }), "FAIL"],
+      [produces, dispositionFacts({ conversationResolution: true }), "PASS"],
+      [{ produces: false, where: null, unmeasured: "unreadable workflows" },
+        dispositionFacts({ conversationResolution: true }), "UNMEASURED"],
+    ];
+    for (const [p, f, want] of grid) {
+      expect(
+        readFindingDisposition(f, p).verdict as string,
+        `producer=${p.unmeasured ? "unread" : p.produces}, protection=${f.unreadable ? "unread" : f.conversationResolution}`,
+      ).toBe(want);
+    }
+  });
+});
+
+describe("#1858: the step id is the generator's binding, not a second copy of it", () => {
+  // Two constants that agree by coincidence are ONE decider with a spare, and
+  // this pair fails in the direction that matters: rename the step in the
+  // generator alone and readThreadProducer stops matching, `produces` goes
+  // false, and PROTECT-2 silently PASSES on a tree that still opens threads.
+  // The gate built to catch a silent regression regresses silently.
+  test("THREAD_PRODUCER_STEP_ID is AI_REVIEW_THREADS_STEP_ID, by identity not by value", () => {
+    expect(THREAD_PRODUCER_STEP_ID).toBe(AI_REVIEW_THREADS_STEP_ID);
+    const src = readFileSync(join(REPO, "lib", "branch-protection.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      src.match(/["']ai-review-threads["']/),
+      "spelling the id here again restores the second decider — re-export the generator's " +
+        "constant instead, so a rename moves both",
+    ).toBeNull();
+    expect(src, "and the re-export must be the generator's own binding").toContain(
+      "AI_REVIEW_THREADS_STEP_ID",
+    );
+  });
+
+  test("the id the generator WRITES is the id the detector matches", () => {
+    // Not two assertions about one constant: this runs the real emitter's
+    // spelling of the line through the real detector.
+    const root = project({
+      ".github/workflows/ai-review.yml": `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - id: ${AI_REVIEW_THREADS_STEP_ID}
+        run: bun bin/rungate.ts ai-review-threads
+`,
+    });
+    expect(readThreadProducer(root).produces).toBe(true);
   });
 });

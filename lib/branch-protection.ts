@@ -92,6 +92,7 @@ import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 
 import { createGitHubClient, parseOwnerRepo, type GitHubClient } from "./github";
+import { AI_REVIEW_THREADS_STEP_ID } from "./scaffold/ai-review-step";
 import { originSlug } from "./verified-push";
 
 // ── Facts ───────────────────────────────────────────────
@@ -954,12 +955,28 @@ export function jobBlocks(text: string): JobBlock[] {
 
 /**
  * The step id the generated AI review uses to open one review thread per
- * finding. Spelled once, because it is the PRECONDITION the whole check below
- * turns on: a repo that does not produce threads has nothing for
- * `required_conversation_resolution` to gate, and refusing there would be a
- * gate telling an operator to configure a setting that would do nothing.
+ * finding — **re-exported from the generator that writes it**, never spelled
+ * again here (ai-review review round 1 of #1858).
+ *
+ * The first version of this declared its own `"ai-review-threads"` literal
+ * beside a comment claiming it was "spelled once". It was spelled twice:
+ * `AI_REVIEW_THREADS_STEP_ID` in `lib/scaffold/ai-review-step.ts` is what
+ * actually gets written into the generated workflow's `id:` line, and the two
+ * agreed by coincidence rather than by construction.
+ *
+ * That is the *two deciders that agree* shape, and it fails in the direction
+ * that matters: rename the step in the generator alone and `readThreadProducer`
+ * stops matching, `produces` goes false, `readFindingDisposition` takes the
+ * PASS branch below — and PROTECT-2 silently clears on a tree that still opens
+ * a review thread per finding. The gate built to catch a silent regression
+ * would have regressed silently.
+ *
+ * It is the PRECONDITION the whole check turns on: a repo that does not
+ * produce threads has nothing for `required_conversation_resolution` to gate,
+ * and refusing there would tell an operator to configure a setting that would
+ * do nothing for them.
  */
-export const THREAD_PRODUCER_STEP_ID = "ai-review-threads";
+export const THREAD_PRODUCER_STEP_ID = AI_REVIEW_THREADS_STEP_ID;
 
 /** Whether this tree opens a review thread per finding. */
 export interface ThreadProducerReading {
@@ -1003,7 +1020,12 @@ export function readThreadProducer(root: string): ThreadProducerReading {
     // workflow mentions `ai-review-threads` in a comment and in three env
     // var values; matching those would report a producer in a tree that had
     // deleted the step and left the prose.
-    if (new RegExp(`^\\s*id:\\s*["']?${THREAD_PRODUCER_STEP_ID}["']?\\s*$`, "m").test(text)) {
+    // `- id: x` is as legal as `id: x` — a step may lead with any key, and
+    // the generator only happens to lead with `name:`. The first spelling of
+    // this required the line to BEGIN with whitespace then `id:`, so a step
+    // written the other way read as no producer at all. Found by a fixture
+    // that spelled it the legal second way (#1858).
+    if (new RegExp(`^\\s*(?:-\\s*)?id:\\s*["']?${THREAD_PRODUCER_STEP_ID}["']?\\s*$`, "m").test(text)) {
       return { produces: true, where: name, unmeasured: null };
     }
   }
@@ -1065,15 +1087,19 @@ export function readFindingDisposition(
   facts: ProtectionFacts,
   producer: ThreadProducerReading,
 ): DispositionReading {
-  if (facts.unreadable) {
-    return {
-      verdict: "UNMEASURED",
-      reason:
-        `UNMEASURED: this repo's protection could not be read — ${facts.unreadable}. Whether a ` +
-        "finding can be left undispositioned is unestablished, which is not the same as fine.",
-      remedy: "",
-    };
-  }
+  // **The producer reading comes FIRST, and the order is the finding** (ai-review
+  // round 1 of #1858). A tree with no thread producer passes whatever the
+  // protection says, because nothing depends on reading it — so asking about
+  // protection before asking whether the question applies made the answer
+  // depend on a fact that cannot change it.
+  //
+  // It is not a tidiness point. The two conditions it put in the wrong order
+  // are BOTH the ordinary state of a consumer: most have not adopted
+  // `ai-review-threads`, and most run with the default `GITHUB_TOKEN`, which
+  // has no admin and so cannot read protection at all. Every one of them would
+  // have got `UNMEASURED: this repo's protection could not be read` on every
+  // run — a warning about a setting that would do nothing for them if they
+  // set it. That is how a gate gets switched off.
   if (producer.unmeasured) {
     return {
       verdict: "UNMEASURED",
@@ -1091,6 +1117,17 @@ export function readFindingDisposition(
         "no workflow in this tree declares a step that opens a review thread per finding, so " +
         "there is nothing for required_conversation_resolution to gate and requiring it here " +
         "would change nothing.",
+      remedy: "",
+    };
+  }
+  // Only now does protection matter: something opens threads, so whether they
+  // have to be answered is a live question.
+  if (facts.unreadable) {
+    return {
+      verdict: "UNMEASURED",
+      reason:
+        `UNMEASURED: this repo's protection could not be read — ${facts.unreadable}. Whether a ` +
+        "finding can be left undispositioned is unestablished, which is not the same as fine.",
       remedy: "",
     };
   }
