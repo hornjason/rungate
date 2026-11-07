@@ -433,3 +433,68 @@ describe("#1853: a label places an issue the milestone could not", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * #1853, ai-review round 1: every label reader refuses a truncated list.
+ *
+ * I added the guard to `scripts/board-ready.ts` and not to
+ * `scripts/board-mirror.ts`, which selects labels for the same ordering and
+ * promotes with it. Both reviewers found it. That is
+ * `feedback-replace-one-name-scan-sweep-for-the-others` exactly — so this is
+ * a sweep over the POPULATION rather than a second per-file case, and the
+ * next file that selects labels is covered before it is written.
+ *
+ * A truncated label list is not a short one. The ranked label can be the one
+ * on page two, and an issue ranked without it is placed as though nothing
+ * ranked it — indistinguishable from an issue nothing ranks.
+ */
+describe("#1853: a truncated label list is refused, in every file that reads one", () => {
+  const root = join(import.meta.dir, "..");
+  // **The population is files that RANK with labels, not files that read
+  // them.** A first pass swept every `labels(first:` and caught two that are
+  // not ordering readers: `lib/live-issues.ts`, which records a
+  // `labelsTruncated` flag on a snapshot and is right to report rather than
+  // refuse, and `scripts/audit-issue-closures.ts`, which is a closure audit.
+  // Widening a new refusal onto them would be this PR's scope leaking into
+  // code it has no finding about, and the check would read as crying wolf.
+  // Importing the ordering module is what makes truncation a WRONG POSITION
+  // rather than a short list.
+  const readers = sourceFiles(root, ["lib", "scripts", "bin", "gates", "hooks"]).filter(f => {
+    const src = readFileSync(join(root, f), "utf-8");
+    return /labels\s*\(\s*first\s*:/.test(src) && /board-ready-rule"/.test(src);
+  });
+
+  test("the sweep found the files it polices", () => {
+    expect(
+      readers,
+      "an empty population is not a clean one — these two select labels today",
+    ).toEqual(expect.arrayContaining(["scripts/board-ready.ts", "scripts/board-mirror.ts"]));
+  });
+
+  test.each(readers)("%s asks for the label connection's pageInfo", file => {
+    const src = readFileSync(join(root, file), "utf-8");
+    // The selection and its truncation marker, in one expression: a
+    // `pageInfo` belonging to some OTHER connection in the same file would
+    // satisfy a bare `.toContain("pageInfo")`.
+    expect(
+      src,
+      `${file} selects labels without asking whether the list was cut short, so a ranked ` +
+        "label on page two is read as absent and the issue is placed as if nothing ranked it",
+    ).toMatch(/labels\s*\(\s*first\s*:[^)]*\)\s*\{[^}]*pageInfo/);
+  });
+
+  test.each(readers)("%s refuses rather than ranking a cut-short list", file => {
+    const src = readFileSync(join(root, file), "utf-8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      code,
+      `${file} reads the label pageInfo and does not act on it, which is worse than not ` +
+        "asking: the truncation is visible and discarded",
+    ).toMatch(/labels\?\.pageInfo\?\.hasNextPage/);
+    const at = code.search(/labels\?\.pageInfo\?\.hasNextPage/);
+    expect(
+      code.slice(at, at + 600),
+      `${file} must REFUSE on a truncated label list, not warn and continue`,
+    ).toMatch(/return\s+(EXIT_REFUSED|REFUSAL_EXIT)/);
+  });
+});

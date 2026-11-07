@@ -221,7 +221,7 @@ const ITEMS_QUERY = `query($project: ID!, $field: String!, $after: String) {
             ... on Issue {
               number title body state
               milestone { title }
-              labels(first: 20) { nodes { name } }
+              labels(first: 20) { pageInfo { hasNextPage } nodes { name } }
               assignees { totalCount }
               issueDependenciesSummary { blockedBy totalBlockedBy }
             }
@@ -341,6 +341,21 @@ export async function main(argv: string[]): Promise<number> {
     fieldId = node.field.id;
     for (const n of node.items.nodes) {
       if (!n.content?.number) continue; // a draft item has no issue
+      // **A truncated label list is UNMEASURED, not a short one** (#1853).
+      // Ordering reads a label when no milestone places the issue, so a
+      // ranked label sitting on page two makes this writer promote the
+      // issue as if nothing placed it — and that is indistinguishable from
+      // an issue nothing places. `scripts/board-ready.ts` refuses the same
+      // state; this file silently did not, which is the one-site-fixed
+      // shape ai-review round 1 of #1855 named.
+      if (n.content.labels?.pageInfo?.hasNextPage) {
+        console.error(
+          `board-mirror: #${n.content.number} carries more than 20 labels, so the label that ` +
+            `ranks it may be unread and its position in Ready would be wrong. UNMEASURED, ` +
+            `nothing written.`,
+        );
+        return REFUSAL_EXIT;
+      }
       items.push({
         itemId: n.id,
         number: n.content.number,

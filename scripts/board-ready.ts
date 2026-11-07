@@ -455,8 +455,23 @@ async function main(): Promise<number> {
         (n2?.labels?.nodes ?? []).map((l: any) => l?.name).filter((x: any) => typeof x === "string"),
       );
     }
-    if (!page.pageInfo?.hasNextPage) break;
-    labelCursor = page.pageInfo.endCursor;
+    // SC-2721: `hasNextPage` is never read here. A file that decides "is
+    // there another page" itself is how three variants of one silent
+    // truncation reached main one at a time — `nextCursor` is the single
+    // binding, and an unreadable pageInfo is UNMEASURED rather than the end
+    // of the list. ai-review round 1 of #1855 caught this shape in the
+    // sibling file; the suite caught it here.
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      console.log(
+        `::warning::UNMEASURED — the open-issue label read could not tell whether more pages ` +
+          `exist: ${step.why}. Candidates past this page would have ranked UNPLACED for an ` +
+          "instrument reason. Nothing written.",
+      );
+      return EXIT_REFUSED;
+    }
+    if (step.kind === "done") break;
+    labelCursor = step.cursor;
   }
   for (const c of candidates) {
     // Shaped as the GraphQL response so the mapping below reads one way,
