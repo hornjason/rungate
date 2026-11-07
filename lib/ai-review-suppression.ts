@@ -56,6 +56,7 @@ import { isAbsolute, resolve, sep } from "path";
 
 import {
   AI_REVIEW_PRIOR_MEASURED,
+  anchorOnlyKey,
   carryKey,
   priorFindings,
   readLedger,
@@ -166,20 +167,45 @@ export function aiReviewSuppressionGate(inputs: SuppressionInputs): AiReviewSupp
     // the within-round half is the growing `seen` set, exactly as
     // `suppressRepeats` spells it.
     const seen = new Set<string>(prior.keys);
+    // #1168. The same prior set read with the wording dropped. Built from the
+    // SAME strings rather than from the threads a second time: two derivations
+    // of one identity are two deciders that agree, and a mutation of either
+    // leaves the other holding every case up.
+    const anchors = new Set<string>();
+    for (const k of prior.keys) {
+      const a = anchorOnlyKey(k);
+      if (a !== null) anchors.add(a);
+    }
     const repeat = candidates.map(c => {
       const key = carryKey(c, inputs.lineTextFor(c as ReviewFinding));
       // Unkeyable CARRIES. It cannot be shown to be a repeat, and the
       // direction this is allowed to be wrong in is toward reporting.
       if (key === null) return null;
-      if (!seen.has(key)) {
-        seen.add(key);
-        return null;
-      }
       const f = c as ReviewFinding;
-      return (
-        `${String(f.file ?? "(no file)")}: ${String(f.summary ?? "(no summary)")} — already ` +
-        `raised on an earlier round of this pull request, so it is not raised again`
-      );
+      const where = String(f.file ?? "(no file)");
+      const what = String(f.summary ?? "(no summary)");
+      if (seen.has(key)) {
+        return (
+          `${where}: ${what} — already ` +
+          `raised on an earlier round of this pull request, so it is not raised again`
+        );
+      }
+      const anchor = anchorOnlyKey(key);
+      // The wording differs and the anchor does not. Measured at #1168: of
+      // eight such collisions across 25 merged pull requests, eight were the
+      // same defect restated and none was a new finding at an old line. This
+      // is a JUDGEMENT rather than an identity, so it says so — the sentence
+      // is what lets a reader appeal it.
+      if (anchor !== null && anchors.has(anchor)) {
+        return (
+          `${where}: ${what} — an earlier round of this pull request already ` +
+          `raised a finding at the same line of this file, in different words, so this ` +
+          `is read as the same finding restated and is not raised again`
+        );
+      }
+      seen.add(key);
+      if (anchor !== null) anchors.add(anchor);
+      return null;
     });
     return { repeat, unmeasured: null };
   };

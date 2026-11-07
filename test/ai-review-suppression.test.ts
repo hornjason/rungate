@@ -382,7 +382,22 @@ describe("AS-1: the planted prior advisory is suppressed, and the subtraction is
     // The vacuity control. Every assertion above would also hold if the gate
     // suppressed unconditionally, and this is the input that tells them
     // apart — same rig, one OPEN thread, a key that does not match.
-    const other = raisedBefore(advisory({ summary: "a different complaint" }));
+    //
+    // #1168 MOVED THE LINE, and the move is the point rather than an
+    // accommodation. This control used to plant a different summary at the
+    // SAME file and line, which is no longer "something else": measured over
+    // 25 merged pull requests, every one of the eight same-anchor collisions
+    // was one defect restated and none was a new finding at an old line, so
+    // the gate now reads that shape as a repeat. The control keeps all of its
+    // power — a gate that suppressed unconditionally still fails here —
+    // because a DIFFERENT ANCHOR is what "a different finding" has to mean
+    // once wording stops being part of the identity.
+    //
+    // The anchor is varied by FILE and not by line: `threadsOf` keys every
+    // prior thread with `CITED_LINE` as its line text whatever `line` says,
+    // so moving the line alone leaves both sides on the same text anchor and
+    // the case would pass for a reason that is not the one written above.
+    const other = raisedBefore(advisory({ file: "lib/elsewhere.ts", summary: "a different complaint" }));
     const reading = readAiReviewFindings(payload, undefined, gate({ threads: other }));
 
     expect(reading.suppressionUnmeasured).toBeNull();
@@ -925,9 +940,18 @@ describe("AS-10 (AC-3): a defect present on two pushes gets ONE thread", () => {
     // The vacuity control on the other side: AS-10a also holds for a gate
     // that suppresses everything after round one, which would silence every
     // finding a later push introduces.
+    //
+    // #1168: a different LINE, for AS-1c's reason. A second finding at the
+    // same line in different words is now read as the first one restated,
+    // which is the measured shape; a finding somewhere else is the input that
+    // still tells a working gate from one that suppresses everything.
     const root = checkout("ac3-other");
     const one = await push([advisory()], [], root);
-    const two = await push([advisory({ summary: "something else is wrong" })], one.threads, root);
+    const two = await push(
+      [advisory({ line: CITED_AT + 2, summary: "something else is wrong" })],
+      one.threads,
+      root,
+    );
     expect(two.result.posted).toBe(1);
     expect(two.threads).toHaveLength(2);
   });
@@ -1018,5 +1042,78 @@ describe("AS-9: `rungate ai-review-findings` suppresses a repeat", () => {
     expect(out).toContain(`${AI_REVIEW_OUTCOME_LINE} CLEAN`);
     expect(out).not.toContain(AI_REVIEW_SUPPRESSED_TITLE);
     expect(out).not.toContain(AI_REVIEW_SUPPRESSED_UNMEASURED_TITLE);
+  });
+});
+
+// ── AS-11 (#1168): the reworded restatement ──────────────────────────────
+//
+// Covers #1168. MEASURED on the last 25 merged pull requests before this was
+// written: 25 round-2+ findings, **0 byte-key repeats** and **8 genuine
+// repeats**, every one of the eight carrying a reworded summary and every one
+// confirmed by reading the pair. Zero of the eight were a different finding at
+// the same anchor, which is the case the summary component was protecting.
+//
+// `carryKey` is `file \0 anchor \0 summary` and `suppressRepeats`' docblock
+// states the consequence as a decision: *"a finding whose summary changed is
+// not [a repeat]"*. The reviewer rewords on essentially every re-raise, so the
+// population the exact key can see is empty by construction — which is what
+// `0` measured, not a clean repo.
+//
+// The anchor is the discriminator the data supports: same file, same TEXT at
+// the cited line. A LINE-NUMBER anchor is deliberately excluded below, because
+// two unrelated findings at line 4 of the same file share nothing.
+
+describe("AS-11 (#1168): a prior finding re-raised in different words", () => {
+  const REWORDED = advisory({
+    summary: "this identifier does not say what it holds and should be renamed",
+  });
+
+  test("AS-11a: the original wording is still suppressed — the exact key is untouched", () => {
+    const verdict = gate({ threads: raisedBefore() })([advisory()]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat[0]).toBeTypeOf("string");
+  });
+
+  test("AS-11b: a reworded restatement at the same anchor is suppressed", () => {
+    const verdict = gate({ threads: raisedBefore() })([REWORDED]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat[0]).toBeTypeOf("string");
+  });
+
+  test("AS-11c: its reason says it was the ANCHOR that matched, not the wording", () => {
+    const verdict = gate({ threads: raisedBefore() })([REWORDED]);
+    const why = String(verdict.repeat[0]);
+    // The two reasons must be distinguishable in the annotation: a reader has
+    // to be able to tell an exact re-post from a judgement that two different
+    // sentences are the same finding, because only the second can be wrong.
+    expect(why).toContain("same line");
+    expect(why).not.toBe(String(gate({ threads: raisedBefore() })([advisory()]).repeat[0]));
+  });
+
+  test("AS-11d: a DIFFERENT file at the same line text is NOT suppressed", () => {
+    const elsewhere = advisory({ file: "lib/other.ts" });
+    const verdict = gate({ threads: raisedBefore() })([elsewhere]);
+    expect(verdict.repeat[0]).toBeNull();
+  });
+
+  test("AS-11e: with no line text to anchor on, nothing is suppressed by anchor", () => {
+    // `withLineText: false` drives both sides into the `n:<line>` namespace.
+    // A line NUMBER is not evidence two findings are the same, so the anchor
+    // rule must not fire here — the exact key is the only thing left, and the
+    // wording differs.
+    const verdict = gate({ threads: raisedBefore(), withLineText: false })([REWORDED]);
+    expect(verdict.repeat[0]).toBeNull();
+  });
+
+  test("AS-11f: an unmeasured prior still suppresses nothing", () => {
+    const verdict = gate({ threads: null })([REWORDED]);
+    expect(verdict.unmeasured).toBeTypeOf("string");
+    expect(verdict.repeat[0]).toBeNull();
+  });
+
+  test("AS-11g: the control — a PR with no prior threads reports the finding", () => {
+    const verdict = gate({})([REWORDED]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat[0]).toBeNull();
   });
 });

@@ -585,6 +585,53 @@ export function carryKey(finding: unknown, lineText?: unknown): string | null {
   return `${file}\u0000${anchor}\u0000${summary}`;
 }
 
+/**
+ * THE SAME KEY WITH THE WORDING DROPPED — `file \0 t:<text>` (#1168).
+ *
+ * `carryKey` ends in the summary, and `suppressRepeats`' docblock below
+ * states what that buys: *a finding whose summary changed is not [a repeat]*.
+ * That was a deliberate trade — protect a genuinely different finding that
+ * happens to sit at a line an earlier round cited — and the measurement says
+ * it costs everything to buy nothing.
+ *
+ * Read on the last 25 merged pull requests of this repository, 25 round-2+
+ * findings: **0 repeats the full key could see, and 8 real ones**. Every one
+ * of the eight was the same defect restated in different words, every one
+ * confirmed by reading the pair, and **zero** were the case the summary
+ * component protects. The reviewer rewords on essentially every re-raise, so
+ * the population the full key can match is empty by construction — the `0` is
+ * the shape of the key, not the state of the repo.
+ *
+ * ## Only a TEXT anchor, and that is the whole safety argument
+ *
+ * `carryKey` falls back to `n:<line>` when the caller could not read the
+ * line. Two unrelated findings at line 4 of one file share that namespace and
+ * nothing else, so matching on it would suppress across completely different
+ * defects. This returns `null` for `n:` and the caller suppresses nothing —
+ * which also keeps the asymmetry `checkoutLineText`'s docblock describes from
+ * turning into over-suppression when a checkout cannot be read.
+ *
+ * ## The direction this is allowed to be wrong in has CHANGED, deliberately
+ *
+ * Everything else here errs toward reporting a repeat twice. This errs toward
+ * calling two differently-worded findings one finding, which can be wrong,
+ * which is why the caller must report a DIFFERENT reason for it: a reader has
+ * to be able to tell a verbatim re-post from a judgement. The judgement is
+ * the only one of the two that can be appealed.
+ *
+ * Exported and total so there is one binding to mutate, and so the battery
+ * can drive it without a thread list.
+ */
+export function anchorOnlyKey(key: string | null): string | null {
+  if (typeof key !== "string") return null;
+  const parts = key.split("\u0000");
+  if (parts.length !== 3) return null;
+  const [file, anchor] = parts as [string, string, string];
+  if (!anchor.startsWith("t:") || anchor === "t:") return null;
+  if (file === "") return null;
+  return `${file}\u0000${anchor}`;
+}
+
 export interface SuppressionReading {
   /** Findings this round may report. */
   kept: ReviewFinding[];
