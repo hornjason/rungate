@@ -59,6 +59,7 @@ import { spawnSync } from "child_process";
 import {
   AI_REVIEW_PRIOR_MEASURED,
   carryKey,
+  normaliseLineText,
   priorFindings,
   readLedger,
   suppressRepeats,
@@ -66,7 +67,9 @@ import {
 } from "../lib/ai-review-rounds";
 import {
   aiReviewSuppressionGate,
+  checkoutLineReader,
   checkoutLineText,
+  productionSuppression,
   priorKeysFrom,
   readOrNull,
 } from "../lib/ai-review-suppression";
@@ -236,8 +239,10 @@ function gate(opts: {
   threads?: string | null;
   root?: string;
   withLineText?: boolean;
+  withOccurrences?: boolean;
 }): AiReviewSuppressionGate {
   const root = opts.root ?? checkout("default");
+  const reader = checkoutLineReader(root);
   return aiReviewSuppressionGate({
     // `undefined` means "a pull request with no threads" — MEASURED and
     // empty. `null` is the separate statement that the list was not read,
@@ -245,7 +250,12 @@ function gate(opts: {
     // pass for the wrong reason.
     threads: opts.threads === undefined ? "[]" : opts.threads,
     lineTextFor:
-      opts.withLineText === false ? () => undefined : checkoutLineText(root),
+      opts.withLineText === false ? () => undefined : reader.lineTextFor,
+    // Wired by default because the production caller wires it
+    // (`scripts/ai-review-findings.ts`). `withOccurrences: false` is the
+    // unwired consumer, and AS-13d is the case that drives it.
+    anchorOccurrences:
+      opts.withOccurrences === false ? undefined : reader.occurrencesOf,
   });
 }
 
@@ -382,7 +392,22 @@ describe("AS-1: the planted prior advisory is suppressed, and the subtraction is
     // The vacuity control. Every assertion above would also hold if the gate
     // suppressed unconditionally, and this is the input that tells them
     // apart — same rig, one OPEN thread, a key that does not match.
-    const other = raisedBefore(advisory({ summary: "a different complaint" }));
+    //
+    // #1168 MOVED THE LINE, and the move is the point rather than an
+    // accommodation. This control used to plant a different summary at the
+    // SAME file and line, which is no longer "something else": measured over
+    // 25 merged pull requests, every one of the eight same-anchor collisions
+    // was one defect restated and none was a new finding at an old line, so
+    // the gate now reads that shape as a repeat. The control keeps all of its
+    // power — a gate that suppressed unconditionally still fails here —
+    // because a DIFFERENT ANCHOR is what "a different finding" has to mean
+    // once wording stops being part of the identity.
+    //
+    // The anchor is varied by FILE and not by line: `threadsOf` keys every
+    // prior thread with `CITED_LINE` as its line text whatever `line` says,
+    // so moving the line alone leaves both sides on the same text anchor and
+    // the case would pass for a reason that is not the one written above.
+    const other = raisedBefore(advisory({ file: "lib/elsewhere.ts", summary: "a different complaint" }));
     const reading = readAiReviewFindings(payload, undefined, gate({ threads: other }));
 
     expect(reading.suppressionUnmeasured).toBeNull();
@@ -647,7 +672,12 @@ describe("AS-4: the list is taken before this round can add to it", () => {
     // `null`, which is the state it shipped in and the state that looks
     // identical in a workflow diff.
     const poster = readFileSync(join(ROOT, "scripts", "ai-review-threads.ts"), "utf-8");
-    expect(poster, "the poster builds no suppression gate").toContain("aiReviewSuppressionGate({");
+    // Spelled `productionSuppression(` since #1861 round 4 — the two commands
+    // used to write the inputs out by hand and one of them fell behind. The
+    // property asserted is unchanged: the poster forms a gate rather than
+    // leaving the argument `null`, which is the state it shipped in and the
+    // state a workflow diff cannot distinguish. AS-15 holds the factory.
+    expect(poster, "the poster builds no suppression gate").toContain("productionSuppression(");
     expect(poster).toContain("readAiReviewFindingsFile(");
   });
 
@@ -925,9 +955,18 @@ describe("AS-10 (AC-3): a defect present on two pushes gets ONE thread", () => {
     // The vacuity control on the other side: AS-10a also holds for a gate
     // that suppresses everything after round one, which would silence every
     // finding a later push introduces.
+    //
+    // #1168: a different LINE, for AS-1c's reason. A second finding at the
+    // same line in different words is now read as the first one restated,
+    // which is the measured shape; a finding somewhere else is the input that
+    // still tells a working gate from one that suppresses everything.
     const root = checkout("ac3-other");
     const one = await push([advisory()], [], root);
-    const two = await push([advisory({ summary: "something else is wrong" })], one.threads, root);
+    const two = await push(
+      [advisory({ line: CITED_AT + 2, summary: "something else is wrong" })],
+      one.threads,
+      root,
+    );
     expect(two.result.posted).toBe(1);
     expect(two.threads).toHaveLength(2);
   });
@@ -1018,5 +1057,335 @@ describe("AS-9: `rungate ai-review-findings` suppresses a repeat", () => {
     expect(out).toContain(`${AI_REVIEW_OUTCOME_LINE} CLEAN`);
     expect(out).not.toContain(AI_REVIEW_SUPPRESSED_TITLE);
     expect(out).not.toContain(AI_REVIEW_SUPPRESSED_UNMEASURED_TITLE);
+  });
+});
+
+// ── AS-11 (#1168): the reworded restatement ──────────────────────────────
+//
+// Covers #1168. MEASURED on the last 25 merged pull requests before this was
+// written: 25 round-2+ findings, **0 byte-key repeats** and **8 genuine
+// repeats**, every one of the eight carrying a reworded summary and every one
+// confirmed by reading the pair. Zero of the eight were a different finding at
+// the same anchor, which is the case the summary component was protecting.
+//
+// `carryKey` is `file \0 anchor \0 summary` and `suppressRepeats`' docblock
+// states the consequence as a decision: *"a finding whose summary changed is
+// not [a repeat]"*. The reviewer rewords on essentially every re-raise, so the
+// population the exact key can see is empty by construction — which is what
+// `0` measured, not a clean repo.
+//
+// The anchor is the discriminator the data supports: same file, same TEXT at
+// the cited line. A LINE-NUMBER anchor is deliberately excluded below, because
+// two unrelated findings at line 4 of the same file share nothing.
+//
+// Every number above is re-runnable rather than quoted. `scripts/measure-review-repeats.ts`
+// produces the counts and carries its own negative control (`--control` injects one
+// synthetic byte-identical repeat per multi-round pull request; byte-key repeats go
+// 0 → 10, exactly the ten multi-round pull requests, so a run reporting 0 on real data
+// is a reading and not a blind instrument). `scripts/print-review-repeat-pairs.ts`
+// prints both summaries of every collision, which is what turned the count of eight
+// into a judgement that all eight were restatements.
+
+describe("AS-11 (#1168): a prior finding re-raised in different words", () => {
+  const REWORDED = advisory({
+    summary: "this identifier does not say what it holds and should be renamed",
+  });
+
+  test("AS-11a: the original wording is still suppressed — the exact key is untouched", () => {
+    const verdict = gate({ threads: raisedBefore() })([advisory()]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat[0]).toBeTypeOf("string");
+  });
+
+  test("AS-11b: a reworded restatement at the same anchor is suppressed", () => {
+    const verdict = gate({ threads: raisedBefore() })([REWORDED]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat[0]).toBeTypeOf("string");
+  });
+
+  test("AS-11c: its reason says it was the ANCHOR that matched, not the wording", () => {
+    const verdict = gate({ threads: raisedBefore() })([REWORDED]);
+    const why = String(verdict.repeat[0]);
+    // The two reasons must be distinguishable in the annotation: a reader has
+    // to be able to tell an exact re-post from a judgement that two different
+    // sentences are the same finding, because only the second can be wrong.
+    expect(why).toContain("same line");
+    expect(why).not.toBe(String(gate({ threads: raisedBefore() })([advisory()]).repeat[0]));
+  });
+
+  test("AS-11d: a DIFFERENT file at the same line text is NOT suppressed", () => {
+    const elsewhere = advisory({ file: "lib/other.ts" });
+    const verdict = gate({ threads: raisedBefore() })([elsewhere]);
+    expect(verdict.repeat[0]).toBeNull();
+  });
+
+  test("AS-11e: with no line text to anchor on, nothing is suppressed by anchor", () => {
+    // `withLineText: false` drives both sides into the `n:<line>` namespace.
+    // A line NUMBER is not evidence two findings are the same, so the anchor
+    // rule must not fire here — the exact key is the only thing left, and the
+    // wording differs.
+    const verdict = gate({ threads: raisedBefore(), withLineText: false })([REWORDED]);
+    expect(verdict.repeat[0]).toBeNull();
+  });
+
+  test("AS-11f: an unmeasured prior still suppresses nothing", () => {
+    const verdict = gate({ threads: null })([REWORDED]);
+    expect(verdict.unmeasured).toBeTypeOf("string");
+    expect(verdict.repeat[0]).toBeNull();
+  });
+
+  test("AS-11g: the control — a PR with no prior threads reports the finding", () => {
+    const verdict = gate({})([REWORDED]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat[0]).toBeNull();
+  });
+});
+
+// ── AS-12 (#1861 round 1): the anchor rule does NOT reach inside one round ──
+//
+// `seen` grows as candidates are walked and `anchors` deliberately does not.
+// The asymmetry is the finding from #1861's first round: growing `anchors`
+// would suppress a second, differently-worded finding at one line because a
+// SIBLING in this very round cited it, under a sentence that says "an earlier
+// round" and would be false.
+//
+// It was also unmeasured when the decision was taken, and #1168's 8-of-8 is
+// on CROSS-round restatements only. It is measured now, and the conservative
+// choice was the right one. Widening the reading to the last 40 merged pull
+// requests turns up **three** same-round anchor collisions, and they do not
+// behave like the cross-round ones:
+//
+// | pair | the two summaries |
+// |---|---|
+// | #1823 r2 | the SAME defect twice — unassign succeeds, the status write fails |
+// | #1810 r4 | the defect, AND the round-budget finding, at one line |
+// | #1810 r5 | the same pairing again |
+//
+// One of three is a genuine duplicate. **Two of three are a real finding
+// sitting at the same line as the round-budget finding** — which is AC-3's
+// only current signal and the regression this change already names. A gate
+// that grew `anchors` within the round would have eaten it twice in forty
+// pull requests. Re-read with
+// `bun scripts/print-review-repeat-pairs.ts 1823 1810`.
+
+describe("AS-12 (#1861): two differently-worded findings at one line in ONE round", () => {
+  const first = advisory({ summary: "the variable could be named better" });
+  const second = advisory({ summary: "this allocation is not freed on the error path" });
+
+  test("AS-12a: both are reported — a same-round sibling is not an earlier round", () => {
+    const verdict = gate({})([first, second]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat).toEqual([null, null]);
+  });
+
+  test("AS-12b: the EXACT duplicate in one round is still suppressed", () => {
+    // The control for AS-12a. A gate that had simply stopped looking within
+    // the round would also pass it, and within-round exact dedupe is
+    // pre-existing behaviour this change must not have removed.
+    const verdict = gate({})([first, advisory()]);
+    expect(verdict.repeat[0]).toBeNull();
+    expect(verdict.repeat[1]).toBeTypeOf("string");
+  });
+
+  test("AS-12c: a PRIOR round still reaches both of them", () => {
+    // And the control on the other side: the anchor rule is not switched off,
+    // it is scoped. With the same two candidates and a thread from an earlier
+    // round at that anchor, both are suppressed.
+    const verdict = gate({ threads: raisedBefore() })([first, second]);
+    expect(verdict.repeat[0]).toBeTypeOf("string");
+    expect(verdict.repeat[1]).toBeTypeOf("string");
+  });
+});
+
+// ── AS-13 (#1861 round 3): an anchor must name ONE line ──────────────────
+//
+// The anchor key is the cited line's TEXT, so a line reading `}` or
+// `return null;` keys the same anchor wherever it recurs in its file — and a
+// genuinely new finding at a second occurrence would be suppressed as a
+// restatement of a defect somewhere else entirely.
+//
+// MEASURED over the same 25 merged pull requests, 60 findings carrying a text
+// anchor: **5 — 8.3% — cite a line whose text recurs in its own file.** The
+// review suggested a minimum anchor LENGTH and the reading refuses it: four
+// of the five normalise to over twenty characters and the worst is
+// forty-five (`for (const t of tokenize(heredocView(cmd))) {`). Length does
+// not predict distinctiveness. Occurrences measure it.
+//
+// `scripts/measure-anchor-distinctiveness.ts` takes that reading and carries
+// its own negative control: `--control` forces every anchor to `}` before
+// counting, so a run reporting "all anchors unique" on real data AND under
+// the control is an instrument that never opened a file.
+//
+// Cost, stated rather than hidden: one of the eight real repeats #1168 found
+// (`const facts = await probe(slug);` on #1858) sits on an x2 anchor and is
+// no longer suppressed. That is the trade this module's header already
+// declares — a repeat re-posted is loud and self-correcting, a live finding
+// dropped is silent and permanent.
+
+describe("AS-13 (#1861): the anchor rule fires only on a DISTINCTIVE line", () => {
+  const REWORDED = advisory({
+    summary: "this identifier does not say what it holds and should be renamed",
+  });
+
+  /** A checkout where `CITED_LINE` appears twice — the ambiguous anchor. */
+  function ambiguousCheckout(name: string): string {
+    const dir = join(SCRATCH, `checkout-${name}`);
+    mkdirSync(join(dir, dirname(CITED_FILE)), { recursive: true });
+    const lines = Array.from({ length: 10 }, (_, i) => `// filler ${i}`);
+    lines[CITED_AT - 1] = CITED_LINE;
+    // The second occurrence. Indented differently on purpose: `normalise`
+    // collapses whitespace, so a counter that compared raw strings would
+    // read this as one occurrence and the case would pass vacuously.
+    lines[8] = `    ${CITED_LINE.trim()}`;
+    writeFileSync(join(dir, CITED_FILE), lines.join("\n"));
+    return dir;
+  }
+
+  test("AS-13a: the baseline — one occurrence, and the reword IS suppressed", () => {
+    // Read first. Every row below is a zero, and a zero against a baseline
+    // that was never shown to be non-zero is an instrument, not a finding.
+    const verdict = gate({ threads: raisedBefore() })([REWORDED]);
+    expect(verdict.repeat[0]).toBeTypeOf("string");
+  });
+
+  test("AS-13b: the SAME input, with the cited text appearing twice, is reported", () => {
+    const verdict = gate({
+      threads: raisedBefore(),
+      root: ambiguousCheckout("ambiguous"),
+    })([REWORDED]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat[0]).toBeNull();
+  });
+
+  test("AS-13c: the EXACT key still suppresses on an ambiguous anchor", () => {
+    // The control for AS-13b. The screen narrows the anchor JUDGEMENT only —
+    // a finding whose wording also matches is the same finding by identity,
+    // and a change that switched suppression off wholesale would pass
+    // AS-13b too.
+    const verdict = gate({
+      threads: raisedBefore(),
+      root: ambiguousCheckout("ambiguous-exact"),
+    })([advisory()]);
+    expect(verdict.repeat[0]).toBeTypeOf("string");
+  });
+
+  test("AS-13d: a consumer that never wired the counter suppresses no anchor", () => {
+    const verdict = gate({ threads: raisedBefore(), withOccurrences: false })([REWORDED]);
+    expect(verdict.unmeasured).toBeNull();
+    expect(verdict.repeat[0]).toBeNull();
+  });
+
+  test("AS-13e: occurrencesOf counts after normalisation, and refuses to escape the root", () => {
+    const { occurrencesOf } = checkoutLineReader(ambiguousCheckout("counter"));
+    expect(occurrencesOf(CITED_FILE, normaliseLineText(CITED_LINE))).toBe(2);
+    expect(occurrencesOf(CITED_FILE, normaliseLineText("// filler 0"))).toBe(1);
+    expect(occurrencesOf(CITED_FILE, "nothing in this file says this")).toBe(0);
+    // "I could not look" is not "it appears once", and both are not-unique.
+    expect(occurrencesOf("../../etc/passwd", "root")).toBeUndefined();
+    expect(occurrencesOf("lib/absent.ts", "anything")).toBeUndefined();
+  });
+});
+
+// ── AS-14 (#1861 round 3): the sentence names the round that matched ─────
+//
+// `seen` is seeded from the prior round AND grows as this round's candidates
+// are walked, so one `seen.has(key)` covers two different facts. The sentence
+// used to report both as "already raised on an earlier round of this pull
+// request", which is false for a payload that listed one finding twice — and
+// it reaches a human verbatim through the suppressed-findings notice.
+
+// ── AS-15 (#1861 round 4): ONE assembly site, enforced ───────────────────
+//
+// The round-4 review read three rounds of findings as one root cause, and it
+// was right: `SuppressionInputs` was hand-written as an object literal in two
+// commands, so #1861 added `anchorOccurrences` to the adjudicator and left the
+// POSTER — the half that produces #1168's symptom, 11 threads for 3 findings
+// on #1616 — with the anchor rule dead.
+//
+// A behavioural test cannot catch the next one. Both commands would pass every
+// case while differing in a field neither test supplied. So this asserts the
+// STRUCTURE: `productionSuppression` is the only thing that builds the inputs,
+// and neither command may reach past it.
+
+describe("AS-15 (#1861): both commands form the gate through one function", () => {
+  const COMMANDS = ["ai-review-findings.ts", "ai-review-threads.ts"] as const;
+
+  test("AS-15a: each command calls productionSuppression", () => {
+    for (const name of COMMANDS) {
+      const src = readFileSync(join(ROOT, "scripts", name), "utf-8");
+      expect(src, `${name} must build its gate through productionSuppression`)
+        .toContain("productionSuppression(");
+    }
+  });
+
+  test("AS-15b: neither command assembles SuppressionInputs itself", () => {
+    // The thing that actually went wrong. `aiReviewSuppressionGate({...})` in
+    // a command is an object literal somebody has to remember to keep level
+    // with the other one, and nobody did.
+    for (const name of COMMANDS) {
+      const src = readFileSync(join(ROOT, "scripts", name), "utf-8");
+      for (const reaching of [
+        "aiReviewSuppressionGate",
+        "checkoutLineText",
+        "checkoutLineReader",
+      ]) {
+        // The CALL, not the name. Both commands discuss these in prose and
+        // should keep being able to; a detector that caught a docblock would
+        // be fixed by deleting the explanation, which is the wrong repair.
+        expect(
+          src.includes(`${reaching}(`),
+          `${name} must not call ${reaching} directly — add the field to ` +
+            "productionSuppression in lib/ai-review-suppression.ts instead, " +
+            "so both commands get it",
+        ).toBe(false);
+      }
+    }
+  });
+
+  test("AS-15c: the assembly site passes every field the gate reads", () => {
+    // The control. AS-15a and AS-15b are both satisfied by a
+    // `productionSuppression` that forgot a field, which is the original
+    // defect wearing the fix's name.
+    const src = readFileSync(join(LIB, "ai-review-suppression.ts"), "utf-8");
+    const body = src.slice(src.indexOf("export function productionSuppression"));
+    for (const field of ["threads:", "lineTextFor:", "anchorOccurrences:"]) {
+      expect(body, `productionSuppression must pass ${field}`).toContain(field);
+    }
+  });
+
+  test("AS-15d: the poster really does suppress a reworded repeat now", () => {
+    // And the behavioural half, because AS-15a..c are all about text. Built
+    // the way the poster builds it — through the factory, with a thread file
+    // on disk — rather than through the test's own `gate()` helper, which
+    // would prove nothing about the command.
+    const root = checkout("production-assembly");
+    const threadsFile = join(SCRATCH, "production-threads.json");
+    writeFileSync(threadsFile, raisedBefore());
+    const { gate: g, lineTextFor } = productionSuppression(threadsFile, root);
+    expect(g).not.toBeNull();
+    const reworded = advisory({ summary: "this name does not say what it holds" });
+    expect(g!([reworded]).repeat[0]).toBeTypeOf("string");
+    // One reader: the key the poster writes is the key the gate forms.
+    expect(lineTextFor(advisory() as ReviewFinding)).toBe(CITED_LINE);
+  });
+
+  test("AS-15e: no thread list still means no gate, in both commands", () => {
+    expect(productionSuppression(undefined, checkout("no-threads")).gate).toBeNull();
+    expect(productionSuppression("", checkout("empty-threads")).gate).toBeNull();
+  });
+});
+
+describe("AS-14 (#1861): an exact duplicate says WHICH round raised it first", () => {
+  test("AS-14a: a prior round's key says 'an earlier round'", () => {
+    const why = String(gate({ threads: raisedBefore() })([advisory()]).repeat[0]);
+    expect(why).toContain("an earlier round of this pull request");
+  });
+
+  test("AS-14b: a same-round duplicate says this round, and does NOT claim an earlier one", () => {
+    const verdict = gate({})([advisory(), advisory()]);
+    expect(verdict.repeat[0]).toBeNull();
+    const why = String(verdict.repeat[1]);
+    expect(why).toContain("this round");
+    expect(why).not.toContain("earlier round");
   });
 });

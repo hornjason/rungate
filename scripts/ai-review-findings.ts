@@ -92,11 +92,7 @@
  * `specs/CODE-REVIEW-CONVERGENCE-SPEC.md`.
  */
 import { aiReviewJuryGate } from "../lib/ai-review-jury";
-import {
-  aiReviewSuppressionGate,
-  checkoutLineText,
-  readOrNull,
-} from "../lib/ai-review-suppression";
+import { productionSuppression } from "../lib/ai-review-suppression";
 import { main } from "../lib/scaffold/ai-review-findings";
 import { AI_REVIEW_BALLOT_DIR_ENV, AI_REVIEW_THREADS_PATH_VAR } from "../lib/scaffold/ai-review-step";
 
@@ -106,14 +102,13 @@ const jury =
     ? null
     : (blocking: readonly unknown[]) => aiReviewJuryGate(blocking, ballotDir);
 
-const threadsPath = process.env[AI_REVIEW_THREADS_PATH_VAR];
-const suppress =
-  threadsPath === undefined || threadsPath === ""
-    ? null
-    : aiReviewSuppressionGate({
-        threads: readOrNull(threadsPath),
-        lineTextFor: checkoutLineText(process.cwd()),
-      });
+// Assembled in `lib/`, not here. This command and `ai-review-threads.ts` must
+// form the SAME gate from the same file, and two hand-written literals is how
+// `anchorOccurrences` reached one of them and not the other (#1861 round 4).
+const { gate: suppress } = productionSuppression(
+  process.env[AI_REVIEW_THREADS_PATH_VAR],
+  process.cwd(),
+);
 
 // One line, and `process.exit(main(` is load-bearing text: AC-4 in
 // `test/ai-review-findings-command.test.ts` reads it to prove this file

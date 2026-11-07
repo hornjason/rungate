@@ -585,6 +585,105 @@ export function carryKey(finding: unknown, lineText?: unknown): string | null {
   return `${file}\u0000${anchor}\u0000${summary}`;
 }
 
+/**
+ * THE SAME KEY WITH THE WORDING DROPPED — `file \0 t:<text>` (#1168).
+ *
+ * @identity file+text — `file` and the TEXT of the cited line, and nothing
+ * else. It answers a THIRD question, which is why it has a third name: not
+ * *is this the same finding* (`carryKey`, which adds the summary) and not
+ * *is this worth adjudicating* (`advisoryKey`), but **is this the same PLACE
+ * an earlier round already objected to**. It is derived from a `carryKey`
+ * string rather than from a finding, so the two cannot drift apart: there is
+ * no second parse of a finding here to disagree with the first.
+ *
+ * `carryKey` ends in the summary, and `suppressRepeats`' docblock below
+ * states what that buys: *a finding whose summary changed is not [a repeat]*.
+ * That was a deliberate trade — protect a genuinely different finding that
+ * happens to sit at a line an earlier round cited — and the measurement says
+ * it costs everything to buy nothing.
+ *
+ * Read on the last 25 merged pull requests of this repository, 25 round-2+
+ * findings: **0 repeats the full key could see, and 8 real ones**. Every one
+ * of the eight was the same defect restated in different words, every one
+ * confirmed by reading the pair, and **zero** were the case the summary
+ * component protects. The reviewer rewords on essentially every re-raise, so
+ * the population the full key can match is empty by construction — the `0` is
+ * the shape of the key, not the state of the repo.
+ *
+ * ## Only a TEXT anchor, and that is the whole safety argument
+ *
+ * `carryKey` falls back to `n:<line>` when the caller could not read the
+ * line. Two unrelated findings at line 4 of one file share that namespace and
+ * nothing else, so matching on it would suppress across completely different
+ * defects. This returns `null` for `n:` and the caller suppresses nothing —
+ * which also keeps the asymmetry `checkoutLineText`'s docblock describes from
+ * turning into over-suppression when a checkout cannot be read.
+ *
+ * ## A TEXT anchor is not automatically a DISTINCTIVE one
+ *
+ * A line reading `}` or `return null;` keys the same anchor wherever it
+ * recurs in its file, so two findings at two different occurrences collide
+ * here and this cannot tell them apart. That screen is the CALLER's, not
+ * this function's — it needs the file, and this takes a string. See
+ * `checkoutLineReader` and the uniqueness condition in
+ * `lib/ai-review-suppression.ts`.
+ *
+ * Measured on the same 25 pull requests, 60 findings carrying a text anchor:
+ * **5 — 8.3% — cite a line whose text recurs in its own file.** A minimum
+ * anchor LENGTH does not separate them and was the fix not taken: four of the
+ * five normalise to over twenty characters and one to forty-five
+ * (`for (const t of tokenize(heredocView(cmd))) {`). Counting occurrences is
+ * the only screen the reading supports.
+ *
+ * ## The direction this is allowed to be wrong in has CHANGED, deliberately
+ *
+ * Everything else here errs toward reporting a repeat twice. This errs toward
+ * calling two differently-worded findings one finding, which can be wrong,
+ * which is why the caller must report a DIFFERENT reason for it: a reader has
+ * to be able to tell a verbatim re-post from a judgement. The judgement is
+ * the only one of the two that can be appealed.
+ *
+ * Exported and total so there is one binding to mutate, and so the battery
+ * can drive it without a thread list.
+ */
+export function anchorOnlyKey(key: string | null): string | null {
+  if (typeof key !== "string") return null;
+  const parts = key.split("\u0000");
+  if (parts.length !== 3) return null;
+  const [file, anchor] = parts as [string, string, string];
+  if (!anchor.startsWith("t:") || anchor === "t:") return null;
+  if (file === "") return null;
+  return `${file}\u0000${anchor}`;
+}
+
+/**
+ * The normalised TEXT out of an anchor key, so the distinctiveness screen
+ * counts occurrences of the same string the key was built from (#1861).
+ *
+ * Not an identity and never used as one — it returns a component, and that
+ * is why it is not named `…Key`. It exists so the caller does not re-derive
+ * the text from the finding: a second derivation is a second decider, and the
+ * two would agree until one of them was mutated, at which point the other
+ * holds every case up. `null` for anything `anchorOnlyKey` would reject.
+ */
+export function anchorTextOf(anchorKey: string | null): string | null {
+  if (typeof anchorKey !== "string") return null;
+  const parts = anchorKey.split("\u0000");
+  if (parts.length !== 2) return null;
+  const anchor = parts[1] as string;
+  if (!anchor.startsWith("t:") || anchor === "t:") return null;
+  return anchor.slice(2);
+}
+
+/**
+ * The normalisation `carryKey` applies to a cited line, exported so a reader
+ * counting occurrences of that line compares like with like. One binding; a
+ * private copy in the reader would be the two-deciders fault again.
+ */
+export function normaliseLineText(v: unknown): string {
+  return normalise(v);
+}
+
 export interface SuppressionReading {
   /** Findings this round may report. */
   kept: ReviewFinding[];

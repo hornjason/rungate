@@ -249,7 +249,11 @@ describe("KEY-2 (#1398): a finding-identity key states its rule and names the ot
   test("the population is the two modules' keys, and it is not empty", () => {
     const keys = identityKeys();
     expect(keys.length, "no exported key found in the identity modules").toBeGreaterThanOrEqual(2);
-    expect(keys.map(k => k.name).sort()).toEqual(["advisoryKey", "carryKey"]);
+    // #1168 added a THIRD key, which is the case this row's own failure message
+    // already prescribed: "a third kind needs its own name and an @identity
+    // line". `anchorOnlyKey` answers "is this the same PLACE an earlier round
+    // objected to", which is neither of the other two questions.
+    expect(keys.map(k => k.name).sort()).toEqual(["advisoryKey", "anchorOnlyKey", "carryKey"]);
   });
 
   test("each states its identity in its own docblock", () => {
