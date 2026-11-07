@@ -270,29 +270,48 @@ jobs:
           # a default here would silently run the wrong source, and "which
           # candidates did this consider" is the one thing the log must not
           # have to be guessed from.
+          # AN ARRAY, AND EVERY EXPANSION QUOTED — ai-review round 2 of #1846.
+          #
+          # The first spelling built `SOURCE="--closed-issue $ISSUE"` and
+          # expanded it unquoted at the call site, with a comment claiming
+          # both composed variables came from the closed set above. That was
+          # true of MODE and WRITE and false of the one that mattered: ISSUE
+          # is the `workflow_dispatch` free-text input, `type: string`, with
+          # no validation. A dispatch with `issue: "7 --write"` and the write
+          # checkbox UNCHECKED word-split into `--closed-issue`, `7`,
+          # `--write`, and the run performed real board mutations for an
+          # operator who asked for a report. The script cannot defend against
+          # this — by the time it reads argv the tokens are already separate,
+          # and `arg("closed-issue")` sees a perfectly valid `7`.
+          #
+          # So: the number is validated as digits before it is used, and
+          # nothing is composed into a string that is later re-split. Every
+          # `$` below is inside double quotes, which is what BR-54 censuses
+          # over this whole block rather than over the line that was wrong.
+          args=(--repo "$GITHUB_REPOSITORY" --project "$PROJECT_ID" --actor "$ACTOR")
           case "$MODE" in
             closed)
-              if [ -z "$ISSUE" ]; then
-                echo "::warning::UNMEASURED — mode is 'closed' and no issue number was supplied."
-                exit 1
-              fi
-              SOURCE="--closed-issue $ISSUE"
+              case "$ISSUE" in
+                '' | *[!0-9]*)
+                  echo "::warning::UNMEASURED — mode 'closed' needs a plain issue NUMBER and got \"$ISSUE\". Nothing was read."
+                  exit 1
+                  ;;
+              esac
+              args+=(--closed-issue "$ISSUE")
               ;;
-            top-up|assigned|unassigned|opened|reopened)
-              SOURCE="--top-up"
+            top-up | assigned | unassigned | opened | reopened)
+              args+=(--top-up)
               ;;
             *)
               echo "::warning::UNMEASURED — unrecognised mode \"$MODE\", so no candidate source was chosen. Nothing was read."
               exit 1
               ;;
           esac
-          echo "mode=$MODE, source=$SOURCE"
-          # SOURCE and WRITE are unquoted on purpose: each is a flag pair this
-          # file composed from the closed set above, and quoting would pass
-          # "--closed-issue 7" as one argument.
-          bun scripts/board-ready.ts \
-            --repo "$GITHUB_REPOSITORY" \
-            $SOURCE \
-            --project "$PROJECT_ID" \
-            --actor "$ACTOR" \
-            $WRITE
+          # The literal, not the variable. WRITE is a closed set today and
+          # this stops it mattering: there is no path by which the contents
+          # of any input become a FLAG rather than a flag's value.
+          if [ -n "$WRITE" ]; then
+            args+=(--write)
+          fi
+          echo "mode=$MODE, args=${args[*]}"
+          bun scripts/board-ready.ts "${args[@]}"

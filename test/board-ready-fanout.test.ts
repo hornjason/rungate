@@ -1209,8 +1209,17 @@ describe("BR-47..BR-52: an issue that was never blocked reaches Ready", () => {
       .split(",").map(s => s.trim().replace(/['"]/g, "")).filter(s => s !== "");
     expect(types.length, "no trigger types parsed — this row would pass vacuously").toBeGreaterThan(1);
     // Every arm of the `case`, including the alternations `a|b|c)`.
+    //
+    // SPACES ROUND THE PIPES ARE OPTIONAL. The first spelling was
+    // `[a-z|-]+`, and reformatting the arm to `a | b | c)` — which is what
+    // `shfmt` does and what #1846 round 2 wrote by hand — made it match
+    // nothing, so the row went red on a change that altered no behaviour.
+    // A detector a reformat defeats is the second shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`, and the direction it
+    // failed in was loud rather than silent only by luck.
     const arms = new Set(
-      [...ymlLive.matchAll(/^\s{10,}([a-z|-]+)\)$/gm)].flatMap(m => m[1].split("|")),
+      [...ymlLive.matchAll(/^\s{10,}([a-z][a-z-]*(?:\s*\|\s*[a-z][a-z-]*)*)\)$/gm)]
+        .flatMap(m => m[1].split("|").map(s => s.trim())),
     );
     expect(arms.size, "no `case` arms parsed — this row would pass vacuously").toBeGreaterThan(1);
     expect(
@@ -1248,6 +1257,72 @@ describe("BR-47..BR-52: an issue that was never blocked reaches Ready", () => {
         "through its writes, and every run re-reads live state anyway, so " +
         "cancelling the one in flight is the only option that loses anything.",
     ).toMatch(/cancel-in-progress:\s*false/);
+  });
+
+  /**
+   * BR-54 — no input can become a FLAG on the way to the script.
+   *
+   * ai-review round 2 of #1846. The step built `SOURCE="--closed-issue $ISSUE"`
+   * and expanded it unquoted at the call site, under a comment of mine saying
+   * both composed variables came from a closed set. True of `MODE` and
+   * `WRITE`; false of the only one that mattered. `ISSUE` is the
+   * `workflow_dispatch` free-text input — `type: string`, no validation — so a
+   * dispatch with `issue: "7 --write"` and the write box UNCHECKED word-split
+   * into `--closed-issue`, `7`, `--write`, and a run the operator asked to
+   * report performed real board mutations.
+   *
+   * **The script cannot defend against this.** By the time it reads `argv` the
+   * tokens are separate and `arg("closed-issue")` sees a valid `7`. The
+   * workflow is the only place the property exists, so this is the only place
+   * it can be asserted.
+   *
+   * CENSUSED OVER THE WHOLE `run:` BLOCK, not over the line that was wrong.
+   * A repair to the one spelling is the fourth shape in
+   * `.claude/rules/checks-must-be-able-to-fail.md`: the next composed
+   * variable somebody adds re-makes this exactly.
+   */
+  test("BR-54: nothing a never blocked top-up run reads can word-split into a flag", () => {
+    // The LAST `run:` block in the file — the step that invokes the script.
+    const at = ymlLive.lastIndexOf("run: |");
+    expect(at, "no `run: |` block found — this row would pass vacuously").toBeGreaterThan(-1);
+    const block = ymlLive.slice(at);
+    expect(block, "the censused block is not the one that invokes the script").toContain(
+      "bun scripts/board-ready.ts",
+    );
+    // Strip every correctly-quoted expansion, then anything left that still
+    // looks like one is unquoted. `"${args[@]}"` and `"$ISSUE"` go; a bare
+    // `$SOURCE` or `$WRITE` on an argument line stays.
+    //
+    // **`\"` FIRST, and it is not a detail.** The warning lines here spell
+    // an embedded quote as `\"$MODE\"`, and a naive `"[^"]*"` closes its
+    // span on the backslash-quote — which left `$MODE` sitting OUTSIDE the
+    // stripped text and reported two correctly-quoted expansions as bare.
+    // Caught by this row going red against the fix it was written for, which
+    // is the only reason it was not relaxed instead.
+    const stripped = block
+      .split("\n")
+      .filter(l => !/^\s*#/.test(l))
+      .join("\n")
+      .replace(/\\"/g, "Q")
+      .replace(/"[^"\n]*"/g, '""');
+    const bare = [...stripped.matchAll(/\$\{?[A-Za-z_][A-Za-z0-9_]*/g)].map(m => m[0]);
+    expect(
+      bare,
+      "an unquoted expansion in the invocation block. `ISSUE` is free text from " +
+        "`workflow_dispatch` with no validation, so a value of `7 --write` " +
+        "word-splits into its own argv token and flips the script into write " +
+        "mode for an operator who asked for a report. Build the arguments in an " +
+        "array and expand it as `\"${args[@]}\"`.",
+    ).toEqual([]);
+    // The positive half, so the row above cannot go green by matching nothing:
+    // the number is validated as digits BEFORE it reaches the array.
+    expect(
+      block,
+      "the issue number must be refused unless it is digits — quoting alone " +
+        "makes `7 --write` one argument the script then rejects, which is a " +
+        "worse error message for the same bug",
+    ).toMatch(/\*\[!0-9\]\*/);
+    expect(block, "the arguments must be expanded as a quoted array").toContain('"${args[@]}"');
   });
 
   // The bound, named where the source is. Top-up's eligible set is the
