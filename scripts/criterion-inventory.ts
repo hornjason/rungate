@@ -30,17 +30,27 @@
  *
  * Pass it and the first run writes the three readings there, beside a
  * {@link PROVENANCE} file recording when, from which repository, and a
- * digest of what was written. A later run reads all three back and makes no
- * API call at all.
+ * digest of what was written. A later run reads all three back and retakes
+ * none of the three readings — it makes exactly one call, the identity read
+ * that says which repository this tree is, which the comparison below needs
+ * and which {@link resolveRepo} explains. This said "no API call at all"
+ * until the identity read was added in review of #1878, and then kept
+ * saying it; the test for the cache hit asserts the one call by name, so
+ * the sentence was contradicted by the case below it.
  *
- * Three ways that cache is refused rather than believed, and all three are
- * read back on every cache hit — a record nobody consults settles nothing,
- * which is the same defect in miniature:
+ * A cache is refused rather than believed whenever the record cannot settle
+ * what it is for — a record nobody consults settles nothing, which is this
+ * command's own subject in miniature. {@link dirState} and
+ * {@link cacheProblem} are the two deciders and between them they are the
+ * list; no count is stated here, because a hand-written number beside the
+ * thing it counts is the defect recorded on PR #1685 and this very
+ * paragraph had one. In outline:
  *
- * - no {@link PROVENANCE} at all: assembled by something other than this
- *   command, refused naming the directory;
- * - a digest that no longer matches: edited after the fetch;
- * - a repository that is not the one `--repo` asks about.
+ * - no {@link PROVENANCE} at all — assembled by something other than this
+ *   command, refused naming the directory ({@link dirState});
+ * - a record that is unreadable, or that carries no digest or no repository;
+ * - a digest that no longer matches — edited after the fetch;
+ * - a repository that is not the one this run resolved.
  *
  * ## Which absences are refusals, and which are the first pass
  *
