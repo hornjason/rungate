@@ -265,6 +265,41 @@ describe("#1849: a verify command names a test that exists", () => {
       ).toEqual(["outer", "outer inner"]);
     });
 
+    test("a declaration inside a STRING is not a declared name", () => {
+      // Round 9, and the largest defect in this change. `forTitles` keeps
+      // string content, because that is where a title lives — so a
+      // fixture string holding declaration-shaped text was read as a
+      // declaration and its title entered the file's name set. A `-t`
+      // naming that string then reads MATCHED against a test that exists
+      // nowhere, which is the C4 failure (#1849) one level deeper and the
+      // one direction this mechanism may not be wrong in.
+      //
+      // Not latent, and the measurement is a DELTA rather than a claim
+      // about the tree: against a copy of the module with the guard
+      // short-circuited to `false`, `titlesIn` returns 163 names across
+      // 45 files that it no longer returns — `"p1"`, `"${KEPT}"`,
+      // `"zz-report"`, planted fixture titles — and 0 names that it did
+      // not return before. The corpus case does NOT bound this; its four
+      // counts are about completeness, not about spurious names. Saying
+      // otherwise here would be the round-8 mistake again.
+      //
+      // The scanner already knows where every string is — it walks them
+      // to mask `forDepth`. It just never said so. It does now, and a
+      // declaration whose HEAD sits inside one is not a declaration.
+      const Q = '"';
+      const src =
+        `${D}("outer", () => {\n` +
+        `  const fixture = '${D}(${Q}phantom${Q}, () => {});';\n` +
+        `  ${T}("inner", () => { void fixture; });\n` +
+        `});\n`;
+      expect(titlesIn(src), "a title inside a string fixture entered the name set").toEqual(["outer", "inner"]);
+      expect(paths(src)).toEqual(["outer", "outer inner"]);
+      expect(
+        namesAreComplete(src).complete,
+        "excluding string content made an ordinary file unreadable",
+      ).toBe(true);
+    });
+
     test("a title the title scan could not READ is UNMEASURED, not a dropped name", () => {
       // Round 8. The head agreement of round 7 made the two patterns
       // start the same way; it did not make them agree about the TITLE.

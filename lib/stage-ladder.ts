@@ -796,6 +796,18 @@ export function titlePathsIn(raw: string): string[] | null {
 }
 
 /** The path set of an already-scanned source, or `null` if interpolated. */
+/**
+ * Does the declaration starting at `at` sit inside a string literal?
+ *
+ * Strictly inside, so a span's own opening quote is not "in" it. The
+ * head is `describe`/`test`/`it`, which in real source is never inside
+ * a string and in a fixture always is — the whole distinction, taken
+ * from the scan rather than guessed at.
+ */
+function headIsInAString(scan: Scan, at: number): boolean {
+  return scan.strings.some(([a, b]) => at > a && at < b);
+}
+
 function pathsFrom(scan: Scan): string[] | null {
   const source = scan.forTitles;
 
@@ -821,6 +833,9 @@ function pathsFrom(scan: Scan): string[] | null {
     // probe caught it: `test/stage-ladder.test.ts` read 41 paths of which
     // not one carried its describe.
     while (stack.length > 0 && stack[stack.length - 1]!.depth > depth) stack.pop();
+
+    // A declaration quoted INSIDE a string is a fixture, not a test.
+    if (headIsInAString(scan, at)) continue;
 
     const [, kind, quote, raw] = m as unknown as [string, string, string, string];
     if (quote === "`" && raw.includes("${")) {
@@ -885,6 +900,21 @@ function pathsFrom(scan: Scan): string[] | null {
 interface Scan {
   forTitles: string;
   forDepth: string;
+  /**
+   * `[start, end)` of every string and template the scan walked.
+   *
+   * `forTitles` keeps string content, because that is where a title
+   * lives — so by itself it cannot tell a declaration from a fixture
+   * string that quotes one. Round 9 measured what that costs: **346
+   * names across 69 files existed only inside a string**, each one a
+   * `-t` pattern away from a confident MATCHED against a test that
+   * exists nowhere. That is #1849's own failure, one level deeper.
+   *
+   * The scanner already walks every string to mask `forDepth`. This is
+   * the same walk, reported instead of discarded — no second parse, and
+   * nothing to keep in step with the first.
+   */
+  strings: [number, number][];
   ok: boolean;
   /**
    * How far the scan actually got. Everything from here on is RAW — not
@@ -998,6 +1028,7 @@ function scanSource(text: string): Scan {
   let before = "\n";
   let ok = true;
   let braces = 0;
+  const strings: [number, number][] = [];
 
   /**
    * Is the `/` at `at` opening a regex, or dividing?
@@ -1081,7 +1112,9 @@ function scanSource(text: string): Scan {
     if (c === '"' || c === "'" || c === "`") {
       const end = endOfString(text, i);
       if (end === -1) { ok = false; break; }
-      // Kept in `forTitles` — this is where a title lives.
+      // Kept in `forTitles` — this is where a title lives. The span is
+      // reported so a reader can tell a title from a fixture that quotes one.
+      strings.push([i, end]);
       blank(depth, i, end);
       i = end;
       remember(c);
@@ -1099,6 +1132,7 @@ function scanSource(text: string): Scan {
   return {
     forTitles: titles.join(""),
     forDepth: depth.join(""),
+    strings,
     ok: ok && braces === 0,
     // Where the loop stopped. On a clean run that is the end; on a bail
     // it is the token that defeated it, and nothing past it was masked.
@@ -1291,9 +1325,13 @@ const UNRESOLVED_CALL = new RegExp(String.raw`${DECLARATION_HEAD}(.)`, "g");
  */
 const TITLE_CALL_AT = new RegExp(TITLE_CALL.source, "y");
 
-function hasUnresolvedDeclaration(masked: string): boolean {
+function hasUnresolvedDeclaration(scan: Scan): boolean {
+  const masked = scan.forTitles;
   UNRESOLVED_CALL.lastIndex = 0;
   for (const m of masked.matchAll(UNRESOLVED_CALL)) {
+    // A declaration quoted inside a string is a fixture. Asked here too,
+    // or a fixture string would be the thing reported unresolved.
+    if (headIsInAString(scan, m.index!)) continue;
     // Group 2: group 1 is the declaration name, captured by the shared
     // `DECLARATION_HEAD`.
     const first = m[2]!;
@@ -1332,6 +1370,8 @@ export function titlesIn(raw: string): string[] {
   const out: string[] = [];
   TITLE_CALL.lastIndex = 0;
   for (const m of source.matchAll(TITLE_CALL)) {
+    // A declaration quoted INSIDE a string is a fixture, not a test.
+    if (headIsInAString(scan, m.index!)) continue;
     const [, , quote, text] = m as unknown as [string, string, string, string];
     if (quote === "`" && text.includes("${")) continue;
     out.push(text.replace(/\\(.)/g, "$1"));
@@ -1351,7 +1391,7 @@ export function namesAreComplete(raw: string): { complete: boolean; why: string 
   if (!scan.ok) {
     return { complete: false, why: "the scanner could not read the whole file — an unterminated string, comment or regex, or braces that do not balance" };
   }
-  if (hasUnresolvedDeclaration(scan.forTitles)) {
+  if (hasUnresolvedDeclaration(scan)) {
     return { complete: false, why: "it declares at least one test whose title is not a string literal (`.each`, `.skipIf(…)(…)`, or a variable)" };
   }
   if (pathsFrom(scan) === null) {
