@@ -80,6 +80,7 @@ grants nothing.
 | — | The filing gate resolves a filing against the session directory, not the checkout it was filed from | lib/issue-filing-gate.ts, test/issue-filing-gate.test.ts | — | — |
 | — | Nothing proves the board can fail: 0 of 28 BOARD-FLOW-SPEC criteria are ticked | test/board-intake.test.ts, test/board-flow.test.ts, specs/BOARD-FLOW-SPEC.md | — | The filing gate resolves a filing against the session directory, not the checkout it was filed from |
 | — | A leading quote disarms the newline escape, so a scratch path can forge a record | lib/scaffold/ai-review-step.ts, .github/workflows/ai-review.yml, test/ai-review-workflow.test.ts | — | — |
+| — | Measure the anchor-suppression rate on rungate@0.8.14 across 10 multi-round pull requests | reporting only — no production file is expected to change | — | — |
 
 The third row is live, found while watching run `42254789078` drain the
 board. `clearAssignees` is REST — `PATCH /repos/{repo}/issues/{n}` — and it
@@ -165,3 +166,38 @@ down here. The row is one title, merged through review like any other, and the
 cap applies unchanged to everything that is not in the table. If found findings
 start appearing in this document at a rate, that is the signal that the cap is
 set wrong — not that the route is working.
+
+## Amended 2026-11-07 (second) — a parked card needs something that can wake it
+
+Jason, asked whether #1168 should move out of the In progress lane while it
+waits for review rounds to accumulate: *"How do we know how to pick back up
+eleven sixty eight?"*
+
+There was no good answer, and that is the finding. The proposal was to park it
+to Backlog and come back when there was data — which is memory, and memory is
+the thing this whole board exists to replace. Nothing in this repository wakes
+a parked card. A card parked on an intention is indistinguishable, a week
+later, from a card nobody ever started; that is the same confusion
+`.claude/rules/parallel-sessions.md` records about an unclaimed issue.
+
+So the wait becomes a card, and `blocked by` carries the relationship:
+
+- the seventh row is the measurement #1168's second criterion is waiting on
+- #1168 is `blocked by` it
+- `work-status` computes startability from the dependencies API, so #1168
+  reappears among the promotion candidates when that closes, because the graph
+  says so and not because anyone remembered
+
+This is rule 4 — *ordering is data, not prose* — applied to a case the rule was
+not written for. Rule 4 is about which work comes first. The same edge also
+answers *when does this become work again*, and that is worth stating because
+the obvious alternatives are all prose: a note in the issue, a line in a retro,
+a date in someone's head.
+
+**The row carries no criterion and changes no production file.** It is a
+reading to be taken and recorded on #1168, which is the shape
+`.claude/rules/checks-must-be-able-to-fail.md` asks for: a criterion is closed
+by a measurement, never by a symbol being present in a package. #1168's second
+criterion is *reachable* as of `rungate@0.8.14` and has been *observed* zero
+times, and ticking it today would be exactly the defect SC-2622 exists to
+refuse.
