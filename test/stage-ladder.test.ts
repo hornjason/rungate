@@ -108,7 +108,7 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  * stages are a dependency order, not a queue, and G's five items depend on
  * nothing those four carry.
  */
-const COMPLETE_STAGES = 3;
+const COMPLETE_STAGES = 4;
 
 /**
  * Every verify command in the plan file runs through here.

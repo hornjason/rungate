@@ -1554,28 +1554,54 @@
         {
           "id": "H1",
           "what": "readyOrder ranks milestone phase first, then label rank, then UNPLACED — with issue number as the tiebreak INSIDE each tier, so age still breaks ties but never decides the tier",
-          "done": false,
+          "done": true,
           "verify": "bun test test/board-ready-rule.test.ts -t 'label' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "H2",
           "what": "THE CONTROL: the label rank exists at exactly ONE site, so a mutation of it reddens every caller. scripts/board-ready.ts and scripts/board-mirror.ts must not each compute a rank — two deciders that agree are behaviourally one, and a mutation of either leaves the other holding the case up",
-          "done": false,
+          "done": true,
           "verify": "bun test test/board-ready-rule.test.ts -t 'one site' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "H3",
           "what": "an UNRANKED label does not place an issue — it is UNPLACED, reported, never guessed into a tier. arbiter-override is deliberately outside the rank and is the live case",
-          "done": false,
+          "done": true,
           "verify": "bun test test/board-ready-rule.test.ts -t 'unknown label' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "H4",
           "what": "work-status states how many promotion candidates are UNPLACED. An issue nothing can rank currently reads identically to one ranked last, which is the lane-health defect one level up (Claim 4)",
-          "done": false,
+          "done": true,
           "verify": "bun test test/work-status.test.ts -t 'UNPLACED' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         }
-      ]
+      ],
+      "retro": {
+        "wentWell": [
+          "THE REDIRECT WAS THE WORK. The option Jason picked was a placement-table backfill, and four commands showed it could not reach the backlog: only 16 of 80 open issues name an SC id, so plan-spec orders a fifth of it and no table reaches the other 64. Measuring before building cost about ten minutes and saved building the wrong thing. The measurement is on Stage E's `why` so it is not re-derived.",
+          "Fourteen mutations across two rounds, membership predicted BY NAME before every run, and all fourteen exact — including both controls at zero. No row was read as a total.",
+          "The control test caught itself twice before CI saw it: it threw on a `sourceFiles` call with no directories (a green run would have been a thrown error read as a clean sweep), and its first predicate flagged `lib/issue-create-override.ts`, which maps the same labels to HELP STRINGS and is a legitimate second naming. Both now carry an anti-vacuity assertion.",
+          "`labels` is REQUIRED on Rankable with no default, and the typecheck then named every caller — 21 errors down to 0. An optional field would have let a site omit it and receive UNPLACED, which is a reading rather than an absence.",
+          "Proved on the live board, not just in the suite: 3 placed by milestone, 27 by label, 8 UNPLACED, and the top five printed in plan order. The report now names the 8 by number instead of burying them in a 28-row `(no milestone)` heading."
+        ],
+        "wentPoorly": [
+          "ONE SITE FIXED, THE SIBLING LEFT — the third time this session. I added the truncated-label refusal to scripts/board-ready.ts and not to scripts/board-mirror.ts, which reads labels for the SAME ordering and promotes with them. Both ai-review reviewers found it independently and graded it high. The rule was already in memory as `feedback-replace-one-name-scan-sweep-for-the-others` and I did not apply it while writing the guard.",
+          "The new labels pager advanced its own cursor from hasNextPage. SC-2721 exists for exactly that and its message says three variants of one silent truncation reached main one at a time. I wrote a pager without reading the rule that governs pagers.",
+          "My own round-1 regression test used `code.slice(at, at + 600)`, which #664 forbids under test/ with no exemption list. CI caught it, not me — and the guard is right: a 600-character window starts passing the day a refusal appears 601 characters away in an unrelated branch.",
+          "`bun scripts/census-routing.ts` answered `no census test is reachable from this change` and #664's guard WAS reachable. The router's test/ trigger is `added a test file`, a lifecycle event, where the guard's real trigger is a content shape. That is the #990 distinction the router exists to make, missing one row. FILE THIS as its own issue when the FindingArbiter 24h cap reopens — it was spent on #1852 and #1853 and the attempt was refused OVER_CAP. It is not in `improvements` because OPEN_WITHOUT_ISSUE only shrinks, and adding a line there to park an unfiled item is the thing that list exists to prevent. The acceptance to file: the router names test/no-fixed-window-slices.test.ts for a diff introducing `.slice(a, a + N)` under test/, its own test proves it with a control diff that lacks the shape, and every other content-shaped CENSUS_TRIGGERS row is audited in the same pass.",
+          "Two mutation needles in the first battery matched 0 and 4 times. Reported UNMEASURED and re-run correctly rather than read as green, but it cost a round trip that a count-before-apply would have avoided.",
+          "The trial reviewer (`Claude review`) failed UNMEASURED on the final head — 25 tool calls, a pending review created, none submitted, NO_REVIEW_POSTED. It is not a required check and `ai-review` passed, so the merge was legitimate, but one of the two review mechanisms produced nothing on this change and its own instrument said so."
+        ],
+        "improvements": [
+          {
+            "what": "When adding a guard, sweep for every file with the same read BEFORE writing the first one — three times this session a reviewer named the second site after I shipped the first",
+            "mechanism": "test/board-ready-rule.test.ts asserts the PROPERTY across the population rather than per file: every file that selects `labels(first:` AND imports board-ready-rule must ask for the label connection's pageInfo and must return EXIT_REFUSED or REFUSAL_EXIT inside that branch. The branch is read with structuralCut, not a fixed window, so the assertion cannot drift onto an unrelated refusal. The next ordering reader is covered before it is written.",
+            "status": "in-place",
+            "issue": 1853,
+            "verify": "bun test test/board-ready-rule.test.ts -t 'truncated label list' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
+          }
+        ]
+      }
     }
   ],
   "goal": {
