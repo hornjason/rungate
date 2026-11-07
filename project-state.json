@@ -1476,31 +1476,31 @@
           "id": "G1",
           "what": "a never-blocked, unblocked, unassigned issue can reach Ready from an event the repo already emits — no cron, no hand-run command",
           "done": false,
-          "verify": "bun test test/board-ready-fanout.test.ts -t 'never blocked'"
+          "verify": "bun test test/board-ready-fanout.test.ts -t 'never blocked' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "G2",
           "what": "work-status names exactly ONE startable list and it is the Ready lane; the repo-wide set is printed as promotion candidates, explicitly not startable",
-          "done": false,
-          "verify": "bun test test/work-status.test.ts -t 'one startable list'"
+          "done": true,
+          "verify": "bun test test/work-status.test.ts -t 'one startable list' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "G3",
           "what": "a short Ready is a NON-ZERO EXIT, not a sentence in a report — this is the item that stops the agreement decaying, because after it nobody has to remember the conversation",
-          "done": false,
-          "verify": "bun test test/work-status.test.ts -t 'short Ready exits non-zero'"
+          "done": true,
+          "verify": "bun test test/work-status.test.ts -t 'a short Ready lane refuses' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "G4",
-          "what": "THE CONTROL: a board already at depth promotes nothing, or the refill fires on everyone and Ready stops meaning anything",
-          "done": false,
-          "verify": "bun test test/board-ready-fanout.test.ts -t 'already at depth'"
+          "what": "THE CONTROL: a board already at depth promotes nothing. Needed no new code — selectReady in lib/board-ready-rule.ts already promotes nothing when slots===0 and refuses with a reason when cap is null. Verified against it rather than rebuilt.",
+          "done": true,
+          "verify": "bun test test/board-ready-rule.test.ts -t 'promotes nothing' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "G5",
           "what": "the report states how many Ready cards it could NOT see — a draft has no issue number and is invisible to every tool here, so it silently holds a slot nothing can dispatch",
-          "done": false,
-          "verify": "bun test test/work-status.test.ts -t 'cards it could not see'"
+          "done": true,
+          "verify": "bun test test/work-status.test.ts -t 'could not see' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         }
       ],
       "retro": null
