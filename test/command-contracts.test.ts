@@ -14,7 +14,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 
 const ROOT = join(import.meta.dir, "..");
 const COMMANDS = join(ROOT, ".claude", "commands");
@@ -65,13 +65,20 @@ function read(name: string): string {
 function runBlock(
   block: string,
   args: string,
-  opts: { stubGh?: string; cwd?: string } = {},
+  opts: { stubGh?: string; cwd?: string; onlyPath?: string } = {},
 ): { code: number; out: string } {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   delete env.GH_TOKEN;
-  if (opts.stubGh !== undefined) env.PATH = `${opts.stubGh}:${env.PATH ?? ""}`;
-  const p = Bun.spawnSync(["bash", "-c", block.replaceAll("$ARGUMENTS", args)], { cwd: opts.cwd ?? ROOT, env });
+  // `onlyPath` REPLACES the search path instead of prepending to it, which
+  // is the only way to run a block in a process where `gh` or `git` is
+  // genuinely absent. It must still contain the runtime, or the block dies
+  // because `bun` is missing and the case witnesses the wrong absence.
+  if (opts.onlyPath !== undefined) env.PATH = opts.onlyPath;
+  else if (opts.stubGh !== undefined) env.PATH = `${opts.stubGh}:${env.PATH ?? ""}`;
+  // `/bin/bash`, absolute: with PATH narrowed, resolving "bash" through it
+  // would fail at spawn and report as the block refusing.
+  const p = Bun.spawnSync(["/bin/bash", "-c", block.replaceAll("$ARGUMENTS", args)], { cwd: opts.cwd ?? ROOT, env });
   return {
     code: p.exitCode ?? -1,
     out: new TextDecoder().decode(p.stdout) + new TextDecoder().decode(p.stderr),
@@ -228,6 +235,49 @@ describe("the commands #1746 creates are executable, not prose", () => {
       "the scan returned nothing for a directory whose only command nests a backtick, " +
         "so its empty answer above proves nothing",
     ).toHaveLength(1);
+  });
+
+  test("every block reports UNMEASURED when the binary it drives is not on PATH", () => {
+    // `Bun.spawnSync` THROWS ENOENT when the executable is absent — it does
+    // not return a non-zero exit. Measured on this runtime:
+    //   Bun.spawnSync(["not-a-real-binary"])  ->  throws, code ENOENT
+    // So every `p.exitCode === 0 ? … : null` helper in these files had a
+    // refusal branch that an absent binary could never reach, and the block
+    // died with a stack trace in the agent's context instead.
+    //
+    // Round 9 found it, in BOTH files at once. Covered here as one case
+    // over both for the same reason: the defect is the helper shape, and a
+    // case per file would let the next helper ship without one.
+    //
+    // Broken to prove it: removing either try/catch makes its own arm exit
+    // non-zero and turns this red.
+    const runtimeDir = dirname(process.execPath);
+    const bare = join(scratch, "no-tools");
+    require("fs").mkdirSync(bare, { recursive: true });
+    const onlyPath = `${bare}:${runtimeDir}`;
+
+    // The control on the fixture: the narrowed path must still run the
+    // runtime, or every arm below "passes" by failing for the wrong reason.
+    const canRun = runBlock('bun -e \'console.log("runtime reachable")\'', "", { onlyPath });
+    expect(canRun.out, `the narrowed PATH cannot run bun, so nothing below measured a missing binary:\n${canRun.out}`).toContain(
+      "runtime reachable",
+    );
+    // …and it must NOT reach the binaries under test, or the arms are vacuous.
+    for (const tool of ["gh", "git"]) {
+      const found = runBlock(`command -v ${tool} || echo ABSENT`, "", { onlyPath });
+      expect(found.out, `${tool} is still reachable on the narrowed PATH, so its arm proves nothing`).toContain("ABSENT");
+    }
+
+    for (const [name, needle] of [
+      ["round-rca", "gh could not be run at all"],
+      ["stage-audit", "git could not be run at all"],
+    ] as const) {
+      const block = executableBlocks(read(name))[0] as string;
+      const out = runBlock(block, "", { onlyPath });
+      expect(out.code, `${name} crashed instead of reporting a missing binary:\n${out.out}`).toBe(0);
+      expect(out.out, `${name} must name the absent binary`).toContain(needle);
+      expect(out.out, `${name} must report it as UNMEASURED`).toContain("UNMEASURED");
+    }
   });
 
   test("stage-audit decides whether this tree can be measured, and refuses this one", () => {
