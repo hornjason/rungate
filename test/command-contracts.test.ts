@@ -397,6 +397,30 @@ describe("the commands #1746 creates are executable, not prose", () => {
     expect(disagree.out).toContain("distinct commits: 4");
   });
 
+  test("round-rca answers about the branch's pull request, and says so when that is not the one asked for", () => {
+    // The argument never reaches the block — it is prose in the prompt — so
+    // standing on a branch whose pull request is NOT the one named gives a
+    // correct answer to a question nobody asked. The prose used to claim the
+    // block would say UNMEASURED here; it does not, and cannot. The only
+    // thing that catches the mismatch is the reader, so the block has to
+    // hand them the number and tell them it came from the branch.
+    //
+    // Round 5 of this PR's review found the false claim. Broken to prove it:
+    // deleting the provenance line turns this red.
+    const block = executableBlocks(read("round-rca"))[0] as string;
+
+    // The planted `gh` answers for pull request 1725. The operator asked
+    // about 9999 — a different one, on a branch they are not standing on.
+    const out = runBlock(block, "9999", { stubGh: plantGh("mismatch", runsOf(["a1", "b2"])) });
+    expect(out.code, out.out).toBe(0);
+    expect(out.out, "the block must report the branch's pull request, which is 1725").toContain("pull request #1725");
+    expect(out.out, "it must never silently adopt the number from the prose").not.toContain("#9999");
+    expect(
+      out.out,
+      "the reader is the only thing that can catch the mismatch, so the block must say where the number came from",
+    ).toContain("resolved from the branch you are standing on");
+  });
+
   test("round-rca refuses a truncated page instead of comparing two populations", () => {
     const block = executableBlocks(read("round-rca"))[0] as string;
     // `total_count` spans the whole result set; the commit count spans only
