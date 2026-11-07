@@ -726,7 +726,15 @@ export function scopeNotSupplied(): AiReviewScopeReading {
     detail:
       `no changed-file list was given (second positional argument), so whether ` +
       `a blocking finding names a file this pull request touches was not checked. ` +
-      `This is a reading, not a pass: the generated job does not supply the list yet`,
+      // #1567. This said "the generated job does not supply the list yet",
+      // which stopped being true when #1356 wired the writer: the step passes
+      // the list as a second positional today. An operator reading the old
+      // sentence would conclude the harness cannot do this, when the true
+      // state is that THIS invocation arrived without one — a different
+      // problem with a different fix.
+      `This is a reading, not a pass. The generated job passes the list as a second ` +
+        `positional, so an empty one here means either the step that writes it did not ` +
+        `run, or the adjudicator was invoked by hand`,
   };
 }
 
