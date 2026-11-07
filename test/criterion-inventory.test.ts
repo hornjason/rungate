@@ -832,7 +832,13 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
       const got = run(["--snapshot", snap, ...args], stub);
       expect(got.exitCode).not.toBe(0);
       expect(got.stderr.toString()).toContain("prs.json is absent");
-      expect(got.stderr.toString()).not.toContain("at <anonymous>");
+      // ONE line, and that is the discriminator. Both states exit non-zero
+      // and both print the sentence, so asserting either proves nothing:
+      // measured against a mutant that rethrows, the uncaught path adds a
+      // source listing and five `at …` frames. A first draft of this case
+      // asserted the absence of `at <anonymous>`, which the real trace does
+      // not contain — it passed under the mutation and witnessed nothing.
+      expect(got.stderr.toString().trim().split("\n")).toHaveLength(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(stub, { recursive: true, force: true });
