@@ -71,6 +71,7 @@ import {
   readLedgerRows,
   recordAdjudication,
   releaseAllowance,
+  RUN_WINDOW_MS,
   reserveAllowance,
   runIdFor,
   type FilingLedgerRow,
@@ -113,15 +114,32 @@ import { tryLoadRungateConfig } from "../lib/config-loader";
  * the cap acquires a third door. A planned filing goes through the CLI
  * path, where `plannedFiling` reads `origin/main`.
  */
-function reserveFiling(title: string): FilingDecision {
-  const reading = runIdFor(process.cwd());
+function reserveFiling(title: string, projectRoot: string): FilingDecision {
+  const reading = runIdFor(projectRoot);
   if (reading.run === null) {
     throw new Error(
       `the run could not be read, so this filing cannot be counted against a cap: ${reading.why ?? "no reason given"}`,
     );
   }
   const run = reading.run;
-  const { cap } = filingsPerRunFor(() => tryLoadRungateConfig(process.cwd()) as Record<string, unknown> | null);
+  const { cap, unreadable } = filingsPerRunFor(
+    () => tryLoadRungateConfig(projectRoot) as Record<string, unknown> | null,
+  );
+  // **A corrupt ship policy refuses rather than quietly enforcing the strict
+  // fallback.** `filingsPerRunFor` reports `unreadable` precisely so a caller
+  // can tell "no policy" from "a policy nobody could parse", and the CLI path
+  // reads it and raises `unreadableShipPolicyNote`. Discarding it here would
+  // be Silent Default Substitution — `.claude/rules/config-access.md` — on
+  // the door that has no parser watching it, which is the combination this
+  // whole change exists to remove.
+  if (unreadable) {
+    throw new Error(
+      `the ship policy in this project's rungate config is present and could not be parsed, so the ` +
+        `filing cap for this run is unknown. Refusing rather than enforcing the strict fallback of ` +
+        `${cap} silently: a cap substituted for one nobody could read is indistinguishable from the ` +
+        `configured one.`,
+    );
+  }
 
   const at = new Date().toISOString();
   const row: FilingLedgerRow = {
@@ -164,9 +182,14 @@ function reserveFiling(title: string): FilingDecision {
     // stranding.
     releaseAllowance(outcome.intent, recordAdjudication);
     throw new Error(
-      `this run has already filed ${outcome.already} issue(s) in the last 24h, and the cap is ${cap}. ` +
-        `Tool-path filings are metered too as of #1677 — this is the same ledger the CLI path reserves ` +
-        `against, at ${ledgerPath()}, and the overflow is a comment.`,
+      // The window is DERIVED, never spelled. `overCapReason` already composes
+      // it as `${RUN_WINDOW_MS / 3_600_000}h`, and a second literal spelling
+      // of a value with one authoritative source goes stale silently the day
+      // that source moves.
+      `this run has already filed ${outcome.already} issue(s) in the last ` +
+        `${RUN_WINDOW_MS / 3_600_000}h, and the cap is ${cap}. Tool-path filings are metered too as ` +
+        `of #1677 — this is the same ledger the CLI path reserves against, at ${ledgerPath()}, and ` +
+        `the overflow is a comment.`,
     );
   }
   if (outcome.outcome === "UNCOUNTABLE") {
@@ -456,7 +479,21 @@ export async function run(command: string, flags: Flags): Promise<unknown> {
           body: readBody(flags, { allowEmpty: true }),
           labels: labels(flags),
         },
-        () => reserveFiling(title),
+        // **`--project-root`, and never `process.cwd()`.** Every production
+        // caller invokes this script as
+        // `bun --cwd ${HARNESS_ROOT} scripts/github-op.ts issue-create`, so
+        // the child's cwd is the HARNESS's checkout for every run on the
+        // machine — not the project being shipped. Keying the cap off it
+        // would put every concurrent ship run in one shared allowance, and
+        // the second project to file would be refused for issues the first
+        // one opened. Caught by review of #1873; it is the same
+        // misresolution ADR-011's 2026-11-06 amendment records, arriving by
+        // a different route.
+        //
+        // Required, with no fallback to cwd, for the reason `gate` has no
+        // default: a silent wrong answer here is a cap measured against the
+        // wrong denominator, and nothing downstream could tell.
+        () => reserveFiling(title, required(flags, "project-root")),
       );
       return { number: data.number, html_url: data.html_url };
     }
