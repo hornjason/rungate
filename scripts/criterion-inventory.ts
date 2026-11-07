@@ -29,13 +29,18 @@
  * ## `--snapshot <dir>` is a cache this command owns, not an input you build
  *
  * Pass it and the first run writes the three readings there, beside a
- * {@link PROVENANCE} file recording when and from which repository. A later
- * run reads them back and makes no API call at all.
+ * {@link PROVENANCE} file recording when, from which repository, and a
+ * digest of what was written. A later run reads all three back and makes no
+ * API call at all.
  *
- * A directory holding those readings WITHOUT that file was assembled by
- * something other than this command, and is a **refusal naming the
- * directory** — not a measurement. Deleting the directory, or dropping
- * `--snapshot`, is the remedy, and the refusal says so.
+ * Three ways that cache is refused rather than believed, and all three are
+ * read back on every cache hit — a record nobody consults settles nothing,
+ * which is the same defect in miniature:
+ *
+ * - no {@link PROVENANCE} at all: assembled by something other than this
+ *   command, refused naming the directory;
+ * - a digest that no longer matches: edited after the fetch;
+ * - a repository that is not the one `--repo` asks about.
  *
  * ## Which absences are refusals, and which are the first pass
  *
@@ -53,6 +58,7 @@
  * name. Both halves were raised by the required reviewer on #1642.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
@@ -508,8 +514,95 @@ export function dirState(dir: string): DirState {
   return data.some(name => existsSync(join(dir, name))) ? "hand" : "empty";
 }
 
+/** The three readings a snapshot holds, in the order the digest reads them. */
+export const SNAPSHOT_FILES = ["issues.json", "prs.json", "pr-files.jsonl"] as const;
+
+/**
+ * A digest of the three readings, so a cache can say it has not been edited.
+ *
+ * {@link PROVENANCE} on its own answers *when* and *from where*, and the
+ * header used to claim it answered *whether a line was edited after the
+ * fetch* as well. It did not: hand-editing `issues.json` leaves the record
+ * untouched and the directory still reads as taken. Raised in review of
+ * #1878, and fixed by making the claim true rather than by narrowing it.
+ *
+ * An absent file contributes its name and nothing else, so deleting one is
+ * a change the digest sees — which matters because `pr-files.jsonl` is
+ * legitimately absent on a cache taken before any pull request named a
+ * criterion, and "absent" has to stay distinguishable from "emptied".
+ */
+export function snapshotDigest(dir: string): string {
+  const h = createHash("sha256");
+  for (const name of SNAPSHOT_FILES) {
+    const path = join(dir, name);
+    h.update(name);
+    h.update(existsSync(path) ? readFileSync(path) : Buffer.alloc(0));
+  }
+  return h.digest("hex");
+}
+
+/** What {@link PROVENANCE} records. */
+export interface Taken {
+  by: string;
+  takenAt: string;
+  repo: string | null;
+  digest: string;
+}
+
+/**
+ * Why this cache must not be believed — or `null` when it may be.
+ *
+ * Reached only for a directory in the `taken` state, so the question is no
+ * longer *did we write this* but *is what we wrote still what is here, and
+ * is it about the repository being asked about*. Both were recorded by
+ * `writeSnapshotDir` from the first commit and neither was read back, which
+ * is the same shape as the defect this whole command is about: a provenance
+ * nobody checks settles nothing.
+ */
+export function cacheProblem(dir: string, repo: string | undefined): string | null {
+  const path = join(dir, PROVENANCE);
+  let taken: Partial<Taken>;
+  try {
+    taken = JSON.parse(readFileSync(path, "utf-8")) as Partial<Taken>;
+  } catch (err) {
+    return `${path} is not readable JSON (${(err as Error).message}), so nothing says where this snapshot came from`;
+  }
+  if (typeof taken.digest !== "string") {
+    return `${path} records no digest, so it cannot say whether the readings beside it have been edited since`;
+  }
+  const now = snapshotDigest(dir);
+  if (now !== taken.digest) {
+    return (
+      `the readings in ${dir} have changed since ${path} was written (recorded ${taken.digest.slice(0, 12)}, ` +
+      `found ${now.slice(0, 12)}), so they are a hand-edited snapshot wearing a record of a fetch that no ` +
+      `longer describes them`
+    );
+  }
+  if (repo !== undefined && taken.repo !== null && taken.repo !== undefined && taken.repo !== repo) {
+    return (
+      `${dir} was taken for ${taken.repo} and --repo asks about ${repo}. A cache hit for the wrong ` +
+      `repository is indistinguishable from a right one in the output`
+    );
+  }
+  return null;
+}
+
 /** How a `gh` call is made. A parameter so the fetch has a seam. */
 export type Exec = (args: readonly string[]) => string;
+
+/**
+ * `gh`, run in the tree the rest of the command is reading.
+ *
+ * With no `--repo`, `gh` infers the repository from the git remote of its
+ * working directory — and `--project-root` is an independent value, so a
+ * caller pointing the spec and the test scan at one tree while standing in
+ * another would read a second repository's tracker and nothing in the
+ * output would say which. They happen to coincide on the dispatcher path,
+ * which is exactly why nothing caught it. Raised in review of #1878.
+ */
+function execIn(root: string): Exec {
+  return args => ghWithoutGhToken(args, { cwd: root });
+}
 
 /**
  * The page size for the two list reads.
@@ -574,9 +667,11 @@ export function fetchChangedFiles(
  * `CODE_DIRS` forever, so widening that list would leave old caches
  * answering with the old one and no reading would say so.
  *
- * {@link PROVENANCE} is written LAST. A run killed partway then leaves a
- * directory in the `hand` state, which refuses — rather than one that looks
- * taken and is half-written.
+ * {@link PROVENANCE} is written LAST, and carries the digest of what was
+ * written before it. A run killed partway leaves a directory in the `hand`
+ * state, which refuses, rather than one that looks taken and is
+ * half-written — and a directory edited afterwards fails the digest, which
+ * is the half {@link cacheProblem} answers.
  */
 export function writeSnapshotDir(
   dir: string,
@@ -588,10 +683,13 @@ export function writeSnapshotDir(
   writeFileSync(join(dir, "prs.json"), JSON.stringify(data.prs));
   const lines = Object.entries(data.files).map(([n, files]) => JSON.stringify({ number: Number(n), files }));
   writeFileSync(join(dir, "pr-files.jsonl"), lines.length === 0 ? "" : `${lines.join("\n")}\n`);
-  writeFileSync(
-    join(dir, PROVENANCE),
-    `${JSON.stringify({ by: "criterion-inventory", takenAt: meta.takenAt, repo: meta.repo }, null, 2)}\n`,
-  );
+  const taken: Taken = {
+    by: "criterion-inventory",
+    takenAt: meta.takenAt,
+    repo: meta.repo,
+    digest: snapshotDigest(dir),
+  };
+  writeFileSync(join(dir, PROVENANCE), `${JSON.stringify(taken, null, 2)}\n`);
 }
 
 function readSnapshot(dir: string): Snapshot {
@@ -684,11 +782,12 @@ function takeReading(
   specText: string,
   testFiles: { file: string; content: string }[],
   today: string,
+  exec: Exec,
 ): Snapshot {
-  const { issues, prs } = fetchTracked(repo);
+  const { issues, prs } = fetchTracked(repo, exec);
   const naming = inventory(specText, { issues, prs, prChangedCode: {} }, testFiles, today);
   const want = [...new Set(naming.flatMap(r => r.mergedPrs))].sort((a, b) => a - b);
-  const files = fetchChangedFiles(want, repo);
+  const files = fetchChangedFiles(want, repo, exec);
   const prChangedCode: Record<number, boolean> = {};
   for (const [n, paths] of Object.entries(files)) prChangedCode[Number(n)] = changedCode(paths);
   if (dir !== undefined) {
@@ -749,10 +848,28 @@ function main(): number {
 
   let snapshot: Snapshot;
   if (dir !== undefined && dirState(dir) === "taken") {
-    snapshot = readSnapshot(dir);
+    // A record nobody reads back settles nothing — the digest and the repo
+    // were both written from the first commit and neither was consulted,
+    // which is the shape this command exists to stop. Raised in review.
+    const problem = cacheProblem(dir, repo);
+    if (problem !== null) {
+      console.error(`UNMEASURED: ${problem}. Delete ${dir} and run again to have a fresh one taken there.`);
+      return EXIT_REFUSED;
+    }
+    try {
+      snapshot = readSnapshot(dir);
+    } catch (err) {
+      // CAUGHT, like the fetch below. `readSnapshot`'s refusals are already
+      // careful `UNMEASURED:` sentences, so the message is printed as it
+      // stands rather than wrapped — but letting the throw out printed a
+      // stack trace for a cache missing a reading, which reads as a crash
+      // in this command. Raised in review of #1878.
+      console.error((err as Error).message);
+      return EXIT_REFUSED;
+    }
   } else {
     try {
-      snapshot = takeReading(dir, repo, specText, testFiles, today);
+      snapshot = takeReading(dir, repo, specText, testFiles, today, execIn(root));
     } catch (err) {
       // A failed fetch is UNMEASURED and says so. Letting the throw out
       // would print a stack trace naming `gh`, which reads as a crash in

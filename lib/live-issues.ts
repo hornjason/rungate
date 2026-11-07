@@ -168,12 +168,21 @@ interface IssuePage {
  * overwriting one key with `undefined` leaves the key PRESENT in the object
  * Bun hands the child, and `gh` prefers `GH_TOKEN` to its own keychain
  * whenever the variable exists at all.
+ *
+ * ## `cwd`, because that is what `gh` infers the repository from
+ *
+ * With no `--repo`, `gh` reads the git remote of the directory it runs in.
+ * A caller that was told which tree to work on by an argument — rather than
+ * by having been launched in it — would otherwise read one repository's
+ * tracker while reporting about another's files, and nothing in either
+ * reading would say so. Raised in review of #1878. Absent means the
+ * process's own directory, which is what every existing caller gets.
  */
-export function ghWithoutGhToken(args: readonly string[]): string {
+export function ghWithoutGhToken(args: readonly string[], opts: { cwd?: string } = {}): string {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   delete env.GH_TOKEN;
-  const proc = Bun.spawnSync(["gh", ...args], { env });
+  const proc = Bun.spawnSync(["gh", ...args], { env, ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }) });
   if (proc.exitCode !== 0) {
     throw new Error(new TextDecoder().decode(proc.stderr).trim().slice(0, 300));
   }

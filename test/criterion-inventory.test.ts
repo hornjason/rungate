@@ -17,7 +17,7 @@
 import { describe, expect, test } from "bun:test";
 import { localCalendarDay } from "../lib/local-calendar-day";
 import { hasContent } from "../lib/spec-evidence";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -33,6 +33,7 @@ import {
   inventory,
   PROVENANCE,
   renderMarkdown,
+  snapshotDigest,
   waiverProblem,
   writeSnapshotDir,
   type Snapshot,
@@ -64,6 +65,20 @@ function pr(number: number, text: string): Tracked {
 
 function snapshot(partial: Partial<Snapshot>): Snapshot {
   return { issues: [], prs: [], prChangedCode: {}, ...partial };
+}
+
+/**
+ * Re-record the digest after a case deliberately alters a taken snapshot.
+ *
+ * A case about `prs.json` being absent, or about a truncated reading, must
+ * meet the refusal it is pointed at and not the digest one — otherwise two
+ * guards answer it and a mutation of either leaves the other holding it up.
+ * It uses the command's own {@link snapshotDigest} rather than hashing the
+ * files itself, so there is one answer to what the digest covers.
+ */
+function restamp(dir: string): void {
+  const taken = JSON.parse(readFileSync(join(dir, PROVENANCE), "utf-8")) as Record<string, unknown>;
+  writeFileSync(join(dir, PROVENANCE), `${JSON.stringify({ ...taken, digest: snapshotDigest(dir) }, null, 2)}\n`);
 }
 
 describe("a spec revision is not work on the criteria it names", () => {
@@ -348,8 +363,12 @@ describe("an absent pr-files.jsonl is the first pass, not a failed fetch", () =>
     );
     // Removed AFTER the write, so the provenance record stays and the
     // refusal under test is the one about `prs.json` rather than the one
-    // about an unprovenanced directory.
-    if (!opts.prs) rmSync(join(dir, "prs.json"));
+    // about an unprovenanced directory — and re-stamped, so it is not the
+    // digest refusal either. One case, one refusal.
+    if (!opts.prs) {
+      rmSync(join(dir, "prs.json"));
+      restamp(dir);
+    }
     const spec = join(dir, "spec.md");
     writeFileSync(spec, SPEC);
     return { dir, spec };
@@ -564,6 +583,7 @@ describe("a wrong-shaped snapshot is a failed fetch, not a measurement", () => {
     writeSnapshotDir(dir, { issues: [], prs: [], files: {} }, { takenAt: "2026-10-28T00:00:00Z", repo: "o/r" });
     writeFileSync(join(dir, "issues.json"), issues);
     writeFileSync(join(dir, "prs.json"), prs);
+    restamp(dir);
     try {
       return Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json"]);
     } finally {
@@ -751,6 +771,99 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
       });
       expect(second.exitCode).toBe(0);
       expect(calls(stub).length).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  // Three findings from round 1 of review, and the shape they share: the
+  // record was written from the first commit and nothing read it back. A
+  // provenance nobody consults settles exactly as much as no provenance.
+
+  test("a cache edited after it was taken is refused, not believed", () => {
+    // The header claimed `taken.json` answered "whether a line had been
+    // edited after the fetch". It did not — the record is untouched by an
+    // edit to the readings beside it. Made true rather than narrowed.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub).exitCode).toBe(0);
+      const edited = JSON.parse(readFileSync(join(snap, "issues.json"), "utf-8")) as { state: string }[];
+      edited[0]!.state = "CLOSED";
+      writeFileSync(join(snap, "issues.json"), JSON.stringify(edited));
+      const got = run(["--snapshot", snap, ...args], stub);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("have changed since");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("a cache taken for another repository is refused, naming both", () => {
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, "--repo", "o/one", ...args], stub).exitCode).toBe(0);
+      const got = run(["--snapshot", snap, "--repo", "o/two", ...args], stub);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("o/one");
+      expect(got.stderr.toString()).toContain("o/two");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("a cache missing a reading refuses in words, not with a stack trace", () => {
+    // `readSnapshot` writes careful UNMEASURED sentences and the call site
+    // did not catch them, so the one failure whose message was already in
+    // hand printed a stack trace instead.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub).exitCode).toBe(0);
+      rmSync(join(snap, "prs.json"));
+      restamp(snap);
+      const got = run(["--snapshot", snap, ...args], stub);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("prs.json is absent");
+      expect(got.stderr.toString()).not.toContain("at <anonymous>");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("the fetch runs in the tree --project-root names, not the process's own", () => {
+    // `gh` infers the repository from its working directory when no --repo
+    // is given, and --project-root is an independent value — so a caller
+    // pointing the spec at one tree while standing in another read a second
+    // repository's tracker with nothing saying so. The stub records its own
+    // cwd, which is the only thing that can tell the two apart.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    writeFileSync(
+      join(stub, "gh"),
+      ["#!/bin/sh", 'pwd >> "$RG_STUB/cwd.log"', 'echo "[]"', ""].join("\n"),
+      { mode: 0o755 },
+    );
+    const { dir, args } = withRoot();
+    try {
+      // Spawned from THIS repository's directory, pointed at the temp root.
+      Bun.spawnSync(["bun", SCRIPT, ...args], {
+        cwd: join(import.meta.dir, ".."),
+        env: { ...process.env, RG_STUB: stub, PATH: `${stub}:${process.env.PATH ?? ""}` },
+      });
+      const seen = readFileSync(join(stub, "cwd.log"), "utf-8").split("\n").filter(l => l !== "");
+      expect(seen.length).toBeGreaterThan(0);
+      // `realpathSync`, because macOS resolves /var to /private/var and the
+      // child reports the resolved form — a raw compare would fail for a
+      // reason that has nothing to do with the property.
+      expect([...new Set(seen)]).toEqual([realpathSync(dir)]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(stub, { recursive: true, force: true });
