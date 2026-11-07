@@ -107,6 +107,23 @@ describe("#1849: a verify command names a test that exists", () => {
     expect(r.violations[0]).toContain("gone.test.ts");
   });
 
+  test("AC-1: a file that declares no test at all is refused, not excused", () => {
+    // Round 4 of review. A file this can read in full, which simply
+    // declares nothing, used to short-circuit to UNMEASURED on the count
+    // of literals alone — before asking whether the names were knowable.
+    // That is the C4 case exactly: a `-t` aimed at the wrong file. When
+    // the wrong file happens to hold no tests, the refusal this mechanism
+    // exists to produce became a reading that refuses nothing.
+    const emptied = `import { ${D}, ${T} } from "bun:test";\n// every case here was deleted\n`;
+    expect(namesAreComplete(emptied).complete, "the fixture is not the clean case it claims to be").toBe(true);
+    const r = verifyTitleViolations(
+      [{ where: "X1", verify: 'bun test a.test.ts -t "inner case"' }],
+      corpus({ "a.test.ts": emptied }),
+    );
+    expect(r.violations.length, "a readable file declaring nothing did not refuse").toBe(1);
+    expect(r.unmeasured, "a readable file was reported as unreadable").toEqual([]);
+  });
+
   test("AC-3: a command of another shape is counted, never silently passed", () => {
     const r = verifyTitleViolations(
       [{ where: "C5", verify: "grep -q 'STALE_CITATION' lib/finding-arbiter.ts" }],

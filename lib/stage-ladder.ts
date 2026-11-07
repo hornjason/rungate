@@ -911,10 +911,11 @@ function scanSource(text: string): Scan {
   };
 
   let i = 0;
-  // The last two significant tokens — a whole word, or one character. Two,
-  // because the `!` call needs to know what came before the `!`.
+  // The last significant token — a whole word, or one character. One is
+  // enough: the `!` case is decided by trial-parsing the regex forward,
+  // not by looking further back. An earlier draft kept a second slot for
+  // a lookback that round 3 deleted, and the slot outlived it.
   let prev = "\n";
-  let prev2 = "\n";
   let ok = true;
   let braces = 0;
 
@@ -957,7 +958,6 @@ function scanSource(text: string): Scan {
     return prev.length === 1 && REGEX_MAY_FOLLOW.has(prev);
   };
   const remember = (tok: string) => {
-    prev2 = prev;
     prev = tok;
   };
 
@@ -1290,10 +1290,12 @@ export function verifyTitleFragments(
       continue;
     }
     const literals = titlesIn(src);
-    if (literals.length === 0) {
-      push("UNMEASURED", `${file} states no describe/test title this can read`);
-      continue;
-    }
+    // An empty name set is NOT a reason to excuse the command. Whether it
+    // means "unreadable" or "declares nothing" is the same question the
+    // no-match path below asks, and it is asked there, once. Short-cutting
+    // on the COUNT sent a readable file that declares nothing — a `-t`
+    // aimed at the wrong file, which is the whole case this exists for —
+    // to UNMEASURED, and UNMEASURED refuses nothing.
     let re: RegExp;
     try {
       re = new RegExp(name);
