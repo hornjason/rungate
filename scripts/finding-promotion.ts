@@ -93,7 +93,18 @@ for (const gap of result.unmeasured) console.log(`  UNMEASURED: ${gap}`);
 // absolute --spec, so the file the guard validated and the file this wrote
 // were different files.
 const target = specPath({ spec, projectRoot: ROOT });
-const content = readFileSync(target, "utf8");
+
+// Guarded, like BOTH reads of this same file in lib/finding-promotion.ts.
+// The first version left this one bare — the third of three reads, the two
+// named in review repaired and the sibling left, which is the same two-of-
+// three the statement fields were.
+let content: string;
+try {
+  content = readFileSync(target, "utf8");
+} catch (e) {
+  console.error(`REFUSED SPEC_UNREADABLE: ${spec} could not be read: ${e instanceof Error ? e.message : String(e)}`);
+  process.exit(PROMOTION_EXIT);
+}
 
 // #1286, the same refusal create-sc makes: appending to a spec a generator
 // owns writes a criterion that disappears at the next regeneration, having

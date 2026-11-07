@@ -88,6 +88,7 @@ export const PROMOTION_REFUSALS = [
   "ALREADY_SERVES",
   "NO_OUTCOME",
   "NO_SYMBOL",
+  "NO_MODULE",
   "MALFORMED_STATEMENT",
   "ID_UNAVAILABLE",
 ] as const;
@@ -150,6 +151,49 @@ function insideSpecs(input: Pick<PromotionInput, "spec" | "projectRoot">): boole
 const CRITERION_LINE = /^- \[ \] SC-\d+: [^\n\r]+$/;
 
 /**
+ * Every free-text field `promotionStatement` interpolates, and its refusal.
+ *
+ * A LIST rather than three `if` blocks, because the first version guarded
+ * `outcome` and `symbol` and silently left `module` — an empty module
+ * produced `" contains [promote] — …"`, which still matches
+ * {@link CRITERION_LINE} and so sailed past the only other guard. Two of
+ * three is the shape this repository keeps shipping: the named instance
+ * repaired, its siblings left, and no behavioural case able to tell.
+ *
+ * `test/finding-promotion.test.ts` derives its cases from this array, so a
+ * fourth field added to `promotionStatement` without a row here is red
+ * rather than unguarded.
+ */
+const STATEMENT_FIELDS = [
+  {
+    field: "outcome",
+    refusal: "NO_OUTCOME",
+    why: "a criterion with no sentence states nothing, so nothing could ever prove it",
+  },
+  {
+    field: "symbol",
+    refusal: "NO_SYMBOL",
+    why:
+      "a criterion that names no symbol cannot be moved by a mutation, so a test claiming " +
+      "it would be green by construction",
+  },
+  {
+    field: "module",
+    refusal: "NO_MODULE",
+    why:
+      "a criterion that names no module points its symbol at the whole tree, and " +
+      "sync-sc-status has no file to look in",
+  },
+] as const satisfies readonly {
+  field: "outcome" | "symbol" | "module";
+  refusal: PromotionRefusal;
+  why: string;
+}[];
+
+/** The fields above, for a test that wants to sweep them. */
+export const STATEMENT_FIELD_NAMES = STATEMENT_FIELDS.map(f => f.field);
+
+/**
  * Every reason this promotion must not happen, in the order a reader should
  * hear them.
  *
@@ -161,20 +205,8 @@ const CRITERION_LINE = /^- \[ \] SC-\d+: [^\n\r]+$/;
 export function promotionViolations(input: PromotionInput): PromotionViolation[] {
   const out: PromotionViolation[] = [];
 
-  if (input.outcome.trim() === "") {
-    out.push({
-      refusal: "NO_OUTCOME",
-      why: "a criterion with no sentence states nothing, so nothing could ever prove it",
-    });
-  }
-
-  if (input.symbol.trim() === "") {
-    out.push({
-      refusal: "NO_SYMBOL",
-      why:
-        "a criterion that names no symbol cannot be moved by a mutation, so a test claiming " +
-        "it would be green by construction",
-    });
+  for (const { field, refusal, why } of STATEMENT_FIELDS) {
+    if (input[field].trim() === "") out.push({ refusal, why });
   }
 
   // Checked before `existsSync`, so a path outside the tree is named for what

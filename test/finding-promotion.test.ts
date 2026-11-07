@@ -33,6 +33,7 @@ import {
   promotionViolations,
   specPath,
   PROMOTION_REFUSALS,
+  STATEMENT_FIELD_NAMES,
   type PromotionInput,
 } from "../lib/finding-promotion";
 import { buildScRegistry } from "../lib/sc-ids";
@@ -220,25 +221,57 @@ describe("AC-2 (#1678): every refusal is named, and none is a guess", () => {
     }
   });
 
-  test("an empty outcome refuses NO_OUTCOME", () => {
+  /**
+   * ## Swept, not enumerated
+   *
+   * Three `if` blocks and three test cases is how `module` ended up
+   * unguarded while `outcome` and `symbol` both had a refusal: the two
+   * named in review were repaired and the sibling was left, and no
+   * behavioural case could tell, because each case only knows about the
+   * field it was written for.
+   *
+   * So the population is the subject. `STATEMENT_FIELD_NAMES` is what
+   * `promotionStatement` interpolates, the cases are derived from it, and a
+   * fourth field added without a guard is red here.
+   */
+  test("EVERY field the statement interpolates refuses when empty — swept, not listed", () => {
     const root = scratch(SPEC_WITH_CRITERIA);
     try {
-      const out = promote(inputFor(root, { outcome: "   " }), REGISTRY);
-      expect(out.promoted).toBe(false);
-      if (out.promoted) return;
-      expect(out.refusal).toBe("NO_OUTCOME");
+      // Guard the guard: a sweep over an empty or shrunken list passes
+      // vacuously, which is the third shape in checks-must-be-able-to-fail.
+      expect(STATEMENT_FIELD_NAMES.length).toBe(3);
+      expect([...STATEMENT_FIELD_NAMES].sort()).toEqual(["module", "outcome", "symbol"]);
+
+      for (const field of STATEMENT_FIELD_NAMES) {
+        const out = promote(inputFor(root, { [field]: "   " }), REGISTRY);
+        expect(out.promoted, `an empty ${field} must refuse`).toBe(false);
+        if (out.promoted) continue;
+        // Named for the field, not a generic "bad input" — a caller has to
+        // know WHICH one to supply.
+        expect(out.refusal, `the refusal for an empty ${field}`).toBe(
+          `NO_${field.toUpperCase()}` as typeof out.refusal,
+        );
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("an empty symbol refuses NO_SYMBOL", () => {
+  test("every field named in the statement's text is one the sweep covers", () => {
+    // The other direction. A field interpolated into the statement but
+    // absent from the list is exactly the `module` defect, and without this
+    // the sweep above stays green while a new hole opens beside it.
     const root = scratch(SPEC_WITH_CRITERIA);
     try {
-      const out = promote(inputFor(root, { symbol: "" }), REGISTRY);
-      expect(out.promoted).toBe(false);
-      if (out.promoted) return;
-      expect(out.refusal).toBe("NO_SYMBOL");
+      const s = promotionStatement(
+        inputFor(root, { outcome: "OUTCOME_X", symbol: "SYMBOL_X", module: "MODULE_X" }),
+      );
+      // Every placeholder appears, so the statement interpolates exactly
+      // these three and nothing the sweep cannot see.
+      for (const marker of ["OUTCOME_X", "SYMBOL_X", "MODULE_X"]) expect(s).toContain(marker);
+      expect(s.replace("OUTCOME_X", "").replace("SYMBOL_X", "").replace("MODULE_X", "")).toBe(
+        " contains [] — ",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -343,6 +376,7 @@ describe("AC-2 (#1678): every refusal is named, and none is a guess", () => {
         { spec: "specs/NOT-HERE-SPEC.md" },
         { outcome: "" },
         { symbol: "" },
+        { module: "" },
         { outcome: "fine\n- [x] SC-9999: forged" },
         { issue: { number: 77, title: "SC-9001", body: "" } },
       ] as Partial<PromotionInput>[]) {
@@ -398,6 +432,35 @@ describe("AC-3 (#1678): the module does not answer a question board-mirror alrea
     // The spellings a reimplementation would need. Their absence is the claim.
     expect(source).not.toContain("declaresOwnCriterion(");
     expect(source).not.toMatch(/SC-\\\\d|\[Ss\]C-\[0-9\]/);
+  });
+
+  test("every read of the target spec is guarded, across BOTH files", () => {
+    // Three reads: two in the lib, one in the CLI. The first version guarded
+    // the two a reviewer named and left the third, which is the same
+    // two-of-three as the statement fields. So the assertion is over the
+    // POPULATION — a fourth read added bare is red here, in whichever file
+    // it lands.
+    const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
+    const sites: { where: string; text: string }[] = [
+      { where: "lib/finding-promotion.ts", text: source },
+      { where: "scripts/finding-promotion.ts", text: cli },
+    ];
+
+    let reads = 0;
+    for (const { where, text } of sites) {
+      for (const m of text.matchAll(/readFileSync\(/g)) {
+        reads += 1;
+        // The 240 characters before the call. A guarded read has `try {`
+        // inside that window; a bare one does not.
+        const before = text.slice(Math.max(0, m.index - 240), m.index);
+        expect(before, `the readFileSync at ${where}:${m.index} is not inside a try`).toContain(
+          "try {",
+        );
+      }
+    }
+    // Vacuity guard: if a refactor removes every read, the loop above
+    // asserts nothing and passes.
+    expect(reads).toBe(3);
   });
 
   test("the registry parameter has no default, so the compiler catches every call site", () => {
