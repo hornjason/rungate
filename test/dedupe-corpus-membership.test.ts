@@ -14,18 +14,40 @@
  * Arguing that in prose would have settled nothing, because prose is what the
  * finding correctly said was unverifiable. So the rule is executed instead.
  *
- * ## The three properties, and why the third is the one that matters
+ * ## THE WHOLE PROPERTY LIST, WRITTEN DOWN ONCE (review round 4)
  *
- * 1. **Total.** Every `CORPUS` id has a `MEMBERSHIP` sentence, and no
- *    `MEMBERSHIP` key is absent from `CORPUS`. A map that silently covers
- *    thirteen of fourteen is the corpus-short-by-one fault again.
- * 2. **Real.** The sentence appears in `lib/finding-arbiter.ts` and names the
- *    id it admits. A citation that does not resolve is not evidence.
- * 3. **Not circular.** The sentence lies OUTSIDE the generated pair table.
- *    Without this, an id could be justified by the table its own membership
- *    produced — which is precisely the defect round 3 alleged, and the only
- *    way to answer the allegation is to make it impossible rather than to
- *    deny it.
+ * Round 4's standing objection was not to any one gap but to the method:
+ * three rounds spent discovering properties one at a time, each patched after
+ * a reviewer named it. Fair. So the full set a "declared, not derived" corpus
+ * must satisfy is enumerated here and checked in one pass, including the two
+ * holes round 4 predicted rather than waiting for a round that finds them.
+ *
+ * | # | property | why it is not optional |
+ * |---|---|---|
+ * | 1 | **Total** — every id cited, every citation used | a map covering thirteen of fourteen is corpus-short-by-one again |
+ * | 2 | **Real** — the sentence resolves in `lib/finding-arbiter.ts` | a citation that does not resolve is not evidence |
+ * | 3 | **Named** — the sentence contains the id it admits | otherwise it is a sentence that happens to be nearby |
+ * | 4 | **Not circular** — the sentence lies outside EVERY generated region | an id justified by the table its own membership produced proves nothing |
+ * | 5 | **One generated region** — exactly one marker pair exists | property 4 is dodgeable by adding a second generated block it does not know about |
+ * | 6 | **Falsifiable** — the checks above redden under planted violations | all five are `toEqual([])`, the shape that passes loudest when it sees nothing |
+ *
+ * Property 5 is round 4's own hypothetical — *"a CORPUS id whose sentence
+ * sits in a third docblock region the circularity check doesn't exclude"* —
+ * closed by deriving the excluded regions from the markers and refusing any
+ * count but one, rather than by hardcoding the single region that exists
+ * today.
+ *
+ * ## What is NOT checked, stated rather than left to be found
+ *
+ * **Semantic drift.** Round 4's other hypothetical was a sentence that still
+ * resolves but has been edited to mean something different. Nothing here can
+ * catch that: byte-equality cannot read meaning, and a hash would only
+ * restate property 2 in a form that reddens on a typo fix. It is a real
+ * limit of a citation check and it is written down instead of papered over.
+ *
+ * **Whether the frozen bodies match what the October measurements saw.** Out
+ * of reach from inside this change — the tracker has moved — and already
+ * recorded as a limit in the arbiter docblock itself.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
@@ -52,13 +74,31 @@ function flatten(source: string): string {
 const raw = readFileSync(ARBITER, "utf8");
 const flat = flatten(raw);
 
-/** The generated table, flattened the same way — the region citations may NOT come from. */
-function generatedRegion(): string {
-  const i = raw.indexOf(TABLE_BEGIN);
-  const j = raw.indexOf(TABLE_END, i + TABLE_BEGIN.length);
-  expect(i, "lib/finding-arbiter.ts has no generated table block to exclude").toBeGreaterThan(-1);
-  return flatten(raw.slice(i, j + TABLE_END.length));
+/**
+ * EVERY generated region, flattened — the text citations may NOT come from.
+ *
+ * Derived from the markers rather than from the one block that exists today
+ * (property 5). A second generated block added later is excluded
+ * automatically, and `countMarkers` refuses the case where somebody adds one
+ * without a closing marker.
+ */
+function generatedRegions(): string[] {
+  const out: string[] = [];
+  let at = 0;
+  for (;;) {
+    const i = raw.indexOf(TABLE_BEGIN, at);
+    if (i < 0) break;
+    const j = raw.indexOf(TABLE_END, i + TABLE_BEGIN.length);
+    if (j < 0) break;
+    out.push(flatten(raw.slice(i, j + TABLE_END.length)));
+    at = j + TABLE_END.length;
+  }
+  return out;
 }
+
+const occurrences = (needle: string) => raw.split(needle).length - 1;
+const inAnyGeneratedRegion = (quote: string) =>
+  generatedRegions().some(r => r.includes(flatten(quote)));
 
 describe("every corpus id is admitted by a pre-existing sentence (#1365)", () => {
   test("MEMBERSHIP and CORPUS cover exactly each other", () => {
@@ -95,16 +135,33 @@ describe("every corpus id is admitted by a pre-existing sentence (#1365)", () =>
     ).toEqual([]);
   });
 
-  test("no citation comes from the table this corpus generates", () => {
-    const region = generatedRegion();
+  test("no citation comes from any region this corpus generates", () => {
     const circular = Object.entries(MEMBERSHIP)
-      .filter(([, quote]) => region.includes(flatten(quote)))
+      .filter(([, quote]) => inAnyGeneratedRegion(quote))
       .map(([id]) => `#${id}`);
     expect(
       circular,
       "A corpus member justified by the table its own membership produced is circular. " +
-        "Cite a sentence from outside the generated block (#1365, review round 3).",
+        "Cite a sentence from outside every generated block (#1365, review round 3).",
     ).toEqual([]);
+  });
+
+  /**
+   * Property 5. The check above excludes regions it can SEE, so the way
+   * around it is a generated block it cannot — a second marker pair, or a
+   * block opened and never closed. Both are refused here rather than left
+   * for the round that finds them (#1365, review round 4).
+   */
+  test("there is exactly one generated region, and it is well formed", () => {
+    const begins = occurrences(TABLE_BEGIN);
+    const ends = occurrences(TABLE_END);
+    expect(
+      [begins, ends],
+      `lib/finding-arbiter.ts must carry exactly one ${TABLE_BEGIN} … ${TABLE_END} pair. ` +
+        "A second generated block, or an unclosed one, is a region the circularity check " +
+        "cannot exclude — which is the only way a citation could still be self-justifying.",
+    ).toEqual([1, 1]);
+    expect(generatedRegions().length).toBe(1);
   });
 
   /**
@@ -123,8 +180,7 @@ describe("every corpus id is admitted by a pre-existing sentence (#1365)", () =>
 
     // And the exclusion is not vacuous either: a line lifted straight out of
     // the generated table must be caught by the circularity check.
-    const fromTable = flatten("| containment >= 0.8 (shipped) |");
-    expect(generatedRegion().includes(fromTable)).toBe(true);
+    expect(inAnyGeneratedRegion("| containment >= 0.8 (shipped) |")).toBe(true);
   });
 
   /**
@@ -135,7 +191,7 @@ describe("every corpus id is admitted by a pre-existing sentence (#1365)", () =>
   test("#1187's admission is a real pair mention, not the generated table", () => {
     const quote = MEMBERSHIP["1187"] as string;
     expect(flat.includes(flatten(quote))).toBe(true);
-    expect(generatedRegion().includes(flatten(quote))).toBe(false);
+    expect(inAnyGeneratedRegion(quote)).toBe(false);
     // The sentence names #1187 WITH the counterpart the corpus pairs it to.
     expect(quote).toContain("1187");
     expect(quote).toContain("1176");

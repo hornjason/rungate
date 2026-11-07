@@ -48,10 +48,16 @@ import { localCalendarDay } from "../lib/local-calendar-day";
  *
  * Applying that rule by hand found two defects in the first draft of this
  * list: it carried #1301 and #1385, which are attributions, and it was
- * **missing #1269 and #1286**, which line 493 of the arbiter names as one of
- * the four pairs `qty>=2 AND loc>=1` flags. A corpus short by a measured pair
- * is the exact fault #1365 exists to stop, so it is written down rather than
- * quietly corrected.
+ * **missing #1269 and #1286**, which the `DUPLICATE_CONTAINMENT_RATIO`
+ * docblock's `qty>=2 AND loc>=1` row names as one of the four pairs that arm
+ * flags. A corpus short by a measured pair is the exact fault #1365 exists to
+ * stop, so it is written down rather than quietly corrected.
+ *
+ * (That citation names a symbol, not a line. It said "line 493" until review
+ * round 4 pointed out that a raw line number is the driftable claim this very
+ * PR exists to eliminate — `.claude/rules/self-referential-tests.md`: *cite a
+ * stable symbol, never a line number*. The row itself is now bound by
+ * `QTY_ROW` below, so a reflow reddens the suite instead of going quiet.)
  *
  * Declared and not derived from a grep of the docblock on purpose: a corpus
  * that recomputes itself from the prose it justifies moves whenever the prose
