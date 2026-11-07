@@ -38,7 +38,13 @@ import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
-import { heldReason, readyCap, selectReady } from "../lib/board-ready-rule";
+import {
+  heldReason,
+  readyCap,
+  readyOccupancy,
+  selectReady,
+  type ReadyOccupancy,
+} from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
 import {
   criterionIdsIn,
@@ -129,7 +135,13 @@ export function splitReadyChanges<
   eligible: readonly T[],
   cap: number | null,
   occupied: number,
-): { readyWritable: T[]; heldByCap: T[]; selection: ReturnType<typeof selectReady> } {
+): {
+  readyWritable: T[];
+  heldByCap: T[];
+  selection: ReturnType<typeof selectReady>;
+  /** The reading the caller must restate, never re-derive (#1852). */
+  occ: ReadyOccupancy;
+} {
   const promotions = eligible.filter(c => c.to === READY);
   const demotions = eligible.filter(c => c.to !== READY);
   // **A demotion in THIS batch frees a slot in this batch.** `occupied`
@@ -143,10 +155,23 @@ export function splitReadyChanges<
   // over-promote past the cap — the opposite error, reached by the
   // obvious fix.
   const freed = demotions.filter(c => c.item.status === READY).length;
+  // **This command's lane view is OPEN ISSUES ONLY, by design, so its two
+  // occupancy counts are one number** (#1852). `readyPopulation` filters to
+  // `state === "OPEN"` before counting, deliberately: a closed issue left on
+  // Ready counted against the cap forever and starved promotions
+  // (ai-review round 3 of #1795), and a draft has no state at all and is
+  // dropped before it reaches here.
+  //
+  // So WEDGED is unreachable from this caller, and that is HONEST rather
+  // than convenient: a lane held full by cards this command cannot see is a
+  // lane it also cannot clear, and `scripts/board-ready.ts` reads the whole
+  // column and reports it. What this caller must not do is invent a second
+  // free-slot calculation, which is the defect #1852 closed.
+  const after = Math.max(0, occupied - freed);
+  const occ = readyOccupancy(after, after, cap);
   const selection = selectReady(
     promotions.map(c => ({ number: c.item.number, phase: c.item.phase, labels: c.item.labels })),
-    cap,
-    Math.max(0, occupied - freed),
+    occ,
   );
   // **Written in the order `selectReady` chose, not in board order.**
   // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
@@ -161,6 +186,7 @@ export function splitReadyChanges<
     readyWritable: [...demotions, ...chosen],
     heldByCap: promotions.filter(c => !chosenNumbers.has(c.item.number)),
     selection,
+    occ,
   };
 }
 
@@ -419,7 +445,7 @@ export async function main(argv: string[]): Promise<number> {
       ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
       : null;
   const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
-  const { readyWritable, heldByCap, selection } = splitReadyChanges(eligible, cap, occupied);
+  const { readyWritable, heldByCap, selection, occ } = splitReadyChanges(eligible, cap, occupied);
 
   if (values.json) {
     console.log(
@@ -473,7 +499,7 @@ export async function main(argv: string[]): Promise<number> {
         // fresh here one pull request later, with the fix exported and
         // in the tree. `test/board-ready-rule.test.ts` now refuses the
         // string anywhere but its own binding.
-        console.log(`    #${c.item.number} eligible but held: ${heldReason(cap)}`);
+        console.log(`    #${c.item.number} eligible but held: ${heldReason(occ)}`);
       }
       for (const c of readyWritable) {
         console.log(`    #${c.item.number}  ${c.item.status || "(none)"} -> ${c.to}  (${c.item.milestone || "no milestone"}; ${c.item.blockedByOpen} open of ${c.item.blockedByTotal} blockers, ${c.item.assignees} assignee(s))`);

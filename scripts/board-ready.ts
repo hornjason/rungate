@@ -45,7 +45,7 @@ import {
   type Dependent,
 } from "../lib/board-ready-fanout";
 import { phaseOf } from "../lib/board-mirror";
-import { heldReason, readyCap, selectReady } from "../lib/board-ready-rule";
+import { heldReason, readyCap, readyOccupancy, selectReady } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
 
@@ -367,6 +367,7 @@ async function main(): Promise<number> {
     return EXIT_REFUSED;
   }
   let occupied = 0;
+  let dispatchable = 0;
   let occupancyTruncated = false;
   for (;;) {
     for (const n of page.nodes) {
@@ -377,7 +378,17 @@ async function main(): Promise<number> {
       const status = (n.fieldValues?.nodes ?? []).find(
         (f: any) => f?.field?.name === "Status",
       )?.name;
-      if (status === READY_COLUMN) occupied++;
+      if (status === READY_COLUMN) {
+        occupied++;
+        // **And the second number, from the SAME pass** (#1852). A slot is a
+        // slot, but a slot nobody can start is not work. Counting these
+        // separately in a different file is what let this script report
+        // `2 of 2, full` while the report said `1 of 2, short` — both right,
+        // about different questions, with no site that could reconcile them.
+        // One pass over one lane, so `readyOccupancy` can refuse a pair
+        // counted over different populations.
+        if (n.content?.__typename === "Issue" && n.content?.state === "OPEN") dispatchable++;
+      }
       // A Status on page two and no Status at all produce the same
       // `undefined`, and one means "this card is not in Ready" while the
       // other means "I could not look". An undercount here promotes past
@@ -586,7 +597,8 @@ async function main(): Promise<number> {
       phase: phaseOfNumber.get(dec.number) ?? null,
       labels: labelsOfNumber.get(dec.number) ?? [],
     }));
-  const selection = selectReady(eligible, cap, occupied);
+  const occ = readyOccupancy(occupied, dispatchable, cap);
+  const selection = selectReady(eligible, occ);
   console.log(
     `  depth: ${cap ?? "UNMEASURED"}` +
       (throughput === null
@@ -594,13 +606,20 @@ async function main(): Promise<number> {
         : ` (${throughput.delivered} delivered in ${throughput.days} days)`) +
       `. ${selection.why}`,
   );
+  // **An annotation, not a log line.** A WEDGED lane will not unstick on its
+  // own: no event refills it, because by cards it is full, and nothing ages
+  // out a draft or a parked pull request. It needs a person, so it is said
+  // where a person sees it without reading the job output.
+  if (occ.verdict === "WEDGED") {
+    console.log(`::warning::Ready is WEDGED — ${occ.why}`);
+  }
   // Named, not merely dropped. An eligible issue that did not move because
   // the queue is full is a different fact from one that was never eligible,
   // and a reader who cannot tell them apart goes looking for a bug in the
   // decider.
   for (const dec of eligible) {
     if (!selection.promote.includes(dec)) {
-      console.log(`  #${dec.number} eligible but held: ${heldReason(cap)}`);
+      console.log(`  #${dec.number} eligible but held: ${heldReason(occ)}`);
     }
   }
 

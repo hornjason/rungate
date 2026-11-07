@@ -9,6 +9,7 @@
  */
 
 import type { LaneReading } from "./board-lane-health";
+import { heldReason, readyOccupancy } from "./board-ready-rule";
 
 /**
  * Is this issue something anybody may pick up right now?
@@ -351,14 +352,26 @@ export function readyRefusal(
       why: "the board reading contains no Ready lane at all",
     };
   }
-  // Closed cards parked in Ready. Named rather than silently subtracted: the
-  // lane disagreeing with itself is a board defect somebody has to clear,
-  // and a gate that quietly corrects for it hides the thing to fix.
-  const stale = ready.count - openInReady;
+  // **The subtraction is `readyOccupancy`'s, not this file's** (#1852). It
+  // used to be spelled here as `ready.count - openInReady`, which made this
+  // the SECOND place that decided how full Ready is — and the two then
+  // disagreed in production: on 2026-11-07 the writer read `2 of 2, full`
+  // over every card while this read `1 of 2, SHORT` over open issues, and
+  // no single site a mutation could move said which was right.
+  //
+  // Named rather than silently subtracted, as before: the lane disagreeing
+  // with itself is a board defect somebody has to clear, and a gate that
+  // quietly corrects for it hides the thing to fix.
+  const occ = readyOccupancy(ready.count, openInReady, ready.against);
   const why =
-    stale > 0
-      ? `${ready.why} — and ${stale} of the ${ready.count} card(s) in this lane ` +
-        `${stale === 1 ? "is" : "are"} not an open issue, so only ${openInReady} can be started`
+    occ.undispatchable > 0
+      ? `${ready.why} — and ${occ.undispatchable} of the ${occ.cards} card(s) in this lane ` +
+        `${occ.undispatchable === 1 ? "is" : "are"} not an open issue, so only ` +
+        `${occ.dispatchable} can be started` +
+        // The REMEDY, which is the half a count cannot carry: a lane holding
+        // cards nobody can start is not short of promotions. `heldReason`
+        // branches on the verdict, so there is no second branch here.
+        `. ${heldReason(occ)}`
       : ready.why;
   const seen = { count: openInReady, against: ready.against, why };
   // Judged on the OPEN count, so a lane filled with closed cards cannot

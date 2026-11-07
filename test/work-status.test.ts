@@ -992,3 +992,82 @@ describe("#1853 H4: the candidate list says how many are UNPLACED", () => {
     );
   });
 });
+
+/**
+ * #1852: the gate refuses a WEDGED lane, and does not do its own subtraction.
+ *
+ * `readyRefusal` spelled `ready.count - openInReady` itself, which made it
+ * the second place deciding how full Ready is. On 2026-11-07 the two
+ * disagreed in production — the writer said `2 of 2, full` over every card
+ * while this said `1 of 2, SHORT` over open issues — and no single site a
+ * mutation could move said which was right.
+ */
+describe("#1852: the Ready gate reads one occupancy", () => {
+  const laneAt = (health: string, count: number, against: number | null) =>
+    [
+      {
+        lane: "Ready",
+        count,
+        against,
+        health: health as never,
+        why: `${against} allowed in the queue`,
+      },
+    ] as const;
+
+  // **A wedged lane was already refused, for the wrong reason.** The first
+  // draft of this added `if (occ.verdict === "WEDGED") return REFUSE` and a
+  // mutation of that line reddened NOTHING: for any `against > 0`,
+  // `openInReady < against` is already true whenever nothing is startable,
+  // and for `against === 0` nothing is eligible and refusing would be wrong.
+  // The branch was dead the day it was written —
+  // `.claude/rules/checks-must-be-able-to-fail.md`, sixth shape: green on
+  // the verdict, witnessing a mechanism that never ran. So what WEDGED adds
+  // is the REMEDY in the sentence, and that is what these assert.
+  test("a wedged lane is refused, and told to clear itself rather than grow", () => {
+    const r = readyRefusal(laneAt("OK", 2, 2), 0);
+    expect(r!.verdict).toBe("REFUSE");
+    expect(r!.why).toContain("not an open issue");
+    expect(
+      r!.why,
+      "SHORT sends the reader to promotion, and no promotion can reach a lane that is " +
+        "already at its depth — the remedy is the half the count cannot carry",
+    ).toContain("clearing the lane is the fix");
+  });
+
+  test("CONTROL: a lane with SOME startable work is not told to clear itself", () => {
+    // **This control had to be rewritten.** Its first form passed a lane
+    // with nothing undispatchable, which never reaches the WEDGED
+    // conditional at all — so a mutant that printed the remedy on EVERY
+    // refusal stayed green and the case witnessed nothing. The control has
+    // to differ in ONE variable: undispatchable > 0 here too, and only the
+    // verdict differs. This is the live 2026-11-07 lane — #1650 and a
+    // draft at a depth of 2.
+    const live = readyRefusal(laneAt("SHORT", 2, 2), 1);
+    expect(live!.verdict).toBe("REFUSE");
+    expect(live!.why, "the card count still has to be named").toContain("not an open issue");
+    expect(
+      live!.why,
+      "one startable issue is not a wedge, so it must NOT be told to clear the lane",
+    ).not.toContain("clearing the lane is the fix");
+    expect(
+      live!.why,
+      "and it still gets a remedy — promotion cannot help a lane already at its depth",
+    ).toContain("Ready is at its depth");
+  });
+
+  test("CONTROL: a genuinely full lane of startable work still passes", () => {
+    expect(readyRefusal(laneAt("OK", 2, 2), 2)).toBeNull();
+  });
+
+  test("the stale count comes from the occupancy, not from a subtraction here", () => {
+    const src = readFileSync(join(ROOT, "lib/work-status.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(src, "the one decider must be called").toContain("readyOccupancy(");
+    expect(
+      src.match(/ready\.count\s*-\s*openInReady/),
+      "this file must not re-derive how many cards are undispatchable — that is the " +
+        "second decider #1852 removed, and a mutation of readyOccupancy would not move it",
+    ).toBeNull();
+  });
+});
