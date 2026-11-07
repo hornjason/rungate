@@ -68,35 +68,55 @@ const OUT = join(import.meta.dir, "..", "test", "fixtures", "finding-dedupe-corp
 function gh(args: string[]): string {
   const p = Bun.spawnSync(["gh", ...args], { env: { ...process.env, GH_TOKEN: undefined as never } });
   if (p.exitCode !== 0) {
-    throw new Error(`gh ${args.slice(0, 3).join(" ")} failed: ${new TextDecoder().decode(p.stderr).slice(0, 300)}`);
+    const why = new TextDecoder().decode(p.stderr).trim().replace(/\s+/g, " ").slice(0, 300);
+    throw new Error(
+      `gh ${args.slice(0, 3).join(" ")} exited ${p.exitCode}: ${why === "" ? "(no stderr)" : why}`,
+    );
   }
   return new TextDecoder().decode(p.stdout);
 }
 
 const findings: Array<{ id: string; title: string; body: string }> = [];
-const missing: string[] = [];
+const missing: Array<{ id: string; why: string }> = [];
 
 for (const id of CORPUS) {
-  let raw: string;
+  let raw: string | null = null;
   try {
     raw = gh(["issue", "view", id, "--repo", REPO, "--json", "number,title,body"]);
-  } catch {
+  } catch (e) {
     // REFUSE rather than skip. A corpus quietly short by one issue produces a
     // table that is wrong in a way nothing in the output says — which is the
     // exact failure mode #1365 is about, rebuilt in the tool that fixes it.
-    missing.push(id);
-    continue;
+    //
+    // **And carry the reason, never a bare id.** `gh` fails for reasons that
+    // are not about this issue at all — unauthenticated, rate-limited, not on
+    // PATH, no network — and under every one of them all fourteen ids fail
+    // identically. A refusal listing fourteen numbers reads as "the corpus is
+    // wrong" when the true state is "nothing was read". That is the same
+    // conversion `.claude/rules/config-access.md` forbids by name: a bare
+    // `catch` turning corruption into absence.
+    missing.push({ id, why: e instanceof Error ? e.message : String(e) });
   }
+  if (raw === null) continue;
   const j = JSON.parse(raw) as { number: number; title: string; body: string | null };
   findings.push({ id: String(j.number), title: j.title, body: j.body ?? "" });
 }
 
 if (missing.length > 0) {
+  const all = missing.length === CORPUS.length;
   console.error(
-    `REFUSING: ${missing.length} of ${CORPUS.length} declared issues could not be read ` +
-      `(${missing.join(", ")}). A corpus short by one issue is a table that is wrong ` +
-      `and does not say so. Nothing was written.`,
+    `REFUSING: ${missing.length} of ${CORPUS.length} declared issues could not be read. ` +
+      `A corpus short by one issue is a table that is wrong and does not say so. ` +
+      `Nothing was written.`,
   );
+  for (const m of missing) console.error(`  #${m.id}: ${m.why}`);
+  if (all) {
+    // Every id failing is a statement about the tool, not about the corpus.
+    console.error(
+      `  ALL ${CORPUS.length} failed, which is what an unauthenticated, rate-limited or ` +
+        `absent \`gh\` looks like — check the tool before concluding the corpus is wrong.`,
+    );
+  }
   process.exit(1);
 }
 
