@@ -183,24 +183,81 @@ describe("the commands #1746 creates are executable, not prose", () => {
     const probe = blocks.find(b => b.includes("--git-common-dir"));
     expect(probe, "no block in stage-audit.md resolves --git-common-dir").toBeDefined();
 
-    // Executed, not matched. The suite runs from a linked worktree or from a
-    // branch — either way this is not the primary checkout on main, so the
-    // probe must REFUSE and say why.
+    // Executed, not matched. Run here first, for the one property that holds
+    // whatever tree this suite happens to be in: the probe emits a VERDICT,
+    // never raw git output for a reader to compare.
     //
     // Broken to prove it: a probe that still RUNS both git commands but
     // never compares them — the mutant the substring version of this case
-    // could not see — prints "Proceed." here and turns this red.
+    // could not see — prints neither verdict and turns this red.
     const here = runBlock(probe as string, "B");
     expect(here.code, `the probe exited ${here.code}:\n${here.out}`).toBe(0);
     expect(here.out, "the probe must emit a verdict, not raw git output for a reader to compare").toMatch(
       /^(REFUSE:|PRIMARY CHECKOUT ON MAIN)/m,
     );
+
+    // The refusal itself is measured against a tree THIS CASE BUILT, not
+    // against whichever tree the suite is running in. An earlier revision
+    // asserted `REFUSE:` on the ambient checkout, which is green only
+    // because nobody has yet run the suite from the primary checkout on a
+    // clean main — the one place it is legitimate to run the audit. There
+    // the probe correctly prints "Proceed." and the case would have failed
+    // for being right.
+    const planted = join(scratch, "planted-tree");
+    require("fs").mkdirSync(planted, { recursive: true });
+    for (const argv of [
+      ["init", "-q", "-b", "not-main"],
+      ["config", "user.email", "t@example.invalid"],
+      ["config", "user.name", "t"],
+      ["commit", "-q", "--allow-empty", "-m", "seed"],
+    ]) {
+      const p = Bun.spawnSync(["git", "-C", planted, ...argv]);
+      expect(p.exitCode, `git ${argv[0]} failed building the planted tree`).toBe(0);
+    }
+
+    // A repository on a branch that is not `main...origin/main`, with no
+    // linked worktree and nothing uncommitted — so exactly ONE of the
+    // probe's three reasons can fire, and the case names which.
+    const refused = runBlock(probe as string, "B", { cwd: planted });
+    expect(refused.code, refused.out).toBe(0);
+    expect(refused.out, `the planted tree is not the primary checkout on main:\n${refused.out}`).toContain("REFUSE:");
+    expect(refused.out, "the reason must name the branch, which is the only thing wrong with this tree").toContain(
+      "not main...origin/main",
+    );
+    expect(refused.out, "no worktree was linked and nothing was left uncommitted").not.toContain("LINKED WORKTREE");
+  });
+
+  test("stage-audit says UNMEASURED when the plan is absent, and says so differently when it is corrupt", () => {
+    // An absent plan and a corrupt plan are different facts and only one of
+    // them is somebody's mistake. Before this, both threw a JSON or ENOENT
+    // stack trace into the agent's context, which reads as a crash rather
+    // than as a reading that could not be taken.
+    //
+    // Broken to prove it: deleting either guard makes the block throw, the
+    // exit code goes non-zero, and the matching case here turns red.
+    const stageBlock = executableBlocks(read("stage-audit")).find(b => b.includes("project-state.json")) as string;
+
+    const empty = join(scratch, "no-plan");
+    require("fs").mkdirSync(empty, { recursive: true });
+    const absent = runBlock(stageBlock, "", { cwd: empty });
+    expect(absent.code, `an absent plan must report, not crash:\n${absent.out}`).toBe(0);
+    expect(absent.out).toContain("UNMEASURED");
+    expect(absent.out, "the refusal must say the file is not there, so the reader knows to move").toContain(
+      "not present",
+    );
+
+    const bad = join(scratch, "corrupt-plan");
+    require("fs").mkdirSync(bad, { recursive: true });
+    writeFileSync(join(bad, "project-state.json"), '{"stages": [');
+    const corrupt = runBlock(stageBlock, "", { cwd: bad });
+    expect(corrupt.code, `a corrupt plan must report, not crash:\n${corrupt.out}`).toBe(0);
+    expect(corrupt.out).toContain("UNMEASURED");
+    // The control: a corrupt plan must not be reported as an absent one.
     expect(
-      here.out,
-      "this suite does not run from the primary checkout on a clean main, so the probe must refuse it",
-    ).toContain("REFUSE:");
-    // The reason has to be actionable, not just a refusal.
-    expect(here.out).toMatch(/LINKED WORKTREE|not main\.\.\.origin\/main|uncommitted change/);
+      corrupt.out,
+      `a present-but-unparseable plan was reported as absent, so the two states are indistinguishable:\n${corrupt.out}`,
+    ).not.toContain("not present");
+    expect(corrupt.out).toContain("could not be parsed");
   });
 
   test("stage-audit indexes every stage and says how many DONE items can be audited", () => {

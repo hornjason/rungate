@@ -12,7 +12,7 @@ updated: 2026-11-07
 
 ## The stage, and the commands it was closed on
 
-!`bun -e 'const s=JSON.parse(await Bun.file("project-state.json").text()); const st=s.stages??[]; if(!st.length){console.log("UNMEASURED: project-state.json declares no stages.");process.exit(0);} console.log("id  done/items  with-verify  name"); for(const x of st){const it=x.items??[]; const done=it.filter(i=>i.done); const withV=done.filter(i=>typeof i.verify==="string"&&i.verify.length>0); console.log(" "+String(x.id).padEnd(3)+" "+String(done.length+"/"+it.length).padEnd(10)+" "+String(withV.length).padEnd(12)+" "+(x.name??""));} console.log("\nevery DONE item above must carry a verify, or the stage cannot be audited at all.");'`
+!`bun -e 'const f=Bun.file("project-state.json"); if(!(await f.exists())){console.log("UNMEASURED: project-state.json is not present in this directory, so no stage index could be built. Run this from the repository root.");process.exit(0);} let s; try{s=JSON.parse(await f.text());}catch(e){console.log("UNMEASURED: project-state.json is present and could not be parsed — "+(e&&e.message?e.message:String(e))+". A corrupt plan is not an empty plan.");process.exit(0);} const st=s.stages??[]; if(!st.length){console.log("UNMEASURED: project-state.json declares no stages.");process.exit(0);} console.log("id  done/items  with-verify  name"); for(const x of st){const it=x.items??[]; const done=it.filter(i=>i.done); const withV=done.filter(i=>typeof i.verify==="string"&&i.verify.length>0); console.log(" "+String(x.id).padEnd(3)+" "+String(done.length+"/"+it.length).padEnd(10)+" "+String(withV.length).padEnd(12)+" "+(x.name??""));} console.log("\nevery DONE item above must carry a verify, or the stage cannot be audited at all.");'`
 
 ---
 
