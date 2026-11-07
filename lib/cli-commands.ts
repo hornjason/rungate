@@ -178,7 +178,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   "criterion-inventory": {
     script: "scripts/criterion-inventory.ts",
     summary: "Trace every criterion to the tests, issues and pull requests that name it",
-    usage: "rungate criterion-inventory --snapshot <dir> --spec <path> [--json] [--markdown]",
+    usage: "rungate criterion-inventory --spec <path> [--snapshot <cache-dir>] [--repo <owner/name>] [--json] [--markdown]",
     projectRootFlag: true,
   },
   // Step 3 of ADR-003 made VISIBLE (#1647). The issue body declares which

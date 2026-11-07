@@ -17,9 +17,9 @@
 import { describe, expect, test } from "bun:test";
 import { localCalendarDay } from "../lib/local-calendar-day";
 import { hasContent } from "../lib/spec-evidence";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   CODE_DIRS,
@@ -31,8 +31,10 @@ import {
   collectTestFiles,
   falseTicks,
   inventory,
+  PROVENANCE,
   renderMarkdown,
   waiverProblem,
+  writeSnapshotDir,
   type Snapshot,
   type Tracked,
 } from "../scripts/criterion-inventory";
@@ -329,20 +331,25 @@ describe("an absent pr-files.jsonl is the first pass, not a failed fetch", () =>
   const run = (dir: string, spec: string) =>
     Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json"]);
 
+  // Planted through `writeSnapshotDir`, the command's OWN writer, because
+  // SC-2619 refuses a directory it did not write. Spelling `taken.json`
+  // here instead would be a second answer to *what a taken snapshot looks
+  // like*, free to drift from the fetcher's.
   const plant = (opts: { prs: boolean }): { dir: string; spec: string } => {
     const dir = mkdtempSync(join(tmpdir(), "rg-inventory-snap-"));
-    writeFileSync(
-      join(dir, "issues.json"),
-      JSON.stringify([{ number: 1, title: "CRC-Z2 is wrong", body: "", state: "OPEN" }]),
+    writeSnapshotDir(
+      dir,
+      {
+        issues: [{ number: 1, title: "CRC-Z2 is wrong", body: "", state: "OPEN" }],
+        prs: [{ number: 900, title: "CRC-Z2", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }],
+        files: {},
+      },
+      { takenAt: "2026-10-28T00:00:00Z", repo: "o/r" },
     );
-    if (opts.prs) {
-      writeFileSync(
-        join(dir, "prs.json"),
-        JSON.stringify([
-          { number: 900, title: "CRC-Z2", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" },
-        ]),
-      );
-    }
+    // Removed AFTER the write, so the provenance record stays and the
+    // refusal under test is the one about `prs.json` rather than the one
+    // about an unprovenanced directory.
+    if (!opts.prs) rmSync(join(dir, "prs.json"));
     const spec = join(dir, "spec.md");
     writeFileSync(spec, SPEC);
     return { dir, spec };
@@ -409,8 +416,15 @@ describe("the expiry comparison is anchored in UTC, like the gate that enforces 
     const spec = join(mkdtempSync(join(tmpdir(), "rg-inv-tz-")), "s.md");
     writeFileSync(spec, SPEC);
     const dir = mkdtempSync(join(tmpdir(), "rg-inv-tzsnap-"));
-    writeFileSync(join(dir, "issues.json"), JSON.stringify([{ number: 1, title: "x", body: "", state: "OPEN" }]));
-    writeFileSync(join(dir, "prs.json"), JSON.stringify([{ number: 9, title: "x", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }]));
+    writeSnapshotDir(
+      dir,
+      {
+        issues: [{ number: 1, title: "x", body: "", state: "OPEN" }],
+        prs: [{ number: 9, title: "x", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }],
+        files: {},
+      },
+      { takenAt: "2026-10-28T00:00:00Z", repo: "o/r" },
+    );
     try {
       const day = (TZ: string) =>
         JSON.parse(
@@ -543,6 +557,11 @@ describe("a wrong-shaped snapshot is a failed fetch, not a measurement", () => {
     const dir = mkdtempSync(join(tmpdir(), "rg-inv-shape-"));
     const spec = join(dir, "s.md");
     writeFileSync(spec, SPEC);
+    // Taken first, then corrupted: the directory's provenance is real and
+    // the shape is what is wrong with it, which is the case being made. A
+    // directory with neither would refuse for the other reason and prove
+    // nothing about the shape guards.
+    writeSnapshotDir(dir, { issues: [], prs: [], files: {} }, { takenAt: "2026-10-28T00:00:00Z", repo: "o/r" });
     writeFileSync(join(dir, "issues.json"), issues);
     writeFileSync(join(dir, "prs.json"), prs);
     try {
@@ -570,5 +589,171 @@ describe("a wrong-shaped snapshot is a failed fetch, not a measurement", () => {
     // The control: the guard was tightened, not turned into a refusal of
     // everything.
     expect(run(ISSUES, PRS).exitCode).toBe(0);
+  });
+});
+
+/**
+ * SC-2619, and item **D1** of the ladder in `project-state.json`.
+ *
+ * The input directory was assembled by hand, with two `gh` commands copied
+ * out of this script's own header and a third appended per pull request. So
+ * the number it printed on 2026-10-30 was reproducible by nobody else: there
+ * is no way to tell, from the directory or from the output, which tracker it
+ * was taken from, when, or whether a line was edited afterwards.
+ *
+ * Two halves, and both have to hold or the criterion is half-built:
+ *
+ * - the command takes its own reading when nobody hands it one, and
+ * - a directory it did not write is a **refusal naming it**, rather than a
+ *   measurement it silently believes.
+ *
+ * ## Predicted membership, written before the cases ran
+ *
+ * All four below were predicted RED against the script as it stood, and all
+ * four were: the first because a hand-built directory exited 0, and the
+ * other three because no `--snapshot` printed usage and refused. The cost
+ * was predicted too — the six existing subprocess cases above plant a
+ * directory by hand, so every one of them was predicted to flip to the new
+ * refusal, and every one did until their planting went through
+ * {@link writeSnapshotDir}. They use the command's own writer rather than
+ * spelling `taken.json` themselves, so there is one binding for what a
+ * taken snapshot looks like and a test cannot drift from the fetcher.
+ */
+describe("the command takes its own snapshot, and refuses one assembled by hand", () => {
+  /** A `gh` that answers from canned files and records what it was asked. */
+  const stubGh = (answers: { issues: unknown; prs: unknown }): string => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-inv-gh-"));
+    writeFileSync(join(dir, "issues.json"), JSON.stringify(answers.issues));
+    writeFileSync(join(dir, "prs.json"), JSON.stringify(answers.prs));
+    writeFileSync(
+      join(dir, "gh"),
+      [
+        "#!/bin/sh",
+        'echo "$@" >> "$RG_STUB/calls.log"',
+        'case "$1 $2" in',
+        '  "issue list") cat "$RG_STUB/issues.json" ;;',
+        '  "pr list") cat "$RG_STUB/prs.json" ;;',
+        '  "pr view") printf \'{"number":%s,"files":[{"path":"lib/x.ts"}]}\\n\' "$3" ;;',
+        "  *) echo \"stub gh: unexpected $*\" >&2; exit 64 ;;",
+        "esac",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    return dir;
+  };
+
+  const calls = (stub: string): string[] =>
+    existsSync(join(stub, "calls.log"))
+      ? readFileSync(join(stub, "calls.log"), "utf-8").split("\n").filter(l => l !== "")
+      : [];
+
+  const ISSUES = [{ number: 1, title: "CRC-Z2 is wrong", body: "", state: "OPEN" }];
+  const PRS = [{ number: 900, title: "CRC-Z2", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }];
+
+  const run = (args: string[], stub: string | null) =>
+    Bun.spawnSync(["bun", SCRIPT, ...args], {
+      env: {
+        ...process.env,
+        ...(stub === null ? {} : { RG_STUB: stub, PATH: `${stub}:${process.env.PATH ?? ""}` }),
+      },
+    });
+
+  /**
+   * A project root of its own, not this repository's.
+   *
+   * `--project-root` matters here beyond tidiness: with the default root the
+   * scan reaches THIS file, which spells `CRC-Z2` in the lines above, so the
+   * criterion reads BOUND and the pull-request reading it is supposed to
+   * demonstrate is outranked by the ladder. A fixture that describes the
+   * tree it happens to be running in cannot show what it says it shows.
+   */
+  const withRoot = (): { dir: string; args: string[] } => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-inv-own-"));
+    mkdirSync(join(dir, "test"));
+    writeFileSync(join(dir, "test", "placeholder.test.ts"), "// names no criterion\n");
+    const spec = join(dir, "s.md");
+    writeFileSync(spec, SPEC);
+    return { dir, args: ["--project-root", dir, "--spec", spec, "--json"] };
+  };
+
+  test("a snapshot directory this command did not take is refused, naming it", () => {
+    // The defect, stated as a case: two hand-written files and the command
+    // believed them. Nothing in the directory says where they came from.
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    mkdirSync(snap);
+    writeFileSync(join(snap, "issues.json"), JSON.stringify(ISSUES));
+    writeFileSync(join(snap, "prs.json"), JSON.stringify(PRS));
+    try {
+      const got = run(["--snapshot", snap, ...args], null);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain(snap);
+      expect(got.stderr.toString()).toContain(PROVENANCE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no --snapshot the command takes its own reading", () => {
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    try {
+      const got = run(args, stub);
+      expect(got.stderr.toString()).not.toContain("usage:");
+      expect(got.exitCode).toBe(0);
+      expect(calls(stub).some(c => c.startsWith("issue list"))).toBe(true);
+      expect(calls(stub).some(c => c.startsWith("pr list"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("what it fetched reaches the report, so the fetch is not a no-op that exits 0", () => {
+    // Green on the exit code witnesses nothing. #900 is MERGED and names
+    // CRC-Z2, so a reading that really happened puts it on that criterion's
+    // row — and having fetched its changed files, in CODE_DIRS, as TOUCHED.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    try {
+      const got = run(args, stub);
+      expect(got.exitCode).toBe(0);
+      const out = JSON.parse(got.stdout.toString());
+      const z2 = out.rows.find((r: { id: string }) => r.id === "CRC-Z2");
+      expect(z2.mergedPrs).toEqual([900]);
+      expect(out.unclassified).toEqual([]);
+      expect(z2.state).toBe("TOUCHED");
+      expect(calls(stub).some(c => c.startsWith("pr view 900"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("a directory the command wrote is read back, and the second run fetches nothing", () => {
+    // The cache half, and the control that `--snapshot` still means
+    // something: run one writes the directory, run two reads it with no
+    // `gh` on PATH at all — so a run that silently re-fetched could not
+    // pass, and a run that silently refused could not either.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub).exitCode).toBe(0);
+      expect(existsSync(join(snap, PROVENANCE))).toBe(true);
+      const before = calls(stub).length;
+      // PATH is the runtime's own directory and nothing else — so there is
+      // no `gh` of any kind to reach, stub or real. A re-fetch could not
+      // pass this quietly by falling back on the machine's own credentials.
+      const second = Bun.spawnSync(["bun", SCRIPT, "--snapshot", snap, ...args], {
+        env: { ...process.env, PATH: dirname(process.execPath) },
+      });
+      expect(second.exitCode).toBe(0);
+      expect(calls(stub).length).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
   });
 });

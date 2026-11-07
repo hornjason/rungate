@@ -3,33 +3,39 @@
  * The criterion inventory: for every criterion in one spec, what state it is
  * in and who has been near it.
  *
- *   bun scripts/criterion-inventory.ts --snapshot <dir> [--spec <path>] [--json]
+ *   bun scripts/criterion-inventory.ts [--snapshot <dir>] [--spec <path>] [--json]
  *
- * ## Why this takes a snapshot directory instead of fetching
+ * ## It takes its own reading — SC-2619, item D1
  *
  * The three readings it needs are a full issue list, a full pull-request list,
- * and the changed files of every pull request that names a criterion. The
- * third is one API call per pull request — sixty-two of them on the first run
- * — so a tool that fetched on every invocation would be slow enough that
- * nobody re-ran it, and a number nobody re-runs is the defect
- * `.claude/rules/checks-must-be-able-to-fail.md` is about.
+ * and the changed files of every pull request that names a criterion. Until
+ * #1718 all three were assembled by hand: the header printed two `gh`
+ * commands to copy, the run reported which pull requests were still
+ * UNCLASSIFIED, and you appended one line per pull request and ran it again.
  *
- * So the fetch is a separate, explicit step and the snapshot is an input you
- * can point at, date, and keep. Take one with:
+ * The number that came out on 2026-10-30 was therefore reproducible by nobody
+ * else. Nothing in the directory, and nothing in the output, said which
+ * tracker it was taken from, when, or whether a line had been edited after
+ * the fetch. That is the defect SC-2619 names, and it is the same shape as
+ * the one in `.claude/rules/config-access.md`: a reading nobody can retake is
+ * not a measurement.
  *
- *   mkdir -p <dir>
- *   gh issue list --state all --limit 3000 \
- *     --json number,title,body,state > <dir>/issues.json
- *   gh pr list --state all --limit 3000 \
- *     --json number,title,body,state,mergedAt > <dir>/prs.json
+ * So with no `--snapshot` the command fetches all three itself and writes
+ * nothing. The changed-file read is still one API call per pull request, and
+ * it is still only taken for the pull requests that NAME a criterion — which
+ * the command now works out for itself by running the inventory once against
+ * an empty classification and asking it which numbers it could not place.
  *
- * Run it now. It reports which merged pull requests have no changed-file
- * reading, under UNCLASSIFIED. Fetch exactly those, one line each:
+ * ## `--snapshot <dir>` is a cache this command owns, not an input you build
  *
- *   gh pr view <n> --json number,files \
- *     -q '{number:.number,files:[.files[].path]}' >> <dir>/pr-files.jsonl
+ * Pass it and the first run writes the three readings there, beside a
+ * {@link PROVENANCE} file recording when and from which repository. A later
+ * run reads them back and makes no API call at all.
  *
- * then run it again.
+ * A directory holding those readings WITHOUT that file was assembled by
+ * something other than this command, and is a **refusal naming the
+ * directory** — not a measurement. Deleting the directory, or dropping
+ * `--snapshot`, is the remedy, and the refusal says so.
  *
  * ## Which absences are refusals, and which are the first pass
  *
@@ -39,24 +45,18 @@
  * report every criterion as NOT STARTED: the one direction that reads as
  * good news.
  *
- * `pr-files.jsonl` missing is **not**. It is the normal state of the first
- * pass, because it is populated from the UNCLASSIFIED numbers this script
- * itself reports. Refusing on it made the recipe above circular — the file
- * could only be filled from a reading that would not run until the file
- * existed — so it is read as empty and every merged pull request is
- * unclassified, which the run says by name.
- *
- * Both halves were raised by the required reviewer on #1642. The same round
- * flagged a `-c` that used to sit on the `gh pr view` command, on the
- * grounds that it broke the single-line output the `>>` append needs. It
- * does not: measured, with and without it, that command emits exactly one
- * line. It is gone anyway, because `-c` is `--comments` and is a no-op
- * beside `--json` — removed as misleading, not as a fix.
+ * `pr-files.jsonl` missing is **not**. It is the normal state of a cache
+ * written before any pull request named a criterion, and refusing on it
+ * made the old hand recipe circular — the file could only be filled from a
+ * reading that would not run until the file existed. It is read as empty
+ * and every merged pull request is unclassified, which the run says by
+ * name. Both halves were raised by the required reviewer on #1642.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
+import { ghWithoutGhToken } from "../lib/live-issues";
 import { hasContent, isIsoDay, parseCriteria } from "../lib/spec-evidence";
 import { oneScMentionPattern } from "../lib/sc-ids";
 import { localCalendarDay } from "../lib/local-calendar-day";
@@ -481,6 +481,119 @@ export function collectTestFiles(testDir: string): { file: string; content: stri
   return out;
 }
 
+/**
+ * The file a snapshot this command took carries, and one assembled by hand
+ * does not. Named once, because the writer, the reader and the refusal all
+ * have to mean the same file — and the test imports it rather than spelling
+ * it again, so a rename cannot leave a case asserting about a filename
+ * nothing writes.
+ */
+export const PROVENANCE = "taken.json";
+
+/** What a `--snapshot` directory turned out to be. */
+export type DirState = "empty" | "taken" | "hand";
+
+/**
+ * Three states, never two.
+ *
+ * `empty` is a path with nothing of ours in it — the first run with a cache
+ * location, which writes. `taken` is one we wrote. `hand` is readings with
+ * no record of where they came from, which is SC-2619's refusal: folding it
+ * into `taken` is exactly the silent default the criterion exists to stop,
+ * and folding it into `empty` would OVERWRITE somebody's files.
+ */
+export function dirState(dir: string): DirState {
+  if (existsSync(join(dir, PROVENANCE))) return "taken";
+  const data = ["issues.json", "prs.json", "pr-files.jsonl"];
+  return data.some(name => existsSync(join(dir, name))) ? "hand" : "empty";
+}
+
+/** How a `gh` call is made. A parameter so the fetch has a seam. */
+export type Exec = (args: readonly string[]) => string;
+
+/**
+ * The page size for the two list reads.
+ *
+ * One number for both, because they are one reading taken in one shot and a
+ * limit that differed between them would truncate one list against the
+ * other — which reads as criteria nobody has started.
+ */
+export const FETCH_LIMIT = 3000;
+
+function repoArgs(repo: string | undefined): string[] {
+  return repo === undefined ? [] : ["--repo", repo];
+}
+
+/** The issue list and the pull-request list, live. */
+export function fetchTracked(
+  repo: string | undefined,
+  exec: Exec = ghWithoutGhToken,
+): { issues: Tracked[]; prs: Tracked[] } {
+  const limit = String(FETCH_LIMIT);
+  const issues = JSON.parse(
+    exec(["issue", "list", "--state", "all", "--limit", limit, "--json", "number,title,body,state", ...repoArgs(repo)]),
+  ) as Tracked[];
+  const prs = JSON.parse(
+    exec([
+      "pr", "list", "--state", "all", "--limit", limit,
+      "--json", "number,title,body,state,mergedAt",
+      ...repoArgs(repo),
+    ]),
+  ) as Tracked[];
+  return { issues, prs };
+}
+
+/**
+ * The changed paths of each pull request named, one call apiece.
+ *
+ * Only the ones that NAME a criterion are asked for — `main` works that set
+ * out by running the inventory once against an empty classification, which
+ * is the same `unclassified` list the hand recipe used to print for a person
+ * to copy.
+ */
+export function fetchChangedFiles(
+  numbers: readonly number[],
+  repo: string | undefined,
+  exec: Exec = ghWithoutGhToken,
+): Record<number, string[]> {
+  const out: Record<number, string[]> = {};
+  for (const n of numbers) {
+    const raw = JSON.parse(exec(["pr", "view", String(n), "--json", "number,files", ...repoArgs(repo)])) as {
+      files?: { path: string }[];
+    };
+    out[n] = (raw.files ?? []).map(f => f.path);
+  }
+  return out;
+}
+
+/**
+ * Write a cache, with the record that makes it one.
+ *
+ * The raw path lists are written, not the `changedCode` verdict computed
+ * from them: storing the verdict would make the cache carry this version of
+ * `CODE_DIRS` forever, so widening that list would leave old caches
+ * answering with the old one and no reading would say so.
+ *
+ * {@link PROVENANCE} is written LAST. A run killed partway then leaves a
+ * directory in the `hand` state, which refuses — rather than one that looks
+ * taken and is half-written.
+ */
+export function writeSnapshotDir(
+  dir: string,
+  data: { issues: Tracked[]; prs: Tracked[]; files: Record<number, string[]> },
+  meta: { takenAt: string; repo: string | null },
+): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "issues.json"), JSON.stringify(data.issues));
+  writeFileSync(join(dir, "prs.json"), JSON.stringify(data.prs));
+  const lines = Object.entries(data.files).map(([n, files]) => JSON.stringify({ number: Number(n), files }));
+  writeFileSync(join(dir, "pr-files.jsonl"), lines.length === 0 ? "" : `${lines.join("\n")}\n`);
+  writeFileSync(
+    join(dir, PROVENANCE),
+    `${JSON.stringify({ by: "criterion-inventory", takenAt: meta.takenAt, repo: meta.repo }, null, 2)}\n`,
+  );
+}
+
 function readSnapshot(dir: string): Snapshot {
   const need = (name: string): string => {
     const path = join(dir, name);
@@ -553,11 +666,43 @@ function readSnapshot(dir: string): Snapshot {
   return { issues, prs, prChangedCode };
 }
 
+/**
+ * Take all three readings live, and write them to `dir` when there is one.
+ *
+ * The changed-file call is taken only for the pull requests that NAME a
+ * criterion, and the inventory itself is what says which those are: run it
+ * once against an empty classification and `mergedPrs` is exactly the set
+ * the id match found. That is the step the hand recipe made a person do, and
+ * the reason it is not a second matcher here — a list built by a different
+ * predicate from the one that consumes it would quietly ask about the wrong
+ * pull requests (`.claude/rules/checks-must-be-able-to-fail.md`, *two
+ * deciders*).
+ */
+function takeReading(
+  dir: string | undefined,
+  repo: string | undefined,
+  specText: string,
+  testFiles: { file: string; content: string }[],
+  today: string,
+): Snapshot {
+  const { issues, prs } = fetchTracked(repo);
+  const naming = inventory(specText, { issues, prs, prChangedCode: {} }, testFiles, today);
+  const want = [...new Set(naming.flatMap(r => r.mergedPrs))].sort((a, b) => a - b);
+  const files = fetchChangedFiles(want, repo);
+  const prChangedCode: Record<number, boolean> = {};
+  for (const [n, paths] of Object.entries(files)) prChangedCode[Number(n)] = changedCode(paths);
+  if (dir !== undefined) {
+    writeSnapshotDir(dir, { issues, prs, files }, { takenAt: new Date().toISOString(), repo: repo ?? null });
+  }
+  return { issues, prs, prChangedCode };
+}
+
 function main(): number {
   const argv = process.argv.slice(2);
   const dir = flag(argv, "--snapshot");
-  if (!dir) {
-    console.error("usage: bun scripts/criterion-inventory.ts --snapshot <dir> [--spec <path>]");
+  const repo = flag(argv, "--repo");
+  if (argv.includes("--snapshot") && !dir) {
+    console.error("usage: bun scripts/criterion-inventory.ts [--snapshot <dir>] [--spec <path>] [--repo <owner/name>]");
     return EXIT_REFUSED;
   }
   // `--project-root`, not `import.meta.dir/..`, for the reason registering
@@ -580,14 +725,45 @@ function main(): number {
     ? (isAbsolute(specFlag) ? specFlag : join(root, specFlag))
     : join(root, "specs/CODE-REVIEW-CONVERGENCE-SPEC.md");
 
-  const snapshot = readSnapshot(dir);
   const testFiles = collectTestFiles(join(root, "test"));
   if (testFiles.length === 0) {
     console.error(`UNMEASURED: no test files under ${join(root, "test")}. Every criterion would read as unbound.`);
     return EXIT_REFUSED;
   }
   const today = inventoryToday();
-  const rows = inventory(readFileSync(specPath, "utf-8"), snapshot, testFiles, today);
+  const specText = readFileSync(specPath, "utf-8");
+
+  // SC-2619. A directory holding readings with no record of where they came
+  // from is refused by name, and `taken` is the only state that is read back
+  // — so the source of every number this prints is either a directory this
+  // command wrote or the live API it just called.
+  if (dir !== undefined && dirState(dir) === "hand") {
+    console.error(
+      `UNMEASURED: ${dir} holds a snapshot this command did not take — there is no ${join(dir, PROVENANCE)}, ` +
+        `so nothing says which tracker it came from or when, and the numbers would be reproducible by nobody ` +
+        `else. Drop --snapshot and the command takes its own reading, or delete ${dir} and pass --snapshot ` +
+        `${dir} again to have one written there.`,
+    );
+    return EXIT_REFUSED;
+  }
+
+  let snapshot: Snapshot;
+  if (dir !== undefined && dirState(dir) === "taken") {
+    snapshot = readSnapshot(dir);
+  } else {
+    try {
+      snapshot = takeReading(dir, repo, specText, testFiles, today);
+    } catch (err) {
+      // A failed fetch is UNMEASURED and says so. Letting the throw out
+      // would print a stack trace naming `gh`, which reads as a crash in
+      // this command rather than a tracker it could not reach.
+      console.error(
+        `UNMEASURED: could not take the reading — ${(err as Error).message}. That is not an empty tracker.`,
+      );
+      return EXIT_REFUSED;
+    }
+  }
+  const rows = inventory(specText, snapshot, testFiles, today);
 
   const unclassified = [
     ...new Set(rows.flatMap(r => r.mergedPrs).filter(n => snapshot.prChangedCode[n] === undefined)),
