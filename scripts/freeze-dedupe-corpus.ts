@@ -80,26 +80,37 @@ const findings: Array<{ id: string; title: string; body: string }> = [];
 const missing: Array<{ id: string; why: string }> = [];
 
 for (const id of CORPUS) {
-  let raw: string | null = null;
+  // **Every way reading one id can fail lands in `missing`.** The spawn, the
+  // parse, and the shape are one try on purpose: a `gh` that exits 0 and
+  // prints an update notice ahead of its JSON is a bad read of ONE id, and
+  // letting its `SyntaxError` escape would kill the run for all fourteen with
+  // a stack trace — the designed refusal, bypassed by the one failure mode
+  // that does not announce itself as one.
+  //
+  // REFUSE rather than skip. A corpus quietly short by one issue produces a
+  // table that is wrong in a way nothing in the output says — which is the
+  // exact failure mode #1365 is about, rebuilt in the tool that fixes it.
+  //
+  // **And carry the reason, never a bare id.** `gh` fails for reasons that
+  // are not about this issue at all — unauthenticated, rate-limited, not on
+  // PATH, no network — and under every one of them all fourteen ids fail
+  // identically. A refusal listing fourteen numbers reads as "the corpus is
+  // wrong" when the true state is "nothing was read". That is the same
+  // conversion `.claude/rules/config-access.md` forbids by name: a bare
+  // `catch` turning corruption into absence.
   try {
-    raw = gh(["issue", "view", id, "--repo", REPO, "--json", "number,title,body"]);
+    const raw = gh(["issue", "view", id, "--repo", REPO, "--json", "number,title,body"]);
+    const j = JSON.parse(raw) as { number?: number; title?: string; body?: string | null };
+    // A shape check, because `JSON.parse` succeeds on plenty of things that
+    // are not an issue. Without it a missing `number` is frozen as the string
+    // `"undefined"` and the corpus is wrong in exactly the silent way above.
+    if (typeof j.number !== "number" || typeof j.title !== "string") {
+      throw new Error(`gh returned no issue shape — got ${JSON.stringify(j).slice(0, 120)}`);
+    }
+    findings.push({ id: String(j.number), title: j.title, body: j.body ?? "" });
   } catch (e) {
-    // REFUSE rather than skip. A corpus quietly short by one issue produces a
-    // table that is wrong in a way nothing in the output says — which is the
-    // exact failure mode #1365 is about, rebuilt in the tool that fixes it.
-    //
-    // **And carry the reason, never a bare id.** `gh` fails for reasons that
-    // are not about this issue at all — unauthenticated, rate-limited, not on
-    // PATH, no network — and under every one of them all fourteen ids fail
-    // identically. A refusal listing fourteen numbers reads as "the corpus is
-    // wrong" when the true state is "nothing was read". That is the same
-    // conversion `.claude/rules/config-access.md` forbids by name: a bare
-    // `catch` turning corruption into absence.
     missing.push({ id, why: e instanceof Error ? e.message : String(e) });
   }
-  if (raw === null) continue;
-  const j = JSON.parse(raw) as { number: number; title: string; body: string | null };
-  findings.push({ id: String(j.number), title: j.title, body: j.body ?? "" });
 }
 
 if (missing.length > 0) {
@@ -111,10 +122,11 @@ if (missing.length > 0) {
   );
   for (const m of missing) console.error(`  #${m.id}: ${m.why}`);
   if (all) {
-    // Every id failing is a statement about the tool, not about the corpus.
+    // Every id failing is a statement about the reader, not about the corpus
+    // — the reasons above say which reader fault it was.
     console.error(
-      `  ALL ${CORPUS.length} failed, which is what an unauthenticated, rate-limited or ` +
-        `absent \`gh\` looks like — check the tool before concluding the corpus is wrong.`,
+      `  ALL ${CORPUS.length} failed, which is a statement about \`gh\` and not about the ` +
+        `corpus. The reasons above say which; fix the reader before editing CORPUS.`,
     );
   }
   process.exit(1);
