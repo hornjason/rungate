@@ -397,6 +397,59 @@ describe("the commands #1746 creates are executable, not prose", () => {
     expect(disagree.out).toContain("distinct commits: 4");
   });
 
+  test("round-rca reports UNMEASURED when gh exits 0 without printing JSON", () => {
+    // `gh` exiting 0 is not `gh` printing JSON. A one-time CLI notice, an
+    // auth banner or a schema change all arrive on stdout with a zero exit,
+    // and an unguarded JSON.parse turns each into a stack trace in the
+    // agent's context — which reads as a crash, not as a reading that could
+    // not be taken.
+    //
+    // Round 7 of this PR's review found it, and found it as a CLASS: the
+    // sibling block in stage-audit.md had been given exactly this guard two
+    // rounds earlier and the fix was not carried across. So this case
+    // covers BOTH parse sites, not the one that was reported.
+    //
+    // Broken to prove it: removing either try/catch makes its own arm exit
+    // non-zero and turns this red.
+    const block = executableBlocks(read("round-rca"))[0] as string;
+
+    const plantJunk = (label: string, prOut: string, apiOut: string): string => {
+      const dir = join(scratch, label);
+      require("fs").mkdirSync(dir, { recursive: true });
+      const gh = join(dir, "gh");
+      writeFileSync(
+        gh,
+        `#!/bin/sh\ncase "$1" in\n  pr) printf '%s' ${JSON.stringify(prOut)} ;;\n` +
+          `  api) printf '%s' ${JSON.stringify(apiOut)} ;;\n  *) exit 1 ;;\nesac\n`,
+      );
+      chmodSync(gh, 0o755);
+      return dir;
+    };
+
+    const goodMeta = JSON.stringify({
+      number: 1725,
+      headRefName: "rg/planted",
+      createdAt: "2026-11-01T00:00:00Z",
+      state: "OPEN",
+      url: "u",
+    });
+    const notice = "! A new release of gh is available\n";
+
+    // Arm one: the pull-request read is not JSON.
+    const badMeta = runBlock(block, "1725", { stubGh: plantJunk("junk-meta", notice, "{}") });
+    expect(badMeta.code, `a non-JSON pr read must report, not crash:\n${badMeta.out}`).toBe(0);
+    expect(badMeta.out).toContain("UNMEASURED");
+    expect(badMeta.out, "the refusal must say gh printed something that was not JSON").toContain("did not print JSON");
+
+    // Arm two: the pull request reads fine and the RUNS read is not JSON.
+    // Without this arm the case would pass with the second guard deleted,
+    // because the first one short-circuits before the second is reached.
+    const badRuns = runBlock(block, "1725", { stubGh: plantJunk("junk-runs", goodMeta, notice) });
+    expect(badRuns.code, `a non-JSON runs read must report, not crash:\n${badRuns.out}`).toBe(0);
+    expect(badRuns.out).toContain("UNMEASURED");
+    expect(badRuns.out, "the second refusal must name the runs read, not the pull request").toContain("workflow runs");
+  });
+
   test("round-rca answers about the branch's pull request, and says so when that is not the one asked for", () => {
     // The argument never reaches the block — it is prose in the prompt — so
     // standing on a branch whose pull request is NOT the one named gives a
