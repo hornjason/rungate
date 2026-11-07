@@ -79,6 +79,7 @@ grants nothing.
 | — | clearAssignees reads a REST response through the GraphQL envelope, so every release is UNMEASURED | scripts/board-status-sweep.ts, test/board-status-sweep.test.ts | — | The board PAT cannot write issues, so 6 of 6 stale-claim releases were refused |
 | — | The filing gate resolves a filing against the session directory, not the checkout it was filed from | lib/issue-filing-gate.ts, test/issue-filing-gate.test.ts | — | — |
 | — | Nothing proves the board can fail: 0 of 28 BOARD-FLOW-SPEC criteria are ticked | test/board-intake.test.ts, test/board-flow.test.ts, specs/BOARD-FLOW-SPEC.md | — | The filing gate resolves a filing against the session directory, not the checkout it was filed from |
+| — | A leading quote disarms the newline escape, so a scratch path can forge a record | lib/scaffold/ai-review-step.ts, .github/workflows/ai-review.yml, test/ai-review-workflow.test.ts | — | — |
 
 The third row is live, found while watching run `42254789078` drain the
 board. `clearAssignees` is REST — `PATCH /repos/{repo}/issues/{n}` — and it
@@ -134,3 +135,33 @@ things follow that the gate does not do:
 The second row below follows from the first: until an agent can file
 ordinarily, nothing about intake can be exercised the way a new agent or a
 consumer would exercise it.
+
+## Amended 2026-11-07 — the last row was FOUND, and says so
+
+The sixth row is not like the other five. They were planned: somebody decided
+the work and then wrote it down. That one was **found** — the Claude review
+trial on #1866 raised it, and #1866 is a step reorder that surfaced it only
+because regenerating `ai-review.yml` shifted every line and put pre-existing
+code in the diff.
+
+A document titled *planned, not found* carrying a found finding is worth one
+paragraph rather than a quiet row, because the distinction is the whole reason
+the route exists. Three facts, and they are what this row is resting on:
+
+- **It is out of every open diff.** #1866 is merged and the code is
+  pre-existing, so rule 7's default — *a review finding is a PR comment* —
+  has nothing to attach to. The arbiter agreed: it cleared
+  `COMMENT_INSTEAD` on `out-of-pr-diff` and refused only on `OVER_CAP`.
+- **Jason authorised it explicitly**, 2026-11-07, asked directly and answering
+  *"File it, over the cap"*. The row records the authorisation where the gate
+  can read it, which a sentence in a transcript is not.
+- **It is engine code.** The defect is in the drift step this repository
+  generates into every consumer's CI, which is the population the cap's own
+  docblock carves out: the cap exists because of what a swarm did, and engine
+  work is what makes the backlog shrink.
+
+What this is **not** is a precedent that a finding may be filed by writing it
+down here. The row is one title, merged through review like any other, and the
+cap applies unchanged to everything that is not in the table. If found findings
+start appearing in this document at a rate, that is the signal that the cap is
+set wrong — not that the route is working.
