@@ -1,0 +1,74 @@
+---
+argument-hint: <pr-number>
+description: At the review-round budget, ask three questions in order before re-scoping anything
+doc-type: reference
+status: active
+updated: 2026-11-07
+---
+
+## Runs against reviewed commits, for this pull request
+
+!`bun -e 'const n=(process.argv[1]??"").trim(); if(!/^[0-9]+$/.test(n)){console.log("UNMEASURED: give a pull request number. Usage: /round-rca <pr-number>");process.exit(0);} const sh=async a=>{const p=Bun.spawnSync(["gh",...a],{env:Object.fromEntries(Object.entries(process.env).filter(([k,v])=>k!=="GH_TOKEN"&&v!==undefined))}); return p.exitCode===0?new TextDecoder().decode(p.stdout):null;}; const meta=await sh(["pr","view",n,"--json","headRefName,createdAt,state,url"]); if(meta===null){console.log("UNMEASURED: gh could not read pull request #"+n+". A count that could not be taken is not a count of zero.");process.exit(0);} const m=JSON.parse(meta); const runs=await sh(["api","-X","GET","repos/{owner}/{repo}/actions/workflows/ai-review.yml/runs","-f","event=pull_request","-f","branch="+m.headRefName,"-f","created=>="+m.createdAt,"-f","per_page=100"]); if(runs===null){console.log("UNMEASURED: the workflow-runs API did not answer. This is the same reading ai-review.yml takes; without it the round number is unreadable, not 1.");process.exit(0);} const r=JSON.parse(runs); const list=r.workflow_runs??[]; const shas=new Set(list.map(x=>x.head_sha)); console.log("pull request #"+n+"  "+m.state+"  "+m.url); console.log("head branch:      "+m.headRefName); console.log("runs counted:     "+r.total_count+"   <- this is the number ai-review.yml calls the round"); console.log("distinct commits: "+shas.size+"   <- this is how many trees were actually reviewed"); console.log(r.total_count===shas.size?"\nAGREE. The round count is not inflated by re-runs on this reading.":"\nDISAGREE by "+(r.total_count-shas.size)+". The round number counts RUNS, not reviewed commits."); console.log("\nper run:"); for(const x of list.slice(0,30)) console.log("  "+x.head_sha.slice(0,8)+"  "+x.event+"  "+x.conclusion+"  "+x.created_at);' -- $ARGUMENTS`
+
+---
+
+Pull request **$ARGUMENTS** has reached the review-round budget. **Do not
+re-scope on the trigger.** Ask these three questions in order and re-scope only
+if the third is yes.
+
+Had the trigger alone been obeyed on #1725, a correct green pull request would
+have been split and a race fix deleted. That is what this command exists to
+stop.
+
+## 1. Is the round count real?
+
+Read the block above. `.github/workflows/ai-review.yml` sets
+`round="${total}"` from `total_count` on the workflow-runs API, filtered by
+head branch and the PR's creation time — so it counts **runs**, not reviewed
+commits. Every close/reopen and every re-run adds one.
+
+- **AGREE** — the count is honest. Go to question 2.
+- **DISAGREE** — the trigger fired early. Say so, give both numbers, and
+  carry on working. The budget has not actually been reached.
+- **UNMEASURED** — the API did not answer. That is not a count of 1 and not
+  permission to re-scope; say which reading failed.
+
+**#1592 already tracks this counter. Do not re-file it.** #1725 read 6 against
+4 because each #1307 flake remediation is a close/reopen, and that is another
+run.
+
+## 2. Is the finding real?
+
+Only reached if the count is honest. Take the repeated finding and ask what
+input would make it false, then go and run that input. A recommendation is not
+evidence; a reading is.
+
+The worked case: #1725 rounds 5 and 6 both recommended consolidating two cap
+sites into one. Killing each site separately reddened **different** sets — 23
+cases with 14 unique against 12 with 3 unique. Two deciders that agree cannot
+produce that, so the two sites were not duplicates and the recommendation
+would have deleted #1595's race fix.
+
+- **Not real** — answer it on the thread with the reading, resolve it, and
+  carry on. A round spent refuting a finding is not a round spent repairing.
+- **Real** — go to question 3.
+
+## 3. Is the work wrong?
+
+Only now. Rounds are a rejection signal rather than progress — across 40,214
+pull requests each extra reviewer comment *lowered* merge odds 2.8% on
+agent-authored changes (Yoshioka et al., MSR '26).
+
+Re-scope, and say what a further round would fix that this one did not. If
+that is a different problem it is a second issue, not a fourth round.
+
+## Report
+
+```
+pr #<n>: COUNT REAL? yes|no|unmeasured  ->  FINDING REAL? yes|no|-  ->  RE-SCOPE? yes|no
+<the two numbers from the block above>
+<what you are doing next, in one line>
+```
+
+Stop at the first `no`. Three noes in a row has never happened; one is the
+common case and it means keep working.
