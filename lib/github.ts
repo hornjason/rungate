@@ -760,6 +760,40 @@ export type FilingDecision =
 export const REFUSED_UNGATED = "refusing to create an issue the filing gate did not allow";
 
 /**
+ * The filing gate: turn a gate's answer into a decision, failing CLOSED.
+ *
+ * SC-2613 names this symbol, and it is a named binding rather than four
+ * lines inside `createIssue` for the reason that criterion exists: the thing
+ * that adjudicates a filing has to be something a mutation can move and a
+ * reader can find. Inline, the only way to describe it was "the try/catch at
+ * the top of `createIssue`", which is a position, not a binding.
+ *
+ * Three answers are NOT permission, and all three arrive looking different:
+ *
+ * | the gate | what this returns |
+ * |---|---|
+ * | returns a decision | that decision, unchanged |
+ * | returns anything else — `undefined`, a string, `null` | refuses |
+ * | throws | refuses, carrying the message |
+ *
+ * The second row is the one worth stating: `undefined` is what a stubbed or
+ * half-written gate returns, and reading it as permission is precisely the
+ * fail-open this whole path exists to close. Reserving is a WRITE to the
+ * ledger, so a gate that could not complete is a cap whose state did not
+ * update — indistinguishable from an attempt to switch the cap off.
+ */
+export function filingGate(gate: () => FilingDecision): FilingDecision {
+  try {
+    const answer = gate();
+    return answer !== null && typeof answer === "object" && "allowed" in answer
+      ? answer
+      : { allowed: false, reason: "the filing gate returned no decision" };
+  } catch (e) {
+    return { allowed: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
  * Create a new issue, **metered** (#1677, SC-2613).
  *
  * Used by ship.js when Discovery rescopes a large issue into phases: phase 1
@@ -806,19 +840,7 @@ export async function createIssue(
   opts: { title: string; body?: string; labels?: string[] },
   gate: () => FilingDecision,
 ): Promise<any> {
-  let decision: FilingDecision;
-  try {
-    const answer = gate();
-    // A gate that returned nothing usable has not allowed anything. Treating
-    // an unreadable answer as permission is the fail-open this exists to
-    // close, and `undefined` is what a stubbed or half-written gate returns.
-    decision =
-      answer !== null && typeof answer === "object" && "allowed" in answer
-        ? answer
-        : { allowed: false, reason: "the filing gate returned no decision" };
-  } catch (e) {
-    decision = { allowed: false, reason: e instanceof Error ? e.message : String(e) };
-  }
+  const decision = filingGate(gate);
 
   if (!decision.allowed) {
     throw new Error(`${REFUSED_UNGATED}: ${decision.reason}`);
