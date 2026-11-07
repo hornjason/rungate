@@ -943,12 +943,42 @@ const REGEX_AFTER_WORD = new Set([
  * — a whole word, or one character, or the two-character `++`/`--`.
  * Both callers must merge those two, or `i++ / n` arrives here spelled
  * `+` and is indistinguishable from binary plus.
+ *
+ * `before` is the token before `prev`, and it is read for exactly one
+ * case: `!`. See `endsAnExpression`.
  */
-function opensARegexAfter(text: string, at: number, prev: string): boolean {
+function opensARegexAfter(prev: string, before: string): boolean {
   if (REGEX_AFTER_WORD.has(prev)) return true;
   if (prev === "++" || prev === "--") return false;
-  if (prev === "!") return endOfRegex(text, at) !== -1;
+  if (prev === "!") return !endsAnExpression(before);
   return prev.length === 1 && REGEX_MAY_FOLLOW.has(prev);
+}
+
+/**
+ * Did this token finish a value? The whole of the `!` decision.
+ *
+ * `a.b! / c` is a non-null assertion then DIVISION; `return !/re/` is
+ * negation then a REGEX. The two are told apart by what sits before the
+ * `!`, and nothing else can tell them apart.
+ *
+ * Round 3 asked this question by LAST CHARACTER, so `return` ended in
+ * `n`, counted as a value, and an ordinary file became unreadable. The
+ * repair then was to delete the lookback and TRIAL-PARSE instead: treat
+ * the `/` as a regex if some later `/` on the line could close it.
+ * Round 8 found what that costs — `expect(z.oneRound! / z.passed)
+ * .toBeCloseTo(1 / 3, 5)` in `test/crc-reading.test.ts` pairs the two
+ * slashes and masks everything between them. The docstring that
+ * replaced the lookback claimed this shape had no instance in the tree.
+ * It had one the whole time, and the claim was never swept for.
+ *
+ * So the question is asked again, of the WHOLE token this time, which
+ * is the version that answers `return` correctly. A trial-parse was
+ * never evidence: a line almost always has another `/` somewhere.
+ */
+function endsAnExpression(token: string): boolean {
+  if (token === ")" || token === "]") return true;
+  if (token === '"' || token === "'" || token === "`" || token === "/re/") return true;
+  return /^[\w$]/.test(token) && !REGEX_AFTER_WORD.has(token);
 }
 
 function scanSource(text: string): Scan {
@@ -959,11 +989,13 @@ function scanSource(text: string): Scan {
   };
 
   let i = 0;
-  // The last significant token — a whole word, or one character. One is
-  // enough: the `!` case is decided by trial-parsing the regex forward,
-  // not by looking further back. An earlier draft kept a second slot for
-  // a lookback that round 3 deleted, and the slot outlived it.
+  // The last two significant tokens — each a whole word, one character,
+  // or the two-character `++`/`--`. Two, because `!` is decided by what
+  // came before it (`endsAnExpression`). Round 4 deleted the second slot
+  // as dead and it was: the decision that needed it had been replaced by
+  // a trial-parse. Round 8 found what the trial-parse got wrong.
   let prev = "\n";
+  let before = "\n";
   let ok = true;
   let braces = 0;
 
@@ -987,23 +1019,17 @@ function scanSource(text: string): Scan {
    *   `i + 1` kept all three titles. A real test vanishing with no
    *   UNMEASURED signal is a false refusal waiting to happen.
    *
-   * The lookback is gone. `++`/`--` are now one token, so postfix is
-   * visible, and the genuinely ambiguous `!` is decided by TRYING the
-   * regex read: a pattern that closes on the same line is a regex, and
-   * one that does not is division. That is the same question the scanner
-   * would have to answer anyway, asked once instead of guessed at.
-   *
-   * Known remaining ambiguity, stated rather than papered over: `a.b! / c
-   * / d`, two divisions on one line after a non-null assertion, reads as
-   * a regex. No instance exists in this tree; a further round on the
-   * decision itself is writing a JavaScript tokenizer, which is a
-   * different problem and would be a different issue.
+   * `++`/`--` are one token, so postfix is visible. `!` is decided by
+   * the token BEFORE it — `endsAnExpression`, which is where round 8's
+   * correction lives and which replaced the trial-parse that stood here
+   * between rounds 3 and 8.
    *
    * The decision is `opensARegexAfter`, at module scope, because
    * `endOfSubstitution` has to make it too — see its own note.
    */
-  const opensARegex = (at: number) => opensARegexAfter(text, at, prev);
+  const opensARegex = () => opensARegexAfter(prev, before);
   const remember = (tok: string) => {
+    before = prev;
     prev = tok;
   };
 
@@ -1043,7 +1069,7 @@ function scanSource(text: string): Scan {
       continue;
     }
 
-    if (c === "/" && opensARegex(i)) {
+    if (c === "/" && opensARegex()) {
       const end = endOfRegex(text, i);
       if (end === -1) { ok = false; break; }
       blank(titles, i, end);
@@ -1179,18 +1205,20 @@ function endOfSubstitution(text: string, from: number): number {
   let i = from + 1;
   let open = 1;
   let prev = "{";
+  let before = "{";
   while (i < text.length) {
     const c = text[i]!;
     if (/[A-Za-z_$]/.test(c)) {
       let j = i;
       while (j < text.length && /[\w$]/.test(text[j]!)) j++;
+      before = prev;
       prev = text.slice(i, j);
       i = j;
       continue;
     }
     // `++`/`--` as one token, for the reason `opensARegexAfter` states:
     // split, postfix increment arrives there spelled `+`.
-    if ((c === "+" || c === "-") && text[i + 1] === c) { prev = c + c; i += 2; continue; }
+    if ((c === "+" || c === "-") && text[i + 1] === c) { before = prev; prev = c + c; i += 2; continue; }
     if (c === "/" && text[i + 1] === "/") {
       const e = text.indexOf("\n", i);
       i = e === -1 ? text.length : e;
@@ -1202,10 +1230,11 @@ function endOfSubstitution(text: string, from: number): number {
       i = e + 2;
       continue;
     }
-    if (c === "/" && opensARegexAfter(text, i, prev)) {
+    if (c === "/" && opensARegexAfter(prev, before)) {
       const e = endOfRegex(text, i);
       if (e === -1) return -1;
       i = e;
+      before = prev;
       prev = "/re/";
       continue;
     }
@@ -1213,6 +1242,7 @@ function endOfSubstitution(text: string, from: number): number {
       const e = endOfString(text, i);
       if (e === -1) return -1;
       i = e;
+      before = prev;
       prev = c;
       continue;
     }
@@ -1221,7 +1251,7 @@ function endOfSubstitution(text: string, from: number): number {
       open--;
       if (open === 0) return i + 1;
     }
-    if (!/\s/.test(c)) prev = c;
+    if (!/\s/.test(c)) { before = prev; prev = c; }
     i++;
   }
   return -1;
@@ -1255,6 +1285,12 @@ function endOfSubstitution(text: string, from: number): number {
  */
 const UNRESOLVED_CALL = new RegExp(String.raw`${DECLARATION_HEAD}(.)`, "g");
 
+/**
+ * `TITLE_CALL`, anchored, so the two patterns can be asked to agree
+ * about one declaration rather than about their own spelling.
+ */
+const TITLE_CALL_AT = new RegExp(TITLE_CALL.source, "y");
+
 function hasUnresolvedDeclaration(masked: string): boolean {
   UNRESOLVED_CALL.lastIndex = 0;
   for (const m of masked.matchAll(UNRESOLVED_CALL)) {
@@ -1262,6 +1298,16 @@ function hasUnresolvedDeclaration(masked: string): boolean {
     // `DECLARATION_HEAD`.
     const first = m[2]!;
     if (first !== '"' && first !== "'" && first !== "`") return true;
+    // A quote is not the same fact as a title this can READ. Round 8: a
+    // template literal spanning two lines matches no `TITLE_CALL`, and
+    // a check on the first character alone sees a backtick and calls the
+    // file complete — so the name vanished from a set reported as whole,
+    // which is the false refusal. Sharing the head (round 7) made the
+    // patterns START alike; this makes them AGREE, which is the property
+    // that was wanted, and it holds for a title shape nobody has thought
+    // of yet.
+    TITLE_CALL_AT.lastIndex = m.index!;
+    if (!TITLE_CALL_AT.test(masked)) return true;
   }
   return false;
 }

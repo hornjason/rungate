@@ -265,6 +265,32 @@ describe("#1849: a verify command names a test that exists", () => {
       ).toEqual(["outer", "outer inner"]);
     });
 
+    test("a title the title scan could not READ is UNMEASURED, not a dropped name", () => {
+      // Round 8. The head agreement of round 7 made the two patterns
+      // start the same way; it did not make them agree about the TITLE.
+      // A template literal spanning two lines is legal JS, `TITLE_CALL`'s
+      // content group has no `s` flag so it matches nothing, and the
+      // unresolved scan — which reads only the character after the paren
+      // — sees a backtick and calls the file readable.
+      //
+      // MEASURED before the fix: titles ["outer"], complete=true. A name
+      // missing from a set reported WHOLE, which is the false refusal.
+      //
+      // The fix is not another spelling. The two now agree BEHAVIOURALLY:
+      // a declaration whose first argument is a quote that the title
+      // pattern did not match at that position is unresolved. That holds
+      // for every future title shape without naming one.
+      const BT = "`";
+      const src =
+        `${D}("outer", () => {\n` + `  ${T}(${BT}inner\n` + `name${BT}, () => {});\n` + `});\n`;
+      const read = namesAreComplete(src);
+      expect(
+        read.complete,
+        "a title this cannot read was reported as a name set known in full — that is a false refusal waiting",
+      ).toBe(false);
+      expect(titlesIn(src), "the readable title was lost along with the unreadable one").toContain("outer");
+    });
+
     test("every spelling of a declaration HEAD is seen by the title scan", () => {
       // Rounds 6 and 7 each found one character on which the title scan
       // and the unresolved scan disagreed — the modifier chain, then the
@@ -322,6 +348,63 @@ describe("#1849: a verify command names a test that exists", () => {
         namesAreComplete(two).complete,
         "a file with a dropped title still reported its names as whole",
       ).toBe(true);
+    });
+
+    test("a non-null assertion before a division is not a regex, even with a second slash on the line", () => {
+      // Round 8, and the finding was against this module's own PROSE: the
+      // docstring said `a.b! / c / d` "has no instance in this tree" and
+      // `test/crc-reading.test.ts` has had one all along. I asserted an
+      // absence without sweeping for it, and the whole "where this stops"
+      // argument rested on it.
+      //
+      // The repair is the missing half of the `!` decision rather than a
+      // token kind: the token BEFORE the `!` decides. A word that is not
+      // a keyword, a `)`, a `]` or a digit ends an expression, so the `!`
+      // is a non-null assertion and the `/` divides. Round 3's deleted
+      // lookback asked the same question by LAST CHARACTER, which is why
+      // `return` passed for an expression; asking it of the whole token
+      // is the version that works.
+      // Two consequences, both MEASURED on the old code. The live line
+      // itself is harmless — the span it swallows holds no brace and no
+      // declaration — so the fixtures are the two shapes where the same
+      // misread does reach something, and the control is the same line
+      // with the `!` removed.
+      const around = (line: string) =>
+        `${D}("outer", () => {\n${line}\n  ${T}("inner", () => {});\n});\n`;
+
+      // Confidently wrong: a real declaration inside the swallowed span
+      // vanishes and the file still reports its names as complete.
+      const eaten = around(`  const u = z.a! / z.b; ${T}("swallowed", () => {}); const v = p / q;`);
+      expect(titlesIn(eaten), "a declaration inside the swallowed span is still missing").toContain("swallowed");
+
+      // Falsely UNMEASURED: the swallowed span takes a `{` with it, the
+      // braces stop balancing, and a readable file stops being checked.
+      const unbalanced = around("  if (z.a! / z.b > 1) { const u = x / y; }");
+      expect(paths(unbalanced), "a readable file was still knocked into UNMEASURED").toEqual([
+        "outer",
+        "outer inner",
+      ]);
+
+      // The control: the same two lines with no `!` always read cleanly,
+      // so neither row above can be green for an unrelated reason.
+      expect(paths(around("  const u = z.a / z.b; const v = p / q;"))).toEqual(["outer", "outer inner"]);
+      expect(paths(around("  if (z.a / z.b > 1) { const u = x / y; }"))).toEqual(["outer", "outer inner"]);
+
+      // And the live line from test/crc-reading.test.ts, which the
+      // docstring said did not exist.
+      const live = around("  expect(z.oneRound! / z.passed).toBeCloseTo(1 / 3, 5);");
+      expect(paths(live), "the live shape from test/crc-reading.test.ts was misread").toEqual([
+        "outer",
+        "outer inner",
+      ]);
+
+      // The other arm, which must not regress: `!` as negation still
+      // opens a regex.
+      const negated = `${D}("outer", () => {\n  const bad = !/\\bcwd\\s*:/.${T}(line);\n  ${T}("inner", () => { void bad; });\n});\n`;
+      expect(paths(negated), "negation before a regex stopped being read as a regex").toEqual([
+        "outer",
+        "outer inner",
+      ]);
     });
 
     test("a brace inside a TITLE does not open a block", () => {
