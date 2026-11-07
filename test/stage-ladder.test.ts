@@ -372,7 +372,12 @@ describe("the live plan", () => {
     // run still sees what is outstanding — and COUNTED by the case below,
     // because a `console.log` in a passing run is not a reader.
     for (const o of openImprovements(stages)) console.log(`  OPEN improvement (stage ${o.stage}): ${o.what}`);
-  });
+    // LIVE_VERIFY_BUDGET_MS, for the reason the item case carries it: these
+    // commands SPAWN suites. The default 5 s was enough while every claimed
+    // improvement was a grep; the first one whose proof is a test file put
+    // the case at 5040 ms and it reported a killed spawn as a refused one —
+    // which reads as a mechanism that regressed.
+  }, LIVE_VERIFY_BUDGET_MS);
 
   /**
    * #1745 — an open improvement that is on nothing but this file.

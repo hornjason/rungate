@@ -651,3 +651,871 @@ export function ladderViolations(raw: unknown): string[] {
 
   return out;
 }
+
+/* ────────────────────────────────────────────────────────────────────────
+ * #1849 — a verify command may not name a test that does not exist.
+ *
+ * `verify` is free text. Nothing related it to the set of test titles that
+ * exist, so a command could name a case nobody wrote and its item could be
+ * ticked against it. Three of Stage G's five verify commands did exactly
+ * that; two of Stage C's six did, and one of those named a FILE whose 47
+ * tests contain nothing matching — which is the half the runtime guard
+ * cannot see, because `grep -qE '^ [1-9][0-9]* pass'` only catches a title
+ * that matches nothing IN THE FILE NAMED.
+ *
+ * Static, by AC-1: this reads the file, it does not run it. A check that
+ * had to run the suite to know whether the suite would be selected is the
+ * thing it is checking.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/**
+ * What a single `bun test <file> -t <name>` fragment turned out to be.
+ *
+ * `UNMEASURED` is a first-class reading and not a quiet pass, for the
+ * reason `.claude/rules/config-access.md` gives: a fragment this cannot
+ * read has not been checked, and "not checked" and "fine" are different
+ * facts. Every one is reported.
+ */
+export const VERIFY_TITLE_READINGS = ["MATCHED", "NO_SUCH_TITLE", "FILE_ABSENT", "UNMEASURED"] as const;
+export type VerifyTitleReading = (typeof VERIFY_TITLE_READINGS)[number];
+
+export interface VerifyTitleFragment {
+  /** The item, improvement or goal the command belongs to. */
+  where: string;
+  /** The path as the command spells it, relative to the project root. */
+  file: string;
+  /** The `-t` pattern, verbatim. */
+  name: string;
+  reading: VerifyTitleReading;
+  /** What the reader saw. Empty only on `MATCHED`. */
+  why: string;
+}
+
+/**
+ * `bun test <file> -t "<name>"`, wherever it appears in a command.
+ *
+ * Global and non-anchored because a verify may chain several with `&&` —
+ * C6 chains three — and a chain whose FIRST command is checked and whose
+ * second is not is the population defect this repository keeps paying for
+ * (#1818).
+ */
+const BUN_TEST_T = /bun test\s+(\S+)\s+-t\s+(["'])(.*?)\2/g;
+
+/**
+ * `describe(` / `test(` / `it(`, with a quoted title and any modifier.
+ *
+ * The lookbehind is load-bearing. `\b` alone matches between the `.` and
+ * the `t` of `RegExp.prototype.test`, so `/^ 1 pass$/m.test(\`${out}\`)` —
+ * an ordinary line in this file's own suite — read as a declaration with
+ * an interpolated title, and marked the whole file UNMEASURED. Found by
+ * AC-4's mutation failing to redden anything: the victim it picked was a
+ * fragment this parser had quietly given up on.
+ *
+ * The HEAD of the declaration — everything up to and including the open
+ * paren — is `DECLARATION_HEAD`, shared verbatim with `UNRESOLVED_CALL`.
+ * Rounds 6 and 7 each found the two patterns disagreeing about one
+ * character of it: first the modifier chain (`?` against `*`, so
+ * `test.only.skip("inner", …)` fell between them), then the space before
+ * the paren (`describe ("outer", …)`, same gap). The second was round 6's
+ * finding with one name replaced, and the sweep I should have run then is
+ * this constant: every part they must agree on in ONE place, rather than
+ * a third round finding the third character.
+ *
+ * Why the gap is the damaging direction: a declaration this pattern
+ * cannot see contributes no title, and the unresolved scan — seeing a
+ * quote as the first argument — calls the file readable anyway. A name
+ * missing from a set reported as WHOLE turns a verify command naming a
+ * real test into a refusal, and everywhere else in this module an
+ * unreadable declaration degrades to UNMEASURED instead.
+ *
+ * Group 1 is the name, and the two patterns' later groups are numbered
+ * from it: `TITLE_CALL` takes 2 and 3, `UNRESOLVED_CALL` takes 2.
+ */
+const DECLARATION_HEAD = String.raw`(?<![.\w$])(describe|test|it)(?:\.\w+)*\s*\(\s*`;
+const TITLE_CALL = new RegExp(
+  String.raw`${DECLARATION_HEAD}(["'\`])((?:\\.|(?!\2).)*)\2`,
+  "g",
+);
+
+/**
+ * Every name `bun test -t` could match in one source file.
+ *
+ * **Measured, not assumed** (2026-11-07, bun 1.3.14). Against
+ * `describe("outer group") > test("inner case")`:
+ *
+ * | `-t` pattern                 | result |
+ * |------------------------------|--------|
+ * | `inner case`                 | runs   |
+ * | `outer group`                | runs   |
+ * | `outer group inner case`     | runs   |
+ * | `outer group > inner case`   | NO     |
+ * | `group.*inner`               | runs   |
+ *
+ * So the thing matched is a regular expression against the **space-joined**
+ * path of enclosing describes plus the title — not the reporter's `>`
+ * spelling, and not a substring test. Getting this from the documentation
+ * rather than from the binary would have produced a check that refuses
+ * every path pattern in the tree.
+ *
+ * Returns `null` when the source cannot be parsed into a path set with
+ * confidence. A file whose nesting this cannot follow is UNMEASURED, never
+ * a refusal: the cost of reading it wrong is a red row for a command that
+ * is correct, which is how a check becomes an obstacle people route around.
+ * `scanSource` says when that is — see its three guards.
+ */
+/**
+ * Why a file's names could not be read — the two causes are different
+ * facts and the message must not conflate them.
+ *
+ * It did. Everything unreadable was reported as "builds at least one
+ * title by interpolation", and the first file that proved it wrong was
+ * `test/board-ready-rule.test.ts`, whose real cause was a regex the
+ * scanner could not see. A reader chasing that message would have gone
+ * looking for a template literal that is not there.
+ */
+export type TitleReading =
+  | { paths: string[]; why: null }
+  | { paths: null; why: "INTERPOLATED" | "UNPARSEABLE" };
+
+export function titleReading(raw: string): TitleReading {
+  const scan = scanSource(raw);
+  if (!scan.ok) return { paths: null, why: "UNPARSEABLE" };
+  const paths = pathsFrom(scan);
+  return paths === null ? { paths: null, why: "INTERPOLATED" } : { paths, why: null };
+}
+
+export function titlePathsIn(raw: string): string[] | null {
+  // Comments are masked before the title scan. A `describe("outer group",
+  // …)` written INSIDE a comment is not a declaration, and reading it as
+  // one adds a name no test has — the docblock in
+  // `test/stage-ladder.test.ts` explaining that hazard became a title path
+  // of that file. Masked rather than removed, so offsets still line up.
+  const scan = scanSource(raw);
+  if (!scan.ok) return null;
+  return pathsFrom(scan);
+}
+
+/** The path set of an already-scanned source, or `null` if interpolated. */
+/**
+ * Does the declaration starting at `at` sit inside a string literal?
+ *
+ * Strictly inside, so a span's own opening quote is not "in" it. The
+ * head is `describe`/`test`/`it`, which in real source is never inside
+ * a string and in a fixture always is — the whole distinction, taken
+ * from the scan rather than guessed at.
+ */
+function headIsInAString(scan: Scan, at: number): boolean {
+  return scan.strings.some(([a, b]) => at > a && at < b);
+}
+
+function pathsFrom(scan: Scan): string[] | null {
+  const source = scan.forTitles;
+
+  const stack: { title: string; depth: number }[] = [];
+  const paths: string[] = [];
+  let depth = 0;
+  let interpolated = false;
+
+  // One pass, walking the braces between title calls. `lastIndex` on a
+  // global regex is the cursor; the text between two calls is where the
+  // depth moves. The depth is read off `forDepth`, where strings are
+  // masked too — a `{` inside a title would otherwise open a block.
+  TITLE_CALL.lastIndex = 0;
+  let cursor = 0;
+  for (const m of source.matchAll(TITLE_CALL)) {
+    const at = m.index!;
+    depth += braceDelta(scan.forDepth.slice(cursor, at));
+    cursor = at;
+    // Pop on STRICTLY greater. A describe records the depth INSIDE its own
+    // body, which is the depth every call it encloses is read at, so `>=`
+    // pops the enclosing describe at its own first child and every path
+    // comes out as the bare test title. The first draft had `>=` and the
+    // probe caught it: `test/stage-ladder.test.ts` read 41 paths of which
+    // not one carried its describe.
+    while (stack.length > 0 && stack[stack.length - 1]!.depth > depth) stack.pop();
+
+    // A declaration quoted INSIDE a string is a fixture, not a test.
+    if (headIsInAString(scan, at)) continue;
+
+    const [, kind, quote, raw] = m as unknown as [string, string, string, string];
+    if (quote === "`" && raw.includes("${")) {
+      // An interpolated title is a name this cannot know. One is enough to
+      // make the whole file's path set incomplete, and an incomplete set
+      // can only produce false refusals.
+      interpolated = true;
+      continue;
+    }
+    const title = raw.replace(/\\(.)/g, "$1");
+    const path = [...stack.map(s => s.title), title].join(" ");
+    paths.push(path);
+    if (kind === "describe") stack.push({ title, depth: depth + 1 });
+  }
+
+  if (interpolated) return null;
+  return paths;
+}
+
+/**
+ * One tokenizer pass, two masked copies of the source and a verdict.
+ *
+ * ## Why one pass and not two scanners
+ *
+ * The first version had a `blankComments` and a `braceDelta` that each
+ * walked the text with their own idea of what a token is, and both were
+ * missing the same thing. Review of #1877 traced it, in full: neither
+ * recognised a **regex literal**, so the `"` inside a character class like
+ * `/["x]/` — an idiom that already appears in this repository, at
+ * `test/branch-cleanup-slug.test.ts` — opened a string that never closed.
+ * The scan then ran off the end of the slice without ever seeing the `}`
+ * that closed the enclosing block, the depth came back 1 instead of 0, and
+ * a sibling `test` was recorded as nested inside a `describe` whose body
+ * had already ended.
+ *
+ * That is the dangerous direction: not a refusal, not a `null`, but a
+ * **confident wrong answer** — a path this invented, which a verify
+ * command naming no real test could then match. It is also what the old
+ * `braceDelta` docstring claimed it handled. Two deciders, the same blind
+ * spot, and a comment asserting the property neither had.
+ *
+ * ## The three guards
+ *
+ * 1. Regex literals are recognised and masked, so ordinary files stay
+ *    readable rather than being written off as UNMEASURED.
+ * 2. Anything unterminated — string, template, comment, regex — sets
+ *    `ok: false`. The old `endOfString` returned `text.length`, which
+ *    spells "the rest of the file is inside this string" and is how a
+ *    misparse became silent.
+ * 3. Braces must never go negative and must return to zero at the end.
+ *    This is the GLOBAL check, and it is the one that does not depend on
+ *    having thought of every token: a scan knocked off the rails by
+ *    something nobody anticipated comes out unbalanced.
+ *
+ * Any of the three failing makes `titlePathsIn` return `null`, which is
+ * UNMEASURED and reported — never a refusal.
+ *
+ * `forTitles` keeps string literals (the titles live in them) and blanks
+ * comments and regexes. `forDepth` blanks all three. Both are the same
+ * length as the input, so one set of offsets indexes both.
+ */
+interface Scan {
+  forTitles: string;
+  forDepth: string;
+  /**
+   * `[start, end)` of every string and template the scan walked.
+   *
+   * `forTitles` keeps string content, because that is where a title
+   * lives — so by itself it cannot tell a declaration from a fixture
+   * string that quotes one. Round 9 measured what that costs: **346
+   * names across 69 files existed only inside a string**, each one a
+   * `-t` pattern away from a confident MATCHED against a test that
+   * exists nowhere. That is #1849's own failure, one level deeper.
+   *
+   * The scanner already walks every string to mask `forDepth`. This is
+   * the same walk, reported instead of discarded — no second parse, and
+   * nothing to keep in step with the first.
+   */
+  strings: [number, number][];
+  ok: boolean;
+  /**
+   * How far the scan actually got. Everything from here on is RAW — not
+   * masked, comments included.
+   *
+   * Round 2 of review found `titlesIn` reading `forTitles` whole while
+   * ignoring `ok`, so a `describe("phantom")` sitting in a comment in the
+   * unscanned tail of an unparseable file was returned as a declared
+   * title, and the literal fast path reported MATCHED for a test that
+   * exists nowhere. The mitigation for a confidently-wrong answer was
+   * itself confidently wrong. A reader of a failed scan may only trust
+   * the prefix the scan completed.
+   */
+  scannedUpTo: number;
+}
+
+/**
+ * Characters after which a `/` opens a regex rather than dividing.
+ *
+ * `!` is in the set and needs the lookback below: in TypeScript a `!`
+ * after an expression is the non-null assertion, so `a.b! / c` is
+ * DIVISION, while `!/re/.test(x)` is negation followed by a regex. Both
+ * spellings are live in this tree; `test/crc-reading.test.ts` has the
+ * first.
+ */
+const REGEX_MAY_FOLLOW = new Set([..."(,=:[!&|?{};+-*%~^<>", "\n"]);
+
+/**
+ * Keywords after which a `/` opens a regex.
+ *
+ * Without these, `return /labels\s*:/.test(src)` reads the `/` as
+ * division, scans on INTO the pattern, and the `"` in the next regex on
+ * the same line opens a string that never closes. That is
+ * `test/board-ready-rule.test.ts:478`, which five live verify fragments
+ * point at — so the whole file went UNMEASURED and five items lost their
+ * check. A character class is not the only way in.
+ */
+const REGEX_AFTER_WORD = new Set([
+  "return", "typeof", "instanceof", "in", "of", "new", "delete",
+  "void", "do", "else", "case", "yield", "await", "throw",
+]);
+
+/**
+ * Is the `/` at `at` opening a regex, or dividing? ONE decider.
+ *
+ * It lives at module scope because there are two walkers that have to
+ * answer it — `scanSource` over the file, and `endOfSubstitution` inside
+ * a `${…}` — and round 5 found them holding two copies, of which the
+ * inner one had missed round 3's two fixes. Two guards answering the
+ * same question about the same input are behaviourally ONE guard: no
+ * case over the outer scanner can tell them apart, and the stale copy
+ * reads as covered. `.claude/rules/checks-must-be-able-to-fail.md`
+ * names the shape.
+ *
+ * `prev` is the last significant token, which each caller tracks itself
+ * — a whole word, or one character, or the two-character `++`/`--`.
+ * Both callers must merge those two, or `i++ / n` arrives here spelled
+ * `+` and is indistinguishable from binary plus.
+ *
+ * `before` is the token before `prev`, and it is read for exactly one
+ * case: `!`. See `endsAnExpression`.
+ */
+function opensARegexAfter(prev: string, before: string): boolean {
+  if (REGEX_AFTER_WORD.has(prev)) return true;
+  if (prev === "++" || prev === "--") return false;
+  if (prev === "!") return !endsAnExpression(before);
+  return prev.length === 1 && REGEX_MAY_FOLLOW.has(prev);
+}
+
+/**
+ * Did this token finish a value? The whole of the `!` decision.
+ *
+ * `a.b! / c` is a non-null assertion then DIVISION; `return !/re/` is
+ * negation then a REGEX. The two are told apart by what sits before the
+ * `!`, and nothing else can tell them apart.
+ *
+ * Round 3 asked this question by LAST CHARACTER, so `return` ended in
+ * `n`, counted as a value, and an ordinary file became unreadable. The
+ * repair then was to delete the lookback and TRIAL-PARSE instead: treat
+ * the `/` as a regex if some later `/` on the line could close it.
+ * Round 8 found what that costs — `expect(z.oneRound! / z.passed)
+ * .toBeCloseTo(1 / 3, 5)` in `test/crc-reading.test.ts` pairs the two
+ * slashes and masks everything between them. The docstring that
+ * replaced the lookback claimed this shape had no instance in the tree.
+ * It had one the whole time, and the claim was never swept for.
+ *
+ * So the question is asked again, of the WHOLE token this time, which
+ * is the version that answers `return` correctly. A trial-parse was
+ * never evidence: a line almost always has another `/` somewhere.
+ */
+function endsAnExpression(token: string): boolean {
+  if (token === ")" || token === "]") return true;
+  if (token === '"' || token === "'" || token === "`" || token === "/re/") return true;
+  return /^[\w$]/.test(token) && !REGEX_AFTER_WORD.has(token);
+}
+
+function scanSource(text: string): Scan {
+  const titles = text.split("");
+  const depth = text.split("");
+  const blank = (buf: string[], from: number, to: number) => {
+    for (let k = from; k < to && k < buf.length; k++) if (buf[k] !== "\n") buf[k] = " ";
+  };
+
+  let i = 0;
+  // The last two significant tokens — each a whole word, one character,
+  // or the two-character `++`/`--`. Two, because `!` is decided by what
+  // came before it (`endsAnExpression`). Round 4 deleted the second slot
+  // as dead and it was: the decision that needed it had been replaced by
+  // a trial-parse. Round 8 found what the trial-parse got wrong.
+  let prev = "\n";
+  let before = "\n";
+  let ok = true;
+  let braces = 0;
+  const strings: [number, number][] = [];
+
+  /**
+   * Is the `/` at `at` opening a regex, or dividing?
+   *
+   * Round 3 of review found both remaining members of this set, and both
+   * were real:
+   *
+   * - `return !/\bcwd\s*:/.test(line)` — the old lookback asked whether
+   *   the token before `!` "ends an expression" by its LAST CHARACTER, so
+   *   `return` ended in `n` and counted as one. The regex was read as
+   *   division, the scan ran on into the pattern, and the pattern's real
+   *   closing `/` was then taken as a new regex that never closed. One
+   *   ordinary file became unreadable
+   *   (`test/unit/git-identity-isolation.test.ts:91`).
+   * - `i++ / n` — `prev` was a bare `+` either way, so postfix increment
+   *   was indistinguishable from binary plus. MEASURED on a planted
+   *   file: a `test("swallowed")` sitting after it was silently dropped
+   *   from the name set with a CLEAN reading, while the same file with
+   *   `i + 1` kept all three titles. A real test vanishing with no
+   *   UNMEASURED signal is a false refusal waiting to happen.
+   *
+   * `++`/`--` are one token, so postfix is visible. `!` is decided by
+   * the token BEFORE it — `endsAnExpression`, which is where round 8's
+   * correction lives and which replaced the trial-parse that stood here
+   * between rounds 3 and 8.
+   *
+   * The decision is `opensARegexAfter`, at module scope, because
+   * `endOfSubstitution` has to make it too — see its own note.
+   */
+  const opensARegex = () => opensARegexAfter(prev, before);
+  const remember = (tok: string) => {
+    before = prev;
+    prev = tok;
+  };
+
+  while (i < text.length) {
+    const c = text[i]!;
+
+    // An identifier or keyword is one token, not its last letter.
+    if (/[A-Za-z_$]/.test(c)) {
+      let j = i;
+      while (j < text.length && /[\w$]/.test(text[j]!)) j++;
+      remember(text.slice(i, j));
+      i = j;
+      continue;
+    }
+
+    if (c === "/" && text[i + 1] === "/") {
+      const end = text.indexOf("\n", i);
+      const stop = end === -1 ? text.length : end;
+      blank(titles, i, stop);
+      blank(depth, i, stop);
+      i = stop;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      if (end === -1) { ok = false; break; }
+      blank(titles, i, end + 2);
+      blank(depth, i, end + 2);
+      i = end + 2;
+      continue;
+    }
+    // `++` and `--` are ONE token. Character-by-character, postfix
+    // increment and binary plus both leave `prev` as a bare `+`.
+    if ((c === "+" || c === "-") && text[i + 1] === c) {
+      remember(c + c);
+      i += 2;
+      continue;
+    }
+
+    if (c === "/" && opensARegex()) {
+      const end = endOfRegex(text, i);
+      if (end === -1) { ok = false; break; }
+      blank(titles, i, end);
+      blank(depth, i, end);
+      i = end;
+      remember("/re/");
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const end = endOfString(text, i);
+      if (end === -1) { ok = false; break; }
+      // Kept in `forTitles` — this is where a title lives. The span is
+      // reported so a reader can tell a title from a fixture that quotes one.
+      strings.push([i, end]);
+      blank(depth, i, end);
+      i = end;
+      remember(c);
+      continue;
+    }
+    if (c === "{") braces++;
+    else if (c === "}") {
+      braces--;
+      if (braces < 0) { ok = false; break; }
+    }
+    if (!/\s/.test(c)) remember(c);
+    i++;
+  }
+
+  return {
+    forTitles: titles.join(""),
+    forDepth: depth.join(""),
+    strings,
+    ok: ok && braces === 0,
+    // Where the loop stopped. On a clean run that is the end; on a bail
+    // it is the token that defeated it, and nothing past it was masked.
+    scannedUpTo: i,
+  };
+}
+
+/** Index just past a regex literal's closing `/` and flags, or -1. */
+function endOfRegex(text: string, from: number): number {
+  let i = from + 1;
+  let inClass = false;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === "\\") { i += 2; continue; }
+    if (c === "\n") return -1; // a regex literal cannot span a line
+    if (c === "[") inClass = true;
+    else if (c === "]") inClass = false;
+    else if (c === "/" && !inClass) {
+      i++;
+      while (i < text.length && /[a-z]/.test(text[i]!)) i++;
+      return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * Index just past a string's closing quote, or -1 when it never closes.
+ *
+ * A template is NOT "scan to the next backtick". `${x.map(p => \`-${p}\`)}`
+ * — a template nested inside its own substitution — is ordinary in this
+ * tree, and the naive scan ends the outer template at the INNER opening
+ * backtick. Everything after that is read in the wrong state, which on
+ * `test/issue-file-overlap.test.ts` ate a `{` and the file came out with
+ * a negative brace depth 280 lines later. So a substitution is walked as
+ * a brace group, with its own strings and templates inside it.
+ */
+function endOfString(text: string, from: number): number {
+  const quote = text[from]!;
+  if (quote === "`") return endOfTemplate(text, from);
+  let i = from + 1;
+  while (i < text.length) {
+    if (text[i] === "\\") { i += 2; continue; }
+    if (text[i] === quote) return i + 1;
+    if (text[i] === "\n") return -1; // a quoted string does not span lines
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * A template, walked to its closing backtick.
+ *
+ * A substitution holding its OWN template — `${xs.map(p => \`-${p}\`)}` —
+ * ends this scan at the inner opening backtick. That is a real misparse
+ * and it is deliberately NOT fixed here.
+ *
+ * It was attempted: a recursive substitution walker took the unparseable
+ * corpus from four files to eleven, because the substitution needs its
+ * own regex handling, which needs its own character-class handling, and
+ * each repair had the next instance of the same class inside it. Three
+ * rounds, which is where AGENTS.md rule 5 says stop repairing and
+ * re-scope.
+ *
+ * The re-scope is `titlesIn` plus the fallback in `verifyTitleFragments`:
+ * a file this cannot nest correctly still yields its title LITERALS, and
+ * a pattern matching one of those is MATCHED without any nesting being
+ * believed. The parser is allowed to be imperfect; what it is not allowed
+ * to be is confidently wrong, and `scan.ok` is what separates those.
+ */
+function endOfTemplate(text: string, from: number): number {
+  let i = from + 1;
+  while (i < text.length) {
+    if (text[i] === "\\") { i += 2; continue; }
+    if (text[i] === "`") return i + 1;
+    if (text[i] === "$" && text[i + 1] === "{") {
+      const end = endOfSubstitution(text, i + 1);
+      if (end === -1) return -1;
+      i = end;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * Index just past the `}` closing a `${…}`, or -1.
+ *
+ * The first attempt at this was deleted for taking the unparseable
+ * corpus from 4 files to 11, and the reason was precise: it knew about
+ * strings and comments and **not** about regex literals, so it repeated
+ * the exact defect the outer scanner had just been fixed for. One level
+ * down, same blind spot. It is here now, with the regex branch.
+ *
+ * And the branch calls `opensARegexAfter`, the SAME decider the outer
+ * scanner uses. Round 5 found this walker holding its own copy of the
+ * rule, missing round 3's two fixes — so `${i++ / 2}` and `${a.b! / c}`
+ * each opened a phantom regex and the whole file went UNMEASURED. One
+ * question, one decider; a copy of it is a guard nothing can mutate.
+ */
+function endOfSubstitution(text: string, from: number): number {
+  let i = from + 1;
+  let open = 1;
+  let prev = "{";
+  let before = "{";
+  while (i < text.length) {
+    const c = text[i]!;
+    if (/[A-Za-z_$]/.test(c)) {
+      let j = i;
+      while (j < text.length && /[\w$]/.test(text[j]!)) j++;
+      before = prev;
+      prev = text.slice(i, j);
+      i = j;
+      continue;
+    }
+    // `++`/`--` as one token, for the reason `opensARegexAfter` states:
+    // split, postfix increment arrives there spelled `+`.
+    if ((c === "+" || c === "-") && text[i + 1] === c) { before = prev; prev = c + c; i += 2; continue; }
+    if (c === "/" && text[i + 1] === "/") {
+      const e = text.indexOf("\n", i);
+      i = e === -1 ? text.length : e;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const e = text.indexOf("*/", i + 2);
+      if (e === -1) return -1;
+      i = e + 2;
+      continue;
+    }
+    if (c === "/" && opensARegexAfter(prev, before)) {
+      const e = endOfRegex(text, i);
+      if (e === -1) return -1;
+      i = e;
+      before = prev;
+      prev = "/re/";
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const e = endOfString(text, i);
+      if (e === -1) return -1;
+      i = e;
+      before = prev;
+      prev = c;
+      continue;
+    }
+    if (c === "{") open++;
+    else if (c === "}") {
+      open--;
+      if (open === 0) return i + 1;
+    }
+    if (!/\s/.test(c)) { before = prev; prev = c; }
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * A `describe` / `test` / `it` whose call does NOT open with a quote.
+ *
+ * Review round 2 named `test.each(CASES)("%s", fn)` — 46 files here use
+ * it — and the general shape is wider than that one spelling: anything
+ * whose first argument is not a string literal declares names this
+ * cannot resolve.
+ *
+ * | spelling | first argument |
+ * |---|---|
+ * | `test.each(CASES)("%s", fn)` | `CASES`, and the title is printf bun fills in |
+ * | `test.skipIf(cond)("title")` | `cond` |
+ * | `test(NAME, fn)` | a variable |
+ *
+ * Enumerated as a SHAPE rather than repaired per spelling, because the
+ * finding named one member of exactly this population (#1818). A file
+ * holding one of these has names this cannot see, so a pattern matching
+ * nothing in it is UNMEASURED — never the false refusal review predicted.
+ *
+ * It opens with `DECLARATION_HEAD`, the same string `TITLE_CALL` opens
+ * with, because the two must agree on what a declaration IS. They did
+ * not in round 6 (the modifier chain) and again in round 7 (the space
+ * before the paren), and both gaps were silent — see `TITLE_CALL`'s
+ * note. One constant is the only version of that agreement a later edit
+ * cannot break one-sidedly.
+ */
+const UNRESOLVED_CALL = new RegExp(String.raw`${DECLARATION_HEAD}(.)`, "g");
+
+/**
+ * `TITLE_CALL`, anchored, so the two patterns can be asked to agree
+ * about one declaration rather than about their own spelling.
+ */
+const TITLE_CALL_AT = new RegExp(TITLE_CALL.source, "y");
+
+function hasUnresolvedDeclaration(scan: Scan): boolean {
+  const masked = scan.forTitles;
+  UNRESOLVED_CALL.lastIndex = 0;
+  for (const m of masked.matchAll(UNRESOLVED_CALL)) {
+    // A declaration quoted inside a string is a fixture. Asked here too,
+    // or a fixture string would be the thing reported unresolved.
+    if (headIsInAString(scan, m.index!)) continue;
+    // Group 2: group 1 is the declaration name, captured by the shared
+    // `DECLARATION_HEAD`.
+    const first = m[2]!;
+    if (first !== '"' && first !== "'" && first !== "`") return true;
+    // A quote is not the same fact as a title this can READ. Round 8: a
+    // template literal spanning two lines matches no `TITLE_CALL`, and
+    // a check on the first character alone sees a backtick and calls the
+    // file complete — so the name vanished from a set reported as whole,
+    // which is the false refusal. Sharing the head (round 7) made the
+    // patterns START alike; this makes them AGREE, which is the property
+    // that was wanted, and it holds for a title shape nobody has thought
+    // of yet.
+    TITLE_CALL_AT.lastIndex = m.index!;
+    if (!TITLE_CALL_AT.test(masked)) return true;
+  }
+  return false;
+}
+
+/**
+ * Every title LITERAL in a file, with no nesting believed.
+ *
+ * Comments are masked, so a `describe("…")` in prose is still excluded,
+ * but nothing here depends on brace depth — which is the half that can
+ * be confidently wrong. This is what a file the scanner cannot nest
+ * falls back to.
+ *
+ * **Only the prefix the scan completed is read.** Past that point
+ * nothing was masked, so a `describe("phantom")` inside a COMMENT in the
+ * tail of an unparseable file would be returned as a declared name, and
+ * the literal fast path in `verifyTitleFragments` would report MATCHED
+ * for a test that exists nowhere. Round 2 of review on #1877.
+ */
+export function titlesIn(raw: string): string[] {
+  const scan = scanSource(raw);
+  const source = scan.forTitles.slice(0, scan.scannedUpTo);
+  const out: string[] = [];
+  TITLE_CALL.lastIndex = 0;
+  for (const m of source.matchAll(TITLE_CALL)) {
+    // A declaration quoted INSIDE a string is a fixture, not a test.
+    if (headIsInAString(scan, m.index!)) continue;
+    const [, , quote, text] = m as unknown as [string, string, string, string];
+    if (quote === "`" && text.includes("${")) continue;
+    out.push(text.replace(/\\(.)/g, "$1"));
+  }
+  return out;
+}
+
+/**
+ * Can this file's set of names be known in full?
+ *
+ * The single predicate behind every UNMEASURED, so there is one place
+ * that decides and one place to mutate. `false` means a pattern matching
+ * nothing here is UNMEASURED rather than a refusal.
+ */
+export function namesAreComplete(raw: string): { complete: boolean; why: string | null } {
+  const scan = scanSource(raw);
+  if (!scan.ok) {
+    return { complete: false, why: "the scanner could not read the whole file — an unterminated string, comment or regex, or braces that do not balance" };
+  }
+  if (hasUnresolvedDeclaration(scan)) {
+    return { complete: false, why: "it declares at least one test whose title is not a string literal (`.each`, `.skipIf(…)(…)`, or a variable)" };
+  }
+  if (pathsFrom(scan) === null) {
+    return { complete: false, why: "it builds at least one title by interpolation" };
+  }
+  return { complete: true, why: null };
+}
+
+/** Net `{` minus `}` over an already-masked slice. */
+function braceDelta(masked: string): number {
+  let d = 0;
+  for (const c of masked) {
+    if (c === "{") d++;
+    else if (c === "}") d--;
+  }
+  return d;
+}
+
+/**
+ * Every `bun test … -t …` in one command, read against the tree.
+ *
+ * `readSource` returns the file's text, or `null` when there is no such
+ * file. Injected rather than read here so the caller owns the root and so
+ * a test can plant a corpus without a temp directory — the same reason
+ * `promote` takes its registry.
+ *
+ * A command containing no such fragment yields NOTHING. That is not a
+ * pass: `verifyTitleViolations` counts it separately, so "this shape was
+ * not checked" stays visible instead of being absorbed into a green.
+ */
+export function verifyTitleFragments(
+  where: string,
+  verify: string,
+  readSource: (file: string) => string | null,
+): VerifyTitleFragment[] {
+  const out: VerifyTitleFragment[] = [];
+  BUN_TEST_T.lastIndex = 0;
+  for (const m of verify.matchAll(BUN_TEST_T)) {
+    const file = m[1]!;
+    const name = m[3]!;
+    const push = (reading: VerifyTitleReading, why: string) => out.push({ where, file, name, reading, why });
+
+    const src = readSource(file);
+    if (src === null) {
+      push("FILE_ABSENT", `${file} does not exist, so this command selects nothing`);
+      continue;
+    }
+    const literals = titlesIn(src);
+    // An empty name set is NOT a reason to excuse the command. Whether it
+    // means "unreadable" or "declares nothing" is the same question the
+    // no-match path below asks, and it is asked there, once. Short-cutting
+    // on the COUNT sent a readable file that declares nothing — a `-t`
+    // aimed at the wrong file, which is the whole case this exists for —
+    // to UNMEASURED, and UNMEASURED refuses nothing.
+    let re: RegExp;
+    try {
+      re = new RegExp(name);
+    } catch (e) {
+      push("UNMEASURED", `-t ${JSON.stringify(name)} is not a regular expression: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+
+    // A literal match needs no nesting to be believed, so it is asked
+    // first and answers every live fragment in the plan today.
+    if (literals.some(t => re.test(t))) {
+      push("MATCHED", "");
+      continue;
+    }
+
+    // Then nesting: the pattern may name a PATH spanning a describe and
+    // the test inside it.
+    const paths = titlePathsIn(src);
+    if (paths !== null && paths.some(p => re.test(p))) {
+      push("MATCHED", "");
+      continue;
+    }
+
+    // Nothing matched. Whether that is a REFUSAL or an UNMEASURED turns
+    // on one question, asked in one place: could this file's names be
+    // known in full? Refusing a file whose names this cannot see is the
+    // false red that makes a check an obstacle.
+    const { complete, why } = namesAreComplete(src);
+    if (!complete) {
+      push("UNMEASURED", `${JSON.stringify(name)} matches nothing in ${file}, and ${file} cannot be read in full: ${why}`);
+      continue;
+    }
+    push(
+      "NO_SUCH_TITLE",
+      `no describe/test title in ${file} matches ${JSON.stringify(name)} — ${(paths ?? literals).length} name(s) read`,
+    );
+  }
+  return out;
+}
+
+/**
+ * The refusal. One line per fragment that is not `MATCHED`, naming the
+ * item, the file and the title — AC-2, because a bare count sends the next
+ * reader back through every command in the plan.
+ *
+ * `UNMEASURED` is reported and does NOT refuse. It is a statement that
+ * this instrument could not see the fragment, and turning that into a red
+ * row would make the honest reading the expensive one.
+ */
+export function verifyTitleViolations(
+  commands: readonly { where: string; verify: string | null }[],
+  readSource: (file: string) => string | null,
+): { violations: string[]; unmeasured: string[]; matched: number; outOfShape: number } {
+  const violations: string[] = [];
+  const unmeasured: string[] = [];
+  let matched = 0;
+  let outOfShape = 0;
+
+  for (const c of commands) {
+    if (c.verify === null || c.verify.trim().length === 0) continue;
+    const frags = verifyTitleFragments(c.where, c.verify, readSource);
+    if (frags.length === 0) {
+      outOfShape++;
+      continue;
+    }
+    for (const f of frags) {
+      if (f.reading === "MATCHED") matched++;
+      else if (f.reading === "UNMEASURED") unmeasured.push(`${f.where}: ${f.why}`);
+      else violations.push(`${f.where}: ${f.why}`);
+    }
+  }
+  return { violations, unmeasured, matched, outOfShape };
+}
