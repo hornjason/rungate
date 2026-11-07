@@ -11,20 +11,46 @@
 # closes. So the trigger is the close itself, and the script fans out to that
 # issue's `blocking` list.
 #
-# **No schedule.** A cron is the thing this exists to remove; see #1744.
+# ## And a close cannot reach an issue nobody blocked — #1842, G1
+#
+# That fan-out answers "what did this close free", which is all it can answer.
+# An issue with no dependencies appears in no `blocking` list, so for a
+# repository whose next piece of work was never blocked there was no event at
+# all that could put it in Ready: the lane drained and was refilled by
+# somebody running a command by hand. Claim 7's third falsification, surviving
+# inside the mechanism written to remove it.
+#
+# So the other four `issues:` types below run `--top-up`, which asks the same
+# question of every OPEN issue. They are the events that change whether Ready
+# SHOULD be refilled:
+#
+#   closed      → fan out from what that close freed (unchanged)
+#   assigned    → somebody pulled an item; a Ready slot just freed
+#   unassigned  → a claim was dropped; that issue is eligible again
+#   opened      → new work exists that no close will ever mention
+#   reopened    → likewise, for work that came back
+#
+# **Still no schedule.** A cron is the thing this exists to remove; see #1744.
+# Every trigger here is an event a person caused, and BR-12 asserts the
+# absence of `schedule:` and `cron:` over this whole file.
 #
 # Every `uses:` is pinned to a commit SHA, and both
 # `test/action-pin-parity.test.ts` and BR-14 assert it.
-name: Board — a closed blocker frees what it blocked
+name: Board — keep Ready full from the events the repo already emits
 
 on:
   issues:
-    types: [closed]
+    types: [closed, assigned, unassigned, opened, reopened]
   workflow_dispatch:
     inputs:
+      mode:
+        description: "closed = fan out from `issue`; top-up = consider every open issue"
+        type: choice
+        default: closed
+        options: [closed, "top-up"]
       issue:
-        description: "Issue number to fan out from"
-        required: true
+        description: "Issue number to fan out from (mode: closed only)"
+        required: false
         type: string
       write:
         description: "Perform the moves (default: report only)"
@@ -33,6 +59,27 @@ on:
 
 permissions:
   contents: read
+
+# ONE RUN AT A TIME, REPOSITORY-WIDE — ai-review round 1 of #1846, and it was
+# right. Occupancy is read once per run and the write happens later, so two
+# overlapping runs each compute `slots = cap - occupied` from the SAME snapshot
+# and each promote that many: Ready ends up over its cap with no warning, and
+# the cap is the property #1846's own description calls what makes top-up safe.
+#
+# That race existed with `issues: [closed]` alone and needed two closes in the
+# same few seconds. Adding `assigned`/`unassigned`/`opened`/`reopened` makes it
+# ordinary — those cluster during any triage session — so the widening is what
+# obliges the group, not the group that was always missing.
+#
+# `cancel-in-progress: false`, and a superseded PENDING run costs nothing.
+# Every mode here is a pure function of LIVE state: both walks re-read the
+# board, the throughput and the dependency summaries on each run, and neither
+# consumes anything. So a run dropped from the queue would have done exactly
+# what the run that replaces it does, against fresher data. Cancelling the
+# RUNNING one is the option that would lose something — it can be mid-write.
+concurrency:
+  group: board-ready
+  cancel-in-progress: false
 
 jobs:
   move-freed-issues-to-ready:
@@ -197,13 +244,19 @@ jobs:
       # pass this file's credential handling exists to refuse, reintroduced
       # one level up. This workflow is not scaffolded to consumers; it runs
       # here, where the PAT is configured, and a red run is the signal.
-      - name: Fan out from the closed blocker
+      - name: Fill Ready from whatever this event changed
         if: steps.gate.outputs.trusted == 'true'
         env:
           BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
           WRITE: ${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
+          # WHICH candidate source. `github.event.action` is set on every
+          # `issues:` trigger and absent on a dispatch, where the operator's
+          # `mode` choice answers instead. Both are closed-set values GitHub
+          # or the `choice` input produces — never free text — so the `case`
+          # below cannot be reached with anything it has no arm for.
+          MODE: ${{ github.event.action || inputs.mode }}
           # The identity that TRIGGERED this run, which is the one the script
           # asks the permission endpoint about. Not the issue's author.
           ACTOR: ${{ github.actor }}
@@ -212,9 +265,53 @@ jobs:
             echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
             exit 0
           fi
-          bun scripts/board-ready.ts \
-            --repo "$GITHUB_REPOSITORY" \
-            --closed-issue "$ISSUE" \
-            --project "$PROJECT_ID" \
-            --actor "$ACTOR" \
-            $WRITE
+          # `closed` keeps the fan-out; everything else tops Ready up. An
+          # unrecognised mode REFUSES rather than falling through to either —
+          # a default here would silently run the wrong source, and "which
+          # candidates did this consider" is the one thing the log must not
+          # have to be guessed from.
+          # AN ARRAY, AND EVERY EXPANSION QUOTED — ai-review round 2 of #1846.
+          #
+          # The first spelling built `SOURCE="--closed-issue $ISSUE"` and
+          # expanded it unquoted at the call site, with a comment claiming
+          # both composed variables came from the closed set above. That was
+          # true of MODE and WRITE and false of the one that mattered: ISSUE
+          # is the `workflow_dispatch` free-text input, `type: string`, with
+          # no validation. A dispatch with `issue: "7 --write"` and the write
+          # checkbox UNCHECKED word-split into `--closed-issue`, `7`,
+          # `--write`, and the run performed real board mutations for an
+          # operator who asked for a report. The script cannot defend against
+          # this — by the time it reads argv the tokens are already separate,
+          # and `arg("closed-issue")` sees a perfectly valid `7`.
+          #
+          # So: the number is validated as digits before it is used, and
+          # nothing is composed into a string that is later re-split. Every
+          # `$` below is inside double quotes, which is what BR-54 censuses
+          # over this whole block rather than over the line that was wrong.
+          args=(--repo "$GITHUB_REPOSITORY" --project "$PROJECT_ID" --actor "$ACTOR")
+          case "$MODE" in
+            closed)
+              case "$ISSUE" in
+                '' | *[!0-9]*)
+                  echo "::warning::UNMEASURED — mode 'closed' needs a plain issue NUMBER and got \"$ISSUE\". Nothing was read."
+                  exit 1
+                  ;;
+              esac
+              args+=(--closed-issue "$ISSUE")
+              ;;
+            top-up | assigned | unassigned | opened | reopened)
+              args+=(--top-up)
+              ;;
+            *)
+              echo "::warning::UNMEASURED — unrecognised mode \"$MODE\", so no candidate source was chosen. Nothing was read."
+              exit 1
+              ;;
+          esac
+          # The literal, not the variable. WRITE is a closed set today and
+          # this stops it mattering: there is no path by which the contents
+          # of any input become a FLAG rather than a flag's value.
+          if [ -n "$WRITE" ]; then
+            args+=(--write)
+          fi
+          echo "mode=$MODE, args=${args[*]}"
+          bun scripts/board-ready.ts "${args[@]}"

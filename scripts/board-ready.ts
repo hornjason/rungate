@@ -6,6 +6,29 @@
  * `isReady`'s. This file is the I/O: read the closed issue's `blocking` list
  * and the board, ask, and perform only the moves it was handed.
  *
+ * ## Two candidate sources, one decider (#1842, G1)
+ *
+ * The fan-out above answers "what did THIS close free", and that is the whole
+ * of what it can answer. An issue that was **never blocked** appears in no
+ * `blocking` list, so no close can ever reach it — this file's own header used
+ * to say *"there is no 'became unblocked' event"* and stopped one sentence
+ * short of the consequence: a repository whose next piece of work has no
+ * dependencies had no event at all that could put it in Ready, and the lane
+ * was refilled by somebody running a command by hand. That is Claim 7's third
+ * falsification verbatim, surviving inside the mechanism written to remove it.
+ *
+ * `--top-up` is the second candidate source: every OPEN issue in the
+ * repository, asked the same question. It is deliberately a source and not a
+ * second decider — both paths converge on one `candidates.map(...)`, one
+ * `fanoutDecisions`, one `readyCap`, one `selectReady`. A mutation of any of
+ * those reddens both modes, which is the only reason a second entry point is
+ * safe here (`.claude/rules/checks-must-be-able-to-fail.md`, fourth shape).
+ *
+ * **The cap is what makes this safe to run on an ordinary event.** Top-up's
+ * eligible set is the 36-of-46 population `lib/board-ready-rule.ts` was
+ * written about; `selectReady` promotes at most `cap - occupied` of it and
+ * says so. Without that bound this mode would be "move the backlog to Ready".
+ *
  * **It never adds an item to the board** and it never writes a field other
  * than Status. Both are `board-mirror`'s, and an Action that grew either
  * would make the board's contents depend on which issues happened to close.
@@ -105,17 +128,33 @@ async function main(): Promise<number> {
   const project = arg("project");
   const actor = arg("actor");
   const apply = process.argv.includes("--write");
+  const topUp = process.argv.includes("--top-up");
   // `Number(null)` is 0 and `Number.isFinite(0)` is true, so the first
   // version of this guard passed a MISSING `--closed-issue` straight through
   // and fanned out from issue 0. Caught in review of #1747. The absence is
   // checked before the conversion, and the value must be a positive integer
   // rather than merely finite — `1e9`, `0` and `-3` are all finite.
-  if (repo === null || project === null || rawClosed === null) {
-    console.error("UNMEASURED: --repo <owner/name> --closed-issue <n> --project <id> are all required");
+  if (repo === null || project === null) {
+    console.error("UNMEASURED: --repo <owner/name> and --project <id> are both required");
     return EXIT_REFUSED;
   }
-  const closed = Number(rawClosed);
-  if (!Number.isInteger(closed) || closed <= 0) {
+  // **Exactly one candidate source.** Neither is the original defect — an
+  // invocation with no source has nothing to look at and must not quietly
+  // become the other one. BOTH is worse than either: `--top-up` already
+  // contains every candidate `--closed-issue` can produce, so a run given both
+  // would report a fan-out it did not perform, and whichever branch lost would
+  // do so silently.
+  if (topUp === (rawClosed !== null)) {
+    console.error(
+      "UNMEASURED: pass exactly one of --closed-issue <n> (fan out from what that close freed) " +
+        "or --top-up (consider every open issue). " +
+        (topUp ? "Both were given." : "Neither was given."),
+    );
+    return EXIT_REFUSED;
+  }
+  // Only reachable with a `--closed-issue` present, by the guard above.
+  const closed = rawClosed === null ? null : Number(rawClosed);
+  if (closed !== null && (!Number.isInteger(closed) || closed <= 0)) {
     console.error(`UNMEASURED: --closed-issue must be a positive integer, got "${rawClosed}"`);
     return EXIT_REFUSED;
   }
@@ -200,9 +239,62 @@ async function main(): Promise<number> {
                  pageInfo{hasNextPage endCursor}
                  nodes{... on ProjectV2ItemFieldSingleSelectValue{
                    name optionId field{... on ProjectV2FieldCommon{id name}}}}}}}}}}}}`;
-  const blocking: any[] = [];
+  // **The top-up source, same shape and same sub-selections.** `issues` is the
+  // repository's own OPEN list rather than one issue's `blocking` list, and
+  // everything below this point cannot tell which produced the array — that
+  // is the property, not a coincidence. `states:[OPEN]` is asked for rather
+  // than filtered afterwards: a CLOSED issue is refused by `whyNotReady`
+  // anyway, so filtering here only decides how many pages get fetched.
+  //
+  // Page sizes are the fan-out's exactly. 100 × 20 × 50 is 100,000 against
+  // GitHub's 500,000 node limit, which it computes from the `first:` values
+  // before executing anything — BR-46, and run `42083551881` is why.
+  const TOP_UP_QUERY = `query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
+       issues(first:100,after:$c,states:[OPEN]){
+         pageInfo{hasNextPage endCursor}
+         nodes{
+           number state milestone{title} assignees{totalCount}
+           issueDependenciesSummary{blockedBy}
+           projectItems(first:20){
+             pageInfo{hasNextPage endCursor}
+             nodes{
+               id project{id}
+               fieldValues(first:50){
+                 pageInfo{hasNextPage endCursor}
+                 nodes{... on ProjectV2ItemFieldSingleSelectValue{
+                   name optionId field{... on ProjectV2FieldCommon{id name}}}}}}}}}}}`;
+
+  // One array, two sources. Named for what it holds rather than where it came
+  // from, because nothing after this line may branch on the mode.
+  const candidates: any[] = [];
   let cursor: string | null = null;
-  do {
+  while (topUp) {
+    const d = await gql(token, TOP_UP_QUERY, { o: owner, n: name, c: cursor });
+    // `repository` is null with no `errors` for a name the credential cannot
+    // see or that does not exist — the same well-formed-but-empty response
+    // BR-37 covers on the fan-out path, at the site that path does not reach.
+    if (!d.repository?.issues) {
+      console.log(
+        `::warning::${owner}/${name} did not resolve to a repository with issues — it may be ` +
+          `renamed, deleted, or unreadable by this credential. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
+    const page = d.repository.issues;
+    candidates.push(...page.nodes);
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      console.log(
+        `::warning::the repository's open issues stopped paging — ${step.why}. ` +
+          `A partial list tops Ready up from SOME of the candidates, which silently ` +
+          `changes WHICH work is next. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
+    cursor = step.kind === "more" ? step.cursor : null;
+    if (cursor === null) break;
+  }
+  while (closed !== null) {
     const d = await gql(token, BLOCKING_QUERY, { o: owner, n: name, i: closed, c: cursor });
     // **`issue(number:)` resolves to null, with no `errors`, for a number
     // that is not an Issue.** Issues and pull requests share one numbering
@@ -222,7 +314,7 @@ async function main(): Promise<number> {
       return EXIT_REFUSED;
     }
     const page = d.repository.issue.blocking;
-    blocking.push(...page.nodes);
+    candidates.push(...page.nodes);
     const step = nextCursor(page.pageInfo);
     if (step.kind === "unreadable") {
       console.log(
@@ -233,9 +325,14 @@ async function main(): Promise<number> {
       return EXIT_REFUSED;
     }
     cursor = step.kind === "more" ? step.cursor : null;
-  } while (cursor);
-  if (blocking.length === 0) {
-    console.log(`#${closed} was blocking nothing. No issue changed.`);
+    if (cursor === null) break;
+  }
+  if (candidates.length === 0) {
+    console.log(
+      topUp
+        ? `${owner}/${name} has no open issues. No issue changed.`
+        : `#${closed} was blocking nothing. No issue changed.`,
+    );
     return 0;
   }
 
@@ -315,7 +412,7 @@ async function main(): Promise<number> {
   // and "the Status field was on page two" produce the same `null`. Refuse
   // the whole run rather than write a subset: a board half-moved is harder to
   // notice than one that did not move.
-  const unreadable = truncatedReadings(blocking);
+  const unreadable = truncatedReadings(candidates);
   if (unreadable.length > 0) {
     console.log(
       `::warning::UNMEASURED — ${unreadable.map(n => `#${n}`).join(", ")} ` +
@@ -334,7 +431,7 @@ async function main(): Promise<number> {
   // and it was the one guaranteed to be skipped. The field belongs to the
   // PROJECT; it is resolved once, below. BR-34..BR-36.
   const itemOf = new Map<number, { itemId: string }>();
-  const dependents: Dependent[] = blocking.map((b: any) => {
+  const dependents: Dependent[] = candidates.map((b: any) => {
     const item = (b.projectItems?.nodes ?? []).find((i: any) => i.project?.id === project);
     const statusValue = item?.fieldValues?.nodes?.find((f: any) => f?.field?.name === "Status");
     if (item) {
@@ -365,8 +462,17 @@ async function main(): Promise<number> {
   });
 
   const decisions = fanoutDecisions(dependents, READY_COLUMN);
-  console.log(`#${closed} closed.`);
+  console.log(
+    topUp
+      ? `Top-up: ${candidates.length} open issue(s) considered.`
+      : `#${closed} closed.`,
+  );
+  // **Only the movers, in top-up.** A fan-out holds a handful of dependents
+  // and naming every one is the log's value; a top-up holds every open issue,
+  // and ~250 lines of "somebody has claimed it" is a log nobody reads, which
+  // is how the one line that mattered gets missed.
   for (const dec of decisions) {
+    if (topUp && !dec.move) continue;
     console.log(dec.move ? `  #${dec.number} -> ${READY_COLUMN}` : `  #${dec.number} unchanged: ${dec.why}`);
   }
 
@@ -421,7 +527,7 @@ async function main(): Promise<number> {
   // Ready, still blocked, or claimed — against a board whose "Ready" column
   // had been renamed exited `EXIT_REFUSED` instead of 0. A no-op success
   // reported as a failure is red CI for a scenario where nothing needed
-  // writing, and the `blocking.length === 0` case above already short-circuits
+  // writing, and the `candidates.length === 0` case above already short-circuits
   // for exactly this reason. Caught in review of #1747; BR-42. Same class as
   // BS-38 in `scripts/board-status-sweep.ts`, found one round earlier in the
   // other script.

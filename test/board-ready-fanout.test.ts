@@ -204,14 +204,18 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
    */
   test("BR-31: no field of a Dependent defaults an unreadable value to a number", () => {
     const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
-    const literal = /const dependents: Dependent\[\] = blocking\.map\(\(b: any\) => \{([\s\S]*?)\n {2}\}\);/
+    // `blocking.map` until #1842, which gave the script a second candidate
+    // source — every open issue, for the ones no close can reach. Both walks
+    // push into ONE array and this is still the only mapping, which is the
+    // property BR-48 asserts by count. The name moved; the single site did not.
+    const literal = /const dependents: Dependent\[\] = candidates\.map\(\(b: any\) => \{([\s\S]*?)\n {2}\}\);/
       .exec(src)?.[1];
     // ANTI-VACUITY. A detector that found nothing and a tree with no defaults
     // produce the same empty list, and the second is the one worth believing
     // only once the first is ruled out.
     expect(
       literal,
-      "the `blocking.map(...)` that builds Dependent was not found in scripts/board-ready.ts — " +
+      "the `candidates.map(...)` that builds Dependent was not found in scripts/board-ready.ts — " +
         "this row would pass vacuously. Fix the pattern, do not delete the row.",
     ).toBeTruthy();
     // A DETECTOR THAT READS A WHOLE BLOCK READS ITS COMMENTS. The first
@@ -501,8 +505,16 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
     expect(yml).toContain("issues:");
     expect(yml).toContain("closed");
     // A cron is the thing #1744 exists to avoid. Jason: no schedules.
-    expect(yml).not.toContain("schedule:");
-    expect(yml).not.toContain("cron:");
+    //
+    // COMMENTS STRIPPED, like BR-24 four rows down and for the same reason:
+    // #1842 added a comment to the workflow naming both forbidden keys while
+    // explaining that neither is present, and this row went red on the record
+    // of its own rule. A guard that refuses the sentence describing it gets
+    // relaxed rather than obeyed. The keys cannot hide in a comment anyway —
+    // Actions does not read one.
+    const live = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+    expect(live).not.toContain("schedule:");
+    expect(live).not.toContain("cron:");
   });
 
   /**
@@ -1077,5 +1089,255 @@ describe("BR-38..BR-39: every credentialed fetch reads its status before its bod
         "every caller dereferences as a bare TypeError instead of this file's " +
         "own UNMEASURED refusal. Read the status first.",
     ).toBe(0);
+  });
+});
+
+/**
+ * BR-47..BR-52 — an issue that was **never blocked** can still reach Ready.
+ *
+ * #1842, G1. Everything above this line is the fan-out from a close, and the
+ * fan-out answers exactly one question: what did THIS close free. An issue
+ * with no dependencies appears in no `blocking` list, so no close can ever
+ * mention it — and this file's own header said *"there is no 'became
+ * unblocked' event"* while stopping one sentence short of the consequence.
+ * For a repository whose next piece of work was never blocked there was no
+ * event at all that could put it in Ready. The lane drained, and a person
+ * refilled it with `board-mirror --ready --write`: Claim 7's third
+ * falsification, *"a board state reachable only by someone running a command
+ * by hand"*, surviving inside the mechanism written to remove it.
+ *
+ * ## What is NOT the gap, and the control that says so
+ *
+ * The decider. `isReady` has never asked whether an issue was once blocked —
+ * only whether it is blocked NOW — so a never-blocked issue and a just-freed
+ * one are the same input to it. BR-47 asserts that rather than assuming it,
+ * because if the decider HAD been the gap then a candidate-source change
+ * would move nothing and every structural row below would still be green.
+ */
+describe("BR-47..BR-52: an issue that was never blocked reaches Ready", () => {
+  const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+  // A detector that reads a whole file reads its comments, and both the
+  // script and the workflow now explain this change at length.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+  const yml = readFileSync(join(ROOT, ".github/workflows/board-ready.yml"), "utf-8");
+  const ymlLive = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+
+  // THE CONTROL. Two inputs identical in every field the decider reads, and
+  // the only difference is one the decider cannot see: whether anything ever
+  // blocked them. Same verdict, so the gap is upstream of here.
+  test("BR-47: the decider cannot tell a never blocked issue from a freed one", () => {
+    const freed = dep({ number: 10, blockedByOpen: 0 });
+    const neverBlocked = dep({ number: 11, blockedByOpen: 0 });
+    const out = fanoutDecisions([freed, neverBlocked], "Ready");
+    expect(out.map(d => d.move)).toEqual([true, true]);
+    // The negative half, so the row above is not green because everything
+    // moves: the same issue with a live blocker does not.
+    const [held] = fanoutDecisions([dep({ number: 11, blockedByOpen: 1 })], "Ready");
+    expect(held.move).toBe(false);
+  });
+
+  // THE GAP, as source. A second candidate source is only safe because it is
+  // a SOURCE — both walks push into one array and converge on one mapping and
+  // one decider, so a mutation of either reddens both modes. Two deciders
+  // would agree on every input anybody tested and no behavioural case could
+  // say which was live (`.claude/rules/checks-must-be-able-to-fail.md`).
+  test("BR-48: the never blocked candidates come from a second source, not a second decider", () => {
+    expect(
+      code,
+      "no repository-wide open-issue query was found — a close cannot reach an " +
+        "issue nobody blocked, so without this the lane still needs a person",
+    ).toContain("issues(first:100,after:$c,states:[OPEN])");
+    for (const [sym, n] of [["candidates.map(", 1], ["fanoutDecisions(", 1], ["selectReady(", 1]] as const) {
+      expect(
+        (code.match(new RegExp(sym.replace(/[().]/g, "\\$&"), "g")) ?? []).length,
+        `expected exactly ${n} \`${sym}\` in scripts/board-ready.ts — the two candidate ` +
+          "sources must converge on one mapping and one decider, or a mutation of " +
+          "either leaves the other mode holding the case up",
+      ).toBe(n);
+    }
+  });
+
+  // RUN, do not read. The argument guard sits before any network call, so
+  // every refusal below is observable without a credential.
+  test("BR-49: --top-up is accepted as a source for a never blocked issue, and is exclusive", () => {
+    const run = (extra: string[]) =>
+      Bun.spawnSync(["bun", "scripts/board-ready.ts", "--repo", "o/n", "--project", "PVT_x", ...extra], {
+        cwd: ROOT,
+        env: { ...process.env, BOARD_PROJECT_TOKEN: "" },
+      });
+    // The positive half: `--top-up` alone gets PAST the source guard and
+    // refuses on the credential instead — the same place BR-22 lands a valid
+    // `--closed-issue`. Without this the two refusals below are green for a
+    // reason that has nothing to do with the flag.
+    const ok = run(["--top-up"]);
+    expect(new TextDecoder().decode(ok.stdout)).toContain("BOARD_PROJECT_TOKEN");
+    expect(new TextDecoder().decode(ok.stderr)).not.toContain("exactly one");
+    // Neither, and both. BOTH is the one worth refusing rather than
+    // resolving: `--top-up` already contains every candidate a fan-out can
+    // produce, so whichever branch lost would lose silently.
+    for (const extra of [[], ["--top-up", "--closed-issue", "7"]]) {
+      const p = run(extra);
+      expect(p.exitCode, `${extra.join(" ") || "(no source)"} was not refused`).toBe(2);
+      expect(new TextDecoder().decode(p.stderr)).toContain("exactly one");
+    }
+  }, 30_000);
+
+  // The trigger. A source nothing fires is a command somebody runs by hand
+  // wearing a flag, which is the state this issue exists to leave.
+  test("BR-50: an event that is not a close reaches the never blocked path", () => {
+    const types = /types:\s*\[([^\]]*)\]/.exec(ymlLive)?.[1]?.split(",").map(s => s.trim().replace(/['"]/g, ""));
+    expect(types, "no `types: [...]` found in board-ready.yml — this row would pass vacuously").toBeTruthy();
+    expect(types).toContain("closed");
+    expect(
+      (types ?? []).filter(t => t !== "closed"),
+      "every trigger is `closed`, so an issue nobody blocked still has no event " +
+        "that can reach it and G1 is not done",
+    ).not.toEqual([]);
+    expect(ymlLive, "no trigger maps to --top-up").toContain("--top-up");
+    // Jason: no schedules. Re-asserted here and not only in BR-12, because
+    // the cheapest wrong fix for "nothing fires for an unblocked issue" is a
+    // cron, and this is the row that would have to be deleted to add one.
+    expect(ymlLive).not.toContain("schedule:");
+    expect(ymlLive).not.toContain("cron:");
+  });
+
+  // SWEEP FOR THE SHAPE. A trigger type with no `case` arm exits 1 at
+  // runtime, which is a red run nobody sees until that event fires in
+  // production. Declared types and handled modes are compared as sets.
+  test("BR-51: every declared trigger type has a mode arm", () => {
+    const types = (/types:\s*\[([^\]]*)\]/.exec(ymlLive)?.[1] ?? "")
+      .split(",").map(s => s.trim().replace(/['"]/g, "")).filter(s => s !== "");
+    expect(types.length, "no trigger types parsed — this row would pass vacuously").toBeGreaterThan(1);
+    // Every arm of the `case`, including the alternations `a|b|c)`.
+    //
+    // SPACES ROUND THE PIPES ARE OPTIONAL. The first spelling was
+    // `[a-z|-]+`, and reformatting the arm to `a | b | c)` — which is what
+    // `shfmt` does and what #1846 round 2 wrote by hand — made it match
+    // nothing, so the row went red on a change that altered no behaviour.
+    // A detector a reformat defeats is the second shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`, and the direction it
+    // failed in was loud rather than silent only by luck.
+    const arms = new Set(
+      [...ymlLive.matchAll(/^\s{10,}([a-z][a-z-]*(?:\s*\|\s*[a-z][a-z-]*)*)\)$/gm)]
+        .flatMap(m => m[1].split("|").map(s => s.trim())),
+    );
+    expect(arms.size, "no `case` arms parsed — this row would pass vacuously").toBeGreaterThan(1);
+    expect(
+      types.filter(t => !arms.has(t)),
+      "a trigger type with no arm in the mode `case` refuses at runtime — a red " +
+        "run that first appears when that event fires in production. Add the arm " +
+        "in the same edit as the trigger.",
+    ).toEqual([]);
+  });
+
+  // ai-review round 1 of #1846, and it was right. Occupancy is read ONCE per
+  // run and the write happens later, so two overlapping runs each compute
+  // `slots = cap - occupied` from the same snapshot and each promote that
+  // many — Ready ends up over its cap with no warning, which is the property
+  // BR-52 below is there to protect. The race existed under `closed` alone
+  // and needed two closes in the same few seconds; the four added types
+  // cluster during any triage session, so the widening is what obliges the
+  // group. Asserted rather than left to the reviewer who widens it next.
+  test("BR-53: two events cannot race past the cap for a never blocked issue", () => {
+    expect(
+      ymlLive,
+      "the workflow has no `concurrency:` group, so two issue events seconds " +
+        "apart each read the same occupancy and each promote `cap - occupied` " +
+        "items. The cap is what makes top-up safe on an ordinary event; without " +
+        "serialisation it is advisory.",
+    ).toMatch(/^concurrency:/m);
+    expect(ymlLive).toMatch(/group:\s*board-ready/);
+    // `cancel-in-progress: true` would cancel the RUNNING job, which can be
+    // mid-write — the one thing here that is not a pure function of live
+    // state. A superseded PENDING run costs nothing and is not what this
+    // forbids.
+    expect(
+      ymlLive,
+      "cancel-in-progress must be false: the running job can be part-way " +
+        "through its writes, and every run re-reads live state anyway, so " +
+        "cancelling the one in flight is the only option that loses anything.",
+    ).toMatch(/cancel-in-progress:\s*false/);
+  });
+
+  /**
+   * BR-54 — no input can become a FLAG on the way to the script.
+   *
+   * ai-review round 2 of #1846. The step built `SOURCE="--closed-issue $ISSUE"`
+   * and expanded it unquoted at the call site, under a comment of mine saying
+   * both composed variables came from a closed set. True of `MODE` and
+   * `WRITE`; false of the only one that mattered. `ISSUE` is the
+   * `workflow_dispatch` free-text input — `type: string`, no validation — so a
+   * dispatch with `issue: "7 --write"` and the write box UNCHECKED word-split
+   * into `--closed-issue`, `7`, `--write`, and a run the operator asked to
+   * report performed real board mutations.
+   *
+   * **The script cannot defend against this.** By the time it reads `argv` the
+   * tokens are separate and `arg("closed-issue")` sees a valid `7`. The
+   * workflow is the only place the property exists, so this is the only place
+   * it can be asserted.
+   *
+   * CENSUSED OVER THE WHOLE `run:` BLOCK, not over the line that was wrong.
+   * A repair to the one spelling is the fourth shape in
+   * `.claude/rules/checks-must-be-able-to-fail.md`: the next composed
+   * variable somebody adds re-makes this exactly.
+   */
+  test("BR-54: nothing a never blocked top-up run reads can word-split into a flag", () => {
+    // The LAST `run:` block in the file — the step that invokes the script.
+    const at = ymlLive.lastIndexOf("run: |");
+    expect(at, "no `run: |` block found — this row would pass vacuously").toBeGreaterThan(-1);
+    const block = ymlLive.slice(at);
+    expect(block, "the censused block is not the one that invokes the script").toContain(
+      "bun scripts/board-ready.ts",
+    );
+    // Strip every correctly-quoted expansion, then anything left that still
+    // looks like one is unquoted. `"${args[@]}"` and `"$ISSUE"` go; a bare
+    // `$SOURCE` or `$WRITE` on an argument line stays.
+    //
+    // **`\"` FIRST, and it is not a detail.** The warning lines here spell
+    // an embedded quote as `\"$MODE\"`, and a naive `"[^"]*"` closes its
+    // span on the backslash-quote — which left `$MODE` sitting OUTSIDE the
+    // stripped text and reported two correctly-quoted expansions as bare.
+    // Caught by this row going red against the fix it was written for, which
+    // is the only reason it was not relaxed instead.
+    const stripped = block
+      .split("\n")
+      .filter(l => !/^\s*#/.test(l))
+      .join("\n")
+      .replace(/\\"/g, "Q")
+      .replace(/"[^"\n]*"/g, '""');
+    const bare = [...stripped.matchAll(/\$\{?[A-Za-z_][A-Za-z0-9_]*/g)].map(m => m[0]);
+    expect(
+      bare,
+      "an unquoted expansion in the invocation block. `ISSUE` is free text from " +
+        "`workflow_dispatch` with no validation, so a value of `7 --write` " +
+        "word-splits into its own argv token and flips the script into write " +
+        "mode for an operator who asked for a report. Build the arguments in an " +
+        "array and expand it as `\"${args[@]}\"`.",
+    ).toEqual([]);
+    // The positive half, so the row above cannot go green by matching nothing:
+    // the number is validated as digits BEFORE it reaches the array.
+    expect(
+      block,
+      "the issue number must be refused unless it is digits — quoting alone " +
+        "makes `7 --write` one argument the script then rejects, which is a " +
+        "worse error message for the same bug",
+    ).toMatch(/\*\[!0-9\]\*/);
+    expect(block, "the arguments must be expanded as a quoted array").toContain('"${args[@]}"');
+  });
+
+  // The bound, named where the source is. Top-up's eligible set is the
+  // 36-of-46 population `lib/board-ready-rule.ts` was written about; without
+  // the cap this mode is "move the backlog to Ready" on every issue event.
+  test("BR-52: what a never blocked issue is promoted against is the cap, not the whole backlog", () => {
+    const at = code.search(/const selection = selectReady\(/);
+    expect(at, "`selectReady` must still bound what top-up promotes").toBeGreaterThan(-1);
+    expect(
+      code.slice(0, at),
+      "the cap must be computed from live throughput before the selection, or " +
+        "top-up promotes every eligible open issue",
+    ).toMatch(/readyCap\(throughput\)/);
+    // And the occupancy it is measured against is the whole board's, read
+    // before this point — not the candidate list's.
+    expect(code.slice(0, at)).toMatch(/occupied\+\+/);
   });
 });
