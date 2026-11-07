@@ -651,11 +651,18 @@ describe("a wrong-shaped snapshot is a failed fetch, not a measurement", () => {
  * taken snapshot looks like and a test cannot drift from the fetcher.
  */
 describe("the command takes its own snapshot, and refuses one assembled by hand", () => {
-  /** A `gh` that answers from canned files and records what it was asked. */
+  /**
+   * A `gh` that answers from canned files and records what it was asked.
+   *
+   * A raw string is emitted verbatim, so a case can hand the command a
+   * truncated or wrong-shaped payload — the shapes a real `gh` produces on
+   * a rate-limited page or an error it does not surface as a non-zero exit.
+   */
   const stubGh = (answers: { issues: unknown; prs: unknown }): string => {
     const dir = mkdtempSync(join(tmpdir(), "rg-inv-gh-"));
-    writeFileSync(join(dir, "issues.json"), JSON.stringify(answers.issues));
-    writeFileSync(join(dir, "prs.json"), JSON.stringify(answers.prs));
+    const body = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
+    writeFileSync(join(dir, "issues.json"), body(answers.issues));
+    writeFileSync(join(dir, "prs.json"), body(answers.prs));
     writeFileSync(
       join(dir, "gh"),
       [
@@ -860,6 +867,49 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
       rmSync(dir, { recursive: true, force: true });
       rmSync(stub, { recursive: true, force: true });
     }
+  });
+
+  // The live path had NONE of the guards the cache path has carried since
+  // #1642, and the asymmetry is the finding: a `gh issue list` that exits 0
+  // and returns `[]` — a wrong repository, a rate-limited page, an error gh
+  // does not surface — would have reported every criterion NOT STARTED,
+  // which is the one direction that reads as good news. Raised in round 3
+  // of review. The decisions are now one pair of functions both paths call,
+  // so there is nothing for two guards to drift apart about.
+  describe.each([
+    {
+      what: "an empty pull-request list",
+      answers: { issues: ISSUES, prs: [] },
+      says: "An empty reading is a failed fetch",
+    },
+    {
+      what: "an empty issue list",
+      answers: { issues: [], prs: PRS },
+      says: "An empty reading is a failed fetch",
+    },
+    {
+      what: "a JSON error object",
+      answers: { issues: ISSUES, prs: '{"message":"API rate limit exceeded"}' },
+      says: "parsed to object, not an array",
+    },
+    {
+      what: "a truncated page",
+      answers: { issues: '[{"number":1,', prs: PRS },
+      says: "did not emit readable JSON",
+    },
+  ])("the live reading refuses $what, like the cache path does", ({ answers, says }) => {
+    test("exit non-zero, and the message names what it saw", () => {
+      const stub = stubGh(answers);
+      const { dir, args } = withRoot();
+      try {
+        const got = run(args, stub);
+        expect(got.exitCode).not.toBe(0);
+        expect(got.stderr.toString()).toContain(says);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(stub, { recursive: true, force: true });
+      }
+    });
   });
 
   test("a cache written before the repository was recorded is refused, not waved through", () => {

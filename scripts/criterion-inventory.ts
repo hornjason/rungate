@@ -657,22 +657,82 @@ function repoArgs(repo: string | undefined): string[] {
   return repo === undefined ? [] : ["--repo", repo];
 }
 
-/** The issue list and the pull-request list, live. */
+/**
+ * ONE shape decision for a tracker list, wherever it came from.
+ *
+ * The cache path refused a truncated read, a JSON object and an empty list;
+ * the live path, added in this PR, refused none of them. A `gh issue list`
+ * that exits 0 and returns `[]` — a wrong repository, a rate-limited page,
+ * an error `gh` does not surface as a non-zero exit — would have reported
+ * every criterion NOT STARTED, which is the one direction that reads as
+ * good news, and a JSON error object would have died later inside
+ * `inventory` where the surrounding catch would have called it a failed
+ * fetch for the right outcome and the wrong reason. Raised in round 3 of
+ * review on #1878.
+ *
+ * Not a copy of the cache guard — the cache path calls this too. One answer
+ * to *is this a tracker reading*, so there is no pair of deciders free to
+ * drift, which is what the round-3 meta-finding was about: sweep the paths,
+ * do not patch the one that was named.
+ *
+ * `source` is what the refusal calls it: a file path on the cache path, a
+ * command on the live one. A refusal has to name something the reader can
+ * go and look at.
+ */
+export function validateTracked(parsed: unknown, source: string): Tracked[] {
+  if (!Array.isArray(parsed)) {
+    throw new Error(
+      `UNMEASURED: ${source} parsed to ${parsed === null ? "null" : typeof parsed}, not an array. ` +
+        `\`gh\` emits a JSON array here; an object is usually its error payload.`,
+    );
+  }
+  return parsed as Tracked[];
+}
+
+/**
+ * Both lists together are either a reading or a failed fetch.
+ *
+ * Judged on the PAIR, because they are taken in one shot: a tracker this
+ * command was pointed at does not have neither issues nor pull requests,
+ * and either list coming back empty is the shape a failed fetch takes. The
+ * cache path has judged them together since #1642; the live path does now.
+ */
+export function refuseEmptyPair(issues: Tracked[], prs: Tracked[], source: string): void {
+  if (issues.length === 0 || prs.length === 0) {
+    throw new Error(
+      `UNMEASURED: ${source} holds ${issues.length} issue(s) and ${prs.length} pull ` +
+        `request(s). An empty reading is a failed fetch, not an empty tracker.`,
+    );
+  }
+}
+
+/** The issue list and the pull-request list, live — validated like the cache. */
 export function fetchTracked(
   repo: string | undefined,
   exec: Exec = ghWithoutGhToken,
 ): { issues: Tracked[]; prs: Tracked[] } {
   const limit = String(FETCH_LIMIT);
-  const issues = JSON.parse(
-    exec(["issue", "list", "--state", "all", "--limit", limit, "--json", "number,title,body,state", ...repoArgs(repo)]),
-  ) as Tracked[];
-  const prs = JSON.parse(
-    exec([
-      "pr", "list", "--state", "all", "--limit", limit,
-      "--json", "number,title,body,state,mergedAt",
-      ...repoArgs(repo),
-    ]),
-  ) as Tracked[];
+  const read = (what: string, args: string[]): Tracked[] => {
+    const command = `gh ${args.slice(0, 2).join(" ")}${repo === undefined ? "" : ` --repo ${repo}`}`;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(exec(args));
+    } catch (err) {
+      throw new Error(
+        `UNMEASURED: ${command} did not emit readable JSON (${(err as Error).message}). ` +
+          `A truncated or half-written ${what} reading is a failed fetch, not an empty tracker.`,
+      );
+    }
+    return validateTracked(parsed, command);
+  };
+  const issues = read("issue", [
+    "issue", "list", "--state", "all", "--limit", limit, "--json", "number,title,body,state", ...repoArgs(repo),
+  ]);
+  const prs = read("pull-request", [
+    "pr", "list", "--state", "all", "--limit", limit,
+    "--json", "number,title,body,state,mergedAt", ...repoArgs(repo),
+  ]);
+  refuseEmptyPair(issues, prs, `the live reading of ${repo ?? "this tree's repository"}`);
   return { issues, prs };
 }
 
@@ -758,6 +818,10 @@ function readSnapshot(dir: string): Snapshot {
    * `issues.filter is not a function`. A failed fetch reading as a
    * measurement is the whole thing this guard exists to stop. Raised by
    * the required reviewer on #1642.
+   *
+   * The shape and emptiness decisions themselves live in
+   * {@link validateTracked} and {@link refuseEmptyPair}, shared with the
+   * live path — see their comments for why that is one decider, not two.
    */
   const readList = (name: string): Tracked[] => {
     const text = need(name);
@@ -770,22 +834,11 @@ function readSnapshot(dir: string): Snapshot {
           `A truncated or half-written snapshot is a failed fetch, not an empty tracker.`,
       );
     }
-    if (!Array.isArray(parsed)) {
-      throw new Error(
-        `UNMEASURED: ${join(dir, name)} parsed to ${parsed === null ? "null" : typeof parsed}, not an array. ` +
-          `\`gh\` writes a JSON array here; an object is usually its error payload redirected into the file.`,
-      );
-    }
-    return parsed as Tracked[];
+    return validateTracked(parsed, join(dir, name));
   };
   const issues = readList("issues.json");
   const prs = readList("prs.json");
-  if (issues.length === 0 || prs.length === 0) {
-    throw new Error(
-      `UNMEASURED: the snapshot holds ${issues.length} issue(s) and ${prs.length} pull ` +
-        `request(s). An empty reading is a failed fetch, not an empty tracker.`,
-    );
-  }
+  refuseEmptyPair(issues, prs, "the snapshot");
   // An absent `pr-files.jsonl` is the first pass, not a failed fetch: it is
   // populated FROM this script's own UNCLASSIFIED report, so refusing on it
   // made the documented recipe circular — the file could only be filled from
