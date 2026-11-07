@@ -39,8 +39,10 @@ import {
   type ProtectionProbe,
   githubProtectionProbe,
   protectionSubject,
+  readFindingDisposition,
   readMergeSerialisation,
   readPushCi,
+  readThreadProducer,
   unmeasuredPushCi,
 } from "./branch-protection";
 import { stripJsComments } from "./strip-js-comments";
@@ -5020,6 +5022,64 @@ export function runBranchProtectionValidation(
       // recorded finding into a red suite — and the cast keeps the assertion
       // written against the value rather than against the narrowing.
       expect(reading.verdict as string, message).toBe("PASS");
+    });
+
+    /**
+     * PROTECT-2 (#1650, CRC-C3) — a finding nobody answered blocks the merge.
+     *
+     * The same probe and the same facts object as PROTECT-1, one question
+     * further on: `required_conversation_resolution`. It is the only
+     * protection setting that can read a review thread, so it is the only one
+     * that can tell *this finding was answered* from *nobody looked*.
+     *
+     * **It exists because the setting regressed in silence.** On this repo it
+     * was applied 2026-10-23, read `true` 2026-10-25, and observably gating
+     * three pull requests through 2026-10-27. On 2026-11-07 it read `false`
+     * and #1857 merged with five unresolved threads. The field had no reader
+     * anywhere in the tree, so the spec went on recording it as applied for
+     * thirteen days. `lib/branch-protection.ts` carries the readings.
+     *
+     * FAILS, like PROTECT-1, and for the same reason: the thing that did not
+     * work was writing it down.
+     */
+    test("PROTECT-2: a pull request cannot merge with a finding nobody answered", async () => {
+      const slug = subject(root);
+      if (!slug) {
+        addFinding({
+          ruleId: "PROTECT-2",
+          severity: "WARN",
+          file: "",
+          message:
+            "UNMEASURED: this tree's origin remote names no owner/name, so there is no repo to " +
+            "read protection for. Nothing was checked, which is not the same as nothing being wrong.",
+        });
+        return;
+      }
+
+      const facts = await probe(slug);
+      const reading = readFindingDisposition(facts, readThreadProducer(root));
+
+      if (reading.verdict === "UNMEASURED") {
+        addFinding({ ruleId: "PROTECT-2", severity: "WARN", file: "", message: reading.reason });
+        return;
+      }
+      if (reading.verdict === "PASS") return;
+
+      addFinding({
+        ruleId: "PROTECT-2",
+        severity: "FAIL",
+        file: "",
+        message: `${reading.reason}\n\nREMEDY: ${reading.remedy}`,
+        // Reads. Never writes — the same line PROTECT-1 holds. A fixCommand
+        // that PUT a protection payload would be the harness silently
+        // rewriting a repository's security settings, and the operator's next
+        // read of their own config would be a reading of what a tool decided.
+        fixCommand: `gh api repos/${facts.slug}/branches/${facts.branch ?? "main"}/protection -q .required_conversation_resolution`,
+      });
+      // Widened for the same reason as PROTECT-1: control flow has narrowed
+      // `verdict` to "FAIL", so the comparison typechecks as a contradiction
+      // and reads as dead. It is what turns the finding into a red suite.
+      expect(reading.verdict as string, `${reading.reason}\n\nREMEDY: ${reading.remedy}`).toBe("PASS");
     });
   });
 }

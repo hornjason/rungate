@@ -58,12 +58,16 @@ import {
   jobContextNames,
   protectionFactsFromPayload,
   EVENT_RESTRICTED_ACTIONS,
+  readFindingDisposition,
   readMergeSerialisation,
   readPushCi,
+  readThreadProducer,
   runsOnPushTo,
   unreadableFacts,
+  THREAD_PRODUCER_STEP_ID,
   type ProtectionFacts,
   type PushCiReading,
+  type ThreadProducerReading,
 } from "../lib/branch-protection";
 
 const REPO = resolve(import.meta.dir, "..");
@@ -137,6 +141,7 @@ function facts(over: Partial<ProtectionFacts> = {}): ProtectionFacts {
     ownerType: "User",
     contexts: ["test", "gates"],
     mergeQueueEnabled: null,
+    conversationResolution: null,
     unreadable: null,
     ...over,
   };
@@ -161,7 +166,7 @@ interface Protect1Run {
  * through a module-level mutable, so each case is a fresh process and no case
  * can see another's findings.
  */
-function protect1(root: string, given: ProtectionFacts): Protect1Run {
+function protect1(root: string, given: ProtectionFacts, ruleId = "PROTECT-1"): Protect1Run {
   const file = join(mkdtempSync(join(tmpdir(), "rungate-909-run-")), "probe.test.ts");
   scratch.push(dirname(file));
   writeFileSync(
@@ -174,7 +179,7 @@ function protect1(root: string, given: ProtectionFacts): Protect1Run {
       `  subject: () => ${JSON.stringify(given.slug)},\n` +
       `});\n` +
       `test("zz-report", () => {\n` +
-      `  console.log("F:" + JSON.stringify(getFindings().filter(f => f.ruleId === "PROTECT-1")));\n` +
+      `  console.log("F:" + JSON.stringify(getFindings().filter(f => f.ruleId === ${JSON.stringify(ruleId)})));\n` +
       `});\n`,
   );
   const r = spawnSync("bun", ["test", file], { cwd: REPO, encoding: "utf-8" });
@@ -796,5 +801,210 @@ describe("#909: PROTECT-1 is wired into the suite consumers actually run", () =>
   test("this repo's own conformity suite calls it", () => {
     const suite = readFileSync(join(REPO, "test", "scaffold-conformity.test.ts"), "utf-8");
     expect(suite).toContain("runBranchProtectionValidation(ROOT);");
+  });
+});
+
+/**
+ * PROTECT-2 (#1650, CRC-C3) — a finding nobody answered blocks the merge.
+ *
+ * ## The regression this exists for, measured
+ *
+ * `required_conversation_resolution` was applied on this repo 2026-10-23,
+ * read `true` from the API 2026-10-25, and observably gating through
+ * 2026-10-27: three pull requests each sat at `BLOCKED` on ONE unresolved
+ * thread with every required check green, and each flipped to `CLEAN` when
+ * that thread was resolved — same head, no push, no re-run.
+ *
+ * On 2026-11-07 the field read `false`, and PR #1857 merged carrying five
+ * unresolved threads, two of them not outdated. **Nothing in the tree read
+ * the field.** The protection endpoint's `PUT` replaces the whole object, so
+ * an update omitting it turns it off and returns 200 — no event, no error,
+ * and the spec went on recording it as applied for thirteen days.
+ *
+ * ## Proof it can fail
+ *
+ * Every spawned case plants `strict: false` and push-CI, so PROTECT-1 passes
+ * and the only thing that can redden the suite is PROTECT-2. One variable
+ * differs between the red case and its control.
+ *
+ * | Fixture | `conversationResolution` | threads step | Spawned suite |
+ * |---|---|---|---|
+ * | ai-review opens threads | `false` | present | **1 red** — PROTECT-2 FAIL |
+ * | ai-review opens threads | `true`  | present | **0 red**, 0 findings |
+ * | no thread producer       | `false` | absent  | **0 red**, 0 findings |
+ * | unreadable protection    | unread  | present | **0 red**, 1 WARN `UNMEASURED:` |
+ */
+const THREADS_CI = `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post this round's findings onto the diff
+        id: ${THREAD_PRODUCER_STEP_ID}
+        run: bun bin/rungate.ts ai-review-threads
+`;
+
+/** The same tree with the producing STEP removed and the prose left behind. */
+const THREADS_PROSE_ONLY = `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # ${THREAD_PRODUCER_STEP_ID} used to post findings here; it was removed
+      - run: echo "AI_REVIEW_THREADS_PATH=${THREAD_PRODUCER_STEP_ID}.json"
+`;
+
+const dispositionFacts = (over: Partial<ProtectionFacts> = {}) =>
+  facts({ strict: false, ...over });
+
+describe("#1650: PROTECT-2 goes red when a review opens threads nothing has to answer", () => {
+  test("threads produced and the setting OFF is 1 red; turning it on is the ONLY change that clears it", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    const off = protect1(root, dispositionFacts({ conversationResolution: false }), "PROTECT-2");
+    expect(off.red, off.fails.join("\n")).toBe(true);
+    expect(off.fails).toHaveLength(1);
+
+    // One variable differs. Same tree, same facts, same probe.
+    const on = protect1(root, dispositionFacts({ conversationResolution: true }), "PROTECT-2");
+    expect(on.red, on.fails.concat(on.warns).join("\n")).toBe(false);
+    expect(on.fails).toHaveLength(0);
+    expect(on.warns).toHaveLength(0);
+  });
+
+  test("the refusal names what is unguarded and what to do, including the PUT trap", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    const r = protect1(root, dispositionFacts({ conversationResolution: false }), "PROTECT-2");
+    const m = r.fails[0] ?? "";
+    expect(m).toContain("required_conversation_resolution is OFF");
+    expect(m, "the reader has to know which file opens them").toContain("ai-review.yml");
+    expect(
+      m,
+      "a remedy that does not warn about the whole-object PUT reproduces the regression",
+    ).toContain("omits a field silently");
+    expect(m, "and the clearing procedure is where the next question goes").toContain(
+      "reference/clearing-a-false-positive.md",
+    );
+  });
+
+  // THE PRECONDITION, and the case that stops this gate being advice nobody
+  // can act on. A tree that opens no threads has nothing for the setting to
+  // gate; refusing there would tell an operator to configure something that
+  // changes nothing, which is how a gate gets switched off.
+  test("CONTROL: the same OFF setting is NOT a finding when nothing opens a thread", () => {
+    const root = project({ ".github/workflows/ci.yml": PUSH_CI });
+    const r = protect1(root, dispositionFacts({ conversationResolution: false }), "PROTECT-2");
+    expect(r.red, r.fails.join("\n")).toBe(false);
+    expect(r.fails).toHaveLength(0);
+    expect(r.warns).toHaveLength(0);
+  });
+
+  test("an unreadable protection reading is UNMEASURED, not a clean one", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    const r = protect1(root, unreadableFacts("someone/consumer", "403 from the API"), "PROTECT-2");
+    expect(r.red).toBe(false);
+    expect(r.fails).toHaveLength(0);
+    expect(r.warns).toHaveLength(1);
+    expect(r.warns[0]).toStartWith("UNMEASURED:");
+  });
+});
+
+describe("#1650: readThreadProducer tells a producer from prose about one", () => {
+  test("a declaring `id:` line is a producer, and names the file", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    const r = readThreadProducer(root);
+    expect(r.produces).toBe(true);
+    expect(r.where).toBe("ai-review.yml");
+    expect(r.unmeasured).toBeNull();
+  });
+
+  // The detector has to be narrower than "the string appears". The real
+  // workflow mentions `ai-review-threads` in a comment and in three env
+  // values; a substring match reports a producer in a tree that deleted the
+  // step and left the prose — `.claude/rules/checks-must-be-able-to-fail.md`,
+  // second shape.
+  test("the same words in a comment and an env value are NOT a producer", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_PROSE_ONLY });
+    expect(THREADS_PROSE_ONLY, "the fixture must contain the string, or this proves nothing")
+      .toContain(THREAD_PRODUCER_STEP_ID);
+    const r = readThreadProducer(root);
+    expect(r.produces).toBe(false);
+    expect(r.unmeasured).toBeNull();
+  });
+
+  test("an absent workflows directory is UNMEASURED, not 'no producer'", () => {
+    const r = readThreadProducer(project({ "README.md": "nothing here" }));
+    expect(r.produces).toBe(false);
+    expect(r.unmeasured, "an unread tree reporting no producer clears the gate vacuously")
+      .not.toBeNull();
+  });
+});
+
+describe("#1650: readFindingDisposition reaches PASS only on positive evidence", () => {
+  const produces: ThreadProducerReading = { produces: true, where: "ai-review.yml", unmeasured: null };
+  const none: ThreadProducerReading = { produces: false, where: null, unmeasured: null };
+
+  test("threads plus the setting on is the only PASS that is about the setting", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: true }), produces);
+    expect(r.verdict).toBe("PASS");
+    expect(r.reason).toContain("blocks the merge");
+  });
+
+  test("threads plus the setting off FAILS", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: false }), produces);
+    expect(r.verdict).toBe("FAIL");
+    expect(r.remedy).not.toBe("");
+  });
+
+  // An absent key and a false one are different facts. Reading the absence as
+  // off would FAIL every repo whose payload simply did not mention it.
+  test("a payload that said nothing is UNMEASURED, not off", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: null }), produces);
+    expect(r.verdict).toBe("UNMEASURED");
+    expect(r.remedy, "nothing was established, so there is nothing to remedy").toBe("");
+  });
+
+  test("an unread producer is UNMEASURED even when the setting IS readable", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: false }), {
+      produces: false,
+      where: null,
+      unmeasured: ".github/workflows is unreadable",
+    });
+    expect(r.verdict, "the protection reading alone cannot decide the setting's relevance")
+      .toBe("UNMEASURED");
+  });
+
+  test("no producer passes, and says that is why rather than saying the setting is fine", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: false }), none);
+    expect(r.verdict).toBe("PASS");
+    expect(r.reason).toContain("nothing for required_conversation_resolution to gate");
+  });
+});
+
+describe("#1650: the field is parsed from the shape the endpoint actually answers", () => {
+  test("{enabled:false} is false, not truthy", () => {
+    const f = protectionFactsFromPayload("o/n", "main", "User", {
+      required_conversation_resolution: { enabled: false },
+    });
+    expect(f.conversationResolution).toBe(false);
+  });
+
+  test("{enabled:true} is true", () => {
+    const f = protectionFactsFromPayload("o/n", "main", "User", {
+      required_conversation_resolution: { enabled: true },
+    });
+    expect(f.conversationResolution).toBe(true);
+  });
+
+  test("an absent key is null — unestablished, not off", () => {
+    expect(protectionFactsFromPayload("o/n", "main", "User", {}).conversationResolution).toBeNull();
+  });
+
+  test("the live payload shape from 2026-11-07 parses to false", () => {
+    // Trimmed from the real response, which is what caught this.
+    const f = protectionFactsFromPayload("hornjason/rungate", "main", "User", {
+      required_status_checks: { strict: false, contexts: ["test", "ai-review"] },
+      enforce_admins: { enabled: true },
+      required_conversation_resolution: { enabled: false },
+    });
+    expect(f.conversationResolution).toBe(false);
+    expect(f.strict, "the rest of the payload must still parse").toBe(false);
   });
 });
