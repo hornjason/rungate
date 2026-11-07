@@ -352,9 +352,9 @@ check proving it can fail against this file and not against a fixture.
       needs: run
 - [ ] CRC-A2: A fresh-context subagent reviews the diff before the PR opens.
       needs: run
-- [ ] CRC-A3: `CLAUDE.md` is short, states stack/conventions/goals/non-goals, and points elsewhere for detail.
+- [x] CRC-A3: `CLAUDE.md` is short, states stack/conventions/goals/non-goals, and points elsewhere for detail.
       needs: test
-- [ ] CRC-A4: The reviewer flags code breaking a `CLAUDE.md` convention, AND changes that make a line in it out of date.
+- [x] CRC-A4: The reviewer flags code breaking a `CLAUDE.md` convention, AND changes that make a line in it out of date.
       needs: test
 - [x] CRC-A5: `REVIEW.md` exists per owned area, written by code owners. (shipped, #1167)
       needs: test
@@ -371,13 +371,13 @@ check proving it can fail against this file and not against a fixture.
 
 ### Layer 2 — AI review on every PR
 
-- [ ] CRC-B1: The reviewer reads the diff against the whole repo **and the PR's stated intent**.
+- [x] CRC-B1: The reviewer reads the diff against the whole repo **and the PR's stated intent**.
       needs: test
 - [ ] CRC-B2: On a bug fix, the reviewer looks for the root cause.
       needs: test
 - [ ] CRC-B3: **Several agents look for bugs at the same time** (parallel generation). **Not an unqualified good here, and the qualification is CRC-B4's, pointed the other way.** The reviewer is a *sampled* instrument, so N generators are N draws and they raise recall and the false-positive rate together. Measured on run `39962683401`: two attempts on merge commit `99d50fc`, both at round 5, with the tree, the head, the prompt and the model all held fixed, returned **BLOCKED then CLEAN** — and the blocking finding was false, claiming a routing row that was present at the reviewed head. So the disagreement a second draw buys has already been observed arriving in the costly direction. Under the source's priority that trade is worth taking; under ours it is not, because CRC-M8 is inverted here by declared decision and a false block costs a remedy commit, a CI round, a review round and an agent's whole context. **Parallel generation without CRC-B4's quorum behind it is therefore strictly worse than one generator** — it is N chances to block on a false positive with nothing filtering them — so this criterion is not adoptable before CRC-B4, and adopting it first would be measurable harm rather than partial progress.
       needs: measurement
-- [ ] CRC-B4: **A separate group of agents votes on each finding**, and it is surfaced only if enough agree it is real. The ledger records **every verifier's individual vote** and **whether the verifiers disagreed**, both as first-class fields written at decision time. Without them every threshold except the one actually used is permanently UNMEASURED, and re-running to recover the votes re-samples the thing being measured. **A reading the mechanism produces whether or not it works does not satisfy this criterion.** Measured: the deployed filing path takes no votes at all — a regex over the title and set arithmetic over symptom keys, with no clock, model or network — so a variance control over it reports a single distinct outcome set, zero variance, by construction, and the reading that looks most like success is the signature of the failure mode. **Nor does a reading that varies for a reason other than the mechanism under test** — name the mechanism the reading is of, not only the number it produced. Where the flattering reading is available by construction, the criterion names what would distinguish it from the real thing, or declares itself UNMEASURED.
+- [x] CRC-B4: **A separate group of agents votes on each finding**, and it is surfaced only if enough agree it is real. The ledger records **every verifier's individual vote** and **whether the verifiers disagreed**, both as first-class fields written at decision time. Without them every threshold except the one actually used is permanently UNMEASURED, and re-running to recover the votes re-samples the thing being measured. **A reading the mechanism produces whether or not it works does not satisfy this criterion.** Measured: the deployed filing path takes no votes at all — a regex over the title and set arithmetic over symptom keys, with no clock, model or network — so a variance control over it reports a single distinct outcome set, zero variance, by construction, and the reading that looks most like success is the signature of the failure mode. **Nor does a reading that varies for a reason other than the mechanism under test** — name the mechanism the reading is of, not only the number it produced. Where the flattering reading is available by construction, the criterion names what would distinguish it from the real thing, or declares itself UNMEASURED.
       needs: test
 - [x] CRC-B5: Findings that are only **style, diagnostics or cleanup** are dropped.
       needs: test
@@ -390,7 +390,7 @@ check proving it can fail against this file and not against a fixture.
       waived-reason: #1567 records that nobody has run a finding through the live path and observed a demotion, so the tagging is NOT verified end to end
       waived-by: rayford (agent; not countersigned by jason)
       waived-until: 2026-12-31
-- [ ] CRC-B8: **Every finding is answered** — fixed, or resolved with a stated reason. A finding is never silently dropped and never becomes a tracker item by default.
+- [x] CRC-B8: **Every finding is answered** — fixed, or resolved with a stated reason. A finding is never silently dropped and never becomes a tracker item by default.
       needs: test
 - [ ] CRC-B9: Review depth is configurable per repo as **Quick / Standard / Deep**.
       needs: test
@@ -399,9 +399,9 @@ check proving it can fail against this file and not against a fixture.
 
 - [ ] CRC-C1: Security review is a separate automated pass.
       needs: test
-- [ ] CRC-C2: A PR cannot merge while any bug-review or security-review finding is open.
+- [x] CRC-C2: A PR cannot merge while any bug-review or security-review finding is open.
       needs: test
-- [ ] CRC-C3: A false positive clears by closing the thread with a short reason.
+- [x] CRC-C3: A false positive clears by closing the thread with a short reason.
       needs: test
 - [x] CRC-C4: A finding clears on its own if a later commit fixes it.
       needs: test
@@ -428,7 +428,7 @@ check proving it can fail against this file and not against a fixture.
       needs: test
 - [ ] CRC-E6: **An agent's approval never counts as a person's.**
       needs: test
-- [ ] CRC-E7: Whoever prompted the change counts as one of the required reviewers.
+- [x] CRC-E7: Whoever prompted the change counts as one of the required reviewers.
       needs: test
 - [ ] CRC-E8: **An approval covers one specific commit**; new commits the system cannot vouch for dismiss it.
       needs: test
@@ -450,7 +450,7 @@ check proving it can fail against this file and not against a fixture.
 
 ### Measurement — how we know any of this works
 
-- [ ] CRC-M1: **Incidents are an eval.** Past incident-causing PRs, with fix-forwards and reverts, form a case set.
+- [x] CRC-M1: **Incidents are an eval.** Past incident-causing PRs, with fix-forwards and reverts, form a case set.
       needs: review
 - [ ] CRC-M2: Each case is **expert-confirmed** — a human who knows the code confirms the bug and where it lived.
       needs: review
@@ -501,7 +501,7 @@ unreadable rate exactly where it is.
       which published version produced it cannot be attributed to a configuration, and
       an unattributable reading is what O1 and O2 above are made of.
       needs: test
-- [ ] CRC-M15: **The staleness check reads contents, not a version string.**
+- [x] CRC-M15: **The staleness check reads contents, not a version string.**
       `lib/distribution-standing.ts` makes **two** comparisons on **two different
       fields**, and neither reads an artefact. `standing.published` — the version a
       consumer can install — is checked for membership in
@@ -529,11 +529,11 @@ showed **~59%** of what the reviewer kept flagging was code present at its first
       needs: test
       proved-by: test/ai-review-rounds-step.test.ts (AC-S1..AC-S5) — 371 pass, 0 fail, 2026-10-28
       fingerprint: 72c24240
-- [ ] CRC-N2: **Diff-only re-review** after the first few passes.
+- [x] CRC-N2: **Diff-only re-review** after the first few passes.
       needs: test
-- [ ] CRC-N3: **Flag the class of bug**, so the author fixes every instance rather than one line.
+- [x] CRC-N3: **Flag the class of bug**, so the author fixes every instance rather than one line.
       needs: test
-- [ ] CRC-N4: **No repeats** of findings already posted.
+- [x] CRC-N4: **No repeats** of findings already posted.
       needs: test
 - [ ] CRC-N5: Review agents run **nightly over existing code**.
       needs: run
