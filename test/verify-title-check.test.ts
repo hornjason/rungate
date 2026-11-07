@@ -325,6 +325,42 @@ describe("#1849: a verify command names a test that exists", () => {
       expect(namesAreComplete(`${T}("an ordinary case", () => {});`).complete).toBe(true);
     });
 
+    test("a regex after `return !` is a regex, not a division", () => {
+      // Round 3. The old lookback asked whether the token before `!` ends
+      // an expression BY ITS LAST CHARACTER, so `return` ended in "n" and
+      // counted as one. The regex was read as division, the scan ran into
+      // the pattern, and the pattern's real closing `/` was taken as a new
+      // regex that never closed — one ordinary file became unreadable.
+      // Live at test/unit/git-identity-isolation.test.ts:91.
+      const src = `${D}("outer", () => {\n  const ok = () => { return !/\\bcwd\\s*:/.${T}(line) && x; };\n  ${T}("inner", () => {});\n});\n`;
+      expect(titleReading(src).why, "an ordinary file reads as unparseable").toBeNull();
+      expect(titlePathsIn(src)).toEqual(["outer", "outer inner"]);
+
+      // And the control that keeps `!` honest: a non-null assertion
+      // before a division must NOT be read as a regex.
+      const nonNull = `${D}("outer", () => {\n  const r = a.b! / c;\n  ${T}("inner", () => {});\n});\n`;
+      expect(titlePathsIn(nonNull), "a non-null assertion was read as a regex open").toEqual(["outer", "outer inner"]);
+    });
+
+    test("postfix ++ before a division does not swallow the declarations after it", () => {
+      // Round 3, and the harmful version — the finding's own fixture was
+      // benign, so this one puts a REAL declaration inside the span a
+      // mis-read regex masks. Measured before the fix: ["outer",
+      // "outer after"], a clean reading, and `swallowed` gone. A test
+      // vanishing from the name set with no UNMEASURED signal is a false
+      // refusal waiting to happen.
+      const src =
+        `${D}("outer", () => {\n  let i=0,n=2;\n` +
+        `  const r = i++ / n;  ${T}("swallowed", () => {});  const z = 1/2;\n` +
+        `  ${T}("after", () => {});\n});\n`;
+      expect(titlePathsIn(src)).toEqual(["outer", "outer swallowed", "outer after"]);
+
+      // The contrast that names the one variable: binary `+` must still
+      // open a regex, or this case passes because nothing ever does.
+      const binary = `${D}("outer", () => {\n  const m = 1 + /x/.${T}(s);\n  ${T}("inner", () => {});\n});\n`;
+      expect(titlePathsIn(binary)).toEqual(["outer", "outer inner"]);
+    });
+
     test("the whole corpus scans, and every cause of UNMEASURED is counted apart", () => {
       // A guard whose honest answer is UNMEASURED can pass by refusing to
       // read anything, so the corpus is split by CAUSE rather than
@@ -332,10 +368,29 @@ describe("#1849: a verify command names a test that exists", () => {
       // number, and review round 2 found a cause the previous split could
       // not see at all: a `.each` file also has ordinary titles, so it was
       // neither silent nor unparseable and fell through both bounds.
-      const files = readdirSync(join(ROOT, "test"))
-        .filter(f => f.endsWith(".test.ts"))
-        .map(f => join("test", f));
+      // RECURSIVE. The first version read only the top level of test/,
+      // which left 67 files — test/unit, test/types, test/helpers —
+      // outside a bound asserted as `toEqual([])`. Round 3's one
+      // confirmed unreadable file lived in exactly that gap, so the
+      // instrument said zero while naming a scope that excluded the
+      // instance. `fixtures/` is excluded deliberately: planted broken
+      // sources are its job.
+      const walk = (dir: string): string[] =>
+        readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap(e =>
+          e.isDirectory()
+            ? e.name === "fixtures"
+              ? []
+              : walk(join(dir, e.name))
+            : e.name.endsWith(".test.ts")
+              ? [join(dir, e.name)]
+              : [],
+        );
+      const files = walk("test");
       expect(files.length, "no test files were found, so this case witnessed nothing").toBeGreaterThan(50);
+      expect(
+        files.some(f => f.startsWith("test/unit/")),
+        "the sweep does not reach test/unit/, where round 3's one real instance was",
+      ).toBe(true);
 
       const by = { complete: 0, unresolved: 0, interpolated: 0, unparseable: [] as string[] };
       for (const f of files) {

@@ -918,10 +918,42 @@ function scanSource(text: string): Scan {
   let ok = true;
   let braces = 0;
 
-  const endsAnExpression = (tok: string) => /[\w$)\]]$/.test(tok);
-  const opensARegex = () => {
+  /**
+   * Is the `/` at `at` opening a regex, or dividing?
+   *
+   * Round 3 of review found both remaining members of this set, and both
+   * were real:
+   *
+   * - `return !/\bcwd\s*:/.test(line)` — the old lookback asked whether
+   *   the token before `!` "ends an expression" by its LAST CHARACTER, so
+   *   `return` ended in `n` and counted as one. The regex was read as
+   *   division, the scan ran on into the pattern, and the pattern's real
+   *   closing `/` was then taken as a new regex that never closed. One
+   *   ordinary file became unreadable
+   *   (`test/unit/git-identity-isolation.test.ts:91`).
+   * - `i++ / n` — `prev` was a bare `+` either way, so postfix increment
+   *   was indistinguishable from binary plus. MEASURED on a planted
+   *   file: a `test("swallowed")` sitting after it was silently dropped
+   *   from the name set with a CLEAN reading, while the same file with
+   *   `i + 1` kept all three titles. A real test vanishing with no
+   *   UNMEASURED signal is a false refusal waiting to happen.
+   *
+   * The lookback is gone. `++`/`--` are now one token, so postfix is
+   * visible, and the genuinely ambiguous `!` is decided by TRYING the
+   * regex read: a pattern that closes on the same line is a regex, and
+   * one that does not is division. That is the same question the scanner
+   * would have to answer anyway, asked once instead of guessed at.
+   *
+   * Known remaining ambiguity, stated rather than papered over: `a.b! / c
+   * / d`, two divisions on one line after a non-null assertion, reads as
+   * a regex. No instance exists in this tree; a fourth round on this
+   * function is writing a JavaScript tokenizer, which is a different
+   * problem and would be a different issue.
+   */
+  const opensARegex = (at: number) => {
     if (REGEX_AFTER_WORD.has(prev)) return true;
-    if (prev === "!") return !endsAnExpression(prev2);
+    if (prev === "++" || prev === "--") return false;
+    if (prev === "!") return endOfRegex(text, at) !== -1;
     return prev.length === 1 && REGEX_MAY_FOLLOW.has(prev);
   };
   const remember = (tok: string) => {
@@ -957,7 +989,15 @@ function scanSource(text: string): Scan {
       i = end + 2;
       continue;
     }
-    if (c === "/" && opensARegex()) {
+    // `++` and `--` are ONE token. Character-by-character, postfix
+    // increment and binary plus both leave `prev` as a bare `+`.
+    if ((c === "+" || c === "-") && text[i + 1] === c) {
+      remember(c + c);
+      i += 2;
+      continue;
+    }
+
+    if (c === "/" && opensARegex(i)) {
       const end = endOfRegex(text, i);
       if (end === -1) { ok = false; break; }
       blank(titles, i, end);
