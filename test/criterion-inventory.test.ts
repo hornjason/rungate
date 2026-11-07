@@ -897,7 +897,7 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
     {
       what: "a truncated page",
       answers: { issues: '[{"number":1,', prs: PRS },
-      says: "did not emit readable JSON",
+      says: "exited 0 and what it emitted is not readable JSON",
     },
   ])("the live reading refuses $what, like the cache path does", ({ answers, says }) => {
     test("exit non-zero, and the message names what it saw", () => {
@@ -912,6 +912,47 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
         rmSync(stub, { recursive: true, force: true });
       }
     });
+  });
+
+  test("a gh call that FAILS is not reported as unreadable output", () => {
+    // Round 5. One `try` around the call and the parse reported every
+    // failure as "did not emit readable JSON", so an auth failure or a rate
+    // limit — gh exiting non-zero with no output at all — sent the reader
+    // looking for truncated output. The real stderr was in the
+    // parentheses; the framing named the wrong kind of failure.
+    //
+    // The PAIR is the case. The truncated-page row above asserts the other
+    // message against the same command, so a refusal that collapsed them
+    // again could not satisfy both.
+    const stub = mkdtempSync(join(tmpdir(), "rg-inv-ghfail-"));
+    const { dir, args } = withRoot();
+    try {
+      // `repo view` succeeds, so the run gets past the identity read and
+      // the failure lands on the list call this case is about. A gh that
+      // fails at the first call is refused by `resolveRepo` with its own
+      // message and never reaches the reading at all.
+      writeFileSync(
+        join(stub, "gh"),
+        [
+          "#!/bin/sh",
+          'if [ "$1 $2" = "repo view" ]; then echo \'{"nameWithOwner":"o/r"}\'; exit 0; fi',
+          'echo "gh: HTTP 401 Bad credentials" >&2',
+          "exit 1",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const got = Bun.spawnSync(["bun", SCRIPT, ...args], {
+        env: { ...process.env, PATH: `${stub}:${process.env.PATH ?? ""}` },
+      });
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("failed and produced no reading");
+      expect(got.stderr.toString()).toContain("401");
+      expect(got.stderr.toString()).not.toContain("not readable JSON");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
   });
 
   // Round 4, and it is the sweep I said I had done and had not: the SAME

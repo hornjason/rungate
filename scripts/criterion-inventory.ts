@@ -706,29 +706,54 @@ export function refuseEmptyPair(issues: Tracked[], prs: Tracked[], source: strin
   }
 }
 
+/**
+ * Call `gh` and read what it said — as TWO refusals, not one.
+ *
+ * A single `try` around the call and the parse reported every failure as
+ * "did not emit readable JSON", so an auth failure, a rate limit or a wrong
+ * repository — anything that makes `gh` exit non-zero and produce no output
+ * at all — sent whoever was debugging it looking for truncated output. The
+ * real stderr was in the parentheses, but the framing named the wrong kind
+ * of failure, which is this file's own stated defect wearing a different
+ * hat. Raised in round 5 of review on #1878.
+ *
+ * Both sites call this, so there is one answer to *which failure was it*.
+ */
+function readGh(exec: Exec, args: string[], command: string): unknown {
+  let text: string;
+  try {
+    text = exec(args);
+  } catch (err) {
+    throw new Error(
+      `UNMEASURED: ${command} failed and produced no reading (${(err as Error).message}). ` +
+        `A tracker that could not be reached is not an empty one.`,
+    );
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error(
+      `UNMEASURED: ${command} exited 0 and what it emitted is not readable JSON ` +
+        `(${(err as Error).message}). A truncated or half-written reading is a failed fetch, ` +
+        `not an empty tracker.`,
+    );
+  }
+}
+
 /** The issue list and the pull-request list, live — validated like the cache. */
 export function fetchTracked(
   repo: string | undefined,
   exec: Exec = ghWithoutGhToken,
 ): { issues: Tracked[]; prs: Tracked[] } {
   const limit = String(FETCH_LIMIT);
-  const read = (what: string, args: string[]): Tracked[] => {
+  const read = (args: string[]): Tracked[] => {
     const command = `gh ${args.slice(0, 2).join(" ")}${repo === undefined ? "" : ` --repo ${repo}`}`;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(exec(args));
-    } catch (err) {
-      throw new Error(
-        `UNMEASURED: ${command} did not emit readable JSON (${(err as Error).message}). ` +
-          `A truncated or half-written ${what} reading is a failed fetch, not an empty tracker.`,
-      );
-    }
-    return validateTracked(parsed, command);
+    return validateTracked(readGh(exec, args, command), command);
   };
-  const issues = read("issue", [
+  const issues = read([
     "issue", "list", "--state", "all", "--limit", limit, "--json", "number,title,body,state", ...repoArgs(repo),
   ]);
-  const prs = read("pull-request", [
+  const prs = read([
     "pr", "list", "--state", "all", "--limit", limit,
     "--json", "number,title,body,state,mergedAt", ...repoArgs(repo),
   ]);
@@ -782,13 +807,8 @@ export function fetchChangedFiles(
   const out: Record<number, string[]> = {};
   for (const n of numbers) {
     const command = `gh pr view ${n}${repo === undefined ? "" : ` --repo ${repo}`}`;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(exec(["pr", "view", String(n), "--json", "number,files", ...repoArgs(repo)]));
-    } catch (err) {
-      throw new Error(`UNMEASURED: ${command} did not emit readable JSON (${(err as Error).message}).`);
-    }
-    out[n] = validateChangedFiles(parsed, command);
+    const args = ["pr", "view", String(n), "--json", "number,files", ...repoArgs(repo)];
+    out[n] = validateChangedFiles(readGh(exec, args, command), command);
   }
   return out;
 }
