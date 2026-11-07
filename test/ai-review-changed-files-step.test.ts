@@ -40,18 +40,23 @@ import {
  * that the path reaching the adjudicator is the same constant the writer
  * used.
  *
- * **Phase 2, not here: the end-to-end case.** The generated step runs
- * `bunx rungate@<generating version>`, and npm serves `0.8.2` from the
- * `v0.8.2` tag. The adjudicator in that release reads `argv[0]` and nothing
- * else (measured: `git show v0.8.2:lib/scaffold/ai-review-findings.ts`), so a
- * second positional is a no-op there — which is what makes shipping this
- * safe, and also what makes the end-to-end case unobservable until a release
- * carries the reading half. A step asserting it today would go green having
- * observed nothing, which is the whole defect class this module is about.
+ * **Phase 2, no longer here and no longer unobservable:
+ * `test/ai-review-changed-files-e2e.test.ts`.** This file used to carry a
+ * paragraph explaining that the end-to-end case could not be written — the
+ * generated step runs `bunx rungate@<generating version>`, the published
+ * adjudicator took one positional, so a second was a no-op and a case
+ * asserting it would go green having observed nothing.
  *
- * So this file does not claim the gate fires in production. It claims the
- * input now exists, is taken from the right tree, and is handed over
- * correctly.
+ * `v0.8.3` inverted that premise and the paragraph is deleted rather than
+ * reworded (#1567). Rewording would have kept the claim — *unobservable
+ * until a release carries the reading half* — intact while its premise had
+ * flipped, and the file would have gone on reading as current. The honest
+ * change is that the case exists now, so the test says it and this comment
+ * does not need to.
+ *
+ * This file's own claim is unchanged and still narrow: the input exists, is
+ * taken from the right tree, and is handed over correctly. Neither file
+ * claims an observation of a production run.
  *
  * ## Why the list must come from the RESTORED tree
  *
