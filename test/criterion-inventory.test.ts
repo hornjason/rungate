@@ -672,7 +672,8 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
         '  "repo view") printf \'{"nameWithOwner":"%s"}\\n\' "${RG_STUB_REPO:-o/r}" ;;',
         '  "issue list") cat "$RG_STUB/issues.json" ;;',
         '  "pr list") cat "$RG_STUB/prs.json" ;;',
-        '  "pr view") printf \'{"number":%s,"files":[{"path":"lib/x.ts"}]}\\n\' "$3" ;;',
+        '  "pr view") if [ -n "$RG_STUB_PRVIEW" ]; then echo "$RG_STUB_PRVIEW";',
+        '             else printf \'{"number":%s,"files":[{"path":"lib/x.ts"}]}\\n\' "$3"; fi ;;',
         "  *) echo \"stub gh: unexpected $*\" >&2; exit 64 ;;",
         "esac",
         "",
@@ -690,12 +691,13 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
   const ISSUES = [{ number: 1, title: "CRC-Z2 is wrong", body: "", state: "OPEN" }];
   const PRS = [{ number: 900, title: "CRC-Z2", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }];
 
-  const run = (args: string[], stub: string | null, asRepo?: string) =>
+  const run = (args: string[], stub: string | null, asRepo?: string, prView?: string) =>
     Bun.spawnSync(["bun", SCRIPT, ...args], {
       env: {
         ...process.env,
         ...(stub === null ? {} : { RG_STUB: stub, PATH: `${stub}:${process.env.PATH ?? ""}` }),
         ...(asRepo === undefined ? {} : { RG_STUB_REPO: asRepo }),
+        ...(prView === undefined ? {} : { RG_STUB_PRVIEW: prView }),
       },
     });
 
@@ -910,6 +912,42 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
         rmSync(stub, { recursive: true, force: true });
       }
     });
+  });
+
+  // Round 4, and it is the sweep I said I had done and had not: the SAME
+  // direction-that-reads-as-good-news, in the third fetch, one function
+  // below the two I had just fixed. `raw.files ?? []` read a missing key as
+  // "this pull request touched nothing", so an error payload with a zero
+  // exit silently downgraded a criterion from TOUCHED.
+  test("a pull-request view that reports no files array is refused, not read as touching nothing", () => {
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    try {
+      const got = run(args, stub, undefined, '{"message":"API rate limit exceeded"}');
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("gh pr view 900");
+      expect(got.stderr.toString()).toContain("is not one that changed nothing");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("and an EMPTY files array is a reading, not a refusal", () => {
+    // The control, and the reason the guard is on the key rather than on
+    // the count: GitHub really does report a pull request with no changed
+    // files, and refusing that would turn a true reading into UNMEASURED.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    try {
+      const got = run(args, stub, undefined, '{"number":900,"files":[]}');
+      expect(got.exitCode).toBe(0);
+      const z2 = JSON.parse(got.stdout.toString()).rows.find((r: { id: string }) => r.id === "CRC-Z2");
+      expect(z2.state).toBe("DOCUMENT ONLY");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
   });
 
   test("a cache written before the repository was recorded is refused, not waved through", () => {

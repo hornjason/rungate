@@ -737,6 +737,36 @@ export function fetchTracked(
 }
 
 /**
+ * The paths one pull-request view reported, or a refusal naming it.
+ *
+ * `raw.files ?? []` read a missing key as *this pull request touched
+ * nothing*, so an error payload with a zero exit — a rate limit is the
+ * realistic one — silently downgraded a criterion from TOUCHED. That is the
+ * same direction-that-reads-as-good-news this file closed for the two list
+ * reads one round earlier and did not sweep to the third call.
+ *
+ * A pull request with an EMPTY `files` array is left alone: GitHub really
+ * does report that, and it is a reading. An absent or non-array key is not.
+ * Raised in round 4 of review on #1878.
+ */
+export function validateChangedFiles(parsed: unknown, source: string): string[] {
+  const files = (parsed as { files?: unknown } | null)?.files;
+  if (!Array.isArray(files)) {
+    throw new Error(
+      `UNMEASURED: ${source} returned no \`files\` array (${files === undefined ? "the key is absent" : typeof files}). ` +
+        `A pull request whose changed files could not be read is not one that changed nothing.`,
+    );
+  }
+  return files.map((f, i) => {
+    const path = (f as { path?: unknown } | null)?.path;
+    if (typeof path !== "string") {
+      throw new Error(`UNMEASURED: ${source} entry ${i} has no string \`path\`, so its changed files are unreadable.`);
+    }
+    return path;
+  });
+}
+
+/**
  * The changed paths of each pull request named, one call apiece.
  *
  * Only the ones that NAME a criterion are asked for — `main` works that set
@@ -751,10 +781,14 @@ export function fetchChangedFiles(
 ): Record<number, string[]> {
   const out: Record<number, string[]> = {};
   for (const n of numbers) {
-    const raw = JSON.parse(exec(["pr", "view", String(n), "--json", "number,files", ...repoArgs(repo)])) as {
-      files?: { path: string }[];
-    };
-    out[n] = (raw.files ?? []).map(f => f.path);
+    const command = `gh pr view ${n}${repo === undefined ? "" : ` --repo ${repo}`}`;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(exec(["pr", "view", String(n), "--json", "number,files", ...repoArgs(repo)]));
+    } catch (err) {
+      throw new Error(`UNMEASURED: ${command} did not emit readable JSON (${(err as Error).message}).`);
+    }
+    out[n] = validateChangedFiles(parsed, command);
   }
   return out;
 }
