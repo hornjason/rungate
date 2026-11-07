@@ -1422,9 +1422,9 @@
           },
           {
             "what": "A stage item's verify command names a test that exists",
-            "mechanism": "verifyTitleViolations in lib/stage-ladder.ts, run by test/stage-ladder.test.ts. It reads each `bun test <file> -t <name>` fragment of every verify command and compares the pattern against the title paths the named file actually declares — statically, without running the suite, so it catches a command pointing at the WRONG FILE, which the runtime pass-count guard cannot. A fragment it cannot read (an interpolated title, an unparseable pattern) is reported UNMEASURED and does not refuse. Built on #1849 after Stage C hit the same class Stage G filed it from.",
-            "status": "in-place",
-            "verify": "bun test test/stage-ladder.test.ts -t \"a verify command names a test that exists\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\"",
+            "mechanism": "NOT YET MECHANISED — #1849, filed out of Stage G's retro. Stage C is the SECOND stage to hit it, and this time it cost two items that read as not-done when they were actually unscoreable. Two stages is the evidence it needs building rather than re-noting.",
+            "status": "open",
+            "verify": null,
             "issue": 1849
           },
           {
@@ -1609,9 +1609,9 @@
           },
           {
             "what": "A stage item's verify command names a test that exists",
-            "mechanism": "verifyTitleViolations in lib/stage-ladder.ts, run by test/stage-ladder.test.ts. It reads each `bun test <file> -t <name>` fragment of every verify command and compares the pattern against the title paths the named file actually declares — statically, without running the suite, so it catches a command pointing at the WRONG FILE, which the runtime pass-count guard cannot. A fragment it cannot read (an interpolated title, an unparseable pattern) is reported UNMEASURED and does not refuse. Built on #1849 after Stage C hit the same class Stage G filed it from.",
-            "status": "in-place",
-            "verify": "bun test test/stage-ladder.test.ts -t \"a verify command names a test that exists\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\"",
+            "mechanism": "NOT YET MECHANISED — filed as #1849. Today a `-t` matching nothing is caught only because the pass-count guard above refuses ` 0 pass`. Nothing relates a verify string to the set of declared test titles, so a command pointing at the wrong FILE still passes if that file happens to have a matching title.",
+            "status": "open",
+            "verify": null,
             "issue": 1849
           },
           {

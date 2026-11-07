@@ -337,6 +337,11 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
       // Its re-prefix scan reads the whole test/ population, so a new test
       // file importing lib/source-census can redden it (#1803 round 2).
       "test/source-census.test.ts",
+      // #1849. Its corpus case walks every test/*.test.ts and bounds the
+      // share the title scanner cannot nest, so a new file the scanner
+      // chokes on reddens it — and a file with no literal title at all
+      // reddens the other bound.
+      "test/verify-title-check.test.ts",
       // #1547 itself. Its subject IS "a new test file censuses the test
       // population and nothing routes it", so adding one is exactly the
       // event that reddens it — and it was absent from this row, so the
