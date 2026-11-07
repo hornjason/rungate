@@ -87,7 +87,7 @@ async function attempt(gate: () => FilingDecision): Promise<{ created: number; e
   return { created: created.length, error };
 }
 
-describe("AC-1 (#1677): an allowed filing still files", () => {
+describe("SC-2613 / AC-1 (#1677): an allowed filing still files", () => {
   test("the one case that must reach the client, so the rest are not vacuous", async () => {
     const { created, error } = await attempt(allow());
     expect(error).toBeNull();
@@ -105,7 +105,7 @@ describe("AC-1 (#1677): an allowed filing still files", () => {
   });
 });
 
-describe("AC-2 (#1677): a refused filing never reaches the client", () => {
+describe("SC-2613 / AC-2 (#1677): a refused filing never reaches the client", () => {
   test("OVER_CAP-shaped refusal files nothing and says why", async () => {
     const { created, error } = await attempt(refuse("this run has already filed 3 issue(s)"));
     expect(created).toBe(0);
@@ -120,7 +120,7 @@ describe("AC-2 (#1677): a refused filing never reaches the client", () => {
   });
 });
 
-describe("AC-3 (#1677): a gate that THROWS refuses, it does not fall open", () => {
+describe("SC-2613 / AC-3 (#1677): a gate that THROWS refuses, it does not fall open", () => {
   test("an unreadable ledger files nothing", async () => {
     const { created, error } = await attempt(() => {
       throw new Error("ledger unreadable");
@@ -141,7 +141,7 @@ describe("AC-3 (#1677): a gate that THROWS refuses, it does not fall open", () =
   });
 });
 
-describe("AC-4 (#1677): the gate parameter has no default", () => {
+describe("SC-2613 / AC-4 (#1677): the gate parameter has no default", () => {
   const source = readFileSync(SOURCE, "utf8");
 
   test("the signature does not default the gate, so the compiler catches every call site", () => {
@@ -158,7 +158,7 @@ describe("AC-4 (#1677): the gate parameter has no default", () => {
   });
 });
 
-describe("AC-5 (#1677): the guard is proved able to fail", () => {
+describe("SC-2613 / AC-5 (#1677): the guard is proved able to fail", () => {
   /**
    * ## Two copies, because the mutant cannot be a one-line edit
    *
