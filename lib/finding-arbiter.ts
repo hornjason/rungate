@@ -579,6 +579,12 @@ export const DUPLICATE_MIN_SHARED_LOCATIONS = 1;
  * and `test/dedupe-corpus-table.test.ts` fails when the two differ. So it is
  * a command's output rather than a reading, and it cannot go stale quietly.
  *
+ * **Membership is checked, not asserted.** Each of the fourteen carries the
+ * sentence from THIS file that admits it, and
+ * `test/dedupe-corpus-membership.test.ts` refuses an id whose sentence is
+ * absent, does not name it, or lies inside the generated block below — so a
+ * member can never be justified by the table its own membership produced.
+ *
  * <!-- BEGIN dedupe-pair-table -->
  * Corpus: 14 findings, 91 pairs, frozen 2026-11-07.
  * Regenerate with `bun scripts/print-dedupe-pair-table.ts`.

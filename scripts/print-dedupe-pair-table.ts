@@ -69,6 +69,16 @@ interface Corpus {
   findings: Array<{ id: string; title: string; body: string }>;
 }
 
+/**
+ * Everything below runs ONLY as a CLI.
+ *
+ * `test/dedupe-corpus-table.test.ts` imports `TABLE_BEGIN` and `TABLE_END`
+ * from this module. Without this guard, importing two string constants reads
+ * the fixture, computes every pair and prints the table as a side effect —
+ * and a missing or malformed fixture would throw at IMPORT time, a failure
+ * unrelated to whatever the test needed the constants for.
+ */
+function main(): number {
 const corpus = JSON.parse(readFileSync(FIXTURE, "utf8")) as Corpus;
 const findings: Finding[] = corpus.findings.map(f => ({ id: f.id, title: f.title, body: f.body }));
 
@@ -155,3 +165,7 @@ if (!control) {
     );
   }
 }
+  return 0;
+}
+
+if (import.meta.main) process.exit(main());

@@ -56,11 +56,69 @@ import { localCalendarDay } from "../lib/local-calendar-day";
  * Declared and not derived from a grep of the docblock on purpose: a corpus
  * that recomputes itself from the prose it justifies moves whenever the prose
  * does, which is the property this issue exists to remove.
+ *
+ * **But a hand-applied rule is one nobody can check, and this list had
+ * already been wrong once.** So every id carries the sentence that admits it,
+ * in `MEMBERSHIP` below, and `test/dedupe-corpus-membership.test.ts` refuses
+ * an id whose sentence is absent from `lib/finding-arbiter.ts`, does not name
+ * it, or sits inside the table this corpus GENERATES. That last clause is the
+ * one that matters: without it a member could be justified by the output it
+ * produced, which is circular, and a reviewer was right to say the prose rule
+ * alone could not rule that out.
  */
-const CORPUS = [
+export const CORPUS = [
   "1162", "1175", "1176", "1177", "1184", "1187", "1195",
   "1196", "1226", "1239", "1269", "1286", "1454", "1456",
 ] as const;
+
+/** The admitting sentences, verbatim from `lib/finding-arbiter.ts`. */
+const CLUSTER =
+  "#1175, #1176, #1177, #1184, #1195, #1196 all landed on `lib/bash-write-guard.ts` in a " +
+  "single afternoon and name the same functions while describing genuinely different defects.";
+const QTY_ROW = "| `qty>=2 AND loc>=1` | 4 — 1175/1177, 1195/1196, 1269/1286, 1162/1226 |";
+const CONTAINMENT_ROW = "| containment >= 0.6 | 3 — 1175/1177, 1195/1196, 1195/1239 |";
+const PAIR_1454_1456 = "Both true duplicates on that corpus survive (#1456/#1454 at 0.900,";
+const PAIR_1187 =
+  "#1187 is that shape: it reproduces #1175's 234 and 5,060 and #1176's 60 verbatim, and " +
+  "under measurement alone it is indistinguishable from a duplicate of each.";
+
+/**
+ * Why each id is in `CORPUS`, as a verbatim sentence from the arbiter.
+ *
+ * Each value must appear in `lib/finding-arbiter.ts` with comment leaders and
+ * runs of whitespace collapsed, must contain the id it admits, and must lie
+ * OUTSIDE the generated pair table. One sentence may admit several ids — the
+ * `bash-write-guard` cluster admits six — which is the point: a reader can see
+ * at a glance which ids share a justification and how thin the thinnest one is.
+ */
+export const MEMBERSHIP: Record<string, string> = {
+  // The six-issue cluster the quantity threshold was tuned to KEEP APART.
+  "1175": CLUSTER,
+  "1176": CLUSTER,
+  "1177": CLUSTER,
+  "1184": CLUSTER,
+  "1195": CLUSTER,
+  "1196": CLUSTER,
+  // The four pairs the quantity arm flags, from the 946-pair table's own row.
+  "1162": QTY_ROW,
+  "1226": QTY_ROW,
+  "1269": QTY_ROW,
+  "1286": QTY_ROW,
+  // The containment row names #1239 as the distinct pair against #1195.
+  "1239": CONTAINMENT_ROW,
+  // A true duplicate pair, named with its score.
+  "1454": PAIR_1454_1456,
+  "1456": PAIR_1454_1456,
+  // #1187 is the thinnest admission here and it is a real one: the
+  // `duplicateOverlap` header names it paired with #1175 AND #1176 by number,
+  // and says measurement alone cannot tell it from a duplicate of EACH. It is
+  // not an attribution — the same docblock records that the cross-reference
+  // escape removes only "2 false positives of 7", so #1187's pairs are
+  // measured members that mostly survive. #1187 cites #1175 and #1177 by
+  // number and does NOT cite #1176, so #1176/#1187 is precisely the survivor
+  // that header predicts.
+  "1187": PAIR_1187,
+};
 
 const REPO = "hornjason/rungate";
 const OUT = join(import.meta.dir, "..", "test", "fixtures", "finding-dedupe-corpus.json");
@@ -76,6 +134,15 @@ function gh(args: string[]): string {
   return new TextDecoder().decode(p.stdout);
 }
 
+/**
+ * Everything below runs ONLY as a CLI.
+ *
+ * `test/dedupe-corpus-membership.test.ts` imports `CORPUS` and `MEMBERSHIP`
+ * from this module, and an import that fetched fourteen issues as a side
+ * effect would make reading two constants cost fourteen network calls — and
+ * would fail the import for reasons that have nothing to do with the test.
+ */
+function main(): number {
 const findings: Array<{ id: string; title: string; body: string }> = [];
 const missing: Array<{ id: string; why: string }> = [];
 
@@ -129,7 +196,7 @@ if (missing.length > 0) {
         `corpus. The reasons above say which; fix the reader before editing CORPUS.`,
     );
   }
-  process.exit(1);
+  return 1;
 }
 
 const pairs = (findings.length * (findings.length - 1)) / 2;
@@ -152,3 +219,7 @@ writeFileSync(
 );
 
 console.log(`froze ${findings.length} findings (${pairs} pairs) to ${OUT}`);
+  return 0;
+}
+
+if (import.meta.main) process.exit(main());
