@@ -1376,14 +1376,14 @@
         {
           "id": "C3",
           "what": "SC-2612, lib/finding-promotion.ts — turns a review finding that names real work into a criterion, and is the only thing that DRAINS the criterion-less issues rather than tagging them. Tracker: #1678",
-          "done": false,
+          "done": true,
           "verify": "bun test test/finding-promotion.test.ts -t \"SC-2612\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "C4",
           "what": "SC-2613, filingGate in lib/github.ts — without it a tool that creates issues bypasses the cap a `gh issue create` is metered by. Tracker: #1677",
-          "done": false,
-          "verify": "bun test test/github-client.test.ts -t \"SC-2613\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
+          "done": true,
+          "verify": "bun test test/github-create-gated.test.ts -t \"SC-2613\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "C5",
@@ -1400,7 +1400,42 @@
       ],
       "goal": "The things the engine spec names that do not exist or are false get built",
       "serves": 2,
-      "retro": null
+      "retro": {
+        "wentWell": [
+          "Both remaining items shipped and merged — #1677 via PR #1873, #1678 via PR #1874 — and SC-2612 and SC-2613 are ticked with proved-by lines naming what ran in each round, not a tick with the field blank.",
+          "SC-2613 was within one edit of being ticked FALSE. Closing #1677 is not the same event as making the criterion true: lib/github.ts still contained no filingGate binding, so the tick would have certified a symbol that did not exist. The stage ladder's criterion-coverage reading went 25 of 26 and that red is what found it. The fix was to extract the real binding and then tick, not to tick.",
+          "#1874's security review found three defects in the first commit that I had not: a newline in --outcome forging a ticked criterion into the spec, ALREADY_SERVES scoped to one spec instead of the sweep, and the lib and CLI resolving an absolute --spec to two different files.",
+          "Every refusal in lib/finding-promotion.ts is reachable and named, proved by a mutation battery that short-circuits promotionViolations to `return []` and observes 4 of 4 refusing inputs promote — with the forged line asserted by content, not by exit code."
+        ],
+        "wentPoorly": [
+          "THE SAME CLASS SEVEN TIMES ACROSS EIGHT ROUNDS on #1874: review named one member of a population, I repaired that member and left its siblings. `module` unguarded while outcome and symbol were; the CLI's readFileSync bare while both lib reads were wrapped; --issue with no named refusal; sweep.ids silently excluding collided ids. Twice I declared the class closed AS A PROPERTY and was wrong both times, because each property was drawn around the members review had already named. Filed as #1818.",
+          "Both of this stage's last two verify commands selected ZERO tests, and so could not score their items in either direction. C3's -t \"SC-2612\" matched no title — the suite put the id in the file docblock and titled every describe AC-N (#1678). C4 named test/github-client.test.ts, a file that exists and holds 47 tests, none of them SC-2613's. This is exactly the improvement Stage G filed as #1849, met again by living it rather than by the check.",
+          "I merged #1873 and turned main red. Same root as the SC-2613 near-miss above: I treated closing the issue as finishing the criterion.",
+          "A dead gh keyring produced five FAILING board readings that were all `Bad credentials`. A control with the env PAT gave a DIFFERENT unmeasured reason. Two credentials, two failures, neither one a defect — and nothing in the output distinguished an expired keyring from a real red."
+        ],
+        "improvements": [
+          {
+            "what": "A test file claims its criterion where the ladder can select it",
+            "mechanism": "The SC id now opens every top-level describe in test/finding-promotion.test.ts and test/github-create-gated.test.ts (PR #1875). That is the position .claude/rules/claiming-sc-coverage.md already required and the one the ladder's -t selects on; the four already-done Stage C items all used it.",
+            "status": "in-place",
+            "verify": "bun test test/finding-promotion.test.ts -t \"SC-2612\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
+          },
+          {
+            "what": "A stage item's verify command names a test that exists",
+            "mechanism": "NOT YET MECHANISED — #1849, filed out of Stage G's retro. Stage C is the SECOND stage to hit it, and this time it cost two items that read as not-done when they were actually unscoreable. Two stages is the evidence it needs building rather than re-noting.",
+            "status": "open",
+            "verify": null,
+            "issue": 1849
+          },
+          {
+            "what": "A finding naming one member of a population is checked against the whole population",
+            "mechanism": "NOT YET MECHANISED — #1818. Seven instances in one pull request, and the two 'closed as a property' claims are the part a reviewer cannot catch: a property drawn around the known members is indistinguishable from a real sweep until someone names a member nobody listed.",
+            "status": "open",
+            "issue": 1818,
+            "verify": null
+          }
+        ]
+      }
     },
     {
       "id": "D",
