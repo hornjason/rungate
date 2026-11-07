@@ -102,12 +102,17 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  * as a rise: completing a stage is a deliberate edit here, and a stage
  * going backwards is a regression rather than a number somebody lowers.
  *
- * Stage A completed 2026-10-31, Stage B 2026-11-02, Stage G 2026-11-06,
- * Stage C 2026-11-07. Stage H is the fourth and this comment never named
- * it — the constant read 4 while the prose listed three, which is how a
- * ratchet stops being readable.
+ * Finished, in the order they finished, each with the commit that closed
+ * it — a date nobody can check is the same second decider the budget
+ * above warns about, and this list had already drifted once:
  *
- * Stages G and H are complete ahead of C through F, which the ladder
+ *   A  2026-10-31  ab075245
+ *   B  2026-11-02  f1024585
+ *   G  2026-11-06  c6fc43c0
+ *   H  2026-11-06  63885fc4   <- the fourth, and the prose never named it
+ *   C  2026-11-07  this commit
+ *
+ * Stages G and H are complete ahead of D through F, which the ladder
  * permits — stages are a dependency order, not a queue, and their items
  * depend on nothing those stages carry.
  */
