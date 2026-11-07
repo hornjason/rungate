@@ -1445,8 +1445,8 @@
         {
           "id": "D1",
           "what": "criterion-inventory takes its OWN snapshot — today the input directory is built by hand with two `gh` commands, so the number is reproducible by nobody else",
-          "done": false,
-          "verify": null
+          "done": true,
+          "verify": "bun test test/criterion-inventory.test.ts -t \"takes its own snapshot, and refuses one assembled by hand\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "D2",
