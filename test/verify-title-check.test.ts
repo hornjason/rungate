@@ -265,6 +265,29 @@ describe("#1849: a verify command names a test that exists", () => {
       ).toEqual(["outer", "outer inner"]);
     });
 
+    test("a declaration's chained modifiers do not hide its title", () => {
+      // Round 6. `TITLE_CALL` allowed ONE chained modifier and
+      // `UNRESOLVED_CALL` allowed any number, so a two-modifier call with
+      // a literal title fell between them: invisible to the title scan,
+      // and not flagged unresolved either, because the unresolved scan saw
+      // a quote as the first argument and called it readable.
+      //
+      // MEASURED before the fix: `test.only.skip("inner", …)` inside a
+      // describe gave titles ["outer"] with complete=true — a name
+      // missing from a set reported as whole, which turns a verify
+      // command naming a test that DOES exist into a refusal. That is
+      // the false-red direction this module exists to avoid.
+      const one = `${D}("outer", () => {\n  ${T}.skip("inner", () => {});\n});\n`;
+      const two = `${D}("outer", () => {\n  ${T}.only.skip("inner", () => {});\n});\n`;
+
+      expect(paths(one), "the control lost a single-modifier declaration").toEqual(["outer", "outer inner"]);
+      expect(paths(two), "a two-modifier declaration's title was dropped").toEqual(["outer", "outer inner"]);
+      expect(
+        namesAreComplete(two).complete,
+        "a file with a dropped title still reported its names as whole",
+      ).toBe(true);
+    });
+
     test("a brace inside a TITLE does not open a block", () => {
       const src = `${D}("a {curly} name", () => {\n  ${T}("inner", () => {});\n});\n${T}("after", () => {});\n`;
       expect(paths(src)).toEqual(["a {curly} name", "a {curly} name inner", "after"]);

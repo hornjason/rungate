@@ -710,8 +710,21 @@ const BUN_TEST_T = /bun test\s+(\S+)\s+-t\s+(["'])(.*?)\2/g;
  * an interpolated title, and marked the whole file UNMEASURED. Found by
  * AC-4's mutation failing to redden anything: the victim it picked was a
  * fragment this parser had quietly given up on.
+ *
+ * `MODIFIERS` is shared with `UNRESOLVED_CALL`, and the sharing is the
+ * point rather than a tidy-up. Round 6: this pattern took ONE modifier
+ * and that one took any number, so `test.only.skip("inner", …)` fell
+ * between them — no title recorded, and not flagged unresolved either,
+ * because the unresolved scan saw a quote as the first argument and
+ * called the file readable. A name missing from a set reported as whole
+ * turns a verify command naming a real test into a refusal, which is
+ * the one direction this module may not be wrong in.
  */
-const TITLE_CALL = /(?<![.\w$])(describe|test|it)(?:\.\w+)?\(\s*(["'`])((?:\\.|(?!\2).)*)\2/g;
+const MODIFIERS = String.raw`(?:\.\w+)*`;
+const TITLE_CALL = new RegExp(
+  String.raw`(?<![.\w$])(describe|test|it)${MODIFIERS}\(\s*(["'\`])((?:\\.|(?!\2).)*)\2`,
+  "g",
+);
 
 /**
  * Every name `bun test -t` could match in one source file.
@@ -1221,8 +1234,17 @@ function endOfSubstitution(text: string, from: number): number {
  * finding named one member of exactly this population (#1818). A file
  * holding one of these has names this cannot see, so a pattern matching
  * nothing in it is UNMEASURED — never the false refusal review predicted.
+ *
+ * It spells the modifier chain with `MODIFIERS`, the same constant
+ * `TITLE_CALL` uses, because the two must agree on what a declaration
+ * IS. They did not in round 6 and the gap between them was silent — see
+ * `TITLE_CALL`'s note. One constant is the only version of that
+ * agreement a later edit cannot break one-sidedly.
  */
-const UNRESOLVED_CALL = /(?<![.\w$])(?:describe|test|it)(?:\.\w+)*\s*\(\s*(.)/g;
+const UNRESOLVED_CALL = new RegExp(
+  String.raw`(?<![.\w$])(?:describe|test|it)${MODIFIERS}\s*\(\s*(.)`,
+  "g",
+);
 
 function hasUnresolvedDeclaration(masked: string): boolean {
   UNRESOLVED_CALL.lastIndex = 0;
