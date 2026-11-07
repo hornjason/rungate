@@ -1472,7 +1472,7 @@ check that reads the API, which is a design decision in its own right.
 
 | Criterion | The setting | What it closes |
 |---|---|---|
-| CRC-C3 — a false positive clears by closing the thread with a reason | `required_conversation_resolution`, **`true` today and NOT continuously true since 2026-10-23** — applied 2026-10-23, read `true` 2026-10-25, read **`false`** on 2026-11-07, re-applied the same day (#1650). Phase 0 below records the regression, its mechanism and the thirteen days nothing could see it. Separately and earlier, this row read `currently false` until 2026-10-25 and was stale then too. | The native mechanism for "a finding blocks merge until it is dispositioned", which is also half of CRC-B8. **It is in force and, since 2026-10-26, it has something to act on:** the generated workflow's `ai-review-threads` step opens a review thread per finding, and #1614 carries four. This cell read "nothing to act on" until then, and until 2026-11-07 it went on to say the reading was still missing — *no pull request has yet been observed blocked by an unresolved thread with every other required context green*. That sentence was already false when it was written and stayed in the row for twelve days: Phase 0's row in *Readings taken* records **four draws** (#1616, #1622, #1627, #1858), each one exactly that observation. The setting's effect is measured, not inferred. What is genuinely missing is a check that would have caught the regression while it was live — `readFindingDisposition` is newer than the incident and has no live history at all. |
+| CRC-C3 — a false positive clears by closing the thread with a reason | `required_conversation_resolution`, **`true` today and NOT continuously true since 2026-10-23** — applied 2026-10-23, read `true` 2026-10-25, read **`false`** on 2026-11-07, re-applied the same day (#1650). Phase 0 below records the regression, its mechanism, and the three different day-counts this incident has — the setting was off for **at most 11 days** and that is an upper bound rather than a measurement. Separately and earlier, this row read `currently false` until 2026-10-25 and was stale then too. | The native mechanism for "a finding blocks merge until it is dispositioned", which is also half of CRC-B8. **It is in force and, since 2026-10-26, it has something to act on:** the generated workflow's `ai-review-threads` step opens a review thread per finding, and #1614 carries four. This cell read "nothing to act on" until then, and until 2026-11-07 it went on to say the reading was still missing — *no pull request has yet been observed blocked by an unresolved thread with every other required context green*. That sentence was already false when it was written and stayed in the row for twelve days — a count about this row's staleness, not about the setting's outage, which the Phase 0 table below keeps apart: Phase 0's row in *Readings taken* records **four draws** (#1616, #1622, #1627, #1858), each one exactly that observation. The setting's effect is measured, not inferred. What is genuinely missing is a check that would have caught the regression while it was live — `readFindingDisposition` is newer than the incident and has no live history at all. |
 | CRC-E8 — an approval covers one specific commit | `required_pull_request_reviews` with `dismiss_stale_reviews`. | Nothing today: with no required reviews there is no approval to carry or dismiss. `gh pr merge --match-head-commit` is a convention agents follow by hand. |
 
 ### Contested — this repository gives two opposite instructions
@@ -1721,11 +1721,24 @@ and bound on 2026-11-07 (#1650).** `required_conversation_resolution` was set
 contexts, `enforce_admins`, and every other field unchanged.
 
 **And then something turned it off, and this document went on saying it was
-applied for thirteen days.** Read from the API on 2026-11-07 it was `false`,
-and PR #1857 merged that morning carrying five unresolved review threads, two
-of them not even outdated — which the first three draws recorded in the Phase
-0 exit table below say was impossible on 2026-10-27, when one unresolved
-thread held a pull request at `BLOCKED` with every required check green. **The
+applied.** Read from the API on 2026-11-07 it was `false`, and PR #1857 merged
+that morning carrying five unresolved review threads, two of them not even
+outdated — which the first three draws recorded in the Phase 0 exit table
+below say was impossible on 2026-10-27, when one unresolved thread held a pull
+request at `BLOCKED` with every required check green.
+
+**Three different day-counts belong to this incident and they measure three
+different things.** They are spelled out because an earlier draft stated two
+of them in adjacent sentences as though they were one quantity, and the review
+of that draft caught it.
+
+| days | from → to | what it measures |
+|---|---|---|
+| **at most 11** | some time after 2026-10-27 → 2026-11-07 | how long the setting was **off**. An upper bound, not a measurement: the last draw confirms it working on 2026-10-27 and the API read finds it off on 2026-11-07, and nothing narrows the gap because the endpoint emits no audit event. |
+| 13 | 2026-10-25 → 2026-11-07 | how long **this document asserted a field nothing had re-read**. 2026-10-25 is the last direct read of `true`; the three October draws exercise the *effect* and are not reads of the field. |
+| 12 | 2026-10-26 → 2026-11-07 | how long the CRC-C3 row above went on saying *no pull request has yet been observed blocked* after the first draw made that false. A property of the row, not of the setting. |
+
+**The
 fourth draw, in that same table, is #1858 on 2026-11-07** and it is this
 paragraph's closing half: it is the only reading taken after the setting was
 restored, so it says the mechanism works *now* rather than that it worked in
@@ -2147,7 +2160,9 @@ after-half — refutes it still. This one is three out of four. **A fifth pull
 request, #1858, supplied a fourth draw on 2026-11-07, so the standing count is
 four out of five** — and that draw is not a fourth of the same kind. The first
 three were taken while the setting was believed continuously applied; it was
-not, and the Phase 0 narrative below records the thirteen days it was off. The
+not, and the Phase 0 narrative above records the outage and bounds it at **at
+most 11 days** — from the last draw that confirmed it working to the read that
+found it off, with nothing available to narrow the gap. The
 fourth is the only reading taken after the setting was restored, which makes it
 the only one that is evidence about the repository as it stands today rather
 than about October.
