@@ -36,11 +36,14 @@ import {
 } from "./behavioral-cache";
 import { tryLoadRungateConfig } from "./config-loader";
 import {
+  type ProtectionFacts,
   type ProtectionProbe,
   githubProtectionProbe,
   protectionSubject,
+  readFindingDisposition,
   readMergeSerialisation,
   readPushCi,
+  readThreadProducer,
   unmeasuredPushCi,
 } from "./branch-protection";
 import { stripJsComments } from "./strip-js-comments";
@@ -4974,6 +4977,24 @@ export function runBranchProtectionValidation(
   const probe = opts.probe ?? githubProtectionProbe;
   const subject = opts.subject ?? protectionSubject;
 
+  /**
+   * ONE protection reading per run, shared by both checks (#1858 round 4).
+   *
+   * PROTECT-2 called `probe` a second time for the same slug. That is three
+   * more admin-scoped GETs per run, and worse than the cost: **two readings
+   * of one branch inside one run can disagree.** The protection endpoint
+   * 403s as its ORDINARY outcome on a consumer's default token, and a
+   * secondary rate limit trips on the second round-trip rather than the
+   * first — so a run could report PROTECT-1 clean and PROTECT-2 UNMEASURED
+   * about the identical branch, with nothing in the output saying which
+   * reading to believe.
+   *
+   * That is the same defect #1852 closed one lane over, reintroduced here by
+   * the check that was written to catch a different instance of it.
+   */
+  let protectionOnce: Promise<ProtectionFacts> | null = null;
+  const factsFor = (slug: string): Promise<ProtectionFacts> => (protectionOnce ??= probe(slug));
+
   describe("Branch protection (#909)", () => {
     test("PROTECT-1: merging one PR does not invalidate every other open PR", async () => {
       const slug = subject(root);
@@ -4989,7 +5010,7 @@ export function runBranchProtectionValidation(
         return;
       }
 
-      const facts = await probe(slug);
+      const facts = await factsFor(slug);
       // Read against the branch the FACTS are about. Defaulting to "main"
       // here would answer a question about a branch the repo may not protect.
       const pushCi = facts.branch
@@ -5020,6 +5041,77 @@ export function runBranchProtectionValidation(
       // recorded finding into a red suite — and the cast keeps the assertion
       // written against the value rather than against the narrowing.
       expect(reading.verdict as string, message).toBe("PASS");
+    });
+
+    /**
+     * PROTECT-2 (#1650, CRC-C3) — a finding nobody answered blocks the merge.
+     *
+     * The same probe and the same facts object as PROTECT-1, one question
+     * further on: `required_conversation_resolution`. It is the only
+     * protection setting that can read a review thread, so it is the only one
+     * that can tell *this finding was answered* from *nobody looked*.
+     *
+     * **It exists because the setting regressed in silence.** On this repo it
+     * was applied 2026-10-23, read `true` 2026-10-25, and observably gating
+     * three pull requests through 2026-10-27. On 2026-11-07 it read `false`
+     * and #1857 merged with five unresolved threads. The field had no reader
+     * anywhere in the tree, so the spec went on recording it as applied for
+     * thirteen days. `lib/branch-protection.ts` carries the readings.
+     *
+     * FAILS, like PROTECT-1, and for the same reason: the thing that did not
+     * work was writing it down.
+     */
+    test("PROTECT-2: a pull request cannot merge with a finding nobody answered", async () => {
+      const slug = subject(root);
+      if (!slug) {
+        addFinding({
+          ruleId: "PROTECT-2",
+          severity: "WARN",
+          file: "",
+          message:
+            "UNMEASURED: this tree's origin remote names no owner/name, so there is no repo to " +
+            "read protection for. Nothing was checked, which is not the same as nothing being wrong.",
+        });
+        return;
+      }
+
+      // **No short-circuit here, and the battery is why.** The first draft of
+      // this returned early when `readThreadProducer` found no producer, on
+      // the reasoning that round 1 applied inside `readFindingDisposition`:
+      // do not consult a fact that cannot change the answer. Mutating that
+      // branch away reddened NOTHING — predicted 1, observed 0.
+      //
+      // It was dead, and `factsFor` is why: PROTECT-1 has already taken the
+      // reading on every path that reaches here, so the memo returns it and
+      // no request is saved. Keeping the branch would have shipped a line
+      // whose removal no case can observe, which is the shape this session
+      // spent four rounds finding elsewhere
+      // (`.claude/rules/checks-must-be-able-to-fail.md`).
+      const producer = readThreadProducer(root);
+      const facts = await factsFor(slug);
+      const disposition = readFindingDisposition(facts, producer);
+
+      if (disposition.verdict === "UNMEASURED") {
+        addFinding({ ruleId: "PROTECT-2", severity: "WARN", file: "", message: disposition.reason });
+        return;
+      }
+      if (disposition.verdict === "PASS") return;
+
+      addFinding({
+        ruleId: "PROTECT-2",
+        severity: "FAIL",
+        file: "",
+        message: `${disposition.reason}\n\nREMEDY: ${disposition.remedy}`,
+        // Reads. Never writes — the same line PROTECT-1 holds. A fixCommand
+        // that PUT a protection payload would be the harness silently
+        // rewriting a repository's security settings, and the operator's next
+        // read of their own config would be a reading of what a tool decided.
+        fixCommand: `gh api repos/${facts.slug}/branches/${facts.branch ?? "main"}/protection -q .required_conversation_resolution`,
+      });
+      // Widened for the same reason as PROTECT-1: control flow has narrowed
+      // `verdict` to "FAIL", so the comparison typechecks as a contradiction
+      // and reads as dead. It is what turns the finding into a red suite.
+      expect(disposition.verdict as string, `${disposition.reason}\n\nREMEDY: ${disposition.remedy}`).toBe("PASS");
     });
   });
 }

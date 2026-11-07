@@ -58,13 +58,18 @@ import {
   jobContextNames,
   protectionFactsFromPayload,
   EVENT_RESTRICTED_ACTIONS,
+  readFindingDisposition,
   readMergeSerialisation,
   readPushCi,
+  readThreadProducer,
   runsOnPushTo,
   unreadableFacts,
+  THREAD_PRODUCER_STEP_ID,
   type ProtectionFacts,
   type PushCiReading,
+  type ThreadProducerReading,
 } from "../lib/branch-protection";
+import { AI_REVIEW_THREADS_STEP_ID } from "../lib/scaffold/ai-review-step";
 
 const REPO = resolve(import.meta.dir, "..");
 const CONFORMITY = join(REPO, "lib", "conformity.ts");
@@ -137,6 +142,7 @@ function facts(over: Partial<ProtectionFacts> = {}): ProtectionFacts {
     ownerType: "User",
     contexts: ["test", "gates"],
     mergeQueueEnabled: null,
+    conversationResolution: null,
     unreadable: null,
     ...over,
   };
@@ -161,7 +167,7 @@ interface Protect1Run {
  * through a module-level mutable, so each case is a fresh process and no case
  * can see another's findings.
  */
-function protect1(root: string, given: ProtectionFacts): Protect1Run {
+function protect1(root: string, given: ProtectionFacts, ruleId = "PROTECT-1"): Protect1Run {
   const file = join(mkdtempSync(join(tmpdir(), "rungate-909-run-")), "probe.test.ts");
   scratch.push(dirname(file));
   writeFileSync(
@@ -174,7 +180,7 @@ function protect1(root: string, given: ProtectionFacts): Protect1Run {
       `  subject: () => ${JSON.stringify(given.slug)},\n` +
       `});\n` +
       `test("zz-report", () => {\n` +
-      `  console.log("F:" + JSON.stringify(getFindings().filter(f => f.ruleId === "PROTECT-1")));\n` +
+      `  console.log("F:" + JSON.stringify(getFindings().filter(f => f.ruleId === ${JSON.stringify(ruleId)})));\n` +
       `});\n`,
   );
   const r = spawnSync("bun", ["test", file], { cwd: REPO, encoding: "utf-8" });
@@ -796,5 +802,483 @@ describe("#909: PROTECT-1 is wired into the suite consumers actually run", () =>
   test("this repo's own conformity suite calls it", () => {
     const suite = readFileSync(join(REPO, "test", "scaffold-conformity.test.ts"), "utf-8");
     expect(suite).toContain("runBranchProtectionValidation(ROOT);");
+  });
+});
+
+/**
+ * PROTECT-2 (#1650, CRC-C3) — a finding nobody answered blocks the merge.
+ *
+ * ## The regression this exists for, measured
+ *
+ * `required_conversation_resolution` was applied on this repo 2026-10-23,
+ * read `true` from the API 2026-10-25, and observably gating through
+ * 2026-10-27: three pull requests each sat at `BLOCKED` on ONE unresolved
+ * thread with every required check green, and each flipped to `CLEAN` when
+ * that thread was resolved — same head, no push, no re-run.
+ *
+ * On 2026-11-07 the field read `false`, and PR #1857 merged carrying five
+ * unresolved threads, two of them not outdated. **Nothing in the tree read
+ * the field.** The protection endpoint's `PUT` replaces the whole object, so
+ * an update omitting it turns it off and returns 200 — no event, no error,
+ * and the spec went on recording it as applied for thirteen days.
+ *
+ * ## Proof it can fail
+ *
+ * Every spawned case plants `strict: false` and push-CI, so PROTECT-1 passes
+ * and the only thing that can redden the suite is PROTECT-2. One variable
+ * differs between the red case and its control.
+ *
+ * | Fixture | `conversationResolution` | threads step | Spawned suite |
+ * |---|---|---|---|
+ * | ai-review opens threads | `false` | present | **1 red** — PROTECT-2 FAIL |
+ * | ai-review opens threads | `true`  | present | **0 red**, 0 findings |
+ * | no thread producer       | `false` | absent  | **0 red**, 0 findings |
+ * | unreadable protection    | unread  | present | **0 red**, 1 WARN `UNMEASURED:` |
+ */
+const THREADS_CI = `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post this round's findings onto the diff
+        id: ${THREAD_PRODUCER_STEP_ID}
+        run: bun bin/rungate.ts ai-review-threads
+`;
+
+/** The same tree with the producing STEP removed and the prose left behind. */
+const THREADS_PROSE_ONLY = `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      # ${THREAD_PRODUCER_STEP_ID} used to post findings here; it was removed
+      - run: echo "AI_REVIEW_THREADS_PATH=${THREAD_PRODUCER_STEP_ID}.json"
+`;
+
+const dispositionFacts = (over: Partial<ProtectionFacts> = {}) =>
+  facts({ strict: false, ...over });
+
+describe("#1650: PROTECT-2 goes red when a review opens threads nothing has to answer", () => {
+  test("threads produced and the setting OFF is 1 red; turning it on is the ONLY change that clears it", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    const off = protect1(root, dispositionFacts({ conversationResolution: false }), "PROTECT-2");
+    expect(off.red, off.fails.join("\n")).toBe(true);
+    expect(off.fails).toHaveLength(1);
+
+    // One variable differs. Same tree, same facts, same probe.
+    const on = protect1(root, dispositionFacts({ conversationResolution: true }), "PROTECT-2");
+    expect(on.red, on.fails.concat(on.warns).join("\n")).toBe(false);
+    expect(on.fails).toHaveLength(0);
+    expect(on.warns).toHaveLength(0);
+  });
+
+  test("the refusal names what is unguarded and what to do, including the PUT trap", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    const r = protect1(root, dispositionFacts({ conversationResolution: false }), "PROTECT-2");
+    const m = r.fails[0] ?? "";
+    expect(m).toContain("required_conversation_resolution is OFF");
+    expect(m, "the reader has to know which file opens them").toContain("ai-review.yml");
+    expect(
+      m,
+      "a remedy that does not warn about the whole-object PUT reproduces the regression",
+    ).toContain("omits a field silently");
+    expect(m, "and the clearing procedure is where the next question goes").toContain(
+      "reference/clearing-a-false-positive.md",
+    );
+  });
+
+  // THE PRECONDITION, and the case that stops this gate being advice nobody
+  // can act on. A tree that opens no threads has nothing for the setting to
+  // gate; refusing there would tell an operator to configure something that
+  // changes nothing, which is how a gate gets switched off.
+  test("CONTROL: the same OFF setting is NOT a finding when nothing opens a thread", () => {
+    const root = project({ ".github/workflows/ci.yml": PUSH_CI });
+    const r = protect1(root, dispositionFacts({ conversationResolution: false }), "PROTECT-2");
+    expect(r.red, r.fails.join("\n")).toBe(false);
+    expect(r.fails).toHaveLength(0);
+    expect(r.warns).toHaveLength(0);
+  });
+
+  test("an unreadable protection reading is UNMEASURED, not a clean one", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    const r = protect1(root, unreadableFacts("someone/consumer", "403 from the API"), "PROTECT-2");
+    expect(r.red).toBe(false);
+    expect(r.fails).toHaveLength(0);
+    expect(r.warns).toHaveLength(1);
+    expect(r.warns[0]).toStartWith("UNMEASURED:");
+  });
+});
+
+describe("#1650: readThreadProducer tells a producer from prose about one", () => {
+  test("a declaring `id:` line is a producer, and names the file", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    const r = readThreadProducer(root);
+    expect(r.produces).toBe(true);
+    expect(r.where).toBe("ai-review.yml");
+    expect(r.unmeasured).toBeNull();
+  });
+
+  // The detector has to be narrower than "the string appears". The real
+  // workflow mentions `ai-review-threads` in a comment and in three env
+  // values; a substring match reports a producer in a tree that deleted the
+  // step and left the prose — `.claude/rules/checks-must-be-able-to-fail.md`,
+  // second shape.
+  test("the same words in a comment and an env value are NOT a producer", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_PROSE_ONLY });
+    expect(THREADS_PROSE_ONLY, "the fixture must contain the string, or this proves nothing")
+      .toContain(THREAD_PRODUCER_STEP_ID);
+    const r = readThreadProducer(root);
+    expect(r.produces).toBe(false);
+    expect(r.unmeasured).toBeNull();
+  });
+
+  test("an absent workflows directory is UNMEASURED, not 'no producer'", () => {
+    const r = readThreadProducer(project({ "README.md": "nothing here" }));
+    expect(r.produces).toBe(false);
+    expect(r.unmeasured, "an unread tree reporting no producer clears the gate vacuously")
+      .not.toBeNull();
+  });
+});
+
+describe("#1650: readFindingDisposition reaches PASS only on positive evidence", () => {
+  const produces: ThreadProducerReading = { produces: true, where: "ai-review.yml", unmeasured: null };
+  const none: ThreadProducerReading = { produces: false, where: null, unmeasured: null };
+
+  test("threads plus the setting on is the only PASS that is about the setting", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: true }), produces);
+    expect(r.verdict).toBe("PASS");
+    expect(r.reason).toContain("blocks the merge");
+  });
+
+  test("threads plus the setting off FAILS", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: false }), produces);
+    expect(r.verdict).toBe("FAIL");
+    expect(r.remedy).not.toBe("");
+  });
+
+  // An absent key and a false one are different facts. Reading the absence as
+  // off would FAIL every repo whose payload simply did not mention it.
+  test("a payload that said nothing is UNMEASURED, not off", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: null }), produces);
+    expect(r.verdict).toBe("UNMEASURED");
+    expect(r.remedy, "nothing was established, so there is nothing to remedy").toBe("");
+  });
+
+  test("an unread producer is UNMEASURED even when the setting IS readable", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: false }), {
+      produces: false,
+      where: null,
+      unmeasured: ".github/workflows is unreadable",
+    });
+    expect(r.verdict, "the protection reading alone cannot decide the setting's relevance")
+      .toBe("UNMEASURED");
+  });
+
+  test("no producer passes, and says that is why rather than saying the setting is fine", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: false }), none);
+    expect(r.verdict).toBe("PASS");
+    expect(r.reason).toContain("nothing for required_conversation_resolution to gate");
+  });
+});
+
+describe("#1650: the field is parsed from the shape the endpoint actually answers", () => {
+  test("{enabled:false} is false, not truthy", () => {
+    const f = protectionFactsFromPayload("o/n", "main", "User", {
+      required_conversation_resolution: { enabled: false },
+    });
+    expect(f.conversationResolution).toBe(false);
+  });
+
+  test("{enabled:true} is true", () => {
+    const f = protectionFactsFromPayload("o/n", "main", "User", {
+      required_conversation_resolution: { enabled: true },
+    });
+    expect(f.conversationResolution).toBe(true);
+  });
+
+  test("an absent key is null — unestablished, not off", () => {
+    expect(protectionFactsFromPayload("o/n", "main", "User", {}).conversationResolution).toBeNull();
+  });
+
+  test("the live payload shape from 2026-11-07 parses to false", () => {
+    // Trimmed from the real response, which is what caught this.
+    const f = protectionFactsFromPayload("hornjason/rungate", "main", "User", {
+      required_status_checks: { strict: false, contexts: ["test", "ai-review"] },
+      enforce_admins: { enabled: true },
+      required_conversation_resolution: { enabled: false },
+    });
+    expect(f.conversationResolution).toBe(false);
+    expect(f.strict, "the rest of the payload must still parse").toBe(false);
+  });
+});
+
+/**
+ * #1858 round 1 — the three findings ai-review raised on the PR that added
+ * PROTECT-2, each with the case that would have caught it.
+ *
+ * All three were real and all three were mine. The first two are the ones
+ * worth a permanent case: a branch ORDER that only misfires on a combination
+ * no case paired, and a constant that agreed with the generator's by
+ * coincidence.
+ */
+describe("#1858: the verdict does not depend on a fact that cannot change it", () => {
+  const produces: ThreadProducerReading = { produces: true, where: "ai-review.yml", unmeasured: null };
+  const none: ThreadProducerReading = { produces: false, where: null, unmeasured: null };
+
+  // THE COMBINATION NOTHING PAIRED. The unreadable-protection case only ever
+  // ran against a tree that DID produce threads, and the no-producer case
+  // only ever ran against READABLE facts — so the ordinary state of a
+  // consumer (neither adopted nor admin-scoped) was the one square of the
+  // grid no case occupied, and it is the square the bug was in.
+  test("no producer plus UNREADABLE protection is a clean PASS, not a warning", () => {
+    const r = readFindingDisposition(unreadableFacts("someone/consumer", "403 from the API"), none);
+    expect(
+      r.verdict,
+      "nothing here depends on reading protection, so an unreadable reading cannot change " +
+        "the answer — warning about it on every run is how a gate gets switched off",
+    ).toBe("PASS");
+    expect(r.reason).toContain("nothing for required_conversation_resolution to gate");
+  });
+
+  test("CONTROL: the SAME unreadable facts ARE unmeasured once something opens threads", () => {
+    const r = readFindingDisposition(unreadableFacts("someone/consumer", "403 from the API"), produces);
+    expect(r.verdict, "one variable differs from the case above: the producer").toBe("UNMEASURED");
+  });
+
+  // The full grid, so the next branch added here cannot reintroduce an
+  // ordering that only shows up on a pairing nobody wrote.
+  test("every producer/protection pairing has a stated verdict", () => {
+    const grid: Array<[ThreadProducerReading, ProtectionFacts, string]> = [
+      [none, unreadableFacts("o/n", "403"), "PASS"],
+      [none, dispositionFacts({ conversationResolution: false }), "PASS"],
+      [none, dispositionFacts({ conversationResolution: true }), "PASS"],
+      [none, dispositionFacts({ conversationResolution: null }), "PASS"],
+      [produces, unreadableFacts("o/n", "403"), "UNMEASURED"],
+      [produces, dispositionFacts({ conversationResolution: null }), "UNMEASURED"],
+      [produces, dispositionFacts({ conversationResolution: false }), "FAIL"],
+      [produces, dispositionFacts({ conversationResolution: true }), "PASS"],
+      [{ produces: false, where: null, unmeasured: "unreadable workflows" },
+        dispositionFacts({ conversationResolution: true }), "UNMEASURED"],
+    ];
+    for (const [p, f, want] of grid) {
+      expect(
+        readFindingDisposition(f, p).verdict as string,
+        `producer=${p.unmeasured ? "unread" : p.produces}, protection=${f.unreadable ? "unread" : f.conversationResolution}`,
+      ).toBe(want);
+    }
+  });
+});
+
+describe("#1858: the step id is the generator's binding, not a second copy of it", () => {
+  // Two constants that agree by coincidence are ONE decider with a spare, and
+  // this pair fails in the direction that matters: rename the step in the
+  // generator alone and readThreadProducer stops matching, `produces` goes
+  // false, and PROTECT-2 silently PASSES on a tree that still opens threads.
+  // The gate built to catch a silent regression regresses silently.
+  test("THREAD_PRODUCER_STEP_ID is AI_REVIEW_THREADS_STEP_ID, by identity not by value", () => {
+    expect(THREAD_PRODUCER_STEP_ID).toBe(AI_REVIEW_THREADS_STEP_ID);
+    const src = readFileSync(join(REPO, "lib", "branch-protection.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^[ \t]*\/\/.*$/gm, "");
+    expect(
+      src.match(/["']ai-review-threads["']/),
+      "spelling the id here again restores the second decider — re-export the generator's " +
+        "constant instead, so a rename moves both",
+    ).toBeNull();
+    expect(src, "and the re-export must be the generator's own binding").toContain(
+      "AI_REVIEW_THREADS_STEP_ID",
+    );
+  });
+
+  test("the id the generator WRITES is the id the detector matches", () => {
+    // Not two assertions about one constant: this runs the real emitter's
+    // spelling of the line through the real detector.
+    const root = project({
+      ".github/workflows/ai-review.yml": `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - id: ${AI_REVIEW_THREADS_STEP_ID}
+        run: bun bin/rungate.ts ai-review-threads
+`,
+    });
+    expect(readThreadProducer(root).produces).toBe(true);
+  });
+});
+
+/**
+ * #1858 round 2 — the id is not this file's value, so it is not this file's
+ * to interpolate raw.
+ *
+ * `THREAD_PRODUCER_STEP_ID` is the generator's constant, imported. A rename
+ * to anything containing a regex metacharacter changes what the pattern MEANS
+ * rather than throwing: a `.` matches any character, so the detector would
+ * report a producer for a step whose id merely resembles the real one — and
+ * `readFindingDisposition` would then fail a tree that opens no threads, or
+ * pass one that does, depending on which way the near-match fell.
+ *
+ * The case runs the detector against an id the GENERATOR could plausibly
+ * grow, rather than asserting that `escapeRegex` is called.
+ */
+describe("#1858: a metacharacter in the step id cannot change what the pattern means", () => {
+  const SPECIAL = "ai.review+threads";
+
+  test("a near-miss id does NOT match a dotted producer id", () => {
+    // With the id interpolated raw, `.` matches any character and `+` makes
+    // the preceding one repeatable, so `ai-reviewXthreads` reads as a match.
+    // Escaped, only the literal spelling does.
+    const near = `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - id: ai-reviewXXthreads
+        run: echo hi
+`;
+    const exact = `${PUSH_CI}
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - id: ${SPECIAL}
+        run: echo hi
+`;
+    const match = (text: string, id: string) =>
+      new RegExp(`^\\s*(?:-\\s*)?id:\\s*["']?${escapeRegexLocal(id)}["']?\\s*$`, "m").test(text);
+
+    expect(match(exact, SPECIAL), "the real spelling must still match").toBe(true);
+    expect(
+      match(near, SPECIAL),
+      "an id differing from the constant must not match it — raw interpolation makes `.` " +
+        "match any character and the detector starts reporting producers that are not one",
+    ).toBe(false);
+
+    // And the production call goes through the helper, so the property above
+    // is the one shipped rather than one this test re-implemented.
+    const src = readFileSync(join(REPO, "lib", "branch-protection.ts"), "utf-8");
+    expect(src).toContain("escapeRegex(THREAD_PRODUCER_STEP_ID)");
+  });
+
+  /** The same escaping the module uses, spelled here so the case is self-contained. */
+  function escapeRegexLocal(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  test("the real id still resolves a real producer end to end", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    expect(readThreadProducer(root).produces).toBe(true);
+  });
+});
+
+/**
+ * #1858 round 3 — the remedy has to be true for BOTH populations that reach
+ * FAIL, and one of them has no protection to amend.
+ *
+ * `githubProtectionProbe` sets `conversationResolution: false` for a branch
+ * with no protection at all, which is a measured fact rather than an unread
+ * one: nothing is requiring anything, so nothing can hold a merge for an
+ * unanswered finding. That reaches the same FAIL as a protected branch with
+ * the setting off — and the remedy was written only for the second, telling
+ * an operator to "restate every other field" of an object that does not
+ * exist.
+ *
+ * See the thread on the PR for what was re-scoped rather than built here: a
+ * remedy TAILORED per population needs a `protected` fact on
+ * `ProtectionFacts` that nothing carries today, and testing the probe's own
+ * `!isProtected` branch needs a client seam `githubProtectionProbe` does not
+ * have. Both are a different change. This makes the sentence true for both.
+ */
+describe("#1858: the FAIL remedy is actionable for an unprotected branch too", () => {
+  const produces: ThreadProducerReading = { produces: true, where: "ai-review.yml", unmeasured: null };
+
+  test("it names the no-protection case rather than presupposing a protection object", () => {
+    const r = readFindingDisposition(dispositionFacts({ conversationResolution: false }), produces);
+    expect(r.verdict).toBe("FAIL");
+    expect(
+      r.remedy,
+      "an operator on an unprotected branch following this literally has nothing to amend",
+    ).toContain("NO protection at all");
+    expect(r.remedy).toContain("create the protection rather than amend it");
+    // The PUT's own requirement, which is why "just toggle the checkbox" is
+    // wrong for a first-time enable.
+    expect(
+      r.remedy,
+      "the endpoint rejects a partial payload, so the remedy has to name the required fields",
+    ).toContain("required_status_checks");
+    expect(r.remedy).toContain("enforce_admins");
+  });
+
+  test("the unprotected branch really does reach FAIL — the premise above is not hypothetical", () => {
+    // `conversationResolution: false` is what the probe sets for !isProtected,
+    // asserted here so this describe block is about a reachable state rather
+    // than a shape nothing produces.
+    const unprotected = facts({
+      strict: false,
+      conversationResolution: false,
+      unreadable: null,
+    });
+    expect(readFindingDisposition(unprotected, produces).verdict).toBe("FAIL");
+  });
+});
+
+/**
+ * #1858 round 4 — one protection reading per run, and none at all when the
+ * tree already answers the question.
+ *
+ * PROTECT-2 called `probe` a second time for the same slug. The cost is three
+ * more admin-scoped GETs, and the defect underneath it is worse: **two
+ * readings of one branch inside one run can disagree.** This endpoint 403s as
+ * its ORDINARY outcome on a consumer's default token, and a secondary rate
+ * limit trips on the second round-trip rather than the first — so a run could
+ * report PROTECT-1 clean and PROTECT-2 UNMEASURED about the identical branch,
+ * with nothing saying which to believe. That is the defect #1852 closed one
+ * lane over, reintroduced by the check written to catch another instance of
+ * it.
+ *
+ * And a tree that opens no review thread needs the reading not at all: round
+ * 1 put the producer check first inside the classifier because the answer
+ * cannot depend on a fact that cannot change it, and the same holds one level
+ * up, where it saves the request.
+ */
+function probeCallCount(root: string, given: ProtectionFacts): number {
+  const file = join(mkdtempSync(join(tmpdir(), "rungate-1858-calls-")), "calls.test.ts");
+  scratch.push(dirname(file));
+  writeFileSync(
+    file,
+    `import { test } from "bun:test";\n` +
+      `import { runBranchProtectionValidation, clearFindings } from ${JSON.stringify(CONFORMITY)};\n` +
+      `let calls = 0;\n` +
+      `clearFindings();\n` +
+      `runBranchProtectionValidation(${JSON.stringify(root)}, {\n` +
+      `  probe: async () => { calls++; return ${JSON.stringify(given)}; },\n` +
+      `  subject: () => ${JSON.stringify(given.slug)},\n` +
+      `});\n` +
+      `test("zz-calls", () => { console.log("C:" + calls); });\n`,
+  );
+  const r = spawnSync("bun", ["test", file], { cwd: REPO, encoding: "utf-8" });
+  const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+  const m = out.match(/C:(\d+)/);
+  if (!m) throw new Error(`the counting suite never reported:\n${out}`);
+  return Number(m[1]);
+}
+
+describe("#1858: the protection endpoint is read once per run, or not at all", () => {
+  test("a tree that DOES open threads reads protection exactly once, not twice", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    expect(
+      probeCallCount(root, dispositionFacts({ conversationResolution: true })),
+      "two reads of one branch in one run can disagree — PROTECT-1 clean and PROTECT-2 403 " +
+        "about the same branch, with nothing saying which to believe",
+    ).toBe(1);
+  });
+
+  // A tree with no producer reads once too, and that is PROTECT-1's read.
+  //
+  // **This case cannot tell a short-circuit from the memo, and saying so is
+  // the point.** The first draft of the fix added an early return here on
+  // "no producer"; mutating it away reddened nothing — predicted 1, observed
+  // 0 — because `factsFor` had already made the second call impossible. The
+  // branch was removed rather than kept with a case that could not witness
+  // it. What this asserts is the only thing it can: the total is 1 either
+  // way, so the memo is what holds the number down.
+  test("a tree that opens NO threads also reads once — the memo, not a second call", () => {
+    const root = project({ ".github/workflows/ci.yml": PUSH_CI });
+    expect(probeCallCount(root, dispositionFacts({ conversationResolution: false }))).toBe(1);
   });
 });

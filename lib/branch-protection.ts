@@ -92,6 +92,7 @@ import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 
 import { createGitHubClient, parseOwnerRepo, type GitHubClient } from "./github";
+import { AI_REVIEW_THREADS_STEP_ID } from "./scaffold/ai-review-step";
 import { originSlug } from "./verified-push";
 
 // ── Facts ───────────────────────────────────────────────
@@ -124,6 +125,25 @@ export interface ProtectionFacts {
    * excuse `strict: true`.
    */
   mergeQueueEnabled: boolean | null;
+  /**
+   * `required_conversation_resolution`, or null when the payload said nothing
+   * either way — CRC-C3, #1650.
+   *
+   * GitHub's native implementation of *a finding blocks merge until somebody
+   * dispositions it*. It is the only protection setting that can read a
+   * review thread, so it is the only one that can tell "this finding was
+   * answered" from "nobody looked".
+   *
+   * **It regresses silently, and did.** The protection endpoint's `PUT`
+   * replaces the whole object, so any update that omits this field turns it
+   * off and reports success. It was read `true` on 2026-10-25 and behaved
+   * that way through 2026-10-27 — three separate pull requests sat at
+   * `BLOCKED` on one unresolved thread with every check green, and flipped to
+   * `CLEAN` on resolving it. On 2026-11-07 it read `false`, and #1857 merged
+   * carrying five unresolved threads. Nothing in the tree read the field, so
+   * thirteen days passed with the spec recording it as applied.
+   */
+  conversationResolution: boolean | null;
   /**
    * Non-null when something could not be read: no credential, no remote, a
    * 403, a network failure. Named, because a cause the operator cannot see is
@@ -408,6 +428,7 @@ export function unreadableFacts(slug: string, why: string): ProtectionFacts {
     ownerType: null,
     contexts: [],
     mergeQueueEnabled: null,
+    conversationResolution: null,
     unreadable: why,
   };
 }
@@ -513,8 +534,14 @@ export const githubProtectionProbe: ProtectionProbe = async (slug) => {
 
   // An unprotected branch requires nothing, so nothing is strict and nothing
   // serialises. Measured false, not an unread null.
+  //
+  // `conversationResolution` is false here for the same reason and it is the
+  // same kind of fact: an unprotected branch cannot hold a merge for an
+  // unanswered finding, so a review that opens threads on one gates nothing.
+  // Reading it as `null` would call that unestablished when it is the one
+  // case the endpoint lets us establish without admin (#1650).
   if (!isProtected) {
-    return { slug, branch, strict: false, ownerType, contexts: [], mergeQueueEnabled: null, unreadable: null };
+    return { slug, branch, strict: false, ownerType, contexts: [], mergeQueueEnabled: null, conversationResolution: false, unreadable: null };
   }
 
   try {
@@ -555,7 +582,7 @@ export function protectionFactsFromPayload(
   // No required_status_checks block: protection exists but requires no
   // checks, so there is no strictness and nothing to be out of date against.
   if (!rsc || typeof rsc !== "object") {
-    return { slug, branch, strict: false, ownerType, contexts: [], mergeQueueEnabled: mergeQueueFrom(d), unreadable: null };
+    return { slug, branch, strict: false, ownerType, contexts: [], mergeQueueEnabled: mergeQueueFrom(d), conversationResolution: conversationResolutionFrom(d), unreadable: null };
   }
 
   const strict = typeof rsc.strict === "boolean" ? rsc.strict : null;
@@ -569,11 +596,24 @@ export function protectionFactsFromPayload(
     (c: unknown): c is string => typeof c === "string" && c.length > 0,
   );
 
-  return { slug, branch, strict, ownerType, contexts, mergeQueueEnabled: mergeQueueFrom(d), unreadable: null };
+  return { slug, branch, strict, ownerType, contexts, mergeQueueEnabled: mergeQueueFrom(d), conversationResolution: conversationResolutionFrom(d), unreadable: null };
 }
 
 function mergeQueueFrom(d: Record<string, any>): boolean | null {
   const e = d.required_merge_queue?.enabled;
+  return typeof e === "boolean" ? e : null;
+}
+
+/**
+ * `required_conversation_resolution.enabled`, and **only** from that shape.
+ *
+ * The protection endpoint answers `{"enabled": false}` for off and omits the
+ * key entirely on an unprotected branch, so a reader that coerced the object
+ * itself would read the `false` case as truthy. Absent stays `null`: the
+ * payload did not say, and "did not say" is not "off".
+ */
+function conversationResolutionFrom(d: Record<string, any>): boolean | null {
+  const e = d.required_conversation_resolution?.enabled;
   return typeof e === "boolean" ? e : null;
 }
 
@@ -909,4 +949,232 @@ export function jobBlocks(text: string): JobBlock[] {
     out.push({ context: name?.header ? unquote(name.header) : key[2], body: block });
   }
   return out;
+}
+
+// ── CRC-C3: a finding blocks merge until somebody dispositions it ──
+
+/**
+ * The step id the generated AI review uses to open one review thread per
+ * finding — **re-exported from the generator that writes it**, never spelled
+ * again here (ai-review review round 1 of #1858).
+ *
+ * The first version of this declared its own `"ai-review-threads"` literal
+ * beside a comment claiming it was "spelled once". It was spelled twice:
+ * `AI_REVIEW_THREADS_STEP_ID` in `lib/scaffold/ai-review-step.ts` is what
+ * actually gets written into the generated workflow's `id:` line, and the two
+ * agreed by coincidence rather than by construction.
+ *
+ * That is the *two deciders that agree* shape, and it fails in the direction
+ * that matters: rename the step in the generator alone and `readThreadProducer`
+ * stops matching, `produces` goes false, `readFindingDisposition` takes the
+ * PASS branch below — and PROTECT-2 silently clears on a tree that still opens
+ * a review thread per finding. The gate built to catch a silent regression
+ * would have regressed silently.
+ *
+ * It is the PRECONDITION the whole check turns on: a repo that does not
+ * produce threads has nothing for `required_conversation_resolution` to gate,
+ * and refusing there would tell an operator to configure a setting that would
+ * do nothing for them.
+ */
+export const THREAD_PRODUCER_STEP_ID = AI_REVIEW_THREADS_STEP_ID;
+
+/** Whether this tree opens a review thread per finding. */
+export interface ThreadProducerReading {
+  /** True only when a workflow was read and declares the producing step. */
+  produces: boolean;
+  /** The workflow file it was found in, for the reason string. */
+  where: string | null;
+  /**
+   * Non-null when the workflows could not be read, so `produces: false` means
+   * nothing. An unread directory reporting "no producer" would clear this
+   * check vacuously on every tree whose `.github/` is unreadable.
+   */
+  unmeasured: string | null;
+}
+
+export function readThreadProducer(root: string): ThreadProducerReading {
+  const dir = join(root, ".github", "workflows");
+  const unread = (why: string): ThreadProducerReading => ({ produces: false, where: null, unmeasured: why });
+
+  let entries: string[];
+  try {
+    if (!statSync(dir).isDirectory()) return unread(`${dir} is not a directory`);
+    entries = readdirSync(dir).filter(n => WORKFLOW_EXT.test(n)).sort();
+  } catch (e) {
+    const why = (e as NodeJS.ErrnoException).code === "ENOENT"
+      ? `${dir} does not exist`
+      : `${dir} is unreadable — ${(e as Error).message}`;
+    return unread(why);
+  }
+
+  const unreadable: string[] = [];
+  for (const name of entries) {
+    let text: string;
+    try {
+      text = readFileSync(join(dir, name), "utf-8");
+    } catch (e) {
+      unreadable.push(`${name} (${(e as Error).message})`);
+      continue;
+    }
+    // The step ID in a declaring position, not the string anywhere. The
+    // workflow mentions `ai-review-threads` in a comment and in three env
+    // var values; matching those would report a producer in a tree that had
+    // deleted the step and left the prose.
+    // `- id: x` is as legal as `id: x` — a step may lead with any key, and
+    // the generator only happens to lead with `name:`. The first spelling of
+    // this required the line to BEGIN with whitespace then `id:`, so a step
+    // written the other way read as no producer at all. Found by a fixture
+    // that spelled it the legal second way (#1858).
+    //
+    // `escapeRegex`, because the id is not this file's value to trust. It is
+    // the generator's constant, imported — which is the whole point of the
+    // re-export above — and a rename to anything containing `.`, `+` or `(`
+    // would change what this pattern MEANS rather than throw. A `.` in the id
+    // would quietly match any character. Round 2 of #1858; the helper was
+    // already in use a few dozen lines up for exactly this reason.
+    if (new RegExp(`^\\s*(?:-\\s*)?id:\\s*["']?${escapeRegex(THREAD_PRODUCER_STEP_ID)}["']?\\s*$`, "m").test(text)) {
+      return { produces: true, where: name, unmeasured: null };
+    }
+  }
+
+  if (unreadable.length > 0) {
+    return unread(
+      `${unreadable.length} workflow file(s) could not be read — ${unreadable.join(", ")} — ` +
+        "so whether any opens a review thread is unestablished",
+    );
+  }
+  return { produces: false, where: null, unmeasured: null };
+}
+
+/** One reading of whether a finding can be left undispositioned. */
+export interface DispositionReading {
+  verdict: ProtectionVerdict;
+  /** A sentence naming why, in every branch including PASS. */
+  reason: string;
+  /** Empty on PASS and on UNMEASURED — nothing to remedy, or nothing established. */
+  remedy: string;
+}
+
+/**
+ * CRC-C3 — can a pull request merge with a finding nobody answered?
+ *
+ * `required_conversation_resolution` is GitHub's own implementation of it,
+ * and the only protection setting that can read a review thread. It is
+ * therefore the only one that can tell *this finding was answered* from
+ * *nobody looked*.
+ *
+ * ## Why this check exists rather than a line in the spec
+ *
+ * It was ON and it silently went OFF. `specs/CODE-REVIEW-CONVERGENCE-SPEC.md`
+ * records it applied on 2026-10-23 and read `true` from the API on
+ * 2026-10-25, and three pull requests behaved accordingly through 2026-10-27:
+ * each sat at `BLOCKED` on one unresolved thread with every required check
+ * green, and each flipped to `CLEAN` when that thread was resolved — same
+ * head, no push, no re-run.
+ *
+ * On 2026-11-07 the same field read `false`, and #1857 merged carrying five
+ * unresolved threads, two of them not even outdated. **Nothing in the tree
+ * read the field**, so thirteen days passed with the spec recording a setting
+ * that was not in force. The protection endpoint's `PUT` replaces the whole
+ * object, so any update that omits the field turns it off and returns 200 —
+ * there is no event to notice and no error to read.
+ *
+ * That is the shape this repository keeps paying for: a documented status
+ * that nothing re-reads. The remedy is not a better sentence in the spec.
+ *
+ * ## No branch reaches PASS by not finding a problem
+ *
+ * A tree that opens no review threads PASSES, and says that is why — there is
+ * nothing for the setting to gate, and demanding it there would be advice
+ * that changes nothing. Everything unread is UNMEASURED: the protection
+ * endpoint needs admin and the default Actions token has none, so UNMEASURED
+ * is the ordinary outcome in a consumer's CI and must never read as clean.
+ */
+export function readFindingDisposition(
+  facts: ProtectionFacts,
+  producer: ThreadProducerReading,
+): DispositionReading {
+  // **The producer reading comes FIRST, and the order is the finding** (ai-review
+  // round 1 of #1858). A tree with no thread producer passes whatever the
+  // protection says, because nothing depends on reading it — so asking about
+  // protection before asking whether the question applies made the answer
+  // depend on a fact that cannot change it.
+  //
+  // It is not a tidiness point. The two conditions it put in the wrong order
+  // are BOTH the ordinary state of a consumer: most have not adopted
+  // `ai-review-threads`, and most run with the default `GITHUB_TOKEN`, which
+  // has no admin and so cannot read protection at all. Every one of them would
+  // have got `UNMEASURED: this repo's protection could not be read` on every
+  // run — a warning about a setting that would do nothing for them if they
+  // set it. That is how a gate gets switched off.
+  if (producer.unmeasured) {
+    return {
+      verdict: "UNMEASURED",
+      reason:
+        `UNMEASURED: ${producer.unmeasured}. With no reading of whether anything opens a review ` +
+        "thread, the setting's relevance is unestablished and the protection reading alone " +
+        "cannot decide it.",
+      remedy: "",
+    };
+  }
+  if (!producer.produces) {
+    return {
+      verdict: "PASS",
+      reason:
+        "no workflow in this tree declares a step that opens a review thread per finding, so " +
+        "there is nothing for required_conversation_resolution to gate and requiring it here " +
+        "would change nothing.",
+      remedy: "",
+    };
+  }
+  // Only now does protection matter: something opens threads, so whether they
+  // have to be answered is a live question.
+  if (facts.unreadable) {
+    return {
+      verdict: "UNMEASURED",
+      reason:
+        `UNMEASURED: this repo's protection could not be read — ${facts.unreadable}. Whether a ` +
+        "finding can be left undispositioned is unestablished, which is not the same as fine.",
+      remedy: "",
+    };
+  }
+  if (facts.conversationResolution === null) {
+    return {
+      verdict: "UNMEASURED",
+      reason:
+        "UNMEASURED: the protection payload said nothing about " +
+        "required_conversation_resolution, so it is unestablished rather than off. An absent " +
+        "key and a false one are different facts.",
+      remedy: "",
+    };
+  }
+  if (facts.conversationResolution) {
+    return {
+      verdict: "PASS",
+      reason:
+        `required_conversation_resolution is on, and ${producer.where ?? "a workflow"} opens a ` +
+        "review thread per finding — so a finding nobody answered blocks the merge.",
+      remedy: "",
+    };
+  }
+  return {
+    verdict: "FAIL",
+    reason:
+      `${producer.where ?? "a workflow"} opens a review thread per finding and ` +
+      "required_conversation_resolution is OFF, so a pull request merges with every one of them " +
+      "unanswered. The review runs, writes its findings onto the diff, and gates nothing — " +
+      "which reads as a reviewed change and is not one.",
+    remedy:
+      "Require conversation resolution before merging on this branch. It is a setting, not " +
+      "engineering. **A branch with NO protection at all reaches this same verdict** — nothing " +
+      "is requiring anything, so nothing can hold a merge for an unanswered finding — and there " +
+      "the fix is to create the protection rather than amend it. Either way, write it with a " +
+      "FULL PUT: `PUT /repos/{owner}/{repo}/branches/{branch}/protection` replaces the whole " +
+      "object and requires required_status_checks, enforce_admins, " +
+      "required_pull_request_reviews and restrictions to be present even when you are only " +
+      "turning one thing on — so read the current protection first and restate every field you " +
+      "want to keep. An update that omits a field silently disables it, which is how this regressed " +
+      "once already. Clearing a false positive is a documented step, not a judgement call — " +
+      "reference/clearing-a-false-positive.md.",
+  };
 }

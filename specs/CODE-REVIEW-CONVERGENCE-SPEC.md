@@ -1715,12 +1715,42 @@ only where the measurement is.
 
 ### Phase 0 — three settings, no engineering
 
-**CRC-C3 is APPLIED as of 2026-10-23.** `required_conversation_resolution` is
-`true` on `main`, set through a full `PUT` that preserved the two required
-contexts, `enforce_admins`, and every other field unchanged. It stays
-**unticked** because the setting is GitHub state and no check in this tree
-reads it — which is the distinction the table above exists to keep, and the
-reason "applied" and "bound" are recorded separately.
+**CRC-C3 was applied on 2026-10-23, SILENTLY REGRESSED, and was re-applied
+and bound on 2026-11-07 (#1650).** `required_conversation_resolution` was set
+`true` on `main` through a full `PUT` that preserved the two required
+contexts, `enforce_admins`, and every other field unchanged.
+
+**And then something turned it off, and this document went on saying it was
+applied for thirteen days.** Read from the API on 2026-11-07 it was `false`,
+and PR #1857 merged that morning carrying five unresolved review threads, two
+of them not even outdated — which the three draws recorded in the Phase 0
+exit table below say was impossible on 2026-10-27, when one unresolved thread
+held a pull request at `BLOCKED` with every required check green. The
+mechanism needs no culprit: the protection endpoint's `PUT` **replaces the
+whole object**, so any later update that omits this field disables it and
+returns 200. There is no event to notice and no error to read.
+
+The sentence this paragraph replaced is the reason it went unnoticed: *"it
+stays unticked because the setting is GitHub state and no check in this tree
+reads it."* That was an accurate description of a gap and it was filed as a
+distinction worth keeping. A setting nothing re-reads is not applied; it is
+applied **until something changes it**, and the difference is invisible
+exactly when it matters.
+
+**So the fix is a reader, not a better sentence.** `PROTECT-2` in
+`lib/conformity.ts` reads the live field through the same probe `PROTECT-1`
+uses and FAILS when a tree that opens a review thread per finding does not
+require those threads to be answered. The classification is
+`readFindingDisposition` in `lib/branch-protection.ts`; a tree that produces
+no threads passes and says so, because demanding the setting there would be
+advice that changes nothing.
+
+It stays **unticked** all the same. `PROTECT-2` binds the half that says *a
+finding nobody answered blocks the merge*; CRC-C3's own sentence is about
+**clearing** one, and that half is now a written procedure
+(`reference/clearing-a-false-positive.md`) rather than an executed check. A
+procedure a person follows is not a test, and ticking it on the strength of
+the other half is the move this criterion has already been burned by.
 
 **CRC-E8 does not belong in this phase and is moved to the table above it.**
 With one account and `enforce_admins: true`, requiring an approving review
