@@ -40,6 +40,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
+  AI_REVIEW_DRIFT_STEP_ID,
   AI_REVIEW_EXECUTION_FILE_VAR,
   AI_REVIEW_FINDINGS_PATH_VAR,
   AI_REVIEW_GIT_ISOLATED,
@@ -1130,6 +1131,123 @@ describe("AC-L5 (#1168): the committed workflow carries the step, in position", 
     // doctrine is that nothing here may. Read the step's own block rather
     // than the file: an `if:` belonging to another step is not this one's.
     const start = yml.indexOf(`id: ${AI_REVIEW_PERSIST_STEP_ID}`);
+    const block = yml.slice(start, yml.indexOf("\n      - name:", start));
+    expect(block.length, "the step block could not be isolated").toBeGreaterThan(200);
+    expect(block).not.toContain("\n        if:");
+  });
+});
+
+/**
+ * AC-L31 (#1395): the drift refusal runs BEFORE the ledger quotes anything.
+ *
+ * #1383 ended by reading the cited line out of the INDEX — `git show ":${rel}"`
+ * — rather than the working tree, and `AC-L13: a tracked but DIRTY file quotes
+ * the committed line, not the disk line` holds that. That is correct and it is
+ * a workaround: it routes AROUND a modified checkout rather than preventing
+ * one. The job still reached the ledger with a tree the reviewer may have
+ * written to, and every later consumer of that tree had to remember to ask the
+ * index instead — a property each reader re-derives, which is the shape that
+ * produced all three of #1379's defects.
+ *
+ * Moving the refusal ahead of the ledger makes a modified checkout
+ * **unquotable by construction**. The index read stops being load-bearing and
+ * becomes defence in depth, which is the right relationship for it.
+ *
+ * ## What this order costs, stated rather than discovered later
+ *
+ * A step that exits non-zero ends the job, and this job forbids `if:`, so on a
+ * drift refusal the ledger, the threads, the execution-file staging and the
+ * report no longer run. That is a real loss and it is the intended one:
+ * `buildDriftScript`'s own docblock says a review that edited the code it was
+ * reviewing "is not an absent review; it is a review nobody should read", and
+ * a finding set the carry-forward walker will re-inject into later rounds is
+ * exactly what must not be recorded from a tainted round. It is not silent
+ * either — the drift step's `::error` annotation names the paths that moved,
+ * so the diagnosis a reader needs is in the annotation and not in the
+ * execution file the refusal skips.
+ */
+describe("AC-L31 (#1395): the drift refusal runs before the ledger step", () => {
+  const yml = readFileSync(WORKFLOW, "utf8");
+
+  /**
+   * ONE binding for the reading, so the mutant below is a mutation of the
+   * thing under test rather than a second opinion about it. A step whose id
+   * is absent is a violation and never a silent pass — an `indexOf` of -1
+   * compares as smaller than everything and would make this vacuous.
+   */
+  const orderViolations = (text: string): string[] => {
+    const bad: string[] = [];
+    const at = (id: string) => text.indexOf(`id: ${id}`);
+    const drift = at(AI_REVIEW_DRIFT_STEP_ID);
+    const persist = at(AI_REVIEW_PERSIST_STEP_ID);
+    if (drift < 0) bad.push(`${AI_REVIEW_DRIFT_STEP_ID} is not in the workflow at all`);
+    if (persist < 0) bad.push(`${AI_REVIEW_PERSIST_STEP_ID} is not in the workflow at all`);
+    if (drift >= 0 && persist >= 0 && drift > persist) {
+      bad.push(
+        `${AI_REVIEW_DRIFT_STEP_ID} runs AFTER ${AI_REVIEW_PERSIST_STEP_ID}, so the ledger ` +
+          `quotes from a checkout the reviewer may already have written to (#1395)`,
+      );
+    }
+    return bad;
+  };
+
+  /** The step blocks, split on the one indent this job's steps are written at. */
+  const blocks = (text: string): string[] => {
+    const parts = text.split("\n      - name:");
+    return [parts[0]!, ...parts.slice(1).map(p => `\n      - name:${p}`)];
+  };
+
+  test("AC-L31: the committed workflow refuses drift before it records anything", () => {
+    expect(orderViolations(yml)).toEqual([]);
+  });
+
+  test("AC-L31: the MUTANT — the drift step back after the reviewer's report — is caught", () => {
+    // The pre-#1395 order, rebuilt by moving the drift block to where it used
+    // to sit: last but one, immediately before the disarm step. This is the
+    // reorder reverted, which is acceptance item 4.
+    const parts = blocks(yml);
+    const i = parts.findIndex(b => b.includes(`id: ${AI_REVIEW_DRIFT_STEP_ID}`));
+    expect(i, "the drift block was not found, so nothing was mutated").toBeGreaterThan(0);
+    const drift = parts[i]!;
+    const rest = parts.filter((_, k) => k !== i);
+    const mutant = [...rest.slice(0, rest.length - 1), drift, rest[rest.length - 1]!].join("");
+
+    // The premise, asserted rather than assumed: the mutation really did move
+    // the step. Without this the row below is satisfied by a no-op edit.
+    expect(mutant, "the mutant is byte-identical, so it mutated nothing").not.toBe(yml);
+    expect(mutant.indexOf(`id: ${AI_REVIEW_DRIFT_STEP_ID}`))
+      .toBeGreaterThan(mutant.indexOf(`id: ${AI_REVIEW_PERSIST_STEP_ID}`));
+
+    // And the reading goes red on it. Real green, mutant red, one input.
+    expect(orderViolations(mutant)).toHaveLength(1);
+    expect(orderViolations(mutant)[0]).toContain("#1395");
+  });
+
+  test("AC-L31: the reading cannot pass on a workflow that has neither step", () => {
+    // `indexOf` returns -1 for an absent id, and -1 < -1 is false, so a naive
+    // comparison calls an empty file compliant. This is the row that says the
+    // instrument reports absence as a violation instead.
+    expect(orderViolations("jobs: {}")).toHaveLength(2);
+  });
+
+  test("AC-L31: the move did not break what the drift step must still follow", () => {
+    // Both halves are load-bearing and neither is this change's business to
+    // move: the baseline must be read before the reviewer runs (#836), and
+    // the drift reading is only meaningful after the reviewer has run.
+    const at = (needle: string) => {
+      const i = yml.indexOf(needle);
+      expect(i, `${needle} is not in the committed workflow`).toBeGreaterThan(-1);
+      return i;
+    };
+    expect(at("id: ai-review-baseline")).toBeLessThan(at(`id: ${AI_REVIEW_DRIFT_STEP_ID}`));
+    expect(at("id: ai-review-action")).toBeLessThan(at(`id: ${AI_REVIEW_DRIFT_STEP_ID}`));
+  });
+
+  test("AC-L31: the drift step still carries no `if:`", () => {
+    // Same doctrine as AC-L5's third row, now that this step has moved into
+    // the middle of the job where an `if:` is the tempting way to keep the
+    // later steps running. A step skipped by a condition reports `skipped`.
+    const start = yml.indexOf(`id: ${AI_REVIEW_DRIFT_STEP_ID}`);
     const block = yml.slice(start, yml.indexOf("\n      - name:", start));
     expect(block.length, "the step block could not be isolated").toBeGreaterThan(200);
     expect(block).not.toContain("\n        if:");

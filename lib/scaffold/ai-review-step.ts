@@ -11732,6 +11732,25 @@ export function buildReviewRunStep(
     indented(carry, indent) +
     indented(baseline, indent) +
     indented(review, indent) +
+    // #1395. BEFORE the ledger, and that is the whole of this ordering. The
+    // ledger quotes a line out of a reviewer-cited file, and #1383 made that
+    // read come from the INDEX rather than the working tree — correct, and a
+    // workaround: it routes AROUND a modified checkout instead of preventing
+    // one, so every later reader of this tree has to remember to ask the
+    // index too. Refusing here makes a modified checkout unquotable by
+    // construction and leaves the index read as defence in depth.
+    //
+    // What it costs, deliberately: a refusal ends the job, and this job
+    // forbids `if:`, so the ledger, the threads, the execution-file staging
+    // and the report do not run on a drift failure. `buildDriftScript` says
+    // why that is the right loss — a review that edited the code it was
+    // reviewing "is not an absent review; it is a review nobody should
+    // read" — and a finding set the carry-forward walker would re-inject
+    // into later rounds is exactly what a tainted round must not leave
+    // behind. The refusal is not silent: its annotation names the paths that
+    // moved, so the diagnosis is in the annotation rather than in the
+    // execution file this order skips.
+    indented(drift, indent) +
     indented(persist, indent) +
     // #1612. After the ledger and before the report, for the reason
     // `AI_REVIEW_THREADS_STEP_ID` gives: the payload exists, the adjudicator
@@ -11743,7 +11762,6 @@ export function buildReviewRunStep(
     indented(stageExecution, indent) +
     indented(executionArtifact, indent) +
     indented(report, indent) +
-    indented(drift, indent) +
     indented(disarm, indent)
   );
 }
