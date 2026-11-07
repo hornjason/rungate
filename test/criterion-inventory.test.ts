@@ -68,6 +68,17 @@ function snapshot(partial: Partial<Snapshot>): Snapshot {
 }
 
 /**
+ * The repository every planted snapshot below is stamped with.
+ *
+ * Passed as `--repo` by the cases that plant one, so the command's own
+ * repository resolution short-circuits and the cache matches. Without it
+ * those cases resolve THIS repository from the ambient tree and meet the
+ * repo-mismatch refusal instead of the one they are each pointed at —
+ * which would be two guards answering one case.
+ */
+const PLANTED_REPO = "o/r";
+
+/**
  * Re-record the digest after a case deliberately alters a taken snapshot.
  *
  * A case about `prs.json` being absent, or about a truncated reading, must
@@ -344,7 +355,7 @@ describe("an absent pr-files.jsonl is the first pass, not a failed fetch", () =>
   // a subprocess because the refusal lives in `readSnapshot`, which the
   // recipe reaches only through the command line.
   const run = (dir: string, spec: string) =>
-    Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json"]);
+    Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json", "--repo", PLANTED_REPO]);
 
   // Planted through `writeSnapshotDir`, the command's OWN writer, because
   // SC-2619 refuses a directory it did not write. Spelling `taken.json`
@@ -359,7 +370,7 @@ describe("an absent pr-files.jsonl is the first pass, not a failed fetch", () =>
         prs: [{ number: 900, title: "CRC-Z2", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }],
         files: {},
       },
-      { takenAt: "2026-10-28T00:00:00Z", repo: "o/r" },
+      { takenAt: "2026-10-28T00:00:00Z", repo: PLANTED_REPO },
     );
     // Removed AFTER the write, so the provenance record stays and the
     // refusal under test is the one about `prs.json` rather than the one
@@ -442,12 +453,12 @@ describe("the expiry comparison is anchored in UTC, like the gate that enforces 
         prs: [{ number: 9, title: "x", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }],
         files: {},
       },
-      { takenAt: "2026-10-28T00:00:00Z", repo: "o/r" },
+      { takenAt: "2026-10-28T00:00:00Z", repo: PLANTED_REPO },
     );
     try {
       const day = (TZ: string) =>
         JSON.parse(
-          Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json"], {
+          Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json", "--repo", PLANTED_REPO], {
             env: { ...process.env, TZ },
           }).stdout.toString(),
         ).taken;
@@ -580,12 +591,12 @@ describe("a wrong-shaped snapshot is a failed fetch, not a measurement", () => {
     // the shape is what is wrong with it, which is the case being made. A
     // directory with neither would refuse for the other reason and prove
     // nothing about the shape guards.
-    writeSnapshotDir(dir, { issues: [], prs: [], files: {} }, { takenAt: "2026-10-28T00:00:00Z", repo: "o/r" });
+    writeSnapshotDir(dir, { issues: [], prs: [], files: {} }, { takenAt: "2026-10-28T00:00:00Z", repo: PLANTED_REPO });
     writeFileSync(join(dir, "issues.json"), issues);
     writeFileSync(join(dir, "prs.json"), prs);
     restamp(dir);
     try {
-      return Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json"]);
+      return Bun.spawnSync(["bun", SCRIPT, "--snapshot", dir, "--spec", spec, "--json", "--repo", PLANTED_REPO]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -651,6 +662,7 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
         "#!/bin/sh",
         'echo "$@" >> "$RG_STUB/calls.log"',
         'case "$1 $2" in',
+        '  "repo view") printf \'{"nameWithOwner":"%s"}\\n\' "${RG_STUB_REPO:-o/r}" ;;',
         '  "issue list") cat "$RG_STUB/issues.json" ;;',
         '  "pr list") cat "$RG_STUB/prs.json" ;;',
         '  "pr view") printf \'{"number":%s,"files":[{"path":"lib/x.ts"}]}\\n\' "$3" ;;',
@@ -671,13 +683,17 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
   const ISSUES = [{ number: 1, title: "CRC-Z2 is wrong", body: "", state: "OPEN" }];
   const PRS = [{ number: 900, title: "CRC-Z2", body: "", state: "MERGED", mergedAt: "2026-10-28T00:00:00Z" }];
 
-  const run = (args: string[], stub: string | null) =>
+  const run = (args: string[], stub: string | null, asRepo?: string) =>
     Bun.spawnSync(["bun", SCRIPT, ...args], {
       env: {
         ...process.env,
         ...(stub === null ? {} : { RG_STUB: stub, PATH: `${stub}:${process.env.PATH ?? ""}` }),
+        ...(asRepo === undefined ? {} : { RG_STUB_REPO: asRepo }),
       },
     });
+
+  /** The three expensive readings, as the call log spells them. */
+  const READINGS = ["issue list", "pr list", "pr view"];
 
   /**
    * A project root of its own, not this repository's.
@@ -751,11 +767,17 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
     }
   });
 
-  test("a directory the command wrote is read back, and the second run fetches nothing", () => {
+  test("a directory the command wrote is read back, and the second run retakes no reading", () => {
     // The cache half, and the control that `--snapshot` still means
-    // something: run one writes the directory, run two reads it with no
-    // `gh` on PATH at all — so a run that silently re-fetched could not
-    // pass, and a run that silently refused could not either.
+    // something: run one writes the directory, run two reads it and takes
+    // none of the three readings again.
+    //
+    // Not "makes no call at all" any more. Round 2 of review showed the
+    // repository comparison declined to answer whenever `--repo` was
+    // omitted, which is the ordinary case, so the repository is now
+    // RESOLVED on both paths — one cheap identity call on a cache hit. The
+    // saving the cache exists for is the sixty-odd readings, and that is
+    // what this asserts.
     const stub = stubGh({ issues: ISSUES, prs: PRS });
     const { dir, args } = withRoot();
     const snap = join(dir, "snap");
@@ -763,14 +785,11 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
       expect(run(["--snapshot", snap, ...args], stub).exitCode).toBe(0);
       expect(existsSync(join(snap, PROVENANCE))).toBe(true);
       const before = calls(stub).length;
-      // PATH is the runtime's own directory and nothing else — so there is
-      // no `gh` of any kind to reach, stub or real. A re-fetch could not
-      // pass this quietly by falling back on the machine's own credentials.
-      const second = Bun.spawnSync(["bun", SCRIPT, "--snapshot", snap, ...args], {
-        env: { ...process.env, PATH: dirname(process.execPath) },
-      });
+      const second = run(["--snapshot", snap, ...args], stub);
       expect(second.exitCode).toBe(0);
-      expect(calls(stub).length).toBe(before);
+      const added = calls(stub).slice(before);
+      expect(added.filter(c => READINGS.some(r => c.startsWith(r)))).toEqual([]);
+      expect(added.every(c => c.startsWith("repo view"))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(stub, { recursive: true, force: true });
@@ -812,6 +831,51 @@ describe("the command takes its own snapshot, and refuses one assembled by hand"
       expect(got.exitCode).not.toBe(0);
       expect(got.stderr.toString()).toContain("o/one");
       expect(got.stderr.toString()).toContain("o/two");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("and it is refused when NEITHER run passed --repo, which is the ordinary case", () => {
+    // The first draft compared only when both sides were concrete, so a
+    // fetch with the flag omitted stamped `null` and the guard had nothing
+    // to compare. Two trees for different repositories sharing one cache
+    // directory, neither passing `--repo`, is the everyday shape on this
+    // machine — and it was precisely the input the guard could not see.
+    // Raised in round 2 of review; the repository is now RESOLVED rather
+    // than copied from the flag, so there is no input it declines to
+    // answer about.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub, "o/one").exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(join(snap, PROVENANCE), "utf-8")).repo).toBe("o/one");
+      const got = run(["--snapshot", snap, ...args], stub, "o/two");
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("o/one");
+      expect(got.stderr.toString()).toContain("o/two");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stub, { recursive: true, force: true });
+    }
+  });
+
+  test("a cache written before the repository was recorded is refused, not waved through", () => {
+    // "I cannot tell which repository this is about" is not the same fact
+    // as "it is the right one", and only one of them is reportable.
+    const stub = stubGh({ issues: ISSUES, prs: PRS });
+    const { dir, args } = withRoot();
+    const snap = join(dir, "snap");
+    try {
+      expect(run(["--snapshot", snap, ...args], stub).exitCode).toBe(0);
+      const taken = JSON.parse(readFileSync(join(snap, PROVENANCE), "utf-8")) as Record<string, unknown>;
+      delete taken.repo;
+      writeFileSync(join(snap, PROVENANCE), `${JSON.stringify(taken, null, 2)}\n`);
+      const got = run(["--snapshot", snap, ...args], stub);
+      expect(got.exitCode).not.toBe(0);
+      expect(got.stderr.toString()).toContain("does not say which repository");
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(stub, { recursive: true, force: true });

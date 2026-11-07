@@ -541,12 +541,42 @@ export function snapshotDigest(dir: string): string {
   return h.digest("hex");
 }
 
-/** What {@link PROVENANCE} records. */
+/**
+ * What {@link PROVENANCE} records.
+ *
+ * `repo` is the repository `gh` RESOLVED, never the flag as typed. A first
+ * draft stored `--repo` verbatim, so a fetch with the flag omitted stamped
+ * `null` — and the mismatch check below then had nothing to compare and
+ * passed. Two trees for different repositories sharing one cache directory,
+ * neither passing `--repo`, is the ordinary case on this machine and it was
+ * the one the guard could not see. Raised in round 2 of review on #1878.
+ */
 export interface Taken {
   by: string;
   takenAt: string;
-  repo: string | null;
+  repo: string;
   digest: string;
+}
+
+/**
+ * Which repository this invocation is about, asked of `gh` rather than
+ * inferred twice.
+ *
+ * `--repo` wins when given. Otherwise `gh` is asked what it would resolve,
+ * in the tree the rest of the command is reading — the same question it
+ * would answer internally on every later call, so there is one answer and
+ * not a local re-derivation free to disagree with it. Parsing `git remote`
+ * here instead would be a second decider, and it would get `gh repo
+ * set-default` and multi-remote trees wrong in the direction that refuses a
+ * legitimate cache.
+ */
+export function resolveRepo(repo: string | undefined, exec: Exec): string {
+  if (repo !== undefined) return repo;
+  const raw = JSON.parse(exec(["repo", "view", "--json", "nameWithOwner"])) as { nameWithOwner?: string };
+  if (typeof raw.nameWithOwner !== "string" || raw.nameWithOwner === "") {
+    throw new Error("gh could not say which repository this tree belongs to, and no --repo was given");
+  }
+  return raw.nameWithOwner;
 }
 
 /**
@@ -558,8 +588,11 @@ export interface Taken {
  * `writeSnapshotDir` from the first commit and neither was read back, which
  * is the same shape as the defect this whole command is about: a provenance
  * nobody checks settles nothing.
+ *
+ * `repo` is the RESOLVED repository, so the comparison always has two
+ * concrete sides and there is no input for which it declines to answer.
  */
-export function cacheProblem(dir: string, repo: string | undefined): string | null {
+export function cacheProblem(dir: string, repo: string): string | null {
   const path = join(dir, PROVENANCE);
   let taken: Partial<Taken>;
   try {
@@ -578,9 +611,16 @@ export function cacheProblem(dir: string, repo: string | undefined): string | nu
       `longer describes them`
     );
   }
-  if (repo !== undefined && taken.repo !== null && taken.repo !== undefined && taken.repo !== repo) {
+  // An absent or non-string `repo` is a cache written before this field was
+  // recorded, and it is refused rather than waved through: "I cannot tell
+  // which repository this is about" is not the same fact as "it is the
+  // right one", and only one of them is reportable.
+  if (typeof taken.repo !== "string") {
+    return `${path} does not say which repository it was taken for, so a cache hit cannot be told from a wrong one`;
+  }
+  if (taken.repo !== repo) {
     return (
-      `${dir} was taken for ${taken.repo} and --repo asks about ${repo}. A cache hit for the wrong ` +
+      `${dir} was taken for ${taken.repo} and this run is about ${repo}. A cache hit for the wrong ` +
       `repository is indistinguishable from a right one in the output`
     );
   }
@@ -676,7 +716,7 @@ export function fetchChangedFiles(
 export function writeSnapshotDir(
   dir: string,
   data: { issues: Tracked[]; prs: Tracked[]; files: Record<number, string[]> },
-  meta: { takenAt: string; repo: string | null },
+  meta: { takenAt: string; repo: string },
 ): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "issues.json"), JSON.stringify(data.issues));
@@ -778,12 +818,15 @@ function readSnapshot(dir: string): Snapshot {
  */
 function takeReading(
   dir: string | undefined,
-  repo: string | undefined,
+  repo: string,
   specText: string,
   testFiles: { file: string; content: string }[],
   today: string,
   exec: Exec,
 ): Snapshot {
+  // The RESOLVED repository is passed on every call, so the list reads no
+  // longer depend on `gh`'s own cwd inference either — one resolution, and
+  // every reading in the run is demonstrably about the same repository.
   const { issues, prs } = fetchTracked(repo, exec);
   const naming = inventory(specText, { issues, prs, prChangedCode: {} }, testFiles, today);
   const want = [...new Set(naming.flatMap(r => r.mergedPrs))].sort((a, b) => a - b);
@@ -791,7 +834,7 @@ function takeReading(
   const prChangedCode: Record<number, boolean> = {};
   for (const [n, paths] of Object.entries(files)) prChangedCode[Number(n)] = changedCode(paths);
   if (dir !== undefined) {
-    writeSnapshotDir(dir, { issues, prs, files }, { takenAt: new Date().toISOString(), repo: repo ?? null });
+    writeSnapshotDir(dir, { issues, prs, files }, { takenAt: new Date().toISOString(), repo });
   }
   return { issues, prs, prChangedCode };
 }
@@ -846,12 +889,30 @@ function main(): number {
     return EXIT_REFUSED;
   }
 
+  // Resolved ONCE, before either branch, and asked of `gh` in the tree
+  // `--project-root` names. Both paths need it: the fetch passes it on
+  // every call, and the cache hit compares it against what was recorded.
+  // A cache hit therefore costs one cheap identity call and retakes none
+  // of the three readings — the saving the cache exists for is intact, and
+  // the alternative was a comparison that declined to answer whenever
+  // `--repo` was omitted, which is the ordinary case.
+  let resolved: string;
+  try {
+    resolved = resolveRepo(repo, execIn(root));
+  } catch (err) {
+    console.error(
+      `UNMEASURED: could not establish which repository to read — ${(err as Error).message}. ` +
+        `Pass --repo <owner/name>.`,
+    );
+    return EXIT_REFUSED;
+  }
+
   let snapshot: Snapshot;
   if (dir !== undefined && dirState(dir) === "taken") {
     // A record nobody reads back settles nothing — the digest and the repo
     // were both written from the first commit and neither was consulted,
     // which is the shape this command exists to stop. Raised in review.
-    const problem = cacheProblem(dir, repo);
+    const problem = cacheProblem(dir, resolved);
     if (problem !== null) {
       console.error(`UNMEASURED: ${problem}. Delete ${dir} and run again to have a fresh one taken there.`);
       return EXIT_REFUSED;
@@ -869,7 +930,7 @@ function main(): number {
     }
   } else {
     try {
-      snapshot = takeReading(dir, repo, specText, testFiles, today, execIn(root));
+      snapshot = takeReading(dir, resolved, specText, testFiles, today, execIn(root));
     } catch (err) {
       // A failed fetch is UNMEASURED and says so. Letting the throw out
       // would print a stack trace naming `gh`, which reads as a crash in
