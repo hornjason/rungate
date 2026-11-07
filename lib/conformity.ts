@@ -36,6 +36,7 @@ import {
 } from "./behavioral-cache";
 import { tryLoadRungateConfig } from "./config-loader";
 import {
+  type ProtectionFacts,
   type ProtectionProbe,
   githubProtectionProbe,
   protectionSubject,
@@ -4976,6 +4977,24 @@ export function runBranchProtectionValidation(
   const probe = opts.probe ?? githubProtectionProbe;
   const subject = opts.subject ?? protectionSubject;
 
+  /**
+   * ONE protection reading per run, shared by both checks (#1858 round 4).
+   *
+   * PROTECT-2 called `probe` a second time for the same slug. That is three
+   * more admin-scoped GETs per run, and worse than the cost: **two readings
+   * of one branch inside one run can disagree.** The protection endpoint
+   * 403s as its ORDINARY outcome on a consumer's default token, and a
+   * secondary rate limit trips on the second round-trip rather than the
+   * first — so a run could report PROTECT-1 clean and PROTECT-2 UNMEASURED
+   * about the identical branch, with nothing in the output saying which
+   * reading to believe.
+   *
+   * That is the same defect #1852 closed one lane over, reintroduced here by
+   * the check that was written to catch a different instance of it.
+   */
+  let protectionOnce: Promise<ProtectionFacts> | null = null;
+  const factsFor = (slug: string): Promise<ProtectionFacts> => (protectionOnce ??= probe(slug));
+
   describe("Branch protection (#909)", () => {
     test("PROTECT-1: merging one PR does not invalidate every other open PR", async () => {
       const slug = subject(root);
@@ -4991,7 +5010,7 @@ export function runBranchProtectionValidation(
         return;
       }
 
-      const facts = await probe(slug);
+      const facts = await factsFor(slug);
       // Read against the branch the FACTS are about. Defaulting to "main"
       // here would answer a question about a branch the repo may not protect.
       const pushCi = facts.branch
@@ -5056,20 +5075,33 @@ export function runBranchProtectionValidation(
         return;
       }
 
-      const facts = await probe(slug);
-      const reading = readFindingDisposition(facts, readThreadProducer(root));
+      // **No short-circuit here, and the battery is why.** The first draft of
+      // this returned early when `readThreadProducer` found no producer, on
+      // the reasoning that round 1 applied inside `readFindingDisposition`:
+      // do not consult a fact that cannot change the answer. Mutating that
+      // branch away reddened NOTHING — predicted 1, observed 0.
+      //
+      // It was dead, and `factsFor` is why: PROTECT-1 has already taken the
+      // reading on every path that reaches here, so the memo returns it and
+      // no request is saved. Keeping the branch would have shipped a line
+      // whose removal no case can observe, which is the shape this session
+      // spent four rounds finding elsewhere
+      // (`.claude/rules/checks-must-be-able-to-fail.md`).
+      const producer = readThreadProducer(root);
+      const facts = await factsFor(slug);
+      const disposition = readFindingDisposition(facts, producer);
 
-      if (reading.verdict === "UNMEASURED") {
-        addFinding({ ruleId: "PROTECT-2", severity: "WARN", file: "", message: reading.reason });
+      if (disposition.verdict === "UNMEASURED") {
+        addFinding({ ruleId: "PROTECT-2", severity: "WARN", file: "", message: disposition.reason });
         return;
       }
-      if (reading.verdict === "PASS") return;
+      if (disposition.verdict === "PASS") return;
 
       addFinding({
         ruleId: "PROTECT-2",
         severity: "FAIL",
         file: "",
-        message: `${reading.reason}\n\nREMEDY: ${reading.remedy}`,
+        message: `${disposition.reason}\n\nREMEDY: ${disposition.remedy}`,
         // Reads. Never writes — the same line PROTECT-1 holds. A fixCommand
         // that PUT a protection payload would be the harness silently
         // rewriting a repository's security settings, and the operator's next
@@ -5079,7 +5111,7 @@ export function runBranchProtectionValidation(
       // Widened for the same reason as PROTECT-1: control flow has narrowed
       // `verdict` to "FAIL", so the comparison typechecks as a contradiction
       // and reads as dead. It is what turns the finding into a red suite.
-      expect(reading.verdict as string, `${reading.reason}\n\nREMEDY: ${reading.remedy}`).toBe("PASS");
+      expect(disposition.verdict as string, `${disposition.reason}\n\nREMEDY: ${disposition.remedy}`).toBe("PASS");
     });
   });
 }

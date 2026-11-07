@@ -1216,3 +1216,69 @@ describe("#1858: the FAIL remedy is actionable for an unprotected branch too", (
     expect(readFindingDisposition(unprotected, produces).verdict).toBe("FAIL");
   });
 });
+
+/**
+ * #1858 round 4 — one protection reading per run, and none at all when the
+ * tree already answers the question.
+ *
+ * PROTECT-2 called `probe` a second time for the same slug. The cost is three
+ * more admin-scoped GETs, and the defect underneath it is worse: **two
+ * readings of one branch inside one run can disagree.** This endpoint 403s as
+ * its ORDINARY outcome on a consumer's default token, and a secondary rate
+ * limit trips on the second round-trip rather than the first — so a run could
+ * report PROTECT-1 clean and PROTECT-2 UNMEASURED about the identical branch,
+ * with nothing saying which to believe. That is the defect #1852 closed one
+ * lane over, reintroduced by the check written to catch another instance of
+ * it.
+ *
+ * And a tree that opens no review thread needs the reading not at all: round
+ * 1 put the producer check first inside the classifier because the answer
+ * cannot depend on a fact that cannot change it, and the same holds one level
+ * up, where it saves the request.
+ */
+function probeCallCount(root: string, given: ProtectionFacts): number {
+  const file = join(mkdtempSync(join(tmpdir(), "rungate-1858-calls-")), "calls.test.ts");
+  scratch.push(dirname(file));
+  writeFileSync(
+    file,
+    `import { test } from "bun:test";\n` +
+      `import { runBranchProtectionValidation, clearFindings } from ${JSON.stringify(CONFORMITY)};\n` +
+      `let calls = 0;\n` +
+      `clearFindings();\n` +
+      `runBranchProtectionValidation(${JSON.stringify(root)}, {\n` +
+      `  probe: async () => { calls++; return ${JSON.stringify(given)}; },\n` +
+      `  subject: () => ${JSON.stringify(given.slug)},\n` +
+      `});\n` +
+      `test("zz-calls", () => { console.log("C:" + calls); });\n`,
+  );
+  const r = spawnSync("bun", ["test", file], { cwd: REPO, encoding: "utf-8" });
+  const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+  const m = out.match(/C:(\d+)/);
+  if (!m) throw new Error(`the counting suite never reported:\n${out}`);
+  return Number(m[1]);
+}
+
+describe("#1858: the protection endpoint is read once per run, or not at all", () => {
+  test("a tree that DOES open threads reads protection exactly once, not twice", () => {
+    const root = project({ ".github/workflows/ai-review.yml": THREADS_CI });
+    expect(
+      probeCallCount(root, dispositionFacts({ conversationResolution: true })),
+      "two reads of one branch in one run can disagree — PROTECT-1 clean and PROTECT-2 403 " +
+        "about the same branch, with nothing saying which to believe",
+    ).toBe(1);
+  });
+
+  // A tree with no producer reads once too, and that is PROTECT-1's read.
+  //
+  // **This case cannot tell a short-circuit from the memo, and saying so is
+  // the point.** The first draft of the fix added an early return here on
+  // "no producer"; mutating it away reddened nothing — predicted 1, observed
+  // 0 — because `factsFor` had already made the second call impossible. The
+  // branch was removed rather than kept with a case that could not witness
+  // it. What this asserts is the only thing it can: the total is 1 either
+  // way, so the memo is what holds the number down.
+  test("a tree that opens NO threads also reads once — the memo, not a second call", () => {
+    const root = project({ ".github/workflows/ci.yml": PUSH_CI });
+    expect(probeCallCount(root, dispositionFacts({ conversationResolution: false }))).toBe(1);
+  });
+});
