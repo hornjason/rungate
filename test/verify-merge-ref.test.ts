@@ -36,15 +36,63 @@ const OPEN_HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const LATER = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const MERGE = "cccccccccccccccccccccccccccccccccccccccc";
 
+/**
+ * Round 2 of review on #1909, and correct: a `git ls-remote` that FAILED
+ * and a `git ls-remote` that found no ref both produced `remoteHead:
+ * undefined`, so on a MERGED pull request a network blip reported the
+ * confident `MERGED_CLEAN` — "nothing to arm" — about a remote nobody read.
+ * That is the #1847 shape reported as safe, in the one branch where this
+ * script exists to say otherwise, and the file's own comment two functions
+ * up says a reading that could not be taken is never a pass.
+ *
+ * Measured: against a real bare repository `git ls-remote <r> refs/heads/nope`
+ * exits **0** with empty output; against an unreachable one it exits **128**.
+ * The distinction was always there and the script discarded it.
+ *
+ * `remoteRead` is therefore required in spirit — absent means "nobody said
+ * the remote was read", which fails closed. Every case below states it.
+ */
+describe("a remote that could not be read is never a pass (#1909 round 2)", () => {
+  const READ_FAILED = { remoteRead: false, remoteHead: undefined };
+
+  // The row that was wrong. It must not be MERGED_CLEAN.
+  test("MERGED and the remote could not be read is UNMEASURED, not MERGED_CLEAN", () => {
+    const v = mergeRefReading({ prState: "MERGED", prHead: OPEN_HEAD, mergeCommit: MERGE, ...READ_FAILED });
+    expect(v.reading).toBe("UNMEASURED");
+    expect(v.detail, "the refusal does not say the remote is what went unread").toMatch(/remote|ls-remote/i);
+  });
+
+  test("OPEN and the remote could not be read is UNMEASURED", () => {
+    expect(mergeRefReading({ prState: "OPEN", prHead: OPEN_HEAD, ...READ_FAILED }).reading).toBe("UNMEASURED");
+  });
+
+  // The control that gives the row above something to be distinguished FROM.
+  // A branch deleted after a merge is a fact, not a failure to read one, and
+  // conflating them in the other direction would make every tidy-up noisy.
+  test("MERGED with the ref genuinely absent is still MERGED_CLEAN", () => {
+    expect(
+      mergeRefReading({ prState: "MERGED", prHead: OPEN_HEAD, mergeCommit: MERGE, remoteRead: true, remoteHead: undefined }).reading,
+    ).toBe("MERGED_CLEAN");
+  });
+
+  // Fail closed. An input that does not say whether the remote was read has
+  // not said it was, and the safe default is the one that refuses.
+  test("an input that never mentions remoteRead is UNMEASURED", () => {
+    expect(
+      mergeRefReading({ prState: "MERGED", prHead: OPEN_HEAD, mergeCommit: MERGE, remoteHead: LATER }).reading,
+    ).toBe("UNMEASURED");
+  });
+});
+
 describe("mergeRefReading: the one decider (#1850)", () => {
   test("OPEN and the remote holds exactly the reported head is CLEAR", () => {
     expect(
-      mergeRefReading({ prState: "OPEN", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD, branch: "rg/x" }).reading,
+      mergeRefReading({ remoteRead: true, prState: "OPEN", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD, branch: "rg/x" }).reading,
     ).toBe("CLEAR");
   });
 
   test("OPEN and the remote has moved past it is STALE_HEAD, naming both", () => {
-    const v = mergeRefReading({ prState: "OPEN", prHead: OPEN_HEAD, remoteHead: LATER, branch: "rg/x" });
+    const v = mergeRefReading({ remoteRead: true, prState: "OPEN", prHead: OPEN_HEAD, remoteHead: LATER, branch: "rg/x" });
     expect(v.reading).toBe("STALE_HEAD");
     expect(v.detail, "the refusal does not name the head the API reported").toContain(OPEN_HEAD);
     expect(v.detail, "the refusal does not name what the remote actually holds").toContain(LATER);
@@ -53,7 +101,7 @@ describe("mergeRefReading: the one decider (#1850)", () => {
   // The #1847 case itself.
   test("MERGED with the branch carrying a later commit is PUSHED_AFTER_MERGE", () => {
     const v = mergeRefReading({
-      prState: "MERGED", prHead: OPEN_HEAD, remoteHead: LATER, mergeCommit: MERGE, branch: "rg/x",
+      remoteRead: true, prState: "MERGED", prHead: OPEN_HEAD, remoteHead: LATER, mergeCommit: MERGE, branch: "rg/x",
     });
     expect(v.reading).toBe("PUSHED_AFTER_MERGE");
     expect(v.detail).toContain(LATER);
@@ -62,13 +110,13 @@ describe("mergeRefReading: the one decider (#1850)", () => {
 
   test("MERGED with the branch holding nothing beyond it is MERGED_CLEAN", () => {
     expect(
-      mergeRefReading({ prState: "MERGED", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD, mergeCommit: MERGE }).reading,
+      mergeRefReading({ remoteRead: true, prState: "MERGED", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD, mergeCommit: MERGE }).reading,
     ).toBe("MERGED_CLEAN");
   });
 
   test("MERGED with the branch deleted is MERGED_CLEAN", () => {
     expect(
-      mergeRefReading({ prState: "MERGED", prHead: OPEN_HEAD, remoteHead: undefined, mergeCommit: MERGE }).reading,
+      mergeRefReading({ remoteRead: true, prState: "MERGED", prHead: OPEN_HEAD, remoteHead: undefined, mergeCommit: MERGE }).reading,
     ).toBe("MERGED_CLEAN");
   });
 
@@ -86,7 +134,7 @@ describe("mergeRefReading: the one decider (#1850)", () => {
 
   test("a CLOSED pull request is not quietly treated as open", () => {
     expect(
-      mergeRefReading({ prState: "CLOSED", prHead: OPEN_HEAD, remoteHead: LATER }).reading,
+      mergeRefReading({ remoteRead: true, prState: "CLOSED", prHead: OPEN_HEAD, remoteHead: LATER }).reading,
     ).not.toBe("CLEAR");
   });
 
@@ -98,12 +146,12 @@ describe("mergeRefReading: the one decider (#1850)", () => {
    */
   test("exactly one input reads CLEAR, and only CLEAR has no detail", () => {
     const inputs: Parameters<typeof mergeRefReading>[0][] = [
-      { prState: "OPEN", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD },
-      { prState: "OPEN", prHead: OPEN_HEAD, remoteHead: LATER },
-      { prState: "MERGED", prHead: OPEN_HEAD, remoteHead: LATER, mergeCommit: MERGE },
-      { prState: "MERGED", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD, mergeCommit: MERGE },
-      { prState: "CLOSED", prHead: OPEN_HEAD, remoteHead: LATER },
-      { prState: "OPEN", prHead: OPEN_HEAD },
+      { remoteRead: true, prState: "OPEN", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD },
+      { remoteRead: true, prState: "OPEN", prHead: OPEN_HEAD, remoteHead: LATER },
+      { remoteRead: true, prState: "MERGED", prHead: OPEN_HEAD, remoteHead: LATER, mergeCommit: MERGE },
+      { remoteRead: true, prState: "MERGED", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD, mergeCommit: MERGE },
+      { remoteRead: true, prState: "CLOSED", prHead: OPEN_HEAD, remoteHead: LATER },
+      { remoteRead: true, prState: "OPEN", prHead: OPEN_HEAD },
       {},
     ];
     const verdicts = inputs.map(i => mergeRefReading(i));
@@ -388,6 +436,21 @@ describe("the script refuses, and the refusal is what each case observed", () =>
     expect(r.err, "the refusal does not name the repository the API reported").toContain("hornjason/rungate");
   });
 
+  // The wiring half of round 2's finding. `remoteRead: ls.ok` is one word
+  // in `main()` and nothing above would notice it going away: every other
+  // case here hands the script a remote it can reach. This one names a path
+  // whose last two segments ARE the repository — so the guard above clears
+  // it — and which does not exist, so the branch read exits 128.
+  test("UNMEASURED: the remote resolves but cannot be read", () => {
+    const gone = join(dir, "gone", "hornjason", "rungate.git");
+    const gh = plantGh(join(dir, "unreachable"), {
+      state: "MERGED", headRefName: "rg/planted", headRefOid: OPEN_HEAD, mergeCommit: { oid: MERGE },
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", gone]);
+    expect(r.err, "an unreadable remote on a MERGED pull request still read as MERGED_CLEAN").toContain("UNMEASURED");
+    expect(r.err).not.toContain("MERGED_CLEAN");
+  });
+
   test("no --pr is a refusal, not a default", () => {
     const gh = plantGh(join(dir, "noargs"), { state: "OPEN" });
     bothHalves(gh, ["--remote", remote]);
@@ -414,10 +477,10 @@ describe("the properties the mutant depends on are asserted, not assumed", () =>
     const declared = [...SOURCE.matchAll(/^\s*\|?\s*"(CLEAR|STALE_HEAD|PUSHED_AFTER_MERGE|MERGED_CLEAN|UNMEASURED)"/gm)]
       .map(m => m[1]);
     const produced = new Set<Reading>([
-      mergeRefReading({ prState: "OPEN", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD }).reading,
-      mergeRefReading({ prState: "OPEN", prHead: OPEN_HEAD, remoteHead: LATER }).reading,
-      mergeRefReading({ prState: "MERGED", prHead: OPEN_HEAD, remoteHead: LATER, mergeCommit: MERGE }).reading,
-      mergeRefReading({ prState: "MERGED", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD, mergeCommit: MERGE }).reading,
+      mergeRefReading({ remoteRead: true, prState: "OPEN", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD }).reading,
+      mergeRefReading({ remoteRead: true, prState: "OPEN", prHead: OPEN_HEAD, remoteHead: LATER }).reading,
+      mergeRefReading({ remoteRead: true, prState: "MERGED", prHead: OPEN_HEAD, remoteHead: LATER, mergeCommit: MERGE }).reading,
+      mergeRefReading({ remoteRead: true, prState: "MERGED", prHead: OPEN_HEAD, remoteHead: OPEN_HEAD, mergeCommit: MERGE }).reading,
       mergeRefReading({}).reading,
     ]);
     expect(declared.length, "the reading union was not found in the source").toBeGreaterThan(0);

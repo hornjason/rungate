@@ -81,6 +81,22 @@ export interface RefInputs {
   prState?: string;
   /** `headRefOid` from the API. */
   prHead?: string;
+  /**
+   * Did `git ls-remote` succeed? Absent means nobody said so, and that
+   * fails closed.
+   *
+   * Raised in review of #1909 round 2. Without this, a command that FAILED
+   * and a command that found no ref both arrive as `remoteHead: undefined`,
+   * and on a MERGED pull request the second is the benign case — so a
+   * network blip reported `MERGED_CLEAN`, "nothing to arm", about a remote
+   * nobody read. That is #1847's own shape reported as safe, in the one
+   * branch this script exists to speak up in.
+   *
+   * The distinction was always available: against a real remote
+   * `git ls-remote <r> refs/heads/nope` exits 0 with empty output, and
+   * against an unreachable one it exits 128.
+   */
+  remoteRead?: boolean;
   /** What `git ls-remote` reports for the branch, absent when the ref is gone. */
   remoteHead?: string;
   /** `mergeCommit.oid`, present only once the pull request merged. */
@@ -116,6 +132,20 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
         " for this pull request, so nothing was compared. That is not the same as a pull request that is fine.",
     };
   }
+  // Before any comparison, and before the merged/open split: did the read
+  // happen at all? This sits here rather than inside either branch because
+  // the branch that most needs it — MERGED — is the one whose benign
+  // reading an unread remote is indistinguishable from.
+  if (input.remoteRead !== true) {
+    return {
+      reading: "UNMEASURED",
+      detail:
+        `\`git ls-remote\` did not succeed for ${where}, so nothing was read from the remote. ` +
+        `An unreachable remote is not an empty one: a branch still carrying commits past the merge ` +
+        `looks exactly like a branch that was tidied up, and only one of those is fine.`,
+    };
+  }
+
   const merged = prState === "MERGED";
   if (!remoteHead && !merged) {
     return {
@@ -279,11 +309,16 @@ export function main(argv: string[]): number {
   // An absent branch name makes the ls-remote below match EVERY ref, and a
   // wrong SHA compared confidently is worse than no comparison at all.
   const ls = branch ? run(["git", "ls-remote", remote, `refs/heads/${branch}`]) : { out: "", ok: false };
+  // `ok` and `out` carry different facts and both travel. Exit 0 with no
+  // output is a ref that is not there; a non-zero exit is a remote that was
+  // not read. Collapsing them into one `undefined` is what round 2 of
+  // #1909's review found.
   const remoteHead = ls.ok && ls.out !== "" ? ls.out.split(/\s+/)[0] : undefined;
 
   const verdict = mergeRefReading({
     prState: pj.state,
     prHead: pj.headRefOid,
+    remoteRead: ls.ok,
     remoteHead,
     mergeCommit: pj.mergeCommit?.oid,
     branch,
