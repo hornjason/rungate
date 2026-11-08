@@ -39,8 +39,18 @@ const HOOK = join(REPO_ROOT, "hooks", "IssueCloseGuard.hook.ts");
 
 let workBase: string;
 
-/** `hooks/lib/utils.ts` joins `.rungate` onto RUNGATE_WORK_DIR. */
-const workDir = () => join(workBase, ".rungate");
+/**
+ * RUNGATE_WORK_DIR IS the work directory. It is not a parent of one.
+ *
+ * This read `join(workBase, ".rungate")` until #1668, under a comment stating
+ * that `hooks/lib/utils.ts` joins `.rungate` onto the override — which it did,
+ * because the `join` sat outside the `||` in
+ * `join(RUNGATE_WORK_DIR || HOME, '.rungate')`. So this file planted its state
+ * one directory below where the live harness plants it, the guard read a
+ * directory that does not exist on a real ship run, and the defect was
+ * encoded here as the contract.
+ */
+const workDir = () => workBase;
 
 beforeEach(() => {
   workBase = mkdtempSync(join(tmpdir(), "close-guard-"));
