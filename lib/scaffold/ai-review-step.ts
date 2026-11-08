@@ -4030,19 +4030,26 @@ export const AI_REVIEW_BLOCK_VERDICT = "BLOCK";
  * imports and re-exports these two names, so its own callers are unchanged
  * and there is still exactly ONE declaration.
  */
-export type Severity = "Important" | "Nit" | "Pre-existing";
+export type Severity = "Important" | "Nit" | "Pre-existing" | "Unobserved";
 
 /**
  * Sort order for the posted findings. A pre-existing bug is still a bug, so
  * it outranks a nit; it is not the author's, so it does not outrank an
- * Important one.
+ * Important one. `Unobserved` (#1879) sits with `Pre-existing`, below it:
+ * both are real findings that do not block, and an unobserved one is the
+ * weaker claim of the two because nothing ran to produce it.
  *
  * ONE binding, and the only ordering in the deployed path. A second
  * comparator would be two deciders over one question and a mutation of
  * either would leave the other holding every case up
  * (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape).
  */
-export const SEVERITY_RANK: Record<Severity, number> = { Important: 0, "Pre-existing": 1, Nit: 2 };
+export const SEVERITY_RANK: Record<Severity, number> = {
+  Important: 0,
+  "Pre-existing": 1,
+  Unobserved: 2,
+  Nit: 3,
+};
 
 const AI_REVIEW_BLOCKING_SEVERITIES = Object.keys(AI_REVIEW_SEVERITIES).filter(
   s => AI_REVIEW_SEVERITIES[s],

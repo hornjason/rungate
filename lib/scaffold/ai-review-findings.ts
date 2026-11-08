@@ -564,10 +564,28 @@ export function advisoryNotice(reading: AiReviewFindingsReading): string | null 
     return `${all[i]}${key}`;
   });
 
+  // DERIVED from the rank table, not restated. #1914 round 2 added a fourth
+  // tag and this sentence was a hardcoded list of three, so it would have
+  // gone on naming an order it no longer described — the defect this module
+  // spends most of its length guarding against, in its own output.
+  const order = (Object.keys(SEVERITY_RANK) as Severity[])
+    .sort((a, b) => SEVERITY_RANK[a] - SEVERITY_RANK[b])
+    .join(" / ");
+  // #1914 round 2: the demotion's reason reaches `detail`, and `detail` is
+  // only read back for BLOCKED, CONTRADICTION and UNMEASURED. A payload
+  // whose only blocking finding is demoted here is CLEAN, so this notice is
+  // the ONLY thing the maintainer sees — a tag with no legend would be a
+  // finding nobody can act on, which is the state this issue is about.
+  const unobserved = rendered.some(line => line.includes("[Unobserved]"))
+    ? `An [Unobserved] finding claims a test's outcome, and this job runs no test ` +
+      `command — so it is an inference from reading the source, not a result. It is ` +
+      `reported in full and does not block. `
+    : "";
   return (
     `${advisory.length} advisory finding(s) were counted and block nothing, ` +
-    `in Important / Pre-existing / Nit order. ` +
+    `in ${order} order. ` +
     `${rendered.join("; ")}. ` +
+    unobserved +
     `Each is UNANSWERED: nothing in this pipeline requires it to be fixed, ` +
     `resolved with a reason, or filed, and this annotation is the only place ` +
     `it survives the job — the payload lives under the runner's temp directory ` +
@@ -665,6 +683,85 @@ export function blockingContractViolations(finding: Record<string, unknown>): st
     if (value === undefined || value === null) return true;
     return typeof value === "string" && value.trim() === "";
   });
+}
+
+/**
+ * A thing whose outcome is a test run: the subject half of the claim.
+ *
+ * **`check`, `case`, `spec` and `assertion` are deliberately absent**, and
+ * that is the whole of #1914 round 1. They are ordinary production
+ * vocabulary in this repository — a `check` is a CI job or a guard, a
+ * `case` is a branch, a `spec` is a document under `specs/` — so a
+ * well-evidenced finding reading *"the required check is broken when the
+ * payload omits the severity field"* matched the subject half and demoted
+ * itself. The whole point of this module is the red required check; a
+ * detector that turns one green over a live defect is worse than no
+ * detector.
+ *
+ * `test` covers a path as well as a noun: `\b` fires at the slash and the
+ * dot, so `test/ratchet.test.ts` matches without a second pattern.
+ */
+const TEST_SUBJECT = /\b(?:tests?|suites?)\b/i;
+
+/**
+ * The outcome half. One exclusion: **`fails to <verb>`**, because "the suite
+ * fails to load the module" is a statement about what code DOES, which is
+ * the ordinary subject of a review and must keep blocking.
+ *
+ * `broken` was briefly excluded too, on the reasoning above the subject
+ * list, and the mutation that restored it turned **no case red** — once the
+ * subject is `test` or `suite`, "broken" can only be describing a run. An
+ * exclusion no case can see is not a decision, so it was withdrawn and
+ * `the suite is broken` is pinned below instead.
+ */
+const TEST_OUTCOME =
+  /\b(?:fail(?:s|ing|ed)?(?!\s+to\s+\w)|red|broken|do(?:es)?\s+not\s+pass|cannot\s+pass|will\s+not\s+pass|won't\s+pass)\b/i;
+
+/**
+ * Does this finding assert the OUTCOME of a test run? — #1879.
+ *
+ * ## Why an outcome claim is unfounded here by construction
+ *
+ * `.github/workflows/ai-review.yml` runs no test command of any kind. The
+ * reviewer reads source and the diff; it never sees a result. So a finding
+ * saying a named case fails is always an inference, and on #1878 the same
+ * inference blocked three rounds running and was wrong all three times.
+ *
+ * That instance arrived through the restore — `.claude` is in
+ * `AI_REVIEW_UNTRUSTED_PATHS`, so the reviewer read the BASE's ratchet file
+ * beside the branch's source and concluded a case must fail. **The restore
+ * is not what makes the claim unfounded**, and a check built around it would
+ * be narrower than the defect: the same sentence about a file nothing
+ * restores is just as unobserved. The prompt already forbids the
+ * restore-shaped version of this, in those words, and was ignored anyway —
+ * which is the argument for deciding it here rather than instructing it
+ * again.
+ *
+ * ## What this is allowed to get wrong, and in which direction
+ *
+ * It is a text detector over prose, which is the shape this repository keeps
+ * catching itself on, so the bound is stated rather than implied:
+ *
+ * - **A false negative is the status quo.** Today every one of these blocks.
+ * - **A false positive costs a finding its blocking status and nothing
+ *   else** — it stays in `reported` and reaches the maintainer in full.
+ *
+ * Both halves must land in ONE sentence, because "this test file is new"
+ * followed by "the build is broken" is two statements and neither is a
+ * claim about a case's outcome.
+ *
+ * The returned string is the sentence itself, so the refusal quotes what it
+ * matched instead of asserting that it matched something.
+ */
+export function unrunTestClaim(finding: Record<string, unknown>): string | null {
+  for (const key of [AI_REVIEW_FINDING_FIELDS.summary, AI_REVIEW_FINDING_FIELDS.failureScenario]) {
+    const value = finding[key];
+    if (typeof value !== "string") continue;
+    for (const sentence of value.split(/(?<=[.!?])\s+|\n+/)) {
+      if (TEST_SUBJECT.test(sentence) && TEST_OUTCOME.test(sentence)) return sentence.trim();
+    }
+  }
+  return null;
 }
 
 // `AI_REVIEW_CHANGED_FILES_FLAG` lived here and is gone. #1204 argued for a
@@ -1208,7 +1305,28 @@ export function findingTag(
 ): Severity | null {
   if (findingPathScope(finding, touched) === "PRE_EXISTING") return "Pre-existing";
   const blocks = severityBlocks(finding[AI_REVIEW_SEVERITY_KEY]);
-  return blocks === null ? null : blocks ? "Important" : "Nit";
+  // BEFORE the unrun check, and that order is #1914 round 4. An
+  // unrecognised severity tags `null`, and the first version of #1879 put
+  // the unrun check above this — so a finding declaring `severity: "spicy"`
+  // whose prose matched read `[Unobserved]` instead of untagged. The
+  // payload is `SEVERITY_UNRECOGNISED` and the reading is UNMEASURED, but
+  // `tagsForPayload` runs independently of `reasons` and the annotation
+  // showed the tag anyway: the module inventing a classification for a
+  // payload it is refusing, which is what this docblock warns about.
+  //
+  // The `Pre-existing` branch above has the same shape and predates this
+  // change. It is deliberately left alone — fixing it is a behaviour change
+  // to CRC-B7 that nothing in this issue asked for.
+  if (blocks === null) return null;
+  // #1879, and in the same position relative to attribution as the demotion
+  // is: a finding that is both pre-existing and an unrun claim reads
+  // `Pre-existing`, so the tag and the demotion cannot disagree about one
+  // finding. That is also why the check is HERE rather than beside the
+  // demotion in `readPayload` — a tag that only tracked the demotion would
+  // leave an ADVISORY unrun claim reading `Nit`, and the maintainer reads
+  // the tag.
+  if (unrunTestClaim(finding) !== null) return "Unobserved";
+  return blocks ? "Important" : "Nit";
 }
 
 /**
@@ -1765,6 +1883,25 @@ function readPayload(
       // — the ballot is RECORDED and never acted on. `main` runs the gate
       // for the ledger and the annotation; this list is untouched by it.
       // See `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` under CRC-B4.
+      //
+      // #1879, and LAST of the demotions rather than first. A finding that is
+      // both pre-existing and an unrun claim is reported as pre-existing,
+      // which is the older mechanism and the better-evidenced sentence; this
+      // one only sees what would otherwise still redden the check.
+      //
+      // It demotes on the same terms CRC-B8 set: the finding stays in
+      // `reported` and counts toward `demoted`, so a reviewer that said
+      // BLOCK is not turned into a CONTRADICTION by the demotion working.
+      const unrun = unrunTestClaim(finding);
+      if (unrun !== null) {
+        demoted += 1;
+        detail.push(
+          `finding ${i} claims a test outcome, and no test ran: ${JSON.stringify(unrun)}. The ` +
+            `review job executes no test command, so this is an inference from reading the ` +
+            `source and not an observation. It is reported and does not block`,
+        );
+        return;
+      }
       blocking.push(item);
       // Tagged through the same binding every other render uses. By here the
       // tag is `Important` by construction — the severity blocks and the
