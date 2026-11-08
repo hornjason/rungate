@@ -49,8 +49,9 @@ export function findWorkflowForIssue(issueNum?: string, phases?: string[], repo?
     // Blast radius, since an earlier version of this comment got it wrong:
     // `CommitEnforcement.hook.ts` is the ONLY hook importing this module.
     // `IssueCloseGuard` and `AutoVerifyGate` use `findWorkflowState` from
-    // `./utils`, a third implementation of this scan that is still
-    // unfiltered — #1668. Fixing this file does not reach them.
+    // `./utils`, a third implementation of this scan — fixing this file does
+    // not reach them. #1668 filtered that one too, and added a census over
+    // every work-dir scan site so a fourth copy cannot ship unfiltered.
     const dirs = readdirSync(RUNGATE_WORK_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory() && isRunDirectory(d.name));
 

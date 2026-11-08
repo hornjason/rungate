@@ -31,13 +31,17 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { WORK_DIR } from './lib/paths';
+import { isRunDirectory } from '../lib/active-workflow';
 
 const BLOCKED_PHASES = new Set(['build', 'execute', 'verify']);
 
 function findLatestPRD(): { path: string; phase: string } | null {
   try {
+    // Filtered (#1668). This picks the PRD by newest mtime, which is the
+    // exact shape #1648 describes: an archived run's PRD.md is written last,
+    // so unfiltered it always wins and the gate reads a finished run's plan.
     const dirs = readdirSync(WORK_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory())
+      .filter(d => d.isDirectory() && isRunDirectory(d.name))
       .map(d => {
         const prdPath = join(WORK_DIR, d.name, 'PRD.md');
         try {

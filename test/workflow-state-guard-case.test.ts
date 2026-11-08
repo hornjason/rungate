@@ -46,15 +46,61 @@
  */
 
 import { test, expect, describe, beforeAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, readFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, dirname } from "path";
 
 const ROOT = join(import.meta.dir, "..");
 const GUARD = join(ROOT, "hooks", "WorkflowStateGuard.hook.ts");
 
 /** The one token whose presence is the fix. Deleting it restores the defect. */
 const FOLD = ".toLowerCase()";
+
+/**
+ * Copy a source file into the mutant tree at its REPO-RELATIVE path, and every
+ * relative import it reaches, transitively.
+ *
+ * The layout is mirrored rather than flattened because the imports are
+ * relative: `hooks/lib/utils.ts` reaching `../../lib/active-workflow` only
+ * resolves if `lib/` sits beside `hooks/` in the copy too.
+ *
+ * It walks the closure instead of naming it because naming it is what broke.
+ * This used to copy one hand-listed file under the comment "`hooks/lib/utils.ts`
+ * imports only `fs` and `path`". #1668 gave that file two relative imports, the
+ * mutant stopped loading, and `decide` read the module-resolution failure as
+ * UNMEASURED on every row — a battery reporting nothing, in a shape no row of
+ * this table can distinguish from a verdict it disagrees with.
+ *
+ * An unresolvable import throws rather than being skipped: a closure that is
+ * quietly incomplete is the same silent-UNMEASURED failure one commit later.
+ */
+const RELATIVE_IMPORT = /(?:^|\n)\s*(?:import|export)(?:[^'"\n]*?from\s*)?['"](\.[^'"]+)['"]/g;
+
+function carryClosure(relPath: string, into: string, seen = new Set<string>()): void {
+  if (seen.has(relPath)) return;
+  seen.add(relPath);
+
+  const text = readFileSync(join(ROOT, relPath), "utf-8");
+  const dest = join(into, relPath);
+  mkdirSync(dirname(dest), { recursive: true });
+  writeFileSync(dest, text);
+
+  for (const [, spec] of text.matchAll(RELATIVE_IMPORT)) {
+    const target = join(dirname(relPath), spec);
+    const resolved = [".ts", ".tsx", ".js", "/index.ts"]
+      .map(ext => `${target}${ext}`)
+      .concat(target)
+      .find(candidate => existsSync(join(ROOT, candidate)));
+    if (!resolved) {
+      throw new Error(
+        `mutant closure is incomplete: ${relPath} imports "${spec}", which does not ` +
+          `resolve under ${ROOT}. The mutant would fail to load and every row below ` +
+          `would read UNMEASURED.`,
+      );
+    }
+    carryClosure(resolved, into, seen);
+  }
+}
 
 /** The only two readings a row may carry. Anything else is UNMEASURED. */
 type Verdict = "REFUSED" | "ALLOWED";
@@ -261,14 +307,13 @@ beforeAll(async () => {
   // source with the fold deleted. Built by deletion rather than written by
   // hand, so it cannot drift away from the thing it is the counterfactual of.
   //
-  // `hooks/lib/utils.ts` imports only `fs` and `path`, so carrying that one
-  // file closes the mutant's dependencies and it loads from a temp directory.
-  // A mutant that failed to load would exit non-zero and be read as UNMEASURED
-  // above, not as a permit.
+  // `carryClosure` walks the guard's relative imports and mirrors the repo
+  // layout, so the mutant's dependencies are closed by construction rather
+  // than by a comment claiming they are. A mutant that failed to load would
+  // exit non-zero and be read as UNMEASURED above, not as a permit.
   tmp = mkdtempSync(join(tmpdir(), "ws-guard-case-"));
-  mkdirSync(join(tmp, "lib"), { recursive: true });
-  copyFileSync(join(ROOT, "hooks", "lib", "utils.ts"), join(tmp, "lib", "utils.ts"));
-  const mutantPath = join(tmp, "WorkflowStateGuard.hook.ts");
+  carryClosure("hooks/WorkflowStateGuard.hook.ts", tmp);
+  const mutantPath = join(tmp, "hooks", "WorkflowStateGuard.hook.ts");
   writeFileSync(mutantPath, source.split(FOLD).join(""));
 
   for (const s of CORPUS) {

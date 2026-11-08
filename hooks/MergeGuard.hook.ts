@@ -12,13 +12,19 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseHookInput, WORK_DIR, HARNESS_ROOT } from './lib/utils';
+import { isRunDirectory } from '../lib/active-workflow';
 
 const TTL_MS = 4 * 60 * 60 * 1000;
 
 function findActiveShipMarker(): { issue: number; workDir: string } | null {
   if (!existsSync(WORK_DIR)) return null;
   try {
-    for (const d of readdirSync(WORK_DIR, { withFileTypes: true }).filter(d => d.isDirectory())) {
+    // Filtered (#1668). `.archive/<slug>/.ship-active` is a finished run's
+    // marker; unfiltered, it is returned as the active ship and this guard
+    // gates a merge on behalf of a run that ended. The TTL below bounds how
+    // long that lasts but does not prevent it — an archive written inside the
+    // window reads exactly like a live run.
+    for (const d of readdirSync(WORK_DIR, { withFileTypes: true }).filter(d => d.isDirectory() && isRunDirectory(d.name))) {
       const markerPath = join(WORK_DIR, d.name, '.ship-active');
       if (!existsSync(markerPath)) continue;
       if (Date.now() - statSync(markerPath).mtimeMs > TTL_MS) continue;
