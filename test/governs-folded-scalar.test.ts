@@ -116,7 +116,16 @@ describe("isValidGoverns is the one decider, and it reads every block indicator"
   // predicate narrower than the syntax is a detector narrower than what it
   // detects — a spec author writing `|-` instead of `>-` would walk straight
   // past a guard that only knew the one spelling.
-  const INDICATORS = [">", ">-", ">+", "|", "|-", "|+", ">2", ">-2", "|2", "|-2"];
+  //
+  // The header may also carry a trailing YAML comment, which no reader in
+  // this tree strips, so the whole string `">- # what it governs"` reaches
+  // the predicate. Raised in review of this PR — the first version of the
+  // regex anchored on `$` and let every commented header through, which is
+  // the same defect one spelling along.
+  const INDICATORS = [
+    ">", ">-", ">+", "|", "|-", "|+", ">2", ">-2", "|2", "|-2",
+    ">- # what it governs", "| # note", ">-2  #  trailing", "> #",
+  ];
   for (const ind of INDICATORS) {
     test(`\`governs: ${ind}\` is not a governs value`, () => {
       expect(isValidGoverns(ind)).toBe(false);
@@ -132,6 +141,10 @@ describe("isValidGoverns is the one decider, and it reads every block indicator"
     "> than the previous threshold, the queue drains",
     "the pipe | separates the two halves",
     ">>= is the bind operator, and this spec governs its parser",
+    // The control for the comment-stripping above: a `#` in real governs
+    // text must survive. A predicate that cut at the first `#` would leave
+    // `"the "` here and this row would be the only thing to say so.
+    "the # anchor parser, and nothing else",
   ];
   for (const v of VALID) {
     test(`real governs text is kept: ${JSON.stringify(v.slice(0, 40))}`, () => {

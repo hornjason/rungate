@@ -43,12 +43,17 @@ function parseFrontmatter(content: string): Record<string, string> | null {
  * captures when the value is folded onto the lines below it.
  *
  * `>` folds, `|` keeps newlines, either may carry a chomping indicator
- * (`-`/`+`) and an explicit indentation digit, in either order. The class is
- * deliberately a touch wider than YAML — `>--` is not legal YAML and is not
- * governs text either, and a detector narrower than the syntax it detects is
- * the defect in #1692, not the fix for it.
+ * (`-`/`+`) and an explicit indentation digit, in either order, and either
+ * may be followed by a comment. The class is deliberately a touch wider than
+ * YAML — `>--` is not legal YAML and is not governs text either, and a
+ * detector narrower than the syntax it detects is the defect in #1692, not
+ * the fix for it.
+ *
+ * The comment is matched here rather than stripped beforehand, so a `#` in
+ * real governs text — "the # anchor parser" — is never cut: nothing is
+ * removed unless what precedes it is already a block header.
  */
-const BLOCK_SCALAR_HEADER = /^[>|][0-9+-]{0,2}$/;
+const BLOCK_SCALAR_HEADER = /^[>|][0-9+-]{0,2}(\s+#.*)?$/;
 
 /**
  * Check if a governs field value is valid (non-empty, not TODO, not a
