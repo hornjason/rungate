@@ -1736,3 +1736,168 @@ describe("AC-14 (#1104): the escaped record is injective, and spares the paths g
     ).toBe(2);
   });
 });
+
+// ── AC-15: a leading quote does not disarm the newline escape (#1869) ─────
+
+/**
+ * `case` tries arms in order, and the two `unquotable` arms were in the wrong
+ * one. A name that BOTH starts with a literal `"` AND carries a newline matched
+ * the git-shape arm first, so `esc` stayed empty, the renderer took the
+ * `'%s %s\n'` branch, and the record split into two lines — the forgery AC-13
+ * closes, re-entered through the arm order.
+ *
+ * ## READ THIS FIRST: it is NOT reachable from either caller today, and #1869
+ * does not say so
+ *
+ * The issue's measured table is exactly right about `classify_path` and says
+ * nothing about whether any path source can produce its input. Measured here,
+ * through the real `read_tree` rather than by reading the code:
+ *
+ * | source | can carry a RAW newline | can start with `"` |
+ * |---|---|---|
+ * | `git status --porcelain` | no — git C-quotes it to `\n`, two characters | yes |
+ * | `read_scratch` glob | yes — the filesystem wraps nothing | no — every entry is `"${root}"*`, so it begins `.claude-pr/` |
+ *
+ * The two conditions sit in different sources and no live path has both. The
+ * first draft of this battery drove the defect row through `read_tree` and
+ * went **green**, because `read_scratch` handed `classify_path`
+ * `.claude-pr/"<newline>absent .ripgreprc`, which does not start with a quote
+ * and matches the newline arm correctly. That green was the finding: a trace
+ * is not a reachability argument, and a case that cannot tell the fix from the
+ * defect is worth nothing however true its subject is.
+ *
+ * So these rows feed `classify_path` DIRECTLY. That is the unit where the
+ * defect lives and the only level at which this battery can disagree with
+ * itself. Measured on the unfixed source, one `bash` call per row:
+ *
+ * ```
+ * 1 git-quoted, no newline      1 line   unquotable "ordinary name with spaces.md"
+ * 2 newline, no leading quote   1 line   unquotable $'evil\nabsent .ripgreprc'
+ * 3 newline AND leading quote   2 lines  unquotable "      <- then `absent .ripgreprc`
+ * ```
+ *
+ * ## Why fix an unreachable defect rather than close the issue
+ *
+ * Because the reachability argument is the one that already failed once. The
+ * arm was correct for every caller `classify_path` had until #1071 added
+ * `read_scratch`, the first source git had never seen — and the comment over
+ * the `case` has warned about precisely that since: *"A path from
+ * `read_scratch` was never seen by git and is wrapped by nothing. That is the
+ * one that needs escaping below"*. The next source inherits whichever order is
+ * there. Reordering two arms costs nothing and moves no token.
+ *
+ * **It is defence in depth and the pull request says so.** It is not a live
+ * forgery, and calling it one would be the overstatement this docblock exists
+ * to correct.
+ *
+ * ## The axis this battery varies
+ *
+ * Rows 2 and 3 carry the SAME newline payload and differ only in the leading
+ * quote, so the quote is the whole cause and nothing else can be
+ * (`.claude/rules/checks-must-be-able-to-fail.md`, seventh shape). Row 2 is the
+ * control and must stay escaped under every mutation, or the battery is
+ * varying the wrong axis. Row 1 is AC-14's control — a git-quoted path with no
+ * newline, pinned byte-for-byte through the real reader — and is not restated
+ * here, because a second copy of a pinned record is a second place for it to
+ * drift.
+ */
+describe("AC-15 (#1869): the newline is tested first, whatever the name starts with", () => {
+  /** The record a forged second line would carry. `.ripgreprc` is untrusted. */
+  const FORGED = "absent .ripgreprc";
+
+  const QUOTE_ARM = `'"'*) h=unquotable; esc= ;;`;
+  const NEWLINE_ARM = `*$'\\n'*) h=unquotable; esc=1 ;;`;
+
+  /**
+   * Put the arms back the way #1869 found them, in a copy.
+   *
+   * A FUNCTION replacer, and that is not style. Both arms contain `$'`, which
+   * `String.replace` reads as the "portion after the match" substitution when
+   * the replacement is a string — the first draft here produced a mutant whose
+   * `case` was truncated to `*'`, and bash refused it with a syntax error. A
+   * mutant that will not parse is indistinguishable from one that refuses on
+   * the merits, which is why the exit code is asserted inside `classify`.
+   */
+  const armSwapped = (reader: string): string =>
+    reader.replace(`${NEWLINE_ARM}\n    ${QUOTE_ARM}`, () => `${QUOTE_ARM}\n    ${NEWLINE_ARM}`);
+
+  /** Everything `classify_path` printed for one path, as whole lines. */
+  const classify = (path: string, reader: string): string[] => {
+    const script = join(scratchDir("ai-review-ig-classify-"), "p.sh");
+    writeFileSync(script, `set -uo pipefail\n${reader}\nclassify_path "$1"\n`);
+    // `bash -e`, which is the shell a runner `run:` block gets and what
+    // AC-1 of test/ai-review-runner-shell-parity.test.ts requires of every
+    // suite driving a generated step. A plain `bash` here would let a
+    // mid-script failure continue and report a different exit code than CI.
+    const r = Bun.spawnSync(["bash", "-e", script, path], { cwd: dirname(script) });
+    expect(
+      r.exitCode,
+      `classify_path failed outright, so nothing below witnessed the arm order:\n` +
+        new TextDecoder().decode(r.stderr),
+    ).toBe(0);
+    return new TextDecoder().decode(r.stdout).split("\n").filter(l => l.length > 0);
+  };
+
+  const ROWS = [
+    { row: 2, what: "a newline and NO leading quote — the control", path: `evil\n${FORGED}` },
+    { row: 3, what: "a newline AND a leading quote — the defect", path: `"\n${FORGED}` },
+  ] as const;
+
+  for (const { row, what, path } of ROWS) {
+    test(`row ${row}: ${what} — ONE escaped record, never the forged line`, () => {
+      const lines = classify(path, AI_REVIEW_TREE_READER);
+      expect(
+        lines.length,
+        `the record split into ${lines.length} lines, and every line after the first is ` +
+          `indistinguishable from one this function produced:\n${lines.join("\n")}`,
+      ).toBe(1);
+      expect(
+        lines,
+        "a line equal to the forged record reached the reading, authored by whoever chose the name",
+      ).not.toContain(FORGED);
+      expect(
+        lines[0],
+        "the name was printed as itself rather than escaped, so its newline is a record boundary",
+      ).toContain("$'");
+    });
+  }
+
+  test("the mutant: the old arm order splits row 3 and leaves row 2 escaped", () => {
+    // A mutant that moves BOTH rows is a broken mutant, not the old rule: it
+    // would mean the swap changed more than the arm order, and this battery
+    // could then not tell the leading quote from the newline.
+    const mutant = armSwapped(AI_REVIEW_TREE_READER);
+    expect(
+      mutant,
+      "the arm swap matched nothing, so every assertion below ran against the REAL reader and " +
+        "the mutant witnessed nothing",
+    ).not.toBe(AI_REVIEW_TREE_READER);
+
+    expect(
+      classify(`evil\n${FORGED}`, mutant),
+      "the control row stopped escaping under the mutant, so the swap moved more than the arm " +
+        "order and this battery is varying the wrong axis",
+    ).toEqual([`unquotable $'evil\\n${FORGED}'`]);
+
+    expect(
+      classify(`"\n${FORGED}`, mutant),
+      "the mutant did NOT split the leading-quote row, so the arm order is not what row 3 is " +
+        "measuring and row 3 would pass with the defect restored",
+    ).toEqual(['unquotable "', FORGED]);
+  });
+
+  test("the fix is the ORDER: the newline arm is tried first, and no token moved", () => {
+    const reader = AI_REVIEW_TREE_READER;
+    const caseBlock = reader.slice(reader.indexOf('case "${p}" in'), reader.indexOf("esac"));
+    expect(caseBlock, "the classifier's case block was not located").toContain("h=unquotable");
+    const newlineAt = caseBlock.indexOf(NEWLINE_ARM);
+    const quoteAt = caseBlock.indexOf(QUOTE_ARM);
+    expect(newlineAt, "the newline arm is not in the case block at all").toBeGreaterThanOrEqual(0);
+    expect(quoteAt, "the leading-quote arm is not in the case block at all").toBeGreaterThanOrEqual(0);
+    expect(
+      newlineAt < quoteAt,
+      "the leading-quote arm is tried BEFORE the newline arm, so a name carrying both matches " +
+        "the git-shape arm and prints unescaped — #1869",
+    ).toBe(true);
+  });
+});
