@@ -142,6 +142,33 @@ describe("orderReading: an item nothing can observe is UNMEASURED, never DONE", 
     ).toBe("RECORDED");
   });
 
+  // Every citation into `project-state.json`'s `priorities` names the entry by
+  // its OPENING WORDS, and this asserts each named entry is still there.
+  //
+  // `priorities` is an array people PREPEND to. Two entries were unshifted on
+  // 2026-11-08 and `priorities[0]` — cited twice in scripts/work-status.ts,
+  // once in a docblock and once in the text item 7 PRINTS — silently began
+  // naming a different entry. An index is a position, so no reading of it can
+  // be wrong; a name can be, which is the only reason this case can fail.
+  //
+  // What was broken to prove it: changing one anchor to
+  // `STAGE B IS NOW TAKEN BY A CMMAND` fails with that string, and deleting
+  // both anchors fails the non-vacuity floor rather than passing over nothing.
+  test("every priorities citation in scripts/work-status.ts names an entry that exists", () => {
+    const source = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
+    const anchors = [...source.matchAll(/(?:priority|entry) opening `([^`]+)`/g)].map(m => m[1]!);
+    expect(anchors.length, "no citation was found at all — the regex stopped matching, not the citations").toBeGreaterThanOrEqual(2);
+
+    const priorities: string[] = JSON.parse(readFileSync(join(ROOT, "project-state.json"), "utf-8")).priorities;
+    const missing = anchors.filter(a => !priorities.some(p => p.startsWith(a)));
+    expect(
+      missing,
+      `scripts/work-status.ts cites ${missing.length} project-state.json priority entr(ies) that no longer open ` +
+        `with the words it names. Re-read the entry and update the citation — do NOT replace it with an index, ` +
+        `which is what went stale on 2026-11-08.`,
+    ).toEqual([]);
+  });
+
   test("RECORDED requires a citation — a bare flag is still UNMEASURED", () => {
     // The whole guard. `recordedDone: true` would make this reading reachable
     // by a session's memory, which is the 2026-11-03 defect with an extra

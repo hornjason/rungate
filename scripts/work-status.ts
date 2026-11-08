@@ -324,11 +324,19 @@ async function boardStatus(): Promise<{
  *
  * **This array is hand-maintained and that is a known defect, not a design.**
  * The banner below says the order comes from `project-state.json`; the ORDER
- * is its, but nothing here READS it — the list lives in prose inside
- * `priorities[0]` and this is a transcription of it. A transcription goes
- * stale silently, and did: item 2 had no tracker for a day after #1759 was
- * filed for it, and item 7 printed blank for a day after it was completed.
+ * is its, but nothing here READS it — the list lives in prose inside the
+ * `priorities` entry opening `STAGE B IS NOW TAKEN BY A COMMAND`, and this is
+ * a transcription of it. A transcription goes stale silently, and did: item 2
+ * had no tracker for a day after #1759 was filed for it, and item 7 printed
+ * blank for a day after it was completed.
  * Parsing the prose is the real fix and is not in this change.
+ *
+ * **Cite that entry by its opening words, never by its index.** `priorities`
+ * is an array people PREPEND to — two entries were unshifted on 2026-11-08 —
+ * so `priorities[0]` names a different entry every time somebody records
+ * something, and both references in this file pointed at the wrong one within
+ * the hour. An index is a position; the opening words are a name, and `grep`
+ * finds the name.
  */
 const ORDER: {
   n: number;
@@ -348,7 +356,8 @@ const ORDER: {
     what: "re-run the Stage B audit",
     tracker: null,
     recordedDone:
-      "project-state.json priorities[0], 2026-11-07 — taken BY `/stage-audit` from the " +
+      "project-state.json, the priority opening `STAGE B IS NOW TAKEN BY A COMMAND`, " +
+      "2026-11-07 — taken BY `/stage-audit` from the " +
       "primary checkout on main at 1da3821f, not by hand: the precondition probe cleared " +
       "and all six readings MET (B1 26/26, B2 26/26, B3 6/6, B4 6/6, B5 exit 0, B6 6/6). " +
       "No tracker object carries this, which is why it is still `~` — re-run `/stage-audit` " +
