@@ -23,6 +23,7 @@ import {
   actorMayWrite,
   WRITING_PERMISSIONS,
   fanoutDecisions,
+  mergeCandidateSources,
   readBoardCredential,
   truncatedReadings,
   whyNotReady,
@@ -1224,27 +1225,34 @@ describe("BR-47..BR-52: an issue that was never blocked reaches Ready", () => {
 
   // RUN, do not read. The argument guard sits before any network call, so
   // every refusal below is observable without a credential.
-  test("BR-49: --top-up is accepted as a source for a never blocked issue, and is exclusive", () => {
+  test("BR-49: every source combination but NONE is accepted", () => {
     const run = (extra: string[]) =>
       Bun.spawnSync(["bun", "scripts/board-ready.ts", "--repo", "o/n", "--project", "PVT_x", ...extra], {
         cwd: ROOT,
         env: { ...process.env, BOARD_PROJECT_TOKEN: "" },
       });
-    // The positive half: `--top-up` alone gets PAST the source guard and
+    // The positive half: each accepted spelling gets PAST the source guard and
     // refuses on the credential instead — the same place BR-22 lands a valid
-    // `--closed-issue`. Without this the two refusals below are green for a
-    // reason that has nothing to do with the flag.
-    const ok = run(["--top-up"]);
-    expect(new TextDecoder().decode(ok.stdout)).toContain("BOARD_PROJECT_TOKEN");
-    expect(new TextDecoder().decode(ok.stderr)).not.toContain("exactly one");
-    // Neither, and both. BOTH is the one worth refusing rather than
-    // resolving: `--top-up` already contains every candidate a fan-out can
-    // produce, so whichever branch lost would lose silently.
-    for (const extra of [[], ["--top-up", "--closed-issue", "7"]]) {
-      const p = run(extra);
-      expect(p.exitCode, `${extra.join(" ") || "(no source)"} was not refused`).toBe(2);
-      expect(new TextDecoder().decode(p.stderr)).toContain("exactly one");
+    // `--closed-issue`. Without this the refusal below is green for a reason
+    // that has nothing to do with the flags.
+    //
+    // **BOTH is one of them now** (#1917). It used to be refused, on the true
+    // observation that `--top-up` already contains every candidate a fan-out
+    // can produce — and that refusal is what left a close unable to refill the
+    // lane from the general pool. The two sets are merged rather than
+    // concatenated (BR-55), so nothing is counted twice and neither source
+    // loses silently.
+    for (const extra of [["--top-up"], ["--closed-issue", "7"], ["--top-up", "--closed-issue", "7"]]) {
+      const ok = run(extra);
+      expect(new TextDecoder().decode(ok.stdout), `${extra.join(" ")} did not reach the credential`)
+        .toContain("BOARD_PROJECT_TOKEN");
+      expect(new TextDecoder().decode(ok.stderr)).not.toContain("at least one");
     }
+    // NEITHER is still refused. An invocation with no source has nothing to
+    // look at and must not quietly become either one.
+    const p = run([]);
+    expect(p.exitCode, "(no source) was not refused").toBe(2);
+    expect(new TextDecoder().decode(p.stderr)).toContain("at least one");
   }, 30_000);
 
   // The trigger. A source nothing fires is a command somebody runs by hand
@@ -1404,5 +1412,196 @@ describe("BR-47..BR-52: an issue that was never blocked reaches Ready", () => {
     // And the occupancy it is measured against is the whole board's, read
     // before this point — not the candidate list's.
     expect(code.slice(0, at)).toMatch(/occupied\+\+/);
+  });
+});
+
+/**
+ * BR-55..BR-58 — a close that freed nothing still refills Ready.
+ *
+ * `closed` is the one event that reliably FREES a slot in this lane, and it
+ * was the one event that could not refill it from the general pool: the
+ * workflow ran `--closed-issue` there and `--top-up` on the other four types,
+ * and the script refused both together. So when the closed issue was blocking
+ * nothing, the lane dropped by one and stayed there.
+ *
+ * Measured 2026-11-08. #1889 closed at 22:02:10Z; run `42528160275` reported
+ * `#1889 was blocking nothing. No issue changed.` — correct for what it was
+ * asked. The lane then read `Ready 1 of 2 SHORT` with 33 unblocked and
+ * unclaimed candidates, and a hand-run `mode=top-up -f write=true` moved
+ * `#1157 -> Ready` within seconds (run `42530702081`).
+ *
+ * THE CONTROL IS BR-58, and it is why the fix is not "always top up and drop
+ * the fan-out": a close that WAS blocking something must still name every
+ * issue it freed, which is the only thing the fan-out contributes that the
+ * top-up cannot.
+ */
+describe("BR-55..BR-58: a close that freed nothing still refills Ready", () => {
+  const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+  const yml = readFileSync(join(ROOT, ".github/workflows/board-ready.yml"), "utf-8");
+  const ymlLive = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+  /**
+   * The `closed)` arm alone, comments already gone.
+   *
+   * It counts `case`/`esac` rather than matching to the first `;;`, because
+   * this arm CONTAINS a nested `case "$ISSUE" in` that validates the number
+   * and the first `;;` in the text belongs to that one. The first spelling
+   * here matched to it, so both rows below went red against a correct
+   * workflow — the second shape in `.claude/rules/checks-must-be-able-to-fail.md`,
+   * loud by luck. Indentation is not read at all, so `shfmt` cannot move it.
+   */
+  const armsOf = (): Map<string, string> => {
+    // SCOPED TO `case "$MODE"`. The file holds a second `case` — the trust
+    // gate's `case "$perm" in admin|maintain|write)` — whose arms match the
+    // same label pattern, so an unscoped parse reported `admin`, `maintain`
+    // and `write` as mode arms passing no candidate source. True of them, and
+    // nothing to do with this lane.
+    const all = ymlLive.split("\n");
+    const start = all.findIndex(l => /^\s*case\s+"\$MODE"\s+in\s*$/.test(l));
+    const lines: string[] = [];
+    for (let d = 0, i = start < 0 ? all.length : start + 1; i < all.length; i++) {
+      const l = all[i] ?? "";
+      if (/^\s*case\s/.test(l)) d++;
+      else if (/^\s*esac\s*$/.test(l)) {
+        if (d === 0) break;
+        d--;
+      }
+      lines.push(l);
+    }
+    const arms = new Map<string, string>();
+    for (let i = 0; i < lines.length; i++) {
+      // BR-51's own arm-label pattern, alternations and optional spaces round
+      // the pipes included, so a `shfmt` reformat cannot empty this map.
+      const m = /^\s{10,}([a-z][a-z-]*(?:\s*\|\s*[a-z][a-z-]*)*)\)$/.exec(lines[i] ?? "");
+      if (m === null) continue;
+      const body: string[] = [];
+      let depth = 0;
+      for (const l of lines.slice(i + 1)) {
+        if (/^\s*case\s/.test(l)) depth++;
+        else if (/^\s*esac\s*$/.test(l)) depth--;
+        else if (/^\s*;;\s*$/.test(l) && depth === 0) break;
+        body.push(l);
+      }
+      for (const nm of (m[1] ?? "").split("|").map(s => s.trim())) arms.set(nm, body.join("\n"));
+    }
+    return arms;
+  };
+  const closedArm = armsOf().get("closed") ?? "";
+
+  // THE DEFECT, behaviourally. A close that freed nothing contributes no
+  // candidate, and the run must still have the general pool to draw from.
+  test("BR-55: a close that freed nothing still leaves the general pool to promote from", () => {
+    const pool = [{ number: 10 }, { number: 11 }, { number: 12 }];
+    const freedNothing = mergeCandidateSources([], pool);
+    expect(
+      freedNothing.candidates.map(c => c.number),
+      "a close that was blocking nothing must still consider every open issue — " +
+        "this is the whole of #1917, and without it the lane stays one short",
+    ).toEqual([10, 11, 12]);
+    expect(freedNothing.freed.size, "nothing was freed, so nothing may be named as freed").toBe(0);
+    // THE NEGATIVE HALF. Without the top-up source the same close produces
+    // nothing, which is exactly the behaviour measured on #1889 — so the row
+    // above is not green because the merge returns its input whatever happens.
+    expect(mergeCandidateSources([], []).candidates).toEqual([]);
+  });
+
+  // MERGED, NOT CONCATENATED. The two sets overlap by construction —
+  // `states:[OPEN]` contains every OPEN issue a `blocking` list can produce —
+  // and handing the decider the same issue twice lets one close count against
+  // the cap twice.
+  test("BR-56: an issue reached by both sources is one candidate, not two", () => {
+    const both = mergeCandidateSources([{ number: 10 }], [{ number: 10 }, { number: 11 }]);
+    expect(
+      both.candidates.map(c => c.number),
+      "an issue in both the blocking list and the open-issue list must appear ONCE — " +
+        "twice lets a single close consume two slots of the cap",
+    ).toEqual([10, 11]);
+    // Close-freed first, so the log names what this event freed before the
+    // pool it was topped up from.
+    expect(mergeCandidateSources([{ number: 11 }], [{ number: 10 }]).candidates.map(c => c.number))
+      .toEqual([11, 10]);
+    // ANTI-VACUITY: distinct numbers are both kept, so the row above is not
+    // green because the merge drops the second list.
+    expect(mergeCandidateSources([{ number: 10 }], [{ number: 11 }]).candidates.map(c => c.number))
+      .toEqual([10, 11]);
+    // A node with no number is unreadable rather than duplicate, and two of
+    // them must not collapse into one.
+    expect(mergeCandidateSources([], [{}, {}] as { number?: unknown }[]).candidates.length).toBe(2);
+  });
+
+  // THE WIRING. A merge nothing calls with two populated lists is a function
+  // with no caller, and the workflow is where the close learns to top up.
+  test("BR-57: the close event passes BOTH sources, quoted", () => {
+    expect(closedArm, "no `closed)` arm was parsed — this row would pass vacuously").not.toBe("");
+    expect(
+      closedArm,
+      "the `closed` arm must pass --top-up as well as --closed-issue, or a close " +
+        "that unblocked nothing leaves Ready one short until a person runs a command",
+    ).toContain("--top-up");
+    // BR-54's property, at the site #1917 adds. `$ISSUE` is the
+    // `workflow_dispatch` free-text input; unquoted it word-splits into flags.
+    expect(closedArm, "--closed-issue must take a QUOTED $ISSUE").toContain('--closed-issue "$ISSUE"');
+    expect(closedArm).not.toMatch(/--closed-issue\s+\$ISSUE/);
+    // And the script accepts the pair rather than refusing it.
+    expect(
+      code,
+      "the source guard must refuse only when NEITHER source is given",
+    ).toMatch(/if \(!topUp && rawClosed === null\)/);
+    expect(code, "both walks must feed the one merge").toContain("mergeCandidateSources(closeNodes, openNodes)");
+  });
+
+  // THE CONTROL. The fan-out contributes no candidate the top-up lacks, so
+  // "always top up and drop the fan-out" passes every row above. What it
+  // loses is the reporting: a close must still name every issue it freed,
+  // moved or not, where a top-up names only the movers.
+  test("BR-58: a close that WAS blocking something still names every issue it freed", () => {
+    const freedTwo = mergeCandidateSources([{ number: 10 }, { number: 11 }], [{ number: 12 }]);
+    expect(
+      [...freedTwo.freed].sort((a, b) => a - b),
+      "the issues this close freed must be identified, or the log cannot name them",
+    ).toEqual([10, 11]);
+    expect(freedTwo.freed.has(12), "an issue the close did not free is not freed").toBe(false);
+    // The log keys on that set, and on nothing else. `freed` is empty on a
+    // pure top-up and holds every candidate on a pure fan-out, so this one
+    // expression is what both modes always did.
+    expect(
+      code,
+      "the log must name a non-moving candidate when this close freed it — " +
+        "dropping the fan-out would silently stop reporting what a close unblocked",
+    ).toMatch(/if \(!freed\.has\(dec\.number\) && !dec\.move\) continue;/);
+    // And the workflow must still ask for it.
+    expect(
+      closedArm,
+      "the `closed` arm must still pass --closed-issue — replacing it with --top-up " +
+        "alone promotes the same issues and stops saying what the close freed",
+    ).toContain("--closed-issue");
+  });
+
+  // SWEEP FOR THE SHAPE, and this row exists because the battery for the four
+  // above found it: deleting `--top-up` from the `assigned)` arm left every
+  // case green, and that arm would then pass no candidate source at all. The
+  // script refuses such a run with `pass at least one of` — a red run that
+  // first appears when that event fires in production, which is exactly what
+  // BR-51 says about an arm that does not exist. BR-51 asks whether the arm is
+  // there; this asks whether it does anything.
+  //
+  // It is the shape #1917 makes reachable: BOTH sources are legal now, so the
+  // guard that used to refuse a second flag no longer refuses anything except
+  // NONE, and NONE is per-arm rather than per-file.
+  test("BR-59: every mode arm passes at least one candidate source", () => {
+    const arms = armsOf();
+    expect(
+      arms.size,
+      "no mode arms parsed — this row would pass vacuously",
+    ).toBeGreaterThan(3);
+    const sourceless = [...arms]
+      .filter(([, body]) => !/--top-up|--closed-issue/.test(body))
+      .map(([n]) => n);
+    expect(
+      sourceless,
+      "a mode arm that passes neither --top-up nor --closed-issue refuses at runtime " +
+        "with `pass at least one of`, so the lane silently stops refilling for that " +
+        "event. BOTH sources are legal; NEITHER is not.",
+    ).toEqual([]);
   });
 });

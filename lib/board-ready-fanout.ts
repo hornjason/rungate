@@ -177,6 +177,67 @@ export function fanoutDecisions(
   });
 }
 
+/** What the two candidate walks produced, as one set the decider reads once. */
+export interface MergedCandidates<T> {
+  /** Every candidate, deduplicated by number, close-freed ones first. */
+  readonly candidates: readonly T[];
+  /** The numbers THIS close freed — the set the log names in full. */
+  readonly freed: ReadonlySet<number>;
+}
+
+/**
+ * The two candidate sources, merged into the one array the decider reads.
+ *
+ * ## Why both may run at once (#1917)
+ *
+ * A close is the one event that reliably FREES a slot in Ready, and it used to
+ * be the one event that could not refill the lane from the general pool:
+ * `.github/workflows/board-ready.yml` ran `--closed-issue` on `closed` and
+ * `--top-up` on everything else, so a close that unblocked nothing left the
+ * lane one short until a person ran a command by hand. Measured 2026-11-08 —
+ * #1889 closed, run `42528160275` reported "was blocking nothing", 33
+ * candidates were eligible against a depth of 2 with one slot free, and a
+ * hand-run top-up moved #1157 within seconds.
+ *
+ * ## The two sets are not disjoint, and the fan-out adds no candidate
+ *
+ * The top-up query asks for `states:[OPEN]` over the whole repository, so it
+ * already contains every OPEN issue a `blocking` list can produce. What the
+ * fan-out contributes is `freed`: the issues THIS close unblocked, which the
+ * caller names in full — movers and non-movers alike — where a top-up names
+ * only the movers. Concatenating instead of merging would hand the decider the
+ * same issue twice and let one close count against the cap twice.
+ *
+ * **It lives here rather than inline in the script so a case can hold it.** A
+ * `main()` that needs a live GraphQL endpoint cannot be asked this question.
+ *
+ * A node with no numeric `number` is carried through unchanged rather than
+ * dropped: it is unreadable rather than duplicate, and `truncatedReadings` and
+ * the caller's mapping are where that is judged.
+ */
+export function mergeCandidateSources<T extends { readonly number?: unknown }>(
+  fromClose: readonly T[],
+  fromTopUp: readonly T[],
+): MergedCandidates<T> {
+  const freed = new Set<number>();
+  for (const n of fromClose) {
+    if (typeof n?.number === "number") freed.add(n.number);
+  }
+  const candidates: T[] = [];
+  const seen = new Set<number>();
+  // Close-freed first, so the log names what this event freed before the pool
+  // it was topped up from. Ordering does not decide promotion — `selectReady`
+  // sorts by `readyOrder` — so this is a reading order, not a priority.
+  for (const n of [...fromClose, ...fromTopUp]) {
+    if (typeof n?.number === "number") {
+      if (seen.has(n.number)) continue;
+      seen.add(n.number);
+    }
+    candidates.push(n);
+  }
+  return { candidates, freed };
+}
+
 /** A GraphQL connection, as far as truncation is concerned. */
 interface MaybeTruncated {
   readonly pageInfo?: { readonly hasNextPage?: boolean } | null;
