@@ -8,7 +8,7 @@ status: active
 owner: jason
 created: 2026-10-22
 source: https://claude.dev/blog/solving-code-review-at-anthropic/
-updated: 2026-11-07
+updated: 2026-11-08
 ---
 
 # Code Review Convergence
@@ -230,8 +230,22 @@ rounds-to-pass: measured 40, unmeasured 0 (passed 40, still open 0)
 ```
 
 Against the 2026-10-28 baseline: **4.50 → 3.30 rounds**, **26.1% → 30.0% one-round**.
-Zero unmeasured, where the baseline cohort had 45.8% of rounds unreadable — that is
-the largest change of the three and the one O3 was pointed at.
+
+**The `from` values in that output are not this baseline.** `2.08`, `65%` and `8.9%`
+are Anthropic's published before-figures, hard-coded in `lib/rounds-to-pass.ts` as the
+frame the criterion is read against, and `1.32`, `78%` and `1.5%` are their after. They
+are not #1573–#1634 and they do not contradict the 4.50 / 26.1% above. The line reads
+as though they might, which is worth fixing in the formatter and is not fixed here.
+
+**O3 is NOT measured by this reading**, and the first revision of this section claimed
+it was. `rounds-to-pass: … unmeasured 0` counts PULL REQUESTS whose ledger comment
+could not be read — `unmeasured.push({ number: pr.number, … })`. O3's denominator is
+**rounds**. This document's own methodology section shows how far the two diverge: on
+one cohort 44 of 45 pull requests were readable at the pull-request level while **41.0%
+of individual rounds** were rounds in which no review happened. So "zero unmeasured over
+40 pull requests" says nothing about the share of this cohort's rounds that were
+unreadable. The claim that it was "the largest change, and the one O3 was pointed at"
+is **withdrawn**; O3 stands at its 2026-10-28 baseline, unmoved by anything here.
 
 **This does not settle O1 or O2, and it is not the O4 reading.** The cohort spans
 at least one mechanism change of its own: #1914 merged the `Unobserved` demotion on
