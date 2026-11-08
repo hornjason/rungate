@@ -5485,11 +5485,27 @@ describe("the filing cap under direct-ship mode", () => {
     // upward one PR at a time ends there, and nothing else in this file
     // would go red on the way. The bound is an assertion rather than a
     // comment because a comment is how the last one of these was missed.
+    //
+    // The bound was 5 and is now 15, raised with the constant on 2026-11-08
+    // against a ledger reading rather than a feeling — see the table in
+    // `FILINGS_PER_RUN_DIRECT`'s docblock. It is NOT set to the constant:
+    // a bound equal to what it bounds goes red on every raise including the
+    // defensible ones, which trains the next reader to move both together
+    // without reading either. The gap is the room one raise may use before
+    // somebody has to argue the bound itself.
     expect(
       FILINGS_PER_RUN_DIRECT,
-      "a direct-ship allowance above 5 is not a raised cap, it is no cap — " +
+      "a direct-ship allowance above 15 is not a raised cap, it is no cap — " +
         "argue it in `FILINGS_PER_RUN_DIRECT`'s docblock against a reading, not here",
-    ).toBeLessThanOrEqual(5);
+    ).toBeLessThanOrEqual(15);
+
+    // And it stays a quarter of what the swarm did, which is the thing the
+    // bound is actually protecting. A bound nobody relates to the number it
+    // was derived from is a number somebody rounds up.
+    expect(
+      FILINGS_PER_RUN_DIRECT * 4,
+      "the allowance is no longer comfortably below #1595's 57-per-day swarm figure",
+    ).toBeLessThan(57);
   });
 
   test("FG-195: reserveAllowance honours the cap it is handed, not the module constant", () => {
