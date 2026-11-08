@@ -116,17 +116,20 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  * permits — stages are a dependency order, not a queue, and their items
  * depend on nothing those stages carry.
  *
- * **4 since 2026-11-08: B went BACKWARDS, and this is the regression the
- * message below refuses to let anybody lower quietly.** B2 is the state
- * claim "every engine criterion either names an open issue or is recorded
- * as already true", and closing #1892 removed SC-2620's only open issue, so
- * `criterion-coverage` fell to 25 of 26 and B2's own verify began exiting
- * 1 — on `main`, not only on a branch (run 42462454264 at `a0201e21`, one
- * failure, this item). The claim is measurably false, so B2 is `done:
- * false` and the command is untouched.
+ * **B went backwards and came back, both on 2026-11-08, and the round trip
+ * is the reason this number is an equality rather than a high-water mark.**
+ * B2 is the state claim "every engine criterion either names an open issue
+ * or is recorded as already true". Closing #1892 removed SC-2620's only
+ * open issue, `criterion-coverage` fell to 25 of 26, and B2's own verify
+ * began exiting 1 on `main` rather than only on a branch (run 42462454264
+ * at `a0201e21`, one failure, this item) — so #1899 set it `done: false`
+ * and dropped this number to 4, leaving the command untouched. #1899 then
+ * ticked SC-2620, `criterion-coverage` returned to 26 of 26, and the verify
+ * exits 0 against the spec as `origin/main` holds it at `f081246d`. Hence
+ * 5 again.
  *
- * Two things that exposed, both recorded in B2's own `what` and both
- * Jason's call:
+ * The re-tick restores the reading. It does not fix either thing the fall
+ * exposed, both recorded in B2's own `what` and both Jason's call:
  *
  *   - B2 is a STATE reading rather than a delivered capability, so it flaps
  *     on every spec tick that briefly shortens the board — and "`board-
@@ -135,12 +138,10 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  *   - Its verify reads the spec from `origin/main` (D3, #1896), so a pull
  *     request that FIXES a short board is measured against the unfixed
  *     `main` and cannot prove itself. With `test` a required check, that is
- *     a deadlock: no spec tick moving `criterion-coverage` can merge.
- *
- * This number goes back to 5 when B2 is re-ticked, which the tick in this
- * same commit makes true the moment it reaches `main`.
+ *     a deadlock: no spec tick moving `criterion-coverage` can merge. #1899
+ *     did not solve it — it unticked the item, which works once.
  */
-const COMPLETE_STAGES = 4;
+const COMPLETE_STAGES = 5;
 
 /**
  * Every verify command in the plan file runs through here.
