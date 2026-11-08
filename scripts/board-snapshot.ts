@@ -256,13 +256,24 @@ export const LIVE_GIT = (root: string, spawn: GitSpawn = spawnSync): GitRunner =
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     });
     // `code` carries `status`, and `status` is NULL when the process never
-    // ran — no `git` on PATH, or killed by a signal, which now includes the
-    // timeout above. That is a different fact from any exit code, and
-    // `lib/spec-source.ts` refuses on it rather than reading it as an answer
-    // about a file. The kill reason is put on stderr so the refusal can say
-    // "it ran too long" instead of "it never started".
-    const killed = r.status === null;
-    const why = killed && r.error !== undefined ? `${r.error.message} (timeout ${GIT_TIMEOUT_MS}ms)` : "";
+    // ran — no `git` on PATH — or when it was killed by a signal, which now
+    // includes the timeout above. Both are a different fact from any exit
+    // code, and `lib/spec-source.ts` refuses on either rather than reading
+    // it as an answer about a file.
+    //
+    // **BUT THEY ARE NOT THE SAME SENTENCE.** The first version of this
+    // appended `(timeout ${GIT_TIMEOUT_MS}ms)` to every null status with an
+    // error, so `spawnSync git ENOENT` — git simply absent, failing
+    // instantly — printed as having run for a full minute. Same conflation
+    // this module spent four review rounds removing from its git reads,
+    // reintroduced in the message. `r.signal` is the discriminator: a
+    // timeout kills, so it is set; an `ENOENT` never started, so it is not.
+    const why =
+      r.status !== null || r.error === undefined
+        ? ""
+        : r.signal !== null
+          ? `${r.error.message} (killed by ${r.signal}; the bound is ${GIT_TIMEOUT_MS}ms)`
+          : `${r.error.message} (it never started — this is not a timeout)`;
     return {
       ok: r.status === 0,
       code: r.status,

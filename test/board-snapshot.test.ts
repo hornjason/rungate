@@ -1635,6 +1635,32 @@ describe("LIVE_GIT bounds every call, because one of them is the network", () =>
     expect(r.code).toBeNull();
     expect(r.stderr).toContain("ETIMEDOUT");
     expect(r.stderr, "the reason omits the bound that was exceeded").toContain(String(GIT_TIMEOUT_MS));
+    expect(r.stderr).toContain("SIGTERM");
+  });
+
+  test("a `git` that was never THERE says so, and does NOT claim a timeout", () => {
+    // **The axis the first version of this battery never varied.** A null
+    // status has two causes and the code's own comment names both, but
+    // every row here handed it the timeout shape — so no count could come
+    // back wrong about an `ENOENT`, which failed instantly and printed as
+    // having run for a full minute. `signal` is what separates them: a
+    // timeout kills, an absent binary never started.
+    const absent = ((_cmd: string, _args: readonly string[]) => ({
+      status: null,
+      stdout: "",
+      stderr: "",
+      error: new Error("spawnSync git ENOENT"),
+      pid: 0,
+      output: [],
+      signal: null,
+    })) as unknown as GitSpawn;
+
+    const r = LIVE_GIT("/r", absent)(["fetch"]);
+    expect(r.code).toBeNull();
+    expect(r.stderr).toContain("ENOENT");
+    expect(r.stderr, "an instant failure claimed the full timeout").not.toContain(String(GIT_TIMEOUT_MS));
+    expect(r.stderr).not.toContain("SIGTERM");
+    expect(r.stderr).toContain("never started");
   });
 
   test("a child that exited normally carries NO invented reason — the control", () => {
