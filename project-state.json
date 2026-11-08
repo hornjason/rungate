@@ -1268,8 +1268,8 @@
         },
         {
           "id": "B2",
-          "what": "every engine criterion either names an open issue or is recorded as already true and needing only a binding",
-          "done": true,
+          "what": "every engine criterion either names an open issue or is recorded as already true and needing only a binding UNTICKED 2026-11-08, and the reading is the reason: closing #1892 removed SC-2620's only open issue, so `criterion-coverage` fell to 25 of 26 and this item's own verify command began exiting 1 — on `main`, not only on a branch. Run 42462454264 at `a0201e21` is the red, one failure, this item. The state claim really is false right now, so `done: false` is the honest value and the command is untouched. TWO THINGS THIS EXPOSED, both for Jason. **First, this item is a STATE reading, not a delivered capability**, so it flaps every time a spec tick lands and the board is briefly short — which is F2's done-condition (`board-conformance` exits 0) restated here, the thing rule 10 forbids. **Second, and worse: the verify reads the spec from `origin/main` (D3, #1896), so a pull request that FIXES a short board cannot prove it** — its branch is measured against the unfixed `main` — and because `test` is a required check, no spec tick that moves `criterion-coverage` can ever merge. That is a deadlock, and it is why this line changed rather than the command. The durable fix is Jason's call between three: move the state claim to F2 and give B2 a capability command; give `board-snapshot` a named worktree spec source for this one caller; or take the ladder's live board reading out of the required check.",
+          "done": false,
           "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading criterion-coverage"
         },
         {
@@ -1485,9 +1485,9 @@
         },
         {
           "id": "D5",
-          "what": "it runs as a test on main in CI. NOT BUILT — nothing runs `board-conformance` on a schedule or in a job, so a board that drifts after a merge stays drifted until a person asks. Filed 2026-11-08 as the tracker item below; no verify command yet, because #1849 refuses a verify naming a test that does not exist, and inventing the name here would be the thing that rule exists to stop.",
-          "done": false,
-          "verify": null,
+          "what": "it runs as a test on main in CI. DELIVERED by #1898, merged `a0201e21` on 2026-11-08, as `.github/workflows/board-conformance.yml` — a job rather than a case in the suite, deliberately: the `test` job is a required check, so a short board would redden every pull request, and a merge that legitimately closes the last issue for a criterion takes the board short for the minutes between the merge and the tick. It has no `pull_request` trigger, so nothing can make it required; it reports and gates nothing. THE FIRST REAL RUN IS THE EVIDENCE, not the suite: Actions run 42462454243 fired on the very push that merged it, resolved `secrets.RUNGATE_PROJECT_TOKEN` inside `run:` (there is no `Board conformance UNMEASURED` warning in the run's annotations, so the reading was taken rather than skipped), read the live board, printed `SHORT criterion-coverage 25 of 26 — 1 short` and exited 1 with a failure annotation titled `Board conformance`. The criterion it caught was SC-2620 itself — closing #1892 removed its only open issue — which is the same sequence SC-2613 records against #1873, found in 11 seconds instead of waiting for a person. THE COMMAND BELOW IS THE MUTATION, NOT A SMOKE TEST: the suite cuts the step's own `run:` body out of the YAML and executes that text under `bash -e`, the invocation Actions uses, then re-runs the short-board input against a copy whose `exit $status` reads `exit 0` — real refuses, mutant ships. Separately, adding `continue-on-error: true` to the step turned exactly one case red and nothing else.",
+          "done": true,
+          "verify": "bun test test/board-conformance-job.test.ts 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\"",
           "issue": 1892
         },
         {
