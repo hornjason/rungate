@@ -44,7 +44,7 @@
  */
 
 import { realpathSync } from "fs";
-import { basename, dirname, join, resolve, sep } from "path";
+import { basename, dirname, join, relative, resolve, sep } from "path";
 
 /** What a single git invocation came back with. */
 export interface GitRun {
@@ -120,13 +120,21 @@ export type SpecSource =
        */
       staleness: string | null;
       /**
-       * True when the working tree's copy differs from `ref`'s.
+       * True when the working tree's copy differs from `ref`'s, **and `null`
+       * when the comparison itself failed.**
        *
        * D4's half of this lives elsewhere; what this flag buys D3 is that the
        * provenance line can say "I read the shipped spec, and yours differs"
        * rather than leaving the reader to wonder which they got.
+       *
+       * The third state is not decoration. `git diff --quiet` exits 0 for
+       * same and 1 for differs, and anything else is the comparison not
+       * happening — which `!ok` printed as a confident "DIFFERS". A reader
+       * cannot act on a difference nobody measured.
        */
-      worktreeDiffers: boolean;
+      worktreeDiffers: boolean | null;
+      /** Why the comparison failed, when `worktreeDiffers` is `null`. */
+      worktreeCompareFailed: string | null;
     }
   | { kind: "untracked"; path: string; why: string }
   | { kind: "unmeasured"; why: string };
@@ -299,34 +307,18 @@ export function resolveSpecSource(opts: {
     };
   }
 
-  // IS IT TRACKED. Asked before the fetch, so an untracked fixture costs no
-  // network at all — and so the untracked arm cannot be reached by a fetch
-  // failure, which would make the two indistinguishable.
-  //
-  // **EXIT 1 AND NOTHING ELSE IS "untracked".** `--error-unmatch` exits 1
-  // for a path git does not know and 128 for a broken object store or a
-  // path outside the repository; treating both as untracked hands the
-  // second one a working-tree read. Security review of round 1 found this,
-  // and the battery had no row for it: every untracked case asserted on an
-  // exit-1 shape, so no count could come back wrong about a 128.
-  const rel = opts.git(["ls-files", "--full-name", "--error-unmatch", "--", opts.absPath]);
-  const path = rel.stdout.trim();
-  if (!rel.ok && rel.code !== 1) {
+  // **THE REPOSITORY-RELATIVE PATH IS DERIVED, NOT ASKED OF `ls-files`.**
+  // Both operands are already canonical and containment is already decided,
+  // so `relative` is the whole computation and it needs no subprocess. What
+  // it replaces is `ls-files --full-name`, which returned this string as a
+  // side effect of answering a question about the LOCAL index — see below.
+  const path = relative(canonTop, real).split(sep).join("/");
+  if (path === "" || path.startsWith("..")) {
     return {
       kind: "unmeasured",
       why:
-        `\`git ls-files\` failed in ${opts.root} with exit ${rel.code}: ` +
-        `${redactCredentials(rel.stderr.trim()) || "no reason given"}. That is a broken reader, not an untracked ` +
-        `file, and the difference is the whole of this module.`,
-    };
-  }
-  if (!rel.ok || path === "") {
-    return {
-      kind: "untracked",
-      path: opts.absPath,
-      why:
-        `git in ${opts.root} does not track ${opts.absPath}, so ${ref} has no version of it to read. ` +
-        `The reading below was taken against the file on disk.`,
+        `${opts.absPath} resolved to ${real}, which is the work tree at ${canonTop} itself rather than a file ` +
+        `inside it. A spec is a file; there is no reading to take here.`,
     };
   }
 
@@ -349,6 +341,27 @@ export function resolveSpecSource(opts: {
   const resolved = opts.git(["rev-parse", ref]);
   const sha = resolved.stdout.trim();
   if (!resolved.ok || sha === "") {
+    // **A REF THAT DOES NOT EXIST IS NOT AUTOMATICALLY A REFUSAL.** A fresh
+    // repository, a fork with no `origin`, a project whose default branch is
+    // not `main` — none of those has an `origin/main`, and for a path git
+    // has never heard of there is nothing to read there even in principle.
+    // So ask the local index BEFORE refusing: untracked here as well means
+    // disk genuinely is the only copy. Tracked here refuses, because then a
+    // shipped version exists and we could not reach it.
+    //
+    // Found by a real-repository fixture in `test/board-snapshot.test.ts`
+    // when round 3 moved the trackedness question after the ref — the
+    // reorder was right and this arm had to follow it.
+    const local = opts.git(["ls-files", "--error-unmatch", "--", opts.absPath]);
+    if (!local.ok && local.code === 1) {
+      return {
+        kind: "untracked",
+        path: opts.absPath,
+        why:
+          `${ref} does not resolve in ${opts.root} and git does not track ${opts.absPath} either, so the file on ` +
+          `disk is the only copy that exists. The reading below was taken against it.`,
+      };
+    }
     return {
       kind: "unmeasured",
       why:
@@ -357,15 +370,74 @@ export function resolveSpecSource(opts: {
     };
   }
 
+  // **DOES THE REF HAVE IT — ASKED OF THE REF.**
+  //
+  // This used to be `git ls-files --error-unmatch`, and that is a question
+  // about the LOCAL index. The two answers diverge in exactly the direction
+  // this module exists to prevent: a spec added on `origin/main` after this
+  // checkout was cut is absent locally and present at the ref, so the local
+  // question said "untracked" and the caller read disk — or, in
+  // `board-snapshot`, refused with "no such spec" while the shipped copy
+  // sat in the ref it was asked to read. Found by review of #1896 round 3,
+  // and no case could see it: every fixture keyed `ls-files` to the same
+  // branch state as `show`, so the suite varied one axis and the defect
+  // sat on the other.
+  //
+  // The cost is that an untracked path inside the work tree now costs a
+  // fetch, because trackedness is no longer known before the ref is
+  // resolved. That is the right trade: the saved fetch was buying a wrong
+  // answer.
+  const atRef = opts.git(["cat-file", "-e", `${sha}:${path}`]);
+  if (!atRef.ok && atRef.code !== 1) {
+    return {
+      kind: "unmeasured",
+      why:
+        `\`git cat-file -e ${sha}:${path}\` failed in ${opts.root} with exit ${atRef.code}: ` +
+        `${redactCredentials(atRef.stderr.trim()) || "no reason given"}. That is a broken reader, not a spec the ` +
+        `ref has not got, and the difference is the whole of this module.`,
+    };
+  }
+  if (!atRef.ok) {
+    // NOT AT THE REF — and now the LOCAL index is the right thing to ask,
+    // because the two cases it separates are both about this checkout: a
+    // spec added on this branch and not yet shipped, versus a file git has
+    // never heard of. Only the second may be read from disk.
+    const rel = opts.git(["ls-files", "--error-unmatch", "--", opts.absPath]);
+    if (!rel.ok && rel.code !== 1) {
+      return {
+        kind: "unmeasured",
+        why:
+          `\`git ls-files\` failed in ${opts.root} with exit ${rel.code}: ` +
+          `${redactCredentials(rel.stderr.trim()) || "no reason given"}. That is a broken reader, not an untracked ` +
+          `file, and the difference is the whole of this module.`,
+      };
+    }
+    if (rel.ok) {
+      return {
+        kind: "unmeasured",
+        why:
+          `${path} is tracked here but ${ref} (${sha}) has no version of it. That is a spec added on this branch ` +
+          `and not yet shipped, which is a different fact from a spec whose criteria are unplaced — reading the ` +
+          `working tree here would print the second while the first is true.`,
+      };
+    }
+    return {
+      kind: "untracked",
+      path: opts.absPath,
+      why:
+        `neither ${ref} (${sha}) nor git in ${opts.root} has any version of ${opts.absPath}, so the file on disk ` +
+        `is the only copy that exists. The reading below was taken against it.`,
+    };
+  }
+
   const shown = opts.git(["show", `${sha}:${path}`]);
   if (!shown.ok) {
     return {
       kind: "unmeasured",
       why:
-        `${path} is tracked but ${ref} (${sha}) has no version of it: ` +
-        `${redactCredentials(shown.stderr.trim()) || "no reason given"}. That is a spec added on this branch and not yet ` +
-        `shipped, which is a different fact from a spec whose criteria are unplaced — reading the working ` +
-        `tree here would print the second while the first is true.`,
+        `${ref} (${sha}) has ${path} and \`git show\` could not produce it: ` +
+        `${redactCredentials(shown.stderr.trim()) || "no reason given"}. Two calls disagreeing about one object is a ` +
+        `broken reader, and reading the working tree here would print a reading scoped by whatever branch this is.`,
     };
   }
 
@@ -373,7 +445,16 @@ export function resolveSpecSource(opts: {
   // not a re-read of the file: `git diff` already knows about CRLF
   // normalisation and filters, and a byte compare here would call a checkout
   // difference a content difference on a tree configured for either.
+  //
+  // **AND IT IS READ AS THREE OUTCOMES, not as `!ok`.** `--quiet` exits 0
+  // for same and 1 for differs; anything else is the comparison failing,
+  // and `!ok` printed that as "your working tree's copy DIFFERS from it" —
+  // a measured fact nobody measured. Review of #1896 round 3. This is the
+  // last of the four sites where one boolean stood over a tri-state; the
+  // type change that stops a fifth site arriving is filed separately.
   const differs = opts.git(["diff", "--quiet", sha, "--", path]);
+  const worktreeDiffers =
+    differs.code === 0 ? false : differs.code === 1 ? true : null;
 
   return {
     kind: "ref",
@@ -382,7 +463,11 @@ export function resolveSpecSource(opts: {
     path,
     content: shown.stdout,
     staleness,
-    worktreeDiffers: !differs.ok,
+    worktreeDiffers,
+    worktreeCompareFailed:
+      worktreeDiffers === null
+        ? `\`git diff --quiet\` exited ${differs.code}: ${redactCredentials(differs.stderr.trim()) || "no reason given"}`
+        : null,
   };
 }
 
@@ -398,7 +483,10 @@ export function describeSpecSource(source: SpecSource): string {
   if (source.kind === "untracked") return `spec read from the working tree — ${source.why}`;
   if (source.kind === "unmeasured") return `spec UNMEASURED — ${source.why}`;
   const notes = [
-    source.worktreeDiffers ? "your working tree's copy DIFFERS from it" : null,
+    source.worktreeDiffers === true ? "your working tree's copy DIFFERS from it" : null,
+    source.worktreeDiffers === null
+      ? `whether your working tree's copy differs is UNMEASURED — ${source.worktreeCompareFailed}`
+      : null,
     source.staleness,
   ].filter((s): s is string => s !== null);
   return (

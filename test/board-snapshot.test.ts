@@ -26,9 +26,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  GIT_TIMEOUT_MS,
+  LIVE_GIT,
   REFUSAL_EXIT,
   main as boardSnapshotMain,
   type BoardSnapshotGitHub,
+  type GitSpawn,
   type ProducedSnapshot,
 } from "../scripts/board-snapshot";
 import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
@@ -1563,5 +1566,69 @@ describe("the two files agree, and the producer never writes", () => {
     expect((SOURCE.match(/REFUSAL_EXIT\s*=/g) || []).length).toBe(1);
     expect(SOURCE.match(/return\s+-?[1-9]\d*\s*;/g) || []).toEqual([]);
     expect((SOURCE.match(/process\.exit\(/g) || []).length).toBe(1);
+  });
+});
+
+// ── Security review of PR #1896, round 3 ───────────────────────────────
+//
+// `resolveSpecSource` put network I/O behind this runner — `git fetch` —
+// and `spawnSync` with no `timeout` waits forever. Through
+// `board-conformance` the outer `PRODUCE_TIMEOUT_MS` eventually kills the
+// child, but `board-snapshot` is a standalone entry point too and nothing
+// is above it there. A wedge is worse than a refusal because nothing
+// observes it, which is the reasoning `PRODUCE_TIMEOUT_MS`'s own comment
+// already carries one level up.
+describe("LIVE_GIT bounds every call, because one of them is the network", () => {
+  const seen: { cmd: string; args: readonly string[]; opts: Record<string, unknown> }[] = [];
+  const recorder = ((cmd: string, args: readonly string[], opts: Record<string, unknown>) => {
+    seen.push({ cmd, args, opts });
+    return { status: 0, stdout: "out", stderr: "", pid: 1, output: [], signal: null };
+  }) as unknown as GitSpawn;
+
+  test("every invocation carries a timeout and refuses to prompt for credentials", () => {
+    seen.length = 0;
+    LIVE_GIT("/r", recorder)(["fetch", "--quiet", "origin", "main"]);
+
+    expect(seen.length).toBe(1);
+    const opts = seen[0]!.opts;
+    expect(opts.timeout, "a git call with no timeout can wedge an unattended run").toBe(GIT_TIMEOUT_MS);
+    expect(GIT_TIMEOUT_MS).toBeGreaterThan(0);
+    // A credential prompt is a hang wearing a different hat: git blocks on
+    // a terminal nobody is sitting at. Asserted because the timeout alone
+    // turns a 2-second failure into a full-length one.
+    expect((opts.env as Record<string, string>).GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
+  test("a killed child is `code: null` and SAYS it ran too long", () => {
+    // What `spawnSync` hands back when the timeout fires: `status: null`
+    // and an `error`. `lib/spec-source.ts` already refuses on a null code,
+    // so the open question is whether the refusal can say WHY — "it never
+    // started" and "it ran too long" are different facts, and only one of
+    // them is worth retrying.
+    const timedOut = ((_cmd: string, _args: readonly string[]) => ({
+      status: null,
+      stdout: "",
+      stderr: "",
+      error: new Error("spawnSync git ETIMEDOUT"),
+      pid: 1,
+      output: [],
+      signal: "SIGTERM",
+    })) as unknown as GitSpawn;
+
+    const r = LIVE_GIT("/r", timedOut)(["fetch"]);
+    expect(r.ok).toBe(false);
+    expect(r.code).toBeNull();
+    expect(r.stderr).toContain("ETIMEDOUT");
+    expect(r.stderr, "the reason omits the bound that was exceeded").toContain(String(GIT_TIMEOUT_MS));
+  });
+
+  test("a child that exited normally carries NO invented reason — the control", () => {
+    // Without this, "a kill says why" is satisfied by appending the timeout
+    // note to every call, which would put a timeout message on a successful
+    // fetch and teach the reader to ignore it.
+    seen.length = 0;
+    const r = LIVE_GIT("/r", recorder)(["rev-parse", "--show-toplevel"]);
+    expect(r.ok).toBe(true);
+    expect(r.stderr).toBe("");
   });
 });

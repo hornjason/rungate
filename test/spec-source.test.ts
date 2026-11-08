@@ -81,6 +81,12 @@ const SHA = "1234567890abcdef1234567890abcdef12345678";
 const complete = (over: Partial<Record<string, GitRun>> = {}) => ({
   "in-repo": ok("/r\n"),
   "git-dir": ok("/r/.git\n"),
+  // `cat-file -e` is the trackedness question, and round 3 moved it here
+  // from `ls-files`: the first asks the REF, the second asks the local
+  // index, and they disagree for a spec shipped after this checkout was
+  // cut. `ls-files` is still answered — it separates "added on this
+  // branch" from "git never heard of it" once the ref has already said no.
+  "cat-file": ok(""),
   "ls-files": ok(`${TRACKED}\n`),
   fetch: ok(""),
   "rev-parse": ok(`${SHA}\n`),
@@ -218,12 +224,19 @@ describe("D3: untracked is a third answer, not a failure and not a pass", () => 
     ).toEqual([]);
   });
 
-  test("ls-files succeeding with empty output is ALSO untracked", () => {
-    // `--error-unmatch` is supposed to make this impossible. It is checked
-    // anyway because the alternative is a `path` of `""` and a `show` of
-    // `<sha>:`, which git answers with the whole tree listing.
-    const git = fakeGit(complete({ "ls-files": ok("\n") }));
-    expect(resolveSpecSource({ root: "/r", absPath: "/r/x.md", git: git.run, realpath: same }).kind).toBe("untracked");
+  test("the path read from the ref is DERIVED, so a disagreeing `ls-files` cannot redirect it", () => {
+    // `ls-files --full-name` used to supply the repository-relative path as
+    // a side effect of answering a question about the local index. Round 3
+    // took the question away from it; this asserts the path went too. The
+    // fake answers `ls-files` with a DIFFERENT path, and the read must still
+    // be taken against the one derived from the work tree.
+    const git = fakeGit(complete({ "ls-files": ok("some/other/FILE.md\n") }));
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    expect(r.kind).toBe("ref");
+    if (r.kind !== "ref") return;
+    expect(r.path).toBe(TRACKED);
+    expect(git.log.find(a => a[0] === "show")?.[1]).toBe(`${SHA}:${TRACKED}`);
   });
 
   test("describeSpecSource names the arm in every case, so silence never means origin/main", () => {
@@ -249,7 +262,10 @@ describe("round 1: a broken reader is not an untracked file", () => {
     // could not look. Reading them as one hands the second a working-tree
     // read, which is the defect this module exists to prevent, reached
     // through a side door.
-    const git = fakeGit(complete({ "ls-files": bad("fatal: not a git repository", 128) }));
+    //
+    // Round 3 moved `ls-files` behind the ref, so reaching it at all now
+    // needs the ref to have already said no — `cat-file -e` exiting 1.
+    const git = fakeGit(complete({ "cat-file": bad("", 1), "ls-files": bad("fatal: not a git repository", 128) }));
     const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
 
     expect(r.kind, "a broken ls-files produced a reading from disk").toBe("unmeasured");
@@ -261,7 +277,7 @@ describe("round 1: a broken reader is not an untracked file", () => {
     // The control for the row above. Without it, "128 refuses" is satisfied
     // by a reader that refuses on every non-zero exit, which would make
     // every planted fixture in `test/board-snapshot.test.ts` UNMEASURED.
-    const git = fakeGit(complete({ "ls-files": bad("did not match any file(s) known to git", 1) }));
+    const git = fakeGit(complete({ "cat-file": bad("", 1), "ls-files": bad("did not match any file(s) known to git", 1) }));
     expect(resolveSpecSource({ root: "/r", absPath: "/r/x.md", git: git.run, realpath: same }).kind).toBe("untracked");
   });
 
@@ -401,7 +417,7 @@ describe("round 1: outside the work tree is a PATH fact, decided before git", ()
     ).toEqual([]);
   });
 
-  test("a path INSIDE the toplevel still reaches ls-files — the check did not swallow everything", () => {
+  test("a path INSIDE the toplevel still reaches the ref — the check did not swallow everything", () => {
     // The control. Without it, "outside is untracked" is satisfied by a
     // containment test that says no to every path, which would make every
     // real reading untracked and the whole module a no-op.
@@ -409,7 +425,7 @@ describe("round 1: outside the work tree is a PATH fact, decided before git", ()
     const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
 
     expect(r.kind).toBe("ref");
-    expect(git.log.filter(a => a[0] === "ls-files").length).toBe(1);
+    expect(git.log.filter(a => a[0] === "cat-file").length).toBe(1);
   });
 
   test("a prefix that is not a path boundary is OUTSIDE — /rogue is not inside /r", () => {
@@ -420,9 +436,19 @@ describe("round 1: outside the work tree is a PATH fact, decided before git", ()
     expect(resolveSpecSource({ root: "/r", absPath: "/rogue/SPEC.md", git: git.run, realpath: same }).kind).toBe("untracked");
   });
 
-  test("the toplevel ITSELF is inside it, so a repository-root spec is not excluded", () => {
+  test("the path that IS the work tree is UNMEASURED — a spec is a file, and the read is refused", () => {
+    // The containment check lets `real === canonTop` through, because the
+    // boundary belongs to the inside. Round 3 made the repository-relative
+    // path DERIVED rather than read out of `ls-files --full-name`, and
+    // `relative(x, x)` is `""` — which would have become `git show <sha>:`,
+    // the whole tree listing, printed as a spec. It refuses instead.
     const git = fakeGit(complete({ "in-repo": ok(`/r/${TRACKED}\n`) }));
-    expect(resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same }).kind).toBe("ref");
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    expect(r.kind).toBe("unmeasured");
+    if (r.kind !== "unmeasured") return;
+    expect(r.why).toContain("A spec is a file");
+    expect(git.log.filter(a => a[0] === "show"), "a tree listing was fetched as a spec").toEqual([]);
   });
 
 });
@@ -552,5 +578,124 @@ describe("round 2: containment is canonicalised, because a lexical compare has a
     expect(seen, "realpath was handed the FILE, which throws for one that does not exist yet").not.toContain(
       `/r/${TRACKED}`,
     );
+  });
+});
+
+// ── Security review of PR #1896, round 3 ───────────────────────────────
+//
+// By count this is a fourth round, and AGENTS.md rule 5 says the third is
+// where repairing stops. It did not stop here because the first finding
+// below is not a repair of a prior repair: it says the feature does not do
+// the thing D3 defines it as doing. Shipping that and filing a follow-up
+// would tick an item on a command that reads the working tree.
+describe("round 3: trackedness is a question about the REF, not about the local index", () => {
+  test("a spec present at the ref and ABSENT locally is read from the ref", () => {
+    // THE FINDING. `ls-files --error-unmatch` answers about the local index,
+    // so a spec shipped to origin/main after this checkout was cut reads as
+    // untracked — and `board-snapshot` then refuses "no such spec" while the
+    // copy it was asked for sits in the ref. The module exists to stop a
+    // stale tree looking like a missing feature, and this was that exact
+    // confusion reached through the trackedness check.
+    //
+    // No existing fixture could see it: every one keyed `ls-files` to the
+    // same branch state as `show`, so the suite varied one axis and the
+    // defect sat on the other.
+    const git = fakeGit(complete({ "ls-files": bad("did not match any file(s) known to git", 1) }));
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    expect(r.kind, "a spec the ref HAS was reported untracked because this checkout lacks it").toBe("ref");
+    if (r.kind !== "ref") return;
+    expect(r.content).toContain("the shipped spec");
+    expect(r.path).toBe(TRACKED);
+  });
+
+  test("not at the ref and tracked here is UNMEASURED — added on this branch, not yet shipped", () => {
+    const git = fakeGit(complete({ "cat-file": bad("", 1) }));
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    expect(r.kind).toBe("unmeasured");
+    if (r.kind !== "unmeasured") return;
+    expect(r.why).toContain("added on this branch");
+  });
+
+  test("not at the ref and not tracked here is untracked — the control for the row above", () => {
+    // Without this, "not at the ref refuses" is satisfied by a reader that
+    // refuses on every absent path, and every planted fixture becomes
+    // UNMEASURED rather than an honest working-tree reading.
+    const git = fakeGit(complete({ "cat-file": bad("", 1), "ls-files": bad("no such path", 1) }));
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    expect(r.kind).toBe("untracked");
+    if (r.kind !== "untracked") return;
+    expect(r.why, "the line does not say the REF was asked first").toContain(SHA);
+  });
+
+  test("`cat-file` failing for any reason OTHER than absence is UNMEASURED", () => {
+    const git = fakeGit(complete({ "cat-file": bad("fatal: not a valid object name", 128) }));
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    expect(r.kind).toBe("unmeasured");
+    if (r.kind !== "unmeasured") return;
+    expect(r.why).toContain("128");
+  });
+
+  test("an in-repo untracked path now COSTS a fetch, and that is the trade this made", () => {
+    // Stated as an assertion rather than left in a comment. The old order
+    // asked trackedness first and skipped the network for an untracked
+    // path; the saved fetch was buying a wrong answer. If somebody reorders
+    // these to save it again, this is what says so.
+    const git = fakeGit(complete({ "cat-file": bad("", 1), "ls-files": bad("no such path", 1) }));
+    resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+    expect(git.log.filter(a => a[0] === "fetch").length).toBe(1);
+  });
+});
+
+describe("round 3: `git diff --quiet` has three outcomes, and `!ok` printed two of them as DIFFERS", () => {
+  test("exit 0 is same, exit 1 is differs", () => {
+    const sameTree = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: fakeGit(complete({ diff: ok("") })).run, realpath: same });
+    const changed = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: fakeGit(complete({ diff: bad("", 1) })).run, realpath: same });
+
+    expect(sameTree.kind === "ref" && sameTree.worktreeDiffers).toBe(false);
+    expect(changed.kind === "ref" && changed.worktreeDiffers).toBe(true);
+    expect(describeSpecSource(changed)).toContain("DIFFERS");
+  });
+
+  test("any other exit is NULL, and the printed line says UNMEASURED rather than DIFFERS", () => {
+    // `!differs.ok` reported a failed comparison as a confirmed difference —
+    // a measured fact nobody measured. The reading is still `ref`, because
+    // the CONTENT was read successfully; only the comparison was not.
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: fakeGit(complete({ diff: bad("fatal: unable to read index", 128) })).run, realpath: same });
+
+    expect(r.kind).toBe("ref");
+    if (r.kind !== "ref") return;
+    expect(r.worktreeDiffers).toBeNull();
+    const line = describeSpecSource(r);
+    expect(line, "a comparison that never happened printed as a difference").not.toContain("copy DIFFERS");
+    expect(line).toContain("UNMEASURED");
+    expect(line).toContain("128");
+  });
+});
+
+describe("round 3: a ref that does not resolve is only a refusal when a shipped copy could exist", () => {
+  test("no origin/main AND untracked here is untracked — a fresh repo is not a broken reader", () => {
+    // Found by a real-repository fixture in `test/board-snapshot.test.ts`,
+    // not by a unit case: moving trackedness after the ref turned every
+    // repository without an `origin/main` into a refusal, including for a
+    // path git has never heard of. A fork, a fresh `git init`, a project
+    // whose default branch is not `main` — all ordinary.
+    const git = fakeGit(complete({ "rev-parse": bad("fatal: ambiguous argument 'origin/main'", 128), "ls-files": bad("no such path", 1) }));
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    expect(r.kind).toBe("untracked");
+  });
+
+  test("no origin/main while the path IS tracked here is UNMEASURED — the control", () => {
+    // Without this row the arm above is satisfied by "an unresolvable ref is
+    // always untracked", which restores the working-tree fallback in the one
+    // case where a shipped version genuinely exists and we could not read it.
+    const git = fakeGit(complete({ "rev-parse": bad("fatal: ambiguous argument 'origin/main'", 128) }));
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    expect(r.kind).toBe("unmeasured");
   });
 });

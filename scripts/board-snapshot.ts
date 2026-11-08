@@ -221,14 +221,54 @@ export interface ProducedSnapshot {
  * reaches a real repository measures whatever this machine happens to be on,
  * and goes green or red for reasons the case never wrote down.
  */
-export const LIVE_GIT = (root: string): GitRunner => {
+/**
+ * How long any one `git` call may take before it is killed.
+ *
+ * **One of these calls is network I/O.** `resolveSpecSource` runs `git fetch`,
+ * and a stalled remote or an HTTPS remote that drops to a credential prompt
+ * blocks `spawnSync` forever. Through `board-conformance` the outer
+ * `PRODUCE_TIMEOUT_MS` eventually kills the child, but `board-snapshot` is
+ * also a standalone entry point and there is nothing above it — so an
+ * unattended run wedges with no bound at all. A wedge is worse than a
+ * refusal, because nothing observes it. Review of #1896 round 3.
+ */
+export const GIT_TIMEOUT_MS = 60_000;
+
+/**
+ * `spawnSync`, injected so a case can assert WHAT was asked for.
+ *
+ * A timeout is invisible from outside unless something hangs, and a test
+ * that hangs to prove it does not hang is not a test. The seam puts the
+ * options object where a case can read it, and lets a case hand back the
+ * shape `spawnSync` returns when it kills a child — which is the half that
+ * actually decides what the caller sees.
+ */
+export type GitSpawn = typeof spawnSync;
+
+export const LIVE_GIT = (root: string, spawn: GitSpawn = spawnSync): GitRunner => {
   return args => {
-    const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
+    const r = spawn("git", ["-C", root, ...args], {
+      encoding: "utf-8",
+      timeout: GIT_TIMEOUT_MS,
+      // A prompt is a hang wearing a different hat: git waits on a terminal
+      // nobody is sitting at. Refusing to ask is what makes the timeout the
+      // last line of defence rather than the first.
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
     // `code` carries `status`, and `status` is NULL when the process never
-    // ran — no `git` on PATH, or killed by a signal. That is a different
-    // fact from any exit code, and `lib/spec-source.ts` refuses on it
-    // rather than reading it as an answer about a file.
-    return { ok: r.status === 0, code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+    // ran — no `git` on PATH, or killed by a signal, which now includes the
+    // timeout above. That is a different fact from any exit code, and
+    // `lib/spec-source.ts` refuses on it rather than reading it as an answer
+    // about a file. The kill reason is put on stderr so the refusal can say
+    // "it ran too long" instead of "it never started".
+    const killed = r.status === null;
+    const why = killed && r.error !== undefined ? `${r.error.message} (timeout ${GIT_TIMEOUT_MS}ms)` : "";
+    return {
+      ok: r.status === 0,
+      code: r.status,
+      stdout: r.stdout ?? "",
+      stderr: [r.stderr ?? "", why].filter(s => s !== "").join("\n"),
+    };
   };
 };
 
