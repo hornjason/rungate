@@ -619,6 +619,16 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
       "test/success-doc.test.ts",
       "test/distribution-standing.test.ts",
       "test/rule-lifecycle-spec.test.ts",
+      // #1889. `project-state.json`'s prose states figures about the board
+      // that nothing re-derived; this is the refusal that re-derives them.
+      // It reads the live record from the repo root against a stated board,
+      // so a state write moves it.
+      //
+      // `test/state-claim-readings.test.ts` is deliberately NOT here. It is
+      // a unit test over prose with no live file in it, so a state write
+      // genuinely cannot redden it — and this row's own membership guard
+      // said so, correctly, the first time it was added.
+      "test/check-state-claims.test.ts",
     ],
     // Exact repo-root paths, not a basename match. A consumer fixture at
     // `test/fixtures/project-state.json` is not the live record, and a

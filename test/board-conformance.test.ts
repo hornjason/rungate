@@ -1386,6 +1386,9 @@ describe("D3: what the producer said on the success path", () => {
     produce: true,
     snapshotGiven: false,
     readingGiven: false,
+    // #1889. Not given: these cases are about the PRODUCER, and emitting
+    // the readings happens after it has already answered.
+    emitReadingsGiven: false,
     spec: "specs/X.md",
     specGiven: true,
     prefix: "Pipeline",
@@ -1552,6 +1555,137 @@ describe("the offender lines are read, not just counted", () => {
       const printed = offenders.filter(o => out.includes(o)).length;
       const withheld = Number(/… and (\d+) more/.exec(out)?.[1] ?? 0);
       expect(printed + withheld, `n=${n}: ${printed} printed + ${withheld} withheld`).toBe(n);
+    }
+  });
+});
+
+/**
+ * `--emit-readings` — #1889, and written because a reviewer measured that
+ * it had no coverage at all.
+ *
+ * Deleting either the flag-combination refusal or the `writeFileSync`
+ * block left both suites green. The flag existed so that
+ * `scripts/check-state-claims.ts` would never have to parse this command's
+ * prose; a seam with no test is a seam that can silently stop producing.
+ *
+ * **What every case below holds fixed**: the board is a planted snapshot,
+ * so none of this touches the network. The axis each one varies is the
+ * flag, which is what had never been varied.
+ */
+describe("#1889: --emit-readings is the machine-readable seam", () => {
+  // `out-`, deliberately not sharing a prefix with `plant`'s `emit-*`
+  // snapshots. The first version collided, and the target-clearing step
+  // promptly deleted the snapshot the case was about to read — which is
+  // the mechanism working, found by the only instrument that could.
+  const emitTo = (name: string) => join(SCRATCH, `out-${name}.json`);
+
+  test("it writes every reading, with measured and target as NUMBERS", () => {
+    // The shape is the assertion, not the exit code. The consumer reads
+    // `measured` and `target` arithmetically, so a file of strings would
+    // satisfy "a file was written" and break the comparison downstream.
+    const out = emitTo("shape");
+    const r = run(SCRIPT, [`--snapshot=${plant("emit-complete", completeBoard())}`, `--emit-readings=${out}`]);
+    expect(r.code, `a conformant board refused: ${r.err}`).toBe(0);
+    const written = JSON.parse(readFileSync(out, "utf8")) as {
+      name: string;
+      measured: number;
+      target: number;
+      status: string;
+    }[];
+    expect(written.map(x => x.name).sort()).toEqual([...READING_NAMES].sort());
+    for (const row of written) {
+      expect(typeof row.measured, `${row.name}.measured is not a number`).toBe("number");
+      expect(typeof row.target, `${row.name}.target is not a number`).toBe("number");
+      expect(["met", "short", "unmeasured"], `${row.name}.status is not a declared status`).toContain(
+        row.status,
+      );
+    }
+  });
+
+  test("a SHORT board still emits — the file is not a conformance certificate", () => {
+    // The case the write's placement exists for. Emitting only when every
+    // reading is met would leave the consumer unmeasured for exactly as
+    // long as anything is outstanding, which is the normal state of this
+    // board. Moving the write below the `outstanding.length > 0` refusal
+    // turns this red.
+    const short = completeBoard();
+    short.issues = [{ number: 1, blockedBy: [], rootReady: false, criteriaField: "", labels: ["engine"] }];
+    const out = emitTo("short");
+    const r = run(SCRIPT, [`--snapshot=${plant("emit-short", short)}`, `--emit-readings=${out}`]);
+    expect(r.code, "a short board should still refuse on the verdict").toBe(REFUSE_EXIT);
+    const written = JSON.parse(readFileSync(out, "utf8")) as unknown[];
+    expect(written.length, "a short board emitted nothing, so the consumer is unmeasured").toBe(
+      READING_NAMES.length,
+    );
+  });
+
+  test("a source that will not read leaves NO file, not a stale one", () => {
+    // The hazard this flag must not create. A caller that logs the
+    // non-zero exit and feeds the old file onward would be reading an
+    // earlier run's board as live — the exact defect check-state-claims
+    // exists to catch. The target is cleared before any source is
+    // resolved, so absent is the only other state, and absent is loud.
+    const out = emitTo("stale");
+    const good = run(SCRIPT, [`--snapshot=${plant("emit-first", completeBoard())}`, `--emit-readings=${out}`]);
+    expect(good.code).toBe(0);
+    expect(readFileSync(out, "utf8").length).toBeGreaterThan(0);
+
+    const unreadable = join(SCRATCH, "not-a-board.json");
+    writeFileSync(unreadable, "{not json");
+    refuses([`--snapshot=${unreadable}`, `--emit-readings=${out}`], "an unreadable snapshot");
+    expect(() => readFileSync(out, "utf8"), "an earlier run's readings survived a refusal").toThrow();
+  });
+
+  test("--emit-readings with --reading or --list-readings refuses, and writes nothing", () => {
+    // Both answer and return before the readings are taken as a set.
+    // `--list-readings` exits ZERO, so the combination used to report
+    // success having written no file — indistinguishable, to a caller
+    // chaining with `&&`, from a file that was written.
+    for (const other of ["--reading=milestones", "--list-readings"]) {
+      const out = emitTo(`combo-${other.replace(/[^a-z]/g, "")}`);
+      refuses([other, `--emit-readings=${out}`], `--emit-readings with ${other}`);
+      expect(() => readFileSync(out, "utf8"), `${other} wrote a file anyway`).toThrow();
+    }
+  });
+
+  test("a bare --emit-readings refuses BEFORE any board is produced", () => {
+    // `parseArgs` swallows the next flag as the value and `str()` discards
+    // it, so the flag is given with no path. Checked at the top of `main`,
+    // like --snapshot and --reading are, rather than after a live fetch
+    // that can take tens of seconds and several API calls.
+    const r = run(SCRIPT, ["--emit-readings", "--snapshot", join(SCRATCH, "unused.json")]);
+    expect(r.code).toBe(REFUSE_EXIT);
+    expect(r.err).toContain("--emit-readings needs a path");
+    // It never reached the producer, which is the half a bare exit code
+    // cannot show: the producer announces the tree it read on stderr.
+    expect(r.err, "the board was produced before the flag was validated").not.toContain("spec read from");
+  });
+
+  test("an UNWRITABLE path refuses before any board is produced, not at the last line", () => {
+    // #1915 round 2. The clear doubles as the writability probe, because
+    // `rmSync(..., { force: true })` on a path whose directory does not
+    // exist succeeds silently — ENOENT is what `force` suppresses. So
+    // clearing proved nothing about the write at the end of `main`, and a
+    // run spent the whole board production to discover a directory that
+    // was never there.
+    //
+    // Two shapes, because an `existsSync(dirname(...))` would pass the
+    // first and fail the second — the narrower detector, which is the
+    // repair to reach for here.
+    const cases: [string, string][] = [
+      ["a directory that does not exist", join(SCRATCH, "no-such-dir", "out.json")],
+      ["a path that IS a directory", SCRATCH],
+    ];
+    for (const [what, out] of cases) {
+      const r = run(SCRIPT, [`--emit-readings=${out}`, `--snapshot=${plant("emit-probe", completeBoard())}`]);
+      expect(r.code, what).toBe(REFUSE_EXIT);
+      expect(r.err, what).toContain("cannot write");
+      // The half the exit code cannot show. A readable snapshot was given,
+      // so without the probe this run reaches the end of `main` and
+      // refuses there — same code, same stream, different mechanism.
+      expect(r.err, `${what}: the board was read before the path was checked`).not.toContain(
+        "spec read from",
+      );
     }
   });
 });

@@ -34,7 +34,7 @@
  * self-contained.
  */
 import { spawnSync } from "child_process";
-import { readFileSync } from "fs";
+import { readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { parseArgs } from "util";
 
@@ -1039,6 +1039,20 @@ export interface Flags {
   prefixGiven: boolean;
   repo?: string;
   repoGiven: boolean;
+  /**
+   * Where to write the readings as JSON, for a consumer that must not
+   * parse this command's prose — #1889.
+   *
+   * `scripts/check-state-claims.ts` re-derives the figures
+   * `project-state.json` states about the board, and it needs `measured`
+   * and `target` as numbers. Reading them back out of `formatReading`'s
+   * output would be a detector narrower than what it detects: a change to
+   * the padding or the wording there would silently stop the state check
+   * from seeing anything, and an extractor that matches nothing certifies
+   * by counting nothing.
+   */
+  emitReadings?: string;
+  emitReadingsGiven: boolean;
 }
 
 /**
@@ -1067,6 +1081,7 @@ function readFlags(argv: readonly string[]): Flags {
       spec: { type: "string" },
       prefix: { type: "string" },
       repo: { type: "string" },
+      "emit-readings": { type: "string" },
     },
     strict: false,
     allowPositionals: true,
@@ -1089,6 +1104,8 @@ function readFlags(argv: readonly string[]): Flags {
     prefixGiven: values.prefix !== undefined,
     repo: str(values.repo),
     repoGiven: values.repo !== undefined,
+    emitReadings: str(values["emit-readings"]),
+    emitReadingsGiven: values["emit-readings"] !== undefined,
   };
 }
 
@@ -1099,6 +1116,83 @@ export function main(argv: readonly string[]): number {
   } catch (e) {
     console.error(`board-conformance: ${(e as Error).message}`);
     return REFUSE_EXIT;
+  }
+
+  // #1889, and ABOVE every early return rather than beside the write.
+  //
+  // `--reading` and `--list-readings` both answer and return before the
+  // readings are taken as a set, so either combined with --emit-readings
+  // wrote nothing — and `--list-readings` exits ZERO, so a caller running
+  // `board-conformance … && check-state-claims …` proceeds onto whatever
+  // that path held from an earlier run. A stale artefact consumed as live
+  // is the exact defect `scripts/check-state-claims.ts` exists to catch,
+  // so this command must not be the thing that creates one.
+  //
+  // The rule this encodes: every exit from `main` that was given
+  // --emit-readings either writes the file or refuses. There is no third
+  // outcome, because a caller cannot tell the third from success.
+  if (flags.emitReadingsGiven && (flags.readingGiven || flags.listReadings)) {
+    console.error(
+      "board-conformance: --emit-readings writes the whole set; --reading takes one and " +
+        "--list-readings takes none. Pass one. Combined, the file is not written, and a consumer " +
+        "cannot tell that from a file written by an earlier run.",
+    );
+    return REFUSE_EXIT;
+  }
+  if (flags.emitReadingsGiven && flags.emitReadings === undefined) {
+    console.error("board-conformance: --emit-readings needs a path");
+    return REFUSE_EXIT;
+  }
+  // THE TARGET IS REMOVED BEFORE ANY SOURCE IS RESOLVED, so that no
+  // refusal below can leave an earlier run's file sitting at the path.
+  //
+  // The flag-combination guard above only covered the combinations. The
+  // likelier failure is a source that will not read — `produceBoard`
+  // throwing, a snapshot that is not a board — and every one of those
+  // returns before the write. A caller that logs the non-zero exit and
+  // feeds the old file onward is the stale-artefact hazard this flag
+  // exists to avoid creating, and "gate on the exit code" is a rule for
+  // somebody else's script.
+  //
+  // Absent is now the only other state: a consumer reads a fresh file or
+  // no file, and no file is loud.
+  //
+  // **The clear is also the writability probe, and that is deliberate.**
+  // `rmSync(..., { force: true })` on a path whose directory does not exist
+  // succeeds silently — ENOENT is exactly what `force` suppresses — so
+  // clearing alone proved nothing about whether the write at the end of
+  // `main` can land. A directory that is absent, read-only, or actually a
+  // directory was discovered at the LAST line of a run that had already
+  // produced the board: several API calls and tens of seconds spent to
+  // learn something knowable in the first millisecond.
+  //
+  // An `existsSync(dirname(...))` would be the narrower detector: it names
+  // the absent directory and misses every permission case. Writing a byte
+  // and removing it asks the question that is actually being asked.
+  //
+  // The cost, stated: between the two calls an EMPTY file exists at the
+  // path. A process killed in that window leaves one behind — and an empty
+  // file is not readable JSON, so `scripts/check-state-claims.ts` refuses
+  // it rather than reading it as a board. That is the direction this is
+  // allowed to be wrong in.
+  if (flags.emitReadingsGiven && flags.emitReadings !== undefined) {
+    // Its own name, not `flags.emitReadings` a second time. The two writes
+    // in this file are two different acts — a zero-byte probe that is
+    // removed, and the payload at the end of `main` — and the spec-write
+    // registry keys on the symbol, so sharing one would file them under a
+    // single explanation.
+    const probeAt = flags.emitReadings;
+    try {
+      writeFileSync(probeAt, "");
+      rmSync(probeAt, { force: true });
+    } catch (e) {
+      console.error(
+        `board-conformance: cannot write ${flags.emitReadings}: ${(e as Error).message}. ` +
+          `Refusing before taking any reading — the path is checked first so a run that cannot ` +
+          `deliver its readings does not spend the board production to find out.`,
+      );
+      return REFUSE_EXIT;
+    }
   }
 
   if (flags.listReadings) {
@@ -1176,6 +1270,21 @@ export function main(argv: readonly string[]): number {
   }
 
   const readings = takeReadings(board);
+  // WRITTEN BEFORE THE VERDICT, and on every path that got this far. A
+  // short reading is still a reading, and a consumer that only receives
+  // the file when the board is fully conformant would be unmeasured for
+  // exactly as long as anything is outstanding — which is now (#1889).
+  // `flags.emitReadings` is known present: the flag-combination guard at
+  // the top of `main` refused a bare `--emit-readings` before any source
+  // was resolved, so nothing reaches here with the flag given and no path.
+  if (flags.emitReadingsGiven && flags.emitReadings !== undefined) {
+    try {
+      writeFileSync(flags.emitReadings, `${JSON.stringify(readings, null, 2)}\n`);
+    } catch (e) {
+      console.error(`board-conformance: could not write ${flags.emitReadings}: ${(e as Error).message}`);
+      return REFUSE_EXIT;
+    }
+  }
   for (const r of readings) console.log(formatReading(r));
   const outstanding = readings.filter(r => r.status !== "met");
   if (outstanding.length > 0) {

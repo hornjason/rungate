@@ -1,5 +1,5 @@
 {
-  "note": "Opaque write sites: targets lib/spec-write-ast.ts could not fully resolve. A ratchet, not an exemption list — it refuses in both directions, so a new opaque site, a changed set of holes, and a site that became readable all fail test/spec-write-chokepoint.test.ts until this file says so. Regenerate by pasting the added/removed lines the failure prints; do not blanket-overwrite. The prose tier is REASSIGNABLE_TARGETS in lib/spec-write-sweep.ts (#1584).",
+  "note": "Opaque write sites: targets lib/spec-write-ast.ts could not fully resolve. A ratchet, not an exemption list \u2014 it refuses in both directions, so a new opaque site, a changed set of holes, and a site that became readable all fail test/spec-write-chokepoint.test.ts until this file says so. Regenerate by pasting the added/removed lines the failure prints; do not blanket-overwrite. The prose tier is REASSIGNABLE_TARGETS in lib/spec-write-sweep.ts (#1584).",
   "sites": [
     "gates/brief-assembler.ts::briefPath | workDir: destructured (nested)",
     "gates/brief-assembler.ts::join(workDir, \"canaries.json\") | workDir: destructured",
@@ -85,6 +85,8 @@
     "lib/worktree-collect.ts::dest | projectRoot: parameter (nested), rawRel: no-initialiser (nested), group: no-initialiser (nested)",
     "lib/worktree-collect.ts::entry.dest | entry: no-initialiser",
     "lib/worktree-collect.ts::slot | reassignable, no readable hole",
+    "scripts/board-conformance.ts::flags.emitReadings | flags: no-initialiser, argv: parameter (nested)",
+    "scripts/board-conformance.ts::probeAt | flags: no-initialiser (nested), argv: parameter (nested)",
     "scripts/check-installed-hook-currency.ts::path | path: parameter",
     "scripts/claim-files.ts::path | project: parameter (nested), FILE_CLAIMS_PATH: import (nested)",
     "scripts/crc-reading.ts::args.save | argv: parameter (nested)",

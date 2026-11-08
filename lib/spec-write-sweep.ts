@@ -206,6 +206,10 @@ export const REASSIGNABLE_TARGETS: Record<string, string> = {
     "the artefact path given by --out, written only when that flag was passed",
   "gates/run-gate.ts::SF":
     "the gate state file this script exists to maintain",
+  "scripts/board-conformance.ts::flags.emitReadings":
+    "the board-readings JSON given by --emit-readings, written only when that flag was passed; never a spec (#1889)",
+  "scripts/board-conformance.ts::probeAt":
+    "the same --emit-readings path, written as a zero-byte probe and removed in the next statement — it proves the path is writable before the board is produced rather than at the last line; never a spec (#1889)",
 };
 
 /**
