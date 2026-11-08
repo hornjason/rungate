@@ -8659,9 +8659,25 @@ export const AI_REVIEW_TREE_READER = `classify_path() {
   # A path from \`read_scratch\` was never seen by git and is wrapped by
   # nothing. That is the one that needs escaping below, and \`esc\` is how the
   # renderer knows which it is WITHOUT asking the question a second time.
+  #
+  # NEWLINE ARM FIRST, AND THE ORDER IS THE WHOLE GUARD (#1869). \`case\` tries
+  # arms in sequence, so with the git-shape arm first a name that BOTH starts
+  # with a literal \`"\` AND carries a newline matched it, \`esc\` stayed empty,
+  # and the record split into two lines again. Measured on the unfixed source,
+  # \`classify_path\` called directly: \`"<newline>absent .ripgreprc\` printed
+  # \`unquotable "\` and then \`absent .ripgreprc\` — a second line a reader
+  # cannot tell from one this function produced.
+  #
+  # Not reachable from either caller as they stand: git C-quotes a newline to
+  # two characters, so a git-derived path never carries a raw one, and
+  # \`read_scratch\` globs \`"\${root}"*\` so every entry it finds begins with
+  # the scratch root and cannot start with a quote. The two conditions live in
+  # different sources. This is the order the NEXT source inherits, and the
+  # paragraph above is the record of what happened the last time a source
+  # arrived that git had never seen.
   case "\${p}" in
-    '"'*) h=unquotable; esc= ;;
     *$'\\n'*) h=unquotable; esc=1 ;;
+    '"'*) h=unquotable; esc= ;;
     *)
       esc=
       if [ -f "\${p}" ]; then
