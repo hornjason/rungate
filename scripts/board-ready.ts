@@ -631,12 +631,18 @@ async function main(): Promise<number> {
   });
 
   const decisions = fanoutDecisions(dependents, READY_COLUMN);
-  // Each source says what it brought, so a run given both cannot report one
-  // and perform the other.
+  // Each source says what IT brought, so a run given both cannot report one
+  // and perform the other — and each counts its own nodes rather than the
+  // merged array. ai-review round 1 of #1919 caught the merged count here:
+  // `BLOCKING_QUERY` has no `states:` filter where `TOP_UP_QUERY` asks for
+  // `[OPEN]`, so a close whose `blocking` list holds an already-closed
+  // dependent inflated a line that calls every one of them an open issue.
+  // The dependent is still named below, with `the issue is CLOSED` as its
+  // reason — it is the SUMMARY that was wrong, not the walk.
   console.log(
     [
-      closed === null ? null : `#${closed} closed, freeing ${freed.size} issue(s).`,
-      topUp ? `Top-up: ${candidates.length} open issue(s) considered.` : null,
+      closed === null ? null : `#${closed} closed, blocking ${freed.size} issue(s).`,
+      topUp ? `Top-up: ${openNodes.length} open issue(s) considered.` : null,
     ]
       .filter(l => l !== null)
       .join(" "),

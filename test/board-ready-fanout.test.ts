@@ -1577,6 +1577,34 @@ describe("BR-55..BR-58: a close that freed nothing still refills Ready", () => {
     ).toContain("--closed-issue");
   });
 
+  // ai-review round 1 of #1919, and it was right. `BLOCKING_QUERY` has no
+  // `states:` filter where `TOP_UP_QUERY` asks for `[OPEN]`, so once the two
+  // sources merge, a close whose `blocking` list holds an already-closed
+  // dependent puts a CLOSED issue in `candidates`. Counting the merged array
+  // in a line that calls every member an open issue reports a number no query
+  // returned — and it only became wrong when both sources could run at once,
+  // which is this change.
+  //
+  // Source-ORDER, like BR-42 and BR-52 and for the same reason: `main()`
+  // needs a live endpoint, and a mock deep enough to reach this line would
+  // assert against its own fixture.
+  test("BR-60: each source's summary counts that source, not the merged set", () => {
+    const line = /Top-up: \$\{([^}]*)\}\.?\s*open issue\(s\) considered/.exec(code);
+    expect(line, "no top-up summary line found — this row would pass vacuously").not.toBeNull();
+    expect(
+      line?.[1],
+      "the top-up summary must count the nodes the OPEN-issue query returned. " +
+        "`candidates` is the merged set and can hold CLOSED dependents from the " +
+        "blocking list, which no `states:[OPEN]` query ever returned.",
+    ).toBe("openNodes.length");
+    // The other half of the same line, so the fix is not one-sided: the close
+    // reports what it was BLOCKING, which is true whatever state those are in.
+    expect(
+      code,
+      "the close summary must not claim to have freed issues that were already closed",
+    ).toMatch(/#\$\{closed\} closed, blocking \$\{freed\.size\} issue\(s\)/);
+  });
+
   // SWEEP FOR THE SHAPE, and this row exists because the battery for the four
   // above found it: deleting `--top-up` from the `assigned)` arm left every
   // case green, and that arm would then pass no candidate source at all. The
