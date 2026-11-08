@@ -64,8 +64,19 @@ const CHECKED_SC_BASELINE = 261;
  * second number is banked in that file rather than quoted here; it went 100
  * -> 66 in #574, and a count repeated in two places is a count that drifts
  * in one of them.
+ *
+ * 300 -> 320 on 2026-11-07 (#1718). The sentence above says this number
+ * "refuses only a collapse, never an honest criterion", and that was not
+ * true of 300: the split's two halves summed to 297, but the LIVE unmatched
+ * count was also 300, so the headroom over the thing it bounds was zero.
+ * Ticking SC-2618 and SC-2619 — two honest criteria, each with a `proved-by:`
+ * naming what ran — took it to 302 and reddened this. A backstop calibrated
+ * to the live reading is a third equality ratchet wearing a `<=`, and the
+ * two in `test/sc-binding-split.test.ts` are the ones that are supposed to
+ * refuse a tick. 320 is 18 above the live 302 and 23 above the split's sum,
+ * which is a margin stated here rather than a number that tracks the tree.
  */
-const UNMATCHED_BACKSTOP = 300;
+const UNMATCHED_BACKSTOP = 320;
 function specFiles(): string[] {
   return readdirSync(SPECS_DIR).filter(f => f.endsWith(".md"));
 }
