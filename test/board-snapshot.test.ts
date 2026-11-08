@@ -1431,12 +1431,12 @@ describe("the refusals, and whether the API was reached", () => {
         // this fixture used to be exactly that shape while asserting a
         // successful run. Committing and planting the ref makes it a real
         // D3 repository instead of a repository the reader has to excuse.
-        // late-env-ok: git reads no GITHUB_REPOSITORY, and this case deletes it
         for (const argv of [
           ["-C", dir, "add", "-A"],
           ["-C", dir, "-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "-m", "fixture"],
           ["-C", dir, "update-ref", "refs/remotes/origin/main", "HEAD"],
         ]) {
+          // late-env-ok: git reads no GITHUB_REPOSITORY, and this case deletes it
           const step = spawnSync("git", argv, { encoding: "utf-8" });
           expect(step.status, `${argv[2]} failed in the fixture: ${step.stderr}`).toBe(0);
         }

@@ -524,12 +524,21 @@ export function resolveSpecSource(opts: {
   // last of the four sites where one boolean stood over a tri-state; the
   // type change that stops a fifth site arriving is filed separately.
   //
-  // **The pathspec is ABSOLUTE for the same reason**, and `absPath` rather
-  // than `path`: this is the one call that cannot use `<rev>:<path>`
-  // syntax, so it is the one whose pathspec the process's cwd can move. A
-  // pathspec matching nothing does not error — `--quiet` exits 0 — so the
-  // failure is "your copy matches" about a comparison that never ran.
-  const differs = opts.git(["diff", "--quiet", sha, "--", `:(literal)${opts.absPath}`]);
+  // **`:(top,literal)` — the same blob the `show` above read, addressed
+  // the same way.** This is the one call that cannot use `<rev>:<path>`
+  // syntax, so it is the one whose pathspec the process's cwd can move,
+  // and a pathspec matching nothing does not error: `--quiet` exits 0, so
+  // the failure would be "your copy matches" about a comparison that
+  // never ran. `:(top)` is `git diff`'s `--full-tree`.
+  //
+  // Round 7 reported the previous spelling — an absolute `absPath` — as
+  // that failure. **It does not reproduce:** measured from a nested cwd,
+  // the absolute pathspec, the `/private` realpath of it, and
+  // `:(top,literal)` all return exit 1 against an edited tree. This change
+  // ships as hardening, not as a fix, and carries no battery row claiming
+  // it binds. What it does buy is one path expression across all three
+  // calls instead of two.
+  const differs = opts.git(["diff", "--quiet", sha, "--", `:(top,literal)${path}`]);
   const worktreeDiffers =
     differs.code === 0 ? false : differs.code === 1 ? true : null;
 
