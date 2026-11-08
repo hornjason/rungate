@@ -59,6 +59,16 @@ export const DEFAULT_STATE = "project-state.json";
 export interface Ratchet {
   allowed: number;
   why: string;
+  /**
+   * The reading names the number was banked against — the rename guard.
+   *
+   * An `UNRESOLVABLE` verdict was written for this and could not fire:
+   * `judgeClaims` derives its name list from the live readings, so a
+   * citation of a renamed reading is invisible to the extractor and never
+   * reaches a verdict. The set comparison is where a rename IS visible, so
+   * it is checked here instead of pretended at there.
+   */
+  readings: string[];
 }
 
 type Read<T> = { ok: true; value: T } | { ok: false; why: string };
@@ -106,6 +116,28 @@ export function readLiveReadings(value: unknown): Read<LiveReading[]> {
         why: `reading ${JSON.stringify(o.name)} carries a non-numeric 'measured' or 'target'`,
       };
     }
+    // AN UNMEASURED READING IS NOT A READING, and comparing against one is
+    // the vacuous certification this whole check exists against.
+    // `takeReading` reports `unmeasured` with `measured: 0, target: 0`, so
+    // without this a cited `6 of 6` disagrees for a reason nobody wrote,
+    // and a cited `0 of 0` AGREES having been compared with nothing. The
+    // `status` field is in the emitted JSON precisely so this is decidable
+    // rather than guessed from the zeros.
+    if (o.status === "unmeasured") {
+      return {
+        ok: false,
+        why:
+          `reading ${JSON.stringify(o.name)} is UNMEASURED, and a figure compared against an ` +
+          `unmeasured reading has not been checked. Re-run board-conformance against a board it ` +
+          `can read`,
+      };
+    }
+    if (o.status !== undefined && o.status !== "met" && o.status !== "short") {
+      return {
+        ok: false,
+        why: `reading ${JSON.stringify(o.name)} carries an unrecognised 'status' (${JSON.stringify(o.status)})`,
+      };
+    }
     out.push({ name: o.name, measured: o.measured, target: o.target });
   }
   return { ok: true, value: out };
@@ -128,6 +160,16 @@ export function readRatchet(value: unknown): Read<Ratchet> {
   if (typeof o.allowed !== "number" || !Number.isInteger(o.allowed) || o.allowed < 0) {
     return { ok: false, why: "the ratchet's 'allowed' is not a whole number of violations" };
   }
+  if (
+    !Array.isArray(o.readings) ||
+    o.readings.length === 0 ||
+    o.readings.some(n => typeof n !== "string" || n === "")
+  ) {
+    return {
+      ok: false,
+      why: "the ratchet's 'readings' must name the reading set the number was banked against",
+    };
+  }
   if (typeof o.why !== "string" || o.why.trim().length < 40) {
     // A ratchet nobody can interpret becomes a number nobody lowers.
     return {
@@ -135,7 +177,7 @@ export function readRatchet(value: unknown): Read<Ratchet> {
       why: "the ratchet's 'why' must say what the number means, in at least 40 characters",
     };
   }
-  return { ok: true, value: { allowed: o.allowed, why: o.why } };
+  return { ok: true, value: { allowed: o.allowed, why: o.why, readings: o.readings as string[] } };
 }
 
 /** The `priorities[]` prose, which is what carries the figures. */
@@ -194,12 +236,27 @@ export function main(argv: readonly string[]): number {
   const ratchet = readRatchet(rawRatchet.value);
   if (!ratchet.ok) return refuse(`${ratchetPath}: ${ratchet.why}`);
 
+  // THE RENAME GUARD, and before any comparison. A reading renamed in
+  // `board-conformance` makes every citation of its old name invisible to
+  // the extractor — the file would read as fully checked while a figure
+  // nobody re-derives sits in it. Comparing the SETS is where that is
+  // visible; a per-citation branch for it cannot fire.
+  const liveNames = live.value.map(r => r.name).sort();
+  const bankedNames = [...ratchet.value.readings].sort();
+  if (liveNames.join("\u0000") !== bankedNames.join("\u0000")) {
+    return refuse(
+      `the live readings are ${liveNames.join(", ")} and ${ratchetPath} was banked against ` +
+        `${bankedNames.join(", ")}. A renamed or added reading changes which figures in the state ` +
+        `file are re-derivable at all, so the banked number no longer describes the same question. ` +
+        `Re-run the check, read the new count, and bank it with 'readings' updated in the same commit`,
+    );
+  }
+
   const reading = readStateClaims(priorities.value, live.value);
 
   console.log(
     `check-state-claims: ${reading.claims} cited figure(s) — ${reading.agreed} agreed, ` +
-      `${reading.recorded} dated and not compared, ${reading.disagreed.length} disagreed, ` +
-      `${reading.unresolvable.length} unresolvable.`,
+      `${reading.recorded} dated and not compared, ${reading.disagreed.length} disagreed.`,
   );
 
   // NO CLAIMS IS ITS OWN OUTCOME. Zero disagreements over zero figures and
@@ -213,23 +270,12 @@ export function main(argv: readonly string[]): number {
     );
   }
 
-  for (const v of reading.unresolvable) {
-    if (v.kind !== "UNRESOLVABLE") continue;
-    console.error(`UNRESOLVABLE: ${v.why}\n  ${v.cited.sentence}`);
-  }
   for (const v of reading.disagreed) {
     if (v.kind !== "DISAGREED") continue;
     console.error(
       `DISAGREED: \`${v.cited.reading}\` is cited as ${v.cited.measured} of ${v.cited.target} and ` +
         `reads ${v.live.measured} of ${v.live.target} now. Either correct the figure, or date the ` +
         `sentence so it reads as the record it is.\n  ${v.cited.sentence}`,
-    );
-  }
-
-  if (reading.unresolvable.length > 0) {
-    return refuse(
-      `${reading.unresolvable.length} cited figure(s) name a reading that no longer exists. A ` +
-        `renamed reading drops out of the comparison silently, so the file would read as fully checked`,
     );
   }
 

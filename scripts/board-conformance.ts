@@ -1148,6 +1148,21 @@ export function main(argv: readonly string[]): number {
     return REFUSE_EXIT;
   }
 
+  // #1889. `--reading` returns before the readings are taken as a set, so
+  // the combination used to write nothing and say nothing — and a consumer
+  // pointed at a path that was never written reads whatever was there
+  // last run. A stale file consumed as live is the exact defect
+  // `scripts/check-state-claims.ts` exists to catch, so it must not be
+  // this command that creates one.
+  if (flags.emitReadingsGiven && flags.readingGiven) {
+    console.error(
+      "board-conformance: --emit-readings writes the whole set and --reading takes one. " +
+        "Pass one. Together the file is not written, and a consumer cannot tell that from a " +
+        "file written by an earlier run.",
+    );
+    return REFUSE_EXIT;
+  }
+
   let board: BoardSnapshot | null = null;
   let sourceFailed: string | null = null;
   if (flags.produce && flags.snapshotGiven) {

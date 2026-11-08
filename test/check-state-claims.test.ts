@@ -36,6 +36,8 @@ const LIVE = [
 ];
 const WHY =
   "Undated figures in priorities[] that no longer match the live board, banked so a new one reddens.";
+/** The ratchet shape, with the reading set every fixture board carries. */
+const RATCHET = (allowed: number, readings = LIVE.map(r => r.name)) => ({ allowed, why: WHY, readings });
 
 beforeAll(() => {
   SCRATCH = mkdtempSync(join(tmpdir(), "check-state-claims-"));
@@ -100,7 +102,7 @@ describe("the mutant is real", () => {
     // instead of the removed refusal.
     const readings = plant("readings", LIVE);
     const state = plant("state", { priorities: ["milestones 26 of 26."] });
-    const ratchet = plant("ratchet", { allowed: 0, why: WHY });
+    const ratchet = plant("ratchet", RATCHET(0));
     expect(runMutant([`--readings=${readings}`, `--state=${state}`, `--ratchet=${ratchet}`])).toBe(0);
   });
 });
@@ -109,7 +111,7 @@ describe("the comparison — one input, two outcomes", () => {
   test("a figure that disagrees refuses; the same entry corrected exits zero", () => {
     // The issue's own `How we will know`, written as one pair.
     const readings = plant("readings", LIVE);
-    const ratchet = plant("ratchet", { allowed: 0, why: WHY });
+    const ratchet = plant("ratchet", RATCHET(0));
     const wrong = plant("state", { priorities: ["blocked-by-edges 6 of 6 MET."] });
     const right = plant("state", { priorities: ["blocked-by-edges 5 of 5 MET."] });
 
@@ -124,7 +126,7 @@ describe("the comparison — one input, two outcomes", () => {
     // The first historical escape, as it was written. 12/12 against a live
     // 5/5 — and it is a record of 2026-11-03, so it must not redden.
     const readings = plant("readings", LIVE);
-    const ratchet = plant("ratchet", { allowed: 0, why: WHY });
+    const ratchet = plant("ratchet", RATCHET(0));
     const state = plant("state", {
       priorities: ["The 2026-11-03 session recorded FIVE readings at 87d7c832 — blocked-by-edges 12/12."],
     });
@@ -136,7 +138,7 @@ describe("the comparison — one input, two outcomes", () => {
     // Without it, "dated recordings pass" is satisfied by a check that
     // passes everything.
     const readings = plant("readings", LIVE);
-    const ratchet = plant("ratchet", { allowed: 0, why: WHY });
+    const ratchet = plant("ratchet", RATCHET(0));
     const state = plant("state", { priorities: ["FIVE readings — blocked-by-edges 12/12."] });
     const r = bothWays([`--readings=${readings}`, `--state=${state}`, `--ratchet=${ratchet}`]);
     expect(r.real).toBe(REFUSE_EXIT);
@@ -150,7 +152,7 @@ describe("the states that are not a pass", () => {
     // checked, and an extractor that matched nothing would otherwise
     // certify it by counting nothing.
     const readings = plant("readings", LIVE);
-    const ratchet = plant("ratchet", { allowed: 0, why: WHY });
+    const ratchet = plant("ratchet", RATCHET(0));
     const state = plant("state", { priorities: ["a note that cites no reading at all"] });
     const r = bothWays([`--readings=${readings}`, `--state=${state}`, `--ratchet=${ratchet}`]);
     expect(r.real).toBe(REFUSE_EXIT);
@@ -180,7 +182,7 @@ describe("the states that are not a pass", () => {
     // A ratchet nobody can interpret becomes a number nobody lowers.
     const readings = plant("readings", LIVE);
     const state = plant("state", { priorities: ["milestones 26 of 26."] });
-    const ratchet = plant("ratchet", { allowed: 0, why: "stale" });
+    const ratchet = plant("ratchet", { allowed: 0, why: "stale", readings: LIVE.map(r => r.name) });
     const r = bothWays([`--readings=${readings}`, `--state=${state}`, `--ratchet=${ratchet}`]);
     expect(r.real).toBe(REFUSE_EXIT);
     expect(r.mutant).toBe(0);
@@ -190,9 +192,45 @@ describe("the states that are not a pass", () => {
     const at = join(SCRATCH, "corrupt-readings.json");
     writeFileSync(at, "{not json");
     const state = plant("state", { priorities: ["milestones 26 of 26."] });
-    const ratchet = plant("ratchet", { allowed: 0, why: WHY });
+    const ratchet = plant("ratchet", RATCHET(0));
     const r = bothWays([`--readings=${at}`, `--state=${state}`, `--ratchet=${ratchet}`]);
     expect(r.real).toBe(REFUSE_EXIT);
+    expect(r.mutant).toBe(0);
+  });
+
+  test("an UNMEASURED reading refuses — it is not a reading of 0 of 0", () => {
+    // The vacuous certification this whole check exists against, arriving
+    // through its own input. `takeReading` reports `unmeasured` with
+    // `measured: 0, target: 0`, so without the `status` check a cited
+    // `26 of 26` disagrees for a reason nobody wrote — and a cited
+    // `0 of 0` AGREES having been compared with nothing at all.
+    const readings = plant("readings", [
+      { name: "milestones", measured: 0, target: 0, status: "unmeasured" },
+      { name: "blocked-by-edges", measured: 5, target: 5, status: "met" },
+    ]);
+    const state = plant("state", { priorities: ["milestones 0 of 0."] });
+    const r = bothWays([`--readings=${readings}`, `--state=${state}`, `--ratchet=${plant("ratchet", RATCHET(0))}`]);
+    expect(r.real, "a figure was compared against a reading nothing measured").toBe(REFUSE_EXIT);
+    expect(r.mutant).toBe(0);
+  });
+
+  test("a RENAMED reading refuses — the citation would otherwise vanish silently", () => {
+    // The guard that replaced a branch which could not fire. `judgeClaims`
+    // derives its name list from the live readings, so a figure citing
+    // `queue-label` after it is renamed never reaches a verdict: the file
+    // reads as fully checked while a figure nobody re-derives sits in it.
+    // Comparing the SETS is the only place that is visible.
+    const renamed = plant("readings", [
+      { name: "milestones", measured: 26, target: 26 },
+      { name: "queue-labels", measured: 5, target: 5 },
+    ]);
+    const state = plant("state", { priorities: ["queue-label 9 of 9."] });
+    const r = bothWays([
+      `--readings=${renamed}`,
+      `--state=${state}`,
+      `--ratchet=${plant("ratchet", RATCHET(0, ["milestones", "queue-label"]))}`,
+    ]);
+    expect(r.real, "a renamed reading passed as if nothing changed").toBe(REFUSE_EXIT);
     expect(r.mutant).toBe(0);
   });
 
@@ -202,7 +240,7 @@ describe("the states that are not a pass", () => {
     // the reason.
     const readings = plant("readings", [{ name: "milestones", measured: 26, target: "26" }]);
     const state = plant("state", { priorities: ["milestones 26 of 26."] });
-    const ratchet = plant("ratchet", { allowed: 0, why: WHY });
+    const ratchet = plant("ratchet", RATCHET(0));
     const r = bothWays([`--readings=${readings}`, `--state=${state}`, `--ratchet=${ratchet}`]);
     expect(r.real).toBe(REFUSE_EXIT);
     expect(r.mutant).toBe(0);
@@ -218,7 +256,7 @@ describe("the ratchet refuses in both directions", () => {
     const r = bothWays([
       `--readings=${readings()}`,
       `--state=${twoWrong()}`,
-      `--ratchet=${plant("ratchet", { allowed: 1, why: WHY })}`,
+      `--ratchet=${plant("ratchet", RATCHET(1))}`,
     ]);
     expect(r.real).toBe(REFUSE_EXIT);
     expect(r.mutant).toBe(0);
@@ -230,7 +268,7 @@ describe("the ratchet refuses in both directions", () => {
     const r = bothWays([
       `--readings=${readings()}`,
       `--state=${twoWrong()}`,
-      `--ratchet=${plant("ratchet", { allowed: 3, why: WHY })}`,
+      `--ratchet=${plant("ratchet", RATCHET(3))}`,
     ]);
     expect(r.real).toBe(REFUSE_EXIT);
     expect(r.mutant).toBe(0);
@@ -241,7 +279,7 @@ describe("the ratchet refuses in both directions", () => {
       main([
         `--readings=${readings()}`,
         `--state=${twoWrong()}`,
-        `--ratchet=${plant("ratchet", { allowed: 2, why: WHY })}`,
+        `--ratchet=${plant("ratchet", RATCHET(2))}`,
       ]),
     ).toBe(0);
   });
@@ -319,14 +357,21 @@ describe("the live repository", () => {
 
     // …and it is ONE more, not some other number. A refusal for the wrong
     // count would pass the assertion above while measuring nothing.
-    const atOneMore = plant("ratchet", { allowed: banked.allowed + 1, why: WHY });
+    const atOneMore = plant("ratchet", { allowed: banked.allowed + 1, why: WHY, readings: BOARD_AT_BANKING.map(r => r.name) });
     expect(main([`--readings=${readings}`, `--state=${worse}`, `--ratchet=${atOneMore}`])).toBe(0);
   });
 
   test("the banked number says what it means", () => {
     // A ratchet nobody can interpret becomes a number nobody lowers.
-    const banked = JSON.parse(readFileSync(ratchetPath, "utf8")) as { allowed: number; why: string };
+    const banked = JSON.parse(readFileSync(ratchetPath, "utf8")) as {
+      allowed: number;
+      why: string;
+      readings: string[];
+    };
     expect(Number.isInteger(banked.allowed)).toBe(true);
+    // The rename guard's own input. A ratchet banked against an unstated
+    // reading set cannot tell a rename from a count that moved.
+    expect(banked.readings.length).toBeGreaterThan(0);
     expect(banked.why.length).toBeGreaterThan(40);
   });
 });

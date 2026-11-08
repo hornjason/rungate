@@ -1,4 +1,13 @@
 {
   "allowed": 7,
-  "why": "Undated figures in project-state.json's priorities[] that no longer match the live board. Measured 2026-11-08 against origin/main at 7cdef845: 19 cited figures, 10 dated and therefore records, 2 agreeing, 7 disagreeing. Every one of the seven is an append-only session note that was true when it was written; the fix for each is to date the sentence so it reads as the record it is, not to edit the number. This refuses in both directions, so lowering it means banking the new count in the same commit. Only the DA may edit project-state.json (#296), so an agent in a worktree lowers this by asking rather than by editing."
+  "why": "Undated figures in project-state.json's priorities[] that no longer match the live board. Measured 2026-11-08 against origin/main at 7cdef845: 19 cited figures, 10 dated and therefore records, 2 agreeing, 7 disagreeing. Every one of the seven is an append-only session note that was true when it was written; the fix for each is to date the sentence so it reads as the record it is, not to edit the number. This refuses in both directions, so lowering it means banking the new count in the same commit. Only the DA may edit project-state.json (#296), so an agent in a worktree lowers this by asking rather than by editing. 'readings' is the reading set the number was banked against: a rename or an addition changes which figures are re-derivable at all, so the count no longer describes the same question and the check refuses until both are updated together.",
+  "readings": [
+    "milestones",
+    "criterion-coverage",
+    "blocked-by-edges",
+    "criteria-field",
+    "queue-label",
+    "spec-placement",
+    "criteria-named"
+  ]
 }

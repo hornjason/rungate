@@ -44,10 +44,19 @@ describe("citedReadings — what counts as a cited figure", () => {
     expect(c.map(x => [x.reading, x.measured, x.target])).toEqual([["blocked-by-edges", 6, 6]]);
   });
 
+  test("CONTROL: a clause boundary ends the window, with no second name in sight", () => {
+    // The case the OTHER guard cannot see, and it is here because a
+    // mutation said so: widening `[^,;.]` to `.` turned zero cases red
+    // until this was written, because every list this suite held was
+    // already caught by the name-in-window check below. There is no second
+    // reading in this sentence, so only the comma keeps `3 of 9` from
+    // being read as `blocked-by-edges`'s figure.
+    expect(citedReadings("blocked-by-edges MET, but 3 of 9 elsewhere.", NAMES)).toEqual([]);
+  });
+
   test("CONTROL: a list does not pair the first name with the second figure", () => {
-    // The mis-pairing this is pointed at, and the reason the gap window
-    // stops at a comma. Widening `[^,;.]` to `.` makes this read
-    // `blocked-by-edges 5 of 6` TWICE and lose `criteria-field` entirely.
+    // Caught by the name-in-window guard, NOT by the punctuation stop —
+    // which is what the case above exists to keep honest.
     const c = citedReadings("blocked-by-edges 5 of 6, criteria-field 5 of 6", NAMES);
     expect(c.map(x => [x.reading, x.measured, x.target])).toEqual([
       ["blocked-by-edges", 5, 6],
@@ -83,6 +92,22 @@ describe("citedReadings — what counts as a cited figure", () => {
     expect(sha[0]?.dated).toBe(true);
     expect(citedReadings("milestones 26/26.", NAMES)[0]?.dated).toBe(false);
   });
+
+  test("CONTROL: a word spelt only from a-f is not a SHA, and must not suppress the figure", () => {
+    // A bypass, not a nicety. `[0-9a-f]{7,40}` with no digit required
+    // matches ordinary English — and a sentence containing one of these
+    // would be marked RECORDED and its figure never compared, which is a
+    // silent hole anybody could walk a stale number through.
+    //
+    // Dropping the `\d` requirement from `STAMPED` turns every row red.
+    for (const word of ["defaced", "effaced", "faceted", "decade", "cabbage"]) {
+      const c = citedReadings(`the ${word} list — milestones 26/26.`, NAMES);
+      expect(c[0]?.dated, `${word} was read as a commit SHA`).toBe(false);
+    }
+    // …and a real short SHA still is one, or the fix would be a deletion.
+    expect(citedReadings("at 87d7c832 — milestones 26/26.", NAMES)[0]?.dated).toBe(true);
+    expect(citedReadings("at 1234567 — milestones 26/26.", NAMES)[0]?.dated).toBe(true);
+  });
 });
 
 describe("judgeClaims — four outcomes, four different facts", () => {
@@ -106,19 +131,22 @@ describe("judgeClaims — four outcomes, four different facts", () => {
     expect(v?.kind).toBe("RECORDED");
   });
 
-  test("a figure naming a reading that no longer exists is UNRESOLVABLE, not silence", () => {
-    // The reading is cited under a name the live set no longer carries. It
-    // must refuse rather than vanish — a renamed reading dropping out of
-    // the comparison leaves the file reading as fully checked.
+  test("a citation of a renamed reading VANISHES — which is why the guard is elsewhere", () => {
+    // Asserted as the limitation it is, not papered over. `judgeClaims`
+    // derives its name list from the live readings, so a figure citing a
+    // name they no longer carry never reaches a verdict at all. An
+    // `UNRESOLVABLE` branch was written for this and could not fire; a
+    // branch that cannot fire is not protection, it is the reason nobody
+    // checks.
+    //
+    // The rename IS caught, by comparing the reading SETS in
+    // `scripts/check-state-claims.ts` against the set the ratchet was
+    // banked with. This case pins why that guard has to live there.
     const shrunk = LIVE.filter(r => r.name !== "queue-label");
     expect(judgeClaims("queue-label 5 of 5.", shrunk)).toEqual([]);
-    // …which is why the name set comes from the LIVE readings: a citation
-    // of a name nothing produces is invisible to the extractor by
-    // construction, so UNRESOLVABLE is reachable only when a caller hands
-    // `judgeClaims` a name list wider than its readings. That is exactly
-    // what a mid-rename tree looks like, and it is asserted directly.
-    const stale = citedReadings("queue-label 5 of 5.", [...NAMES]);
-    expect(stale).toHaveLength(1);
+    // The same prose against the full set is one claim, so the vanishing
+    // above is the rename and not a defect in the extractor.
+    expect(judgeClaims("queue-label 5 of 5.", LIVE)).toHaveLength(1);
   });
 });
 
@@ -153,7 +181,7 @@ describe("readStateClaims — the file-level reading", () => {
       LIVE,
     );
     expect(r.claims).toBe(3);
-    expect(r.agreed + r.disagreed.length + r.recorded + r.unresolvable.length).toBe(r.claims);
+    expect(r.agreed + r.disagreed.length + r.recorded).toBe(r.claims);
     expect([r.agreed, r.disagreed.length, r.recorded]).toEqual([1, 1, 1]);
   });
 });

@@ -65,21 +65,35 @@ export interface CitedReading {
 }
 
 /**
- * Four outcomes, and they are four different facts.
+ * Three outcomes, and they are three different facts.
  *
- * `UNRESOLVABLE` exists so that a reading named in prose which
- * `board-conformance` no longer produces is a refusal rather than silence.
- * A renamed reading would otherwise drop out of the comparison entirely and
- * the file would read as fully checked.
+ * There is deliberately no `UNRESOLVABLE`. One was written, and it was a
+ * **dead branch**: `judgeClaims` derives its name list from the live
+ * readings, so a citation of a name they no longer carry is invisible to
+ * the extractor and never reaches a verdict at all. A branch that cannot
+ * fire is not protection, and keeping it would have been the worst kind of
+ * guard — one whose presence is the reason nobody checks.
+ *
+ * The rename it was meant to catch is caught where it can be: the ratchet
+ * names the reading set it was banked against, and
+ * `scripts/check-state-claims.ts` refuses when the live set differs.
  */
 export type ClaimVerdict =
   | { kind: "AGREED"; cited: CitedReading }
   | { kind: "DISAGREED"; cited: CitedReading; live: LiveReading }
-  | { kind: "RECORDED"; cited: CitedReading }
-  | { kind: "UNRESOLVABLE"; cited: CitedReading; why: string };
+  | { kind: "RECORDED"; cited: CitedReading };
 
-/** A date, or a commit SHA: either says WHEN the figure was taken. */
-const STAMPED = /\b\d{4}-\d{2}-\d{2}\b|\b[0-9a-f]{7,40}\b/;
+/**
+ * A date, or a commit SHA: either says WHEN the figure was taken.
+ *
+ * **The SHA arm requires a digit**, and that is not tidiness. `[0-9a-f]{7,}`
+ * alone matches ordinary English words spelt only from those letters —
+ * `defaced`, `effaced`, `facade` — so a sentence containing one would have
+ * been marked RECORDED and its figure never compared. A detector that
+ * suppresses the comparison on a word is a bypass, not a heuristic, and the
+ * controls in `test/state-claim-readings.test.ts` hold those three words.
+ */
+const STAMPED = /\b\d{4}-\d{2}-\d{2}\b|\b(?=[0-9a-f]{7,40}\b)[a-f]*\d[0-9a-f]*\b/;
 
 /**
  * Sentence boundaries, and `\n` counts as one.
@@ -94,12 +108,21 @@ const SENTENCE = /(?<=[.!?])\s+|\n+/;
 /**
  * How much may sit between a reading's name and its ratio.
  *
- * Wide enough for `blocked-by-edges to 6 of 6` and `milestones 26 of 26`,
- * and stopped at `,` `;` and `.` so that `blocked-by-edges 5 of 6,
- * criteria-field 5 of 6` cannot pair the first name with the second ratio.
- * Any other reading's name appearing inside the window disqualifies the
- * pairing too — the punctuation alone is not enough, and a list written
- * without commas would otherwise collapse onto its first name.
+ * Wide enough for `blocked-by-edges to 6 of 6` and `milestones 26 of 26`.
+ *
+ * Two separate restrictions, and a mutation of each turns a different case
+ * red. They were briefly described as doing the same job, and the mutation
+ * that widened the punctuation stop turned ZERO cases red — because the
+ * list it was credited with catching is caught by the other half:
+ *
+ * - **No other reading's name inside the window.** This is what stops
+ *   `blocked-by-edges 5 of 6, criteria-field 5 of 6` pairing the first
+ *   name with the second ratio, and it works on a list with no punctuation
+ *   in it at all.
+ * - **Stopped at `,` `;` and `.`.** This does something the name guard
+ *   cannot: `blocked-by-edges MET, but 3 of 9 elsewhere` has no second
+ *   reading in it, so only the clause boundary keeps the ratio from being
+ *   read as this reading's.
  */
 const GAP_MAX = 24;
 
@@ -147,28 +170,15 @@ export function citedReadings(prose: string, names: readonly string[]): CitedRea
   return out;
 }
 
-/**
- * Compare each cited figure against the live reading of the same name.
- *
- * `live` is the whole set, so an unresolvable citation can say what the
- * known names are rather than only that this one is not among them.
- */
-export function judgeClaims(
-  prose: string,
-  live: readonly LiveReading[],
-): ClaimVerdict[] {
+/** Compare each cited figure against the live reading of the same name. */
+export function judgeClaims(prose: string, live: readonly LiveReading[]): ClaimVerdict[] {
   const byName = new Map(live.map(r => [r.name, r]));
   return citedReadings(prose, [...byName.keys()]).map((cited): ClaimVerdict => {
-    const now = byName.get(cited.reading);
-    if (now === undefined) {
-      return {
-        kind: "UNRESOLVABLE",
-        cited,
-        why:
-          `no live reading is called ${JSON.stringify(cited.reading)}. Known readings: ` +
-          `${[...byName.keys()].join(", ")}`,
-      };
-    }
+    // Non-null by construction: the name list IS `byName`'s keys, so the
+    // extractor cannot produce a citation this map does not answer. Said
+    // as an assertion rather than a branch, because the branch that used
+    // to be here could not fire and read as protection.
+    const now = byName.get(cited.reading)!;
     if (cited.dated) return { kind: "RECORDED", cited };
     if (cited.measured === now.measured && cited.target === now.target) {
       return { kind: "AGREED", cited };
@@ -191,7 +201,6 @@ export interface StateClaimReading {
   agreed: number;
   disagreed: ClaimVerdict[];
   recorded: number;
-  unresolvable: ClaimVerdict[];
 }
 
 export function readStateClaims(
@@ -205,6 +214,5 @@ export function readStateClaims(
     agreed: verdicts.filter(v => v.kind === "AGREED").length,
     disagreed: verdicts.filter(v => v.kind === "DISAGREED"),
     recorded: verdicts.filter(v => v.kind === "RECORDED").length,
-    unresolvable: verdicts.filter(v => v.kind === "UNRESOLVABLE"),
   };
 }
