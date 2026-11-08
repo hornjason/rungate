@@ -55,6 +55,40 @@ function parseFrontmatter(content: string): Record<string, string> | null {
  */
 const BLOCK_SCALAR_HEADER = /^[>|][0-9+-]{0,2}(\s+#.*)?$/;
 
+/** The frontmatter block: everything between the opening and closing `---`. */
+const FRONTMATTER = /^---\n([\s\S]*?)\n---/;
+
+/** A `governs:` line at column 0, and whatever follows it on that line. */
+const GOVERNS_LINE = /^governs:[ \t]*(.*)$/m;
+
+/**
+ * The inline text of a document's `governs:` field — the one extractor.
+ *
+ * Returns `undefined` when the document declares no `governs` at all, and
+ * the empty string when it declares one whose value is not on that line.
+ * Those are different facts and both callers need to tell them apart.
+ *
+ * Deliberately reads the inline text ONLY. Raised in review of #1906: the
+ * two callers used to extract `governs` with two different frontmatter
+ * parsers, and on a bare `governs:` with the text indented below,
+ * `lib/conformity.ts`'s flattened the continuation lines and joined them
+ * with `"; "` while `lib/spec-registry.ts`'s never set the key — so
+ * HYGIENE-1 called the spec governed and `getUngoverned` called the same
+ * spec ungoverned, in the same run. Unifying the predicate had not fixed
+ * that, because the disagreement was upstream of the predicate.
+ *
+ * A value on the lines below is therefore absent to both readers rather
+ * than present and different. That is the same decision #1692 made about
+ * the folded form, applied to the shape that has no indicator: `governs`
+ * is one line, and anything else is refused rather than guessed at.
+ */
+export function governsOf(content: string): string | undefined {
+  const fm = FRONTMATTER.exec(content);
+  if (!fm) return undefined;
+  const line = GOVERNS_LINE.exec(fm[1]);
+  return line ? line[1].trim() : undefined;
+}
+
 /**
  * Check if a governs field value is valid (non-empty, not TODO, not a
  * folded block whose text this reader never saw).
@@ -68,8 +102,9 @@ const BLOCK_SCALAR_HEADER = /^[>|][0-9+-]{0,2}(\s+#.*)?$/;
  * supporting it means a reader that knows how `>` and `|` join their lines,
  * which nothing here needs.
  *
- * `lib/conformity.ts`'s HYGIENE-1 calls this. It is the one decider — two
- * copies of the same criteria is what let the disagreement sit unnoticed.
+ * `lib/conformity.ts`'s HYGIENE-1 calls this, over a value `governsOf`
+ * extracted. One extractor and one predicate — two copies of either is what
+ * let the disagreement sit unnoticed.
  */
 export function isValidGoverns(governs: string | undefined): governs is string {
   if (!governs) return false;
@@ -104,13 +139,13 @@ function scanSpecDir(dir: string, prefix: string = ''): { governed: SpecEntry[];
 
     const filePath = join(dir, entry.name);
     const content = readFileSync(filePath, 'utf-8');
-    const fm = parseFrontmatter(content);
+    const governs = governsOf(content); // #1906 — the one extractor
     const relFile = prefix ? `${prefix}/${entry.name}` : entry.name;
 
-    if (fm && isValidGoverns(fm.governs)) {
+    if (isValidGoverns(governs)) {
       governed.push({
         file: relFile,
-        governs: fm.governs,
+        governs,
         path: filePath,
       });
     } else {

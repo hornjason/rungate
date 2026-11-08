@@ -26,7 +26,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { parseFrontmatter } from "../lib/conformity";
-import { getUngoverned, isValidGoverns } from "../lib/spec-registry";
+import { getUngoverned, governsOf, isValidGoverns } from "../lib/spec-registry";
 
 const HARNESS = resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -107,6 +107,80 @@ describe("a folded governs scalar is refused, not read as `>-` (#1692)", () => {
   test("both readers extract the same string, so one predicate can decide", () => {
     const content = `---\n${FOLDED}\n---\n\n# X\n`;
     expect(parseFrontmatter(content)?.governs).toBe(">-");
+  });
+});
+
+/**
+ * Round 1 of review on #1906 said the "one decider" claim was overstated,
+ * and it was right: unifying the PREDICATE left two EXTRACTORS, and they
+ * disagree on a different shape — a bare `governs:` with the text on the
+ * indented lines below and no `>`/`|` at all.
+ *
+ * Measured on this tree before the fix: `lib/conformity.ts`'s
+ * `parseFrontmatter` flattens the continuation lines and joins them with
+ * `"; "`, so HYGIENE-1 saw
+ * `"THE ENGINE that turns a spec into board state — not; the specs it
+ * ships."` and passed the spec; `lib/spec-registry.ts`'s own parser has no
+ * such branch, never set the key, and `getUngoverned` listed the same file
+ * as ungoverned. Same spec, two verdicts, in the same run.
+ *
+ * The answer is one extractor, not a softer sentence. `governsOf` reads the
+ * inline text and nothing else, so a value that lives on the lines below —
+ * folded, literal or bare — is absent to both readers rather than present
+ * and different.
+ */
+describe("one extractor, so a value on the lines below is absent to both (#1906)", () => {
+  const BARE_BLOCK = "governs:\n  THE ENGINE that turns a spec into board state — not\n  the specs it ships.";
+
+  test("HYGIENE-1 fails on a bare block governs, and names the file", () => {
+    const r = runDocHygieneOn(plantSpec("BLOCK-SPEC.md", BARE_BLOCK));
+    expect(r.ran, `no HYGIENE check ran at all:\n${r.output}`).toBeGreaterThan(0);
+    expect(
+      r.fail,
+      "HYGIENE-1 read the flattened continuation lines as the governs text " +
+        `and passed. Output:\n${r.output}`,
+    ).toBeGreaterThan(0);
+    expect(r.output).toContain("BLOCK-SPEC.md");
+  });
+
+  test("the registry calls the same bare-block spec ungoverned", () => {
+    expect(getUngoverned(plantSpec("BLOCK-SPEC.md", BARE_BLOCK))).toEqual(["BLOCK-SPEC.md"]);
+  });
+
+  // The property, not the two sites. Repairing them one at a time leaves a
+  // behavioural suite that catches only the last one to regress.
+  for (const [shape, frontmatter] of [
+    ["one-line", ONE_LINE],
+    ["folded", FOLDED],
+    ["bare block", BARE_BLOCK],
+    ["literal block", "governs: |\n  THE ENGINE, kept verbatim."],
+    ["absent", "created: 2026-11-08"],
+  ] as const) {
+    test(`the two readers agree on a ${shape} governs`, () => {
+      const root = plantSpec("AGREE-SPEC.md", frontmatter);
+      const hygienePassed = runDocHygieneOn(root).fail === 0;
+      const registrySaysGoverned = !getUngoverned(root).includes("AGREE-SPEC.md");
+      expect(
+        { hygienePassed, registrySaysGoverned },
+        `HYGIENE-1 and spec-registry reached different verdicts on a ${shape} governs`,
+      ).toEqual({ hygienePassed: registrySaysGoverned, registrySaysGoverned });
+    });
+  }
+
+  test("governsOf reads the inline text only", () => {
+    const of = (fm: string) => governsOf(`---\ndoc-type: spec\n${fm}\nupdated: 2026-11-08\n---\n\n# X\n`);
+    expect(of(ONE_LINE)).toBe("THE ENGINE that turns a spec into board state — not the specs it ships.");
+    expect(of(FOLDED)).toBe(">-");
+    expect(of(BARE_BLOCK)).toBe("");
+    expect(of("created: 2026-11-08")).toBeUndefined();
+  });
+
+  // The control. `governsOf` must not find a `governs:` written in the BODY,
+  // or a spec that merely discusses the field would read as declaring one.
+  test("a governs: line in the body is not frontmatter", () => {
+    expect(
+      governsOf(`---\ndoc-type: spec\nupdated: 2026-11-08\n---\n\n# X\n\ngoverns: the body is not the block\n`),
+    ).toBeUndefined();
   });
 });
 

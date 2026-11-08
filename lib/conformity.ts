@@ -48,7 +48,7 @@ import {
 } from "./branch-protection";
 import { stripJsComments } from "./strip-js-comments";
 import { remedyMessage } from "./check-remedy";
-import { isValidGoverns } from "./spec-registry";
+import { governsOf, isValidGoverns } from "./spec-registry";
 import { parseScDeclarations } from "./sc-ids";
 import { isHarnessItself } from "./harness-identity";
 import {
@@ -2004,13 +2004,18 @@ export function runDocHygiene(
       const missing: string[] = [];
       for (const f of collectSpecFiles(specsDir)) { // #225 — subdirectories too
         const content = readFileSync(join(specsDir, f), "utf-8");
-        const fm = parseFrontmatter(content);
-        if (!fm) continue;
+        if (!parseFrontmatter(content)) continue;
         // #1692 — the criteria used to be spelled out again here, identically
         // to `isValidGoverns`. Two deciders answering the same question about
         // the same input are behaviourally one, so neither could see that both
         // read `governs: >-` as the governs text itself.
-        if (!isValidGoverns(fm.governs)) missing.push(f);
+        //
+        // #1906 — and the value must come from the same EXTRACTOR as the
+        // registry's, not from this file's general-purpose parser. That one
+        // flattens a bare `governs:` block into `"a; b"` where the registry's
+        // saw nothing at all, so the two readers disagreed one shape along
+        // from the one the predicate had just been taught.
+        if (!isValidGoverns(governsOf(content))) missing.push(f);
       }
       // Was unconditionally passing after a console.warn (#80).
       expect(
