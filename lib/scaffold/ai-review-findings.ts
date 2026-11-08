@@ -667,6 +667,64 @@ export function blockingContractViolations(finding: Record<string, unknown>): st
   });
 }
 
+/** A thing whose outcome is a test run: the subject half of the claim. */
+const TEST_SUBJECT = /\b(?:tests?|specs?|cases?|checks?|suites?|assertions?)\b/i;
+
+/**
+ * The outcome half. `fails to <verb>` is excluded deliberately — "the check
+ * fails to escape the path" is a statement about what code DOES, which is
+ * the ordinary subject of a review and must keep blocking.
+ */
+const TEST_OUTCOME =
+  /\b(?:fail(?:s|ing|ed)?(?!\s+to\s+\w)|red|broken|do(?:es)?\s+not\s+pass|cannot\s+pass|will\s+not\s+pass|won't\s+pass)\b/i;
+
+/**
+ * Does this finding assert the OUTCOME of a test run? — #1879.
+ *
+ * ## Why an outcome claim is unfounded here by construction
+ *
+ * `.github/workflows/ai-review.yml` runs no test command of any kind. The
+ * reviewer reads source and the diff; it never sees a result. So a finding
+ * saying a named case fails is always an inference, and on #1878 the same
+ * inference blocked three rounds running and was wrong all three times.
+ *
+ * That instance arrived through the restore — `.claude` is in
+ * `AI_REVIEW_UNTRUSTED_PATHS`, so the reviewer read the BASE's ratchet file
+ * beside the branch's source and concluded a case must fail. **The restore
+ * is not what makes the claim unfounded**, and a check built around it would
+ * be narrower than the defect: the same sentence about a file nothing
+ * restores is just as unobserved. The prompt already forbids the
+ * restore-shaped version of this, in those words, and was ignored anyway —
+ * which is the argument for deciding it here rather than instructing it
+ * again.
+ *
+ * ## What this is allowed to get wrong, and in which direction
+ *
+ * It is a text detector over prose, which is the shape this repository keeps
+ * catching itself on, so the bound is stated rather than implied:
+ *
+ * - **A false negative is the status quo.** Today every one of these blocks.
+ * - **A false positive costs a finding its blocking status and nothing
+ *   else** — it stays in `reported` and reaches the maintainer in full.
+ *
+ * Both halves must land in ONE sentence, because "this test file is new"
+ * followed by "the build is broken" is two statements and neither is a
+ * claim about a case's outcome.
+ *
+ * The returned string is the sentence itself, so the refusal quotes what it
+ * matched instead of asserting that it matched something.
+ */
+export function unrunTestClaim(finding: Record<string, unknown>): string | null {
+  for (const key of [AI_REVIEW_FINDING_FIELDS.summary, AI_REVIEW_FINDING_FIELDS.failureScenario]) {
+    const value = finding[key];
+    if (typeof value !== "string") continue;
+    for (const sentence of value.split(/(?<=[.!?])\s+|\n+/)) {
+      if (TEST_SUBJECT.test(sentence) && TEST_OUTCOME.test(sentence)) return sentence.trim();
+    }
+  }
+  return null;
+}
+
 // `AI_REVIEW_CHANGED_FILES_FLAG` lived here and is gone. #1204 argued for a
 // FLAG over a second positional, citing #675: `--project-root <cwd>` "would
 // arrive as a second positional and be read as a second payload".
@@ -1765,6 +1823,25 @@ function readPayload(
       // — the ballot is RECORDED and never acted on. `main` runs the gate
       // for the ledger and the annotation; this list is untouched by it.
       // See `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` under CRC-B4.
+      //
+      // #1879, and LAST of the demotions rather than first. A finding that is
+      // both pre-existing and an unrun claim is reported as pre-existing,
+      // which is the older mechanism and the better-evidenced sentence; this
+      // one only sees what would otherwise still redden the check.
+      //
+      // It demotes on the same terms CRC-B8 set: the finding stays in
+      // `reported` and counts toward `demoted`, so a reviewer that said
+      // BLOCK is not turned into a CONTRADICTION by the demotion working.
+      const unrun = unrunTestClaim(finding);
+      if (unrun !== null) {
+        demoted += 1;
+        detail.push(
+          `finding ${i} claims a test outcome, and no test ran: ${JSON.stringify(unrun)}. The ` +
+            `review job executes no test command, so this is an inference from reading the ` +
+            `source and not an observation. It is reported and does not block`,
+        );
+        return;
+      }
       blocking.push(item);
       // Tagged through the same binding every other render uses. By here the
       // tag is `Important` by construction — the severity blocks and the

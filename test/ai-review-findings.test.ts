@@ -27,6 +27,7 @@ import {
   scopeMeasured,
   renderFinding,
   severityBlocks,
+  unrunTestClaim,
 } from "../lib/scaffold/ai-review-findings";
 
 /**
@@ -1797,5 +1798,106 @@ describe("#1472: an unnormalisable changed-file entry is DROPPED and NAMED, not 
     // the drop nowhere at all.
     expect(aiReviewScopeLine(none)).toContain("entries dropped: not checked");
     expect(aiReviewScopeLine(complete)).toContain("entries dropped: 0");
+  });
+});
+
+/**
+ * Covers #1879 — a blocking finding whose claim is a test's OUTCOME.
+ *
+ * The premise, measured rather than assumed: `.github/workflows/ai-review.yml`
+ * contains no `bun test`, no `npm test`, and no other test invocation of any
+ * kind. The reviewer reads source and a diff; it never sees a result. So
+ * every one of these sentences is an inference, and on #1878 the same
+ * inference blocked three rounds running and was wrong all three times.
+ *
+ * The direction this is allowed to be wrong in is stated in
+ * `unrunTestClaim`'s docblock and is asserted below in both directions: the
+ * ordinary review sentence that merely contains the word "fails" must keep
+ * blocking, or the demotion is wider than the defect.
+ */
+describe("#1879 — a claim about a test's outcome does not block", () => {
+  const f = AI_REVIEW_FINDING_FIELDS;
+
+  const payload = (summary: string, failureScenario: string, verdict = "BLOCK") =>
+    JSON.stringify({
+      [AI_REVIEW_VERDICT_KEY]: verdict,
+      [AI_REVIEW_FINDINGS_KEY]: [
+        { [f.severity]: "critical", [f.file]: "a.ts", [f.line]: 1, [f.summary]: summary, [f.failureScenario]: failureScenario },
+      ],
+    });
+
+  test("the claim is demoted, stays reported, and the refusal says no test ran", () => {
+    const r = readAiReviewFindings(
+      payload("the ratchet case fails on this branch", "CI goes red at test/ratchet.test.ts"),
+    );
+    expect(r.blocked, "an unobserved test outcome still reddened the required check").toBe(false);
+    expect(r.outcome).toBe("CLEAN");
+    // CRC-B8's half: demoted is not dropped. One finding in, one finding out.
+    expect(r.reported).toHaveLength(1);
+    expect(r.blockingReported).toEqual([]);
+    expect(r.detail.join("\n")).toContain("claims a test outcome, and no test ran");
+  });
+
+  test("the reviewer's own BLOCK is not turned into a CONTRADICTION by the demotion", () => {
+    // The same reasoning CRC-B7 carries at the `demoted` counter: the
+    // reviewer is not told the job runs no tests, so its BLOCK is honest.
+    // Scoring the demotion against its word would make the mechanism WORKING
+    // the loudest possible failure. Without `demoted += 1` this reads
+    // CONTRADICTION and the check is red for a different reason — green on
+    // `blocked` alone would not have caught it.
+    const r = readAiReviewFindings(payload("test/foo.test.ts is red", "the suite fails"));
+    expect(r.outcome).toBe("CLEAN");
+  });
+
+  test("control: an ordinary finding that merely contains \"fails\" keeps blocking", () => {
+    // The over-correction this is pointed at. `fails to <verb>` is a
+    // statement about what the CODE does, which is the ordinary subject of a
+    // review. Dropping the `(?!\s+to\s+\w)` lookahead in `TEST_OUTCOME` turns
+    // this case red, and turns the two above green for the wrong reason.
+    const r = readAiReviewFindings(
+      payload("the check fails to escape the path", "a path with a quote in it reaches the shell"),
+    );
+    expect(r.blocked, "a finding about code behaviour was demoted").toBe(true);
+    expect(r.outcome).toBe("BLOCKED");
+  });
+
+  test("control: the two halves must land in ONE sentence", () => {
+    // Named because it is what the detector holds fixed. A finding may
+    // mention a test file and, separately, that something is broken, without
+    // ever claiming an outcome — matching across a sentence boundary would
+    // demote most of the payloads this module sees.
+    const r = readAiReviewFindings(
+      payload(
+        "test/ratchet.test.ts is new. The config it reads is broken.",
+        "a reader of the ratchet gets an empty list",
+      ),
+    );
+    expect(r.blocked, "the detector matched across a sentence boundary").toBe(true);
+  });
+
+  test("control: a non-blocking finding is untouched — this decides blocking only", () => {
+    const r = readAiReviewFindings(
+      JSON.stringify({
+        [AI_REVIEW_VERDICT_KEY]: "PASS",
+        [AI_REVIEW_FINDINGS_KEY]: [
+          { [f.severity]: "low", [f.file]: "b.ts", [f.line]: 2, [f.summary]: "the case fails" },
+        ],
+      }),
+    );
+    expect(r.outcome).toBe("CLEAN");
+    expect(r.reported).toHaveLength(1);
+    // It never reached the branch, so nothing was demoted and nothing says so.
+    expect(r.detail.join("\n")).not.toContain("claims a test outcome");
+  });
+
+  test("the predicate returns the sentence it matched, not a boolean", () => {
+    // So the refusal quotes what it read instead of asserting that it read
+    // something. A boolean here is the cheapest wrong fix and it is silent.
+    expect(
+      unrunTestClaim({ [f.summary]: "fine. the spec case is red. also fine." }),
+    ).toBe("the spec case is red.");
+    expect(unrunTestClaim({ [f.summary]: "an unchecked index" })).toBeNull();
+    // A non-string field is not an input it may crash on.
+    expect(unrunTestClaim({ [f.summary]: 7, [f.failureScenario]: null })).toBeNull();
   });
 });
