@@ -22,11 +22,12 @@
  * needs a `governs` long enough to wrap.
  */
 import { test, expect, describe, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { parseFrontmatter } from "../lib/conformity";
 import { getUngoverned, governsOf, isValidGoverns } from "../lib/spec-registry";
+import { stripComments } from "./helpers/strip-comments";
 
 const HARNESS = resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -231,6 +232,82 @@ describe("isValidGoverns is the one decider, and it reads every block indicator"
     expect(isValidGoverns("")).toBe(false);
     expect(isValidGoverns("   ")).toBe(false);
     expect(isValidGoverns("TODO")).toBe(false);
+  });
+});
+
+describe("the one extractor is asserted, not just described", () => {
+  // Raised in review of #1906, three seconds after it merged: switching
+  // `scanSpecDir` to `governsOf` left the module's own `parseFrontmatter`
+  // sitting there unused and unexported. A near-duplicate parser nobody
+  // calls is the cheapest thing in the world for a later edit to wire back
+  // in as a second source of truth — which is the exact class of bug this
+  // work closed. A docblock saying "one extractor" is the reason nobody
+  // checks that it still is, so this is the check.
+  const SOURCE = readFileSync(join(HARNESS, "lib", "spec-registry.ts"), "utf-8");
+
+  /**
+   * Every distinct identifier containing "frontmatter" in a module's CODE.
+   *
+   * Raised in review of #1907: the first version matched `function NAME`
+   * declarations only, so `const parseFrontmatter = (c) => …` — the arrow
+   * style this tree uses over a hundred times — and an `import { … }` of
+   * someone else's parser both sailed past a guard whose own comment warned
+   * about exactly that reintroduction. Measured: the old scan returned `[]`
+   * for a planted arrow declaration and a planted import.
+   *
+   * So this does not reason about declaring position at all. It takes every
+   * mention in comment-stripped source, which is strictly wider than any
+   * list of syntactic forms and cannot be defeated by a form nobody thought
+   * of. A string literal would be a false positive, and that is the
+   * direction to be wrong in: it costs one line in the expectation below.
+   */
+  function frontmatterIdentifiers(source: string): string[] {
+    // Case-insensitive: the first draft of this scan spelled it `[Ff]` and
+    // so could not see the module's own `FRONTMATTER` constant, which is a
+    // detector narrower than what it detects one more time.
+    const found = stripComments(source).match(/\w*frontmatter\w*/gi) ?? [];
+    return [...new Set(found)].sort();
+  }
+
+  test("lib/spec-registry.ts names one frontmatter thing, and it is the block regex", () => {
+    expect(
+      frontmatterIdentifiers(SOURCE),
+      "a second frontmatter parser — declared, assigned or IMPORTED — is back " +
+        "in the module whose whole point is that there is one. Call " +
+        "`governsOf`, or say in the diff why this one has to exist. This is " +
+        "an equality, so a binding that legitimately goes away must come out " +
+        "of the expectation in the same commit.",
+    ).toEqual(["FRONTMATTER"]);
+  });
+
+  // The controls. The case above is an equality over a one-element set, so
+  // it would read green against a scanner that finds nothing it should —
+  // which is precisely how its first version passed. These plant each form
+  // somebody would actually reintroduce the parser in.
+  const REINTRODUCTIONS: [string, string][] = [
+    ["a function declaration", "function parseFrontmatter(c: string) { return null; }"],
+    ["an exported arrow", "export const parseFrontmatter = (c: string) => ({});"],
+    ["a function expression", "const parseFrontmatter = function (c) { return {}; };"],
+    ["an import of another one", 'import { parseFrontmatter } from "./conformity";'],
+    ["a renamed import", 'import { parseFrontmatter as pf } from "./conformity";'],
+    ["a class method's owner", "class FrontmatterReader { read(c: string) { return c; } }"],
+  ];
+  for (const [shape, code] of REINTRODUCTIONS) {
+    test(`the scan catches ${shape}`, () => {
+      expect(frontmatterIdentifiers(code).length, `missed: ${code}`).toBeGreaterThan(0);
+    });
+  }
+
+  test("prose about frontmatter is not a binding", () => {
+    expect(frontmatterIdentifiers("// parseFrontmatter used to live here\nconst x = 1;")).toEqual([]);
+    expect(frontmatterIdentifiers("/** The frontmatter block. */\nconst x = 1;")).toEqual([]);
+  });
+
+  // And the control that says the scan is reading the real file, not an
+  // empty string: this module's two exported deciders are both present.
+  test("the scan is reading the module", () => {
+    expect(SOURCE).toContain("export function governsOf");
+    expect(SOURCE).toContain("export function isValidGoverns");
   });
 });
 

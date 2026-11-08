@@ -8,6 +8,14 @@
  * conformity.ts, spec-validators.ts). This module centralizes the contract
  * so doc-hygiene, scaffold, and gate enforcement share one source of truth.
  *
+ * #1692 and #1906 finished that for the two that DECIDE: `governsOf` is the
+ * one extractor and `isValidGoverns` the one predicate, and `HYGIENE-1` in
+ * `lib/conformity.ts` calls both. This module holds no frontmatter parser of
+ * its own, and `test/governs-folded-scalar.test.ts` asserts that rather than
+ * leaving it to this sentence. `scanner.ts` and `spec-validators.ts` still
+ * extract their own; they render text and compose a warning, and neither
+ * decides whether a spec is governed.
+ *
  * Issue: #24
  */
 
@@ -21,21 +29,6 @@ export interface SpecEntry {
   governs: string;
   /** Full path to the spec file */
   path: string;
-}
-
-/**
- * Parse frontmatter from a markdown file's content.
- * Returns key-value pairs from YAML-style frontmatter block.
- */
-function parseFrontmatter(content: string): Record<string, string> | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return null;
-  const fields: Record<string, string> = {};
-  for (const line of match[1].split('\n')) {
-    const kv = line.match(/^(\w[\w-]*):\s*(.+)$/);
-    if (kv) fields[kv[1]] = kv[2].trim();
-  }
-  return fields;
 }
 
 /**
