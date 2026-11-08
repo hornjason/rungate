@@ -132,6 +132,34 @@ export const GIT_LOCATION_VARS = [
 export const GIT_AMBIENT_CONFIG_PREFIX = "GIT_CONFIG";
 
 /**
+ * **The decider: every ambient `GIT_*` is removed.** The named lists in
+ * this file document WHY; they do not decide.
+ *
+ * Three review rounds added names to a list — locations, then the config
+ * prefix, then the exec vars — and each round found the previous list
+ * short. That is not bad luck about one entry. A denylist over a namespace
+ * its owner keeps extending is short by construction, and the fourth patch
+ * would have been as temporary as the third. So the population is the
+ * namespace, and a `GIT_` variable git adds next year is excluded without
+ * an edit here.
+ *
+ * The allowlist is EMPTY on purpose. Everything this file needs set — the
+ * three in {@link GIT_ISOLATION_ENV}, and a caller's
+ * `GIT_TERMINAL_PROMPT` — is applied AFTER the sweep by whoever wants it,
+ * so nothing has to survive it.
+ *
+ * **Scope is `GIT_` only, and `SSH_` is deliberately NOT swept.**
+ * `SSH_AUTH_SOCK` is an agent socket rather than a command, and removing
+ * it breaks fetching over SSH for every consumer using an agent — a cost
+ * with no matching gain. `SSH_ASKPASS` is a command, so it is named in
+ * {@link GIT_EXEC_VARS} and removed individually. Review of #1896 round 11.
+ */
+export const GIT_AMBIENT_NAMESPACE = "GIT_";
+
+/** Names allowed to survive the sweep. Empty, and see the note above. */
+export const GIT_AMBIENT_ALLOWED: ReadonlySet<string> = new Set<string>();
+
+/**
  * Variables whose VALUE git executes as a command.
  *
  * These are here for consistency, and the argument is short: stripping
@@ -182,10 +210,13 @@ export function withoutAmbientGitOverrides(
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
-  for (const name of GIT_LOCATION_VARS) delete env[name];
-  for (const name of GIT_EXEC_VARS) delete env[name];
   for (const name of Object.keys(env)) {
-    if (name.startsWith(GIT_AMBIENT_CONFIG_PREFIX)) delete env[name];
+    if (name.startsWith(GIT_AMBIENT_NAMESPACE) && !GIT_AMBIENT_ALLOWED.has(name)) delete env[name];
+  }
+  // The one command-bearing name outside the namespace. Everything else
+  // under `SSH_` is left alone — see {@link GIT_AMBIENT_NAMESPACE}.
+  for (const name of GIT_EXEC_VARS) {
+    if (!name.startsWith(GIT_AMBIENT_NAMESPACE)) delete env[name];
   }
   return env;
 }

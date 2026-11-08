@@ -1788,6 +1788,57 @@ describe("round 9: the denylist was short, and a second denylist is why", () => 
     expect(got.PATH, "stripping became emptying").toBe("/usr/bin");
   });
 
+  test("round 11: the sweep covers names NOBODY listed — that is the point of it", () => {
+    // Rounds 8, 9 and 10 each added names to a list and each found the
+    // previous list short. The fix is the namespace, not a fourth patch:
+    // these are real `GIT_*` variables that appear in none of the
+    // exported lists, and a denylist of literals cannot remove them.
+    const unlisted = {
+      GIT_EXEC_PATH: "/attacker/git-core",
+      GIT_TEMPLATE_DIR: "/attacker/template",
+      GIT_NAMESPACE: "refs/namespaces/evil",
+      GIT_ATTR_NOSYSTEM: "1",
+      GIT_A_VARIABLE_GIT_HAS_NOT_INVENTED_YET: "x",
+    };
+    for (const name of Object.keys(unlisted)) {
+      expect(
+        [...GIT_LOCATION_VARS, ...GIT_EXEC_VARS].includes(name as never),
+        `${name} is in a list, so it cannot show the sweep did the work`,
+      ).toBe(false);
+    }
+
+    const got = gitEnv({ ...unlisted, PATH: "/usr/bin", HOME: "/h" });
+    for (const name of Object.keys(unlisted)) {
+      expect(got[name], `${name} reached git`).toBeUndefined();
+    }
+    expect(got.PATH).toBe("/usr/bin");
+    expect(got.HOME).toBe("/h");
+  });
+
+  test("round 11: the named lists are DOCUMENTATION — the sweep must cover each", () => {
+    // Keeps the lists honest without letting them decide. If a name is
+    // worth documenting it must actually be removed; if the sweep ever
+    // stops covering one, this says which.
+    const every = Object.fromEntries(
+      [...GIT_LOCATION_VARS, ...GIT_EXEC_VARS].map(n => [n, "/attacker/x"]),
+    );
+    const got = gitEnv(every);
+    const survivors = [...GIT_LOCATION_VARS, ...GIT_EXEC_VARS].filter(n => got[n] !== undefined);
+    expect(survivors, "a documented name is not actually removed").toEqual([]);
+  });
+
+  test("round 11: `SSH_AUTH_SOCK` SURVIVES — the control on how wide the sweep is", () => {
+    // Without this the sweep is free to widen to `SSH_` and nothing here
+    // would notice, which would break fetching over SSH for every
+    // consumer using an agent. `SSH_ASKPASS` is a command and is removed
+    // by name, so the two assertions together say where the line is.
+    const got = gitEnv({ SSH_AUTH_SOCK: "/tmp/agent.sock", SSH_ASKPASS: "/attacker/ask" });
+    expect(got.SSH_AUTH_SOCK, "an agent socket is not a command, and fetch needs it").toBe(
+      "/tmp/agent.sock",
+    );
+    expect(got.SSH_ASKPASS, "an askpass IS a command").toBeUndefined();
+  });
+
   test("the declaration lives in lib/git-isolation.ts, and this file consumes it", () => {
     // The finding's actual subject. A behavioural assertion cannot tell a
     // second denylist from the first — both answer, one is dead — so the
