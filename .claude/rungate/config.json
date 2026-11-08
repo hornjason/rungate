@@ -23,7 +23,9 @@
       "What's next": "PVTV_lAHOAZTQCM4BpMuRzgMSs_Y",
       "Spec coverage": "PVTV_lAHOAZTQCM4BpMuRzgMSzhk"
     },
-    "queueLabel": "engine"
+    "queueLabel": "engine",
+    "engineSpec": "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
+    "milestonePrefix": "Pipeline"
   },
   "ship": {
     "mode": "direct",

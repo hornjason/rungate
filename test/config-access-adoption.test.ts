@@ -38,7 +38,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { loadRoleConfig, readBoardConfig, readProjectSlug, readRemoteHosts } from "../lib/config-readers";
+import { loadRoleConfig, readBoardConfig, readBoardInputs, readProjectSlug, readRemoteHosts } from "../lib/config-readers";
 import { loadRegistry } from "../lib/create-sc";
 import { loadValidRoles, loadRoleBriefPaths } from "../scripts/grade-deterministic";
 import { getProjectSlug } from "../scripts/parallel-ship";
@@ -185,6 +185,64 @@ describe("SC-1449: the accessors read the directory layout, which is what the ol
       // everything.
       writeFileSync(at, JSON.stringify({ board: { id: "PVT_x", fields: { Criteria: "PVTF_x" } } }));
       expect(readBoardConfig(root)).toEqual({ projectId: "PVT_x", criteriaFieldId: "PVTF_x" });
+    } finally {
+      cleanup();
+    }
+  });
+
+  /**
+   * Covers SC-2619 (SPEC-TO-BOARD-PIPELINE-SPEC.md) — #1718.
+   *
+   * `board.engineSpec` and `board.milestonePrefix` are what let
+   * `board-conformance` take its own reading instead of reporting five
+   * UNMEASURED rows blaming itself for an argument nobody passed.
+   *
+   * **Each key is independent**, unlike the B4 pair above: a project may
+   * configure a prefix and pass the spec, or the other way round, and
+   * collapsing one absent key into both would refuse a half-configured
+   * tree that has everything it needs on the command line.
+   */
+  test("engineSpec and milestonePrefix read independently, and absent is null per key — #1718", () => {
+    const rows: { why: string; board: unknown; want: { engineSpec: string | null; milestonePrefix: string | null } }[] =
+      [
+        { why: "no board key at all", board: undefined, want: { engineSpec: null, milestonePrefix: null } },
+        { why: "an empty board", board: {}, want: { engineSpec: null, milestonePrefix: null } },
+        { why: "an array, not a block", board: [], want: { engineSpec: null, milestonePrefix: null } },
+        {
+          why: "a spec and no prefix",
+          board: { engineSpec: "specs/X.md" },
+          want: { engineSpec: "specs/X.md", milestonePrefix: null },
+        },
+        {
+          why: "a prefix and no spec",
+          board: { milestonePrefix: "Pipeline" },
+          want: { engineSpec: null, milestonePrefix: "Pipeline" },
+        },
+        {
+          why: "blank is absent, not a value — a blank prefix matches no milestone",
+          board: { engineSpec: "   ", milestonePrefix: "" },
+          want: { engineSpec: null, milestonePrefix: null },
+        },
+        {
+          why: "a non-string is absent too",
+          board: { engineSpec: 7, milestonePrefix: ["Pipeline"] },
+          want: { engineSpec: null, milestonePrefix: null },
+        },
+        {
+          why: "whitespace around a real value is trimmed, not refused",
+          board: { engineSpec: " specs/X.md ", milestonePrefix: " Pipeline " },
+          want: { engineSpec: "specs/X.md", milestonePrefix: "Pipeline" },
+        },
+      ];
+    const root = mkdtempSync(join(tmpdir(), "rungate-board-inputs-"));
+    scratch.push(root);
+    mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+    const at = join(root, ".claude", "rungate", "config.json");
+    try {
+      for (const row of rows) {
+        writeFileSync(at, JSON.stringify(row.board === undefined ? {} : { board: row.board }));
+        expect(readBoardInputs(root), row.why).toEqual(row.want);
+      }
     } finally {
       cleanup();
     }

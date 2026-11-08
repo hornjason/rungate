@@ -1694,7 +1694,8 @@
     "verify": "bun bin/rungate.ts board-conformance",
     "successClaim": 7,
     "agreed": "2026-10-30 Jason",
-    "decisionRecord": "docs/adr/ADR-009-engine-goal-and-build-order.md"
+    "decisionRecord": "docs/adr/ADR-009-engine-goal-and-build-order.md",
+    "met": "MET as of 2026-11-07, by the command and not by this sentence. `bun bin/rungate.ts board-conformance` with no arguments exits 0 and reports five of five readings MET — B1 milestones 26/26, B2 criterion-coverage 26/26, B3 blocked-by-edges 6/6, B4 criteria-field 6/6, B6 queue-label 6/6. It was five of five UNMEASURED, exit 1, until #1718 (PR #1890) made it resolve its own spec, milestone prefix and repository from `board.engineSpec`, `board.milestonePrefix` and the project origin instead of needing all three typed. Rule 10 says a done-condition is the command exiting 0 and never a document, so this field records the reading rather than granting it. WHAT THIS DOES NOT SAY: the reading is scoped by `--prefix Pipeline`, so it is a reading of the ENGINE own board, not of every spec the engine exists to place — that is Stage E, which has not started. Stage D is 1 of 6: D2 is this, and D3 through D6 (read origin/main not a working tree; name unmerged work every run; run as a test on main in CI; prove every criterion red before trusting it) are untouched. In a tree with no credential the command exits 1 and refuses naming GITHUB_TOKEN, which is UNMEASURED and not a failure — `test/stage-ladder.test.ts` distinguishes the two rather than reading any non-zero as a short board."
   },
   "goals": [
     {

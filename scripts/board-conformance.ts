@@ -365,7 +365,13 @@ export const READING_NAMES: readonly string[] = READINGS.map(r => r.name);
 export function takeReading(spec: ReadingSpec, board: BoardSnapshot | null): Reading {
   const base = { name: spec.name, item: spec.item, what: spec.what };
   if (board === null) {
-    return { ...base, status: "unmeasured", measured: 0, target: 0, why: `no board snapshot — ${spec.item} has not wired this reading's source yet` };
+    // **THE REASON NAMES THE CALLER, NOT THE READING.** This said
+    // `${spec.item} has not wired this reading's source yet` — a claim that
+    // the reading is unimplemented — for every caller that simply had no
+    // board to hand it. `main` can no longer reach this arm at all (#1718:
+    // every source either produces a board or returns a reason), so the one
+    // way here is an API caller passing null, and that is what it now says.
+    return { ...base, status: "unmeasured", measured: 0, target: 0, why: "no board snapshot was passed to this reading, so nothing was measured — that is a caller with no board, not a board with nothing on it" };
   }
   const why = spec.unreadable?.(board) ?? null;
   if (why !== null) return { ...base, status: "unmeasured", measured: 0, target: 0, why };
@@ -627,15 +633,48 @@ export function readSnapshotText(text: string): SnapshotRead {
  * is why that stays the only source the negative cases touch.
  */
 function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: string | null } {
-  const { spec, prefix, repo } = flags;
-  // `=== undefined` is not enough: an empty `--prefix ""` reaches the
-  // producer, which refuses it, and the reader then reports the CHILD's
-  // refusal for an argument this command was handed. Same population as
-  // plan-deps' --milestone-prefix and board-snapshot's own --prefix.
-  if (spec === undefined || prefix === undefined || spec.trim() === "" || prefix.trim() === "") {
-    return { board: null, error: "--produce needs a non-empty --spec <path> and --prefix <name>" };
+  const { spec, prefix, repo, specGiven, prefixGiven, repoGiven } = flags;
+  // **GIVEN-AND-BLANK REFUSES. ABSENT FORWARDS NOTHING.** These used to be
+  // one case and #1718 split them, because they carry opposite
+  // instructions. `--prefix ""` is somebody typing a value, and reaching
+  // past it to a configured default would override a person with a file.
+  // Omitting the flag entirely carries no instruction at all, so the
+  // producer resolves it from `board.engineSpec` / `board.milestonePrefix`
+  // and refuses by name when the config has not got it — which is how
+  // `rungate board-conformance` with no arguments became a command that
+  // takes its own reading instead of five UNMEASURED rows blaming itself.
+  //
+  // The blank arm stays for the reason it was written: an empty value
+  // reaching the producer makes the reader report the CHILD's refusal for
+  // an argument this command was handed. Same population as plan-deps'
+  // --milestone-prefix and board-snapshot's own --prefix.
+  //
+  // **WRITTEN AS A SWEEP OVER EVERY FORWARDED INPUT, not a case per
+  // flag.** Review of #1890 found `--repo` left out of a two-row version
+  // of this list: `"" ?? env` keeps the empty string and `resolveRepoSlug`
+  // reads it as "not given", so a blank reached the producer and resolved
+  // this checkout's own origin. A list that enumerates the inputs cannot
+  // be short by one the way three hand-written conditions can — adding a
+  // fourth forwarded flag without a row here is a visible omission.
+  const blank = ([
+    ["--spec", specGiven, spec],
+    ["--prefix", prefixGiven, prefix],
+    ["--repo", repoGiven, repo],
+  ] as [string, boolean, string | undefined][])
+    .filter(([, given, value]) => given && (value === undefined || value.trim() === ""))
+    .map(([flag]) => flag);
+  if (blank.length > 0) {
+    return {
+      board: null,
+      error:
+        `${blank.join(" and ")} was given with no usable value. Pass a value, or omit the flag ` +
+        `entirely and the spec and prefix are read from \`board.engineSpec\` and ` +
+        `\`board.milestonePrefix\` in this project's rungate config.`,
+    };
   }
-  const args = [join(import.meta.dir, "board-snapshot.ts"), spec, "--prefix", prefix];
+  const args = [join(import.meta.dir, "board-snapshot.ts")];
+  if (spec !== undefined) args.push(spec);
+  if (prefix !== undefined) args.push("--prefix", prefix);
   if (repo !== undefined) args.push("--repo", repo);
   // A TIMEOUT, because a hang is the one failure mode every other branch
   // here turns into a crisp refusal and this one did not. `listMilestones`
@@ -701,8 +740,12 @@ interface Flags {
   reading?: string;
   readingGiven: boolean;
   spec?: string;
+  /** The flag APPEARED, whatever its value — `--spec ""` is given. */
+  specGiven: boolean;
   prefix?: string;
+  prefixGiven: boolean;
   repo?: string;
+  repoGiven: boolean;
 }
 
 /**
@@ -748,8 +791,11 @@ function readFlags(argv: readonly string[]): Flags {
     reading: str(values.reading),
     readingGiven: values.reading !== undefined,
     spec: str(values.spec),
+    specGiven: values.spec !== undefined,
     prefix: str(values.prefix),
+    prefixGiven: values.prefix !== undefined,
     repo: str(values.repo),
+    repoGiven: values.repo !== undefined,
   };
 }
 
@@ -773,13 +819,45 @@ export function main(argv: readonly string[]): number {
     return REFUSE_EXIT;
   }
 
+  // **THE READING NAME IS VALIDATED BEFORE ANY SOURCE IS RESOLVED.** It
+  // used to be checked after, which cost nothing while a source was always
+  // a file somebody passed. Once a bare run produces its own board (#1718)
+  // that ordering makes a typo spend a live board fetch — several API
+  // calls, tens of seconds — before saying the word is misspelt. Nothing
+  // about an unknown reading depends on the board, so nothing about it
+  // should wait for one.
+  const named = flags.readingGiven ? READINGS.find(r => r.name === flags.reading) : undefined;
+  if (flags.readingGiven && named === undefined) {
+    // A typo must never read as a pass. This is the first case the mutant
+    // has to fail to catch, because it is the one an agent in a loop will
+    // hit by writing a reading that does not exist yet.
+    console.error(
+      `board-conformance: unknown reading "${flags.reading ?? ""}". Known readings: ${READING_NAMES.join(", ")}.\n` +
+        `Run \`rungate board-conformance --list-readings\` for what each one measures.`,
+    );
+    return REFUSE_EXIT;
+  }
+
   let board: BoardSnapshot | null = null;
   let sourceFailed: string | null = null;
-  if (flags.produce) {
-    if (flags.snapshotGiven) {
-      console.error("board-conformance: --produce and --snapshot are two sources. Pass one.");
-      return REFUSE_EXIT;
-    }
+  if (flags.produce && flags.snapshotGiven) {
+    console.error("board-conformance: --produce and --snapshot are two sources. Pass one.");
+    return REFUSE_EXIT;
+  }
+  // **NO SOURCE IS NOT A SOURCE, AND IT USED TO BE TREATED AS ONE.** With
+  // neither flag this fell through with `board === null` and printed five
+  // UNMEASURED rows whose stated reason was `B1 has not wired this
+  // reading's source yet` — a sentence about an unfinished tool, emitted by
+  // a finished one, because nobody had passed a spec. It exited 1, so the
+  // terminal condition was right and the diagnosis was a fabrication, which
+  // is the worse half: a reader acts on the reason, not the exit code.
+  //
+  // Taking its own reading is the fix, not a better sentence (#1718,
+  // SC-2618/SC-2619). The producer resolves the spec, the prefix and the
+  // repository from the project itself and refuses naming the config key it
+  // could not find, so every outcome here is now a reading or a refusal
+  // that says what is missing.
+  if (flags.produce || !flags.snapshotGiven) {
     const produced = produceBoard(flags);
     if (produced.error !== null) sourceFailed = produced.error;
     else board = produced.board;
@@ -793,20 +871,8 @@ export function main(argv: readonly string[]): number {
     return REFUSE_EXIT;
   }
 
-  if (flags.readingGiven) {
-    const name = flags.reading;
-    const spec = READINGS.find(r => r.name === name);
-    if (!spec) {
-      // A typo must never read as a pass. This is the first case the
-      // mutant has to fail to catch, because it is the one an agent in a
-      // loop will hit by writing a reading that does not exist yet.
-      console.error(
-        `board-conformance: unknown reading "${name ?? ""}". Known readings: ${READING_NAMES.join(", ")}.\n` +
-          `Run \`rungate board-conformance --list-readings\` for what each one measures.`,
-      );
-      return REFUSE_EXIT;
-    }
-    const reading = takeReading(spec, board);
+  if (named !== undefined) {
+    const reading = takeReading(named, board);
     console.log(formatReading(reading));
     return reading.status === "met" ? 0 : REFUSE_EXIT;
   }

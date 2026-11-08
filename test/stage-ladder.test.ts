@@ -286,18 +286,38 @@ describe("the live plan", () => {
     ).toEqual([]);
   }, LIVE_VERIFY_BUDGET_MS);
 
-  test("the overall goal carries a command, and that command is not yet met", () => {
-    // The honest state: `rungate board-conformance` is B5/D2 in this very
-    // ladder, so the goal CANNOT be met yet. This case exists so the day it
-    // starts passing is a day somebody notices, rather than a sentence
-    // somewhere going stale in the other direction.
+  test("the overall goal carries a command, and that command is MET wherever it can be measured", () => {
+    // **THIS CASE FLIPPED ON 2026-11-07 AND THAT IS THE WHOLE POINT OF IT.**
+    // It used to assert the goal was NOT met, so that the day it started
+    // passing was a day somebody noticed rather than a sentence going
+    // stale. #1718 made `rungate board-conformance` resolve its own spec,
+    // prefix and repository, the command exits 0, and project-state.json's
+    // goal records that in the same commit as this line.
     expect(doc.goal.verify.length, "the overall goal has no verify command").toBeGreaterThan(0);
     const r = run(doc.goal.verify);
+    const said = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+
+    // A tree with no credential has not FAILED this goal — it has not
+    // MEASURED it, and those are different states
+    // (`.claude/rules/config-access.md`). The command says which of the two
+    // it is, by name, which is the only reason this branch is allowed to
+    // exist: a bare non-zero would be satisfied by a crash, a typo, or a
+    // genuinely short board, and all three must stay distinguishable here.
+    if (said.includes("GITHUB_TOKEN environment variable is not set")) {
+      expect(r.status, "no credential, and the command still exited 0 — unmeasured read as a pass").not.toBe(0);
+      expect(
+        said,
+        "the command reported a reading SHORT in a tree where it could not reach the API at all",
+      ).not.toContain("reading(s) are not met");
+      return;
+    }
+
     expect(
       r.status,
-      "the overall goal's command now exits 0. If `board-conformance` is real and passing, the goal is MET — " +
-        "say so in project-state.json and update this assertion in the same commit.",
-    ).not.toBe(0);
+      `the overall goal's command no longer exits 0, so the board has drifted from the spec or the ` +
+        `command has regressed. Neither is something to record in project-state.json — fix it.\n${said}`,
+    ).toBe(0);
+    expect(said, "it exited 0 without saying every reading was met").toContain("every reading is met");
   });
 
   test("every complete stage carries a retro, and the next one is agreed and unblocked", () => {

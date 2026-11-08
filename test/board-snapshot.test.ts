@@ -21,6 +21,7 @@
  * real parser and asserts a board comes out.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -451,10 +452,20 @@ describe("the refusals, and whether the API was reached", () => {
 
   test("the arguments it cannot run without refuse, and none of them reaches the API", async () => {
     await withSpec(SPEC, async (_dir, at) => {
+      // `--project-root _dir` on every case, and _dir carries no config.
+      // Without it the root is the SUITE's cwd — this repository — whose
+      // config now sets `board.engineSpec` and `board.milestonePrefix`
+      // (#1718), so the first two cases would resolve real values and stop
+      // refusing while still reporting a pass. The control that this is not
+      // merely a narrower root is the case below, which uses the same
+      // directory WITH a config and runs.
       const cases: { why: string; argv: string[] }[] = [
-        { why: "no spec", argv: ["--prefix", "Fix", "--repo", "o/n"] },
-        { why: "no --prefix", argv: [at, "--repo", "o/n"] },
-        { why: "no spec on disk", argv: [join(_dir, "absent.md"), "--prefix", "Fix", "--repo", "o/n"] },
+        { why: "no spec, and no board.engineSpec", argv: ["--prefix", "Fix", "--repo", "o/n", "--project-root", _dir] },
+        { why: "no --prefix, and no board.milestonePrefix", argv: [at, "--repo", "o/n", "--project-root", _dir] },
+        {
+          why: "no spec on disk",
+          argv: [join(_dir, "absent.md"), "--prefix", "Fix", "--repo", "o/n", "--project-root", _dir],
+        },
       ];
       for (const c of cases) {
         const { gh, calls } = spy(CONFORMANT_LIVE);
@@ -463,7 +474,173 @@ describe("the refusals, and whether the API was reached", () => {
       }
     });
   });
+});
 
+/**
+ * Covers SC-2619 (SPEC-TO-BOARD-PIPELINE-SPEC.md): the inputs come from the
+ * repository, not from whoever remembered to type them.
+ *
+ * `rungate board-conformance` with no arguments printed five UNMEASURED
+ * readings reading `B1 has not wired this reading's source yet` — a claim
+ * that the tool was unfinished, emitted because nobody had passed a spec.
+ * #1718. The cases below are a pair: the same argv refuses against a root
+ * with no config and runs against one that configures the two keys, so
+ * neither half can pass by accident of scope.
+ */
+describe("#1718: the spec, the prefix and the repository come from the project", () => {
+  test("with neither given, both are read from board.engineSpec and board.milestonePrefix", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      // THE NEGATIVE FIRST, so the positive below is a contrast and not a
+      // lone green. Same argv, same spec on disk, no config.
+      const bare = spy(CONFORMANT_LIVE);
+      expect(
+        await boardSnapshotMain(["--repo", "o/n", "--project-root", dir], bare.gh),
+        "a root with no board config resolved a spec from somewhere",
+      ).toBe(REFUSAL_EXIT);
+      expect(bare.calls, "it refused and had already asked the API").toEqual([]);
+
+      writeBoardConfig(dir, {
+        ...BOARD,
+        engineSpec: at.slice(dir.length + 1),
+        milestonePrefix: "Fix",
+      });
+      const { gh, calls } = spy(CONFORMANT_LIVE);
+      const snap = await emitted(["--repo", "o/n", "--project-root", dir], gh);
+      expect(calls, "the configured run never reached the API, so it measured nothing").toContain("listMilestones o/n");
+      // The PREFIX is what proves the second key was read, not just the
+      // first: `Fix` is the only prefix under which these two milestones
+      // are the spec's phases. A wrong or blank one reports both as
+      // `create` and the case would still be green on the spec alone.
+      expect(
+        snap.phases.map(p => p.milestoneState),
+        "the configured prefix was not the one the reading was taken with",
+      ).toEqual(["unchanged", "unchanged"]);
+    });
+  });
+
+  test("a value typed on the command line wins, and a BLANK one still refuses rather than falling back", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      writeBoardConfig(dir, { ...BOARD, engineSpec: at.slice(dir.length + 1), milestonePrefix: "Fix" });
+
+      // Config present and complete, and `--prefix ""` still refuses. A
+      // fallback reached by a blank would override a person with a file —
+      // the typed empty is a mistake to name, not a request for a default.
+      const blank = spy(CONFORMANT_LIVE);
+      expect(
+        await boardSnapshotMain(["--prefix", "", "--repo", "o/n", "--project-root", dir], blank.gh),
+        "a blank --prefix fell through to board.milestonePrefix",
+      ).toBe(REFUSAL_EXIT);
+      expect(blank.calls).toEqual([]);
+
+      // And a typed prefix that is NOT the configured one is the one used.
+      // `Other` matches no milestone here, so both phases read `create`;
+      // under the configured `Fix` they read `unchanged`. One input, two
+      // outcomes, so the case cannot pass on the config either way.
+      const { gh } = spy(CONFORMANT_LIVE);
+      const snap = await emitted(["--prefix", "Other", "--repo", "o/n", "--project-root", dir], gh);
+      expect(snap.phases.map(p => p.milestoneState), "the configured prefix overrode the typed one").toEqual([
+        "create",
+        "create",
+      ]);
+    });
+  });
+
+  /**
+   * Round 1 of #1890. `--spec ""` and `--prefix ""` refused; `--repo ""`
+   * did not, because `"" ?? env` keeps the empty string and
+   * `resolveRepoSlug`'s own `if (repo && repo.trim())` reads it as "not
+   * given" — so a CI line interpolating an unset `$REPO` took a live
+   * reading against this checkout's `origin`, a repository the caller
+   * never named, with no refusal and no provenance line.
+   *
+   * Swept over the three inputs rather than adding the missing one, and
+   * every other flag is held at a good value in each row, so a refusal
+   * can only be about the blank.
+   */
+  test("a BLANK value on ANY of the three inputs refuses, and none of them reaches the API", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      // Config fully present, so a fallback is available for all three and
+      // the rows prove it is NOT taken. Without this the case would pass
+      // on there being nothing to fall back to.
+      writeBoardConfig(dir, { ...BOARD, engineSpec: at.slice(dir.length + 1), milestonePrefix: "Fix" });
+      for (const [which, argv] of [
+        ["--prefix", ["--prefix", "", "--repo", "o/n"]],
+        ["--prefix whitespace", ["--prefix", "   ", "--repo", "o/n"]],
+        ["--repo", ["--prefix", "Fix", "--repo", ""]],
+        ["--repo whitespace", ["--prefix", "Fix", "--repo", "  "]],
+      ] as [string, string[]][]) {
+        const { gh, calls } = spy(CONFORMANT_LIVE);
+        expect(
+          await boardSnapshotMain([at, ...argv, "--project-root", dir], gh),
+          `a blank ${which} did not refuse`,
+        ).toBe(REFUSAL_EXIT);
+        expect(calls, `a blank ${which} reached the API anyway`).toEqual([]);
+      }
+      // The control: the same argv shape with real values runs, so the
+      // four rows above are not refusing for some unrelated reason.
+      const { gh, calls } = spy(CONFORMANT_LIVE);
+      expect(await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh)).toBe(0);
+      expect(calls).toContain("listMilestones o/n");
+    });
+  });
+
+  test("the refusal names the config key, not only the flag", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      const said: string[] = [];
+      const err = console.error;
+      console.error = (...a: unknown[]) => void said.push(a.join(" "));
+      try {
+        await boardSnapshotMain(["--repo", "o/n", "--project-root", dir], spy(CONFORMANT_LIVE).gh);
+        writeBoardConfig(dir, { ...BOARD, engineSpec: at.slice(dir.length + 1) });
+        await boardSnapshotMain(["--repo", "o/n", "--project-root", dir], spy(CONFORMANT_LIVE).gh);
+      } finally {
+        console.error = err;
+      }
+      // A refusal that names only the flag tells a reader to type the value
+      // again, which is the thing #1718 is removing. It has to name the
+      // place the value can live permanently.
+      expect(said.join("\n"), "the spec refusal never named board.engineSpec").toContain("board.engineSpec");
+      expect(said.join("\n"), "the prefix refusal never named board.milestonePrefix").toContain(
+        "board.milestonePrefix",
+      );
+    });
+  });
+
+  test("it says on stderr which inputs it resolved from the repository, and stdout stays the snapshot", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      writeBoardConfig(dir, { ...BOARD, engineSpec: at.slice(dir.length + 1), milestonePrefix: "Fix" });
+      const said: string[] = [];
+      const err = console.error;
+      console.error = (...a: unknown[]) => void said.push(a.join(" "));
+      let snap: ProducedSnapshot;
+      try {
+        snap = await emitted(["--repo", "o/n", "--project-root", dir], spy(CONFORMANT_LIVE).gh);
+      } finally {
+        console.error = err;
+      }
+      // Two readings taken from config and one typed are the same bytes on
+      // stdout. Only one of them is reproducible by somebody who did not
+      // watch it being typed, so the difference is stated.
+      expect(said.join("\n")).toContain("board.engineSpec");
+      expect(said.join("\n")).toContain("board.milestonePrefix");
+      // And the control: with both typed, there is nothing to announce.
+      const quiet: string[] = [];
+      console.error = (...a: unknown[]) => void quiet.push(a.join(" "));
+      try {
+        await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], spy(CONFORMANT_LIVE).gh);
+      } finally {
+        console.error = err;
+      }
+      expect(
+        quiet.join("\n"),
+        "it announced a config resolution for arguments the caller typed in full",
+      ).not.toContain("resolved from the repository");
+      expect(snap.phases.length, "the snapshot itself changed shape").toBe(2);
+    });
+  });
+});
+
+describe("the refusals, and whether the API was reached", () => {
   /**
    * Round 1 of #1705, swept. The finding was reported against `plan-deps`,
    * where a guard trimmed and a filter did not. Here the split runs the
@@ -1174,19 +1351,82 @@ describe("the refusals, and whether the API was reached", () => {
     expect(SOURCE, "nothing resolves the unresolved numbers").toContain("readIssueStates");
   });
 
-  test("--repo falls back to GITHUB_REPOSITORY, and refuses when neither is set", async () => {
+  /**
+   * THREE SOURCES SINCE #1718, in this order: the flag, `GITHUB_REPOSITORY`,
+   * then the project's own `origin`. The third is new — the command has to
+   * be able to take its own reading, and the repository it is standing in
+   * is the only honest answer when nobody has said otherwise.
+   *
+   * The refusal therefore needs a root that is not a git repository at all,
+   * which the scratch directory is. Running this against the suite's cwd
+   * would resolve this repository's origin and never refuse — and would do
+   * so quietly, reporting a pass.
+   */
+  test("--repo falls back to GITHUB_REPOSITORY, then to origin, and refuses when none resolves", async () => {
     await withSpec(SPEC, async (_dir, at) => {
       const had = process.env.GITHUB_REPOSITORY;
       try {
         delete process.env.GITHUB_REPOSITORY;
         const bare = spy(CONFORMANT_LIVE);
-        expect(await boardSnapshotMain([at, "--prefix", "Fix"], bare.gh)).toBe(REFUSAL_EXIT);
+        expect(
+          await boardSnapshotMain([at, "--prefix", "Fix", "--project-root", _dir], bare.gh),
+          "a root with no origin resolved a repository from somewhere",
+        ).toBe(REFUSAL_EXIT);
         expect(bare.calls).toEqual([]);
 
         process.env.GITHUB_REPOSITORY = "env/slug";
         const fromEnv = spy(CONFORMANT_LIVE);
-        expect((await capture([at, "--prefix", "Fix"], fromEnv.gh)).code).toBe(0);
+        expect((await capture([at, "--prefix", "Fix", "--project-root", _dir], fromEnv.gh)).code).toBe(0);
         expect(fromEnv.calls).toContain("listMilestones env/slug");
+
+        // And the flag still beats the environment, or the ordering above
+        // is asserted only at its weakest step.
+        const fromFlag = spy(CONFORMANT_LIVE);
+        expect(
+          (await capture([at, "--prefix", "Fix", "--repo", "flag/slug", "--project-root", _dir], fromFlag.gh)).code,
+        ).toBe(0);
+        expect(fromFlag.calls, "GITHUB_REPOSITORY overrode an explicit --repo").toContain("listMilestones flag/slug");
+      } finally {
+        if (had === undefined) delete process.env.GITHUB_REPOSITORY;
+        else process.env.GITHUB_REPOSITORY = had;
+      }
+    });
+  });
+
+  /**
+   * The third source, exercised rather than described: a root that IS a git
+   * repository with an `origin`, no flag and no environment variable.
+   *
+   * The scratch tree gets its own `origin` pointing at a name no real
+   * repository has, so a pass here cannot come from this checkout's remote
+   * leaking in through cwd — the asserted slug is one only this fixture
+   * could have produced.
+   */
+  test("with no flag and no environment, the repository is this project's own origin", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      const had = process.env.GITHUB_REPOSITORY;
+      try {
+        delete process.env.GITHUB_REPOSITORY;
+        // Spelled out, not built from a shared prefix. `#84`'s guard reads
+        // SOURCE TEXT for the git argv it polices, so a literal is the only
+        // form it can see — a prefix spread past it once already.
+        // late-env-ok: git reads no GITHUB_REPOSITORY, and this case deletes it
+        // precisely so the slug can only come from the remote planted below.
+        const init = spawnSync("git", ["-C", dir, "init", "-q"], { encoding: "utf-8" });
+        expect(init.status, `git init failed in the fixture: ${init.stderr}`).toBe(0);
+        // late-env-ok: same call, same reason — git does not consult the
+        // environment variable this file writes, and must not.
+        const remote = spawnSync(
+          "git",
+          ["-C", dir, "remote", "add", "origin", "git@github.com:fixture-owner/fixture-repo.git"],
+          { encoding: "utf-8" },
+        );
+        expect(remote.status, `git remote add failed in the fixture: ${remote.stderr}`).toBe(0);
+        const { gh, calls } = spy(CONFORMANT_LIVE);
+        expect((await capture([at, "--prefix", "Fix", "--project-root", dir], gh)).code).toBe(0);
+        expect(calls, "the slug did not come from the fixture's own origin").toContain(
+          "listMilestones fixture-owner/fixture-repo",
+        );
       } finally {
         if (had === undefined) delete process.env.GITHUB_REPOSITORY;
         else process.env.GITHUB_REPOSITORY = had;
