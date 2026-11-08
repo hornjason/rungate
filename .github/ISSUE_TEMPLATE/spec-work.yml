@@ -34,8 +34,10 @@ body:
       description: >-
         Ids, comma separated — several is normal and expected. A criterion
         usually needs several issues and an issue usually serves several
-        criteria. If this is machinery that serves none, write `none —
-        machinery` and say why in the next field.
+        criteria. If this is machinery that serves none,
+        write `serves no criterion` and say why in the next field — that
+        exact phrase, because it is the one string `board-conformance` reads
+        to tell a deliberate "none" from a field nobody filled in (SC-2616).
       placeholder: CRC-N4, CRC-N2
     validations:
       required: true

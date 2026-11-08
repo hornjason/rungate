@@ -44,6 +44,7 @@ import {
   withoutAmbientGitOverrides,
 } from "../lib/git-isolation";
 import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
+import { NAMES_NONE } from "../lib/board-mirror";
 import { oneScMentionPattern } from "../lib/sc-ids";
 import { PRODUCE_TIMEOUT_MS, readSnapshotText, takeReadings } from "../scripts/board-conformance";
 
@@ -2063,6 +2064,33 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
       )!;
       expect(reading.status, "a failed spec sweep was reported as the tracker's shortfall").toBe("unmeasured");
     });
+  });
+
+  test("the issue template tells authors the EXACT string `servesNone` reads", () => {
+    // Raised by the AI review of #1903, and it was right: the template said
+    // to write `none — machinery`, and the producer matches the literal
+    // `NAMES_NONE`. An author following the form's own instruction would be
+    // reported as an offender for declining a criterion correctly — a false
+    // SHORT, which is the exact reading SC-2616 exists to prevent.
+    //
+    // Measured 2026-11-08: 0 open issues carried either phrasing, so there
+    // was nothing to migrate and the honest fix is ONE spelling rather than
+    // a reader that accepts two. This is the agreement that keeps it one:
+    // the constant and the form are different languages in different files
+    // and nothing else compares them.
+    // Whitespace-normalised, because the description is a FOLDED YAML
+    // scalar: GitHub joins its lines with spaces before anybody reads it, so
+    // a phrase broken across two source lines is the same instruction and a
+    // raw byte match would call it a drift. The first version of this case
+    // did exactly that and went red on a line wrap.
+    const form = readFileSync(join(ROOT, ".github/ISSUE_TEMPLATE/spec-work.yml"), "utf-8")
+      .replace(/\s+/g, " ");
+    expect(
+      form.includes(NAMES_NONE),
+      `the spec-work form no longer tells authors to write "${NAMES_NONE}", so an issue filed through it ` +
+        "declines a criterion in a spelling the producer does not read",
+    ).toBe(true);
+    expect(form, "the superseded phrasing is still in the form").not.toContain("none — machinery");
   });
 
   test("the control: the SAME issue IS read when the sweep works", async () => {
