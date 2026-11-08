@@ -1070,6 +1070,47 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
     expect(PRODUCE_TIMEOUT_MS, "the default timeout is not a positive number of milliseconds").toBe(60_000);
   });
 
+  // ── Security review of PR #1896, round 12 ────────────────────────────
+  const HUNG_MARKER = "board-snapshot: resolved from origin/main at deadbeef";
+
+  test("round 12: a producer that hangs still reports HOW FAR IT GOT", () => {
+    // The kill arm was the one path reaching neither `error` nor `notes`,
+    // so everything the child had already written was discarded on
+    // exactly the failure where WHERE it stuck is the whole question.
+    //
+    // Driven through a real subprocess, not `produceBoard` in-process:
+    // `PRODUCE_TIMEOUT_MS` is read once at module load, so an env edit
+    // after import cannot reach it and the case would wait the full
+    // default minute while proving nothing.
+    const { command } = stage(
+      `process.stderr.write(${JSON.stringify(HUNG_MARKER + "\n")});\n` +
+        `await new Promise(() => {});`,
+    );
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "P"], {
+      RUNGATE_PRODUCE_TIMEOUT_MS: "2000",
+    });
+
+    expect(r.code, "a hanging producer was read as a board").not.toBe(0);
+    expect(r.err, "the arm no longer reports a kill").toContain("was killed by");
+    expect(
+      r.err,
+      "the child's provenance is still discarded on a hang — the case this round was about",
+    ).toContain(HUNG_MARKER);
+  });
+
+  test("round 12: a producer that hangs SILENTLY says so, and invents nothing", () => {
+    // The control. Without it the arm could append a constant string and
+    // the case above would pass having read nothing the child emitted.
+    const { command } = stage(`await new Promise(() => {});`);
+    const r = run(command, ["--produce", "--spec", "specs/X.md", "--prefix", "P"], {
+      RUNGATE_PRODUCE_TIMEOUT_MS: "2000",
+    });
+
+    expect(r.err).toContain("was killed by");
+    expect(r.err).toContain("wrote nothing before it was killed");
+    expect(r.err, "a line no child ever wrote").not.toContain(HUNG_MARKER);
+  });
+
   test("--name=value and --name value forward identically — one parser, not two", () => {
     // The producer parses its own flags with `parseArgs`, which accepts
     // both spellings; this command used to read its own with

@@ -232,8 +232,31 @@ export interface ProducedSnapshot {
  * also a standalone entry point and there is nothing above it — so an
  * unattended run wedges with no bound at all. A wedge is worse than a
  * refusal, because nothing observes it. Review of #1896 round 3.
+ *
+ * **And it must be strictly UNDER the outer bound, which is why it is
+ * derived rather than written.** Round 12 found the two equal: this was
+ * `60_000` and `board-conformance`'s `PRODUCE_TIMEOUT_MS` is
+ * `Number(process.env.RUNGATE_PRODUCE_TIMEOUT_MS) || 60_000`. With both at
+ * 60s the outer `spawnSync` kills the whole child at the same moment the
+ * inner timeout would fire, so the specific message this code builds —
+ * *"it timed out — the bound is 60000ms"* — never reaches anyone through
+ * the primary caller. The reader saw `board-snapshot was killed by
+ * SIGTERM` instead, which names the wrong bound and the wrong subject.
+ *
+ * A diagnostic that cannot fire in the path it was written for is the
+ * shape `.claude/rules/checks-must-be-able-to-fail.md` calls a line in a
+ * report. Reading the same env var keeps the margin under a consumer who
+ * lowers the outer bound, which a fixed smaller number would not.
  */
-export const GIT_TIMEOUT_MS = 60_000;
+export const GIT_TIMEOUT_FRACTION = 0.5;
+
+/** The outer bound this must stay under, read the same way the outer reads it. */
+export function gitTimeoutFor(env: NodeJS.ProcessEnv): number {
+  const outer = Number(env.RUNGATE_PRODUCE_TIMEOUT_MS) || 60_000;
+  return Math.max(1, Math.floor(outer * GIT_TIMEOUT_FRACTION));
+}
+
+export const GIT_TIMEOUT_MS = gitTimeoutFor(process.env);
 
 /**
  * The ambient environment with every git override removed.

@@ -28,6 +28,7 @@ import { join } from "path";
 import {
   GIT_TIMEOUT_MS,
   gitEnv,
+  gitTimeoutFor,
   LIVE_GIT,
   REFUSAL_EXIT,
   main as boardSnapshotMain,
@@ -44,7 +45,7 @@ import {
 } from "../lib/git-isolation";
 import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
 import { oneScMentionPattern } from "../lib/sc-ids";
-import { readSnapshotText, takeReadings } from "../scripts/board-conformance";
+import { PRODUCE_TIMEOUT_MS, readSnapshotText, takeReadings } from "../scripts/board-conformance";
 
 const ROOT = join(import.meta.dir, "..");
 const SOURCE = readFileSync(join(ROOT, "scripts/board-snapshot.ts"), "utf-8");
@@ -1716,6 +1717,49 @@ describe("round 8: the environment can move the repository out from under `-C ro
     LIVE_GIT("/r", rec)(["status"]);
     const env = seen[0]!.env as NodeJS.ProcessEnv;
     for (const name of GIT_LOCATION_VARS) expect(env[name], `${name} reached the child`).toBeUndefined();
+  });
+});
+
+// ── Security review of PR #1896, round 12 ──────────────────────────────
+describe("round 12: the inner timeout must be able to fire before the outer one", () => {
+  test("GIT_TIMEOUT_MS is strictly under board-conformance's PRODUCE_TIMEOUT_MS", () => {
+    // The two were both 60_000, so the outer `spawnSync` killed the whole
+    // child at the same moment the inner timeout would have fired and the
+    // specific "it timed out — the bound is Nms" message never reached
+    // anyone through the primary caller. A diagnostic that cannot fire in
+    // the path it was written for is a line in a report
+    // (`.claude/rules/checks-must-be-able-to-fail.md`).
+    expect(GIT_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(
+      GIT_TIMEOUT_MS,
+      "the outer bound kills the child before the inner one can say why",
+    ).toBeLessThan(PRODUCE_TIMEOUT_MS);
+  });
+
+  test("it TRACKS the outer bound rather than being a smaller fixed number", () => {
+    // A fixed 30s would pass the assertion above and still be wrong for a
+    // consumer who lowers the outer bound to 20s — the margin has to
+    // follow the variable, not the default. Driven through the exported
+    // function because the module-level const reads `process.env` once at
+    // import and a late edit cannot reach it
+    // (`feedback-bun-late-env-edits-dont-reach-children`).
+    expect(gitTimeoutFor({ RUNGATE_PRODUCE_TIMEOUT_MS: "20000" })).toBeLessThan(20000);
+    expect(gitTimeoutFor({ RUNGATE_PRODUCE_TIMEOUT_MS: "600000" })).toBeGreaterThan(60000);
+    // The control: an unset or unparseable value falls back to the same
+    // default the outer one falls back to, not to zero.
+    expect(gitTimeoutFor({})).toBe(gitTimeoutFor({ RUNGATE_PRODUCE_TIMEOUT_MS: "nonsense" }));
+    expect(gitTimeoutFor({})).toBeGreaterThan(0);
+  });
+
+  test("the bound LIVE_GIT actually passes is the derived one", () => {
+    const seen: Record<string, unknown>[] = [];
+    const rec = ((_c: string, _a: readonly string[], o: Record<string, unknown>) => {
+      seen.push(o);
+      return { status: 0, stdout: "", stderr: "", pid: 1, output: [], signal: null };
+    }) as unknown as GitSpawn;
+
+    LIVE_GIT("/r", rec)(["fetch"]);
+    expect(seen[0]!.timeout).toBe(GIT_TIMEOUT_MS);
   });
 });
 

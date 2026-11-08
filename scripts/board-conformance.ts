@@ -715,12 +715,21 @@ export function produceBoard(
   // half no input here can reach, and a clause nothing can exercise is
   // not a guard.
   if (r.signal !== null && r.signal !== undefined) {
+    // AND WHAT THE CHILD ALREADY SAID. This was the one arm reaching
+    // neither `error` nor `notes`, so the producer's provenance — the
+    // `board-snapshot: resolved from…` lines, and how far it got before
+    // it stuck — was discarded on exactly the failure where knowing WHERE
+    // it stuck is the whole question. Every other arm below quotes it.
+    // The producer redacts its own credentials before writing, so this
+    // relays an already-redacted reading. Review of #1896 round 12.
+    const said = (r.stderr ?? "").trim();
     return {
       board: null,
       notes: "",
       error:
         `board-snapshot was killed by ${r.signal ?? "the timeout"} after ${PRODUCE_TIMEOUT_MS}ms. A producer ` +
-        `that hangs is UNMEASURED, not a board — an unattended loop cannot observe a wedge.`,
+        `that hangs is UNMEASURED, not a board — an unattended loop cannot observe a wedge.` +
+        (said === "" ? " It wrote nothing before it was killed." : ` It got as far as: ${said}`),
     };
   }
   // Then a spawn that never started — no `bun` on PATH. It sets `error`
