@@ -564,10 +564,28 @@ export function advisoryNotice(reading: AiReviewFindingsReading): string | null 
     return `${all[i]}${key}`;
   });
 
+  // DERIVED from the rank table, not restated. #1914 round 2 added a fourth
+  // tag and this sentence was a hardcoded list of three, so it would have
+  // gone on naming an order it no longer described — the defect this module
+  // spends most of its length guarding against, in its own output.
+  const order = (Object.keys(SEVERITY_RANK) as Severity[])
+    .sort((a, b) => SEVERITY_RANK[a] - SEVERITY_RANK[b])
+    .join(" / ");
+  // #1914 round 2: the demotion's reason reaches `detail`, and `detail` is
+  // only read back for BLOCKED, CONTRADICTION and UNMEASURED. A payload
+  // whose only blocking finding is demoted here is CLEAN, so this notice is
+  // the ONLY thing the maintainer sees — a tag with no legend would be a
+  // finding nobody can act on, which is the state this issue is about.
+  const unobserved = rendered.some(line => line.includes("[Unobserved]"))
+    ? `An [Unobserved] finding claims a test's outcome, and this job runs no test ` +
+      `command — so it is an inference from reading the source, not a result. It is ` +
+      `reported in full and does not block. `
+    : "";
   return (
     `${advisory.length} advisory finding(s) were counted and block nothing, ` +
-    `in Important / Pre-existing / Nit order. ` +
+    `in ${order} order. ` +
     `${rendered.join("; ")}. ` +
+    unobserved +
     `Each is UNANSWERED: nothing in this pipeline requires it to be fixed, ` +
     `resolved with a reason, or filed, and this annotation is the only place ` +
     `it survives the job — the payload lives under the runner's temp directory ` +
@@ -1286,6 +1304,15 @@ export function findingTag(
   touched: ReadonlySet<string> | null,
 ): Severity | null {
   if (findingPathScope(finding, touched) === "PRE_EXISTING") return "Pre-existing";
+  // #1879, and in the same position for the same reason the demotion is:
+  // attribution first. A finding that is both pre-existing and an unrun
+  // claim reads `Pre-existing`, so the tag and the demotion cannot disagree
+  // about one finding — which is the property this whole function exists
+  // for, and the reason the unrun check is HERE rather than beside the
+  // demotion in `readPayload`. A tag that only tracked the demotion would
+  // leave an advisory unrun claim reading `Nit`, and the maintainer reads
+  // the tag.
+  if (unrunTestClaim(finding) !== null) return "Unobserved";
   const blocks = severityBlocks(finding[AI_REVIEW_SEVERITY_KEY]);
   return blocks === null ? null : blocks ? "Important" : "Nit";
 }

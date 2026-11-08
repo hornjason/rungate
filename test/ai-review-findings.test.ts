@@ -21,6 +21,7 @@ import {
   aiReviewRefusal,
   aiReviewScopeLine,
   escapeAnnotation,
+  findingTag,
   main,
   readAiReviewFindings,
   readAiReviewFindingsFile,
@@ -1926,6 +1927,65 @@ describe("#1879 — a claim about a test's outcome does not block", () => {
     expect(r.reported).toHaveLength(1);
     // It never reached the branch, so nothing was demoted and nothing says so.
     expect(r.detail.join("\n")).not.toContain("claims a test outcome");
+  });
+
+  test("#1914 round 2: the maintainer is told WHY it did not block", () => {
+    // The reviewer's finding, and it was right. The demotion's sentence goes
+    // to `reading.detail`, and `aiReviewRefusal` only reads `detail` back for
+    // BLOCKED, CONTRADICTION and UNMEASURED. A payload whose only blocking
+    // finding is demoted here is CLEAN — so the refusal is `null` and the
+    // sentence reached nobody. `advisoryNotice` is the only output left, and
+    // before this it printed the finding as `[Important]`, indistinguishable
+    // from one that genuinely blocks.
+    const r = readAiReviewFindings(
+      payload("the ratchet test fails on this branch", "CI goes red at test/ratchet.test.ts"),
+    );
+    expect(aiReviewRefusal(r), "a CLEAN reading has no refusal to carry the sentence").toBeNull();
+
+    const notice = advisoryNotice(r) ?? "";
+    expect(notice, "the demoted finding still reads as a blocking one").toContain("[Unobserved]");
+    expect(notice).not.toContain("[Important]");
+    expect(notice, "the tag arrived with no legend").toContain("this job runs no test command");
+  });
+
+  test("#1914 round 2: the order legend is derived, not restated", () => {
+    // The sentence used to be the literal "Important / Pre-existing / Nit".
+    // Adding a fourth tag left it naming an order it no longer described —
+    // the defect this module spends most of its length guarding against,
+    // in its own output. Asserted against SEVERITY_RANK so the two cannot
+    // drift again.
+    const r = readAiReviewFindings(
+      JSON.stringify({
+        [AI_REVIEW_VERDICT_KEY]: "PASS",
+        [AI_REVIEW_FINDINGS_KEY]: [
+          { [f.severity]: "low", [f.file]: "b.ts", [f.line]: 2, [f.summary]: "a naming nit" },
+        ],
+      }),
+    );
+    const expected = (Object.keys(SEVERITY_RANK) as (keyof typeof SEVERITY_RANK)[])
+      .sort((a, b) => SEVERITY_RANK[a] - SEVERITY_RANK[b])
+      .join(" / ");
+    expect(expected, "the rank table lost a tag").toBe("Important / Pre-existing / Unobserved / Nit");
+    expect(advisoryNotice(r) ?? "").toContain(`in ${expected} order`);
+  });
+
+  test("#1914 round 2: Pre-existing outranks Unobserved, and the tag agrees with the demotion", () => {
+    // The tag and the demotion must not disagree about one finding. Both ask
+    // attribution first, so a finding that is BOTH reads Pre-existing in the
+    // annotation and is demoted down the pre-existing branch. Swapping the
+    // two checks in `findingTag` turns this red.
+    const both = {
+      [f.severity]: "critical",
+      [f.file]: "untouched.ts",
+      [f.line]: 1,
+      [f.summary]: "the ratchet test fails on this branch",
+      [f.failureScenario]: "CI goes red",
+    };
+    const touched = new Set(["a.ts"]);
+    expect(findingTag(both, touched)).toBe("Pre-existing");
+    // …and with no changed-file list, attribution is undecidable and the
+    // unrun claim is the tag that remains.
+    expect(findingTag(both, null)).toBe("Unobserved");
   });
 
   test("the predicate returns the sentence it matched, not a boolean", () => {
