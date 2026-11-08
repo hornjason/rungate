@@ -1576,7 +1576,15 @@ describe("CRC-B7: the sort and the tag can fail", () => {
     },
     {
       id: "M-B the tag's severity arm returns null",
-      needle: 'return blocks === null ? null : blocks ? "Important" : "Nit";',
+      // Re-pointed by #1914 round 4, which split the single ternary into an
+      // early `blocks === null` guard and this arm, so that an unrecognised
+      // severity tags `null` before the unrun-claim check can answer. The
+      // needle has to name the line that still decides Important vs Nit;
+      // the guard clause above it decides a different question. The
+      // predicted row is unchanged, and the exactly-once assertion below is
+      // what catches a needle that has gone stale rather than letting the
+      // mutant silently become a copy of the original.
+      needle: 'return blocks ? "Important" : "Nit";',
       with: "return null;",
       expect: { O1: false, O2: false, O3: true, O4: true },
     },
@@ -1986,6 +1994,34 @@ describe("#1879 — a claim about a test's outcome does not block", () => {
     // …and with no changed-file list, attribution is undecidable and the
     // unrun claim is the tag that remains.
     expect(findingTag(both, null)).toBe("Unobserved");
+  });
+
+  test("#1914 round 4: an unrecognised severity tags null, match or no match", () => {
+    // The invariant `findingTag`'s own docblock states: a guessed tag is the
+    // module inventing the classification it refuses the payload for
+    // omitting. The first version of this put the unrun check ABOVE the
+    // severity read, so a finding declaring `severity: "spicy"` whose prose
+    // matched read `[Unobserved]`. The reading is UNMEASURED either way —
+    // `tagsForPayload` runs independently of `reasons`, so the annotation
+    // showed the tag regardless, and the existing AC-8b case asserts only on
+    // `outcome`. Moving the unrun check back above `blocks === null` turns
+    // this red.
+    const spicy = {
+      [f.severity]: "spicy",
+      [f.file]: "a.ts",
+      [f.line]: 1,
+      [f.summary]: "the ratchet test fails on this branch",
+    };
+    expect(findingTag(spicy, null), "a refused payload was given a tag anyway").toBeNull();
+
+    // …and the reading itself is still UNMEASURED for the declared reason,
+    // so this change did not quietly make an unrecognised severity readable.
+    const r = readAiReviewFindings(
+      JSON.stringify({ [AI_REVIEW_VERDICT_KEY]: "BLOCK", [AI_REVIEW_FINDINGS_KEY]: [spicy] }),
+    );
+    expect(r.outcome).toBe("UNMEASURED");
+    expect(r.unmeasuredReasons).toContain("SEVERITY_UNRECOGNISED");
+    expect(r.findingTags).toEqual([null]);
   });
 
   test("the predicate returns the sentence it matched, not a boolean", () => {

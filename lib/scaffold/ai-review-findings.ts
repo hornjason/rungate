@@ -1304,17 +1304,29 @@ export function findingTag(
   touched: ReadonlySet<string> | null,
 ): Severity | null {
   if (findingPathScope(finding, touched) === "PRE_EXISTING") return "Pre-existing";
-  // #1879, and in the same position for the same reason the demotion is:
-  // attribution first. A finding that is both pre-existing and an unrun
-  // claim reads `Pre-existing`, so the tag and the demotion cannot disagree
-  // about one finding — which is the property this whole function exists
-  // for, and the reason the unrun check is HERE rather than beside the
-  // demotion in `readPayload`. A tag that only tracked the demotion would
-  // leave an advisory unrun claim reading `Nit`, and the maintainer reads
+  const blocks = severityBlocks(finding[AI_REVIEW_SEVERITY_KEY]);
+  // BEFORE the unrun check, and that order is #1914 round 4. An
+  // unrecognised severity tags `null`, and the first version of #1879 put
+  // the unrun check above this — so a finding declaring `severity: "spicy"`
+  // whose prose matched read `[Unobserved]` instead of untagged. The
+  // payload is `SEVERITY_UNRECOGNISED` and the reading is UNMEASURED, but
+  // `tagsForPayload` runs independently of `reasons` and the annotation
+  // showed the tag anyway: the module inventing a classification for a
+  // payload it is refusing, which is what this docblock warns about.
+  //
+  // The `Pre-existing` branch above has the same shape and predates this
+  // change. It is deliberately left alone — fixing it is a behaviour change
+  // to CRC-B7 that nothing in this issue asked for.
+  if (blocks === null) return null;
+  // #1879, and in the same position relative to attribution as the demotion
+  // is: a finding that is both pre-existing and an unrun claim reads
+  // `Pre-existing`, so the tag and the demotion cannot disagree about one
+  // finding. That is also why the check is HERE rather than beside the
+  // demotion in `readPayload` — a tag that only tracked the demotion would
+  // leave an ADVISORY unrun claim reading `Nit`, and the maintainer reads
   // the tag.
   if (unrunTestClaim(finding) !== null) return "Unobserved";
-  const blocks = severityBlocks(finding[AI_REVIEW_SEVERITY_KEY]);
-  return blocks === null ? null : blocks ? "Important" : "Nit";
+  return blocks ? "Important" : "Nit";
 }
 
 /**
