@@ -28,6 +28,7 @@ import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
 import {
   DEFAULT_TIMEOUT_MS,
+  MAX_TIMEOUT_MS,
   REFUSE_EXIT,
   exitFor,
   mergeRefReading,
@@ -262,6 +263,14 @@ describe("the timeout bound is read, not coerced (#1912)", () => {
     ["a positive integer", "1500", 1500],
     ["the default, stated rather than assumed", "30000", 30_000],
     ["padded — a trailing newline off a shell", " 1500 ", 1500],
+    // Review of #1913. The top end was open, so a fat-fingered extra digit
+    // reached `Bun.spawnSync` unexamined. The boundary is MEASURED, not
+    // assumed — the table is in `timeoutReading`'s docstring, and the short
+    // version is that `2**31` is killed in ~2ms while `3e9` is honoured, so
+    // no operator can tell a safe value from an unsafe one.
+    ["int32 max — the largest measured to behave", "2147483647", 2147483647],
+    ["one past it — killed in ~2ms, measured", "2147483648", "REFUSED"],
+    ["a fat-fingered extra digit", "3000000000", "REFUSED"],
   ];
 
   for (const [why, raw, want] of CASES) {
@@ -295,6 +304,17 @@ describe("the timeout bound is read, not coerced (#1912)", () => {
    * "refuse more". `Number("1500") || 30_000` is 1500, and it must stay
    * 1500 — the hang case at the bottom of this file passes exactly that.
    */
+  /**
+   * The control for the bound, and the reason it is separate: every refusal
+   * row above is satisfied by a cap drawn ANYWHERE, including one so low it
+   * refuses the 30s default. This pins the two sides of the actual edge.
+   */
+  test("the cap is at the measured edge, not merely somewhere", () => {
+    expect(timeoutReading(String(MAX_TIMEOUT_MS)).ok, "the largest measured-good value is refused").toBe(true);
+    expect(timeoutReading(String(MAX_TIMEOUT_MS + 1)).ok, "one past the measured edge is accepted").toBe(false);
+    expect(timeoutReading(String(DEFAULT_TIMEOUT_MS)).ok, "the default itself is refused by the cap").toBe(true);
+  });
+
   test("a positive override still reaches the subprocess unchanged", () => {
     const r = timeoutReading("1500");
     expect(r.ok && r.ms).toBe(1500);

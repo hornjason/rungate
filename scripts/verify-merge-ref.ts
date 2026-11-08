@@ -320,6 +320,9 @@ export function remoteRepoReading(url: string, expected: string): { ok: boolean;
  */
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** The largest bound measured to behave. See `timeoutReading` for the table. */
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
 export type TimeoutReading = { ok: true; ms: number } | { ok: false; detail: string };
 
 /**
@@ -346,6 +349,33 @@ export type TimeoutReading = { ok: true; ms: number } | { ok: false; detail: str
  * A digits-only test rather than `Number`, which also accepts `" 12 "`,
  * `"0x10"`, `"1e3"` and `"Infinity"` — none of them a thing anybody meant to
  * type into a millisecond bound.
+ *
+ * ## The upper bound is a measurement, not a preference
+ *
+ * Raised in review of #1913, and the finding is right while the mechanism
+ * offered for it is not. The claim was that anything above `setTimeout`'s
+ * int32 ceiling wraps and fires immediately. Measured against
+ * `Bun.spawnSync(["sleep","2"], { timeout: t })` on bun 1.3.14, what
+ * actually happens is stranger and less predictable:
+ *
+ * | `timeout` | the `sleep 2` |
+ * |---|---|
+ * | `2**31 - 1` | ran its full 2s |
+ * | `2**31`, `2**31 + 2` | **killed in ~2ms** |
+ * | `2**31 + 1000`, `2.2e9`, `3e9`, `2**32 - 1` | ran its full 2s |
+ * | `2**32`, `2**33`, `2**34`, `2**40` | **killed in ~2ms** |
+ * | `Number.MAX_SAFE_INTEGER` | ran its full 2s |
+ *
+ * So it is not a wrap. It is a narrow window just above each power of two
+ * from `2**31` up, reproducible across repeated runs, and there is no rule
+ * an operator could apply to know which of their values is safe.
+ *
+ * `MAX_TIMEOUT_MS` is therefore `2**31 - 1`: the largest value measured to
+ * behave. **It is deliberately conservative** — `3e9` works and is refused —
+ * because the bound's job is to exclude what the platform mishandles, and a
+ * cap drawn at the last reliable reading is defensible where one drawn
+ * through the middle of an unexplained pattern is not. 24.8 days is already
+ * far past anything this script has a use for; nobody loses a real case.
  */
 export function timeoutReading(raw: string | undefined): TimeoutReading {
   if (raw === undefined) return { ok: true, ms: DEFAULT_TIMEOUT_MS };
@@ -354,13 +384,19 @@ export function timeoutReading(raw: string | undefined): TimeoutReading {
     ok: false,
     detail:
       `RUNGATE_REMOTE_TIMEOUT_MS is \`${raw}\`, which ${why}. It must be a whole number of ` +
-      `milliseconds above zero, or unset to take the ${DEFAULT_TIMEOUT_MS}ms default. Refused rather ` +
+      `milliseconds from 1 to ${MAX_TIMEOUT_MS}, or unset to take the ${DEFAULT_TIMEOUT_MS}ms default. Refused rather ` +
       `than defaulted: a value you set and a value you did not are different facts.`,
   });
   if (trimmed === "") return refuse("is empty — set, and unusable");
   if (!/^[0-9]+$/.test(trimmed)) return refuse("is not a whole number of milliseconds");
   const ms = Number(trimmed);
   if (ms <= 0) return refuse("is not above zero");
+  if (ms > MAX_TIMEOUT_MS) {
+    return refuse(
+      `is above ${MAX_TIMEOUT_MS}, the largest bound measured to behave — above it bun kills the ` +
+        `subprocess in milliseconds for some values and honours it for others, with no rule saying which`,
+    );
+  }
   return { ok: true, ms };
 }
 
