@@ -71,13 +71,10 @@ and refuses only when every one is spent (#1541). Do not suffix the owner to
 keep them apart; the suffix is not a convention anything reads, and it hides
 the second block from `reservationsFor`.
 
-`FG` and `AR` are the ones this rule used to be silent about, and the silence
-cost a collision. They have no allocator — every agent adding a block picks
-ids by eyeballing headroom above the highest in the file, which is the third
-method above, so they collide exactly the way SC ids do. On 2026-10-22
-`rg/filing-gate-four` held `FG-45..59` and `AR-20` while PR #1339
-independently took `FG-45..49` and `AR-20`. Neither diff contained the
-other's ids and neither PR's CI could see the overlap.
+`FG` and `AR` have no allocator — every agent picks ids by eyeballing
+headroom above the highest in the file, the third method above, so they
+collide exactly the way SC ids do. The 2026-10-22 instance, in full:
+`reference/parallel-sessions-worked-instances.md`.
 
 Two rules follow from the field, both enforced by `lib/sc-reservations.ts`:
 
@@ -125,8 +122,8 @@ Four readings per worktree — a merged PR *at the commit it holds*, a `git
 status` that was read and was empty, no process holding a file under it, and
 nothing modified inside a declared age — and a worktree failing to produce any
 one of them is **UNMEASURED, counted apart from ABANDONED**. It deletes
-nothing; removal stays yours. Measured on this machine's 173 worktrees, 9 sat
-at a commit GitHub never merged, in a tree `git status` calls clean.
+nothing; removal stays yours. What the census of this machine's 173
+worktrees found is in the reference file, in full.
 
 `git worktree prune` is not the safe half of this. It drops
 `.git/worktrees/<name>` for **any** registered worktree whose directory is
@@ -153,14 +150,20 @@ repo's, or anything the project marks as requiring sign-off.
 ## Pin the head when you merge, and verify by content when you did not
 
 ```bash
-gh pr merge <N> --squash --match-head-commit "$(gh pr view <N> --json headRefOid -q .headRefOid)"
+SHA="$(bun scripts/verify-merge-ref.ts --pr <N>)" \
+  && gh pr merge <N> --squash --auto --match-head-commit "$SHA"
+gh pr checks <N> --watch   # --auto only ARMS; the merge fires later
+bun scripts/verify-merge-ref.ts --pr <N> --after-merge   # not optional
 ```
 
-`--match-head-commit` refuses the merge if the head moved since you read it.
-Use it every time. It costs one subshell and it is the whole fix. Without it,
-PRs #500 and #502 each merged a commit four behind their branch head and 611
-lines never reached main — and nothing cheap could see it, because a squash
-merge destroys ancestry and `gh pr view` still says MERGED.
+Pin the head every time. Exit zero always writes a SHA, so `&&` cannot hand
+the flag an empty string; the two runs ask different questions, so they clear
+on different readings. **The second run is the one that
+matters**: no read taken before arming can see a push that arrives after
+it, and `PUSHED_AFTER_MERGE` is #1847 — commits on the branch, on no path
+to main, indistinguishable from merged work until somebody asks. What an
+unpinned merge cost (#500, #502):
+`reference/parallel-sessions-worked-instances.md`.
 
 So when a merge has already happened and you want to know whether your work is
 really there, ask about **content**, not ancestry:
@@ -215,11 +218,9 @@ It refuses with `UNMEASURED: wrong tree`, naming both the directory it read
 and the branch you meant.
 
 **And do not build the obvious detector** — a populated `COMMITS` beside an
-empty `DIFF CONTENT` is the normal case, not a contradiction. Why, both
-measurements, and why the skill is not where this gets fixed:
-`reference/parallel-sessions-worked-instances.md` (#1348). Two security
-reviews on 2026-10-17 were each measured against a tree their branch had
-already moved past, and neither report let the reader tell.
+empty `DIFF CONTENT` is the normal case, not a contradiction. Why, and why
+the skill is not where this gets fixed:
+`reference/parallel-sessions-worked-instances.md` (#1348).
 
 A report whose currency could not be established says so. "I could not
 resolve the branch" is a thing worth writing down; silence reads as current.
