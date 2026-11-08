@@ -316,76 +316,102 @@ export interface ReadyCard {
   /** `content.state` — `"OPEN"` or `"CLOSED"` for an issue. */
   readonly state?: string;
   /**
-   * `content.assignees.totalCount` — **the raw count, passed through.**
-   *
-   * A `boolean` here was the first spelling and it was wrong: it put a
-   * `count > 0` mapping in the caller, and a caller writing `?? 0` turns an
-   * `assignees` field the query did not select into "unassigned" and frees
-   * the slot. That is the inversion of the direction stated below, and a
-   * mutation of it turned ZERO cases red — the rule module's battery varies
-   * the predicate and the defect was sitting in the script.
-   *
-   * So the three states stay in one place. `undefined` is "the query did
-   * not ask", `0` is "nobody is assigned", and they are different facts.
+   * `content.number`. Absent when the query did not select it, which holds
+   * the slot — see {@link holdsReadySlot}.
    */
-  readonly assigneeCount?: number;
+  readonly number?: number;
 }
 
 /**
  * Does this card hold a Ready slot? — #1905.
  *
- * ## The race this closes, and why it is closed by construction
+ * ## The race
  *
  * `board-ready.yml` and `board-flow.yml` both fire on `issues: assigned`.
  * `board-ready` counted the just-assigned card as occupying Ready, concluded
  * the lane was full, and promoted nothing; `board-flow` moved that same card
  * to *In progress* one second later. Measured 2026-11-08: `board-ready` at
  * 13:06:55Z read *"Ready holds 1 of its depth of 1"*, `board-flow` moved
- * #1668 out at 13:06:56Z, and the lane was then empty with nothing queued to
- * refill it.
+ * #1668 out at 13:06:56Z, and the lane was then empty with nothing queued.
  *
- * **An assigned open issue in Ready is mid-transition, and that is a fact
- * about the board rather than about the clock.** `laneFor` in
- * `lib/board-flow.ts` returns `In progress` for `issue_assigned`
- * unconditionally — there is no branch in which an assigned issue stays in
- * Ready — so a card in that state is leaving whether or not the two runs
- * happen to interleave. Not counting it is therefore not a timing guess.
+ * ## `movingIssue` is ONE issue number, and that bound is the whole design
+ *
+ * The caller passes the number of the issue **this event is about** — the
+ * card `board-flow` is moving out of Ready in the run racing this one. That
+ * single card does not hold its slot. Nothing else is excluded.
+ *
+ * **The first version of this excluded every assigned open issue**, on the
+ * argument that `laneFor` maps `issue_assigned` to `In progress`
+ * unconditionally, so such a card is always leaving. Review found the hole
+ * and it is a real one: `laneFor` is a pure decision function, not a
+ * guarantee the write it feeds ever lands. `scripts/board-flow.ts` gates the
+ * write behind `actorMayWrite`, which refuses GitHub's **Triage** role —
+ * sufficient to assign an issue, absent from `WRITING_PERMISSIONS` — and the
+ * write also fails on an expired token or a GraphQL error, both recorded
+ * happening here. A card whose move failed is OPEN, assigned, and still in
+ * Ready **forever**; the old predicate excluded it on every later run, so
+ * the writer promoted on top of it with nothing bounding the pile. That is
+ * the over-the-cap outcome this file says must never happen, and it also
+ * re-opened #1852's split: `lib/board-lane-health.ts` kept counting that
+ * card, so the writer and the health report disagreed permanently.
+ *
+ * Keying on the event's own issue number bounds all of it:
+ *
+ * - **At most one card** is ever excluded, in the one run that races.
+ * - **It is self-correcting.** A later run is about a different issue, so a
+ *   card whose move failed is counted normally again and the lane reads
+ *   over-depth, which `board-lane-health` reports.
+ * - **No permanent disagreement.** The health report takes its own reading
+ *   with no event, so it excludes nothing; the difference exists only
+ *   during the racing run.
+ *
+ * **The residual, stated rather than hidden:** if `board-flow`'s write
+ * fails, the lane ends that run one card over its depth. At the instant
+ * this predicate is asked, a successful move and a failed one are
+ * indistinguishable — the card is in Ready either way — so one is the floor,
+ * not a choice. Bounded and visible beats dry and silent.
  *
  * ## Why not the three options #1905 listed
  *
- * - **Chain `board-ready` on `board-flow`'s completion.** It drops triggers.
- *   `board-ready` fires on five issue events and `board-flow` on three; a
- *   `workflow_run` chain loses `unassigned` and `opened`, both of which are
- *   `--top-up` sources. The `workflow_run` payload also carries neither the
- *   originating issue nor the action, so the mode could not be resolved.
+ * - **Chain `board-ready` on `board-flow`'s completion.** It drops
+ *   triggers. `board-ready` fires on five issue events and `board-flow` on
+ *   three; a `workflow_run` chain loses `unassigned` and `opened`, both
+ *   `--top-up` sources, and its payload carries neither the originating
+ *   issue nor the action, so the mode could not be resolved.
  * - **Fold the top-up into `board-flow`.** Works, and couples the move to
- *   the refill for a defect that is one predicate wide.
+ *   the refill for a defect one predicate wide.
  * - **Re-read before concluding FULL.** #1905 rejected it and was right:
  *   it narrows the window instead of closing it.
  *
  * ## The direction this is allowed to be wrong in
  *
- * Toward **holding** the slot. Over-counting occupancy leaves the lane one
- * short, which the board's own health check reports and a person can clear.
- * Under-counting promotes past the depth, which is the thing the cap exists
- * to prevent. So every uncertain reading holds:
+ * Toward **holding** the slot, so every uncertain reading holds:
  *
- * - `assigneeCount` **absent** holds the slot. A caller whose query does not
- *   ask for assignees must not thereby empty the lane — absent is
- *   UNMEASURED, never "unassigned". This is why the field is the raw count
- *   and not a boolean: a boolean forces the caller to map, and the obvious
- *   mapping (`?? 0`) is the inversion.
+ * - `movingIssue` **absent** excludes nothing. A caller that does not know
+ *   which card is moving must not thereby empty the lane.
+ * - A card whose **`number`** the query did not select holds it. Absent is
+ *   UNMEASURED, never "matches".
  * - A **non-issue** holds it. A pull request parked in Ready takes a slot
- *   exactly as an issue does, and `board-flow` will not move it on an
+ *   exactly as an issue does, and `board-flow` moves no PR on an issue
  *   assignment.
  * - A **closed** issue holds it, because nothing here is a tidier.
  */
-export function holdsReadySlot(card: ReadyCard): boolean {
+export function holdsReadySlot(card: ReadyCard, movingIssue?: number): boolean {
   if (card.typename !== "Issue") return true;
   if (card.state !== "OPEN") return true;
-  if (card.assigneeCount === undefined) return true;
-  if (card.assigneeCount <= 0) return true;
-  return false;
+  // **ONE guard for both absences, and the mutation battery is why.** They
+  // were two lines — `movingIssue === undefined` and `card.number ===
+  // undefined` — and mutating EITHER turned zero cases red, because each
+  // was held up by the other through the `!==` below. Two guards answering
+  // one question are behaviourally one guard, and no behavioural test can
+  // tell them apart.
+  //
+  // They are not redundant, which is the trap: `undefined !== undefined` is
+  // FALSE, so with both removed a card whose number was never selected, in
+  // a run that named no mover, frees its slot — and that is every card on
+  // the board. One site, and a case that is red when it goes.
+  if (movingIssue === undefined || card.number === undefined) return true;
+  return card.number !== movingIssue;
 }
 
 export interface ReadyOccupancy {

@@ -60,6 +60,9 @@ import {
 // rather than restated. A docblock claiming `laneFor` always returns
 // `In progress` would be the reason nobody checks.
 import { laneFor, type LaneEvent } from "../lib/board-flow";
+// #1905's BOUND rests on this gate refusing some actors who can assign, so
+// the list is imported and asserted rather than paraphrased.
+import { WRITING_PERMISSIONS } from "../lib/board-ready-fanout";
 
 const item = (number: number, phase: number | null, labels: readonly string[] = []): Rankable => ({
   number,
@@ -81,69 +84,93 @@ const LIVE = { delivered: 237, days: 14 } as const;
  */
 const atDepth = (occupied: number, cap: number | null) => readyOccupancy(occupied, occupied, cap);
 
-describe("#1905: an assigned issue in Ready is leaving, and does not hold the slot", () => {
-  // The race, as a property of the board rather than of the clock.
-  // `board-ready` counted the just-assigned card, read the lane as full,
-  // and promoted nothing; `board-flow` moved that card to In progress one
-  // second later and the lane was empty with nothing queued.
+describe("#1905: the card this event is moving does not hold its slot", () => {
+  // The race: `board-ready` counted the just-assigned card, read the lane
+  // as full, and promoted nothing; `board-flow` moved that card to In
+  // progress one second later and the lane was empty with nothing queued.
   //
-  // What makes this a construction and not a timing narrowing: `laneFor`
-  // in `lib/board-flow.ts` returns `In progress` for `issue_assigned`
-  // unconditionally. There is no board state in which an assigned open
-  // issue stays in Ready, so one sitting there is mid-transition whether
-  // or not the two runs interleave. The agreement below pins that.
+  // What every row below holds fixed, said out loud: the card is OPEN, an
+  // Issue, and sitting in Ready. The only thing that varies is whether it
+  // is the one the event named. That is the bound — review of #1918 found
+  // the first version excluding EVERY assigned issue, which is unbounded
+  // when `board-flow`'s write fails.
 
-  test("the racing pair: the same lane reads FULL or has ROOM on one field", () => {
-    // One card, one cap, one difference — the assignment. This is the
-    // case that fails against the old counter, which had no notion of
-    // assignment at all.
-    const unassigned = [{ typename: "Issue", state: "OPEN", assigneeCount: 0 }];
-    const assigned = [{ typename: "Issue", state: "OPEN", assigneeCount: 1 }];
-    const count = (cards: typeof unassigned) => cards.filter(holdsReadySlot).length;
-
-    expect(readyOccupancy(count(unassigned), count(unassigned), 1).verdict).toBe("FULL");
-    expect(readyOccupancy(count(assigned), count(assigned), 1).verdict).toBe("ROOM");
+  test("the racing pair: one card, one cap, FULL or ROOM on whether it is the mover", () => {
+    const card = { typename: "Issue", state: "OPEN", number: 1668 };
+    const occ = (moving?: number) => {
+      const held = [card].filter(c => holdsReadySlot(c, moving)).length;
+      return readyOccupancy(held, held, 1).verdict;
+    };
+    expect(occ(undefined), "no mover named").toBe("FULL");
+    expect(occ(999), "a DIFFERENT issue is moving").toBe("FULL");
+    expect(occ(1668), "this card is the one moving").toBe("ROOM");
   });
 
-  test("CONTROL: an UNASKED assignees field holds the slot, and 0 is a different fact", () => {
-    // The direction this is allowed to be wrong in, as an assertion.
-    // A caller whose query does not select assignees must not thereby
-    // empty the lane; that would promote past the cap, which is the one
-    // thing the cap exists to prevent.
+  test("CONTROL: exactly ONE card is excluded, never every assigned issue", () => {
+    // The hole review found in the first spelling, as an assertion.
+    // `laneFor` returning `In progress` is a decision, not a guarantee the
+    // write landed: `scripts/board-flow.ts` refuses GitHub's Triage role,
+    // and an expired token or a GraphQL error fail the same way. A card
+    // whose move failed is OPEN, assigned and in Ready forever — so a
+    // predicate keyed on "assigned" excluded it on every later run and the
+    // writer promoted on top of it with nothing bounding the pile.
     //
-    // The field is the RAW COUNT for exactly this reason. It was a boolean
-    // first, which forced the script to map `count > 0` — and the obvious
-    // spelling there, `(count ?? 0) > 0`, is the inversion. A mutation of
-    // that expression turned zero cases red, because this battery varies
-    // the predicate and that defect sat in the other file. Moving the three
-    // states in here leaves the script nothing to get wrong.
-    expect(holdsReadySlot({ typename: "Issue", state: "OPEN" }), "absent").toBe(true);
-    expect(holdsReadySlot({ typename: "Issue", state: "OPEN", assigneeCount: 0 }), "zero").toBe(true);
-    expect(holdsReadySlot({ typename: "Issue", state: "OPEN", assigneeCount: 1 }), "one").toBe(false);
+    // Keyed on the event's number, a lane full of stalled cards still
+    // reads full, and the one being moved is the one slot that frees.
+    const stalled = [1, 2, 3].map(number => ({ typename: "Issue", state: "OPEN", number }));
+    expect(stalled.filter(c => holdsReadySlot(c, 2)).length, "more than one card freed").toBe(2);
+    expect(stalled.filter(c => holdsReadySlot(c, 99)).length, "a stalled lane must stay full").toBe(3);
   });
 
-  test("CONTROL: a pull request parked in Ready still holds its slot", () => {
-    // `board-flow` does not move a pull request on an issue assignment, so
-    // it is not mid-transition — and a slot is a slot whatever occupies it.
-    expect(holdsReadySlot({ typename: "PullRequest", state: "OPEN", assigneeCount: 1 })).toBe(true);
-    expect(holdsReadySlot({ typename: "PullRequest" })).toBe(true);
-    // A draft card carries no `content` at all.
-    expect(holdsReadySlot({})).toBe(true);
+  test("CONTROL: an absent mover excludes NOTHING — not knowing is not freeing", () => {
+    // The direction this is allowed to be wrong in. Every other mode
+    // (`--top-up`, a close fan-out, the report) passes no mover, and none
+    // of them may empty the lane as a side effect.
+    const card = { typename: "Issue", state: "OPEN", number: 7 };
+    expect(holdsReadySlot(card), "absent mover freed a slot").toBe(true);
   });
 
-  test("CONTROL: a CLOSED assigned issue holds its slot — this is not a tidier", () => {
-    // It should not be in Ready, and saying so is `undispatchableRemedy`'s
-    // job. Silently freeing its slot would promote a replacement on top of
-    // a lane nobody has cleaned, hiding the thing that needs cleaning.
-    expect(holdsReadySlot({ typename: "Issue", state: "CLOSED", assigneeCount: 1 })).toBe(true);
+  test("CONTROL: BOTH sides absent still holds — the case neither guard alone can see", () => {
+    // The dangerous input, and the only one the absence guard protects.
+    // `undefined !== undefined` is FALSE, so a card whose number was never
+    // selected, in a run that named no mover, would free its slot — and
+    // that is every card on the board at once.
+    //
+    // It is one guard rather than two because two turned zero mutations
+    // red: each absence check was held up by the other through the
+    // comparison, so both read as covered and neither was.
+    expect(holdsReadySlot({ typename: "Issue", state: "OPEN" }), "both absent").toBe(true);
+    // Either one alone is handled by the comparison itself, and both are
+    // asserted because they are the documented direction — not because a
+    // mutation of the guard reddens them.
+    expect(holdsReadySlot({ typename: "Issue", state: "OPEN" }, 7), "no number").toBe(true);
+    expect(holdsReadySlot({ typename: "Issue", state: "OPEN", number: 7 }), "no mover").toBe(true);
   });
 
-  test("the premise: board-flow moves an assigned issue to In progress, always", () => {
-    // Written as an assertion because the whole argument above rests on
-    // it. If `laneFor` ever grows a branch where an assigned issue stays
-    // in Ready, this predicate becomes a timing guess and this case is
-    // what says so.
+  test("CONTROL: a pull request and a draft hold their slots", () => {
+    // `board-flow` relanes no pull request on an issue assignment, and a
+    // slot is a slot whatever occupies it.
+    expect(holdsReadySlot({ typename: "PullRequest", state: "OPEN", number: 7 }, 7)).toBe(true);
+    expect(holdsReadySlot({}, 7)).toBe(true);
+  });
+
+  test("CONTROL: a CLOSED issue holds its slot — this is not a tidier", () => {
+    // It should not be in Ready, and `undispatchableRemedy` is what says
+    // so. Freeing its slot would promote on top of a lane nobody cleaned.
+    expect(holdsReadySlot({ typename: "Issue", state: "CLOSED", number: 7 }, 7)).toBe(true);
+  });
+
+  test("the premise, and its LIMIT: board-flow decides In progress, which is not the write", () => {
+    // Asserted rather than described. The decision is unconditional —
+    // which is why the event's card is the right one to exclude — and the
+    // decision is all it is. The write is gated separately, and the
+    // exclusion is bounded to one card precisely because that gate can
+    // refuse. Both halves, because the first alone is what justified the
+    // unbounded version.
     expect(laneFor({ kind: "issue_assigned" } as LaneEvent).lane).toBe("In progress");
+    expect(WRITING_PERMISSIONS, "Triage can assign an issue and cannot write the board").not.toContain(
+      "triage",
+    );
   });
 });
 

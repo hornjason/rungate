@@ -247,66 +247,67 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
   // has been found on this day's work — twice on #1740's reader and once
   // here — so it is asserted as a census over the file's GraphQL list
   // selections rather than against `blocking` alone.
-  test("#1905: the assignee count is selected AND reaches the occupancy decider", () => {
+  test("#1905: the mover reaches the occupancy decider, and only `assigned` names one", () => {
     // **The wiring, because the predicate's battery cannot see it.**
-    // `holdsReadySlot` in `lib/board-ready-rule.ts` has five behavioural
-    // cases and a mutation of every arm reddens one of them. None of them
-    // reddens if this script stops SELECTING `assignees`, or stops passing
-    // the count to the decider — both mutations were run and both returned
-    // zero red. The predicate would then receive `undefined` for every
-    // card, hold every slot, and the race #1905 records would be back with
-    // the whole suite green.
-    //
-    // So this is a source census, in the shape BR-19 and BR-31 already use
-    // here, and like them it guards against finding nothing.
+    // `holdsReadySlot` has seven behavioural cases and a mutation of every
+    // arm reddens one. None of them reddens if this script stops selecting
+    // `number`, stops passing the mover, or if the workflow stops supplying
+    // it — all three mutations were run against the first version and all
+    // three returned zero red. The predicate would then exclude nothing,
+    // and the race #1905 records would be back with the suite green.
     const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
-    // **Comments stripped first, and a mutation is why.** Deleting the
-    // selection from the query left this case GREEN, because the script
-    // carries a comment explaining why the selection has no `first:` — so
-    // the assertion was reading its own explanation. That is BR-19's
-    // recorded trap, walked into one screen below where it is written
-    // down, and it is the reason a `toContain` over a whole source file is
-    // never enough on its own.
+    // **Comments stripped first, and a mutation is why.** The first version
+    // of this case passed with the selection DELETED, because the script
+    // carries a comment naming it — the assertion was reading its own
+    // explanation. BR-19 records that trap one screen below; this walked
+    // into it anyway.
     const code = src
       .split("\n")
       .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
       .join("\n");
 
     // **Scoped to BOARD_PAGE_QUERY, because the file holds three queries
-    // and two of the others already select assignees.** Asserting over the
-    // whole file was wider than what it detects: deleting the selection
-    // from the occupancy query left the case green on the other two. The
-    // mutation found that; reading the file did not.
+    // and the other two already select `number`.** Asserting over the whole
+    // file was wider than what it detects: deleting the selection from the
+    // occupancy query left the case green on the other two. The mutation
+    // found that; reading the file did not.
     const query = /const BOARD_PAGE_QUERY = `([\s\S]*?)`;/.exec(code)?.[1];
     expect(query, "BOARD_PAGE_QUERY is not where this test expects it").toBeDefined();
-
-    // No `first:` on purpose — a page argument makes it a list BR-19 must
-    // see cursored and multiplies into BR-46's node-limit product, and
-    // GitHub needs `first`/`last` only when `nodes` or `edges` are
-    // selected. Spelled without spaces, as every other selection in the
-    // query string is.
     expect(
       query,
-      "the OCCUPANCY query stopped selecting assignees — every card then reads as UNMEASURED, " +
-        "holds its slot, and the assigned-card race returns silently",
-    ).toContain("assignees{totalCount}");
+      "the OCCUPANCY query stopped selecting `number`, so no card can be recognised as the " +
+        "one being moved and the assigned-card race returns silently",
+    ).toContain("Issue{number");
 
-    // ANTI-VACUITY: a `toContain` that found nothing and a call site that
-    // was deleted are the same green. Assert the call exists, then that it
-    // carries the field.
-    const call = /holdsReadySlot\(\{([\s\S]*?)\}\)/.exec(code)?.[1];
+    // ANTI-VACUITY: a regex that found nothing and a call site that was
+    // deleted are the same green.
+    const call = /holdsReadySlot\(([\s\S]*?)\n {8}\);/.exec(code)?.[1];
     expect(call, "no holdsReadySlot call in board-ready.ts — the decider is not wired in").toBeDefined();
-    expect(
-      call,
-      "the occupancy call stopped passing the assignee count, so every card reads UNMEASURED",
-    ).toContain("assigneeCount: n.content?.assignees?.totalCount");
+    expect(call, "the card's number is not passed").toContain("number: n.content?.number");
+    expect(call, "the mover is not passed, so nothing is ever excluded").toContain("movingIssue");
 
-    // And it is passed RAW. `?? 0` here turns a field the query did not
-    // return into "unassigned" and frees the slot — the inversion the
-    // decider's docblock names, and the reason the field is a count rather
-    // than a boolean.
-    expect(call, "the count is coalesced, which makes absent indistinguishable from zero").not.toMatch(
-      /assigneeCount:[^,]*\?\?/,
+    // **And the workflow supplies it on `assigned` ONLY.** The bound lives
+    // half here: `board-flow` relanes nothing out of Ready on `unassigned`,
+    // `opened` or `reopened`, so naming a mover there would free a slot
+    // with no move behind it and promote past the cap.
+    const yml = readFileSync(join(ROOT, ".github/workflows/board-ready.yml"), "utf-8")
+      .split("\n")
+      .filter(l => !/^\s*#/.test(l))
+      .join("\n");
+    const assignedArm = /\n\s*assigned\)\n([\s\S]*?);;/.exec(yml)?.[1];
+    expect(assignedArm, "no `assigned)` arm in board-ready.yml").toBeDefined();
+    expect(assignedArm, "the assigned arm stopped naming the moving issue").toContain(
+      '--moving-issue "$ISSUE"',
+    );
+    // Quoted, so a free-text dispatch value stays ONE array element — the
+    // injection this file's own `args` comment records.
+    expect(assignedArm, "unquoted $ISSUE word-splits into flags").not.toMatch(
+      /--moving-issue \$ISSUE/,
+    );
+    const otherArm = /\n\s*top-up \| unassigned \| opened \| reopened\)\n([\s\S]*?);;/.exec(yml)?.[1];
+    expect(otherArm, "no combined arm for the non-relaning modes").toBeDefined();
+    expect(otherArm, "a mode board-flow does not relane must not name a mover").not.toContain(
+      "--moving-issue",
     );
   });
 

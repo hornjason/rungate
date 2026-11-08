@@ -71,20 +71,15 @@ const READY_COLUMN = "Ready";
  * different fields — and a page that stopped carrying `fieldValues` would
  * undercount Ready's occupancy and promote past the cap with nothing red.
  */
-// `assignees{totalCount}` carries NO `first:`, and that is deliberate rather
-// than an omission BR-19 should catch. A page argument would make it a list
-// this query has to paginate and would multiply into BR-46's node-limit
-// product against `items(100)` and `fieldValues(50)`; `first:1` is also the
-// shape BR-46 refuses outright — below 20 is a guess, not a page. GitHub
-// requires `first`/`last` only when `nodes` or `edges` are selected, and this
-// selects neither. Verified against the live API on 2026-11-08:
-// `{repository{issue(number:1905){assignees{totalCount}}}}` returns 1.
+// `number` is selected so the occupancy pass can recognise the ONE card the
+// current event is moving out of Ready (#1905). A scalar, so it costs no
+// page and nothing for BR-19 or BR-46 to weigh.
 const BOARD_PAGE_QUERY = `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
        pageInfo{hasNextPage endCursor}
        nodes{
          fieldValues(first:50){pageInfo{hasNextPage} nodes{
            ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}}}
-         content{__typename ... on Issue{state milestone{title} assignees{totalCount}}}}}}}}`;
+         content{__typename ... on Issue{number state milestone{title}}}}}}}}`;
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(`--${name}`);
@@ -172,6 +167,26 @@ async function main(): Promise<number> {
     console.error(`UNMEASURED: --closed-issue must be a positive integer, got "${rawClosed}"`);
     return EXIT_REFUSED;
   }
+  // **The ONE card this event is moving out of Ready** (#1905) — the issue
+  // `board-flow` is relaning in a run racing this one. Absent means the
+  // caller does not know, and then nothing is excluded, which is the safe
+  // direction: the lane reads one fuller than it will be and the board's
+  // health check reports that, where the other direction promotes past the
+  // depth.
+  //
+  // Validated like `--closed-issue` and for the same reason: `Number(null)`
+  // is 0, `Number("x")` is NaN, and neither is an issue. A malformed value
+  // REFUSES rather than silently excluding nothing — a flag that is ignored
+  // when it is wrong is a flag nobody can tell is working.
+  const rawMoving = arg("moving-issue");
+  if (rawMoving !== null) {
+    const n = Number(rawMoving);
+    if (!Number.isInteger(n) || n <= 0) {
+      console.error(`UNMEASURED: --moving-issue must be a positive integer, got "${rawMoving}"`);
+      return EXIT_REFUSED;
+    }
+  }
+  const movingIssue = rawMoving === null ? undefined : Number(rawMoving);
 
   const credential = readBoardCredential(process.env);
   if (credential.kind === "UNMEASURED") {
@@ -399,20 +414,20 @@ async function main(): Promise<number> {
       // the lane was empty. `holdsReadySlot` is the one binding that
       // decides, so there is one site to mutate.
       //
-      // **The raw `totalCount`, with no mapping here at all.** An earlier
-      // spelling passed `(totalCount ?? 0) > 0`, which turns a field the
-      // query did not return into "unassigned" and frees the slot — and a
-      // mutation of that expression turned ZERO cases red, because the
-      // battery varies the predicate in the rule module and the defect was
-      // sitting in this file. The three states now live in one place, so
-      // there is no mapping in this loop to get wrong.
+      // **One card, named by the event.** `movingIssue` is the issue this
+      // run was triggered for; `board-flow` is moving it out of Ready in a
+      // run racing this one, so counting it reads the lane as full and
+      // promotes nothing. Excluding EVERY assigned issue was the first
+      // spelling and it was unbounded — a card whose move failed stayed in
+      // Ready and stayed uncounted forever. The fields go in raw: there is
+      // no mapping in this loop, because a mapping here is a decision the
+      // rule module's battery cannot see.
       const holds =
         status === READY_COLUMN &&
-        holdsReadySlot({
-          typename: n.content?.__typename,
-          state: n.content?.state,
-          assigneeCount: n.content?.assignees?.totalCount,
-        });
+        holdsReadySlot(
+          { typename: n.content?.__typename, state: n.content?.state, number: n.content?.number },
+          movingIssue,
+        );
       if (holds) {
         occupied++;
         // **And the second number, from the SAME pass** (#1852). A slot is a
