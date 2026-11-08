@@ -249,7 +249,24 @@ const UNCLAIMED_RATCHET = 150;
 // and mutant not; for SC-2619, blank-value rows for all three forwarded
 // inputs against a project whose config COULD have satisfied each one, so
 // a refusal cannot come from there being nothing to fall back to.
-const CLAIMED_UNBINDABLE = 147;
+//
+// 148 adds SC-2620 (#1892), the third of that run and unbindable for the
+// same reason: "the conformance command runs on main, so a board that
+// drifts reddens CI" is a claim about what a JOB does when it fires, and no
+// registered pattern expresses that. `test/board-conformance-job.test.ts`
+// names it in a declaring position, so the tick moved it into this
+// population rather than creating a new gap.
+//
+// What the tick rests on is in the criterion's own `proved-by`, and the
+// operative half is NOT the suite: Actions run 42462454243 on `a0201e21`
+// fired on the push that merged #1898, read the live board with the PAT,
+// printed `SHORT criterion-coverage 25 of 26 — 1 short` and exited 1 — with
+// no `Board conformance UNMEASURED` warning in the run's annotations, so
+// the reading was taken rather than skipped. The suite's half is the
+// mutation: the step's own `run:` body, executed under `bash -e`, refuses
+// the short-board input where a copy with `exit $status` set to `exit 0`
+// ships.
+const CLAIMED_UNBINDABLE = 148;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
