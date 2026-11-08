@@ -26,7 +26,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import {
-  GIT_LOCATION_VARS,
   GIT_TIMEOUT_MS,
   gitEnv,
   LIVE_GIT,
@@ -36,6 +35,12 @@ import {
   type GitSpawn,
   type ProducedSnapshot,
 } from "../scripts/board-snapshot";
+import {
+  GIT_AMBIENT_CONFIG_PREFIX,
+  GIT_LOCATION_VARS,
+  gitIsolatedEnv,
+  withoutAmbientGitOverrides,
+} from "../lib/git-isolation";
 import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
 import { oneScMentionPattern } from "../lib/sc-ids";
 import { readSnapshotText, takeReadings } from "../scripts/board-conformance";
@@ -1710,6 +1715,96 @@ describe("round 8: the environment can move the repository out from under `-C ro
     LIVE_GIT("/r", rec)(["status"]);
     const env = seen[0]!.env as NodeJS.ProcessEnv;
     for (const name of GIT_LOCATION_VARS) expect(env[name], `${name} reached the child`).toBeUndefined();
+  });
+});
+
+// ── Security review of PR #1896, round 9 ───────────────────────────────
+describe("round 9: the denylist was short, and a second denylist is why", () => {
+  // Round 8 named seven location variables and stopped. The family it
+  // missed does not redirect the repository — it reconfigures git, and
+  // several git config keys are COMMANDS. `core.fsmonitor` is the one
+  // `lib/git-isolation.ts` measured executing under #960/#965.
+  const poisoned = {
+    PATH: "/usr/bin",
+    HOME: "/h",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.fsmonitor",
+    GIT_CONFIG_VALUE_0: "touch /tmp/pwned",
+    GIT_CONFIG_GLOBAL: "/attacker/gitconfig",
+    GIT_CONFIG_SYSTEM: "/attacker/system",
+    GIT_CONFIG_NOSYSTEM: "0",
+    GIT_CONFIG: "/attacker/legacy",
+  };
+
+  test("every `GIT_CONFIG*` spelling is stripped, including the open-ended one", () => {
+    const got = gitEnv(poisoned);
+
+    for (const name of Object.keys(poisoned)) {
+      if (!name.startsWith(GIT_AMBIENT_CONFIG_PREFIX)) continue;
+      expect(got[name], `${name} survived into the spawn env`).toBeUndefined();
+    }
+    // The control, and it is the half that makes the strip a strip rather
+    // than an emptying: the child still has to find git and a home.
+    expect(got.PATH).toBe("/usr/bin");
+    expect(got.HOME).toBe("/h");
+    expect(got.GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
+  test("`KEY_<n>` is matched by PREFIX — an enumeration cannot reach the last one", () => {
+    // The reason this is a prefix and not a list. `GIT_CONFIG_COUNT` may
+    // be any integer, so the set of names is unbounded and a denylist of
+    // literals is short by construction — which is exactly how round 8's
+    // list came to be short.
+    const many: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+    for (let i = 0; i < 64; i++) {
+      many[`GIT_CONFIG_KEY_${i}`] = "core.pager";
+      many[`GIT_CONFIG_VALUE_${i}`] = "sh -c 'id > /tmp/pwned'";
+    }
+    const got = gitEnv(many);
+    const survivors = Object.keys(got).filter(n => n.startsWith(GIT_AMBIENT_CONFIG_PREFIX));
+    expect(survivors, "an injected config entry reached git").toEqual([]);
+  });
+
+  test("the declaration lives in lib/git-isolation.ts, and this file consumes it", () => {
+    // The finding's actual subject. A behavioural assertion cannot tell a
+    // second denylist from the first — both answer, one is dead — so the
+    // property asserted is that the reader's env IS the registry's
+    // projection, not merely equal to it today.
+    const base = { ...poisoned, GIT_DIR: "/elsewhere/.git" };
+    expect(gitEnv(base)).toEqual({
+      ...withoutAmbientGitOverrides(base),
+      GIT_TERMINAL_PROMPT: "0",
+    });
+  });
+
+  test("the reader does NOT adopt `gitIsolatedEnv` — one of these calls is a fetch", () => {
+    // `gitIsolatedEnv` is the other projection and it is wrong here. It
+    // SETS `GIT_CONFIG_GLOBAL=/dev/null`, which discards the system
+    // gitconfig's `credential.helper` along with everything else —
+    // measured in `lib/git-isolation.ts`'s own docblock as the reason
+    // `gitCredentialEnv` exists. `resolveSpecSource` runs `git fetch`
+    // through this runner, so adopting it would convert a reading into an
+    // authentication failure on every HTTPS remote.
+    expect(gitIsolatedEnv({}).GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    expect(
+      gitEnv({}).GIT_CONFIG_GLOBAL,
+      "the snapshot reader nulled the config file that declares credential.helper",
+    ).toBeUndefined();
+  });
+
+  test("isolation survives the strip — the two halves are not composed by a caller", () => {
+    // Both halves are individually correct and the series is not: strip
+    // after set removes the isolation, and the result is byte-identical
+    // to the isolated case on every channel but the one var. So
+    // `gitIsolatedEnv` performs both internally and there is no order for
+    // a caller to get wrong.
+    const got = gitIsolatedEnv(poisoned);
+    expect(got.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    expect(got.GIT_CONFIG_SYSTEM).toBe("/dev/null");
+    expect(got.GIT_CONFIG_NOSYSTEM).toBe("1");
+    expect(got.GIT_CONFIG_COUNT, "an injected entry outlived the isolation").toBeUndefined();
+    expect(got.GIT_CONFIG_KEY_0).toBeUndefined();
+    expect(got.GIT_CONFIG_VALUE_0).toBeUndefined();
   });
 });
 

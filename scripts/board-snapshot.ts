@@ -38,6 +38,7 @@ import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { describeSpecSource, resolveSpecSource, type GitRunner } from "../lib/spec-source";
 import { openFrontier, phaseOf } from "../lib/board-mirror";
+import { withoutAmbientGitOverrides } from "../lib/git-isolation";
 import { createGitHubClient, listMilestones } from "../lib/github";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
 import { resolveRepoSlug } from "../lib/branch-cleanup";
@@ -235,27 +236,27 @@ export interface ProducedSnapshot {
 export const GIT_TIMEOUT_MS = 60_000;
 
 /**
- * Environment variables that override `-C <root>`'s repository discovery.
+ * The ambient environment with every git override removed.
  *
- * Every one of these makes git read a repository the caller named rather
- * than the one this reader was pointed at, and nothing downstream can tell:
- * the reading comes back clean, confident, and about another tree.
+ * **The list is not declared here.** Round 8 of this review added a
+ * seven-name denylist to this file and round 9 found it short by the whole
+ * `GIT_CONFIG*` family — which is the predictable outcome of a second
+ * registry, not bad luck about one entry: two deciders over one question
+ * are behaviourally one, and no case here could tell which was answering
+ * (`.claude/rules/checks-must-be-able-to-fail.md`). `lib/git-isolation.ts`
+ * has owned this set since #1001, so this is the declaration's second
+ * consumer rather than its second spelling.
+ *
+ * {@link withoutAmbientGitOverrides} is the half that only REMOVES.
+ * `gitIsolatedEnv` is deliberately not used: it additionally sets
+ * `GIT_CONFIG_GLOBAL=/dev/null`, which discards `credential.helper` —
+ * measured on this machine as the system gitconfig's `osxkeychain` — and
+ * {@link GIT_TIMEOUT_MS}'s comment above records that one of these calls
+ * is a `git fetch`. Isolation that cannot authenticate turns a reading
+ * into a refusal.
  */
-export const GIT_LOCATION_VARS = [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_CEILING_DIRECTORIES",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_COMMON_DIR",
-] as const;
-
-/** The ambient environment with repo-location overrides removed. */
 export function gitEnv(from: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...from, GIT_TERMINAL_PROMPT: "0" };
-  for (const name of GIT_LOCATION_VARS) delete env[name];
-  return env;
+  return { ...withoutAmbientGitOverrides(from), GIT_TERMINAL_PROMPT: "0" };
 }
 
 /**
