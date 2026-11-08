@@ -516,6 +516,12 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
       "test/scaffold-permissions-merge.test.ts",
       "test/ai-review-wif.test.ts",
       "test/no-fixed-window-slices.test.ts",
+      // #1782. It holds a hand-maintained list of every workflow running
+      // `setup-bun`, so adding a workflow file is DESIGNED to turn it red
+      // exactly once. #1781 added `board-flow.yml` and learned that from a
+      // red PR rather than from this router — the one instrument built to
+      // say so.
+      "test/bun-version-agreement.test.ts",
     ],
     fires: c => inDir(c.path, ".github/workflows") || inDir(c.path, "lib/scaffold"),
   },
