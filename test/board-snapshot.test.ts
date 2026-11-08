@@ -87,6 +87,11 @@ const iss = (o: Partial<LiveIssue> & { number: number }): LiveIssue => ({
   milestone: null,
   blockedBy: [],
   labels: [],
+  // Defaulted to the EMPTY states, not to text naming a criterion: a case
+  // that does not pass a body is a case about something else, and an issue
+  // with no body names nothing (SC-2616).
+  title: `issue ${o.number}`,
+  body: null,
   ...o,
 });
 

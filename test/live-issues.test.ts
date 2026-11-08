@@ -37,6 +37,8 @@ import { phaseInFamily } from "../lib/spec-placement";
 type Node = {
   number: number;
   state?: string;
+  title?: string;
+  body?: string | null;
   milestone?: { title: string } | null;
   labels?: { pageInfo: { hasNextPage: boolean }; nodes: { name: string }[] } | null;
   blockedBy?: { pageInfo: { hasNextPage: boolean }; nodes: { number: number }[] } | null;
@@ -83,6 +85,8 @@ describe("the field mapping", () => {
         {
           number: 10,
           state: "CLOSED",
+          title: "the order is data",
+          body: "Serves SC-2617.",
           milestone: { title: "Pipeline Phase 2 — the order is data" },
           labels: { pageInfo: { hasNextPage: false }, nodes: [{ name: "engine" }, { name: "bug" }] },
           blockedBy: { pageInfo: { hasNextPage: false }, nodes: [{ number: 7 }, { number: 8 }] },
@@ -93,6 +97,8 @@ describe("the field mapping", () => {
     expect(issue).toEqual({
       number: 10,
       state: "CLOSED",
+      title: "the order is data",
+      body: "Serves SC-2617.",
       milestone: "Pipeline Phase 2 — the order is data",
       labels: ["engine", "bug"],
       labelsTruncated: false,

@@ -52,7 +52,16 @@ import {
   type LiveIssue,
   type ProjectFieldReading,
 } from "../lib/live-issues";
-import { criterionCoverage, milestonePlan, placementReading, type CriterionCoverage } from "../lib/spec-placement";
+import {
+  criterionCoverage,
+  milestonePlan,
+  placementCoverage,
+  placementReading,
+  type CriterionCoverage,
+} from "../lib/spec-placement";
+// SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
+import { NAMES_NONE, criteriaNamedBy, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
+import { dependencyPlan } from "../lib/spec-deps";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -673,6 +682,78 @@ export async function main(
   const columnRead =
     board !== null && snapshotIssues.length > 0 && snapshotIssues.every(i => "criteriaField" in i);
 
+  // ── The three REPOSITORY-WIDE populations — SC-2615, SC-2616, SC-2617 ──
+  //
+  // Everything above this line is engine-scoped: `phases` comes from the one
+  // spec named on the command line and `issues` is that spec's milestone
+  // family. Each of the three below asks the same shape of question of the
+  // whole tree, and each is emitted ONLY when it could actually be taken —
+  // `board-conformance` reads an absent key as UNMEASURED, and an absent key
+  // is the honest thing to write when nothing was read.
+
+  // SC-2615. The sweep's own `specs` rows are passed through, UNREADABLE
+  // ones included: the reading refuses on them by name, which it cannot do
+  // if the producer drops them. The key is omitted only when the sweep could
+  // not enumerate `specs/` at all — then there are no rows to carry, and an
+  // empty list would be indistinguishable from a tree whose specs are all
+  // placed.
+  const coverage = placementCoverage(root, specPathSweep, (base, path) =>
+    readFileSync(join(base, path), "utf-8"),
+  );
+  const placements =
+    coverage.specs.length === 0 && coverage.reading === "UNMEASURED"
+      ? {}
+      : {
+          specPlacements: coverage.specs.map(s => ({
+            path: s.path,
+            state: s.state,
+            criteria: s.criteria,
+            placed: s.placed,
+          })),
+        };
+
+  // SC-2616. The criterion union comes from the SAME sweep `board-mirror`
+  // uses to build the column, so "which ids exist" has one answer. A second
+  // enumeration here would be a second decider that no behavioural case
+  // could separate from the first.
+  //
+  // `servesNone` is the literal `NAMES_NONE` string, which is the one way
+  // this repository spells the declaration (SC-2609). Matching anything
+  // looser — "no criterion", "n/a" — would let an issue opt out by accident,
+  // and the entire criterion is that *has not said* and *says none* are
+  // different facts.
+  const allIds = specCriteriaIn(root).ids;
+  const openIssues = liveIssues.filter(i => i.state === "OPEN");
+  const repoIssues = {
+    repoIssues: openIssues.map(i => ({
+      number: i.number,
+      names: criteriaNamedBy({ title: i.title, body: i.body }, allIds),
+      servesNone: `${i.title}\n${i.body ?? ""}`.includes(NAMES_NONE),
+    })),
+  };
+
+  // SC-2617. `missing` and `present` are the plan's own two halves — derived
+  // edges the tracker lacks, and derived edges it carries. `extra` is
+  // deliberately excluded: an edge somebody added that the plan does not
+  // derive is reported by `plan-deps` and removed by nobody, so counting it
+  // here would let hand-added ordering satisfy a reading about derived
+  // ordering.
+  //
+  // An UNMEASURED plan omits the key. `dependencyPlan` returns UNMEASURED
+  // for a truncated `blockedBy` among other reasons, and a truncated read
+  // produces exactly the false `missing` edges this reading would then count
+  // as the tracker's failure.
+  const plan = dependencyPlan(liveIssues);
+  const edges =
+    plan.reading === "UNMEASURED"
+      ? {}
+      : {
+          plannedEdges: [
+            ...plan.present.map(e => ({ blocked: e.blocked, blocker: e.blocker, present: true })),
+            ...plan.missing.map(e => ({ blocked: e.blocked, blocker: e.blocker, present: false })),
+          ],
+        };
+
   const snapshot: ProducedSnapshot = {
     producedAt: new Date().toISOString(),
     spec: specArg,
@@ -681,6 +762,9 @@ export async function main(
     closedBlockers: [...named].sort((a, b) => a - b),
     queueLabel: readQueueLabel(root),
     criteria: criterionCoverage(content, snapshotIssues, columnRead),
+    ...placements,
+    ...repoIssues,
+    ...edges,
   };
 
   process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);

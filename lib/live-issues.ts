@@ -118,6 +118,20 @@ export interface LiveIssue extends DepIssue {
   /** Every label name on the issue, as GitHub spells them. */
   readonly labels: readonly string[];
   /**
+   * The issue's title and body, for reading which criteria it names — SC-2616.
+   *
+   * ADR-003 step 3 says an issue declares what it serves as plain text in its
+   * body, so `criteriaNamedBy` needs both. Neither is a paged connection, so
+   * neither carries a truncation flag: GitHub returns a body whole or not at
+   * all.
+   *
+   * `body` is `null` when the issue has none, which is a real state and not a
+   * read that failed — an issue with an empty body names no criterion, which
+   * is exactly what `criteria-named` is there to report.
+   */
+  readonly title: string;
+  readonly body: string | null;
+  /**
    * True when the LABEL list was cut — a paged connection reporting another
    * page. Same reasoning as {@link DepIssue.blockedByTruncated}, and here
    * for the same reason: `queue-label` asks `labels.includes("engine")`, so
@@ -141,6 +155,8 @@ query($owner:String!,$name:String!,$states:[IssueState!],$after:String){
       nodes{
         number
         state
+        title
+        body
         milestone{title}
         labels(first:${ISSUE_PAGE}){pageInfo{hasNextPage} nodes{name}}
         blockedBy(first:${ISSUE_PAGE}){pageInfo{hasNextPage} nodes{number}}
@@ -155,6 +171,8 @@ interface IssuePage {
   nodes: {
     number: number;
     state: string;
+    title: string;
+    body: string | null;
     milestone: { title: string } | null;
     labels: { pageInfo: { hasNextPage: boolean }; nodes: { name: string }[] } | null;
     blockedBy: { pageInfo: { hasNextPage: boolean }; nodes: { number: number }[] } | null;
@@ -231,6 +249,8 @@ export async function readLiveIssues(
       out.push({
         number: n.number,
         state: n.state,
+        title: n.title,
+        body: n.body,
         milestone: n.milestone?.title ?? null,
         labels: (n.labels?.nodes ?? []).map(l => l.name),
         labelsTruncated: n.labels?.pageInfo.hasNextPage === true,
