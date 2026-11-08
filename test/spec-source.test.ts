@@ -850,3 +850,188 @@ describe("round 4: the remote probe asks about the REMOTE, not about a flag", ()
     expect(r.kind).toBe("unmeasured");
   });
 });
+
+// ── Security review of PR #1896, round 5 ───────────────────────────────
+//
+// A git pathspec is resolved against the PROCESS's cwd, and `LIVE_GIT`
+// runs `-C root`. When `root` is a subdirectory of the work tree top — the
+// case the containment logic above exists to support — a root-relative
+// pathspec matches nothing from there, and neither of the two calls that
+// use one says so by failing. They both exit 0.
+describe("round 5: a pathspec is resolved against cwd, and cwd is `root`", () => {
+  const realGit = (cwd: string): GitRunner => args => {
+    const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+    return { ok: r.status === 0, code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  };
+
+  test("`ls-tree` without --full-tree reports a PRESENT blob as absent, with exit 0", () => {
+    // The pin. Exit 0 and empty output is the same pair this module reads
+    // as "the ref has not got it", so without the flag a nested `root`
+    // falls straight through to a working-tree read.
+    const dir = mkdtempSync(join(tmpdir(), "spec-source-cwd-"));
+    try {
+      const g = realGit(dir);
+      expect(g(["init", "-q"]).ok).toBe(true);
+      mkdirSync(join(dir, "nested"), { recursive: true });
+      writeFileSync(join(dir, "SPEC.md"), "# shipped\n");
+      writeFileSync(join(dir, "nested", "keep.txt"), "x\n");
+      expect(g(["add", "-A"]).ok).toBe(true);
+      expect(g(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"]).ok).toBe(true);
+      const sha = g(["rev-parse", "HEAD"]).stdout.trim();
+
+      const fromNested = realGit(join(dir, "nested"));
+      const without = fromNested(["ls-tree", "-z", "--format=%(objecttype)", sha, "--", "SPEC.md"]);
+      expect(without.code, "it does not fail — that is the whole problem").toBe(0);
+      expect(without.stdout.replace(/\0/g, "").trim(), "a present blob read as absent").toBe("");
+
+      const withFlag = fromNested(["ls-tree", "-z", "--full-tree", "--format=%(objecttype)", sha, "--", "SPEC.md"]);
+      expect(withFlag.stdout.replace(/\0/g, "").trim()).toBe("blob");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("end to end: a `root` BELOW the work tree top still reads the spec from the ref", () => {
+    // The behavioural case for both fixes at once. `root` is the nested
+    // directory; the spec sits at the top. Before round 5 this read the
+    // working tree.
+    const dir = mkdtempSync(join(tmpdir(), "spec-source-nested-"));
+    try {
+      const g = realGit(dir);
+      expect(g(["init", "-q"]).ok).toBe(true);
+      mkdirSync(join(dir, "nested"), { recursive: true });
+      writeFileSync(join(dir, "SPEC.md"), "# shipped\n");
+      writeFileSync(join(dir, "nested", "keep.txt"), "x\n");
+      expect(g(["add", "-A"]).ok).toBe(true);
+      expect(g(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"]).ok).toBe(true);
+      expect(g(["update-ref", "refs/remotes/origin/main", "HEAD"]).ok).toBe(true);
+
+      const r = resolveSpecSource({
+        root: join(dir, "nested"),
+        absPath: join(dir, "SPEC.md"),
+        git: realGit(join(dir, "nested")),
+      });
+
+      expect(r.kind, describeSpecSource(r)).toBe("ref");
+      if (r.kind !== "ref") return;
+      expect(r.content).toContain("shipped");
+      expect(r.worktreeDiffers, "the comparison ran against nothing and said `same`").toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("end to end from a nested root: an EDITED working tree is still seen as differing", () => {
+    // The control for the row above. `worktreeDiffers: false` there is
+    // only meaningful if this one comes back true — a pathspec matching
+    // nothing exits 0 and reports `false` for every input, which would
+    // satisfy the previous case while measuring nothing.
+    const dir = mkdtempSync(join(tmpdir(), "spec-source-nested-diff-"));
+    try {
+      const g = realGit(dir);
+      expect(g(["init", "-q"]).ok).toBe(true);
+      mkdirSync(join(dir, "nested"), { recursive: true });
+      writeFileSync(join(dir, "SPEC.md"), "# shipped\n");
+      expect(g(["add", "-A"]).ok).toBe(true);
+      expect(g(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"]).ok).toBe(true);
+      expect(g(["update-ref", "refs/remotes/origin/main", "HEAD"]).ok).toBe(true);
+      writeFileSync(join(dir, "SPEC.md"), "# shipped, then edited locally\n");
+
+      const r = resolveSpecSource({
+        root: join(dir, "nested"),
+        absPath: join(dir, "SPEC.md"),
+        git: realGit(join(dir, "nested")),
+      });
+
+      expect(r.kind, describeSpecSource(r)).toBe("ref");
+      if (r.kind !== "ref") return;
+      expect(r.content, "the REF's bytes, not the edited ones").toBe("# shipped\n");
+      expect(r.worktreeDiffers, "an edited tree reported as matching").toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── Security review of PR #1896, round 6 ───────────────────────────────
+describe("round 6: only the exit code git uses for a missing remote means a missing remote", () => {
+  test("a malformed config is UNMEASURED, not `there is no remote`", () => {
+    // Round 5 accepted every non-null non-zero here, so git failing to
+    // read `.git/config` was indistinguishable from a remote that is not
+    // configured — and the second one permits a working-tree read.
+    const git = fakeGit(complete({
+      "rev-parse": bad("fatal: ambiguous argument", 128),
+      remote: bad("fatal: bad config line 3 in file .git/config", 128),
+    }));
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    expect(r.kind).toBe("unmeasured");
+    if (r.kind !== "unmeasured") return;
+    expect(r.why).toContain("128");
+  });
+
+  test("exit 2 is still the missing remote — the control", () => {
+    const git = fakeGit(complete({
+      "rev-parse": bad("fatal: ambiguous argument", 128),
+      remote: bad("error: No such remote 'origin'", 2),
+    }));
+    expect(resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same }).kind).toBe("untracked");
+  });
+
+  test("real git: `remote get-url` exits 2 for a missing remote and 0 for a present one", () => {
+    // The pin. Round 4's fake asserted a code nobody had measured, which
+    // is the same mistake `cat-file -e` cost a whole round.
+    const dir = mkdtempSync(join(tmpdir(), "spec-source-remote-"));
+    try {
+      const g = (args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+      expect(g(["init", "-q"]).status).toBe(0);
+      expect(g(["remote", "get-url", "nosuch"]).status, "a missing remote").toBe(2);
+      expect(g(["remote", "add", "origin", "git@github.com:o/n.git"]).status).toBe(0);
+      expect(g(["remote", "get-url", "origin"]).status, "a present remote").toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("round 6: a pathspec is a glob, and `<rev>:<path>` is not", () => {
+  // **A CHARACTERISATION CASE, NOT A PROOF — and labelled, because the
+  // difference matters.** Round 6 reported that `ls-tree -- 'a[b].md'`
+  // reads `[b]` as a character class while `git show <sha>:a[b].md` is
+  // literal, so the two disagree and the disagreement resolves toward a
+  // working-tree read. It does not reproduce: measured, git tries an
+  // EXACT match before it globs, and `ls-tree -- 'SPEC[draft].md'`
+  // returns `blob SPEC[draft].md` with and without the `:(literal)`
+  // prefix. Two battery rows were written to redden this case by removing
+  // the prefix and BOTH reddened nothing.
+  //
+  // The prefix stays — it costs nothing and closes the class — but it is
+  // hardening rather than a fix, and this case pins today's behaviour
+  // rather than catching a defect. Saying so is the point:
+  // `.claude/rules/checks-must-be-able-to-fail.md` is about not letting a
+  // case that cannot fail pass for one that can.
+  test("end to end: a spec whose NAME holds pathspec metacharacters is read from the ref", () => {
+    const dir = mkdtempSync(join(tmpdir(), "spec-source-glob-"));
+    const name = "SPEC[draft].md";
+    try {
+      const g = (args: string[]): GitRun => {
+        const r = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+        return { ok: r.status === 0, code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+      };
+      expect(g(["init", "-q"]).ok).toBe(true);
+      writeFileSync(join(dir, name), "# shipped\n");
+      expect(g(["add", "-A"]).ok).toBe(true);
+      expect(g(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"]).ok).toBe(true);
+      expect(g(["update-ref", "refs/remotes/origin/main", "HEAD"]).ok).toBe(true);
+
+      const r = resolveSpecSource({ root: dir, absPath: join(dir, name), git: g });
+
+      expect(r.kind, describeSpecSource(r)).toBe("ref");
+      if (r.kind !== "ref") return;
+      expect(r.content).toContain("shipped");
+      expect(r.worktreeDiffers, "the diff pathspec globbed and matched nothing").toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

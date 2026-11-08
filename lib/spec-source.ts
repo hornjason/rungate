@@ -372,8 +372,23 @@ export function resolveSpecSource(opts: {
     // reading nobody took.
     const remote = splitRef(ref)?.remote ?? null;
     if (remote !== null) {
+      // **EXIT 2 AND NOTHING ELSE.** Measured: `git remote get-url` exits
+      // 2 for a remote that is not configured and 0 for one that is. Any
+      // other code is git failing to answer — a malformed `.git/config` is
+      // 128 — and round 5 accepted every non-null non-zero here, so a
+      // broken config read as "no remote" and fell through to a
+      // working-tree read. Round 6.
       const url = opts.git(["remote", "get-url", remote]);
-      if (!url.ok && url.code !== null) {
+      if (!url.ok && url.code !== 2 && url.code !== 0) {
+        return {
+          kind: "unmeasured",
+          why:
+            `\`git remote get-url ${remote}\` failed in ${opts.root} with exit ${url.code}: ` +
+            `${redactCredentials(url.stderr.trim()) || "no reason given"}. That is git unable to say whether the ` +
+            `remote exists, which is not the same as it not existing.`,
+        };
+      }
+      if (!url.ok) {
         return {
           kind: "untracked",
           path: opts.absPath,
@@ -425,7 +440,16 @@ export function resolveSpecSource(opts: {
   // is the reader failing. `%(objecttype)` also answers the second half —
   // a directory is a `tree`, and `git show <sha>:<dir>` is a listing, not
   // a spec.
-  const atRef = opts.git(["ls-tree", "-z", "--format=%(objecttype)", sha, "--", path]);
+  //
+  // **`--full-tree`, because a pathspec is resolved against the PROCESS's
+  // cwd and that is `root`, not the work tree top.** When `root` is a
+  // subdirectory of the toplevel — which the containment logic above
+  // exists to support — a root-relative `path` matches nothing from
+  // there, and `ls-tree` says so by exiting **0 with empty output**: the
+  // same bytes as "the ref has not got it". Measured from `lib/` against
+  // `README.md`: empty without the flag, `blob` with it. Round 5 of this
+  // review, in the arm round 4 had just added.
+  const atRef = opts.git(["ls-tree", "-z", "--full-tree", "--format=%(objecttype)", sha, "--", `:(literal)${path}`]);
   if (!atRef.ok) {
     return {
       kind: "unmeasured",
@@ -499,7 +523,13 @@ export function resolveSpecSource(opts: {
   // a measured fact nobody measured. Review of #1896 round 3. This is the
   // last of the four sites where one boolean stood over a tri-state; the
   // type change that stops a fifth site arriving is filed separately.
-  const differs = opts.git(["diff", "--quiet", sha, "--", path]);
+  //
+  // **The pathspec is ABSOLUTE for the same reason**, and `absPath` rather
+  // than `path`: this is the one call that cannot use `<rev>:<path>`
+  // syntax, so it is the one whose pathspec the process's cwd can move. A
+  // pathspec matching nothing does not error — `--quiet` exits 0 — so the
+  // failure is "your copy matches" about a comparison that never ran.
+  const differs = opts.git(["diff", "--quiet", sha, "--", `:(literal)${opts.absPath}`]);
   const worktreeDiffers =
     differs.code === 0 ? false : differs.code === 1 ? true : null;
 
