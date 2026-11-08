@@ -305,9 +305,42 @@ export function remoteRepoReading(url: string, expected: string): { ok: boolean;
 
 // ── the I/O half ────────────────────────────────────────────
 
-function run(cmd: string[]): { out: string; ok: boolean } {
-  const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" });
-  return { out: new TextDecoder().decode(r.stdout).trim(), ok: r.exitCode === 0 };
+/**
+ * How long any one subprocess here may take before it is killed.
+ *
+ * Review of #1909 round 7, and correct. Every other failure in this file
+ * becomes a `Reading`; a hang became nothing at all — not even `UNMEASURED` —
+ * and this script gates an automated merge, so a stalled SSH host-key prompt
+ * or a `gh` waiting on an auth flow wedged the pipeline with no diagnostic.
+ *
+ * 30s rather than the 10s `lib/filing-plan.ts` uses for local git: two of the
+ * three calls here cross the network to the forge. Env-overridable the way
+ * `scripts/board-conformance.ts` does it, so a slow link raises it without an
+ * edit.
+ */
+export const SUBPROCESS_TIMEOUT_MS = Number(process.env.RUNGATE_REMOTE_TIMEOUT_MS) || 30_000;
+
+function run(cmd: string[]): { out: string; ok: boolean; timedOut: boolean } {
+  const r = Bun.spawnSync(cmd, {
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: SUBPROCESS_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  });
+  // A killed process reports a signal and no exit code. That is a different
+  // fact from a command that ran and failed, and the caller says so — "it
+  // did not succeed" sends somebody looking for the wrong thing.
+  const timedOut = r.exitCode === null || r.signalCode === "SIGKILL";
+  return { out: new TextDecoder().decode(r.stdout).trim(), ok: r.exitCode === 0, timedOut };
+}
+
+/** The sentence a killed subprocess gets, so a hang is never a silent gap. */
+function timeoutNote(what: string): string {
+  return (
+    ` \`${what}\` was killed after ${SUBPROCESS_TIMEOUT_MS}ms rather than answering — a stalled host-key ` +
+    `prompt, an unreachable remote, or an auth flow waiting on a human. Raise ` +
+    `RUNGATE_REMOTE_TIMEOUT_MS if the link is simply slow.`
+  );
 }
 
 function arg(name: string, argv: string[]): string | undefined {
@@ -331,7 +364,10 @@ export function main(argv: string[]): number {
     "--json", "state,headRefName,headRefOid,mergeCommit,headRepository,headRepositoryOwner",
   ]);
   if (!view.ok || view.out === "") {
-    console.error(`UNMEASURED: \`gh pr view ${pr}\` produced nothing. The pull request was not read, which is not the same as a pull request that is fine.`);
+    console.error(
+      `UNMEASURED: \`gh pr view ${pr}\` produced nothing. The pull request was not read, which is not the same as a pull request that is fine.` +
+        (view.timedOut ? timeoutNote(`gh pr view ${pr}`) : ""),
+    );
     return REFUSE_EXIT;
   }
 
@@ -359,14 +395,21 @@ export function main(argv: string[]): number {
   const url = run(["git", "ls-remote", "--get-url", remote]);
   const sameRepo = remoteRepoReading(url.ok ? url.out : "", expected);
   if (!sameRepo.ok) {
-    console.error(`UNMEASURED: ${sameRepo.detail}`);
+    console.error(`UNMEASURED: ${sameRepo.detail}` + (url.timedOut ? timeoutNote("git ls-remote --get-url") : ""));
     return REFUSE_EXIT;
   }
 
   const branch = pj.headRefName;
   // An absent branch name makes the ls-remote below match EVERY ref, and a
   // wrong SHA compared confidently is worse than no comparison at all.
-  const ls = branch ? run(["git", "ls-remote", remote, `refs/heads/${branch}`]) : { out: "", ok: false };
+  const ls = branch
+    ? run(["git", "ls-remote", remote, `refs/heads/${branch}`])
+    : { out: "", ok: false, timedOut: false };
+  // A kill is not an empty answer. The decider is told `remoteRead: false`
+  // either way — it compares SHAs and has no use for the distinction — but
+  // the operator reading stderr does, so it is said here rather than
+  // threaded through `RefInputs` as a seventh field.
+  if (ls.timedOut) console.error(`UNMEASURED:${timeoutNote(`git ls-remote ${remote}`)}`);
   // `ok` and `out` carry different facts and both travel. Exit 0 with no
   // output is a ref that is not there; a non-zero exit is a remote that was
   // not read. Collapsing them into one `undefined` is what round 2 of

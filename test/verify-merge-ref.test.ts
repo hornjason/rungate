@@ -528,6 +528,59 @@ describe("the script refuses, and the refusal is what each case observed", () =>
     expect(r.out, "exit zero with an empty stdout is how a caller reads a reading nobody took").toBe("");
   });
 
+  /**
+   * Review of #1909 round 7, and correct: `run()` passed no `timeout`, so a
+   * stalled host-key prompt or a `gh` waiting on an auth flow produced no
+   * reading at all — not even `UNMEASURED` — and wedged the merge pipeline
+   * this script gates with no diagnostic.
+   *
+   * The fixture is a `gh` that sleeps far longer than the suite would
+   * tolerate, with the timeout lowered by env var. Without the `timeout`
+   * option this case does not fail, it HANGS, so the elapsed-time assertion
+   * is the one that distinguishes "killed and reported" from "answered
+   * quickly for some other reason".
+   */
+  test("UNMEASURED: a subprocess that never answers is killed and reported", () => {
+    const bin = join(dir, "hangs", "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "gh"), "#!/bin/sh\nsleep 120\n");
+    chmodSync(join(bin, "gh"), 0o755);
+
+    const began = Date.now();
+    const real = Bun.spawnSync(["bun", SCRIPT, "--pr", "1", "--remote", remote], {
+      cwd: REPO,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNGATE_REMOTE_TIMEOUT_MS: "1500" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const elapsed = Date.now() - began;
+    const err = new TextDecoder().decode(real.stderr);
+
+    expect(real.exitCode, `a hung subprocess did not refuse:\n${err}`).toBe(REFUSE_EXIT);
+    // 20s sits between a real run (~2s here, slower in CI) and the 120s
+    // sleep. Measured against the source with the `timeout` option removed,
+    // this read 120,211ms — the hang, not a slow machine.
+    expect(elapsed, "the script waited out the hang rather than killing it").toBeLessThan(20_000);
+    expect(err, "the refusal does not say the subprocess was killed").toContain("was killed after");
+    expect(err, "the refusal does not name the env var that raises the bound").toContain(
+      "RUNGATE_REMOTE_TIMEOUT_MS",
+    );
+
+    // The mutant half, run only now that the real script is known to return:
+    // with REFUSE_EXIT at 0 this must exit 0, or the case observed something
+    // other than the refusal.
+    const mut = Bun.spawnSync(["bun", mutant, "--pr", "1", "--remote", remote], {
+      cwd: REPO,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNGATE_REMOTE_TIMEOUT_MS: "1500" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(mut.exitCode, "the mutant refused too — the case did not observe the exit constant").toBe(0);
+    // Explicit, and well above both spawns: bun's default per-test bound is
+    // 5s and the real run lands near it on a loaded CI box, so the default
+    // would make this case report a hang that is only a slow machine.
+  }, 90_000);
+
   test("UNMEASURED: the branch has no ref on the remote", () => {
     const gh = plantGh(join(dir, "noref"), {
       state: "OPEN", headRefName: "rg/never-pushed", headRefOid: OPEN_HEAD, mergeCommit: null,
