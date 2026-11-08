@@ -48,6 +48,7 @@ import {
 } from "./branch-protection";
 import { stripJsComments } from "./strip-js-comments";
 import { remedyMessage } from "./check-remedy";
+import { governsOf, isValidGoverns } from "./spec-registry";
 import { parseScDeclarations } from "./sc-ids";
 import { isHarnessItself } from "./harness-identity";
 import {
@@ -2003,13 +2004,33 @@ export function runDocHygiene(
       const missing: string[] = [];
       for (const f of collectSpecFiles(specsDir)) { // #225 — subdirectories too
         const content = readFileSync(join(specsDir, f), "utf-8");
-        const fm = parseFrontmatter(content);
-        if (!fm) continue;
-        const governs = fm.governs || "";
-        if (!governs || governs.includes("TODO")) missing.push(f);
+        if (!parseFrontmatter(content)) continue;
+        // #1692 — the criteria used to be spelled out again here, identically
+        // to `isValidGoverns`. Two deciders answering the same question about
+        // the same input are behaviourally one, so neither could see that both
+        // read `governs: >-` as the governs text itself.
+        //
+        // #1906 — and the value must come from the same EXTRACTOR as the
+        // registry's, not from this file's general-purpose parser. That one
+        // flattens a bare `governs:` block into `"a; b"` where the registry's
+        // saw nothing at all, so the two readers disagreed one shape along
+        // from the one the predicate had just been taught.
+        if (!isValidGoverns(governsOf(content))) missing.push(f);
       }
       // Was unconditionally passing after a console.warn (#80).
-      expect(missing).toEqual([]);
+      expect(
+        missing,
+        remedyMessage({
+          root,
+          check: "HYGIENE-1",
+          violations: missing,
+          fix:
+            "give each spec a `governs:` saying what it governs, on ONE line. " +
+            "A folded or literal block (`governs: >-` with the text indented " +
+            "below) is refused: every reader in this tree captures the two " +
+            "characters `>-` and never sees the prose (#1692).",
+        }),
+      ).toEqual([]);
     });
 
     test("HYGIENE-2: All specs have updated field in frontmatter", () => {
