@@ -24,6 +24,7 @@ import {
   splitRef,
   resolveSpecSource,
   type GitRun,
+  type GitRunner,
   type RealPath,
 } from "../lib/spec-source";
 
@@ -1014,7 +1015,7 @@ describe("round 6: a pathspec is a glob, and `<rev>:<path>` is not", () => {
     const dir = mkdtempSync(join(tmpdir(), "spec-source-glob-"));
     const name = "SPEC[draft].md";
     try {
-      const g = (args: string[]): GitRun => {
+      const g: GitRunner = args => {
         const r = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
         return { ok: r.status === 0, code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
       };
