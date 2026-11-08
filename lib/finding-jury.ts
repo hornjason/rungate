@@ -210,7 +210,10 @@ export function classifyCategory(finding: Pick<Finding, "title" | "body">): Find
 // ── Severity ─────────────────────────────────────────────────────────────
 
 /**
- * The three tags the source design posts, and no fourth.
+ * How an ai-review tag SORTS. Three of its members are also the three tags
+ * the source design posts; `Unobserved` (#1879) is a fourth that no
+ * verifier votes — `JURY_VOTE_SEVERITIES` below is the set that answers
+ * that question, and this one is allowed to be wider.
  *
  * `Pre-existing` is the one that matters most here and the one we had no way
  * to say: a finding about code the change never touched is not the author's
@@ -235,6 +238,32 @@ export function classifyCategory(finding: Pick<Finding, "title" | "body">): Find
  */
 export { SEVERITY_RANK };
 export type { Severity };
+
+/**
+ * What a VERIFIER may vote, which is not the same question as how a tag
+ * sorts — #1914 round 3.
+ *
+ * `SEVERITY_RANK` was doing both jobs, and they coincided only because the
+ * two sets happened to be equal. #1879 added `Unobserved` to the sort,
+ * because an ai-review annotation needs somewhere to put a finding whose
+ * claim nothing ran to produce; `parseVotes` validated against the same
+ * table, so a verifier vote declaring `severity: "Unobserved"` silently
+ * became legal, could win `severityOf`'s majority, and would be
+ * interpolated into a posted comment as a word this module defines no
+ * meaning for. Nothing prompts a verifier with it today — but the guard
+ * had stopped being able to refuse it, which is the shape
+ * `.claude/rules/checks-must-be-able-to-fail.md` is about.
+ *
+ * So the two questions get two lists. This one is CLOSED: a verifier
+ * assigns the author a severity, and `Unobserved` is not something a
+ * verifier observes — it is a statement about the review job, not about
+ * the finding's magnitude.
+ *
+ * `test/finding-jury.test.ts` asserts every member is a key of
+ * `SEVERITY_RANK`, so this list cannot drift to a tag that does not sort.
+ * The relation is one-way by design: the rank table may be wider.
+ */
+export const JURY_VOTE_SEVERITIES: readonly Severity[] = ["Important", "Nit", "Pre-existing"];
 
 // ── The vote ─────────────────────────────────────────────────────────────
 
@@ -314,7 +343,9 @@ function shapeOf(value: unknown): string {
  * two of the others carry the same defect. An unrecognised `category` is not
  * in `DROPPED_CATEGORIES`, so it reads to `juryCategory` as a keep category.
  * An unrecognised `severity` indexes `SEVERITY_RANK` to `undefined`, making
- * the sort comparator in `severityOf` return `NaN`.
+ * the sort comparator in `severityOf` return `NaN`. It is checked against
+ * `JURY_VOTE_SEVERITIES` rather than against that table — see there for why
+ * the two are different questions (#1914 round 3).
  *
  * **`Object.hasOwn`, never the `in` operator**, and this is not a style
  * preference. `in` walks the prototype chain, so `"constructor" in
@@ -357,10 +388,18 @@ export function parseVotes(parsed: unknown): readonly VerifierVote[] {
         `an unrecognised category is not a dropped one, so it would read as a keep — ${UNREADABLE_VOTE}`,
       );
     }
-    if (v.severity !== undefined && !(typeof v.severity === "string" && Object.hasOwn(SEVERITY_RANK, v.severity))) {
+    // #1914 round 3: `JURY_VOTE_SEVERITIES`, not `SEVERITY_RANK`. The rank
+    // table answers how a tag SORTS and is allowed to be wider than what a
+    // verifier may vote; validating against it made every new ai-review tag
+    // a legal vote by accident. `includes` over a frozen list rather than
+    // `Object.hasOwn`, so there is no prototype chain to walk at all.
+    if (
+      v.severity !== undefined &&
+      !(typeof v.severity === "string" && JURY_VOTE_SEVERITIES.includes(v.severity as Severity))
+    ) {
       throw new Error(
         `${where}, from \`${v.verifier}\`, names an unknown \`severity\` (${shapeOf(v.severity)}): ` +
-        `it has no rank, so the severity sort would compare against NaN — ${UNREADABLE_VOTE}`,
+        `a verifier may vote ${JURY_VOTE_SEVERITIES.join(", ")} and nothing else — ${UNREADABLE_VOTE}`,
       );
     }
     return {

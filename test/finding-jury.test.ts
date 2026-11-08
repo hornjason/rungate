@@ -25,6 +25,7 @@ import {
   parseVotes,
   renderComment,
   severityOf,
+  JURY_VOTE_SEVERITIES,
   SEVERITY_RANK,
   UNREADABLE_VOTE,
   VERIFIER_GROUP_SIZE,
@@ -360,6 +361,44 @@ describe("JURY-6: the ballot is read, not cast", () => {
       expect(() => parseVotes([{ ...good, severity: key }])).toThrow("unknown `severity`");
     },
   );
+
+  /**
+   * #1914 round 3 — the vote vocabulary and the sort order are two
+   * questions, and `SEVERITY_RANK` was answering both.
+   *
+   * #1879 added `Unobserved` to the rank table so an ai-review annotation
+   * could tag a finding whose claim nothing ran to produce. `parseVotes`
+   * validated against that same table, so the new tag silently became a
+   * legal verifier vote: it would pass here, could win `severityOf`'s
+   * majority, and would be interpolated into a posted comment as a word
+   * this module defines no meaning for. Nothing prompts a verifier with it
+   * — but the guard had stopped being ABLE to refuse it.
+   */
+  test("a vote may not name an ai-review tag that is not a vote severity", () => {
+    // Restoring `Object.hasOwn(SEVERITY_RANK, …)` at the guard turns this
+    // red, and it is the only case that can see the difference.
+    expect(() => parseVotes([{ ...good, severity: "Unobserved" }])).toThrow("unknown `severity`");
+    expect(() => parseVotes([{ ...good, severity: "Unobserved" }])).toThrow(
+      "a verifier may vote Important, Nit, Pre-existing and nothing else",
+    );
+  });
+
+  test("the relation is one-way: every vote severity has a rank, the rank table may be wider", () => {
+    // The drift guard. A member added here with no rank would make
+    // `severityOf`'s comparator return NaN — the exact defect `parseVotes`
+    // was written against — so the list cannot float free of the table.
+    for (const s of JURY_VOTE_SEVERITIES) {
+      expect(Object.hasOwn(SEVERITY_RANK, s), `${s} is a legal vote with no rank`).toBe(true);
+      expect(() => parseVotes([{ ...good, severity: s }])).not.toThrow();
+    }
+    // And the other direction is NOT asserted equal, deliberately: that is
+    // the whole of this fix. Stated as a live reading rather than a comment,
+    // so deleting `Unobserved` from the rank table makes this say so.
+    expect(
+      Object.keys(SEVERITY_RANK).length,
+      "the rank table no longer carries a tag that is not a vote — re-read #1914 round 3 before widening the vote list to match",
+    ).toBeGreaterThan(JURY_VOTE_SEVERITIES.length);
+  });
 
   test("the refusal names the entry and the reading it refused to take", () => {
     expect(() => parseVotes([good, { verifier: "v2", real: "false", reason: "no" }]))
