@@ -83,6 +83,7 @@ grants nothing.
 | — | Measure the anchor-suppression rate on rungate@0.8.14 across 10 multi-round pull requests | reporting only — no production file is expected to change | — | — |
 | — | Run the reviewer five times per round and merge the drafts | lib/scaffold/ai-review-step.ts, lib/scaffold/ai-review-findings.ts, .claude/rungate/config.json, test/ai-review-findings.test.ts | — | — |
 | — | ai-review returns a clean verdict over files it restored from base and never read | lib/scaffold/ai-review-step.ts, .github/workflows/ai-review.yml, test/ai-review-workflow.test.ts | — | — |
+| — | SC-2620: nothing runs board-conformance, so a board that drifts stays drifted | .github/workflows/board-conformance.yml, lib/scaffold/board-conformance-job.ts, test/board-conformance-job.test.ts, lib/scaffold/owned-files.ts | — | — |
 
 The third row is live, found while watching run `42254789078` drain the
 board. `clearAssignees` is REST — `PATCH /repos/{repo}/issues/{n}` — and it
