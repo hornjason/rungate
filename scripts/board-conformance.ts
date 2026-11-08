@@ -1156,13 +1156,40 @@ export function main(argv: readonly string[]): number {
   //
   // Absent is now the only other state: a consumer reads a fresh file or
   // no file, and no file is loud.
+  //
+  // **The clear is also the writability probe, and that is deliberate.**
+  // `rmSync(..., { force: true })` on a path whose directory does not exist
+  // succeeds silently — ENOENT is exactly what `force` suppresses — so
+  // clearing alone proved nothing about whether the write at the end of
+  // `main` can land. A directory that is absent, read-only, or actually a
+  // directory was discovered at the LAST line of a run that had already
+  // produced the board: several API calls and tens of seconds spent to
+  // learn something knowable in the first millisecond.
+  //
+  // An `existsSync(dirname(...))` would be the narrower detector: it names
+  // the absent directory and misses every permission case. Writing a byte
+  // and removing it asks the question that is actually being asked.
+  //
+  // The cost, stated: between the two calls an EMPTY file exists at the
+  // path. A process killed in that window leaves one behind — and an empty
+  // file is not readable JSON, so `scripts/check-state-claims.ts` refuses
+  // it rather than reading it as a board. That is the direction this is
+  // allowed to be wrong in.
   if (flags.emitReadingsGiven && flags.emitReadings !== undefined) {
+    // Its own name, not `flags.emitReadings` a second time. The two writes
+    // in this file are two different acts — a zero-byte probe that is
+    // removed, and the payload at the end of `main` — and the spec-write
+    // registry keys on the symbol, so sharing one would file them under a
+    // single explanation.
+    const probeAt = flags.emitReadings;
     try {
-      rmSync(flags.emitReadings, { force: true });
+      writeFileSync(probeAt, "");
+      rmSync(probeAt, { force: true });
     } catch (e) {
       console.error(
-        `board-conformance: could not clear ${flags.emitReadings} before taking a reading: ` +
-          `${(e as Error).message}. Refusing rather than risk a later refusal leaving a stale file there.`,
+        `board-conformance: cannot write ${flags.emitReadings}: ${(e as Error).message}. ` +
+          `Refusing before taking any reading — the path is checked first so a run that cannot ` +
+          `deliver its readings does not spend the board production to find out.`,
       );
       return REFUSE_EXIT;
     }

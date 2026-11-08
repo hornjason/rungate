@@ -71,6 +71,34 @@ describe("citedReadings — what counts as a cited figure", () => {
     expect(c.map(x => x.reading)).toEqual(["criteria-field"]);
   });
 
+  test("CONTROL: a reading's name inside a LONGER word is not that reading", () => {
+    // #1915 round 2. Unanchored, these three produced citations of
+    // `milestones` out of sentences that never mention it — and that errs
+    // toward COMPARING, which is the opposite of the direction this file
+    // declares it is allowed to be wrong in. A false DISAGREED reddens a
+    // true sentence; a false AGREED masks a real one.
+    //
+    // **`\b` does not fix this**, which is why the case is written with
+    // compounds on both sides. `-` is a non-word character, so
+    // `milestones\b` matches inside `milestones-tracking` and
+    // `\bmilestones` matches inside `sub-milestones`. Every reading this
+    // project has is hyphenated, so the obvious repair would leave all
+    // three green while changing nothing.
+    for (const s of [
+      "milestones-tracking is 5 of 5.",
+      "sub-milestones 3 of 4.",
+      "milestones_v2 is 1 of 2.",
+    ]) {
+      expect(citedReadings(s, NAMES), s).toEqual([]);
+    }
+    // …and a hyphenated name still matches as itself, or the fix is a
+    // deletion: `blocked-by-edges` contains the very character the
+    // boundary excludes.
+    expect(citedReadings("blocked-by-edges 5 of 5.", NAMES).map(c => c.reading)).toEqual([
+      "blocked-by-edges",
+    ]);
+  });
+
   test("CONTROL: a bare ratio naming no reading is not a claim", () => {
     // This is the whole of "not a fact-checker for English". An extractor
     // that matched every `N of M` would be re-deriving sentences about

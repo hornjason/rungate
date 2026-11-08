@@ -86,6 +86,7 @@
     "lib/worktree-collect.ts::entry.dest | entry: no-initialiser",
     "lib/worktree-collect.ts::slot | reassignable, no readable hole",
     "scripts/board-conformance.ts::flags.emitReadings | flags: no-initialiser, argv: parameter (nested)",
+    "scripts/board-conformance.ts::probeAt | flags: no-initialiser (nested), argv: parameter (nested)",
     "scripts/check-installed-hook-currency.ts::path | path: parameter",
     "scripts/claim-files.ts::path | project: parameter (nested), FILE_CLAIMS_PATH: import (nested)",
     "scripts/crc-reading.ts::args.save | argv: parameter (nested)",

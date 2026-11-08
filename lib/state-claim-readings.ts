@@ -145,6 +145,26 @@ function escapeForPattern(s: string): string {
 }
 
 /**
+ * The reading's name must be the WHOLE name, not the start or end of a
+ * longer one.
+ *
+ * Unanchored, `milestones` matched inside `milestones-tracking is 5 of 5`,
+ * `sub-milestones 3 of 4` and `milestones_v2 is 1 of 2`, each producing a
+ * citation of a reading the sentence never mentions. That errs toward
+ * COMPARING — the opposite of the direction this file declares — so it
+ * reddens a true sentence, or worse, AGREES and masks a real one.
+ *
+ * **`\b` is not the fix, and it is the fix everybody reaches for.** `-` is
+ * a non-word character, so `milestones\b` matches inside
+ * `milestones-tracking` and `\bblocked` matches inside `re-blocked-by-edges`
+ * — and every reading in this project is hyphenated. The boundary has to
+ * exclude `-` and `_` as well as word characters, or the control case goes
+ * green under a fix that changed nothing.
+ */
+const NAME_LEFT = "(?<![\\w-])";
+const NAME_RIGHT = "(?![\\w-])";
+
+/**
  * Every ratio in `prose` that names one of `names`.
  *
  * The names are passed in rather than declared here, and that is the point:
@@ -161,7 +181,7 @@ export function citedReadings(prose: string, names: readonly string[]): CitedRea
     const dated = STAMPED.test(sentence);
     for (const name of ordered) {
       const re = new RegExp(
-        `${escapeForPattern(name)}([^,;.]{0,${GAP_MAX}}?)\\b(\\d+)\\s*(?:of|/)\\s*(\\d+)\\b`,
+        `${NAME_LEFT}${escapeForPattern(name)}${NAME_RIGHT}([^,;.]{0,${GAP_MAX}}?)\\b(\\d+)\\s*(?:of|/)\\s*(\\d+)\\b`,
         "gi",
       );
       for (const m of sentence.matchAll(re)) {

@@ -1660,4 +1660,32 @@ describe("#1889: --emit-readings is the machine-readable seam", () => {
     // cannot show: the producer announces the tree it read on stderr.
     expect(r.err, "the board was produced before the flag was validated").not.toContain("spec read from");
   });
+
+  test("an UNWRITABLE path refuses before any board is produced, not at the last line", () => {
+    // #1915 round 2. The clear doubles as the writability probe, because
+    // `rmSync(..., { force: true })` on a path whose directory does not
+    // exist succeeds silently — ENOENT is what `force` suppresses. So
+    // clearing proved nothing about the write at the end of `main`, and a
+    // run spent the whole board production to discover a directory that
+    // was never there.
+    //
+    // Two shapes, because an `existsSync(dirname(...))` would pass the
+    // first and fail the second — the narrower detector, which is the
+    // repair to reach for here.
+    const cases: [string, string][] = [
+      ["a directory that does not exist", join(SCRATCH, "no-such-dir", "out.json")],
+      ["a path that IS a directory", SCRATCH],
+    ];
+    for (const [what, out] of cases) {
+      const r = run(SCRIPT, [`--emit-readings=${out}`, `--snapshot=${plant("emit-probe", completeBoard())}`]);
+      expect(r.code, what).toBe(REFUSE_EXIT);
+      expect(r.err, what).toContain("cannot write");
+      // The half the exit code cannot show. A readable snapshot was given,
+      // so without the probe this run reaches the end of `main` and
+      // refuses there — same code, same stream, different mechanism.
+      expect(r.err, `${what}: the board was read before the path was checked`).not.toContain(
+        "spec read from",
+      );
+    }
+  });
 });
