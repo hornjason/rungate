@@ -216,6 +216,54 @@ spans a mechanism change describes no system, so a target set against it would b
 number invented to look like a plan. O4 is what makes O1 and O2 real, which is why it is
 in this loop and they are not.
 
+**A second reading, 2026-11-08.** Taken over the **40 most recently merged pull
+requests, #1864–#1915** — not a date range: 118 merged in the same window and this
+is the newest 40 of them, which is the cohort the command was given and therefore
+the cohort the numbers describe.
+
+```
+$ bun evals/ai-review-control/run.ts rounds <pull-requests.json>
+rounds-to-pass: measured 40, unmeasured 0 (passed 40, still open 0)
+  mean rounds to pass   3.30   (target 1.32, from 2.08)
+  passed after 1 round  30.0%   (target 78%, from 65%)
+  5+ rounds            25.0%   (target 1.5%, from 8.9%; over ALL measured, not only those that passed)
+```
+
+Against the 2026-10-28 baseline: **4.50 → 3.30 rounds**, **26.1% → 30.0% one-round**.
+Zero unmeasured, where the baseline cohort had 45.8% of rounds unreadable — that is
+the largest change of the three and the one O3 was pointed at.
+
+**This does not settle O1 or O2, and it is not the O4 reading.** The cohort spans
+at least one mechanism change of its own: #1914 merged the `Unobserved` demotion on
+2026-11-08, inside the window. Partitioning on it leaves n=1 after. So this is a
+second mixed-cohort reading agreeing in direction with the first, which is worth
+having and is not what criterion 4 asks for.
+
+**The command in the table above is incomplete** and this reading is how that was
+found: `rounds` takes a `<pull-requests.json>` the caller must build — an array of
+`{ number, passed, body }` where `body` is the pull request's ai-review ledger
+comment, marked `<!-- rungate:ai-review-ledger:v1 -->`. Deliberately the caller's
+job (a measurement that can only run against one forge is not one a consumer can
+take), but the Command column reads as though the bare invocation produces a number,
+and it refuses.
+
+**What the numbers cannot see, recorded because it is the question that was asked.**
+Across #1906, #1907, #1908, #1909, #1913, #1914 and #1915 the reviewer's findings
+changed *class*, not only count. The first five rounds of that run produced no logic
+errors at all — scope arguments, coverage gaps, and findings about the shape of a
+check. From #1914 onward it began finding **defects in the change under review**: a
+detector demoting production findings, a demotion that never explained itself to the
+maintainer, a tag that silently widened an unrelated validator, and on #1915 an
+unanchored name match that cited readings a sentence never mentioned.
+
+Twice in that stretch the finding was **true and its suggested remedy wrong** — on
+#1915 the reviewer's own example was blocked by an unrelated length cap, and the `\b`
+anchor it recommended does not fix the bug it names, because every reading in this
+project is hyphenated and `-` is a non-word character. Both are recorded here rather
+than in the rounds number because "rounds to pass" cannot distinguish a round that
+found a real defect from one that argued about scope, and that distinction is the
+whole of whether the extra round was worth its cost.
+
 **Options — competing hypotheses.**
 
 | | Hypothesis | What would select it |
