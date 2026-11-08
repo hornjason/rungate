@@ -43,11 +43,52 @@
  * `staleness`, so the caller can say the ref may be behind.
  */
 
+import { resolve, sep } from "path";
+
 /** What a single git invocation came back with. */
 export interface GitRun {
   ok: boolean;
   stdout: string;
   stderr: string;
+  /**
+   * The process's exit status, or `null` when it never ran.
+   *
+   * **Carried because `ok: false` spans two opposite facts.** `git ls-files
+   * --error-unmatch` exits **1** for "this path is not tracked", which is an
+   * answer, and **128** for "this is not a repository / the object store is
+   * broken", which is the reader failing. Collapsing them is the
+   * working-tree fallback reached through a side door: a `root` pointed at
+   * the wrong place reports every path untracked, reads disk, and prints a
+   * reading. Found by security review of PR #1896, round 1 — in the module
+   * whose docblock says it refuses exactly this.
+   *
+   * `null` is a spawn that never happened — no `git` on PATH. That is never
+   * an answer about a file.
+   */
+  code: number | null;
+}
+
+/**
+ * Strip anything credential-shaped out of text bound for a log line.
+ *
+ * `git fetch` failures quote the remote URL, and a CI checkout's remote is
+ * routinely `https://x-access-token:<TOKEN>@github.com/owner/repo`. This
+ * module interpolates that stderr into `staleness`, and
+ * `scripts/board-conformance.ts` prints it — so a failed fetch on a runner
+ * put a live token in the build log. Actions masks secrets it was given;
+ * it cannot mask one that reached the URL by another route.
+ *
+ * Applied at the point of interpolation rather than trusted to the caller:
+ * the caller is a log line, and a sanitiser the emitter has to remember is
+ * one that gets forgotten. Found by security review of PR #1896, round 1.
+ */
+export function redactCredentials(text: string): string {
+  return text
+    // `scheme://user:secret@host` — the userinfo is the whole payload.
+    .replace(/:\/\/[^/@\s]+@/g, "://***@")
+    // GitHub's own token shapes, in case one is quoted outside a URL.
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "***")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{16,}/g, "***");
 }
 
 /** `git -C <root> <args>` — injected so a test never reaches a real repository. */
@@ -113,11 +154,84 @@ export function resolveSpecSource(opts: {
 }): SpecSource {
   const ref = opts.ref ?? DEFAULT_SPEC_REF;
 
-  // IS IT TRACKED, FIRST. Asked before the fetch, so an untracked fixture
-  // costs no network at all — and so the untracked arm cannot be reached by
-  // a fetch failure, which would make the two indistinguishable.
+  // IS THERE A REPOSITORY AT ALL, FIRST — and is `git` even runnable.
+  //
+  // Three outcomes, and they are NOT one: a spawn that never happened is
+  // the reader broken (UNMEASURED); a directory that is not a repository
+  // genuinely has no `origin/main`, so disk is the only copy there is and
+  // saying so is the honest reading; and a repository proceeds.
+  // `--show-toplevel`, which answers BOTH questions in one call: whether
+  // there is a work tree, and where it ends. The second half matters as
+  // much as the first — see the containment check below.
+  const inRepo = opts.git(["rev-parse", "--show-toplevel"]);
+  if (inRepo.code === null) {
+    return {
+      kind: "unmeasured",
+      why:
+        `\`git\` could not be run in ${opts.root}: ${redactCredentials(inRepo.stderr.trim()) || "it never started"}. ` +
+        `A reader that cannot run has not found an untracked file — reading the working tree here would print a ` +
+        `reading scoped by whatever branch this is.`,
+    };
+  }
+  const top = inRepo.stdout.trim();
+  if (!inRepo.ok || top === "") {
+    return {
+      kind: "untracked",
+      path: opts.absPath,
+      // THE EXIT AND THE REASON, quoted. 128 covers both "no repository
+      // here" and a repository whose object store is broken, and no text
+      // matcher should be the thing that tells them apart — so the arm
+      // states what it saw and lets the reader judge.
+      why:
+        `${opts.root} is not inside a readable git work tree (exit ${inRepo.code}: ` +
+        `${redactCredentials(inRepo.stderr.trim()) || "no reason given"}), so there is no ${ref} to read and the ` +
+        `file on disk is the only copy reachable. The reading below was taken against it.`,
+    };
+  }
+
+  // **A PATH OUTSIDE THE REPOSITORY IS UNTRACKED, AND IT IS DECIDED HERE
+  // RATHER THAN BY GIT'S EXIT CODE.** `ls-files --error-unmatch` exits 128
+  // for a path outside the work tree AND for a broken object store, so the
+  // arm below cannot separate them — asking the question before git does
+  // is what lets 128 mean exactly one thing when it arrives. The
+  // alternative is matching on `is outside repository` in stderr, which is
+  // a detector a locale or a git release can silently narrow.
+  //
+  // This is also the ordinary case rather than an edge: every fixture in
+  // `test/board-snapshot.test.ts` plants a spec in an `mkdtemp` while the
+  // project root is this checkout.
+  const within = resolve(opts.absPath) === resolve(top) || resolve(opts.absPath).startsWith(resolve(top) + sep);
+  if (!within) {
+    return {
+      kind: "untracked",
+      path: opts.absPath,
+      why:
+        `${opts.absPath} is outside the work tree at ${top}, so ${ref} has no version of it. ` +
+        `The reading below was taken against the file on disk.`,
+    };
+  }
+
+  // IS IT TRACKED. Asked before the fetch, so an untracked fixture costs no
+  // network at all — and so the untracked arm cannot be reached by a fetch
+  // failure, which would make the two indistinguishable.
+  //
+  // **EXIT 1 AND NOTHING ELSE IS "untracked".** `--error-unmatch` exits 1
+  // for a path git does not know and 128 for a broken object store or a
+  // path outside the repository; treating both as untracked hands the
+  // second one a working-tree read. Security review of round 1 found this,
+  // and the battery had no row for it: every untracked case asserted on an
+  // exit-1 shape, so no count could come back wrong about a 128.
   const rel = opts.git(["ls-files", "--full-name", "--error-unmatch", "--", opts.absPath]);
   const path = rel.stdout.trim();
+  if (!rel.ok && rel.code !== 1) {
+    return {
+      kind: "unmeasured",
+      why:
+        `\`git ls-files\` failed in ${opts.root} with exit ${rel.code}: ` +
+        `${redactCredentials(rel.stderr.trim()) || "no reason given"}. That is a broken reader, not an untracked ` +
+        `file, and the difference is the whole of this module.`,
+    };
+  }
   if (!rel.ok || path === "") {
     return {
       kind: "untracked",
@@ -137,7 +251,7 @@ export function resolveSpecSource(opts: {
     if (!fetched.ok) {
       staleness =
         `\`git ${fetchArgs.join(" ")}\` failed, so ${ref} is as old as the last successful fetch: ` +
-        `${fetched.stderr.trim() || "no reason given"}`;
+        `${redactCredentials(fetched.stderr.trim()) || "no reason given"}`;
     }
   }
 
@@ -150,7 +264,7 @@ export function resolveSpecSource(opts: {
     return {
       kind: "unmeasured",
       why:
-        `${ref} does not resolve in ${opts.root}: ${resolved.stderr.trim() || "no reason given"}. ` +
+        `${ref} does not resolve in ${opts.root}: ${redactCredentials(resolved.stderr.trim()) || "no reason given"}. ` +
         `Falling back to the working tree would report a reading scoped by whatever branch this is.`,
     };
   }
@@ -161,7 +275,7 @@ export function resolveSpecSource(opts: {
       kind: "unmeasured",
       why:
         `${path} is tracked but ${ref} (${sha}) has no version of it: ` +
-        `${shown.stderr.trim() || "no reason given"}. That is a spec added on this branch and not yet ` +
+        `${redactCredentials(shown.stderr.trim()) || "no reason given"}. That is a spec added on this branch and not yet ` +
         `shipped, which is a different fact from a spec whose criteria are unplaced — reading the working ` +
         `tree here would print the second while the first is true.`,
     };

@@ -224,7 +224,11 @@ export interface ProducedSnapshot {
 export const LIVE_GIT = (root: string): GitRunner => {
   return args => {
     const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
-    return { ok: r.status === 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+    // `code` carries `status`, and `status` is NULL when the process never
+    // ran — no `git` on PATH, or killed by a signal. That is a different
+    // fact from any exit code, and `lib/spec-source.ts` refuses on it
+    // rather than reading it as an answer about a file.
+    return { ok: r.status === 0, code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   };
 };
 
