@@ -39,9 +39,19 @@
  * ```bash
  * SHA="$(bun scripts/verify-merge-ref.ts --pr 1850)" \
  *   && gh pr merge 1850 --squash --auto --match-head-commit "$SHA"
- * # …and once it has merged, the reading that would have caught #1847:
+ * gh pr checks 1850 --watch
  * bun scripts/verify-merge-ref.ts --pr 1850 --after-merge
  * ```
+ *
+ * **The `--watch` line is load-bearing** — review of #1909 round 4, and
+ * correct. `--auto` only ARMS; the merge fires minutes later when CI
+ * finishes, so without it the third line runs against a pull request that is
+ * still OPEN and re-reads the arming question. It is a bound, not a fence:
+ * auto-merge fires seconds after the last check, not at the same instant. If
+ * the third line still reads `CLEAR`, the refusal says *the pull request has
+ * not merged* in those words, which is the signal to run it again rather
+ * than a reading to act on. An arming answer to the post-merge question is
+ * never silently accepted.
  *
  * Dropping `--auto` and merging by hand once CI is green removes the
  * arm-to-fire window outright, and is the right call when you are watching.

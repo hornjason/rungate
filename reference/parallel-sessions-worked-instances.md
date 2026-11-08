@@ -1,3 +1,9 @@
+---
+doc-type: reference
+status: active
+updated: 2026-11-08
+---
+
 # Worked instances behind `.claude/rules/parallel-sessions.md`
 
 Moved out of the rule by #1069. The rule is loaded by every agent at launch,
@@ -55,6 +61,22 @@ the allocator was never run at all**, so no change to what it returns could
 have been consulted. The class is "an id consumed without going through the
 allocator", and the only thing that covers it is a declaration made *before*
 the ids are consumed, in a place every other session reads.
+
+### `FG` and `AR` collide the same way, and the rule used to be silent
+
+Moved out of `.claude/rules/parallel-sessions.md` in #1909, not shortened —
+that file is loaded by every agent at launch and was one byte over its
+budget. The rule keeps the mechanism and points here for the instance.
+
+`FG` and `AR` have no allocator. Every agent adding a block picks ids by
+eyeballing headroom above the highest in the file — the third method the rule
+names — so they collide exactly the way `SC` ids do, and the rule's silence
+about them cost one.
+
+**2026-10-22.** `rg/filing-gate-four` held `FG-45..59` and `AR-20` while PR
+#1339 independently took `FG-45..49` and `AR-20`. Neither diff contained the
+other's ids and neither PR's CI could see the overlap — the union shape
+below, one namespace over.
 
 ### The collision is only visible in the union
 
