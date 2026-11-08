@@ -1,0 +1,109 @@
+# Not managed by rungate — the scaffold owns ci.yml, gates.yml and the two
+# ai-review files, and regenerates them by job name. This one is caller-owned,
+# like its four board siblings.
+#
+# SOMETHING RUNS board-conformance (#1892, SC-2620).
+#
+# `rungate board-conformance` has taken its own reading and exited non-zero
+# while any reading is short since #1718 (`396c4701`). Nothing ran it. A board
+# that drifted away from the spec stayed drifted until a person typed the
+# command — and it drifted within minutes of #1718 merging, because closing
+# that issue took `criterion-coverage` from 26 of 26 to 23 of 26 and the only
+# thing that noticed was somebody running the command afterwards. The same
+# sequence is recorded in SC-2613's own `proved-by` against #1873.
+#
+# **No schedule.** A cron is the thing this repository is removing; see
+# `board-flow.yml` and #1744. The board changes when `main` changes, so the
+# reading is taken when `main` changes.
+#
+# ## IT REPORTS. IT GATES NOTHING.
+#
+# No `pull_request` trigger, so this reports no status to any pull request and
+# nobody can make it a required check. That is deliberate and #1892 settled
+# it: a merge that legitimately closes the last issue for a criterion takes
+# the board short for the minutes between the merge and the tick, so a
+# blocking check would redden `main` for correct work. A red run here is a
+# notification, not a gate.
+#
+# What it must never be is GREEN while short. There is no `continue-on-error`
+# and no `|| true` below: the command's own exit code is this job's, and
+# `test/board-conformance-job.test.ts` executes this step's `run:` body to
+# prove it — including against a mutant body whose `exit $status` is `exit 0`.
+#
+# ## THE CREDENTIAL IS NOT THE BUILT-IN TOKEN
+#
+# `secrets.GITHUB_TOKEN` is repository-scoped and structurally cannot see a
+# USER-level ProjectV2 board. That is what `lib/stage-ladder.ts` records
+# against its `"credentialed"` scope, and what `ci.yml` already works around
+# for the suite. So this job binds `secrets.RUNGATE_PROJECT_TOKEN` and there
+# is NO fallback: a board read with a token that cannot see boards reports an
+# empty board, which is the silent pass this file exists to refuse.
+name: Board conformance — does the board say what the spec says?
+
+on:
+  push:
+    branches: [main]
+  # So a reading can be re-taken without a commit — after a tick lands, or
+  # after the secret is rotated.
+  workflow_dispatch:
+
+# A burst of merges would otherwise take five readings, four of them against a
+# tree that has already moved, and send four red notifications for one drift.
+# Cancelling a superseded reading is safe here BECAUSE this job gates nothing
+# and holds no state: the run that survives is the one reading the newest
+# `main`. (`ai-review-unmeasured.yml` deliberately has no `concurrency:` for
+# the opposite reason — a cancelled run there loses a reading permanently.)
+concurrency:
+  group: board-conformance
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  board-conformance:
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+        with:
+          # `lib/spec-source.ts` reads the spec from `origin/main` rather than
+          # from the working tree, so that ref has to exist and has to be deep
+          # enough to resolve. A shallow default makes the spec read refuse,
+          # which reports UNMEASURED for a reason that has nothing to do with
+          # the board.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          # Pinned by .bun-version — the project's single declaration (#622).
+          bun-version-file: ".bun-version"
+      # `--ignore-scripts`: this job carries a PAT, and a postinstall script in
+      # any transitive dependency would run as the job.
+      # `--frozen-lockfile` so the tree that runs is the tree reviewed.
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # The credential is resolved INSIDE `run:`, never in an `if:`. `secrets`
+      # is not available in `if:` at all, and a step skipped by `if:` reports
+      # SKIPPED — which reads as satisfied. See `.claude/rules/config-access.md`.
+      #
+      # The emptiness check below is NOT a second decider, and the line after
+      # it is why: it annotates and then runs the command anyway. All it adds
+      # is the name of the SECRET a maintainer has to set, which the command
+      # structurally cannot know — `scripts/board-conformance.ts` says
+      # "GITHUB_TOKEN environment variable is not set", and a maintainer
+      # reading that goes looking for the built-in token, which is always set
+      # and still cannot answer. The one decider is the command, and it
+      # already refuses an absent credential by name through `REFUSE_EXIT`.
+      - name: Does the board say what the spec says?
+        env:
+          GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            echo "::warning title=Board conformance UNMEASURED::The repository secret RUNGATE_PROJECT_TOKEN resolved to nothing, so this job holds no credential that can read a ProjectV2 board. The built-in GITHUB_TOKEN is repository-scoped and cannot see one, so there is no fallback and none is attempted: the command below refuses by name rather than reporting an empty board."
+          fi
+          status=0
+          bun scripts/board-conformance.ts || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=Board conformance::board-conformance exited ${status}. Every reading it took is named in the log above, and a reading short of target is reported there separately from a reading it could not take. THIS RUN REPORTS AND GATES NOTHING — no pull request waits on it."
+          fi
+          exit $status
