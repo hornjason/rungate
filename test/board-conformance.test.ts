@@ -30,7 +30,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { spawnSync } from "child_process";
 import {
   READINGS,
@@ -50,14 +50,37 @@ const source = readFileSync(SCRIPT, "utf-8");
 
 let SCRATCH: string;
 let MUTANT: string;
+/** The mutant's TEXT, so a staged copy can be built from it too. */
+let MUTATED: string;
 
 beforeAll(() => {
   SCRATCH = mkdtempSync(join(tmpdir(), "board-conformance-"));
   MUTANT = join(SCRATCH, "mutant-board-conformance.ts");
-  const mutated = source.replace(/REFUSE_EXIT\s*=\s*1\b/, "REFUSE_EXIT = 0");
-  if (mutated === source) throw new Error("could not build the mutant: no `REFUSE_EXIT = 1` in scripts/board-conformance.ts");
-  writeFileSync(MUTANT, mutated);
+  MUTATED = source.replace(/REFUSE_EXIT\s*=\s*1\b/, "REFUSE_EXIT = 0");
+  if (MUTATED === source) throw new Error("could not build the mutant: no `REFUSE_EXIT = 1` in scripts/board-conformance.ts");
+  writeFileSync(MUTANT, MUTATED);
 });
+
+/**
+ * A copy of the command beside a stand-in producer, in a directory of its
+ * own.
+ *
+ * The producer is reached through `import.meta.dir`, so this is the only
+ * way to run the real `--produce` path against a source the case can
+ * predict — and, since #1718 made a bare run produce, the only way to run
+ * a bare one without reaching the live API from inside the suite.
+ *
+ * It takes the command's TEXT rather than assuming the real one, so the
+ * mutant can be staged against the identical producer. A mutation contrast
+ * whose two sides have different producers is not a contrast about the
+ * mutation.
+ */
+const stageAs = (text: string, producer: string): string => {
+  const dir = mkdtempSync(join(SCRATCH, "staged-"));
+  writeFileSync(join(dir, "board-conformance.ts"), text);
+  writeFileSync(join(dir, "board-snapshot.ts"), producer);
+  return join(dir, "board-conformance.ts");
+};
 
 afterAll(() => rmSync(SCRATCH, { recursive: true, force: true }));
 
@@ -246,10 +269,39 @@ describe("the refusals, each proved against the mutant", () => {
     refuses(["--reading"], "a reading flag with nothing after it");
   });
 
-  test("no snapshot refuses, as UNMEASURED rather than as a pass", () => {
-    refuses([], "no board to read");
-    refuses(["--reading", "milestones"], "no board to read, one reading");
-    expect(run(SCRIPT, []).out).toContain("UNMEASURED");
+  /**
+   * #1718 moved this case, and the move is the point.
+   *
+   * "No snapshot" used to mean "no board", and the command printed five
+   * UNMEASURED rows about readings nobody had asked it to take. It now
+   * means "produce one", so the input that cannot be measured is a project
+   * whose producer refuses — no `board.engineSpec`, no reachable API — and
+   * that is what has to stay UNMEASURED rather than becoming a pass.
+   *
+   * Both sides are staged copies sharing ONE refusing producer, so the
+   * mutation contrast is about the exit constant and not about which of
+   * the two found a different way to fail. A bare `run(SCRIPT, [])` would
+   * reach the live API from inside the suite, which is a different test
+   * and a worse one.
+   */
+  test("a producer that cannot resolve its inputs is UNMEASURED, not a pass", () => {
+    const REFUSING = `process.stderr.write("board-snapshot: --prefix is required, and no \\\`board.milestonePrefix\\\` is set\\n"); process.exit(1);`;
+    const real = stageAs(source, REFUSING);
+    const mutant = stageAs(MUTATED, REFUSING);
+    for (const args of [[], ["--reading", "milestones"]]) {
+      const r = run(real, args);
+      expect(r.code, `[${args.join(" ")}] did not refuse an unresolvable producer:\n${r.out}${r.err}`).toBe(
+        REFUSE_EXIT,
+      );
+      expect(r.err, "the producer's own reason was dropped").toContain("board.milestonePrefix");
+      expect(r.err).toContain("UNMEASURED");
+      // The mutation, observed: the SAME input against a copy whose only
+      // difference is `REFUSE_EXIT = 0`.
+      expect(
+        run(mutant, args).code,
+        `[${args.join(" ")}] the real script stopped refusing through REFUSE_EXIT`,
+      ).not.toBe(REFUSE_EXIT);
+    }
   });
 
   test("a snapshot that is present and unreadable refuses, and says so", () => {
@@ -831,10 +883,8 @@ describe("--produce: the spawned source", () => {
    * just printing a snapshot.
    */
   const stage = (producer: string): { command: string; argvAt: string } => {
-    const dir = mkdtempSync(join(SCRATCH, "produce-"));
-    writeFileSync(join(dir, "board-conformance.ts"), source);
-    writeFileSync(join(dir, "board-snapshot.ts"), producer);
-    return { command: join(dir, "board-conformance.ts"), argvAt: join(dir, "argv.json") };
+    const command = stageAs(source, producer);
+    return { command, argvAt: join(dirname(command), "argv.json") };
   };
 
   /**
@@ -896,15 +946,20 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
     expect(r.err).toContain("two sources");
   });
 
-  test("--produce with a missing OR EMPTY --spec or --prefix refuses, and never spawns", () => {
+  test("--produce with an EMPTY --spec or --prefix refuses, and never spawns", () => {
     // The empty rows are round 1 of #1703, swept here because this command
     // is the third member of that population: an empty `--prefix ""` used
     // to reach the producer, which refuses it — so the reader reported the
     // CHILD's refusal for an argument it was handed itself, and the reader
     // of that message goes looking at the spec file.
+    //
+    // **The two MISSING rows left this list in #1718 and are the test
+    // below.** Blank and absent used to be one case; they carry opposite
+    // instructions. A typed empty is a mistake to name. An omitted flag
+    // says nothing at all, and reaching past it to `board.engineSpec` /
+    // `board.milestonePrefix` is how the bare command takes its own
+    // reading.
     for (const argv of [
-      ["--produce", "--prefix", "Pipeline"],
-      ["--produce", "--spec", "specs/X.md"],
       ["--produce", "--spec", "specs/X.md", "--prefix", ""],
       ["--produce", "--spec", "", "--prefix", "Pipeline"],
       ["--produce", "--spec", "specs/X.md", "--prefix", "   "],
@@ -914,9 +969,61 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
       const { command } = stage(`throw new Error("the producer was spawned without the arguments it needs");`);
       const r = run(command, argv);
       expect(r.code, `[${argv.join(" ")}] did not refuse`).not.toBe(0);
-      expect(r.err).toContain("--produce needs a non-empty --spec <path> and --prefix <name>");
+      expect(r.err).toContain("was given with no usable value");
       expect(r.err, `[${argv.join(" ")}] spawned the producer anyway`).not.toContain("the producer was spawned");
     }
+  });
+
+  /**
+   * Covers SC-2618, SC-2619 (SPEC-TO-BOARD-PIPELINE-SPEC.md) — #1718.
+   *
+   * `rungate board-conformance` with no source at all used to fall through
+   * with a null board and print five UNMEASURED rows saying `B1 has not
+   * wired this reading's source yet`. It exited 1, so the terminal
+   * condition was right; the DIAGNOSIS was invented, and a reader acts on
+   * the reason rather than the exit code.
+   */
+  test("with NO source flag at all it produces, rather than reporting five readings it never took", () => {
+    const { command, argvAt } = stage(ECHOING_PRODUCER);
+    const r = run(command, []);
+    expect(r.code, `a bare run refused a board every reading meets:\n${r.out}${r.err}`).toBe(0);
+    expect(r.out).toContain("every reading is met");
+    // The producer was reached with NOTHING forwarded, which is what lets
+    // it resolve the spec, the prefix and the repository from the project.
+    expect(JSON.parse(readFileSync(argvAt, "utf-8")), "the bare run forwarded arguments nobody gave").toEqual([]);
+    // And the sentence that used to be printed instead is gone.
+    expect(r.out, "it still claims a reading's source is unwired").not.toContain("has not wired this reading");
+  });
+
+  test("an omitted --spec or --prefix under --produce forwards nothing in its place, and still spawns", () => {
+    for (const [argv, forwarded] of [
+      [["--produce", "--prefix", "Pipeline"], ["--prefix", "Pipeline"]],
+      [["--produce", "--spec", "specs/X.md"], ["specs/X.md"]],
+      [["--produce"], []],
+    ] as [string[], string[]][]) {
+      const { command, argvAt } = stage(ECHOING_PRODUCER);
+      const r = run(command, argv);
+      expect(r.code, `[${argv.join(" ")}] refused instead of letting the producer resolve the rest`).toBe(0);
+      expect(
+        JSON.parse(readFileSync(argvAt, "utf-8")),
+        `[${argv.join(" ")}] forwarded something the caller never gave`,
+      ).toEqual(forwarded);
+    }
+  });
+
+  test("--snapshot alone is still read as a snapshot, and is not quietly produced over", () => {
+    // The guard that makes the bare case produce is `!flags.snapshotGiven`.
+    // If it were written as `!flags.produce` the snapshot path would never
+    // run again, and every `--snapshot` case in this file would pass
+    // anyway — they assert on readings, and the staged producer emits a
+    // board meeting all of them. So the discriminator is the producer
+    // CRASHING: reached at all, this case is red.
+    const { command } = stage(`throw new Error("the producer was spawned over an explicit --snapshot");`);
+    const planted = plant("snapshot-wins", completeBoard());
+    const r = run(command, ["--snapshot", planted]);
+    expect(r.code, `--snapshot alone refused:\n${r.out}${r.err}`).toBe(0);
+    expect(r.err, "--snapshot was overridden by an implicit produce").not.toContain("the producer was spawned");
+    expect(r.out).toContain("every reading is met");
   });
 
   test("a producer that hangs is killed and reported, not waited on", () => {
@@ -1111,8 +1218,15 @@ describe("the properties the mutant depends on", () => {
     // `refuses()` call above would compare two identical scripts and the
     // second assertion would fail loudly rather than quietly pass.
     expect(readFileSync(MUTANT, "utf-8")).toContain("REFUSE_EXIT = 0");
-    expect(run(MUTANT, []).code, "the mutant still refused an unmeasured board").toBe(0);
-    expect(run(SCRIPT, []).code, "the real script stopped refusing an unmeasured board").toBe(REFUSE_EXIT);
+    // **A BARE RUN IS NO LONGER A REFUSAL** (#1718) — it produces its own
+    // board. So the input that still refuses is one whose producer
+    // refuses, staged identically on both sides. `run(SCRIPT, [])` here
+    // would reach the live API from inside the suite and report a pass.
+    const REFUSING = `process.exit(1);`;
+    expect(run(stageAs(MUTATED, REFUSING), []).code, "the mutant still refused an unmeasured board").toBe(0);
+    expect(run(stageAs(source, REFUSING), []).code, "the real script stopped refusing an unmeasured board").toBe(
+      REFUSE_EXIT,
+    );
   });
 });
 

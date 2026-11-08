@@ -37,7 +37,8 @@ import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { openFrontier, phaseOf } from "../lib/board-mirror";
 import { createGitHubClient, listMilestones } from "../lib/github";
-import { readBoardConfig, readQueueLabel } from "../lib/config-readers";
+import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
+import { resolveRepoSlug } from "../lib/branch-cleanup";
 import {
   inMilestoneFamily,
   readIssueStates,
@@ -228,9 +229,25 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
   }
 
   const { values, positionals } = parsed;
-  const specArg = positionals[0];
+  // THE ROOT IS RESOLVED FIRST, because the config under it is now one of
+  // the places the arguments come from (#1718). It used to be read after
+  // every argument check, which is fine when arguments are the only source
+  // and impossible once they are not.
+  const root = values["project-root"] ?? process.cwd();
+  const configured = readBoardInputs(root);
+
+  // **An argument the caller gave always wins, and a BLANK one still
+  // refuses.** Falling back to config on a blank would substitute a value
+  // for one somebody typed — `--prefix ""` is a mistake to name, not a
+  // request for the default. So the fallback is reached only by absence,
+  // which is the one case that carries no instruction to override.
+  const specArg = positionals[0] ?? configured.engineSpec ?? undefined;
   if (!specArg) {
-    console.error(`board-snapshot: no spec given\n\n${USAGE}`);
+    console.error(
+      `board-snapshot: no spec given, and no \`board.engineSpec\` in this project's rungate config ` +
+        `(read from ${root}). Pass the spec as the first argument, or set \`board.engineSpec\` so the ` +
+        `command can take its own reading.\n\n${USAGE}`,
+    );
     return REFUSAL_EXIT;
   }
   // ONE reading, trimmed once — the same binding `plan-spec` and `plan-deps`
@@ -238,24 +255,47 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
   // milestone titles starting with the space, matched none of the live ones,
   // and reported a conformant board as needing every milestone created.
   // Round 1 of #1705.
-  const prefixRead = readMilestonePrefix(values.prefix);
+  const prefixRead = readMilestonePrefix(values.prefix ?? configured.milestonePrefix ?? undefined);
   if (prefixRead.kind !== "given") {
     console.error(
       prefixRead.kind === "absent"
-        ? `board-snapshot: --prefix is required\n\n${USAGE}`
+        ? `board-snapshot: --prefix is required, and no \`board.milestonePrefix\` is set in this ` +
+            `project's rungate config (read from ${root})\n\n${USAGE}`
         : `board-snapshot: --prefix was given as ${JSON.stringify(prefixRead.raw)}, which is blank. ` +
             `It would match no milestone on the board and report every phase as missing.\n\n${USAGE}`,
     );
     return REFUSAL_EXIT;
   }
   const prefix = prefixRead.prefix;
-  const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
+  // The third input, same shape: the flag, then the environment CI sets,
+  // then the project's own `origin`. `resolveRepoSlug` is the existing
+  // binding for that last step and carries its own reason when it fails —
+  // a second reader here would be two deciders over one fact.
+  const slug = resolveRepoSlug({ projectRoot: root, repo: values.repo ?? process.env.GITHUB_REPOSITORY });
+  const repo = slug.slug;
   if (!repo) {
-    console.error(`board-snapshot: --repo is required (or set GITHUB_REPOSITORY)\n\n${USAGE}`);
+    console.error(
+      `board-snapshot: --repo is required (or set GITHUB_REPOSITORY). Falling back to this ` +
+        `project's origin remote did not resolve one either: ${slug.reason ?? "no reason given"}\n\n${USAGE}`,
+    );
     return REFUSAL_EXIT;
   }
 
-  const root = values["project-root"] ?? process.cwd();
+  // WHERE EACH INPUT CAME FROM, on stderr so it never reaches the snapshot
+  // on stdout. A reading taken from config and one taken from the command
+  // line are the same bytes downstream, and only one of them is reproducible
+  // by somebody who did not watch you type it.
+  const fromConfig = [
+    positionals[0] === undefined && configured.engineSpec !== null ? `spec=${specArg} (board.engineSpec)` : null,
+    values.prefix === undefined && configured.milestonePrefix !== null
+      ? `prefix=${prefix} (board.milestonePrefix)`
+      : null,
+    slug.source === "origin" ? `repo=${repo} (origin remote of ${root})` : null,
+  ].filter((s): s is string => s !== null);
+  if (fromConfig.length > 0) {
+    console.error(`board-snapshot: resolved from the repository, not the command line — ${fromConfig.join(", ")}`);
+  }
+
   const specPath = isAbsolute(specArg) ? specArg : join(root, specArg);
   if (!existsSync(specPath)) {
     console.error(`board-snapshot: no such spec: ${specPath}`);

@@ -104,6 +104,49 @@ export function readBoardConfig(projectRoot: string): { projectId: string; crite
 }
 
 /**
+ * The two inputs `board-snapshot` cannot take a reading without: which spec
+ * the board is supposed to mirror, and the milestone-name prefix that defines
+ * the population it is scored over.
+ *
+ * **Why this exists at all (#1718, SC-2619).** Both arrived only as command
+ * line arguments, so `rungate board-conformance` with no flags produced five
+ * UNMEASURED readings whose stated reason was `B1 has not wired this
+ * reading's source yet` — a sentence about the tool being unfinished, for a
+ * tool that was finished. The real cause was that nobody had passed a spec.
+ * A status command that misattributes its own silence is worse than one that
+ * refuses, and that is the whole of what this project is trying to stop.
+ *
+ * **Absent is `null`, per key, and never a literal.** `"Pipeline"` and this
+ * repository's own engine spec are the obvious defaults and both are wrong to
+ * bake in: a consumer that scaffolded rungate and never configured a board has
+ * no engine spec, and handing it ours would score its board against a
+ * document it does not have. Absent must stay nameable by the caller —
+ * *Silent Default Substitution*, `.claude/rules/config-access.md`.
+ *
+ * Blank and whitespace are `null` too, for the reason `readMilestonePrefix`
+ * already encodes: a prefix of `"   "` matches no milestone on any board and
+ * reports every phase as missing.
+ */
+export function readBoardInputs(projectRoot: string): {
+  engineSpec: string | null;
+  milestonePrefix: string | null;
+} {
+  const config = tryLoadRungateConfig(projectRoot);
+  const board = (config as Record<string, unknown> | null)?.board;
+  if (!board || typeof board !== "object" || Array.isArray(board)) {
+    return { engineSpec: null, milestonePrefix: null };
+  }
+  const row = board as Record<string, unknown>;
+  const read = (key: string): string | null => {
+    const raw = row[key];
+    if (typeof raw !== "string") return null;
+    const value = raw.trim();
+    return value === "" ? null : value;
+  };
+  return { engineSpec: read("engineSpec"), milestonePrefix: read("milestonePrefix") };
+}
+
+/**
  * The label that marks an issue as being in the work queue, or `null`.
  *
  * **One binding, because the writer and the reading must not disagree.**
