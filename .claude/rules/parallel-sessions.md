@@ -153,14 +153,16 @@ repo's, or anything the project marks as requiring sign-off.
 ## Pin the head when you merge, and verify by content when you did not
 
 ```bash
-gh pr merge <N> --squash --match-head-commit "$(gh pr view <N> --json headRefOid -q .headRefOid)"
+SHA="$(bun scripts/verify-merge-ref.ts --pr <N>)" \
+  && gh pr merge <N> --squash --auto --match-head-commit "$SHA"
 ```
 
-`--match-head-commit` refuses the merge if the head moved since you read it.
-Use it every time. It costs one subshell and it is the whole fix. Without it,
-PRs #500 and #502 each merged a commit four behind their branch head and 611
-lines never reached main — and nothing cheap could see it, because a squash
-merge destroys ancestry and `gh pr view` still says MERGED.
+Pin the head every time. `--match-head-commit` alone is read at ARM time
+while auto-merge fires later, so it cannot see a push inside that window
+(#1850, #1847) — the decider reads the remote. Only `CLEAR` exits zero and
+writes a SHA, so `&&` cannot hand the flag an empty string; `MERGED_CLEAN`
+and `UNMEASURED` refuse with the rest. What an unpinned merge cost (#500,
+#502): `reference/parallel-sessions-worked-instances.md`.
 
 So when a merge has already happened and you want to know whether your work is
 really there, ask about **content**, not ancestry:
