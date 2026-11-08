@@ -52,7 +52,16 @@ import {
   type LiveIssue,
   type ProjectFieldReading,
 } from "../lib/live-issues";
-import { criterionCoverage, milestonePlan, placementReading, type CriterionCoverage } from "../lib/spec-placement";
+import {
+  criterionCoverage,
+  milestonePlan,
+  placementCoverage,
+  placementReading,
+  type CriterionCoverage,
+} from "../lib/spec-placement";
+// SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
+import { NAMES_NONE, criteriaNamedBy, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
+import type { RepoIssueCriteria, SpecPlacementRow } from "./board-conformance";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -212,6 +221,24 @@ export interface ProducedSnapshot {
    * {@link criterionCoverage}, which owns that decision.
    */
   criteria: CriterionCoverage[];
+  /**
+   * The REPOSITORY-WIDE populations — SC-2615 and SC-2616.
+   *
+   * Optional in the type because they are optional on the wire: each is
+   * emitted only when it could be taken, and `board-conformance` reads an
+   * absent key as UNMEASURED rather than as a zero.
+   *
+   * The row types are IMPORTED from the reader rather than spelled again
+   * here. Two declarations of one wire shape are two deciders that agree —
+   * `.claude/rules/checks-must-be-able-to-fail.md` — and nothing would have
+   * gone red when they drifted. The import is `type`-only and the reader has
+   * no relative imports of its own, so its mutation battery is untouched.
+   *
+   * SC-2617's `plannedEdges` is deliberately absent — see the note at the
+   * producer and #1717.
+   */
+  specPlacements?: SpecPlacementRow[];
+  repoIssues?: RepoIssueCriteria[];
 }
 
 /**
@@ -673,6 +700,76 @@ export async function main(
   const columnRead =
     board !== null && snapshotIssues.length > 0 && snapshotIssues.every(i => "criteriaField" in i);
 
+  // ── The three REPOSITORY-WIDE populations — SC-2615, SC-2616, SC-2617 ──
+  //
+  // Everything above this line is engine-scoped: `phases` comes from the one
+  // spec named on the command line and `issues` is that spec's milestone
+  // family. Each of the three below asks the same shape of question of the
+  // whole tree, and each is emitted ONLY when it could actually be taken —
+  // `board-conformance` reads an absent key as UNMEASURED, and an absent key
+  // is the honest thing to write when nothing was read.
+
+  // SC-2615. The sweep's own `specs` rows are passed through, UNREADABLE
+  // ones included: the reading refuses on them by name, which it cannot do
+  // if the producer drops them. The key is omitted only when the sweep could
+  // not enumerate `specs/` at all — then there are no rows to carry, and an
+  // empty list would be indistinguishable from a tree whose specs are all
+  // placed.
+  const coverage = placementCoverage(root, specPathSweep, (base, path) =>
+    readFileSync(join(base, path), "utf-8"),
+  );
+  const placements =
+    coverage.specs.length === 0 && coverage.reading === "UNMEASURED"
+      ? {}
+      : {
+          specPlacements: coverage.specs.map(s => ({
+            path: s.path,
+            state: s.state,
+            criteria: s.criteria,
+            placed: s.placed,
+          })),
+        };
+
+  // SC-2616. The criterion union comes from the SAME sweep `board-mirror`
+  // uses to build the column, so "which ids exist" has one answer. A second
+  // enumeration here would be a second decider that no behavioural case
+  // could separate from the first.
+  //
+  // `servesNone` is the literal `NAMES_NONE` string, which is the one way
+  // this repository spells the declaration (SC-2609). Matching anything
+  // looser — "no criterion", "n/a" — would let an issue opt out by accident,
+  // and the entire criterion is that *has not said* and *says none* are
+  // different facts.
+  // An UNMEASURED sweep omits the key, the same way the other two do. `ids`
+  // is `[]` on a sweep that refused — an unreadable `specs/`, a criterion two
+  // specs both state — and an empty union matches nothing in any issue, so
+  // every issue would report `names: []` whatever it actually names. The
+  // reading has no way to tell that from a tracker where nobody has declared
+  // anything: it would call all 72 issues offenders, or, if every one of them
+  // happened to carry the `servesNone` text, report MET. Raised in review of
+  // #1903 — the producer had the gate on the other two populations and not on
+  // this one.
+  const sweep = specCriteriaIn(root);
+  const openIssues = liveIssues.filter(i => i.state === "OPEN");
+  const repoIssues =
+    sweep.reading === "UNMEASURED"
+      ? {}
+      : {
+          repoIssues: openIssues.map(i => ({
+            number: i.number,
+            names: criteriaNamedBy({ title: i.title, body: i.body }, sweep.ids),
+            servesNone: `${i.title}\n${i.body ?? ""}`.includes(NAMES_NONE),
+          })),
+        };
+
+  // SC-2617's `plannedEdges` is NOT produced here, and the absence is a
+  // decision — see #1717. It was written and withdrawn at review round 3 of
+  // #1903: `dependencyPlan` buckets by `phaseOf`, which is family-blind, so
+  // a repo-wide call chains `Convergence Phase 1` to `Pipeline Phase 0`.
+  // `plan-deps` is the function's only other caller and it REFUSES an
+  // omitted `--milestone-prefix`, so single-family is the contract. See the
+  // matching note in `scripts/board-conformance.ts`.
+
   const snapshot: ProducedSnapshot = {
     producedAt: new Date().toISOString(),
     spec: specArg,
@@ -681,6 +778,8 @@ export async function main(
     closedBlockers: [...named].sort((a, b) => a - b),
     queueLabel: readQueueLabel(root),
     criteria: criterionCoverage(content, snapshotIssues, columnRead),
+    ...placements,
+    ...repoIssues,
   };
 
   process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);

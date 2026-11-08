@@ -313,6 +313,33 @@ export const NAMES_NONE = "serves no criterion";
  * the JSON carries it. So there is no cap, and the bound that was never
  * measured is gone rather than raised.
  */
+/**
+ * The spec paths, in the shape `placementCoverage` takes its enumerator in.
+ *
+ * Lives here because {@link specCriteriaIn} does: *which files are specs* is
+ * one question with one answer, and a caller writing its own ten-line adapter
+ * is a second site that a mutation of the first would leave standing
+ * (`.claude/rules/checks-must-be-able-to-fail.md`, fourth shape). It was a
+ * private function in `scripts/plan-spec.ts` until `scripts/board-snapshot.ts`
+ * needed the same sweep for SC-2615; both call this now rather than two
+ * copies agreeing.
+ *
+ * An UNMEASURED sweep propagates — an empty path list from a sweep that
+ * failed is indistinguishable from a tree with no specs, and only one of
+ * those is a reading.
+ */
+export function specPathSweep(
+  root: string,
+  readDir: SpecDirReader = readSpecDir,
+): { reading: "MEASURED" | "UNMEASURED"; unmeasuredReasons: string[]; paths: string[] } {
+  const sweep = specCriteriaIn(root, readDir);
+  return {
+    reading: sweep.reading,
+    unmeasuredReasons: [...sweep.unmeasuredReasons],
+    paths: sweep.specs.map(s => s.path),
+  };
+}
+
 export function mirrorText(criteria: readonly string[]): string {
   if (criteria.length === 0) return NAMES_NONE;
   return criteria.join(" ");

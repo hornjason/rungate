@@ -53,29 +53,8 @@ import {
   placementReading,
   uncoveredByMilestone,
 } from "../lib/spec-placement";
-import { specCriteriaIn } from "../lib/board-mirror";
+import { specPathSweep } from "../lib/board-mirror";
 import { readMilestonePrefix } from "../lib/live-issues";
-
-/**
- * Which files are specs, asked of the one sweep that already decides it.
- *
- * `specCriteriaIn` excludes `NOT_A_SPEC`, locates nested specs, and refuses
- * rather than returning a short list. Walking `specs/` here instead would be
- * a second decider for the same question, and no behavioural test of either
- * could see the two disagree.
- */
-function listSpecPaths(root: string): {
-  reading: "MEASURED" | "UNMEASURED";
-  unmeasuredReasons: string[];
-  paths: string[];
-} {
-  const sweep = specCriteriaIn(root);
-  return {
-    reading: sweep.reading,
-    unmeasuredReasons: [...sweep.unmeasuredReasons],
-    paths: sweep.specs.map(s => s.path),
-  };
-}
 
 /**
  * THE one non-zero exit. One site, so `test/plan-spec.test.ts` can build a
@@ -173,7 +152,7 @@ rungate plan-spec --coverage [--project-root <dir>] [--json]
  * would learn to pass `|| true`.
  */
 function reportCoverage(root: string, asJson: boolean): number {
-  const r = placementCoverage(root, listSpecPaths, (base, path) =>
+  const r = placementCoverage(root, specPathSweep, (base, path) =>
     readFileSync(join(base, path), "utf-8"),
   );
   if (asJson) {

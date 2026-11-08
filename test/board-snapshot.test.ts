@@ -44,6 +44,7 @@ import {
   withoutAmbientGitOverrides,
 } from "../lib/git-isolation";
 import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
+import { NAMES_NONE } from "../lib/board-mirror";
 import { oneScMentionPattern } from "../lib/sc-ids";
 import { PRODUCE_TIMEOUT_MS, readSnapshotText, takeReadings } from "../scripts/board-conformance";
 
@@ -87,6 +88,11 @@ const iss = (o: Partial<LiveIssue> & { number: number }): LiveIssue => ({
   milestone: null,
   blockedBy: [],
   labels: [],
+  // Defaulted to the EMPTY states, not to text naming a criterion: a case
+  // that does not pass a body is a case about something else, and an issue
+  // with no body names nothing (SC-2616).
+  title: `issue ${o.number}`,
+  body: null,
   ...o,
 });
 
@@ -1981,5 +1987,117 @@ describe("round 8: a signal is not a mechanism, and `status` is not always null"
     const n = spawnSync("definitely-not-a-binary-xyz", [], { encoding: "utf-8" });
     expect(n.status, "a missing binary returns undefined, not null").toBeUndefined();
     expect((n.error as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+  });
+});
+
+/**
+ * The repository-wide populations — SC-2615 and SC-2616.
+ *
+ * SC-2617's edge population was written here and WITHDRAWN at review round
+ * 3 of #1903: `dependencyPlan` is family-blind and this repository carries
+ * two live milestone families. #1717 stays open carrying it.
+ *
+ * Every other population above is engine-scoped: one spec, its milestone
+ * family. These three ask about the whole tree, and each is emitted ONLY
+ * when it could be taken, because `board-conformance` reads an absent key as
+ * UNMEASURED and an emitted-but-unmeasured population is a number nobody
+ * looked at.
+ *
+ * The pair that matters is the last two cases. The gate on `repoIssues` is
+ * one line, and with it removed the measured case still passes — an issue
+ * naming a criterion is still read correctly when the sweep worked. Only the
+ * UNMEASURED case can see the gate, which is why it asserts both the absent
+ * key AND what the real reader then says. Review of #1903 found this exact
+ * hole: the other two populations were gated and this one was not.
+ */
+describe("the repository-wide populations (SC-2615, SC-2616)", () => {
+  /** The same fixture spec, but where the repository-wide sweep looks. */
+  const withSpecsDir = async <T>(fn: (dir: string, specPath: string) => Promise<T>): Promise<T> =>
+    withSpec(SPEC, async (dir, at) => {
+      mkdirSync(join(dir, "specs"), { recursive: true });
+      writeFileSync(join(dir, "specs", "FIXTURE-SPEC.md"), SPEC);
+      return fn(dir, at);
+    });
+
+  /** Two open issues whose bodies name criteria the fixture spec states. */
+  const namingIssues = [
+    iss({ number: 10, milestone: "Fix Phase 0 — the first one", body: "this one serves SC-9001" }),
+    iss({ number: 11, milestone: "Fix Phase 1 — the second one", body: "this one serves SC-9003" }),
+  ];
+
+  test("both are emitted when the specs sweep can be read", async () => {
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+
+      expect(snap.specPlacements?.map(s => s.path)).toEqual(["specs/FIXTURE-SPEC.md"]);
+      expect(snap.repoIssues?.map(i => [i.number, i.names, i.servesNone])).toEqual([
+        [10, ["SC-9001"], false],
+        [11, ["SC-9003"], false],
+      ]);
+    });
+  });
+
+  test("an UNMEASURED specs sweep omits `repoIssues` — an empty id union reads every issue as naming nothing", async () => {
+    // No `specs/` at all, so `specCriteriaIn` refuses and its `ids` is `[]`.
+    // An empty union matches nothing in any body, so an ungated producer
+    // would emit all 72 issues with `names: []` — indistinguishable from a
+    // tracker where nobody has declared anything, and reported as SHORT.
+    await withSpec(SPEC, async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+
+      expect(snap.repoIssues, "a sweep that refused still produced a countable population").toBeUndefined();
+
+      const reading = takeReadings(readSnapshotText(JSON.stringify(snap)).board).find(
+        r => r.name === "criteria-named",
+      )!;
+      expect(reading.status, "a failed spec sweep was reported as the tracker's shortfall").toBe("unmeasured");
+    });
+  });
+
+  test("the issue template tells authors the EXACT string `servesNone` reads", () => {
+    // Raised by the AI review of #1903, and it was right: the template said
+    // to write `none — machinery`, and the producer matches the literal
+    // `NAMES_NONE`. An author following the form's own instruction would be
+    // reported as an offender for declining a criterion correctly — a false
+    // SHORT, which is the exact reading SC-2616 exists to prevent.
+    //
+    // Measured 2026-11-08: 0 open issues carried either phrasing, so there
+    // was nothing to migrate and the honest fix is ONE spelling rather than
+    // a reader that accepts two. This is the agreement that keeps it one:
+    // the constant and the form are different languages in different files
+    // and nothing else compares them.
+    // Whitespace-normalised, because the description is a FOLDED YAML
+    // scalar: GitHub joins its lines with spaces before anybody reads it, so
+    // a phrase broken across two source lines is the same instruction and a
+    // raw byte match would call it a drift. The first version of this case
+    // did exactly that and went red on a line wrap.
+    const form = readFileSync(join(ROOT, ".github/ISSUE_TEMPLATE/spec-work.yml"), "utf-8")
+      .replace(/\s+/g, " ");
+    expect(
+      form.includes(NAMES_NONE),
+      `the spec-work form no longer tells authors to write "${NAMES_NONE}", so an issue filed through it ` +
+        "declines a criterion in a spelling the producer does not read",
+    ).toBe(true);
+    expect(form, "the superseded phrasing is still in the form").not.toContain("none — machinery");
+  });
+
+  test("the control: the SAME issue IS read when the sweep works", async () => {
+    // Without this the case above is satisfiable by a producer that never
+    // emits `repoIssues` at all, and the gate would be indistinguishable
+    // from the feature being absent.
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+
+      const reading = takeReadings(readSnapshotText(JSON.stringify(snap)).board).find(
+        r => r.name === "criteria-named",
+      )!;
+      expect([reading.status, reading.why]).toEqual(["met", "2 of 2"]);
+    });
   });
 });

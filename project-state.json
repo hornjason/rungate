@@ -1469,7 +1469,7 @@
           "id": "D2",
           "what": "`rungate board-conformance`, one command and one verdict — today Jason has to trust that an agent read four tools' output correctly. DELIVERED by #1718/#1890 and left unticked for a week because this item carried no command: `main()` ends in exactly two whole-board verdicts, one announcing every reading met and one counting how many fall short and naming them, plus an UNMEASURED refusal when the source could not be read. The verify is the planted-short case rather than a live run, deliberately — the live full-board command needs a `project`-scoped credential for `criteria-field` and would make this item `credentialed`, where CI cannot execute it. Proved able to fail 2026-11-08 in both directions: the same counter against `--list-readings` sees 0 verdict lines and exits 1, against a doubled verdict sees 2 and exits 1.",
           "done": true,
-          "verify": "bun test test/board-conformance.test.ts -t \"ONE short reading refuses the whole board even while the other four are met\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
+          "verify": "bun test test/board-conformance.test.ts -t \"ONE short reading refuses the whole board\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         },
         {
           "id": "D3",

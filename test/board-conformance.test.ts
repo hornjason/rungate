@@ -34,11 +34,13 @@ import { dirname, join } from "path";
 import { spawnSync } from "child_process";
 import {
   DEFAULT_PRODUCER,
+  OFFENDERS_SHOWN,
   READINGS,
   READING_NAMES,
   REFUSE_EXIT,
   PRODUCE_TIMEOUT_MS,
   conformant,
+  formatReading,
   produceBoard,
   readSnapshotText,
   takeReading,
@@ -148,6 +150,26 @@ const completeBoard = (): BoardSnapshot => ({
   // omitted it would make `queue-label` UNMEASURED in every case here and
   // the refusals would be about the fixture rather than their subjects.
   queueLabel: "engine",
+  // The three REPOSITORY-WIDE populations — SC-2615, SC-2616, SC-2617.
+  // PRESENT for the same reason as the two above.
+  specPlacements: [
+    { path: "specs/A.md", state: "PLANNED", criteria: 2, placed: 2 },
+    { path: "specs/B.md", state: "PLANNED", criteria: 1, placed: 1 },
+    // A NO_CRITERIA spec belongs in the COMPLETE board on purpose. It
+    // contributes to neither side of `spec-placement`, and a fixture
+    // without one could not tell that from a reading that counts it in the
+    // denominator — which would make this control short and every case
+    // below it a complaint about the fixture.
+    { path: "specs/EMPTY.md", state: "NO_CRITERIA", criteria: 0, placed: 0 },
+  ],
+  // One issue that NAMES, one that DECLARES it serves none. Both are
+  // conformant and they are conformant for different reasons, so a reading
+  // that credited only one of the two spellings would show up here rather
+  // than in whichever case happened to use the other.
+  repoIssues: [
+    { number: 1, names: ["SC-2618"], servesNone: false },
+    { number: 2, names: [], servesNone: true },
+  ],
 });
 
 /**
@@ -244,21 +266,26 @@ const plant = (name: string, board: BoardSnapshot): string => {
 };
 
 describe("the command's shape", () => {
-  test("--list-readings names all five readings, and the list is the assertion", () => {
+  test("--list-readings names every reading, and the list is the assertion", () => {
     const r = run(SCRIPT, ["--list-readings"]);
     expect(r.code, `--list-readings refused: ${r.err}`).toBe(0);
     // Asserting the names rather than the exit code: a command that
     // printed nothing and exited 0 would satisfy the exit code alone, and
     // B5's own verify command reads this output.
     for (const name of READING_NAMES) expect(r.out, `--list-readings did not name "${name}"`).toContain(name);
-    expect(READING_NAMES.length, "the ladder's B5 verify names five readings").toBe(5);
+    // Five engine-scoped readings (B1..B4, B6) and three repository-wide
+    // ones (E1..E3, added by #1717). The number is asserted as well as the
+    // names because `--list-readings` printing a SUBSET would satisfy every
+    // `toContain` above — a list can only be checked by its length and its
+    // membership together.
+    expect(READING_NAMES.length, "the five engine readings plus the two repository-wide ones").toBe(7);
   });
 
   test("every reading names the ladder item that owns wiring its source", () => {
     // Without this, a reading can exist with nobody on the hook for making
     // it real, which is the "declared and nothing reads it" shape this
     // whole stage exists to close.
-    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6"]);
+    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2"]);
   });
 });
 
@@ -414,7 +441,7 @@ describe("the refusals, each proved against the mutant", () => {
       "UNMEASURED",
     );
     expect(whole.out).toContain("SHORT       criterion-coverage");
-    expect(whole.out.match(/^MET /gm)?.length, "an absent satisfiedByIssue moved a reading it has nothing to do with").toBe(4);
+    expect(whole.out.match(/^MET /gm)?.length, "an absent satisfiedByIssue moved a reading it has nothing to do with").toBe(READING_NAMES.length - 1);
 
     const spec = READINGS.find(r => r.name === "criterion-coverage")!;
     const reading = takeReading(spec, board as unknown as BoardSnapshot);
@@ -525,6 +552,23 @@ describe("each reading, planted short and planted complete", () => {
     { reading: "blocked-by-edges", what: "an issue that is neither a declared root nor blocked", break: b => void (b.issues[1]!.blockedBy = []) },
     { reading: "criteria-field", what: "an issue whose Criteria column is blank", break: b => void (b.issues[0]!.criteriaField = "  ") },
     { reading: "queue-label", what: "an issue missing the engine label", break: b => void (b.issues[1]!.labels = ["bug"]) },
+    // The three repository-wide readings, broken in their own populations —
+    // never in `issues`, `criteria` or `phases`. A break that reached into
+    // the engine populations would redden an engine reading too, and the
+    // whole-board assertion below cannot tell which reading refused.
+    {
+      reading: "spec-placement",
+      what: "a spec whose criteria sit in no phase",
+      break: b => {
+        b.specPlacements![0]!.state = "UNPLANNED";
+        b.specPlacements![0]!.placed = 0;
+      },
+    },
+    {
+      reading: "criteria-named",
+      what: "an issue that names no criterion and does not declare that it serves none",
+      break: b => void (b.repoIssues![1]!.servesNone = false),
+    },
   ];
 
   test("the break list covers every reading, so none is silently untested", () => {
@@ -589,7 +633,6 @@ describe("each reading, planted short and planted complete", () => {
       i.blockedBy = [9999];
       delete i.rootReady; // or a declared root satisfies it without the edge
     }
-
     // A row whose references are PARTLY stale, which the all-9999 board
     // above cannot produce. Round 7 found the gap it left: the battery
     // varied which reading it looked at and held the input shape fixed at
@@ -628,14 +671,24 @@ describe("each reading, planted short and planted complete", () => {
     }
   });
 
-  test("ONE short reading refuses the whole board even while the other four are met", () => {
+  test("ONE short reading refuses the whole board even while every other one is met", () => {
     const broken = completeBoard();
     broken.issues[1]!.labels = ["bug"];
     const readings = takeReadings(broken);
+    // Membership, not a count: the point is that exactly ONE reading moved
+    // and it is `queue-label`. A count would stay right if a second
+    // reading went short for an unrelated reason in the same board.
     expect(readings.filter(r => r.status === "met").map(r => r.name).sort()).toEqual(
-      ["blocked-by-edges", "criteria-field", "criterion-coverage", "milestones"],
+      [
+        "blocked-by-edges",
+        "criteria-field",
+        "criteria-named",
+        "criterion-coverage",
+        "milestones",
+        "spec-placement",
+      ],
     );
-    expect(conformant(readings), "four of five met read as conformant").toBe(false);
+    expect(conformant(readings), "six of seven met read as conformant").toBe(false);
   });
 });
 
@@ -1384,5 +1437,121 @@ describe("D3: what the producer said on the success path", () => {
     // This is the only case that names the production value.
     expect(DEFAULT_PRODUCER.endsWith("scripts/board-snapshot.ts"), DEFAULT_PRODUCER).toBe(true);
     expect(readFileSync(DEFAULT_PRODUCER, "utf-8")).toContain("board-snapshot");
+  });
+});
+
+/**
+ * The offender LINES, which until review round 4 of #1903 nothing read.
+ *
+ * The battery above asserts a reading's status and its `why`. It never
+ * asserted what an offender line SAYS, nor the cap, nor the remainder
+ * arithmetic — so `offenders` could have returned `[]` from every reading,
+ * or dropped the counts SC-2615 asks for by name, and the suite would have
+ * stayed green. That is this repository's own *declared and nothing reads
+ * it* shape (`.claude/rules/checks-must-be-able-to-fail.md`) applied to the
+ * code that was shipped alongside the rule. Raised by the AI review and it
+ * was right.
+ *
+ * Each case below names a mutation that it catches, because a case whose
+ * break nobody wrote down is a case nobody can trust.
+ */
+describe("the offender lines are read, not just counted", () => {
+  const readingNamed = (board: BoardSnapshot, name: string) =>
+    takeReadings(board).find(r => r.name === name)!;
+
+  test("spec-placement names the UNPLANNED spec AND its shortfall, not just the path", () => {
+    // Catches: swapping the map body for `.map(s => s.path)`. SC-2615 says
+    // "reported UNPLANNED **by name**", and the counts are what make the
+    // line actionable rather than a second ratio.
+    const board = completeBoard();
+    board.specPlacements = [
+      { path: "specs/A.md", state: "PLANNED", criteria: 4, placed: 4 },
+      { path: "specs/B.md", state: "UNPLANNED", criteria: 7, placed: 2 },
+    ];
+    const r = readingNamed(board, "spec-placement");
+
+    expect(r.status).toBe("short");
+    expect(r.offenders).toEqual(["specs/B.md — 5 of 7 criteria in no phase"]);
+    expect(r.offenders[0], "the PLANNED spec was named as an offender").not.toContain("specs/A.md");
+  });
+
+  test("criteria-named names the ISSUE, and a declared `servesNone` is not an offender", () => {
+    // Catches: dropping `&& !i.servesNone` from the filter, which is the
+    // whole distinction SC-2616 exists for — the issue that decided would
+    // be reported beside the issues nobody has answered for.
+    const board = completeBoard();
+    board.repoIssues = [
+      { number: 11, names: ["SC-2618"], servesNone: false },
+      { number: 12, names: [], servesNone: true },
+      { number: 13, names: [], servesNone: false },
+    ];
+    const r = readingNamed(board, "criteria-named");
+
+    expect(r.offenders).toEqual([
+      "#13 — names no criterion and does not declare that it serves none",
+    ]);
+  });
+
+  test("a MET reading names nobody, and an UNMEASURED one names nobody either", () => {
+    // Catches: computing offenders unconditionally. An UNMEASURED reading
+    // naming rows is the worse half — it did not read the population it
+    // would be naming them out of, so every name would be invented.
+    const met = completeBoard();
+    met.repoIssues = [{ number: 11, names: ["SC-2618"], servesNone: false }];
+    expect(readingNamed(met, "criteria-named").status).toBe("met");
+    expect(readingNamed(met, "criteria-named").offenders).toEqual([]);
+
+    const unread = completeBoard();
+    delete unread.repoIssues;
+    expect(readingNamed(unread, "criteria-named").status).toBe("unmeasured");
+    expect(readingNamed(unread, "criteria-named").offenders).toEqual([]);
+  });
+
+  test("formatReading prints every offender when there are exactly OFFENDERS_SHOWN", () => {
+    // The boundary on the safe side. Catches an off-by-one that truncates
+    // at the cap and appends "… and 0 more".
+    const offenders = Array.from({ length: OFFENDERS_SHOWN }, (_, i) => `#${i} — short`);
+    const out = formatReading({
+      name: "criteria-named", item: "E2", what: "w", status: "short",
+      measured: 0, target: OFFENDERS_SHOWN, why: `0 of ${OFFENDERS_SHOWN}`, offenders,
+    });
+
+    for (const o of offenders) expect(out).toContain(o);
+    expect(out, "a complete list was announced as truncated").not.toContain("more");
+  });
+
+  test("one past the cap prints ten and says how many were withheld", () => {
+    // Catches: breaking the remainder arithmetic in either direction, and
+    // catches a cap that samples silently. The count is asserted as a
+    // number in the text, not as "the line exists".
+    const offenders = Array.from({ length: OFFENDERS_SHOWN + 7 }, (_, i) => `#${i} — short`);
+    const out = formatReading({
+      name: "criteria-named", item: "E2", what: "w", status: "short",
+      measured: 0, target: offenders.length, why: `0 of ${offenders.length}`, offenders,
+    });
+
+    const printed = offenders.filter(o => out.includes(o));
+    expect(printed.length, "the cap printed the wrong number of rows").toBe(OFFENDERS_SHOWN);
+    expect(out).toContain(`… and 7 more`);
+    // Every printed row is from the FRONT of the list, so the cap is a
+    // prefix and not an arbitrary sample a reader cannot reproduce.
+    expect(printed).toEqual(offenders.slice(0, OFFENDERS_SHOWN));
+  });
+
+  test("the withheld count and the list length agree, over the whole boundary", () => {
+    // The property, rather than three hand-picked lengths: whatever is
+    // printed plus whatever is announced as withheld must equal what the
+    // reading actually found. A cap and a counter that disagree is a
+    // reader told a truncated list is the whole one.
+    for (const n of [0, 1, OFFENDERS_SHOWN - 1, OFFENDERS_SHOWN, OFFENDERS_SHOWN + 1, 97]) {
+      const offenders = Array.from({ length: n }, (_, i) => `#${i} — short`);
+      const out = formatReading({
+        name: "criteria-named", item: "E2", what: "w", status: "short",
+        measured: 0, target: n, why: `0 of ${n}`, offenders,
+      });
+      const printed = offenders.filter(o => out.includes(o)).length;
+      const withheld = Number(/… and (\d+) more/.exec(out)?.[1] ?? 0);
+      expect(printed + withheld, `n=${n}: ${printed} printed + ${withheld} withheld`).toBe(n);
+    }
   });
 });
