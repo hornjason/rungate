@@ -135,6 +135,93 @@ export interface BoardSnapshot {
    * RESOLVE to. See {@link resolvableBlocker}.
    */
   closedBlockers?: number[];
+
+  /**
+   * EVERY spec in the tree and whether its criteria are placed — SC-2615.
+   *
+   * The five readings above are engine-scoped: `phases` comes from the one
+   * spec named in `board.engineSpec`, so a spec with no `### Phase placement`
+   * table contributes no phases, raises no milestone, appears in no lane and
+   * is indistinguishable from a spec with no work left. That is the
+   * flattering reading of the two. 1 of 26 specs had a table on 2026-10-29.
+   *
+   * **Absent means the sweep was never taken**, and `spec-placement` goes
+   * UNMEASURED — same convention as {@link closedBlockers}, and for the same
+   * reason: an absent sweep and a tree of fully-placed specs produce the
+   * identical empty list.
+   */
+  specPlacements?: SpecPlacementRow[];
+
+  /**
+   * EVERY open issue in the repository and what it says it serves — SC-2616.
+   *
+   * Distinct from {@link issues}, which is the engine milestone's issues. 25
+   * of 71 open issues named no criterion on 2026-10-30 and the two states —
+   * *has not said* and *says it serves none* — rendered identically, so the
+   * population that needs work could not be separated from the population
+   * that is finished thinking.
+   *
+   * **Absent means repository-wide issues were never read**, and
+   * `criteria-named` goes UNMEASURED.
+   */
+  repoIssues?: RepoIssueCriteria[];
+
+  /**
+   * The ordering the plan implies, and whether the tracker carries it — SC-2617.
+   *
+   * 0 of 71 open issues carried a `blocked by` edge on 2026-10-30, which
+   * makes every ordering claim prose. `blocked-by-edges` above asks the
+   * question of the five engine issues; this asks it of every edge the
+   * dependency plan derives.
+   *
+   * **Absent means the plan was never derived**, and `dependency-edges` goes
+   * UNMEASURED rather than reporting a tracker with no ordering as a tracker
+   * that needs none.
+   */
+  plannedEdges?: PlannedEdge[];
+}
+
+/** One spec in the repository-wide placement sweep — SC-2615. */
+export interface SpecPlacementRow {
+  /** Repo-relative, as `lib/spec-placement.ts`'s sweep spells it. */
+  path: string;
+  /**
+   * `NO_CRITERIA` is separate from `UNPLANNED` deliberately: a spec that
+   * states nothing to place genuinely has no work in it, and a spec that
+   * states twelve and places none has twelve. `UNREADABLE` makes the whole
+   * reading unmeasured rather than shortening the list, because a shorter
+   * list is exactly what a tree with fewer specs produces.
+   */
+  state: "PLANNED" | "UNPLANNED" | "NO_CRITERIA" | "UNREADABLE";
+  /** How many criteria the spec states, and how many its table places. */
+  criteria: number;
+  placed: number;
+}
+
+/** One open issue, and the criteria it names — SC-2616. */
+export interface RepoIssueCriteria {
+  number: number;
+  /** The criterion ids the issue names. Empty is a BLANK cell, not a denial. */
+  names: string[];
+  /**
+   * Set when the issue declares that it serves no criterion.
+   *
+   * This is the whole point of the criterion: `names: []` with this false is
+   * an issue nobody has answered for, and `names: []` with it true is a
+   * decision somebody made. Folding them together is what #1717 found
+   * already folded.
+   */
+  servesNone: boolean;
+}
+
+/** One edge the dependency plan derives, and whether the tracker has it — SC-2617. */
+export interface PlannedEdge {
+  /** The issue that should carry the edge. */
+  blocked: number;
+  /** The issue it should be blocked by. */
+  blocker: number;
+  /** True when the tracker already carries this exact edge. */
+  present: boolean;
 }
 
 export type ReadingStatus = "met" | "short" | "unmeasured";
@@ -148,6 +235,17 @@ export interface Reading {
   measured: number;
   target: number;
   why: string;
+  /**
+   * The rows that are short, by name. Empty when the reading is met, and
+   * empty for a reading that has no way to name them.
+   *
+   * A ratio is not a refusal somebody can act on. SC-2615 and SC-2616 both
+   * say so in their own words — *"or the spec is reported UNPLANNED by
+   * name"*, *"reported as a refusal naming the issue"* — and `23 of 26`
+   * names nothing. Computed only when the reading is short, so a met
+   * reading cannot pay for a list nobody reads.
+   */
+  offenders: string[];
 }
 
 interface ReadingSpec {
@@ -184,6 +282,15 @@ interface ReadingSpec {
   unreadable?: (board: BoardSnapshot) => string | null;
   /** How many of `target` are conformant, and out of how many. */
   measure: (board: BoardSnapshot) => { measured: number; target: number };
+  /**
+   * The non-conformant rows, named. Consulted ONLY when the reading is
+   * short, so it never costs a met run and can never change a verdict.
+   *
+   * A reading with no `offenders` of its own prints a ratio, which is what
+   * the five engine readings did and still do. The three repository-wide
+   * ones have populations in the dozens, where a ratio is unactionable.
+   */
+  offenders?: (board: BoardSnapshot) => string[];
 }
 
 /** The issue numbers actually on the board, for resolving a reference. */
@@ -347,6 +454,119 @@ export const READINGS: readonly ReadingSpec[] = [
       return { measured: b.issues.filter(i => i.labels.includes(label)).length, target: b.issues.length };
     },
   },
+  {
+    name: "spec-placement",
+    item: "E1",
+    what: "every criterion in every testable spec sits in a phase, or its spec is named UNPLANNED",
+    readsIssueRefs: false,
+    // Counted in CRITERIA, not specs — the same choice B1 makes and for the
+    // same reason. A spec stating fourteen unplaced criteria and one stating
+    // a single unplaced criterion are not the same amount of plan with no
+    // home, and `25 of 26 specs` would call a tree conformant while the
+    // largest body of unplanned work in it sat outside every phase.
+    //
+    // `NO_CRITERIA` specs contribute 0 to both sides. A spec with nothing to
+    // place is neither conformant nor short; putting it in the denominator
+    // would make the reading unsatisfiable, and putting it in the numerator
+    // would let a tree of empty specs read as fully planned.
+    unreadable: b => {
+      if (b.specPlacements === undefined) {
+        return "the specs/ sweep was never taken, so no spec's placement was read — that is a " +
+          "producer that did not look, not a tree whose specs are all placed";
+      }
+      // ONE unreadable spec makes the whole reading unmeasured, not a
+      // shorter list — `lib/spec-placement.ts` takes the same position, and
+      // a shorter list is exactly what a tree with fewer specs produces.
+      const broken = b.specPlacements.filter(s => s.state === "UNREADABLE").map(s => s.path);
+      return broken.length === 0
+        ? null
+        : `${broken.length} spec(s) could not be read (${broken.slice(0, 5).join(", ")}` +
+            `${broken.length > 5 ? ", …" : ""}), so the sweep covers an unknown fraction of the tree`;
+    },
+    measure: b => {
+      const specs = b.specPlacements!.filter(s => s.state !== "NO_CRITERIA");
+      return {
+        measured: specs.reduce((n, s) => n + s.placed, 0),
+        target: specs.reduce((n, s) => n + s.criteria, 0),
+      };
+    },
+    offenders: b =>
+      b.specPlacements!
+        .filter(s => s.state === "UNPLANNED")
+        .map(s => `${s.path} — ${s.criteria - s.placed} of ${s.criteria} criteria in no phase`),
+  },
+  {
+    name: "criteria-named",
+    item: "E2",
+    what: "every open issue names the criteria it serves, or declares that it serves none",
+    readsIssueRefs: false,
+    // A DECLARED `servesNone` counts; a blank cell does not. Those are the
+    // two states SC-2616 exists to separate, and the whole criterion is that
+    // they rendered identically — 25 of 71 open issues named nothing on
+    // 2026-10-30 and nothing could say which of them had been decided.
+    //
+    // Reading `names.length > 0 || servesNone` rather than `names.length > 0
+    // || names !== undefined` on purpose: an issue whose body says nothing
+    // is not an issue that says it serves nothing, and a normaliser cannot
+    // invent the difference.
+    unreadable: b =>
+      b.repoIssues === undefined
+        ? "the repository's open issues were never read, so no issue's criteria were seen — " +
+          "`issues` above is the engine milestone only, which is a different population"
+        : null,
+    measure: b => ({
+      measured: b.repoIssues!.filter(i => i.names.length > 0 || i.servesNone).length,
+      target: b.repoIssues!.length,
+    }),
+    offenders: b =>
+      b.repoIssues!
+        .filter(i => i.names.length === 0 && !i.servesNone)
+        .map(i => `#${i.number} — names no criterion and does not declare that it serves none`),
+  },
+  {
+    name: "dependency-edges",
+    item: "E3",
+    what: "every ordering the plan derives is a blocked-by edge on the tracker, so what is next is computed",
+    readsIssueRefs: true,
+    // BOTH endpoints have to resolve, and that is why this carries
+    // `readsIssueRefs`. An edge naming an issue that is not in the open
+    // population points at something that can never close, so the blocked
+    // issue never surfaces as next — the graph is wrong in the one direction
+    // this reading exists to rule out. Rounds 1, 2 and 5 of #1697 were that
+    // hole found three times, once per reading that resolved a number
+    // without checking it.
+    //
+    // Resolved against `repoIssues`, not `onBoard`: the plan is repo-wide
+    // and `issues` is the engine milestone, so resolving against the engine
+    // population would report every edge outside it as dangling.
+    unreadable: b => {
+      if (b.plannedEdges === undefined) {
+        return "the dependency plan was never derived, so no ordering was compared against the " +
+          "tracker — a tracker with no edges is not a tracker that needs none";
+      }
+      return b.repoIssues === undefined
+        ? "the repository's open issues were never read, so an edge pointing at a number cannot " +
+            "be told from an edge pointing at nothing"
+        : null;
+    },
+    measure: b => {
+      const open = new Set(b.repoIssues!.map(i => i.number));
+      return {
+        measured: b.plannedEdges!.filter(e => e.present && open.has(e.blocked) && open.has(e.blocker)).length,
+        target: b.plannedEdges!.length,
+      };
+    },
+    offenders: b => {
+      const open = new Set(b.repoIssues!.map(i => i.number));
+      return b.plannedEdges!
+        .filter(e => !(e.present && open.has(e.blocked) && open.has(e.blocker)))
+        .map(e =>
+          !open.has(e.blocked) || !open.has(e.blocker)
+            ? `#${e.blocked} blocked by #${e.blocker} — ${!open.has(e.blocked) ? `#${e.blocked}` : `#${e.blocker}`} is not an open issue, so this edge resolves to nothing`
+            : `#${e.blocked} blocked by #${e.blocker} — the plan derives it and the tracker does not carry it`,
+        );
+    },
+  },
 ];
 
 export const READING_NAMES: readonly string[] = READINGS.map(r => r.name);
@@ -371,16 +591,26 @@ export function takeReading(spec: ReadingSpec, board: BoardSnapshot | null): Rea
     // board to hand it. `main` can no longer reach this arm at all (#1718:
     // every source either produces a board or returns a reason), so the one
     // way here is an API caller passing null, and that is what it now says.
-    return { ...base, status: "unmeasured", measured: 0, target: 0, why: "no board snapshot was passed to this reading, so nothing was measured — that is a caller with no board, not a board with nothing on it" };
+    return { ...base, status: "unmeasured", measured: 0, target: 0, why: "no board snapshot was passed to this reading, so nothing was measured — that is a caller with no board, not a board with nothing on it", offenders: [] };
   }
   const why = spec.unreadable?.(board) ?? null;
-  if (why !== null) return { ...base, status: "unmeasured", measured: 0, target: 0, why };
+  if (why !== null) return { ...base, status: "unmeasured", measured: 0, target: 0, why, offenders: [] };
   const { measured, target } = spec.measure(board);
   if (target === 0) {
-    return { ...base, status: "unmeasured", measured, target, why: "the board carries nothing for this reading to count, so 0 of 0 is not a pass" };
+    return { ...base, status: "unmeasured", measured, target, why: "the board carries nothing for this reading to count, so 0 of 0 is not a pass", offenders: [] };
   }
-  if (measured >= target) return { ...base, status: "met", measured, target, why: `${measured} of ${target}` };
-  return { ...base, status: "short", measured, target, why: `${measured} of ${target} — ${target - measured} short` };
+  if (measured >= target) return { ...base, status: "met", measured, target, why: `${measured} of ${target}`, offenders: [] };
+  // Named only here. A met reading never pays for the list, and an
+  // UNMEASURED one must not print rows — it did not read the population it
+  // would be naming them out of.
+  return {
+    ...base,
+    status: "short",
+    measured,
+    target,
+    why: `${measured} of ${target} — ${target - measured} short`,
+    offenders: spec.offenders?.(board) ?? [],
+  };
 }
 
 export function takeReadings(board: BoardSnapshot | null): Reading[] {
@@ -392,9 +622,23 @@ export function conformant(readings: readonly Reading[]): boolean {
   return readings.length > 0 && readings.every(r => r.status === "met");
 }
 
+/**
+ * How many offending rows a short reading prints before it stops.
+ *
+ * A cap, not a sample: the line below says how many were withheld, so the
+ * reader is never told a truncated list is the whole one.
+ */
+export const OFFENDERS_SHOWN = 10;
+
 export function formatReading(r: Reading): string {
   const mark = r.status === "met" ? "MET        " : r.status === "short" ? "SHORT      " : "UNMEASURED ";
-  return `${mark} ${r.name.padEnd(20)} ${r.why}\n             ${r.what}  [${r.item}]`;
+  const head = `${mark} ${r.name.padEnd(20)} ${r.why}\n             ${r.what}  [${r.item}]`;
+  if (r.offenders.length === 0) return head;
+  const shown = r.offenders.slice(0, OFFENDERS_SHOWN).map(o => `\n               ${o}`).join("");
+  const rest = r.offenders.length > OFFENDERS_SHOWN
+    ? `\n               … and ${r.offenders.length - OFFENDERS_SHOWN} more`
+    : "";
+  return `${head}${shown}${rest}`;
 }
 
 /**
@@ -465,6 +709,52 @@ const normalisePhase = (v: unknown): BoardPhase | null => {
     criteria: asList<string>(p.criteria).filter(c => typeof c === "string"),
     milestoneState: state,
   };
+};
+
+/**
+ * The four states `placementCoverage` emits, spelled out for the same reason
+ * {@link MILESTONE_STATES} is: an unknown fifth would fall into the
+ * not-PLANNED bucket and read as an honest UNPLANNED instead of the row
+ * nobody can interpret that it is.
+ */
+const PLACEMENT_STATES = ["PLANNED", "UNPLANNED", "NO_CRITERIA", "UNREADABLE"] as const;
+
+const normaliseSpecPlacement = (v: unknown): SpecPlacementRow | null => {
+  if (typeof v !== "object" || v === null) return null;
+  const s = v as Partial<SpecPlacementRow>;
+  if (typeof s.path !== "string") return null;
+  const state = PLACEMENT_STATES.find(x => x === s.state);
+  if (state === undefined) return null;
+  const criteria = typeof s.criteria === "number" ? s.criteria : 0;
+  const placed = typeof s.placed === "number" ? s.placed : 0;
+  // A row claiming more placed than stated would let one spec carry another
+  // spec's shortfall, and the sum is the whole reading.
+  if (criteria < 0 || placed < 0 || placed > criteria) return null;
+  return { path: s.path, state, criteria, placed };
+};
+
+const normaliseRepoIssue = (v: unknown): RepoIssueCriteria | null => {
+  if (typeof v !== "object" || v === null) return null;
+  const i = v as Partial<RepoIssueCriteria>;
+  if (typeof i.number !== "number") return null;
+  return {
+    number: i.number,
+    names: asList<string>(i.names).filter(n => typeof n === "string" && n.trim() !== ""),
+    // `=== true`, so a producer that omits the key produces a BLANK cell
+    // rather than a declaration. The omission must not be able to say
+    // something the issue did not.
+    servesNone: i.servesNone === true,
+  };
+};
+
+const normalisePlannedEdge = (v: unknown): PlannedEdge | null => {
+  if (typeof v !== "object" || v === null) return null;
+  const e = v as Partial<PlannedEdge>;
+  if (typeof e.blocked !== "number" || typeof e.blocker !== "number") return null;
+  // `=== true` again: an edge whose presence nobody recorded has not been
+  // found on the tracker, and reading the omission as present would credit
+  // the reading for an ordering that is not there.
+  return { blocked: e.blocked, blocker: e.blocker, present: e.present === true };
 };
 
 /**
@@ -606,6 +896,32 @@ export function readSnapshotText(text: string): SnapshotRead {
   // reports on, so writing the key unconditionally would make a tree that
   // never configured a queue indistinguishable from one that did.
   const queue = typeof raw.queueLabel === "string" ? { queueLabel: raw.queueLabel.trim() } : {};
+
+  // The three repository-wide populations, carried the same present-only
+  // way and for the same reason: absence IS the reading. They are NOT in
+  // the required list above, because adding a required population makes
+  // every snapshot written before today unreadable BY NAME — which is the
+  // documented behaviour and the right one for a population every reading
+  // depends on, and the wrong one here, where exactly one reading does.
+  //
+  // Each is validated into its own shape rather than trusted. A row this
+  // command cannot identify is DROPPED from the population rather than
+  // refusing the board, which is deliberate and is the opposite of the rule
+  // for `issues`: a dropped row shortens a denominator, so the reading gets
+  // EASIER — and that is why `specPlacements` carries `UNREADABLE` as a
+  // state rather than relying on the row vanishing. A producer emitting
+  // malformed rows is caught by its own tests, not by shortening a ratio
+  // here where no reader would see it.
+  const placements = Array.isArray(raw.specPlacements)
+    ? { specPlacements: raw.specPlacements.map(normaliseSpecPlacement).filter((s): s is SpecPlacementRow => s !== null) }
+    : {};
+  const repoIssues = Array.isArray(raw.repoIssues)
+    ? { repoIssues: raw.repoIssues.map(normaliseRepoIssue).filter((i): i is RepoIssueCriteria => i !== null) }
+    : {};
+  const edges = Array.isArray(raw.plannedEdges)
+    ? { plannedEdges: raw.plannedEdges.map(normalisePlannedEdge).filter((e): e is PlannedEdge => e !== null) }
+    : {};
+
   return {
     board: {
       issues: issues as BoardIssue[],
@@ -613,6 +929,9 @@ export function readSnapshotText(text: string): SnapshotRead {
       phases: phases as BoardPhase[],
       ...closed,
       ...queue,
+      ...placements,
+      ...repoIssues,
+      ...edges,
     },
     why: null,
   };
