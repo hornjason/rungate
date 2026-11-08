@@ -39,11 +39,37 @@ function parseFrontmatter(content: string): Record<string, string> | null {
 }
 
 /**
- * Check if a governs field value is valid (non-empty, not TODO).
+ * A YAML block-scalar header, which is what a line-based frontmatter reader
+ * captures when the value is folded onto the lines below it.
+ *
+ * `>` folds, `|` keeps newlines, either may carry a chomping indicator
+ * (`-`/`+`) and an explicit indentation digit, in either order. The class is
+ * deliberately a touch wider than YAML — `>--` is not legal YAML and is not
+ * governs text either, and a detector narrower than the syntax it detects is
+ * the defect in #1692, not the fix for it.
  */
-function isValidGoverns(governs: string | undefined): governs is string {
+const BLOCK_SCALAR_HEADER = /^[>|][0-9+-]{0,2}$/;
+
+/**
+ * Check if a governs field value is valid (non-empty, not TODO, not a
+ * folded block whose text this reader never saw).
+ *
+ * #1692: `governs: >-` with the prose on the indented lines below parses to
+ * the two characters `">-"` in every line-based reader in this tree. That is
+ * non-empty and contains no `TODO`, so it used to pass here and in
+ * `HYGIENE-1` while `lib/scanner.ts` dropped it for being under six
+ * characters and rendered a blank routing row. A folded `governs` is
+ * REFUSED rather than supported: all specs state it on one line, and
+ * supporting it means a reader that knows how `>` and `|` join their lines,
+ * which nothing here needs.
+ *
+ * `lib/conformity.ts`'s HYGIENE-1 calls this. It is the one decider — two
+ * copies of the same criteria is what let the disagreement sit unnoticed.
+ */
+export function isValidGoverns(governs: string | undefined): governs is string {
   if (!governs) return false;
   const trimmed = governs.trim();
+  if (BLOCK_SCALAR_HEADER.test(trimmed)) return false;
   return trimmed.length > 0 && !trimmed.includes('TODO');
 }
 

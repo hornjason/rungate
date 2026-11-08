@@ -143,6 +143,7 @@ describe("#813: a remedy message says what is wrong, what to do, and where the f
 const TIER_1 = [
   { file: "lib/conformity.ts", check: "DRIFT-2" },
   { file: "lib/conformity.ts", check: "DRIFT-2 (stale exemption)" },
+  { file: "lib/conformity.ts", check: "HYGIENE-1" },
   { file: "lib/conformity.ts", check: "HYGIENE-3" },
   { file: "lib/conformity.ts", check: "HYGIENE-3 (stale exemption)" },
   { file: "lib/conformity.ts", check: "HYGIENE-4" },
