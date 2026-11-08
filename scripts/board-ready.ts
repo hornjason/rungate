@@ -45,7 +45,13 @@ import {
   type Dependent,
 } from "../lib/board-ready-fanout";
 import { phaseOf } from "../lib/board-mirror";
-import { heldReason, readyCap, readyOccupancy, selectReady } from "../lib/board-ready-rule";
+import {
+  heldReason,
+  holdsReadySlot,
+  readyCap,
+  readyOccupancy,
+  selectReady,
+} from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
 
@@ -65,12 +71,20 @@ const READY_COLUMN = "Ready";
  * different fields — and a page that stopped carrying `fieldValues` would
  * undercount Ready's occupancy and promote past the cap with nothing red.
  */
+// `assignees{totalCount}` carries NO `first:`, and that is deliberate rather
+// than an omission BR-19 should catch. A page argument would make it a list
+// this query has to paginate and would multiply into BR-46's node-limit
+// product against `items(100)` and `fieldValues(50)`; `first:1` is also the
+// shape BR-46 refuses outright — below 20 is a guess, not a page. GitHub
+// requires `first`/`last` only when `nodes` or `edges` are selected, and this
+// selects neither. Verified against the live API on 2026-11-08:
+// `{repository{issue(number:1905){assignees{totalCount}}}}` returns 1.
 const BOARD_PAGE_QUERY = `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
        pageInfo{hasNextPage endCursor}
        nodes{
          fieldValues(first:50){pageInfo{hasNextPage} nodes{
            ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}}}
-         content{__typename ... on Issue{state milestone{title}}}}}}}}`;
+         content{__typename ... on Issue{state milestone{title} assignees{totalCount}}}}}}}}`;
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(`--${name}`);
@@ -378,7 +392,28 @@ async function main(): Promise<number> {
       const status = (n.fieldValues?.nodes ?? []).find(
         (f: any) => f?.field?.name === "Status",
       )?.name;
-      if (status === READY_COLUMN) {
+      // **An assigned open issue is mid-transition and holds nothing**
+      // (#1905). `board-flow.yml` fires on the same `issues: assigned`
+      // event this run did and moves that card to In progress; counting it
+      // here read the lane as full and promoted nothing, and a second later
+      // the lane was empty. `holdsReadySlot` is the one binding that
+      // decides, so there is one site to mutate.
+      //
+      // **The raw `totalCount`, with no mapping here at all.** An earlier
+      // spelling passed `(totalCount ?? 0) > 0`, which turns a field the
+      // query did not return into "unassigned" and frees the slot — and a
+      // mutation of that expression turned ZERO cases red, because the
+      // battery varies the predicate in the rule module and the defect was
+      // sitting in this file. The three states now live in one place, so
+      // there is no mapping in this loop to get wrong.
+      const holds =
+        status === READY_COLUMN &&
+        holdsReadySlot({
+          typename: n.content?.__typename,
+          state: n.content?.state,
+          assigneeCount: n.content?.assignees?.totalCount,
+        });
+      if (holds) {
         occupied++;
         // **And the second number, from the SAME pass** (#1852). A slot is a
         // slot, but a slot nobody can start is not work. Counting these

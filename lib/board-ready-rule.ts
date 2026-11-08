@@ -303,6 +303,91 @@ export function placementCensus(items: readonly Rankable[]): PlacementCensus {
  */
 export type OccupancyVerdict = "ROOM" | "FULL" | "WEDGED" | "UNMEASURED";
 
+/**
+ * One card in the Ready lane, as much of it as the occupancy decision needs.
+ *
+ * Deliberately not the GraphQL node. The caller reads the board; this module
+ * decides. A test that had to build a `ProjectV2Item` to ask a yes/no question
+ * would be testing the query.
+ */
+export interface ReadyCard {
+  /** `content.__typename` — `"Issue"`, `"PullRequest"`, or absent for a draft. */
+  readonly typename?: string;
+  /** `content.state` — `"OPEN"` or `"CLOSED"` for an issue. */
+  readonly state?: string;
+  /**
+   * `content.assignees.totalCount` — **the raw count, passed through.**
+   *
+   * A `boolean` here was the first spelling and it was wrong: it put a
+   * `count > 0` mapping in the caller, and a caller writing `?? 0` turns an
+   * `assignees` field the query did not select into "unassigned" and frees
+   * the slot. That is the inversion of the direction stated below, and a
+   * mutation of it turned ZERO cases red — the rule module's battery varies
+   * the predicate and the defect was sitting in the script.
+   *
+   * So the three states stay in one place. `undefined` is "the query did
+   * not ask", `0` is "nobody is assigned", and they are different facts.
+   */
+  readonly assigneeCount?: number;
+}
+
+/**
+ * Does this card hold a Ready slot? — #1905.
+ *
+ * ## The race this closes, and why it is closed by construction
+ *
+ * `board-ready.yml` and `board-flow.yml` both fire on `issues: assigned`.
+ * `board-ready` counted the just-assigned card as occupying Ready, concluded
+ * the lane was full, and promoted nothing; `board-flow` moved that same card
+ * to *In progress* one second later. Measured 2026-11-08: `board-ready` at
+ * 13:06:55Z read *"Ready holds 1 of its depth of 1"*, `board-flow` moved
+ * #1668 out at 13:06:56Z, and the lane was then empty with nothing queued to
+ * refill it.
+ *
+ * **An assigned open issue in Ready is mid-transition, and that is a fact
+ * about the board rather than about the clock.** `laneFor` in
+ * `lib/board-flow.ts` returns `In progress` for `issue_assigned`
+ * unconditionally — there is no branch in which an assigned issue stays in
+ * Ready — so a card in that state is leaving whether or not the two runs
+ * happen to interleave. Not counting it is therefore not a timing guess.
+ *
+ * ## Why not the three options #1905 listed
+ *
+ * - **Chain `board-ready` on `board-flow`'s completion.** It drops triggers.
+ *   `board-ready` fires on five issue events and `board-flow` on three; a
+ *   `workflow_run` chain loses `unassigned` and `opened`, both of which are
+ *   `--top-up` sources. The `workflow_run` payload also carries neither the
+ *   originating issue nor the action, so the mode could not be resolved.
+ * - **Fold the top-up into `board-flow`.** Works, and couples the move to
+ *   the refill for a defect that is one predicate wide.
+ * - **Re-read before concluding FULL.** #1905 rejected it and was right:
+ *   it narrows the window instead of closing it.
+ *
+ * ## The direction this is allowed to be wrong in
+ *
+ * Toward **holding** the slot. Over-counting occupancy leaves the lane one
+ * short, which the board's own health check reports and a person can clear.
+ * Under-counting promotes past the depth, which is the thing the cap exists
+ * to prevent. So every uncertain reading holds:
+ *
+ * - `assigneeCount` **absent** holds the slot. A caller whose query does not
+ *   ask for assignees must not thereby empty the lane — absent is
+ *   UNMEASURED, never "unassigned". This is why the field is the raw count
+ *   and not a boolean: a boolean forces the caller to map, and the obvious
+ *   mapping (`?? 0`) is the inversion.
+ * - A **non-issue** holds it. A pull request parked in Ready takes a slot
+ *   exactly as an issue does, and `board-flow` will not move it on an
+ *   assignment.
+ * - A **closed** issue holds it, because nothing here is a tidier.
+ */
+export function holdsReadySlot(card: ReadyCard): boolean {
+  if (card.typename !== "Issue") return true;
+  if (card.state !== "OPEN") return true;
+  if (card.assigneeCount === undefined) return true;
+  if (card.assigneeCount <= 0) return true;
+  return false;
+}
+
 export interface ReadyOccupancy {
   /** Every card in the lane — an issue, a pull request, a draft. */
   readonly cards: number;

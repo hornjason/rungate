@@ -45,6 +45,7 @@ import {
   LABEL_RANK,
   READY_TOLERANCE_DAYS,
   heldReason,
+  holdsReadySlot,
   placementCensus,
   placementOf,
   readyCap,
@@ -55,6 +56,10 @@ import {
   undispatchableRemedy,
   type Rankable,
 } from "../lib/board-ready-rule";
+// #1905's premise lives in another module, so it is imported and asserted
+// rather than restated. A docblock claiming `laneFor` always returns
+// `In progress` would be the reason nobody checks.
+import { laneFor, type LaneEvent } from "../lib/board-flow";
 
 const item = (number: number, phase: number | null, labels: readonly string[] = []): Rankable => ({
   number,
@@ -75,6 +80,72 @@ const LIVE = { delivered: 237, days: 14 } as const;
  * mutation of the free-slot arithmetic reddens them too.
  */
 const atDepth = (occupied: number, cap: number | null) => readyOccupancy(occupied, occupied, cap);
+
+describe("#1905: an assigned issue in Ready is leaving, and does not hold the slot", () => {
+  // The race, as a property of the board rather than of the clock.
+  // `board-ready` counted the just-assigned card, read the lane as full,
+  // and promoted nothing; `board-flow` moved that card to In progress one
+  // second later and the lane was empty with nothing queued.
+  //
+  // What makes this a construction and not a timing narrowing: `laneFor`
+  // in `lib/board-flow.ts` returns `In progress` for `issue_assigned`
+  // unconditionally. There is no board state in which an assigned open
+  // issue stays in Ready, so one sitting there is mid-transition whether
+  // or not the two runs interleave. The agreement below pins that.
+
+  test("the racing pair: the same lane reads FULL or has ROOM on one field", () => {
+    // One card, one cap, one difference — the assignment. This is the
+    // case that fails against the old counter, which had no notion of
+    // assignment at all.
+    const unassigned = [{ typename: "Issue", state: "OPEN", assigneeCount: 0 }];
+    const assigned = [{ typename: "Issue", state: "OPEN", assigneeCount: 1 }];
+    const count = (cards: typeof unassigned) => cards.filter(holdsReadySlot).length;
+
+    expect(readyOccupancy(count(unassigned), count(unassigned), 1).verdict).toBe("FULL");
+    expect(readyOccupancy(count(assigned), count(assigned), 1).verdict).toBe("ROOM");
+  });
+
+  test("CONTROL: an UNASKED assignees field holds the slot, and 0 is a different fact", () => {
+    // The direction this is allowed to be wrong in, as an assertion.
+    // A caller whose query does not select assignees must not thereby
+    // empty the lane; that would promote past the cap, which is the one
+    // thing the cap exists to prevent.
+    //
+    // The field is the RAW COUNT for exactly this reason. It was a boolean
+    // first, which forced the script to map `count > 0` — and the obvious
+    // spelling there, `(count ?? 0) > 0`, is the inversion. A mutation of
+    // that expression turned zero cases red, because this battery varies
+    // the predicate and that defect sat in the other file. Moving the three
+    // states in here leaves the script nothing to get wrong.
+    expect(holdsReadySlot({ typename: "Issue", state: "OPEN" }), "absent").toBe(true);
+    expect(holdsReadySlot({ typename: "Issue", state: "OPEN", assigneeCount: 0 }), "zero").toBe(true);
+    expect(holdsReadySlot({ typename: "Issue", state: "OPEN", assigneeCount: 1 }), "one").toBe(false);
+  });
+
+  test("CONTROL: a pull request parked in Ready still holds its slot", () => {
+    // `board-flow` does not move a pull request on an issue assignment, so
+    // it is not mid-transition — and a slot is a slot whatever occupies it.
+    expect(holdsReadySlot({ typename: "PullRequest", state: "OPEN", assigneeCount: 1 })).toBe(true);
+    expect(holdsReadySlot({ typename: "PullRequest" })).toBe(true);
+    // A draft card carries no `content` at all.
+    expect(holdsReadySlot({})).toBe(true);
+  });
+
+  test("CONTROL: a CLOSED assigned issue holds its slot — this is not a tidier", () => {
+    // It should not be in Ready, and saying so is `undispatchableRemedy`'s
+    // job. Silently freeing its slot would promote a replacement on top of
+    // a lane nobody has cleaned, hiding the thing that needs cleaning.
+    expect(holdsReadySlot({ typename: "Issue", state: "CLOSED", assigneeCount: 1 })).toBe(true);
+  });
+
+  test("the premise: board-flow moves an assigned issue to In progress, always", () => {
+    // Written as an assertion because the whole argument above rests on
+    // it. If `laneFor` ever grows a branch where an assigned issue stays
+    // in Ready, this predicate becomes a timing guess and this case is
+    // what says so.
+    expect(laneFor({ kind: "issue_assigned" } as LaneEvent).lane).toBe("In progress");
+  });
+});
 
 describe("SC-2710: the cap is derived from live throughput, not typed in", () => {
   test("the 2026-11-05 reading of 237 over 14 days gives a depth of 8", () => {
