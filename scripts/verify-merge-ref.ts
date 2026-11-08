@@ -256,7 +256,11 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
 export function remoteRepoReading(url: string, expected: string): { ok: boolean; detail: string } {
   const tail = (s: string) =>
     s
-      .replace(/\.git\/*$/, "")
+      // `i`, because the sentence above promises case-insensitivity and
+      // `.toLowerCase()` runs AFTER the slice — so without it an uppercase
+      // `.GIT` survives into the final segment and the right remote is
+      // refused as somebody else's (review of #1909 round 5).
+      .replace(/\.git\/*$/i, "")
       .split(/[/:]/)
       .filter(Boolean)
       .slice(-2)

@@ -250,6 +250,14 @@ describe("the remote is tied to the pull request's repository (#1909 review)", (
     // repository instead of stubbing `git ls-remote`, which would be a second
     // decider agreeing with the first.
     "/tmp/x/hornjason/rungate.git",
+    // Review of #1909 round 5, and correct. The docstring said the comparison
+    // is case-insensitive; the suffix strip was `/\.git\/*$/` with no `i`, and
+    // `.toLowerCase()` ran afterwards on the already-sliced segments. So an
+    // uppercase suffix survived the strip, became part of the final segment,
+    // and `hornjason/rungate.git` never equals `hornjason/rungate` — the right
+    // remote refused as somebody else's. Reproduced before fixing.
+    "https://github.com/hornjason/RunGate.GIT",
+    "git@github.com:HornJason/RunGate.Git",
   ];
   for (const url of SAME) {
     test(`the same repository: ${url}`, () => {
@@ -344,8 +352,12 @@ beforeAll(() => {
   Bun.spawnSync(["git", "init", "--bare", "-q", remote], { stdout: "pipe", stderr: "pipe" });
   Bun.spawnSync(["git", "init", "--bare", "-q", elsewhere], { stdout: "pipe", stderr: "pipe" });
   Bun.spawnSync(["git", "init", "-q", "-b", "main", work], { stdout: "pipe", stderr: "pipe" });
-  git(work, "config", "user.email", "t@example.com");
-  git(work, "config", "user.name", "t");
+  // Spelled out rather than routed through `git()` above. #84's scanner reads
+  // the argv literally and cannot see that the helper inserts `-C`, so a
+  // helper call here is indistinguishable from a write to the real checkout's
+  // identity — which is the thing that check exists to refuse.
+  Bun.spawnSync(["git", "-C", work, "config", "user.email", "t@example.com"], { stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync(["git", "-C", work, "config", "user.name", "t"], { stdout: "pipe", stderr: "pipe" });
   writeFileSync(join(work, "a.txt"), "one\n");
   git(work, "add", "-A");
   git(work, "commit", "-qm", "one");
