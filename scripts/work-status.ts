@@ -348,8 +348,11 @@ const ORDER: {
     what: "re-run the Stage B audit",
     tracker: null,
     recordedDone:
-      "project-state.json priorities[0], 2026-11-03 session 79 — five Stage B readings " +
-      "retaken from the primary checkout on main at 87d7c832, all MET",
+      "project-state.json priorities[0], 2026-11-07 — taken BY `/stage-audit` from the " +
+      "primary checkout on main at 1da3821f, not by hand: the precondition probe cleared " +
+      "and all six readings MET (B1 26/26, B2 26/26, B3 6/6, B4 6/6, B5 exit 0, B6 6/6). " +
+      "No tracker object carries this, which is why it is still `~` — re-run `/stage-audit` " +
+      "rather than trusting this line",
   },
   { n: 8, what: "/stage-audit and /round-rca", tracker: "#1746" },
 ];
