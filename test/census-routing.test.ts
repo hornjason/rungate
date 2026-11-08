@@ -510,6 +510,12 @@ const GENERATED_WORKFLOW_CENSUS = [
   // guard the diff gives an agent no route to.
   "test/ai-review-wif.test.ts",
   "test/no-fixed-window-slices.test.ts",
+  // #1782. Same shape again: a guard the diff gives an agent no route to.
+  // Adding a workflow file is designed to turn it red exactly once, and
+  // #1781 learned that from a red PR. This constant is what the
+  // scaffold-minus-hooks delta below is measured against, so it has to move
+  // with the router row or that case goes red on a correct change.
+  "test/bun-version-agreement.test.ts",
 ];
 
 /**
@@ -571,6 +577,34 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
     for (const t of GENERATED_WORKFLOW_CENSUS) {
       expect(tests, `${t} is routed by an edit touching no generated workflow`).not.toContain(t);
     }
+  });
+
+  // #1782. `test/bun-version-agreement.test.ts` holds a hand-maintained list
+  // of every workflow that runs `setup-bun`, so adding a workflow file is
+  // meant to turn it red exactly once — and that is a design, not a bug. The
+  // router did not name it, so #1781 learned about it from a red PR instead
+  // of from the instrument built to say so.
+  //
+  // Exemplar: #1781 added `.github/workflows/board-flow.yml` and nothing else
+  // in its diff routed that suite.
+  test("#1782: ADDING a workflow file routes the bun-version census", () => {
+    const { tests } = censusTestsFor([
+      change({ path: ".github/workflows/board-flow.yml", added: ["name: board-flow"] }),
+    ]);
+    expect(
+      tests,
+      "adding a workflow does not route test/bun-version-agreement.test.ts, which " +
+        "that very act is designed to turn red — this is #1782 again",
+    ).toContain("test/bun-version-agreement.test.ts");
+  });
+
+  // The negative control for the row above. `bun-version-agreement` reads
+  // `.github/workflows/` only, so a diff touching no workflow and no scaffold
+  // must NOT route it; without this the case above is satisfied by a row that
+  // fires on everything, which is the same as having no router.
+  test("#1782: an ordinary source edit does not route the bun-version census", () => {
+    const { tests } = censusTestsFor([change({ path: "lib/ai-review-rounds.ts" })]);
+    expect(tests).not.toContain("test/bun-version-agreement.test.ts");
   });
 
   // #1401's own acceptance: run the amended row against the exemplar that

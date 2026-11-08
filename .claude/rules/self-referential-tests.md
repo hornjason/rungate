@@ -137,7 +137,7 @@ events.** Why a `--name-only` router cannot tell them apart:
 | ticked or unticked an SC (ran sync-sc-status) | `test/sc-binding-split.test.ts` `test/ticked-sc-cover.test.ts` `test/behavioral-sc-ratchet.test.ts` `test/ticked-sc-absent-symbol.test.ts` |
 | touched a specs/ file that has a suite named after it | the suite named after it: `test/` + its basename lowercased + `.test.ts` |
 | touched gates/, hooks/ or the scaffold | `test/gate-contracts.test.ts` `test/scaffold-ownership.test.ts` `test/hook-traceability.test.ts` |
-| changed a generated workflow, or the scaffold source that emits one | `test/ai-review-runner-shell-parity.test.ts` `test/action-pin-parity.test.ts` `test/scaffold-permissions-merge.test.ts` `test/ai-review-wif.test.ts` `test/no-fixed-window-slices.test.ts` |
+| changed a generated workflow, or the scaffold source that emits one | `test/ai-review-runner-shell-parity.test.ts` `test/action-pin-parity.test.ts` `test/scaffold-permissions-merge.test.ts` `test/ai-review-wif.test.ts` `test/no-fixed-window-slices.test.ts` `test/bun-version-agreement.test.ts` |
 | touched config/ | `test/check-registry.test.ts` `test/matcher-registry-parity.test.ts` |
 | wrote the DA-owned session state (project-state.json, PROJECT-STATE.md, SUCCESS.md) | `test/closing-keywords.test.ts` `test/project-state-currency.test.ts` `test/project-state-shape.test.ts` `test/update-project-state.test.ts` `test/success-doc.test.ts` `test/distribution-standing.test.ts` `test/rule-lifecycle-spec.test.ts` |
 
