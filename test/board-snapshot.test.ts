@@ -1371,8 +1371,12 @@ describe("the refusals, and whether the API was reached", () => {
         // Spelled out, not built from a shared prefix. `#84`'s guard reads
         // SOURCE TEXT for the git argv it polices, so a literal is the only
         // form it can see — a prefix spread past it once already.
+        // late-env-ok: git reads no GITHUB_REPOSITORY, and this case deletes it
+        // precisely so the slug can only come from the remote planted below.
         const init = spawnSync("git", ["-C", dir, "init", "-q"], { encoding: "utf-8" });
         expect(init.status, `git init failed in the fixture: ${init.stderr}`).toBe(0);
+        // late-env-ok: same call, same reason — git does not consult the
+        // environment variable this file writes, and must not.
         const remote = spawnSync(
           "git",
           ["-C", dir, "remote", "add", "origin", "git@github.com:fixture-owner/fixture-repo.git"],
