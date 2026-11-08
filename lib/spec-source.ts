@@ -43,7 +43,8 @@
  * `staleness`, so the caller can say the ref may be behind.
  */
 
-import { resolve, sep } from "path";
+import { realpathSync } from "fs";
+import { basename, dirname, join, resolve, sep } from "path";
 
 /** What a single git invocation came back with. */
 export interface GitRun {
@@ -146,13 +147,33 @@ function fetchArgsFor(ref: string): string[] | null {
  * `board-snapshot` accepts an absolute spec path and deriving a root from it
  * would silently measure a different checkout.
  */
+/**
+ * Canonicalise a directory, or `null` when it cannot be resolved.
+ *
+ * Injected for the same reason {@link GitRunner} is: a case that touches the
+ * real filesystem measures whatever this machine happens to look like. The
+ * live one returns `null` on ENOENT rather than throwing, because an
+ * unresolvable path is a reading this module must refuse, not a crash.
+ */
+export type RealPath = (p: string) => string | null;
+
+export const LIVE_REALPATH: RealPath = p => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+};
+
 export function resolveSpecSource(opts: {
   root: string;
   absPath: string;
   ref?: string;
   git: GitRunner;
+  realpath?: RealPath;
 }): SpecSource {
   const ref = opts.ref ?? DEFAULT_SPEC_REF;
+  const realpath = opts.realpath ?? LIVE_REALPATH;
 
   // IS THERE A REPOSITORY AT ALL, FIRST — and is `git` even runnable.
   //
@@ -174,18 +195,54 @@ export function resolveSpecSource(opts: {
     };
   }
   const top = inRepo.stdout.trim();
-  if (!inRepo.ok || top === "") {
+  // **AN `ok` ANSWER OF NOTHING IS UNMEASURED, NEVER UNTRACKED.** git
+  // succeeded and said something this function cannot interpret, and
+  // "I do not understand the answer" is not "there is no repository".
+  // Round 2 of #1896's security review; this arm used to return untracked
+  // and a case in the battery asserted that wrong answer.
+  if (inRepo.ok && top === "") {
+    return {
+      kind: "unmeasured",
+      why:
+        `\`git rev-parse --show-toplevel\` exited 0 in ${opts.root} and printed nothing. That is an answer this ` +
+        `reader cannot interpret, not a directory without a repository — and the difference decides whether the ` +
+        `working tree gets read.`,
+    };
+  }
+  if (!inRepo.ok) {
+    // **A SECOND PROBE, BECAUSE 128 SPANS TWO FACTS.** `--show-toplevel`
+    // exits 128 for "no repository anywhere above here" and for "there is
+    // a repository and its work tree is unusable" — a bare repo, an
+    // unreadable `.git`. The first is an ordinary planted fixture and disk
+    // is genuinely the only copy; the second is a reader that failed, and
+    // falling back there is the defect this module exists to prevent.
+    //
+    // Not two deciders over one question: `--git-dir` answers *is there a
+    // repository*, `--show-toplevel` answers *does it have a work tree I
+    // can see*. Measured — in a plain temp directory both exit 128, which
+    // is what makes "both failed" the signal for no repository at all.
+    const gitDir = opts.git(["rev-parse", "--git-dir"]);
+    if (gitDir.ok) {
+      return {
+        kind: "unmeasured",
+        why:
+          `${opts.root} IS a git repository (\`--git-dir\` resolved to ${gitDir.stdout.trim() || "an unnamed path"}) ` +
+          `and \`--show-toplevel\` still failed with exit ${inRepo.code}: ` +
+          `${redactCredentials(inRepo.stderr.trim()) || "no reason given"}. A work tree that cannot be located is a ` +
+          `reader that failed, not a file that is untracked.`,
+      };
+    }
     return {
       kind: "untracked",
       path: opts.absPath,
-      // THE EXIT AND THE REASON, quoted. 128 covers both "no repository
-      // here" and a repository whose object store is broken, and no text
-      // matcher should be the thing that tells them apart — so the arm
-      // states what it saw and lets the reader judge.
+      // THE EXIT AND BOTH REASONS, quoted. No text matcher decides which
+      // kind of 128 this was — the two probes do, and the line says what
+      // each of them said so a reader can judge for themselves.
       why:
-        `${opts.root} is not inside a readable git work tree (exit ${inRepo.code}: ` +
-        `${redactCredentials(inRepo.stderr.trim()) || "no reason given"}), so there is no ${ref} to read and the ` +
-        `file on disk is the only copy reachable. The reading below was taken against it.`,
+        `${opts.root} is not inside a git work tree and is not a repository (\`--show-toplevel\` exit ` +
+        `${inRepo.code}: ${redactCredentials(inRepo.stderr.trim()) || "no reason given"}; \`--git-dir\` exit ` +
+        `${gitDir.code}), so there is no ${ref} to read and the file on disk is the only copy that exists. ` +
+        `The reading below was taken against it.`,
     };
   }
 
@@ -200,7 +257,30 @@ export function resolveSpecSource(opts: {
   // This is also the ordinary case rather than an edge: every fixture in
   // `test/board-snapshot.test.ts` plants a spec in an `mkdtemp` while the
   // project root is this checkout.
-  const within = resolve(opts.absPath) === resolve(top) || resolve(opts.absPath).startsWith(resolve(top) + sep);
+  // **CANONICALISED BOTH SIDES, because a lexical compare has a parser
+  // differential against the filesystem.** On darwin `/tmp` IS
+  // `/private/tmp` and the volume is case-insensitive, so a path genuinely
+  // inside the work tree can read as outside — and the error falls toward
+  // reading the working tree, which is the direction that matters. Round 2
+  // of #1896's security review.
+  //
+  // `realpath` is resolved on the DIRECTORY and the basename re-attached,
+  // so a spec that does not exist yet still canonicalises; a directory that
+  // cannot be resolved at all is UNMEASURED rather than untracked, for the
+  // same reason every other failure here is.
+  const canonTop = realpath(resolve(top));
+  const canonAbs = realpath(resolve(dirname(opts.absPath)));
+  if (canonTop === null || canonAbs === null) {
+    return {
+      kind: "unmeasured",
+      why:
+        `the work tree at ${top} or the directory holding ${opts.absPath} could not be resolved to a real path, ` +
+        `so whether the spec is inside the repository is unknown. Guessing it is outside would read the working ` +
+        `tree; guessing it is inside would read a ref for a file somewhere else.`,
+    };
+  }
+  const real = join(canonAbs, basename(opts.absPath));
+  const within = real === canonTop || real.startsWith(canonTop + sep);
   if (!within) {
     return {
       kind: "untracked",
