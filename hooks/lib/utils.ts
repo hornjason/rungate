@@ -1,7 +1,19 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
+import { isRunDirectory } from '../../lib/active-workflow';
 
-export const WORK_DIR = join(process.env.RUNGATE_WORK_DIR || process.env.HOME!, '.rungate');
+// One binding for "where is the work directory", in `./paths` (#1668). This
+// file used to declare a second one as
+// `join(RUNGATE_WORK_DIR || HOME, '.rungate')`, with the `join` outside the
+// `||`: an absolute override resolved to `$RUNGATE_WORK_DIR/.rungate`, and a
+// ship run and the test harness both set that variable, so in exactly those
+// conditions IssueCloseGuard and AutoVerifyGate read a directory that does not
+// exist and found no live workflow at all. It was also missing the
+// `PAI_WORK_DIR` fallback that six siblings spell.
+// Imported as well as re-exported: `findWorkflowState` below reads it, and a
+// bare `export ... from` would not bind it in this module's scope.
+import { WORK_DIR } from './paths';
+export { WORK_DIR };
 export const HARNESS_ROOT = process.env.HARNESS_ROOT || join(process.env.HOME!, 'Projects', 'rungate');
 
 export interface HookInput {
@@ -65,11 +77,19 @@ export function findWorkflowState(issueNum?: string, phases?: string[]): Workflo
     } catch {}
   };
 
+  // BOTH levels filtered (#1648, #1668). A hidden entry is the work dir's own
+  // bookkeeping, not a run: `.archive/<slug>/workflow-state.json` is a
+  // finished run, and being written last it is the newest file, so an
+  // unfiltered scan hands it to every caller here. Filtering only the outer
+  // level leaves the same defect one level deeper — a hidden directory INSIDE
+  // a live run — and that is one filtered reading beside one unfiltered
+  // reading of the same question, which no behavioural case can tell apart
+  // while the outer one is right.
   try {
-    for (const d of readdirSync(WORK_DIR, { withFileTypes: true }).filter(d => d.isDirectory())) {
+    for (const d of readdirSync(WORK_DIR, { withFileTypes: true }).filter(d => d.isDirectory() && isRunDirectory(d.name))) {
       collect(join(WORK_DIR, d.name, 'workflow-state.json'), d.name);
       try {
-        for (const sd of readdirSync(join(WORK_DIR, d.name), { withFileTypes: true }).filter(sd => sd.isDirectory()))
+        for (const sd of readdirSync(join(WORK_DIR, d.name), { withFileTypes: true }).filter(sd => sd.isDirectory() && isRunDirectory(sd.name)))
           collect(join(WORK_DIR, d.name, sd.name, 'workflow-state.json'), `${d.name}/${sd.name}`);
       } catch {}
     }

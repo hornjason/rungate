@@ -79,10 +79,22 @@ export function getMemoryDir(): string {
 
 /**
  * Get the PAI work directory (expanded)
- * Priority: RUNGATE_WORK_DIR env var (expanded) → ~/.rungate
+ * Priority: RUNGATE_WORK_DIR → PAI_WORK_DIR → ~/.rungate, each expanded.
+ *
+ * `PAI_WORK_DIR` is the fallback six siblings already spell — VerifyPhaseLock,
+ * StaleTTLCleanup, AgentVerdictCapture, findWorkflow, issue-filing-gate and
+ * local-review-rounds — and this function did not, so a tree setting only
+ * `PAI_WORK_DIR` sent these callers to `~/.rungate` while the rest of the
+ * harness used the override (#1668).
+ *
+ * This is the ONE binding for the question. `hooks/lib/utils.ts` used to
+ * declare a second one as `join(RUNGATE_WORK_DIR || HOME, '.rungate')` — the
+ * `join` outside the `||`, so an absolute override resolved to
+ * `$RUNGATE_WORK_DIR/.rungate` — and it now re-exports this instead of
+ * carrying a ninth copy of the expression.
  */
 export function getWorkDir(): string {
-  const envWorkDir = process.env.RUNGATE_WORK_DIR;
+  const envWorkDir = process.env.RUNGATE_WORK_DIR || process.env.PAI_WORK_DIR;
 
   if (envWorkDir) {
     return expandPath(envWorkDir);
