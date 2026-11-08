@@ -148,6 +148,27 @@ const completeBoard = (): BoardSnapshot => ({
   // omitted it would make `queue-label` UNMEASURED in every case here and
   // the refusals would be about the fixture rather than their subjects.
   queueLabel: "engine",
+  // The three REPOSITORY-WIDE populations — SC-2615, SC-2616, SC-2617.
+  // PRESENT for the same reason as the two above.
+  specPlacements: [
+    { path: "specs/A.md", state: "PLANNED", criteria: 2, placed: 2 },
+    { path: "specs/B.md", state: "PLANNED", criteria: 1, placed: 1 },
+    // A NO_CRITERIA spec belongs in the COMPLETE board on purpose. It
+    // contributes to neither side of `spec-placement`, and a fixture
+    // without one could not tell that from a reading that counts it in the
+    // denominator — which would make this control short and every case
+    // below it a complaint about the fixture.
+    { path: "specs/EMPTY.md", state: "NO_CRITERIA", criteria: 0, placed: 0 },
+  ],
+  // One issue that NAMES, one that DECLARES it serves none. Both are
+  // conformant and they are conformant for different reasons, so a reading
+  // that credited only one of the two spellings would show up here rather
+  // than in whichever case happened to use the other.
+  repoIssues: [
+    { number: 1, names: ["SC-2618"], servesNone: false },
+    { number: 2, names: [], servesNone: true },
+  ],
+  plannedEdges: [{ blocked: 2, blocker: 1, present: true }],
 });
 
 /**
@@ -244,21 +265,26 @@ const plant = (name: string, board: BoardSnapshot): string => {
 };
 
 describe("the command's shape", () => {
-  test("--list-readings names all five readings, and the list is the assertion", () => {
+  test("--list-readings names every reading, and the list is the assertion", () => {
     const r = run(SCRIPT, ["--list-readings"]);
     expect(r.code, `--list-readings refused: ${r.err}`).toBe(0);
     // Asserting the names rather than the exit code: a command that
     // printed nothing and exited 0 would satisfy the exit code alone, and
     // B5's own verify command reads this output.
     for (const name of READING_NAMES) expect(r.out, `--list-readings did not name "${name}"`).toContain(name);
-    expect(READING_NAMES.length, "the ladder's B5 verify names five readings").toBe(5);
+    // Five engine-scoped readings (B1..B4, B6) and three repository-wide
+    // ones (E1..E3, added by #1717). The number is asserted as well as the
+    // names because `--list-readings` printing a SUBSET would satisfy every
+    // `toContain` above — a list can only be checked by its length and its
+    // membership together.
+    expect(READING_NAMES.length, "the five engine readings plus the three repository-wide ones").toBe(8);
   });
 
   test("every reading names the ladder item that owns wiring its source", () => {
     // Without this, a reading can exist with nobody on the hook for making
     // it real, which is the "declared and nothing reads it" shape this
     // whole stage exists to close.
-    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6"]);
+    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2", "E3"]);
   });
 });
 
@@ -414,7 +440,7 @@ describe("the refusals, each proved against the mutant", () => {
       "UNMEASURED",
     );
     expect(whole.out).toContain("SHORT       criterion-coverage");
-    expect(whole.out.match(/^MET /gm)?.length, "an absent satisfiedByIssue moved a reading it has nothing to do with").toBe(4);
+    expect(whole.out.match(/^MET /gm)?.length, "an absent satisfiedByIssue moved a reading it has nothing to do with").toBe(READING_NAMES.length - 1);
 
     const spec = READINGS.find(r => r.name === "criterion-coverage")!;
     const reading = takeReading(spec, board as unknown as BoardSnapshot);
@@ -525,6 +551,28 @@ describe("each reading, planted short and planted complete", () => {
     { reading: "blocked-by-edges", what: "an issue that is neither a declared root nor blocked", break: b => void (b.issues[1]!.blockedBy = []) },
     { reading: "criteria-field", what: "an issue whose Criteria column is blank", break: b => void (b.issues[0]!.criteriaField = "  ") },
     { reading: "queue-label", what: "an issue missing the engine label", break: b => void (b.issues[1]!.labels = ["bug"]) },
+    // The three repository-wide readings, broken in their own populations —
+    // never in `issues`, `criteria` or `phases`. A break that reached into
+    // the engine populations would redden an engine reading too, and the
+    // whole-board assertion below cannot tell which reading refused.
+    {
+      reading: "spec-placement",
+      what: "a spec whose criteria sit in no phase",
+      break: b => {
+        b.specPlacements![0]!.state = "UNPLANNED";
+        b.specPlacements![0]!.placed = 0;
+      },
+    },
+    {
+      reading: "criteria-named",
+      what: "an issue that names no criterion and does not declare that it serves none",
+      break: b => void (b.repoIssues![1]!.servesNone = false),
+    },
+    {
+      reading: "dependency-edges",
+      what: "an ordering the plan derives that the tracker does not carry",
+      break: b => void (b.plannedEdges![0]!.present = false),
+    },
   ];
 
   test("the break list covers every reading, so none is silently untested", () => {
@@ -568,7 +616,7 @@ describe("each reading, planted short and planted complete", () => {
       READINGS.filter(r => r.readsIssueRefs).map(r => r.name).sort(),
       "a reading's readsIssueRefs declaration moved. If a new reading resolves an issue number it must set " +
         "the flag AND validate the reference against the board — see the rounds this battery replaced.",
-    ).toEqual(["blocked-by-edges", "criterion-coverage"]);
+    ).toEqual(["blocked-by-edges", "criterion-coverage", "dependency-edges"]);
 
     // Every row carries a reference, and every reference names nothing.
     //
@@ -589,6 +637,11 @@ describe("each reading, planted short and planted complete", () => {
       i.blockedBy = [9999];
       delete i.rootReady; // or a declared root satisfies it without the edge
     }
+    // `dependency-edges` resolves against `repoIssues`, not against the
+    // engine population, so its references have to be made stale in their
+    // own list or the sweep below asserts on a reading that was never
+    // handed a dangling pointer — green while witnessing nothing.
+    for (const e of dangling.plannedEdges!) e.blocker = 9999;
 
     // A row whose references are PARTLY stale, which the all-9999 board
     // above cannot produce. Round 7 found the gap it left: the battery
@@ -628,14 +681,25 @@ describe("each reading, planted short and planted complete", () => {
     }
   });
 
-  test("ONE short reading refuses the whole board even while the other four are met", () => {
+  test("ONE short reading refuses the whole board even while every other one is met", () => {
     const broken = completeBoard();
     broken.issues[1]!.labels = ["bug"];
     const readings = takeReadings(broken);
+    // Membership, not a count: the point is that exactly ONE reading moved
+    // and it is `queue-label`. A count would stay right if a second
+    // reading went short for an unrelated reason in the same board.
     expect(readings.filter(r => r.status === "met").map(r => r.name).sort()).toEqual(
-      ["blocked-by-edges", "criteria-field", "criterion-coverage", "milestones"],
+      [
+        "blocked-by-edges",
+        "criteria-field",
+        "criteria-named",
+        "criterion-coverage",
+        "dependency-edges",
+        "milestones",
+        "spec-placement",
+      ],
     );
-    expect(conformant(readings), "four of five met read as conformant").toBe(false);
+    expect(conformant(readings), "seven of eight met read as conformant").toBe(false);
   });
 });
 
