@@ -286,38 +286,61 @@ describe("the live plan", () => {
     ).toEqual([]);
   }, LIVE_VERIFY_BUDGET_MS);
 
-  test("the overall goal carries a command, and that command is MET wherever it can be measured", () => {
-    // **THIS CASE FLIPPED ON 2026-11-07 AND THAT IS THE WHOLE POINT OF IT.**
-    // It used to assert the goal was NOT met, so that the day it started
-    // passing was a day somebody noticed rather than a sentence going
-    // stale. #1718 made `rungate board-conformance` resolve its own spec,
-    // prefix and repository, the command exits 0, and project-state.json's
-    // goal records that in the same commit as this line.
+  test("the overall goal's command produces a VERDICT about the board, whichever verdict that is", () => {
+    // **THIS CASE ASSERTED THE BOARD WAS CONFORMANT FOR ABOUT AN HOUR, AND
+    // THAT WAS WRONG.** The history is worth keeping because the mistake
+    // is the one the whole stage exists to stop.
+    //
+    // It originally asserted the goal was NOT met, so that the day it
+    // started passing was a day somebody noticed. #1718 made the command
+    // work, so it was flipped to `toBe(0)` — and merging #1718 CLOSED
+    // #1718, which was the only open issue naming SC-2618, SC-2619 and
+    // SC-2620, so `criterion-coverage` went 26 of 26 → 23 of 26 and this
+    // case reddened `main` for a correct merge, within minutes.
+    //
+    // `SC-2613`'s own `proved-by` in SPEC-TO-BOARD-PIPELINE-SPEC.md
+    // records the identical sequence against #1873 and merge `849ad16c`.
+    // Twice now: a merge closes the last issue for a criterion and the
+    // board is legitimately short for the gap between the merge and the
+    // tick.
+    //
+    // **So a unit suite must not gate on live board state.** Board
+    // conformance is a property of the TRACKER, which a merge moves and
+    // this file cannot; it belongs to the job SC-2620 asks for, where a
+    // short board is a report rather than a red `main`. What this case
+    // owns is the CODE: that the command can still take a reading at all.
+    // That is the regression #1718 fixed and the one worth guarding here.
     expect(doc.goal.verify.length, "the overall goal has no verify command").toBeGreaterThan(0);
     const r = run(doc.goal.verify);
     const said = `${r.stdout ?? ""}${r.stderr ?? ""}`;
 
     // A tree with no credential has not FAILED this goal — it has not
     // MEASURED it, and those are different states
-    // (`.claude/rules/config-access.md`). The command says which of the two
-    // it is, by name, which is the only reason this branch is allowed to
-    // exist: a bare non-zero would be satisfied by a crash, a typo, or a
-    // genuinely short board, and all three must stay distinguishable here.
+    // (`.claude/rules/config-access.md`). The command names which, so this
+    // branch asserts the refusal is the credential one and not a crash
+    // wearing the same exit code.
     if (said.includes("GITHUB_TOKEN environment variable is not set")) {
       expect(r.status, "no credential, and the command still exited 0 — unmeasured read as a pass").not.toBe(0);
-      expect(
-        said,
-        "the command reported a reading SHORT in a tree where it could not reach the API at all",
-      ).not.toContain("reading(s) are not met");
+      expect(said, "it reported a reading SHORT in a tree it could not reach the API from").not.toContain(
+        "reading(s) are not met",
+      );
       return;
     }
 
+    // Exactly two outcomes count as a verdict, and the command spells both.
+    // Anything else — a crash, an unresolvable spec, a producer that could
+    // not be started, the `UNMEASURED` the five readings used to print —
+    // means it did not measure the board, which is the failure this owns.
+    const met = r.status === 0 && said.includes("every reading is met");
+    const short = r.status !== 0 && /\d+ of \d+ reading\(s\) are not met/.test(said);
     expect(
-      r.status,
-      `the overall goal's command no longer exits 0, so the board has drifted from the spec or the ` +
-        `command has regressed. Neither is something to record in project-state.json — fix it.\n${said}`,
-    ).toBe(0);
-    expect(said, "it exited 0 without saying every reading was met").toContain("every reading is met");
+      met || short,
+      `the goal's command produced neither verdict. It must either exit 0 saying every reading is met, ` +
+        `or exit non-zero naming how many are short. Exit ${r.status}:\n${said}`,
+    ).toBe(true);
+    expect(said, "it took no reading at all — this is the state #1718 removed").not.toContain(
+      "has not wired this reading",
+    );
   });
 
   test("every complete stage carries a retro, and the next one is agreed and unblocked", () => {

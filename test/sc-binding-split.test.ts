@@ -227,7 +227,29 @@ const UNCLAIMED_RATCHET = 150;
 // reading an incomplete census as complete reddens 1 (exact), and turning an
 // unreadable cap into full eligibility reddens 2 where 3 were predicted — the
 // miss is recorded in the PR rather than retrofitted.
-const CLAIMED_UNBINDABLE = 145;
+//
+// 145 -> 147 on 2026-11-07 (#1718): SC-2618 and SC-2619 of
+// SPEC-TO-BOARD-PIPELINE-SPEC.md. Both were already CLAIMED — named in a
+// declaring position by `test/board-conformance.test.ts` and
+// `test/board-snapshot.test.ts` — so ticking them moved them into this
+// population rather than creating a new kind of gap, the same way the 27
+// above did.
+//
+// They are unbindable for the same reason: each is a claim about what a
+// COMMAND answers for a given input, not about a symbol existing. SC-2618
+// is "exits non-zero while any reading is short", SC-2619 is "every input
+// comes from the repository or the live API, and a hand-assembled file is
+// a refusal naming it". No registered pattern expresses an exit code or a
+// refusal; the available ones would bind to `board-conformance` appearing
+// in the tree, which is satisfied by the file existing.
+//
+// What the ticks rest on is in each criterion's own `proved-by`: for
+// SC-2618, two staged copies of the command differing only in
+// `REFUSE_EXIT`, run against one shared refusing producer, real refusing
+// and mutant not; for SC-2619, blank-value rows for all three forwarded
+// inputs against a project whose config COULD have satisfied each one, so
+// a refusal cannot come from there being nothing to fall back to.
+const CLAIMED_UNBINDABLE = 147;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
