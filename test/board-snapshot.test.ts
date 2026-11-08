@@ -26,14 +26,26 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  GIT_TIMEOUT_MS,
+  gitEnv,
+  gitTimeoutFor,
+  LIVE_GIT,
   REFUSAL_EXIT,
   main as boardSnapshotMain,
   type BoardSnapshotGitHub,
+  type GitSpawn,
   type ProducedSnapshot,
 } from "../scripts/board-snapshot";
+import {
+  GIT_AMBIENT_CONFIG_PREFIX,
+  GIT_EXEC_VARS,
+  GIT_LOCATION_VARS,
+  gitIsolatedEnv,
+  withoutAmbientGitOverrides,
+} from "../lib/git-isolation";
 import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
 import { oneScMentionPattern } from "../lib/sc-ids";
-import { readSnapshotText, takeReadings } from "../scripts/board-conformance";
+import { PRODUCE_TIMEOUT_MS, readSnapshotText, takeReadings } from "../scripts/board-conformance";
 
 const ROOT = join(import.meta.dir, "..");
 const SOURCE = readFileSync(join(ROOT, "scripts/board-snapshot.ts"), "utf-8");
@@ -1422,6 +1434,21 @@ describe("the refusals, and whether the API was reached", () => {
           { encoding: "utf-8" },
         );
         expect(remote.status, `git remote add failed in the fixture: ${remote.stderr}`).toBe(0);
+        // **AND A RESOLVABLE `origin/main`, because a reading needs one.**
+        // Round 4 made an unresolvable ref fail closed — a configured
+        // remote whose ref will not resolve is a reading nobody took, and
+        // this fixture used to be exactly that shape while asserting a
+        // successful run. Committing and planting the ref makes it a real
+        // D3 repository instead of a repository the reader has to excuse.
+        for (const argv of [
+          ["-C", dir, "add", "-A"],
+          ["-C", dir, "-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "-m", "fixture"],
+          ["-C", dir, "update-ref", "refs/remotes/origin/main", "HEAD"],
+        ]) {
+          // late-env-ok: git reads no GITHUB_REPOSITORY, and this case deletes it
+          const step = spawnSync("git", argv, { encoding: "utf-8" });
+          expect(step.status, `${argv[2]} failed in the fixture: ${step.stderr}`).toBe(0);
+        }
         const { gh, calls } = spy(CONFORMANT_LIVE);
         expect((await capture([at, "--prefix", "Fix", "--project-root", dir], gh)).code).toBe(0);
         expect(calls, "the slug did not come from the fixture's own origin").toContain(
@@ -1563,5 +1590,396 @@ describe("the two files agree, and the producer never writes", () => {
     expect((SOURCE.match(/REFUSAL_EXIT\s*=/g) || []).length).toBe(1);
     expect(SOURCE.match(/return\s+-?[1-9]\d*\s*;/g) || []).toEqual([]);
     expect((SOURCE.match(/process\.exit\(/g) || []).length).toBe(1);
+  });
+});
+
+// ── Security review of PR #1896, round 3 ───────────────────────────────
+//
+// `resolveSpecSource` put network I/O behind this runner — `git fetch` —
+// and `spawnSync` with no `timeout` waits forever. Through
+// `board-conformance` the outer `PRODUCE_TIMEOUT_MS` eventually kills the
+// child, but `board-snapshot` is a standalone entry point too and nothing
+// is above it there. A wedge is worse than a refusal because nothing
+// observes it, which is the reasoning `PRODUCE_TIMEOUT_MS`'s own comment
+// already carries one level up.
+describe("LIVE_GIT bounds every call, because one of them is the network", () => {
+  const seen: { cmd: string; args: readonly string[]; opts: Record<string, unknown> }[] = [];
+  const recorder = ((cmd: string, args: readonly string[], opts: Record<string, unknown>) => {
+    seen.push({ cmd, args, opts });
+    return { status: 0, stdout: "out", stderr: "", pid: 1, output: [], signal: null };
+  }) as unknown as GitSpawn;
+
+  test("every invocation carries a timeout and refuses to prompt for credentials", () => {
+    seen.length = 0;
+    LIVE_GIT("/r", recorder)(["fetch", "--quiet", "origin", "main"]);
+
+    expect(seen.length).toBe(1);
+    const opts = seen[0]!.opts;
+    expect(opts.timeout, "a git call with no timeout can wedge an unattended run").toBe(GIT_TIMEOUT_MS);
+    expect(GIT_TIMEOUT_MS).toBeGreaterThan(0);
+    // A credential prompt is a hang wearing a different hat: git blocks on
+    // a terminal nobody is sitting at. Asserted because the timeout alone
+    // turns a 2-second failure into a full-length one.
+    expect((opts.env as Record<string, string>).GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
+  test("a killed child is `code: null` and SAYS it ran too long", () => {
+    // What `spawnSync` hands back when the timeout fires: `status: null`
+    // and an `error`. `lib/spec-source.ts` already refuses on a null code,
+    // so the open question is whether the refusal can say WHY — "it never
+    // started" and "it ran too long" are different facts, and only one of
+    // them is worth retrying.
+    //
+    // The fake carries `error.code` because round 8 made that — not the
+    // signal — what licenses naming the bound: a `maxBuffer` overrun has
+    // the same signal and a different cause.
+    const timedOut = ((_cmd: string, _args: readonly string[]) => ({
+      status: null,
+      stdout: "",
+      stderr: "",
+      error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }),
+      pid: 1,
+      output: [],
+      signal: "SIGTERM",
+    })) as unknown as GitSpawn;
+
+    const r = LIVE_GIT("/r", timedOut)(["fetch"]);
+    expect(r.ok).toBe(false);
+    expect(r.code).toBeNull();
+    expect(r.stderr).toContain("ETIMEDOUT");
+    expect(r.stderr, "the reason omits the bound that was exceeded").toContain(String(GIT_TIMEOUT_MS));
+  });
+
+  test("a `git` that was never THERE says so, and does NOT claim a timeout", () => {
+    // **The axis the first version of this battery never varied.** A null
+    // status has two causes and the code's own comment names both, but
+    // every row here handed it the timeout shape — so no count could come
+    // back wrong about an `ENOENT`, which failed instantly and printed as
+    // having run for a full minute. `signal` is what separates them: a
+    // timeout kills, an absent binary never started.
+    const absent = ((_cmd: string, _args: readonly string[]) => ({
+      status: null,
+      stdout: "",
+      stderr: "",
+      error: new Error("spawnSync git ENOENT"),
+      pid: 0,
+      output: [],
+      signal: null,
+    })) as unknown as GitSpawn;
+
+    const r = LIVE_GIT("/r", absent)(["fetch"]);
+    expect(r.code).toBeNull();
+    expect(r.stderr).toContain("ENOENT");
+    expect(r.stderr, "an instant failure claimed the full timeout").not.toContain(String(GIT_TIMEOUT_MS));
+    expect(r.stderr).not.toContain("SIGTERM");
+    expect(r.stderr).toContain("never started");
+  });
+
+  test("a child that exited normally carries NO invented reason — the control", () => {
+    // Without this, "a kill says why" is satisfied by appending the timeout
+    // note to every call, which would put a timeout message on a successful
+    // fetch and teach the reader to ignore it.
+    seen.length = 0;
+    const r = LIVE_GIT("/r", recorder)(["rev-parse", "--show-toplevel"]);
+    expect(r.ok).toBe(true);
+    expect(r.stderr).toBe("");
+  });
+});
+
+// ── Security review of PR #1896, round 8 ───────────────────────────────
+describe("round 8: the environment can move the repository out from under `-C root`", () => {
+  test("the repo-locating variables are stripped from every git call", () => {
+    // `GIT_DIR` and friends take precedence over `-C root`'s discovery, so
+    // a caller that already set them — a git hook, a wrapper around its
+    // own nested git — points every call at a DIFFERENT repository while
+    // each downstream check reports a clean, confident reading for the
+    // wrong tree. This module's whole defect, reached through the
+    // environment rather than through an exit code.
+    const got = gitEnv({ PATH: "/usr/bin", GIT_DIR: "/elsewhere/.git", GIT_WORK_TREE: "/elsewhere", HOME: "/h" });
+
+    for (const name of GIT_LOCATION_VARS) {
+      expect(got[name], `${name} survived into the spawn env`).toBeUndefined();
+    }
+    // The control: stripping is not "empty the environment". PATH is how
+    // the child finds git at all.
+    expect(got.PATH).toBe("/usr/bin");
+    expect(got.HOME).toBe("/h");
+    expect(got.GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
+  test("the list is what LIVE_GIT actually passes, not a parallel list", () => {
+    const seen: Record<string, unknown>[] = [];
+    const rec = ((_c: string, _a: readonly string[], o: Record<string, unknown>) => {
+      seen.push(o);
+      return { status: 0, stdout: "", stderr: "", pid: 1, output: [], signal: null };
+    }) as unknown as GitSpawn;
+
+    LIVE_GIT("/r", rec)(["status"]);
+    const env = seen[0]!.env as NodeJS.ProcessEnv;
+    for (const name of GIT_LOCATION_VARS) expect(env[name], `${name} reached the child`).toBeUndefined();
+  });
+});
+
+// ── Security review of PR #1896, round 12 ──────────────────────────────
+describe("round 12: the inner timeout must be able to fire before the outer one", () => {
+  test("GIT_TIMEOUT_MS is strictly under board-conformance's PRODUCE_TIMEOUT_MS", () => {
+    // The two were both 60_000, so the outer `spawnSync` killed the whole
+    // child at the same moment the inner timeout would have fired and the
+    // specific "it timed out — the bound is Nms" message never reached
+    // anyone through the primary caller. A diagnostic that cannot fire in
+    // the path it was written for is a line in a report
+    // (`.claude/rules/checks-must-be-able-to-fail.md`).
+    expect(GIT_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(
+      GIT_TIMEOUT_MS,
+      "the outer bound kills the child before the inner one can say why",
+    ).toBeLessThan(PRODUCE_TIMEOUT_MS);
+  });
+
+  test("it TRACKS the outer bound rather than being a smaller fixed number", () => {
+    // A fixed 30s would pass the assertion above and still be wrong for a
+    // consumer who lowers the outer bound to 20s — the margin has to
+    // follow the variable, not the default. Driven through the exported
+    // function because the module-level const reads `process.env` once at
+    // import and a late edit cannot reach it
+    // (`feedback-bun-late-env-edits-dont-reach-children`).
+    expect(gitTimeoutFor({ RUNGATE_PRODUCE_TIMEOUT_MS: "20000" })).toBeLessThan(20000);
+    expect(gitTimeoutFor({ RUNGATE_PRODUCE_TIMEOUT_MS: "600000" })).toBeGreaterThan(60000);
+    // The control: an unset or unparseable value falls back to the same
+    // default the outer one falls back to, not to zero.
+    expect(gitTimeoutFor({})).toBe(gitTimeoutFor({ RUNGATE_PRODUCE_TIMEOUT_MS: "nonsense" }));
+    expect(gitTimeoutFor({})).toBeGreaterThan(0);
+  });
+
+  test("the bound LIVE_GIT actually passes is the derived one", () => {
+    const seen: Record<string, unknown>[] = [];
+    const rec = ((_c: string, _a: readonly string[], o: Record<string, unknown>) => {
+      seen.push(o);
+      return { status: 0, stdout: "", stderr: "", pid: 1, output: [], signal: null };
+    }) as unknown as GitSpawn;
+
+    LIVE_GIT("/r", rec)(["fetch"]);
+    expect(seen[0]!.timeout).toBe(GIT_TIMEOUT_MS);
+  });
+});
+
+// ── Security review of PR #1896, round 9 ───────────────────────────────
+describe("round 9: the denylist was short, and a second denylist is why", () => {
+  // Round 8 named seven location variables and stopped. The family it
+  // missed does not redirect the repository — it reconfigures git, and
+  // several git config keys are COMMANDS. `core.fsmonitor` is the one
+  // `lib/git-isolation.ts` measured executing under #960/#965.
+  const poisoned = {
+    PATH: "/usr/bin",
+    HOME: "/h",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.fsmonitor",
+    GIT_CONFIG_VALUE_0: "touch /tmp/pwned",
+    GIT_CONFIG_GLOBAL: "/attacker/gitconfig",
+    GIT_CONFIG_SYSTEM: "/attacker/system",
+    GIT_CONFIG_NOSYSTEM: "0",
+    GIT_CONFIG: "/attacker/legacy",
+  };
+
+  test("every `GIT_CONFIG*` spelling is stripped, including the open-ended one", () => {
+    const got = gitEnv(poisoned);
+
+    for (const name of Object.keys(poisoned)) {
+      if (!name.startsWith(GIT_AMBIENT_CONFIG_PREFIX)) continue;
+      expect(got[name], `${name} survived into the spawn env`).toBeUndefined();
+    }
+    // The control, and it is the half that makes the strip a strip rather
+    // than an emptying: the child still has to find git and a home.
+    expect(got.PATH).toBe("/usr/bin");
+    expect(got.HOME).toBe("/h");
+    expect(got.GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
+  test("`KEY_<n>` is matched by PREFIX — an enumeration cannot reach the last one", () => {
+    // The reason this is a prefix and not a list. `GIT_CONFIG_COUNT` may
+    // be any integer, so the set of names is unbounded and a denylist of
+    // literals is short by construction — which is exactly how round 8's
+    // list came to be short.
+    const many: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+    for (let i = 0; i < 64; i++) {
+      many[`GIT_CONFIG_KEY_${i}`] = "core.pager";
+      many[`GIT_CONFIG_VALUE_${i}`] = "sh -c 'id > /tmp/pwned'";
+    }
+    const got = gitEnv(many);
+    const survivors = Object.keys(got).filter(n => n.startsWith(GIT_AMBIENT_CONFIG_PREFIX));
+    expect(survivors, "an injected config entry reached git").toEqual([]);
+  });
+
+  test("round 10: a variable git EXECUTES is stripped too, config-spelled or not", () => {
+    // The gap my own round-9 refactor opened. Stripping `GIT_CONFIG_*`
+    // removes an injected `core.sshCommand`/`core.pager`/`core.fsmonitor`,
+    // so leaving `GIT_SSH_COMMAND` set closes the config spelling of a
+    // route and leaves the direct one — which buys nothing, because
+    // anyone who can set the first can set the second.
+    const got = gitEnv({
+      PATH: "/usr/bin",
+      GIT_SSH_COMMAND: "sh -c 'id > /tmp/pwned'",
+      GIT_EXTERNAL_DIFF: "/attacker/diff",
+      GIT_ASKPASS: "/attacker/askpass",
+      SSH_ASKPASS: "/attacker/askpass",
+      GIT_PROXY_COMMAND: "/attacker/proxy",
+      GIT_PAGER: "/attacker/pager",
+    });
+
+    for (const name of GIT_EXEC_VARS) {
+      expect(got[name], `${name} is executed by git and reached the child`).toBeUndefined();
+    }
+    expect(got.PATH, "stripping became emptying").toBe("/usr/bin");
+  });
+
+  test("round 11: the sweep covers names NOBODY listed — that is the point of it", () => {
+    // Rounds 8, 9 and 10 each added names to a list and each found the
+    // previous list short. The fix is the namespace, not a fourth patch:
+    // these are real `GIT_*` variables that appear in none of the
+    // exported lists, and a denylist of literals cannot remove them.
+    const unlisted = {
+      GIT_EXEC_PATH: "/attacker/git-core",
+      GIT_TEMPLATE_DIR: "/attacker/template",
+      GIT_NAMESPACE: "refs/namespaces/evil",
+      GIT_ATTR_NOSYSTEM: "1",
+      GIT_A_VARIABLE_GIT_HAS_NOT_INVENTED_YET: "x",
+    };
+    for (const name of Object.keys(unlisted)) {
+      expect(
+        [...GIT_LOCATION_VARS, ...GIT_EXEC_VARS].includes(name as never),
+        `${name} is in a list, so it cannot show the sweep did the work`,
+      ).toBe(false);
+    }
+
+    const got = gitEnv({ ...unlisted, PATH: "/usr/bin", HOME: "/h" });
+    for (const name of Object.keys(unlisted)) {
+      expect(got[name], `${name} reached git`).toBeUndefined();
+    }
+    expect(got.PATH).toBe("/usr/bin");
+    expect(got.HOME).toBe("/h");
+  });
+
+  test("round 11: the named lists are DOCUMENTATION — the sweep must cover each", () => {
+    // Keeps the lists honest without letting them decide. If a name is
+    // worth documenting it must actually be removed; if the sweep ever
+    // stops covering one, this says which.
+    const every = Object.fromEntries(
+      [...GIT_LOCATION_VARS, ...GIT_EXEC_VARS].map(n => [n, "/attacker/x"]),
+    );
+    const got = gitEnv(every);
+    const survivors = [...GIT_LOCATION_VARS, ...GIT_EXEC_VARS].filter(n => got[n] !== undefined);
+    expect(survivors, "a documented name is not actually removed").toEqual([]);
+  });
+
+  test("round 11: `SSH_AUTH_SOCK` SURVIVES — the control on how wide the sweep is", () => {
+    // Without this the sweep is free to widen to `SSH_` and nothing here
+    // would notice, which would break fetching over SSH for every
+    // consumer using an agent. `SSH_ASKPASS` is a command and is removed
+    // by name, so the two assertions together say where the line is.
+    const got = gitEnv({ SSH_AUTH_SOCK: "/tmp/agent.sock", SSH_ASKPASS: "/attacker/ask" });
+    expect(got.SSH_AUTH_SOCK, "an agent socket is not a command, and fetch needs it").toBe(
+      "/tmp/agent.sock",
+    );
+    expect(got.SSH_ASKPASS, "an askpass IS a command").toBeUndefined();
+  });
+
+  test("the declaration lives in lib/git-isolation.ts, and this file consumes it", () => {
+    // The finding's actual subject. A behavioural assertion cannot tell a
+    // second denylist from the first — both answer, one is dead — so the
+    // property asserted is that the reader's env IS the registry's
+    // projection, not merely equal to it today.
+    const base = { ...poisoned, GIT_DIR: "/elsewhere/.git" };
+    expect(gitEnv(base)).toEqual({
+      ...withoutAmbientGitOverrides(base),
+      GIT_TERMINAL_PROMPT: "0",
+    });
+  });
+
+  test("the reader does NOT adopt `gitIsolatedEnv` — one of these calls is a fetch", () => {
+    // `gitIsolatedEnv` is the other projection and it is wrong here. It
+    // SETS `GIT_CONFIG_GLOBAL=/dev/null`, which discards the system
+    // gitconfig's `credential.helper` along with everything else —
+    // measured in `lib/git-isolation.ts`'s own docblock as the reason
+    // `gitCredentialEnv` exists. `resolveSpecSource` runs `git fetch`
+    // through this runner, so adopting it would convert a reading into an
+    // authentication failure on every HTTPS remote.
+    expect(gitIsolatedEnv({}).GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    expect(
+      gitEnv({}).GIT_CONFIG_GLOBAL,
+      "the snapshot reader nulled the config file that declares credential.helper",
+    ).toBeUndefined();
+  });
+
+  test("isolation survives the strip — the two halves are not composed by a caller", () => {
+    // Both halves are individually correct and the series is not: strip
+    // after set removes the isolation, and the result is byte-identical
+    // to the isolated case on every channel but the one var. So
+    // `gitIsolatedEnv` performs both internally and there is no order for
+    // a caller to get wrong.
+    const got = gitIsolatedEnv(poisoned);
+    expect(got.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    expect(got.GIT_CONFIG_SYSTEM).toBe("/dev/null");
+    expect(got.GIT_CONFIG_NOSYSTEM).toBe("1");
+    expect(got.GIT_CONFIG_COUNT, "an injected entry outlived the isolation").toBeUndefined();
+    expect(got.GIT_CONFIG_KEY_0).toBeUndefined();
+    expect(got.GIT_CONFIG_VALUE_0).toBeUndefined();
+  });
+});
+
+describe("round 8: a signal is not a mechanism, and `status` is not always null", () => {
+  const shaped = (over: Record<string, unknown>): GitSpawn =>
+    ((_c: string, _a: readonly string[]) => ({
+      status: null, stdout: "", stderr: "", pid: 1, output: [], signal: null, ...over,
+    })) as unknown as GitSpawn;
+
+  test("only ETIMEDOUT names the bound — a maxBuffer kill carries the same signal", () => {
+    // Measured: a `maxBuffer` overrun is `status null, signal SIGTERM,
+    // code ENOBUFS` — identical to a timeout on the channel the previous
+    // version watched. So is an OOM kill. Naming the bound there is the
+    // "a duration is not a mechanism" shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    const err = Object.assign(new Error("spawnSync git ENOBUFS"), { code: "ENOBUFS" });
+    const r = LIVE_GIT("/r", shaped({ signal: "SIGTERM", error: err }))(["fetch"]);
+
+    expect(r.stderr).toContain("ENOBUFS");
+    expect(r.stderr).toContain("SIGTERM");
+    expect(r.stderr, "a buffer overrun was attributed to the timeout").not.toContain("timed out");
+    expect(r.stderr, "it named a bound it has no evidence was exceeded").not.toContain(String(GIT_TIMEOUT_MS));
+  });
+
+  test("a real timeout still names the bound — the control", () => {
+    const err = Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const r = LIVE_GIT("/r", shaped({ signal: "SIGTERM", error: err }))(["fetch"]);
+
+    expect(r.stderr).toContain("timed out");
+    expect(r.stderr).toContain(String(GIT_TIMEOUT_MS));
+  });
+
+  test("an `undefined` status becomes null, so the never-ran guard can see it", () => {
+    // Measured, and NOT what the fake had been saying: a missing binary
+    // returns `status: undefined` under Bun, not null. `code: r.status`
+    // therefore made `spec-source`'s `code === null` guard false, and a
+    // `git` that is not installed walked past the one check written for
+    // it and into a working-tree read.
+    const err = Object.assign(new Error("spawnSync git ENOENT"), { code: "ENOENT" });
+    const r = LIVE_GIT("/r", shaped({ status: undefined, error: err }))(["fetch"]);
+
+    expect(r.code, "undefined is not null, and the guard tests for null").toBeNull();
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("never started");
+  });
+
+  test("real spawnSync: the three shapes are what this code claims they are", () => {
+    // The pin, against the actual runtime. Assumed exit semantics have
+    // cost this PR two rounds already.
+    // late-env-ok: `sleep` reads no environment at all; this measures spawnSync's own timeout shape
+    const t = spawnSync("sleep", ["5"], { timeout: 300, encoding: "utf-8" });
+    expect(t.status).toBeNull();
+    expect((t.error as NodeJS.ErrnoException | undefined)?.code).toBe("ETIMEDOUT");
+
+    // late-env-ok: a binary that does not exist reads nothing; this measures the ENOENT shape
+    const n = spawnSync("definitely-not-a-binary-xyz", [], { encoding: "utf-8" });
+    expect(n.status, "a missing binary returns undefined, not null").toBeUndefined();
+    expect((n.error as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
   });
 });

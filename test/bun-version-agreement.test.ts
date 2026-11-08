@@ -156,7 +156,8 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // `board-sweep` joined with #1758, which reconciles every card against
     // GitHub on the events the board already emits, because an event-driven
     // writer cannot reach a card whose event fired before it existed. That
-    // makes fourteen.
+    // makes fourteen, and `board-conformance` joined with #1892/SC-2620,
+    // which takes the board's own reading on every push to `main` — fifteen.
     //
     // The floor and the list are two different claims, deliberately:
     // the floor says the scan read SOMETHING, so no case below is satisfied
@@ -166,12 +167,13 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // meant to turn this red once.
     const steps = setupBunStepsUnder(WORKFLOW_DIR);
     expect(steps.length, "fewer setup-bun steps than this repo has workflows that install bun")
-      .toBeGreaterThanOrEqual(14);
+      .toBeGreaterThanOrEqual(15);
     const files = new Set(steps.map(s => s.file));
     expect([...files].sort()).toEqual([
       "action-pins.yml",
       "ai-review-unmeasured.yml",
       "ai-review.yml",
+      "board-conformance.yml",
       "board-flow.yml",
       "board-ready.yml",
       "board-sweep.yml",

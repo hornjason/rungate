@@ -32,10 +32,13 @@
  * A producer that repaired the thing it measures would make the reading
  * true by taking it.
  */
+import { spawnSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
+import { describeSpecSource, resolveSpecSource, type GitRunner } from "../lib/spec-source";
 import { openFrontier, phaseOf } from "../lib/board-mirror";
+import { withoutAmbientGitOverrides } from "../lib/git-isolation";
 import { createGitHubClient, listMilestones } from "../lib/github";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
 import { resolveRepoSlug } from "../lib/branch-cleanup";
@@ -211,7 +214,149 @@ export interface ProducedSnapshot {
   criteria: CriterionCoverage[];
 }
 
-export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB): Promise<number> {
+/**
+ * `git -C <root> …`, built per root so the runner cannot be pointed at one
+ * checkout while the reading is taken in another.
+ *
+ * Injected for the same reason {@link BoardSnapshotGitHub} is: a case that
+ * reaches a real repository measures whatever this machine happens to be on,
+ * and goes green or red for reasons the case never wrote down.
+ */
+/**
+ * How long any one `git` call may take before it is killed.
+ *
+ * **One of these calls is network I/O.** `resolveSpecSource` runs `git fetch`,
+ * and a stalled remote or an HTTPS remote that drops to a credential prompt
+ * blocks `spawnSync` forever. Through `board-conformance` the outer
+ * `PRODUCE_TIMEOUT_MS` eventually kills the child, but `board-snapshot` is
+ * also a standalone entry point and there is nothing above it — so an
+ * unattended run wedges with no bound at all. A wedge is worse than a
+ * refusal, because nothing observes it. Review of #1896 round 3.
+ *
+ * **And it must be strictly UNDER the outer bound, which is why it is
+ * derived rather than written.** Round 12 found the two equal: this was
+ * `60_000` and `board-conformance`'s `PRODUCE_TIMEOUT_MS` is
+ * `Number(process.env.RUNGATE_PRODUCE_TIMEOUT_MS) || 60_000`. With both at
+ * 60s the outer `spawnSync` kills the whole child at the same moment the
+ * inner timeout would fire, so the specific message this code builds —
+ * *"it timed out — the bound is 60000ms"* — never reaches anyone through
+ * the primary caller. The reader saw `board-snapshot was killed by
+ * SIGTERM` instead, which names the wrong bound and the wrong subject.
+ *
+ * A diagnostic that cannot fire in the path it was written for is the
+ * shape `.claude/rules/checks-must-be-able-to-fail.md` calls a line in a
+ * report. Reading the same env var keeps the margin under a consumer who
+ * lowers the outer bound, which a fixed smaller number would not.
+ */
+export const GIT_TIMEOUT_FRACTION = 0.5;
+
+/** The outer bound this must stay under, read the same way the outer reads it. */
+export function gitTimeoutFor(env: NodeJS.ProcessEnv): number {
+  const outer = Number(env.RUNGATE_PRODUCE_TIMEOUT_MS) || 60_000;
+  return Math.max(1, Math.floor(outer * GIT_TIMEOUT_FRACTION));
+}
+
+export const GIT_TIMEOUT_MS = gitTimeoutFor(process.env);
+
+/**
+ * The ambient environment with every git override removed.
+ *
+ * **The list is not declared here.** Round 8 of this review added a
+ * seven-name denylist to this file and round 9 found it short by the whole
+ * `GIT_CONFIG*` family — which is the predictable outcome of a second
+ * registry, not bad luck about one entry: two deciders over one question
+ * are behaviourally one, and no case here could tell which was answering
+ * (`.claude/rules/checks-must-be-able-to-fail.md`). `lib/git-isolation.ts`
+ * has owned this set since #1001, so this is the declaration's second
+ * consumer rather than its second spelling.
+ *
+ * {@link withoutAmbientGitOverrides} is the half that only REMOVES.
+ * `gitIsolatedEnv` is deliberately not used: it additionally sets
+ * `GIT_CONFIG_GLOBAL=/dev/null`, which discards `credential.helper` —
+ * measured on this machine as the system gitconfig's `osxkeychain` — and
+ * {@link GIT_TIMEOUT_MS}'s comment above records that one of these calls
+ * is a `git fetch`. Isolation that cannot authenticate turns a reading
+ * into a refusal.
+ */
+export function gitEnv(from: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...withoutAmbientGitOverrides(from), GIT_TERMINAL_PROMPT: "0" };
+}
+
+/**
+ * `spawnSync`, injected so a case can assert WHAT was asked for.
+ *
+ * A timeout is invisible from outside unless something hangs, and a test
+ * that hangs to prove it does not hang is not a test. The seam puts the
+ * options object where a case can read it, and lets a case hand back the
+ * shape `spawnSync` returns when it kills a child — which is the half that
+ * actually decides what the caller sees.
+ */
+export type GitSpawn = typeof spawnSync;
+
+export const LIVE_GIT = (root: string, spawn: GitSpawn = spawnSync): GitRunner => {
+  return args => {
+    const r = spawn("git", ["-C", root, ...args], {
+      encoding: "utf-8",
+      timeout: GIT_TIMEOUT_MS,
+      // A prompt is a hang wearing a different hat: git waits on a terminal
+      // nobody is sitting at. Refusing to ask is what makes the timeout the
+      // last line of defence rather than the first.
+      //
+      // **AND THE REPO-LOCATING VARIABLES ARE STRIPPED.** `GIT_DIR`,
+      // `GIT_WORK_TREE` and friends take precedence over `-C root`'s
+      // discovery, so a caller that already set them — a git hook, a
+      // wrapper around its own nested git — silently points every call
+      // here at a DIFFERENT repository while each downstream check still
+      // reports a clean, confident reading for the wrong tree. That is
+      // this module's whole defect reached through the environment
+      // instead of through an exit code. Review of #1896 round 8.
+      env: gitEnv(process.env),
+    });
+    // `code` carries `status`, and `status` is NULL when the process never
+    // ran — no `git` on PATH — or when it was killed by a signal, which now
+    // includes the timeout above. Both are a different fact from any exit
+    // code, and `lib/spec-source.ts` refuses on either rather than reading
+    // it as an answer about a file.
+    //
+    // **BUT THEY ARE NOT THE SAME SENTENCE, AND A SIGNAL IS NOT A
+    // MECHANISM.** Measured, with Bun's `spawnSync`:
+    //
+    //   timeout    status null       signal SIGTERM   code ETIMEDOUT
+    //   maxBuffer  status null       signal SIGTERM   code ENOBUFS
+    //   no binary  status UNDEFINED  signal null      code ENOENT
+    //
+    // Two things fall out, and neither was in the review that prompted
+    // this. The middle row is indistinguishable from the first by signal
+    // alone, so only `ETIMEDOUT` may name the bound — `r.signal !== null`
+    // attributed an out-of-buffer kill, or an OOM killer, to a timeout
+    // that had not fired. And the last row returns **undefined**, not
+    // null, so `code: r.status` made `inRepo.code === null` false and a
+    // missing `git` walked past the one guard written for it into a
+    // working-tree read. `?? null` is the fix and the tri-state is the
+    // lesson again.
+    const code = r.status ?? null;
+    const why =
+      code !== null || r.error === undefined
+        ? ""
+        : (r.error as NodeJS.ErrnoException).code === "ETIMEDOUT"
+          ? `${r.error.message} (timed out — the bound is ${GIT_TIMEOUT_MS}ms)`
+          : r.signal !== null
+            ? `${r.error.message} (killed by ${r.signal}; the cause was not reported as a timeout)`
+            : `${r.error.message} (it never started — this is not a timeout)`;
+    return {
+      ok: r.status === 0,
+      code,
+      stdout: r.stdout ?? "",
+      stderr: [r.stderr ?? "", why].filter(s => s !== "").join("\n"),
+    };
+  };
+};
+
+export async function main(
+  argv: string[],
+  gh: BoardSnapshotGitHub = LIVE_GITHUB,
+  git: (root: string) => GitRunner = LIVE_GIT,
+): Promise<number> {
   let parsed;
   try {
     parsed = parseArgs({
@@ -314,12 +459,31 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
     console.error(`board-snapshot: resolved from the repository, not the command line — ${fromConfig.join(", ")}`);
   }
 
+  // **THE SPEC COMES FROM `origin/main`, AND THE LINE BELOW SAYS SO** — D3.
+  // This was a bare `readFileSync` until 2026-11-08, so every reading it
+  // produced was scoped by whichever branch the caller stood on and the
+  // output named none of them. A branch mid-edit on a Phase placement table
+  // and a branch four days behind main give different numbers against the
+  // SAME live board, and both printed as an ordinary reading.
+  //
+  // Three answers, and the third is the point: a tracked path is read from
+  // the ref; an UNTRACKED one is read from disk and said so (a planted
+  // fixture has no `origin/main` version, which is a fact about the file);
+  // and a failure anywhere in between is UNMEASURED. It does NOT fall back
+  // to disk — that is the working-tree read wearing a repair, and it fires
+  // in exactly the case where the two disagree most.
   const specPath = isAbsolute(specArg) ? specArg : join(root, specArg);
-  if (!existsSync(specPath)) {
+  const source = resolveSpecSource({ root, absPath: specPath, git: git(root) });
+  // ALWAYS, never only on the interesting arm. A provenance line that
+  // appears when something is odd teaches the reader that silence means
+  // origin/main, and silence is also what a broken emitter looks like.
+  console.error(`board-snapshot: ${describeSpecSource(source)}`);
+  if (source.kind === "unmeasured") return REFUSAL_EXIT;
+  if (source.kind === "untracked" && !existsSync(specPath)) {
     console.error(`board-snapshot: no such spec: ${specPath}`);
     return REFUSAL_EXIT;
   }
-  const content = readFileSync(specPath, "utf-8");
+  const content = source.kind === "ref" ? source.content : readFileSync(specPath, "utf-8");
 
   // An unsound placement table is UNMEASURED, not a board with fewer
   // phases. A criterion the table never places, or places twice, makes the
