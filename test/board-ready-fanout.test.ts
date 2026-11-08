@@ -247,6 +247,70 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
   // has been found on this day's work — twice on #1740's reader and once
   // here — so it is asserted as a census over the file's GraphQL list
   // selections rather than against `blocking` alone.
+  test("#1905: the mover reaches the occupancy decider, and only `assigned` names one", () => {
+    // **The wiring, because the predicate's battery cannot see it.**
+    // `holdsReadySlot` has seven behavioural cases and a mutation of every
+    // arm reddens one. None of them reddens if this script stops selecting
+    // `number`, stops passing the mover, or if the workflow stops supplying
+    // it — all three mutations were run against the first version and all
+    // three returned zero red. The predicate would then exclude nothing,
+    // and the race #1905 records would be back with the suite green.
+    const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+    // **Comments stripped first, and a mutation is why.** The first version
+    // of this case passed with the selection DELETED, because the script
+    // carries a comment naming it — the assertion was reading its own
+    // explanation. BR-19 records that trap one screen below; this walked
+    // into it anyway.
+    const code = src
+      .split("\n")
+      .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+
+    // **Scoped to BOARD_PAGE_QUERY, because the file holds three queries
+    // and the other two already select `number`.** Asserting over the whole
+    // file was wider than what it detects: deleting the selection from the
+    // occupancy query left the case green on the other two. The mutation
+    // found that; reading the file did not.
+    const query = /const BOARD_PAGE_QUERY = `([\s\S]*?)`;/.exec(code)?.[1];
+    expect(query, "BOARD_PAGE_QUERY is not where this test expects it").toBeDefined();
+    expect(
+      query,
+      "the OCCUPANCY query stopped selecting `number`, so no card can be recognised as the " +
+        "one being moved and the assigned-card race returns silently",
+    ).toContain("Issue{number");
+
+    // ANTI-VACUITY: a regex that found nothing and a call site that was
+    // deleted are the same green.
+    const call = /holdsReadySlot\(([\s\S]*?)\n {8}\);/.exec(code)?.[1];
+    expect(call, "no holdsReadySlot call in board-ready.ts — the decider is not wired in").toBeDefined();
+    expect(call, "the card's number is not passed").toContain("number: n.content?.number");
+    expect(call, "the mover is not passed, so nothing is ever excluded").toContain("movingIssue");
+
+    // **And the workflow supplies it on `assigned` ONLY.** The bound lives
+    // half here: `board-flow` relanes nothing out of Ready on `unassigned`,
+    // `opened` or `reopened`, so naming a mover there would free a slot
+    // with no move behind it and promote past the cap.
+    const yml = readFileSync(join(ROOT, ".github/workflows/board-ready.yml"), "utf-8")
+      .split("\n")
+      .filter(l => !/^\s*#/.test(l))
+      .join("\n");
+    const assignedArm = /\n\s*assigned\)\n([\s\S]*?);;/.exec(yml)?.[1];
+    expect(assignedArm, "no `assigned)` arm in board-ready.yml").toBeDefined();
+    expect(assignedArm, "the assigned arm stopped naming the moving issue").toContain(
+      '--moving-issue "$ISSUE"',
+    );
+    // Quoted, so a free-text dispatch value stays ONE array element — the
+    // injection this file's own `args` comment records.
+    expect(assignedArm, "unquoted $ISSUE word-splits into flags").not.toMatch(
+      /--moving-issue \$ISSUE/,
+    );
+    const otherArm = /\n\s*top-up \| unassigned \| opened \| reopened\)\n([\s\S]*?);;/.exec(yml)?.[1];
+    expect(otherArm, "no combined arm for the non-relaning modes").toBeDefined();
+    expect(otherArm, "a mode board-flow does not relane must not name a mover").not.toContain(
+      "--moving-issue",
+    );
+  });
+
   test("BR-19: every GraphQL list in the script declares its own truncation", () => {
     const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
     for (const sel of ["blocking(first:100,after:$c)", "items(first:100,after:$c)"]) {

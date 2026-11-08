@@ -299,7 +299,21 @@ jobs:
               esac
               args+=(--closed-issue "$ISSUE")
               ;;
-            top-up | assigned | unassigned | opened | reopened)
+            assigned)
+              # **`--moving-issue`, and only on `assigned`** (#1905).
+              # `board-flow.yml` fires on this same event and moves THIS
+              # issue out of Ready; a run that counts it reads the lane as
+              # full and promotes nothing, and a second later the lane is
+              # empty. Naming the one card bounds the exclusion to it — the
+              # predicate refuses to exclude anything when the flag is
+              # absent, so every other mode is unchanged.
+              #
+              # Not on `unassigned`, `opened` or `reopened`: `board-flow`
+              # relanes none of those out of Ready, so there is no race to
+              # close and excluding a card would only promote past the cap.
+              args+=(--top-up --moving-issue "$ISSUE")
+              ;;
+            top-up | unassigned | opened | reopened)
               args+=(--top-up)
               ;;
             *)
