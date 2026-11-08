@@ -168,7 +168,6 @@ const completeBoard = (): BoardSnapshot => ({
     { number: 1, names: ["SC-2618"], servesNone: false },
     { number: 2, names: [], servesNone: true },
   ],
-  plannedEdges: [{ blocked: 2, blocker: 1, present: true }],
 });
 
 /**
@@ -277,14 +276,14 @@ describe("the command's shape", () => {
     // names because `--list-readings` printing a SUBSET would satisfy every
     // `toContain` above — a list can only be checked by its length and its
     // membership together.
-    expect(READING_NAMES.length, "the five engine readings plus the three repository-wide ones").toBe(8);
+    expect(READING_NAMES.length, "the five engine readings plus the two repository-wide ones").toBe(7);
   });
 
   test("every reading names the ladder item that owns wiring its source", () => {
     // Without this, a reading can exist with nobody on the hook for making
     // it real, which is the "declared and nothing reads it" shape this
     // whole stage exists to close.
-    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2", "E3"]);
+    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2"]);
   });
 });
 
@@ -568,11 +567,6 @@ describe("each reading, planted short and planted complete", () => {
       what: "an issue that names no criterion and does not declare that it serves none",
       break: b => void (b.repoIssues![1]!.servesNone = false),
     },
-    {
-      reading: "dependency-edges",
-      what: "an ordering the plan derives that the tracker does not carry",
-      break: b => void (b.plannedEdges![0]!.present = false),
-    },
   ];
 
   test("the break list covers every reading, so none is silently untested", () => {
@@ -616,7 +610,7 @@ describe("each reading, planted short and planted complete", () => {
       READINGS.filter(r => r.readsIssueRefs).map(r => r.name).sort(),
       "a reading's readsIssueRefs declaration moved. If a new reading resolves an issue number it must set " +
         "the flag AND validate the reference against the board — see the rounds this battery replaced.",
-    ).toEqual(["blocked-by-edges", "criterion-coverage", "dependency-edges"]);
+    ).toEqual(["blocked-by-edges", "criterion-coverage"]);
 
     // Every row carries a reference, and every reference names nothing.
     //
@@ -637,12 +631,6 @@ describe("each reading, planted short and planted complete", () => {
       i.blockedBy = [9999];
       delete i.rootReady; // or a declared root satisfies it without the edge
     }
-    // `dependency-edges` resolves against `repoIssues`, not against the
-    // engine population, so its references have to be made stale in their
-    // own list or the sweep below asserts on a reading that was never
-    // handed a dangling pointer — green while witnessing nothing.
-    for (const e of dangling.plannedEdges!) e.blocker = 9999;
-
     // A row whose references are PARTLY stale, which the all-9999 board
     // above cannot produce. Round 7 found the gap it left: the battery
     // varied which reading it looked at and held the input shape fixed at
@@ -694,12 +682,11 @@ describe("each reading, planted short and planted complete", () => {
         "criteria-field",
         "criteria-named",
         "criterion-coverage",
-        "dependency-edges",
         "milestones",
         "spec-placement",
       ],
     );
-    expect(conformant(readings), "seven of eight met read as conformant").toBe(false);
+    expect(conformant(readings), "six of seven met read as conformant").toBe(false);
   });
 });
 

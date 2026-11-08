@@ -1991,7 +1991,11 @@ describe("round 8: a signal is not a mechanism, and `status` is not always null"
 });
 
 /**
- * The three repository-wide populations — SC-2615, SC-2616, SC-2617.
+ * The repository-wide populations — SC-2615 and SC-2616.
+ *
+ * SC-2617's edge population was written here and WITHDRAWN at review round
+ * 3 of #1903: `dependencyPlan` is family-blind and this repository carries
+ * two live milestone families. #1717 stays open carrying it.
  *
  * Every other population above is engine-scoped: one spec, its milestone
  * family. These three ask about the whole tree, and each is emitted ONLY
@@ -2006,7 +2010,7 @@ describe("round 8: a signal is not a mechanism, and `status` is not always null"
  * key AND what the real reader then says. Review of #1903 found this exact
  * hole: the other two populations were gated and this one was not.
  */
-describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
+describe("the repository-wide populations (SC-2615, SC-2616)", () => {
   /** The same fixture spec, but where the repository-wide sweep looks. */
   const withSpecsDir = async <T>(fn: (dir: string, specPath: string) => Promise<T>): Promise<T> =>
     withSpec(SPEC, async (dir, at) => {
@@ -2015,24 +2019,13 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
       return fn(dir, at);
     });
 
-  /**
-   * Two open issues whose bodies name criteria the fixture spec states.
-   *
-   * Two PHASES, and the later one carrying the edge the plan derives: a
-   * single-phase tracker is degenerate and `dependencyPlan` reports it
-   * UNMEASURED, which would leave SC-2617 unexercised here.
-   */
+  /** Two open issues whose bodies name criteria the fixture spec states. */
   const namingIssues = [
     iss({ number: 10, milestone: "Fix Phase 0 — the first one", body: "this one serves SC-9001" }),
-    iss({
-      number: 11,
-      milestone: "Fix Phase 1 — the second one",
-      body: "this one serves SC-9003",
-      blockedBy: [10],
-    }),
+    iss({ number: 11, milestone: "Fix Phase 1 — the second one", body: "this one serves SC-9003" }),
   ];
 
-  test("all three are emitted when the specs sweep can be read", async () => {
+  test("both are emitted when the specs sweep can be read", async () => {
     await withSpecsDir(async (dir, at) => {
       writeBoardConfig(dir, BOARD);
       const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
@@ -2043,7 +2036,6 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
         [10, ["SC-9001"], false],
         [11, ["SC-9003"], false],
       ]);
-      expect(snap.plannedEdges).toEqual([{ blocked: 11, blocker: 10, present: true }]);
     });
   });
 

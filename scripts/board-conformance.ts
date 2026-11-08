@@ -165,20 +165,6 @@ export interface BoardSnapshot {
    * `criteria-named` goes UNMEASURED.
    */
   repoIssues?: RepoIssueCriteria[];
-
-  /**
-   * The ordering the plan implies, and whether the tracker carries it — SC-2617.
-   *
-   * 0 of 71 open issues carried a `blocked by` edge on 2026-10-30, which
-   * makes every ordering claim prose. `blocked-by-edges` above asks the
-   * question of the five engine issues; this asks it of every edge the
-   * dependency plan derives.
-   *
-   * **Absent means the plan was never derived**, and `dependency-edges` goes
-   * UNMEASURED rather than reporting a tracker with no ordering as a tracker
-   * that needs none.
-   */
-  plannedEdges?: PlannedEdge[];
 }
 
 /** One spec in the repository-wide placement sweep — SC-2615. */
@@ -212,16 +198,6 @@ export interface RepoIssueCriteria {
    * already folded.
    */
   servesNone: boolean;
-}
-
-/** One edge the dependency plan derives, and whether the tracker has it — SC-2617. */
-export interface PlannedEdge {
-  /** The issue that should carry the edge. */
-  blocked: number;
-  /** The issue it should be blocked by. */
-  blocker: number;
-  /** True when the tracker already carries this exact edge. */
-  present: boolean;
 }
 
 export type ReadingStatus = "met" | "short" | "unmeasured";
@@ -523,50 +499,22 @@ export const READINGS: readonly ReadingSpec[] = [
         .filter(i => i.names.length === 0 && !i.servesNone)
         .map(i => `#${i.number} — names no criterion and does not declare that it serves none`),
   },
-  {
-    name: "dependency-edges",
-    item: "E3",
-    what: "every ordering the plan derives is a blocked-by edge on the tracker, so what is next is computed",
-    readsIssueRefs: true,
-    // BOTH endpoints have to resolve, and that is why this carries
-    // `readsIssueRefs`. An edge naming an issue that is not in the open
-    // population points at something that can never close, so the blocked
-    // issue never surfaces as next — the graph is wrong in the one direction
-    // this reading exists to rule out. Rounds 1, 2 and 5 of #1697 were that
-    // hole found three times, once per reading that resolved a number
-    // without checking it.
-    //
-    // Resolved against `repoIssues`, not `onBoard`: the plan is repo-wide
-    // and `issues` is the engine milestone, so resolving against the engine
-    // population would report every edge outside it as dangling.
-    unreadable: b => {
-      if (b.plannedEdges === undefined) {
-        return "the dependency plan was never derived, so no ordering was compared against the " +
-          "tracker — a tracker with no edges is not a tracker that needs none";
-      }
-      return b.repoIssues === undefined
-        ? "the repository's open issues were never read, so an edge pointing at a number cannot " +
-            "be told from an edge pointing at nothing"
-        : null;
-    },
-    measure: b => {
-      const open = new Set(b.repoIssues!.map(i => i.number));
-      return {
-        measured: b.plannedEdges!.filter(e => e.present && open.has(e.blocked) && open.has(e.blocker)).length,
-        target: b.plannedEdges!.length,
-      };
-    },
-    offenders: b => {
-      const open = new Set(b.repoIssues!.map(i => i.number));
-      return b.plannedEdges!
-        .filter(e => !(e.present && open.has(e.blocked) && open.has(e.blocker)))
-        .map(e =>
-          !open.has(e.blocked) || !open.has(e.blocker)
-            ? `#${e.blocked} blocked by #${e.blocker} — ${!open.has(e.blocked) ? `#${e.blocked}` : `#${e.blocker}`} is not an open issue, so this edge resolves to nothing`
-            : `#${e.blocked} blocked by #${e.blocker} — the plan derives it and the tracker does not carry it`,
-        );
-    },
-  },
+  // SC-2617's `dependency-edges` reading is NOT here, and its absence is a
+  // decision rather than an omission — see #1717.
+  //
+  // It was written, measured 129 of 154 on the live tracker, and withdrawn
+  // at review round 3 of #1903 because the number was taken over the wrong
+  // population. `dependencyPlan` buckets issues by `phaseOf`, which is
+  // `/\bPhase (\d+)\b/` — family-blind. `plan-deps`, its only other caller,
+  // REFUSES an omitted `--milestone-prefix` and filters before calling it,
+  // so the function has always been single-family by contract. This repo
+  // carries two live families: `Convergence Phase N` and `Pipeline Phase N`,
+  // both with open issues at overlapping numbers, so a repo-wide call
+  // chains one spec's phase to another's.
+  //
+  // SC-2617 asks a repository-wide question of a function with no family
+  // concept, which is a design gap and not a repair. #1717 stays open
+  // carrying it, with the measurement and the decision in a comment there.
 ];
 
 export const READING_NAMES: readonly string[] = READINGS.map(r => r.name);
@@ -747,16 +695,6 @@ const normaliseRepoIssue = (v: unknown): RepoIssueCriteria | null => {
   };
 };
 
-const normalisePlannedEdge = (v: unknown): PlannedEdge | null => {
-  if (typeof v !== "object" || v === null) return null;
-  const e = v as Partial<PlannedEdge>;
-  if (typeof e.blocked !== "number" || typeof e.blocker !== "number") return null;
-  // `=== true` again: an edge whose presence nobody recorded has not been
-  // found on the tracker, and reading the omission as present would credit
-  // the reading for an ordering that is not there.
-  return { blocked: e.blocked, blocker: e.blocker, present: e.present === true };
-};
-
 /**
  * A board, or the reason there is not one. Never a bare null.
  *
@@ -918,10 +856,6 @@ export function readSnapshotText(text: string): SnapshotRead {
   const repoIssues = Array.isArray(raw.repoIssues)
     ? { repoIssues: raw.repoIssues.map(normaliseRepoIssue).filter((i): i is RepoIssueCriteria => i !== null) }
     : {};
-  const edges = Array.isArray(raw.plannedEdges)
-    ? { plannedEdges: raw.plannedEdges.map(normalisePlannedEdge).filter((e): e is PlannedEdge => e !== null) }
-    : {};
-
   return {
     board: {
       issues: issues as BoardIssue[],
@@ -931,7 +865,6 @@ export function readSnapshotText(text: string): SnapshotRead {
       ...queue,
       ...placements,
       ...repoIssues,
-      ...edges,
     },
     why: null,
   };
