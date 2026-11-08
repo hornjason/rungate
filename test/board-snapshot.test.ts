@@ -1425,6 +1425,21 @@ describe("the refusals, and whether the API was reached", () => {
           { encoding: "utf-8" },
         );
         expect(remote.status, `git remote add failed in the fixture: ${remote.stderr}`).toBe(0);
+        // **AND A RESOLVABLE `origin/main`, because a reading needs one.**
+        // Round 4 made an unresolvable ref fail closed — a configured
+        // remote whose ref will not resolve is a reading nobody took, and
+        // this fixture used to be exactly that shape while asserting a
+        // successful run. Committing and planting the ref makes it a real
+        // D3 repository instead of a repository the reader has to excuse.
+        // late-env-ok: git reads no GITHUB_REPOSITORY, and this case deletes it
+        for (const argv of [
+          ["-C", dir, "add", "-A"],
+          ["-C", dir, "-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "-m", "fixture"],
+          ["-C", dir, "update-ref", "refs/remotes/origin/main", "HEAD"],
+        ]) {
+          const step = spawnSync("git", argv, { encoding: "utf-8" });
+          expect(step.status, `${argv[2]} failed in the fixture: ${step.stderr}`).toBe(0);
+        }
         const { gh, calls } = spy(CONFORMANT_LIVE);
         expect((await capture([at, "--prefix", "Fix", "--project-root", dir], gh)).code).toBe(0);
         expect(calls, "the slug did not come from the fixture's own origin").toContain(

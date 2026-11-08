@@ -147,11 +147,26 @@ export type SpecSource =
  */
 export const DEFAULT_SPEC_REF = "origin/main";
 
-/** `origin/main` -> `origin main`, for the fetch that refreshes it. */
-function fetchArgsFor(ref: string): string[] | null {
+/**
+ * `origin/main` -> `{ remote: "origin", branch: "main" }`, or null when the
+ * ref does not name both.
+ *
+ * **One decider.** Round 4 read the remote back out of the fetch argv as
+ * `fetchArgs[1]`, which is `--quiet`, and asked `git remote get-url
+ * --quiet` — so every unresolvable ref fell through to a working-tree read,
+ * which is the fail-open that arm exists to prevent. The fake could not see
+ * it: it keys answers on the subcommand and never looked at the operand.
+ */
+export function splitRef(ref: string): { remote: string; branch: string } | null {
   const at = ref.indexOf("/");
   if (at <= 0 || at === ref.length - 1) return null;
-  return ["fetch", "--quiet", ref.slice(0, at), ref.slice(at + 1)];
+  return { remote: ref.slice(0, at), branch: ref.slice(at + 1) };
+}
+
+/** `origin/main` -> `origin main`, for the fetch that refreshes it. */
+function fetchArgsFor(ref: string): string[] | null {
+  const parts = splitRef(ref);
+  return parts === null ? null : ["fetch", "--quiet", parts.remote, parts.branch];
 }
 
 /**
@@ -341,26 +356,32 @@ export function resolveSpecSource(opts: {
   const resolved = opts.git(["rev-parse", ref]);
   const sha = resolved.stdout.trim();
   if (!resolved.ok || sha === "") {
-    // **A REF THAT DOES NOT EXIST IS NOT AUTOMATICALLY A REFUSAL.** A fresh
-    // repository, a fork with no `origin`, a project whose default branch is
-    // not `main` — none of those has an `origin/main`, and for a path git
-    // has never heard of there is nothing to read there even in principle.
-    // So ask the local index BEFORE refusing: untracked here as well means
-    // disk genuinely is the only copy. Tracked here refuses, because then a
-    // shipped version exists and we could not reach it.
+    // **AN UNRESOLVABLE REF FAILS CLOSED, AND THE ONE WIDENING IS A
+    // MISSING REMOTE.** Round 3 widened it with the LOCAL INDEX instead —
+    // untracked here plus an unresolvable ref read disk — and that is the
+    // hole this module had just closed, re-opened one arm along: a stale
+    // checkout missing a newly-shipped spec is untracked locally, and a
+    // transient resolution failure then hands it a working-tree read. The
+    // local index cannot be the evidence that permits a disk read; it is
+    // the thing being doubted.
     //
-    // Found by a real-repository fixture in `test/board-snapshot.test.ts`
-    // when round 3 moved the trackedness question after the ref — the
-    // reorder was right and this arm had to follow it.
-    const local = opts.git(["ls-files", "--error-unmatch", "--", opts.absPath]);
-    if (!local.ok && local.code === 1) {
-      return {
-        kind: "untracked",
-        path: opts.absPath,
-        why:
-          `${ref} does not resolve in ${opts.root} and git does not track ${opts.absPath} either, so the file on ` +
-          `disk is the only copy that exists. The reading below was taken against it.`,
-      };
+    // A remote that does not exist is different in kind. `origin/main`
+    // cannot ever resolve there and no fetch will change it, so there is
+    // no shipped version to be wrong about. `git remote get-url` is the
+    // probe, and only its exit 0 counts as an answer — anything else is a
+    // reading nobody took.
+    const remote = splitRef(ref)?.remote ?? null;
+    if (remote !== null) {
+      const url = opts.git(["remote", "get-url", remote]);
+      if (!url.ok && url.code !== null) {
+        return {
+          kind: "untracked",
+          path: opts.absPath,
+          why:
+            `${opts.root} has no remote named \`${remote}\`, so ${ref} can never resolve and there is no shipped ` +
+            `version of ${opts.absPath} to read. The reading below was taken against the file on disk.`,
+        };
+      }
     }
     return {
       kind: "unmeasured",
@@ -387,17 +408,43 @@ export function resolveSpecSource(opts: {
   // fetch, because trackedness is no longer known before the ref is
   // resolved. That is the right trade: the saved fetch was buying a wrong
   // answer.
-  const atRef = opts.git(["cat-file", "-e", `${sha}:${path}`]);
-  if (!atRef.ok && atRef.code !== 1) {
+  // **`ls-tree`, NOT `cat-file -e` — because `cat-file -e` has no exit code
+  // for "the ref has not got it".** Measured against real git at
+  // b40a62a0: an absent path exits **128**, and so does a bad object name,
+  // and so does a corrupt store. Round 3 of this review shipped
+  // `atRef.code !== 1` over it, which sent every absent path to UNMEASURED
+  // and left the untracked arm unreachable — and the suite stayed green
+  // because the fake answered `1`, a code real git never returns here. A
+  // fixture that encodes semantics git does not have is a suite measuring
+  // nothing; `test/spec-source.test.ts` now pins these codes against the
+  // real binary so the fake cannot drift from it again.
+  //
+  // `ls-tree` separates the three answers without an exit code doing the
+  // work: it exits 0 whether or not the path is there, prints the object's
+  // TYPE when it is, and prints nothing when it is not. Anything non-zero
+  // is the reader failing. `%(objecttype)` also answers the second half —
+  // a directory is a `tree`, and `git show <sha>:<dir>` is a listing, not
+  // a spec.
+  const atRef = opts.git(["ls-tree", "-z", "--format=%(objecttype)", sha, "--", path]);
+  if (!atRef.ok) {
     return {
       kind: "unmeasured",
       why:
-        `\`git cat-file -e ${sha}:${path}\` failed in ${opts.root} with exit ${atRef.code}: ` +
+        `\`git ls-tree\` failed in ${opts.root} with exit ${atRef.code}: ` +
         `${redactCredentials(atRef.stderr.trim()) || "no reason given"}. That is a broken reader, not a spec the ` +
         `ref has not got, and the difference is the whole of this module.`,
     };
   }
-  if (!atRef.ok) {
+  const objectType = atRef.stdout.replace(/\0/g, "").trim();
+  if (objectType !== "" && objectType !== "blob") {
+    return {
+      kind: "unmeasured",
+      why:
+        `${path} is a \`${objectType}\` in ${ref} (${sha}), not a file. A spec is a file; \`git show\` would hand ` +
+        `back a directory listing and this would print it as the spec's text.`,
+    };
+  }
+  if (objectType === "") {
     // NOT AT THE REF — and now the LOCAL index is the right thing to ask,
     // because the two cases it separates are both about this checkout: a
     // spec added on this branch and not yet shipped, versus a file git has

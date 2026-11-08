@@ -13,11 +13,15 @@
  * than on the return value — "it did not fetch" is invisible in the content.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import {
   DEFAULT_SPEC_REF,
   describeSpecSource,
   redactCredentials,
+  splitRef,
   resolveSpecSource,
   type GitRun,
   type RealPath,
@@ -86,7 +90,12 @@ const complete = (over: Partial<Record<string, GitRun>> = {}) => ({
   // index, and they disagree for a spec shipped after this checkout was
   // cut. `ls-files` is still answered — it separates "added on this
   // branch" from "git never heard of it" once the ref has already said no.
-  "cat-file": ok(""),
+  "ls-tree": ok("blob\u0000"),
+  // The default is a repository that HAS its remote. Round 4 made that the
+  // deciding fact when `origin/main` will not resolve: a missing remote can
+  // never resolve and is honestly untracked, while a present one that does
+  // not resolve is a reading nobody took.
+  remote: ok("git@github.com:o/n.git\n"),
   "ls-files": ok(`${TRACKED}\n`),
   fetch: ok(""),
   "rev-parse": ok(`${SHA}\n`),
@@ -265,7 +274,7 @@ describe("round 1: a broken reader is not an untracked file", () => {
     //
     // Round 3 moved `ls-files` behind the ref, so reaching it at all now
     // needs the ref to have already said no — `cat-file -e` exiting 1.
-    const git = fakeGit(complete({ "cat-file": bad("", 1), "ls-files": bad("fatal: not a git repository", 128) }));
+    const git = fakeGit(complete({ "ls-tree": ok(""), "ls-files": bad("fatal: not a git repository", 128) }));
     const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
 
     expect(r.kind, "a broken ls-files produced a reading from disk").toBe("unmeasured");
@@ -277,7 +286,7 @@ describe("round 1: a broken reader is not an untracked file", () => {
     // The control for the row above. Without it, "128 refuses" is satisfied
     // by a reader that refuses on every non-zero exit, which would make
     // every planted fixture in `test/board-snapshot.test.ts` UNMEASURED.
-    const git = fakeGit(complete({ "cat-file": bad("", 1), "ls-files": bad("did not match any file(s) known to git", 1) }));
+    const git = fakeGit(complete({ "ls-tree": ok(""), "ls-files": bad("did not match any file(s) known to git", 1) }));
     expect(resolveSpecSource({ root: "/r", absPath: "/r/x.md", git: git.run, realpath: same }).kind).toBe("untracked");
   });
 
@@ -425,7 +434,7 @@ describe("round 1: outside the work tree is a PATH fact, decided before git", ()
     const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
 
     expect(r.kind).toBe("ref");
-    expect(git.log.filter(a => a[0] === "cat-file").length).toBe(1);
+    expect(git.log.filter(a => a[0] === "ls-tree").length).toBe(1);
   });
 
   test("a prefix that is not a path boundary is OUTSIDE — /rogue is not inside /r", () => {
@@ -610,7 +619,7 @@ describe("round 3: trackedness is a question about the REF, not about the local 
   });
 
   test("not at the ref and tracked here is UNMEASURED — added on this branch, not yet shipped", () => {
-    const git = fakeGit(complete({ "cat-file": bad("", 1) }));
+    const git = fakeGit(complete({ "ls-tree": ok("") }));
     const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
 
     expect(r.kind).toBe("unmeasured");
@@ -622,7 +631,7 @@ describe("round 3: trackedness is a question about the REF, not about the local 
     // Without this, "not at the ref refuses" is satisfied by a reader that
     // refuses on every absent path, and every planted fixture becomes
     // UNMEASURED rather than an honest working-tree reading.
-    const git = fakeGit(complete({ "cat-file": bad("", 1), "ls-files": bad("no such path", 1) }));
+    const git = fakeGit(complete({ "ls-tree": ok(""), "ls-files": bad("no such path", 1) }));
     const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
 
     expect(r.kind).toBe("untracked");
@@ -631,7 +640,7 @@ describe("round 3: trackedness is a question about the REF, not about the local 
   });
 
   test("`cat-file` failing for any reason OTHER than absence is UNMEASURED", () => {
-    const git = fakeGit(complete({ "cat-file": bad("fatal: not a valid object name", 128) }));
+    const git = fakeGit(complete({ "ls-tree": bad("fatal: not a tree object", 128) }));
     const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
 
     expect(r.kind).toBe("unmeasured");
@@ -644,7 +653,7 @@ describe("round 3: trackedness is a question about the REF, not about the local 
     // asked trackedness first and skipped the network for an untracked
     // path; the saved fetch was buying a wrong answer. If somebody reorders
     // these to save it again, this is what says so.
-    const git = fakeGit(complete({ "cat-file": bad("", 1), "ls-files": bad("no such path", 1) }));
+    const git = fakeGit(complete({ "ls-tree": ok(""), "ls-files": bad("no such path", 1) }));
     resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
     expect(git.log.filter(a => a[0] === "fetch").length).toBe(1);
   });
@@ -676,26 +685,168 @@ describe("round 3: `git diff --quiet` has three outcomes, and `!ok` printed two 
   });
 });
 
-describe("round 3: a ref that does not resolve is only a refusal when a shipped copy could exist", () => {
-  test("no origin/main AND untracked here is untracked — a fresh repo is not a broken reader", () => {
-    // Found by a real-repository fixture in `test/board-snapshot.test.ts`,
-    // not by a unit case: moving trackedness after the ref turned every
-    // repository without an `origin/main` into a refusal, including for a
-    // path git has never heard of. A fork, a fresh `git init`, a project
-    // whose default branch is not `main` — all ordinary.
-    const git = fakeGit(complete({ "rev-parse": bad("fatal: ambiguous argument 'origin/main'", 128), "ls-files": bad("no such path", 1) }));
+// Round 3 widened the unresolvable-ref arm with the LOCAL INDEX, after a
+// real-repository fixture showed that refusing outright turned every
+// checkout with no `origin/main` into a refusal. The widening was wrong and
+// round 4 replaced it — the cases live in the round-4 block below, where
+// the deciding fact is whether the REMOTE exists. Kept as a note rather
+// than deleted: the fixture that forced the widening is still right that an
+// outright refusal is too narrow, and the next person to narrow it will hit
+// the same fixture.
+
+// ── Security review of PR #1896, round 4 ───────────────────────────────
+//
+// Round 3 shipped `atRef.code !== 1` over `git cat-file -e`, and the suite
+// stayed green because the fake answered `1` — a code real git does not
+// return for an absent path. Every case above runs against a fake, and a
+// fake that encodes semantics git does not have is a suite measuring
+// nothing. These cases run the REAL binary once and pin what it does, so
+// the next person changing an exit code in `complete()` has something that
+// disagrees with them.
+describe("round 4: the fake's exit codes are pinned to what real git does", () => {
+  const realGit = (cwd: string): GitRunner => args => {
+    const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+    return { ok: r.status === 0, code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  };
+
+  const plant = (): { dir: string; sha: string } => {
+    const dir = mkdtempSync(join(tmpdir(), "spec-source-premise-"));
+    const g = realGit(dir);
+    expect(g(["init", "-q"]).ok).toBe(true);
+    mkdirSync(join(dir, "specs"), { recursive: true });
+    writeFileSync(join(dir, "specs", "SPEC.md"), "# shipped\n");
+    expect(g(["add", "-A"]).ok).toBe(true);
+    expect(g(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"]).ok).toBe(true);
+    const sha = g(["rev-parse", "HEAD"]).stdout.trim();
+    return { dir, sha };
+  };
+
+  test("`cat-file -e` exits 128 for an ABSENT path, so `code !== 1` can never mean untracked", () => {
+    const { dir, sha } = plant();
+    try {
+      const g = realGit(dir);
+      expect(g(["cat-file", "-e", `${sha}:specs/SPEC.md`]).code, "a present path").toBe(0);
+      // THE PIN. Round 3 assumed 1 here and the fake agreed with it.
+      expect(g(["cat-file", "-e", `${sha}:nope.md`]).code, "an absent path").toBe(128);
+      expect(g(["cat-file", "-e", `${sha}:specs`]).code, "a DIRECTORY also exits 0").toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("`ls-tree --format` exits 0 either way and names the type — which is why it replaced it", () => {
+    const { dir, sha } = plant();
+    try {
+      const g = realGit(dir);
+      const f = (p: string) => g(["ls-tree", "-z", "--format=%(objecttype)", sha, "--", p]);
+      expect(f("specs/SPEC.md").code).toBe(0);
+      expect(f("specs/SPEC.md").stdout.replace(/\0/g, "").trim()).toBe("blob");
+      expect(f("specs").stdout.replace(/\0/g, "").trim(), "a directory must be distinguishable").toBe("tree");
+      expect(f("nope.md").code, "absence is exit 0, not an error code").toBe(0);
+      expect(f("nope.md").stdout.replace(/\0/g, "").trim(), "absence is empty output").toBe("");
+      expect(f("nope.md").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("end to end against a real repository: a committed spec is read from the ref", () => {
+    // The whole module, no fake anywhere. `origin/main` is planted as a
+    // local ref so nothing touches the network.
+    const { dir, sha } = plant();
+    try {
+      const g = realGit(dir);
+      expect(g(["update-ref", "refs/remotes/origin/main", sha]).ok).toBe(true);
+      const r = resolveSpecSource({ root: dir, absPath: join(dir, "specs", "SPEC.md"), git: g });
+
+      expect(r.kind, describeSpecSource(r)).toBe("ref");
+      if (r.kind !== "ref") return;
+      expect(r.content).toContain("shipped");
+      expect(r.path).toBe("specs/SPEC.md");
+      expect(r.worktreeDiffers, "a clean tree reported as differing").toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("end to end: a DIRECTORY is UNMEASURED, not a spec whose text is a listing", () => {
+    const { dir, sha } = plant();
+    try {
+      const g = realGit(dir);
+      expect(g(["update-ref", "refs/remotes/origin/main", sha]).ok).toBe(true);
+      const r = resolveSpecSource({ root: dir, absPath: join(dir, "specs"), git: g });
+
+      expect(r.kind).toBe("unmeasured");
+      if (r.kind !== "unmeasured") return;
+      expect(r.why).toContain("tree");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("round 4: an unresolvable ref fails CLOSED, and only a missing remote widens it", () => {
+  test("no origin/main while the remote EXISTS is UNMEASURED, whatever the local index says", () => {
+    // Round 3 read the local index here and returned untracked. That is
+    // the hole this module had just closed, one arm along: a stale
+    // checkout missing a newly-shipped spec is untracked locally too.
+    const git = fakeGit(complete({
+      "rev-parse": bad("fatal: ambiguous argument 'origin/main'", 128),
+      "ls-files": bad("no such path", 1),
+      remote: ok("git@github.com:o/n.git\n"),
+    }));
+    expect(resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same }).kind).toBe("unmeasured");
+  });
+
+  test("no such remote at all IS untracked — nothing will ever resolve there", () => {
+    const git = fakeGit(complete({
+      "rev-parse": bad("fatal: ambiguous argument 'origin/main'", 128),
+      remote: bad("error: No such remote 'origin'", 2),
+    }));
     const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
 
     expect(r.kind).toBe("untracked");
+    if (r.kind !== "untracked") return;
+    expect(r.why).toContain("no remote named");
   });
 
-  test("no origin/main while the path IS tracked here is UNMEASURED — the control", () => {
-    // Without this row the arm above is satisfied by "an unresolvable ref is
-    // always untracked", which restores the working-tree fallback in the one
-    // case where a shipped version genuinely exists and we could not read it.
-    const git = fakeGit(complete({ "rev-parse": bad("fatal: ambiguous argument 'origin/main'", 128) }));
-    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+  test("a remote probe that never RAN is UNMEASURED — absence of an answer is not an answer", () => {
+    const git = fakeGit(complete({
+      "rev-parse": bad("fatal: ambiguous argument 'origin/main'", 128),
+      remote: bad("spawn git ENOENT", null),
+    }));
+    expect(resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same }).kind).toBe("unmeasured");
+  });
+});
 
+describe("round 4: the remote probe asks about the REMOTE, not about a flag", () => {
+  test("the probe names the remote the ref names", () => {
+    // The fake keys its answers on the SUBCOMMAND and never looked at the
+    // operand, so `git remote get-url --quiet` — the remote read back out
+    // of the fetch argv at the wrong index — was answered as if it had
+    // asked about `origin`. Every unresolvable ref then fell through to a
+    // working-tree read, which is the fail-open this arm exists to
+    // prevent, and the whole suite stayed green. The argv is asserted
+    // here because no answer-keyed fake can assert it for us.
+    const git = fakeGit(complete({ "rev-parse": bad("fatal: ambiguous argument", 128) }));
+    resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, git: git.run, realpath: same });
+
+    const probe = git.log.find(a => a[0] === "remote");
+    expect(probe, "the remote was never probed at all").toBeDefined();
+    expect(probe).toEqual(["remote", "get-url", "origin"]);
+  });
+
+  test("splitRef is the one place a ref becomes a remote and a branch", () => {
+    expect(splitRef("origin/main")).toEqual({ remote: "origin", branch: "main" });
+    expect(splitRef("upstream/release/7.x")).toEqual({ remote: "upstream", branch: "release/7.x" });
+    expect(splitRef("main"), "a bare branch names no remote").toBeNull();
+    expect(splitRef("/main")).toBeNull();
+    expect(splitRef("origin/")).toBeNull();
+  });
+
+  test("a ref naming no remote is UNMEASURED when it will not resolve — nothing to probe", () => {
+    const git = fakeGit(complete({ "rev-parse": bad("fatal: ambiguous argument", 128) }));
+    const r = resolveSpecSource({ root: "/r", absPath: `/r/${TRACKED}`, ref: "main", git: git.run, realpath: same });
     expect(r.kind).toBe("unmeasured");
   });
 });
