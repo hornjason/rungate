@@ -631,8 +631,29 @@ export function readSnapshotText(text: string): SnapshotRead {
  * Which also means a mutant cannot use this: its `import.meta.dir` is the
  * temp directory and the spawn fails. The battery uses `--snapshot`, which
  * is why that stays the only source the negative cases touch.
+ *
+ * ## `notes` exists because the producer's stderr used to be thrown away
+ *
+ * Every failure arm below quotes `r.stderr`; the SUCCESS arm read `r.stdout`
+ * and dropped the rest on the floor. So on the one path anybody runs daily,
+ * the producer's provenance — which tree the spec came from (D3), which
+ * inputs were resolved from config rather than typed, which readings it
+ * could not take — was written, captured, and discarded.
+ *
+ * It is RETURNED rather than written here so a case can assert on it. A
+ * `process.stderr.write` inside this function is invisible to an in-process
+ * test, which is how it would have gone uncovered a second time.
+ *
+ * `producer` is a parameter for the same reason: pointed at a stub, a case
+ * can drive the success arm without a network, which no case could do while
+ * the path was a constant.
  */
-function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: string | null } {
+export const DEFAULT_PRODUCER = join(import.meta.dir, "board-snapshot.ts");
+
+export function produceBoard(
+  flags: Flags,
+  producer: string = DEFAULT_PRODUCER,
+): { board: BoardSnapshot | null; error: string | null; notes: string } {
   const { spec, prefix, repo, specGiven, prefixGiven, repoGiven } = flags;
   // **GIVEN-AND-BLANK REFUSES. ABSENT FORWARDS NOTHING.** These used to be
   // one case and #1718 split them, because they carry opposite
@@ -666,13 +687,14 @@ function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: strin
   if (blank.length > 0) {
     return {
       board: null,
+      notes: "",
       error:
         `${blank.join(" and ")} was given with no usable value. Pass a value, or omit the flag ` +
         `entirely and the spec and prefix are read from \`board.engineSpec\` and ` +
         `\`board.milestonePrefix\` in this project's rungate config.`,
     };
   }
-  const args = [join(import.meta.dir, "board-snapshot.ts")];
+  const args = [producer];
   if (spec !== undefined) args.push(spec);
   if (prefix !== undefined) args.push("--prefix", prefix);
   if (repo !== undefined) args.push("--repo", repo);
@@ -693,11 +715,21 @@ function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: strin
   // half no input here can reach, and a clause nothing can exercise is
   // not a guard.
   if (r.signal !== null && r.signal !== undefined) {
+    // AND WHAT THE CHILD ALREADY SAID. This was the one arm reaching
+    // neither `error` nor `notes`, so the producer's provenance — the
+    // `board-snapshot: resolved from…` lines, and how far it got before
+    // it stuck — was discarded on exactly the failure where knowing WHERE
+    // it stuck is the whole question. Every other arm below quotes it.
+    // The producer redacts its own credentials before writing, so this
+    // relays an already-redacted reading. Review of #1896 round 12.
+    const said = (r.stderr ?? "").trim();
     return {
       board: null,
+      notes: "",
       error:
         `board-snapshot was killed by ${r.signal ?? "the timeout"} after ${PRODUCE_TIMEOUT_MS}ms. A producer ` +
-        `that hangs is UNMEASURED, not a board — an unattended loop cannot observe a wedge.`,
+        `that hangs is UNMEASURED, not a board — an unattended loop cannot observe a wedge.` +
+        (said === "" ? " It wrote nothing before it was killed." : ` It got as far as: ${said}`),
     };
   }
   // Then a spawn that never started — no `bun` on PATH. It sets `error`
@@ -705,18 +737,27 @@ function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: strin
   // those reports "exit none: no output" for the one failure whose cause
   // is already in hand.
   if (r.error) {
-    return { board: null, error: `board-snapshot could not be started: ${r.error.message}` };
+    return { board: null, notes: "", error: `board-snapshot could not be started: ${r.error.message}` };
   }
   if (r.status !== 0) {
+    // `notes` stays EMPTY on this arm, not a second copy of the same bytes:
+    // the refusal message already quotes `r.stderr`, and printing both puts
+    // the producer's reason on screen twice with nothing saying they are one
+    // reading.
     return {
       board: null,
+      notes: "",
       error: `board-snapshot refused (exit ${r.status ?? "none"}): ${(r.stderr || r.stdout || "no output").trim()}`,
     };
   }
+  // PAST THE EXIT CODE, so `notes` carries what the producer said on the
+  // path where nothing else quotes it. This is the daily path, and it is the
+  // one that used to be silent.
+  const notes = (r.stderr ?? "").trim();
   const read = readSnapshotText(r.stdout);
   return read.board === null
-    ? { board: null, error: `board-snapshot exited 0 and what it emitted is unreadable — ${read.why}` }
-    : { board: read.board, error: null };
+    ? { board: null, notes, error: `board-snapshot exited 0 and what it emitted is unreadable — ${read.why}` }
+    : { board: read.board, notes, error: null };
 }
 
 /**
@@ -732,7 +773,7 @@ function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: strin
  */
 export const PRODUCE_TIMEOUT_MS = Number(process.env.RUNGATE_PRODUCE_TIMEOUT_MS) || 60_000;
 
-interface Flags {
+export interface Flags {
   listReadings: boolean;
   produce: boolean;
   snapshot?: string;
@@ -859,6 +900,11 @@ export function main(argv: readonly string[]): number {
   // that says what is missing.
   if (flags.produce || !flags.snapshotGiven) {
     const produced = produceBoard(flags);
+    // WHAT THE PRODUCER SAID, on stderr, before any verdict. It names which
+    // tree the spec came from (D3) and which inputs were resolved from
+    // config rather than typed — both captured and discarded until
+    // 2026-11-08, on the success path and only on the success path.
+    if (produced.notes !== "") console.error(produced.notes);
     if (produced.error !== null) sourceFailed = produced.error;
     else board = produced.board;
   } else if (snapshotPath !== undefined) {

@@ -93,6 +93,135 @@ export const GIT_ISOLATION_CONFIG: ReadonlyArray<readonly [string, string]> = Ob
 ] as const);
 
 /**
+ * Ambient variables that must be **removed**, as against the three above
+ * which are **set**.
+ *
+ * Two families, one property: each lets whoever populated the environment
+ * redirect or reconfigure a git call that named neither, and nothing
+ * downstream can tell — the reading comes back clean, confident, and about
+ * another tree or another config.
+ *
+ * - **Location.** `GIT_DIR` and friends outrank `-C <root>`'s discovery, so
+ *   a reader pointed at one checkout reports on a different one.
+ * - **`GIT_CONFIG*`,** matched as a PREFIX because the injection form is
+ *   open-ended: `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor
+ *   GIT_CONFIG_VALUE_0=<command>` is config at command scope, and `KEY_<n>`
+ *   has no last element to enumerate. `GIT_CONFIG_GLOBAL` and
+ *   `GIT_CONFIG_SYSTEM` are in the family too: pointed at a file the
+ *   caller wrote, they are the same attack spelled as a path.
+ *
+ * **The `-c` flags are not a substitute, and the prefix is not redundant
+ * with them.** Measured on git 2.50.1: `-c core.fsmonitor=` DOES beat
+ * `GIT_CONFIG_KEY_0=core.fsmonitor`, so command-scope flags win where they
+ * overlap — but {@link GIT_ISOLATION_CONFIG} names four keys, and the
+ * injection can name any key git has. Neither covers the other, which is
+ * the same conclusion the env-vars-AND-`-c` section above reaches from the
+ * other direction. Review of #1896 round 9.
+ */
+export const GIT_LOCATION_VARS = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_CEILING_DIRECTORIES",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+] as const;
+
+/** The prefix form, so `KEY_0`…`KEY_<n>` needs no enumeration. */
+export const GIT_AMBIENT_CONFIG_PREFIX = "GIT_CONFIG";
+
+/**
+ * **The decider: every ambient `GIT_*` is removed.** The named lists in
+ * this file document WHY; they do not decide.
+ *
+ * Three review rounds added names to a list — locations, then the config
+ * prefix, then the exec vars — and each round found the previous list
+ * short. That is not bad luck about one entry. A denylist over a namespace
+ * its owner keeps extending is short by construction, and the fourth patch
+ * would have been as temporary as the third. So the population is the
+ * namespace, and a `GIT_` variable git adds next year is excluded without
+ * an edit here.
+ *
+ * The allowlist is EMPTY on purpose. Everything this file needs set — the
+ * three in {@link GIT_ISOLATION_ENV}, and a caller's
+ * `GIT_TERMINAL_PROMPT` — is applied AFTER the sweep by whoever wants it,
+ * so nothing has to survive it.
+ *
+ * **Scope is `GIT_` only, and `SSH_` is deliberately NOT swept.**
+ * `SSH_AUTH_SOCK` is an agent socket rather than a command, and removing
+ * it breaks fetching over SSH for every consumer using an agent — a cost
+ * with no matching gain. `SSH_ASKPASS` is a command, so it is named in
+ * {@link GIT_EXEC_VARS} and removed individually. Review of #1896 round 11.
+ */
+export const GIT_AMBIENT_NAMESPACE = "GIT_";
+
+/** Names allowed to survive the sweep. Empty, and see the note above. */
+export const GIT_AMBIENT_ALLOWED: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Variables whose VALUE git executes as a command.
+ *
+ * These are here for consistency, and the argument is short: stripping
+ * `GIT_CONFIG_*` already removes an injected `core.sshCommand`, `core.pager`
+ * and `core.fsmonitor`. Anyone able to set `GIT_CONFIG_KEY_0` can set
+ * `GIT_SSH_COMMAND`, so closing the config spelling of a route and leaving
+ * the direct spelling open buys nothing — it only makes the registry look
+ * complete. Review of #1896 round 10.
+ *
+ * **`GIT_SSH_COMMAND` has a real cost and it is accepted deliberately.** A
+ * deploy-key setup that passes `ssh -i <key>` through the environment
+ * rather than through `core.sshCommand` will fail to authenticate. In
+ * `lib/spec-source.ts` — this registry's only remote-reaching consumer — a
+ * failed fetch is recorded as `staleness` and the reading continues, so the
+ * cost is a reported stale ref rather than a refusal or a wrong answer.
+ * That is the direction this module is required to be wrong in.
+ *
+ * `GIT_EXTERNAL_DIFF` is listed despite being unreachable from the one call
+ * that could run it: measured on git 2.50.1, `diff --quiet` short-circuits
+ * before the external driver while a plain `diff` does invoke it (the
+ * control). A registry that only covers today's call sites is the narrower
+ * kind of denylist this whole round was about.
+ */
+export const GIT_EXEC_VARS = [
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "GIT_ASKPASS",
+  "SSH_ASKPASS",
+  "GIT_PROXY_COMMAND",
+  "GIT_EXTERNAL_DIFF",
+  "GIT_TEXTCONV_CACHE",
+  "GIT_PAGER",
+  "GIT_EDITOR",
+  "GIT_SEQUENCE_EDITOR",
+] as const;
+
+/**
+ * `base` with both families removed, and NOTHING set.
+ *
+ * Separate from {@link gitIsolatedEnv} because the two halves have
+ * different costs. Removing an ambient override can only restore git's
+ * own defaults, so it is safe for a command that reaches a remote;
+ * *setting* `GIT_CONFIG_GLOBAL=/dev/null` discards `credential.helper`
+ * with everything else, which is why `gitCredentialEnv` exists. A caller
+ * that must fetch wants this one alone.
+ */
+export function withoutAmbientGitOverrides(
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const name of Object.keys(env)) {
+    if (name.startsWith(GIT_AMBIENT_NAMESPACE) && !GIT_AMBIENT_ALLOWED.has(name)) delete env[name];
+  }
+  // The one command-bearing name outside the namespace. Everything else
+  // under `SSH_` is left alone — see {@link GIT_AMBIENT_NAMESPACE}.
+  for (const name of GIT_EXEC_VARS) {
+    if (!name.startsWith(GIT_AMBIENT_NAMESPACE)) delete env[name];
+  }
+  return env;
+}
+
+/**
  * The shell-prefix projection: `VAR=… VAR=… git -c k=v …`, ready to be
  * interpolated in front of a subcommand in a generated script.
  *
@@ -132,11 +261,18 @@ export function gitIsolatedArgs(args: readonly string[] = []): string[] {
  *
  * Takes the base environment as a parameter rather than reading
  * `process.env`, so a case can drive it without touching the machine's.
+ *
+ * The strip happens HERE rather than being left to the caller to compose,
+ * because the two steps are order-sensitive and only one order is safe:
+ * stripping `GIT_CONFIG*` after setting it removes the isolation this
+ * function exists to apply, and the result looks exactly like the
+ * isolated case. Both halves are individually correct and the series is
+ * not, so there is no composition for a caller to get wrong.
  */
 export function gitIsolatedEnv(
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  return { ...base, ...GIT_ISOLATION_ENV };
+  return { ...withoutAmbientGitOverrides(base), ...GIT_ISOLATION_ENV };
 }
 
 /**
