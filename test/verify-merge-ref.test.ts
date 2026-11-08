@@ -26,7 +26,14 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
-import { REFUSE_EXIT, mergeRefReading, remoteRepoReading, type Reading } from "../scripts/verify-merge-ref";
+import {
+  REFUSE_EXIT,
+  exitFor,
+  mergeRefReading,
+  remoteRepoReading,
+  type Mode,
+  type Reading,
+} from "../scripts/verify-merge-ref";
 
 const REPO = resolve(import.meta.dir, "..");
 const SCRIPT = join(REPO, "scripts", "verify-merge-ref.ts");
@@ -184,6 +191,46 @@ describe("mergeRefReading: the one decider (#1850)", () => {
  * added because a script measuring the wrong tree produced a confident
  * wrong verdict rather than an UNMEASURED one.
  */
+/**
+ * Round 3 of review on #1909, and correct: `MERGED_CLEAN` and
+ * `PUSHED_AFTER_MERGE` both exited 1, so the post-merge run — the one the
+ * rule file calls the one that matters — could not tell "nothing was
+ * dropped" from "#1847 just happened" without parsing stderr for a string.
+ *
+ * The table below is the whole of `exitFor`, and it is written as a table
+ * because the thing worth proving is that the two modes DISAGREE. A flag
+ * that answers every reading the same way is decorative, and the last case
+ * here is the one that would catch that.
+ */
+describe("the two runs exit on different answers (#1909 round 3)", () => {
+  const READINGS: Reading[] = ["CLEAR", "STALE_HEAD", "PUSHED_AFTER_MERGE", "MERGED_CLEAN", "UNMEASURED"];
+
+  const EXPECTED: Record<Mode, Reading> = { arming: "CLEAR", "after-merge": "MERGED_CLEAN" };
+
+  for (const mode of Object.keys(EXPECTED) as Mode[]) {
+    for (const reading of READINGS) {
+      const zero = reading === EXPECTED[mode];
+      test(`${mode}: ${reading} exits ${zero ? 0 : REFUSE_EXIT}`, () => {
+        expect(exitFor(reading, mode)).toBe(zero ? 0 : REFUSE_EXIT);
+      });
+    }
+  }
+
+  test("the modes disagree — otherwise the flag decides nothing", () => {
+    const disagree = READINGS.filter((r) => exitFor(r, "arming") !== exitFor(r, "after-merge"));
+    expect(
+      disagree.sort(),
+      "`--after-merge` answered every reading exactly as arming does, so the flag is a no-op and " +
+        "every case above passes without the mode mattering",
+    ).toEqual(["CLEAR", "MERGED_CLEAN"]);
+  });
+
+  test("#1847 refuses in BOTH modes — it is never a good answer", () => {
+    expect(exitFor("PUSHED_AFTER_MERGE", "arming")).toBe(REFUSE_EXIT);
+    expect(exitFor("PUSHED_AFTER_MERGE", "after-merge")).toBe(REFUSE_EXIT);
+  });
+});
+
 describe("the remote is tied to the pull request's repository (#1909 review)", () => {
   const MINE = "hornjason/rungate";
 
@@ -395,6 +442,55 @@ describe("the script refuses, and the refusal is what each case observed", () =>
     const r = bothHalves(gh, ["--pr", "1", "--remote", remote]);
     expect(r.err).toContain("MERGED_CLEAN");
     expect(r.out, "a merged pull request handed a SHA to the arming command").toBe("");
+  });
+
+  // The post-merge run, end to end. `--after-merge` is only worth adding if
+  // the two modes behave differently against the SAME planted state, so the
+  // first two cases plant one fixture each and run it in both modes.
+  test("--after-merge: MERGED_CLEAN exits 0 and prints the merge commit", () => {
+    const head = plantedHead();
+    const gh = plantGh(join(dir, "aftermerge-clean"), {
+      state: "MERGED", headRefName: "rg/planted", headRefOid: head, mergeCommit: { oid: MERGE },
+    });
+    const r = runScript(SCRIPT, gh, ["--pr", "1", "--remote", remote, "--after-merge"]);
+    expect(r.code, `the post-merge run refused a clean merge:\n${r.err}`).toBe(0);
+    expect(r.out, "exit zero with nothing on stdout — the shape this file refuses").toBe(MERGE);
+    // Same fixture, no flag: still a refusal. Without this the case above
+    // would pass just as well against a script that always exits 0.
+    const armed = runScript(SCRIPT, gh, ["--pr", "1", "--remote", remote]);
+    expect(armed.code, "arming cleared a merged pull request").toBe(REFUSE_EXIT);
+  });
+
+  test("--after-merge: PUSHED_AFTER_MERGE still refuses — that is #1847", () => {
+    const gh = plantGh(join(dir, "aftermerge-pushed"), {
+      state: "MERGED", headRefName: "rg/planted", headRefOid: OPEN_HEAD, mergeCommit: { oid: MERGE },
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", remote, "--after-merge"]);
+    expect(r.err).toContain("PUSHED_AFTER_MERGE");
+    expect(r.out, "a dropped-work reading printed a SHA, which reads as success").toBe("");
+  });
+
+  test("--after-merge: an OPEN pull request refuses — nothing merged", () => {
+    const head = plantedHead();
+    const gh = plantGh(join(dir, "aftermerge-open"), {
+      state: "OPEN", headRefName: "rg/planted", headRefOid: head, mergeCommit: null,
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", remote, "--after-merge"]);
+    // Not `toContain("CLEAR")`: measured against a decider mutated to ignore
+    // the mode, that assertion stayed green on a DIFFERENT refusal whose
+    // message happens to quote the reading back. Assert the sentence only
+    // this situation can produce.
+    expect(r.err, "the refusal does not say the pull request has not merged").toContain("has not merged");
+  });
+
+  test("--after-merge: MERGED_CLEAN with no recorded merge commit refuses", () => {
+    const head = plantedHead();
+    const gh = plantGh(join(dir, "aftermerge-nocommit"), {
+      state: "MERGED", headRefName: "rg/planted", headRefOid: head, mergeCommit: null,
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", remote, "--after-merge"]);
+    expect(r.err).toContain("UNMEASURED");
+    expect(r.out, "exit zero with an empty stdout is how a caller reads a reading nobody took").toBe("");
   });
 
   test("UNMEASURED: the branch has no ref on the remote", () => {

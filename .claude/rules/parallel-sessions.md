@@ -155,11 +155,12 @@ repo's, or anything the project marks as requiring sign-off.
 ```bash
 SHA="$(bun scripts/verify-merge-ref.ts --pr <N>)" \
   && gh pr merge <N> --squash --auto --match-head-commit "$SHA"
-bun scripts/verify-merge-ref.ts --pr <N>   # AFTER it merges. Not optional.
+bun scripts/verify-merge-ref.ts --pr <N> --after-merge   # not optional
 ```
 
-Pin the head every time. Only `CLEAR` exits zero and writes a SHA, so `&&`
-cannot hand the flag an empty string. **The second run is the one that
+Pin the head every time. Exit zero always writes a SHA, so `&&` cannot hand
+the flag an empty string; the two runs ask different questions, so they clear
+on different readings. **The second run is the one that
 matters**: no read taken before arming can see a push that arrives after
 it, and `PUSHED_AFTER_MERGE` is #1847 — commits on the branch, on no path
 to main, indistinguishable from merged work until somebody asks. Merging by

@@ -40,7 +40,7 @@
  * SHA="$(bun scripts/verify-merge-ref.ts --pr 1850)" \
  *   && gh pr merge 1850 --squash --auto --match-head-commit "$SHA"
  * # …and once it has merged, the reading that would have caught #1847:
- * bun scripts/verify-merge-ref.ts --pr 1850   # expect MERGED_CLEAN
+ * bun scripts/verify-merge-ref.ts --pr 1850 --after-merge
  * ```
  *
  * Dropping `--auto` and merging by hand once CI is green removes the
@@ -48,11 +48,21 @@
  * It costs a human waiting on a five-minute pipeline, which is why this
  * project arms instead — a trade, named rather than hidden.
  *
- * **Only `CLEAR` exits zero**, and only `CLEAR` writes a SHA to stdout. Every
- * other reading — including a merged pull request with nothing left to arm —
- * refuses, so the `&&` above can never hand `--match-head-commit` an empty
- * string. A reading that could not be taken is `UNMEASURED` and refuses with
- * the rest; it is not a pass.
+ * ## The two runs ask different questions, so they exit on different answers
+ *
+ * Raised in review of #1909 round 3, and correct. Arming wants a SHA to pin,
+ * so `CLEAR` is its only zero. After the merge the question is *did anything
+ * get dropped*, whose one good answer is `MERGED_CLEAN` — and with both
+ * collapsed into exit 1, the run this file exists for could not tell "fine"
+ * from "#1847 happened" without parsing stderr. `--after-merge` selects the
+ * second question; `exitFor` is the one place either is answered.
+ *
+ * In both modes **stdout is a SHA or it is empty**: the head to pin when
+ * arming, the merge commit to hand `verify-merge-content.ts` afterwards. Exit
+ * zero never happens without one, so the `&&` above cannot hand
+ * `--match-head-commit` an empty string in either mode. Every other reading
+ * refuses, and a reading that could not be taken is `UNMEASURED` and refuses
+ * with the rest; it is not a pass.
  *
  * Every refusal exits through `REFUSE_EXIT`, declared exactly once, so
  * `test/verify-merge-ref.test.ts` can build a mutant copy with it set to `0`
@@ -103,6 +113,21 @@ export interface RefInputs {
   mergeCommit?: string;
   /** The branch name, for the message. */
   branch?: string;
+}
+
+/** Which of the two questions is being asked. See the docblock. */
+export type Mode = "arming" | "after-merge";
+
+/**
+ * The one place a reading becomes an exit code.
+ *
+ * Kept out of `main` so the two modes can be shown to DISAGREE rather than
+ * asserted to: a flag both modes answer identically is decorative, and
+ * `test/verify-merge-ref.test.ts` walks every reading against both.
+ */
+export function exitFor(reading: Reading, mode: Mode): number {
+  const good: Reading = mode === "after-merge" ? "MERGED_CLEAN" : "CLEAR";
+  return reading === good ? 0 : REFUSE_EXIT;
 }
 
 export interface RefVerdict {
@@ -261,11 +286,12 @@ function arg(name: string, argv: string[]): string | undefined {
 export function main(argv: string[]): number {
   const pr = arg("pr", argv);
   if (!pr) {
-    console.error("usage: verify-merge-ref.ts --pr <N> [--repo owner/name] [--remote <name|path>]");
+    console.error("usage: verify-merge-ref.ts --pr <N> [--after-merge] [--repo owner/name] [--remote <name|path>]");
     return REFUSE_EXIT;
   }
   const repo = arg("repo", argv);
   const remote = arg("remote", argv) ?? "origin";
+  const mode: Mode = argv.includes("--after-merge") ? "after-merge" : "arming";
 
   const view = run([
     "gh", "pr", "view", pr,
@@ -324,12 +350,32 @@ export function main(argv: string[]): number {
     branch,
   });
 
-  if (verdict.reading === "CLEAR") {
-    console.log(pj.headRefOid);
-    return 0;
+  if (exitFor(verdict.reading, mode) !== 0) {
+    // `CLEAR` carries no detail — it is the good answer to the OTHER
+    // question — so a bare `CLEAR:` is all a post-merge run would print.
+    const why =
+      verdict.detail ||
+      `the pull request has not merged: \`${branch ?? "the branch"}\` is armable, which is not what ` +
+        `\`--after-merge\` asks. Merge it first, or drop the flag.`;
+    console.error(`${verdict.reading}: ${why}`);
+    return REFUSE_EXIT;
   }
-  console.error(`${verdict.reading}: ${verdict.detail}`);
-  return REFUSE_EXIT;
+  // Exit zero never happens without a SHA on stdout. Arming prints the head
+  // to pin; after a merge it prints the commit to hand `verify-merge-content
+  // .ts --merged`. A MERGED pull request the API gave no merge commit for is
+  // the one way this can be empty, and an empty success is the shape the
+  // whole file refuses.
+  const sha = mode === "after-merge" ? pj.mergeCommit?.oid : pj.headRefOid;
+  if (!sha) {
+    console.error(
+      `UNMEASURED: the pull request reads ${verdict.reading}, but the API recorded no ` +
+        `${mode === "after-merge" ? "merge commit" : "head"} to print. Exiting zero with nothing on stdout ` +
+        `is how a caller reads "fine" off a reading nobody took.`,
+    );
+    return REFUSE_EXIT;
+  }
+  console.log(sha);
+  return 0;
 }
 
 if (import.meta.main) process.exit(main(Bun.argv.slice(2)));
