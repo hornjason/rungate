@@ -33,15 +33,18 @@ import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { spawnSync } from "child_process";
 import {
+  DEFAULT_PRODUCER,
   READINGS,
   READING_NAMES,
   REFUSE_EXIT,
   PRODUCE_TIMEOUT_MS,
   conformant,
+  produceBoard,
   readSnapshotText,
   takeReading,
   takeReadings,
   type BoardSnapshot,
+  type Flags,
 } from "../scripts/board-conformance.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -1262,5 +1265,83 @@ describe("takeReading's three states", () => {
     // `[].every(...)` is true, which would make a command that took no
     // readings at all report success.
     expect(conformant([])).toBe(false);
+  });
+});
+
+// ── D3: the producer's provenance reaches the caller ────────────────────
+//
+// `produceBoard` quoted the child's stderr on every FAILURE arm and dropped
+// it on the success arm, so on the one path anybody runs daily the
+// producer's provenance — which tree the spec came from, which inputs came
+// from config rather than the command line, which readings it could not
+// take — was captured and discarded.
+//
+// These cases drive the success arm through a STUB producer rather than the
+// real one. That is the whole reason `producer` is a parameter: while the
+// path was a constant, no case could reach the success arm without a
+// network and a credential, which is why this went uncovered.
+describe("D3: what the producer said on the success path", () => {
+  const stub = (body: string): string => {
+    const at = join(mkdtempSync(join(SCRATCH, "producer-")), "stub.ts");
+    writeFileSync(at, body);
+    return at;
+  };
+
+  const flags = (): Flags => ({
+    listReadings: false,
+    produce: true,
+    snapshotGiven: false,
+    readingGiven: false,
+    spec: "specs/X.md",
+    specGiven: true,
+    prefix: "Pipeline",
+    prefixGiven: true,
+    repo: "o/n",
+    repoGiven: true,
+  });
+
+  const MARKER = "spec read from origin/main at deadbeef (specs/X.md)";
+
+  test("a producer that exits 0 has its stderr RETURNED, not swallowed", () => {
+    const at = stub(
+      `console.error(${JSON.stringify(MARKER)});\n` +
+        `console.log(${JSON.stringify(JSON.stringify(completeBoard()))});\n`,
+    );
+    const r = produceBoard(flags(), at);
+
+    expect(r.error, `the stub producer refused: ${r.error}`).toBeNull();
+    expect(r.board, "the stub's board did not parse, so this case witnessed nothing").not.toBeNull();
+    expect(r.notes, "the producer's provenance was captured and dropped — D3's line never reaches a reader").toContain(
+      MARKER,
+    );
+  });
+
+  test("a producer that says nothing yields EMPTY notes, not a fabricated line", () => {
+    // The control. Without it, `notes` could be a constant string and the
+    // case above would pass having measured nothing the child emitted.
+    const at = stub(`console.log(${JSON.stringify(JSON.stringify(completeBoard()))});\n`);
+    const r = produceBoard(flags(), at);
+
+    expect(r.error).toBeNull();
+    expect(r.notes).toBe("");
+  });
+
+  test("a REFUSING producer leaves notes empty — the reason is in `error`, and once is enough", () => {
+    // Not a cosmetic choice. The refusal message already quotes stderr, so
+    // carrying it in `notes` as well prints the producer's one reason twice
+    // with nothing saying they are the same reading.
+    const at = stub(`console.error("it refused, loudly");\nprocess.exit(3);\n`);
+    const r = produceBoard(flags(), at);
+
+    expect(r.error, "a non-zero producer produced no error").not.toBeNull();
+    expect(r.error).toContain("it refused, loudly");
+    expect(r.notes, "the same bytes are now on screen twice").toBe("");
+  });
+
+  test("DEFAULT_PRODUCER is the real board-snapshot, so the stub never becomes the shipped default", () => {
+    // A parameter with a default is a second place the path can be wrong.
+    // This is the only case that names the production value.
+    expect(DEFAULT_PRODUCER.endsWith("scripts/board-snapshot.ts"), DEFAULT_PRODUCER).toBe(true);
+    expect(readFileSync(DEFAULT_PRODUCER, "utf-8")).toContain("board-snapshot");
   });
 });

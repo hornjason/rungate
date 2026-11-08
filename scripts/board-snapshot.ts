@@ -32,9 +32,11 @@
  * A producer that repaired the thing it measures would make the reading
  * true by taking it.
  */
+import { spawnSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
+import { describeSpecSource, resolveSpecSource, type GitRunner } from "../lib/spec-source";
 import { openFrontier, phaseOf } from "../lib/board-mirror";
 import { createGitHubClient, listMilestones } from "../lib/github";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
@@ -211,7 +213,26 @@ export interface ProducedSnapshot {
   criteria: CriterionCoverage[];
 }
 
-export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB): Promise<number> {
+/**
+ * `git -C <root> …`, built per root so the runner cannot be pointed at one
+ * checkout while the reading is taken in another.
+ *
+ * Injected for the same reason {@link BoardSnapshotGitHub} is: a case that
+ * reaches a real repository measures whatever this machine happens to be on,
+ * and goes green or red for reasons the case never wrote down.
+ */
+export const LIVE_GIT = (root: string): GitRunner => {
+  return args => {
+    const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
+    return { ok: r.status === 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  };
+};
+
+export async function main(
+  argv: string[],
+  gh: BoardSnapshotGitHub = LIVE_GITHUB,
+  git: (root: string) => GitRunner = LIVE_GIT,
+): Promise<number> {
   let parsed;
   try {
     parsed = parseArgs({
@@ -314,12 +335,31 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
     console.error(`board-snapshot: resolved from the repository, not the command line — ${fromConfig.join(", ")}`);
   }
 
+  // **THE SPEC COMES FROM `origin/main`, AND THE LINE BELOW SAYS SO** — D3.
+  // This was a bare `readFileSync` until 2026-11-08, so every reading it
+  // produced was scoped by whichever branch the caller stood on and the
+  // output named none of them. A branch mid-edit on a Phase placement table
+  // and a branch four days behind main give different numbers against the
+  // SAME live board, and both printed as an ordinary reading.
+  //
+  // Three answers, and the third is the point: a tracked path is read from
+  // the ref; an UNTRACKED one is read from disk and said so (a planted
+  // fixture has no `origin/main` version, which is a fact about the file);
+  // and a failure anywhere in between is UNMEASURED. It does NOT fall back
+  // to disk — that is the working-tree read wearing a repair, and it fires
+  // in exactly the case where the two disagree most.
   const specPath = isAbsolute(specArg) ? specArg : join(root, specArg);
-  if (!existsSync(specPath)) {
+  const source = resolveSpecSource({ root, absPath: specPath, git: git(root) });
+  // ALWAYS, never only on the interesting arm. A provenance line that
+  // appears when something is odd teaches the reader that silence means
+  // origin/main, and silence is also what a broken emitter looks like.
+  console.error(`board-snapshot: ${describeSpecSource(source)}`);
+  if (source.kind === "unmeasured") return REFUSAL_EXIT;
+  if (source.kind === "untracked" && !existsSync(specPath)) {
     console.error(`board-snapshot: no such spec: ${specPath}`);
     return REFUSAL_EXIT;
   }
-  const content = readFileSync(specPath, "utf-8");
+  const content = source.kind === "ref" ? source.content : readFileSync(specPath, "utf-8");
 
   // An unsound placement table is UNMEASURED, not a board with fewer
   // phases. A criterion the table never places, or places twice, makes the
