@@ -1828,7 +1828,7 @@ describe("#1879 — a claim about a test's outcome does not block", () => {
 
   test("the claim is demoted, stays reported, and the refusal says no test ran", () => {
     const r = readAiReviewFindings(
-      payload("the ratchet case fails on this branch", "CI goes red at test/ratchet.test.ts"),
+      payload("the ratchet test fails on this branch", "CI goes red at test/ratchet.test.ts"),
     );
     expect(r.blocked, "an unobserved test outcome still reddened the required check").toBe(false);
     expect(r.outcome).toBe("CLEAN");
@@ -1849,26 +1849,64 @@ describe("#1879 — a claim about a test's outcome does not block", () => {
     expect(r.outcome).toBe("CLEAN");
   });
 
-  test("control: an ordinary finding that merely contains \"fails\" keeps blocking", () => {
+  test("control: \"the suite fails to <verb>\" is about code and keeps blocking", () => {
     // The over-correction this is pointed at. `fails to <verb>` is a
-    // statement about what the CODE does, which is the ordinary subject of a
-    // review. Dropping the `(?!\s+to\s+\w)` lookahead in `TEST_OUTCOME` turns
-    // this case red, and turns the two above green for the wrong reason.
+    // statement about what the CODE does. Dropping the `(?!\s+to\s+\w)`
+    // lookahead in `TEST_OUTCOME` turns this case red, and turns the two
+    // above green for the wrong reason. The subject is a word the detector
+    // DOES read, or the lookahead would not be the thing under test.
     const r = readAiReviewFindings(
-      payload("the check fails to escape the path", "a path with a quote in it reaches the shell"),
+      payload(
+        "the test harness fails to escape the path it is handed",
+        "a path with a quote in it reaches the shell",
+      ),
     );
     expect(r.blocked, "a finding about code behaviour was demoted").toBe(true);
     expect(r.outcome).toBe("BLOCKED");
   });
 
+  test("control: #1914 round 1 — \"check\", \"case\" and \"spec\" are not test subjects", () => {
+    // Three sentences the reviewer wrote against the first version of this,
+    // verbatim. Each is a well-evidenced finding about what PRODUCTION code
+    // does, and the first version demoted all three: `TEST_SUBJECT` listed
+    // `checks?` and `cases?`, which are what a CI job and a branch are
+    // called in this repository, and `TEST_OUTCOME` listed `broken`.
+    //
+    // This is the population, not one example. Restoring any one of those
+    // three words to the pattern turns the matching row red.
+    const sentences = [
+      "the required check is broken when the payload omits the severity field",
+      "the check fails silently when given an empty changed-file list",
+      "it does not pass large payloads through its size check",
+      "the error case is red-flagged but never reported to the caller",
+      "the spec does not pass its own frontmatter requirement",
+    ];
+    for (const s of sentences) {
+      const r = readAiReviewFindings(payload(s, "a maintainer merges over a live defect"));
+      expect(r.blocked, `demoted a finding about code behaviour: ${s}`).toBe(true);
+    }
+  });
+
+  test("\"broken\" is an outcome word once the subject is a test", () => {
+    // This case exists because a mutation found nothing. Excluding `broken`
+    // from `TEST_OUTCOME` — which the first version did — turned zero cases
+    // red, so the exclusion was a decision nothing could see. Removing
+    // `broken` from the pattern now turns THIS red, in both directions.
+    const r = readAiReviewFindings(
+      payload("the budget suite is broken on this branch", "CI will not go green"),
+    );
+    expect(r.blocked).toBe(false);
+    expect(r.detail.join("\n")).toContain("claims a test outcome, and no test ran");
+  });
+
   test("control: the two halves must land in ONE sentence", () => {
     // Named because it is what the detector holds fixed. A finding may
-    // mention a test file and, separately, that something is broken, without
-    // ever claiming an outcome — matching across a sentence boundary would
-    // demote most of the payloads this module sees.
+    // mention a test file and, separately, that something does not pass,
+    // without ever claiming an outcome — matching across a sentence boundary
+    // would demote most of the payloads this module sees.
     const r = readAiReviewFindings(
       payload(
-        "test/ratchet.test.ts is new. The config it reads is broken.",
+        "test/ratchet.test.ts is new. The config it reads does not pass validation.",
         "a reader of the ratchet gets an empty list",
       ),
     );
@@ -1880,7 +1918,7 @@ describe("#1879 — a claim about a test's outcome does not block", () => {
       JSON.stringify({
         [AI_REVIEW_VERDICT_KEY]: "PASS",
         [AI_REVIEW_FINDINGS_KEY]: [
-          { [f.severity]: "low", [f.file]: "b.ts", [f.line]: 2, [f.summary]: "the case fails" },
+          { [f.severity]: "low", [f.file]: "b.ts", [f.line]: 2, [f.summary]: "the test fails" },
         ],
       }),
     );
@@ -1894,8 +1932,8 @@ describe("#1879 — a claim about a test's outcome does not block", () => {
     // So the refusal quotes what it read instead of asserting that it read
     // something. A boolean here is the cheapest wrong fix and it is silent.
     expect(
-      unrunTestClaim({ [f.summary]: "fine. the spec case is red. also fine." }),
-    ).toBe("the spec case is red.");
+      unrunTestClaim({ [f.summary]: "fine. the budget test is red. also fine." }),
+    ).toBe("the budget test is red.");
     expect(unrunTestClaim({ [f.summary]: "an unchecked index" })).toBeNull();
     // A non-string field is not an input it may crash on.
     expect(unrunTestClaim({ [f.summary]: 7, [f.failureScenario]: null })).toBeNull();

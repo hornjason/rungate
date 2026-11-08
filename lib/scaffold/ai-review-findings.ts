@@ -667,13 +667,34 @@ export function blockingContractViolations(finding: Record<string, unknown>): st
   });
 }
 
-/** A thing whose outcome is a test run: the subject half of the claim. */
-const TEST_SUBJECT = /\b(?:tests?|specs?|cases?|checks?|suites?|assertions?)\b/i;
+/**
+ * A thing whose outcome is a test run: the subject half of the claim.
+ *
+ * **`check`, `case`, `spec` and `assertion` are deliberately absent**, and
+ * that is the whole of #1914 round 1. They are ordinary production
+ * vocabulary in this repository — a `check` is a CI job or a guard, a
+ * `case` is a branch, a `spec` is a document under `specs/` — so a
+ * well-evidenced finding reading *"the required check is broken when the
+ * payload omits the severity field"* matched the subject half and demoted
+ * itself. The whole point of this module is the red required check; a
+ * detector that turns one green over a live defect is worse than no
+ * detector.
+ *
+ * `test` covers a path as well as a noun: `\b` fires at the slash and the
+ * dot, so `test/ratchet.test.ts` matches without a second pattern.
+ */
+const TEST_SUBJECT = /\b(?:tests?|suites?)\b/i;
 
 /**
- * The outcome half. `fails to <verb>` is excluded deliberately — "the check
- * fails to escape the path" is a statement about what code DOES, which is
+ * The outcome half. One exclusion: **`fails to <verb>`**, because "the suite
+ * fails to load the module" is a statement about what code DOES, which is
  * the ordinary subject of a review and must keep blocking.
+ *
+ * `broken` was briefly excluded too, on the reasoning above the subject
+ * list, and the mutation that restored it turned **no case red** — once the
+ * subject is `test` or `suite`, "broken" can only be describing a run. An
+ * exclusion no case can see is not a decision, so it was withdrawn and
+ * `the suite is broken` is pinned below instead.
  */
 const TEST_OUTCOME =
   /\b(?:fail(?:s|ing|ed)?(?!\s+to\s+\w)|red|broken|do(?:es)?\s+not\s+pass|cannot\s+pass|will\s+not\s+pass|won't\s+pass)\b/i;
