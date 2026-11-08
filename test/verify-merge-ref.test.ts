@@ -26,7 +26,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
-import { REFUSE_EXIT, mergeRefReading, type Reading } from "../scripts/verify-merge-ref";
+import { REFUSE_EXIT, mergeRefReading, remoteRepoReading, type Reading } from "../scripts/verify-merge-ref";
 
 const REPO = resolve(import.meta.dir, "..");
 const SCRIPT = join(REPO, "scripts", "verify-merge-ref.ts");
@@ -118,18 +118,99 @@ describe("mergeRefReading: the one decider (#1850)", () => {
   });
 });
 
+/**
+ * Round 1 of review on #1909. `git ls-remote` reads whatever `origin`
+ * resolves to in the process's working directory, and nothing tied that to
+ * the repository the pull request came from. Run from a tree whose remote
+ * points somewhere else and `remoteHead` is populated from the wrong source,
+ * so the decider returns a confident `CLEAR` — or a confident
+ * `PUSHED_AFTER_MERGE` — about a comparison it never made.
+ *
+ * Demonstrated before the fix: a fresh repository with
+ * `origin = https://github.com/some/other-repo.git` answers
+ * `git ls-remote --get-url origin` with that URL, and the script compared
+ * against it without a word.
+ *
+ * Same shape `.claude/rules/parallel-sessions.md` already documents for
+ * `check-launch-base.ts` and `report-provenance.ts --expect-branch`, both
+ * added because a script measuring the wrong tree produced a confident
+ * wrong verdict rather than an UNMEASURED one.
+ */
+describe("the remote is tied to the pull request's repository (#1909 review)", () => {
+  const MINE = "hornjason/rungate";
+
+  const SAME = [
+    "https://github.com/hornjason/rungate.git",
+    "https://github.com/hornjason/rungate",
+    "git@github.com:hornjason/rungate.git",
+    "ssh://git@github.com/hornjason/rungate.git",
+    "https://x-access-token:TOKEN@github.com/hornjason/rungate.git",
+    // The repository was renamed from pai-harness on 2026-10-28 and a
+    // long-lived checkout may still carry the old URL. GitHub redirects it,
+    // so refusing it would refuse a working remote; case is GitHub's own.
+    "https://github.com/HornJason/RunGate.git",
+    // A local mirror laid out as owner/name. The comparison is the last two
+    // path segments, which is what makes one rule cover https, ssh, scp-style
+    // and a path — and what lets this file point `--remote` at a real bare
+    // repository instead of stubbing `git ls-remote`, which would be a second
+    // decider agreeing with the first.
+    "/tmp/x/hornjason/rungate.git",
+  ];
+  for (const url of SAME) {
+    test(`the same repository: ${url}`, () => {
+      expect(remoteRepoReading(url, MINE).ok, `refused a remote that IS the PR's repository`).toBe(true);
+    });
+  }
+
+  const DIFFERENT = [
+    ["another repository", "https://github.com/some/other-repo.git"],
+    ["another owner, same name", "https://github.com/someoneelse/rungate.git"],
+    ["an ordinary working path", "/Users/x/Projects/rg-wt-1850"],
+    ["an empty url", ""],
+  ];
+  for (const [why, url] of DIFFERENT) {
+    test(`UNMEASURED on ${why}`, () => {
+      const r = remoteRepoReading(url, MINE);
+      expect(r.ok, `accepted ${url} as ${MINE}`).toBe(false);
+      expect(r.detail, "the refusal does not name what the remote actually is").toContain(url || "(empty)");
+      expect(r.detail, "the refusal does not name the repository it expected").toContain(MINE);
+    });
+  }
+
+  // The control. If the expected repository cannot be read, a comparison
+  // against it is not a pass — this is the shape that turns "I could not
+  // look" into "nothing is wrong".
+  test("an unknown expected repository is UNMEASURED, not a free pass", () => {
+    expect(remoteRepoReading("https://github.com/hornjason/rungate.git", "").ok).toBe(false);
+  });
+});
+
 // ── the script, spawned for real ────────────────────────────
 
 let dir = "";
 let mutant = "";
 let remote = "";
+let elsewhere = "";
 
-/** A `gh` on PATH answering `pr view` from a literal JSON payload. */
-function plantGh(at: string, payload: unknown): string {
+/**
+ * A `gh` on PATH answering `pr view` from a literal JSON payload.
+ *
+ * The repository fields default to the fixture remotes' owner/name, because
+ * every case here is about the HEAD comparison and would otherwise be
+ * stopped one step earlier by the repository guard — which is a different
+ * reading and would make each of them green for the wrong reason. The case
+ * that IS about the guard overrides the remote, not the payload.
+ */
+function plantGh(at: string, payload: Record<string, unknown>): string {
   const bin = join(at, "bin");
   mkdirSync(bin, { recursive: true });
   const file = join(bin, "gh");
-  writeFileSync(file, `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify(payload)}\nJSON\n`);
+  const full = {
+    headRepositoryOwner: { login: "hornjason" },
+    headRepository: { name: "rungate" },
+    ...payload,
+  };
+  writeFileSync(file, `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify(full)}\nJSON\n`);
   chmodSync(file, 0o755);
   return bin;
 }
@@ -153,12 +234,20 @@ beforeAll(() => {
 
   // A real bare repository to be the remote, so `git ls-remote` is the real
   // command reading a real ref rather than a stub agreeing with the script.
-  remote = join(dir, "remote.git");
+  // Laid out as owner/name, because the script now refuses a remote that is
+  // not the pull request's repository and the comparison is the last two
+  // path segments. `elsewhere` is the same repository under a path that
+  // says it is somebody else's.
+  remote = join(dir, "hornjason", "rungate.git");
+  elsewhere = join(dir, "someoneelse", "other-repo.git");
   const work = join(dir, "work");
+  mkdirSync(join(dir, "hornjason"), { recursive: true });
+  mkdirSync(join(dir, "someoneelse"), { recursive: true });
   mkdirSync(work, { recursive: true });
   const git = (cwd: string, ...a: string[]) =>
     Bun.spawnSync(["git", "-C", cwd, ...a], { stdout: "pipe", stderr: "pipe" });
   Bun.spawnSync(["git", "init", "--bare", "-q", remote], { stdout: "pipe", stderr: "pipe" });
+  Bun.spawnSync(["git", "init", "--bare", "-q", elsewhere], { stdout: "pipe", stderr: "pipe" });
   Bun.spawnSync(["git", "init", "-q", "-b", "main", work], { stdout: "pipe", stderr: "pipe" });
   git(work, "config", "user.email", "t@example.com");
   git(work, "config", "user.name", "t");
@@ -170,6 +259,7 @@ beforeAll(() => {
   git(work, "add", "-A");
   git(work, "commit", "-qm", "two");
   git(work, "push", "-q", remote, "rg/planted");
+  git(work, "push", "-q", elsewhere, "rg/planted");
 
   // The mutant. Guarded, because a mutant that fails to build or fails to
   // load reports zero failures and reads exactly like a case that passed.
@@ -274,6 +364,28 @@ describe("the script refuses, and the refusal is what each case observed", () =>
     chmodSync(join(bin, "gh"), 0o755);
     const r = bothHalves(bin, ["--pr", "1", "--remote", remote]);
     expect(r.err).toContain("UNMEASURED");
+  });
+
+  // The wiring half of the review finding. A correct predicate the script
+  // never consults is the defect this repository keeps finding in its own
+  // tooling, and nothing above would notice: every other case here uses a
+  // `--remote` that happens to be the right one.
+  test("UNMEASURED: the remote is not the pull request's repository", () => {
+    const head = plantedHead();
+    const gh = plantGh(join(dir, "wrongremote"), {
+      state: "OPEN",
+      headRefName: "rg/planted",
+      headRefOid: head,
+      mergeCommit: null,
+      headRepositoryOwner: { login: "hornjason" },
+      headRepository: { name: "rungate" },
+    });
+    // `elsewhere` holds the SAME branch at the SAME commit, so every other
+    // reading in this file would clear against it. Only the repository the
+    // path names is different, which is the one variable under test.
+    const r = bothHalves(gh, ["--pr", "1", "--remote", elsewhere]);
+    expect(r.err).toContain("UNMEASURED");
+    expect(r.err, "the refusal does not name the repository the API reported").toContain("hornjason/rungate");
   });
 
   test("no --pr is a refusal, not a default", () => {

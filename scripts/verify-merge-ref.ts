@@ -18,16 +18,35 @@
  * between arming and firing is exactly the window the flag leaves open, and a
  * push arriving after firing has no merge left to refuse.
  *
- * ## What this is
+ * ## What this does NOT do, said first
  *
- * A decider. It performs nothing: it reads the pull request and the remote
- * ref, compares them, and exits. Use it to gate the acting command, so the
- * SHA you pin is one that was just confirmed against the remote:
+ * **A read taken before arming cannot see a push that arrives after it.**
+ * Raised in review of #1909 and correct: run before `gh pr merge --auto`,
+ * this closes nothing that `--match-head-commit` leaves open, because its
+ * read happens at the same moment the flag's does. Nothing short of the
+ * forge enforcing the expected head at FIRE time can close that window.
+ *
+ * What it actually buys is two readings at two moments:
+ *
+ * - **before arming** — `STALE_HEAD`, the branch already moved while you
+ *   were reading it. Narrow, and real.
+ * - **after merging** — `PUSHED_AFTER_MERGE`, which is #1847 itself. This
+ *   is the one that matters. The commits were never lost because they were
+ *   unrecoverable; they were lost because for days nobody asked.
+ *
+ * So run it twice, and the second run is not optional:
  *
  * ```bash
  * SHA="$(bun scripts/verify-merge-ref.ts --pr 1850)" \
  *   && gh pr merge 1850 --squash --auto --match-head-commit "$SHA"
+ * # …and once it has merged, the reading that would have caught #1847:
+ * bun scripts/verify-merge-ref.ts --pr 1850   # expect MERGED_CLEAN
  * ```
+ *
+ * Dropping `--auto` and merging by hand once CI is green removes the
+ * arm-to-fire window outright, and is the right call when you are watching.
+ * It costs a human waiting on a five-minute pipeline, which is why this
+ * project arms instead — a trade, named rather than hidden.
  *
  * **Only `CLEAR` exits zero**, and only `CLEAR` writes a SHA to stdout. Every
  * other reading — including a merged pull request with nothing left to arm —
@@ -148,6 +167,55 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
   return { reading: "CLEAR", detail: "" };
 }
 
+/**
+ * Is the remote this process is about to read the pull request's repository?
+ *
+ * Raised in review of #1909. `git ls-remote` queries whatever `origin`
+ * resolves to in the working directory, and nothing tied that to the
+ * repository `gh pr view` answered from. Run from a tree whose remote points
+ * somewhere else and the comparison below is made against the wrong source,
+ * confidently. That is the same failure shape `.claude/rules/parallel-
+ * sessions.md` documents for `check-launch-base.ts` and
+ * `report-provenance.ts --expect-branch`, both added because a script
+ * measuring the wrong tree produced a wrong verdict rather than an
+ * UNMEASURED one.
+ *
+ * The comparison is the last two path segments, case-insensitively, with any
+ * `.git` suffix dropped. One rule covers `https://`, `ssh://`, scp-style
+ * `git@host:owner/name`, a credential-bearing URL, and a local mirror laid
+ * out as `owner/name` — and an ordinary working path such as
+ * `/Users/x/Projects/rg-wt-1850` does not match, which is the case that
+ * motivated this. GitHub's own names are case-insensitive and the repository
+ * was renamed once, so refusing on case would refuse a working remote.
+ */
+export function remoteRepoReading(url: string, expected: string): { ok: boolean; detail: string } {
+  const tail = (s: string) =>
+    s
+      .replace(/\.git\/*$/, "")
+      .split(/[/:]/)
+      .filter(Boolean)
+      .slice(-2)
+      .join("/")
+      .toLowerCase();
+  const got = url ? tail(url) : "";
+  const want = expected ? tail(expected) : "";
+  if (!want) {
+    return {
+      ok: false,
+      detail: `the API did not say which repository this pull request belongs to, so the remote \`${url || "(empty)"}\` was compared against nothing.`,
+    };
+  }
+  if (!got || got !== want || got.split("/").length !== 2) {
+    return {
+      ok: false,
+      detail:
+        `the remote resolves to \`${url || "(empty)"}\`, which is not \`${expected}\` — the repository the pull request is in. ` +
+        `Nothing was compared. Pass \`--remote\` naming the right one, or run from a checkout of \`${expected}\`.`,
+    };
+  }
+  return { ok: true, detail: "" };
+}
+
 // ── the I/O half ────────────────────────────────────────────
 
 function run(cmd: string[]): { out: string; ok: boolean } {
@@ -172,18 +240,38 @@ export function main(argv: string[]): number {
   const view = run([
     "gh", "pr", "view", pr,
     ...(repo ? ["--repo", repo] : []),
-    "--json", "state,headRefName,headRefOid,mergeCommit",
+    "--json", "state,headRefName,headRefOid,mergeCommit,headRepository,headRepositoryOwner",
   ]);
   if (!view.ok || view.out === "") {
     console.error(`UNMEASURED: \`gh pr view ${pr}\` produced nothing. The pull request was not read, which is not the same as a pull request that is fine.`);
     return REFUSE_EXIT;
   }
 
-  let pj: { state?: string; headRefName?: string; headRefOid?: string; mergeCommit?: { oid?: string } };
+  let pj: {
+    state?: string;
+    headRefName?: string;
+    headRefOid?: string;
+    mergeCommit?: { oid?: string };
+    headRepository?: { name?: string };
+    headRepositoryOwner?: { login?: string };
+  };
   try {
     pj = JSON.parse(view.out);
   } catch {
     console.error(`UNMEASURED: \`gh pr view ${pr}\` returned something that is not JSON.`);
+    return REFUSE_EXIT;
+  }
+
+  // Before reading the remote, establish it IS the pull request's remote.
+  // Otherwise every comparison below is made confidently against the wrong
+  // source — review of #1909.
+  const owner = pj.headRepositoryOwner?.login;
+  const name = pj.headRepository?.name;
+  const expected = owner && name ? `${owner}/${name}` : "";
+  const url = run(["git", "ls-remote", "--get-url", remote]);
+  const sameRepo = remoteRepoReading(url.ok ? url.out : "", expected);
+  if (!sameRepo.ok) {
+    console.error(`UNMEASURED: ${sameRepo.detail}`);
     return REFUSE_EXIT;
   }
 

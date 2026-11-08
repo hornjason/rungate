@@ -125,8 +125,8 @@ Four readings per worktree — a merged PR *at the commit it holds*, a `git
 status` that was read and was empty, no process holding a file under it, and
 nothing modified inside a declared age — and a worktree failing to produce any
 one of them is **UNMEASURED, counted apart from ABANDONED**. It deletes
-nothing; removal stays yours. Measured on this machine's 173 worktrees, 9 sat
-at a commit GitHub never merged, in a tree `git status` calls clean.
+nothing; removal stays yours. What the census of this machine's 173
+worktrees found is in the reference file, in full.
 
 `git worktree prune` is not the safe half of this. It drops
 `.git/worktrees/<name>` for **any** registered worktree whose directory is
@@ -155,14 +155,16 @@ repo's, or anything the project marks as requiring sign-off.
 ```bash
 SHA="$(bun scripts/verify-merge-ref.ts --pr <N>)" \
   && gh pr merge <N> --squash --auto --match-head-commit "$SHA"
+bun scripts/verify-merge-ref.ts --pr <N>   # AFTER it merges. Not optional.
 ```
 
-Pin the head every time. `--match-head-commit` alone is read at ARM time
-while auto-merge fires later, so it cannot see a push inside that window
-(#1850, #1847) — the decider reads the remote. Only `CLEAR` exits zero and
-writes a SHA, so `&&` cannot hand the flag an empty string; `MERGED_CLEAN`
-and `UNMEASURED` refuse with the rest. What an unpinned merge cost (#500,
-#502): `reference/parallel-sessions-worked-instances.md`.
+Pin the head every time. Only `CLEAR` exits zero and writes a SHA, so `&&`
+cannot hand the flag an empty string. **The second run is the one that
+matters**: no read taken before arming can see a push that arrives after
+it, and `PUSHED_AFTER_MERGE` is #1847 — commits on the branch, on no path
+to main, indistinguishable from merged work until somebody asks. Merging by
+hand once CI is green removes that window outright. What an unpinned merge
+cost (#500, #502): `reference/parallel-sessions-worked-instances.md`.
 
 So when a merge has already happened and you want to know whether your work is
 really there, ask about **content**, not ancestry:
@@ -217,11 +219,9 @@ It refuses with `UNMEASURED: wrong tree`, naming both the directory it read
 and the branch you meant.
 
 **And do not build the obvious detector** — a populated `COMMITS` beside an
-empty `DIFF CONTENT` is the normal case, not a contradiction. Why, both
-measurements, and why the skill is not where this gets fixed:
-`reference/parallel-sessions-worked-instances.md` (#1348). Two security
-reviews on 2026-10-17 were each measured against a tree their branch had
-already moved past, and neither report let the reader tell.
+empty `DIFF CONTENT` is the normal case, not a contradiction. Why, and why
+the skill is not where this gets fixed:
+`reference/parallel-sessions-worked-instances.md` (#1348).
 
 A report whose currency could not be established says so. "I could not
 resolve the branch" is a thing worth writing down; silence reads as current.
