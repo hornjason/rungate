@@ -27,10 +27,13 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
 import {
+  DEFAULT_TIMEOUT_MS,
+  MAX_TIMEOUT_MS,
   REFUSE_EXIT,
   exitFor,
   mergeRefReading,
   remoteRepoReading,
+  timeoutReading,
   type Mode,
   type Reading,
 } from "../scripts/verify-merge-ref";
@@ -228,6 +231,93 @@ describe("the two runs exit on different answers (#1909 round 3)", () => {
   test("#1847 refuses in BOTH modes — it is never a good answer", () => {
     expect(exitFor("PUSHED_AFTER_MERGE", "arming")).toBe(REFUSE_EXIT);
     expect(exitFor("PUSHED_AFTER_MERGE", "after-merge")).toBe(REFUSE_EXIT);
+  });
+});
+
+/**
+ * #1912, review of #1909 round 8.
+ *
+ * The bound was `Number(process.env.RUNGATE_REMOTE_TIMEOUT_MS) || 30_000`,
+ * which coerces rather than reads. `"0"` is falsy so it handed back 30,000 —
+ * the operator asked to minimise the bound and silently got the maximum —
+ * `"soon"` does the same through `NaN`, and `"-1"` is truthy so it reached
+ * `Bun.spawnSync` unexamined. *Silent Default Substitution*, named and
+ * forbidden in `.claude/rules/config-access.md`, in the file whose whole
+ * argument is that an unread value is never a quiet pass.
+ *
+ * A table, because the defect is about WHICH inputs are distinguished and a
+ * case per value is the only shape that can say so. Absent is the sole row
+ * that may take the default; the old expression gave that same answer to
+ * three others, and this is where they separate.
+ */
+describe("the timeout bound is read, not coerced (#1912)", () => {
+  const CASES: [string, string | undefined, number | "REFUSED"][] = [
+    ["absent — the only silent default", undefined, DEFAULT_TIMEOUT_MS],
+    ["empty — set, and unusable", "", "REFUSED"],
+    ["zero", "0", "REFUSED"],
+    ["negative", "-1", "REFUSED"],
+    ["non-numeric", "soon", "REFUSED"],
+    ["fractional", "1.5", "REFUSED"],
+    ["hex, which Number accepts", "0x10", "REFUSED"],
+    ["exponential, which Number accepts", "1e3", "REFUSED"],
+    ["a positive integer", "1500", 1500],
+    ["the default, stated rather than assumed", "30000", 30_000],
+    ["padded — a trailing newline off a shell", " 1500 ", 1500],
+    // Review of #1913. The top end was open, so a fat-fingered extra digit
+    // reached `Bun.spawnSync` unexamined. The boundary is MEASURED, not
+    // assumed — the table is in `timeoutReading`'s docstring, and the short
+    // version is that `2**31` is killed in ~2ms while `3e9` is honoured, so
+    // no operator can tell a safe value from an unsafe one.
+    ["int32 max — the largest measured to behave", "2147483647", 2147483647],
+    ["one past it — killed in ~2ms, measured", "2147483648", "REFUSED"],
+    ["a fat-fingered extra digit", "3000000000", "REFUSED"],
+  ];
+
+  for (const [why, raw, want] of CASES) {
+    test(`${why}: ${JSON.stringify(raw)} → ${want}`, () => {
+      const r = timeoutReading(raw);
+      if (want === "REFUSED") {
+        expect(r.ok, `\`${raw}\` was accepted as a bound`).toBe(false);
+        if (!r.ok) {
+          expect(r.detail, "the refusal does not quote what it read").toContain(String(raw));
+          expect(r.detail, "the refusal does not name the variable").toContain("RUNGATE_REMOTE_TIMEOUT_MS");
+        }
+      } else {
+        expect(r.ok, `\`${raw}\` was refused`).toBe(true);
+        if (r.ok) expect(r.ms).toBe(want);
+      }
+    });
+  }
+
+  /**
+   * The control this table needs, and the reason it is a separate case:
+   * every row above would also pass against a reader that refuses
+   * EVERYTHING except `undefined`. This names the rows that must differ.
+   */
+  test("the refusals are not simply everything-but-absent", () => {
+    const accepted = CASES.filter(([, raw]) => timeoutReading(raw).ok).map(([why]) => why);
+    expect(accepted.length, `only ${accepted.join(", ")} were accepted`).toBeGreaterThan(1);
+  });
+
+  /**
+   * And the row the OLD expression got right, kept so a fix cannot be
+   * "refuse more". `Number("1500") || 30_000` is 1500, and it must stay
+   * 1500 — the hang case at the bottom of this file passes exactly that.
+   */
+  /**
+   * The control for the bound, and the reason it is separate: every refusal
+   * row above is satisfied by a cap drawn ANYWHERE, including one so low it
+   * refuses the 30s default. This pins the two sides of the actual edge.
+   */
+  test("the cap is at the measured edge, not merely somewhere", () => {
+    expect(timeoutReading(String(MAX_TIMEOUT_MS)).ok, "the largest measured-good value is refused").toBe(true);
+    expect(timeoutReading(String(MAX_TIMEOUT_MS + 1)).ok, "one past the measured edge is accepted").toBe(false);
+    expect(timeoutReading(String(DEFAULT_TIMEOUT_MS)).ok, "the default itself is refused by the cap").toBe(true);
+  });
+
+  test("a positive override still reaches the subprocess unchanged", () => {
+    const r = timeoutReading("1500");
+    expect(r.ok && r.ms).toBe(1500);
   });
 });
 
@@ -579,6 +669,38 @@ describe("the script refuses, and the refusal is what each case observed", () =>
     // Explicit, and well above both spawns: bun's default per-test bound is
     // 5s and the real run lands near it on a loaded CI box, so the default
     // would make this case report a hang that is only a slow machine.
+  }, 90_000);
+
+  // #1912 end to end: the refusal has to reach an exit code, not merely a
+  // return value. `gh` here sleeps, so under the OLD expression this case
+  // does not fail — the run silently takes the 30s default and the elapsed
+  // assertion is what catches it.
+  test("UNMEASURED: an unusable RUNGATE_REMOTE_TIMEOUT_MS refuses before any subprocess", () => {
+    const bin = join(dir, "badbound", "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "gh"), "#!/bin/sh\nsleep 120\n");
+    chmodSync(join(bin, "gh"), 0o755);
+
+    const began = Date.now();
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNGATE_REMOTE_TIMEOUT_MS: "0" };
+    const real = Bun.spawnSync(["bun", SCRIPT, "--pr", "1", "--remote", remote], {
+      cwd: REPO, env, stdout: "pipe", stderr: "pipe",
+    });
+    const elapsed = Date.now() - began;
+    const err = new TextDecoder().decode(real.stderr);
+
+    expect(real.exitCode, `an unusable bound did not refuse:\n${err}`).toBe(REFUSE_EXIT);
+    expect(err, "the refusal does not quote the value it read").toContain("`0`");
+    expect(err, "the refusal does not name the variable").toContain("RUNGATE_REMOTE_TIMEOUT_MS");
+    // Under `Number("0") || 30_000` the script runs with a 30s bound and
+    // spends it on the sleeping `gh`. This is the assertion that separates
+    // "refused the bound" from "defaulted and then timed out".
+    expect(elapsed, "the script ran anyway and spent the default bound").toBeLessThan(10_000);
+
+    const mut = Bun.spawnSync(["bun", mutant, "--pr", "1", "--remote", remote], {
+      cwd: REPO, env, stdout: "pipe", stderr: "pipe",
+    });
+    expect(mut.exitCode, "the mutant refused too — the case did not observe the exit constant").toBe(0);
   }, 90_000);
 
   test("UNMEASURED: the branch has no ref on the remote", () => {

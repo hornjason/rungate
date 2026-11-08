@@ -318,13 +318,93 @@ export function remoteRepoReading(url: string, expected: string): { ok: boolean;
  * `scripts/board-conformance.ts` does it, so a slow link raises it without an
  * edit.
  */
-export const SUBPROCESS_TIMEOUT_MS = Number(process.env.RUNGATE_REMOTE_TIMEOUT_MS) || 30_000;
+export const DEFAULT_TIMEOUT_MS = 30_000;
 
-function run(cmd: string[]): { out: string; ok: boolean; timedOut: boolean } {
+/** The largest bound measured to behave. See `timeoutReading` for the table. */
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
+export type TimeoutReading = { ok: true; ms: number } | { ok: false; detail: string };
+
+/**
+ * The bound, read rather than coerced — #1912, review of #1909 round 8.
+ *
+ * `Number(raw) || DEFAULT_TIMEOUT_MS` was the first spelling and it is this
+ * repository's own named anti-pattern, *Silent Default Substitution*
+ * (`.claude/rules/config-access.md`), in the one file whose whole argument is
+ * that an unread value is never a quiet pass:
+ *
+ * - `"0"` coerces to `0`, which is **falsy**, so `||` handed back 30,000 —
+ *   the operator asked to minimise the bound and silently got the maximum.
+ * - `"soon"` coerces to `NaN`, also falsy, also 30,000.
+ * - `"-1"` is truthy, so `-1` reached `Bun.spawnSync`'s `timeout` unexamined,
+ *   while every other line here reasons about a positive bound.
+ *
+ * **Absent is the only case that silently takes the default.** Everything
+ * else that cannot be used as a positive bound is refused by name, because
+ * absent and wrong are different facts and `||` collapsed them. Refused
+ * rather than clamped: clamping is the same substitution one step quieter,
+ * and an operator who set `0` and got 30s learns nothing from one who set
+ * `0` and got 1,000.
+ *
+ * A digits-only test rather than `Number`, which also accepts `" 12 "`,
+ * `"0x10"`, `"1e3"` and `"Infinity"` — none of them a thing anybody meant to
+ * type into a millisecond bound.
+ *
+ * ## The upper bound is a measurement, not a preference
+ *
+ * Raised in review of #1913, and the finding is right while the mechanism
+ * offered for it is not. The claim was that anything above `setTimeout`'s
+ * int32 ceiling wraps and fires immediately. Measured against
+ * `Bun.spawnSync(["sleep","2"], { timeout: t })` on bun 1.3.14, what
+ * actually happens is stranger and less predictable:
+ *
+ * | `timeout` | the `sleep 2` |
+ * |---|---|
+ * | `2**31 - 1` | ran its full 2s |
+ * | `2**31`, `2**31 + 2` | **killed in ~2ms** |
+ * | `2**31 + 1000`, `2.2e9`, `3e9`, `2**32 - 1` | ran its full 2s |
+ * | `2**32`, `2**33`, `2**34`, `2**40` | **killed in ~2ms** |
+ * | `Number.MAX_SAFE_INTEGER` | ran its full 2s |
+ *
+ * So it is not a wrap. It is a narrow window just above each power of two
+ * from `2**31` up, reproducible across repeated runs, and there is no rule
+ * an operator could apply to know which of their values is safe.
+ *
+ * `MAX_TIMEOUT_MS` is therefore `2**31 - 1`: the largest value measured to
+ * behave. **It is deliberately conservative** — `3e9` works and is refused —
+ * because the bound's job is to exclude what the platform mishandles, and a
+ * cap drawn at the last reliable reading is defensible where one drawn
+ * through the middle of an unexplained pattern is not. 24.8 days is already
+ * far past anything this script has a use for; nobody loses a real case.
+ */
+export function timeoutReading(raw: string | undefined): TimeoutReading {
+  if (raw === undefined) return { ok: true, ms: DEFAULT_TIMEOUT_MS };
+  const trimmed = raw.trim();
+  const refuse = (why: string): TimeoutReading => ({
+    ok: false,
+    detail:
+      `RUNGATE_REMOTE_TIMEOUT_MS is \`${raw}\`, which ${why}. It must be a whole number of ` +
+      `milliseconds from 1 to ${MAX_TIMEOUT_MS}, or unset to take the ${DEFAULT_TIMEOUT_MS}ms default. Refused rather ` +
+      `than defaulted: a value you set and a value you did not are different facts.`,
+  });
+  if (trimmed === "") return refuse("is empty — set, and unusable");
+  if (!/^[0-9]+$/.test(trimmed)) return refuse("is not a whole number of milliseconds");
+  const ms = Number(trimmed);
+  if (ms <= 0) return refuse("is not above zero");
+  if (ms > MAX_TIMEOUT_MS) {
+    return refuse(
+      `is above ${MAX_TIMEOUT_MS}, the largest bound measured to behave — above it bun kills the ` +
+        `subprocess in milliseconds for some values and honours it for others, with no rule saying which`,
+    );
+  }
+  return { ok: true, ms };
+}
+
+function run(cmd: string[], timeoutMs: number): { out: string; ok: boolean; timedOut: boolean } {
   const r = Bun.spawnSync(cmd, {
     stdout: "pipe",
     stderr: "pipe",
-    timeout: SUBPROCESS_TIMEOUT_MS,
+    timeout: timeoutMs,
     killSignal: "SIGKILL",
   });
   // A killed process reports a signal and no exit code. That is a different
@@ -335,9 +415,9 @@ function run(cmd: string[]): { out: string; ok: boolean; timedOut: boolean } {
 }
 
 /** The sentence a killed subprocess gets, so a hang is never a silent gap. */
-function timeoutNote(what: string): string {
+function timeoutNote(what: string, ms: number): string {
   return (
-    ` \`${what}\` was killed after ${SUBPROCESS_TIMEOUT_MS}ms rather than answering — a stalled host-key ` +
+    ` \`${what}\` was killed after ${ms}ms rather than answering — a stalled host-key ` +
     `prompt, an unreachable remote, or an auth flow waiting on a human. Raise ` +
     `RUNGATE_REMOTE_TIMEOUT_MS if the link is simply slow.`
   );
@@ -356,17 +436,26 @@ export function main(argv: string[]): number {
   }
   const repo = arg("repo", argv);
   const remote = arg("remote", argv) ?? "origin";
+
+  // Before any subprocess, because the bound governs all three of them and a
+  // value that cannot be used is not a value to run with — #1912.
+  const bound = timeoutReading(process.env.RUNGATE_REMOTE_TIMEOUT_MS);
+  if (!bound.ok) {
+    console.error(`UNMEASURED: ${bound.detail}`);
+    return REFUSE_EXIT;
+  }
+  const timeoutMs = bound.ms;
   const mode: Mode = argv.includes("--after-merge") ? "after-merge" : "arming";
 
   const view = run([
     "gh", "pr", "view", pr,
     ...(repo ? ["--repo", repo] : []),
     "--json", "state,headRefName,headRefOid,mergeCommit,headRepository,headRepositoryOwner",
-  ]);
+  ], timeoutMs);
   if (!view.ok || view.out === "") {
     console.error(
       `UNMEASURED: \`gh pr view ${pr}\` produced nothing. The pull request was not read, which is not the same as a pull request that is fine.` +
-        (view.timedOut ? timeoutNote(`gh pr view ${pr}`) : ""),
+        (view.timedOut ? timeoutNote(`gh pr view ${pr}`, timeoutMs) : ""),
     );
     return REFUSE_EXIT;
   }
@@ -392,10 +481,10 @@ export function main(argv: string[]): number {
   const owner = pj.headRepositoryOwner?.login;
   const name = pj.headRepository?.name;
   const expected = owner && name ? `${owner}/${name}` : "";
-  const url = run(["git", "ls-remote", "--get-url", remote]);
+  const url = run(["git", "ls-remote", "--get-url", remote], timeoutMs);
   const sameRepo = remoteRepoReading(url.ok ? url.out : "", expected);
   if (!sameRepo.ok) {
-    console.error(`UNMEASURED: ${sameRepo.detail}` + (url.timedOut ? timeoutNote("git ls-remote --get-url") : ""));
+    console.error(`UNMEASURED: ${sameRepo.detail}` + (url.timedOut ? timeoutNote("git ls-remote --get-url", timeoutMs) : ""));
     return REFUSE_EXIT;
   }
 
@@ -403,13 +492,13 @@ export function main(argv: string[]): number {
   // An absent branch name makes the ls-remote below match EVERY ref, and a
   // wrong SHA compared confidently is worse than no comparison at all.
   const ls = branch
-    ? run(["git", "ls-remote", remote, `refs/heads/${branch}`])
+    ? run(["git", "ls-remote", remote, `refs/heads/${branch}`], timeoutMs)
     : { out: "", ok: false, timedOut: false };
   // A kill is not an empty answer. The decider is told `remoteRead: false`
   // either way — it compares SHAs and has no use for the distinction — but
   // the operator reading stderr does, so it is said here rather than
   // threaded through `RefInputs` as a seventh field.
-  if (ls.timedOut) console.error(`UNMEASURED:${timeoutNote(`git ls-remote ${remote}`)}`);
+  if (ls.timedOut) console.error(`UNMEASURED:${timeoutNote(`git ls-remote ${remote}`, timeoutMs)}`);
   // `ok` and `out` carry different facts and both travel. Exit 0 with no
   // output is a ref that is not there; a non-zero exit is a remote that was
   // not read. Collapsing them into one `undefined` is what round 2 of
