@@ -139,7 +139,7 @@ events.** Why a `--name-only` router cannot tell them apart:
 | touched gates/, hooks/ or the scaffold | `test/gate-contracts.test.ts` `test/scaffold-ownership.test.ts` `test/hook-traceability.test.ts` |
 | changed a generated workflow, or the scaffold source that emits one | `test/ai-review-runner-shell-parity.test.ts` `test/action-pin-parity.test.ts` `test/scaffold-permissions-merge.test.ts` `test/ai-review-wif.test.ts` `test/no-fixed-window-slices.test.ts` `test/bun-version-agreement.test.ts` |
 | touched config/ | `test/check-registry.test.ts` `test/matcher-registry-parity.test.ts` |
-| wrote the DA-owned session state (project-state.json, PROJECT-STATE.md, SUCCESS.md) | `test/closing-keywords.test.ts` `test/project-state-currency.test.ts` `test/project-state-shape.test.ts` `test/update-project-state.test.ts` `test/success-doc.test.ts` `test/distribution-standing.test.ts` `test/rule-lifecycle-spec.test.ts` |
+| wrote the DA-owned session state (project-state.json, PROJECT-STATE.md, SUCCESS.md) | `test/closing-keywords.test.ts` `test/project-state-currency.test.ts` `test/project-state-shape.test.ts` `test/update-project-state.test.ts` `test/success-doc.test.ts` `test/distribution-standing.test.ts` `test/rule-lifecycle-spec.test.ts` `test/check-state-claims.test.ts` |
 
 **That table is rendered from `CENSUS_TRIGGERS` in `scripts/census-routing.ts`
 and compared byte-for-byte by that script's own test file**, in both

@@ -34,7 +34,7 @@
  * self-contained.
  */
 import { spawnSync } from "child_process";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { parseArgs } from "util";
 
@@ -1039,6 +1039,20 @@ export interface Flags {
   prefixGiven: boolean;
   repo?: string;
   repoGiven: boolean;
+  /**
+   * Where to write the readings as JSON, for a consumer that must not
+   * parse this command's prose — #1889.
+   *
+   * `scripts/check-state-claims.ts` re-derives the figures
+   * `project-state.json` states about the board, and it needs `measured`
+   * and `target` as numbers. Reading them back out of `formatReading`'s
+   * output would be a detector narrower than what it detects: a change to
+   * the padding or the wording there would silently stop the state check
+   * from seeing anything, and an extractor that matches nothing certifies
+   * by counting nothing.
+   */
+  emitReadings?: string;
+  emitReadingsGiven: boolean;
 }
 
 /**
@@ -1067,6 +1081,7 @@ function readFlags(argv: readonly string[]): Flags {
       spec: { type: "string" },
       prefix: { type: "string" },
       repo: { type: "string" },
+      "emit-readings": { type: "string" },
     },
     strict: false,
     allowPositionals: true,
@@ -1089,6 +1104,8 @@ function readFlags(argv: readonly string[]): Flags {
     prefixGiven: values.prefix !== undefined,
     repo: str(values.repo),
     repoGiven: values.repo !== undefined,
+    emitReadings: str(values["emit-readings"]),
+    emitReadingsGiven: values["emit-readings"] !== undefined,
   };
 }
 
@@ -1176,6 +1193,22 @@ export function main(argv: readonly string[]): number {
   }
 
   const readings = takeReadings(board);
+  // WRITTEN BEFORE THE VERDICT, and on every path that got this far. A
+  // short reading is still a reading, and a consumer that only receives
+  // the file when the board is fully conformant would be unmeasured for
+  // exactly as long as anything is outstanding — which is now (#1889).
+  if (flags.emitReadingsGiven) {
+    if (flags.emitReadings === undefined) {
+      console.error("board-conformance: --emit-readings needs a path");
+      return REFUSE_EXIT;
+    }
+    try {
+      writeFileSync(flags.emitReadings, `${JSON.stringify(readings, null, 2)}\n`);
+    } catch (e) {
+      console.error(`board-conformance: could not write ${flags.emitReadings}: ${(e as Error).message}`);
+      return REFUSE_EXIT;
+    }
+  }
   for (const r of readings) console.log(formatReading(r));
   const outstanding = readings.filter(r => r.status !== "met");
   if (outstanding.length > 0) {

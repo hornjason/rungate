@@ -1386,6 +1386,9 @@ describe("D3: what the producer said on the success path", () => {
     produce: true,
     snapshotGiven: false,
     readingGiven: false,
+    // #1889. Not given: these cases are about the PRODUCER, and emitting
+    // the readings happens after it has already answered.
+    emitReadingsGiven: false,
     spec: "specs/X.md",
     specGiven: true,
     prefix: "Pipeline",
