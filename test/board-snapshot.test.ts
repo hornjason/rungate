@@ -545,6 +545,45 @@ describe("#1718: the spec, the prefix and the repository come from the project",
     });
   });
 
+  /**
+   * Round 1 of #1890. `--spec ""` and `--prefix ""` refused; `--repo ""`
+   * did not, because `"" ?? env` keeps the empty string and
+   * `resolveRepoSlug`'s own `if (repo && repo.trim())` reads it as "not
+   * given" — so a CI line interpolating an unset `$REPO` took a live
+   * reading against this checkout's `origin`, a repository the caller
+   * never named, with no refusal and no provenance line.
+   *
+   * Swept over the three inputs rather than adding the missing one, and
+   * every other flag is held at a good value in each row, so a refusal
+   * can only be about the blank.
+   */
+  test("a BLANK value on ANY of the three inputs refuses, and none of them reaches the API", async () => {
+    await withSpec(SPEC, async (dir, at) => {
+      // Config fully present, so a fallback is available for all three and
+      // the rows prove it is NOT taken. Without this the case would pass
+      // on there being nothing to fall back to.
+      writeBoardConfig(dir, { ...BOARD, engineSpec: at.slice(dir.length + 1), milestonePrefix: "Fix" });
+      for (const [which, argv] of [
+        ["--prefix", ["--prefix", "", "--repo", "o/n"]],
+        ["--prefix whitespace", ["--prefix", "   ", "--repo", "o/n"]],
+        ["--repo", ["--prefix", "Fix", "--repo", ""]],
+        ["--repo whitespace", ["--prefix", "Fix", "--repo", "  "]],
+      ] as [string, string[]][]) {
+        const { gh, calls } = spy(CONFORMANT_LIVE);
+        expect(
+          await boardSnapshotMain([at, ...argv, "--project-root", dir], gh),
+          `a blank ${which} did not refuse`,
+        ).toBe(REFUSAL_EXIT);
+        expect(calls, `a blank ${which} reached the API anyway`).toEqual([]);
+      }
+      // The control: the same argv shape with real values runs, so the
+      // four rows above are not refusing for some unrelated reason.
+      const { gh, calls } = spy(CONFORMANT_LIVE);
+      expect(await boardSnapshotMain([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh)).toBe(0);
+      expect(calls).toContain("listMilestones o/n");
+    });
+  });
+
   test("the refusal names the config key, not only the flag", async () => {
     await withSpec(SPEC, async (dir, at) => {
       const said: string[] = [];

@@ -633,7 +633,7 @@ export function readSnapshotText(text: string): SnapshotRead {
  * is why that stays the only source the negative cases touch.
  */
 function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: string | null } {
-  const { spec, prefix, repo, specGiven, prefixGiven } = flags;
+  const { spec, prefix, repo, specGiven, prefixGiven, repoGiven } = flags;
   // **GIVEN-AND-BLANK REFUSES. ABSENT FORWARDS NOTHING.** These used to be
   // one case and #1718 split them, because they carry opposite
   // instructions. `--prefix ""` is somebody typing a value, and reaching
@@ -648,10 +648,21 @@ function produceBoard(flags: Flags): { board: BoardSnapshot | null; error: strin
   // reaching the producer makes the reader report the CHILD's refusal for
   // an argument this command was handed. Same population as plan-deps'
   // --milestone-prefix and board-snapshot's own --prefix.
-  const blank = [
-    specGiven && (spec === undefined || spec.trim() === "") ? "--spec" : null,
-    prefixGiven && (prefix === undefined || prefix.trim() === "") ? "--prefix" : null,
-  ].filter((s): s is string => s !== null);
+  //
+  // **WRITTEN AS A SWEEP OVER EVERY FORWARDED INPUT, not a case per
+  // flag.** Review of #1890 found `--repo` left out of a two-row version
+  // of this list: `"" ?? env` keeps the empty string and `resolveRepoSlug`
+  // reads it as "not given", so a blank reached the producer and resolved
+  // this checkout's own origin. A list that enumerates the inputs cannot
+  // be short by one the way three hand-written conditions can — adding a
+  // fourth forwarded flag without a row here is a visible omission.
+  const blank = ([
+    ["--spec", specGiven, spec],
+    ["--prefix", prefixGiven, prefix],
+    ["--repo", repoGiven, repo],
+  ] as [string, boolean, string | undefined][])
+    .filter(([, given, value]) => given && (value === undefined || value.trim() === ""))
+    .map(([flag]) => flag);
   if (blank.length > 0) {
     return {
       board: null,
@@ -734,6 +745,7 @@ interface Flags {
   prefix?: string;
   prefixGiven: boolean;
   repo?: string;
+  repoGiven: boolean;
 }
 
 /**
@@ -783,6 +795,7 @@ function readFlags(argv: readonly string[]): Flags {
     prefix: str(values.prefix),
     prefixGiven: values.prefix !== undefined,
     repo: str(values.repo),
+    repoGiven: values.repo !== undefined,
   };
 }
 

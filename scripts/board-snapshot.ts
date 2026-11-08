@@ -271,6 +271,24 @@ export async function main(argv: string[], gh: BoardSnapshotGitHub = LIVE_GITHUB
   // then the project's own `origin`. `resolveRepoSlug` is the existing
   // binding for that last step and carries its own reason when it fails —
   // a second reader here would be two deciders over one fact.
+  //
+  // **AND THE SAME BLANK RULE, which review of #1890 found applied to two
+  // of the three inputs.** `"" ?? x` keeps `""`, and `resolveRepoSlug`'s
+  // own `if (repo && repo.trim())` is falsy for it, so `--repo ""` — a CI
+  // line interpolating an unset `$REPO` — fell through to this checkout's
+  // `origin` and took a live reading against a repository the caller never
+  // named, without even the provenance line, which fires only when the
+  // flag was ABSENT. Spelled here rather than inside `resolveRepoSlug`:
+  // its other callers may legitimately read a blank as "not given", and
+  // this command's contract is that a typed empty is a mistake to name.
+  if (values.repo !== undefined && String(values.repo).trim() === "") {
+    console.error(
+      `board-snapshot: --repo was given as ${JSON.stringify(values.repo)}, which is blank. Falling back to ` +
+        `this project's origin would take a reading against a repository you did not name. Pass a value, or ` +
+        `omit --repo entirely.\n\n${USAGE}`,
+    );
+    return REFUSAL_EXIT;
+  }
   const slug = resolveRepoSlug({ projectRoot: root, repo: values.repo ?? process.env.GITHUB_REPOSITORY });
   const repo = slug.slug;
   if (!repo) {

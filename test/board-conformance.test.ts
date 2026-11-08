@@ -946,7 +946,7 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
     expect(r.err).toContain("two sources");
   });
 
-  test("--produce with an EMPTY --spec or --prefix refuses, and never spawns", () => {
+  test("--produce with an EMPTY value on ANY forwarded flag refuses, and never spawns", () => {
     // The empty rows are round 1 of #1703, swept here because this command
     // is the third member of that population: an empty `--prefix ""` used
     // to reach the producer, which refuses it — so the reader reported the
@@ -959,11 +959,30 @@ process.stdout.write(${JSON.stringify(JSON.stringify(completeBoard()))});
     // says nothing at all, and reaching past it to `board.engineSpec` /
     // `board.milestonePrefix` is how the bare command takes its own
     // reading.
-    for (const argv of [
-      ["--produce", "--spec", "specs/X.md", "--prefix", ""],
-      ["--produce", "--spec", "", "--prefix", "Pipeline"],
-      ["--produce", "--spec", "specs/X.md", "--prefix", "   "],
-    ]) {
+    // **EVERY FORWARDED FLAG, derived from the list rather than written
+    // out.** Round 1 of #1890: the first version of this case named
+    // `--spec` and `--prefix` and left out `--repo`, which is the third
+    // input the same change added — and `--repo ""` fell through to this
+    // checkout's own origin, taking a live reading against a repository
+    // the caller never named. A list that enumerates the flags is short by
+    // one visibly; three hand-written rows are not.
+    const FORWARDED = ["--spec", "--prefix", "--repo"] as const;
+    const COMPLETE: Record<string, string> = {
+      "--spec": "specs/X.md",
+      "--prefix": "Pipeline",
+      "--repo": "o/n",
+    };
+    const cases: string[][] = [];
+    for (const flag of FORWARDED) {
+      for (const empty of ["", "   "]) {
+        // Every OTHER flag at a good value, so the refusal can only be
+        // about the blank one.
+        const argv = ["--produce"];
+        for (const f of FORWARDED) argv.push(f, f === flag ? empty : COMPLETE[f]);
+        cases.push(argv);
+      }
+    }
+    for (const argv of cases) {
       // A producer that would CRASH if reached, so the refusal is proved
       // to have happened before the spawn rather than after it.
       const { command } = stage(`throw new Error("the producer was spawned without the arguments it needs");`);
