@@ -34,7 +34,7 @@
  * self-contained.
  */
 import { spawnSync } from "child_process";
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { parseArgs } from "util";
 
@@ -1142,6 +1142,30 @@ export function main(argv: readonly string[]): number {
   if (flags.emitReadingsGiven && flags.emitReadings === undefined) {
     console.error("board-conformance: --emit-readings needs a path");
     return REFUSE_EXIT;
+  }
+  // THE TARGET IS REMOVED BEFORE ANY SOURCE IS RESOLVED, so that no
+  // refusal below can leave an earlier run's file sitting at the path.
+  //
+  // The flag-combination guard above only covered the combinations. The
+  // likelier failure is a source that will not read — `produceBoard`
+  // throwing, a snapshot that is not a board — and every one of those
+  // returns before the write. A caller that logs the non-zero exit and
+  // feeds the old file onward is the stale-artefact hazard this flag
+  // exists to avoid creating, and "gate on the exit code" is a rule for
+  // somebody else's script.
+  //
+  // Absent is now the only other state: a consumer reads a fresh file or
+  // no file, and no file is loud.
+  if (flags.emitReadingsGiven && flags.emitReadings !== undefined) {
+    try {
+      rmSync(flags.emitReadings, { force: true });
+    } catch (e) {
+      console.error(
+        `board-conformance: could not clear ${flags.emitReadings} before taking a reading: ` +
+          `${(e as Error).message}. Refusing rather than risk a later refusal leaving a stale file there.`,
+      );
+      return REFUSE_EXIT;
+    }
   }
 
   if (flags.listReadings) {

@@ -86,14 +86,28 @@ export type ClaimVerdict =
 /**
  * A date, or a commit SHA: either says WHEN the figure was taken.
  *
- * **The SHA arm requires a digit**, and that is not tidiness. `[0-9a-f]{7,}`
- * alone matches ordinary English words spelt only from those letters —
- * `defaced`, `effaced`, `facade` — so a sentence containing one would have
- * been marked RECORDED and its figure never compared. A detector that
- * suppresses the comparison on a word is a bypass, not a heuristic, and the
- * controls in `test/state-claim-readings.test.ts` hold those three words.
+ * **The SHA arm requires a letter AND a digit**, and both halves were put
+ * there by a case that got through:
+ *
+ * - **Letters only** — `[0-9a-f]{7,}` matches ordinary English spelt from
+ *   those characters: `defaced`, `effaced`, `faceted`.
+ * - **Digits only** — and this is the one the first fix missed, because
+ *   requiring *a* digit does not exclude a number. A plain decimal of
+ *   seven or more digits is valid hex, so `filed as run 12345678` marked
+ *   its sentence RECORDED. A GitHub run id, an issue count, a line
+ *   number: any of them suppressed the comparison.
+ *
+ * A detector that suppresses the comparison on a word or a count is a
+ * bypass, not a heuristic. Both populations are controls in
+ * `test/state-claim-readings.test.ts`.
+ *
+ * **What this gives up, deliberately**: a SHA prefix that happens to be all
+ * digits is no longer read as one, so a figure beside it is compared rather
+ * than recorded. That errs toward comparing, which is the direction stated
+ * at the top of this file — the remedy a refusal names is "date the
+ * sentence", and a sentence citing a commit usually carries a date too.
  */
-const STAMPED = /\b\d{4}-\d{2}-\d{2}\b|\b(?=[0-9a-f]{7,40}\b)[a-f]*\d[0-9a-f]*\b/;
+const STAMPED = /\b\d{4}-\d{2}-\d{2}\b|\b(?=[0-9a-f]{7,40}\b)(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/;
 
 /**
  * Sentence boundaries, and `\n` counts as one.

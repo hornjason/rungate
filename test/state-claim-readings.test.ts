@@ -106,7 +106,24 @@ describe("citedReadings — what counts as a cited figure", () => {
     }
     // …and a real short SHA still is one, or the fix would be a deletion.
     expect(citedReadings("at 87d7c832 — milestones 26/26.", NAMES)[0]?.dated).toBe(true);
-    expect(citedReadings("at 1234567 — milestones 26/26.", NAMES)[0]?.dated).toBe(true);
+  });
+
+  test("CONTROL: a plain decimal of 7+ digits is not a SHA either", () => {
+    // The half the first fix missed. Requiring *a* digit does not exclude
+    // a NUMBER — every decimal is valid hex — so `run 12345678` marked its
+    // sentence RECORDED and the figure beside it was never compared. A
+    // GitHub run id, an issue count, a line number: any of them was a way
+    // through. Dropping the `(?=[0-9a-f]*[a-f])` lookahead turns these red.
+    for (const n of ["12345678", "1234567", "9999999999"]) {
+      const c = citedReadings(`criterion-coverage 25 of 26, filed as run ${n}.`, NAMES);
+      expect(c[0]?.dated, `the decimal ${n} was read as a commit SHA`).toBe(false);
+    }
+    // The cost, stated: an all-digit SHA prefix is no longer read as one,
+    // so its figure is COMPARED rather than recorded. That is the
+    // direction this is allowed to be wrong in — the remedy a refusal
+    // names is "date the sentence".
+    expect(citedReadings("at 1234567 — milestones 26/26.", NAMES)[0]?.dated).toBe(false);
+    expect(citedReadings("on 2026-11-03 at 1234567 — milestones 26/26.", NAMES)[0]?.dated).toBe(true);
   });
 });
 
