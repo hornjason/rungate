@@ -235,6 +235,30 @@ export interface ProducedSnapshot {
 export const GIT_TIMEOUT_MS = 60_000;
 
 /**
+ * Environment variables that override `-C <root>`'s repository discovery.
+ *
+ * Every one of these makes git read a repository the caller named rather
+ * than the one this reader was pointed at, and nothing downstream can tell:
+ * the reading comes back clean, confident, and about another tree.
+ */
+export const GIT_LOCATION_VARS = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_CEILING_DIRECTORIES",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+] as const;
+
+/** The ambient environment with repo-location overrides removed. */
+export function gitEnv(from: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...from, GIT_TERMINAL_PROMPT: "0" };
+  for (const name of GIT_LOCATION_VARS) delete env[name];
+  return env;
+}
+
+/**
  * `spawnSync`, injected so a case can assert WHAT was asked for.
  *
  * A timeout is invisible from outside unless something hangs, and a test
@@ -253,7 +277,16 @@ export const LIVE_GIT = (root: string, spawn: GitSpawn = spawnSync): GitRunner =
       // A prompt is a hang wearing a different hat: git waits on a terminal
       // nobody is sitting at. Refusing to ask is what makes the timeout the
       // last line of defence rather than the first.
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      //
+      // **AND THE REPO-LOCATING VARIABLES ARE STRIPPED.** `GIT_DIR`,
+      // `GIT_WORK_TREE` and friends take precedence over `-C root`'s
+      // discovery, so a caller that already set them — a git hook, a
+      // wrapper around its own nested git — silently points every call
+      // here at a DIFFERENT repository while each downstream check still
+      // reports a clean, confident reading for the wrong tree. That is
+      // this module's whole defect reached through the environment
+      // instead of through an exit code. Review of #1896 round 8.
+      env: gitEnv(process.env),
     });
     // `code` carries `status`, and `status` is NULL when the process never
     // ran — no `git` on PATH — or when it was killed by a signal, which now
@@ -261,22 +294,34 @@ export const LIVE_GIT = (root: string, spawn: GitSpawn = spawnSync): GitRunner =
     // code, and `lib/spec-source.ts` refuses on either rather than reading
     // it as an answer about a file.
     //
-    // **BUT THEY ARE NOT THE SAME SENTENCE.** The first version of this
-    // appended `(timeout ${GIT_TIMEOUT_MS}ms)` to every null status with an
-    // error, so `spawnSync git ENOENT` — git simply absent, failing
-    // instantly — printed as having run for a full minute. Same conflation
-    // this module spent four review rounds removing from its git reads,
-    // reintroduced in the message. `r.signal` is the discriminator: a
-    // timeout kills, so it is set; an `ENOENT` never started, so it is not.
+    // **BUT THEY ARE NOT THE SAME SENTENCE, AND A SIGNAL IS NOT A
+    // MECHANISM.** Measured, with Bun's `spawnSync`:
+    //
+    //   timeout    status null       signal SIGTERM   code ETIMEDOUT
+    //   maxBuffer  status null       signal SIGTERM   code ENOBUFS
+    //   no binary  status UNDEFINED  signal null      code ENOENT
+    //
+    // Two things fall out, and neither was in the review that prompted
+    // this. The middle row is indistinguishable from the first by signal
+    // alone, so only `ETIMEDOUT` may name the bound — `r.signal !== null`
+    // attributed an out-of-buffer kill, or an OOM killer, to a timeout
+    // that had not fired. And the last row returns **undefined**, not
+    // null, so `code: r.status` made `inRepo.code === null` false and a
+    // missing `git` walked past the one guard written for it into a
+    // working-tree read. `?? null` is the fix and the tri-state is the
+    // lesson again.
+    const code = r.status ?? null;
     const why =
-      r.status !== null || r.error === undefined
+      code !== null || r.error === undefined
         ? ""
-        : r.signal !== null
-          ? `${r.error.message} (killed by ${r.signal}; the bound is ${GIT_TIMEOUT_MS}ms)`
-          : `${r.error.message} (it never started — this is not a timeout)`;
+        : (r.error as NodeJS.ErrnoException).code === "ETIMEDOUT"
+          ? `${r.error.message} (timed out — the bound is ${GIT_TIMEOUT_MS}ms)`
+          : r.signal !== null
+            ? `${r.error.message} (killed by ${r.signal}; the cause was not reported as a timeout)`
+            : `${r.error.message} (it never started — this is not a timeout)`;
     return {
       ok: r.status === 0,
-      code: r.status,
+      code,
       stdout: r.stdout ?? "",
       stderr: [r.stderr ?? "", why].filter(s => s !== "").join("\n"),
     };

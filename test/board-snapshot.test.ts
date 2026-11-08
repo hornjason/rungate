@@ -26,7 +26,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  GIT_LOCATION_VARS,
   GIT_TIMEOUT_MS,
+  gitEnv,
   LIVE_GIT,
   REFUSAL_EXIT,
   main as boardSnapshotMain,
@@ -1620,11 +1622,15 @@ describe("LIVE_GIT bounds every call, because one of them is the network", () =>
     // so the open question is whether the refusal can say WHY — "it never
     // started" and "it ran too long" are different facts, and only one of
     // them is worth retrying.
+    //
+    // The fake carries `error.code` because round 8 made that — not the
+    // signal — what licenses naming the bound: a `maxBuffer` overrun has
+    // the same signal and a different cause.
     const timedOut = ((_cmd: string, _args: readonly string[]) => ({
       status: null,
       stdout: "",
       stderr: "",
-      error: new Error("spawnSync git ETIMEDOUT"),
+      error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }),
       pid: 1,
       output: [],
       signal: "SIGTERM",
@@ -1635,7 +1641,6 @@ describe("LIVE_GIT bounds every call, because one of them is the network", () =>
     expect(r.code).toBeNull();
     expect(r.stderr).toContain("ETIMEDOUT");
     expect(r.stderr, "the reason omits the bound that was exceeded").toContain(String(GIT_TIMEOUT_MS));
-    expect(r.stderr).toContain("SIGTERM");
   });
 
   test("a `git` that was never THERE says so, and does NOT claim a timeout", () => {
@@ -1671,5 +1676,97 @@ describe("LIVE_GIT bounds every call, because one of them is the network", () =>
     const r = LIVE_GIT("/r", recorder)(["rev-parse", "--show-toplevel"]);
     expect(r.ok).toBe(true);
     expect(r.stderr).toBe("");
+  });
+});
+
+// ── Security review of PR #1896, round 8 ───────────────────────────────
+describe("round 8: the environment can move the repository out from under `-C root`", () => {
+  test("the repo-locating variables are stripped from every git call", () => {
+    // `GIT_DIR` and friends take precedence over `-C root`'s discovery, so
+    // a caller that already set them — a git hook, a wrapper around its
+    // own nested git — points every call at a DIFFERENT repository while
+    // each downstream check reports a clean, confident reading for the
+    // wrong tree. This module's whole defect, reached through the
+    // environment rather than through an exit code.
+    const got = gitEnv({ PATH: "/usr/bin", GIT_DIR: "/elsewhere/.git", GIT_WORK_TREE: "/elsewhere", HOME: "/h" });
+
+    for (const name of GIT_LOCATION_VARS) {
+      expect(got[name], `${name} survived into the spawn env`).toBeUndefined();
+    }
+    // The control: stripping is not "empty the environment". PATH is how
+    // the child finds git at all.
+    expect(got.PATH).toBe("/usr/bin");
+    expect(got.HOME).toBe("/h");
+    expect(got.GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
+  test("the list is what LIVE_GIT actually passes, not a parallel list", () => {
+    const seen: Record<string, unknown>[] = [];
+    const rec = ((_c: string, _a: readonly string[], o: Record<string, unknown>) => {
+      seen.push(o);
+      return { status: 0, stdout: "", stderr: "", pid: 1, output: [], signal: null };
+    }) as unknown as GitSpawn;
+
+    LIVE_GIT("/r", rec)(["status"]);
+    const env = seen[0]!.env as NodeJS.ProcessEnv;
+    for (const name of GIT_LOCATION_VARS) expect(env[name], `${name} reached the child`).toBeUndefined();
+  });
+});
+
+describe("round 8: a signal is not a mechanism, and `status` is not always null", () => {
+  const shaped = (over: Record<string, unknown>): GitSpawn =>
+    ((_c: string, _a: readonly string[]) => ({
+      status: null, stdout: "", stderr: "", pid: 1, output: [], signal: null, ...over,
+    })) as unknown as GitSpawn;
+
+  test("only ETIMEDOUT names the bound — a maxBuffer kill carries the same signal", () => {
+    // Measured: a `maxBuffer` overrun is `status null, signal SIGTERM,
+    // code ENOBUFS` — identical to a timeout on the channel the previous
+    // version watched. So is an OOM kill. Naming the bound there is the
+    // "a duration is not a mechanism" shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    const err = Object.assign(new Error("spawnSync git ENOBUFS"), { code: "ENOBUFS" });
+    const r = LIVE_GIT("/r", shaped({ signal: "SIGTERM", error: err }))(["fetch"]);
+
+    expect(r.stderr).toContain("ENOBUFS");
+    expect(r.stderr).toContain("SIGTERM");
+    expect(r.stderr, "a buffer overrun was attributed to the timeout").not.toContain("timed out");
+    expect(r.stderr, "it named a bound it has no evidence was exceeded").not.toContain(String(GIT_TIMEOUT_MS));
+  });
+
+  test("a real timeout still names the bound — the control", () => {
+    const err = Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const r = LIVE_GIT("/r", shaped({ signal: "SIGTERM", error: err }))(["fetch"]);
+
+    expect(r.stderr).toContain("timed out");
+    expect(r.stderr).toContain(String(GIT_TIMEOUT_MS));
+  });
+
+  test("an `undefined` status becomes null, so the never-ran guard can see it", () => {
+    // Measured, and NOT what the fake had been saying: a missing binary
+    // returns `status: undefined` under Bun, not null. `code: r.status`
+    // therefore made `spec-source`'s `code === null` guard false, and a
+    // `git` that is not installed walked past the one check written for
+    // it and into a working-tree read.
+    const err = Object.assign(new Error("spawnSync git ENOENT"), { code: "ENOENT" });
+    const r = LIVE_GIT("/r", shaped({ status: undefined, error: err }))(["fetch"]);
+
+    expect(r.code, "undefined is not null, and the guard tests for null").toBeNull();
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("never started");
+  });
+
+  test("real spawnSync: the three shapes are what this code claims they are", () => {
+    // The pin, against the actual runtime. Assumed exit semantics have
+    // cost this PR two rounds already.
+    // late-env-ok: `sleep` reads no environment at all; this measures spawnSync's own timeout shape
+    const t = spawnSync("sleep", ["5"], { timeout: 300, encoding: "utf-8" });
+    expect(t.status).toBeNull();
+    expect((t.error as NodeJS.ErrnoException | undefined)?.code).toBe("ETIMEDOUT");
+
+    // late-env-ok: a binary that does not exist reads nothing; this measures the ENOENT shape
+    const n = spawnSync("definitely-not-a-binary-xyz", [], { encoding: "utf-8" });
+    expect(n.status, "a missing binary returns undefined, not null").toBeUndefined();
+    expect((n.error as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
   });
 });
