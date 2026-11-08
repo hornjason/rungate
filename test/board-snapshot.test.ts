@@ -37,6 +37,7 @@ import {
 } from "../scripts/board-snapshot";
 import {
   GIT_AMBIENT_CONFIG_PREFIX,
+  GIT_EXEC_VARS,
   GIT_LOCATION_VARS,
   gitIsolatedEnv,
   withoutAmbientGitOverrides,
@@ -1763,6 +1764,28 @@ describe("round 9: the denylist was short, and a second denylist is why", () => 
     const got = gitEnv(many);
     const survivors = Object.keys(got).filter(n => n.startsWith(GIT_AMBIENT_CONFIG_PREFIX));
     expect(survivors, "an injected config entry reached git").toEqual([]);
+  });
+
+  test("round 10: a variable git EXECUTES is stripped too, config-spelled or not", () => {
+    // The gap my own round-9 refactor opened. Stripping `GIT_CONFIG_*`
+    // removes an injected `core.sshCommand`/`core.pager`/`core.fsmonitor`,
+    // so leaving `GIT_SSH_COMMAND` set closes the config spelling of a
+    // route and leaves the direct one — which buys nothing, because
+    // anyone who can set the first can set the second.
+    const got = gitEnv({
+      PATH: "/usr/bin",
+      GIT_SSH_COMMAND: "sh -c 'id > /tmp/pwned'",
+      GIT_EXTERNAL_DIFF: "/attacker/diff",
+      GIT_ASKPASS: "/attacker/askpass",
+      SSH_ASKPASS: "/attacker/askpass",
+      GIT_PROXY_COMMAND: "/attacker/proxy",
+      GIT_PAGER: "/attacker/pager",
+    });
+
+    for (const name of GIT_EXEC_VARS) {
+      expect(got[name], `${name} is executed by git and reached the child`).toBeUndefined();
+    }
+    expect(got.PATH, "stripping became emptying").toBe("/usr/bin");
   });
 
   test("the declaration lives in lib/git-isolation.ts, and this file consumes it", () => {

@@ -132,7 +132,29 @@ describe("D3: the spec comes from the ref, and the reader says which", () => {
       "fetch",
       "--quiet",
       "origin",
-      "main",
+      "+main:refs/remotes/origin/main",
+    ]);
+  });
+
+  test("the fetch names an explicit DESTINATION, not just a branch", () => {
+    // Round 9. `git fetch origin main` writes `refs/remotes/origin/main`
+    // only when the remote's configured `remote.<name>.fetch` refspec
+    // happens to match — which `actions/checkout` makes false, because it
+    // configures a narrow refspec naming just the PR branch. The real-git
+    // case below is the one that can actually catch this; this one pins
+    // the string so a refactor cannot quietly drop the destination.
+    const git = fakeGit(complete());
+    resolveSpecSource({
+      root: "/r",
+      absPath: `/r/${TRACKED}`,
+      ref: "upstream/release/7.x",
+      git: git.run,
+      realpath: same,
+    });
+
+    const fetches = git.log.filter(a => a[0] === "fetch");
+    expect(fetches).toEqual([
+      ["fetch", "--quiet", "upstream", "+release/7.x:refs/remotes/upstream/release/7.x"],
     ]);
   });
 
@@ -767,6 +789,53 @@ describe("round 4: the fake's exit codes are pinned to what real git does", () =
       expect(r.worktreeDiffers, "a clean tree reported as differing").toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("round 9: the fetch CREATES the tracking ref under a narrow refspec", () => {
+    // **The case the fixture could not contain.** Every end-to-end case
+    // above plants `refs/remotes/origin/main` by hand with `update-ref`,
+    // so the fetch inside `resolveSpecSource` has nothing left to do and
+    // the suite never asks whether it would have worked. Here the ref does
+    // NOT exist beforehand and there is a real bare upstream, so the only
+    // thing that can create it is the fetch under test.
+    //
+    // The narrow `remote.origin.fetch` is the `actions/checkout` shape: it
+    // names a PR branch, so a `git fetch origin main` with no destination
+    // matches nothing, exits 0, writes only `FETCH_HEAD`, and leaves the
+    // next `rev-parse origin/main` to fail on a remote the spec is
+    // genuinely fetchable from.
+    const up = mkdtempSync(join(tmpdir(), "spec-source-upstream-"));
+    const { dir, sha } = plant();
+    try {
+      const g = realGit(dir);
+      expect(realGit(up)(["init", "-q", "--bare", "."]).ok).toBe(true);
+      expect(g(["remote", "add", "origin", up]).ok).toBe(true);
+      expect(g(["push", "-q", "origin", "HEAD:refs/heads/main"]).ok).toBe(true);
+      expect(
+        g(["config", "remote.origin.fetch", "+refs/heads/some-pr:refs/remotes/origin/some-pr"]).ok,
+      ).toBe(true);
+
+      // `git push` updates the remote-tracking ref for what it pushed, so
+      // the setup above plants the very thing under test. Deleting it is
+      // the point of the case, and the assertion below is what caught the
+      // first draft doing exactly what this case accuses the fixture of.
+      expect(g(["update-ref", "-d", "refs/remotes/origin/main"]).ok).toBe(true);
+
+      // The premise, asserted rather than assumed: the ref is absent, so a
+      // green result below cannot come from a ref somebody else planted.
+      expect(g(["rev-parse", "origin/main"]).ok, "the tracking ref already existed").toBe(false);
+
+      const r = resolveSpecSource({ root: dir, absPath: join(dir, "specs", "SPEC.md"), git: g });
+
+      expect(r.kind, describeSpecSource(r)).toBe("ref");
+      if (r.kind !== "ref") return;
+      expect(r.sha).toBe(sha);
+      expect(r.content).toContain("shipped");
+      expect(g(["rev-parse", "origin/main"]).stdout.trim(), "the fetch did not write the ref").toBe(sha);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(up, { recursive: true, force: true });
     }
   });
 

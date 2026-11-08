@@ -163,10 +163,37 @@ export function splitRef(ref: string): { remote: string; branch: string } | null
   return { remote: ref.slice(0, at), branch: ref.slice(at + 1) };
 }
 
-/** `origin/main` -> `origin main`, for the fetch that refreshes it. */
+/**
+ * `origin/main` -> `origin +main:refs/remotes/origin/main`, for the fetch
+ * that refreshes it.
+ *
+ * **The destination is explicit, and that is the whole point.** `git fetch
+ * origin main` updates `refs/remotes/origin/main` only as an *opportunistic*
+ * side effect of the remote's already-configured `remote.<name>.fetch`
+ * refspec happening to match — and `actions/checkout` configures a narrow
+ * one naming just the PR's branch. Measured on git 2.50.1 against a bare
+ * upstream, with the ordinary clone as the control:
+ *
+ *   wildcard `+refs/heads/*:refs/remotes/origin/*`   origin/main RESOLVES
+ *   narrow   `+refs/heads/some-pr:refs/remotes/…`    UNKNOWN REVISION
+ *   narrow, with this explicit destination           origin/main RESOLVES
+ *
+ * In the middle row `fetch` exits 0 and `FETCH_HEAD` resolves — the data is
+ * there — so the next `rev-parse origin/main` fails and the whole reading
+ * refuses as unmeasured on a remote the spec is genuinely fetchable from.
+ * That is this module's one prohibited outcome: an ordinary, recoverable
+ * situation wearing a broken reader's face.
+ *
+ * Forced (`+`) to match what a clone writes. A remote-tracking ref follows
+ * the remote wherever it goes, and refusing a non-fast-forward here would
+ * reintroduce the same refusal after any force-push to the base branch.
+ * Review of #1896 round 9.
+ */
 function fetchArgsFor(ref: string): string[] | null {
   const parts = splitRef(ref);
-  return parts === null ? null : ["fetch", "--quiet", parts.remote, parts.branch];
+  if (parts === null) return null;
+  const dest = `+${parts.branch}:refs/remotes/${parts.remote}/${parts.branch}`;
+  return ["fetch", "--quiet", parts.remote, dest];
 }
 
 /**

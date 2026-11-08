@@ -132,6 +132,43 @@ export const GIT_LOCATION_VARS = [
 export const GIT_AMBIENT_CONFIG_PREFIX = "GIT_CONFIG";
 
 /**
+ * Variables whose VALUE git executes as a command.
+ *
+ * These are here for consistency, and the argument is short: stripping
+ * `GIT_CONFIG_*` already removes an injected `core.sshCommand`, `core.pager`
+ * and `core.fsmonitor`. Anyone able to set `GIT_CONFIG_KEY_0` can set
+ * `GIT_SSH_COMMAND`, so closing the config spelling of a route and leaving
+ * the direct spelling open buys nothing — it only makes the registry look
+ * complete. Review of #1896 round 10.
+ *
+ * **`GIT_SSH_COMMAND` has a real cost and it is accepted deliberately.** A
+ * deploy-key setup that passes `ssh -i <key>` through the environment
+ * rather than through `core.sshCommand` will fail to authenticate. In
+ * `lib/spec-source.ts` — this registry's only remote-reaching consumer — a
+ * failed fetch is recorded as `staleness` and the reading continues, so the
+ * cost is a reported stale ref rather than a refusal or a wrong answer.
+ * That is the direction this module is required to be wrong in.
+ *
+ * `GIT_EXTERNAL_DIFF` is listed despite being unreachable from the one call
+ * that could run it: measured on git 2.50.1, `diff --quiet` short-circuits
+ * before the external driver while a plain `diff` does invoke it (the
+ * control). A registry that only covers today's call sites is the narrower
+ * kind of denylist this whole round was about.
+ */
+export const GIT_EXEC_VARS = [
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "GIT_ASKPASS",
+  "SSH_ASKPASS",
+  "GIT_PROXY_COMMAND",
+  "GIT_EXTERNAL_DIFF",
+  "GIT_TEXTCONV_CACHE",
+  "GIT_PAGER",
+  "GIT_EDITOR",
+  "GIT_SEQUENCE_EDITOR",
+] as const;
+
+/**
  * `base` with both families removed, and NOTHING set.
  *
  * Separate from {@link gitIsolatedEnv} because the two halves have
@@ -146,6 +183,7 @@ export function withoutAmbientGitOverrides(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const name of GIT_LOCATION_VARS) delete env[name];
+  for (const name of GIT_EXEC_VARS) delete env[name];
   for (const name of Object.keys(env)) {
     if (name.startsWith(GIT_AMBIENT_CONFIG_PREFIX)) delete env[name];
   }
