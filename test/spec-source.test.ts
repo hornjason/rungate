@@ -330,10 +330,18 @@ describe("round 1: a credential never reaches a log line", () => {
     expect(r.staleness).toContain("403");
   });
 
-  test("EVERY stderr this module interpolates is redacted — the sweep, not one arm", () => {
-    // Membership, predicted: the four calls whose stderr reaches a string.
+  test("EVERY git output this module interpolates is redacted — stdout too, not only stderr", () => {
+    // Membership, predicted: every call whose output reaches a string.
     // A per-arm fix guarantees the next arm leaks, which is the N-site shape
     // in `.claude/rules/checks-must-be-able-to-fail.md`.
+    //
+    // **The last row is the one round 3 found, and it is why this row list
+    // used to be wrong rather than short.** Every row above it varies the
+    // same axis — a failing call's STDERR — so no count this battery
+    // produced could come back wrong about an arm that quotes stdout. The
+    // `--git-dir` arm does, and `GIT_DIR` is a string somebody else chose.
+    // Named shape: *a battery that varies one axis while the defect sits on
+    // the other*.
     const leak = `fatal: unable to access '${TOKEN_URL}/'`;
     const arms: { call: string; answers: Record<string, GitRun> }[] = [
       { call: "in-repo", answers: { "in-repo": bad(leak, 128) } },
@@ -341,6 +349,10 @@ describe("round 1: a credential never reaches a log line", () => {
       { call: "fetch", answers: { fetch: bad(leak) } },
       { call: "rev-parse", answers: { "rev-parse": bad(leak) } },
       { call: "show", answers: { show: bad(leak) } },
+      {
+        call: "git-dir (stdout)",
+        answers: { "in-repo": bad("fatal: this operation must be run in a work tree", 128), "git-dir": ok(`${TOKEN_URL}/.git\n`) },
+      },
     ];
 
     const leaked = arms

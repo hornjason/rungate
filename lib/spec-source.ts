@@ -82,6 +82,13 @@ export interface GitRun {
  * Applied at the point of interpolation rather than trusted to the caller:
  * the caller is a log line, and a sanitiser the emitter has to remember is
  * one that gets forgotten. Found by security review of PR #1896, round 1.
+ *
+ * **EVERY interpolation, not every stderr.** Round 3 found the one arm that
+ * quotes a git *stdout* — `--git-dir`'s path — and it was unwrapped because
+ * the rule in this docblock said "stderr" and a path looked exempt. A path
+ * is `GIT_DIR` when `GIT_DIR` is set, and `GIT_DIR` is a string somebody
+ * else chose. The narrower rule is the defect: a sanitiser with a carve-out
+ * is one each new arm has to re-decide, so there is no carve-out.
  */
 export function redactCredentials(text: string): string {
   return text
@@ -226,7 +233,8 @@ export function resolveSpecSource(opts: {
       return {
         kind: "unmeasured",
         why:
-          `${opts.root} IS a git repository (\`--git-dir\` resolved to ${gitDir.stdout.trim() || "an unnamed path"}) ` +
+          `${opts.root} IS a git repository (\`--git-dir\` resolved to ` +
+          `${redactCredentials(gitDir.stdout.trim()) || "an unnamed path"}) ` +
           `and \`--show-toplevel\` still failed with exit ${inRepo.code}: ` +
           `${redactCredentials(inRepo.stderr.trim()) || "no reason given"}. A work tree that cannot be located is a ` +
           `reader that failed, not a file that is untracked.`,
