@@ -22,7 +22,7 @@
  * needs a `governs` long enough to wrap.
  */
 import { test, expect, describe, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { parseFrontmatter } from "../lib/conformity";
@@ -231,6 +231,37 @@ describe("isValidGoverns is the one decider, and it reads every block indicator"
     expect(isValidGoverns("")).toBe(false);
     expect(isValidGoverns("   ")).toBe(false);
     expect(isValidGoverns("TODO")).toBe(false);
+  });
+});
+
+describe("the one extractor is asserted, not just described", () => {
+  // Raised in review of #1906, three seconds after it merged: switching
+  // `scanSpecDir` to `governsOf` left the module's own `parseFrontmatter`
+  // sitting there unused and unexported. A near-duplicate parser nobody
+  // calls is the cheapest thing in the world for a later edit to wire back
+  // in as a second source of truth — which is the exact class of bug this
+  // work closed. A docblock saying "one extractor" is the reason nobody
+  // checks that it still is, so this is the check.
+  const SOURCE = readFileSync(join(HARNESS, "lib", "spec-registry.ts"), "utf-8");
+
+  test("lib/spec-registry.ts declares no frontmatter parser of its own", () => {
+    const declarations = [...SOURCE.matchAll(/^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/gm)]
+      .map(m => m[1])
+      .filter(n => /frontmatter/i.test(n));
+    expect(
+      declarations,
+      "a second frontmatter parser is back in the module whose whole point is " +
+        "that there is one. Call `governsOf`, or say in the diff why this one " +
+        "has to exist.",
+    ).toEqual([]);
+  });
+
+  // The control. Without it the case above is green on a file it failed to
+  // read, or on a regex that matches no function declaration at all.
+  test("the scan can see this module's functions", () => {
+    const all = [...SOURCE.matchAll(/^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/gm)].map(m => m[1]);
+    expect(all).toContain("governsOf");
+    expect(all).toContain("isValidGoverns");
   });
 });
 
