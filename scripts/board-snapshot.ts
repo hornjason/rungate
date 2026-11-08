@@ -62,6 +62,7 @@ import {
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { NAMES_NONE, criteriaNamedBy, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
 import { dependencyPlan } from "../lib/spec-deps";
+import type { PlannedEdge, RepoIssueCriteria, SpecPlacementRow } from "./board-conformance";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -221,6 +222,22 @@ export interface ProducedSnapshot {
    * {@link criterionCoverage}, which owns that decision.
    */
   criteria: CriterionCoverage[];
+  /**
+   * The three REPOSITORY-WIDE populations — SC-2615, SC-2616, SC-2617.
+   *
+   * Optional in the type because they are optional on the wire: each is
+   * emitted only when it could be taken, and `board-conformance` reads an
+   * absent key as UNMEASURED rather than as a zero.
+   *
+   * The row types are IMPORTED from the reader rather than spelled again
+   * here. Two declarations of one wire shape are two deciders that agree —
+   * `.claude/rules/checks-must-be-able-to-fail.md` — and nothing would have
+   * gone red when they drifted. The import is `type`-only and the reader has
+   * no relative imports of its own, so its mutation battery is untouched.
+   */
+  specPlacements?: SpecPlacementRow[];
+  repoIssues?: RepoIssueCriteria[];
+  plannedEdges?: PlannedEdge[];
 }
 
 /**
@@ -722,15 +739,27 @@ export async function main(
   // looser — "no criterion", "n/a" — would let an issue opt out by accident,
   // and the entire criterion is that *has not said* and *says none* are
   // different facts.
-  const allIds = specCriteriaIn(root).ids;
+  // An UNMEASURED sweep omits the key, the same way the other two do. `ids`
+  // is `[]` on a sweep that refused — an unreadable `specs/`, a criterion two
+  // specs both state — and an empty union matches nothing in any issue, so
+  // every issue would report `names: []` whatever it actually names. The
+  // reading has no way to tell that from a tracker where nobody has declared
+  // anything: it would call all 72 issues offenders, or, if every one of them
+  // happened to carry the `servesNone` text, report MET. Raised in review of
+  // #1903 — the producer had the gate on the other two populations and not on
+  // this one.
+  const sweep = specCriteriaIn(root);
   const openIssues = liveIssues.filter(i => i.state === "OPEN");
-  const repoIssues = {
-    repoIssues: openIssues.map(i => ({
-      number: i.number,
-      names: criteriaNamedBy({ title: i.title, body: i.body }, allIds),
-      servesNone: `${i.title}\n${i.body ?? ""}`.includes(NAMES_NONE),
-    })),
-  };
+  const repoIssues =
+    sweep.reading === "UNMEASURED"
+      ? {}
+      : {
+          repoIssues: openIssues.map(i => ({
+            number: i.number,
+            names: criteriaNamedBy({ title: i.title, body: i.body }, sweep.ids),
+            servesNone: `${i.title}\n${i.body ?? ""}`.includes(NAMES_NONE),
+          })),
+        };
 
   // SC-2617. `missing` and `present` are the plan's own two halves — derived
   // edges the tracker lacks, and derived edges it carries. `extra` is

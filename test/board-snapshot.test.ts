@@ -1988,3 +1988,96 @@ describe("round 8: a signal is not a mechanism, and `status` is not always null"
     expect((n.error as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
   });
 });
+
+/**
+ * The three repository-wide populations — SC-2615, SC-2616, SC-2617.
+ *
+ * Every other population above is engine-scoped: one spec, its milestone
+ * family. These three ask about the whole tree, and each is emitted ONLY
+ * when it could be taken, because `board-conformance` reads an absent key as
+ * UNMEASURED and an emitted-but-unmeasured population is a number nobody
+ * looked at.
+ *
+ * The pair that matters is the last two cases. The gate on `repoIssues` is
+ * one line, and with it removed the measured case still passes — an issue
+ * naming a criterion is still read correctly when the sweep worked. Only the
+ * UNMEASURED case can see the gate, which is why it asserts both the absent
+ * key AND what the real reader then says. Review of #1903 found this exact
+ * hole: the other two populations were gated and this one was not.
+ */
+describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
+  /** The same fixture spec, but where the repository-wide sweep looks. */
+  const withSpecsDir = async <T>(fn: (dir: string, specPath: string) => Promise<T>): Promise<T> =>
+    withSpec(SPEC, async (dir, at) => {
+      mkdirSync(join(dir, "specs"), { recursive: true });
+      writeFileSync(join(dir, "specs", "FIXTURE-SPEC.md"), SPEC);
+      return fn(dir, at);
+    });
+
+  /**
+   * Two open issues whose bodies name criteria the fixture spec states.
+   *
+   * Two PHASES, and the later one carrying the edge the plan derives: a
+   * single-phase tracker is degenerate and `dependencyPlan` reports it
+   * UNMEASURED, which would leave SC-2617 unexercised here.
+   */
+  const namingIssues = [
+    iss({ number: 10, milestone: "Fix Phase 0 — the first one", body: "this one serves SC-9001" }),
+    iss({
+      number: 11,
+      milestone: "Fix Phase 1 — the second one",
+      body: "this one serves SC-9003",
+      blockedBy: [10],
+    }),
+  ];
+
+  test("all three are emitted when the specs sweep can be read", async () => {
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+
+      expect(snap.specPlacements?.map(s => s.path)).toEqual(["specs/FIXTURE-SPEC.md"]);
+      expect(snap.repoIssues?.map(i => [i.number, i.names, i.servesNone])).toEqual([
+        [10, ["SC-9001"], false],
+        [11, ["SC-9003"], false],
+      ]);
+      expect(snap.plannedEdges).toEqual([{ blocked: 11, blocker: 10, present: true }]);
+    });
+  });
+
+  test("an UNMEASURED specs sweep omits `repoIssues` — an empty id union reads every issue as naming nothing", async () => {
+    // No `specs/` at all, so `specCriteriaIn` refuses and its `ids` is `[]`.
+    // An empty union matches nothing in any body, so an ungated producer
+    // would emit all 72 issues with `names: []` — indistinguishable from a
+    // tracker where nobody has declared anything, and reported as SHORT.
+    await withSpec(SPEC, async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+
+      expect(snap.repoIssues, "a sweep that refused still produced a countable population").toBeUndefined();
+
+      const reading = takeReadings(readSnapshotText(JSON.stringify(snap)).board).find(
+        r => r.name === "criteria-named",
+      )!;
+      expect(reading.status, "a failed spec sweep was reported as the tracker's shortfall").toBe("unmeasured");
+    });
+  });
+
+  test("the control: the SAME issue IS read when the sweep works", async () => {
+    // Without this the case above is satisfiable by a producer that never
+    // emits `repoIssues` at all, and the gate would be indistinguishable
+    // from the feature being absent.
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+
+      const reading = takeReadings(readSnapshotText(JSON.stringify(snap)).board).find(
+        r => r.name === "criteria-named",
+      )!;
+      expect([reading.status, reading.why]).toEqual(["met", "2 of 2"]);
+    });
+  });
+});
