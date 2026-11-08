@@ -115,8 +115,32 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  * Stages G and H are complete ahead of D through F, which the ladder
  * permits — stages are a dependency order, not a queue, and their items
  * depend on nothing those stages carry.
+ *
+ * **4 since 2026-11-08: B went BACKWARDS, and this is the regression the
+ * message below refuses to let anybody lower quietly.** B2 is the state
+ * claim "every engine criterion either names an open issue or is recorded
+ * as already true", and closing #1892 removed SC-2620's only open issue, so
+ * `criterion-coverage` fell to 25 of 26 and B2's own verify began exiting
+ * 1 — on `main`, not only on a branch (run 42462454264 at `a0201e21`, one
+ * failure, this item). The claim is measurably false, so B2 is `done:
+ * false` and the command is untouched.
+ *
+ * Two things that exposed, both recorded in B2's own `what` and both
+ * Jason's call:
+ *
+ *   - B2 is a STATE reading rather than a delivered capability, so it flaps
+ *     on every spec tick that briefly shortens the board — and "`board-
+ *     conformance` exits 0" is F2's done-condition, restated here, which is
+ *     what rule 10 forbids.
+ *   - Its verify reads the spec from `origin/main` (D3, #1896), so a pull
+ *     request that FIXES a short board is measured against the unfixed
+ *     `main` and cannot prove itself. With `test` a required check, that is
+ *     a deadlock: no spec tick moving `criterion-coverage` can merge.
+ *
+ * This number goes back to 5 when B2 is re-ticked, which the tick in this
+ * same commit makes true the moment it reaches `main`.
  */
-const COMPLETE_STAGES = 5;
+const COMPLETE_STAGES = 4;
 
 /**
  * Every verify command in the plan file runs through here.
