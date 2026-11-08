@@ -182,7 +182,7 @@ describe("AC-1: one declaration, and it is a pin", () => {
       // rather than forbidden.
       for (const generated of hits.filter(f => f.startsWith(".github/workflows/"))) {
         const text = readFileSync(join(REPO_ROOT, generated), "utf-8");
-        const run = /^\s*run: npm install -g (.*)$/m.exec(text);
+        const run = /^\s*npm install -g (.*)$/m.exec(text);
         expect(run, `${generated} names ${version} outside a global-install step`).not.toBeNull();
         expect(run?.[1], `${generated} has drifted from ci.globalTools`).toContain(version);
       }
@@ -218,7 +218,7 @@ describe("AC-1: one declaration, and it is a pin", () => {
    */
   test("this repository's own CI test job installs every compliance tool, pinned", () => {
     const yml = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf-8");
-    const run = /^\s*run: npm install -g (.*)$/m.exec(yml);
+    const run = /^\s*npm install -g (.*)$/m.exec(yml);
     expect(run, ".github/workflows/ci.yml has no global-tool install step — CI will probe tools it never installed (#597)")
       .not.toBeNull();
 
@@ -460,10 +460,25 @@ describe("AC-5: a refused declaration cannot write YAML of its own", () => {
       // every assertion below passes for a reason that is not the fix.
       expect(step, "the refused entry was not reported at all").toContain(marker);
 
+      // The skeleton is DERIVED from a benign generation rather than listed
+      // here: every line the step emits except the install command itself is
+      // fixed prose with no interpolation, so a hostile declaration can only
+      // ever reach the one line that carries declared values. Deriving it
+      // means a line added to the step later is still checked — an allowlist
+      // written out by hand would have to be widened to keep this green, and
+      // widening it is indistinguishable from letting an injection through.
+      const skeleton = new Set(
+        globalToolInstallStep({ globalTools: { agnix: "9.9.9" } })
+          .step.split("\n")
+          .map(l => l.trim())
+          .filter(l => l !== "" && !l.startsWith("#") && !l.startsWith("npm install -g ")),
+      );
+      expect(skeleton.size, "the benign step produced no fixed lines, so this case compares nothing").toBeGreaterThan(0);
+
       for (const line of step.split("\n")) {
         if (line.trim() === "") continue;
         expect(
-          line.trim().startsWith("#") || /^\s+(- name: Install pinned global tools|run: npm install -g )/.test(line),
+          line.trim().startsWith("#") || skeleton.has(line.trim()) || /^\s+npm install -g /.test(line),
           `line escaped the comment: ${JSON.stringify(line)}`,
         ).toBe(true);
       }
@@ -477,5 +492,159 @@ describe("AC-5: a refused declaration cannot write YAML of its own", () => {
     const good = globalToolInstallStep({ globalTools: { agnix: "9.9.9" } });
     expect(good.rejected).toEqual([]);
     expect(good.step).toContain("npm install -g 'agnix@9.9.9'");
+  });
+});
+
+/**
+ * AC-6 — a registry or CDN outage is UNMEASURED, not a red build and not a
+ * silent pass.
+ *
+ * ## What happened, and why a warning is the honest reading
+ *
+ * On 2026-11-08 `agnix`'s postinstall binary download returned HTTP 504 for
+ * several hours. The npm REGISTRY was fine — `GET /agnix` answered 200 — so
+ * nothing about the pin, the lockfile or this repository was wrong; the
+ * platform binary's host was down. `npm install -g` exited 1, the step had no
+ * handling for that, and every `test-shard` leg died before running a single
+ * test. Measured across two unrelated pull requests, #1894 and #1900: five
+ * shards, five identical `Failed to install agnix: Download failed with status
+ * 504`. **For those hours no change could merge in this repository**, including
+ * a two-literal state correction, because `test` is a required check.
+ *
+ * The tools are not what the suite measures. `lib/compliance.ts` probes each
+ * one with `--version` and returns `reading: "UNMEASURED"` naming the tools it
+ * could not reach, so a runner without them already reports the three Layer 1
+ * checks as unmeasured rather than passed. The install step was the only part
+ * of the pipeline that treated a missing tool as fatal, and it was fatal to
+ * the whole suite rather than to the checks that need it.
+ *
+ * ## The cheapest wrong fix, named
+ *
+ * `npm install -g ... || true`. It clears the symptom and produces exactly the
+ * *Silent Default Substitution* `.claude/rules/config-access.md` forbids: a
+ * green step, no annotation, and nothing in the log that distinguishes "the
+ * tools are here" from "the tools are absent and three checks measured
+ * nothing". The case below that catches it is `a failed install still says so`
+ * — the status is 0 AND an annotation naming UNMEASURED must be on stdout.
+ * `|| true` passes the first half and fails the second.
+ *
+ * ## Why the body is EXECUTED here rather than pattern-matched
+ *
+ * The step is shell, and the thing being asserted is what the shell DOES with
+ * a non-zero npm. A `toContain("::warning")` would pass over a body whose
+ * `if` can never be reached. Each case below runs the emitted body under
+ * `/bin/bash` against a stub `npm` on `PATH` whose exit code the case chooses,
+ * and the stub echoes a marker that every case asserts — so a body that never
+ * invokes npm cannot pass vacuously.
+ */
+describe("AC-6: a failed global-tool install is UNMEASURED, not fatal and not silent", () => {
+  const NPM_MARKER = "STUB-NPM-INVOKED";
+
+  /** The emitted `run:` body for a project declaring the unusual pins. */
+  function installBody(): string {
+    const { yml } = generate("unmeasured", { ...BASE_CI, globalTools: UNUSUAL_PINS });
+    const steps = testJobSteps(yml);
+    const at = indexOfRun(steps, "npm install -g");
+    expect(at, "no global-install step was emitted, so there is no body to run").toBeGreaterThanOrEqual(0);
+    return String(steps[at].run);
+  }
+
+  interface Outcome {
+    status: number | null;
+    out: string;
+  }
+
+  /**
+   * Run `body` with a stub `npm` that exits `npmExit`.
+   *
+   * `require` is the value of the consumer's switch, passed the way the
+   * workflow passes it — as an environment variable on the step, never as an
+   * `if:` condition, because a step skipped by `if:` reports SKIPPED and a
+   * skipped required check reads as satisfied (`.claude/rules/config-access.md`).
+   */
+  function exec(body: string, opts: { npmExit: number; require?: string }): Outcome {
+    const dir = mkdtempSync(join(tmpdir(), "global-tools-exec-"));
+    try {
+      const stub = join(dir, "npm");
+      writeFileSync(stub, `#!/bin/sh\necho "${NPM_MARKER} $*"\nexit ${opts.npmExit}\n`, { mode: 0o755 });
+      const script = join(dir, "step.sh");
+      writeFileSync(script, body);
+      const env: Record<string, string> = {
+        PATH: `${dir}:${process.env.PATH ?? ""}`,
+        HOME: process.env.HOME ?? dir,
+      };
+      if (opts.require !== undefined) env.RUNGATE_REQUIRE_GLOBAL_TOOLS = opts.require;
+      // `-e` is how Actions invokes a `run:` block, so a body that relies on
+      // the shell continuing past a non-zero command fails here exactly as it
+      // would on a runner (`.claude/rules/checks-must-be-able-to-fail.md`).
+      const r = spawnSync("/bin/bash", ["-e", script], { encoding: "utf-8", env, timeout: 60000 });
+      return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a successful install exits 0 and annotates nothing", () => {
+    const r = exec(installBody(), { npmExit: 0 });
+    expect(r.out, "the stub npm was never invoked, so this case measured nothing").toContain(NPM_MARKER);
+    expect(r.status).toBe(0);
+    expect(r.out).not.toContain("::warning");
+    expect(r.out).not.toContain("::error");
+  });
+
+  test("a failed install still says so — the step is green, the annotation is not", () => {
+    const r = exec(installBody(), { npmExit: 1 });
+    expect(r.out, "the stub npm was never invoked, so this case measured nothing").toContain(NPM_MARKER);
+    // Green, so one unreachable CDN cannot stop every merge in the repository.
+    expect(r.status, "a third-party outage must not fail the suite").toBe(0);
+    // And loud, so it is never mistaken for a tree that has the tools. This
+    // half is what `|| true` cannot satisfy.
+    expect(r.out).toContain("::warning");
+    expect(r.out).toContain("UNMEASURED");
+  });
+
+  test("the warning names the switch that makes it fatal, so the default is a choice a reader can change", () => {
+    const r = exec(installBody(), { npmExit: 7 });
+    expect(r.out).toContain("RUNGATE_REQUIRE_GLOBAL_TOOLS");
+    // The exit code is reported rather than swallowed: 7 is not 1, and a
+    // message that cannot tell them apart cannot be acted on.
+    expect(r.out).toContain("7");
+  });
+
+  test("a consumer that declares the tools required gets a red step instead", () => {
+    const r = exec(installBody(), { npmExit: 1, require: "true" });
+    expect(r.out, "the stub npm was never invoked, so this case measured nothing").toContain(NPM_MARKER);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("::error");
+  });
+
+  /**
+   * The switch is read EXACTLY, for the reason `config-access.md` gives: a
+   * loose reading of a variable that turns a gate on is a gate that turns
+   * itself on by accident. These are the spellings a `[ -n "$VAR" ]` or a
+   * case-insensitive compare would wrongly accept.
+   */
+  for (const spelling of ["TRUE", "True", "1", "yes", "true ", "truthy"]) {
+    test(`RUNGATE_REQUIRE_GLOBAL_TOOLS=${JSON.stringify(spelling)} is not the string "true" and does not arm the refusal`, () => {
+      const r = exec(installBody(), { npmExit: 1, require: spelling });
+      expect(r.status, `${JSON.stringify(spelling)} armed a gate that only "true" may arm`).toBe(0);
+      expect(r.out).toContain("::warning");
+    });
+  }
+
+  test("the pin survives the change — this is still the step that installs declared versions", () => {
+    const body = installBody();
+    for (const [pkg, version] of Object.entries(UNUSUAL_PINS)) {
+      expect(body, "the UNMEASURED handling must not have cost the pin").toContain(`'${pkg}@${version}'`);
+    }
+  });
+
+  test("the refusal's exit code has exactly one declaring position", () => {
+    // One site to mutate. A second literal would let a later branch refuse
+    // without going through the constant, and the mutation above would leave
+    // that branch refusing while reading as covered.
+    const src = readFileSync(STEPS, "utf-8");
+    const declarations = src.match(/^export const GLOBAL_TOOLS_REQUIRED_EXIT = \d+;$/gm) ?? [];
+    expect(declarations.length, "GLOBAL_TOOLS_REQUIRED_EXIT must be declared exactly once").toBe(1);
   });
 });

@@ -3328,6 +3328,21 @@ function indentedScript(script: string, indent: string): string {
  */
 export { workflowOverrides } from "./managed-workflow";
 
+/**
+ * The consumer's switch for whether an unmeasured global-tool install is
+ * fatal. Read as this exact string and at no other value — see the emitted
+ * comparison, and `.claude/rules/config-access.md` for why a loose read of a
+ * gate-arming variable is a gate that arms itself by accident.
+ */
+export const GLOBAL_TOOLS_REQUIRE_VAR = "RUNGATE_REQUIRE_GLOBAL_TOOLS";
+
+/**
+ * The one declaring position for the refusal's exit code, so a test can build
+ * a mutant with it set to `0` and watch the refusal stop refusing. A second
+ * literal elsewhere would bypass that mutation and read as covered.
+ */
+export const GLOBAL_TOOLS_REQUIRED_EXIT = 1;
+
 export function globalToolInstallStep(ci: unknown, indent = "      "): GlobalToolDecision {
   const declared = (ci as { globalTools?: unknown } | null | undefined)?.globalTools;
   const entries =
@@ -3362,15 +3377,42 @@ export function globalToolInstallStep(ci: unknown, indent = "      "): GlobalToo
   // the single quotes would have to defend against, which is what makes
   // neither defence a place for the other to be relaxed.
   const specs = pins.map(p => `'${p.package}@${p.version}'`).join(" ");
+  const body = `${indent}    `;
   return {
-    // The versions appear on the `run:` line and nowhere else in the emitted
-    // YAML, so a test asserting the pin is asserting the command rather than
-    // a comment that happens to quote it.
+    // The versions appear on the `npm install -g` line and nowhere else in the
+    // emitted YAML — not in the annotations, which are fixed prose — so a test
+    // asserting the pin is asserting the command rather than a comment that
+    // happens to quote it, and the refused-declaration sanitiser keeps exactly
+    // the one interpolation site it had before.
     step:
       `\n${indent}# Pinned by ci.globalTools in .claude/rungate/config.json — one declaration (#597).` +
       (rejected.length === 0 ? "" : `\n${indent}#${refusals}`) +
+      `\n${indent}# A failed install is UNMEASURED, not fatal. lib/compliance.ts probes each tool` +
+      `\n${indent}# and reports reading=UNMEASURED naming the ones it cannot reach, so the checks` +
+      `\n${indent}# that need them already decline to pass without them. On 2026-11-08 agnix's` +
+      `\n${indent}# binary host answered 504 for hours while the npm registry was fine, and this` +
+      `\n${indent}# step — the only part of the pipeline that treated an absent tool as fatal —` +
+      `\n${indent}# stopped every merge in the repository. A host that is down does not make the` +
+      `\n${indent}# tree wrong; it makes three checks unmeasured, and that is what gets said.` +
       `\n${indent}- name: Install pinned global tools` +
-      `\n${indent}  run: npm install -g ${specs}`,
+      `\n${indent}  env:` +
+      // Resolved inside `run:`, never in an `if:`: a step skipped by `if:`
+      // reports SKIPPED, and a skipped required check reads as satisfied
+      // (`.claude/rules/config-access.md`).
+      `\n${indent}    ${GLOBAL_TOOLS_REQUIRE_VAR}: \${{ vars.${GLOBAL_TOOLS_REQUIRE_VAR} }}` +
+      `\n${indent}  run: |` +
+      `\n${body}set -uo pipefail` +
+      `\n${body}status=0` +
+      `\n${body}npm install -g ${specs} || status=$?` +
+      `\n${body}if [ "$status" -eq 0 ]; then exit 0; fi` +
+      // Read as the exact string and at no other value. A loose reading of a
+      // variable that turns a gate on is a gate that turns itself on by
+      // accident.
+      `\n${body}if [ "\${${GLOBAL_TOOLS_REQUIRE_VAR}:-}" = "true" ]; then` +
+      `\n${body}  echo "::error title=Global tools UNMEASURED::npm install -g exited $status, so the tools pinned by ci.globalTools are absent from this runner and the checks that shell out to them measured nothing. ${GLOBAL_TOOLS_REQUIRE_VAR} is the exact string 'true', so this repository has declared an unmeasured run fatal."` +
+      `\n${body}  exit ${GLOBAL_TOOLS_REQUIRED_EXIT}` +
+      `\n${body}fi` +
+      `\n${body}echo "::warning title=Global tools UNMEASURED::npm install -g exited $status, so the tools pinned by ci.globalTools are absent from this runner. THIS IS NOT A PASS for the checks that shell out to them: lib/compliance.ts probes each tool and reports reading=UNMEASURED, naming the ones it could not reach. The suite continues, because a tool host that is unreachable does not make this tree wrong. Set the repository variable ${GLOBAL_TOOLS_REQUIRE_VAR} to the exact string 'true' to make this step fatal instead."`,
     pins,
     reason: `ci.globalTools pins ${pins.map(p => `${p.package}@${p.version}`).join(", ")}`,
     rejected,

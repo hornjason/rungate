@@ -1,4 +1,4 @@
-# generated-sha: 31745104244b11b5
+# generated-sha: da813b6b05aa5513
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -107,8 +107,26 @@ jobs:
           bun-version-file: ".bun-version"
       - run: bun install
       # Pinned by ci.globalTools in .claude/rungate/config.json — one declaration (#597).
+      # A failed install is UNMEASURED, not fatal. lib/compliance.ts probes each tool
+      # and reports reading=UNMEASURED naming the ones it cannot reach, so the checks
+      # that need them already decline to pass without them. On 2026-11-08 agnix's
+      # binary host answered 504 for hours while the npm registry was fine, and this
+      # step — the only part of the pipeline that treated an absent tool as fatal —
+      # stopped every merge in the repository. A host that is down does not make the
+      # tree wrong; it makes three checks unmeasured, and that is what gets said.
       - name: Install pinned global tools
-        run: npm install -g 'agnix@0.59.0' '@reporails/cli@0.6.4'
+        env:
+          RUNGATE_REQUIRE_GLOBAL_TOOLS: ${{ vars.RUNGATE_REQUIRE_GLOBAL_TOOLS }}
+        run: |
+          set -uo pipefail
+          status=0
+          npm install -g 'agnix@0.59.0' '@reporails/cli@0.6.4' || status=$?
+          if [ "$status" -eq 0 ]; then exit 0; fi
+          if [ "${RUNGATE_REQUIRE_GLOBAL_TOOLS:-}" = "true" ]; then
+            echo "::error title=Global tools UNMEASURED::npm install -g exited $status, so the tools pinned by ci.globalTools are absent from this runner and the checks that shell out to them measured nothing. RUNGATE_REQUIRE_GLOBAL_TOOLS is the exact string 'true', so this repository has declared an unmeasured run fatal."
+            exit 1
+          fi
+          echo "::warning title=Global tools UNMEASURED::npm install -g exited $status, so the tools pinned by ci.globalTools are absent from this runner. THIS IS NOT A PASS for the checks that shell out to them: lib/compliance.ts probes each tool and reports reading=UNMEASURED, naming the ones it could not reach. The suite continues, because a tool host that is unreachable does not make this tree wrong. Set the repository variable RUNGATE_REQUIRE_GLOBAL_TOOLS to the exact string 'true' to make this step fatal instead."
       - name: Consumer setup (scripts/ci-setup.sh, optional)
         run: |
           # rungate's one extension point inside this managed job (#529).
