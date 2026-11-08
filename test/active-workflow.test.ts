@@ -214,7 +214,8 @@ describe("#1648: hooks/lib/findWorkflow.ts — the same scan, one more hook", ()
   // Its one importer is `CommitEnforcement.hook.ts`. An earlier version of
   // this comment also named IssueCloseGuard and AutoVerifyGate and was
   // wrong — those two use `findWorkflowState` from `hooks/lib/utils.ts`, a
-  // third implementation of this scan that is still unfiltered (#1668).
+  // third implementation of this scan, which #1668 filtered and which has its
+  // own cases below.
   //
   // The archived entry is planted LAST in each case, so it is the newest
   // file and wins `Priority 3` unless it is filtered out.
@@ -283,13 +284,25 @@ describe("#1648: hooks/lib/findWorkflow.ts — the same scan, one more hook", ()
  * empty directory.
  */
 
-const WORK_DIR_SCANNERS = [
-  "HarnessAFKGate.hook.ts",
-  "MergeGuard.hook.ts",
-  "VerifyPhaseLock.hook.ts",
-  "lib/findWorkflow.ts",
-  "lib/utils.ts",
-] as const;
+/**
+ * Every hook that lists the work directory, and HOW MANY `readdirSync` calls
+ * each one makes.
+ *
+ * The count is the half that matters, and it is the half the first version of
+ * this census got wrong — see the comment on `unguardedSites`. Three of these
+ * five files scan twice, once per level, and predicting the membership rather
+ * than a total is what makes the second scan impossible to lose
+ * (`.claude/rules/checks-must-be-able-to-fail.md`, seventh shape).
+ */
+const WORK_DIR_SCAN_SITES: Readonly<Record<string, number>> = {
+  "HarnessAFKGate.hook.ts": 1,
+  "MergeGuard.hook.ts": 1,
+  "VerifyPhaseLock.hook.ts": 2,
+  "lib/findWorkflow.ts": 2,
+  "lib/utils.ts": 2,
+};
+
+const WORK_DIR_SCANNERS = Object.keys(WORK_DIR_SCAN_SITES);
 
 const HOOKS_DIR = join(import.meta.dir, "..", "hooks");
 const ISSUE_CLOSE_GUARD = join(HOOKS_DIR, "IssueCloseGuard.hook.ts");
@@ -500,39 +513,88 @@ describe("#1668: the property across every work-dir scan site", () => {
     return out;
   }
 
-  /** `readdirSync(<something that names the work dir>` — the scan sites. */
-  const SCAN = /readdirSync\(\s*(WORK_DIR|PAI_WORK|RUNGATE_WORK_DIR|work|workDir)\b/g;
+  const SCAN_CALL = "readdirSync(";
+  const NAMES_WORK_DIR = /\b(WORK_DIR|RUNGATE_WORK_DIR|PAI_WORK_DIR)\b/;
+
+  /** The hooks that list the work directory, by source rather than by list. */
+  const scanners = () =>
+    hookSources().filter(f => f.src.includes(SCAN_CALL) && NAMES_WORK_DIR.test(f.src));
+
+  /** Every `readdirSync(` in a source, as byte offsets in source order. */
+  function scanOffsets(src: string): number[] {
+    const out: number[] = [];
+    for (let i = src.indexOf(SCAN_CALL); i >= 0; i = src.indexOf(SCAN_CALL, i + 1)) out.push(i);
+    return out;
+  }
+
+  /**
+   * The 1-based lines of the scan sites with no `isRunDirectory` between them
+   * and the next scan site. A site owns the text up to the next one, which is
+   * where its own consumer is written.
+   *
+   * ## Pairing is the whole point, and the first version did not pair
+   *
+   * ai-review raised both halves on #1902 and was right about both. It
+   * counted `readdirSync(<work-dir-ish identifier>)` regex matches against
+   * `isRunDirectory(` occurrences FILE-WIDE, and asserted `guards < scans`:
+   *
+   *   - the pattern required the work-dir name to be the FIRST token inside
+   *     the call, so `readdirSync(join(WORK_DIR, d.name), …)` — the inner
+   *     scan in `hooks/lib/utils.ts` — did not count, and neither did
+   *     `readdirSync(subDir, …)` in findWorkflow or `readdirSync(nested, …)`
+   *     in VerifyPhaseLock. Every file read as exactly one scan;
+   *   - a file-wide total lets a surplus guard anywhere in the file stand in
+   *     for a missing one anywhere else.
+   *
+   * The second swallowed the first: `utils.ts` read `scans = 1, guards = 2`,
+   * so deleting EITHER filter still left `guards >= scans`. The census was
+   * green by coincidence and could not fail on the regression it exists to
+   * catch — `.claude/rules/checks-must-be-able-to-fail.md`, third shape.
+   *
+   * Both spellings of the guard count, deliberately. A chained
+   * `.filter(d => … isRunDirectory(d.name))` and an
+   * `if (!isRunDirectory(entry.name)) continue;` in the loop body are both
+   * live in this population, and neither is more correct than the other.
+   */
+  function unguardedSites(src: string): number[] {
+    const offsets = scanOffsets(src);
+    return offsets
+      .filter((at, i) => {
+        const until = i + 1 < offsets.length ? offsets[i + 1] : src.length;
+        return !src.slice(at, until).includes("isRunDirectory(");
+      })
+      .map(at => src.slice(0, at).split("\n").length);
+  }
 
   test("the population is exactly the files this test knows about", () => {
-    const scanning = hookSources()
-      .filter(f => (f.src.match(SCAN) ?? []).length > 0)
-      .map(f => f.rel)
-      .sort();
     expect(
-      scanning,
+      scanners().map(f => f.rel).sort(),
       "a hook started or stopped scanning the work directory. If it is NEW, it must filter " +
         "through isRunDirectory from lib/active-workflow (#1648, #1668) — then add it to " +
-        "WORK_DIR_SCANNERS. Do not add it without the filter.",
+        "WORK_DIR_SCAN_SITES. Do not add it without the filter.",
     ).toEqual([...WORK_DIR_SCANNERS].sort());
   });
 
+  test("the census sees every scan site, including the second one in a nested scanner", () => {
+    // The membership, not the total: the defect this replaced read 1 site in
+    // each of the five files and was internally consistent about it.
+    const counted = Object.fromEntries(scanners().map(f => [f.rel, scanOffsets(f.src).length]));
+    expect(
+      counted,
+      "the scan-site count moved. If a hook gained or lost a readdirSync, update " +
+        "WORK_DIR_SCAN_SITES; if it did not, this census has stopped seeing one, and " +
+        "every case below it is vacuous for that site.",
+    ).toEqual(WORK_DIR_SCAN_SITES);
+  });
+
   test("every scan site in every one of them is filtered by isRunDirectory", () => {
-    const unfiltered = hookSources()
-      .map(f => ({ rel: f.rel, scans: (f.src.match(SCAN) ?? []).length, guards: (f.src.match(/isRunDirectory\(/g) ?? []).length }))
-      .filter(f => f.scans > 0 && f.guards < f.scans)
-      .map(f => `${f.rel}: ${f.scans} work-dir scan(s), ${f.guards} isRunDirectory call(s)`);
+    const unfiltered = scanners()
+      .flatMap(f => unguardedSites(f.src).map(line => `${f.rel}:${line}`));
     expect(
       unfiltered,
       "an unfiltered work-dir scan reads .archive, and an archived run is newest, so it decides " +
-        "the gate (#1648). Filter BOTH levels through isRunDirectory from lib/active-workflow.",
+        "the gate (#1648). Filter THAT scan — each call site is paired with the guard written " +
+        "between it and the next one, so a filter elsewhere in the file does not cover for it.",
     ).toEqual([]);
-  });
-
-  test("the census can see a scan at all — it is not matching zero everywhere", () => {
-    // Without this, a regex that stopped matching would report a clean tree.
-    const total = hookSources().reduce((n, f) => n + (f.src.match(SCAN) ?? []).length, 0);
-    expect(total, "the scan-site regex matched nothing, so both cases above are vacuous").toBeGreaterThanOrEqual(
-      WORK_DIR_SCANNERS.length,
-    );
   });
 });
