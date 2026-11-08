@@ -310,6 +310,12 @@ export const FILINGS_PER_RUN = 1;
  * Jason's call, 2026-11-02: *"raise the cap for this work until we have
  * these stages completed and ready for agents to swarm"*.
  *
+ * **Raised 3 → 12 on 2026-11-08, Jason's call again**: *"You can increase the
+ * cap for the work we're doing. I keep telling you that we need to have this
+ * not being an issue… We're doing the fundamental work here that needs to get
+ * through."* Second time he has had to say it, which is itself the reading
+ * that 3 was wrong for this population.
+ *
  * ## Why this does not reopen the hole the docblock above closes
  *
  * The objection is *"a cap read from config is a cap an agent raises"*, and
@@ -329,24 +335,44 @@ export const FILINGS_PER_RUN = 1;
  * somebody remembers to lower a constant. A dated expiry would have to be
  * guessed, and an expired one is read as a bug rather than a policy.
  *
- * ## Why 3
+ * ## Why 12, and why 3 was wrong
  *
  * The cap exists because of what a SWARM did — #1595 measured 57 filed
  * against 53 closed in a day — and the engine work is the opposite
  * population: it is what makes the backlog shrink, which is the carve-out
- * already granted to the opened-against-closed ratio. The number is the
- * count Stage B actually needed rather than a round one: this run spent its
- * allowance on #1704 and then had two genuine findings it could not file,
- * both of them `green-check-lies` against ladder items that read MET only
- * because a person had edited the tracker. Three is 13x below #1595's
- * per-day figure, and `FG-194` asserts it stays at or below five, so it
- * cannot creep into a swarm's number one pull request at a time.
+ * already granted to the opened-against-closed ratio.
+ *
+ * **3 was set from one run's shortfall and it was measured from the wrong
+ * end.** It was *"the count Stage B actually needed"* — a run that spent
+ * its allowance and then had two findings left over. That is the count a
+ * run had left over on one day, not the count the work generates, and the
+ * two are different numbers whenever the day is busier than the one that
+ * was sampled.
+ *
+ * Measured from the ledger instead, `~/.rungate/finding-ledger.jsonl`,
+ * 24 hours to 2026-11-08 15:30Z, one run-directory doing engine work:
+ *
+ * | reading | count |
+ * |---|---|
+ * | distinct findings that reached the tracker | 6 |
+ * | distinct findings refused `OVER_CAP` | 8 |
+ * | of those, later admitted on a retry | 3 |
+ * | distinct findings LOST to the cap | 5 |
+ *
+ * So the day's real demand was about eleven and the allowance was three. A
+ * cap of 5 would still have refused six of them, which is why this is not
+ * the one-step raise `FG-194`'s old bound invited.
+ *
+ * Twelve is 4.75x below #1595's per-day figure, so it still binds a swarm
+ * hard — a swarm hits it before lunch. `FG-194` keeps the anti-creep job
+ * and its bound moves with it, so the next raise is still an argument
+ * against a reading rather than an edit nobody has to defend.
  *
  * A PLANNED filing is already exempt from the cap entirely (`plannedFiling`),
  * so this number governs ad-hoc findings only — the decompose path that
  * creates seven issues from a merged plan never consulted it.
  */
-export const FILINGS_PER_RUN_DIRECT = 3;
+export const FILINGS_PER_RUN_DIRECT = 12;
 
 /**
  * The allowance a given ship policy earns.

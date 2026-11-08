@@ -2,7 +2,7 @@
 doc-type: adr
 status: accepted
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-08
 ---
 
 # ADR-012 — the three open retro improvements become three issues
@@ -29,6 +29,36 @@ stands in for. This file is that plan.
 Nothing in `lib/issue-filing-gate.ts` changes, and
 `FILINGS_PER_RUN_DIRECT` stays at 3. `FG-194` asserts it stays at or below
 five; this ADR does not test that boundary because it does not approach it.
+
+> **Superseded, 2026-11-08 — the paragraph above is no longer true.**
+> `FILINGS_PER_RUN_DIRECT` is **12** and `FG-194`'s bound is **15**. Jason's
+> call, for the second time: *"You can increase the cap for the work we're
+> doing… We're doing the fundamental work here that needs to get through."*
+>
+> **The rest of this ADR stands.** The exemption route it builds is not
+> withdrawn and is still the right way to land a merged plan's filings; it
+> simply turned out not to cover the ad-hoc case. Measured from
+> `~/.rungate/finding-ledger.jsonl` over the 24h to 2026-11-08 15:30Z, one
+> run-directory doing engine work: 6 distinct findings reached the tracker,
+> 8 were refused `OVER_CAP`, 3 of those were later admitted on a retry, so 5
+> were lost outright. Demand was about eleven against an allowance of three,
+> and none of the eleven was a planned filing this ADR's route would have
+> exempted.
+>
+> **What this ADR got wrong is narrower than the number.** *"Do not raise
+> the number"* was right about the mechanism — a cap nobody can defend is a
+> cap someone raises — and the raise honours it: the new value is argued in
+> `FILINGS_PER_RUN_DIRECT`'s docblock against a ledger reading, `FG-194`
+> keeps its anti-creep job with its bound moved deliberately rather than
+> deleted, and a second assertion pins the allowance below a quarter of
+> #1595's 57-per-day swarm figure. What was wrong was the premise that the
+> engine population would not approach the boundary. It approached it on the
+> second day and overran it on the third.
+>
+> The reasoning is in PR #1904. This paragraph exists because nothing
+> cross-checks an ADR's prose against the constant it describes, so a
+> contradiction here would have merged silently — raised by the AI review of
+> that PR.
 
 ## What must become true
 
