@@ -1118,6 +1118,32 @@ export function main(argv: readonly string[]): number {
     return REFUSE_EXIT;
   }
 
+  // #1889, and ABOVE every early return rather than beside the write.
+  //
+  // `--reading` and `--list-readings` both answer and return before the
+  // readings are taken as a set, so either combined with --emit-readings
+  // wrote nothing — and `--list-readings` exits ZERO, so a caller running
+  // `board-conformance … && check-state-claims …` proceeds onto whatever
+  // that path held from an earlier run. A stale artefact consumed as live
+  // is the exact defect `scripts/check-state-claims.ts` exists to catch,
+  // so this command must not be the thing that creates one.
+  //
+  // The rule this encodes: every exit from `main` that was given
+  // --emit-readings either writes the file or refuses. There is no third
+  // outcome, because a caller cannot tell the third from success.
+  if (flags.emitReadingsGiven && (flags.readingGiven || flags.listReadings)) {
+    console.error(
+      "board-conformance: --emit-readings writes the whole set; --reading takes one and " +
+        "--list-readings takes none. Pass one. Combined, the file is not written, and a consumer " +
+        "cannot tell that from a file written by an earlier run.",
+    );
+    return REFUSE_EXIT;
+  }
+  if (flags.emitReadingsGiven && flags.emitReadings === undefined) {
+    console.error("board-conformance: --emit-readings needs a path");
+    return REFUSE_EXIT;
+  }
+
   if (flags.listReadings) {
     for (const r of READINGS) console.log(`${r.name.padEnd(20)} ${r.what}  [${r.item}]`);
     return 0;
@@ -1144,21 +1170,6 @@ export function main(argv: readonly string[]): number {
     console.error(
       `board-conformance: unknown reading "${flags.reading ?? ""}". Known readings: ${READING_NAMES.join(", ")}.\n` +
         `Run \`rungate board-conformance --list-readings\` for what each one measures.`,
-    );
-    return REFUSE_EXIT;
-  }
-
-  // #1889. `--reading` returns before the readings are taken as a set, so
-  // the combination used to write nothing and say nothing — and a consumer
-  // pointed at a path that was never written reads whatever was there
-  // last run. A stale file consumed as live is the exact defect
-  // `scripts/check-state-claims.ts` exists to catch, so it must not be
-  // this command that creates one.
-  if (flags.emitReadingsGiven && flags.readingGiven) {
-    console.error(
-      "board-conformance: --emit-readings writes the whole set and --reading takes one. " +
-        "Pass one. Together the file is not written, and a consumer cannot tell that from a " +
-        "file written by an earlier run.",
     );
     return REFUSE_EXIT;
   }
@@ -1212,11 +1223,10 @@ export function main(argv: readonly string[]): number {
   // short reading is still a reading, and a consumer that only receives
   // the file when the board is fully conformant would be unmeasured for
   // exactly as long as anything is outstanding — which is now (#1889).
-  if (flags.emitReadingsGiven) {
-    if (flags.emitReadings === undefined) {
-      console.error("board-conformance: --emit-readings needs a path");
-      return REFUSE_EXIT;
-    }
+  // `flags.emitReadings` is known present: the flag-combination guard at
+  // the top of `main` refused a bare `--emit-readings` before any source
+  // was resolved, so nothing reaches here with the flag given and no path.
+  if (flags.emitReadingsGiven && flags.emitReadings !== undefined) {
     try {
       writeFileSync(flags.emitReadings, `${JSON.stringify(readings, null, 2)}\n`);
     } catch (e) {

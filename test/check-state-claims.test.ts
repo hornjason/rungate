@@ -31,8 +31,8 @@ let SCRATCH = "";
 let MUTANT = "";
 
 const LIVE = [
-  { name: "milestones", measured: 26, target: 26 },
-  { name: "blocked-by-edges", measured: 5, target: 5 },
+  { name: "milestones", measured: 26, target: 26, status: "met" },
+  { name: "blocked-by-edges", measured: 5, target: 5, status: "met" },
 ];
 const WHY =
   "Undated figures in priorities[] that no longer match the live board, banked so a new one reddens.";
@@ -221,8 +221,8 @@ describe("the states that are not a pass", () => {
     // reads as fully checked while a figure nobody re-derives sits in it.
     // Comparing the SETS is the only place that is visible.
     const renamed = plant("readings", [
-      { name: "milestones", measured: 26, target: 26 },
-      { name: "queue-labels", measured: 5, target: 5 },
+      { name: "milestones", measured: 26, target: 26, status: "met" },
+      { name: "queue-labels", measured: 5, target: 5, status: "met" },
     ]);
     const state = plant("state", { priorities: ["queue-label 9 of 9."] });
     const r = bothWays([
@@ -234,11 +234,38 @@ describe("the states that are not a pass", () => {
     expect(r.mutant).toBe(0);
   });
 
+  test("an ABSENT status refuses — absent is UNMEASURED, never met", () => {
+    // The escape hatch the first version left open. A readings file
+    // written by anything other than `--emit-readings` carries no status,
+    // and every entry in it would have been compared as though measured.
+    const readings = plant("readings", [{ name: "milestones", measured: 26, target: 26 }]);
+    const state = plant("state", { priorities: ["milestones 26 of 26."] });
+    const r = bothWays([`--readings=${readings}`, `--state=${state}`, `--ratchet=${plant("ratchet", RATCHET(0, ["milestones"]))}`]);
+    expect(r.real).toBe(REFUSE_EXIT);
+    expect(r.mutant).toBe(0);
+  });
+
+  test("a target of 0 refuses even when the status is confident", () => {
+    // Not redundant with the status guard: `status` is what the producer
+    // CLAIMS and `target` is what it produced. A `0 of 0` reading would
+    // make any figure citing it AGREE having compared nothing, and a
+    // truncated or hand-written file can carry "met" over nothing at all.
+    const readings = plant("readings", [
+      { name: "milestones", measured: 0, target: 0, status: "met" },
+    ]);
+    const state = plant("state", { priorities: ["milestones 0 of 0."] });
+    const r = bothWays([`--readings=${readings}`, `--state=${state}`, `--ratchet=${plant("ratchet", RATCHET(0, ["milestones"]))}`]);
+    expect(r.real, "a figure AGREED against a reading of nothing").toBe(REFUSE_EXIT);
+    expect(r.mutant).toBe(0);
+  });
+
   test("a readings entry with a non-numeric target refuses rather than comparing undefined", () => {
     // Otherwise `26 === undefined` reads as a disagreement: a refusal for
     // the wrong reason, which is worse than none because a reader acts on
     // the reason.
-    const readings = plant("readings", [{ name: "milestones", measured: 26, target: "26" }]);
+    const readings = plant("readings", [
+      { name: "milestones", measured: 26, target: "26", status: "met" },
+    ]);
     const state = plant("state", { priorities: ["milestones 26 of 26."] });
     const ratchet = plant("ratchet", RATCHET(0));
     const r = bothWays([`--readings=${readings}`, `--state=${state}`, `--ratchet=${ratchet}`]);
@@ -305,13 +332,13 @@ describe("the ratchet refuses in both directions", () => {
  * date the sentence so it reads as the record it is.
  */
 const BOARD_AT_BANKING = [
-  { name: "milestones", measured: 26, target: 26 },
-  { name: "criterion-coverage", measured: 26, target: 26 },
-  { name: "blocked-by-edges", measured: 5, target: 5 },
-  { name: "criteria-field", measured: 5, target: 5 },
-  { name: "queue-label", measured: 5, target: 5 },
-  { name: "spec-placement", measured: 87, target: 1815 },
-  { name: "criteria-named", measured: 41, target: 71 },
+  { name: "milestones", measured: 26, target: 26, status: "met" },
+  { name: "criterion-coverage", measured: 26, target: 26, status: "met" },
+  { name: "blocked-by-edges", measured: 5, target: 5, status: "met" },
+  { name: "criteria-field", measured: 5, target: 5, status: "met" },
+  { name: "queue-label", measured: 5, target: 5, status: "met" },
+  { name: "spec-placement", measured: 87, target: 1815, status: "short" },
+  { name: "criteria-named", measured: 41, target: 71, status: "short" },
 ];
 
 describe("the live repository", () => {

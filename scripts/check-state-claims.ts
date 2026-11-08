@@ -123,6 +123,12 @@ export function readLiveReadings(value: unknown): Read<LiveReading[]> {
     // and a cited `0 of 0` AGREES having been compared with nothing. The
     // `status` field is in the emitted JSON precisely so this is decidable
     // rather than guessed from the zeros.
+    // STATUS IS REQUIRED, and a closed set of two. The first version let
+    // an ABSENT status through, which is this repository's own rule
+    // inverted: an absent reading is UNMEASURED, never met
+    // (`.claude/rules/config-access.md`). A readings file written by
+    // anything other than `--emit-readings` would then have been compared
+    // against as though every entry had been measured.
     if (o.status === "unmeasured") {
       return {
         ok: false,
@@ -132,10 +138,24 @@ export function readLiveReadings(value: unknown): Read<LiveReading[]> {
           `can read`,
       };
     }
-    if (o.status !== undefined && o.status !== "met" && o.status !== "short") {
+    if (o.status !== "met" && o.status !== "short") {
       return {
         ok: false,
-        why: `reading ${JSON.stringify(o.name)} carries an unrecognised 'status' (${JSON.stringify(o.status)})`,
+        why:
+          `reading ${JSON.stringify(o.name)} carries no usable 'status' ` +
+          `(${JSON.stringify(o.status)}). It must be "met" or "short"; absent is UNMEASURED, not met`,
+      };
+    }
+    // ZERO OF ZERO IS NEVER A MEASUREMENT, whatever the status says. The
+    // two guards are not redundant: `status` is what the producer claims
+    // and `target` is what it produced, and a hand-written or truncated
+    // file can carry a confident status over nothing at all.
+    if (o.target === 0) {
+      return {
+        ok: false,
+        why:
+          `reading ${JSON.stringify(o.name)} has a target of 0, so '0 of 0' would AGREE with any ` +
+          `figure citing it having compared nothing`,
       };
     }
     out.push({ name: o.name, measured: o.measured, target: o.target });
