@@ -233,7 +233,25 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
 }
 
 /**
- * Is the remote this process is about to read the pull request's repository?
+ * Does the remote this process is about to read carry the pull request's
+ * `owner/name`? **It does not check the host, and that gap is open.**
+ *
+ * ## The scope, before the mechanism
+ *
+ * Review of #1909 round 6, and correct: an internal mirror or a GHE instance
+ * laying out `owner/name` the same way passes here as "the same repository".
+ * Identity is host AND path; this reads one axis. The reason is not an
+ * oversight to be read past — `gh pr view` answers
+ * `headRepositoryOwner.login` and `headRepository.name` and no host at all,
+ * so a host comparison needs a second source for the expected side, and the
+ * local bare repository this file's own fixture points `--remote` at has no
+ * host to offer. Closing it is a redesign of both sides, which is #1911, not
+ * a seventh guard in front of the same comparison.
+ *
+ * `test/verify-merge-ref.test.ts` asserts the gap rather than describing it:
+ * a differing-host row is in the table as a KNOWN LIMITATION and goes red
+ * when somebody closes it, which is the only form of this sentence that
+ * cannot quietly stop being true.
  *
  * Raised in review of #1909. `git ls-remote` queries whatever `origin`
  * resolves to in the working directory, and nothing tied that to the

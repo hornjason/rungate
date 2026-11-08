@@ -286,6 +286,29 @@ describe("the remote is tied to the pull request's repository (#1909 review)", (
   test("an unknown expected repository is UNMEASURED, not a free pass", () => {
     expect(remoteRepoReading("https://github.com/hornjason/rungate.git", "").ok).toBe(false);
   });
+
+  /**
+   * KNOWN LIMITATION, asserted rather than described — #1911.
+   *
+   * Review of #1909 round 6: identity is host AND path, and `tail()` reads
+   * one axis, so a mirror or a GHE instance laying out `owner/name` the same
+   * way passes as "the same repository". Every row above holds the host
+   * fixed, which is the battery shape `.claude/rules/checks-must-be-able-to
+   * -fail.md` names last — one axis varied while the defect sits on the
+   * other — so the existing table could not have found this.
+   *
+   * It is a green assertion over defective behaviour and is NOT coverage.
+   * Its job is to go RED the day somebody closes #1911, so the docstring's
+   * scope sentence cannot quietly stop being true.
+   */
+  test("KNOWN LIMITATION (#1911): a different host passes — the host is not read", () => {
+    const elsewhere = remoteRepoReading("https://mirror.example.com/hornjason/rungate.git", MINE);
+    expect(
+      elsewhere.ok,
+      "a differing host is now refused — #1911 is closed, so delete this case and move the row " +
+        "into DIFFERENT, and rewrite the scope paragraph in `remoteRepoReading`'s docstring",
+    ).toBe(true);
+  });
 });
 
 // ── the script, spawned for real ────────────────────────────
