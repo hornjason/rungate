@@ -57,14 +57,6 @@ import { specPathSweep } from "../lib/board-mirror";
 import { readMilestonePrefix } from "../lib/live-issues";
 
 /**
- * Which files are specs, asked of the one sweep that already decides it.
- *
- * `specCriteriaIn` excludes `NOT_A_SPEC`, locates nested specs, and refuses
- * rather than returning a short list. Walking `specs/` here instead would be
- * a second decider for the same question, and no behavioural test of either
- * could see the two disagree.
- */
-/**
  * THE one non-zero exit. One site, so `test/plan-spec.test.ts` can build a
  * mutant with it set to `0` and prove each refusal is what the case observed
  * (`.claude/rules/checks-must-be-able-to-fail.md`).
