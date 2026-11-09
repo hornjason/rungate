@@ -86,14 +86,19 @@ jobs:
       #
       # Resolved in one step so there is a single place the payload is read,
       # and resolved to the EMPTY STRING for events that mean no transition.
-      # The two that do:
+      # The one that does: a DRAFT pull request opened. A draft in In review
+      # says somebody is waiting on a reader when nobody is.
       #
-      #   - a DRAFT pull request opened. A draft in In review says somebody
-      #     is waiting on a reader when nobody is.
-      #   - a pull request that closed because it MERGED. The issue it closes
-      #     fires its own `issues: closed` with `state_reason = completed`,
-      #     and that is the event that writes Done. Handling the merge here
-      #     too would be two writers for one transition.
+      # A MERGED pull request used to be the second, on the argument that
+      # the issue it closes fires its own `issues: closed` and handling the
+      # merge here too would be two writers for one transition. **That is
+      # only true of a merge that actually closes something.** GitHub
+      # applies closing keywords only on the DEFAULT branch, so `Fixes #N`
+      # merged branch-to-branch leaves #N open and no second event is
+      # coming — the card stayed in In review while the work continued
+      # (#1921). The merge now yields `pr_merged`, and the two-writers
+      # problem is handled where it belongs: Done is a terminal lane and
+      # `prEventMayWrite` refuses a pull-request event out of one.
       #
       # Everything downstream is gated on a non-empty kind, so "no
       # transition" costs a checkout that never happens rather than a run
@@ -120,7 +125,7 @@ jobs:
                 if [ "$DRAFT" != "true" ]; then kind="pr_ready"; fi
                 ;;
               closed)
-                if [ "$MERGED" != "true" ]; then kind="pr_closed_unmerged"; fi
+                if [ "$MERGED" = "true" ]; then kind="pr_merged"; else kind="pr_closed_unmerged"; fi
                 ;;
             esac
           fi

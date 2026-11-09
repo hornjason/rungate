@@ -60,6 +60,7 @@ export const LANE_EVENTS = [
   "issue_reopened",
   "pr_ready",
   "pr_closed_unmerged",
+  "pr_merged",
 ] as const;
 
 export interface LaneEvent {
@@ -189,6 +190,33 @@ export function laneFor(e: LaneEvent): LaneDecision {
       // request that is genuinely waiting on a reviewer. In review has to
       // mean that or it cannot measure the constraint it exists to measure.
       return { lane: "In review", why: "a non-draft pull request is finished work waiting on a reviewer" };
+
+    case "pr_merged":
+      // **A merge does not always close the issue it names.** GitHub applies
+      // closing keywords only when the pull request merges into the DEFAULT
+      // branch, so `Fixes #N` on a branch-to-branch merge leaves #N open —
+      // and before #1921 this event was discarded on the argument that the
+      // issue's own `issues: closed` would write Done. For that case no such
+      // event is ever coming, and the card sat in In review while the work
+      // went on.
+      //
+      // In progress, not Backlog, and the difference is not a preference.
+      // Backlog is where everything going BACKWARDS lands, and it is safe
+      // there only because `board-ready.yml` re-promotes on its own. It
+      // cannot here: Ready's entry condition includes "nobody assigned"
+      // (`whyNotReady` answers "somebody has claimed it"), and an issue
+      // whose pull request just merged is still assigned to whoever did the
+      // work. The card would sit in Backlog until a person moved it.
+      //
+      // The merge that DOES close its issue is handled by `prEventMayWrite`
+      // rather than by a second rule here: the close writes Done, Done is
+      // terminal, and a `pr_merged` arriving after it is refused. Arriving
+      // before it, it writes In progress and the close — an ISSUE event, not
+      // gated — overwrites with Done. Either order ends at Done.
+      return {
+        lane: "In progress",
+        why: "the pull request merged without closing this issue, so the work is still claimed and open",
+      };
 
     case "issue_reopened":
     case "pr_closed_unmerged":

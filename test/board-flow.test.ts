@@ -413,6 +413,8 @@ describe("one decider owns every lane transition", () => {
         assignees: 1,
         onBoard: true,
         boardStatus: "Backlog",
+        phase: null,
+        labels: [],
       }),
       "if Ready ever re-promotes an assigned issue, Backlog becomes a legal answer here and " +
         "this lane choice should be re-argued from the spec rather than left as it stands.",
