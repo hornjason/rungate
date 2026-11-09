@@ -96,7 +96,7 @@ export interface CensusTrigger {
    * see `censusTestsFor`. A row that fired with no target would read exactly
    * like a spec whose suite was renamed away, and those are different facts.
    */
-  derive?(c: Change, exists: (path: string) => boolean): string[];
+  derive?(c: Change, exists: (path: string) => boolean, tree: CensusTree): string[];
   /**
    * The rule file's table cell for a derived row, since there is no path
    * list to render. It must spell no concrete test path: the document's
@@ -106,6 +106,39 @@ export interface CensusTrigger {
    */
   derivedTarget?: string;
 }
+
+/**
+ * #1927. The suites `generatedWorkflowCensusSuites` cannot reach, carried so
+ * the derivation WIDENS the row and never narrows it.
+ *
+ * The walk asks one question — does this suite's source name the workflows
+ * directory, or call an emitter. These three never do, and are still real
+ * catchers: they reach the generated YAML through a scaffold run into an
+ * `mkdtemp`, or through a reading that is not a file read at all.
+ *
+ * `no-fixed-window-slices` is the one with recorded evidence of a catch
+ * (#1387 — a `slice(at - 400, at + 400)` that ran off the construct and read
+ * one of three occurrences), and it is why this constant exists rather than
+ * being deleted as the walk's residue. A straight swap to the derivation
+ * would drop it in a change whose whole purpose is to stop under-routing.
+ *
+ * **This list SHRINKS as the walk improves, and that is the design.** It held
+ * 24 when the walk resolved paths structurally, 21 after bound-variable
+ * resolution, and 3 once the structural parse was replaced by a predicate
+ * with no spelling to get wrong. `test/census-routing.test.ts` asserts the
+ * two sets are disjoint, so an entry the walk has learned to see cannot sit
+ * here covering for a walk that silently regressed — that case reported 18
+ * of these rather than my noticing them.
+ *
+ * Three unguarded paths is the honest remaining cost: deleting one is
+ * silent. Twenty-one would not have been acceptable; three is small enough
+ * to read.
+ */
+export const WORKFLOW_SUITES_THE_WALK_CANNOT_SEE = [
+  "test/failure-intake-promotion.test.ts",
+  "test/no-fixed-window-slices.test.ts",
+  "test/test-command-agreement.test.ts",
+];
 
 const isMarkdown = (p: string) => p.endsWith(".md");
 const inDir = (p: string, dir: string) => p.startsWith(`${dir}/`);
@@ -510,19 +543,15 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
     // this file named at the time.
     id: "generated-workflow",
     event: "changed a generated workflow, or the scaffold source that emits one",
-    tests: [
-      "test/ai-review-runner-shell-parity.test.ts",
-      "test/action-pin-parity.test.ts",
-      "test/scaffold-permissions-merge.test.ts",
-      "test/ai-review-wif.test.ts",
-      "test/no-fixed-window-slices.test.ts",
-      // #1782. It holds a hand-maintained list of every workflow running
-      // `setup-bun`, so adding a workflow file is DESIGNED to turn it red
-      // exactly once. #1781 added `board-flow.yml` and learned that from a
-      // red PR rather than from this router — the one instrument built to
-      // say so.
-      "test/bun-version-agreement.test.ts",
-    ],
+    // DERIVED, not listed. See `generatedWorkflowCensusSuites`.
+    tests: [],
+    derivedTarget:
+      "every suite that calls a workflow emitter or reads the committed " +
+      "`.github/workflows` — `bun scripts/census-routing.ts` names them",
+    derive: (_c, exists, tree) =>
+      [...new Set([...tree.generatedWorkflowSuites(), ...WORKFLOW_SUITES_THE_WALK_CANNOT_SEE])]
+        .filter(exists)
+        .sort(),
     fires: c => inDir(c.path, ".github/workflows") || inDir(c.path, "lib/scaffold"),
   },
   {
@@ -856,6 +885,127 @@ export function testPopulationCensusSuites(root: string): string[] {
   return out.sort();
 }
 
+/**
+ * A suite names the generated workflows, with no parse in the way.
+ *
+ * THREE CONSECUTIVE REVIEW ROUNDS on PR #1930 each found a different source
+ * shape that defeated a structural resolution of the path \u2014 an assembled
+ * literal the first draw searched for, a `join` whose last segment is a
+ * variable, a `join` bound to an identifier and read elsewhere \u2014 and the
+ * fourth round found a fifth, the same binding written across several lines,
+ * while the fix for the third was still being written. Each repair patched
+ * the shape in front of it. The reviewer named the real defect: the
+ * APPROACH, not the shapes.
+ *
+ * So there is no longer a path to resolve. A suite is in the population if
+ * its source, comments removed, names the workflows directory at all, in any
+ * spelling, or calls an emitter. No arrangement of `join`, no intermediate
+ * binding, no helper and no line break can hide a mention of the directory
+ * from a reader that is only looking for the mention.
+ *
+ * **Wider on purpose, and the width was measured before it was chosen.**
+ * 101 of 674 test files against the 72 the structural parse resolved, and
+ * those 72 are a strict SUBSET \u2014 the parse was sound and incomplete, which
+ * is the only direction that matters here. Routing 15% of the suite is not
+ * the state this row's own history rejected as *routing everything* at 138
+ * of 588; it is the price of a predicate with no spelling to get wrong, in a
+ * row whose entire purpose is to stop being short.
+ *
+ * Comments are stripped so a docstring mentioning the directory does not
+ * vote. Literals are NOT, because the directory is only ever named inside
+ * one \u2014 blanking them removes the signal. A quoted fixture therefore counts,
+ * and that is the acknowledged false positive: it costs one test file in a
+ * local run, against a miss that costs a CI round.
+ */
+const NAMES_GENERATED_WORKFLOWS =
+  /\.github[\/"'`,\s]+[ \t]*["'`]?workflows|\bcreateCiWorkflows\b|\bbuildAiReviewUnmeasuredWorkflow\b/;
+
+/**
+ * #1927 — the suites with an opinion about a generated workflow, read from
+ * the tree rather than written down.
+ *
+ * The row this feeds was a hand list for three releases, and the comment on
+ * it records three derivations tried and rejected. One of those was *which
+ * suites mention the YAML anywhere* — 138 of 588, dismissed as routing
+ * everything. This is that reading, narrowed to the workflows DIRECTORY and
+ * measured again: **101 of 674.** The earlier number was right about its own
+ * predicate and wrong as a reason to resolve paths structurally, which cost
+ * three review rounds on PR #1930 to establish.
+ *
+ * It exists because the hand list was PROVED short: the review named
+ * `test/managed-workflow-key-order.test.ts` and
+ * `test/scaffold-on-trigger-authored.test.ts`, both reading the committed
+ * workflows through `join(REPO, ".github", "workflows", f)`. Three widenings
+ * of a path-literal search returned 63, 96 and 54 — disagreeing in both
+ * directions, which is what says the instrument was the problem.
+ *
+ * `test/fixtures/` is NOT skipped, and nothing here guarantees it stays out.
+ * The walk descends into it and the predicate decides, the same way
+ * `testPopulationCensusSuites` does. Measured on this tree: three fixture
+ * suites exist and none of them names the workflows directory, so the
+ * population contains zero. A fixture that ever did name it would join —
+ * which is a case somebody has to decide about rather than something a
+ * hand-written skip hides.
+ */
+export function generatedWorkflowCensusSuites(root: string): string[] {
+  const dir = join(root, "test");
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  const walk = (abs: string, rel: string): void => {
+    for (const e of readdirSync(abs, { withFileTypes: true })) {
+      const childAbs = join(abs, e.name);
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        walk(childAbs, childRel);
+        continue;
+      }
+      if (!/\.test\.tsx?$/.test(e.name)) continue;
+      // Comments removed, literals kept. The directory is only ever named
+      // inside a string, so the literal-blanked view `censusDirsRead` uses
+      // would remove the very thing being looked for.
+      if (NAMES_GENERATED_WORKFLOWS.test(stripJsComments(readFileSync(childAbs, "utf-8")))) {
+        out.push(`test/${childRel}`);
+      }
+    }
+  };
+  walk(dir, "");
+  return out.sort();
+}
+
+/**
+ * The tree a derived row resolves against, and a place to spend ONE walk of
+ * it per routing call.
+ *
+ * The walk reads every `*.test.ts` under `test/` and takes about 650ms, and
+ * `derive` runs once per matching change — twenty changed workflow files
+ * would pay for it twenty times. The first fix for that was a module-level
+ * `Map` keyed by root, and the AI review on PR #1930 was right to refuse it:
+ * a process-lifetime memo over LIVE filesystem state, in a function whose
+ * entire premise is that membership is a property of the tree. A caller that
+ * writes a test file and routes again in the same process would have been
+ * handed the old answer with nothing saying so — under-routing reintroduced
+ * silently, which is the defect this row exists to remove.
+ *
+ * So the memo lives exactly as long as one `censusTestsFor` call. Within a
+ * call the tree cannot change underneath the answer; between calls there is
+ * nothing to go stale. No bound to tune and no invalidation hook to forget.
+ */
+export interface CensusTree {
+  /** Absolute path to the project being routed. */
+  root: string;
+  /** `generatedWorkflowCensusSuites(root)`, walked at most once per call. */
+  generatedWorkflowSuites(): string[];
+}
+
+/** A `CensusTree` whose walk is memoised for this object's lifetime only. */
+export function censusTree(root: string): CensusTree {
+  let walked: string[] | undefined;
+  return {
+    root,
+    generatedWorkflowSuites: () => (walked ??= generatedWorkflowCensusSuites(root)),
+  };
+}
+
 /** Resolve a repo-relative path against a project root. */
 export const onDisk = (root: string) => (p: string) => existsSync(join(root, p));
 
@@ -869,8 +1019,18 @@ const SELF_ROOT = join(import.meta.dir, "..");
  */
 export function censusTestsFor(
   changes: Change[],
-  exists: (path: string) => boolean = onDisk(SELF_ROOT),
+  // #1927. A row whose membership is a property of the TREE needs the tree,
+  // not just a per-path `exists`. The ROOT is the parameter and `exists` is
+  // DERIVED from it, because the first cut took both and every caller passed
+  // only the second — so a derived row silently walked this repository while
+  // `exists` answered about the consumer's. Two parameters that must agree
+  // are two parameters that will not; found by the AI review on PR #1930.
+  root: string = SELF_ROOT,
+  exists: (path: string) => boolean = onDisk(root),
 ): CensusRouting {
+  // One tree per call, so a derived row's walk is paid for once however many
+  // changes fire it, and cannot outlive the call that asked for it.
+  const tree = censusTree(root);
   const fired: CensusRouting["fired"] = [];
   for (const trigger of CENSUS_TRIGGERS) {
     const matched = changes.filter(c => trigger.fires(c));
@@ -881,7 +1041,7 @@ export function censusTestsFor(
     // fired and the suite it names is gone".
     const resolved = trigger.derive
       ? matched
-          .map(c => ({ path: c.path, tests: trigger.derive!(c, exists) }))
+          .map(c => ({ path: c.path, tests: trigger.derive!(c, exists, tree) }))
           .filter(r => r.tests.length > 0)
       : matched.map(c => ({ path: c.path, tests: trigger.tests }));
     if (resolved.length === 0) continue;
@@ -1005,7 +1165,7 @@ if (import.meta.main) {
 
   let routing: CensusRouting;
   try {
-    routing = censusTestsFor(changesFor(root, flag("base")), onDisk(root));
+    routing = censusTestsFor(changesFor(root, flag("base")), root);
   } catch (e) {
     // Loud and non-zero. A router that cannot read the diff and prints an
     // empty line reads exactly like "nothing to run", which is the fail-open

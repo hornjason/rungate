@@ -92,7 +92,7 @@ import { join } from "path";
 import { affectedTests, SAFE_TEST_PATH } from "../lib/affected-tests";
 import { textDependents } from "../lib/text-dependents";
 
-import { censusTestsFor, changesFor, onDisk, type Change } from "./census-routing";
+import { censusTestsFor, changesFor, type Change } from "./census-routing";
 
 /** One census row that fired, and the changed paths that fired it. */
 export interface CensusAttribution {
@@ -191,10 +191,12 @@ export function selectionFor(root: string, base?: string): SelectionArtifact {
   }
 
   const changed = [...new Set(changes.map(c => c.path))];
-  // `onDisk(root)`, not the default: a derived census row resolves against
-  // the tree being selected for, and the default reads the repository this
-  // module was imported from (#1442).
-  const routing = censusTestsFor(changes, onDisk(root));
+  // `root`, not the default: a derived census row resolves against the tree
+  // being selected for, and the default reads the repository this module was
+  // imported from (#1442). `censusTestsFor` derives its own `exists` from
+  // whatever root it is given, so there is one place that can be wrong and
+  // it is this argument (#1927).
+  const routing = censusTestsFor(changes, root);
   const routed = routing.tests;
 
   const text = textDependents(

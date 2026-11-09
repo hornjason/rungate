@@ -68,7 +68,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
 import {
@@ -76,6 +77,9 @@ import {
   allCensusTests,
   censusDirsRead,
   censusTestsFor,
+  censusTree,
+  generatedWorkflowCensusSuites,
+  WORKFLOW_SUITES_THE_WALK_CANNOT_SEE,
   ownSpecTestPath,
   parseUnifiedDiff,
   testPopulationCensusSuites,
@@ -512,10 +516,18 @@ const GENERATED_WORKFLOW_CENSUS = [
   "test/no-fixed-window-slices.test.ts",
   // #1782. Same shape again: a guard the diff gives an agent no route to.
   // Adding a workflow file is designed to turn it red exactly once, and
-  // #1781 learned that from a red PR. This constant is what the
-  // scaffold-minus-hooks delta below is measured against, so it has to move
-  // with the router row or that case goes red on a correct change.
+  // #1781 learned that from a red PR.
   "test/bun-version-agreement.test.ts",
+  // #1927. The three #1926 broke, every one of them green on a targeted run
+  // of the six above. They are listed BY HAND and deliberately are not the
+  // router's own list: a constant copied from `CENSUS_TRIGGERS` would be a
+  // second decider agreeing with the first, and no mutation of the row could
+  // be caught by it (`.claude/rules/checks-must-be-able-to-fail.md`). Delete
+  // any one of these from the row and the two containment cases below go red
+  // naming it.
+  "test/ci-shard-aggregate-measured.test.ts",
+  "test/ci-global-tools.test.ts",
+  "test/test-command-binding.test.ts",
 ];
 
 /**
@@ -560,13 +572,20 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
     // `lib/scaffold/**` fires `gates-hooks-scaffold` too, so a case asserting
     // only that SOME tests routed is green under a router with no row here.
     // `hooks/` fires that row and nothing else, so the delta is this row.
+    //
+    // #1927 relaxed this from an equality to a floor. The row now carries a
+    // MEASURED population of 65 rather than a hand-picked handful, and an
+    // equality could only be satisfied by restating that population here —
+    // two deciders agreeing, which no mutation of either can be caught by.
+    // The floor is what the case was ever for: the delta is at least every
+    // exemplar that paid for the row, so a row emptied or narrowed is red.
     const scaffold = censusTestsFor([change({ path: "lib/scaffold/ai-review-step.ts" })]);
     const hooks = censusTestsFor([change({ path: "hooks/Example.hook.ts" })]);
     expect(hooks.tests.length, "the gates-hooks-scaffold row stopped firing").toBeGreaterThan(0);
     expect(
       scaffold.tests.length - hooks.tests.length,
       "a scaffold edit and a hooks edit route the same set, so this row is doing nothing",
-    ).toBe(GENERATED_WORKFLOW_CENSUS.length);
+    ).toBeGreaterThanOrEqual(GENERATED_WORKFLOW_CENSUS.length);
   });
 
   test("an ordinary source edit is NOT routed here", () => {
@@ -577,6 +596,145 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
     for (const t of GENERATED_WORKFLOW_CENSUS) {
       expect(tests, `${t} is routed by an edit touching no generated workflow`).not.toContain(t);
     }
+  });
+
+  /**
+   * #1927 — the row's membership is now DERIVED, so these bind the walk.
+   *
+   * The hand list this replaced was proved short by the AI review on PR
+   * #1930: two suites read the committed workflows through
+   * `join(REPO, ".github", "workflows", f)`, and a population drawn by
+   * searching for the assembled path `.github/workflows/ci.yml` cannot match
+   * source that never spells it. Three widenings of that search returned 63,
+   * 96 and 54 — disagreeing in both directions.
+   */
+  describe("#1927: the population is walked, not written down", () => {
+    const derived = generatedWorkflowCensusSuites(REPO);
+
+    // The regression. Both reach the committed workflows through a `join`
+    // whose LAST segment is a variable, which is the shape that defeated the
+    // first draw.
+    test.each([
+      "test/managed-workflow-key-order.test.ts",
+      "test/scaffold-on-trigger-authored.test.ts",
+    ])("the walk finds %s, which a path-literal search could not", path => {
+      expect(
+        derived,
+        `${path} reads the committed workflows through a join with a non-literal ` +
+          "trailing segment — if the walk has stopped resolving those, it is short again",
+      ).toContain(path);
+    });
+
+    // Non-vacuity, both ends. A walk returning everything is a router nobody
+    // runs — the state the row's own comment measured at 138 of 588 and
+    // rejected — and a walk returning nothing goes green having witnessed
+    // nothing.
+    //
+    // NAMED for what it asserts. The first cut called itself a subset check
+    // and compared no sets, and the population it reached for —
+    // `testPopulationCensusSuites` — answers a different question entirely
+    // (suites that ENUMERATE `test/`), so the containment it implied is not
+    // even true. Found by the AI review on PR #1930, round 3. Every member
+    // existing on disk is the containment that IS meaningful here.
+    test("the walk resolves some suites but not most of them, and all of them exist", () => {
+      expect(derived.length, "the walk resolved no suite at all").toBeGreaterThan(0);
+      expect(
+        derived.length,
+        "the walk routes a quarter of every test file — that is routing everything",
+      ).toBeLessThan(150);
+      expect(
+        derived.filter(p => !existsSync(join(REPO, p))),
+        "the walk named a suite that is not on disk",
+      ).toEqual([]);
+    });
+
+    // The constant beside the walk must be its COMPLEMENT, not an overlap. A
+    // suite the walk has learned to see is one the hand list should give up,
+    // and an entry that is in both is dead weight no mutation can catch:
+    // delete it and the walk still supplies the path.
+    // The RAW constant against the walk, never the routed union filtered by
+    // membership of the walk. The first cut of this case did the latter and
+    // was vacuous — found by the AI review on PR #1930, round 2: filtering
+    // `routed` by `!derived.includes(p)` and then asserting the survivors are
+    // absent from `derived` restates the filter, so it holds for whatever
+    // either side returns. `.claude/rules/checks-must-be-able-to-fail.md`,
+    // *assertions that hold vacuously*, written by someone who had just read
+    // that file.
+    test("nothing is both derived and hand-carried", () => {
+      expect(
+        WORKFLOW_SUITES_THE_WALK_CANNOT_SEE.length,
+        "the hand-carried list is empty, so this asserted nothing",
+      ).toBeGreaterThan(0);
+      expect(derived.length, "the walk found nothing, so this asserted nothing").toBeGreaterThan(0);
+      expect(
+        WORKFLOW_SUITES_THE_WALK_CANNOT_SEE.filter(p => derived.includes(p)),
+        "these are hand-carried in WORKFLOW_SUITES_THE_WALK_CANNOT_SEE and the walk now " +
+          "finds them too — drop them from the constant, or the walk could regress to " +
+          "nothing behind a list that silently covers for it",
+      ).toEqual([]);
+    });
+
+    /**
+     * The memo is scoped to one `censusTree`, and this proves BOTH halves on
+     * a tree that actually moves underneath it.
+     *
+     * The first version of this cache was a module-level `Map` keyed by
+     * root, with no invalidation — a process-lifetime memo over live
+     * filesystem state, in a function whose premise is that membership is a
+     * property of the tree. The AI review on PR #1930 refused it, and a
+     * bound or a TTL would only have made the staleness window shorter.
+     *
+     * Both assertions are needed. Without the first, a `censusTree` that
+     * re-walked on every call would pass the second and silently cost 650ms
+     * per changed file. Without the second, the module-level `Map` this
+     * replaced would pass the first.
+     */
+    test("a tree memoises for its own lifetime and no longer", () => {
+      const dir = mkdtempSync(join(tmpdir(), "rg-census-tree-"));
+      try {
+        mkdirSync(join(dir, "test"));
+        writeFileSync(
+          join(dir, "test/first.test.ts"),
+          'readFileSync(join(REPO, ".github", "workflows", "ci.yml"));\n',
+        );
+        const tree = censusTree(dir);
+        expect(tree.generatedWorkflowSuites()).toEqual(["test/first.test.ts"]);
+
+        writeFileSync(
+          join(dir, "test/second.test.ts"),
+          'readFileSync(join(REPO, ".github", "workflows", "gates.yml"));\n',
+        );
+        expect(
+          tree.generatedWorkflowSuites(),
+          "the tree re-walked mid-call — a routing run would pay 650ms per changed file",
+        ).toEqual(["test/first.test.ts"]);
+        expect(
+          censusTree(dir).generatedWorkflowSuites(),
+          "a FRESH tree returned the stale answer — the memo outlived the call that asked " +
+            "for it, which is under-routing reintroduced with nothing saying so",
+        ).toEqual(["test/first.test.ts", "test/second.test.ts"]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    // The suite with recorded evidence of a catch that the walk cannot see
+    // by construction: `no-fixed-window-slices` (#1387) reads no workflow
+    // file and calls no emitter, so neither question the walk asks can reach
+    // it. A straight swap to the derivation would have dropped it.
+    //
+    // Its sibling `ai-review-runner-shell-parity` was in this list until
+    // bound-variable resolution landed and the walk learned to see it — which
+    // is the direction this is supposed to move, and why the premise is
+    // asserted rather than assumed.
+    test("no-fixed-window-slices is still routed although the walk cannot see it", () => {
+      const path = "test/no-fixed-window-slices.test.ts";
+      expect(derived, "this case's premise is gone — the walk now sees it").not.toContain(path);
+      expect(
+        censusTestsFor([change({ path: ".github/workflows/ci.yml" })]).tests,
+        `${path} carries recorded evidence of a catch and is no longer routed`,
+      ).toContain(path);
+    });
   });
 
   // #1782. `test/bun-version-agreement.test.ts` holds a hand-maintained list
@@ -838,7 +996,7 @@ describe("#1442: a specs/ edit routes the suite named after that spec", () => {
       existsSync(join(REPO, future)),
       "this case needs a pair that does NOT resolve on the live tree",
     ).toBe(false);
-    const { tests } = censusTestsFor([change({ path: spec, added: ["some prose"] })], p =>
+    const { tests } = censusTestsFor([change({ path: spec, added: ["some prose"] })], REPO, p =>
       p === future ? true : existsSync(join(REPO, p)),
     );
     expect(tests, "the row reads a fixed list, not the tree").toContain(future);
@@ -1433,6 +1591,7 @@ describe("#1547: the routed set is complete over the census of the test populati
   const routedByNewTestFile = () =>
     censusTestsFor(
       [change({ path: "test/zz-a-newly-added-suite.test.ts", isNew: true, added: ["x"] })],
+      REPO,
       p => existsSync(join(REPO, p)),
     ).tests;
 
