@@ -535,6 +535,8 @@ describe("one decider owns every lane transition", () => {
     ACTION: "closed",
     DRAFT: "false",
     MERGED: "false",
+    BASE_REF: "rg/some-branch",
+    DEFAULT_BRANCH: "main",
     ...over,
   });
 
@@ -544,6 +546,65 @@ describe("one decider owns every lane transition", () => {
       "a merged pull request that produced no kind is the defect: the job prints `means no " +
         "lane transition here` and the card it should have moved stays where it was.",
     ).toBe("pr_merged");
+  });
+
+  // ## The two events are made mutually exclusive, not serialised — #1922
+  //
+  // Review round 1 found the hole, and it is a real one this change
+  // introduced: `scripts/board-flow.ts` reads the card's current lane, then
+  // writes, and the two runs are independent workflow runs with no mutual
+  // exclusion. A `pr_merged` run that reads "In review" before the close
+  // lands still writes In progress afterwards, and its read-back compares
+  // against what IT wrote — so it sees a match and reports success while
+  // delivered work sits in In progress. "Either order ends at Done" is only
+  // true of orders; it says nothing about overlap.
+  //
+  // A `concurrency:` group is the obvious fix and the wrong one: GitHub
+  // keeps at most ONE pending run per group and cancels the previously
+  // pending one, so a burst of three events silently drops the middle lane
+  // write — the silent lane this whole file exists to end.
+  //
+  // The two events are instead made unable to co-occur. **GitHub applies
+  // closing keywords only on the DEFAULT branch.** So a merge into the
+  // default branch is exactly the case where a close is coming and owns the
+  // card, and a merge anywhere else is exactly the case where none is. The
+  // fact is in the payload, costs no API call, and leaves one writer per
+  // merge rather than two racing.
+  test("#1922: a merge into the default branch yields no kind, because the close owns the card", () => {
+    expect(
+      kindOf(prEvent({ MERGED: "true", BASE_REF: "main", DEFAULT_BRANCH: "main" })),
+      "a default-branch merge closes the issues it names, and that close fires its own event. " +
+        "Writing In progress from here races that close, and the loser is silent: the read-back " +
+        "compares against this run's own value and matches.",
+    ).toBe("");
+    expect(
+      kindOf(prEvent({ MERGED: "true", BASE_REF: "rg/feature", DEFAULT_BRANCH: "main" })),
+      "a merge anywhere else closes nothing, so no second event is coming and this is the " +
+        "whole of #1921. Suppressing it too would restore the defect.",
+    ).toBe("pr_merged");
+  });
+
+  test("#1922: an unreadable branch pair is UNMEASURED, and UNMEASURED does not write", () => {
+    for (const pair of [
+      { BASE_REF: "", DEFAULT_BRANCH: "main" },
+      { BASE_REF: "main", DEFAULT_BRANCH: "" },
+    ]) {
+      expect(
+        kindOf(prEvent({ MERGED: "true", ...pair })),
+        "an empty string is not a branch name, and two empty strings are not a match. " +
+          "Comparing them raw makes an unreadable payload look like a non-default merge, " +
+          "which writes In progress into the race. Not moving a card is recoverable; " +
+          "overwriting Done is not.",
+      ).toBe("");
+    }
+  });
+
+  test("#1922: the branch pair does not reach the unmerged arm", () => {
+    expect(
+      kindOf(prEvent({ MERGED: "false", BASE_REF: "main", DEFAULT_BRANCH: "main" })),
+      "an abandoned pull request closes no issue whatever branch it targeted, so there is no " +
+        "second writer and no reason for the default-branch test to apply here.",
+    ).toBe("pr_closed_unmerged");
   });
 
   // The negative control for the row above. A fix of "emit pr_merged for

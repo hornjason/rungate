@@ -208,11 +208,15 @@ export function laneFor(e: LaneEvent): LaneDecision {
       // whose pull request just merged is still assigned to whoever did the
       // work. The card would sit in Backlog until a person moved it.
       //
-      // The merge that DOES close its issue is handled by `prEventMayWrite`
-      // rather than by a second rule here: the close writes Done, Done is
-      // terminal, and a `pr_merged` arriving after it is refused. Arriving
-      // before it, it writes In progress and the close — an ISSUE event, not
-      // gated — overwrites with Done. Either order ends at Done.
+      // **A merge that DOES close its issue never reaches here.** The
+      // workflow emits this kind only for a merge onto a branch other than
+      // the default one, which is precisely the set of merges GitHub applies
+      // no closing keyword to. One writer per merge, by construction.
+      //
+      // `prEventMayWrite` refusing a terminal lane remains the backstop and
+      // is not the guarantee — two independent workflow runs can interleave
+      // the lane read and the write, and the loser reports success because
+      // its read-back compares against its own value (#1922, round 1).
       return {
         lane: "In progress",
         why: "the pull request merged without closing this issue, so the work is still claimed and open",

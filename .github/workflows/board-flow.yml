@@ -96,9 +96,23 @@ jobs:
       # applies closing keywords only on the DEFAULT branch, so `Fixes #N`
       # merged branch-to-branch leaves #N open and no second event is
       # coming — the card stayed in In review while the work continued
-      # (#1921). The merge now yields `pr_merged`, and the two-writers
-      # problem is handled where it belongs: Done is a terminal lane and
-      # `prEventMayWrite` refuses a pull-request event out of one.
+      # (#1921).
+      #
+      # So the arm below splits on exactly that fact, and the split is what
+      # keeps the two-writers argument true rather than discarding it. A
+      # default-branch merge still yields no kind, because its close is
+      # coming and owns the card. Anything else yields `pr_merged`, and no
+      # close is coming for it.
+      #
+      # **The two events are made mutually exclusive, not serialised.**
+      # `prEventMayWrite` refusing a terminal lane is a backstop, not the
+      # guarantee: `scripts/board-flow.ts` reads the lane and writes later,
+      # and two independent runs can interleave that read and write, with
+      # the loser reporting success because its read-back compares against
+      # its own value (#1922, review round 1). A `concurrency:` group is the
+      # obvious answer and the wrong one — GitHub keeps one pending run per
+      # group and cancels the previously pending one, so a burst of events
+      # drops a lane write silently, which is this file's own defect.
       #
       # Everything downstream is gated on a non-empty kind, so "no
       # transition" costs a checkout that never happens rather than a run
@@ -110,6 +124,11 @@ jobs:
           ACTION: ${{ github.event.action }}
           DRAFT: ${{ github.event.pull_request.draft }}
           MERGED: ${{ github.event.pull_request.merged }}
+          # Which branch the merge landed on, and which branch closing
+          # keywords apply to. The pair is what separates a merge that
+          # closes its issues from one that does not — see the arm below.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           kind=""
@@ -125,7 +144,13 @@ jobs:
                 if [ "$DRAFT" != "true" ]; then kind="pr_ready"; fi
                 ;;
               closed)
-                if [ "$MERGED" = "true" ]; then kind="pr_merged"; else kind="pr_closed_unmerged"; fi
+                if [ "$MERGED" != "true" ]; then
+                  kind="pr_closed_unmerged"
+                elif [ -z "$BASE_REF" ] || [ -z "$DEFAULT_BRANCH" ]; then
+                  echo "::warning::UNMEASURED — the merge's base branch or the repository's default branch could not be read, so whether a close is coming for this merge is unknown. Nothing written: not moving a card is recoverable, overwriting Done is not."
+                elif [ "$BASE_REF" != "$DEFAULT_BRANCH" ]; then
+                  kind="pr_merged"
+                fi
                 ;;
             esac
           fi
