@@ -40,6 +40,7 @@
 import {
   actorMayWrite,
   fanoutDecisions,
+  mergeCandidateSources,
   readBoardCredential,
   truncatedReadings,
   type Dependent,
@@ -147,21 +148,25 @@ async function main(): Promise<number> {
     console.error("UNMEASURED: --repo <owner/name> and --project <id> are both required");
     return EXIT_REFUSED;
   }
-  // **Exactly one candidate source.** Neither is the original defect — an
-  // invocation with no source has nothing to look at and must not quietly
-  // become the other one. BOTH is worse than either: `--top-up` already
-  // contains every candidate `--closed-issue` can produce, so a run given both
-  // would report a fan-out it did not perform, and whichever branch lost would
-  // do so silently.
-  if (topUp === (rawClosed !== null)) {
+  // **At least one candidate source.** An invocation with no source has
+  // nothing to look at and must not quietly become either one.
+  //
+  // BOTH used to be refused as well, on the reasoning that `--top-up` already
+  // contains every candidate `--closed-issue` can produce — true, and it is
+  // why the two are deduplicated below rather than concatenated. What that
+  // refusal cost is #1917: `closed` is the one event that reliably FREES a
+  // slot in Ready and it was the one event that could not refill the lane from
+  // the general pool, so a close that unblocked nothing left the lane one
+  // short until a person ran a command. Both sources now run in one
+  // invocation and both report, so neither loses silently.
+  if (!topUp && rawClosed === null) {
     console.error(
-      "UNMEASURED: pass exactly one of --closed-issue <n> (fan out from what that close freed) " +
-        "or --top-up (consider every open issue). " +
-        (topUp ? "Both were given." : "Neither was given."),
+      "UNMEASURED: pass at least one of --closed-issue <n> (fan out from what that close freed) " +
+        "or --top-up (consider every open issue). Neither was given.",
     );
     return EXIT_REFUSED;
   }
-  // Only reachable with a `--closed-issue` present, by the guard above.
+  // Only reachable with a `--closed-issue` present, by the `null` check.
   const closed = rawClosed === null ? null : Number(rawClosed);
   if (closed !== null && (!Number.isInteger(closed) || closed <= 0)) {
     console.error(`UNMEASURED: --closed-issue must be a positive integer, got "${rawClosed}"`);
@@ -295,36 +300,30 @@ async function main(): Promise<number> {
 
   // One array, two sources. Named for what it holds rather than where it came
   // from, because nothing after this line may branch on the mode.
-  const candidates: any[] = [];
-  let cursor: string | null = null;
-  while (topUp) {
-    const d = await gql(token, TOP_UP_QUERY, { o: owner, n: name, c: cursor });
-    // `repository` is null with no `errors` for a name the credential cannot
-    // see or that does not exist — the same well-formed-but-empty response
-    // BR-37 covers on the fan-out path, at the site that path does not reach.
-    if (!d.repository?.issues) {
-      console.log(
-        `::warning::${owner}/${name} did not resolve to a repository with issues — it may be ` +
-          `renamed, deleted, or unreadable by this credential. UNMEASURED, nothing written.`,
-      );
-      return EXIT_REFUSED;
-    }
-    const page = d.repository.issues;
-    candidates.push(...page.nodes);
-    const step = nextCursor(page.pageInfo);
-    if (step.kind === "unreadable") {
-      console.log(
-        `::warning::the repository's open issues stopped paging — ${step.why}. ` +
-          `A partial list tops Ready up from SOME of the candidates, which silently ` +
-          `changes WHICH work is next. UNMEASURED, nothing written.`,
-      );
-      return EXIT_REFUSED;
-    }
-    cursor = step.kind === "more" ? step.cursor : null;
-    if (cursor === null) break;
-  }
+  //
+  // **Both sources may fill it in one invocation** (#1917), and the two sets
+  // are not disjoint: `states:[OPEN]` is every open issue, so it already
+  // contains every OPEN candidate a `blocking` list can produce. The fan-out
+  // therefore contributes no candidate the top-up lacks — what it contributes
+  // is the LOG, which names every issue this close freed and says why each one
+  // did or did not move. So the union is deduplicated by number, and the
+  // fan-out walks first so those issues are named first.
+  //
+  // Measured 2026-11-08: #1889 closed, run `42528160275` reported "#1889 was
+  // blocking nothing. No issue changed.", 33 eligible candidates sat untouched
+  // at a depth of 2 with one slot free, and a hand-run `mode=top-up` moved
+  // #1157 within seconds (run `42530702081`).
+  // The merge is `mergeCandidateSources`'s, not this file's — a `main()` that
+  // needs a live endpoint cannot be asked whether it deduplicates, and the
+  // dedupe is what stops one close counting against the cap twice.
+  const closeNodes: any[] = [];
+  const openNodes: any[] = [];
+  // **A cursor each.** They used to share one, which worked only because the
+  // first walk always left it `null` — a coupling nothing asserted and the
+  // second walk would have resumed from the first one's page.
+  let closedCursor: string | null = null;
   while (closed !== null) {
-    const d = await gql(token, BLOCKING_QUERY, { o: owner, n: name, i: closed, c: cursor });
+    const d = await gql(token, BLOCKING_QUERY, { o: owner, n: name, i: closed, c: closedCursor });
     // **`issue(number:)` resolves to null, with no `errors`, for a number
     // that is not an Issue.** Issues and pull requests share one numbering
     // space and this field resolves only Issues, so a PR number — or a
@@ -343,7 +342,7 @@ async function main(): Promise<number> {
       return EXIT_REFUSED;
     }
     const page = d.repository.issue.blocking;
-    candidates.push(...page.nodes);
+    closeNodes.push(...page.nodes);
     const step = nextCursor(page.pageInfo);
     if (step.kind === "unreadable") {
       console.log(
@@ -353,13 +352,43 @@ async function main(): Promise<number> {
       );
       return EXIT_REFUSED;
     }
+    closedCursor = step.kind === "more" ? step.cursor : null;
+    if (closedCursor === null) break;
+  }
+  let cursor: string | null = null;
+  while (topUp) {
+    const d = await gql(token, TOP_UP_QUERY, { o: owner, n: name, c: cursor });
+    // `repository` is null with no `errors` for a name the credential cannot
+    // see or that does not exist — the same well-formed-but-empty response
+    // BR-37 covers on the fan-out path, at the site that path does not reach.
+    if (!d.repository?.issues) {
+      console.log(
+        `::warning::${owner}/${name} did not resolve to a repository with issues — it may be ` +
+          `renamed, deleted, or unreadable by this credential. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
+    const page = d.repository.issues;
+    openNodes.push(...page.nodes);
+    const step = nextCursor(page.pageInfo);
+    if (step.kind === "unreadable") {
+      console.log(
+        `::warning::the repository's open issues stopped paging — ${step.why}. ` +
+          `A partial list tops Ready up from SOME of the candidates, which silently ` +
+          `changes WHICH work is next. UNMEASURED, nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
     cursor = step.kind === "more" ? step.cursor : null;
     if (cursor === null) break;
   }
+  const { candidates, freed } = mergeCandidateSources(closeNodes, openNodes);
   if (candidates.length === 0) {
     console.log(
       topUp
-        ? `${owner}/${name} has no open issues. No issue changed.`
+        ? `${owner}/${name} has no open issues` +
+          (closed === null ? "" : `, and #${closed} was blocking nothing`) +
+          ". No issue changed."
         : `#${closed} was blocking nothing. No issue changed.`,
     );
     return 0;
@@ -602,17 +631,31 @@ async function main(): Promise<number> {
   });
 
   const decisions = fanoutDecisions(dependents, READY_COLUMN);
+  // Each source says what IT brought, so a run given both cannot report one
+  // and perform the other — and each counts its own nodes rather than the
+  // merged array. ai-review round 1 of #1919 caught the merged count here:
+  // `BLOCKING_QUERY` has no `states:` filter where `TOP_UP_QUERY` asks for
+  // `[OPEN]`, so a close whose `blocking` list holds an already-closed
+  // dependent inflated a line that calls every one of them an open issue.
+  // The dependent is still named below, with `the issue is CLOSED` as its
+  // reason — it is the SUMMARY that was wrong, not the walk.
   console.log(
-    topUp
-      ? `Top-up: ${candidates.length} open issue(s) considered.`
-      : `#${closed} closed.`,
+    [
+      closed === null ? null : `#${closed} closed, blocking ${freed.size} issue(s).`,
+      topUp ? `Top-up: ${openNodes.length} open issue(s) considered.` : null,
+    ]
+      .filter(l => l !== null)
+      .join(" "),
   );
-  // **Only the movers, in top-up.** A fan-out holds a handful of dependents
-  // and naming every one is the log's value; a top-up holds every open issue,
-  // and ~250 lines of "somebody has claimed it" is a log nobody reads, which
-  // is how the one line that mattered gets missed.
+  // **Every issue this close freed, and otherwise only the movers.** Naming
+  // each dependent and why it did or did not move is the fan-out's whole
+  // contribution — its candidates are already a subset of the top-up's — and
+  // a top-up holds every open issue, where ~250 lines of "somebody has
+  // claimed it" is a log nobody reads and the one line that mattered is
+  // missed. `freed` is empty on a pure top-up and holds every candidate on a
+  // pure fan-out, so this one expression is what both modes always did.
   for (const dec of decisions) {
-    if (topUp && !dec.move) continue;
+    if (!freed.has(dec.number) && !dec.move) continue;
     console.log(dec.move ? `  #${dec.number} -> ${READY_COLUMN}` : `  #${dec.number} unchanged: ${dec.why}`);
   }
 

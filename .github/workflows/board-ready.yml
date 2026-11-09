@@ -297,7 +297,18 @@ jobs:
                   exit 1
                   ;;
               esac
-              args+=(--closed-issue "$ISSUE")
+              # **BOTH sources on a close** (#1917). A close is the one event
+              # that reliably FREES a slot in Ready, and it was the one event
+              # that could not refill the lane from the general pool: when the
+              # closed issue was blocking nothing, the fan-out had nothing to
+              # offer and the lane stayed one short until a person ran a
+              # command. Measured 2026-11-08 — #1889 closed, run
+              # `42528160275` moved nothing, 33 candidates were eligible, and
+              # a hand-run top-up moved #1157 within seconds.
+              #
+              # `--closed-issue` stays because it is what names the freed
+              # issues in the log; it adds no candidate the top-up lacks.
+              args+=(--closed-issue "$ISSUE" --top-up)
               ;;
             assigned)
               # **`--moving-issue`, and only on `assigned`** (#1905).
