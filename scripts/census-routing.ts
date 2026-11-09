@@ -132,7 +132,7 @@ export interface CensusTrigger {
  * narrowing the row is not this issue's direction, and a suite removed here
  * is a suite nothing routes.
  */
-const WORKFLOW_SUITES_THE_WALK_CANNOT_SEE = [
+export const WORKFLOW_SUITES_THE_WALK_CANNOT_SEE = [
   "test/action-pin-parity.test.ts",
   "test/agents-md-refs.test.ts",
   "test/ai-review-runner-shell-parity.test.ts",

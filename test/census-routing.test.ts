@@ -77,6 +77,7 @@ import {
   censusDirsRead,
   censusTestsFor,
   generatedWorkflowCensusSuites,
+  WORKFLOW_SUITES_THE_WALK_CANNOT_SEE,
   ownSpecTestPath,
   parseUnifiedDiff,
   testPopulationCensusSuites,
@@ -640,19 +641,26 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
     // suite the walk has learned to see is one the hand list should give up,
     // and an entry that is in both is dead weight no mutation can catch:
     // delete it and the walk still supplies the path.
+    // The RAW constant against the walk, never the routed union filtered by
+    // membership of the walk. The first cut of this case did the latter and
+    // was vacuous — found by the AI review on PR #1930, round 2: filtering
+    // `routed` by `!derived.includes(p)` and then asserting the survivors are
+    // absent from `derived` restates the filter, so it holds for whatever
+    // either side returns. `.claude/rules/checks-must-be-able-to-fail.md`,
+    // *assertions that hold vacuously*, written by someone who had just read
+    // that file.
     test("nothing is both derived and hand-carried", () => {
-      const row = CENSUS_TRIGGERS.find(t => t.id === "generated-workflow")!;
-      const routed = row.derive!(change({ path: ".github/workflows/ci.yml" }), () => true, REPO);
-      const handCarried = routed.filter(p => !derived.includes(p));
-      expect(handCarried.length, "the hand-carried list is empty, so this asserted nothing")
-        .toBeGreaterThan(0);
-      for (const p of handCarried) {
-        expect(
-          derived,
-          `${p} is hand-carried in WORKFLOW_SUITES_THE_WALK_CANNOT_SEE and the walk now ` +
-            "finds it too — drop it from the constant",
-        ).not.toContain(p);
-      }
+      expect(
+        WORKFLOW_SUITES_THE_WALK_CANNOT_SEE.length,
+        "the hand-carried list is empty, so this asserted nothing",
+      ).toBeGreaterThan(0);
+      expect(derived.length, "the walk found nothing, so this asserted nothing").toBeGreaterThan(0);
+      expect(
+        WORKFLOW_SUITES_THE_WALK_CANNOT_SEE.filter(p => derived.includes(p)),
+        "these are hand-carried in WORKFLOW_SUITES_THE_WALK_CANNOT_SEE and the walk now " +
+          "finds them too — drop them from the constant, or the walk could regress to " +
+          "nothing behind a list that silently covers for it",
+      ).toEqual([]);
     });
 
     // The two suites with recorded evidence of a catch, which the walk does
