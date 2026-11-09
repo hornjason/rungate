@@ -96,7 +96,7 @@ export interface CensusTrigger {
    * see `censusTestsFor`. A row that fired with no target would read exactly
    * like a spec whose suite was renamed away, and those are different facts.
    */
-  derive?(c: Change, exists: (path: string) => boolean): string[];
+  derive?(c: Change, exists: (path: string) => boolean, root: string): string[];
   /**
    * The rule file's table cell for a derived row, since there is no path
    * list to render. It must spell no concrete test path: the document's
@@ -106,6 +106,58 @@ export interface CensusTrigger {
    */
   derivedTarget?: string;
 }
+
+/**
+ * #1927. The suites `generatedWorkflowCensusSuites` cannot reach, carried so
+ * the derivation WIDENS the row and never narrows it.
+ *
+ * The walk asks two questions — does this suite call a workflow emitter, and
+ * does it read a path under the committed `.github/workflows` resolved from
+ * its own repo-root binding. Twenty-four suites that the hand list routed
+ * answer no to both and are still real catchers: they reach the generated
+ * YAML through a scaffold run into an `mkdtemp` (no repo-root binding to
+ * resolve), through a helper this file does not name, or through a reading
+ * that is not a file read at all.
+ *
+ * Two of them carry recorded evidence of a catch and are the reason this
+ * constant exists rather than being deleted as the derivation's residue:
+ * `no-fixed-window-slices` (#1387 — a `slice(at - 400, at + 400)` that ran
+ * off the construct and read one of three occurrences) and
+ * `ai-review-runner-shell-parity` (#1351 — two `rf=$(...)` assignments,
+ * shard 3, after every suite the router named came back green). Both would
+ * be dropped by a straight swap to the derivation, in a change whose whole
+ * purpose is to stop under-routing.
+ *
+ * The rest came from #1927's own grep. They are kept for the same reason:
+ * narrowing the row is not this issue's direction, and a suite removed here
+ * is a suite nothing routes.
+ */
+const WORKFLOW_SUITES_THE_WALK_CANNOT_SEE = [
+  "test/action-pin-parity.test.ts",
+  "test/agents-md-refs.test.ts",
+  "test/ai-review-runner-shell-parity.test.ts",
+  "test/branch-protection-gate.test.ts",
+  "test/ci-workflow-probe.test.ts",
+  "test/consumer-requirements-ownership.test.ts",
+  "test/failure-intake-promotion.test.ts",
+  "test/generators-config-path.test.ts",
+  "test/issue-file-overlap.test.ts",
+  "test/no-fixed-window-slices.test.ts",
+  "test/owned-strategy-reachability.test.ts",
+  "test/phase-0.test.ts",
+  "test/post-fix-verify.test.ts",
+  "test/release-guard.test.ts",
+  "test/risk-tier.test.ts",
+  "test/scaffold-audit-agreement.test.ts",
+  "test/scaffold-ci-preservation-mutation.test.ts",
+  "test/scaffold-idempotent.test.ts",
+  "test/scaffold-profile.test.ts",
+  "test/scaffold-rehearsal-marking.test.ts",
+  "test/suite-flake-truncation.test.ts",
+  "test/test-command-agreement.test.ts",
+  "test/transcript-checker.test.ts",
+  "test/workflow-drift-validation.test.ts",
+];
 
 const isMarkdown = (p: string) => p.endsWith(".md");
 const inDir = (p: string, dir: string) => p.startsWith(`${dir}/`);
@@ -510,73 +562,15 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
     // this file named at the time.
     id: "generated-workflow",
     event: "changed a generated workflow, or the scaffold source that emits one",
-    tests: [
-      "test/action-pin-freshness-schedule.test.ts",
-      "test/action-pin-parity.test.ts",
-      "test/agents-md-refs.test.ts",
-      "test/ai-review-credentialed-job.test.ts",
-      "test/ai-review-model-alias.test.ts",
-      "test/ai-review-push-trigger.test.ts",
-      "test/ai-review-runner-shell-parity.test.ts",
-      "test/ai-review-surface-census.test.ts",
-      "test/ai-review-turn-budget.test.ts",
-      "test/ai-review-wif.test.ts",
-      "test/ai-review-workflow.test.ts",
-      "test/ai-review-write-scope.test.ts",
-      "test/allowlist-growth.test.ts",
-      "test/branch-protection-gate.test.ts",
-      "test/bun-version-agreement.test.ts",
-      "test/bun-version-moving-tag.test.ts",
-      "test/ci-concurrency.test.ts",
-      "test/ci-global-tools.test.ts",
-      "test/ci-history-depth.test.ts",
-      "test/ci-setup-step.test.ts",
-      "test/ci-shard-aggregate-measured.test.ts",
-      "test/ci-shard.test.ts",
-      "test/ci-workflow-probe.test.ts",
-      "test/clean-env-suite-job.test.ts",
-      "test/consumer-requirements-ownership.test.ts",
-      "test/failure-intake-promotion.test.ts",
-      "test/generated-workflow-pins.test.ts",
-      "test/generators-config-path.test.ts",
-      "test/issue-file-overlap.test.ts",
-      "test/merge-group-trigger.test.ts",
-      "test/no-fixed-window-slices.test.ts",
-      "test/one-managed-write-path.test.ts",
-      "test/owned-strategy-reachability.test.ts",
-      "test/phase-0.test.ts",
-      "test/post-fix-verify.test.ts",
-      "test/release-guard.test.ts",
-      "test/risk-tier.test.ts",
-      "test/scaffold-audit-agreement.test.ts",
-      "test/scaffold-ci-config.test.ts",
-      "test/scaffold-ci-preservation-mutation.test.ts",
-      "test/scaffold-ci-preservation.test.ts",
-      "test/scaffold-idempotent.test.ts",
-      "test/scaffold-ownership.test.ts",
-      "test/scaffold-permissions-merge.test.ts",
-      "test/scaffold-profile.test.ts",
-      "test/scaffold-rehearsal-marking.test.ts",
-      "test/stacked-pr-ci-trigger.test.ts",
-      "test/suite-flake-truncation.test.ts",
-      "test/suite-flake.test.ts",
-      "test/suite-timeout-margin.test.ts",
-      "test/test-clean-env.test.ts",
-      "test/test-command-agreement.test.ts",
-      "test/test-command-binding.test.ts",
-      "test/transcript-checker.test.ts",
-      "test/typescript-project.test.ts",
-      "test/unit/gates-tier1-jwt.test.ts",
-      "test/unit/generated-shell-syntax.test.ts",
-      "test/unit/secret-patterns.test.ts",
-      "test/workflow-added-section-comment.test.ts",
-      "test/workflow-dispatch-trigger.test.ts",
-      "test/workflow-drift-validation.test.ts",
-      "test/workflow-provenance-merge.test.ts",
-      "test/workflow-residual-comment.test.ts",
-      "test/workflow-top-level-merge.test.ts",
-      "test/workflow-version-skew.test.ts",
-    ],
+    // DERIVED, not listed. See `generatedWorkflowCensusSuites`.
+    tests: [],
+    derivedTarget:
+      "every suite that calls a workflow emitter or reads the committed " +
+      "`.github/workflows` — `bun scripts/census-routing.ts` names them",
+    derive: (_c, exists, root) =>
+      [...new Set([...generatedWorkflowCensusSuites(root), ...WORKFLOW_SUITES_THE_WALK_CANNOT_SEE])]
+        .filter(exists)
+        .sort(),
     fires: c => inDir(c.path, ".github/workflows") || inDir(c.path, "lib/scaffold"),
   },
   {
@@ -910,6 +904,122 @@ export function testPopulationCensusSuites(root: string): string[] {
   return out.sort();
 }
 
+/**
+ * The scaffold entry points that EMIT a workflow. A suite that calls one has
+ * an opinion about a generated workflow whether or not it ever reads a file.
+ */
+const WORKFLOW_EMITTERS = /\b(?:createCiWorkflows|buildAiReviewUnmeasuredWorkflow)\s*\(/;
+
+/** The calls that take a path and return its contents, or its existence. */
+const PATH_READERS = /\b(?:readFileSync|readFile|existsSync|readdirSync|opendirSync)\s*\(/g;
+
+const WORKFLOWS_DIR = ".github/workflows";
+
+/**
+ * Does this first-argument expression name something under the COMMITTED
+ * `.github/workflows`, resolved from the suite's own repo-root binding?
+ *
+ * The parse is deliberately DEGRADED rather than perfected: literal segments
+ * are read up to the first one that is not a literal, and the segments before
+ * it still count. `join(REPO, ".github", "workflows", f)` is the shape that
+ * defeated #1927's first population draw — a text search for the assembled
+ * path `.github/workflows/ci.yml` cannot match source that never spells it —
+ * and insisting on a fully literal path, as `joinedDir` does, reproduces that
+ * miss. What the trailing segment names does not matter here; every file in
+ * that directory is a generated workflow.
+ */
+function readsCommittedWorkflow(expr: string, roots: Set<string>): boolean {
+  const m = /^join\(\s*([A-Za-z_][A-Za-z0-9_.]*(?:\(\))?)\s*,([\s\S]*)\)$/.exec(expr);
+  if (!m) return false;
+  const head = m[1]!;
+  if (!roots.has(head) && head !== "import.meta.dir" && head !== "process.cwd()") return false;
+  const segs: string[] = [];
+  for (const part of m[2]!.split(",")) {
+    const lit = /^\s*"([^"]*)"\s*$/.exec(part);
+    if (!lit) break;
+    // Navigation is not a name — the same refusal `joinedDir` makes, so
+    // `join(import.meta.dir, "..", ".github", "workflows", n)` resolves to
+    // the directory and not to a path beginning `../`.
+    if (lit[1] === "." || lit[1] === "..") continue;
+    segs.push(lit[1]!);
+  }
+  return segs.join("/").startsWith(WORKFLOWS_DIR);
+}
+
+/**
+ * #1927 — the suites with an opinion about a generated workflow, read from
+ * the tree rather than written down.
+ *
+ * The row this feeds was a hand list for three releases, and the comment on
+ * it records three derivations that were tried and rejected. This is a
+ * fourth, and it differs from all three in what it asks: not *which suites
+ * co-change with the generator* (that finds the ones an author edited, the
+ * opposite population), and not *which suites mention the YAML anywhere*
+ * (138 of 588 — routing everything), but **which suites call an emitter or
+ * read a path under the committed `.github/workflows`, resolved from their
+ * own repo-root binding, judged per call site.**
+ *
+ * It exists because the hand list was PROVED short on PR #1930: the AI review
+ * named `test/managed-workflow-key-order.test.ts` and
+ * `test/scaffold-on-trigger-authored.test.ts`, both of which read the
+ * committed workflows through `join(REPO, ".github", "workflows", f)`. A list
+ * drawn by searching for the assembled path could never contain them, and
+ * three widenings of that search returned 63, 96 and 54 — disagreeing in both
+ * directions, which is what says the instrument was the problem.
+ *
+ * `test/fixtures/` is excluded by the ROOT BINDING rather than by a skip: a
+ * fixture project writing its own `.github/workflows` into an `mkdtemp` has no
+ * repo-root identifier for `readsCommittedWorkflow` to resolve, so it cannot
+ * satisfy the predicate. A hand-written skip would make that silent.
+ */
+const generatedWorkflowCensusCache = new Map<string, string[]>();
+
+export function generatedWorkflowCensusSuites(root: string): string[] {
+  const hit = generatedWorkflowCensusCache.get(root);
+  if (hit) return hit;
+  const computed = computeGeneratedWorkflowCensusSuites(root);
+  generatedWorkflowCensusCache.set(root, computed);
+  return computed;
+}
+
+function computeGeneratedWorkflowCensusSuites(root: string): string[] {
+  const dir = join(root, "test");
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  const walk = (abs: string, rel: string): void => {
+    for (const e of readdirSync(abs, { withFileTypes: true })) {
+      const childAbs = join(abs, e.name);
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        walk(childAbs, childRel);
+        continue;
+      }
+      if (!/\.test\.tsx?$/.test(e.name)) continue;
+      const source = readFileSync(childAbs, "utf-8");
+      // Both views, for the reason `censusDirsRead` states: a match COUNTS in
+      // the literal-blanked view, so this repository's own quoted fixtures —
+      // source code inside a string — cannot vote themselves into the
+      // population, and is READ out of the literal-bearing one.
+      const src = stripJsComments(source);
+      const code = stripJsComments(source, { blankLiterals: true });
+      if (WORKFLOW_EMITTERS.test(code)) {
+        out.push(`test/${childRel}`);
+        continue;
+      }
+      const roots = repoRootIdents(code);
+      for (const m of code.matchAll(PATH_READERS)) {
+        const arg = firstArgument(code, src, m.index! + m[0].length - 1);
+        if (readsCommittedWorkflow(arg, roots)) {
+          out.push(`test/${childRel}`);
+          break;
+        }
+      }
+    }
+  };
+  walk(dir, "");
+  return out.sort();
+}
+
 /** Resolve a repo-relative path against a project root. */
 export const onDisk = (root: string) => (p: string) => existsSync(join(root, p));
 
@@ -924,6 +1034,10 @@ const SELF_ROOT = join(import.meta.dir, "..");
 export function censusTestsFor(
   changes: Change[],
   exists: (path: string) => boolean = onDisk(SELF_ROOT),
+  // #1927. A row whose membership is a property of the TREE needs the tree,
+  // not just a per-path `exists`. Defaulted alongside `exists` and defaulted
+  // to the same place, so the two cannot silently describe different trees.
+  root: string = SELF_ROOT,
 ): CensusRouting {
   const fired: CensusRouting["fired"] = [];
   for (const trigger of CENSUS_TRIGGERS) {
@@ -935,7 +1049,7 @@ export function censusTestsFor(
     // fired and the suite it names is gone".
     const resolved = trigger.derive
       ? matched
-          .map(c => ({ path: c.path, tests: trigger.derive!(c, exists) }))
+          .map(c => ({ path: c.path, tests: trigger.derive!(c, exists, root) }))
           .filter(r => r.tests.length > 0)
       : matched.map(c => ({ path: c.path, tests: trigger.tests }));
     if (resolved.length === 0) continue;

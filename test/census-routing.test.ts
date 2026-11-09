@@ -76,6 +76,7 @@ import {
   allCensusTests,
   censusDirsRead,
   censusTestsFor,
+  generatedWorkflowCensusSuites,
   ownSpecTestPath,
   parseUnifiedDiff,
   testPopulationCensusSuites,
@@ -592,6 +593,81 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
     for (const t of GENERATED_WORKFLOW_CENSUS) {
       expect(tests, `${t} is routed by an edit touching no generated workflow`).not.toContain(t);
     }
+  });
+
+  /**
+   * #1927 — the row's membership is now DERIVED, so these bind the walk.
+   *
+   * The hand list this replaced was proved short by the AI review on PR
+   * #1930: two suites read the committed workflows through
+   * `join(REPO, ".github", "workflows", f)`, and a population drawn by
+   * searching for the assembled path `.github/workflows/ci.yml` cannot match
+   * source that never spells it. Three widenings of that search returned 63,
+   * 96 and 54 — disagreeing in both directions.
+   */
+  describe("#1927: the population is walked, not written down", () => {
+    const derived = generatedWorkflowCensusSuites(REPO);
+
+    // The regression. Both reach the committed workflows through a `join`
+    // whose LAST segment is a variable, which is the shape that defeated the
+    // first draw.
+    test.each([
+      "test/managed-workflow-key-order.test.ts",
+      "test/scaffold-on-trigger-authored.test.ts",
+    ])("the walk finds %s, which a path-literal search could not", path => {
+      expect(
+        derived,
+        `${path} reads the committed workflows through a join with a non-literal ` +
+          "trailing segment — if the walk has stopped resolving those, it is short again",
+      ).toContain(path);
+    });
+
+    // Non-vacuity, both ends. A walk returning everything is a router nobody
+    // runs — the state the row's own comment measured at 138 of 588 and
+    // rejected — and a walk returning nothing goes green having witnessed
+    // nothing. Neither bound is a round number anybody has to maintain.
+    test("the walk is a proper, non-empty subset of the test population", () => {
+      const all = testPopulationCensusSuites(REPO);
+      expect(derived.length, "the walk resolved no suite at all").toBeGreaterThan(0);
+      expect(
+        derived.length,
+        "the walk routes a quarter of every test file — that is routing everything",
+      ).toBeLessThan(150);
+      expect(all.length, "the test-population census stopped reporting").toBeGreaterThan(0);
+    });
+
+    // The constant beside the walk must be its COMPLEMENT, not an overlap. A
+    // suite the walk has learned to see is one the hand list should give up,
+    // and an entry that is in both is dead weight no mutation can catch:
+    // delete it and the walk still supplies the path.
+    test("nothing is both derived and hand-carried", () => {
+      const row = CENSUS_TRIGGERS.find(t => t.id === "generated-workflow")!;
+      const routed = row.derive!(change({ path: ".github/workflows/ci.yml" }), () => true, REPO);
+      const handCarried = routed.filter(p => !derived.includes(p));
+      expect(handCarried.length, "the hand-carried list is empty, so this asserted nothing")
+        .toBeGreaterThan(0);
+      for (const p of handCarried) {
+        expect(
+          derived,
+          `${p} is hand-carried in WORKFLOW_SUITES_THE_WALK_CANNOT_SEE and the walk now ` +
+            "finds it too — drop it from the constant",
+        ).not.toContain(p);
+      }
+    });
+
+    // The two suites with recorded evidence of a catch, which the walk does
+    // NOT see. A straight swap to the derivation would have dropped both, in
+    // a change whose whole purpose is to stop under-routing.
+    test.each(["test/no-fixed-window-slices.test.ts", "test/ai-review-runner-shell-parity.test.ts"])(
+      "%s is still routed although the walk cannot see it",
+      path => {
+        expect(derived, "this case's premise is gone — the walk now sees it").not.toContain(path);
+        expect(
+          censusTestsFor([change({ path: ".github/workflows/ci.yml" })]).tests,
+          `${path} carries recorded evidence of a catch and is no longer routed`,
+        ).toContain(path);
+      },
+    );
   });
 
   // #1782. `test/bun-version-agreement.test.ts` holds a hand-maintained list
