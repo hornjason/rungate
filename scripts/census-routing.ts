@@ -43,7 +43,7 @@
  */
 import { execFileSync } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
-import { join } from "path";
+import { join, posix } from "path";
 
 import { LINE_CITATION } from "../lib/line-citation";
 import { TRACKED_ID_PREFIX_SOURCE } from "../lib/sc-ids";
@@ -715,7 +715,7 @@ export function allCensusTests(): string[] {
  *
  * Returns repo-relative directories, `""` for the repo root itself.
  */
-export function censusDirsRead(source: string): string[] {
+export function censusDirsRead(source: string, selfDir = ""): string[] {
   // Two views of the same offsets. `code` is where a match COUNTS: literal
   // contents are blanked, so this file's own fixtures — quoted source — are
   // whitespace and cannot match. `src` is where a match is READ: the literals
@@ -730,18 +730,48 @@ export function censusDirsRead(source: string): string[] {
   // lets a string manufacture one. Measured at `[""]` before this changed.
   const roots = repoRootIdents(code);
 
-  const bound = new Map<string, string>();
-  for (const m of code.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(join\([^;\n]*)/g)) {
+  // Every `X = <expr>` whose right-hand side could name a directory, read
+  // once. The two forms are deliberately both here: a `join(...)` call, and a
+  // BARE root — `const TEST_DIR = import.meta.dir;`, which binds this file's
+  // own directory and which the join-only capture could not see at all. That
+  // bare form is what put `test/no-fixed-window-slices.test.ts` outside the
+  // population it walks (#1931).
+  const rhs: [string, string][] = [];
+  for (const m of code.matchAll(
+    /([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(join\([^;\n]*|import\.meta\.dir|process\.cwd\(\))/g,
+  )) {
     const at = m.index! + m[0].length - m[2]!.length;
-    const expr = src.slice(at, at + m[2]!.length);
-    const dir = joinedDir(expr.replace(/\)\s*[;,].*$/, ")").trim(), roots);
-    if (dir !== null) bound.set(m[1]!, dir);
+    rhs.push([m[1]!, src.slice(at, at + m[2]!.length).replace(/\)\s*[;,].*$/, ")").trim()]);
+  }
+
+  // Resolved to a FIXED POINT, because a binding may name an earlier one:
+  // `REPO = join(import.meta.dir, "..")` then `TEST_DIR = join(REPO, "test")`.
+  // The old single pass did not need this — it only asked whether the head
+  // was a known root NAME — but arithmetic needs the head's VALUE, and a
+  // single pass would resolve the pair in source order and nothing else.
+  // Bounded by the number of bindings, so it terminates on any input.
+  const bound = new Map<string, string>();
+  for (let pass = 0; pass <= rhs.length; pass++) {
+    let grew = false;
+    for (const [name, expr] of rhs) {
+      if (bound.has(name)) continue;
+      const dir =
+        expr === "import.meta.dir"
+          ? selfDir
+          : expr === "process.cwd()"
+            ? ""
+            : joinedDir(expr, roots, bound, selfDir);
+      if (dir === null) continue;
+      bound.set(name, dir);
+      grew = true;
+    }
+    if (!grew) break;
   }
 
   const dirs = new Set<string>();
   for (const m of code.matchAll(/\b(?:readdirSync|readdir|opendirSync|globSync)\s*\(/g)) {
     const arg = firstArgument(code, src, m.index! + m[0].length - 1);
-    const inline = joinedDir(arg, roots);
+    const inline = joinedDir(arg, roots, bound, selfDir);
     if (inline !== null) dirs.add(inline);
     else if (bound.has(arg)) dirs.add(bound.get(arg)!);
     else if (roots.has(arg)) dirs.add("");
@@ -812,22 +842,71 @@ function firstArgument(scan: string, read: string, open: number): string {
 }
 
 /**
- * `join(<a repo root>, "a", "b")` -> `"a/b"`; anything else -> `null`.
+ * Segments appended to a repo-relative base, as path arithmetic.
  *
- * Navigation segments are dropped, so `join(import.meta.dir, "..")` is the
- * repo root (`""`) and not a directory named `..`. The same refusal
- * `lib/scratch-roots.ts` makes, for the same reason: a navigation literal is
- * not a name.
+ * It used to FILTER navigation literals out — `".."` and `"./x"` were simply
+ * dropped — which gives the right answer for exactly one base and the wrong
+ * one for every other. `join(import.meta.dir, "..")` is the repo root only
+ * when `import.meta.dir` is one level below it; from `test/unit/` the same
+ * expression is `test/`. Dropping the literal reported the root in both
+ * cases. #1931.
+ *
+ * `null` when the result climbs above the repository, which no repo-relative
+ * directory can name.
  */
-function joinedDir(expr: string, roots: Set<string>): string | null {
+function resolveDir(base: string, segments: readonly string[]): string | null {
+  const parts = [base, ...segments].filter(s => s !== "");
+  const p = posix.normalize(parts.length === 0 ? "." : parts.join("/"));
+  if (p === "." || p === "/" || p === "") return "";
+  if (p === ".." || p.startsWith("../")) return null;
+  return p.replace(/\/+$/, "");
+}
+
+/**
+ * `join(<a directory this file can name>, "a", "b")` -> `"a/b"`; anything
+ * else -> `null`.
+ *
+ * `selfDir` is where `import.meta.dir` actually points: the repo-relative
+ * directory of the file this source was read from. It is a parameter rather
+ * than a constant because it is the one fact the source text cannot carry,
+ * and reading every `import.meta.dir` as the repo root is what left the #664
+ * guard outside the population it censuses (#1931).
+ *
+ * `bases` resolves an identifier that was bound to a directory earlier in the
+ * same file. An identifier `repoRootIdents` recognises but no binding
+ * resolved falls back to the root, which is this function's behaviour before
+ * #1931 and the conservative direction: it can only place a directory nearer
+ * the root than it is.
+ */
+function joinedDir(
+  expr: string,
+  roots: Set<string>,
+  bases: ReadonlyMap<string, string>,
+  selfDir: string,
+): string | null {
   const m = /^join\(\s*([A-Za-z_][A-Za-z0-9_.]*(?:\(\))?)\s*((?:,\s*"[^"]+"\s*)*)\)?$/.exec(expr);
   if (!m) return null;
   const head = m[1]!;
-  if (!roots.has(head) && head !== "import.meta.dir" && head !== "process.cwd()") return null;
-  return [...(m[2] ?? "").matchAll(/"([^"]+)"/g)]
-    .map(x => x[1]!)
-    .filter(l => l !== "." && l !== ".." && !l.startsWith("../"))
-    .join("/");
+  const base = baseFor(head, roots, bases, selfDir);
+  if (base === null) return null;
+  return resolveDir(
+    base,
+    [...(m[2] ?? "").matchAll(/"([^"]+)"/g)].map(x => x[1]!),
+  );
+}
+
+/** The repo-relative directory an expression HEAD names, or `null`. */
+function baseFor(
+  head: string,
+  roots: Set<string>,
+  bases: ReadonlyMap<string, string>,
+  selfDir: string,
+): string | null {
+  if (head === "import.meta.dir") return selfDir;
+  if (head === "process.cwd()") return "";
+  const bound = bases.get(head);
+  if (bound !== undefined) return bound;
+  return roots.has(head) ? "" : null;
 }
 
 /**
@@ -875,7 +954,12 @@ export function testPopulationCensusSuites(root: string): string[] {
       if (e.isDirectory()) walk(childAbs, childRel);
       else if (
         /\.test\.tsx?$/.test(e.name) &&
-        censusDirsRead(readFileSync(childAbs, "utf-8")).includes("test")
+        // The walk is the only thing that knows where the file sits, and
+        // `import.meta.dir` cannot be resolved without it (#1931).
+        censusDirsRead(
+          readFileSync(childAbs, "utf-8"),
+          rel ? `test/${rel}` : "test",
+        ).includes("test")
       ) {
         out.push(`test/${childRel}`);
       }

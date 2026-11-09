@@ -1653,6 +1653,79 @@ describe("#1547: the routed set is complete over the census of the test populati
     }
   });
 
+  // W2b. #1931's witness, and the third spelling to defeat this parse.
+  //
+  // `test/no-fixed-window-slices.test.ts` binds `TEST_DIR =
+  // join(import.meta.dir)` and walks it recursively — it IS the #664 guard
+  // that refuses a fixed-character `.slice(at, at + N)` anywhere in `test/`.
+  // The parse read every `import.meta.dir` as the repo root, so a file
+  // resolving its OWN directory from inside `test/` landed on `""` and the
+  // suite was outside the population it censuses.
+  //
+  // That was not free. On 2026-11-09 PR #1933 pushed four wiring cases using
+  // fixed-character windows, the local routed run was green because this row
+  // did not name the guard, and CI reddened on #664.
+  //
+  // Not the shape #1931 predicted. It expected the multi-line `X = join(\n…)`
+  // binding whose capture excludes newlines; measured over 677 files, exactly
+  // one file carries that shape — `test/consumer-requirements-ownership.test.ts`
+  // — and it enumerates nothing, so it costs no member. The live defect was a
+  // different one, which is the issue's own argument rather than a point
+  // against it.
+  test("a suite that enumerates its own directory from inside test/ is in the population", () => {
+    const population = testPopulationCensusSuites(REPO);
+    expect(
+      population,
+      "test/no-fixed-window-slices.test.ts walks test/ recursively from " +
+        "`join(import.meta.dir)` and is not derived, so `import.meta.dir` is still being " +
+        "read as the repo root for a file that lives inside test/ (#1931)",
+    ).toContain("test/no-fixed-window-slices.test.ts");
+  });
+
+  // D5. The arithmetic behind W2b, at the unit. `import.meta.dir` is the
+  // directory of the file it appears in — not a synonym for the repo root —
+  // and the only thing that knows which that is, is the caller holding the
+  // path. Resolution is `posix.normalize`, not a navigation-literal filter:
+  // dropping `".."` happens to give the right answer when the base is the
+  // root and the wrong one for every other base.
+  test("import.meta.dir resolves to the file's own directory, not the repo root", () => {
+    const bare = "const D = import.meta.dir;\nreaddirSync(D);\n";
+    const wrapped = "const D = join(import.meta.dir);\nreaddirSync(D);\n";
+    for (const [label, fixture] of [["bare", bare], ["join()-wrapped", wrapped]] as const) {
+      expect(
+        censusDirsRead(fixture, "test"),
+        `a ${label} import.meta.dir in a file under test/ did not resolve to test/`,
+      ).toEqual(["test"]);
+      expect(
+        censusDirsRead(fixture, "test/unit"),
+        `a ${label} import.meta.dir in a file under test/unit/ did not resolve to test/unit`,
+      ).toEqual(["test/unit"]);
+    }
+  });
+
+  // C5. CONTROL on D5, and the reason it is not simply "call everything
+  // test/". The same base must still walk UP: a file in test/ reaching
+  // `join(import.meta.dir, "..")` is at the repo root, which is what every
+  // existing member of the population spells. A fix that relabelled the base
+  // without doing the arithmetic would pass D5 and fail here.
+  test("navigation above the file's own directory still reaches the repo root", () => {
+    expect(
+      censusDirsRead('const R = join(import.meta.dir, "..");\nreaddirSync(R);\n', "test"),
+      "a file in test/ navigating up one level did not reach the repo root",
+    ).toEqual([""]);
+    expect(
+      censusDirsRead(
+        'const R = join(import.meta.dir, "..");\nreaddirSync(join(R, "specs"));\n',
+        "test",
+      ),
+      "a directory under the repo root, reached from test/ by navigating up, was misresolved",
+    ).toEqual(["specs"]);
+    expect(
+      censusDirsRead('const R = join(import.meta.dir, "..", "..");\nreaddirSync(R);\n', "test/unit"),
+      "two levels up from test/unit/ is the repo root",
+    ).toEqual([""]);
+  });
+
   // D2. The walk's depth, which the first cut of this check got wrong.
   //
   // `testPopulationCensusSuites` read only the top level of `test/`, so every
