@@ -32,6 +32,7 @@ import {
   type Incumbent,
 } from "../lib/board-ready-fanout";
 import { laneFor } from "../lib/board-flow";
+import { structuralCut } from "../lib/source-slice";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -148,38 +149,43 @@ describe("#1929: a card already in Ready is held to Ready's entry condition", ()
       .join("\n");
   };
 
+  // Every region below is cut to a CONSTRUCT, never to a character count.
+  // The first spelling of these four used `slice(at, at + 120)` and
+  // `slice(push - 200, push)`, and `test/no-fixed-window-slices.test.ts`
+  // reddened in CI naming #664: a window sized by eye reads the wrong region
+  // the moment the code around it grows, and a guard reading the wrong
+  // region is green for free. There is no exemption list.
   test("BR-68: main() calls incumbentDecisions, and acts on what it returns", () => {
     const code = readyScript();
-    const call = code.indexOf("incumbentDecisions(readyIncumbents, READY_COLUMN)");
+    // One regex over the whole file, so there is no region to size at all.
+    // Called and DISCARDED is the same as not called, which is why the
+    // filter is part of the pattern rather than a second search.
     expect(
-      call,
-      "nothing in main() calls incumbentDecisions with the gathered incumbents, so the " +
-        "decider is dead code and Ready keeps offering blocked work",
-    ).toBeGreaterThan(-1);
-    // Called and DISCARDED is the same as not called. The result must reach
-    // the write loop, which is the next case, and must be filtered to the
-    // demotions here rather than written wholesale.
-    expect(
-      code.slice(call, call + 120),
-      "the call's result must be filtered to the cards that actually demote",
-    ).toMatch(/\.filter\(\s*d\s*=>\s*d\.demote\s*\)/);
+      code,
+      "main() must call incumbentDecisions with the gathered incumbents AND filter the " +
+        "result to the cards that demote — a call whose result is dropped leaves the " +
+        "decider dead and Ready still offering blocked work",
+    ).toMatch(
+      /const demoting = incumbentDecisions\(readyIncumbents, READY_COLUMN\)\s*\.filter\(\s*d\s*=>\s*d\.demote\s*\)/,
+    );
   });
 
   test("BR-69: the gather is behind `holds`, so the in-flight card is exempt", () => {
     const code = readyScript();
-    const push = code.indexOf("readyIncumbents.push(");
-    expect(push, "nothing gathers the lane's incumbents").toBeGreaterThan(-1);
-    // **The condition, not merely the push.** `holdsReadySlot` returns false
-    // for exactly the card this run's event is moving out of Ready (#1905);
-    // gathering on a bare `status === READY_COLUMN` would demote it to
-    // Backlog while `board-flow` writes In progress for it in a racing run.
-    // Two writers, one card, last writer wins.
-    const guard = code.slice(Math.max(0, push - 200), push);
+    expect(code, "nothing gathers the lane's incumbents").toContain("readyIncumbents.push(");
+    // **Cut the guard's own block and look inside it.** `holdsReadySlot`
+    // returns false for exactly the card this run's event is moving out of
+    // Ready (#1905); gathering on a bare `status === READY_COLUMN` would
+    // demote it to Backlog while `board-flow` writes In progress for it in a
+    // racing run. Two writers, one card, last writer wins.
+    const guarded = structuralCut(code, "if (holds && n.content?.number !== undefined) {", {
+      balanced: "{",
+    });
     expect(
-      guard,
-      "the incumbent gather must be gated on `holds`, the same predicate the cap uses, " +
-        "or the card mid-transition out of Ready is demoted on top of the move in flight",
-    ).toMatch(/if\s*\(\s*holds\s*&&/);
+      guarded,
+      "the incumbent gather must sit inside the `holds` guard, the same predicate the cap " +
+        "uses, or the card mid-transition out of Ready is demoted on top of the move in flight",
+    ).toContain("readyIncumbents.push(");
   });
 
   test("BR-70: the demotions are written, and before the promotions", () => {
@@ -200,25 +206,24 @@ describe("#1929: a card already in Ready is held to Ready's entry condition", ()
       "demotions must be written before promotions, or a promotion lands against an " +
         "occupancy the same run is about to change",
     ).toBe(true);
-    // The write itself, not just the loop: a loop that logs and mutates
-    // nothing passes every assertion above.
+    // The write itself, cut to the loop's own body: a loop that logs and
+    // mutates nothing satisfies every assertion above.
     expect(
-      code.slice(loop, promote),
+      structuralCut(code, "for (const dec of demoting) {", { balanced: "{" }),
       "the demotion loop must perform the field mutation, not only log it",
-    ).toMatch(/updateProjectV2ItemFieldValue/);
+    ).toContain("updateProjectV2ItemFieldValue");
   });
 
   test("BR-71: no-candidates returns before the incumbent walk no longer", () => {
     const code = readyScript();
-    const noCandidates = code.search(/if \(candidates\.length === 0\)/);
-    const occupancy = code.indexOf("BOARD_PAGE_QUERY, { p: project, c: null }");
-    expect(noCandidates, "the no-candidates branch is gone").toBeGreaterThan(-1);
-    expect(occupancy, "the occupancy walk is gone — this census measures nothing").toBeGreaterThan(-1);
+    expect(code, "the occupancy walk is gone — this census measures nothing").toContain(
+      "BOARD_PAGE_QUERY, { p: project, c: null }",
+    );
     // `--closed-issue N --write` where #N was blocking nothing used to exit
     // here, skipping the walk that gathers incumbents entirely. The
     // production workflow always passes `--top-up` and never reaches that
     // combination, which is why it would not have been noticed.
-    const branch = code.slice(noCandidates, occupancy);
+    const branch = structuralCut(code, "if (candidates.length === 0) {", { balanced: "{" });
     expect(
       branch,
       "the no-candidates branch must not return before the incumbent walk: nothing to " +

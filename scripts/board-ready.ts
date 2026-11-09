@@ -79,10 +79,14 @@ const READY_COLUMN = "Ready";
 // page and nothing for BR-19 or BR-46 to weigh.
 // `id` and `issueDependenciesSummary{blockedBy}` are both SCALAR selections —
 // neither takes a `first:`, so BR-46's product is unchanged at 100 × 50 =
-// 5,000 and this walk stays five hundred times under GitHub's 500,000 ceiling
-// (#1929) — 500,000 ÷ 5,000 is a HUNDRED times under, not five hundred;
-// ai-review round 1 caught that arithmetic and this repository treats a
-// headroom figure as a load-bearing claim the next selection relies on.
+// 5,000, which is **a hundred times** under GitHub's 500,000 ceiling (#1929).
+//
+// That figure is load-bearing: the next person adding a selection here sizes
+// it against this headroom. The first draft said "five hundred times", and
+// round 2 of ai-review was right that round 1's fix had APPENDED a correction
+// while leaving the wrong number as the leading claim — a reader who stops at
+// the first number is told the margin is five times larger than it is.
+//
 // They are here because the occupancy pass is the only walk that
 // already visits every card in Ready, and re-asking Ready's entry condition
 // of its incumbents needs exactly two things the walk did not carry: the item
