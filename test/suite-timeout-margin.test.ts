@@ -51,7 +51,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { createCiWorkflows } from "../lib/scaffold/steps";
-import { isBunTestCommand, junitReporterFlags } from "../lib/test-command-positions";
+import { isBunTestCommand, junitReporterFlags, mayInstrumentJunit } from "../lib/test-command-positions";
 
 import {
   DEFAULT_WITHIN,
@@ -398,19 +398,48 @@ describe("#1173: CI produces the durations these readings need", () => {
     const BUN_TEST = ["bun test", "bun test --coverage", "bun  test --bail", "bun test --timeout 30000"];
     const NOT_BUN_TEST = ["bun test:unit", "bun test-e2e", "bun test-runner.ts", "bunx test", "npm test", "pytest -q", "bun run test"];
 
+    // Round 3's finding, and the second reason a command is ineligible. A
+    // consumer who already configured a reporter has solved this themselves;
+    // appending a second pair does not merely override their choice. MEASURED:
+    // the CI extractor strips from the FIRST `--reporter=junit` to end of
+    // line, so it reads `bun test` while their config and AGENTS.md row say
+    // the full command, and the three-position agreement check goes red.
+    const ALREADY_REPORTING = [
+      "bun test --reporter=junit --reporter-outfile=./custom.xml",
+      "bun test --reporter=dot",
+      "bun test --coverage --reporter junit",
+    ];
+
     test("#1173: the predicate separates the runner from a script that merely starts with `test`", () => {
       for (const c of BUN_TEST) expect(isBunTestCommand(c), `${c} is bun's test runner`).toBe(true);
       for (const c of NOT_BUN_TEST) expect(isBunTestCommand(c), `${c} is NOT bun's test runner`).toBe(false);
+      // `isBunTestCommand` still says yes to these — they ARE bun test. It is
+      // `mayInstrumentJunit` that must say no, and keeping both assertions
+      // here is what stops the two reasons collapsing into one.
+      for (const c of ALREADY_REPORTING) expect(isBunTestCommand(c), `${c} is bun's test runner`).toBe(true);
+    });
+
+    test("#1173: a command that already chose a reporter keeps its own", () => {
+      for (const c of ALREADY_REPORTING) {
+        expect(mayInstrumentJunit(c), `${c} had a second reporter appended`).toBe(false);
+      }
+      // …and the guard is not simply "contains a dash": every eligible
+      // command here carries other flags and must still be instrumented.
+      for (const c of BUN_TEST) expect(mayInstrumentJunit(c), `${c} was refused instrumentation`).toBe(true);
+      // `--reporter-outfile` alone is not choosing a reporter, and
+      // `--no-reporter` is not the flag at all.
+      expect(mayInstrumentJunit("bun test --reporter-outfile=./x.xml")).toBe(true);
+      expect(mayInstrumentJunit("bun test --no-reporter")).toBe(true);
     });
 
     test("#1173: the flags follow the predicate, and are empty for everything else", () => {
-      // Asserted over BOTH lists rather than over the predicate alone: a
+      // Asserted over the LISTS rather than over the predicate alone: a
       // later caller that forgets the guard is the failure this is about,
-      // and a case that only checks `isBunTestCommand` cannot see it.
+      // and a case that only checks the predicate cannot see it.
       for (const c of BUN_TEST) {
         expect(junitReporterFlags(c, "/t/r.xml")).toBe(" --reporter=junit --reporter-outfile=/t/r.xml");
       }
-      for (const c of NOT_BUN_TEST) {
+      for (const c of [...NOT_BUN_TEST, ...ALREADY_REPORTING]) {
         expect(junitReporterFlags(c, "/t/r.xml"), `${c} was handed bun's reporter flags`).toBe("");
       }
     });
@@ -473,6 +502,18 @@ describe("#1173: CI produces the durations these readings need", () => {
       expect(yml, "the artifact name must carry the leg or the legs overwrite each other").toContain(
         "name: rungate-junit-${{ github.run_attempt }}-${{ matrix.shard }}",
       );
+    });
+
+    test("#1173: a consumer who already configured a reporter gets no second one", () => {
+      // Round 3. The upload step must go too, not just the flags: a step
+      // uploading `${{ runner.temp }}/rungate-junit.xml` for a run writing
+      // `./custom.xml` warns on every CI run of a file nobody asked for.
+      // Both templates, because round 1 was one template being missed.
+      for (const ci of [{}, { shards: 4 }]) {
+        const yml = emit(ci, "bun test --reporter=junit --reporter-outfile=./custom.xml");
+        expect(yml, `a second reporter at ${JSON.stringify(ci)}`).not.toContain("rungate-junit");
+        expect((yml.match(/--reporter=junit/g) ?? []).length, `duplicated reporter at ${JSON.stringify(ci)}`).toBe(1);
+      }
     });
 
     test("#1173: a consumer whose test command is not bun gets no bun flags", () => {

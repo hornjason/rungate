@@ -67,7 +67,7 @@ import { localCalendarDay } from "../local-calendar-day";
 import { decideRuleWrite } from "../rule-provenance";
 import { rowDriftClause, ruleRowDrift } from "../rule-row-drift";
 import { actionRef } from "../workflow-actions";
-import { isBunTestCommand, junitReporterFlags } from "../test-command-positions";
+import { junitReporterFlags, mayInstrumentJunit } from "../test-command-positions";
 import { ciSetupStep } from "../ci-setup-step";
 import { DEFAULT_PROFILE, isRuleIncluded, type ScaffoldProfile } from "./profiles";
 import { referencedPaths } from "../agents-md-refs";
@@ -3320,7 +3320,7 @@ export const CI_JUNIT_SINGLE_LEG = "";
  * gets the step too.
  */
 export function buildJunitArtifactStep(indent: string, testCommand: string, leg: string): string {
-  if (!isBunTestCommand(testCommand)) return "";
+  if (!mayInstrumentJunit(testCommand)) return "";
   const lines = [
     `# #1173. The per-case durations, kept so they can accumulate across`,
     `# runs — one run cannot say whether a case has regressed.`,

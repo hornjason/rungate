@@ -232,6 +232,40 @@ export function isBunTestCommand(command: string): boolean {
 }
 
 /**
+ * A command that already chose a reporter.
+ *
+ * Only the flag, not a bare `--reporterish` word: `(=|\s|$)` so
+ * `--reporter-outfile` alone does not count as choosing one, and
+ * `--no-reporter` is not matched by the leading `(^|\s)--reporter`.
+ */
+const DECLARES_REPORTER = /(^|\s)--reporter(=|\s|$)/;
+
+/**
+ * May this command be given a JUnit reporter? ONE answer, two reasons.
+ *
+ * Both reasons were found by review rather than by me, one round apart
+ * (#1926), and that is the argument for them living in one predicate rather
+ * than as two guards at two call sites. Round 2 fixed `isBunTestCommand` and
+ * I did not then ask what ELSE makes a command ineligible; round 3 named the
+ * second reason. A third would be added here, not somewhere new.
+ *
+ * 1. **It must be bun's built-in runner.** See `isBunTestCommand`.
+ * 2. **It must not already declare a reporter.** A consumer whose
+ *    `test.command` is `bun test --reporter=junit --reporter-outfile=./x.xml`
+ *    has already solved this, and appending a second pair does not merely
+ *    override their choice — measured, it breaks their build. The CI
+ *    extractor below strips from the FIRST `--reporter=junit` to end of
+ *    line, so it reads `bun test` while their config and AGENTS.md row say
+ *    the full command, and the three-position agreement check goes red.
+ *
+ * Both `junitReporterFlags` and the scaffold's upload step ask THIS, so the
+ * flags and the artifact step cannot disagree about whether a report exists.
+ */
+export function mayInstrumentJunit(command: string): boolean {
+  return isBunTestCommand(command) && !DECLARES_REPORTER.test(command.trim());
+}
+
+/**
  * The flags that make a `bun test` run write per-case durations, or `""`.
  *
  * `outfile` is the caller's, because the only correct answer involves the
@@ -244,7 +278,7 @@ export function isBunTestCommand(command: string): boolean {
  * guards downstream would not catch it.
  */
 export function junitReporterFlags(command: string, outfile: string): string {
-  if (!isBunTestCommand(command)) return "";
+  if (!mayInstrumentJunit(command)) return "";
   return ` --reporter=junit --reporter-outfile=${outfile}`;
 }
 
