@@ -119,14 +119,20 @@ export interface CensusTrigger {
  * resolve), through a helper this file does not name, or through a reading
  * that is not a file read at all.
  *
- * Two of them carry recorded evidence of a catch and are the reason this
+ * One of them carries recorded evidence of a catch and is the reason this
  * constant exists rather than being deleted as the derivation's residue:
  * `no-fixed-window-slices` (#1387 — a `slice(at - 400, at + 400)` that ran
- * off the construct and read one of three occurrences) and
- * `ai-review-runner-shell-parity` (#1351 — two `rf=$(...)` assignments,
- * shard 3, after every suite the router named came back green). Both would
- * be dropped by a straight swap to the derivation, in a change whose whole
- * purpose is to stop under-routing.
+ * off the construct and read one of three occurrences). It reads no workflow
+ * file and calls no emitter, so no walk over those two questions can ever
+ * reach it, and a straight swap to the derivation would drop it in a change
+ * whose whole purpose is to stop under-routing.
+ *
+ * The list SHRINKS as the walk improves, and three entries left it in one
+ * round when bound-variable resolution landed — `ai-review-runner-shell-parity`
+ * (#1351's own catcher), `owned-strategy-reachability` and `release-guard`.
+ * `test/census-routing.test.ts` asserts the two sets are disjoint, so an
+ * entry the walk has learned to see cannot sit here covering for a walk that
+ * silently regressed.
  *
  * The rest came from #1927's own grep. They are kept for the same reason:
  * narrowing the row is not this issue's direction, and a suite removed here
@@ -135,7 +141,6 @@ export interface CensusTrigger {
 export const WORKFLOW_SUITES_THE_WALK_CANNOT_SEE = [
   "test/action-pin-parity.test.ts",
   "test/agents-md-refs.test.ts",
-  "test/ai-review-runner-shell-parity.test.ts",
   "test/branch-protection-gate.test.ts",
   "test/ci-workflow-probe.test.ts",
   "test/consumer-requirements-ownership.test.ts",
@@ -143,10 +148,8 @@ export const WORKFLOW_SUITES_THE_WALK_CANNOT_SEE = [
   "test/generators-config-path.test.ts",
   "test/issue-file-overlap.test.ts",
   "test/no-fixed-window-slices.test.ts",
-  "test/owned-strategy-reachability.test.ts",
   "test/phase-0.test.ts",
   "test/post-fix-verify.test.ts",
-  "test/release-guard.test.ts",
   "test/risk-tier.test.ts",
   "test/scaffold-audit-agreement.test.ts",
   "test/scaffold-ci-preservation-mutation.test.ts",
@@ -943,7 +946,12 @@ function readsCommittedWorkflow(expr: string, roots: Set<string>): boolean {
     if (lit[1] === "." || lit[1] === "..") continue;
     segs.push(lit[1]!);
   }
-  return segs.join("/").startsWith(WORKFLOWS_DIR);
+  // Compared at a SEGMENT boundary, not as a string prefix. A sibling named
+  // `.github/workflows-backup` satisfies `startsWith(".github/workflows")`
+  // and reads nothing this row is about; there is no such directory today,
+  // which is exactly when a prefix check looks correct.
+  const path = segs.join("/");
+  return path === WORKFLOWS_DIR || path.startsWith(`${WORKFLOWS_DIR}/`);
 }
 
 /**
@@ -1007,9 +1015,23 @@ function computeGeneratedWorkflowCensusSuites(root: string): string[] {
         continue;
       }
       const roots = repoRootIdents(code);
+      // Identifiers BOUND to a committed-workflow path, because the read is
+      // usually not where the path is built: `const COMMITTED = join(ROOT,
+      // ".github", "workflows", FILE)` at the top of the file and
+      // `readFileSync(COMMITTED)` two hundred lines down is the dominant
+      // shape, and resolving only the inline form hid nine suites — found by
+      // the AI review on PR #1930, round 3. `censusDirsRead` already carries
+      // this map for the same reason; the same shape of binding, read the
+      // same way.
+      const bound = new Set<string>();
+      for (const m of code.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(join\([^;\n]*)/g)) {
+        const at = m.index! + m[0].length - m[2]!.length;
+        const expr = src.slice(at, at + m[2]!.length).replace(/\)\s*[;,].*$/, ")").trim();
+        if (readsCommittedWorkflow(expr, roots)) bound.add(m[1]!);
+      }
       for (const m of code.matchAll(PATH_READERS)) {
         const arg = firstArgument(code, src, m.index! + m[0].length - 1);
-        if (readsCommittedWorkflow(arg, roots)) {
+        if (readsCommittedWorkflow(arg, roots) || bound.has(arg)) {
           out.push(`test/${childRel}`);
           break;
         }

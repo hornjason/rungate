@@ -626,15 +626,24 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
     // Non-vacuity, both ends. A walk returning everything is a router nobody
     // runs — the state the row's own comment measured at 138 of 588 and
     // rejected — and a walk returning nothing goes green having witnessed
-    // nothing. Neither bound is a round number anybody has to maintain.
-    test("the walk is a proper, non-empty subset of the test population", () => {
-      const all = testPopulationCensusSuites(REPO);
+    // nothing.
+    //
+    // NAMED for what it asserts. The first cut called itself a subset check
+    // and compared no sets, and the population it reached for —
+    // `testPopulationCensusSuites` — answers a different question entirely
+    // (suites that ENUMERATE `test/`), so the containment it implied is not
+    // even true. Found by the AI review on PR #1930, round 3. Every member
+    // existing on disk is the containment that IS meaningful here.
+    test("the walk resolves some suites but not most of them, and all of them exist", () => {
       expect(derived.length, "the walk resolved no suite at all").toBeGreaterThan(0);
       expect(
         derived.length,
         "the walk routes a quarter of every test file — that is routing everything",
       ).toBeLessThan(150);
-      expect(all.length, "the test-population census stopped reporting").toBeGreaterThan(0);
+      expect(
+        derived.filter(p => !existsSync(join(REPO, p))),
+        "the walk named a suite that is not on disk",
+      ).toEqual([]);
     });
 
     // The constant beside the walk must be its COMPLEMENT, not an overlap. A
@@ -663,19 +672,23 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
       ).toEqual([]);
     });
 
-    // The two suites with recorded evidence of a catch, which the walk does
-    // NOT see. A straight swap to the derivation would have dropped both, in
-    // a change whose whole purpose is to stop under-routing.
-    test.each(["test/no-fixed-window-slices.test.ts", "test/ai-review-runner-shell-parity.test.ts"])(
-      "%s is still routed although the walk cannot see it",
-      path => {
-        expect(derived, "this case's premise is gone — the walk now sees it").not.toContain(path);
-        expect(
-          censusTestsFor([change({ path: ".github/workflows/ci.yml" })]).tests,
-          `${path} carries recorded evidence of a catch and is no longer routed`,
-        ).toContain(path);
-      },
-    );
+    // The suite with recorded evidence of a catch that the walk cannot see
+    // by construction: `no-fixed-window-slices` (#1387) reads no workflow
+    // file and calls no emitter, so neither question the walk asks can reach
+    // it. A straight swap to the derivation would have dropped it.
+    //
+    // Its sibling `ai-review-runner-shell-parity` was in this list until
+    // bound-variable resolution landed and the walk learned to see it — which
+    // is the direction this is supposed to move, and why the premise is
+    // asserted rather than assumed.
+    test("no-fixed-window-slices is still routed although the walk cannot see it", () => {
+      const path = "test/no-fixed-window-slices.test.ts";
+      expect(derived, "this case's premise is gone — the walk now sees it").not.toContain(path);
+      expect(
+        censusTestsFor([change({ path: ".github/workflows/ci.yml" })]).tests,
+        `${path} carries recorded evidence of a catch and is no longer routed`,
+      ).toContain(path);
+    });
   });
 
   // #1782. `test/bun-version-agreement.test.ts` holds a hand-maintained list
