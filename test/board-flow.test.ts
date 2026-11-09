@@ -7,7 +7,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import {
   LANE_EVENTS,
@@ -16,6 +17,7 @@ import {
   prEventMayWrite,
   type LaneEvent,
 } from "../lib/board-flow";
+import { whyNotReady } from "../lib/board-ready-fanout";
 import { structuralCut } from "../lib/source-slice";
 
 const read = (p: string) => readFileSync(join(import.meta.dir, "..", p), "utf-8");
@@ -352,5 +354,216 @@ describe("one decider owns every lane transition", () => {
       "a pull request event must not also pass --issue: the script reads one target source " +
         "per event kind, and passing both hides which one it used.",
     ).not.toContain("--issue");
+  });
+
+  // ## #1921 — a merge is an event, and discarding it leaves a card parked
+  //
+  // The `closed` arm used to drop a MERGED pull request entirely, on the
+  // argument that the issue fires its own `issues: closed` and handling the
+  // merge here too would be two writers for one transition. The argument
+  // holds only for a merge that actually closes its issue. A pull request
+  // carrying `Fixes #N` that merges into a branch other than the default one
+  // does NOT close #N — GitHub only applies closing keywords on the default
+  // branch — so #N stays open, stays assigned, and its card stays in In
+  // review while the work continues. No further event is coming.
+  test("#1921 / SC-2690: a merged pull request is an event the decider answers for", () => {
+    expect(
+      (LANE_EVENTS as readonly string[]).includes("pr_merged"),
+      "`scripts/board-flow.ts` validates --event against LANE_EVENTS, so a kind missing from " +
+        "this list is refused by the writer however the workflow spells it.",
+    ).toBe(true);
+    expect(laneFor({ kind: "pr_merged" } as LaneEvent).lane).toBe("In progress");
+  });
+
+  // The control the issue asked for by name: the fix must not be "treat
+  // every close the same". A merge and an abandonment are opposite outcomes
+  // and they must still land in different lanes.
+  test("#1921 / SC-2692: a merge and an abandoned pull request do not share a lane", () => {
+    expect(
+      laneFor({ kind: "pr_merged" } as LaneEvent).lane,
+      "a kind the decider refuses answers `null`, which differs from every lane and satisfies " +
+        "the row below while witnessing nothing. Name the lane before comparing it.",
+    ).not.toBeNull();
+    expect(
+      laneFor({ kind: "pr_merged" } as LaneEvent).lane,
+      "collapsing these two would send delivered work backwards into Backlog on the strength " +
+        "of the thing that proves it was not abandoned.",
+    ).not.toBe(laneFor({ kind: "pr_closed_unmerged" }).lane);
+  });
+
+  // ## Why In progress, and not Backlog with the rest of the movement
+  //
+  // Backlog is where everything going BACKWARDS lands, because Ready's entry
+  // condition is a claim about a blocker graph nobody re-checked, and
+  // `board-ready.yml` re-promotes on its own. That self-correction is the
+  // whole reason Backlog is safe — and it does not apply here: Ready also
+  // requires that nobody has claimed the issue, and an issue whose pull
+  // request just merged is still assigned to whoever did the work. Sent to
+  // Backlog it would sit there until a person moved it by hand.
+  //
+  // This is asserted against the Ready writer's own predicate rather than
+  // restated, so the day Ready stops excluding assigned issues this case
+  // goes red and the lane choice is re-decided rather than inherited.
+  test("#1921: Backlog would strand the card, because Ready refuses an assigned issue", () => {
+    expect(
+      whyNotReady({
+        number: 1,
+        state: "OPEN",
+        blockedByOpen: 0,
+        assignees: 1,
+        onBoard: true,
+        boardStatus: "Backlog",
+      }),
+      "if Ready ever re-promotes an assigned issue, Backlog becomes a legal answer here and " +
+        "this lane choice should be re-argued from the spec rather than left as it stands.",
+    ).toBe("somebody has claimed it");
+    const lane = laneFor({ kind: "pr_merged" } as LaneEvent).lane;
+    expect(lane, "a refusal is not a lane choice, and `null` is not Backlog for free").not.toBeNull();
+    expect(lane).not.toBe("Backlog");
+  });
+
+  // ## The merge that DOES close its issue must still reach Done, either order
+  //
+  // Two events now fire for one merge, and GitHub orders them however it
+  // likes. Both orders are played out here against the real functions rather
+  // than reasoned about in a comment, because "the existing guard handles
+  // it" is exactly the claim that is cheap to assert and expensive to be
+  // wrong about.
+  test("#1921 / SC-2692: a merge that closes its issue ends in Done whichever event lands first", () => {
+    const play = (order: readonly LaneEvent["kind"][]): string | null => {
+      let lane: string | null = "In review";
+      for (const kind of order) {
+        if (!kind.startsWith("issue_") && !prEventMayWrite(lane).allowed) continue;
+        const d = laneFor({ kind, stateReason: "COMPLETED" } as LaneEvent);
+        if (d.lane !== null) lane = d.lane;
+      }
+      return lane;
+    };
+    // Anti-vacuity first. While `pr_merged` is a kind the decider refuses,
+    // the simulator writes nothing for it and BOTH orders reach Done on the
+    // close alone — the rows below would pass against the unfixed tree.
+    expect(
+      play(["pr_merged"]),
+      "the merge event must move the card on its own, or the two orderings below are both " +
+        "measuring the close and nothing else.",
+    ).toBe("In progress");
+    expect(
+      play(["issue_closed", "pr_merged"]),
+      "the close landed first, so the merge event must find Done terminal and write nothing. " +
+        "A second writer here would pull delivered work back into In progress.",
+    ).toBe("Done");
+    expect(
+      play(["pr_merged", "issue_closed"]),
+      "the merge landed first. The close is an ISSUE event, which the terminal guard does not " +
+        "gate, so it still writes Done over In progress.",
+    ).toBe("Done");
+  });
+
+  test("#1921 / SC-2690: a merged pull request authorises its author as well as its actor", () => {
+    expect(
+      identitiesToAuthorise("pr_merged" as LaneEvent["kind"], "maintainer", "drive-by"),
+      "a merge carries a contributor-authored target set exactly as every other pull request " +
+        "event does. A kind that slipped past the `issue_` test would authorise the closer alone.",
+    ).toEqual(["maintainer", "drive-by"]);
+    expect(
+      identitiesToAuthorise("pr_merged" as LaneEvent["kind"], "maintainer", null),
+      "an author nobody could read is UNMEASURED here too.",
+    ).toBeNull();
+  });
+
+  test("#1921: the workflow's shell builds a merge's argv from the pull request, not the issue", () => {
+    const out = runWith({
+      GITHUB_REPOSITORY: "o/n",
+      PROJECT_ID: "PVT_x",
+      ACTOR: "maintainer",
+      KIND: "pr_merged",
+      ISSUE: "",
+      PR: "99",
+      PR_AUTHOR: "author",
+      STATE_REASON: "",
+    });
+    expect(out).toContain("--pr 99 --pr-author author");
+    expect(out).not.toContain("--issue");
+  });
+
+  // ## The kind-derivation block is EXECUTED, like the argv block above
+  //
+  // It is the step that decides whether anything happens at all, and its
+  // failure mode is the quiet one: an arm that matches nothing prints a
+  // notice saying there was nothing to do, which is byte-identical to the
+  // genuine no-transition case. Describing it in TypeScript would measure a
+  // copy; this runs the real text on this machine's bash.
+  const kindOf = (env: Record<string, string>): string => {
+    const yml = read(".github/workflows/board-flow.yml");
+    const all = yml.split("\n");
+    const at = all.findIndex(l => l === '          kind=""');
+    expect(at, "the kind-derivation block moved or was renamed").toBeGreaterThan(-1);
+    const body: string[] = [];
+    for (const l of all.slice(at)) {
+      if (l.trim() !== "" && !l.startsWith("          ")) break;
+      body.push(l.replace(/^ {10}/, ""));
+    }
+    const lines = body.filter(l => l.trim() !== "");
+    expect(
+      lines[lines.length - 1],
+      "the last line of the cut is not the step's output write, so the cut has run past the " +
+        "end of the step or the step no longer reports a kind. Either way this measures the " +
+        "wrong text.",
+    ).toBe('echo "kind=${kind}" >> "$GITHUB_OUTPUT"');
+
+    const dir = mkdtempSync(join(tmpdir(), "board-flow-kind-"));
+    try {
+      const out = join(dir, "github_output");
+      writeFileSync(out, "");
+      const r = spawnSync("/bin/bash", ["-euo", "pipefail", "-c", body.join("\n")], {
+        env: { ...env, GITHUB_OUTPUT: out, PATH: process.env.PATH ?? "" },
+        encoding: "utf-8",
+      });
+      expect(r.status, `the kind step's own shell aborted: ${r.stderr}`).toBe(0);
+      const m = /^kind=(.*)$/m.exec(readFileSync(out, "utf-8"));
+      expect(m, "the step wrote no kind= line at all").not.toBeNull();
+      return m?.[1] ?? "";
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  const prEvent = (over: Record<string, string>): Record<string, string> => ({
+    EVENT: "pull_request_target",
+    ACTION: "closed",
+    DRAFT: "false",
+    MERGED: "false",
+    ...over,
+  });
+
+  test("#1921: the workflow derives a kind for a merge instead of discarding it", () => {
+    expect(
+      kindOf(prEvent({ MERGED: "true" })),
+      "a merged pull request that produced no kind is the defect: the job prints `means no " +
+        "lane transition here` and the card it should have moved stays where it was.",
+    ).toBe("pr_merged");
+  });
+
+  // The negative control for the row above. A fix of "emit pr_merged for
+  // every close" would pass it and destroy the distinction the decider rests
+  // on, so the unmerged close is measured through the same shell.
+  test("#1921: an unmerged close is still pr_closed_unmerged, through the same block", () => {
+    expect(kindOf(prEvent({ MERGED: "false" }))).toBe("pr_closed_unmerged");
+    expect(
+      kindOf(prEvent({ MERGED: "" })),
+      "GitHub omits `merged` on some payload shapes, and an absent value is not a merge. " +
+        "Reading absent as merged would send abandoned work to In progress.",
+    ).toBe("pr_closed_unmerged");
+  });
+
+  test("#1921: the merge arm did not disturb the events around it", () => {
+    expect(kindOf({ EVENT: "issues", ACTION: "closed", DRAFT: "", MERGED: "" })).toBe(
+      "issue_closed",
+    );
+    expect(kindOf(prEvent({ ACTION: "opened", DRAFT: "false" }))).toBe("pr_ready");
+    expect(
+      kindOf(prEvent({ ACTION: "opened", DRAFT: "true" })),
+      "a draft in In review says somebody is waiting on a reader when nobody is.",
+    ).toBe("");
   });
 });
