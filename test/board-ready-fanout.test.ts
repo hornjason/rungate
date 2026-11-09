@@ -1176,7 +1176,14 @@ describe("BR-38..BR-39: every credentialed fetch reads its status before its bod
     // Source-ORDER, like BS-38 and for the same reason: `main()` needs a live
     // endpoint, and a mock deep enough to reach the resolution would assert
     // against its own fixture.
-    const guard = code.search(/if \(moving\.length === 0\)/);
+    // Anchored on the guard's own MESSAGE rather than on the shape of its
+    // condition. The condition gained a second term in #1929 — a demotion is
+    // a move, so a run whose only work is a demotion must NOT short-circuit —
+    // and `/if \(moving\.length === 0\)/` stopped matching a guard that was
+    // still there and still correct. A detector narrower than what it detects
+    // reads as a missing guard, which is the louder half of that failure and
+    // not the dangerous one; the dangerous one is the next rewording.
+    const guard = code.search(/Nothing to move\. No issue changed\./);
     const resolve = code.search(/field\(name:\s*"Status"\)/);
     // Anti-vacuity, both halves — `-1 < anything` would satisfy the ordering
     // for free if either side were renamed away.
@@ -1185,6 +1192,17 @@ describe("BR-38..BR-39: every credentialed fetch reads its status before its bod
       guard,
       "a `--write` run must short-circuit when nothing is moving",
     ).toBeGreaterThan(-1);
+    // **And the short-circuit must count BOTH kinds of move** (#1929). With
+    // only `moving.length === 0` a run that promotes nothing and demotes one
+    // card returns before the Status field is resolved, so the demotion is
+    // decided, logged, and never written — the lane stays wrong while the
+    // job reports success, which is the exact defect this issue is about.
+    const condition = code.slice(Math.max(0, guard - 400), guard);
+    expect(
+      condition,
+      "the nothing-to-move guard must consider demotions as well as promotions, " +
+        "or a demotion-only run exits before it can write anything",
+    ).toMatch(/demoting\.length === 0/);
     expect(
       guard < resolve,
       "the nothing-to-move guard must come BEFORE the Status field is resolved, " +
