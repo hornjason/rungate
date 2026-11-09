@@ -1,4 +1,4 @@
-# generated-sha: 05c6b54ebbcce7ed
+# generated-sha: fd1c3d3fcaf3d39a
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -153,7 +153,7 @@ jobs:
       - run: bun run typecheck
       # #1173. The per-case durations, kept so they can accumulate across
       # runs — one run cannot say whether a case has regressed.
-      - name: Keep this shard's per-case durations
+      - name: Keep this run's per-case durations
         if: always()
         uses: actions/upload-artifact@v4
         with:

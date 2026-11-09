@@ -658,8 +658,19 @@ describe("#1181/#1190: the generated workflow supplies what the script reads", (
     // Fresh directory, so nothing an earlier step left behind ships.
     expect(marker?.run ?? "").toContain(`rm -r "$${SHARD_MARKER_ENV.dir}"`);
 
-    const upload = parsed.jobs["test-shard"].steps.find(s => s.uses?.startsWith("actions/upload-artifact"));
-    expect(upload, "the marker never leaves the shard runner").toBeDefined();
+    // Found by WHAT IT UPLOADS, not by being the first upload step. "the
+    // first `actions/upload-artifact`" is a proxy for "the marker's upload",
+    // and #1173 made them different steps: the shard job also uploads its
+    // JUnit durations. Under the positional read this case then asserted the
+    // marker's properties against the JUnit step — a true failure about the
+    // wrong subject, which is indistinguishable from the real regression.
+    const markerUploads = parsed.jobs["test-shard"].steps.filter(
+      s =>
+        s.uses?.startsWith("actions/upload-artifact") &&
+        String(s.with?.name ?? "").startsWith(SHARD_MARKER_ARTIFACT_PREFIX),
+    );
+    expect(markerUploads, "the marker never leaves the shard runner").toHaveLength(1);
+    const upload = markerUploads[0];
     expect(upload?.if).toBe("always()");
     // Name: attempt AND leg. Artifacts live on the run, so without the
     // attempt a stale marker is downloadable here (run 39835866754).

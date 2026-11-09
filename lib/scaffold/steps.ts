@@ -3268,14 +3268,29 @@ echo "All $passed shards concluded, and all $passed passed."
  * the leg that failed to write it.
  */
 /**
- * Where a shard writes its JUnit report (#1173).
+ * Where a run writes its JUnit report (#1173).
  *
  * `runner.temp`, not the checkout: several suites in `test/` spawn `bun test`
  * as a subprocess with the repository as cwd, so a repository-relative path
- * is written by every nested run and the last writer wins. Per shard, so four
- * legs of one matrix do not overwrite each other either.
+ * is written by every nested run and the last writer wins.
+ *
+ * `leg` distinguishes the legs of a matrix and is `""` when there is no
+ * matrix. It is a PARAMETER rather than a constant because `shardCount`
+ * returns 1 for every project that has not set `ci.shards` — which is the
+ * default scaffold output, not an edge case — and the unsharded template is a
+ * different `- run:` line several hundred lines away. Instrumenting only the
+ * sharded one leaves the defect this exists to fix in place for every
+ * consumer who took the default, which is what the first round of review on
+ * #1926 caught. `\${{ matrix.shard }}` is not expanded outside a matrix job,
+ * so the suffix cannot simply be passed unconditionally.
  */
-export const CI_JUNIT_OUTFILE = `\${{ runner.temp }}/rungate-junit-\${{ matrix.shard }}.xml`;
+export function ciJunitOutfile(leg: string): string {
+  return `\${{ runner.temp }}/rungate-junit${leg}.xml`;
+}
+
+/** The leg suffix for a matrix job, and the one for a job with no matrix. */
+export const CI_JUNIT_SHARD_LEG = `-\${{ matrix.shard }}`;
+export const CI_JUNIT_SINGLE_LEG = "";
 
 /**
  * Keep the durations past the runner's lifetime, or there is no population.
@@ -3299,18 +3314,22 @@ export const CI_JUNIT_OUTFILE = `\${{ runner.temp }}/rungate-junit-\${{ matrix.s
  *
  * Emitted only for a `bun test` command, because the flags that write the
  * file are only emitted for one.
+ *
+ * `leg` is the same suffix `ciJunitOutfile` took, so the artifact name and
+ * the path it uploads cannot drift apart — and so the unsharded template
+ * gets the step too.
  */
-export function buildJunitArtifactStep(indent: string, testCommand: string): string {
+export function buildJunitArtifactStep(indent: string, testCommand: string, leg: string): string {
   if (!isBunTestCommand(testCommand)) return "";
   const lines = [
     `# #1173. The per-case durations, kept so they can accumulate across`,
     `# runs — one run cannot say whether a case has regressed.`,
-    `- name: Keep this shard's per-case durations`,
+    `- name: Keep this run's per-case durations`,
     `  if: always()`,
     `  uses: ${actionRef("actions/upload-artifact")}`,
     `  with:`,
-    `    name: rungate-junit-\${{ github.run_attempt }}-\${{ matrix.shard }}`,
-    `    path: ${CI_JUNIT_OUTFILE}`,
+    `    name: rungate-junit-\${{ github.run_attempt }}${leg}`,
+    `    path: ${ciJunitOutfile(leg)}`,
     `    if-no-files-found: warn`,
     `    retention-days: 14`,
   ];
@@ -3887,8 +3906,8 @@ ${baseRefStep}
         with:
 ${bunStep}
       - run: bun install${globalTools.step}${ciSetupStep()}
-      - run: ${test.command} --shard=\${{ matrix.shard }}/${shards}${junitReporterFlags(test.command, CI_JUNIT_OUTFILE)}${trackerTokenEnv}${typecheckStep}
-${buildJunitArtifactStep("      ", test.command)}${buildShardMarkerSteps("      ")}
+      - run: ${test.command} --shard=\${{ matrix.shard }}/${shards}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SHARD_LEG))}${trackerTokenEnv}${typecheckStep}
+${buildJunitArtifactStep("      ", test.command, CI_JUNIT_SHARD_LEG)}${buildShardMarkerSteps("      ")}
 
   # The aggregate. Named "test" because that is the context branch protection
   # requires; it exists to turn N shard results into the one verdict.
@@ -3975,8 +3994,8 @@ ${baseRefStep}
         with:
 ${bunStep}
       - run: bun install${globalTools.step}${ciSetupStep()}
-      - run: ${test.command}${trackerTokenEnv}${typecheckStep}
-`;
+      - run: ${test.command}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SINGLE_LEG))}${trackerTokenEnv}${typecheckStep}
+${buildJunitArtifactStep("      ", test.command, CI_JUNIT_SINGLE_LEG)}`;
 
   const gatesYml = `# Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: Gates

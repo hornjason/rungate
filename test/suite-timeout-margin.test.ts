@@ -46,9 +46,11 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+
+import { createCiWorkflows } from "../lib/scaffold/steps";
 
 import {
   DEFAULT_WITHIN,
@@ -379,6 +381,78 @@ describe("#1173: CI produces the durations these readings need", () => {
   // gate on; `scripts/suite-timeout-margin.ts` is that consumer and wiring
   // it is a decision about reddening every pull request, taken once
   // somebody has seen what it would say.
+  // ## Round 1 of #1926's review, which was right
+  //
+  // Every case above reads THIS repository's `ci.yml`, and this repository
+  // sets `ci.shards: 4`. `shardCount` returns 1 for any project that has not
+  // set it, and the unsharded template is a different `- run:` line several
+  // hundred lines away in the generator — so the cases above were green while
+  // the exact defect #1173 exists to fix stood untouched for every consumer
+  // who took the default. The repository under test being sharded is the
+  // thing that hid it, which is why these run the generator instead.
+  describe("#1173: the DEFAULT scaffold output is instrumented too", () => {
+    const emit = (ci: Record<string, unknown>, command = "bun test"): string => {
+      const root = mkdtempSync(join(tmpdir(), "rungate-1173-yml-"));
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(
+        join(root, ".claude", "rungate", "config.json"),
+        // BOTH fields. `dev.testCmd` is the top rung of `lib/test-command.ts`
+        // and is what the scaffold writes into CI; `test.command` is what the
+        // ship run measures with. Setting only the latter was this fixture's
+        // first draft, and the generator emitted `bun test` regardless — so
+        // the "not bun" case was asserting about a bun command.
+        JSON.stringify({ slug: "junitgen", test: { command, timeout: 300000 }, dev: { testCmd: command }, ci }),
+      );
+      writeFileSync(join(root, ".bun-version"), "1.4.3\n");
+      createCiWorkflows(root, [], { force: true });
+      const out = join(root, ".github", "workflows", "ci.yml");
+      // The fixture proves its own premise, twice: a generator that wrote
+      // nothing leaves every assertion below passing against an empty
+      // string, and a generator that ignored `command` leaves the "not bun"
+      // case asserting about a bun command.
+      if (!existsSync(out)) {
+        throw new Error(`the generator wrote no ci.yml for ${JSON.stringify(ci)}. UNMEASURED, not a pass.`);
+      }
+      const yml = readFileSync(out, "utf8");
+      expect(yml, `the generator did not run \`${command}\`, so this fixture measures another command`).toContain(
+        `- run: ${command}`,
+      );
+      return yml;
+    };
+
+    test("#1173: an UNSHARDED project writes and uploads a report", () => {
+      // `shardCount` returns 1 when `ci.shards` is unset, so this IS the
+      // default scaffold output rather than an edge case.
+      const yml = emit({});
+      expect(yml, "the unsharded template still runs the suite with no reporter").toContain("--reporter=junit");
+      expect(yml).toContain("--reporter-outfile=${{ runner.temp }}/rungate-junit.xml");
+      expect(yml, "nothing uploads it, so it dies with the runner").toMatch(/upload-artifact[\s\S]{0,400}junit/);
+      // No matrix exists here, so `${{ matrix.shard }}` would expand to the
+      // empty string and two things would silently share one path.
+      expect(yml).not.toContain("rungate-junit-${{ matrix.shard }}");
+    });
+
+    test("#1173: a SHARDED project keeps one report per leg", () => {
+      const yml = emit({ shards: 4 });
+      expect(yml).toContain("--reporter-outfile=${{ runner.temp }}/rungate-junit-${{ matrix.shard }}.xml");
+      expect(yml, "the artifact name must carry the leg or the legs overwrite each other").toContain(
+        "name: rungate-junit-${{ github.run_attempt }}-${{ matrix.shard }}",
+      );
+    });
+
+    test("#1173: a consumer whose test command is not bun gets no bun flags", () => {
+      // This generator ships to consumers. `pytest --reporter=junit` is a
+      // command their runner rejects, so the instrumentation is conditional
+      // on the command it is appended to — and the condition must hold in
+      // BOTH templates, which is the half that was missing.
+      for (const ci of [{}, { shards: 4 }]) {
+        const yml = emit(ci, "pytest -q");
+        expect(yml, `pytest got bun's reporter flags at ${JSON.stringify(ci)}`).not.toContain("--reporter=junit");
+        expect(yml, `pytest got a report upload at ${JSON.stringify(ci)}`).not.toContain("rungate-junit");
+      }
+    });
+  });
+
   test("#1173: the suite step does NOT claim a reading it cannot have taken", () => {
     expect(
       suiteRun(),
