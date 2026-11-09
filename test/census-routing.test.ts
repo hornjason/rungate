@@ -950,7 +950,7 @@ describe("#1442: a specs/ edit routes the suite named after that spec", () => {
       existsSync(join(REPO, future)),
       "this case needs a pair that does NOT resolve on the live tree",
     ).toBe(false);
-    const { tests } = censusTestsFor([change({ path: spec, added: ["some prose"] })], p =>
+    const { tests } = censusTestsFor([change({ path: spec, added: ["some prose"] })], REPO, p =>
       p === future ? true : existsSync(join(REPO, p)),
     );
     expect(tests, "the row reads a fixed list, not the tree").toContain(future);
@@ -1545,6 +1545,7 @@ describe("#1547: the routed set is complete over the census of the test populati
   const routedByNewTestFile = () =>
     censusTestsFor(
       [change({ path: "test/zz-a-newly-added-suite.test.ts", isNew: true, added: ["x"] })],
+      REPO,
       p => existsSync(join(REPO, p)),
     ).tests;
 

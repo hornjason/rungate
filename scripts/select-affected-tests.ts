@@ -194,7 +194,7 @@ export function selectionFor(root: string, base?: string): SelectionArtifact {
   // `onDisk(root)`, not the default: a derived census row resolves against
   // the tree being selected for, and the default reads the repository this
   // module was imported from (#1442).
-  const routing = censusTestsFor(changes, onDisk(root));
+  const routing = censusTestsFor(changes, root);
   const routed = routing.tests;
 
   const text = textDependents(
