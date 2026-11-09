@@ -217,9 +217,18 @@ const CI_REPORTER_SELECTOR = /\s+--reporter=junit\s+--reporter-outfile=.*$/;
  * flags. So the instrumentation is conditional on the command it is being
  * appended to, and a command this cannot recognise gets nothing rather than
  * a flag its runner will reject.
+ *
+ * **Whitespace or end of string, NOT `\b`.** `\b` asks only for a non-word
+ * character, and `:` and `-` are non-word characters — so the first spelling
+ * of this matched `bun test:unit` (a package script) and `bun test-runner.ts`
+ * (a file), neither of which is bun's built-in runner. Bun intercepts the
+ * exact token `test` and nothing else, so those commands would have had
+ * `--reporter=junit` appended to some script's argv, and a report uploaded
+ * that the script never writes. Round 2 of #1926's review; measured, not
+ * reasoned about — `/^bun\s+test\b/` returns true for all three.
  */
 export function isBunTestCommand(command: string): boolean {
-  return /^bun\s+test\b/.test(command.trim());
+  return /^bun\s+test(\s|$)/.test(command.trim());
 }
 
 /**

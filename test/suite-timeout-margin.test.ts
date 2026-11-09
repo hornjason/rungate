@@ -51,6 +51,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { createCiWorkflows } from "../lib/scaffold/steps";
+import { isBunTestCommand, junitReporterFlags } from "../lib/test-command-positions";
 
 import {
   DEFAULT_WITHIN,
@@ -381,6 +382,40 @@ describe("#1173: CI produces the durations these readings need", () => {
   // gate on; `scripts/suite-timeout-margin.ts` is that consumer and wiring
   // it is a decision about reddening every pull request, taken once
   // somebody has seen what it would say.
+  // ## Round 2 of #1926's review, which was also right
+  //
+  // `isBunTestCommand` is the one predicate deciding whether a consumer's
+  // command gets bun's reporter flags, and it had no direct case — the
+  // generator cases above only ever handed it `bun test` and `pytest -q`,
+  // which is a battery varying one axis while the defect sits on the other.
+  describe("#1173: only bun's built-in runner is handed bun's flags", () => {
+    // `bun test-runner.ts` is a FILE invocation and `bun test:unit` is a
+    // package script. Neither is the built-in runner, and `\b` — the first
+    // spelling of this predicate — matched both, because `\b` asks only for
+    // a non-word character and `:` and `-` are non-word characters. The
+    // generator would then have appended `--reporter=junit` to somebody's
+    // script argv and uploaded a report that script never writes.
+    const BUN_TEST = ["bun test", "bun test --coverage", "bun  test --bail", "bun test --timeout 30000"];
+    const NOT_BUN_TEST = ["bun test:unit", "bun test-e2e", "bun test-runner.ts", "bunx test", "npm test", "pytest -q", "bun run test"];
+
+    test("#1173: the predicate separates the runner from a script that merely starts with `test`", () => {
+      for (const c of BUN_TEST) expect(isBunTestCommand(c), `${c} is bun's test runner`).toBe(true);
+      for (const c of NOT_BUN_TEST) expect(isBunTestCommand(c), `${c} is NOT bun's test runner`).toBe(false);
+    });
+
+    test("#1173: the flags follow the predicate, and are empty for everything else", () => {
+      // Asserted over BOTH lists rather than over the predicate alone: a
+      // later caller that forgets the guard is the failure this is about,
+      // and a case that only checks `isBunTestCommand` cannot see it.
+      for (const c of BUN_TEST) {
+        expect(junitReporterFlags(c, "/t/r.xml")).toBe(" --reporter=junit --reporter-outfile=/t/r.xml");
+      }
+      for (const c of NOT_BUN_TEST) {
+        expect(junitReporterFlags(c, "/t/r.xml"), `${c} was handed bun's reporter flags`).toBe("");
+      }
+    });
+  });
+
   // ## Round 1 of #1926's review, which was right
   //
   // Every case above reads THIS repository's `ci.yml`, and this repository
