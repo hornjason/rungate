@@ -105,12 +105,11 @@ your work survive the worktree. Make it before you start anything that will
 hold the session for minutes — a full suite, a mutation battery, a long agent
 run — not when the change feels done.
 
-**Why:** `git worktree list` marks a worktree whose branch is merged exactly
-the same as an abandoned one, and nothing makes an uncommitted worktree
-visibly in use from outside. Two sessions lost in-flight work to an ordinary
-hand cleanup on 2026-10-16, one of them about 500 lines. The window between
-starting and committing is exactly the window where your work is invisible to
-everyone else, so make it short.
+**Why:** nothing makes an uncommitted worktree visibly in use from outside —
+`git worktree list` marks a merged branch exactly like an abandoned one. Two
+sessions lost in-flight work to an ordinary hand cleanup on 2026-10-16, one
+about 500 lines. The window before your first commit is the window where your
+work is invisible, so make it short.
 
 ## Take the census before you tidy a worktree, and never run `git worktree prune`
 
@@ -122,8 +121,8 @@ Four readings per worktree — a merged PR *at the commit it holds*, a `git
 status` that was read and was empty, no process holding a file under it, and
 nothing modified inside a declared age — and a worktree failing to produce any
 one of them is **UNMEASURED, counted apart from ABANDONED**. It deletes
-nothing; removal stays yours. What the census of this machine's 173
-worktrees found is in the reference file, in full.
+nothing; removal stays yours. The census of this machine's 173 worktrees is
+in the reference file.
 
 `git worktree prune` is not the safe half of this. It drops
 `.git/worktrees/<name>` for **any** registered worktree whose directory is
@@ -136,11 +135,9 @@ anything for prune to take.
 When the work is done and CI is green: push, open a PR, merge it. Do not hold a
 finished branch pending approval, and do not ask whether to push.
 
-**Why:** unpushed finished work is invisible. It makes the tracker lie, it
-makes other sessions duplicate effort, and it is lost entirely if the session
-or the worktree goes away. Review happens on the PR, where it is durable and
-where CI already runs — not in a conversation that has to be in someone's
-context at the right moment.
+**Why:** unpushed finished work is invisible. It makes the tracker lie, makes
+other sessions duplicate effort, and is lost entirely if the worktree goes
+away. Review happens on the PR, where it is durable and CI already runs.
 
 Escalate only for things that are genuinely hard to reverse or reach outside
 the repo: force-pushing a shared branch, deleting branches holding unmerged
@@ -227,9 +224,7 @@ resolve the branch" is a thing worth writing down; silence reads as current.
 
 ## Read your baseline row before you read any mutation row
 
-`.claude/rules/checks-must-be-able-to-fail.md` says this about a battery you
-run yourself. It is worth repeating where cross-session reports live, because
-a peer's battery is a battery you did not watch: a row of zeros with a
+A peer's battery is a battery you did not watch: a row of zeros with a
 believable baseline is a finding, and a row of zeros with an empty or missing
 baseline is an instrument that stopped reporting. Ask for the baseline when a
 report does not carry one.

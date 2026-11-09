@@ -512,10 +512,18 @@ const GENERATED_WORKFLOW_CENSUS = [
   "test/no-fixed-window-slices.test.ts",
   // #1782. Same shape again: a guard the diff gives an agent no route to.
   // Adding a workflow file is designed to turn it red exactly once, and
-  // #1781 learned that from a red PR. This constant is what the
-  // scaffold-minus-hooks delta below is measured against, so it has to move
-  // with the router row or that case goes red on a correct change.
+  // #1781 learned that from a red PR.
   "test/bun-version-agreement.test.ts",
+  // #1927. The three #1926 broke, every one of them green on a targeted run
+  // of the six above. They are listed BY HAND and deliberately are not the
+  // router's own list: a constant copied from `CENSUS_TRIGGERS` would be a
+  // second decider agreeing with the first, and no mutation of the row could
+  // be caught by it (`.claude/rules/checks-must-be-able-to-fail.md`). Delete
+  // any one of these from the row and the two containment cases below go red
+  // naming it.
+  "test/ci-shard-aggregate-measured.test.ts",
+  "test/ci-global-tools.test.ts",
+  "test/test-command-binding.test.ts",
 ];
 
 /**
@@ -560,13 +568,20 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
     // `lib/scaffold/**` fires `gates-hooks-scaffold` too, so a case asserting
     // only that SOME tests routed is green under a router with no row here.
     // `hooks/` fires that row and nothing else, so the delta is this row.
+    //
+    // #1927 relaxed this from an equality to a floor. The row now carries a
+    // MEASURED population of 65 rather than a hand-picked handful, and an
+    // equality could only be satisfied by restating that population here —
+    // two deciders agreeing, which no mutation of either can be caught by.
+    // The floor is what the case was ever for: the delta is at least every
+    // exemplar that paid for the row, so a row emptied or narrowed is red.
     const scaffold = censusTestsFor([change({ path: "lib/scaffold/ai-review-step.ts" })]);
     const hooks = censusTestsFor([change({ path: "hooks/Example.hook.ts" })]);
     expect(hooks.tests.length, "the gates-hooks-scaffold row stopped firing").toBeGreaterThan(0);
     expect(
       scaffold.tests.length - hooks.tests.length,
       "a scaffold edit and a hooks edit route the same set, so this row is doing nothing",
-    ).toBe(GENERATED_WORKFLOW_CENSUS.length);
+    ).toBeGreaterThanOrEqual(GENERATED_WORKFLOW_CENSUS.length);
   });
 
   test("an ordinary source edit is NOT routed here", () => {
