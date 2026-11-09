@@ -275,3 +275,122 @@ describe("#804: the suite says how close it ran to its budget", () => {
     expect(mutated.status, "the mutant refused, so the exit is not routed through REFUSE_EXIT").toBe(0);
   });
 });
+
+// ## #1173 — the population, which until now did not exist anywhere
+//
+// Every case above runs against a report the test wrote. The readings they
+// compose have never once run against this repository's own suite, and the
+// reason is a producer rather than a consumer: measured on `origin/main`
+// before this change, `.github/workflows/ci.yml` ran `bun test --shard=N/4`
+// with no reporter, `bunfig.toml` declared no reporter, and
+// `SUITE_JUNIT_REPORT` was set by nothing in `.github/`, `lib/` or
+// `scripts/` — its only occurrences in the tree were the three files that
+// READ it. So three live checks printed UNMEASURED and passed on every CI
+// run: this one, `test/test-timeout-population.test.ts` (#621) and
+// `test/ai-review-fixture-budget.test.ts` AC-5 (#1172).
+//
+// The docblock at the top of this file called that wiring "the decision
+// #804 still needs", and `lib/suite-timeout-margin.ts` said the reading
+// happens "over the report `bunfig.toml` now declares" — of a declaration
+// `bunfig.toml` does not contain. Two documents disagreeing about whether
+// something shipped is why this is asserted rather than written down again.
+describe("#1173: CI produces the durations these readings need", () => {
+  const ci = () => readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf-8");
+
+  /** The one `- run:` line that invokes the suite, shard selector and all. */
+  const suiteRun = (): string => {
+    const line = ci()
+      .split("\n")
+      .map(l => /^\s+- run:\s*(bun test\b.*)$/.exec(l))
+      .find((m): m is RegExpExecArray => m !== null);
+    expect(line, "ci.yml has no `- run: bun test …` line at all").toBeDefined();
+    return line?.[1] ?? "";
+  };
+
+  test("#1173: the suite run writes a JUnit report", () => {
+    const run = suiteRun();
+    expect(
+      run,
+      "without a reporter the run produces no per-case durations, so every reading above is " +
+        "UNMEASURED on every CI run and passes. That is the state this issue was filed into.",
+    ).toContain("--reporter=junit");
+    expect(run, "a reporter with no outfile writes nowhere this job can upload from").toMatch(
+      /--reporter-outfile[= ]\S/,
+    );
+  });
+
+  // The hazard the docblock at the top of this file names by name: several
+  // suites in `test/` spawn `bun test` as a subprocess with the repository as
+  // cwd. A RELATIVE outfile — or a `bunfig.toml` declaration, which every
+  // nested run would inherit — means the last writer wins, and a 15,000-case
+  // run can end with a three-case report on disk. Three cases is not empty,
+  // so the UNMEASURED guards would not catch it.
+  test("#1173: the report is written outside the repository, so a nested run cannot overwrite it", () => {
+    const run = suiteRun();
+    // `\S+` will not do, for the same reason `SHARD_SELECTOR` does not use it:
+    // the generated value is the GitHub expression `${{ runner.temp }}/…`,
+    // which contains spaces. A reader that stops at the first one extracts
+    // `${{` and then every assertion below is a fact about the reader.
+    const outfile = /--reporter-outfile[= ]("[^"]+"|.*)$/.exec(run)?.[1]?.replace(/"/g, "").trim() ?? "";
+    expect(outfile, "no outfile to judge").not.toBe("");
+    expect(
+      outfile,
+      "a repository-relative path is inherited by every nested `bun test` this suite spawns, " +
+        "and the last writer wins. Write it under the runner's own temp directory.",
+    ).toContain("runner.temp");
+    expect(
+      /^\s*(\.\/|\.\.\/|[A-Za-z0-9_-]+\.xml)/.test(outfile),
+      `the outfile "${outfile}" is repository-relative`,
+    ).toBe(false);
+  });
+
+  test("#1173: no reporter is declared in bunfig, which is the spelling that collides", () => {
+    expect(
+      readFileSync(join(REPO_ROOT, "bunfig.toml"), "utf-8"),
+      "`[test.reporter]` in bunfig is read by every nested `bun test` as well as the real one, " +
+        "which is the collision the command-line flag exists to avoid.",
+    ).not.toContain("reporter");
+  });
+
+  // A report nobody uploads is a report nobody can read: the runner is
+  // destroyed with the job. This is also the half that makes the durations
+  // ACCUMULATE, which is the whole point for #1173 — one run cannot show
+  // whether a normalisation is stabler than milliseconds.
+  test("#1173: the report leaves the runner as an artifact", () => {
+    const yml = ci();
+    expect(yml, "nothing uploads the report, so it dies with the runner").toMatch(
+      /upload-artifact[\s\S]{0,400}junit/,
+    );
+  });
+
+  // ## The obvious next line, and why it is not here
+  //
+  // `SUITE_JUNIT_REPORT` is the contract the three readings take their
+  // population from, so exporting it on the suite step looks like the other
+  // half of this change. It is the opposite. **A `bun test` run cannot read
+  // its own JUnit report** — `lib/suite-timeout-margin.ts` says so in its
+  // header, and the file is written when the run ends. Setting the variable
+  // there points three in-suite checks at a path that does not exist yet,
+  // or on a re-run at a STALE report from a previous attempt, which they
+  // would read as a live population and pass on.
+  //
+  // UNMEASURED is the honest state for those three until a step runs AFTER
+  // the suite. This change produces and retains the durations and turns no
+  // gate on; `scripts/suite-timeout-margin.ts` is that consumer and wiring
+  // it is a decision about reddening every pull request, taken once
+  // somebody has seen what it would say.
+  test("#1173: the suite step does NOT claim a reading it cannot have taken", () => {
+    expect(
+      suiteRun(),
+      "a run cannot read the report it is still writing",
+    ).not.toContain("SUITE_JUNIT_REPORT");
+    const yml = ci();
+    const shardJob = yml.slice(yml.indexOf("\n  test-shard:"), yml.indexOf("\n  test:"));
+    expect(
+      shardJob,
+      "exporting SUITE_JUNIT_REPORT into the job that writes it hands the three in-suite " +
+        "readings a path that is absent on a first run and STALE on a re-run. A stale " +
+        "population is worse than UNMEASURED: it reports a number nobody took.",
+    ).not.toContain("SUITE_JUNIT_REPORT");
+  });
+});

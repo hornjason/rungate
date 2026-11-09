@@ -192,6 +192,53 @@ const NOT_THE_TEST_STEP = new Set(["bun install", "bun run typecheck"]);
  */
 const SHARD_SELECTOR = /\s+--shard=.+?\/\d+\s*$/;
 
+/**
+ * The JUnit reporter is CI INSTRUMENTATION, not a different test command
+ * (#1173), and it is stripped here for the same reason the shard selector is.
+ *
+ * Appending it without this would turn the agreement check red, and the cheap
+ * fix for THAT red is to put `--reporter=junit --reporter-outfile=…` in the
+ * AGENTS.md row a human copies to run the suite locally — a CI-only flag in
+ * the one place it must never be.
+ *
+ * Anchored at the end and matching only the exact PAIR this generator emits,
+ * in that order, so a command that differs anywhere else still disagrees. The
+ * outfile is matched with `.*` rather than `\S+` for the same reason as the
+ * shard numerator: the generated value is a GitHub expression containing
+ * spaces.
+ */
+const CI_REPORTER_SELECTOR = /\s+--reporter=junit\s+--reporter-outfile=.*$/;
+
+/**
+ * Is this test command a `bun test` invocation?
+ *
+ * The scaffold generates CI for consumers, and `test.command` is theirs — a
+ * project running `npm test` or `pytest` must not be handed bun's reporter
+ * flags. So the instrumentation is conditional on the command it is being
+ * appended to, and a command this cannot recognise gets nothing rather than
+ * a flag its runner will reject.
+ */
+export function isBunTestCommand(command: string): boolean {
+  return /^bun\s+test\b/.test(command.trim());
+}
+
+/**
+ * The flags that make a `bun test` run write per-case durations, or `""`.
+ *
+ * `outfile` is the caller's, because the only correct answer involves the
+ * runner's own temp directory and the shard index, and neither is this
+ * module's to know. **It must not be repository-relative**: several suites in
+ * `test/` spawn `bun test` as a subprocess with the repository as cwd, so a
+ * relative path — or a `bunfig.toml` declaration, which every nested run
+ * inherits — means the last writer wins and a 15,000-case run can end with a
+ * three-case report on disk. Three cases is not empty, so the UNMEASURED
+ * guards downstream would not catch it.
+ */
+export function junitReporterFlags(command: string, outfile: string): string {
+  if (!isBunTestCommand(command)) return "";
+  return ` --reporter=junit --reporter-outfile=${outfile}`;
+}
+
 /** The test step of the generated suite job in ci.yml. */
 export function testCommandsNamedByCiWorkflow(text: string): NamedTestCommand[] {
   // `suiteJobName` is the one binding for "which job runs the suite" — it is
@@ -217,7 +264,7 @@ export function testCommandsNamedByCiWorkflow(text: string): NamedTestCommand[] 
     // `run: |` opens a block scalar; the body is not a command on this line.
     .filter(cmd => cmd !== "|" && !cmd.startsWith("|"))
     .filter(cmd => !NOT_THE_TEST_STEP.has(cmd))
-    .map(cmd => cmd.replace(SHARD_SELECTOR, ""));
+    .map(cmd => cmd.replace(CI_REPORTER_SELECTOR, "").replace(SHARD_SELECTOR, ""));
 
   if (runs.length === 0) {
     refuse(CI_YML, "its `test:` job runs nothing but setup and the type check");
