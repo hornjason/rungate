@@ -21,6 +21,7 @@ import { join } from "path";
 
 import { DEFAULT_TEST_COMMAND, testCommandDecision } from "../lib/test-command";
 import { createCiWorkflows, generateAgentsMdContent } from "../lib/scaffold/steps";
+import { testCommandsNamedByCiWorkflow } from "../lib/test-command-positions";
 import { readFileSync } from "fs";
 
 const roots: string[] = [];
@@ -43,14 +44,25 @@ function project(opts: { testCmd?: string; script?: string; pkg?: boolean } = {}
   return root;
 }
 
-/** The `run:` line of the generated CI test job, by generating it. */
+/**
+ * The test command the generated CI job names, by generating it.
+ *
+ * Through `testCommandsNamedByCiWorkflow`, which is the production answer to
+ * "which run line is the test step, and what command does it name". This was
+ * a hand-rolled copy of that walk — the same question answered twice, so a
+ * mutation of either left the other holding every case up.
+ *
+ * Delegating also makes the CI-only instrumentation invisible here, which is
+ * the point rather than a side effect: #1173 appends
+ * `--reporter=junit --reporter-outfile=…` to a `bun test` command, and the
+ * copy compared it raw and reported that CI had overridden the operator's
+ * command. The strip is the production one, so if it ever stops stripping,
+ * `test/test-command-agreement.test.ts` is what goes red, not this.
+ */
 function ciTestStep(root: string): string {
   createCiWorkflows(root, [], { force: true });
   const yml = readFileSync(join(root, ".github", "workflows", "ci.yml"), "utf-8");
-  const job = yml.slice(yml.indexOf("  test:"));
-  const runs = job.split("\n").filter(l => /^\s+- run: /.test(l)).map(l => l.replace(/^\s+- run: /, ""));
-  // `bun install` is always first and is not the test step.
-  return runs.filter(r => r !== "bun install")[0] ?? "";
+  return testCommandsNamedByCiWorkflow(yml)[0]?.command ?? "";
 }
 
 describe("#488: one binding decides the test command", () => {

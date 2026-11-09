@@ -254,7 +254,12 @@ describe("AC-2/AC-3: the generator reads the declaration", () => {
 
     // Ahead of the test step, and after dependencies are installed.
     const deps = indexOfRun(steps, "bun install");
-    const tests = steps.findIndex(s => s.run === "bun test");
+    // STARTS WITH, not equals. The property here is ordering, and an exact
+    // match makes it hostage to every CI-only flag appended to the command:
+    // #1173 added `--reporter=junit --reporter-outfile=…` and this case went
+    // red reporting "the fixture's test step is missing", which is a true
+    // failure about the wrong thing.
+    const tests = steps.findIndex(s => typeof s.run === "string" && s.run.startsWith("bun test"));
     expect(tests, "the fixture's test step is missing").toBeGreaterThanOrEqual(0);
     expect(deps).toBeLessThan(install);
     expect(install).toBeLessThan(tests);

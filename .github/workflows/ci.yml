@@ -1,4 +1,4 @@
-# generated-sha: da813b6b05aa5513
+# generated-sha: fd1c3d3fcaf3d39a
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -140,7 +140,7 @@ jobs:
           else
             echo "rungate: no scripts/ci-setup.sh in this tree, so no consumer setup ran (#529)"
           fi
-      - run: bun test --shard=${{ matrix.shard }}/4
+      - run: bun test --shard=${{ matrix.shard }}/4 --reporter=junit --reporter-outfile=${{ runner.temp }}/rungate-junit-${{ matrix.shard }}.xml
         env:
           # ci.suiteReadsTracker, with ci.trackerTokenSecret naming the secret.
           # NOT the built-in token: that one is repository-scoped and cannot see a
@@ -151,6 +151,16 @@ jobs:
           # name — it does not quietly fall back to a token that cannot answer.
           GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
       - run: bun run typecheck
+      # #1173. The per-case durations, kept so they can accumulate across
+      # runs — one run cannot say whether a case has regressed.
+      - name: Keep this run's per-case durations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rungate-junit-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/rungate-junit-${{ matrix.shard }}.xml
+          if-no-files-found: warn
+          retention-days: 14
       # #1190. The aggregate below counts these instead of asking the Actions
       # API: `gh` is a GitHub-hosted-image fact rather than a runner fact, and
       # `actions: read` is a scope a consumer's token has to be granted. A

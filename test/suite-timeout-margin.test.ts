@@ -46,9 +46,20 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+
+import { createCiWorkflows } from "../lib/scaffold/steps";
+import {
+  CI_JUNIT_SHARD_LEG,
+  CI_JUNIT_SINGLE_LEG,
+  ciJunitOutfile,
+  isBunTestCommand,
+  junitReporterFlags,
+  mayInstrumentJunit,
+  testCommandsNamedByCiWorkflow,
+} from "../lib/test-command-positions";
 
 import {
   DEFAULT_WITHIN,
@@ -273,5 +284,331 @@ describe("#804: the suite says how close it ran to its budget", () => {
 
     expect(real.status, `the real script did not refuse:\n${real.stdout}\n${real.stderr}`).toBe(1);
     expect(mutated.status, "the mutant refused, so the exit is not routed through REFUSE_EXIT").toBe(0);
+  });
+});
+
+// ## #1173 — the population, which until now did not exist anywhere
+//
+// Every case above runs against a report the test wrote. The readings they
+// compose have never once run against this repository's own suite, and the
+// reason is a producer rather than a consumer: measured on `origin/main`
+// before this change, `.github/workflows/ci.yml` ran `bun test --shard=N/4`
+// with no reporter, `bunfig.toml` declared no reporter, and
+// `SUITE_JUNIT_REPORT` was set by nothing in `.github/`, `lib/` or
+// `scripts/` — its only occurrences in the tree were the three files that
+// READ it. So three live checks printed UNMEASURED and passed on every CI
+// run: this one, `test/test-timeout-population.test.ts` (#621) and
+// `test/ai-review-fixture-budget.test.ts` AC-5 (#1172).
+//
+// The docblock at the top of this file called that wiring "the decision
+// #804 still needs", and `lib/suite-timeout-margin.ts` said the reading
+// happens "over the report `bunfig.toml` now declares" — of a declaration
+// `bunfig.toml` does not contain. Two documents disagreeing about whether
+// something shipped is why this is asserted rather than written down again.
+describe("#1173: CI produces the durations these readings need", () => {
+  const ci = () => readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf-8");
+
+  /** The one `- run:` line that invokes the suite, shard selector and all. */
+  const suiteRun = (): string => {
+    const line = ci()
+      .split("\n")
+      .map(l => /^\s+- run:\s*(bun test\b.*)$/.exec(l))
+      .find((m): m is RegExpExecArray => m !== null);
+    expect(line, "ci.yml has no `- run: bun test …` line at all").toBeDefined();
+    return line?.[1] ?? "";
+  };
+
+  test("#1173: the suite run writes a JUnit report", () => {
+    const run = suiteRun();
+    expect(
+      run,
+      "without a reporter the run produces no per-case durations, so every reading above is " +
+        "UNMEASURED on every CI run and passes. That is the state this issue was filed into.",
+    ).toContain("--reporter=junit");
+    expect(run, "a reporter with no outfile writes nowhere this job can upload from").toMatch(
+      /--reporter-outfile[= ]\S/,
+    );
+  });
+
+  // The hazard the docblock at the top of this file names by name: several
+  // suites in `test/` spawn `bun test` as a subprocess with the repository as
+  // cwd. A RELATIVE outfile — or a `bunfig.toml` declaration, which every
+  // nested run would inherit — means the last writer wins, and a 15,000-case
+  // run can end with a three-case report on disk. Three cases is not empty,
+  // so the UNMEASURED guards would not catch it.
+  test("#1173: the report is written outside the repository, so a nested run cannot overwrite it", () => {
+    const run = suiteRun();
+    // `\S+` will not do, for the same reason `SHARD_SELECTOR` does not use it:
+    // the generated value is the GitHub expression `${{ runner.temp }}/…`,
+    // which contains spaces. A reader that stops at the first one extracts
+    // `${{` and then every assertion below is a fact about the reader.
+    const outfile = /--reporter-outfile[= ]("[^"]+"|.*)$/.exec(run)?.[1]?.replace(/"/g, "").trim() ?? "";
+    expect(outfile, "no outfile to judge").not.toBe("");
+    expect(
+      outfile,
+      "a repository-relative path is inherited by every nested `bun test` this suite spawns, " +
+        "and the last writer wins. Write it under the runner's own temp directory.",
+    ).toContain("runner.temp");
+    expect(
+      /^\s*(\.\/|\.\.\/|[A-Za-z0-9_-]+\.xml)/.test(outfile),
+      `the outfile "${outfile}" is repository-relative`,
+    ).toBe(false);
+  });
+
+  test("#1173: no reporter is declared in bunfig, which is the spelling that collides", () => {
+    expect(
+      readFileSync(join(REPO_ROOT, "bunfig.toml"), "utf-8"),
+      "`[test.reporter]` in bunfig is read by every nested `bun test` as well as the real one, " +
+        "which is the collision the command-line flag exists to avoid.",
+    ).not.toContain("reporter");
+  });
+
+  // A report nobody uploads is a report nobody can read: the runner is
+  // destroyed with the job. This is also the half that makes the durations
+  // ACCUMULATE, which is the whole point for #1173 — one run cannot show
+  // whether a normalisation is stabler than milliseconds.
+  test("#1173: the report leaves the runner as an artifact", () => {
+    const yml = ci();
+    expect(yml, "nothing uploads the report, so it dies with the runner").toMatch(
+      /upload-artifact[\s\S]{0,400}junit/,
+    );
+  });
+
+  // ## The obvious next line, and why it is not here
+  //
+  // `SUITE_JUNIT_REPORT` is the contract the three readings take their
+  // population from, so exporting it on the suite step looks like the other
+  // half of this change. It is the opposite. **A `bun test` run cannot read
+  // its own JUnit report** — `lib/suite-timeout-margin.ts` says so in its
+  // header, and the file is written when the run ends. Setting the variable
+  // there points three in-suite checks at a path that does not exist yet,
+  // or on a re-run at a STALE report from a previous attempt, which they
+  // would read as a live population and pass on.
+  //
+  // UNMEASURED is the honest state for those three until a step runs AFTER
+  // the suite. This change produces and retains the durations and turns no
+  // gate on; `scripts/suite-timeout-margin.ts` is that consumer and wiring
+  // it is a decision about reddening every pull request, taken once
+  // somebody has seen what it would say.
+  // ## Round 2 of #1926's review, which was also right
+  //
+  // `isBunTestCommand` is the one predicate deciding whether a consumer's
+  // command gets bun's reporter flags, and it had no direct case — the
+  // generator cases above only ever handed it `bun test` and `pytest -q`,
+  // which is a battery varying one axis while the defect sits on the other.
+  describe("#1173: only bun's built-in runner is handed bun's flags", () => {
+    // `bun test-runner.ts` is a FILE invocation and `bun test:unit` is a
+    // package script. Neither is the built-in runner, and `\b` — the first
+    // spelling of this predicate — matched both, because `\b` asks only for
+    // a non-word character and `:` and `-` are non-word characters. The
+    // generator would then have appended `--reporter=junit` to somebody's
+    // script argv and uploaded a report that script never writes.
+    const BUN_TEST = ["bun test", "bun test --coverage", "bun  test --bail", "bun test --timeout 30000"];
+    const NOT_BUN_TEST = ["bun test:unit", "bun test-e2e", "bun test-runner.ts", "bunx test", "npm test", "pytest -q", "bun run test"];
+
+    // Round 3's finding, and the second reason a command is ineligible. A
+    // consumer who already configured a reporter has solved this themselves;
+    // appending a second pair does not merely override their choice. MEASURED:
+    // the CI extractor strips from the FIRST `--reporter=junit` to end of
+    // line, so it reads `bun test` while their config and AGENTS.md row say
+    // the full command, and the three-position agreement check goes red.
+    const ALREADY_REPORTING = [
+      "bun test --reporter=junit --reporter-outfile=./custom.xml",
+      "bun test --reporter=dot",
+      "bun test --coverage --reporter junit",
+    ];
+
+    test("#1173: the predicate separates the runner from a script that merely starts with `test`", () => {
+      for (const c of BUN_TEST) expect(isBunTestCommand(c), `${c} is bun's test runner`).toBe(true);
+      for (const c of NOT_BUN_TEST) expect(isBunTestCommand(c), `${c} is NOT bun's test runner`).toBe(false);
+      // `isBunTestCommand` still says yes to these — they ARE bun test. It is
+      // `mayInstrumentJunit` that must say no, and keeping both assertions
+      // here is what stops the two reasons collapsing into one.
+      for (const c of ALREADY_REPORTING) expect(isBunTestCommand(c), `${c} is bun's test runner`).toBe(true);
+    });
+
+    test("#1173: a command that already chose a reporter keeps its own", () => {
+      for (const c of ALREADY_REPORTING) {
+        expect(mayInstrumentJunit(c), `${c} had a second reporter appended`).toBe(false);
+      }
+      // …and the guard is not simply "contains a dash": every eligible
+      // command here carries other flags and must still be instrumented.
+      for (const c of BUN_TEST) expect(mayInstrumentJunit(c), `${c} was refused instrumentation`).toBe(true);
+      // `--reporter-outfile` alone is not choosing a reporter, and
+      // `--no-reporter` is not the flag at all.
+      expect(mayInstrumentJunit("bun test --reporter-outfile=./x.xml")).toBe(true);
+      expect(mayInstrumentJunit("bun test --no-reporter")).toBe(true);
+    });
+
+    // ## Round 4: the strip must round-trip, not just fire
+    //
+    // The generator and the extractor are a writer and a reader of the same
+    // suffix, and nothing compared them. `--reporter-outfile=.*$` matched
+    // ANY trailing outfile, so for a consumer who already configured one it
+    // stripped theirs and reported `bun test` — a mismatch nobody caused.
+    // Their suffix and ours are the SAME SPELLING in the unsharded template,
+    // so no anchoring separates them; the discriminator has to be the one
+    // thing we control, which is the outfile path.
+    //
+    // Measured while verifying the finding: its own scope was too narrow.
+    // It said the sharded template was safe because the shard selector
+    // pushes the reporter off the end. `.*$` ran to end of line and ate the
+    // shard selector too, so sharded was wrong as well — which is why the
+    // table below carries both.
+    const extract = (runLine: string): string => {
+      const yml = `jobs:\n  test:\n    steps:\n      - run: bun install\n      - run: ${runLine}\n`;
+      return testCommandsNamedByCiWorkflow(yml)[0]?.command ?? "";
+    };
+
+    test("#1173: a consumer's OWN reporter survives extraction, in both templates", () => {
+      const own = "bun test --reporter=junit --reporter-outfile=./custom.xml";
+      expect(extract(own), "the unsharded line lost the operator's own flags").toBe(own);
+      expect(
+        extract(`${own} --shard=\${{ matrix.shard }}/4`),
+        "the sharded line lost the operator's own flags, and the shard selector with them",
+      ).toBe(own);
+
+      // A path that merely BEGINS with ours is not ours. Without the
+      // trailing-boundary lookahead the selector strips the prefix and
+      // leaves the remainder behind, so the command reads `bun test .bak` —
+      // a command nobody wrote. Battery row U2 was green until this existed,
+      // which made the lookahead an unproven branch.
+      const lookalike = "bun test --reporter=junit --reporter-outfile=${{ runner.temp }}/rungate-junit.xml.bak";
+      expect(extract(lookalike), "a longer path starting with ours was treated as ours").toBe(lookalike);
+    });
+
+    test("#1173: OUR reporter is stripped, in both templates", () => {
+      // The other direction, or the case above is satisfied by a strip that
+      // never fires — which would put the CI-only flags into the AGENTS.md
+      // row a human copies, the red this selector exists to prevent.
+      //
+      // The suffix is spelled LITERALLY, not built from `junitReporterFlags`
+      // and `ciJunitOutfile`. Composing it from the same bindings the reader
+      // derives from moves both sides of the comparison together, so the
+      // case cannot see a writer and reader that disagree — which is the
+      // exact defect of round 4. Caught by battery row U3, which this case
+      // sat green through while the generator cases went red.
+      const OURS = "--reporter=junit --reporter-outfile=${{ runner.temp }}/rungate-junit";
+      expect(extract(`bun test ${OURS}.xml`)).toBe("bun test");
+      expect(extract(`bun test --shard=\${{ matrix.shard }}/4 ${OURS}-\${{ matrix.shard }}.xml`)).toBe("bun test");
+
+      // …and the literals above really are what the generator emits, or
+      // this case is a fact about two strings in this file.
+      expect(junitReporterFlags("bun test", ciJunitOutfile(CI_JUNIT_SINGLE_LEG))).toBe(` ${OURS}.xml`);
+      expect(junitReporterFlags("bun test", ciJunitOutfile(CI_JUNIT_SHARD_LEG))).toBe(
+        ` ${OURS}-\${{ matrix.shard }}.xml`,
+      );
+    });
+
+    test("#1173: the flags follow the predicate, and are empty for everything else", () => {
+      // Asserted over the LISTS rather than over the predicate alone: a
+      // later caller that forgets the guard is the failure this is about,
+      // and a case that only checks the predicate cannot see it.
+      for (const c of BUN_TEST) {
+        expect(junitReporterFlags(c, "/t/r.xml")).toBe(" --reporter=junit --reporter-outfile=/t/r.xml");
+      }
+      for (const c of [...NOT_BUN_TEST, ...ALREADY_REPORTING]) {
+        expect(junitReporterFlags(c, "/t/r.xml"), `${c} was handed bun's reporter flags`).toBe("");
+      }
+    });
+  });
+
+  // ## Round 1 of #1926's review, which was right
+  //
+  // Every case above reads THIS repository's `ci.yml`, and this repository
+  // sets `ci.shards: 4`. `shardCount` returns 1 for any project that has not
+  // set it, and the unsharded template is a different `- run:` line several
+  // hundred lines away in the generator — so the cases above were green while
+  // the exact defect #1173 exists to fix stood untouched for every consumer
+  // who took the default. The repository under test being sharded is the
+  // thing that hid it, which is why these run the generator instead.
+  describe("#1173: the DEFAULT scaffold output is instrumented too", () => {
+    const emit = (ci: Record<string, unknown>, command = "bun test"): string => {
+      const root = mkdtempSync(join(tmpdir(), "rungate-1173-yml-"));
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(
+        join(root, ".claude", "rungate", "config.json"),
+        // BOTH fields. `dev.testCmd` is the top rung of `lib/test-command.ts`
+        // and is what the scaffold writes into CI; `test.command` is what the
+        // ship run measures with. Setting only the latter was this fixture's
+        // first draft, and the generator emitted `bun test` regardless — so
+        // the "not bun" case was asserting about a bun command.
+        JSON.stringify({ slug: "junitgen", test: { command, timeout: 300000 }, dev: { testCmd: command }, ci }),
+      );
+      writeFileSync(join(root, ".bun-version"), "1.4.3\n");
+      createCiWorkflows(root, [], { force: true });
+      const out = join(root, ".github", "workflows", "ci.yml");
+      // The fixture proves its own premise, twice: a generator that wrote
+      // nothing leaves every assertion below passing against an empty
+      // string, and a generator that ignored `command` leaves the "not bun"
+      // case asserting about a bun command.
+      if (!existsSync(out)) {
+        throw new Error(`the generator wrote no ci.yml for ${JSON.stringify(ci)}. UNMEASURED, not a pass.`);
+      }
+      const yml = readFileSync(out, "utf8");
+      expect(yml, `the generator did not run \`${command}\`, so this fixture measures another command`).toContain(
+        `- run: ${command}`,
+      );
+      return yml;
+    };
+
+    test("#1173: an UNSHARDED project writes and uploads a report", () => {
+      // `shardCount` returns 1 when `ci.shards` is unset, so this IS the
+      // default scaffold output rather than an edge case.
+      const yml = emit({});
+      expect(yml, "the unsharded template still runs the suite with no reporter").toContain("--reporter=junit");
+      expect(yml).toContain("--reporter-outfile=${{ runner.temp }}/rungate-junit.xml");
+      expect(yml, "nothing uploads it, so it dies with the runner").toMatch(/upload-artifact[\s\S]{0,400}junit/);
+      // No matrix exists here, so `${{ matrix.shard }}` would expand to the
+      // empty string and two things would silently share one path.
+      expect(yml).not.toContain("rungate-junit-${{ matrix.shard }}");
+    });
+
+    test("#1173: a SHARDED project keeps one report per leg", () => {
+      const yml = emit({ shards: 4 });
+      expect(yml).toContain("--reporter-outfile=${{ runner.temp }}/rungate-junit-${{ matrix.shard }}.xml");
+      expect(yml, "the artifact name must carry the leg or the legs overwrite each other").toContain(
+        "name: rungate-junit-${{ github.run_attempt }}-${{ matrix.shard }}",
+      );
+    });
+
+    test("#1173: a consumer who already configured a reporter gets no second one", () => {
+      // Round 3. The upload step must go too, not just the flags: a step
+      // uploading `${{ runner.temp }}/rungate-junit.xml` for a run writing
+      // `./custom.xml` warns on every CI run of a file nobody asked for.
+      // Both templates, because round 1 was one template being missed.
+      for (const ci of [{}, { shards: 4 }]) {
+        const yml = emit(ci, "bun test --reporter=junit --reporter-outfile=./custom.xml");
+        expect(yml, `a second reporter at ${JSON.stringify(ci)}`).not.toContain("rungate-junit");
+        expect((yml.match(/--reporter=junit/g) ?? []).length, `duplicated reporter at ${JSON.stringify(ci)}`).toBe(1);
+      }
+    });
+
+    test("#1173: a consumer whose test command is not bun gets no bun flags", () => {
+      // This generator ships to consumers. `pytest --reporter=junit` is a
+      // command their runner rejects, so the instrumentation is conditional
+      // on the command it is appended to — and the condition must hold in
+      // BOTH templates, which is the half that was missing.
+      for (const ci of [{}, { shards: 4 }]) {
+        const yml = emit(ci, "pytest -q");
+        expect(yml, `pytest got bun's reporter flags at ${JSON.stringify(ci)}`).not.toContain("--reporter=junit");
+        expect(yml, `pytest got a report upload at ${JSON.stringify(ci)}`).not.toContain("rungate-junit");
+      }
+    });
+  });
+
+  test("#1173: the suite step does NOT claim a reading it cannot have taken", () => {
+    expect(
+      suiteRun(),
+      "a run cannot read the report it is still writing",
+    ).not.toContain("SUITE_JUNIT_REPORT");
+    const yml = ci();
+    const shardJob = yml.slice(yml.indexOf("\n  test-shard:"), yml.indexOf("\n  test:"));
+    expect(
+      shardJob,
+      "exporting SUITE_JUNIT_REPORT into the job that writes it hands the three in-suite " +
+        "readings a path that is absent on a first run and STALE on a re-run. A stale " +
+        "population is worse than UNMEASURED: it reports a number nobody took.",
+    ).not.toContain("SUITE_JUNIT_REPORT");
   });
 });

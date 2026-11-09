@@ -192,6 +192,140 @@ const NOT_THE_TEST_STEP = new Set(["bun install", "bun run typecheck"]);
  */
 const SHARD_SELECTOR = /\s+--shard=.+?\/\d+\s*$/;
 
+/**
+ * Where a generated run writes its JUnit report (#1173).
+ *
+ * `runner.temp`, not the checkout: several suites in `test/` spawn `bun test`
+ * as a subprocess with the repository as cwd, so a repository-relative path
+ * is written by every nested run and the last writer wins.
+ *
+ * `leg` distinguishes the legs of a matrix and is `""` when there is no
+ * matrix. It is a PARAMETER rather than a constant because `shardCount`
+ * returns 1 for every project that has not set `ci.shards` — the default
+ * scaffold output, not an edge case — and the unsharded template is a
+ * different `- run:` line in the generator. `${{ matrix.shard }}` is not
+ * expanded outside a matrix job, so the suffix cannot be passed
+ * unconditionally.
+ *
+ * It lives HERE rather than beside the generator because the selector below
+ * is derived from it, and `lib/scaffold/steps.ts` already imports from this
+ * module — the other direction would be a cycle, and a second copy of the
+ * path is the thing that makes a producer and a reader disagree.
+ */
+export function ciJunitOutfile(leg: string): string {
+  return `\${{ runner.temp }}/rungate-junit${leg}.xml`;
+}
+
+/** The leg suffix for a matrix job, and the one for a job with no matrix. */
+export const CI_JUNIT_SHARD_LEG = `-\${{ matrix.shard }}`;
+export const CI_JUNIT_SINGLE_LEG = "";
+
+/**
+ * The JUnit reporter is CI INSTRUMENTATION, not a different test command
+ * (#1173), and it is stripped here for the same reason the shard selector is:
+ * leaving it in turns the agreement check red, and the cheap fix for THAT red
+ * is to put `--reporter=junit --reporter-outfile=…` in the AGENTS.md row a
+ * human copies to run the suite locally — a CI-only flag in the one place it
+ * must never be.
+ *
+ * ## It matches OUR outfile by name, and that is the whole point
+ *
+ * The first spelling was `--reporter-outfile=.*$` — anything, to end of line.
+ * Round 4 of #1926 caught what that costs, and measuring it showed the
+ * finding's own scope was too narrow: for a consumer whose `test.command`
+ * already is `bun test --reporter=junit --reporter-outfile=./custom.xml`,
+ * `mayInstrumentJunit` correctly appends nothing, and then this stripped the
+ * consumer's OWN flags and read `bun test`. The agreement check would report
+ * a mismatch nobody caused. In the sharded template it was worse, not better:
+ * `.*$` swallowed the shard selector too.
+ *
+ * Their suffix and ours are **the same spelling in the unsharded template**,
+ * so no amount of anchoring separates them. The discriminator has to be
+ * something we control, and that is the outfile: this generator only ever
+ * writes under `${{ runner.temp }}` with the `rungate-junit` stem, derived
+ * from `ciJunitOutfile` above rather than spelled again. A consumer writing
+ * to exactly that path has configured what we would have configured, so
+ * stripping it is correct there too.
+ */
+const CI_REPORTER_SELECTOR = new RegExp(
+  `\\s+--reporter=junit\\s+--reporter-outfile=(?:${[CI_JUNIT_SHARD_LEG, CI_JUNIT_SINGLE_LEG]
+    .map(leg => ciJunitOutfile(leg).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|")})(?=\\s|$)`,
+);
+
+/**
+ * Is this test command a `bun test` invocation?
+ *
+ * The scaffold generates CI for consumers, and `test.command` is theirs — a
+ * project running `npm test` or `pytest` must not be handed bun's reporter
+ * flags. So the instrumentation is conditional on the command it is being
+ * appended to, and a command this cannot recognise gets nothing rather than
+ * a flag its runner will reject.
+ *
+ * **Whitespace or end of string, NOT `\b`.** `\b` asks only for a non-word
+ * character, and `:` and `-` are non-word characters — so the first spelling
+ * of this matched `bun test:unit` (a package script) and `bun test-runner.ts`
+ * (a file), neither of which is bun's built-in runner. Bun intercepts the
+ * exact token `test` and nothing else, so those commands would have had
+ * `--reporter=junit` appended to some script's argv, and a report uploaded
+ * that the script never writes. Round 2 of #1926's review; measured, not
+ * reasoned about — `/^bun\s+test\b/` returns true for all three.
+ */
+export function isBunTestCommand(command: string): boolean {
+  return /^bun\s+test(\s|$)/.test(command.trim());
+}
+
+/**
+ * A command that already chose a reporter.
+ *
+ * Only the flag, not a bare `--reporterish` word: `(=|\s|$)` so
+ * `--reporter-outfile` alone does not count as choosing one, and
+ * `--no-reporter` is not matched by the leading `(^|\s)--reporter`.
+ */
+const DECLARES_REPORTER = /(^|\s)--reporter(=|\s|$)/;
+
+/**
+ * May this command be given a JUnit reporter? ONE answer, two reasons.
+ *
+ * Both reasons were found by review rather than by me, one round apart
+ * (#1926), and that is the argument for them living in one predicate rather
+ * than as two guards at two call sites. Round 2 fixed `isBunTestCommand` and
+ * I did not then ask what ELSE makes a command ineligible; round 3 named the
+ * second reason. A third would be added here, not somewhere new.
+ *
+ * 1. **It must be bun's built-in runner.** See `isBunTestCommand`.
+ * 2. **It must not already declare a reporter.** A consumer whose
+ *    `test.command` is `bun test --reporter=junit --reporter-outfile=./x.xml`
+ *    has already solved this, and appending a second pair does not merely
+ *    override their choice — measured, it breaks their build. The CI
+ *    extractor below strips from the FIRST `--reporter=junit` to end of
+ *    line, so it reads `bun test` while their config and AGENTS.md row say
+ *    the full command, and the three-position agreement check goes red.
+ *
+ * Both `junitReporterFlags` and the scaffold's upload step ask THIS, so the
+ * flags and the artifact step cannot disagree about whether a report exists.
+ */
+export function mayInstrumentJunit(command: string): boolean {
+  return isBunTestCommand(command) && !DECLARES_REPORTER.test(command.trim());
+}
+
+/**
+ * The flags that make a `bun test` run write per-case durations, or `""`.
+ *
+ * `outfile` is the caller's, because the only correct answer involves the
+ * runner's own temp directory and the shard index, and neither is this
+ * module's to know. **It must not be repository-relative**: several suites in
+ * `test/` spawn `bun test` as a subprocess with the repository as cwd, so a
+ * relative path — or a `bunfig.toml` declaration, which every nested run
+ * inherits — means the last writer wins and a 15,000-case run can end with a
+ * three-case report on disk. Three cases is not empty, so the UNMEASURED
+ * guards downstream would not catch it.
+ */
+export function junitReporterFlags(command: string, outfile: string): string {
+  if (!mayInstrumentJunit(command)) return "";
+  return ` --reporter=junit --reporter-outfile=${outfile}`;
+}
+
 /** The test step of the generated suite job in ci.yml. */
 export function testCommandsNamedByCiWorkflow(text: string): NamedTestCommand[] {
   // `suiteJobName` is the one binding for "which job runs the suite" — it is
@@ -217,7 +351,7 @@ export function testCommandsNamedByCiWorkflow(text: string): NamedTestCommand[] 
     // `run: |` opens a block scalar; the body is not a command on this line.
     .filter(cmd => cmd !== "|" && !cmd.startsWith("|"))
     .filter(cmd => !NOT_THE_TEST_STEP.has(cmd))
-    .map(cmd => cmd.replace(SHARD_SELECTOR, ""));
+    .map(cmd => cmd.replace(CI_REPORTER_SELECTOR, "").replace(SHARD_SELECTOR, ""));
 
   if (runs.length === 0) {
     refuse(CI_YML, "its `test:` job runs nothing but setup and the type check");

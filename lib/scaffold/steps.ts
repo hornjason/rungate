@@ -67,6 +67,13 @@ import { localCalendarDay } from "../local-calendar-day";
 import { decideRuleWrite } from "../rule-provenance";
 import { rowDriftClause, ruleRowDrift } from "../rule-row-drift";
 import { actionRef } from "../workflow-actions";
+import {
+  CI_JUNIT_SHARD_LEG,
+  CI_JUNIT_SINGLE_LEG,
+  ciJunitOutfile,
+  junitReporterFlags,
+  mayInstrumentJunit,
+} from "../test-command-positions";
 import { ciSetupStep } from "../ci-setup-step";
 import { DEFAULT_PROFILE, isRuleIncluded, type ScaffoldProfile } from "./profiles";
 import { referencedPaths } from "../agents-md-refs";
@@ -3266,6 +3273,57 @@ echo "All $passed shards concluded, and all $passed passed."
  * shard whose evidence is UNMEASURED, and the honest place to say so is in
  * the leg that failed to write it.
  */
+// `ciJunitOutfile`, `CI_JUNIT_SHARD_LEG` and `CI_JUNIT_SINGLE_LEG` are
+// declared in `lib/test-command-positions.ts`, beside the selector that
+// STRIPS this suffix back out of a generated workflow (#1173, round 4 of
+// #1926). The reader has to know the exact path the writer emits or it
+// strips a consumer's own reporter flags instead — so there is one
+// declaration, and it lives next to the harder half.
+
+/**
+ * Keep the durations past the runner's lifetime, or there is no population.
+ *
+ * `lib/junit-checks.ts` has held `timeoutProximityViolations` and
+ * `durationCoverageViolations` since #621 and neither had ever run against
+ * this repository's suite: measured before this landed, `ci.yml` ran the
+ * suite with no reporter, `bunfig.toml` declared none, and
+ * `SUITE_JUNIT_REPORT` was set by nothing in the tree — so three live checks
+ * printed UNMEASURED and passed on every CI run.
+ *
+ * **This step produces evidence and gates nothing.** Wiring
+ * `scripts/suite-timeout-margin.ts` in is a separate decision, because it
+ * would redden every pull request carrying a case at 80% of its budget and
+ * nobody has yet seen how many that is.
+ *
+ * `if-no-files-found: warn`, deliberately unlike the shard marker's `error`:
+ * the marker is the aggregate's input and its absence is a broken run, while
+ * a missing report here means the suite died before writing one — which is
+ * already red, and turning it into a second red names the wrong cause.
+ *
+ * Emitted only for a `bun test` command, because the flags that write the
+ * file are only emitted for one.
+ *
+ * `leg` is the same suffix `ciJunitOutfile` took, so the artifact name and
+ * the path it uploads cannot drift apart — and so the unsharded template
+ * gets the step too.
+ */
+export function buildJunitArtifactStep(indent: string, testCommand: string, leg: string): string {
+  if (!mayInstrumentJunit(testCommand)) return "";
+  const lines = [
+    `# #1173. The per-case durations, kept so they can accumulate across`,
+    `# runs — one run cannot say whether a case has regressed.`,
+    `- name: Keep this run's per-case durations`,
+    `  if: always()`,
+    `  uses: ${actionRef("actions/upload-artifact")}`,
+    `  with:`,
+    `    name: rungate-junit-\${{ github.run_attempt }}${leg}`,
+    `    path: ${ciJunitOutfile(leg)}`,
+    `    if-no-files-found: warn`,
+    `    retention-days: 14`,
+  ];
+  return `${lines.map(line => `${indent}${line}`).join("\n")}\n`;
+}
+
 export function buildShardMarkerSteps(indent: string): string {
   const M = SHARD_MARKER_ENV;
   const dir = `\${{ runner.temp }}/rungate-shard-marker`;
@@ -3836,8 +3894,8 @@ ${baseRefStep}
         with:
 ${bunStep}
       - run: bun install${globalTools.step}${ciSetupStep()}
-      - run: ${test.command} --shard=\${{ matrix.shard }}/${shards}${trackerTokenEnv}${typecheckStep}
-${buildShardMarkerSteps("      ")}
+      - run: ${test.command} --shard=\${{ matrix.shard }}/${shards}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SHARD_LEG))}${trackerTokenEnv}${typecheckStep}
+${buildJunitArtifactStep("      ", test.command, CI_JUNIT_SHARD_LEG)}${buildShardMarkerSteps("      ")}
 
   # The aggregate. Named "test" because that is the context branch protection
   # requires; it exists to turn N shard results into the one verdict.
@@ -3924,8 +3982,8 @@ ${baseRefStep}
         with:
 ${bunStep}
       - run: bun install${globalTools.step}${ciSetupStep()}
-      - run: ${test.command}${trackerTokenEnv}${typecheckStep}
-`;
+      - run: ${test.command}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SINGLE_LEG))}${trackerTokenEnv}${typecheckStep}
+${buildJunitArtifactStep("      ", test.command, CI_JUNIT_SINGLE_LEG)}`;
 
   const gatesYml = `# Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: Gates
