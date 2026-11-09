@@ -96,7 +96,7 @@ export interface CensusTrigger {
    * see `censusTestsFor`. A row that fired with no target would read exactly
    * like a spec whose suite was renamed away, and those are different facts.
    */
-  derive?(c: Change, exists: (path: string) => boolean, root: string): string[];
+  derive?(c: Change, exists: (path: string) => boolean, tree: CensusTree): string[];
   /**
    * The rule file's table cell for a derived row, since there is no path
    * list to render. It must spell no concrete test path: the document's
@@ -548,8 +548,8 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
     derivedTarget:
       "every suite that calls a workflow emitter or reads the committed " +
       "`.github/workflows` — `bun scripts/census-routing.ts` names them",
-    derive: (_c, exists, root) =>
-      [...new Set([...generatedWorkflowCensusSuites(root), ...WORKFLOW_SUITES_THE_WALK_CANNOT_SEE])]
+    derive: (_c, exists, tree) =>
+      [...new Set([...tree.generatedWorkflowSuites(), ...WORKFLOW_SUITES_THE_WALK_CANNOT_SEE])]
         .filter(exists)
         .sort(),
     fires: c => inDir(c.path, ".github/workflows") || inDir(c.path, "lib/scaffold"),
@@ -947,17 +947,7 @@ const NAMES_GENERATED_WORKFLOWS =
  * which is a case somebody has to decide about rather than something a
  * hand-written skip hides.
  */
-const generatedWorkflowCensusCache = new Map<string, string[]>();
-
 export function generatedWorkflowCensusSuites(root: string): string[] {
-  const hit = generatedWorkflowCensusCache.get(root);
-  if (hit) return hit;
-  const computed = computeGeneratedWorkflowCensusSuites(root);
-  generatedWorkflowCensusCache.set(root, computed);
-  return computed;
-}
-
-function computeGeneratedWorkflowCensusSuites(root: string): string[] {
   const dir = join(root, "test");
   if (!existsSync(dir)) return [];
   const out: string[] = [];
@@ -982,6 +972,40 @@ function computeGeneratedWorkflowCensusSuites(root: string): string[] {
   return out.sort();
 }
 
+/**
+ * The tree a derived row resolves against, and a place to spend ONE walk of
+ * it per routing call.
+ *
+ * The walk reads every `*.test.ts` under `test/` and takes about 650ms, and
+ * `derive` runs once per matching change — twenty changed workflow files
+ * would pay for it twenty times. The first fix for that was a module-level
+ * `Map` keyed by root, and the AI review on PR #1930 was right to refuse it:
+ * a process-lifetime memo over LIVE filesystem state, in a function whose
+ * entire premise is that membership is a property of the tree. A caller that
+ * writes a test file and routes again in the same process would have been
+ * handed the old answer with nothing saying so — under-routing reintroduced
+ * silently, which is the defect this row exists to remove.
+ *
+ * So the memo lives exactly as long as one `censusTestsFor` call. Within a
+ * call the tree cannot change underneath the answer; between calls there is
+ * nothing to go stale. No bound to tune and no invalidation hook to forget.
+ */
+export interface CensusTree {
+  /** Absolute path to the project being routed. */
+  root: string;
+  /** `generatedWorkflowCensusSuites(root)`, walked at most once per call. */
+  generatedWorkflowSuites(): string[];
+}
+
+/** A `CensusTree` whose walk is memoised for this object's lifetime only. */
+export function censusTree(root: string): CensusTree {
+  let walked: string[] | undefined;
+  return {
+    root,
+    generatedWorkflowSuites: () => (walked ??= generatedWorkflowCensusSuites(root)),
+  };
+}
+
 /** Resolve a repo-relative path against a project root. */
 export const onDisk = (root: string) => (p: string) => existsSync(join(root, p));
 
@@ -1004,6 +1028,9 @@ export function censusTestsFor(
   root: string = SELF_ROOT,
   exists: (path: string) => boolean = onDisk(root),
 ): CensusRouting {
+  // One tree per call, so a derived row's walk is paid for once however many
+  // changes fire it, and cannot outlive the call that asked for it.
+  const tree = censusTree(root);
   const fired: CensusRouting["fired"] = [];
   for (const trigger of CENSUS_TRIGGERS) {
     const matched = changes.filter(c => trigger.fires(c));
@@ -1014,7 +1041,7 @@ export function censusTestsFor(
     // fired and the suite it names is gone".
     const resolved = trigger.derive
       ? matched
-          .map(c => ({ path: c.path, tests: trigger.derive!(c, exists, root) }))
+          .map(c => ({ path: c.path, tests: trigger.derive!(c, exists, tree) }))
           .filter(r => r.tests.length > 0)
       : matched.map(c => ({ path: c.path, tests: trigger.tests }));
     if (resolved.length === 0) continue;

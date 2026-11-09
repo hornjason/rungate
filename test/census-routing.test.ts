@@ -68,7 +68,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
 import {
@@ -76,6 +77,7 @@ import {
   allCensusTests,
   censusDirsRead,
   censusTestsFor,
+  censusTree,
   generatedWorkflowCensusSuites,
   WORKFLOW_SUITES_THE_WALK_CANNOT_SEE,
   ownSpecTestPath,
@@ -670,6 +672,50 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
           "finds them too — drop them from the constant, or the walk could regress to " +
           "nothing behind a list that silently covers for it",
       ).toEqual([]);
+    });
+
+    /**
+     * The memo is scoped to one `censusTree`, and this proves BOTH halves on
+     * a tree that actually moves underneath it.
+     *
+     * The first version of this cache was a module-level `Map` keyed by
+     * root, with no invalidation — a process-lifetime memo over live
+     * filesystem state, in a function whose premise is that membership is a
+     * property of the tree. The AI review on PR #1930 refused it, and a
+     * bound or a TTL would only have made the staleness window shorter.
+     *
+     * Both assertions are needed. Without the first, a `censusTree` that
+     * re-walked on every call would pass the second and silently cost 650ms
+     * per changed file. Without the second, the module-level `Map` this
+     * replaced would pass the first.
+     */
+    test("a tree memoises for its own lifetime and no longer", () => {
+      const dir = mkdtempSync(join(tmpdir(), "rg-census-tree-"));
+      try {
+        mkdirSync(join(dir, "test"));
+        writeFileSync(
+          join(dir, "test/first.test.ts"),
+          'readFileSync(join(REPO, ".github", "workflows", "ci.yml"));\n',
+        );
+        const tree = censusTree(dir);
+        expect(tree.generatedWorkflowSuites()).toEqual(["test/first.test.ts"]);
+
+        writeFileSync(
+          join(dir, "test/second.test.ts"),
+          'readFileSync(join(REPO, ".github", "workflows", "gates.yml"));\n',
+        );
+        expect(
+          tree.generatedWorkflowSuites(),
+          "the tree re-walked mid-call — a routing run would pay 650ms per changed file",
+        ).toEqual(["test/first.test.ts"]);
+        expect(
+          censusTree(dir).generatedWorkflowSuites(),
+          "a FRESH tree returned the stale answer — the memo outlived the call that asked " +
+            "for it, which is under-routing reintroduced with nothing saying so",
+        ).toEqual(["test/first.test.ts", "test/second.test.ts"]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     // The suite with recorded evidence of a catch that the walk cannot see
