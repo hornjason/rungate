@@ -23,12 +23,16 @@ import {
   actorMayWrite,
   WRITING_PERMISSIONS,
   fanoutDecisions,
+  incumbentDecisions,
   mergeCandidateSources,
   readBoardCredential,
   truncatedReadings,
   whyNotReady,
   type Dependent,
+  type Incumbent,
 } from "../lib/board-ready-fanout";
+import { laneFor } from "../lib/board-flow";
+import { structuralCut } from "../lib/source-slice";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -42,6 +46,201 @@ const dep = (over: Partial<Dependent> = {}): Dependent => ({
   onBoard: true,
   boardStatus: "Backlog",
   ...over,
+});
+
+/**
+ * #1929: Ready's entry condition applied to the cards already in it.
+ *
+ * Promotion is one-way with respect to blockers. Measured 2026-11-09 on
+ * #1495: promoted into Ready at 00:41:41Z, `blocked_by_added` for the still
+ * open #1571 at 02:01:08Z, and nothing re-checked it — `blocked_by_added`
+ * reaches the REST timeline and emits no webhook, so no trigger can be added.
+ * The route that needs no new event is this one: `whyNotReady` applied to the
+ * lane's current occupants on the walk that already counts them.
+ */
+const inc = (over: Partial<Incumbent> = {}): Incumbent => ({
+  number: 1,
+  typename: "Issue",
+  state: "OPEN",
+  boardStatus: "Ready",
+  blockedByOpen: 0,
+  ...over,
+});
+
+describe("#1929: a card already in Ready is held to Ready's entry condition", () => {
+  // The pair, and it is a pair on purpose: one input, one field moved. A fix
+  // that demoted everything would pass the first of these and fail the second.
+  test("BR-61: an open issue in Ready with a live blocker is demoted", () => {
+    const [d] = incumbentDecisions([inc({ number: 1495, blockedByOpen: 1 })], "Ready");
+    expect(d.demote).toBe(true);
+    if (d.demote) expect(d.why).toContain("blocker");
+  });
+
+  test("BR-62: the SAME issue with that blocker closed is left alone", () => {
+    const [d] = incumbentDecisions([inc({ number: 1495, blockedByOpen: 0 })], "Ready");
+    expect(d.demote).toBe(false);
+  });
+
+  // The negative control on the LANE. This rule is about Ready's entry
+  // condition and nothing else: an issue somebody is actively working on is
+  // allowed to have an open blocker, and a rule that reached In progress
+  // would yank cards out from under whoever claimed them.
+  test("BR-63: a blocked card in another lane is not touched", () => {
+    const out = incumbentDecisions(
+      [inc({ number: 7, boardStatus: "In progress", blockedByOpen: 2 })],
+      "Ready",
+    );
+    expect(out.filter(d => d.demote)).toEqual([]);
+  });
+
+  // UNMEASURED never moves, the same way `fanoutDecisions` refuses it on the
+  // way in. `?? 0` here would read a token that cannot see dependencies as
+  // "nothing is blocking it" and leave the lane exactly as wrong as it is now.
+  test("BR-64: an unreadable blocker count is UNMEASURED and does not move", () => {
+    const [d] = incumbentDecisions([inc({ blockedByOpen: null })], "Ready");
+    expect(d.demote).toBe(false);
+    if (!d.demote) expect(d.why).toContain("UNMEASURED");
+  });
+
+  // A pull request parked in Ready holds a slot — `holdsReadySlot` counts it —
+  // and has no dependency reading at all. Demoting one would be this rule
+  // acting on a `blockedByOpen` nobody computed.
+  test("BR-65: a pull request in Ready is never demoted", () => {
+    const out = incumbentDecisions(
+      [inc({ typename: "PullRequest", state: "OPEN", blockedByOpen: null })],
+      "Ready",
+    );
+    expect(out.filter(d => d.demote)).toEqual([]);
+  });
+
+  // The lane a demoted card returns to is `laneFor`'s answer, not a literal
+  // spelled here. Two deciders answering "where does something going backwards
+  // go" would agree on every input anybody tests and a mutation of either
+  // would leave the other holding the case up.
+  test("BR-66: the destination lane comes from laneFor, not from a literal", () => {
+    const [d] = incumbentDecisions([inc({ blockedByOpen: 1 })], "Ready");
+    const backwards = laneFor({ kind: "issue_blocked_in_ready" });
+    expect(backwards.lane, "laneFor must have a case for this event kind").not.toBeNull();
+    expect(d.demote).toBe(true);
+    if (d.demote) expect(d.to).toBe(backwards.lane!);
+  });
+
+  // The reason text is `whyNotReady`'s, for the same single-decider reason —
+  // and this asserts the WORDS agree, not merely that both are non-empty.
+  // ── The WIRING, because the four cases above are a pure function ────────
+  //
+  // ai-review round 1 was right and this is the finding that mattered:
+  // deleting the `incumbentDecisions` call, the gather, or the write loop
+  // from `main()` left all 150 tests green, because every case above
+  // exercises the decider directly. The board would have regressed to the
+  // exact one-way promotion #1929 exists to fix with CI green throughout.
+  //
+  // Source-census, the same instrument BR-27, BR-33 and BR-40 already use
+  // on this file: `main()` needs a live endpoint, and a mock deep enough to
+  // reach these call sites would assert against its own fixture.
+  const readyScript = (): string => {
+    const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+    // Comments stripped, or every assertion below can be satisfied by the
+    // prose that explains it — the vacuous shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    return src
+      .split("\n")
+      .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+  };
+
+  // Every region below is cut to a CONSTRUCT, never to a character count.
+  // The first spelling of these four used `slice(at, at + 120)` and
+  // `slice(push - 200, push)`, and `test/no-fixed-window-slices.test.ts`
+  // reddened in CI naming #664: a window sized by eye reads the wrong region
+  // the moment the code around it grows, and a guard reading the wrong
+  // region is green for free. There is no exemption list.
+  test("BR-68: main() calls incumbentDecisions, and acts on what it returns", () => {
+    const code = readyScript();
+    // One regex over the whole file, so there is no region to size at all.
+    // Called and DISCARDED is the same as not called, which is why the
+    // filter is part of the pattern rather than a second search.
+    expect(
+      code,
+      "main() must call incumbentDecisions with the gathered incumbents AND filter the " +
+        "result to the cards that demote — a call whose result is dropped leaves the " +
+        "decider dead and Ready still offering blocked work",
+    ).toMatch(
+      /const demoting = incumbentDecisions\(readyIncumbents, READY_COLUMN\)\s*\.filter\(\s*d\s*=>\s*d\.demote\s*\)/,
+    );
+  });
+
+  test("BR-69: the gather is behind `holds`, so the in-flight card is exempt", () => {
+    const code = readyScript();
+    expect(code, "nothing gathers the lane's incumbents").toContain("readyIncumbents.push(");
+    // **Cut the guard's own block and look inside it.** `holdsReadySlot`
+    // returns false for exactly the card this run's event is moving out of
+    // Ready (#1905); gathering on a bare `status === READY_COLUMN` would
+    // demote it to Backlog while `board-flow` writes In progress for it in a
+    // racing run. Two writers, one card, last writer wins.
+    const guarded = structuralCut(code, "if (holds && n.content?.number !== undefined) {", {
+      balanced: "{",
+    });
+    expect(
+      guarded,
+      "the incumbent gather must sit inside the `holds` guard, the same predicate the cap " +
+        "uses, or the card mid-transition out of Ready is demoted on top of the move in flight",
+    ).toContain("readyIncumbents.push(");
+  });
+
+  test("BR-70: the demotions are written, and before the promotions", () => {
+    const code = readyScript();
+    const loop = code.search(/for\s*\(\s*const dec of demoting\s*\)/);
+    expect(
+      loop,
+      "the demotion decisions are computed and never written — the lane stays wrong while " +
+        "the job reports success",
+    ).toBeGreaterThan(-1);
+    const promote = code.search(/for\s*\(\s*const dec of moving\s*\)/);
+    expect(promote, "the promotion loop is gone — this census is measuring nothing").toBeGreaterThan(-1);
+    // A demotion frees a slot. Writing promotions first computes them
+    // against an occupancy this run is about to reduce, which under-promotes
+    // — conservative. The reverse would write into a lane about to empty.
+    expect(
+      loop < promote,
+      "demotions must be written before promotions, or a promotion lands against an " +
+        "occupancy the same run is about to change",
+    ).toBe(true);
+    // The write itself, cut to the loop's own body: a loop that logs and
+    // mutates nothing satisfies every assertion above.
+    expect(
+      structuralCut(code, "for (const dec of demoting) {", { balanced: "{" }),
+      "the demotion loop must perform the field mutation, not only log it",
+    ).toContain("updateProjectV2ItemFieldValue");
+  });
+
+  test("BR-71: no-candidates returns before the incumbent walk no longer", () => {
+    const code = readyScript();
+    expect(code, "the occupancy walk is gone — this census measures nothing").toContain(
+      "BOARD_PAGE_QUERY, { p: project, c: null }",
+    );
+    // `--closed-issue N --write` where #N was blocking nothing used to exit
+    // here, skipping the walk that gathers incumbents entirely. The
+    // production workflow always passes `--top-up` and never reaches that
+    // combination, which is why it would not have been noticed.
+    const branch = structuralCut(code, "if (candidates.length === 0) {", { balanced: "{" });
+    expect(
+      branch,
+      "the no-candidates branch must not return before the incumbent walk: nothing to " +
+        "PROMOTE is not nothing to do, and a card in Ready that acquired a blocker is " +
+        "still being offered as startable",
+    ).not.toMatch(/\breturn 0;/);
+  });
+
+  test("BR-67: the demotion reason is whyNotReady's, not a second wording", () => {
+    const [d] = incumbentDecisions([inc({ blockedByOpen: 3 })], "Ready");
+    expect(d.demote).toBe(true);
+    if (d.demote) {
+      expect(d.why).toContain(
+        whyNotReady(dep({ state: "OPEN", blockedByOpen: 3, assignees: 0 })),
+      );
+    }
+  });
 });
 
 describe("BR-1..BR-6: the fan-out from one closed blocker", () => {
@@ -1083,7 +1282,14 @@ describe("BR-38..BR-39: every credentialed fetch reads its status before its bod
     // Source-ORDER, like BS-38 and for the same reason: `main()` needs a live
     // endpoint, and a mock deep enough to reach the resolution would assert
     // against its own fixture.
-    const guard = code.search(/if \(moving\.length === 0\)/);
+    // Anchored on the guard's own MESSAGE rather than on the shape of its
+    // condition. The condition gained a second term in #1929 — a demotion is
+    // a move, so a run whose only work is a demotion must NOT short-circuit —
+    // and `/if \(moving\.length === 0\)/` stopped matching a guard that was
+    // still there and still correct. A detector narrower than what it detects
+    // reads as a missing guard, which is the louder half of that failure and
+    // not the dangerous one; the dangerous one is the next rewording.
+    const guard = code.search(/Nothing to move\. No issue changed\./);
     const resolve = code.search(/field\(name:\s*"Status"\)/);
     // Anti-vacuity, both halves — `-1 < anything` would satisfy the ordering
     // for free if either side were renamed away.
@@ -1092,6 +1298,17 @@ describe("BR-38..BR-39: every credentialed fetch reads its status before its bod
       guard,
       "a `--write` run must short-circuit when nothing is moving",
     ).toBeGreaterThan(-1);
+    // **And the short-circuit must count BOTH kinds of move** (#1929). With
+    // only `moving.length === 0` a run that promotes nothing and demotes one
+    // card returns before the Status field is resolved, so the demotion is
+    // decided, logged, and never written — the lane stays wrong while the
+    // job reports success, which is the exact defect this issue is about.
+    const condition = code.slice(Math.max(0, guard - 400), guard);
+    expect(
+      condition,
+      "the nothing-to-move guard must consider demotions as well as promotions, " +
+        "or a demotion-only run exits before it can write anything",
+    ).toMatch(/demoting\.length === 0/);
     expect(
       guard < resolve,
       "the nothing-to-move guard must come BEFORE the Status field is resolved, " +

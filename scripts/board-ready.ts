@@ -40,10 +40,12 @@
 import {
   actorMayWrite,
   fanoutDecisions,
+  incumbentDecisions,
   mergeCandidateSources,
   readBoardCredential,
   truncatedReadings,
   type Dependent,
+  type Incumbent,
 } from "../lib/board-ready-fanout";
 import { phaseOf } from "../lib/board-mirror";
 import {
@@ -75,12 +77,27 @@ const READY_COLUMN = "Ready";
 // `number` is selected so the occupancy pass can recognise the ONE card the
 // current event is moving out of Ready (#1905). A scalar, so it costs no
 // page and nothing for BR-19 or BR-46 to weigh.
+// `id` and `issueDependenciesSummary{blockedBy}` are both SCALAR selections —
+// neither takes a `first:`, so BR-46's product is unchanged at 100 × 50 =
+// 5,000, which is **a hundred times** under GitHub's 500,000 ceiling (#1929).
+//
+// That figure is load-bearing: the next person adding a selection here sizes
+// it against this headroom. The first draft said "five hundred times", and
+// round 2 of ai-review was right that round 1's fix had APPENDED a correction
+// while leaving the wrong number as the leading claim — a reader who stops at
+// the first number is told the margin is five times larger than it is.
+//
+// They are here because the occupancy pass is the only walk that
+// already visits every card in Ready, and re-asking Ready's entry condition
+// of its incumbents needs exactly two things the walk did not carry: the item
+// to write through, and the blocker count to judge.
 const BOARD_PAGE_QUERY = `query($p:ID!,$c:String){node(id:$p){... on ProjectV2{items(first:100,after:$c){
        pageInfo{hasNextPage endCursor}
        nodes{
+         id
          fieldValues(first:50){pageInfo{hasNextPage} nodes{
            ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}}}
-         content{__typename ... on Issue{number state milestone{title}}}}}}}}`;
+         content{__typename ... on Issue{number state milestone{title} issueDependenciesSummary{blockedBy}}}}}}}}`;
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(`--${name}`);
@@ -384,14 +401,24 @@ async function main(): Promise<number> {
   }
   const { candidates, freed } = mergeCandidateSources(closeNodes, openNodes);
   if (candidates.length === 0) {
+    // **No candidate to PROMOTE is not no work to do** (#1929, ai-review
+    // round 1). The demotion walk lives below, inside the occupancy pass,
+    // and this return used to skip it: `--closed-issue N --write` where #N
+    // was blocking nothing exits here, so a card in Ready that acquired a
+    // blocker stayed offered as startable. The production workflow always
+    // passes `--top-up` and never reaches that combination, which is
+    // exactly why it would have gone unnoticed — the script is a general
+    // CLI and its `--closed-issue`-only mode predates `--top-up`.
+    //
+    // Reported rather than silently continued: a run that promotes nothing
+    // and a run that promotes nothing and demotes one are different events.
     console.log(
       topUp
         ? `${owner}/${name} has no open issues` +
           (closed === null ? "" : `, and #${closed} was blocking nothing`) +
-          ". No issue changed."
-        : `#${closed} was blocking nothing. No issue changed.`,
+          ". Nothing to promote; still checking Ready's incumbents."
+        : `#${closed} was blocking nothing. Nothing to promote; still checking Ready's incumbents.`,
     );
-    return 0;
   }
 
   // **This pass counts how full Ready is**, which the cap needs. It also
@@ -427,6 +454,14 @@ async function main(): Promise<number> {
   let occupied = 0;
   let dispatchable = 0;
   let occupancyTruncated = false;
+  // **Every card the walk finds in Ready, so its entry condition can be
+  // re-asked of the lane's incumbents** (#1929). Collected here rather than
+  // in a second walk: a second walk would be a second reading of the same
+  // lane taken at a different moment, and the two could disagree with
+  // nothing able to say which was current. `blockedByOpen` is `?? null`,
+  // never `?? 0` — a token that cannot see `issueDependenciesSummary` has
+  // not read zero blockers, it has not read.
+  const readyIncumbents: (Incumbent & { readonly itemId: string | null })[] = [];
   for (;;) {
     for (const n of page.nodes) {
       // **Occupancy counts every card in Ready, issue or not.** The lane's
@@ -468,6 +503,24 @@ async function main(): Promise<number> {
         // counted over different populations.
         if (n.content?.__typename === "Issue" && n.content?.state === "OPEN") dispatchable++;
       }
+      // **Gathered on `holds`, which is the same predicate the cap uses.**
+      // `holdsReadySlot` returns false for exactly one card: the issue this
+      // run's own event is moving out of Ready (#1905). That card is
+      // mid-transition — `board-flow` is writing In progress for it in a run
+      // racing this one — and demoting it to Backlog on top of that write is
+      // two writers on one card in the same second, with last-writer-wins
+      // deciding where it lands. It is about to leave the lane anyway, and
+      // the next qualifying event re-checks it if it does not.
+      if (holds && n.content?.number !== undefined) {
+        readyIncumbents.push({
+          number: n.content.number,
+          typename: n.content.__typename,
+          state: n.content.state ?? null,
+          boardStatus: status,
+          blockedByOpen: n.content.issueDependenciesSummary?.blockedBy ?? null,
+          itemId: n.id ?? null,
+        });
+      }
       // A Status on page two and no Status at all produce the same
       // `undefined`, and one means "this card is not in Ready" while the
       // other means "I could not look". An undercount here promotes past
@@ -506,7 +559,10 @@ async function main(): Promise<number> {
   // 100,000, and any further selection puts them over GitHub's 500,000 node
   // ceiling as the detector models it. BR-45's own message says what to do —
   // *split the query rather than shrinking a selection until it fits* — so
-  // this is the split. 100 × 20 = 2,000, five hundred times under.
+  // this is the split. 100 × 20 = 2,000, two hundred and fifty times under.
+  // (Swept here rather than only at the site the finding named: the same
+  // "five hundred times under" slip was in the #1929 comment above, and one
+  // of two instances repaired is the shape this repo keeps paying for.)
   //
   // It is one pass over the repository's open issues rather than a lookup per
   // candidate: the candidate set is a subset of it on both source paths, and
@@ -717,8 +773,24 @@ async function main(): Promise<number> {
   }
 
   const moving = selection.promote;
+
+  // **Ready's entry condition, re-asked of the cards already in it** (#1929).
+  // Computed here, beside the promotions, because they are the same claim
+  // about the same lane: `isReady` says who may enter, `incumbentDecisions`
+  // says who may stay, and both read `whyNotReady` for the reason. Reported
+  // separately throughout — a run that promoted two and a run that promoted
+  // two and demoted one are different events, and a single total hides the
+  // half that is new.
+  const demoting = incumbentDecisions(readyIncumbents, READY_COLUMN).filter(d => d.demote);
+  for (const d of demoting) {
+    console.log(`  #${d.number} is in ${READY_COLUMN} and ${d.why} -> ${d.to}`);
+  }
+
   if (!apply) {
-    console.log(`\nDry run. ${moving.length} issue(s) would move. Pass --write to perform it.`);
+    console.log(
+      `\nDry run. ${moving.length} issue(s) would be promoted and ${demoting.length} demoted. ` +
+        `Pass --write to perform it.`,
+    );
     return 0;
   }
 
@@ -731,7 +803,9 @@ async function main(): Promise<number> {
   // for exactly this reason. Caught in review of #1747; BR-42. Same class as
   // BS-38 in `scripts/board-status-sweep.ts`, found one round earlier in the
   // other script.
-  if (moving.length === 0) {
+  // A demotion is a move, so this short-circuit has to count both or a run
+  // whose only work is a demotion exits before resolving the Status field.
+  if (moving.length === 0 && demoting.length === 0) {
     console.log(`\nNothing to move. No issue changed.`);
     return 0;
   }
@@ -753,10 +827,46 @@ async function main(): Promise<number> {
     console.log(`::warning::the board has no Status field — UNMEASURED, nothing written`);
     return EXIT_REFUSED;
   }
-  const option = (statusField.options ?? []).find((o: any) => o.name === READY_COLUMN);
+  // One lookup, used for both directions. A second `find` spelled inline for
+  // the demotion target would be a second place that decides what an option
+  // id is, and the two would agree on every board anybody tests.
+  const optionFor = (name: string): { id: string } | undefined =>
+    (statusField.options ?? []).find((o: any) => o.name === name);
+  const option = optionFor(READY_COLUMN);
   if (!option) {
     console.log(`::warning::the board has no "${READY_COLUMN}" option — UNMEASURED, nothing written`);
     return EXIT_REFUSED;
+  }
+
+  // Demotions first, and the ordering is load-bearing: a demotion frees a
+  // slot, and a promotion computed against the pre-demotion occupancy is
+  // conservative — it under-promotes rather than exceeding the cap. The
+  // reverse order could write a card into a lane this run was about to
+  // empty, which is the direction that breaks #1852's bound.
+  for (const dec of demoting) {
+    const target = readyIncumbents.find(c => c.number === dec.number);
+    const to = optionFor(dec.to);
+    if (!target?.itemId) {
+      console.log(`::warning::#${dec.number} is in ${READY_COLUMN} with no item id — UNMEASURED`);
+      continue;
+    }
+    if (!to) {
+      // The lane the one backwards rule names does not exist on this board.
+      // Loud and skipped, never silently left in Ready: a card that should
+      // not be startable staying startable is the whole defect.
+      console.log(
+        `::warning::the board has no "${dec.to}" option, so #${dec.number} could not be ` +
+          `demoted out of ${READY_COLUMN} — UNMEASURED, it is still being offered as startable`,
+      );
+      continue;
+    }
+    await gql(
+      token,
+      `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(
+         input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}`,
+      { p: project, i: target.itemId, f: statusField.id, o: to.id },
+    );
+    console.log(`  wrote #${dec.number} -> ${dec.to} (${dec.why})`);
   }
 
   for (const dec of moving) {

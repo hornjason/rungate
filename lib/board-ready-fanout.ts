@@ -40,6 +40,7 @@
  * issues happened to close.
  */
 import { isReady } from "./board-mirror";
+import { laneFor } from "./board-flow";
 
 /** One issue that the closed blocker was blocking. */
 export interface Dependent {
@@ -131,6 +132,114 @@ export function whyNotReady(d: Dependent): string {
   }
   if (d.assignees === null) return "UNMEASURED — the assignee count could not be read";
   return "somebody has claimed it";
+}
+
+/**
+ * A card already sitting in the Ready column, as the occupancy walk sees it.
+ *
+ * Deliberately not a `Dependent`. A `Dependent` is an APPLICANT — it carries
+ * `phase`, `labels`, `assignees` and `onBoard`, all of which exist to decide
+ * whether something may ENTER the lane. An incumbent is already in, already
+ * on the board by construction, and the only question asked of it is the one
+ * that can become false after promotion.
+ */
+export interface Incumbent {
+  readonly number: number;
+  /** `Issue`, `PullRequest`, or whatever else GitHub puts on a board. */
+  readonly typename: string;
+  readonly state: string | null;
+  /** The board column this card is in, or `null` when it has no Status value. */
+  readonly boardStatus: string | null;
+  /**
+   * OPEN blockers, or `null` for UNMEASURED — same contract as
+   * `Dependent.blockedByOpen`, and the same reason: a token that cannot read
+   * `issueDependenciesSummary` must not read as "nothing is blocking it".
+   */
+  readonly blockedByOpen: number | null;
+}
+
+export type IncumbentDecision =
+  | { readonly number: number; readonly demote: true; readonly to: string; readonly why: string }
+  | { readonly number: number; readonly demote: false; readonly why: string };
+
+/**
+ * Ready's entry condition, applied to the lane's current occupants (#1929).
+ *
+ * **Promotion is one-way with respect to blockers and this is the half that
+ * closes it.** A card is promoted when `isReady` says yes; nothing re-asks
+ * afterwards, because the event that would prompt it — `blocked_by_added` —
+ * exists on the REST timeline and emits no webhook. Measured on #1495:
+ * promoted 00:41:41Z, blocked 02:01:08Z, zero workflow runs started at the
+ * second timestamp against four unfiltered `issues` subscribers.
+ *
+ * Three things it deliberately does not do:
+ *
+ *   - **It does not decide readiness.** The reason text is `whyNotReady`'s
+ *     and the destination lane is `laneFor`'s. Two deciders for either
+ *     question would agree on every input anybody tests and a mutation of
+ *     one would leave the other holding the case up.
+ *   - **It touches only the Ready column.** An issue in In progress is
+ *     allowed an open blocker — somebody has claimed it, and yanking their
+ *     card back would be this rule acting outside the condition it enforces.
+ *   - **UNMEASURED never moves**, and a non-issue never moves, because a
+ *     pull request parked in Ready holds a slot and has no dependency
+ *     reading at all.
+ *
+ * The honest limit, stated rather than discovered: this corrects on the next
+ * qualifying event, not at the moment of blocking. Between the edge being
+ * added and the next close/assign/unassign/open/reopen anywhere on the
+ * repository, the lane is still wrong. That window is unavoidable while
+ * GitHub emits no event for a dependency change.
+ */
+export function incumbentDecisions(
+  incumbents: readonly Incumbent[],
+  readyColumn: string,
+): IncumbentDecision[] {
+  const backwards = laneFor({ kind: "issue_blocked_in_ready" });
+  return incumbents.map((c): IncumbentDecision => {
+    if (c.boardStatus !== readyColumn) {
+      return { number: c.number, demote: false, why: `not in ${readyColumn}` };
+    }
+    if (c.typename !== "Issue") {
+      return { number: c.number, demote: false, why: `a ${c.typename} has no blocker graph` };
+    }
+    if (c.state !== "OPEN") {
+      return { number: c.number, demote: false, why: `the issue is ${c.state}` };
+    }
+    if (c.blockedByOpen === null) {
+      return {
+        number: c.number,
+        demote: false,
+        why: "UNMEASURED — the dependency summary could not be read",
+      };
+    }
+    if (c.blockedByOpen === 0) return { number: c.number, demote: false, why: "still unblocked" };
+    // The lane itself is UNMEASURED if the one rule for moving backwards has
+    // no answer. Writing a literal here would be the second decider.
+    if (backwards.lane === null) {
+      return {
+        number: c.number,
+        demote: false,
+        why: `UNMEASURED — laneFor gave no destination: ${backwards.why}`,
+      };
+    }
+    return {
+      number: c.number,
+      demote: true,
+      to: backwards.lane,
+      why:
+        `${whyNotReady({
+          number: c.number,
+          state: c.state,
+          phase: null,
+          labels: [],
+          blockedByOpen: c.blockedByOpen,
+          assignees: 0,
+          onBoard: true,
+          boardStatus: c.boardStatus,
+        })}, so it no longer meets ${readyColumn}'s entry condition`,
+    };
+  });
 }
 
 /**

@@ -19,7 +19,8 @@
  */
 import { actorMayWrite, readBoardCredential } from "../lib/board-ready-fanout";
 import {
-  LANE_EVENTS,
+  DERIVED_LANE_EVENTS,
+  WEBHOOK_LANE_EVENTS,
   identitiesToAuthorise,
   laneFor,
   prEventMayWrite,
@@ -144,9 +145,20 @@ async function main(): Promise<number> {
   // `laneFor`'s default arm and be reported as "no rule for event kind",
   // which is true and unhelpful — it reads as a missing feature rather than
   // as a misspelled argument.
-  if (!(LANE_EVENTS as readonly string[]).includes(event)) {
+  // **`WEBHOOK_LANE_EVENTS`, not `LANE_EVENTS`** (#1929, ai-review round 1).
+  // A derived kind means "my caller already verified the preconditions", and
+  // this script verifies none of them — it resolves actor permission and
+  // writes whatever lane `laneFor` returns. Accepting one here would demote
+  // any issue to Backlog on the operator's say-so.
+  if (!(WEBHOOK_LANE_EVENTS as readonly string[]).includes(event)) {
+    const derived = (DERIVED_LANE_EVENTS as readonly string[]).includes(event);
     console.error(
-      `UNMEASURED: --event "${event}" is not one of ${LANE_EVENTS.join(", ")}. ` +
+      `UNMEASURED: --event "${event}" is not one of ${WEBHOOK_LANE_EVENTS.join(", ")}. ` +
+        (derived
+          ? `It is a DERIVED lane event: the caller that raises it has already checked the ` +
+            `preconditions it stands for, and this script checks none of them. It is not an ` +
+            `argument. `
+          : "") +
         `Nothing was read and nothing was written.`,
     );
     return EXIT_REFUSED;
