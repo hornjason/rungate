@@ -67,7 +67,13 @@ import { localCalendarDay } from "../local-calendar-day";
 import { decideRuleWrite } from "../rule-provenance";
 import { rowDriftClause, ruleRowDrift } from "../rule-row-drift";
 import { actionRef } from "../workflow-actions";
-import { junitReporterFlags, mayInstrumentJunit } from "../test-command-positions";
+import {
+  CI_JUNIT_SHARD_LEG,
+  CI_JUNIT_SINGLE_LEG,
+  ciJunitOutfile,
+  junitReporterFlags,
+  mayInstrumentJunit,
+} from "../test-command-positions";
 import { ciSetupStep } from "../ci-setup-step";
 import { DEFAULT_PROFILE, isRuleIncluded, type ScaffoldProfile } from "./profiles";
 import { referencedPaths } from "../agents-md-refs";
@@ -3267,30 +3273,12 @@ echo "All $passed shards concluded, and all $passed passed."
  * shard whose evidence is UNMEASURED, and the honest place to say so is in
  * the leg that failed to write it.
  */
-/**
- * Where a run writes its JUnit report (#1173).
- *
- * `runner.temp`, not the checkout: several suites in `test/` spawn `bun test`
- * as a subprocess with the repository as cwd, so a repository-relative path
- * is written by every nested run and the last writer wins.
- *
- * `leg` distinguishes the legs of a matrix and is `""` when there is no
- * matrix. It is a PARAMETER rather than a constant because `shardCount`
- * returns 1 for every project that has not set `ci.shards` — which is the
- * default scaffold output, not an edge case — and the unsharded template is a
- * different `- run:` line several hundred lines away. Instrumenting only the
- * sharded one leaves the defect this exists to fix in place for every
- * consumer who took the default, which is what the first round of review on
- * #1926 caught. `\${{ matrix.shard }}` is not expanded outside a matrix job,
- * so the suffix cannot simply be passed unconditionally.
- */
-export function ciJunitOutfile(leg: string): string {
-  return `\${{ runner.temp }}/rungate-junit${leg}.xml`;
-}
-
-/** The leg suffix for a matrix job, and the one for a job with no matrix. */
-export const CI_JUNIT_SHARD_LEG = `-\${{ matrix.shard }}`;
-export const CI_JUNIT_SINGLE_LEG = "";
+// `ciJunitOutfile`, `CI_JUNIT_SHARD_LEG` and `CI_JUNIT_SINGLE_LEG` are
+// declared in `lib/test-command-positions.ts`, beside the selector that
+// STRIPS this suffix back out of a generated workflow (#1173, round 4 of
+// #1926). The reader has to know the exact path the writer emits or it
+// strips a consumer's own reporter flags instead — so there is one
+// declaration, and it lives next to the harder half.
 
 /**
  * Keep the durations past the runner's lifetime, or there is no population.

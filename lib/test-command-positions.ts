@@ -193,21 +193,65 @@ const NOT_THE_TEST_STEP = new Set(["bun install", "bun run typecheck"]);
 const SHARD_SELECTOR = /\s+--shard=.+?\/\d+\s*$/;
 
 /**
- * The JUnit reporter is CI INSTRUMENTATION, not a different test command
- * (#1173), and it is stripped here for the same reason the shard selector is.
+ * Where a generated run writes its JUnit report (#1173).
  *
- * Appending it without this would turn the agreement check red, and the cheap
- * fix for THAT red is to put `--reporter=junit --reporter-outfile=…` in the
- * AGENTS.md row a human copies to run the suite locally — a CI-only flag in
- * the one place it must never be.
+ * `runner.temp`, not the checkout: several suites in `test/` spawn `bun test`
+ * as a subprocess with the repository as cwd, so a repository-relative path
+ * is written by every nested run and the last writer wins.
  *
- * Anchored at the end and matching only the exact PAIR this generator emits,
- * in that order, so a command that differs anywhere else still disagrees. The
- * outfile is matched with `.*` rather than `\S+` for the same reason as the
- * shard numerator: the generated value is a GitHub expression containing
- * spaces.
+ * `leg` distinguishes the legs of a matrix and is `""` when there is no
+ * matrix. It is a PARAMETER rather than a constant because `shardCount`
+ * returns 1 for every project that has not set `ci.shards` — the default
+ * scaffold output, not an edge case — and the unsharded template is a
+ * different `- run:` line in the generator. `${{ matrix.shard }}` is not
+ * expanded outside a matrix job, so the suffix cannot be passed
+ * unconditionally.
+ *
+ * It lives HERE rather than beside the generator because the selector below
+ * is derived from it, and `lib/scaffold/steps.ts` already imports from this
+ * module — the other direction would be a cycle, and a second copy of the
+ * path is the thing that makes a producer and a reader disagree.
  */
-const CI_REPORTER_SELECTOR = /\s+--reporter=junit\s+--reporter-outfile=.*$/;
+export function ciJunitOutfile(leg: string): string {
+  return `\${{ runner.temp }}/rungate-junit${leg}.xml`;
+}
+
+/** The leg suffix for a matrix job, and the one for a job with no matrix. */
+export const CI_JUNIT_SHARD_LEG = `-\${{ matrix.shard }}`;
+export const CI_JUNIT_SINGLE_LEG = "";
+
+/**
+ * The JUnit reporter is CI INSTRUMENTATION, not a different test command
+ * (#1173), and it is stripped here for the same reason the shard selector is:
+ * leaving it in turns the agreement check red, and the cheap fix for THAT red
+ * is to put `--reporter=junit --reporter-outfile=…` in the AGENTS.md row a
+ * human copies to run the suite locally — a CI-only flag in the one place it
+ * must never be.
+ *
+ * ## It matches OUR outfile by name, and that is the whole point
+ *
+ * The first spelling was `--reporter-outfile=.*$` — anything, to end of line.
+ * Round 4 of #1926 caught what that costs, and measuring it showed the
+ * finding's own scope was too narrow: for a consumer whose `test.command`
+ * already is `bun test --reporter=junit --reporter-outfile=./custom.xml`,
+ * `mayInstrumentJunit` correctly appends nothing, and then this stripped the
+ * consumer's OWN flags and read `bun test`. The agreement check would report
+ * a mismatch nobody caused. In the sharded template it was worse, not better:
+ * `.*$` swallowed the shard selector too.
+ *
+ * Their suffix and ours are **the same spelling in the unsharded template**,
+ * so no amount of anchoring separates them. The discriminator has to be
+ * something we control, and that is the outfile: this generator only ever
+ * writes under `${{ runner.temp }}` with the `rungate-junit` stem, derived
+ * from `ciJunitOutfile` above rather than spelled again. A consumer writing
+ * to exactly that path has configured what we would have configured, so
+ * stripping it is correct there too.
+ */
+const CI_REPORTER_SELECTOR = new RegExp(
+  `\\s+--reporter=junit\\s+--reporter-outfile=(?:${[CI_JUNIT_SHARD_LEG, CI_JUNIT_SINGLE_LEG]
+    .map(leg => ciJunitOutfile(leg).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|")})(?=\\s|$)`,
+);
 
 /**
  * Is this test command a `bun test` invocation?

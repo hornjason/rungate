@@ -51,7 +51,15 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { createCiWorkflows } from "../lib/scaffold/steps";
-import { isBunTestCommand, junitReporterFlags, mayInstrumentJunit } from "../lib/test-command-positions";
+import {
+  CI_JUNIT_SHARD_LEG,
+  CI_JUNIT_SINGLE_LEG,
+  ciJunitOutfile,
+  isBunTestCommand,
+  junitReporterFlags,
+  mayInstrumentJunit,
+  testCommandsNamedByCiWorkflow,
+} from "../lib/test-command-positions";
 
 import {
   DEFAULT_WITHIN,
@@ -430,6 +438,66 @@ describe("#1173: CI produces the durations these readings need", () => {
       // `--no-reporter` is not the flag at all.
       expect(mayInstrumentJunit("bun test --reporter-outfile=./x.xml")).toBe(true);
       expect(mayInstrumentJunit("bun test --no-reporter")).toBe(true);
+    });
+
+    // ## Round 4: the strip must round-trip, not just fire
+    //
+    // The generator and the extractor are a writer and a reader of the same
+    // suffix, and nothing compared them. `--reporter-outfile=.*$` matched
+    // ANY trailing outfile, so for a consumer who already configured one it
+    // stripped theirs and reported `bun test` — a mismatch nobody caused.
+    // Their suffix and ours are the SAME SPELLING in the unsharded template,
+    // so no anchoring separates them; the discriminator has to be the one
+    // thing we control, which is the outfile path.
+    //
+    // Measured while verifying the finding: its own scope was too narrow.
+    // It said the sharded template was safe because the shard selector
+    // pushes the reporter off the end. `.*$` ran to end of line and ate the
+    // shard selector too, so sharded was wrong as well — which is why the
+    // table below carries both.
+    const extract = (runLine: string): string => {
+      const yml = `jobs:\n  test:\n    steps:\n      - run: bun install\n      - run: ${runLine}\n`;
+      return testCommandsNamedByCiWorkflow(yml)[0]?.command ?? "";
+    };
+
+    test("#1173: a consumer's OWN reporter survives extraction, in both templates", () => {
+      const own = "bun test --reporter=junit --reporter-outfile=./custom.xml";
+      expect(extract(own), "the unsharded line lost the operator's own flags").toBe(own);
+      expect(
+        extract(`${own} --shard=\${{ matrix.shard }}/4`),
+        "the sharded line lost the operator's own flags, and the shard selector with them",
+      ).toBe(own);
+
+      // A path that merely BEGINS with ours is not ours. Without the
+      // trailing-boundary lookahead the selector strips the prefix and
+      // leaves the remainder behind, so the command reads `bun test .bak` —
+      // a command nobody wrote. Battery row U2 was green until this existed,
+      // which made the lookahead an unproven branch.
+      const lookalike = "bun test --reporter=junit --reporter-outfile=${{ runner.temp }}/rungate-junit.xml.bak";
+      expect(extract(lookalike), "a longer path starting with ours was treated as ours").toBe(lookalike);
+    });
+
+    test("#1173: OUR reporter is stripped, in both templates", () => {
+      // The other direction, or the case above is satisfied by a strip that
+      // never fires — which would put the CI-only flags into the AGENTS.md
+      // row a human copies, the red this selector exists to prevent.
+      //
+      // The suffix is spelled LITERALLY, not built from `junitReporterFlags`
+      // and `ciJunitOutfile`. Composing it from the same bindings the reader
+      // derives from moves both sides of the comparison together, so the
+      // case cannot see a writer and reader that disagree — which is the
+      // exact defect of round 4. Caught by battery row U3, which this case
+      // sat green through while the generator cases went red.
+      const OURS = "--reporter=junit --reporter-outfile=${{ runner.temp }}/rungate-junit";
+      expect(extract(`bun test ${OURS}.xml`)).toBe("bun test");
+      expect(extract(`bun test --shard=\${{ matrix.shard }}/4 ${OURS}-\${{ matrix.shard }}.xml`)).toBe("bun test");
+
+      // …and the literals above really are what the generator emits, or
+      // this case is a fact about two strings in this file.
+      expect(junitReporterFlags("bun test", ciJunitOutfile(CI_JUNIT_SINGLE_LEG))).toBe(` ${OURS}.xml`);
+      expect(junitReporterFlags("bun test", ciJunitOutfile(CI_JUNIT_SHARD_LEG))).toBe(
+        ` ${OURS}-\${{ matrix.shard }}.xml`,
+      );
     });
 
     test("#1173: the flags follow the predicate, and are empty for everything else", () => {
