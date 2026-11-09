@@ -23,12 +23,15 @@ import {
   actorMayWrite,
   WRITING_PERMISSIONS,
   fanoutDecisions,
+  incumbentDecisions,
   mergeCandidateSources,
   readBoardCredential,
   truncatedReadings,
   whyNotReady,
   type Dependent,
+  type Incumbent,
 } from "../lib/board-ready-fanout";
+import { laneFor } from "../lib/board-flow";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -42,6 +45,96 @@ const dep = (over: Partial<Dependent> = {}): Dependent => ({
   onBoard: true,
   boardStatus: "Backlog",
   ...over,
+});
+
+/**
+ * #1929: Ready's entry condition applied to the cards already in it.
+ *
+ * Promotion is one-way with respect to blockers. Measured 2026-11-09 on
+ * #1495: promoted into Ready at 00:41:41Z, `blocked_by_added` for the still
+ * open #1571 at 02:01:08Z, and nothing re-checked it — `blocked_by_added`
+ * reaches the REST timeline and emits no webhook, so no trigger can be added.
+ * The route that needs no new event is this one: `whyNotReady` applied to the
+ * lane's current occupants on the walk that already counts them.
+ */
+const inc = (over: Partial<Incumbent> = {}): Incumbent => ({
+  number: 1,
+  typename: "Issue",
+  state: "OPEN",
+  boardStatus: "Ready",
+  blockedByOpen: 0,
+  ...over,
+});
+
+describe("#1929: a card already in Ready is held to Ready's entry condition", () => {
+  // The pair, and it is a pair on purpose: one input, one field moved. A fix
+  // that demoted everything would pass the first of these and fail the second.
+  test("BR-61: an open issue in Ready with a live blocker is demoted", () => {
+    const [d] = incumbentDecisions([inc({ number: 1495, blockedByOpen: 1 })], "Ready");
+    expect(d.demote).toBe(true);
+    if (d.demote) expect(d.why).toContain("blocker");
+  });
+
+  test("BR-62: the SAME issue with that blocker closed is left alone", () => {
+    const [d] = incumbentDecisions([inc({ number: 1495, blockedByOpen: 0 })], "Ready");
+    expect(d.demote).toBe(false);
+  });
+
+  // The negative control on the LANE. This rule is about Ready's entry
+  // condition and nothing else: an issue somebody is actively working on is
+  // allowed to have an open blocker, and a rule that reached In progress
+  // would yank cards out from under whoever claimed them.
+  test("BR-63: a blocked card in another lane is not touched", () => {
+    const out = incumbentDecisions(
+      [inc({ number: 7, boardStatus: "In progress", blockedByOpen: 2 })],
+      "Ready",
+    );
+    expect(out.filter(d => d.demote)).toEqual([]);
+  });
+
+  // UNMEASURED never moves, the same way `fanoutDecisions` refuses it on the
+  // way in. `?? 0` here would read a token that cannot see dependencies as
+  // "nothing is blocking it" and leave the lane exactly as wrong as it is now.
+  test("BR-64: an unreadable blocker count is UNMEASURED and does not move", () => {
+    const [d] = incumbentDecisions([inc({ blockedByOpen: null })], "Ready");
+    expect(d.demote).toBe(false);
+    if (!d.demote) expect(d.why).toContain("UNMEASURED");
+  });
+
+  // A pull request parked in Ready holds a slot — `holdsReadySlot` counts it —
+  // and has no dependency reading at all. Demoting one would be this rule
+  // acting on a `blockedByOpen` nobody computed.
+  test("BR-65: a pull request in Ready is never demoted", () => {
+    const out = incumbentDecisions(
+      [inc({ typename: "PullRequest", state: "OPEN", blockedByOpen: null })],
+      "Ready",
+    );
+    expect(out.filter(d => d.demote)).toEqual([]);
+  });
+
+  // The lane a demoted card returns to is `laneFor`'s answer, not a literal
+  // spelled here. Two deciders answering "where does something going backwards
+  // go" would agree on every input anybody tests and a mutation of either
+  // would leave the other holding the case up.
+  test("BR-66: the destination lane comes from laneFor, not from a literal", () => {
+    const [d] = incumbentDecisions([inc({ blockedByOpen: 1 })], "Ready");
+    const backwards = laneFor({ kind: "issue_blocked_in_ready" });
+    expect(backwards.lane, "laneFor must have a case for this event kind").not.toBeNull();
+    expect(d.demote).toBe(true);
+    if (d.demote) expect(d.to).toBe(backwards.lane!);
+  });
+
+  // The reason text is `whyNotReady`'s, for the same single-decider reason —
+  // and this asserts the WORDS agree, not merely that both are non-empty.
+  test("BR-67: the demotion reason is whyNotReady's, not a second wording", () => {
+    const [d] = incumbentDecisions([inc({ blockedByOpen: 3 })], "Ready");
+    expect(d.demote).toBe(true);
+    if (d.demote) {
+      expect(d.why).toContain(
+        whyNotReady(dep({ state: "OPEN", blockedByOpen: 3, assignees: 0 })),
+      );
+    }
+  });
 });
 
 describe("BR-1..BR-6: the fan-out from one closed blocker", () => {
