@@ -126,6 +126,107 @@ describe("#1929: a card already in Ready is held to Ready's entry condition", ()
 
   // The reason text is `whyNotReady`'s, for the same single-decider reason —
   // and this asserts the WORDS agree, not merely that both are non-empty.
+  // ── The WIRING, because the four cases above are a pure function ────────
+  //
+  // ai-review round 1 was right and this is the finding that mattered:
+  // deleting the `incumbentDecisions` call, the gather, or the write loop
+  // from `main()` left all 150 tests green, because every case above
+  // exercises the decider directly. The board would have regressed to the
+  // exact one-way promotion #1929 exists to fix with CI green throughout.
+  //
+  // Source-census, the same instrument BR-27, BR-33 and BR-40 already use
+  // on this file: `main()` needs a live endpoint, and a mock deep enough to
+  // reach these call sites would assert against its own fixture.
+  const readyScript = (): string => {
+    const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+    // Comments stripped, or every assertion below can be satisfied by the
+    // prose that explains it — the vacuous shape in
+    // `.claude/rules/checks-must-be-able-to-fail.md`.
+    return src
+      .split("\n")
+      .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+  };
+
+  test("BR-68: main() calls incumbentDecisions, and acts on what it returns", () => {
+    const code = readyScript();
+    const call = code.indexOf("incumbentDecisions(readyIncumbents, READY_COLUMN)");
+    expect(
+      call,
+      "nothing in main() calls incumbentDecisions with the gathered incumbents, so the " +
+        "decider is dead code and Ready keeps offering blocked work",
+    ).toBeGreaterThan(-1);
+    // Called and DISCARDED is the same as not called. The result must reach
+    // the write loop, which is the next case, and must be filtered to the
+    // demotions here rather than written wholesale.
+    expect(
+      code.slice(call, call + 120),
+      "the call's result must be filtered to the cards that actually demote",
+    ).toMatch(/\.filter\(\s*d\s*=>\s*d\.demote\s*\)/);
+  });
+
+  test("BR-69: the gather is behind `holds`, so the in-flight card is exempt", () => {
+    const code = readyScript();
+    const push = code.indexOf("readyIncumbents.push(");
+    expect(push, "nothing gathers the lane's incumbents").toBeGreaterThan(-1);
+    // **The condition, not merely the push.** `holdsReadySlot` returns false
+    // for exactly the card this run's event is moving out of Ready (#1905);
+    // gathering on a bare `status === READY_COLUMN` would demote it to
+    // Backlog while `board-flow` writes In progress for it in a racing run.
+    // Two writers, one card, last writer wins.
+    const guard = code.slice(Math.max(0, push - 200), push);
+    expect(
+      guard,
+      "the incumbent gather must be gated on `holds`, the same predicate the cap uses, " +
+        "or the card mid-transition out of Ready is demoted on top of the move in flight",
+    ).toMatch(/if\s*\(\s*holds\s*&&/);
+  });
+
+  test("BR-70: the demotions are written, and before the promotions", () => {
+    const code = readyScript();
+    const loop = code.search(/for\s*\(\s*const dec of demoting\s*\)/);
+    expect(
+      loop,
+      "the demotion decisions are computed and never written — the lane stays wrong while " +
+        "the job reports success",
+    ).toBeGreaterThan(-1);
+    const promote = code.search(/for\s*\(\s*const dec of moving\s*\)/);
+    expect(promote, "the promotion loop is gone — this census is measuring nothing").toBeGreaterThan(-1);
+    // A demotion frees a slot. Writing promotions first computes them
+    // against an occupancy this run is about to reduce, which under-promotes
+    // — conservative. The reverse would write into a lane about to empty.
+    expect(
+      loop < promote,
+      "demotions must be written before promotions, or a promotion lands against an " +
+        "occupancy the same run is about to change",
+    ).toBe(true);
+    // The write itself, not just the loop: a loop that logs and mutates
+    // nothing passes every assertion above.
+    expect(
+      code.slice(loop, promote),
+      "the demotion loop must perform the field mutation, not only log it",
+    ).toMatch(/updateProjectV2ItemFieldValue/);
+  });
+
+  test("BR-71: no-candidates returns before the incumbent walk no longer", () => {
+    const code = readyScript();
+    const noCandidates = code.search(/if \(candidates\.length === 0\)/);
+    const occupancy = code.indexOf("BOARD_PAGE_QUERY, { p: project, c: null }");
+    expect(noCandidates, "the no-candidates branch is gone").toBeGreaterThan(-1);
+    expect(occupancy, "the occupancy walk is gone — this census measures nothing").toBeGreaterThan(-1);
+    // `--closed-issue N --write` where #N was blocking nothing used to exit
+    // here, skipping the walk that gathers incumbents entirely. The
+    // production workflow always passes `--top-up` and never reaches that
+    // combination, which is why it would not have been noticed.
+    const branch = code.slice(noCandidates, occupancy);
+    expect(
+      branch,
+      "the no-candidates branch must not return before the incumbent walk: nothing to " +
+        "PROMOTE is not nothing to do, and a card in Ready that acquired a blocker is " +
+        "still being offered as startable",
+    ).not.toMatch(/\breturn 0;/);
+  });
+
   test("BR-67: the demotion reason is whyNotReady's, not a second wording", () => {
     const [d] = incumbentDecisions([inc({ blockedByOpen: 3 })], "Ready");
     expect(d.demote).toBe(true);

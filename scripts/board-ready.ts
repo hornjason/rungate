@@ -80,7 +80,10 @@ const READY_COLUMN = "Ready";
 // `id` and `issueDependenciesSummary{blockedBy}` are both SCALAR selections —
 // neither takes a `first:`, so BR-46's product is unchanged at 100 × 50 =
 // 5,000 and this walk stays five hundred times under GitHub's 500,000 ceiling
-// (#1929). They are here because the occupancy pass is the only walk that
+// (#1929) — 500,000 ÷ 5,000 is a HUNDRED times under, not five hundred;
+// ai-review round 1 caught that arithmetic and this repository treats a
+// headroom figure as a load-bearing claim the next selection relies on.
+// They are here because the occupancy pass is the only walk that
 // already visits every card in Ready, and re-asking Ready's entry condition
 // of its incumbents needs exactly two things the walk did not carry: the item
 // to write through, and the blocker count to judge.
@@ -394,14 +397,24 @@ async function main(): Promise<number> {
   }
   const { candidates, freed } = mergeCandidateSources(closeNodes, openNodes);
   if (candidates.length === 0) {
+    // **No candidate to PROMOTE is not no work to do** (#1929, ai-review
+    // round 1). The demotion walk lives below, inside the occupancy pass,
+    // and this return used to skip it: `--closed-issue N --write` where #N
+    // was blocking nothing exits here, so a card in Ready that acquired a
+    // blocker stayed offered as startable. The production workflow always
+    // passes `--top-up` and never reaches that combination, which is
+    // exactly why it would have gone unnoticed — the script is a general
+    // CLI and its `--closed-issue`-only mode predates `--top-up`.
+    //
+    // Reported rather than silently continued: a run that promotes nothing
+    // and a run that promotes nothing and demotes one are different events.
     console.log(
       topUp
         ? `${owner}/${name} has no open issues` +
           (closed === null ? "" : `, and #${closed} was blocking nothing`) +
-          ". No issue changed."
-        : `#${closed} was blocking nothing. No issue changed.`,
+          ". Nothing to promote; still checking Ready's incumbents."
+        : `#${closed} was blocking nothing. Nothing to promote; still checking Ready's incumbents.`,
     );
-    return 0;
   }
 
   // **This pass counts how full Ready is**, which the cap needs. It also
@@ -542,7 +555,10 @@ async function main(): Promise<number> {
   // 100,000, and any further selection puts them over GitHub's 500,000 node
   // ceiling as the detector models it. BR-45's own message says what to do —
   // *split the query rather than shrinking a selection until it fits* — so
-  // this is the split. 100 × 20 = 2,000, five hundred times under.
+  // this is the split. 100 × 20 = 2,000, two hundred and fifty times under.
+  // (Swept here rather than only at the site the finding named: the same
+  // "five hundred times under" slip was in the #1929 comment above, and one
+  // of two instances repaired is the shape this repo keeps paying for.)
   //
   // It is one pass over the repository's open issues rather than a lookup per
   // candidate: the candidate set is a subset of it on both source paths, and

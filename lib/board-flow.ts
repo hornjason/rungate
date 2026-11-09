@@ -70,6 +70,37 @@ export const LANE_EVENTS = [
   "issue_blocked_in_ready",
 ] as const;
 
+/**
+ * The subset `scripts/board-flow.ts` may be handed on `--event`.
+ *
+ * **`LANE_EVENTS` stopped being one list the moment a derived kind joined
+ * it** (#1929, ai-review round 1). Every other kind is a webhook action: the
+ * event IS the evidence, and `board-flow.ts` can write the lane `laneFor`
+ * returns after checking only the actor's permission.
+ * `issue_blocked_in_ready` is not. It means *my caller has already verified
+ * the card is in Ready, open, and has a live blocker* — three conditions
+ * `incumbentDecisions` checks and `board-flow.ts` does not. Validating
+ * `--event` against the full list made `--event issue_blocked_in_ready
+ * --issue N` demote any issue to Backlog with none of them performed.
+ *
+ * Unreachable through the wired automation today, because
+ * `.github/workflows/board-flow.yml`'s case statement emits only the real
+ * webhook kinds. That is why it is worth closing now rather than later: the
+ * cost is a derived list, and the thing it prevents is a future trigger, a
+ * `workflow_dispatch`, or a copied case statement quietly skipping the
+ * verification this feature exists to provide.
+ *
+ * Derived by subtraction, not written out. A second hand-written list would
+ * agree with this one on every input anybody tests, and adding a kind to
+ * `LANE_EVENTS` would silently leave it out of both.
+ */
+export const DERIVED_LANE_EVENTS = ["issue_blocked_in_ready"] as const;
+
+export const WEBHOOK_LANE_EVENTS = LANE_EVENTS.filter(
+  (e): e is Exclude<(typeof LANE_EVENTS)[number], (typeof DERIVED_LANE_EVENTS)[number]> =>
+    !(DERIVED_LANE_EVENTS as readonly string[]).includes(e),
+);
+
 export interface LaneEvent {
   readonly kind: (typeof LANE_EVENTS)[number];
   /**
