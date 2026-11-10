@@ -45,6 +45,7 @@ import {
   readyOccupancy,
   selectReady,
   workNextReading,
+  type WorkNextReading,
   type ReadyOccupancy,
 } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
@@ -146,6 +147,13 @@ export function splitReadyChanges<
   readyWritable: T[];
   heldByCap: T[];
   selection: ReturnType<typeof selectReady>;
+  /**
+   * The `work-this-next` reading (#1962), RETURNED rather than printed.
+   * This function runs on every invocation; only the caller knows whether
+   * `--ready` was passed, and announcing a refused promotion during a
+   * Criteria sync is a claim about something the run never attempted.
+   */
+  workNext: WorkNextReading;
   /** The reading the caller must restate, never re-derive (#1852). */
   occ: ReadyOccupancy;
 } {
@@ -185,8 +193,18 @@ export function splitReadyChanges<
   // depth `occ` was built from, not a second reading of it. This is the
   // writer, so this is where the label stops being a report and becomes the
   // order cards are actually written in.
-  const workNext = workNextReading(candidates, cap);
-  if (workNext.status !== "NONE") console.log(`  ${workNext.why}`);
+  //
+  // `COMPLETE`: these candidates are the board's own items, which is the
+  // whole of what this lane draws from, so the ratio has a denominator
+  // somebody chose.
+  //
+  // **It does not log.** This function is called on every run, including a
+  // plain `--field Criteria --write` that never passed `--ready` — round 2
+  // of #1971's review found it announcing a refused Ready promotion during
+  // a Criteria sync, which is a claim about something the run did not
+  // attempt. The reading is RETURNED and the caller prints it under
+  // `--ready`, where it is true.
+  const workNext = workNextReading(candidates, cap, "COMPLETE");
   const selection = selectReady(candidates, occ, enginePrefix, workNext.honoured);
   // **Written in the order `selectReady` chose, not in board order.**
   // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
@@ -202,6 +220,7 @@ export function splitReadyChanges<
     heldByCap: promotions.filter(c => !chosenNumbers.has(c.item.number)),
     selection,
     occ,
+    workNext,
   };
 }
 
@@ -477,7 +496,7 @@ export async function main(argv: string[]): Promise<number> {
   const engine = enginePrefixReading(root);
   if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
   const enginePrefix = engine.prefix;
-  const { readyWritable, heldByCap, selection, occ } = splitReadyChanges(
+  const { readyWritable, heldByCap, selection, occ, workNext } = splitReadyChanges(
     eligible,
     cap,
     occupied,
@@ -523,6 +542,9 @@ export async function main(argv: string[]): Promise<number> {
         `\n  Ready lane — eligibility is unblocked and unclaimed; phase orders, it does not gate`,
       );
       console.log(`    depth: ${cap ?? "UNMEASURED"}. ${selection.why}`);
+      // Under `--ready` only (#1962, round 2): this run did attempt a Ready
+      // promotion, so a refusal here is a true statement about it.
+      if (workNext.status !== "NONE") console.log(`    ${workNext.why}`);
       if (cap === null && !values.repo) {
         console.log(
           `    pass --repo owner/name to derive the depth; a board can span repositories ` +

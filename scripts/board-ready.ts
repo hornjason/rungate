@@ -759,7 +759,15 @@ async function main(): Promise<number> {
   // judged against (#1962) — `cap`, two lines up, not a second reading. Over
   // the bound or with the depth unreadable it promotes nothing and says so,
   // so the lane can only ever be reordered by an ask somebody can audit.
-  const workNext = workNextReading(eligible, cap);
+  // **`SLICE` on a fan-out, `COMPLETE` on a top-up** — round 2 of #1971's
+  // review. `--top-up` considers every open issue, so a ratio over its
+  // candidates has a denominator somebody chose; `--closed-issue N` walks
+  // only the direct dependents of that one close, and one labelled card out
+  // of three would otherwise read HONOURED while the repository held thirty
+  // carriers. A run given both is a top-up, because the fan-out's candidates
+  // are already a subset of it — the same sentence the dependent log above
+  // is written on.
+  const workNext = workNextReading(eligible, cap, topUp ? "COMPLETE" : "SLICE");
   if (workNext.status !== "NONE") console.log(`  ${workNext.why}`);
   const selection = selectReady(eligible, occ, engine.prefix, workNext.honoured);
   console.log(

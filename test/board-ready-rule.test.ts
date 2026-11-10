@@ -1258,7 +1258,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
       "the premise: unpromoted, the lower phase leads",
     ).toEqual([10, 99]);
 
-    const r = workNextReading(cards, 8);
+    const r = workNextReading(cards, 8, "COMPLETE");
     expect(r.status).toBe("HONOURED");
     expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([99, 10]);
   });
@@ -1268,7 +1268,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     // card must hold its relative order, or the lever is moving things
     // nobody labelled.
     const cards = [item(1, 0), item(2, 1), next(3, 9), item(4, null, ["engine"]), item(5, null)];
-    const r = workNextReading(cards, 8);
+    const r = workNextReading(cards, 8, "COMPLETE");
     expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([
       3, 1, 2, 4, 5,
     ]);
@@ -1280,7 +1280,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
 
   test("over the bound NOTHING is promoted, and the refusal names every one", () => {
     const cards = [next(11, null), next(12, null), next(13, null), item(1, 0)];
-    const r = workNextReading(cards, 2);
+    const r = workNextReading(cards, 2, "COMPLETE");
     expect(r.status).toBe("OVER_BOUND");
     expect(r.honoured.size, "a truncated promotion is a promotion nobody chose").toBe(0);
     for (const n of [11, 12, 13]) expect(r.why, `the refusal does not name #${n}`).toContain(`#${n}`);
@@ -1292,16 +1292,18 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
   });
 
   test("exactly AT the bound is honoured — the boundary, from both sides", () => {
-    const at = [next(11, null), next(12, null)];
-    expect(workNextReading(at, 2).status, "a count equal to the depth is inside it").toBe("HONOURED");
-    expect(workNextReading([...at, next(13, null)], 2).status).toBe("OVER_BOUND");
+    // A non-carrier in the population, or the MINORITY rule refuses before
+    // the depth is ever consulted and this row stops being about the bound.
+    const at = [next(11, null), next(12, null), item(500, 0), item(501, 0)];
+    expect(workNextReading(at, 2, "COMPLETE").status, "a count equal to the depth is inside it").toBe("HONOURED");
+    expect(workNextReading([...at, next(13, null)], 2, "COMPLETE").status).toBe("OVER_BOUND");
   });
 
   test("an unreadable depth promotes nothing, and says so as UNMEASURED", () => {
     // `.claude/rules/config-access.md`: a depth that could not be read is not
     // a depth of zero and not a depth of infinity. Distinct from OVER_BOUND,
     // because one is somebody over-labelling and the other is a broken read.
-    const r = workNextReading([next(11, null)], null);
+    const r = workNextReading([next(11, null)], null, "COMPLETE");
     expect(r.status).toBe("UNMEASURED");
     expect(r.honoured.size).toBe(0);
     expect(r.why).toContain("#11");
@@ -1309,14 +1311,14 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
   });
 
   test("no label at all is NONE, and it is not the same word as the other three", () => {
-    const r = workNextReading([item(1, 0), item(2, null, ["engine"])], 8);
+    const r = workNextReading([item(1, 0), item(2, null, ["engine"])], 8, "COMPLETE");
     expect(r.status).toBe("NONE");
     expect(r.carrying).toEqual([]);
     const statuses = [
       r.status,
-      workNextReading([next(1, null)], 8).status,
-      workNextReading([next(1, null), next(2, null)], 1).status,
-      workNextReading([next(1, null)], null).status,
+      workNextReading([next(1, null), item(9, 0)], 8, "COMPLETE").status,
+      workNextReading([next(1, null), next(2, null), item(9, 0)], 1, "COMPLETE").status,
+      workNextReading([next(1, null)], null, "COMPLETE").status,
     ];
     expect(new Set(statuses).size, "two of the four readings report the same word").toBe(4);
   });
@@ -1327,10 +1329,54 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     // refusal invisible to anybody reading the census.
     const cards = [next(11, null), next(12, null)];
     for (const cap of [8, 1, null]) {
-      expect(workNextReading(cards, cap).carrying, `cap ${String(cap)} dropped a carrier`).toEqual([
+      expect(workNextReading(cards, cap, "COMPLETE").carrying, `cap ${String(cap)} dropped a carrier`).toEqual([
         11, 12,
       ]);
     }
+  });
+
+  test("a SLICE promotes nothing, however small the carrier count", () => {
+    // Round 2 of #1971. `scripts/board-ready.ts --closed-issue N` walks only
+    // the direct dependents of one close, so a ratio over its candidates is
+    // answered about a set nobody picked: ONE carrier of three reads
+    // comfortably inside a depth of eight while the repository holds thirty.
+    const slice = [next(11, null), item(1, 0), item(2, 0)];
+    expect(
+      workNextReading(slice, 8, "COMPLETE").status,
+      "the premise: the SAME input, declared complete, is honoured",
+    ).toBe("HONOURED");
+
+    const r = workNextReading(slice, 8, "SLICE");
+    expect(r.status, "a slice bounded a ratio it has no denominator for").toBe("UNMEASURED");
+    expect(r.honoured.size).toBe(0);
+    expect(r.carrying, "a refused reading still names who asked").toEqual([11]);
+    expect(r.why).toContain("#11");
+    expect(r.why, "a slice was reported as an over-labelled population").not.toContain("REFUSED");
+  });
+
+  test("a slice refuses even when the depth is unreadable, naming the slice", () => {
+    // Two UNMEASURED causes, and the first must not hide behind the second:
+    // a run that is BOTH a slice and capless is still a slice, and telling
+    // the operator only about the depth sends them to fix the wrong thing.
+    const r = workNextReading([next(11, null), item(1, 0)], null, "SLICE");
+    expect(r.status).toBe("UNMEASURED");
+    expect(r.why, "a capless slice reported only the depth").toContain("slice");
+  });
+
+  test("when EVERY candidate carries it the label ranks nothing, whatever the depth", () => {
+    // The issue's own sentence, which the cap test alone does not enforce:
+    // three carriers against a depth of eight is inside the bound and still
+    // orders nothing, because the label IS the population.
+    const all = [next(11, null), next(12, null), next(13, null)];
+    const r = workNextReading(all, 8, "COMPLETE");
+    expect(r.status, "a label carried by every candidate ranks nothing and must refuse").toBe(
+      "OVER_BOUND",
+    );
+    expect(r.honoured.size).toBe(0);
+    expect(r.why).toContain("all 3");
+    // The control, one variable apart: the same three carriers with a single
+    // unlabelled card beside them ARE a minority, and are honoured.
+    expect(workNextReading([...all, item(500, 0)], 8, "COMPLETE").status).toBe("HONOURED");
   });
 
   test("the label is NOT in LABEL_RANK — adding it there would not reach the top", () => {
@@ -1351,7 +1397,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
 
   test("the census counts promotions apart from the tier they came from", () => {
     const cards = [next(11, 6), item(1, 0), item(2, null, ["engine"]), item(3, null)];
-    const r = workNextReading(cards, 8);
+    const r = workNextReading(cards, 8, "COMPLETE");
     expect(placementCensus(cards, ENGINE, r.honoured)).toEqual({
       next: 1,
       phase: 1,
@@ -1370,15 +1416,24 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     // reading, so a change to READY_TOLERANCE_DAYS moves both.
     const cap = readyCap(LIVE);
     expect(cap).not.toBeNull();
-    const cards = Array.from({ length: cap! }, (_, i) => next(i + 1, null));
-    expect(workNextReading(cards, cap).status).toBe("HONOURED");
-    expect(workNextReading([...cards, next(999, null)], cap).status).toBe("OVER_BOUND");
+    // One unlabelled card in the population, deliberately: with every
+    // candidate carrying the label the MINORITY rule refuses first and this
+    // row would stop being about the depth at all.
+    const cards = [
+      ...Array.from({ length: cap! }, (_, i) => next(i + 1, null)),
+      item(500, 0),
+      item(501, 0),
+    ];
+    expect(workNextReading(cards, cap, "COMPLETE").status).toBe("HONOURED");
+    expect(workNextReading([...cards, next(999, null)], cap, "COMPLETE").status).toBe("OVER_BOUND");
   });
 
   test("two honoured cards order by age, and the why says where each would have sat", () => {
-    const cards = [next(50, 6), next(10, 0)];
-    const r = workNextReading(cards, 8);
-    expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([10, 50]);
+    const cards = [next(50, 6), next(10, 0), item(500, 0)];
+    const r = workNextReading(cards, 8, "COMPLETE");
+    expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([
+      10, 50, 500,
+    ]);
     const why = placementOf(cards[0], ENGINE, r.honoured).why;
     expect(why, "the promotion does not name the label that caused it").toContain(WORK_NEXT_LABEL);
     expect(why, "the promotion hides where the card would otherwise have sat").toContain("phase 6");
@@ -1403,7 +1458,7 @@ describe("#1962: the promotion reaches the writer, not only the report", () => {
       "the premise: unpromoted, the one slot goes to the lower phase",
     ).toEqual([10]);
     expect(
-      selectReady(eligible, occ, ENGINE, workNextReading(eligible, 8).honoured).promote.map(
+      selectReady(eligible, occ, ENGINE, workNextReading(eligible, 8, "COMPLETE").honoured).promote.map(
         i => i.number,
       ),
       "the writer ignored an honoured promotion",
@@ -1434,6 +1489,14 @@ describe("#1962: the promotion reaches the writer, not only the report", () => {
       if (!ORDERERS.some(fn => code.includes(`${fn}(`))) continue;
       orderers.push(path);
       if (!code.includes("workNextReading(")) offenders.push(`${path}: takes no reading`);
+      // **And it must DECLARE its population** (#1971 round 2). The scope is
+      // the third argument and the type has only two members, so a caller
+      // that passes neither word does not compile — but a caller added later
+      // could pass `"SLICE"` everywhere and turn the lever off in silence,
+      // and one that passes `"COMPLETE"` from a fan-out is the bug the
+      // review found. Both words must appear SOMEWHERE in the three, or the
+      // population has collapsed onto one answer.
+      if (!/"(COMPLETE|SLICE)"/.test(code)) offenders.push(`${path}: declares no population scope`);
       // `NO_WORK_NEXT` is the honest value for a caller that CANNOT read a
       // depth. None of these three is that caller — every one of them has
       // the cap in scope — so here it is an opt-out, not an absence.
@@ -1449,5 +1512,55 @@ describe("#1962: the promotion reaches the writer, not only the report", () => {
       `a script that orders Ready without a workNextReading leaves "${WORK_NEXT_LABEL}" ` +
         "inert on whichever surface it owns, with nothing saying so",
     ).toEqual([]);
+
+    // Both scope words are reachable across the three. If every caller
+    // settled on one of them the type would still compile and the guard
+    // above would still pass, while the distinction it exists for had
+    // quietly stopped being made anywhere.
+    const scopes = new Set(
+      orderers.flatMap(p =>
+        [...codeOf(readFileSync(join(ROOT, p), "utf-8")).matchAll(/"(COMPLETE|SLICE)"/g)].map(
+          m => m[1],
+        ),
+      ),
+    );
+    expect(
+      [...scopes].sort(),
+      "every ordering script declares the same population scope, so the distinction " +
+        "#1971 round 2 added is no longer made by anything",
+    ).toEqual(["COMPLETE", "SLICE"]);
+  });
+
+  /**
+   * #1971 round 2: a reading printed by a run that never took the action.
+   *
+   * `splitReadyChanges` is called on EVERY `board-mirror` invocation,
+   * including a plain `--field Criteria --write` that never passed
+   * `--ready`. Logging the work-next verdict inside it announced a refused
+   * Ready promotion during a Criteria sync — a true sentence about a thing
+   * the run did not attempt, which is the same class as a green check for a
+   * review that never ran.
+   *
+   * Breaking it: move the `console.log(workNext.why)` back inside
+   * `splitReadyChanges` and this names the function.
+   */
+  test("board-mirror returns the work-next reading rather than printing it", () => {
+    const code = codeOf(readFileSync(join(ROOT, "scripts/board-mirror.ts"), "utf-8"));
+    const split = code.slice(code.indexOf("function splitReadyChanges"));
+    const body = split.slice(0, split.indexOf("\nconst USAGE"));
+    expect(
+      body.length,
+      "the slice found no function body, so the assertion below would hold vacuously",
+    ).toBeGreaterThan(200);
+    expect(body, "splitReadyChanges must not log — it runs when --ready was never passed").not.toContain(
+      "workNext.why",
+    );
+    expect(
+      body,
+      "the reading has to reach the caller somehow, or gating it on --ready is impossible",
+    ).toContain("workNext,");
+    // And the caller prints it under the flag, not outside it.
+    const readyBlock = code.slice(code.indexOf("if (values.ready) {"));
+    expect(readyBlock, "nothing prints the reading under --ready").toContain("workNext.why");
   });
 });

@@ -685,7 +685,14 @@ const throughput: Throughput | null = closedReadings?.throughput ?? null;
 // inside its bound. `null` throughput makes the cap `null`, which is
 // UNMEASURED rather than a bound of zero — and UNMEASURED promotes nothing,
 // which is the same direction OVER_BOUND fails in.
-const workNext = workNextReading(candidateRankables, throughput === null ? null : readyCap(throughput));
+// `COMPLETE`: `candidateRankables` is every pickable issue, which is the
+// whole of what this report orders — a denominator somebody chose, not a
+// slice handed to this invocation (#1971 round 2).
+const workNext = workNextReading(
+  candidateRankables,
+  throughput === null ? null : readyCap(throughput),
+  "COMPLETE",
+);
 if (workNext.status !== "NONE") console.log(`\n  ${workNext.why}`);
 
 const census = placementCensus(candidateRankables, enginePrefix, workNext.honoured);

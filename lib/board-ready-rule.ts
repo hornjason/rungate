@@ -216,6 +216,26 @@ export type PlacementTier = "NEXT" | "PHASE" | "LABEL" | "UNPLACED";
 /** What the `work-this-next` label did, and why. */
 export type WorkNextStatus = "NONE" | "HONOURED" | "OVER_BOUND" | "UNMEASURED";
 
+/**
+ * Whether a caller can see every candidate it is ordering, or only some.
+ *
+ * `COMPLETE` means *every candidate this surface orders*, not *every issue
+ * in the repository* — the report's pickable list, the board's own items,
+ * the top-up's open set. Each is the whole of what its own lane draws from,
+ * and each is a denominator somebody chose.
+ *
+ * `SLICE` is a run that was handed a subset of its own population, and it
+ * promotes nothing. `scripts/board-ready.ts --closed-issue N` is the
+ * instance: its candidates are the direct dependents of one closed issue,
+ * and a ratio taken over them answers about a set nobody picked.
+ *
+ * **The caller declares it, and a test asserts which one each caller
+ * passes** — see `test/board-ready-rule.test.ts`. A declaration is only as
+ * honest as the caller, so it is checked in the one place that can see all
+ * of them at once rather than trusted per site.
+ */
+export type PopulationScope = "COMPLETE" | "SLICE";
+
 export interface WorkNextReading {
   readonly status: WorkNextStatus;
   /** Every issue carrying the label, ascending. Populated in all four states. */
@@ -251,12 +271,38 @@ export interface WorkNextReading {
  * depth that could not be read is not a depth of zero and not a depth of
  * infinity, and only one of the three is honest.
  */
-export function workNextReading(items: readonly Rankable[], cap: number | null): WorkNextReading {
-  const carrying = items
+export function workNextReading(
+  population: readonly Rankable[],
+  cap: number | null,
+  scope: PopulationScope,
+): WorkNextReading {
+  const carrying = population
     .filter(i => i.labels.includes(WORK_NEXT_LABEL))
     .map(i => i.number)
     .sort((a, b) => a - b);
   const named = carrying.map(n => `#${n}`).join(", ");
+  // **A slice cannot bound anything** — round 2 of #1971's review. Both
+  // tests the bound applies are ratios against the population: *more than
+  // the depth* and *all of them*. Handed a slice, both are answered about a
+  // denominator nobody chose. `scripts/board-ready.ts`'s fan-out mode is the
+  // live instance: with `--closed-issue N` its candidates are the direct
+  // dependents of one issue, so one labelled card out of three read
+  // HONOURED while the repository held thirty carriers.
+  //
+  // First, before the cap, because a slice is unbounded whether or not the
+  // depth was readable — and two UNMEASURED causes must not hide each other.
+  if (scope === "SLICE") {
+    return {
+      status: "UNMEASURED",
+      carrying,
+      honoured: new Set(),
+      cap,
+      why:
+        `UNMEASURED — this run sees only a slice of the candidates, so the bound on ` +
+        `"${WORK_NEXT_LABEL}" has no denominator and NOTHING was promoted` +
+        (carrying.length > 0 ? `, including ${named}` : ""),
+    };
+  }
   if (cap === null) {
     return {
       status: "UNMEASURED",
@@ -276,6 +322,24 @@ export function workNextReading(items: readonly Rankable[], cap: number | null):
       honoured: new Set(),
       cap,
       why: `no issue carries "${WORK_NEXT_LABEL}", so the ordinary order stands`,
+    };
+  }
+  // **Two ways to rank nothing, and the second is not the depth.** A lane
+  // of three candidates all carrying the label is unordered by it however
+  // deep Ready is — the issue's own sentence, *if every issue carries the
+  // label, the label ranks nothing*, is a ratio against the population and
+  // not against the cap. Round 2 of #1971's review found the cap test alone
+  // reading HONOURED over exactly that input.
+  if (carrying.length >= population.length) {
+    return {
+      status: "OVER_BOUND",
+      carrying,
+      honoured: new Set(),
+      cap,
+      why:
+        `REFUSED — all ${population.length} candidate(s) carry "${WORK_NEXT_LABEL}", so it ` +
+        `ranks nothing among them whatever Ready's depth of ${cap} allows. NONE was ` +
+        `promoted: ${named}.`,
     };
   }
   if (carrying.length > cap) {
