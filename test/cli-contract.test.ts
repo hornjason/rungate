@@ -398,3 +398,184 @@ describe("the dispatcher runs a command script as an entry module", () => {
     );
   });
 });
+
+/**
+ * #1938, #1939 — a script with a test and no registry entry is unreachable.
+ *
+ * `HYGIENE-3` fails a file in `scripts/` with ZERO references, and a test
+ * counts as a reference. So `scripts/finding-promotion.ts` and
+ * `scripts/claim-files.ts` each had a test file, each passed every orphan
+ * check, and neither could be run by anybody who was not reading the source:
+ * on 2026-11-09 a sweep of `bin/`, `hooks/`, `workflows/` and `.github/`
+ * found no caller for either, and neither appeared in `CLI_COMMANDS`.
+ *
+ * `finding-promotion` is the router that decides whether a gap belongs to a
+ * criterion or to the side door, so while it was unreachable every gap was
+ * classified by whoever found it — and a self-classification takes the
+ * cheaper door every time.
+ *
+ * **What was broken to prove this can fail:** the registry entries were
+ * added after this block, and the block was run against the tree without
+ * them. Both cases went red naming the missing command. Deleting either
+ * entry reddens the matching case and nothing else.
+ */
+describe("#1938 / #1939: the doors are reachable from the CLI", () => {
+  const DOORS: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      "finding-promotion",
+      "scripts/finding-promotion.ts",
+      "the router between the front door and the side door — unreachable, every gap is self-classified",
+    ],
+    [
+      "claim-files",
+      "scripts/claim-files.ts",
+      "file-overlap claiming — unreachable, parallel agents collide on the same file with nothing saying so",
+    ],
+  ];
+
+  test.each(DOORS)("%s is registered", (name, script, why) => {
+    expect(
+      Object.keys(CLI_COMMANDS),
+      `${name} dispatches to ${script}, which exists and is tested, but is absent from ` +
+        `CLI_COMMANDS — so nobody can invoke it. ${why}. Add it to lib/cli-commands.ts ` +
+        `and regenerate .claude/rules/commands-routing.md.`,
+    ).toContain(name);
+    expect(CLI_COMMANDS[name]!.script).toBe(script);
+  });
+
+  test("the pair is not vacuous — both scripts are on disk", () => {
+    // A positive control. If either script were deleted the cases above
+    // would still be satisfiable by registering a name that dispatches
+    // nowhere, and SC-809 would be the only thing left to catch it.
+    for (const [, script] of DOORS) {
+      expect(existsSync(join(ROOT, script)), `${script} is gone`).toBe(true);
+    }
+  });
+});
+
+/**
+ * #1955 review: a usage string that omits a required flag is a documented
+ * invocation that always fails.
+ *
+ * The registry's `usage` is what `rungate --help` prints AND what the
+ * scaffold publishes into `.claude/rules/commands-routing.md`, so it is the
+ * whole discovery surface for a command. `finding-promotion` shipped
+ * omitting `--outcome`, which its script refuses without: anyone typing the
+ * documented line got `ERROR: --outcome is required` and exit 1.
+ *
+ * Derived from the SCRIPTS, not from a list typed here, so this is a sweep
+ * rather than the one instance review happened to name. The population is
+ * small today — `required("…")` is an idiom one script uses — and the
+ * assertion below states that, so a second adopter joins the sweep instead
+ * of silently widening a check nobody re-measured.
+ */
+describe("#1955: every flag a command's script requires appears in its usage", () => {
+  /** `required("x")` / `requiredPositiveInt("x")` — the one refusal binding. */
+  const REQUIRED_CALL = /required(?:PositiveInt)?\("([a-z-]+)"\)/g;
+
+  const withRequired = Object.entries(CLI_COMMANDS)
+    .map(([name, c]) => ({ name, cmd: c, path: join(ROOT, c.script) }))
+    .filter(e => existsSync(e.path))
+    .map(e => ({
+      ...e,
+      flags: [...new Set([...readFileSync(e.path, "utf8").matchAll(REQUIRED_CALL)].map(m => m[1]!))],
+    }))
+    .filter(e => e.flags.length > 0);
+
+  test("the sweep found a population — an empty one asserts nothing", () => {
+    // A regex that stopped matching, or a rename of the idiom, makes every
+    // case below vacuous. State the size rather than trusting the loop.
+    expect(withRequired.map(e => e.name)).toEqual(["finding-promotion"]);
+  });
+
+  test("no required flag is missing from the usage a consumer is shown", () => {
+    const missing: string[] = [];
+    for (const { name, cmd, flags } of withRequired) {
+      for (const flag of flags) {
+        if (!cmd.usage.includes(`--${flag}`)) missing.push(`${name}: --${flag}`);
+      }
+    }
+    expect(
+      missing,
+      "a usage string omitting a required flag documents an invocation that exits 1 — " +
+        "add the flag to `usage` in lib/cli-commands.ts",
+    ).toEqual([]);
+  });
+
+  /**
+   * #1955 round 2: `--project-root` read its value through the bare argv
+   * reader, three lines under the docblock warning about exactly that.
+   *
+   * So: no raw `readFlag` may reach a consumer. Every read goes through
+   * `required`, `requiredPositiveInt` or `optional`, all of which switch
+   * over the reader's full union and route the refusal through one
+   * `refuseNoValue`.
+   */
+  test("no flag is read through the bare argv reader — every read is guarded", () => {
+    const raw: string[] = [];
+    for (const { name, path } of withRequired) {
+      const src = readFileSync(path, "utf8");
+      // Inside the guards themselves is the ONE legal call site each.
+      const body = src.replace(/function (?:readFlag|optional|required)\([\s\S]*?\n}\n/g, "");
+      for (const m of body.matchAll(/readFlag\("([a-z-]+)"\)/g)) raw.push(`${name}: --${m[1]}`);
+    }
+    expect(
+      raw,
+      "the bare reader hands back a FlagReading the caller then has to narrow, which is how " +
+        "`absent` and `novalue` got conflated — read it through optional() or required() instead",
+    ).toEqual([]);
+  });
+
+  /**
+   * #1955 round 4: `optional()` returned `undefined` for a flag that was
+   * present as argv's LAST token, so a typo'd `--project-root` with no path
+   * took the silent default. Absent and present-with-no-value are different
+   * facts; the reader must be able to say which, by TYPE, not by comment.
+   */
+  test("the argv reader enumerates absent and present-with-no-value apart", () => {
+    const { path } = withRequired[0]!;
+    const src = readFileSync(path, "utf8");
+    const union = src.match(/type FlagReading =[\s\S]*?;\n/)?.[0] ?? "";
+    expect(union, "scripts/finding-promotion.ts must declare a FlagReading union").not.toBe("");
+    for (const kind of ["absent", "novalue", "nextflag", "value"]) {
+      expect(union, `FlagReading must name the '${kind}' state`).toContain(`"${kind}"`);
+    }
+    // And the two valueless states must reach the refusal, not a default.
+    expect(src).toContain("refuseNoValue");
+  });
+
+  test("the guard is real — the stripper did not eat the whole file", () => {
+    // The case above subtracts the guard definitions before scanning. If
+    // that regex ate too much, it would scan an empty string and pass
+    // having looked at nothing.
+    const { path } = withRequired[0]!;
+    const src = readFileSync(path, "utf8");
+    const body = src.replace(/function (?:readFlag|optional|required)\([\s\S]*?\n}\n/g, "");
+    expect(body.length).toBeGreaterThan(src.length / 2);
+    expect(body, "the body still contains the call sites the scan is for").toContain("required(");
+
+    // Round 5: the alternation had no boundary, so `required` prefix-matched
+    // `requiredPositiveInt` and the lazy span ate ITS whole body — the guard
+    // above silently never scanned that function. A detector narrower than
+    // what it detects. `\(` after the alternation is what fixes it, and this
+    // is what proves the fix: the stripper must leave the sibling standing.
+    expect(
+      body,
+      "the stripper must not swallow requiredPositiveInt — only the three guards themselves",
+    ).toContain("function requiredPositiveInt(");
+  });
+
+  test("the check can fail — a usage with a flag removed is caught", () => {
+    // The guard above is a loop over a filtered list; both can be empty for
+    // reasons that have nothing to do with the property. This performs the
+    // regression and observes it, rather than asserting the loop ran.
+    const { cmd, flags } = withRequired[0]!;
+    // replaceAll, not replace. A usage string with two modes names the flags
+    // they share more than once — `--issue` is in both halves of
+    // finding-promotion's — so removing the first occurrence leaves the
+    // second standing and the control asserts nothing.
+    const broken = cmd.usage.replaceAll(`--${flags[0]} `, "");
+    expect(broken, `removing --${flags[0]} did not change the usage string`).not.toBe(cmd.usage);
+    expect(broken.includes(`--${flags[0]}`)).toBe(false);
+  });
+});

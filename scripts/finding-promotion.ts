@@ -44,47 +44,111 @@ import { ghWithoutGhToken } from "../lib/live-issues";
 import { skipLine } from "../lib/derived-spec";
 import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
 
-/** Same resolution create-sc uses, so both halves read one tree. */
-const ROOT = join(import.meta.dir, "..");
-
 /** Routed through one constant so a test can prove the refusal is observed. */
 export const PROMOTION_EXIT = 1;
 
 const args = process.argv.slice(2);
 
-function getFlag(name: string): string | undefined {
+/**
+ * What argv says about one flag — FOUR states, enumerated, never collapsed.
+ *
+ * The reader used to return `string | undefined` and folded two different
+ * facts into that `undefined`: the flag is **absent**, and the flag is the
+ * **last token in argv** so `args[idx + 1]` does not exist. `optional()`
+ * read both as "the caller did not pass it" and took the default, so
+ * `--project-root` with the path typo'd away resolved ROOT to
+ * `node_modules/rungate` — #363, reintroduced silently through the guard
+ * added to prevent it.
+ *
+ * Rounds 2 through 4 of this pull request each repaired one FLAG, and every
+ * one of them handed the parser the same SHAPE of input ("the value is the
+ * next flag"). The defect sat on the axis nobody varied —
+ * `.claude/rules/checks-must-be-able-to-fail.md`, the seventh shape. So the
+ * states are enumerated here, in the reader, where no caller can drop one:
+ * the union is exhaustive, and a `switch` that omits a case does not
+ * compile.
+ */
+type FlagReading =
+  | { kind: "absent" }
+  | { kind: "novalue" }
+  | { kind: "nextflag"; value: string }
+  | { kind: "value"; value: string };
+
+function readFlag(name: string): FlagReading {
   const idx = args.indexOf(`--${name}`);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  return args[idx + 1];
+  if (idx === -1) return { kind: "absent" };
+  if (idx + 1 >= args.length) return { kind: "novalue" };
+  const value = args[idx + 1]!;
+  return value.startsWith("--") ? { kind: "nextflag", value } : { kind: "value", value };
 }
 
 /**
- * A required flag's value, refused by NAME when it is missing or is the next
- * flag.
- *
- * The second half is the one that bit: `getFlag` returns `args[idx + 1]`
- * unconditionally, so `--issue --spec x` hands back the string `"--spec"`
- * and the run continues on a value nobody passed. Every flag has this, not
- * just the one review named — the first four rounds of this pull request
- * were all "the named instance repaired, its siblings left", and `--issue`
- * was the fifth because the previous sweep covered the LIBRARY's fields and
- * stopped at the CLI's.
+ * The refusal every present-but-valueless flag gets, by name. ONE binding,
+ * so both ways of passing no value produce the same outcome and differ only
+ * in the sentence that says which it was.
+ */
+function refuseNoValue(name: string, reading: { kind: "novalue" } | { kind: "nextflag"; value: string }): never {
+  const detail =
+    reading.kind === "nextflag"
+      ? `was given '${reading.value}', which is the next flag`
+      : "was the last argument and was given no value at all";
+  console.error(
+    `ERROR: --${name} ${detail}. Its value is missing, and continuing would run ` +
+      "against a value nobody passed.",
+  );
+  process.exit(PROMOTION_EXIT);
+}
+
+/** An OPTIONAL flag: absent is fine, present-with-no-value is not. */
+function optional(name: string): string | undefined {
+  const reading = readFlag(name);
+  switch (reading.kind) {
+    case "absent":
+      return undefined;
+    case "value":
+      return reading.value;
+    default:
+      refuseNoValue(name, reading);
+  }
+}
+
+/**
+ * A required flag's value, refused by NAME in all three ways it can be
+ * unusable: absent, last-with-no-value, and "its value is the next flag".
  */
 function required(name: string): string {
-  const v = getFlag(name);
-  if (v === undefined) {
-    console.error(`ERROR: --${name} is required`);
-    process.exit(PROMOTION_EXIT);
+  const reading = readFlag(name);
+  switch (reading.kind) {
+    case "absent":
+      console.error(`ERROR: --${name} is required`);
+      process.exit(PROMOTION_EXIT);
+    case "value":
+      return reading.value;
+    default:
+      refuseNoValue(name, reading);
   }
-  if (v.startsWith("--")) {
-    console.error(
-      `ERROR: --${name} was given '${v}', which is the next flag. Its value is missing, ` +
-        "and continuing would run against a value nobody passed.",
-    );
-    process.exit(PROMOTION_EXIT);
-  }
-  return v;
 }
+
+/**
+ * The tree this run reads and writes — the CALLER's, never this script's.
+ *
+ * It was `join(import.meta.dir, "..")`, which is correct for `bun
+ * scripts/finding-promotion.ts` in this repository and wrong for every
+ * consumer: under `bunx rungate finding-promotion` that is
+ * `node_modules/rungate`, so `--spec specs/MY-SPEC.md` resolved inside the
+ * installed package. The consumer's spec sits right there and the command
+ * refuses SPEC_ABSENT; worse, a spec whose basename collides with one of
+ * rungate's own would have been APPENDED TO inside `node_modules`, printing
+ * "Appended to …" for a criterion the next install deletes. That is #363
+ * exactly, which `lib/cli-commands.ts` spends its first eighty lines
+ * warning about — reintroduced by registering a script that had never
+ * needed the flag because nothing could reach it.
+ *
+ * `bin/rungate.ts` appends `--project-root <cwd>` whenever the registry
+ * entry sets `projectRootFlag` and the caller did not pass one, so the
+ * default below is only reached by a direct `bun scripts/…` invocation.
+ */
+const ROOT = optional("project-root") ?? join(import.meta.dir, "..");
 
 /** A required flag that must be a positive integer, refused by name. */
 function requiredPositiveInt(name: string): number {

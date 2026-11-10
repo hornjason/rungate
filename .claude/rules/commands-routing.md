@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 7d24dd9aaf0ad9fd
+generated-sha: f0021d9dcfc101af
 ---
 
 ## Command Routing
@@ -27,6 +27,8 @@ Run one as `bun bin/rungate.ts <command>`.
 | `sync-spec-tests` | Regenerate the conformity suite from the specs |
 | `generate-code-map` | Regenerate CODE-MAP.md from the source tree |
 | `extract-constraints` | Extract constraints from a project's docs into agent rules |
+| `finding-promotion` | Turn a review finding that names real work into a spec criterion |
+| `claim-files` | Claim the files an issue will change, so parallel agents do not collide |
 | `ai-review-findings` | Adjudicate an AI review's findings payload — exits non-zero on a blocking finding |
 | `ai-review-threads` | Post an AI review's findings onto the pull request's diff as review threads |
 | `record-ai-review-unmeasured` | Record WHICH kind of unmeasured each unmeasured AI-review round was |

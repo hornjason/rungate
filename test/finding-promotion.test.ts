@@ -693,6 +693,56 @@ describe("SC-2612 / AC-6 (#1678): the CLI refuses a bad flag by NAME, for every 
     expect(swept).toBe(7);
   });
 
+  /**
+   * The axis the previous three rounds never varied.
+   *
+   * Each of them handed the parser the SAME shape — "the value is the next
+   * flag" — and differed only in WHICH flag carried it, so the battery
+   * could not come back wrong about a shape nobody wrote. The other way to
+   * pass no value is to put the flag LAST, where `args[idx + 1]` does not
+   * exist at all; the reader returned `undefined` for that and `optional()`
+   * read it as absent.
+   */
+  test("EVERY flag refuses by name when it is the LAST argument with no value", () => {
+    let swept = 0;
+    for (const [mode, valid] of Object.entries(MODES)) {
+      // `--project-root` is optional and belongs to neither table, but it is
+      // the flag whose silent default this case exists for, so it is swept
+      // in the mode that writes a spec.
+      const subjects =
+        mode === "promote" ? [...Object.keys(valid), "project-root"] : Object.keys(valid);
+      for (const flag of subjects) {
+        // Every other flag in THIS mode valid and complete, then the subject
+        // appended with nothing after it — so the refusal is about this one.
+        const rest = Object.entries(valid)
+          .filter(([k]) => k !== flag)
+          .flatMap(([k, v]) => [`--${k}`, v]);
+        const { code, err } = run([...rest, `--${flag}`]);
+        expect(code, `[${mode}] --${flag} as the last argument must refuse`).toBe(1);
+        expect(err, `[${mode}] the refusal for --${flag} must name it`).toContain(`--${flag}`);
+        expect(err, `[${mode}] the refusal for --${flag} must say no value was given`).toContain(
+          "given no value at all",
+        );
+        swept += 1;
+      }
+    }
+    // A loop over an empty table reports success having run nothing.
+    expect(swept).toBe(8);
+  });
+
+  test("a trailing --project-root does NOT silently fall back to the package directory", () => {
+    // #363's exact shape: the flag whose whole purpose is to keep writes out
+    // of node_modules/rungate, typo'd so its path is gone. Before the reader
+    // enumerated `novalue`, this exited on some LATER refusal — or worse,
+    // proceeded — having resolved ROOT to the installed package.
+    const argv = Object.entries(MODES.promote!).flatMap(([k, v]) => [`--${k}`, v]);
+    const { code, err } = run([...argv, "--project-root"]);
+    expect(code).toBe(1);
+    expect(err, "the refusal must be about --project-root, not a downstream symptom").toContain(
+      "--project-root",
+    );
+  });
+
   test("a non-numeric --issue refuses up front, not as a gh error about issue #NaN", () => {
     const { code, err } = run([
       "--issue", "abc",
