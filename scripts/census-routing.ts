@@ -810,12 +810,30 @@ export function censusDirsRead(source: string): string[] {
  * count was unreliable rather than strict. The third site in this file to
  * read the literal-bearing view when it wanted the masked one.
  */
+function firstArgument(scan: string, read: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < scan.length; i++) {
+    const ch = scan[i]!;
+    if (ch === "(" || ch === "[" || ch === "{") depth++;
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      if (--depth === 0) return read.slice(open + 1, i).trim();
+    } else if (ch === "," && depth === 1) return read.slice(open + 1, i).trim();
+  }
+  return "";
+}
+
 /**
  * The index of the `)` closing the call whose `(` sits at `open`, or `-1`.
  *
- * Counted over the literal-blanked view for the reason `firstArgument` gives:
- * a bracket inside a string is text, and counting it as structure desyncs the
- * depth so it never returns to zero.
+ * `firstArgument`'s sibling, and deliberately NOT the same function: that one
+ * stops at a top-level comma because it wants one argument, and this one runs
+ * past every comma because it wants the whole call. `censusDirsRead`'s binding
+ * capture needs the second — `join(\n  REPO,\n  "test",\n)` is the subject,
+ * and stopping at its first comma yields `REPO`.
+ *
+ * Counted over the literal-blanked view for the reason `firstArgument` gives
+ * above: a bracket inside a string is text, and counting it as structure
+ * desyncs the depth so it never returns to zero.
  */
 function callEnd(scan: string, open: number): number {
   let depth = 0;
@@ -827,18 +845,6 @@ function callEnd(scan: string, open: number): number {
     }
   }
   return -1;
-}
-
-function firstArgument(scan: string, read: string, open: number): string {
-  let depth = 0;
-  for (let i = open; i < scan.length; i++) {
-    const ch = scan[i]!;
-    if (ch === "(" || ch === "[" || ch === "{") depth++;
-    else if (ch === ")" || ch === "]" || ch === "}") {
-      if (--depth === 0) return read.slice(open + 1, i).trim();
-    } else if (ch === "," && depth === 1) return read.slice(open + 1, i).trim();
-  }
-  return "";
 }
 
 /**
