@@ -140,8 +140,36 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  *     `main` and cannot prove itself. With `test` a required check, that is
  *     a deadlock: no spec tick moving `criterion-coverage` can merge. #1899
  *     did not solve it — it unticked the item, which works once.
+ *
+ * **B went backwards again on 2026-11-09, and this time it is not a flap.**
+ * The same shape as above, a different item. B4 is the state claim "the
+ * board's Criteria field is populated for every engine issue". Filing
+ * #1938, #1939 and #1940 into the `Pipeline Phase 7` milestone put three
+ * issues into that reading's population and it fell to 5 of 8. B3
+ * (`blocked-by-edges`) fell with it, to 5 of 8, and was repaired
+ * mechanically — `rungate plan-deps --repo hornjason/rungate
+ * --milestone-prefix Pipeline --write` derived 9 edges across 5 issues and
+ * the reading is `MET 8 of 8` again.
+ *
+ * B4 has no such path, and the measurement is on #1945:
+ *
+ *   - `board-mirror` is the Criteria column's ONLY writer, and **no
+ *     workflow invokes it**. Its one occurrence in `.github/workflows/` is
+ *     a comment in `board-ready.yml` naming the problem in Claim 7's own
+ *     words — "Ready is reachable today only by somebody running
+ *     `board-mirror --ready --write` by hand".
+ *   - `board-mirror` reads **no project token**. `BOARD_PROJECT_TOKEN` is
+ *     read by `lib/board-ready-fanout.ts` and three workflows and by
+ *     nothing in `board-mirror`, so it authenticates as the `gh` CLI user
+ *     and GitHub refuses every ProjectV2 field for want of `read:project`.
+ *
+ * So B4 is a reading that every newly filed engine issue lowers and that
+ * nothing automatic can raise. It is `done: false` and this is 4. Unlike
+ * #1899's untick, no re-tick restores it: the item needs a writer, not a
+ * number. That is the third instance of the defect B2's entry already
+ * names — a STATE reading standing in for a delivered capability.
  */
-const COMPLETE_STAGES = 5;
+const COMPLETE_STAGES = 4;
 
 /**
  * Every verify command in the plan file runs through here.
