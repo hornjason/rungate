@@ -392,6 +392,64 @@ describe("SC-2723: nothing spells a held reason for itself", () => {
     ).toEqual([]);
   });
 
+  /**
+   * #1965 round 3: every consumer of the ordering, not two of three.
+   *
+   * I fixed `work-status.ts` and `board-ready.ts` to route the engine prefix
+   * through `enginePrefixReading`, which tells *this tree declares no engine
+   * family* apart from *I could not find a config*, and left
+   * `board-mirror.ts` reading `readBoardInputs(root).milestonePrefix`
+   * directly — the one script that WRITES the Ready lane. ai-review caught it
+   * as a blocking finding. A `null` prefix there promotes `Convergence Phase
+   * 3` ahead of `Pipeline Phase 6` onto the board, in silence.
+   *
+   * A case per script would have caught only the script that had one. This is
+   * the population, so the FOURTH site fails the build rather than waiting
+   * for a reviewer — the same answer `heldReason` got above, for the same
+   * reason it needed it.
+   *
+   * `board-snapshot.ts` reads `board.milestonePrefix` too and is NOT in this
+   * population: it has its own `--prefix`, it does not call an ordering
+   * function, and it already refuses outright when neither is set. The
+   * population is *whoever orders*, not *whoever reads the key*.
+   *
+   * Breaking it: revert any one of the three to `readBoardInputs(...)` and
+   * this names that file.
+   */
+  test("every script that ORDERS resolves the prefix through enginePrefixReading", () => {
+    const ORDERERS = ["readyOrderFor", "selectReady", "splitReadyChanges", "placementCensus"];
+    const population = sourceFiles(ROOT, ["scripts"]);
+    expect(
+      population.length,
+      "the sweep read no scripts, so an empty offender list would witness nothing",
+    ).toBeGreaterThan(10);
+
+    const orderers: string[] = [];
+    const offenders: string[] = [];
+    for (const path of population) {
+      const code = codeOf(readFileSync(join(ROOT, path), "utf-8"));
+      if (!ORDERERS.some(fn => code.includes(`${fn}(`))) continue;
+      orderers.push(path);
+      if (!code.includes("enginePrefixReading(")) offenders.push(path);
+    }
+
+    // The population's own reach, asserted rather than assumed: a matcher
+    // that found nothing would make the offender list empty for the wrong
+    // reason, and all three of these are known to order.
+    expect(
+      orderers.sort(),
+      "the scan did not find the scripts that order Ready — it is measuring nothing",
+    ).toEqual(["scripts/board-mirror.ts", "scripts/board-ready.ts", "scripts/work-status.ts"]);
+
+    expect(
+      offenders,
+      "reading `readBoardInputs(...).milestonePrefix` cannot tell a tree that declares no " +
+        "engine family from a config it could not find, and both are `null` — which is the " +
+        "pre-#1943 ordering, applied silently. Call enginePrefixReading() and print its " +
+        "`unmeasured`",
+    ).toEqual([]);
+  });
+
   test("the scan can find the string it looks for, and ignores comments", () => {
     expect(codeOf('console.log("at its depth");').includes("at its depth")).toBe(true);
     expect(codeOf("// never say at its depth here\nconst x = 1;").includes("at its depth")).toBe(false);
@@ -624,6 +682,97 @@ describe("#1853: a label places an issue the milestone could not", () => {
         .map(i => i.number),
       "the ordering this issue exists for must survive the boundary fix",
     ).toEqual([1717, 1764]);
+  });
+
+  /**
+   * #1965 round 3, the process finding: four keys, one exhaustive table.
+   *
+   * The review's point was not a remaining line — it was that three
+   * structurally different wrong behaviours turned up one at a time in the
+   * same thirty-line comparator, each caught by a case written after a
+   * reviewer named it:
+   *
+   *   1. family membership was a bare `startsWith` (over-matched `EngineX`);
+   *   2. an early revision hoisted family ABOVE tier (every labelled issue
+   *      became honorary engine and outranked a real `Convergence Phase 3`);
+   *   3. the null-prefix control first went green under a mutant that
+   *      invented a family split, because it asserted one pair.
+   *
+   * All three are "a key compared at the wrong level", and no number of
+   * narrative cases enumerates that. So the precedence is asserted as a
+   * TABLE, once: four keys in order, and for each one a pair that differs in
+   * THAT key alone while every key above it is held equal and every key below
+   * it is set ADVERSARIALLY — the loser is given the better value on every
+   * lower key. A comparator that consults the keys in any other order, or
+   * skips one, loses at least one row.
+   *
+   * That adversarial setting is the part the earlier cases lacked. A pair
+   * that differs in one key and agrees on the rest goes green under a
+   * comparator that ignores the key entirely, whenever the issue numbers
+   * happen to fall the right way — which is how case 3 passed.
+   *
+   * Breaking it: swapping any two adjacent lines of `readyOrderFor`'s
+   * comparison chain reddens the row named for the key that lost its place,
+   * and leaves the others green.
+   */
+  test("#1943: the precedence is tier, then family, then phase, then number — all four", () => {
+    // `winner` must sort first. Every key ABOVE the one named is equal;
+    // every key BELOW it favours the loser, so a comparator that reached
+    // the wrong key would pick the other one.
+    const rows: { key: string; winner: Rankable; loser: Rankable; why: string }[] = [
+      {
+        key: "tier",
+        // PHASE tier vs LABEL tier. The loser is in the engine family and
+        // carries the best label rank, so family and rank both favour it.
+        winner: { number: 900, milestone: `${PAYLOAD} Phase 9`, labels: [] },
+        loser: { number: 1, milestone: null, labels: ["engine"] },
+        why: "a milestone places an issue and a label does not — tier is read first",
+      },
+      {
+        key: "family",
+        // Both PHASE tier. The loser has the lower phase AND the lower
+        // number, so everything below family favours it.
+        winner: { number: 900, milestone: `${ENGINE} Phase 9`, labels: [] },
+        loser: { number: 1, milestone: `${PAYLOAD} Phase 1`, labels: [] },
+        why: "inside the PHASE tier the engine family goes first, whatever its phase number",
+      },
+      {
+        key: "phase",
+        // Same tier, same family. The loser has the lower number.
+        winner: { number: 900, milestone: `${ENGINE} Phase 1`, labels: [] },
+        loser: { number: 1, milestone: `${ENGINE} Phase 9`, labels: [] },
+        why: "inside one family the lower phase goes first, whatever the issue number",
+      },
+      {
+        key: "number",
+        // Everything above is equal, so the number is all that is left.
+        winner: { number: 1, milestone: `${ENGINE} Phase 3`, labels: [] },
+        loser: { number: 900, milestone: `${ENGINE} Phase 3`, labels: [] },
+        why: "with every other key equal the lower issue number goes first",
+      },
+    ];
+
+    const order = readyOrderFor(ENGINE);
+    for (const row of rows) {
+      expect([row.winner, row.loser].sort(order).map(i => i.number), `${row.key}: ${row.why}`).toEqual(
+        [row.winner.number, row.loser.number],
+      );
+      // Sorted from the other starting arrangement too — a comparator that
+      // returned 0 for a pair leaves input order untouched, which is
+      // indistinguishable from deciding correctly when the input already
+      // happened to be right.
+      expect(
+        [row.loser, row.winner].sort(order).map(i => i.number),
+        `${row.key}: the comparator is indifferent here — it returned 0 and the input order stood`,
+      ).toEqual([row.winner.number, row.loser.number]);
+    }
+
+    // The table's own reach. Four keys and four rows, so a row silently
+    // deleted during an edit does not shrink the guarantee unnoticed.
+    expect(
+      rows.map(r => r.key),
+      "the precedence has four keys and this table must carry one row per key, in order",
+    ).toEqual(["tier", "family", "phase", "number"]);
   });
 
   test("#1943 CONTROL: with NO prefix configured, phase alone orders across families", () => {

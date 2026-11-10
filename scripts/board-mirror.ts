@@ -38,7 +38,7 @@ import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
-import { readBoardInputs } from "../lib/config-readers";
+import { enginePrefixReading } from "../lib/config-readers";
 import {
   heldReason,
   readyCap,
@@ -451,9 +451,19 @@ export async function main(argv: string[]): Promise<number> {
       ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
       : null;
   const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
-  // The ENGINE milestone family, from this project's own config (#1943).
-  // `null` on a tree that declares none, which orders by phase alone.
-  const enginePrefix = readBoardInputs(root).milestonePrefix;
+  // The ENGINE milestone family, from this project's own config (#1943),
+  // and whether the absence of one was MEASURED — round 3 of #1965's review.
+  //
+  // This is the call site that matters most and the one I left behind when I
+  // fixed the other two: `board-mirror --ready --write` is the only thing
+  // that writes the Ready lane. A `null` prefix orders by phase alone, so a
+  // root with no config promotes `Convergence Phase 3` ahead of `Pipeline
+  // Phase 6` — the exact pre-#1943 ordering, written to the board, in
+  // silence. `enginePrefixReading` tells that apart from a tree that
+  // genuinely declares one family.
+  const engine = enginePrefixReading(root);
+  if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
+  const enginePrefix = engine.prefix;
   const { readyWritable, heldByCap, selection, occ } = splitReadyChanges(
     eligible,
     cap,
