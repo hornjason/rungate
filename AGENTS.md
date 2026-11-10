@@ -15,7 +15,7 @@ A ship harness for AI-first development: from issue to merged PR, with a report 
 
 ## Hard Constraints
 
-### How we work — ten rules; 1-7 are Jason's call of 2026-10-28, 8, 9 and 10 of 2026-10-30, 2026-10-31 and 2026-11-01
+### How we work — ten rules; 1-7 are Jason's call of 2026-10-28, 8 and 10 of 2026-10-30 and 2026-11-01, and 9 of 2026-11-09, replacing a 2026-10-31 call
 
 1. **A spec says what must be true; it is never the to-do list.** Specs still
    carry checkboxes. Nobody works from them — work comes off the tracker.
