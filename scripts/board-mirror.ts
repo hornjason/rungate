@@ -44,6 +44,7 @@ import {
   readyCap,
   readyOccupancy,
   selectReady,
+  workNextReading,
   type ReadyOccupancy,
 } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
@@ -175,11 +176,18 @@ export function splitReadyChanges<
   // free-slot calculation, which is the defect #1852 closed.
   const after = Math.max(0, occupied - freed);
   const occ = readyOccupancy(after, after, cap);
-  const selection = selectReady(
-    promotions.map(c => ({ number: c.item.number, milestone: c.item.milestone, labels: c.item.labels })),
-    occ,
-    enginePrefix,
-  );
+  const candidates = promotions.map(c => ({
+    number: c.item.number,
+    milestone: c.item.milestone,
+    labels: c.item.labels,
+  }));
+  // The `work-this-next` promotion (#1962), bounded by `cap` — the SAME
+  // depth `occ` was built from, not a second reading of it. This is the
+  // writer, so this is where the label stops being a report and becomes the
+  // order cards are actually written in.
+  const workNext = workNextReading(candidates, cap);
+  if (workNext.status !== "NONE") console.log(`  ${workNext.why}`);
+  const selection = selectReady(candidates, occ, enginePrefix, workNext.honoured);
   // **Written in the order `selectReady` chose, not in board order.**
   // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
   // wrong SEQUENCE, so the log and the write order stop matching the

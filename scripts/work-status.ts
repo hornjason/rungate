@@ -35,7 +35,9 @@ import {
   LABEL_RANK,
   placementCensus,
   placementOf,
+  readyCap,
   readyOrderFor,
+  workNextReading,
   type Throughput,
 } from "../lib/board-ready-rule";
 import { enginePrefixReading } from "../lib/config-readers";
@@ -669,14 +671,31 @@ const candidateRankables = pickable.map((i: any) => ({
 const engine = enginePrefixReading(process.cwd());
 if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
 const enginePrefix = engine.prefix;
-const census = placementCensus(candidateRankables, enginePrefix);
+
+// **The `work-this-next` bound is Ready's depth, so the depth is read here**
+// (#1962). It used to be read a hundred lines further down, for the lane
+// health block alone. Reading it twice would be two deciders of one number
+// — `.claude/rules/checks-must-be-able-to-fail.md` — so the one read moved
+// up and the lane block below consumes the same value.
+const [tOwner, tName] = REPO.split("/");
+const closedReadings = await measureClosedIssues(gql, tOwner!, tName!);
+const throughput: Throughput | null = closedReadings?.throughput ?? null;
+
+// Whether anybody has asked for a card to go next, and whether the ask is
+// inside its bound. `null` throughput makes the cap `null`, which is
+// UNMEASURED rather than a bound of zero — and UNMEASURED promotes nothing,
+// which is the same direction OVER_BOUND fails in.
+const workNext = workNextReading(candidateRankables, throughput === null ? null : readyCap(throughput));
+if (workNext.status !== "NONE") console.log(`\n  ${workNext.why}`);
+
+const census = placementCensus(candidateRankables, enginePrefix, workNext.honoured);
 console.log(
-  `\n  placed by milestone ${census.phase}, by label ${census.label}, UNPLACED ${census.unplaced}` +
-    ` — of ${pickable.length}`,
+  `\n  work-this-next ${census.next}, placed by milestone ${census.phase}, by label ` +
+    `${census.label}, UNPLACED ${census.unplaced} — of ${pickable.length}`,
 );
 if (census.unplaced > 0) {
   const names = candidateRankables
-    .filter(r => placementOf(r, enginePrefix).tier === "UNPLACED")
+    .filter(r => placementOf(r, enginePrefix, workNext.honoured).tier === "UNPLACED")
     .map(r => `#${r.number}`);
   console.log(
     `  UNPLACED means no milestone and no ranked label, so nothing in the repository says\n` +
@@ -685,12 +704,15 @@ if (census.unplaced > 0) {
       `    ${names.join(" ")}`,
   );
 }
-if (census.phase + census.label > 0) {
-  const top = [...candidateRankables].sort(readyOrderFor(enginePrefix)).slice(0, 5);
+if (census.next + census.phase + census.label > 0) {
+  const top = [...candidateRankables].sort(readyOrderFor(enginePrefix, workNext.honoured)).slice(0, 5);
   console.log("\n  next out of the backlog, in plan order:");
   for (const r of top) {
     const title = pickable.find((i: any) => i.number === r.number)?.title ?? "";
-    console.log(`    #${r.number} ${String(title).slice(0, 54).padEnd(54)} ${placementOf(r, enginePrefix).why}`);
+    console.log(
+      `    #${r.number} ${String(title).slice(0, 54).padEnd(54)} ` +
+        `${placementOf(r, enginePrefix, workNext.honoured).why}`,
+    );
   }
 }
 if (focus.kind === "all") {
@@ -755,8 +777,10 @@ for (const s of status.values()) {
 // 2026-11-05: `reason:duplicate` returns 0 and so does `reason:bogusvalue`,
 // so a qualifier the index does not understand is the same bytes as a true
 // zero.
-const [tOwner, tName] = REPO.split("/");
-const closedReadings = await measureClosedIssues(gql, tOwner!, tName!);
+//
+// **The read itself moved up to the `work-this-next` block** (#1962), which
+// needs Ready's depth to bound the label. It is reported here, where the
+// lane health it sizes is printed, and there is still exactly one read.
 if (closedReadings === null) {
   // **Ready's depth only.** This pass no longer feeds the cancelled count,
   // and saying it did would name the wrong reading as unmeasured.
@@ -774,7 +798,6 @@ if (closedReadings === null) {
 // UNMEASURED only when ITS OWN source failed, and this one's source throws
 // rather than returning a partial board. ai-review round 1 of #1802.
 const cancelledClosed: number | null = abandonedOnBoard;
-const throughput: Throughput | null = closedReadings?.throughput ?? null;
 
 const offBoardCount = open.filter((i: any) => !i.pull_request && !status.has(i.number)).length;
 

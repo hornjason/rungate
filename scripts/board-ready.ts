@@ -54,6 +54,7 @@ import {
   readyCap,
   readyOccupancy,
   selectReady,
+  workNextReading,
 } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
@@ -754,7 +755,13 @@ async function main(): Promise<number> {
   // silence — round 2 of #1965's review.
   const engine = enginePrefixReading(process.cwd());
   if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
-  const selection = selectReady(eligible, occ, engine.prefix);
+  // The `work-this-next` promotion, bounded by the SAME depth the lane is
+  // judged against (#1962) — `cap`, two lines up, not a second reading. Over
+  // the bound or with the depth unreadable it promotes nothing and says so,
+  // so the lane can only ever be reordered by an ask somebody can audit.
+  const workNext = workNextReading(eligible, cap);
+  if (workNext.status !== "NONE") console.log(`  ${workNext.why}`);
+  const selection = selectReady(eligible, occ, engine.prefix, workNext.honoured);
   console.log(
     `  depth: ${cap ?? "UNMEASURED"}` +
       (throughput === null

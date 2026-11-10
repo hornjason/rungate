@@ -43,7 +43,9 @@ import { structuralCut } from "../lib/source-slice";
 import { join } from "path";
 import {
   LABEL_RANK,
+  NO_WORK_NEXT,
   READY_TOLERANCE_DAYS,
+  WORK_NEXT_LABEL,
   familyRank,
   heldReason,
   holdsReadySlot,
@@ -55,6 +57,7 @@ import {
   readyTarget,
   selectReady,
   undispatchableRemedy,
+  workNextReading,
   type Rankable,
 } from "../lib/board-ready-rule";
 // #1905's premise lives in another module, so it is imported and asserted
@@ -254,7 +257,7 @@ describe("SC-2712: the lane is judged against the capped target", () => {
 
 describe("SC-2715: phase orders the queue, and never empties it", () => {
   test("lower phase first, then older issue first", () => {
-    const got = [item(50, 1), item(10, 1), item(99, 0), item(7, 2)].sort(readyOrderFor(ENGINE)).map(i => i.number);
+    const got = [item(50, 1), item(10, 1), item(99, 0), item(7, 2)].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number);
     expect(got).toEqual([99, 10, 50, 7]);
   });
 
@@ -262,7 +265,7 @@ describe("SC-2715: phase orders the queue, and never empties it", () => {
   // phase-less issue was not merely last, it was INELIGIBLE — and 22 of the
   // 35 pickable issues that day had no milestone at all.
   test("a phase-less issue sorts LAST, and is still in the queue", () => {
-    const got = [item(3, null), item(9, 2), item(4, null), item(1, 0)].sort(readyOrderFor(ENGINE)).map(i => i.number);
+    const got = [item(3, null), item(9, 2), item(4, null), item(1, 0)].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number);
     expect(
       got,
       "phase-less items come after every phased one and before nothing — ordering, not a gate",
@@ -270,7 +273,7 @@ describe("SC-2715: phase orders the queue, and never empties it", () => {
   });
 
   test("a queue of only phase-less issues is ordered by age, not discarded", () => {
-    expect([item(8, null), item(2, null)].sort(readyOrderFor(ENGINE)).map(i => i.number)).toEqual([2, 8]);
+    expect([item(8, null), item(2, null)].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number)).toEqual([2, 8]);
   });
 });
 
@@ -278,26 +281,26 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
   const twelve = Array.from({ length: 12 }, (_, i) => item(i + 1, 0));
 
   test("more eligible work than depth promotes exactly the depth, in order", () => {
-    expect(selectReady(twelve, atDepth(0, 4), ENGINE).promote.map(i => i.number)).toEqual([1, 2, 3, 4]);
+    expect(selectReady(twelve, atDepth(0, 4), ENGINE, NO_WORK_NEXT).promote.map(i => i.number)).toEqual([1, 2, 3, 4]);
   });
 
   test("a full lane promotes nothing", () => {
-    const r = selectReady(twelve, atDepth(4, 4), ENGINE);
+    const r = selectReady(twelve, atDepth(4, 4), ENGINE, NO_WORK_NEXT);
     expect(r.promote).toEqual([]);
     expect(r.why).toContain("full");
   });
 
   test("a pull frees a slot and the next event refills exactly that many", () => {
-    expect(selectReady(twelve, atDepth(2, 4), ENGINE).promote.map(i => i.number)).toEqual([1, 2]);
-    expect(selectReady(twelve, atDepth(3, 4), ENGINE).promote.map(i => i.number)).toEqual([1]);
+    expect(selectReady(twelve, atDepth(2, 4), ENGINE, NO_WORK_NEXT).promote.map(i => i.number)).toEqual([1, 2]);
+    expect(selectReady(twelve, atDepth(3, 4), ENGINE, NO_WORK_NEXT).promote.map(i => i.number)).toEqual([1]);
   });
 
   test("a lane over its depth promotes nothing rather than a negative count", () => {
-    expect(selectReady(twelve, atDepth(11, 4), ENGINE).promote).toEqual([]);
+    expect(selectReady(twelve, atDepth(11, 4), ENGINE, NO_WORK_NEXT).promote).toEqual([]);
   });
 
   test("less eligible work than depth promotes all of it", () => {
-    expect(selectReady([item(5, 1), item(2, 0), item(9, null)], atDepth(0, 4), ENGINE).promote.map(i => i.number)).toEqual([
+    expect(selectReady([item(5, 1), item(2, 0), item(9, null)], atDepth(0, 4), ENGINE, NO_WORK_NEXT).promote.map(i => i.number)).toEqual([
       2, 5, 9,
     ]);
   });
@@ -306,14 +309,14 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
   // reading performed automatically, which is the failure the cap exists
   // to prevent.
   test("an unreadable cap promotes nothing and says UNMEASURED", () => {
-    const r = selectReady(twelve, atDepth(0, null), ENGINE);
+    const r = selectReady(twelve, atDepth(0, null), ENGINE, NO_WORK_NEXT);
     expect(r.promote).toEqual([]);
     expect(r.why).toContain("UNMEASURED");
   });
 
   test("selection does not mutate its input", () => {
     const given = [item(3, 1), item(1, 0)];
-    selectReady(given, atDepth(0, 4), ENGINE);
+    selectReady(given, atDepth(0, 4), ENGINE, NO_WORK_NEXT);
     expect(given.map(i => i.number), "sorting in place reorders the caller's decision record").toEqual([3, 1]);
   });
 
@@ -323,7 +326,7 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
     for (const eligible of [0, 1, 3, 4, 12, 34]) {
       const items = Array.from({ length: eligible }, (_, i) => item(i + 1, 0));
       expect(
-        selectReady(items, atDepth(0, 4), ENGINE).promote.length,
+        selectReady(items, atDepth(0, 4), ENGINE, NO_WORK_NEXT).promote.length,
         `with ${eligible} eligible the reading and the writer must not disagree`,
       // Non-null because the cap is a literal 4 here; `readyTarget` only
       // returns null for an unreadable cap, which the case above covers.
@@ -577,7 +580,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
       item(30, null, ["engine"]),
       item(40, null, ["spec:convergence"]),
     ]
-      .sort(readyOrderFor(ENGINE))
+      .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
       .map(i => i.number);
     expect(
       got,
@@ -586,7 +589,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
   });
 
   test("a milestone always beats a label, however high the label ranks", () => {
-    const got = [item(5, null, ["engine"]), item(900, 6)].sort(readyOrderFor(ENGINE)).map(i => i.number);
+    const got = [item(5, null, ["engine"]), item(900, 6)].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number);
     expect(
       got,
       "phase 6 is the LAST phase and engine is the FIRST label, and the phase still wins — " +
@@ -596,19 +599,19 @@ describe("#1853: a label places an issue the milestone could not", () => {
 
   test("an issue with several ranked labels takes the BEST of them", () => {
     const got = [item(1, null, ["follow-up"]), item(2, null, ["follow-up", "engine"])]
-      .sort(readyOrderFor(ENGINE))
+      .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
       .map(i => i.number);
     expect(
       got,
       "#2 is newer and still first: taking the worst label would let ADDING a label demote an " +
         "issue, which makes the rank punish labelling",
     ).toEqual([2, 1]);
-    expect(placementOf(item(2, null, ["follow-up", "engine"]), ENGINE).rank).toBe(0);
+    expect(placementOf(item(2, null, ["follow-up", "engine"]), ENGINE, NO_WORK_NEXT).rank).toBe(0);
   });
 
   test("age still breaks ties INSIDE a tier, and no longer decides the tier", () => {
     const got = [item(99, null, ["engine"]), item(1, null, ["external-audit"]), item(50, null, ["engine"])]
-      .sort(readyOrderFor(ENGINE))
+      .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
       .map(i => i.number);
     expect(
       got,
@@ -618,7 +621,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
   });
 
   test("an unknown label does not place an issue — it is UNPLACED, never guessed", () => {
-    const p = placementOf(item(7, null, ["arbiter-override"]), ENGINE);
+    const p = placementOf(item(7, null, ["arbiter-override"]), ENGINE, NO_WORK_NEXT);
     expect(p.tier, "arbiter-override is outside LABEL_RANK and is the live case on this repo").toBe(
       "UNPLACED",
     );
@@ -630,8 +633,8 @@ describe("#1853: a label places an issue the milestone could not", () => {
   });
 
   test("no label at all is UNPLACED too, and says something different", () => {
-    const none = placementOf(item(7, null, []), ENGINE);
-    const unknown = placementOf(item(7, null, ["arbiter-override"]), ENGINE);
+    const none = placementOf(item(7, null, []), ENGINE, NO_WORK_NEXT);
+    const unknown = placementOf(item(7, null, ["arbiter-override"]), ENGINE, NO_WORK_NEXT);
     expect(none.tier).toBe("UNPLACED");
     expect(
       none.why,
@@ -644,10 +647,10 @@ describe("#1853: a label places an issue the milestone could not", () => {
     // array in input order — which would look exactly like a correct
     // age sort for an already-sorted input. So the input is NOT sorted.
     const got = [item(8, null, []), item(2, null, ["arbiter-override"])]
-      .sort(readyOrderFor(ENGINE))
+      .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
       .map(i => i.number);
     expect(got).toEqual([2, 8]);
-    expect(readyOrderFor(ENGINE)(item(8, null, []), item(2, null, []))).toBeGreaterThan(0);
+    expect(readyOrderFor(ENGINE, NO_WORK_NEXT)(item(8, null, []), item(2, null, []))).toBeGreaterThan(0);
   });
 
   test("the census counts UNPLACED apart from the two placed tiers", () => {
@@ -657,12 +660,12 @@ describe("#1853: a label places an issue the milestone could not", () => {
       item(3, null, ["follow-up"]),
       item(4, null, ["arbiter-override"]),
       item(5, null, []),
-    ], ENGINE);
+    ], ENGINE, NO_WORK_NEXT);
     expect(
       got,
       "folding UNPLACED into the label count is the defect one level up — an issue nothing " +
         "can rank would read identically to one ranked last",
-    ).toEqual({ phase: 1, label: 2, unplaced: 2 });
+    ).toEqual({ next: 0, phase: 1, label: 2, unplaced: 2 });
   });
 
   /**
@@ -685,7 +688,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
    */
   test("#1943: a LATER engine phase outranks an EARLIER phase in another family", () => {
     const got = [item(1764, 3, [], PAYLOAD), item(1717, 6, [], ENGINE)]
-      .sort(readyOrderFor(ENGINE))
+      .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
       .map(i => i.number);
     expect(
       got,
@@ -698,11 +701,11 @@ describe("#1853: a label places an issue the milestone could not", () => {
     // family and stopped — which would delete the phase ordering entirely
     // and look exactly like the family rank working.
     expect(
-      [item(10, 6, [], ENGINE), item(99, 3, [], ENGINE)].sort(readyOrderFor(ENGINE)).map(i => i.number),
+      [item(10, 6, [], ENGINE), item(99, 3, [], ENGINE)].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number),
       "phase still orders within a family, and lower goes first",
     ).toEqual([99, 10]);
     expect(
-      [item(10, 6, [], PAYLOAD), item(99, 3, [], PAYLOAD)].sort(readyOrderFor(ENGINE)).map(i => i.number),
+      [item(10, 6, [], PAYLOAD), item(99, 3, [], PAYLOAD)].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number),
       "and within the OTHER family too — the rank orders families, it does not flatten one",
     ).toEqual([99, 10]);
   });
@@ -751,7 +754,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
     // read something else.
     expect(
       [item(10, 2, [], LOOKALIKE), item(99, 6, [], ENGINE)]
-        .sort(readyOrderFor(ENGINE))
+        .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
         .map(i => i.number),
       "the lookalike family borrowed the engine's rank and its lower phase won",
     ).toEqual([99, 10]);
@@ -768,7 +771,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
     ).toBe(1);
     expect(
       [item(1764, 3, [], PAYLOAD), item(1717, 6, [], ENGINE)]
-        .sort(readyOrderFor(ENGINE))
+        .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
         .map(i => i.number),
       "the ordering this issue exists for must survive the boundary fix",
     ).toEqual([1717, 1764]);
@@ -842,7 +845,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
       },
     ];
 
-    const order = readyOrderFor(ENGINE);
+    const order = readyOrderFor(ENGINE, NO_WORK_NEXT);
     for (const row of rows) {
       expect([row.winner, row.loser].sort(order).map(i => i.number), `${row.key}: ${row.why}`).toEqual(
         [row.winner.number, row.loser.number],
@@ -872,7 +875,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
     // Substitution pointed at an ordering.
     expect(
       [item(1764, 3, [], PAYLOAD), item(1717, 6, [], ENGINE)]
-        .sort(readyOrderFor(null))
+        .sort(readyOrderFor(null, NO_WORK_NEXT))
         .map(i => i.number),
       "an unconfigured tree has one family, so phase 3 goes first",
     ).toEqual([1764, 1717]);
@@ -887,13 +890,13 @@ describe("#1853: a label places an issue the milestone could not", () => {
     // the order. Any invented split moves exactly one of these two.
     expect(
       [item(10, 6, [], ENGINE), item(99, 3, [], PAYLOAD)]
-        .sort(readyOrderFor(null))
+        .sort(readyOrderFor(null, NO_WORK_NEXT))
         .map(i => i.number),
       "a null prefix invented a family that favours the payload",
     ).toEqual([99, 10]);
     expect(
       [item(10, 6, [], PAYLOAD), item(99, 3, [], ENGINE)]
-        .sort(readyOrderFor(null))
+        .sort(readyOrderFor(null, NO_WORK_NEXT))
         .map(i => i.number),
       "a null prefix invented a family that favours the engine",
     ).toEqual([99, 10]);
@@ -901,7 +904,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
     // built-in that happens to match: ranking against PAYLOAD inverts it.
     expect(
       [item(1764, 3, [], PAYLOAD), item(1717, 6, [], ENGINE)]
-        .sort(readyOrderFor(PAYLOAD))
+        .sort(readyOrderFor(PAYLOAD, NO_WORK_NEXT))
         .map(i => i.number),
       "the family rank reads the prefix it was handed, not a name baked into the rule",
     ).toEqual([1764, 1717]);
@@ -914,15 +917,15 @@ describe("#1853: a label places an issue the milestone could not", () => {
     // among themselves.
     expect(
       [item(5, null, ["engine"]), item(900, 6, [], PAYLOAD)]
-        .sort(readyOrderFor(ENGINE))
+        .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
         .map(i => i.number),
       "a milestone still beats a label, even in the other family",
     ).toEqual([900, 5]);
     expect(
-      placementOf(item(900, 6, [], PAYLOAD), ENGINE).why,
+      placementOf(item(900, 6, [], PAYLOAD), ENGINE, NO_WORK_NEXT).why,
       "the sentence must say the family, or #1943 is invisible in the report again",
     ).toContain(ENGINE);
-    expect(placementOf(item(900, 6, [], ENGINE), ENGINE).why).toContain(`${ENGINE} family`);
+    expect(placementOf(item(900, 6, [], ENGINE), ENGINE, NO_WORK_NEXT).why).toContain(`${ENGINE} family`);
   });
 
   test("THE CONTROL: the label rank is spelled at exactly one site", () => {
@@ -1095,7 +1098,7 @@ describe("#1852: Ready has ONE occupancy reading", () => {
     const occ = readyOccupancy(5, 5, null);
     expect(occ.verdict).toBe("UNMEASURED");
     expect(occ.free, "a depth nobody read must not promote; that is the 36-of-46 reading").toBe(0);
-    expect(selectReady([item(1, 0)], occ, ENGINE).promote).toEqual([]);
+    expect(selectReady([item(1, 0)], occ, ENGINE, NO_WORK_NEXT).promote).toEqual([]);
   });
 
   test("dispatchable above cards is REFUSED, not clamped", () => {
@@ -1229,5 +1232,222 @@ describe("#1857: the gate's remedy is not the promoter's", () => {
       code,
       "this file promotes nothing, so the promoters' sentence is never the right one here",
     ).not.toContain("heldReason(");
+  });
+});
+
+/**
+ * #1962 — a bounded, auditable way to make one issue go next.
+ *
+ * Covers the label, the bound, and the direction the bound fails in. The
+ * label is deliberately NOT in `LABEL_RANK`: top of that map still loses to
+ * every milestone, and reaching the top past work that outranks you is the
+ * whole request.
+ */
+describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
+  const next = (number: number, phase: number | null, extra: readonly string[] = []): Rankable =>
+    item(number, phase, [WORK_NEXT_LABEL, ...extra]);
+
+  test("an honoured card goes first, past a milestone that outranks it", () => {
+    // The premise, measured first: WITHOUT the promotion the phase-0 engine
+    // card wins, which is what #1853 and #1943 built. If this row were the
+    // only one, a rule that promoted nothing and a rule that promoted
+    // everything would be told apart by neither.
+    const cards = [item(10, 0), next(99, 6)];
+    expect(
+      [...cards].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number),
+      "the premise: unpromoted, the lower phase leads",
+    ).toEqual([10, 99]);
+
+    const r = workNextReading(cards, 8);
+    expect(r.status).toBe("HONOURED");
+    expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([99, 10]);
+  });
+
+  test("the promotion changes ONLY the promoted card's position", () => {
+    // The control the issue asks for by name. Everything below the promoted
+    // card must hold its relative order, or the lever is moving things
+    // nobody labelled.
+    const cards = [item(1, 0), item(2, 1), next(3, 9), item(4, null, ["engine"]), item(5, null)];
+    const r = workNextReading(cards, 8);
+    expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([
+      3, 1, 2, 4, 5,
+    ]);
+    expect(
+      [...cards].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number),
+      "the same five, unpromoted — only #3 moves between the two readings",
+    ).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("over the bound NOTHING is promoted, and the refusal names every one", () => {
+    const cards = [next(11, null), next(12, null), next(13, null), item(1, 0)];
+    const r = workNextReading(cards, 2);
+    expect(r.status).toBe("OVER_BOUND");
+    expect(r.honoured.size, "a truncated promotion is a promotion nobody chose").toBe(0);
+    for (const n of [11, 12, 13]) expect(r.why, `the refusal does not name #${n}`).toContain(`#${n}`);
+    expect(r.why).toContain("2");
+    expect(
+      [...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number),
+      "a refused promotion must leave the ordinary order exactly as it was",
+    ).toEqual([...cards].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number));
+  });
+
+  test("exactly AT the bound is honoured — the boundary, from both sides", () => {
+    const at = [next(11, null), next(12, null)];
+    expect(workNextReading(at, 2).status, "a count equal to the depth is inside it").toBe("HONOURED");
+    expect(workNextReading([...at, next(13, null)], 2).status).toBe("OVER_BOUND");
+  });
+
+  test("an unreadable depth promotes nothing, and says so as UNMEASURED", () => {
+    // `.claude/rules/config-access.md`: a depth that could not be read is not
+    // a depth of zero and not a depth of infinity. Distinct from OVER_BOUND,
+    // because one is somebody over-labelling and the other is a broken read.
+    const r = workNextReading([next(11, null)], null);
+    expect(r.status).toBe("UNMEASURED");
+    expect(r.honoured.size).toBe(0);
+    expect(r.why).toContain("#11");
+    expect(r.why, "an unreadable depth was reported as an over-labelled one").not.toContain("REFUSED");
+  });
+
+  test("no label at all is NONE, and it is not the same word as the other three", () => {
+    const r = workNextReading([item(1, 0), item(2, null, ["engine"])], 8);
+    expect(r.status).toBe("NONE");
+    expect(r.carrying).toEqual([]);
+    const statuses = [
+      r.status,
+      workNextReading([next(1, null)], 8).status,
+      workNextReading([next(1, null), next(2, null)], 1).status,
+      workNextReading([next(1, null)], null).status,
+    ];
+    expect(new Set(statuses).size, "two of the four readings report the same word").toBe(4);
+  });
+
+  test("every reading names every carrier, so the lever is auditable in all four", () => {
+    // `carrying` is the audit trail: whatever the verdict, the report can say
+    // who asked. A reading that only populated it when it acted would make a
+    // refusal invisible to anybody reading the census.
+    const cards = [next(11, null), next(12, null)];
+    for (const cap of [8, 1, null]) {
+      expect(workNextReading(cards, cap).carrying, `cap ${String(cap)} dropped a carrier`).toEqual([
+        11, 12,
+      ]);
+    }
+  });
+
+  test("the label is NOT in LABEL_RANK — adding it there would not reach the top", () => {
+    // The design, as an assertion rather than a comment. Ranked 0 in the
+    // LABEL tier it still loses to every milestone, which is the thing it
+    // exists to beat — so a later edit that "tidies" it into the map is a
+    // silent regression of the whole feature.
+    expect(
+      LABEL_RANK.has(WORK_NEXT_LABEL),
+      `${WORK_NEXT_LABEL} belongs to its own tier above PHASE, not to LABEL_RANK — ` +
+        "a LABEL-tier placement loses to every milestone",
+    ).toBe(false);
+    const asLabel = placementOf(item(9, null, [WORK_NEXT_LABEL]), ENGINE, NO_WORK_NEXT);
+    expect(asLabel.tier, "the bare label placed an issue without a reading honouring it").toBe(
+      "UNPLACED",
+    );
+  });
+
+  test("the census counts promotions apart from the tier they came from", () => {
+    const cards = [next(11, 6), item(1, 0), item(2, null, ["engine"]), item(3, null)];
+    const r = workNextReading(cards, 8);
+    expect(placementCensus(cards, ENGINE, r.honoured)).toEqual({
+      next: 1,
+      phase: 1,
+      label: 1,
+      unplaced: 1,
+    });
+    expect(
+      placementCensus(cards, ENGINE, NO_WORK_NEXT),
+      "unpromoted, the same card must count in the tier it actually belongs to",
+    ).toEqual({ next: 0, phase: 2, label: 1, unplaced: 1 });
+  });
+
+  test("the bound is Ready's depth, read from throughput and not typed here", () => {
+    // The bound must be the SAME number the lane is judged against, or the
+    // lever has a second depth nobody declared. Derived from the live
+    // reading, so a change to READY_TOLERANCE_DAYS moves both.
+    const cap = readyCap(LIVE);
+    expect(cap).not.toBeNull();
+    const cards = Array.from({ length: cap! }, (_, i) => next(i + 1, null));
+    expect(workNextReading(cards, cap).status).toBe("HONOURED");
+    expect(workNextReading([...cards, next(999, null)], cap).status).toBe("OVER_BOUND");
+  });
+
+  test("two honoured cards order by age, and the why says where each would have sat", () => {
+    const cards = [next(50, 6), next(10, 0)];
+    const r = workNextReading(cards, 8);
+    expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([10, 50]);
+    const why = placementOf(cards[0], ENGINE, r.honoured).why;
+    expect(why, "the promotion does not name the label that caused it").toContain(WORK_NEXT_LABEL);
+    expect(why, "the promotion hides where the card would otherwise have sat").toContain("phase 6");
+  });
+});
+
+describe("#1962: the promotion reaches the writer, not only the report", () => {
+  const ROOT = join(import.meta.dir, "..");
+  const codeOf = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  test("selectReady promotes the honoured card past a higher-ranked one", () => {
+    // The lever's point. `selectReady` is what WRITES the Ready lane, so a
+    // promotion that only moved `work-status`'s list would be a report that
+    // disagrees with the board — the exact defect #1795 closed in the other
+    // direction.
+    const eligible = [item(10, 0), item(99, 6, [WORK_NEXT_LABEL])];
+    const occ = readyOccupancy(0, 0, 1);
+    expect(occ.free, "the fixture left no slot, so neither arm below writes anything").toBe(1);
+
+    expect(
+      selectReady(eligible, occ, ENGINE, NO_WORK_NEXT).promote.map(i => i.number),
+      "the premise: unpromoted, the one slot goes to the lower phase",
+    ).toEqual([10]);
+    expect(
+      selectReady(eligible, occ, ENGINE, workNextReading(eligible, 8).honoured).promote.map(
+        i => i.number,
+      ),
+      "the writer ignored an honoured promotion",
+    ).toEqual([99]);
+  });
+
+  /**
+   * The population guard, the same shape #1943's prefix guard uses.
+   *
+   * Three scripts order Ready. A fourth that ordered without taking a
+   * promotion reading would compile, run, and silently turn the lever off
+   * for whichever surface it owns — and a behavioural suite catches only the
+   * last site to regress (`.claude/rules/checks-must-be-able-to-fail.md`,
+   * *two deciders that agree*, at N sites).
+   *
+   * Breaking it: pass `NO_WORK_NEXT` at any one of the three call sites and
+   * this names that file.
+   */
+  test("every script that ORDERS takes a work-next reading, and none opts out", () => {
+    const ORDERERS = ["readyOrderFor", "selectReady", "splitReadyChanges", "placementCensus"];
+    const population = sourceFiles(ROOT, ["scripts"]);
+    expect(population.length, "the sweep read no scripts").toBeGreaterThan(10);
+
+    const orderers: string[] = [];
+    const offenders: string[] = [];
+    for (const path of population) {
+      const code = codeOf(readFileSync(join(ROOT, path), "utf-8"));
+      if (!ORDERERS.some(fn => code.includes(`${fn}(`))) continue;
+      orderers.push(path);
+      if (!code.includes("workNextReading(")) offenders.push(`${path}: takes no reading`);
+      // `NO_WORK_NEXT` is the honest value for a caller that CANNOT read a
+      // depth. None of these three is that caller — every one of them has
+      // the cap in scope — so here it is an opt-out, not an absence.
+      if (code.includes("NO_WORK_NEXT")) offenders.push(`${path}: opts out with NO_WORK_NEXT`);
+    }
+
+    expect(
+      orderers.sort(),
+      "the scan did not find the scripts that order Ready — it is measuring nothing",
+    ).toEqual(["scripts/board-mirror.ts", "scripts/board-ready.ts", "scripts/work-status.ts"]);
+    expect(
+      offenders,
+      `a script that orders Ready without a workNextReading leaves "${WORK_NEXT_LABEL}" ` +
+        "inert on whichever surface it owns, with nothing saying so",
+    ).toEqual([]);
   });
 });

@@ -195,8 +195,113 @@ export const LABEL_RANK: ReadonlyMap<string, number> = new Map([
   ["external-audit", 3],
 ]);
 
+/**
+ * The label that makes one issue go next — Jason's call, 2026-11-09 (#1962).
+ *
+ * **Not a flag.** A flag is exercised once at promotion time and leaves
+ * nothing behind, so nobody can later ask why a card jumped the queue. A
+ * label is data on the card, visible in the issue's own timeline, and
+ * AGENTS.md rule 4 says ordering is data.
+ *
+ * **It is NOT a member of `LABEL_RANK`, and that is the design.** Top of
+ * `LABEL_RANK` would rank it 0 inside the LABEL tier, which still loses to
+ * every milestone — and the whole point is to reach the top of the queue
+ * past work that outranks it. So it is its own tier, above PHASE.
+ */
+export const WORK_NEXT_LABEL = "work-this-next";
+
 /** Which source placed an issue — or that nothing did. */
-export type PlacementTier = "PHASE" | "LABEL" | "UNPLACED";
+export type PlacementTier = "NEXT" | "PHASE" | "LABEL" | "UNPLACED";
+
+/** What the `work-this-next` label did, and why. */
+export type WorkNextStatus = "NONE" | "HONOURED" | "OVER_BOUND" | "UNMEASURED";
+
+export interface WorkNextReading {
+  readonly status: WorkNextStatus;
+  /** Every issue carrying the label, ascending. Populated in all four states. */
+  readonly carrying: readonly number[];
+  /** Whose promotion is actually applied. EMPTY unless `HONOURED`. */
+  readonly honoured: ReadonlySet<number>;
+  /** Ready's depth, the bound. `null` when it could not be read. */
+  readonly cap: number | null;
+  readonly why: string;
+}
+
+/**
+ * Whether the `work-this-next` label is honoured, and over how many issues.
+ *
+ * ## The bound is the whole of the design
+ *
+ * If every issue carries the label, the label ranks nothing. So the count
+ * carrying it is bounded by **Ready's own depth** — `readyCap`, derived from
+ * live throughput — rather than by a number somebody typed. A lever with no
+ * bound is a lever that has stopped being one, and a typed bound goes stale
+ * in both directions the way `READY_TOLERANCE_DAYS` already records.
+ *
+ * ## It fails toward NOT promoting
+ *
+ * Over the bound, **nothing is promoted and the issues are named**. Not "the
+ * first `cap` of them" — a silent truncation is a promotion nobody chose, and
+ * picking which `cap` to honour is exactly the hand-placement this board
+ * exists to replace. A card that did not jump the queue costs a cycle; a
+ * silent override nobody can audit costs the property the board is for.
+ *
+ * An unreadable cap is `UNMEASURED` and promotes nothing either, for the same
+ * reason — `.claude/rules/config-access.md`, Silent Default Substitution. A
+ * depth that could not be read is not a depth of zero and not a depth of
+ * infinity, and only one of the three is honest.
+ */
+export function workNextReading(items: readonly Rankable[], cap: number | null): WorkNextReading {
+  const carrying = items
+    .filter(i => i.labels.includes(WORK_NEXT_LABEL))
+    .map(i => i.number)
+    .sort((a, b) => a - b);
+  const named = carrying.map(n => `#${n}`).join(", ");
+  if (cap === null) {
+    return {
+      status: "UNMEASURED",
+      carrying,
+      honoured: new Set(),
+      cap,
+      why:
+        `UNMEASURED — Ready's depth could not be read, so the bound on "${WORK_NEXT_LABEL}" ` +
+        `is unknown and NOTHING was promoted` +
+        (carrying.length > 0 ? `, including ${named}` : ""),
+    };
+  }
+  if (carrying.length === 0) {
+    return {
+      status: "NONE",
+      carrying,
+      honoured: new Set(),
+      cap,
+      why: `no issue carries "${WORK_NEXT_LABEL}", so the ordinary order stands`,
+    };
+  }
+  if (carrying.length > cap) {
+    return {
+      status: "OVER_BOUND",
+      carrying,
+      honoured: new Set(),
+      cap,
+      why:
+        `REFUSED — ${carrying.length} issues carry "${WORK_NEXT_LABEL}" and Ready's depth is ` +
+        `${cap}, so the label ranks nothing. NONE of them was promoted: ${named}. ` +
+        `Remove the label from ${carrying.length - cap} of them.`,
+    };
+  }
+  return {
+    status: "HONOURED",
+    carrying,
+    honoured: new Set(carrying),
+    cap,
+    why:
+      `${carrying.length} of a bound of ${cap} carry "${WORK_NEXT_LABEL}" and go first: ${named}`,
+  };
+}
+
+/** Nothing is promoted. The reading a caller that has not taken one must pass. */
+export const NO_WORK_NEXT: ReadonlySet<number> = new Set<number>();
 
 export interface Placement {
   readonly tier: PlacementTier;
@@ -215,8 +320,21 @@ export interface Placement {
   readonly why: string;
 }
 
-/** PHASE before LABEL before UNPLACED. A milestone always beats a label. */
-const TIER_ORDER: Readonly<Record<PlacementTier, number>> = { PHASE: 0, LABEL: 1, UNPLACED: 2 };
+/**
+ * NEXT before PHASE before LABEL before UNPLACED.
+ *
+ * A milestone always beats a label — and `work-this-next` beats the
+ * milestone, because an honoured promotion is a person saying *this one, now*
+ * about a bounded, auditable number of cards (#1962). Everything below it is
+ * unchanged, so an empty promotion set leaves the order exactly as #1853 and
+ * #1943 left it.
+ */
+const TIER_ORDER: Readonly<Record<PlacementTier, number>> = {
+  NEXT: 0,
+  PHASE: 1,
+  LABEL: 2,
+  UNPLACED: 3,
+};
 
 /**
  * Where an issue sits in the plan — milestone, else label, else nowhere.
@@ -242,9 +360,50 @@ const TIER_ORDER: Readonly<Record<PlacementTier, number>> = { PHASE: 0, LABEL: 1
  * **An issue with several ranked labels takes the best of them.** A
  * follow-up that is also engine work is engine work; taking the worst would
  * let adding a label demote an issue, which makes the rank punish labelling.
+ *
+ * ## The promoted set is REQUIRED, with no default (#1962)
+ *
+ * The same reason `labels` is, one field up: an optional parameter lets a
+ * caller omit it and receive an answer it never asked for. Here the honest
+ * empty value is `NO_WORK_NEXT`, which promotes nothing — so a caller that
+ * has not taken the reading has to say so in its own source, where a census
+ * test can see it, rather than inheriting the safe answer by accident.
  */
-export function placementOf(r: Rankable, enginePrefix: string | null): Placement {
+export function placementOf(
+  r: Rankable,
+  enginePrefix: string | null,
+  honoured: ReadonlySet<number>,
+): Placement {
   const phase = phaseOf(r.milestone);
+  if (honoured.has(r.number)) {
+    // **The promotion reports where the card WOULD have sat**, so the lever
+    // is auditable from the report alone: "work-this-next promotes it above
+    // every tier — the Engine family places it in phase 6" says both that it
+    // jumped and what it jumped. A sentence naming only the label would make
+    // the promotion unreviewable after the fact, which is the property that
+    // ruled out a flag in the first place.
+    //
+    // Family and rank are 0 for every promoted card, so promoted cards order
+    // among themselves by issue number — the oldest ask goes first. Carrying
+    // the underlying family and rank up would compare a phase number against
+    // a label rank inside one tier, which is two scales in one expression.
+    const base = unpromotedPlacement(r, enginePrefix, phase);
+    return {
+      tier: "NEXT",
+      family: 0,
+      rank: 0,
+      why: `"${WORK_NEXT_LABEL}" promotes it above every tier — ${base.why}`,
+    };
+  }
+  return unpromotedPlacement(r, enginePrefix, phase);
+}
+
+/** Where a card sits with no promotion applied. `placementOf`'s other half. */
+function unpromotedPlacement(
+  r: Rankable,
+  enginePrefix: string | null,
+  phase: number | null,
+): Placement {
   if (phase !== null) {
     const family = familyRank(r.milestone, enginePrefix);
     return {
@@ -312,10 +471,13 @@ export function placementOf(r: Rankable, enginePrefix: string | null): Placement
  * Two UNPLACED items compare `Infinity !== Infinity`, which is false, so the
  * rank test falls through to the number rather than producing `NaN`.
  */
-export function readyOrderFor(enginePrefix: string | null): (a: Rankable, b: Rankable) => number {
+export function readyOrderFor(
+  enginePrefix: string | null,
+  honoured: ReadonlySet<number>,
+): (a: Rankable, b: Rankable) => number {
   return (a, b) => {
-    const pa = placementOf(a, enginePrefix);
-    const pb = placementOf(b, enginePrefix);
+    const pa = placementOf(a, enginePrefix, honoured);
+    const pb = placementOf(b, enginePrefix, honoured);
     // Tier first, unchanged: a milestone is the declared plan and a label is
     // a category, so a milestone still always beats a label.
     if (TIER_ORDER[pa.tier] !== TIER_ORDER[pb.tier]) {
@@ -341,6 +503,8 @@ export function readyOrderFor(enginePrefix: string | null): (a: Rankable, b: Ran
 
 /** How many candidates each source placed. The report's one reading. */
 export interface PlacementCensus {
+  /** Promoted by `work-this-next` and honoured (#1962). */
+  readonly next: number;
   readonly phase: number;
   readonly label: number;
   readonly unplaced: number;
@@ -361,17 +525,20 @@ export interface PlacementCensus {
 export function placementCensus(
   items: readonly Rankable[],
   enginePrefix: string | null,
+  honoured: ReadonlySet<number>,
 ): PlacementCensus {
+  let next = 0;
   let phase = 0;
   let label = 0;
   let unplaced = 0;
   for (const i of items) {
-    const t = placementOf(i, enginePrefix).tier;
-    if (t === "PHASE") phase++;
+    const t = placementOf(i, enginePrefix, honoured).tier;
+    if (t === "NEXT") next++;
+    else if (t === "PHASE") phase++;
     else if (t === "LABEL") label++;
     else unplaced++;
   }
-  return { phase, label, unplaced };
+  return { next, phase, label, unplaced };
 }
 
 /**
@@ -642,6 +809,7 @@ export function selectReady<T extends Rankable>(
   eligible: readonly T[],
   occ: ReadyOccupancy,
   enginePrefix: string | null,
+  honoured: ReadonlySet<number>,
 ): { readonly promote: readonly T[]; readonly why: string } {
   if (occ.free === 0) {
     // One branch for every reason there is no room — UNMEASURED, FULL and
@@ -651,7 +819,7 @@ export function selectReady<T extends Rankable>(
   }
   // A copy, not a sort in place: the caller's array is its own decision
   // record and reordering it changes what its log prints.
-  const promote = [...eligible].sort(readyOrderFor(enginePrefix)).slice(0, occ.free);
+  const promote = [...eligible].sort(readyOrderFor(enginePrefix, honoured)).slice(0, occ.free);
   return {
     promote,
     why:

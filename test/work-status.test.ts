@@ -1042,7 +1042,15 @@ describe("#1853 H4: the candidate list says how many are UNPLACED", () => {
       "the report resolves the engine family from config — a literal here is the second " +
         "spelling lib/config-readers.ts exists to prevent",
     ).toContain("enginePrefixReading(process.cwd())");
-    expect(code).toContain(".sort(readyOrderFor(enginePrefix))");
+    // **And with the promotion set, not `NO_WORK_NEXT`** (#1962). Passing
+    // the empty set compiles, orders correctly, and silently turns the
+    // `work-this-next` lever off in this report alone — so the shape of the
+    // call is asserted, not just its name.
+    expect(
+      code,
+      "the report must sort with the promotion reading it just took, or the lever is on " +
+        "for the writer and off for the report that is supposed to explain it",
+    ).toContain(".sort(readyOrderFor(enginePrefix, workNext.honoured))");
 
     // #1965 round 2: and it must SURFACE the reading, not just take it. A
     // `null` prefix is the pre-#1943 ordering, so a config the script could
