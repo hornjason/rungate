@@ -114,5 +114,38 @@
       1628,
       1629
     ]
+  },
+  {
+    "date": "2026-11-10",
+    "lo": 1930,
+    "hi": 1958,
+    "pullRequests": 10,
+    "allRounds": {
+      "measured": 10,
+      "passed": 10,
+      "passedRounds": 37,
+      "mean": 3.7,
+      "oneRound": 3,
+      "fiveOrMore": 4,
+      "refusals": []
+    },
+    "measuredOnly": {
+      "measured": 10,
+      "passed": 10,
+      "passedRounds": 37,
+      "mean": 3.7,
+      "oneRound": 3,
+      "fiveOrMore": 4,
+      "refusals": []
+    },
+    "measuredOnlyEvicted": 0,
+    "measuredOnlyEvictionUnknown": [],
+    "split": {
+      "total": 37,
+      "kinds": {
+        "measured": 37
+      }
+    },
+    "zeroMeasured": []
   }
 ]
