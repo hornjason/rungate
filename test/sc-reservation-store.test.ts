@@ -108,6 +108,72 @@ function tree(opts: { specIds: number[]; store?: unknown | string }): string {
 
 const block = (owner: string, from: number, to: number): ScReservation => ({ owner, from, to });
 
+/**
+ * Does `readScReservations` agree with the JSON it read, entry by entry?
+ *
+ * Extracted from the live-store case by #1969 so the property survives an
+ * EMPTY store. The store is a registry of ids in flight, and
+ * `.claude/rules/parallel-sessions.md` tells every owner to delete their block
+ * at merge — so "no blocks" is the correct resting state, and a reading taken
+ * against it proves nothing. One helper, driven by a fixture that is always
+ * populated and by the live file when it happens to be, rather than a reading
+ * that is sometimes a check and sometimes a demand that the file not be tidy.
+ *
+ * Paired by INDEX, not by owner (#1542): the store is keyed by nothing, and a
+ * branch holding ids in two namespaces declares two entries under one owner —
+ * `.claude/rules/parallel-sessions.md` records `rg/filing-gate-four` holding
+ * `FG-45..59` and `AR-20` as the incident the `namespace` field exists for.
+ * Against such a store `find(b => b.owner === …)` returned the FIRST of the two
+ * for both iterations and the second row asserted `"FG" === "AR"`, reporting
+ * the reader as having rewritten a namespace it never touched. The same key
+ * made the row vacuous from the other side: while every owner is unique the
+ * lookup can only return the block the entry was taken from, so a reader that
+ * rewrote EVERY namespace to `SC` would still be matched against a correctly
+ * tagged copy of itself. Index pairing is what makes the mutation — forcing
+ * `namespace: SC` inside `readScReservations` — land on the AR entry by name.
+ *
+ * Index pairing is sound because `readScReservations` builds its result with
+ * `declared.map(...)` and sorts nothing (the only sort is on a local copy
+ * inside `overlapFault`), and it is ASSERTED rather than assumed: the
+ * owner/from/to agreement below is the order-preservation reading.
+ *
+ * Collected rather than thrown per row, so a failure names EVERY entry the
+ * reader misread instead of only the first.
+ */
+function readerDisagreements(
+  declaredEntries: Array<{ owner: string; from: number; to: number; namespace?: string }>,
+  blocks: ScReservation[],
+): string[] {
+  const misread: string[] = [];
+  if (declaredEntries.length !== blocks.length) {
+    misread.push(
+      `the reader returned ${blocks.length} blocks for ${declaredEntries.length} declared entries`,
+    );
+  }
+  declaredEntries.forEach((declared, i) => {
+    const b = blocks[i];
+    if (b === undefined) {
+      misread.push(`${declared.owner} [${i}]: the reader dropped a declared block`);
+      return;
+    }
+    if (b.owner !== declared.owner || b.from !== declared.from || b.to !== declared.to) {
+      misread.push(
+        `[${i}]: declared ${declared.owner} ${declared.from}-${declared.to}, ` +
+          `read ${b.owner} ${b.from}-${b.to}`,
+      );
+    }
+    const want = declared.namespace ?? "SC";
+    if (b.namespace !== want) {
+      misread.push(
+        declared.namespace === undefined
+          ? `${declared.owner} [${i}]: an absent namespace resolved to ${b.namespace}, not SC`
+          : `${declared.owner} [${i}]: a declared ${declared.namespace} block was read as ${b.namespace}`,
+      );
+    }
+  });
+  return misread;
+}
+
 /** The store as the allocator sees it, for the common case. */
 const storeOf = (...blocks: ScReservation[]): { reservations: ScReservation[] } => ({
   [RESERVATIONS_CONTROL_KEY]: blocks,
@@ -521,92 +587,85 @@ describe("#1363: a block declares which namespace its integers belong to", () =>
     expect(tagged).toBe(HIGH + 1);
   });
 
-  test("the live blocks allocate exactly what they allocate today", () => {
-    // The backward-compatibility control, run against the SHIPPED store
-    // rather than a fixture, because the acceptance bullet is about the live
-    // entries specifically.
+  test("the reader agrees with the file it read, entry by entry", () => {
+    // The backward-compatibility control for `readerDisagreements`, over a
+    // store that is ALWAYS populated.
     //
     // **The population is derived from the store, not counted here** (#1467).
     // It used to assert `b.namespace === "SC"` for every live block, over a
     // store in which none carried the field — so the first entry that
     // declared one reddened this row, and the repair that suggests itself is
     // to drop the loop. That would delete the backward-compatibility reading
-    // the row exists for. The loop below re-reads the raw JSON instead and
-    // asserts the resolution in both directions, which is strictly more than
-    // it checked before: an ABSENT `namespace` must come back `SC`, and a
-    // DECLARED one must come back unchanged. Neither side is vacuous —
-    // asserting `b.namespace` against itself would be.
+    // the row exists for. The helper re-reads the raw JSON instead and asserts
+    // the resolution in both directions: an ABSENT `namespace` must come back
+    // `SC`, and a DECLARED one must come back unchanged. Neither side is
+    // vacuous — asserting `b.namespace` against itself would be.
+    //
+    // #1969 moved this off the live file. It was the live file's only reader,
+    // and it required the file to be non-empty to say anything — so the store
+    // could never reach the state its own `_readme` asks for, and thirteen
+    // blocks belonging to merged branches stayed in it.
+    const declared = [
+      { owner: "rg/untagged", from: LOW, to: LOW + 9 },
+      { owner: "rg/tagged-sc", from: LOW + 10, to: LOW + 19, namespace: "SC" },
+      { owner: "rg/tagged-fg", from: LOW, to: LOW + 9, namespace: "FG" },
+    ];
+    const r = readScReservations(tree({ specIds: [], store: storeOf(...(declared as ScReservation[])) }));
+    expect(r.status).toBe("read");
+    expect(
+      declared.filter(e => e.namespace === undefined).length,
+      "no untagged entry is left, so the absent-means-SC default is unexercised here",
+    ).toBeGreaterThan(0);
+    expect(
+      readerDisagreements(declared, r.blocks),
+      "the reader and the store disagree, entry by entry",
+    ).toEqual([]);
+
+    // The negative control, and it is what stops the row above being a
+    // comparison of the helper with itself: a reader that rewrote every
+    // namespace to `SC` must be NAMED, and named at the entry it broke.
+    const rewritten = r.blocks.map(b => ({ ...b, namespace: "SC" }));
+    expect(
+      readerDisagreements(declared, rewritten).join(" | "),
+      "a reader that collapsed every namespace to SC was reported as agreeing",
+    ).toContain("rg/tagged-fg");
+  });
+
+  test("the live blocks allocate exactly what they allocate today", () => {
+    // Run against the SHIPPED store, because the acceptance bullet is about
+    // the live entries specifically — but the store is a registry of ids IN
+    // FLIGHT, and the resting state is empty. So this takes the reading the
+    // live file can actually support, and says which one it took.
     const root = join(import.meta.dir, "..");
     const r = readScReservations(root);
     expect(r.status).toBe("read");
-    const ceiling = reservedCeiling(r.blocks);
-    expect(ceiling, "the live store declares no blocks").toBeGreaterThan(0);
-    expect(
-      allocateAgainstReservations(1, r.blocks, null, new Set()),
-      "an untagged live block stopped binding the allocator",
-    ).toBe(ceiling + 1);
-
     const raw = JSON.parse(readFileSync(join(root, "specs", "sc-reservations.json"), "utf-8")) as {
       reservations: Array<{ owner: string; from: number; to: number; namespace?: string }>;
     };
     expect(raw.reservations.length, "the reader and the file disagree about how many blocks there are")
       .toBe(r.blocks.length);
-    const untagged = raw.reservations.filter(e => e.namespace === undefined);
-    expect(untagged.length, "no untagged block is left, so the absent-means-SC default is unexercised here")
-      .toBeGreaterThan(0);
-    // **Paired by INDEX, not by owner** (#1542). This loop used to find its
-    // block with `r.blocks.find(b => b.owner === declared.owner)`, and an owner
-    // is not what identifies a block: the store is keyed by nothing, and a
-    // branch holding ids in two namespaces declares two entries under one owner
-    // — `.claude/rules/parallel-sessions.md` records `rg/filing-gate-four`
-    // holding `FG-45..59` and `AR-20` as the incident the `namespace` field
-    // exists for. Against such a store `find` returned the FIRST of the two for
-    // both iterations and the second row asserted `"FG" === "AR"`, reporting the
-    // reader as having rewritten a namespace it never touched.
-    //
-    // The same key made the row vacuous from the other side, which is the half
-    // the docblock above was already worried about: while every owner is unique
-    // the lookup can only return the block the entry was taken from, so a reader
-    // that rewrote EVERY namespace to `SC` would still be matched against a
-    // correctly-tagged copy of itself. Index pairing is what makes the mutation
-    // in the PR body — forcing `namespace: SC` in `readScReservations` — land on
-    // the AR entry by name.
-    //
-    // Index pairing is sound because `readScReservations` builds its result with
-    // `declared.map(...)` and sorts nothing (the only sort is on a local copy
-    // inside `overlapFault`), and it is ASSERTED rather than assumed: the
-    // owner/from/to agreement below is the order-preservation reading, and it is
-    // a reading this row did not take at all before.
-    // Collected rather than thrown per row, so the failure names EVERY entry
-    // the reader misread instead of only the first. Under the mutation in the
-    // PR body this is the difference between a message naming `rg/1344` and a
-    // message naming the AR block the row was reinstated for.
-    const misread: string[] = [];
-    raw.reservations.forEach((declared, i) => {
-      const block = r.blocks[i];
-      if (block === undefined) {
-        misread.push(`${declared.owner} [${i}]: the reader dropped a declared block`);
-        return;
-      }
-      if (block.owner !== declared.owner || block.from !== declared.from || block.to !== declared.to) {
-        misread.push(
-          `[${i}]: declared ${declared.owner} ${declared.from}-${declared.to}, ` +
-            `read ${block.owner} ${block.from}-${block.to}`,
-        );
-      }
-      const want = declared.namespace ?? "SC";
-      if (block.namespace !== want) {
-        misread.push(
-          declared.namespace === undefined
-            ? `${declared.owner} [${i}]: an absent namespace resolved to ${block.namespace}, not SC`
-            : `${declared.owner} [${i}]: a declared ${declared.namespace} block was read as ${block.namespace}`,
-        );
-      }
-    });
     expect(
-      misread,
+      readerDisagreements(raw.reservations, r.blocks),
       "the reader and specs/sc-reservations.json disagree about the live blocks, entry by entry",
     ).toEqual([]);
+
+    const ceiling = reservedCeiling(r.blocks);
+    expect(
+      allocateAgainstReservations(1, r.blocks, null, new Set()),
+      r.blocks.length === 0
+        ? "an EMPTY live store moved the floor — it reserves nothing, so it must bind nothing"
+        : "an untagged live block stopped binding the allocator",
+    ).toBe(ceiling + 1);
+    // `reservedCeiling([])` is 0, so the line above reads `1` either way and
+    // cannot tell the two states apart on its own. This is the assertion that
+    // says WHICH state was measured, so an empty store is a recorded reading
+    // rather than a silent pass — `.claude/rules/config-access.md`, Silent
+    // Default Substitution.
+    if (r.blocks.length === 0) {
+      expect(ceiling, "an empty store reserved something").toBe(0);
+    } else {
+      expect(ceiling, "a populated store reserved nothing").toBeGreaterThan(0);
+    }
   });
 
   test("one owner holding two namespaces is read as two blocks, each with its own", () => {
