@@ -516,7 +516,7 @@ describe("#1955: every flag a command's script requires appears in its usage", (
     for (const { name, path } of withRequired) {
       const src = readFileSync(path, "utf8");
       // Inside the guards themselves is the ONE legal call site each.
-      const body = src.replace(/function (?:readFlag|optional|required)[\s\S]*?\n}\n/g, "");
+      const body = src.replace(/function (?:readFlag|optional|required)\([\s\S]*?\n}\n/g, "");
       for (const m of body.matchAll(/readFlag\("([a-z-]+)"\)/g)) raw.push(`${name}: --${m[1]}`);
     }
     expect(
@@ -550,9 +550,19 @@ describe("#1955: every flag a command's script requires appears in its usage", (
     // having looked at nothing.
     const { path } = withRequired[0]!;
     const src = readFileSync(path, "utf8");
-    const body = src.replace(/function (?:readFlag|optional|required)[\s\S]*?\n}\n/g, "");
+    const body = src.replace(/function (?:readFlag|optional|required)\([\s\S]*?\n}\n/g, "");
     expect(body.length).toBeGreaterThan(src.length / 2);
     expect(body, "the body still contains the call sites the scan is for").toContain("required(");
+
+    // Round 5: the alternation had no boundary, so `required` prefix-matched
+    // `requiredPositiveInt` and the lazy span ate ITS whole body — the guard
+    // above silently never scanned that function. A detector narrower than
+    // what it detects. `\(` after the alternation is what fixes it, and this
+    // is what proves the fix: the stripper must leave the sibling standing.
+    expect(
+      body,
+      "the stripper must not swallow requiredPositiveInt — only the three guards themselves",
+    ).toContain("function requiredPositiveInt(");
   });
 
   test("the check can fail — a usage with a flag removed is caught", () => {
