@@ -270,6 +270,29 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Extract constraints from a project's docs into agent rules",
     usage: "rungate extract-constraints",
   },
+  // The two doors, registered by #1938 and #1939. Both scripts existed and
+  // were tested for weeks while being unreachable: `HYGIENE-3` fails a file
+  // in `scripts/` with ZERO references and a test counts as a reference, so
+  // a script with a test and no registry entry passes every orphan check and
+  // can still be run by nobody. The same shape as #675 above, and as #1935.
+  //
+  // `finding-promotion` is the one that mattered. It decides whether a gap
+  // belongs to a criterion (the front door) or to the side door, and while
+  // it was unreachable that decision fell to whoever found the gap — a
+  // self-classification, which takes the cheaper door every time. Sixteen
+  // issues were filed by hand on 2026-11-09 for exactly that reason.
+  "finding-promotion": {
+    script: "scripts/finding-promotion.ts",
+    summary: "Turn a review finding that names real work into a spec criterion",
+    usage:
+      "rungate finding-promotion --issue <N> --spec <path> --symbol <name> --module <path> [--write]",
+  },
+  "claim-files": {
+    script: "scripts/claim-files.ts",
+    summary: "Claim the files an issue will change, so parallel agents do not collide",
+    usage:
+      "rungate claim-files [--check <path>] [--claim <path> --owner <branch> --issue <N>] [--release --owner <branch>] [--list]",
+  },
   // Registered so the GENERATED ai-review workflow has something to run. The
   // reader has existed and been tested since #631 and nothing executed it:
   // `lib/scaffold/ai-review-step.ts` emitted a warning saying so by name,

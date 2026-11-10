@@ -398,3 +398,57 @@ describe("the dispatcher runs a command script as an entry module", () => {
     );
   });
 });
+
+/**
+ * #1938, #1939 — a script with a test and no registry entry is unreachable.
+ *
+ * `HYGIENE-3` fails a file in `scripts/` with ZERO references, and a test
+ * counts as a reference. So `scripts/finding-promotion.ts` and
+ * `scripts/claim-files.ts` each had a test file, each passed every orphan
+ * check, and neither could be run by anybody who was not reading the source:
+ * on 2026-11-09 a sweep of `bin/`, `hooks/`, `workflows/` and `.github/`
+ * found no caller for either, and neither appeared in `CLI_COMMANDS`.
+ *
+ * `finding-promotion` is the router that decides whether a gap belongs to a
+ * criterion or to the side door, so while it was unreachable every gap was
+ * classified by whoever found it — and a self-classification takes the
+ * cheaper door every time.
+ *
+ * **What was broken to prove this can fail:** the registry entries were
+ * added after this block, and the block was run against the tree without
+ * them. Both cases went red naming the missing command. Deleting either
+ * entry reddens the matching case and nothing else.
+ */
+describe("#1938 / #1939: the doors are reachable from the CLI", () => {
+  const DOORS: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      "finding-promotion",
+      "scripts/finding-promotion.ts",
+      "the router between the front door and the side door — unreachable, every gap is self-classified",
+    ],
+    [
+      "claim-files",
+      "scripts/claim-files.ts",
+      "file-overlap claiming — unreachable, parallel agents collide on the same file with nothing saying so",
+    ],
+  ];
+
+  test.each(DOORS)("%s is registered", (name, script, why) => {
+    expect(
+      Object.keys(CLI_COMMANDS),
+      `${name} dispatches to ${script}, which exists and is tested, but is absent from ` +
+        `CLI_COMMANDS — so nobody can invoke it. ${why}. Add it to lib/cli-commands.ts ` +
+        `and regenerate .claude/rules/commands-routing.md.`,
+    ).toContain(name);
+    expect(CLI_COMMANDS[name]!.script).toBe(script);
+  });
+
+  test("the pair is not vacuous — both scripts are on disk", () => {
+    // A positive control. If either script were deleted the cases above
+    // would still be satisfiable by registering a name that dispatches
+    // nowhere, and SC-809 would be the only thing left to catch it.
+    for (const [, script] of DOORS) {
+      expect(existsSync(join(ROOT, script)), `${script} is gone`).toBe(true);
+    }
+  });
+});
