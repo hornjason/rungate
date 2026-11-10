@@ -33,7 +33,6 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import {
-  bodyWithDecline,
   decline,
   promote,
   specPath,
@@ -114,6 +113,23 @@ const issueNumber = requiredPositiveInt("issue");
 const declining = args.includes("--declines");
 const declineWhy = declining ? required("declines") : "";
 
+// The two modes are exclusive, and silence here was a real hazard: `--spec`,
+// `--outcome`, `--symbol` and `--module` are read ONLY when `declining` is
+// false, so a command line carrying both took the decline path and ignored
+// four flags the caller passed. A half-edited copy-paste produces exactly
+// that, and the result is indistinguishable from a deliberate decline.
+if (declining) {
+  const promoteOnly = ["spec", "outcome", "symbol", "module"].filter(f => args.includes(`--${f}`));
+  if (promoteOnly.length > 0) {
+    console.error(
+      `ERROR: --declines cannot be combined with ${promoteOnly.map(f => `--${f}`).join(", ")}. ` +
+        "Promoting a finding into a criterion and declaring that it serves none are opposite " +
+        "outcomes; this command line asks for both and the promote flags would be ignored.",
+    );
+    process.exit(PROMOTION_EXIT);
+  }
+}
+
 const spec = declining ? "" : required("spec");
 const outcome = declining ? "" : required("outcome");
 const symbol = declining ? "" : required("symbol");
@@ -145,24 +161,68 @@ if (declining) {
     console.error(`REFUSED ${declined.refusal}: ${declined.why}`);
     process.exit(PROMOTION_EXIT);
   }
-  console.log(declined.section);
+  console.log(declined.body);
 
   if (!write) {
-    console.log(`(dry run — nothing written. Add --write to apply it to #${issueNumber}.)`);
+    console.log(`\n(dry run — nothing written. Add --write to apply it to #${issueNumber}.)`);
     process.exit(0);
+  }
+
+  // RE-READ before writing. The body above came from a snapshot taken
+  // before the refusal checks ran, and `gh issue edit --body-file`
+  // overwrites the WHOLE body — so a comment-free edit by anybody else in
+  // that window is silently destroyed. The promote path already does this:
+  // `writeSpec` re-reads the target and runs its own guard against those
+  // bytes rather than the ones the caller validated.
+  //
+  // Re-validating too, not just re-reading: the fresh body is what the
+  // decline is being written into, so ALREADY_DECLINED and the heading
+  // readings have to be taken against it. A re-read that skipped them
+  // would answer a different question from the one that was asked.
+  let fresh: PromotableIssue;
+  try {
+    fresh = JSON.parse(
+      ghWithoutGhToken(["issue", "view", String(issueNumber), "--json", "number,title,body"]),
+    ) as PromotableIssue;
+  } catch (e) {
+    console.error(`REFUSED: #${issueNumber} could not be re-read before the write`);
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(PROMOTION_EXIT);
+  }
+
+  const recheck = decline({ issue: fresh, why: declineWhy, projectRoot: ROOT });
+  if (!recheck.declined) {
+    console.error(
+      `REFUSED ${recheck.refusal}: #${issueNumber} changed between the check and the write. ` +
+        recheck.why,
+    );
+    process.exit(PROMOTION_EXIT);
   }
 
   // Through a file, because the body is markdown with newlines and headings
   // in it and an argv round-trip through a shell is where that gets eaten.
+  //
+  // The two failure modes are reported apart. One `catch` over both said
+  // "could not be updated on the tracker" for a local disk error too, which
+  // sends the reader to GitHub for a problem on their own filesystem.
   const scratch = mkdtempSync(join(tmpdir(), "rg-1940-decline-"));
+  const bodyFile = join(scratch, "body.md");
   try {
-    const bodyFile = join(scratch, "body.md");
-    writeFileSync(bodyFile, bodyWithDecline(issue.body ?? "", declineWhy));
-    ghWithoutGhToken(["issue", "edit", String(issueNumber), "--body-file", bodyFile]);
-  } catch (e) {
-    console.error(`REFUSED: #${issueNumber} could not be updated on the tracker`);
-    console.error(e instanceof Error ? e.message : String(e));
-    process.exit(PROMOTION_EXIT);
+    try {
+      writeFileSync(bodyFile, recheck.body);
+    } catch (e) {
+      console.error(`REFUSED: could not write the new body to ${bodyFile} — this is a LOCAL`);
+      console.error(`failure, not a tracker one. #${issueNumber} was not touched.`);
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exit(PROMOTION_EXIT);
+    }
+    try {
+      ghWithoutGhToken(["issue", "edit", String(issueNumber), "--body-file", bodyFile]);
+    } catch (e) {
+      console.error(`REFUSED: #${issueNumber} could not be updated on the tracker`);
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exit(PROMOTION_EXIT);
+    }
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

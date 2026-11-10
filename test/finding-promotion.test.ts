@@ -987,3 +987,120 @@ describe("#1940: bodyWithDecline puts the declaration where the readers look", (
     expect(out.slice(real)).toContain(NAMES_NONE);
   });
 });
+
+/**
+ * #1956 review round 1. Four distinct defects, all in the decline path.
+ */
+describe("#1956 round 1: the decline path's four review findings", () => {
+  const WHY = "maintenance, no criterion moves";
+
+  function declineIn(root: string, over: Partial<DeclineInput> = {}): DeclineInput {
+    return { issue: ISSUE, why: WHY, projectRoot: root, ...over };
+  }
+
+  /**
+   * An unterminated fence in `--why` flips fence state for EVERYTHING below
+   * it. `headingOccurrencesOf`, `hasContent` and `missingSections` all track
+   * fences by toggling on `/^\s*```/`, so an odd number of such lines makes
+   * every later heading in the body invisible to all three — the body parses
+   * as having no sections at all.
+   *
+   * MALFORMED_WHY guarded the heading forgery and not this one: a detector
+   * narrower than what it detects.
+   */
+  test("MALFORMED_WHY refuses a fence in --why, not only a heading", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const out = decline(declineIn(root, { why: "fine\n```\nsome text" }));
+      expect(out.declined).toBe(false);
+      if (out.declined) return;
+      expect(out.refusal).toBe("MALFORMED_WHY");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the fence guard is not vacuous — an ordinary reason still declines", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      expect(decline(declineIn(root)).declined).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * `section` was documented and printed as the preview of what gets
+   * written, and for a body that already carries an empty criteria heading
+   * `bodyWithDecline` writes only the LINE. So the preview showed a second
+   * heading that never appears, which is a false report about a write.
+   */
+  test("the result carries the body that will ACTUALLY be written", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    const existing = "## What must become true\n\nTidy.\n\n## Criteria this serves\n";
+    try {
+      const out = decline(declineIn(root, { issue: { ...ISSUE, body: existing } }));
+      expect(out.declined).toBe(true);
+      if (!out.declined) return;
+      expect(out.body).toBe(bodyWithDecline(existing, WHY));
+      // The preview and the write agree: one heading, not two.
+      expect(headingOccurrencesOf(out.body, "## Criteria this serves").length).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a body with no heading gains one, and the result still matches the write", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    const existing = "## What must become true\n\nTidy.\n";
+    try {
+      const out = decline(declineIn(root, { issue: { ...ISSUE, body: existing } }));
+      expect(out.declined).toBe(true);
+      if (!out.declined) return;
+      expect(out.body).toBe(bodyWithDecline(existing, WHY));
+      expect(headingOccurrencesOf(out.body, "## Criteria this serves").length).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * #1956 round 1, the CLI's two findings. Spawned, because the defects are in
+ * argument handling and error attribution and neither is reachable from the
+ * library.
+ */
+describe("#1956 round 1: the decline CLI refuses a contradictory command line", () => {
+  const CLI2 = join(import.meta.dir, "..", "scripts", "finding-promotion.ts");
+
+  function run(argv: string[]): { code: number; err: string } {
+    const p = Bun.spawnSync(["bun", CLI2, ...argv], { cwd: join(import.meta.dir, "..") });
+    return { code: p.exitCode ?? -1, err: new TextDecoder().decode(p.stderr) };
+  }
+
+  /**
+   * `--spec`, `--outcome`, `--symbol` and `--module` are read only when
+   * `declining` is false, so a command line carrying both took the decline
+   * path and silently ignored four flags the caller supplied. A half-edited
+   * copy-paste is the likely source, and it is indistinguishable from a
+   * deliberate decline.
+   */
+  test("--declines with any promote flag refuses, naming both", () => {
+    const { code, err } = run([
+      "--issue", "1678",
+      "--declines", "a reason",
+      "--spec", "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("--declines");
+    expect(err).toContain("--spec");
+  });
+
+  test("the refusal is not blanket — --declines alone reaches the tracker read", () => {
+    // Without this, a CLI that refused every --declines invocation would
+    // pass the case above. This one must get PAST argument handling; it then
+    // fails on the tracker or the board, which is a different message.
+    const { err } = run(["--issue", "999999999", "--declines", "a reason"]);
+    expect(err).not.toContain("cannot be combined");
+  });
+});

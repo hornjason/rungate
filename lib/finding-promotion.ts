@@ -451,7 +451,17 @@ export interface DeclineInput {
 export type Decline =
   | {
       readonly declined: true;
-      /** The markdown to put under the issue's Criteria heading, verbatim. */
+      /**
+       * The issue's COMPLETE new body — exactly the bytes a caller writes.
+       *
+       * The first version returned only `section` and documented it as the
+       * preview. For a body already carrying an empty criteria heading
+       * {@link bodyWithDecline} inserts the line alone, so the preview
+       * showed a second heading that never appeared: a false report about
+       * a write, which is the one thing this module exists not to produce.
+       */
+      readonly body: string;
+      /** The standalone section, for a body that has no criteria heading. */
       readonly section: string;
       readonly issue: number;
     }
@@ -502,6 +512,24 @@ export function declineViolations(input: DeclineInput): DeclineViolation[] {
       why:
         "--why opens a markdown heading, which forges a section in the issue body that " +
         "missingSections and every reader would then treat as the author's",
+    });
+  }
+
+  // A FENCE, not only a heading. The first version guarded the heading and
+  // not this, which is a detector narrower than what it detects: an odd
+  // number of fence lines flips fence state for everything below, and
+  // `headingOccurrencesOf`, `hasContent` and `missingSections` all track
+  // fences the same way — so every later heading in the body becomes
+  // invisible to all three at once and the issue parses as having no
+  // sections at all. Refused outright rather than balanced, because a
+  // one-line reason has no use for a code block.
+  if (/^[ \t]*```/m.test(input.why)) {
+    out.push({
+      refusal: "MALFORMED_WHY",
+      why:
+        "--why contains a code fence, and an odd number of them flips fence state for the " +
+        "rest of the body — every heading below it becomes invisible to headingOccurrencesOf, " +
+        "hasContent and missingSections at once",
     });
   }
 
@@ -636,5 +664,10 @@ export function decline(input: DeclineInput): Decline {
   const violations = declineViolations(input);
   const first = violations[0];
   if (first) return { declined: false, refusal: first.refusal, why: first.why };
-  return { declined: true, section: declineSection(input.why), issue: input.issue.number };
+  return {
+    declined: true,
+    body: bodyWithDecline(input.issue.body ?? "", input.why),
+    section: declineSection(input.why),
+    issue: input.issue.number,
+  };
 }
