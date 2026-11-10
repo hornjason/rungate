@@ -143,6 +143,7 @@ import { asIssueFiles, overlapNote } from "./issue-file-overlap";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
 import { tryLoadRungateConfig } from "./config-loader";
+import { readQueueLabel } from "./config-readers";
 
 /**
  * The label that waives this gate.
@@ -449,6 +450,158 @@ export function filingsPerRunFor(
   } catch {
     return { cap: FILINGS_PER_RUN, unreadable: true };
   }
+}
+
+/**
+ * **The cap's THIRD route: a filing the project's own work queue claims.**
+ *
+ * Jason's call, 2026-11-10: *"The filing cap shouldn't work right now if we
+ * were doing stuff specific for the car we're building."* On 2026-11-09 at
+ * 23:50 the cap refused a thirteenth filing and six agreements about the
+ * engine itself were written as issue COMMENTS instead. The cap worked; the
+ * population was wrong, the same way it was wrong for the decompose path the
+ * plan route exists for. A comment is invisible to the board and there is no
+ * path that re-files one when the allowance resets, so four of the six were
+ * still only comments a day later.
+ *
+ * **Why this is not the `arbiter-override` hole reopened.** That label waives
+ * a claim about a FINDING, which is a per-filing judgement, and `OVER_CAP` is
+ * unwaivable precisely because a valid-sounding reason defeating a count IS
+ * the bar that let three of three filings through on 2026-10-24. This waives
+ * nothing and argues nothing: it asks whether the PROJECT, in its own
+ * committed config, declared a work queue and whether this filing is in it.
+ * A filer can spell the label; it cannot make a tree declare one.
+ *
+ * **`board.queueLabel` and no new key**, read through `readQueueLabel` —
+ * #1727's single binding, created so the writer that applies the label
+ * (`plan-issues --decompose`) and the reading that scores it
+ * (`board-conformance`) cannot disagree about what the queue is called. A
+ * second config key here would be a third opinion on one question.
+ *
+ * **It RAISES the ceiling and exempts nothing** — see `QUEUE_FILINGS_PER_RUN`.
+ * This sentence used to say it exempted the SPENT arm the way `plannedFiling`
+ * does, which was true of the FIRST design and false of the shipped one, and
+ * round 6 of the review was right to keep pointing at it: a reader who
+ * believed it could reintroduce the authorization bypass the security review
+ * already rejected once. A queued clause increments `spent` like every other
+ * (`if (!planned.planned) spent += 1`); only the number it is compared
+ * against moves, and only via `capForClause`.
+ *
+ * The parting `plannedFiling` makes does still apply: `uncountable` is never
+ * cleared by either route, because a ledger that cannot be read cannot RECORD
+ * what it admitted, and an admission nobody can audit is what the ledger
+ * exists to prevent.
+ *
+ * **It takes a THUNK for the reason `filingsPerRunFor` does.**
+ * `readQueueLabel` calls `tryLoadRungateConfig`, which is a bare
+ * `JSON.parse(readFileSync(...))` underneath with no catch. Evaluated as an
+ * argument expression it would throw straight out of `filingGate` — a
+ * PreToolUse hook — and block every filing on the machine, which is strictly
+ * worse than the state it guards. A signature taking the VALUE cannot guard
+ * its own production; one taking the thunk can only be called the right way.
+ *
+ * Absent, blank, non-string and unparseable all resolve to `null`, and the
+ * direction is the property: `null` raises nothing. A built-in substituted
+ * for absent config would let a filer in any unscaffolded repository spell
+ * its way past the cap — `.claude/rules/config-access.md`, *Silent Default
+ * Substitution*. `FG-253` is the assertion rather than this sentence.
+ */
+export function queueLabelFor(load: () => string | null): string | null {
+  try {
+    return load();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The configured queue label this filing carries, or `null` for one it does
+ * not — and `null` for every filing when the tree configures no queue.
+ *
+ * Separate from `queueLabelFor` because they answer different questions about
+ * different inputs — *what is the queue called* and *is this filing in it* —
+ * and returning the LABEL rather than a boolean is what lets the ledger row
+ * name which queue admitted it. A raise that reaches the tracker without
+ * naming what granted it is indistinguishable from the cap not having run.
+ */
+export function queueCarveOut(
+  labels: string[],
+  queueLabel: string | null,
+  repo: string | null,
+  directGh: boolean,
+): string | null {
+  // **An invocation this file cannot vouch for gets no raise** — round 3,
+  // and a re-scope rather than a fourth spelling. See `directGhInvocation`.
+  if (!directGh) return null;
+  // **A filing aimed at ANOTHER tracker is never in this project's queue**
+  // — the security review of PR #1963 found this, and it is a real hole:
+  // `board.queueLabel` is a statement about THIS project's board, and a
+  // `gh issue create --repo other/x --label engine` clause borrowed it to
+  // raise its ceiling on a tracker whose config was never consulted. The
+  // same mismatch `targetFor` exists to prevent one stage earlier.
+  if (repo !== null) return null;
+  if (queueLabel === null) return null;
+  return labels.includes(queueLabel) ? queueLabel : null;
+}
+
+/**
+ * The allowance for filings the project's own work queue claims.
+ *
+ * ## This is a RAISED CEILING, not an exemption, and the first spelling was
+ * an exemption
+ *
+ * PR #1963 shipped the queue route as a full bypass of the SPENT arm, beside
+ * `plannedFiling`: a queued clause did not spend the counter and was skipped
+ * by the reservation stage entirely. The security review called it an
+ * *authorization bypass / self-granted exemption of an unwaivable control*
+ * and was right. The plan route can be an exemption because a filer cannot
+ * get a title onto `origin/main` without somebody merging it. A LABEL has no
+ * such author: on a tree that declares a queue — this one declares
+ * `"engine"` — any agent can spell it, and `OVER_CAP` is unwaivable
+ * precisely so that no argument a filer can make defeats a count. An
+ * uncounted route is the strongest argument there is.
+ *
+ * So the queue route is counted, reserved, and raced exactly like every
+ * other filing. What it gets is a HIGHER number.
+ *
+ * ## Why a higher ceiling fixes what actually went wrong
+ *
+ * The 2026-11-09 failure was not that the cap existed. It was that engine
+ * work ran out of allowance **behind ad-hoc filings** — the run reached 12
+ * and the next six findings, all of them about the engine, became comments.
+ * A ceiling of 24 means the engine filings are the ones still admitted when
+ * the ad-hoc population has spent its 12, which is the whole of it.
+ *
+ * ## Why 24, and the residual it leaves
+ *
+ * Twice `FILINGS_PER_RUN_DIRECT`, and the factor is the defensible part
+ * rather than the digit: the ledger reading that set 12 measured ~11 real
+ * findings a day in one engine run-directory, so one more run's worth of
+ * headroom is the smallest bound that cannot re-run 2026-11-09. It still
+ * binds a runaway loop at 24 in a day, where the first spelling bound it at
+ * nothing.
+ *
+ * **The residual, stated rather than hidden: ONE counter, two ceilings.** A
+ * run that spends 20 on ad-hoc findings leaves the queue route 4, not 24.
+ * A second ledger lane would separate them and is the stronger design; it
+ * needs `runIntents`, `intentOrdinal` and `reserveAllowance` to carry a
+ * population, which is a bigger change than this finding justifies in one
+ * round. The direction of the weakness is toward REFUSING, which is the
+ * side a cap is allowed to be wrong on.
+ */
+export const QUEUE_FILINGS_PER_RUN = 2 * FILINGS_PER_RUN_DIRECT;
+
+/**
+ * The ceiling THIS clause is judged against — the one decider, read by the
+ * pre-read and by the reservation stage so the two cannot disagree.
+ *
+ * A clause the queue does not claim is judged against the run's ordinary
+ * allowance, unchanged. `FG-197` holds every cap consumer to taking the
+ * number rather than reaching for a constant, and this is now the thing they
+ * take.
+ */
+export function capForClause(queuedBy: string | null, runCap: number): number {
+  return queuedBy === null ? runCap : Math.max(runCap, QUEUE_FILINGS_PER_RUN);
 }
 
 /**
@@ -929,10 +1082,16 @@ export function overCapReason(
     "",
     `  run: ${run}`,
     "",
-    "  There is no argument against this and no label that waives it. It is a count, not a",
-    "  judgement about your finding, which may well be a good one — the cap exists because a",
+    "  There is no argument against this and no label waives it by argument. It is a count, not",
+    "  a judgement about your finding, which may well be a good one — the cap exists because a",
     "  per-finding judgement drifts and a count does not. If several findings belong on the",
     "  tracker, they are one issue naming every instance, not several.",
+    "",
+    "  Two routes exist and neither is an argument. A title a MERGED plan names is exempt,",
+    "  because somebody had to merge the plan. Work the project has itself declared to be in",
+    "  its work queue gets a HIGHER ceiling — still counted, still reserved, still finite, and",
+    "  the number above is already that ceiling if this filing qualified. Both are recorded on",
+    "  the row.",
   ].join("\n");
 }
 
@@ -1289,6 +1448,12 @@ export interface FilingAttempt {
    * counted later is worth more than a refusal nobody can audit.
    */
   repeatedValueFlag: boolean;
+  /**
+   * The clause invokes `gh` directly, with no wrapper and no assignment
+   * prefix — `directGhInvocation`. The QUEUE CEILING reads this and nothing
+   * else does (#1963, review round 3).
+   */
+  directGh: boolean;
 }
 
 /**
@@ -1357,6 +1522,23 @@ export interface FilingLedgerRow {
    * indistinguishable from the cap not having been applied.
    */
   plannedBy?: string | null;
+  /**
+   * The configured work-queue label that raised this filing's ceiling, or
+   * `null` for one the queue does not claim (#1961).
+   *
+   * **A raise, never an exemption** — the row is written for every queued
+   * clause precisely because those clauses ARE counted. `plannedBy` marks a
+   * filing the cap never counted; this one marks a filing the cap counted
+   * against a bigger number.
+   *
+   * On EVERY row for the same reason `plannedBy` is: *how much of what we
+   * file is engine work* is a ratio, and a column present only where the
+   * raise fired supplies a numerator and no denominator. It is also the
+   * audit trail for the raise — it names WHICH label, so a reader can check
+   * that label against the tree's `board.queueLabel` rather than taking the
+   * raise on trust.
+   */
+  queuedBy?: string | null;
   at: string;
   /**
    * This row, told apart from every other row on a shared ledger (#1318).
@@ -1673,6 +1855,79 @@ function graphqlArgument(doc: string, name: string, vars: Map<string, string>): 
   return m[1].replace(/\\(.)/g, "$1");
 }
 
+/**
+ * The tracker a leading `GH_REPO=` assignment targets, or `null`.
+ *
+ * A clause may be prefixed with `VAR=value` assignments that apply to that
+ * command alone — `GH_REPO=o/n gh issue create …` — and `gh` reads `GH_REPO`
+ * with exactly the authority of `--repo`. A reading that saw only the flag
+ * was `.claude/rules/checks-must-be-able-to-fail.md`'s second shape, *a
+ * detector narrower than what it detects*: the clause was adjudicated, and
+ * only its target was wrong.
+ *
+ * **Leading assignments only, and that is the shell's own rule.** `VAR=value`
+ * is a command prefix; the same text after the program name is an ARGUMENT,
+ * not an assignment. So this stops at the first token that is not one, which
+ * is what makes `gh issue create --title "GH_REPO=o/n"` not a retarget.
+ *
+ * **The ambient `process.env.GH_REPO` is NOT read, and the reason is a false
+ * refusal.** The hook's own environment is not a property of the clause: a
+ * session that legitimately exported its own slug would have every filing
+ * read as cross-repo and lose the queue ceiling for work that is plainly in
+ * this project's queue. The per-clause prefix is the thing a filer writes to
+ * retarget one command, and it is the thing this reads.
+ */
+export function envRepo(tokens: string[]): string | null {
+  let found: string | null = null;
+  for (const token of tokens) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(token);
+    // The first non-assignment token is the program; everything past it is
+    // an argument and no longer an assignment.
+    if (m === null) break;
+    // Last-wins among the prefix, which is what the shell does.
+    if (m[1] === "GH_REPO") found = m[2] === "" ? null : m[2]!;
+  }
+  return found;
+}
+
+/**
+ * Is this clause a PLAIN `gh` invocation — `gh …` or `/path/to/gh …`?
+ *
+ * **Round 3 of PR #1963's review, and a re-scope rather than a repair.**
+ * Rounds 1, 2 and 3 each found one more spelling by which a clause can
+ * retarget itself: `--repo`, then `GH_REPO=`, then `env GH_REPO=` and
+ * `command`. `.claude/rules/checks-must-be-able-to-fail.md` names this —
+ * *three rounds, three sites, one rule* — and AGENTS.md rule 5 says to stop
+ * repairing at the third and re-scope. A wrapper ALLOWLIST is the fourth
+ * round pre-booked: `nohup`, `stdbuf`, `timeout`, `setsid`, `doas` and
+ * whatever is next.
+ *
+ * So the queue ceiling asks a question with ONE right answer instead: is
+ * the program the first thing in the clause? Everything else — a wrapper, an
+ * assignment prefix, an interpreter, anything this file's parser cannot
+ * vouch for — is UNMEASURED for the queue route and gets the ordinary cap.
+ *
+ * **This is a whitelist of one shape, so there is no list to extend.** It
+ * fails toward REFUSING the raise, never toward granting it, and the cost
+ * is a false non-raise: a legitimate `env FOO=1 gh issue create --label
+ * engine` loses the ceiling and keeps the ordinary allowance. That is a
+ * filing refused a bigger number, not a filing refused.
+ *
+ * **It governs the CEILING only, and nothing else in this file.** Every
+ * other reading — the dedupe, the claim check, the cap itself — still sees
+ * a wrapped clause exactly as before. `lib/issue-create-override.ts`'s
+ * header explains why the phase lock does not chase wrappers, and that
+ * reasoning is unchanged; what is different here is that the decision being
+ * guarded is *how much allowance you get*, which is the filer's own
+ * interest, and the honest answer to an unreadable invocation is the
+ * smaller number.
+ */
+export function directGhInvocation(tokens: string[]): boolean {
+  const first = tokens[0];
+  if (first === undefined) return false;
+  return first.replace(/^.*\//, "") === "gh";
+}
+
 export function resolveFiling(tokens: string[]): FilingAttempt {
   const doc = graphqlDocument(tokens);
   if (doc !== null) {
@@ -1687,6 +1942,7 @@ export function resolveFiling(tokens: string[]): FilingAttempt {
       // what a `gh issue create` with no `--repo` already resolves to.
       repo: null,
       repeatedValueFlag: false,
+      directGh: directGhInvocation(tokens),
     };
   }
   const apiRest = apiRestFields(tokens);
@@ -1701,6 +1957,7 @@ export function resolveFiling(tokens: string[]): FilingAttempt {
       bodyFile: null,
       repo: apiFilingRepo(tokens),
       repeatedValueFlag: false,
+      directGh: directGhInvocation(tokens),
     };
   }
   const titles = flagValues(tokens, TITLE_FLAG);
@@ -1715,9 +1972,58 @@ export function resolveFiling(tokens: string[]): FilingAttempt {
     // same `asGhWould` reading as the title and the body — a repeated
     // `--body-file` overrides rather than accumulating.
     bodyFile: bodyFiles.length > 0 ? asGhWould(bodyFiles) : null,
-    repo: repos.length > 0 ? asGhWould(repos) : null,
+    // **`--repo`, else a leading `GH_REPO=` assignment** — round 2 of the
+    // security review of PR #1963. `gh` reads the environment variable with
+    // exactly the authority of the flag, so `GH_REPO=other/x gh issue
+    // create …` targets another tracker while this field read `null`,
+    // meaning *this project's own*. Measured: the clause is recognised and
+    // adjudicated, and only the target was wrong.
+    //
+    // **Fixed here rather than at the one caller that found it.** The
+    // reviewer pointed at `queueCarveOut`, where a wrong `null` borrowed
+    // this project's queue ceiling. It is the same wrong answer everywhere
+    // `repo` is read: the dedupe corpus compares the filing against this
+    // repository's open issues, and `targetFor` composes a comment target
+    // on this repository's PR. One field, one reading, so a second consumer
+    // cannot be fixed and a third left behind.
+    repo: repos.length > 0 ? asGhWould(repos) : envRepo(tokens),
     repeatedValueFlag: titles.length > 1 || bodies.length > 1 || bodyFiles.length > 1,
+    directGh: directGhInvocation(tokens),
   };
+}
+
+/**
+ * Does this command set `GH_REPO` ANYWHERE in it?
+ *
+ * **Round 5 of PR #1963's review, and a change of SCOPE rather than a sixth
+ * spelling.** Rounds 1-3 were all one axis — a clause retargeting *itself* —
+ * and `directGhInvocation` answered the whole axis. This is a different one.
+ * `clauses()` splits on `&&`, `;` and `|` before anything tokenizes, so in
+ *
+ *     export GH_REPO=other/x && gh issue create --label engine …
+ *
+ * the adjudicated clause is the SECOND. It contains no assignment, it begins
+ * with `gh`, and it is byte-identical to an honest local filing — while the
+ * shell has already put `GH_REPO` in the environment `gh` reads. Measured
+ * before the fix: `repo=null, directGh=true`, the same reading a plain
+ * `gh issue create` produces.
+ *
+ * **`hooks/lib/utils.ts` already found and answered this**, for
+ * `IssueCloseGuard` (#143), and its comment is the rule adopted here: *"Tested
+ * against the WHOLE command, not the closing segment. The first version
+ * checked the segment and so caught the inline-prefix form while missing the
+ * natural one … A control that only covers the awkward spelling is not a
+ * control."* A per-clause reading cannot see an environment that outlives the
+ * clause, so the question has to be asked of the whole string.
+ *
+ * **It fails toward refusing the raise.** A `--body "GH_REPO=x"` costs a
+ * legitimate filing its bigger ceiling and nothing else: a smaller allowance,
+ * never a blocked filing. The opposite error hands this project's queue
+ * ceiling to a command aimed at somebody else's tracker, which is the
+ * authorization shape rounds 2 and 3 were closing.
+ */
+export function ambientRetarget(cmd: string): boolean {
+  return /\bGH_REPO=/.test(cmd);
 }
 
 /**
@@ -1726,9 +2032,21 @@ export function resolveFiling(tokens: string[]): FilingAttempt {
  * Per clause and not per command, for the reason `verifyPhaseRefusal` is:
  * `gh issue comment … && gh issue create …` is a create, and a reading over
  * the whole string lets the first half excuse the second.
+ *
+ * **One property is read from the whole command and not the clause**, and it
+ * is `directGh` — see `ambientRetarget`. `directGh` means *an invocation this
+ * file can vouch for*, and a sibling clause that exports `GH_REPO` is exactly
+ * an invocation it cannot. Nothing else widens: the dedupe, the claim check
+ * and the cap all still read the clause.
  */
 export function filingAttempts(cmd: string): FilingAttempt[] {
-  return clauses(cmd).filter(createsIssue).map(resolveFiling);
+  const retargeted = ambientRetarget(cmd);
+  return clauses(cmd)
+    .filter(createsIssue)
+    .map(tokens => {
+      const attempt = resolveFiling(tokens);
+      return retargeted ? { ...attempt, directGh: false } : attempt;
+    });
 }
 
 /**
@@ -2725,6 +3043,17 @@ export async function filingGate(
   // STRICT cap — `filingsPerRunFor`.
   const allowance = filingsPerRunFor(() => tryLoadRungateConfig(root));
   const cap = allowance.cap;
+  // The work queue's name, resolved ONCE per command for the same reason the
+  // allowance is: per clause would let two clauses of one command be
+  // adjudicated against two different queues if the config moved underneath
+  // them. A tree that declares none resolves to `null`, which raises
+  // nothing — `queueLabelFor`.
+  //
+  // No note when it is absent. A config the gate cannot PARSE already earns
+  // `unreadableShipPolicyNote` below, from `filingsPerRunFor`, which catches
+  // the same throw from the same file; a second note over one fact would be
+  // two voices on one repair.
+  const queueLabel = queueLabelFor(() => readQueueLabel(root));
   // Read once per TARGET TRACKER, not once per command and not once per
   // clause. Once per clause would adjudicate two creates against two
   // different snapshots; once per command would adjudicate a `--repo other/x`
@@ -2767,6 +3096,8 @@ export async function filingGate(
   // reader sees, because it is the one that explains the NUMBER every later
   // refusal quotes.
   if (allowance.unreadable) notes.push(unreadableShipPolicyNote(cap));
+  /** The queue-ceiling note is one fact about the project, said once. */
+  let notedQueueCeiling = false;
 
   // One batch per command, so every row of one adjudication shares it and the
   // clause index separates them — `CandidateRecord.key`'s scheme exactly.
@@ -3029,7 +3360,23 @@ export async function filingGate(
     // an open issue is still `DUPLICATE`, and one that declares no reason is
     // still `COMMENT_INSTEAD`; `read2` is untouched above.
     const planned = plannedFiling(attempt.title, planSource);
-    const capped = uncountable || (spent >= cap && !planned.planned);
+    // **The cap's third route: work the project's own queue claims** (#1961).
+    //
+    // **A raised CEILING, not an exemption** — see `QUEUE_FILINGS_PER_RUN`
+    // for why the first spelling of this was an authorization bypass. A
+    // queued clause is counted, reserved and raced exactly like every other
+    // one; the only thing it gets is a bigger number, and `capForClause` is
+    // the one place that decides which number. Both cap sites read it.
+    const queuedBy = queueCarveOut(attempt.labels, queueLabel, attempt.repo, attempt.directGh);
+    const clauseCap = capForClause(queuedBy, cap);
+    // Said once per command even when several clauses qualify: the note is
+    // about the project's declaration, which is one fact, and repeating it
+    // per clause is how a note becomes something a reader skips.
+    if (queuedBy !== null && clauseCap > cap && !notedQueueCeiling) {
+      notedQueueCeiling = true;
+      notes.push(queueCeilingNote(queuedBy, clauseCap, cap));
+    }
+    const capped = uncountable || (spent >= clauseCap && !planned.planned);
     const verdict: FilingAdjudication =
       wouldEmit && capped
         ? {
@@ -3038,7 +3385,7 @@ export async function filingGate(
             refusal: uncountable ? "UNMEASURED_CAP" : "OVER_CAP",
             reason: uncountable
               ? uncountableReason(await targetFor(attempt.repo))
-              : overCapReason(run, spent, await targetFor(attempt.repo), cap),
+              : overCapReason(run, spent, await targetFor(attempt.repo), clauseCap),
           }
         : read2;
     const overridden = overrideOf(verdict);
@@ -3077,6 +3424,7 @@ export async function filingGate(
       refiledAfter: prior?.at ?? null,
       exemption: verdict.exemption,
       plannedBy: planned.planned ? `${planned.plan}:${planned.line}` : null,
+      queuedBy,
       run,
     });
 
@@ -3260,21 +3608,46 @@ export async function filingGate(
       // worse: it writes two rows per planned filing into the ledger the cap
       // is measured from, so `intentsInRun` would count planned work against
       // the population the number was calibrated on.
+      // **`queuedBy` does NOT ride this line, and that is the security
+      // review's finding** (#1963). A queued clause is in the cap's
+      // accounting; it just has a bigger ceiling. Skipping the reservation
+      // would leave the one route a filer can self-grant as the only route
+      // with no race protection and no intent row — unlimited in a loop and
+      // invisible to a parallel hook. It reserves with the rest, against
+      // `capForClause`, so the number the stage re-decides against is the
+      // number the pre-read used.
       if (row.plannedBy != null) continue;
-      const reading = reserveAllowance(row, run, { now: nowMs, append, readLedger: readAgain, cap });
+      // The ceiling THIS row is judged against, which is not always the run's:
+      // a queued row carries the raised one. **One local, read by the
+      // reservation AND by every refusal below it** — round 4 of #1963 found
+      // the second `capForClause` call drifting from the first, with
+      // `unreservedCapReason` naming the run cap while the stage had already
+      // decided against the raised one. Two expressions answering one question
+      // are behaviourally one decider that can disagree
+      // (`.claude/rules/checks-must-be-able-to-fail.md`).
+      const rowCap = capForClause(row.queuedBy ?? null, cap);
+      const reading = reserveAllowance(row, run, {
+        now: nowMs,
+        append,
+        readLedger: readAgain,
+        cap: rowCap,
+      });
       if (reading.outcome === "WON") {
         reserved.push(reading.intent);
         continue;
       }
       const refusal = reading.outcome === "LOST" ? "OVER_CAP" : "UNMEASURED_CAP";
       const target = await targetFor(attempts[index].repo);
+      // Every refusal names `rowCap` — the number the stage above actually
+      // decided against. A refusal naming the wrong number sends its reader
+      // to the wrong fact.
       const reason =
         reading.outcome === "LOST"
-          ? overCapReason(run, reading.already, target, cap)
+          ? overCapReason(run, reading.already, target, rowCap)
           : reading.outcome === "UNRESERVED"
-            ? unreservedCapReason(run, target, cap)
+            ? unreservedCapReason(run, target, rowCap)
             : uncountableReason(target);
-      if (reading.outcome === "UNRESERVED") notes.push(unreservedAllowanceNote(cap));
+      if (reading.outcome === "UNRESERVED") notes.push(unreservedAllowanceNote(rowCap));
       // The intent this clause took is released with the rest below: it won
       // no position, and a losing reservation that is never given back is
       // the same stranded allowance by a rarer route.
@@ -3621,6 +3994,32 @@ export function overrideNote(v: FilingAdjudication, prior: FilingLedgerRow | nul
  * an allowance it was not handed is the stale-copy class this file keeps
  * meeting, and with no default the compiler refuses a caller that forgets.
  */
+/**
+ * A clause in this command was judged against the RAISED ceiling.
+ *
+ * Round 2 of PR #1963's security review asked, at minimum, that the raise be
+ * recorded where a reader can see which config declared the queue. It is the
+ * `.claude/rules/config-access.md` rule applied to a control rather than a
+ * feature: *never substitute a built-in default for config without recording
+ * that you did so* — and a ceiling that doubles silently is the same defect
+ * wearing the opposite sign.
+ *
+ * **Not a refusal, and it fires on the ADMITTED case.** That is the point: a
+ * refusal is already loud, and a raise that let a filing through is the
+ * event nobody would otherwise see. It names the label and the file, so the
+ * reader can check both against the tree rather than taking the raise on
+ * trust.
+ */
+export function queueCeilingNote(label: string, ceiling: number, runCap: number): string {
+  return (
+    `[FindingArbiter] This filing carries \`${label}\`, which \`board.queueLabel\` in ` +
+    `\`.claude/rungate/config.json\` declares to be this project's work queue, so it was judged ` +
+    `against a ceiling of ${ceiling} rather than this run's ${runCap}. It is still counted, still ` +
+    `reserved and still finite — the queue route raises the number and exempts nothing. If that ` +
+    `declaration is not what you expected, the config is the thing to read.`
+  );
+}
+
 export function unreadableShipPolicyNote(cap: number): string {
   return (
     `[FindingArbiter] This project's \`ship\` block is present and could not be resolved, so the ` +

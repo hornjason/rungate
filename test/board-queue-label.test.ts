@@ -89,7 +89,15 @@ describe("the writer and the reading share that one binding", () => {
     // the mutant fail to load, which reads as a refusal on the merits
     // (`.claude/rules/self-referential-tests.md`). So the producer resolves
     // the label and it reaches the reading as snapshot data.
-    const reaches = ["scripts/plan-issues.ts", "scripts/board-snapshot.ts"];
+    // `lib/issue-filing-gate.ts` joined the population in #1961: the filing
+    // cap's third route asks whether a filing is in the project's work
+    // queue, which is the same question these two ask and must not be a
+    // fourth opinion about what the queue is called.
+    const reaches = [
+      "scripts/plan-issues.ts",
+      "scripts/board-snapshot.ts",
+      "lib/issue-filing-gate.ts",
+    ];
     const importFree = ["scripts/board-conformance.ts"];
 
     // The detector, named once so the control below runs the SAME code the

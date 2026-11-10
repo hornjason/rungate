@@ -104,6 +104,13 @@
       "from": 2630,
       "to": 2631,
       "note": "#1038 - commits that exist on this machine and nowhere else. Exactly the two ids consumed rather than a block of twenty: PROJECT-STATE.md on main names SC-2636 as the board-identifier config reader and no block reserves it, so a wider block would have squatted on a published plan's id without colliding with anything a diff could show. 2600-2629 (rg/pipeline-spec) is the highest declared block. Delete when the PR merges."
+    },
+    {
+      "owner": "rg/1961-cap-carveout",
+      "from": 251,
+      "to": 270,
+      "namespace": "FG",
+      "note": "#1961 - the filing cap's engine carve-out. FG-250 is the highest id in test/issue-filing-gate.test.ts on main and no FG block is declared above it, so this sits above every declared block, which is what the allocator hands an owner who has none. FG has no allocator, so this is the eyeballed-headroom method .claude/rules/parallel-sessions.md names, declared before any id is consumed. FG-251..FG-263 are consumed. The block was declared at 258 and overran twice as review rounds added cases - it now reserves HEADROOM to 270 rather than tracking consumption, because a block widened one id at a time is a block that is wrong between the test and the edit. Delete when the PR merges."
     }
   ]
 }
