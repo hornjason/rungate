@@ -83,6 +83,7 @@ import {
   ledgerTitle,
   MAX_LEDGER_TITLE,
   overCapReason,
+  envRepo,
   QUEUE_FILINGS_PER_RUN,
   queueCarveOut,
   queueLabelFor,
@@ -5530,6 +5531,67 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
       queueCarveOut([QUEUE_LABEL], QUEUE_LABEL, null),
       "a filing aimed at this project's own tracker still qualifies",
     ).toBe(QUEUE_LABEL);
+  });
+
+  test("FG-259: a leading GH_REPO= assignment retargets the clause, so it is not in this queue", async () => {
+    // Round 2 of the security review. `gh` reads `GH_REPO` with exactly the
+    // authority of `--repo`, so FG-258's guard was
+    // `.claude/rules/checks-must-be-able-to-fail.md`'s second shape — a
+    // detector narrower than what it detects. Measured before the fix: the
+    // clause WAS adjudicated and `repo` read `null`, meaning *this
+    // project's own*, so the ceiling was borrowed.
+    //
+    // Fixed in `resolveFiling`, not in the guard, so `repo` is one reading
+    // for every consumer of it.
+    expect(
+      filingAttempts(`GH_REPO=other/x ${queueLabelled()}`)[0]?.repo,
+      "a leading GH_REPO= assignment is a target, and it was invisible",
+    ).toBe("other/x");
+    expect(
+      envRepo(["GH_REPO=a/b", "FOO=1", "gh", "issue", "create"]),
+      "assignments may precede the program in any number",
+    ).toBe("a/b");
+
+    // The controls, which are what stop this becoming a false refusal.
+    expect(
+      envRepo(["gh", "issue", "create", "--title", "GH_REPO=o/n"]),
+      "past the program name `VAR=value` is an ARGUMENT, and the shell agrees",
+    ).toBeNull();
+    expect(envRepo(["gh", "issue", "create"]), "an ordinary clause targets nothing").toBeNull();
+    expect(
+      filingAttempts(queueLabelled())[0]?.repo,
+      "and an ordinary queued filing is still aimed here",
+    ).toBeNull();
+
+    // End to end: the retargeted clause loses the ceiling at a spent
+    // allowance, which is the behaviour the finding was about.
+    const r = await run(queued, `GH_REPO=other/x ${queueLabelled()}`);
+    expect(
+      r.rows[0].queuedBy,
+      "another tracker's filing borrowed this project's queue ceiling",
+    ).toBeNull();
+  });
+
+  test("FG-260: the RAISE is recorded, so a reader can see which config granted it", async () => {
+    // The review's stated minimum on the worktree-config finding. A refusal
+    // is already loud; a ceiling that doubles and lets a filing through is
+    // the event nobody would otherwise see, so the note fires on the
+    // ADMITTED case and names the label and the file.
+    const r = await run(queued, queueLabelled());
+    const note = r.note ?? "";
+    expect(r.rows[0].refusal, "the premise: this filing was admitted").toBeNull();
+    expect(note, "the raise is silent — nothing records which config granted it").toContain(
+      QUEUE_LABEL,
+    );
+    expect(note, "and it names the file to read, not just the fact").toContain("board.queueLabel");
+
+    // The control. Without it the row passes against a gate that emits the
+    // note on every filing, which would make it noise rather than a record.
+    const plain = await run(queued, unlabelled());
+    expect(
+      plain.note ?? "",
+      "an ordinary filing earned no raise and must not claim one",
+    ).not.toContain("board.queueLabel");
   });
 });
 

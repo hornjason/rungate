@@ -1830,6 +1830,41 @@ function graphqlArgument(doc: string, name: string, vars: Map<string, string>): 
   return m[1].replace(/\\(.)/g, "$1");
 }
 
+/**
+ * The tracker a leading `GH_REPO=` assignment targets, or `null`.
+ *
+ * A clause may be prefixed with `VAR=value` assignments that apply to that
+ * command alone — `GH_REPO=o/n gh issue create …` — and `gh` reads `GH_REPO`
+ * with exactly the authority of `--repo`. A reading that saw only the flag
+ * was `.claude/rules/checks-must-be-able-to-fail.md`'s second shape, *a
+ * detector narrower than what it detects*: the clause was adjudicated, and
+ * only its target was wrong.
+ *
+ * **Leading assignments only, and that is the shell's own rule.** `VAR=value`
+ * is a command prefix; the same text after the program name is an ARGUMENT,
+ * not an assignment. So this stops at the first token that is not one, which
+ * is what makes `gh issue create --title "GH_REPO=o/n"` not a retarget.
+ *
+ * **The ambient `process.env.GH_REPO` is NOT read, and the reason is a false
+ * refusal.** The hook's own environment is not a property of the clause: a
+ * session that legitimately exported its own slug would have every filing
+ * read as cross-repo and lose the queue ceiling for work that is plainly in
+ * this project's queue. The per-clause prefix is the thing a filer writes to
+ * retarget one command, and it is the thing this reads.
+ */
+export function envRepo(tokens: string[]): string | null {
+  let found: string | null = null;
+  for (const token of tokens) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(token);
+    // The first non-assignment token is the program; everything past it is
+    // an argument and no longer an assignment.
+    if (m === null) break;
+    // Last-wins among the prefix, which is what the shell does.
+    if (m[1] === "GH_REPO") found = m[2] === "" ? null : m[2]!;
+  }
+  return found;
+}
+
 export function resolveFiling(tokens: string[]): FilingAttempt {
   const doc = graphqlDocument(tokens);
   if (doc !== null) {
@@ -1872,7 +1907,21 @@ export function resolveFiling(tokens: string[]): FilingAttempt {
     // same `asGhWould` reading as the title and the body — a repeated
     // `--body-file` overrides rather than accumulating.
     bodyFile: bodyFiles.length > 0 ? asGhWould(bodyFiles) : null,
-    repo: repos.length > 0 ? asGhWould(repos) : null,
+    // **`--repo`, else a leading `GH_REPO=` assignment** — round 2 of the
+    // security review of PR #1963. `gh` reads the environment variable with
+    // exactly the authority of the flag, so `GH_REPO=other/x gh issue
+    // create …` targets another tracker while this field read `null`,
+    // meaning *this project's own*. Measured: the clause is recognised and
+    // adjudicated, and only the target was wrong.
+    //
+    // **Fixed here rather than at the one caller that found it.** The
+    // reviewer pointed at `queueCarveOut`, where a wrong `null` borrowed
+    // this project's queue ceiling. It is the same wrong answer everywhere
+    // `repo` is read: the dedupe corpus compares the filing against this
+    // repository's open issues, and `targetFor` composes a comment target
+    // on this repository's PR. One field, one reading, so a second consumer
+    // cannot be fixed and a third left behind.
+    repo: repos.length > 0 ? asGhWould(repos) : envRepo(tokens),
     repeatedValueFlag: titles.length > 1 || bodies.length > 1 || bodyFiles.length > 1,
   };
 }
@@ -2935,6 +2984,8 @@ export async function filingGate(
   // reader sees, because it is the one that explains the NUMBER every later
   // refusal quotes.
   if (allowance.unreadable) notes.push(unreadableShipPolicyNote(cap));
+  /** The queue-ceiling note is one fact about the project, said once. */
+  let notedQueueCeiling = false;
 
   // One batch per command, so every row of one adjudication shares it and the
   // clause index separates them — `CandidateRecord.key`'s scheme exactly.
@@ -3206,6 +3257,13 @@ export async function filingGate(
     // the one place that decides which number. Both cap sites read it.
     const queuedBy = queueCarveOut(attempt.labels, queueLabel, attempt.repo);
     const clauseCap = capForClause(queuedBy, cap);
+    // Said once per command even when several clauses qualify: the note is
+    // about the project's declaration, which is one fact, and repeating it
+    // per clause is how a note becomes something a reader skips.
+    if (queuedBy !== null && clauseCap > cap && !notedQueueCeiling) {
+      notedQueueCeiling = true;
+      notes.push(queueCeilingNote(queuedBy, clauseCap, cap));
+    }
     const capped = uncountable || (spent >= clauseCap && !planned.planned);
     const verdict: FilingAdjudication =
       wouldEmit && capped
@@ -3816,6 +3874,32 @@ export function overrideNote(v: FilingAdjudication, prior: FilingLedgerRow | nul
  * an allowance it was not handed is the stale-copy class this file keeps
  * meeting, and with no default the compiler refuses a caller that forgets.
  */
+/**
+ * A clause in this command was judged against the RAISED ceiling.
+ *
+ * Round 2 of PR #1963's security review asked, at minimum, that the raise be
+ * recorded where a reader can see which config declared the queue. It is the
+ * `.claude/rules/config-access.md` rule applied to a control rather than a
+ * feature: *never substitute a built-in default for config without recording
+ * that you did so* — and a ceiling that doubles silently is the same defect
+ * wearing the opposite sign.
+ *
+ * **Not a refusal, and it fires on the ADMITTED case.** That is the point: a
+ * refusal is already loud, and a raise that let a filing through is the
+ * event nobody would otherwise see. It names the label and the file, so the
+ * reader can check both against the tree rather than taking the raise on
+ * trust.
+ */
+export function queueCeilingNote(label: string, ceiling: number, runCap: number): string {
+  return (
+    `[FindingArbiter] This filing carries \`${label}\`, which \`board.queueLabel\` in ` +
+    `\`.claude/rungate/config.json\` declares to be this project's work queue, so it was judged ` +
+    `against a ceiling of ${ceiling} rather than this run's ${runCap}. It is still counted, still ` +
+    `reserved and still finite — the queue route raises the number and exempts nothing. If that ` +
+    `declaration is not what you expected, the config is the thing to read.`
+  );
+}
+
 export function unreadableShipPolicyNote(cap: number): string {
   return (
     `[FindingArbiter] This project's \`ship\` block is present and could not be resolved, so the ` +
