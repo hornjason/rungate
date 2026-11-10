@@ -105,7 +105,22 @@ export function readyTarget(eligible: number, cap: number | null): number | null
 }
 
 /**
- * Everything ordering reads. Phase `null` means "no phase milestone".
+ * Everything ordering reads. `milestone` is the milestone TITLE, or `null`.
+ *
+ * **The title and not a phase number** (#1943). A number has already thrown
+ * away the family, and the family is half the order: this repository runs two
+ * milestone families at once — `Pipeline Phase N`, the engine, and
+ * `Convergence Phase N`, the payload the engine ships — and comparing their
+ * numbers as one sequence puts the payload ahead of the engine whenever its
+ * number is lower. Observed 2026-11-09 in `work-status`: `#1764 Convergence
+ * Phase 3` ranked above `#1717 Pipeline Phase 6`, which inverts what
+ * `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md` states and what SC-2625 makes the
+ * engine's own acceptance test.
+ *
+ * Carrying both the title and a pre-read number would be two views of one
+ * fact, and a caller could hand over a pair that disagree. The title is the
+ * one a caller already has; `phaseOf` is still the single thing that reads a
+ * number out of it, imported rather than re-spelled.
  *
  * `labels` is **required, with no default** (#1853). An optional field here
  * would let a caller omit it and receive UNPLACED, which is a reading rather
@@ -114,9 +129,33 @@ export function readyTarget(eligible: number, cap: number | null): number | null
  * had. Both callers now have to say what they read.
  */
 export interface Rankable {
-  readonly phase: number | null;
+  readonly milestone: string | null;
   readonly number: number;
   readonly labels: readonly string[];
+}
+
+/**
+ * Which milestone family an issue's phase belongs to — 0 for the engine, 1
+ * for everything else.
+ *
+ * `enginePrefix` is `board.milestonePrefix` from the project's own config —
+ * `"Pipeline"` here — and it is **passed in, never read in this module**.
+ * `lib/live-issues.ts` already records what happens when two places compile
+ * their own `^<prefix> Phase (\d+)` : two deciders, and no behavioural case
+ * can tell them apart.
+ *
+ * **A `null` prefix ranks every family 0, and that is a reading rather than a
+ * default.** A tree that declares no engine milestone family has ONE family,
+ * so there is nothing to rank and the order falls back to phase alone —
+ * exactly what every consumer did before #1943. It is not
+ * `.claude/rules/config-access.md`'s Silent Default Substitution, which is
+ * about inventing a value: nothing is invented here, and `placementOf`'s
+ * `why` says which of the two readings it took so the distinction reaches
+ * the report.
+ */
+export function familyRank(milestone: string | null, enginePrefix: string | null): number {
+  if (enginePrefix === null) return 0;
+  return milestone !== null && milestone.startsWith(enginePrefix) ? 0 : 1;
 }
 
 /**
