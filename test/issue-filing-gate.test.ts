@@ -83,6 +83,7 @@ import {
   ledgerTitle,
   MAX_LEDGER_TITLE,
   overCapReason,
+  directGhInvocation,
   envRepo,
   QUEUE_FILINGS_PER_RUN,
   queueCarveOut,
@@ -697,6 +698,7 @@ describe("#1261 the parts the decision is built from", () => {
       bodyFile: null,
       repo: null,
       repeatedValueFlag: false,
+      directGh: true,
     };
     const v = await adjudicateFiling(attempt, async () =>
       measuredCorpus(OPEN_ISSUES.map(i => ({ id: String(i.number), title: i.title, body: i.body }))),
@@ -713,6 +715,7 @@ describe("#1261 the parts the decision is built from", () => {
     bodyFile: path,
     repo: null,
     repeatedValueFlag: false,
+    directGh: true,
   });
   const tracker = async () =>
     measuredCorpus(OPEN_ISSUES.map(i => ({ id: String(i.number), title: i.title, body: i.body })));
@@ -5402,7 +5405,7 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
     ).toBe("OVER_CAP");
     expect(r.rows[0].queuedBy).toBeNull();
 
-    expect(queueCarveOut(["anything"], null, null), "no configured label raises nothing").toBeNull();
+    expect(queueCarveOut(["anything"], null, null, true), "no configured label raises nothing").toBeNull();
     expect(queueLabelFor(() => null), "an unscaffolded tree declares no queue").toBeNull();
     // And the thunk, for the reason `filingsPerRunFor` takes one: this runs
     // inside a PreToolUse hook, `tryLoadRungateConfig` is a bare
@@ -5522,13 +5525,13 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
     // ceiling on a tracker whose config was never consulted. The same
     // gate/action mismatch `targetFor` exists to prevent one stage earlier.
     expect(
-      queueCarveOut([QUEUE_LABEL], QUEUE_LABEL, "other/x"),
+      queueCarveOut([QUEUE_LABEL], QUEUE_LABEL, "other/x", true),
       "another tracker's filing must not ride this project's queue",
     ).toBeNull();
     // The control, or the row above passes against a predicate that returns
     // null for everything.
     expect(
-      queueCarveOut([QUEUE_LABEL], QUEUE_LABEL, null),
+      queueCarveOut([QUEUE_LABEL], QUEUE_LABEL, null, true),
       "a filing aimed at this project's own tracker still qualifies",
     ).toBe(QUEUE_LABEL);
   });
@@ -5570,6 +5573,64 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
       r.rows[0].queuedBy,
       "another tracker's filing borrowed this project's queue ceiling",
     ).toBeNull();
+  });
+
+  test("FG-261: a WRAPPED invocation gets no raise, whatever the wrapper is", async () => {
+    // **Round 3, and a re-scope rather than a repair.** Rounds 1, 2 and 3
+    // each found one more spelling by which a clause retargets itself:
+    // `--repo`, then `GH_REPO=`, then `env GH_REPO=` and `command`. That is
+    // `.claude/rules/checks-must-be-able-to-fail.md`'s *three rounds, three
+    // sites, one rule*, and a wrapper allowlist books the fourth round.
+    //
+    // So the ceiling asks one question with one right answer: is the
+    // program the first thing in the clause? This row is deliberately a
+    // POPULATION rather than the two spellings the review named — a case
+    // that listed `env` and `command` would be the allowlist again, written
+    // as a test.
+    const wrapped = [
+      "env GH_REPO=other/x",
+      "env",
+      "command",
+      "nohup",
+      "stdbuf -o0",
+      "FOO=1",
+      "GH_HOST=example.com",
+    ];
+    for (const prefix of wrapped) {
+      const r = await run(queued, `${prefix} ${queueLabelled()}`);
+      expect(
+        r.rows[0]?.queuedBy,
+        `"${prefix} gh issue create …" was granted the raised ceiling — the parser cannot ` +
+          "vouch for what this clause targets, so the honest answer is the smaller number",
+      ).toBeNull();
+    }
+
+    // The controls, in both directions, or the row above is satisfied by a
+    // predicate that refuses everything — which would delete the queue
+    // route entirely and look exactly like a bound.
+    expect(directGhInvocation(["gh", "issue", "create"]), "a plain gh clause").toBe(true);
+    expect(
+      directGhInvocation(["/opt/homebrew/bin/gh", "issue", "create"]),
+      "a path-qualified gh is still gh — the binary is the program, not the string",
+    ).toBe(true);
+    expect(directGhInvocation([]), "an empty clause vouches for nothing").toBe(false);
+    expect(
+      directGhInvocation(["ghq", "issue", "create"]),
+      "a program whose name merely STARTS with gh is not gh",
+    ).toBe(false);
+    // `ghq` and not `github`, and the difference is the whole control:
+    // github is g-i-t-h-u-b, so it does not start with `gh` at all and a
+    // prefix-matching mutant returns false for it exactly as the real one
+    // does. Measured — the mutant was live, printed its own source, and
+    // the case stayed green. `.claude/rules/checks-must-be-able-to-fail.md`,
+    // *assertions that hold vacuously*: the fixture, not the rule.
+    expect("github".startsWith("gh"), "the fixture this control replaced could not fire").toBe(
+      false,
+    );
+    const plain = await run(queued, queueLabelled());
+    expect(plain.rows[0].queuedBy, "and an unwrapped queued filing still earns it").toBe(
+      QUEUE_LABEL,
+    );
   });
 
   test("FG-260: the RAISE is recorded, so a reader can see which config granted it", async () => {

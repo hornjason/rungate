@@ -518,7 +518,11 @@ export function queueCarveOut(
   labels: string[],
   queueLabel: string | null,
   repo: string | null,
+  directGh: boolean,
 ): string | null {
+  // **An invocation this file cannot vouch for gets no raise** — round 3,
+  // and a re-scope rather than a fourth spelling. See `directGhInvocation`.
+  if (!directGh) return null;
   // **A filing aimed at ANOTHER tracker is never in this project's queue**
   // — the security review of PR #1963 found this, and it is a real hole:
   // `board.queueLabel` is a statement about THIS project's board, and a
@@ -1434,6 +1438,12 @@ export interface FilingAttempt {
    * counted later is worth more than a refusal nobody can audit.
    */
   repeatedValueFlag: boolean;
+  /**
+   * The clause invokes `gh` directly, with no wrapper and no assignment
+   * prefix — `directGhInvocation`. The QUEUE CEILING reads this and nothing
+   * else does (#1963, review round 3).
+   */
+  directGh: boolean;
 }
 
 /**
@@ -1865,6 +1875,44 @@ export function envRepo(tokens: string[]): string | null {
   return found;
 }
 
+/**
+ * Is this clause a PLAIN `gh` invocation — `gh …` or `/path/to/gh …`?
+ *
+ * **Round 3 of PR #1963's review, and a re-scope rather than a repair.**
+ * Rounds 1, 2 and 3 each found one more spelling by which a clause can
+ * retarget itself: `--repo`, then `GH_REPO=`, then `env GH_REPO=` and
+ * `command`. `.claude/rules/checks-must-be-able-to-fail.md` names this —
+ * *three rounds, three sites, one rule* — and AGENTS.md rule 5 says to stop
+ * repairing at the third and re-scope. A wrapper ALLOWLIST is the fourth
+ * round pre-booked: `nohup`, `stdbuf`, `timeout`, `setsid`, `doas` and
+ * whatever is next.
+ *
+ * So the queue ceiling asks a question with ONE right answer instead: is
+ * the program the first thing in the clause? Everything else — a wrapper, an
+ * assignment prefix, an interpreter, anything this file's parser cannot
+ * vouch for — is UNMEASURED for the queue route and gets the ordinary cap.
+ *
+ * **This is a whitelist of one shape, so there is no list to extend.** It
+ * fails toward REFUSING the raise, never toward granting it, and the cost
+ * is a false non-raise: a legitimate `env FOO=1 gh issue create --label
+ * engine` loses the ceiling and keeps the ordinary allowance. That is a
+ * filing refused a bigger number, not a filing refused.
+ *
+ * **It governs the CEILING only, and nothing else in this file.** Every
+ * other reading — the dedupe, the claim check, the cap itself — still sees
+ * a wrapped clause exactly as before. `lib/issue-create-override.ts`'s
+ * header explains why the phase lock does not chase wrappers, and that
+ * reasoning is unchanged; what is different here is that the decision being
+ * guarded is *how much allowance you get*, which is the filer's own
+ * interest, and the honest answer to an unreadable invocation is the
+ * smaller number.
+ */
+export function directGhInvocation(tokens: string[]): boolean {
+  const first = tokens[0];
+  if (first === undefined) return false;
+  return first.replace(/^.*\//, "") === "gh";
+}
+
 export function resolveFiling(tokens: string[]): FilingAttempt {
   const doc = graphqlDocument(tokens);
   if (doc !== null) {
@@ -1879,6 +1927,7 @@ export function resolveFiling(tokens: string[]): FilingAttempt {
       // what a `gh issue create` with no `--repo` already resolves to.
       repo: null,
       repeatedValueFlag: false,
+      directGh: directGhInvocation(tokens),
     };
   }
   const apiRest = apiRestFields(tokens);
@@ -1893,6 +1942,7 @@ export function resolveFiling(tokens: string[]): FilingAttempt {
       bodyFile: null,
       repo: apiFilingRepo(tokens),
       repeatedValueFlag: false,
+      directGh: directGhInvocation(tokens),
     };
   }
   const titles = flagValues(tokens, TITLE_FLAG);
@@ -1923,6 +1973,7 @@ export function resolveFiling(tokens: string[]): FilingAttempt {
     // cannot be fixed and a third left behind.
     repo: repos.length > 0 ? asGhWould(repos) : envRepo(tokens),
     repeatedValueFlag: titles.length > 1 || bodies.length > 1 || bodyFiles.length > 1,
+    directGh: directGhInvocation(tokens),
   };
 }
 
@@ -3255,7 +3306,7 @@ export async function filingGate(
     // queued clause is counted, reserved and raced exactly like every other
     // one; the only thing it gets is a bigger number, and `capForClause` is
     // the one place that decides which number. Both cap sites read it.
-    const queuedBy = queueCarveOut(attempt.labels, queueLabel, attempt.repo);
+    const queuedBy = queueCarveOut(attempt.labels, queueLabel, attempt.repo, attempt.directGh);
     const clauseCap = capForClause(queuedBy, cap);
     // Said once per command even when several clauses qualify: the note is
     // about the project's declaration, which is one fact, and repeating it

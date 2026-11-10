@@ -253,7 +253,17 @@ function attemptOf(title: string, body: string): FilingAttempt {
   // added to the shape. Both are stated rather than defaulted, because this
   // file is the measuring instrument: a plant filed into another repo, or one
   // whose title was given twice, is not the finding the arm thinks it scored.
-  return { title, body, labels: [], bodyFile: null, repo: null, repeatedValueFlag: false };
+  return {
+    title,
+    body,
+    labels: [],
+    bodyFile: null,
+    repo: null,
+    repeatedValueFlag: false,
+    // A synthesised attempt is a plain `gh` filing: these fixtures carry no
+    // wrapper, and the queue ceiling is the only reader of this field.
+    directGh: true,
+  };
 }
 
 /**
