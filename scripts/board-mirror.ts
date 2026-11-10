@@ -233,7 +233,8 @@ interface Item {
   blockedByOpen: number;
   blockedByTotal: number;
   criteriaCell: string;
-  milestone: string;
+  /** The milestone TITLE, or `null` — the contract `Rankable` states (#1965). */
+  milestone: string | null;
   /** Ordering's second source when no milestone places the issue (#1853). */
   labels: readonly string[];
 }
@@ -400,7 +401,12 @@ export async function main(argv: string[]): Promise<number> {
         blockedByOpen: n.content.issueDependenciesSummary?.blockedBy ?? 0,
         blockedByTotal: n.content.issueDependenciesSummary?.totalBlockedBy ?? 0,
         criteriaCell: n.fieldValueByName?.text ?? "",
-        milestone: n.content.milestone?.title ?? "",
+        // `null` and never `""` — ONE absent value, matching `Rankable` and
+        // the five other producers in the tree (#1965 round 4). `""` reads
+        // identically today only because `phaseOf` and `phaseInFamily`
+        // normalise it, so a `=== null` added to the ordering later would
+        // misbehave here and nowhere else.
+        milestone: n.content.milestone?.title ?? null,
         // Ordering's second source (#1853). This writer promotes too, so a
         // mirror run that ranked everything milestone-less as UNPLACED
         // would order by age exactly where the fan-out no longer does.

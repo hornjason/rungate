@@ -450,6 +450,56 @@ describe("SC-2723: nothing spells a held reason for itself", () => {
     ).toEqual([]);
   });
 
+  /**
+   * #1965 round 4: `Rankable.milestone` has ONE absent value, and it is `null`.
+   *
+   * `scripts/board-mirror.ts` produced `n.content.milestone?.title ?? ""`
+   * while the five other producers in the tree produce `?? null`, against a
+   * contract that says *"the milestone TITLE, or `null`"*. It is harmless
+   * today only because `phaseOf` and `phaseInFamily` both normalise with
+   * `?? ""` internally — so a later `=== null` anywhere in the ordering would
+   * misbehave for exactly one call site, and only for issues with no
+   * milestone, which is the population the LABEL tier exists for.
+   *
+   * Two sentinels for one absence is the defect `enginePrefixReading` was
+   * added to this same PR to remove for the engine prefix. This is the same
+   * shape one layer down, and the review was right to name it rather than
+   * accept "identical results today".
+   *
+   * A census and not a line, for the reason the ordering-site case above is
+   * one: the SIXTH producer is the one nobody will check.
+   *
+   * Breaking it: change any `?? null` on a `milestone?.title` back to `?? ""`
+   * and this names the file and the line.
+   */
+  test("every milestone-title producer spells absent as null, never an empty string", () => {
+    const population = sourceFiles(ROOT, ["lib", "scripts"]);
+    const producers: string[] = [];
+    const offenders: string[] = [];
+    for (const path of population) {
+      const lines = codeOf(readFileSync(join(ROOT, path), "utf-8")).split("\n");
+      lines.forEach((line, i) => {
+        if (!/milestone\?\.title\s*\?\?/.test(line)) return;
+        producers.push(`${path}:${i + 1}`);
+        if (!/milestone\?\.title\s*\?\?\s*null/.test(line)) offenders.push(`${path}:${i + 1}`);
+      });
+    }
+
+    // The census's own reach. A regex that matched nothing would leave the
+    // offender list empty while witnessing nothing at all.
+    expect(
+      producers.length,
+      "no `milestone?.title ??` producer found — this case is measuring nothing",
+    ).toBeGreaterThanOrEqual(5);
+
+    expect(
+      offenders,
+      "`Rankable.milestone` and `Dependent.milestone` document ONE absent value and it is " +
+        "`null`. `\"\"` reads identically today only because `phaseOf` and `phaseInFamily` " +
+        "normalise it; a `=== null` added to the ordering later would misbehave here alone",
+    ).toEqual([]);
+  });
+
   test("the scan can find the string it looks for, and ignores comments", () => {
     expect(codeOf('console.log("at its depth");').includes("at its depth")).toBe(true);
     expect(codeOf("// never say at its depth here\nconst x = 1;").includes("at its depth")).toBe(false);
