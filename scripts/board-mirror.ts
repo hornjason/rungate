@@ -38,6 +38,7 @@ import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
+import { readBoardInputs } from "../lib/config-readers";
 import {
   heldReason,
   readyCap,
@@ -128,13 +129,19 @@ export function readyPopulation<T extends { state: string; status: string }>(
 
 export function splitReadyChanges<
   T extends {
-    item: { number: number; phase: number | null; labels: readonly string[]; status: string };
+    item: { number: number; milestone: string | null; labels: readonly string[]; status: string };
     to: string;
   },
 >(
   eligible: readonly T[],
   cap: number | null,
   occupied: number,
+  /**
+   * `board.milestonePrefix` — the ENGINE milestone family (#1943). Passed
+   * in, never read here: `lib/config-readers.ts` holds the one binding, and
+   * a second reader is two deciders over one config key.
+   */
+  enginePrefix: string | null,
 ): {
   readyWritable: T[];
   heldByCap: T[];
@@ -170,8 +177,9 @@ export function splitReadyChanges<
   const after = Math.max(0, occupied - freed);
   const occ = readyOccupancy(after, after, cap);
   const selection = selectReady(
-    promotions.map(c => ({ number: c.item.number, phase: c.item.phase, labels: c.item.labels })),
+    promotions.map(c => ({ number: c.item.number, milestone: c.item.milestone, labels: c.item.labels })),
     occ,
+    enginePrefix,
   );
   // **Written in the order `selectReady` chose, not in board order.**
   // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
@@ -226,7 +234,6 @@ interface Item {
   blockedByTotal: number;
   criteriaCell: string;
   milestone: string;
-  phase: number | null;
   /** Ordering's second source when no milestone places the issue (#1853). */
   labels: readonly string[];
 }
@@ -394,7 +401,6 @@ export async function main(argv: string[]): Promise<number> {
         blockedByTotal: n.content.issueDependenciesSummary?.totalBlockedBy ?? 0,
         criteriaCell: n.fieldValueByName?.text ?? "",
         milestone: n.content.milestone?.title ?? "",
-        phase: phaseOf(n.content.milestone?.title),
         // Ordering's second source (#1853). This writer promotes too, so a
         // mirror run that ranked everything milestone-less as UNPLACED
         // would order by age exactly where the fan-out no longer does.
@@ -445,7 +451,15 @@ export async function main(argv: string[]): Promise<number> {
       ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
       : null;
   const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
-  const { readyWritable, heldByCap, selection, occ } = splitReadyChanges(eligible, cap, occupied);
+  // The ENGINE milestone family, from this project's own config (#1943).
+  // `null` on a tree that declares none, which orders by phase alone.
+  const enginePrefix = readBoardInputs(root).milestonePrefix;
+  const { readyWritable, heldByCap, selection, occ } = splitReadyChanges(
+    eligible,
+    cap,
+    occupied,
+    enginePrefix,
+  );
 
   if (values.json) {
     console.log(

@@ -1031,8 +1031,18 @@ describe("#1853 H4: the candidate list says how many are UNPLACED", () => {
 
   test("the candidates are sorted with readyOrder, so the report shows plan order", () => {
     expect(code, "sorting by anything else makes this list disagree with the writer").toContain(
-      ".sort(readyOrder)",
+      ".sort(readyOrderFor(",
     );
+    // **And with the CONFIGURED prefix, not a literal** (#1943). The
+    // comparator takes the engine milestone family, and a report that
+    // handed it `null` would order `Convergence Phase 3` above `Pipeline
+    // Phase 6` again while this row stayed green on the call shape alone.
+    expect(
+      code,
+      "the report resolves the engine family from config — a literal here is the second " +
+        "spelling lib/config-readers.ts exists to prevent",
+    ).toContain("readBoardInputs(process.cwd()).milestonePrefix");
+    expect(code).toContain(".sort(readyOrderFor(enginePrefix))");
   });
 });
 

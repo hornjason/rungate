@@ -48,6 +48,7 @@ import {
   type Incumbent,
 } from "../lib/board-ready-fanout";
 import { phaseOf } from "../lib/board-mirror";
+import { readBoardInputs } from "../lib/config-readers";
 import {
   heldReason,
   holdsReadySlot,
@@ -658,7 +659,7 @@ async function main(): Promise<number> {
     return {
       number: b.number,
       state: b.state,
-      phase: phaseOf(b.milestone?.title),
+      milestone: b.milestone?.title ?? null,
       // The ordering's second source (#1853). Not `?? []` as a convenience:
       // a page that could not carry labels would read as an issue with none,
       // and that is UNPLACED rather than unmeasured. The LABELS_QUERY pass
@@ -733,7 +734,7 @@ async function main(): Promise<number> {
   );
   const throughput = closedReadings?.throughput ?? null;
   const cap = throughput === null ? null : readyCap(throughput);
-  const phaseOfNumber = new Map(dependents.map(d => [d.number, d.phase]));
+  const milestoneOfNumber = new Map(dependents.map(d => [d.number, d.milestone]));
   // Labels travel with the phase because ordering now reads both (#1853).
   // A decision whose issue is not in `dependents` cannot be ranked by label
   // either, and `[]` is the honest reading for it: UNPLACED, sorted behind
@@ -743,11 +744,13 @@ async function main(): Promise<number> {
     .filter(dec => dec.move)
     .map(dec => ({
       ...dec,
-      phase: phaseOfNumber.get(dec.number) ?? null,
+      milestone: milestoneOfNumber.get(dec.number) ?? null,
       labels: labelsOfNumber.get(dec.number) ?? [],
     }));
   const occ = readyOccupancy(occupied, dispatchable, cap);
-  const selection = selectReady(eligible, occ);
+  // The ENGINE milestone family, from this project's own config (#1943):
+  // a phase number only orders inside its own family.
+  const selection = selectReady(eligible, occ, readBoardInputs(process.cwd()).milestonePrefix);
   console.log(
     `  depth: ${cap ?? "UNMEASURED"}` +
       (throughput === null

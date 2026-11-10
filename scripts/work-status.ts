@@ -35,10 +35,10 @@ import {
   LABEL_RANK,
   placementCensus,
   placementOf,
-  readyOrder,
+  readyOrderFor,
   type Throughput,
 } from "../lib/board-ready-rule";
-import { phaseOf } from "../lib/board-mirror";
+import { readBoardInputs } from "../lib/config-readers";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
 
@@ -651,19 +651,23 @@ console.log(
 // distinction every row in the lane-health report below exists to keep.
 const candidateRankables = pickable.map((i: any) => ({
   number: i.number,
-  phase: phaseOf(i.milestone?.title),
+  milestone: i.milestone?.title ?? null,
   labels: (i.labels ?? [])
     .map((l: any) => (typeof l === "string" ? l : l?.name))
     .filter((n: any) => typeof n === "string"),
 }));
-const census = placementCensus(candidateRankables);
+// The ENGINE milestone family, from this project's own config (#1943).
+// Without it `Convergence Phase 3` outranked `Pipeline Phase 6` and the
+// report printed the payload above the engine that ships it.
+const enginePrefix = readBoardInputs(process.cwd()).milestonePrefix;
+const census = placementCensus(candidateRankables, enginePrefix);
 console.log(
   `\n  placed by milestone ${census.phase}, by label ${census.label}, UNPLACED ${census.unplaced}` +
     ` — of ${pickable.length}`,
 );
 if (census.unplaced > 0) {
   const names = candidateRankables
-    .filter(r => placementOf(r).tier === "UNPLACED")
+    .filter(r => placementOf(r, enginePrefix).tier === "UNPLACED")
     .map(r => `#${r.number}`);
   console.log(
     `  UNPLACED means no milestone and no ranked label, so nothing in the repository says\n` +
@@ -673,11 +677,11 @@ if (census.unplaced > 0) {
   );
 }
 if (census.phase + census.label > 0) {
-  const top = [...candidateRankables].sort(readyOrder).slice(0, 5);
+  const top = [...candidateRankables].sort(readyOrderFor(enginePrefix)).slice(0, 5);
   console.log("\n  next out of the backlog, in plan order:");
   for (const r of top) {
     const title = pickable.find((i: any) => i.number === r.number)?.title ?? "";
-    console.log(`    #${r.number} ${String(title).slice(0, 54).padEnd(54)} ${placementOf(r).why}`);
+    console.log(`    #${r.number} ${String(title).slice(0, 54).padEnd(54)} ${placementOf(r, enginePrefix).why}`);
   }
 }
 if (focus.kind === "all") {
