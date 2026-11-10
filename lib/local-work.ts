@@ -188,14 +188,24 @@ export function localCommitsFor(work: LocalWork, issue: number): boolean | null 
  * one command). A pushed branch is work somebody can see even with no
  * pull request open, so it is WORKING rather than INVISIBLE.
  */
-export function issuesWithPushedBranch(refs: readonly string[]): Set<number> {
+export function issuesWithPushedBranch(
+  refs: readonly string[],
+  knownIssues: ReadonlySet<number> | null = null,
+): Set<number> {
   const out = new Set<number>();
   for (const ref of refs) {
     // `origin/rg/1944-x` → strip the remote, then read the issue.
     const branch = ref.startsWith("origin/") ? ref.slice("origin/".length) : ref;
     if (branch === "HEAD") continue;
     const issue = issueFromBranch(branch);
-    if (issue !== null) out.add(issue);
+    if (issue === null) continue;
+    // ai-review round 3 of #1974. Round 2 put this guard on
+    // `tallyLocalWork` and I did not sweep for the siblings — this
+    // function and `issuesWithUncommittedWork` kept crediting a number
+    // read from a name. `origin/2-factor-auth` made issue #2 read
+    // WORKING, which is the direction that hides neglect.
+    if (knownIssues !== null && !knownIssues.has(issue)) continue;
+    out.add(issue);
   }
   return out;
 }
@@ -221,7 +231,10 @@ export interface WorktreeState {
   readonly dirty: boolean | null;
 }
 
-export function issuesWithUncommittedWork(states: readonly WorktreeState[]): {
+export function issuesWithUncommittedWork(
+  states: readonly WorktreeState[],
+  knownIssues: ReadonlySet<number> | null = null,
+): {
   readonly dirty: Map<number, string>;
   readonly unread: string[];
 } {
@@ -234,7 +247,10 @@ export function issuesWithUncommittedWork(states: readonly WorktreeState[]): {
     }
     if (!s.dirty || s.branch === null) continue;
     const issue = issueFromBranch(s.branch);
-    if (issue !== null && !dirty.has(issue)) dirty.set(issue, s.path);
+    if (issue === null) continue;
+    // The third attribution site, and the second one round 2 missed.
+    if (knownIssues !== null && !knownIssues.has(issue)) continue;
+    if (!dirty.has(issue)) dirty.set(issue, s.path);
   }
   return { dirty, unread };
 }
@@ -310,14 +326,20 @@ export function readLocalWork(
 }
 
 /** One `for-each-ref`. Returns `null` when it could not be run. */
-export function readPushedBranches(repoRoot: string): Set<number> | null {
+export function readPushedBranches(
+  repoRoot: string,
+  knownIssues: ReadonlySet<number> | null = null,
+): Set<number> | null {
   try {
     const out = execFileSync(
       "git",
       ["-C", repoRoot, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"],
       { encoding: "utf-8", maxBuffer: 32 * 1024 * 1024 },
     );
-    return issuesWithPushedBranch(out.split("\n").filter(l => l.trim() !== ""));
+    return issuesWithPushedBranch(
+      out.split("\n").filter(l => l.trim() !== ""),
+      knownIssues,
+    );
   } catch {
     return null;
   }

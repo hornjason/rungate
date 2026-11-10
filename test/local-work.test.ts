@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -265,6 +265,72 @@ describe("#1944: the other two evidence fields", () => {
       "a branch with real unpushed commits and no matching issue must be NAMED, not dropped — " +
         "it is work nothing will attribute and somebody should see it",
     ).toEqual(["2-factor-auth", "release/2026-11-10-snapshot", "rg/2620-tick"]);
+  });
+
+  /**
+   * ai-review round 3 of #1974, and the finding is my failure to sweep.
+   * Round 2 put the `knownIssues` guard on `tallyLocalWork` and I fixed
+   * the one site the reviewer named. Two siblings kept crediting a number
+   * read from a name: `origin/2-factor-auth` made issue #2 read WORKING,
+   * and a dirty worktree on such a branch did the same.
+   *
+   * Repairing them one at a time is what produced the second round. So
+   * this asserts the PROPERTY over the population: every function in
+   * `lib/local-work.ts` that calls `issueFromBranch` must take a
+   * `knownIssues` parameter. A fourth attribution site added later is red
+   * until it does, rather than waiting for a reviewer to notice.
+   */
+  test("every attribution site takes the issue list — all of them, not the named one", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "lib/local-work.ts"), "utf-8");
+    // Each exported function, sliced from its own declaration to the next.
+    // Name-then-slice rather than one signature regex: a regex over
+    // parameter lists has to model multi-line signatures and return types,
+    // and the first cut of this guard failed on exactly that — reporting
+    // zero attribution sites, which reads as "all clear".
+    const names = [...src.matchAll(/^export function (\w+)/gm)].map(m => m[1]!);
+    expect(names.length, "no exported functions were found, so this holds vacuously").toBeGreaterThanOrEqual(
+      6,
+    );
+    const sliceOf = (name: string) => {
+      const at = src.indexOf(`export function ${name}(`);
+      const next = src.indexOf("\nexport ", at + 1);
+      return src.slice(at, next === -1 ? src.length : next);
+    };
+    const attributing = names
+      .filter(n => n !== "issueFromBranch")
+      .filter(n => sliceOf(n).includes("issueFromBranch("));
+    expect(
+      [...attributing].sort(),
+      "the set of functions that resolve a branch name to an issue changed. Every one of " +
+        "them must be checked below, so add it here deliberately",
+    ).toEqual(["issuesWithPushedBranch", "issuesWithUncommittedWork", "tallyLocalWork"]);
+
+    const unguarded = attributing.filter(n => !sliceOf(n).includes("knownIssues"));
+    expect(
+      unguarded,
+      "a function resolves a branch name to an issue without taking the tracker's issue " +
+        "list. A name is not a fact: origin/2-factor-auth reads as issue #2 and reports it " +
+        "WORKING, which hides real neglect on it",
+    ).toEqual([]);
+  });
+
+  test("the siblings refuse a ghost issue the same way the tally does", () => {
+    const known = new Set([1944]);
+    expect([...issuesWithPushedBranch(["origin/rg/1944-x", "origin/2-factor-auth"], known)]).toEqual([
+      1944,
+    ]);
+    const { dirty } = issuesWithUncommittedWork(
+      [
+        { path: "/w/a", branch: "rg/1944-x", dirty: true },
+        { path: "/w/b", branch: "2-factor-auth", dirty: true },
+      ],
+      known,
+    );
+    expect([...dirty.keys()]).toEqual([1944]);
+
+    // Negative control: with no list both still attribute by name, so the
+    // assertions above are about the list and not about a blanket refusal.
+    expect([...issuesWithPushedBranch(["origin/2-factor-auth"], null)]).toEqual([2]);
   });
 
   test("with no issue list the caller gets name-only attribution, and knows it", () => {

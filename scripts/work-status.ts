@@ -626,9 +626,9 @@ if (localWork.unattributed.size > 0) {
     );
   }
 }
-const pushedIssues = readPushedBranches(process.cwd());
+const pushedIssues = readPushedBranches(process.cwd(), knownIssueNumbers);
 const wtStates = readWorktreeStates(process.cwd());
-const uncommitted = wtStates === null ? null : issuesWithUncommittedWork(wtStates);
+const uncommitted = wtStates === null ? null : issuesWithUncommittedWork(wtStates, knownIssueNumbers);
 
 // Each reading says so when it could not be taken. None of them degrades to
 // "nothing found" — that is the distinction the whole feature rests on.

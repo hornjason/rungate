@@ -1276,11 +1276,25 @@ describe("#1944: the report names local work every run, from the one decider", (
    * the issue list, so it is the only one that can close the gap.
    */
   test("the real issue list is handed to the walk, and strays are named", () => {
+    /**
+     * All three readers, not just the one a reviewer named. Round 2 wired
+     * the list into `readLocalWork` and round 3 found the other two still
+     * crediting a number read from a name — `origin/2-factor-auth` making
+     * issue #2 read WORKING. Asserting the call sites as a set is what
+     * stops the next one being found the same way.
+     */
+    const wired = [
+      "readLocalWork(process.cwd(), knownIssueNumbers)",
+      "readPushedBranches(process.cwd(), knownIssueNumbers)",
+      "issuesWithUncommittedWork(wtStates, knownIssueNumbers)",
+    ];
+    const missing = wired.filter(call => !section.includes(call));
     expect(
-      section,
-      "readLocalWork is called without the tracker's issue list, so any branch opening with " +
-        "digits — a date stamp, a version — is credited to whatever issue that number is",
-    ).toContain("readLocalWork(process.cwd(), knownIssueNumbers)");
+      missing,
+      "a local reading is taken without the tracker's issue list, so any branch opening " +
+        "with digits — a date stamp, a version, 2-factor-auth — is credited to whatever " +
+        "issue that number happens to be, and reports it as being worked",
+    ).toEqual([]);
     expect(
       section,
       "a branch with unpushed commits and no matching issue must be printed. Dropping it " +
