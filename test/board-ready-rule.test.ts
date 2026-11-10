@@ -1354,6 +1354,33 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     expect(r.why, "a slice was reported as an over-labelled population").not.toContain("REFUSED");
   });
 
+  test("with NO carrier it is NONE, whatever the scope and whatever the depth", () => {
+    // Round 3 of #1971. A bound exists to answer *are there too many of
+    // these*; with none of them the question is unasked, not unanswerable.
+    // Below the slice and cap checks this reported UNMEASURED for the
+    // ordinary state of a repository where nobody has used the label — and
+    // every caller gates its output on `status !== "NONE"`, so each one
+    // announced a refused promotion no card had requested.
+    const quiet = [item(1, 0), item(2, null, ["engine"])];
+    for (const [cap, scope] of [
+      [8, "COMPLETE"],
+      [null, "COMPLETE"],
+      [8, "SLICE"],
+      [null, "SLICE"],
+    ] as const) {
+      const r = workNextReading(quiet, cap, scope);
+      expect(r.status, `cap ${String(cap)} / ${scope} spoke about a promotion nobody asked for`).toBe(
+        "NONE",
+      );
+      expect(r.honoured.size).toBe(0);
+    }
+    // The control, one variable apart: the SAME capless slice with a single
+    // carrier in it is UNMEASURED, so the row above is about the carriers
+    // and not about the scope quietly ceasing to matter.
+    expect(workNextReading([...quiet, next(11, null)], null, "SLICE").status).toBe("UNMEASURED");
+    expect(workNextReading([...quiet, next(11, null)], 8, "SLICE").status).toBe("UNMEASURED");
+  });
+
   test("a slice refuses even when the depth is unreadable, naming the slice", () => {
     // Two UNMEASURED causes, and the first must not hide behind the second:
     // a run that is BOTH a slice and capless is still a slice, and telling

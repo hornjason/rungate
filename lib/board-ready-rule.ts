@@ -281,6 +281,30 @@ export function workNextReading(
     .map(i => i.number)
     .sort((a, b) => a - b);
   const named = carrying.map(n => `#${n}`).join(", ");
+  // **Nobody asked, so there is nothing to measure** — round 3 of #1971's
+  // review, and it goes FIRST, above both refusals.
+  //
+  // A bound only exists to answer *are there too many of these*. With none
+  // of them the question is not unanswerable, it is unasked, and the two
+  // are different facts — the same distinction every other branch in this
+  // function is built on, applied one level up. Below the slice and cap
+  // checks it reported UNMEASURED for the ordinary case of a repository
+  // where nobody has used the label: every `board-mirror` and `board-ready`
+  // run whose throughput read failed, and every fan-out unconditionally,
+  // would print *nothing was promoted* about a promotion no card requested.
+  //
+  // It is also the branch the callers' `status !== "NONE"` gate is written
+  // against, so getting it wrong is not a wording problem — it is noise on
+  // a channel that exists to carry refusals somebody has to act on.
+  if (carrying.length === 0) {
+    return {
+      status: "NONE",
+      carrying,
+      honoured: new Set(),
+      cap,
+      why: `no issue carries "${WORK_NEXT_LABEL}", so the ordinary order stands`,
+    };
+  }
   // **A slice cannot bound anything** — round 2 of #1971's review. Both
   // tests the bound applies are ratios against the population: *more than
   // the depth* and *all of them*. Handed a slice, both are answered about a
@@ -299,8 +323,8 @@ export function workNextReading(
       cap,
       why:
         `UNMEASURED — this run sees only a slice of the candidates, so the bound on ` +
-        `"${WORK_NEXT_LABEL}" has no denominator and NOTHING was promoted` +
-        (carrying.length > 0 ? `, including ${named}` : ""),
+        `"${WORK_NEXT_LABEL}" has no denominator and NOTHING was promoted, ` +
+        `including ${named}`,
     };
   }
   if (cap === null) {
@@ -311,17 +335,7 @@ export function workNextReading(
       cap,
       why:
         `UNMEASURED — Ready's depth could not be read, so the bound on "${WORK_NEXT_LABEL}" ` +
-        `is unknown and NOTHING was promoted` +
-        (carrying.length > 0 ? `, including ${named}` : ""),
-    };
-  }
-  if (carrying.length === 0) {
-    return {
-      status: "NONE",
-      carrying,
-      honoured: new Set(),
-      cap,
-      why: `no issue carries "${WORK_NEXT_LABEL}", so the ordinary order stands`,
+        `is unknown and NOTHING was promoted, including ${named}`,
     };
   }
   // **Two ways to rank nothing, and the second is not the depth.** A lane
