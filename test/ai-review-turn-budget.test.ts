@@ -181,6 +181,72 @@ describe("AC-3: the generated workflow carries the declared budget", () => {
   });
 });
 
+/**
+ * AC-5: the OTHER reviewer runs on the same budget (#1966).
+ *
+ * AC-2 and AC-3 make the budget one declaration reaching one generated
+ * workflow. They are silent about `claude-review.yml`, which is hand-written
+ * and caller-owned — its own header says so — and which therefore never
+ * received #812's raise. It sat on 25 for as long as this file has existed,
+ * and in exactly the same way: all turns spent, nothing written.
+ *
+ * Run 42868398515 on PR #1965, 2026-11-10:
+ *
+ *   UNMEASURED — tool calls: 25 (Grep×17, Read×7, ToolSearch×1);
+ *   reviews added by this run: 0
+ *     NO_REVIEW_POSTED: this run added no review to the pull request (AC-1)
+ *
+ * 25 of 25, none of them a write. The three MCP tools that job grants —
+ * create pending, add comment, submit — were never reached, so a required
+ * check failed on a review that had not happened. `project-state.json`
+ * records the same shape once before, which makes it a mechanism rather
+ * than a draw.
+ *
+ * **Asserted as equality with the constant, never with a literal.** A number
+ * typed in here would be a second place that decides the budget, which is the
+ * thing that just cost two rounds: #812 raised one site and nothing carried
+ * it to the other, and nothing could see the two had drifted.
+ *
+ * Breaking it: set `--max-turns 25` back in the workflow and this goes red
+ * naming both numbers, while AC-2 and AC-3 stay green — they read the
+ * generated file and cannot see this one.
+ */
+describe("AC-5: the hand-written reviewer runs on the same declared budget (#1966)", () => {
+  test("claude-review.yml's --max-turns is AI_REVIEW_MAX_TURNS, not a literal of its own", () => {
+    const text = readFileSync(
+      join(import.meta.dir, "..", ".github", "workflows", "claude-review.yml"),
+      "utf-8",
+    );
+    const budgets = text
+      .split("\n")
+      .map(l => l.trim())
+      .filter(l => !l.startsWith("#"))
+      .flatMap(l => [...l.matchAll(/--max-turns\s+(\d+)/g)].map(m => Number(m[1])));
+
+    expect(
+      budgets.length,
+      "no --max-turns outside a comment in claude-review.yml — this case would pass " +
+        "vacuously, and a reviewer with no turn budget is a job with no bound",
+    ).toBe(1);
+
+    expect(
+      budgets[0],
+      `the trial reviewer runs on ${budgets[0]} turns and ai-review on ` +
+        `${AI_REVIEW_MAX_TURNS}. One number, in AI_REVIEW_MAX_TURNS — #812 raised it once ` +
+        "and the hand-written workflow did not follow, which cost #1965 two UNMEASURED rounds.",
+    ).toBe(AI_REVIEW_MAX_TURNS);
+
+    // The control. Without it the equality above is satisfied by two sites
+    // that both still hold the pre-#812 default, and this case would have
+    // passed on the very tree that produced the failure.
+    expect(
+      AI_REVIEW_MAX_TURNS,
+      "the budget this asserts equality with is the one 25 was raised FROM — the case " +
+        "could not have come back wrong",
+    ).toBeGreaterThan(25);
+  });
+});
+
 // ── AC-4: exhaustion stays UNMEASURED and writes nothing ─────────────────
 
 /** Run the generated reporting step as bash and read what it did. */
