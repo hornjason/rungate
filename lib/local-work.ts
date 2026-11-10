@@ -61,9 +61,30 @@ export interface LocalWork {
  *
  * A name with no number returns `null` rather than guessing. `main` and a
  * personal scratch branch are not work on an issue.
+ *
+ * ## The number must OPEN the final segment, or follow `run-`
+ *
+ * The first cut took any digits preceded by `-` or `/`, and ai-review
+ * round 1 of #1974 found the shape that breaks: GitHub's web editor makes
+ * `username-patch-1`, which would have been attributed to issue #1.
+ *
+ * Checking the live refs turned that from a hypothetical into a count.
+ * This repository already carries `rg/adr-011-plan`, `rg/adr011-measure`
+ * and a dozen `rg/b2-*` branches — `adr-011-plan` would have been read as
+ * **issue #11**. A commit on somebody's ADR branch would have reported an
+ * unrelated issue as WORKING, which hides genuine neglect: exactly the
+ * direction this module is supposed to protect.
+ *
+ * So the rule is positional rather than a blocklist. Either the number
+ * opens the last `/`-separated segment (`rg/1944-x`, `fix/640-644-x`,
+ * `rg/1931`), or the segment is `run-<n>` (`rungate/run-1931`). Nothing
+ * else counts, and a shape nobody anticipated costs an unattributed
+ * commit rather than a wrong attribution — the direction a wrong answer
+ * is cheapest in.
  */
 export function issueFromBranch(branch: string): number | null {
-  const m = branch.match(/(?:^|\/|-)(\d{1,6})(?:-|$)/);
+  const segment = branch.slice(branch.lastIndexOf("/") + 1);
+  const m = segment.match(/^(?:run-)?(\d{1,6})(?:-|$)/);
   if (m === null) return null;
   const n = Number(m[1]);
   return Number.isInteger(n) && n > 0 ? n : null;
@@ -180,6 +201,37 @@ export function issuesWithUncommittedWork(states: readonly WorktreeState[]): {
     if (issue !== null && !dirty.has(issue)) dirty.set(issue, s.path);
   }
   return { dirty, unread };
+}
+
+/**
+ * Does an open pull request DECLARE it closes this issue?
+ *
+ * The third evidence field, and the only one read from GitHub rather than
+ * from the local disk — so it is the one that was shipped breaking this
+ * module's own rule. ai-review round 1 of #1974: the caller passed
+ * `declared.has(n)`, a plain boolean, even when a pull request's
+ * `closingIssuesReferences` page had been truncated.
+ *
+ * The asymmetry is the whole function:
+ *
+ * - **`true` survives truncation.** A pull request that did declare it
+ *   closes this is a fact no cut-off page takes back.
+ * - **Absence does not.** An issue beyond the cut never reached the set,
+ *   and `false` would feed `workVerdict` a reading nobody took — the
+ *   issue could come back PARKED with a live pull request open on it.
+ *
+ * It lives here rather than inline in the script so there is one place to
+ * mutate and a behavioural case can observe it. A ternary in a top-level
+ * script that performs network calls on import is reachable only by
+ * reading the source.
+ */
+export function openPullRequestReading(
+  declared: ReadonlySet<number>,
+  truncatedPRs: readonly number[],
+  issue: number,
+): boolean | null {
+  if (declared.has(issue)) return true;
+  return truncatedPRs.length > 0 ? null : false;
 }
 
 /** Exposed so a test can drive the parse without spawning git. */

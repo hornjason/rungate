@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { laneHealth, type LaneHealth, type LaneReading } from "../lib/board-lane-health";
+import { structuralCut } from "../lib/source-slice";
 import {
   NO_MILESTONE,
   isPickable,
@@ -1212,10 +1213,25 @@ describe("#1944: the report names local work every run, from the one decider", (
     }
   });
 
+  /**
+   * Cut to the construct, never to a character count (#664). The section
+   * runs from its own `bar(...)` heading to the next one, and both are
+   * code rather than comments, so the comment strip above cannot eat
+   * either boundary. A 2,600-character window was the first cut and CI
+   * refused it — correctly: the window is a guess about how long the
+   * section will stay that size, and the day it is wrong it accuses the
+   * wrong code.
+   */
+  const SECTION_START = 'bar("WHAT IS ACTUALLY BEING WORKED';
+  const SECTION_END = 'bar("START HERE';
+  const section = structuralCut(code, SECTION_START, { endAnchor: SECTION_END });
+
+  test("the cut found a real section, so nothing below holds vacuously", () => {
+    expect(section.length).toBeGreaterThan(800);
+    expect(section).toContain("workVerdict({");
+  });
+
   test("the section is unconditional — no flag, no opt-in", () => {
-    const at = code.indexOf("WHAT IS ACTUALLY BEING WORKED");
-    expect(at, "the section heading is gone, so everything below holds vacuously").toBeGreaterThan(0);
-    const section = code.slice(at, at + 2600);
     // D4's whole complaint is "when an agent remembers to check". A flag is
     // exactly that, moved into the tool.
     expect(
@@ -1224,9 +1240,36 @@ describe("#1944: the report names local work every run, from the one decider", (
     ).toBeNull();
   });
 
+  /**
+   * ai-review round 1 of #1974. The skip for healthy rows came BEFORE the
+   * line that reports uncommitted changes, so an issue with an open pull
+   * request and uncommitted edits in its worktree printed nothing at all —
+   * the "and uncommitted" half of this issue's own title, dropped for the
+   * subset most likely to have it. Uncommitted work is in no ref, so
+   * deleting the directory ends it.
+   *
+   * **This is a source-position assertion and that is a real weakness.**
+   * `scripts/work-status.ts` performs network calls at module scope, so it
+   * cannot be imported and the loop cannot be driven. The decision this
+   * case guards is a `continue`, not a value, so there was nothing to lift
+   * into `lib/` the way `openPullRequestReading` was. Stated rather than
+   * left for a reader to discover.
+   */
+  test("a healthy row is still printed when it holds uncommitted work", () => {
+    const skip = section.match(/if \(r\.verdict === "WORKING"[^)]*\) continue;/);
+    expect(skip, "the healthy-row skip was not found, so this holds vacuously").not.toBeNull();
+    expect(
+      skip![0],
+      "the skip drops every WORKING row before the uncommitted-work line can run. An issue " +
+        "with an open pull request AND uncommitted edits in its worktree then prints nothing",
+    ).toContain("!r.alsoDirty");
+    // And the count must span every verdict, not only the printed ones.
+    expect(section, "the summary must count dirty worktrees across all verdicts").toContain(
+      "workRows.filter(r => r.alsoDirty)",
+    );
+  });
+
   test("an unreadable reading is announced, never dropped", () => {
-    const at = code.indexOf("WHAT IS ACTUALLY BEING WORKED");
-    const section = code.slice(at, at + 2600);
     const announcements = section.match(/UNMEASURED —/g) ?? [];
     expect(
       announcements.length,

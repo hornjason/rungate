@@ -18,6 +18,7 @@ import {
   issuesWithPushedBranch,
   issuesWithUncommittedWork,
   localCommitsFor,
+  openPullRequestReading,
   parseUnpushed,
   readLocalWork,
   readPushedBranches,
@@ -46,6 +47,49 @@ describe("#1944: the branch a commit is on names the issue it is work for", () =
     for (const b of ["main", "scratch", "jason/experiments", "release"]) {
       expect(issueFromBranch(b), `${b} should not resolve to an issue`).toBeNull();
     }
+  });
+
+  /**
+   * ai-review round 1 of #1974. The first cut took any digits preceded by
+   * `-` or `/`, so `username-patch-1` — what GitHub's web editor names a
+   * branch — resolved to issue #1.
+   *
+   * Checking the live refs made it a count rather than a hypothesis:
+   * `rg/adr-011-plan` resolved to **#11** and a dozen `rg/b2-*` branches
+   * were one naming convention away from the same thing. A commit on an
+   * ADR branch reporting an unrelated issue as WORKING hides neglect on
+   * that issue, which is the direction this module exists to protect.
+   */
+  test("a digit that is not an issue number is refused, by position", () => {
+    const notIssues = [
+      "jason-patch-1", // GitHub's web editor
+      "patch-2",
+      "jason/patch-1",
+      "rg/adr-011-plan", // live in this checkout
+      "rg/adr011-measure", // live in this checkout
+      "rg/b2-criterion-coverage", // live in this checkout
+      "rg/a7-resolve-adrs", // live in this checkout
+      "worktree-agent-a82622b50baca5118",
+    ];
+    const wrong = notIssues
+      .map(b => [b, issueFromBranch(b)] as const)
+      .filter(([, n]) => n !== null);
+    expect(
+      wrong,
+      "a branch that does not name an issue was attributed to one. Crediting an issue with " +
+        "somebody else's commits reports it WORKING and hides real neglect — worse than " +
+        "leaving a commit unattributed",
+    ).toEqual([]);
+  });
+
+  test("the positional rule still accepts every shape this repo writes", () => {
+    // The negative control for the case above: a rule that refuses
+    // everything would pass it. These must still resolve.
+    expect(
+      ["rg/1944-local-work", "fix/1087-x", "rungate/run-1931", "rg/1931", "1944-local-work"].map(
+        issueFromBranch,
+      ),
+    ).toEqual([1944, 1087, 1931, 1931, 1944]);
   });
 });
 
@@ -154,6 +198,35 @@ describe("#1944: the other two evidence fields", () => {
     ).toEqual(["/w/gone"]);
     // The unreadable one must NOT appear as having no uncommitted work.
     expect(dirty.has(1700)).toBe(false);
+  });
+
+  /**
+   * ai-review round 1 of #1974. This field is read from GitHub rather than
+   * from the disk, and it was the one shipped breaking the module's own
+   * rule: the caller passed `declared.has(n)` even when a pull request's
+   * closing-issue page had been truncated, so an issue beyond the cut fed
+   * `workVerdict` a `false` nobody had measured and could come back PARKED
+   * with a live pull request open on it.
+   */
+  test("a truncated closing-issue page makes ABSENCE null, but keeps presence true", () => {
+    const declared = new Set([1931]);
+
+    // Nothing truncated: absence is a real reading.
+    expect(openPullRequestReading(declared, [], 1931)).toBe(true);
+    expect(openPullRequestReading(declared, [], 1944)).toBe(false);
+
+    // One page cut off. The issue we SAW is still seen — truncation cannot
+    // un-declare it — and the one we did not see is now unmeasured.
+    expect(
+      openPullRequestReading(declared, [1972], 1931),
+      "a declaration already read must survive a truncated page, or the reading gets " +
+        "strictly worse when more data arrives",
+    ).toBe(true);
+    expect(
+      openPullRequestReading(declared, [1972], 1944),
+      "an issue absent from a TRUNCATED page reported false. It may be on the page nobody " +
+        "fetched, and false here is what sends a live claim to PARKED",
+    ).toBeNull();
   });
 
   test("a detached worktree has no branch, so it is attributed to no issue", () => {

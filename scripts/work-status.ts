@@ -34,6 +34,7 @@ import { laneHealth, laneHealthLines, workVerdict } from "../lib/board-lane-heal
 import {
   issuesWithUncommittedWork,
   localCommitsFor,
+  openPullRequestReading,
   readLocalWork,
   readPushedBranches,
   readWorktreeStates,
@@ -645,7 +646,9 @@ const assignedOpen = allIssues.filter(
 );
 const workRows = assignedOpen.map((i: any) => {
   const v = workVerdict({
-    openPullRequest: declaredClosing.has(i.number),
+    // One decider, in lib/local-work.ts, for the same reason as the other
+    // two: a ternary here is reachable only by reading the source.
+    openPullRequest: openPullRequestReading(declaredClosing, closingTruncated, i.number),
     pushedBranch: pushedIssues === null ? null : pushedIssues.has(i.number),
     localCommits: localCommitsFor(localWork, i.number),
   });
@@ -656,11 +659,18 @@ const workRows = assignedOpen.map((i: any) => {
 // INVISIBLE first, then UNMEASURED, then PARKED. WORKING is the expected
 // state and is counted rather than listed — a page that prints every healthy
 // row buries the three that need somebody.
+//
+// **Except when it also holds uncommitted work.** ai-review round 1 of
+// #1974: the skip below came before the dirty line, so an issue with an
+// open pull request AND uncommitted edits in its worktree printed nothing
+// at all. That is the half of this issue's own title — "unmerged and
+// uncommitted" — dropped for the subset most likely to have it, and
+// uncommitted work is in no ref, so deleting the directory ends it.
 const ORDER_OF_ALARM: Record<string, number> = { INVISIBLE: 0, UNMEASURED: 1, PARKED: 2, WORKING: 3 };
 for (const r of [...workRows].sort(
   (a, b) => (ORDER_OF_ALARM[a.verdict] ?? 9) - (ORDER_OF_ALARM[b.verdict] ?? 9) || a.number - b.number,
 )) {
-  if (r.verdict === "WORKING") continue;
+  if (r.verdict === "WORKING" && !r.alsoDirty) continue;
   console.log(`  #${r.number} ${r.verdict} — ${r.title.slice(0, 48)}`);
   console.log(`      ${r.why}`);
   if (r.alsoDirty) {
@@ -671,9 +681,14 @@ for (const r of [...workRows].sort(
 }
 {
   const n = (v: string) => workRows.filter(r => r.verdict === v).length;
+  const dirtyRows = workRows.filter(r => r.alsoDirty).length;
   console.log(
     `\n  ${workRows.length} assigned open issue(s): ` +
-      `${n("WORKING")} working, ${n("INVISIBLE")} invisible, ${n("PARKED")} parked, ${n("UNMEASURED")} unmeasured`,
+      `${n("WORKING")} working, ${n("INVISIBLE")} invisible, ${n("PARKED")} parked, ${n("UNMEASURED")} unmeasured` +
+      // Counted across every verdict, not only the listed ones. The count
+      // is where a reader notices that a WORKING row still has work in no
+      // ref at all.
+      `; ${dirtyRows} with uncommitted changes in a worktree`,
   );
 }
 
