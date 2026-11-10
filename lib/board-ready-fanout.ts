@@ -47,7 +47,12 @@ export interface Dependent {
   readonly number: number;
   /** `OPEN` or `CLOSED`, as GraphQL spells it. */
   readonly state: string;
-  readonly phase: number | null;
+  /**
+   * The milestone TITLE, or `null` — never a pre-read phase number (#1943).
+   * The family is half the order and a number has already discarded it; see
+   * `Rankable` in `lib/board-ready-rule.ts`.
+   */
+  readonly milestone: string | null;
   /**
    * Every label on the issue, verbatim — the ordering's SECOND source
    * (#1853). An empty array means the issue carries none; this script never
@@ -231,7 +236,7 @@ export function incumbentDecisions(
         `${whyNotReady({
           number: c.number,
           state: c.state,
-          phase: null,
+          milestone: null,
           labels: [],
           blockedByOpen: c.blockedByOpen,
           assignees: 0,

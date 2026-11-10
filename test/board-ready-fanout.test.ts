@@ -39,7 +39,7 @@ const ROOT = join(import.meta.dir, "..");
 const dep = (over: Partial<Dependent> = {}): Dependent => ({
   number: 1,
   state: "OPEN",
-  phase: 3,
+  milestone: "Engine Phase 3",
   labels: [],
   blockedByOpen: 0,
   assignees: 0,
@@ -277,12 +277,12 @@ describe("BR-1..BR-6: the fan-out from one closed blocker", () => {
   // the case stays, inverted, because deleting it would let the gate come
   // back without a single test objecting.
   test("BR-4: a later phase is unblocked and therefore Ready", () => {
-    const [d] = fanoutDecisions([dep({ phase: 7 })], "Ready");
+    const [d] = fanoutDecisions([dep({ milestone: "Engine Phase 7" })], "Ready");
     expect(d.move, "phase orders the lane; it does not gate entry to it").toBe(true);
   });
 
   test("BR-4b: a dependent in NO phase is Ready too", () => {
-    const [d] = fanoutDecisions([dep({ phase: null })], "Ready");
+    const [d] = fanoutDecisions([dep({ milestone: null })], "Ready");
     expect(d.move, "an unphased issue was refused by the gate and is now merely ranked last").toBe(
       true,
     );
@@ -430,7 +430,7 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
       .map(l => l.trim())
       .filter(l => l !== "" && !l.startsWith("//") && !l.startsWith("*") && !l.startsWith("/*"));
     const body = code.join("\n");
-    for (const field of ["number:", "state:", "phase:", "blockedByOpen:", "assignees:", "onBoard:", "boardStatus:"]) {
+    for (const field of ["number:", "state:", "milestone:", "blockedByOpen:", "assignees:", "onBoard:", "boardStatus:"]) {
       expect(body, `the matched literal does not contain ${field} — it matched the wrong block`).toContain(field);
     }
     const defaults = code.filter(l => /\?\?\s*-?\d/.test(l));
@@ -650,7 +650,12 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
           // reason — `isReady` takes a number, so an unread count is a
           // question it cannot be asked rather than one it answers false.
           for (const assignees of [0, 1, null]) {
-            const d = dep({ state, phase, blockedByOpen, assignees });
+            const d = dep({
+              state,
+              milestone: phase === null ? null : `Engine Phase ${phase}`,
+              blockedByOpen,
+              assignees,
+            });
             const [got] = fanoutDecisions([d], "Ready");
             if (blockedByOpen === null || assignees === null) {
               expect(got.move).toBe(false);
@@ -683,7 +688,12 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
       for (const phase of [null, 3, 7])
         for (const blockedByOpen of [0, 2, null])
           for (const assignees of [0, 1, null]) {
-            const d = dep({ state, phase, blockedByOpen, assignees });
+            const d = dep({
+              state,
+              milestone: phase === null ? null : `Engine Phase ${phase}`,
+              blockedByOpen,
+              assignees,
+            });
             const ready =
               blockedByOpen !== null && assignees !== null && isReady({ ...d, blockedByOpen, assignees });
             if (ready) continue;

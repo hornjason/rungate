@@ -42,6 +42,9 @@
  * before the gate can go.
  */
 
+import { phaseOf } from "./board-mirror";
+import { inMilestoneFamily } from "./live-issues";
+
 /**
  * How much work was delivered, over how long.
  *
@@ -105,7 +108,22 @@ export function readyTarget(eligible: number, cap: number | null): number | null
 }
 
 /**
- * Everything ordering reads. Phase `null` means "no phase milestone".
+ * Everything ordering reads. `milestone` is the milestone TITLE, or `null`.
+ *
+ * **The title and not a phase number** (#1943). A number has already thrown
+ * away the family, and the family is half the order: this repository runs two
+ * milestone families at once — `Pipeline Phase N`, the engine, and
+ * `Convergence Phase N`, the payload the engine ships — and comparing their
+ * numbers as one sequence puts the payload ahead of the engine whenever its
+ * number is lower. Observed 2026-11-09 in `work-status`: `#1764 Convergence
+ * Phase 3` ranked above `#1717 Pipeline Phase 6`, which inverts what
+ * `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md` states and what SC-2625 makes the
+ * engine's own acceptance test.
+ *
+ * Carrying both the title and a pre-read number would be two views of one
+ * fact, and a caller could hand over a pair that disagree. The title is the
+ * one a caller already has; `phaseOf` is still the single thing that reads a
+ * number out of it, imported rather than re-spelled.
  *
  * `labels` is **required, with no default** (#1853). An optional field here
  * would let a caller omit it and receive UNPLACED, which is a reading rather
@@ -114,9 +132,45 @@ export function readyTarget(eligible: number, cap: number | null): number | null
  * had. Both callers now have to say what they read.
  */
 export interface Rankable {
-  readonly phase: number | null;
+  readonly milestone: string | null;
   readonly number: number;
   readonly labels: readonly string[];
+}
+
+/**
+ * Which milestone family an issue's phase belongs to — 0 for the engine, 1
+ * for everything else.
+ *
+ * `enginePrefix` is `board.milestonePrefix` from the project's own config —
+ * `"Pipeline"` here — and it is **passed in, never read in this module**.
+ * `lib/live-issues.ts` already records what happens when two places compile
+ * their own `^<prefix> Phase (\d+)` : two deciders, and no behavioural case
+ * can tell them apart.
+ *
+ * **Membership is `inMilestoneFamily`, delegated rather than re-decided.**
+ * Round 2 of this PR's review: the first version matched with a bare
+ * `milestone.startsWith(enginePrefix)`, which ranks any family whose NAME
+ * merely begins with the engine's as the engine — `EngineX Phase 2` under
+ * prefix `Engine`, and `Engine Phase 0` under a truncated `Eng`. That is the
+ * same pair `lib/live-issues.ts` records as round 2 of #1703, *"the
+ * cross-spec contamination the prefix exists to prevent, arriving through
+ * the fix for it"* — and this file's docblock cited that one while the code
+ * under it reintroduced the bug. Writing a boundary check here instead of
+ * calling the existing one would be a THIRD decider of the same question,
+ * which is what that file's whole docblock is about.
+ *
+ * **A `null` prefix ranks every family 0, and that is a reading rather than a
+ * default.** A tree that declares no engine milestone family has ONE family,
+ * so there is nothing to rank and the order falls back to phase alone —
+ * exactly what every consumer did before #1943. It is not
+ * `.claude/rules/config-access.md`'s Silent Default Substitution, which is
+ * about inventing a value: nothing is invented here, and `placementOf`'s
+ * `why` says which of the two readings it took so the distinction reaches
+ * the report.
+ */
+export function familyRank(milestone: string | null, enginePrefix: string | null): number {
+  if (enginePrefix === null) return 0;
+  return inMilestoneFamily(milestone, enginePrefix) ? 0 : 1;
 }
 
 /**
@@ -146,6 +200,16 @@ export type PlacementTier = "PHASE" | "LABEL" | "UNPLACED";
 
 export interface Placement {
   readonly tier: PlacementTier;
+  /**
+   * Which milestone family placed it — `familyRank`, so 0 is the engine
+   * (#1943). Compared BEFORE the tier, because a phase number is only
+   * meaningful inside its own family.
+   *
+   * Always 0 outside the PHASE tier: a label and an absence belong to no
+   * milestone family, and giving them one would make the family a second
+   * ordering over the label tier that nothing declared.
+   */
+  readonly family: number;
   /** Rank inside the tier. `POSITIVE_INFINITY` for UNPLACED. */
   readonly rank: number;
   readonly why: string;
@@ -179,9 +243,28 @@ const TIER_ORDER: Readonly<Record<PlacementTier, number>> = { PHASE: 0, LABEL: 1
  * follow-up that is also engine work is engine work; taking the worst would
  * let adding a label demote an issue, which makes the rank punish labelling.
  */
-export function placementOf(r: Rankable): Placement {
-  if (r.phase !== null) {
-    return { tier: "PHASE", rank: r.phase, why: `milestone places it in phase ${r.phase}` };
+export function placementOf(r: Rankable, enginePrefix: string | null): Placement {
+  const phase = phaseOf(r.milestone);
+  if (phase !== null) {
+    const family = familyRank(r.milestone, enginePrefix);
+    return {
+      tier: "PHASE",
+      family,
+      rank: phase,
+      // The family is in the sentence because it is in the order. #1943 was
+      // found by reading `work-status` output that said *"milestone places
+      // it in phase 3"* above one that said *"phase 6"* — both true, and
+      // between them they hid the fact that the two numbers were counted in
+      // different sequences.
+      why:
+        enginePrefix === null
+          ? `milestone places it in phase ${phase} (no engine family is configured, ` +
+            "so phase alone orders this)"
+          : family === 0
+            ? `the ${enginePrefix} family places it in phase ${phase}`
+            : `phase ${phase}, but NOT in the ${enginePrefix} family — the engine ships first, ` +
+              "so every engine phase outranks this",
+    };
   }
   let best: { label: string; rank: number } | null = null;
   for (const label of r.labels) {
@@ -192,12 +275,14 @@ export function placementOf(r: Rankable): Placement {
   if (best !== null) {
     return {
       tier: "LABEL",
+      family: 0,
       rank: best.rank,
       why: `no milestone, and "${best.label}" ranks ${best.rank} of ${LABEL_RANK.size}`,
     };
   }
   return {
     tier: "UNPLACED",
+    family: 0,
     rank: Number.POSITIVE_INFINITY,
     why:
       r.labels.length === 0
@@ -227,14 +312,31 @@ export function placementOf(r: Rankable): Placement {
  * Two UNPLACED items compare `Infinity !== Infinity`, which is false, so the
  * rank test falls through to the number rather than producing `NaN`.
  */
-export function readyOrder(a: Rankable, b: Rankable): number {
-  const pa = placementOf(a);
-  const pb = placementOf(b);
-  if (TIER_ORDER[pa.tier] !== TIER_ORDER[pb.tier]) {
-    return TIER_ORDER[pa.tier] - TIER_ORDER[pb.tier];
-  }
-  if (pa.rank !== pb.rank) return pa.rank - pb.rank;
-  return a.number - b.number;
+export function readyOrderFor(enginePrefix: string | null): (a: Rankable, b: Rankable) => number {
+  return (a, b) => {
+    const pa = placementOf(a, enginePrefix);
+    const pb = placementOf(b, enginePrefix);
+    // Tier first, unchanged: a milestone is the declared plan and a label is
+    // a category, so a milestone still always beats a label.
+    if (TIER_ORDER[pa.tier] !== TIER_ORDER[pb.tier]) {
+      return TIER_ORDER[pa.tier] - TIER_ORDER[pb.tier];
+    }
+    // **Then family, INSIDE the tier, and before rank** (#1943). A phase
+    // number is only meaningful inside its own family, so comparing
+    // `Convergence Phase 3` against `Pipeline Phase 6` on the number alone
+    // puts the payload ahead of the engine that ships it.
+    //
+    // **Above the tier was the first spelling and it was wrong.** `family`
+    // is 0 outside the PHASE tier, so hoisting it made every LABEL-tier
+    // issue honorary engine: an `external-audit` issue with no milestone
+    // outranked `Convergence Phase 3`, which is not engine work beating the
+    // payload, it is a category beating a declared plan. The case that
+    // caught it is `#1943: a non-engine PHASE still beats a label`, written
+    // before the code and red on the first run.
+    if (pa.family !== pb.family) return pa.family - pb.family;
+    if (pa.rank !== pb.rank) return pa.rank - pb.rank;
+    return a.number - b.number;
+  };
 }
 
 /** How many candidates each source placed. The report's one reading. */
@@ -256,12 +358,15 @@ export interface PlacementCensus {
  * can rank currently reads identically to one ranked last, and that is the
  * distinction every row in the lane-health report exists to keep.
  */
-export function placementCensus(items: readonly Rankable[]): PlacementCensus {
+export function placementCensus(
+  items: readonly Rankable[],
+  enginePrefix: string | null,
+): PlacementCensus {
   let phase = 0;
   let label = 0;
   let unplaced = 0;
   for (const i of items) {
-    const t = placementOf(i).tier;
+    const t = placementOf(i, enginePrefix).tier;
     if (t === "PHASE") phase++;
     else if (t === "LABEL") label++;
     else unplaced++;
@@ -536,6 +641,7 @@ export function readyOccupancy(
 export function selectReady<T extends Rankable>(
   eligible: readonly T[],
   occ: ReadyOccupancy,
+  enginePrefix: string | null,
 ): { readonly promote: readonly T[]; readonly why: string } {
   if (occ.free === 0) {
     // One branch for every reason there is no room — UNMEASURED, FULL and
@@ -545,12 +651,14 @@ export function selectReady<T extends Rankable>(
   }
   // A copy, not a sort in place: the caller's array is its own decision
   // record and reordering it changes what its log prints.
-  const promote = [...eligible].sort(readyOrder).slice(0, occ.free);
+  const promote = [...eligible].sort(readyOrderFor(enginePrefix)).slice(0, occ.free);
   return {
     promote,
     why:
       `${occ.why}; ${eligible.length} eligible, promoting ${promote.length} ` +
-      "in phase then age order",
+      (enginePrefix === null
+        ? "in phase then age order"
+        : `in ${enginePrefix}-first, then phase, then age order`),
   };
 }
 

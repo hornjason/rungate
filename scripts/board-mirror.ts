@@ -38,6 +38,7 @@ import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
+import { enginePrefixReading } from "../lib/config-readers";
 import {
   heldReason,
   readyCap,
@@ -50,7 +51,6 @@ import {
   criterionIdsIn,
   isReady,
   mirrorRows,
-  phaseOf,
   specCriteriaIn,
 } from "../lib/board-mirror";
 
@@ -128,13 +128,19 @@ export function readyPopulation<T extends { state: string; status: string }>(
 
 export function splitReadyChanges<
   T extends {
-    item: { number: number; phase: number | null; labels: readonly string[]; status: string };
+    item: { number: number; milestone: string | null; labels: readonly string[]; status: string };
     to: string;
   },
 >(
   eligible: readonly T[],
   cap: number | null,
   occupied: number,
+  /**
+   * `board.milestonePrefix` — the ENGINE milestone family (#1943). Passed
+   * in, never read here: `lib/config-readers.ts` holds the one binding, and
+   * a second reader is two deciders over one config key.
+   */
+  enginePrefix: string | null,
 ): {
   readyWritable: T[];
   heldByCap: T[];
@@ -170,8 +176,9 @@ export function splitReadyChanges<
   const after = Math.max(0, occupied - freed);
   const occ = readyOccupancy(after, after, cap);
   const selection = selectReady(
-    promotions.map(c => ({ number: c.item.number, phase: c.item.phase, labels: c.item.labels })),
+    promotions.map(c => ({ number: c.item.number, milestone: c.item.milestone, labels: c.item.labels })),
     occ,
+    enginePrefix,
   );
   // **Written in the order `selectReady` chose, not in board order.**
   // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
@@ -225,8 +232,8 @@ interface Item {
   blockedByOpen: number;
   blockedByTotal: number;
   criteriaCell: string;
-  milestone: string;
-  phase: number | null;
+  /** The milestone TITLE, or `null` — the contract `Rankable` states (#1965). */
+  milestone: string | null;
   /** Ordering's second source when no milestone places the issue (#1853). */
   labels: readonly string[];
 }
@@ -393,8 +400,12 @@ export async function main(argv: string[]): Promise<number> {
         blockedByOpen: n.content.issueDependenciesSummary?.blockedBy ?? 0,
         blockedByTotal: n.content.issueDependenciesSummary?.totalBlockedBy ?? 0,
         criteriaCell: n.fieldValueByName?.text ?? "",
-        milestone: n.content.milestone?.title ?? "",
-        phase: phaseOf(n.content.milestone?.title),
+        // `null` and never `""` — ONE absent value, matching `Rankable` and
+        // the five other producers in the tree (#1965 round 4). `""` reads
+        // identically today only because `phaseOf` and `phaseInFamily`
+        // normalise it, so a `=== null` added to the ordering later would
+        // misbehave here and nowhere else.
+        milestone: n.content.milestone?.title ?? null,
         // Ordering's second source (#1853). This writer promotes too, so a
         // mirror run that ranked everything milestone-less as UNPLACED
         // would order by age exactly where the fan-out no longer does.
@@ -445,7 +456,25 @@ export async function main(argv: string[]): Promise<number> {
       ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
       : null;
   const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
-  const { readyWritable, heldByCap, selection, occ } = splitReadyChanges(eligible, cap, occupied);
+  // The ENGINE milestone family, from this project's own config (#1943),
+  // and whether the absence of one was MEASURED — round 3 of #1965's review.
+  //
+  // This is the call site that matters most and the one I left behind when I
+  // fixed the other two: `board-mirror --ready --write` is the only thing
+  // that writes the Ready lane. A `null` prefix orders by phase alone, so a
+  // root with no config promotes `Convergence Phase 3` ahead of `Pipeline
+  // Phase 6` — the exact pre-#1943 ordering, written to the board, in
+  // silence. `enginePrefixReading` tells that apart from a tree that
+  // genuinely declares one family.
+  const engine = enginePrefixReading(root);
+  if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
+  const enginePrefix = engine.prefix;
+  const { readyWritable, heldByCap, selection, occ } = splitReadyChanges(
+    eligible,
+    cap,
+    occupied,
+    enginePrefix,
+  );
 
   if (values.json) {
     console.log(

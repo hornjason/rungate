@@ -38,7 +38,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { loadRoleConfig, readBoardConfig, readBoardInputs, readProjectSlug, readRemoteHosts } from "../lib/config-readers";
+import { enginePrefixReading, loadRoleConfig, readBoardConfig, readBoardInputs, readProjectSlug, readRemoteHosts } from "../lib/config-readers";
 import { loadRegistry } from "../lib/create-sc";
 import { loadValidRoles, loadRoleBriefPaths } from "../scripts/grade-deterministic";
 import { getProjectSlug } from "../scripts/parallel-ship";
@@ -243,6 +243,57 @@ describe("SC-1449: the accessors read the directory layout, which is what the ol
         writeFileSync(at, JSON.stringify(row.board === undefined ? {} : { board: row.board }));
         expect(readBoardInputs(root), row.why).toEqual(row.want);
       }
+    } finally {
+      cleanup();
+    }
+  });
+
+  /**
+   * #1965 round 2: two `null`s that mean different things.
+   *
+   * `readBoardInputs` returns `{milestonePrefix: null}` both for a tree that
+   * declares no engine family and for a root with no rungate config at all.
+   * `scripts/work-status.ts` and `scripts/board-ready.ts` pass
+   * `process.cwd()`, and a `null` prefix means *order by phase alone* — the
+   * pre-#1943 behaviour. So a run from the wrong directory silently reports
+   * the payload above the engine, which is the bug #1943 exists to remove,
+   * with nothing saying the config was never found.
+   *
+   * Breaking it: delete the `resolveConfig` line and the UNCONFIGURED row
+   * goes red, while the DECLARED-NONE row stays green — which is the point.
+   * A reading that warned on both would be noise on every tree that has no
+   * engine family, and a reading that warned on neither is what shipped.
+   */
+  test("#1965: an absent config is UNMEASURED, and a config that declares none is not", () => {
+    const root = mkdtempSync(join(tmpdir(), "rungate-engine-prefix-"));
+    scratch.push(root);
+    try {
+      // No config anywhere under this root.
+      const absent = enginePrefixReading(root);
+      expect(absent.prefix, "nothing to read").toBeNull();
+      expect(absent.unmeasured, "an unreadable root reported as an ordinary null").not.toBeNull();
+      expect(
+        absent.unmeasured,
+        "the warning must name the directory — the whole failure is that it was the " +
+          "wrong one, so a message without it is unactionable",
+      ).toContain(root);
+
+      // A config that is present and declares no engine family. A real
+      // reading, not a failure to read.
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      const at = join(root, ".claude", "rungate", "config.json");
+      writeFileSync(at, JSON.stringify({ project: "x", board: {} }));
+      const declaredNone = enginePrefixReading(root);
+      expect(declaredNone.prefix, "still no prefix").toBeNull();
+      expect(
+        declaredNone.unmeasured,
+        "a tree that declares one family is not unmeasured, and warning here would make " +
+          "the warning noise on every such tree",
+      ).toBeNull();
+
+      // And a configured prefix is returned unchanged, with no warning.
+      writeFileSync(at, JSON.stringify({ project: "x", board: { milestonePrefix: "Pipeline" } }));
+      expect(enginePrefixReading(root)).toEqual({ prefix: "Pipeline", unmeasured: null });
     } finally {
       cleanup();
     }

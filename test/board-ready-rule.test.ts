@@ -44,13 +44,14 @@ import { join } from "path";
 import {
   LABEL_RANK,
   READY_TOLERANCE_DAYS,
+  familyRank,
   heldReason,
   holdsReadySlot,
   placementCensus,
   placementOf,
   readyCap,
   readyOccupancy,
-  readyOrder,
+  readyOrderFor,
   readyTarget,
   selectReady,
   undispatchableRemedy,
@@ -64,9 +65,27 @@ import { laneFor, type LaneEvent } from "../lib/board-flow";
 // the list is imported and asserted rather than paraphrased.
 import { WRITING_PERMISSIONS } from "../lib/board-ready-fanout";
 
-const item = (number: number, phase: number | null, labels: readonly string[] = []): Rankable => ({
+/**
+ * The milestone families this suite ranks against.
+ *
+ * **Deliberately not `"Pipeline"` and `"Convergence"`.** This repository
+ * configures `board.milestonePrefix: "Pipeline"`, so a rule that spelled the
+ * prefix itself would pass every row here if the fixture agreed with it. Two
+ * names no tree uses mean the only way these rows go green is by reading the
+ * prefix they are handed.
+ */
+const ENGINE = "Engine";
+const PAYLOAD = "Payload";
+
+/** A rankable in the ENGINE family unless another family is named. */
+const item = (
+  number: number,
+  phase: number | null,
+  labels: readonly string[] = [],
+  family: string = ENGINE,
+): Rankable => ({
   number,
-  phase,
+  milestone: phase === null ? null : `${family} Phase ${phase}`,
   labels,
 });
 
@@ -235,7 +254,7 @@ describe("SC-2712: the lane is judged against the capped target", () => {
 
 describe("SC-2715: phase orders the queue, and never empties it", () => {
   test("lower phase first, then older issue first", () => {
-    const got = [item(50, 1), item(10, 1), item(99, 0), item(7, 2)].sort(readyOrder).map(i => i.number);
+    const got = [item(50, 1), item(10, 1), item(99, 0), item(7, 2)].sort(readyOrderFor(ENGINE)).map(i => i.number);
     expect(got).toEqual([99, 10, 50, 7]);
   });
 
@@ -243,7 +262,7 @@ describe("SC-2715: phase orders the queue, and never empties it", () => {
   // phase-less issue was not merely last, it was INELIGIBLE — and 22 of the
   // 35 pickable issues that day had no milestone at all.
   test("a phase-less issue sorts LAST, and is still in the queue", () => {
-    const got = [item(3, null), item(9, 2), item(4, null), item(1, 0)].sort(readyOrder).map(i => i.number);
+    const got = [item(3, null), item(9, 2), item(4, null), item(1, 0)].sort(readyOrderFor(ENGINE)).map(i => i.number);
     expect(
       got,
       "phase-less items come after every phased one and before nothing — ordering, not a gate",
@@ -251,7 +270,7 @@ describe("SC-2715: phase orders the queue, and never empties it", () => {
   });
 
   test("a queue of only phase-less issues is ordered by age, not discarded", () => {
-    expect([item(8, null), item(2, null)].sort(readyOrder).map(i => i.number)).toEqual([2, 8]);
+    expect([item(8, null), item(2, null)].sort(readyOrderFor(ENGINE)).map(i => i.number)).toEqual([2, 8]);
   });
 });
 
@@ -259,26 +278,26 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
   const twelve = Array.from({ length: 12 }, (_, i) => item(i + 1, 0));
 
   test("more eligible work than depth promotes exactly the depth, in order", () => {
-    expect(selectReady(twelve, atDepth(0, 4)).promote.map(i => i.number)).toEqual([1, 2, 3, 4]);
+    expect(selectReady(twelve, atDepth(0, 4), ENGINE).promote.map(i => i.number)).toEqual([1, 2, 3, 4]);
   });
 
   test("a full lane promotes nothing", () => {
-    const r = selectReady(twelve, atDepth(4, 4));
+    const r = selectReady(twelve, atDepth(4, 4), ENGINE);
     expect(r.promote).toEqual([]);
     expect(r.why).toContain("full");
   });
 
   test("a pull frees a slot and the next event refills exactly that many", () => {
-    expect(selectReady(twelve, atDepth(2, 4)).promote.map(i => i.number)).toEqual([1, 2]);
-    expect(selectReady(twelve, atDepth(3, 4)).promote.map(i => i.number)).toEqual([1]);
+    expect(selectReady(twelve, atDepth(2, 4), ENGINE).promote.map(i => i.number)).toEqual([1, 2]);
+    expect(selectReady(twelve, atDepth(3, 4), ENGINE).promote.map(i => i.number)).toEqual([1]);
   });
 
   test("a lane over its depth promotes nothing rather than a negative count", () => {
-    expect(selectReady(twelve, atDepth(11, 4)).promote).toEqual([]);
+    expect(selectReady(twelve, atDepth(11, 4), ENGINE).promote).toEqual([]);
   });
 
   test("less eligible work than depth promotes all of it", () => {
-    expect(selectReady([item(5, 1), item(2, 0), item(9, null)], atDepth(0, 4)).promote.map(i => i.number)).toEqual([
+    expect(selectReady([item(5, 1), item(2, 0), item(9, null)], atDepth(0, 4), ENGINE).promote.map(i => i.number)).toEqual([
       2, 5, 9,
     ]);
   });
@@ -287,14 +306,14 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
   // reading performed automatically, which is the failure the cap exists
   // to prevent.
   test("an unreadable cap promotes nothing and says UNMEASURED", () => {
-    const r = selectReady(twelve, atDepth(0, null));
+    const r = selectReady(twelve, atDepth(0, null), ENGINE);
     expect(r.promote).toEqual([]);
     expect(r.why).toContain("UNMEASURED");
   });
 
   test("selection does not mutate its input", () => {
     const given = [item(3, 1), item(1, 0)];
-    selectReady(given, atDepth(0, 4));
+    selectReady(given, atDepth(0, 4), ENGINE);
     expect(given.map(i => i.number), "sorting in place reorders the caller's decision record").toEqual([3, 1]);
   });
 
@@ -304,7 +323,7 @@ describe("SC-2716: the cap binds, and replenishes as slots free", () => {
     for (const eligible of [0, 1, 3, 4, 12, 34]) {
       const items = Array.from({ length: eligible }, (_, i) => item(i + 1, 0));
       expect(
-        selectReady(items, atDepth(0, 4)).promote.length,
+        selectReady(items, atDepth(0, 4), ENGINE).promote.length,
         `with ${eligible} eligible the reading and the writer must not disagree`,
       // Non-null because the cap is a literal 4 here; `readyTarget` only
       // returns null for an unreadable cap, which the case above covers.
@@ -373,6 +392,154 @@ describe("SC-2723: nothing spells a held reason for itself", () => {
     ).toEqual([]);
   });
 
+  /**
+   * #1965 round 3: every consumer of the ordering, not two of three.
+   *
+   * I fixed `work-status.ts` and `board-ready.ts` to route the engine prefix
+   * through `enginePrefixReading`, which tells *this tree declares no engine
+   * family* apart from *I could not find a config*, and left
+   * `board-mirror.ts` reading `readBoardInputs(root).milestonePrefix`
+   * directly — the one script that WRITES the Ready lane. ai-review caught it
+   * as a blocking finding. A `null` prefix there promotes `Convergence Phase
+   * 3` ahead of `Pipeline Phase 6` onto the board, in silence.
+   *
+   * A case per script would have caught only the script that had one. This is
+   * the population, so the FOURTH site fails the build rather than waiting
+   * for a reviewer — the same answer `heldReason` got above, for the same
+   * reason it needed it.
+   *
+   * `board-snapshot.ts` reads `board.milestonePrefix` too and is NOT in this
+   * population: it has its own `--prefix`, it does not call an ordering
+   * function, and it already refuses outright when neither is set. The
+   * population is *whoever orders*, not *whoever reads the key*.
+   *
+   * Breaking it: revert any one of the three to `readBoardInputs(...)` and
+   * this names that file.
+   */
+  test("every script that ORDERS resolves the prefix through enginePrefixReading", () => {
+    const ORDERERS = ["readyOrderFor", "selectReady", "splitReadyChanges", "placementCensus"];
+    const population = sourceFiles(ROOT, ["scripts"]);
+    expect(
+      population.length,
+      "the sweep read no scripts, so an empty offender list would witness nothing",
+    ).toBeGreaterThan(10);
+
+    const orderers: string[] = [];
+    const offenders: string[] = [];
+    for (const path of population) {
+      const code = codeOf(readFileSync(join(ROOT, path), "utf-8"));
+      if (!ORDERERS.some(fn => code.includes(`${fn}(`))) continue;
+      orderers.push(path);
+      if (!code.includes("enginePrefixReading(")) offenders.push(path);
+    }
+
+    // The population's own reach, asserted rather than assumed: a matcher
+    // that found nothing would make the offender list empty for the wrong
+    // reason, and all three of these are known to order.
+    expect(
+      orderers.sort(),
+      "the scan did not find the scripts that order Ready — it is measuring nothing",
+    ).toEqual(["scripts/board-mirror.ts", "scripts/board-ready.ts", "scripts/work-status.ts"]);
+
+    expect(
+      offenders,
+      "reading `readBoardInputs(...).milestonePrefix` cannot tell a tree that declares no " +
+        "engine family from a config it could not find, and both are `null` — which is the " +
+        "pre-#1943 ordering, applied silently. Call enginePrefixReading() and print its " +
+        "`unmeasured`",
+    ).toEqual([]);
+  });
+
+  /**
+   * #1965 round 4: `Rankable.milestone` has ONE absent value, and it is `null`.
+   *
+   * `scripts/board-mirror.ts` produced `n.content.milestone?.title ?? ""`
+   * while the five other producers in the tree produce `?? null`, against a
+   * contract that says *"the milestone TITLE, or `null`"*. It is harmless
+   * today only because `phaseOf` and `phaseInFamily` both normalise with
+   * `?? ""` internally — so a later `=== null` anywhere in the ordering would
+   * misbehave for exactly one call site, and only for issues with no
+   * milestone, which is the population the LABEL tier exists for.
+   *
+   * Two sentinels for one absence is the defect `enginePrefixReading` was
+   * added to this same PR to remove for the engine prefix. This is the same
+   * shape one layer down, and the review was right to name it rather than
+   * accept "identical results today".
+   *
+   * A census and not a line, for the reason the ordering-site case above is
+   * one: the SIXTH producer is the one nobody will check.
+   *
+   * Breaking it: change any `?? null` on a `milestone?.title` back to `?? ""`
+   * and this names the file and the line.
+   */
+  test("every milestone-title producer spells absent as null, never an empty string", () => {
+    const population = sourceFiles(ROOT, ["lib", "scripts"]);
+    const producers: string[] = [];
+    const offenders: string[] = [];
+    for (const path of population) {
+      const lines = codeOf(readFileSync(join(ROOT, path), "utf-8")).split("\n");
+      lines.forEach((line, i) => {
+        if (!/milestone\?\.title\s*\?\?/.test(line)) return;
+        producers.push(`${path}:${i + 1}`);
+        if (!/milestone\?\.title\s*\?\?\s*null/.test(line)) offenders.push(`${path}:${i + 1}`);
+      });
+    }
+
+    // The census's own reach. A regex that matched nothing would leave the
+    // offender list empty while witnessing nothing at all.
+    expect(
+      producers.length,
+      "no `milestone?.title ??` producer found — this case is measuring nothing",
+    ).toBeGreaterThanOrEqual(5);
+
+    expect(
+      offenders,
+      "`Rankable.milestone` and `Dependent.milestone` document ONE absent value and it is " +
+        "`null`. `\"\"` reads identically today only because `phaseOf` and `phaseInFamily` " +
+        "normalise it; a `=== null` added to the ordering later would misbehave here alone",
+    ).toEqual([]);
+  });
+
+  /**
+   * #1965 round 5: an import of `phaseOf` with no call to it.
+   *
+   * Two files imported `phaseOf` and never called it — both left by this
+   * PR's own refactor, which replaced `phase: phaseOf(title)` with
+   * `milestone: title` at every construction site and did not sweep the
+   * imports behind it. The repo sets no `noUnusedLocals`, so nothing failed.
+   *
+   * Narrow on purpose. A general unused-import ratchet is a different change
+   * over the whole tree, and this is the specific symbol a `phase` → `title`
+   * refactor leaves behind: a reader who finds it imported reasonably
+   * concludes the file still reads phase numbers, which is the belief #1943
+   * exists to remove.
+   *
+   * Breaking it: re-add the import to either script and this names it.
+   */
+  test("nothing imports phaseOf without calling it", () => {
+    const population = sourceFiles(ROOT, ["lib", "scripts", "gates", "bin"]);
+    const importers: string[] = [];
+    const offenders: string[] = [];
+    for (const path of population) {
+      const code = codeOf(readFileSync(join(ROOT, path), "utf-8"));
+      if (path === "lib/board-mirror.ts") continue; // its home — it declares it
+      if (!/\bphaseOf\b/.test(code)) continue;
+      importers.push(path);
+      if (!code.includes("phaseOf(")) offenders.push(path);
+    }
+
+    expect(
+      importers.length,
+      "no file outside its home names phaseOf — this case is measuring nothing",
+    ).toBeGreaterThanOrEqual(3);
+
+    expect(
+      offenders,
+      "an import with no call reads as 'this file still works in phase numbers', which " +
+        "#1943 made false. Delete it — the repo sets no noUnusedLocals, so nothing else will",
+    ).toEqual([]);
+  });
+
   test("the scan can find the string it looks for, and ignores comments", () => {
     expect(codeOf('console.log("at its depth");').includes("at its depth")).toBe(true);
     expect(codeOf("// never say at its depth here\nconst x = 1;").includes("at its depth")).toBe(false);
@@ -410,7 +577,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
       item(30, null, ["engine"]),
       item(40, null, ["spec:convergence"]),
     ]
-      .sort(readyOrder)
+      .sort(readyOrderFor(ENGINE))
       .map(i => i.number);
     expect(
       got,
@@ -419,7 +586,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
   });
 
   test("a milestone always beats a label, however high the label ranks", () => {
-    const got = [item(5, null, ["engine"]), item(900, 6)].sort(readyOrder).map(i => i.number);
+    const got = [item(5, null, ["engine"]), item(900, 6)].sort(readyOrderFor(ENGINE)).map(i => i.number);
     expect(
       got,
       "phase 6 is the LAST phase and engine is the FIRST label, and the phase still wins — " +
@@ -429,19 +596,19 @@ describe("#1853: a label places an issue the milestone could not", () => {
 
   test("an issue with several ranked labels takes the BEST of them", () => {
     const got = [item(1, null, ["follow-up"]), item(2, null, ["follow-up", "engine"])]
-      .sort(readyOrder)
+      .sort(readyOrderFor(ENGINE))
       .map(i => i.number);
     expect(
       got,
       "#2 is newer and still first: taking the worst label would let ADDING a label demote an " +
         "issue, which makes the rank punish labelling",
     ).toEqual([2, 1]);
-    expect(placementOf(item(2, null, ["follow-up", "engine"])).rank).toBe(0);
+    expect(placementOf(item(2, null, ["follow-up", "engine"]), ENGINE).rank).toBe(0);
   });
 
   test("age still breaks ties INSIDE a tier, and no longer decides the tier", () => {
     const got = [item(99, null, ["engine"]), item(1, null, ["external-audit"]), item(50, null, ["engine"])]
-      .sort(readyOrder)
+      .sort(readyOrderFor(ENGINE))
       .map(i => i.number);
     expect(
       got,
@@ -451,7 +618,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
   });
 
   test("an unknown label does not place an issue — it is UNPLACED, never guessed", () => {
-    const p = placementOf(item(7, null, ["arbiter-override"]));
+    const p = placementOf(item(7, null, ["arbiter-override"]), ENGINE);
     expect(p.tier, "arbiter-override is outside LABEL_RANK and is the live case on this repo").toBe(
       "UNPLACED",
     );
@@ -463,8 +630,8 @@ describe("#1853: a label places an issue the milestone could not", () => {
   });
 
   test("no label at all is UNPLACED too, and says something different", () => {
-    const none = placementOf(item(7, null, []));
-    const unknown = placementOf(item(7, null, ["arbiter-override"]));
+    const none = placementOf(item(7, null, []), ENGINE);
+    const unknown = placementOf(item(7, null, ["arbiter-override"]), ENGINE);
     expect(none.tier).toBe("UNPLACED");
     expect(
       none.why,
@@ -477,10 +644,10 @@ describe("#1853: a label places an issue the milestone could not", () => {
     // array in input order — which would look exactly like a correct
     // age sort for an already-sorted input. So the input is NOT sorted.
     const got = [item(8, null, []), item(2, null, ["arbiter-override"])]
-      .sort(readyOrder)
+      .sort(readyOrderFor(ENGINE))
       .map(i => i.number);
     expect(got).toEqual([2, 8]);
-    expect(readyOrder(item(8, null, []), item(2, null, []))).toBeGreaterThan(0);
+    expect(readyOrderFor(ENGINE)(item(8, null, []), item(2, null, []))).toBeGreaterThan(0);
   });
 
   test("the census counts UNPLACED apart from the two placed tiers", () => {
@@ -490,12 +657,272 @@ describe("#1853: a label places an issue the milestone could not", () => {
       item(3, null, ["follow-up"]),
       item(4, null, ["arbiter-override"]),
       item(5, null, []),
-    ]);
+    ], ENGINE);
     expect(
       got,
       "folding UNPLACED into the label count is the defect one level up — an issue nothing " +
         "can rank would read identically to one ranked last",
     ).toEqual({ phase: 1, label: 2, unplaced: 2 });
+  });
+
+  /**
+   * #1943 — a phase number is only meaningful inside its own family.
+   *
+   * Observed 2026-11-09 in `work-status`, after five claims were released:
+   *
+   * ```
+   * next out of the backlog, in plan order:
+   *   #1764  milestone places it in phase 3   (Convergence Phase 3)
+   *   #1717  milestone places it in phase 6   (Pipeline Phase 6)
+   * ```
+   *
+   * Both sentences are true and between them they hid the defect: the two
+   * numbers are counted in different sequences and `readyOrder` compared
+   * them as one. `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md` says the engine
+   * ships before the payload and SC-2625 makes the payload shipping
+   * untouched the engine's own acceptance test, so the order was inverted
+   * against the project's own declared plan.
+   */
+  test("#1943: a LATER engine phase outranks an EARLIER phase in another family", () => {
+    const got = [item(1764, 3, [], PAYLOAD), item(1717, 6, [], ENGINE)]
+      .sort(readyOrderFor(ENGINE))
+      .map(i => i.number);
+    expect(
+      got,
+      "the payload outranked the engine that ships it — phase 3 beat phase 6 across families",
+    ).toEqual([1717, 1764]);
+  });
+
+  test("#1943 CONTROL: inside ONE family the phase number still decides", () => {
+    // Without this, the row above passes against a rule that ordered by
+    // family and stopped — which would delete the phase ordering entirely
+    // and look exactly like the family rank working.
+    expect(
+      [item(10, 6, [], ENGINE), item(99, 3, [], ENGINE)].sort(readyOrderFor(ENGINE)).map(i => i.number),
+      "phase still orders within a family, and lower goes first",
+    ).toEqual([99, 10]);
+    expect(
+      [item(10, 6, [], PAYLOAD), item(99, 3, [], PAYLOAD)].sort(readyOrderFor(ENGINE)).map(i => i.number),
+      "and within the OTHER family too — the rank orders families, it does not flatten one",
+    ).toEqual([99, 10]);
+  });
+
+  /**
+   * #1943 round 2: a prefix is a FAMILY NAME, not a string prefix.
+   *
+   * `familyRank` matched with a bare `milestone.startsWith(enginePrefix)`, so
+   * a family whose name merely begins with the engine's was ranked as the
+   * engine. Measured before the fix, with `enginePrefix = "Pipeline"`:
+   *
+   *   "PipelineX Phase 2"  familyRank=0   ← another family, ranked as engine
+   *   "Pipeline Phase 0"   familyRank=0 with prefix "Pipe"
+   *
+   * `lib/live-issues.ts` records this exact pair — *"`Pipe` matching
+   * `Pipeline Phase 0`, `Fix` matching `Fixture Phase 2`"* — as round 2 of
+   * #1703, *"the cross-spec contamination the prefix exists to prevent,
+   * arriving through the fix for it"*. The docblock over `familyRank` cited
+   * that file while the code underneath it reintroduced the bug.
+   *
+   * **Fixed by delegating to `inMilestoneFamily`, not by writing a boundary
+   * check here.** A third place that decides family membership is the fourth
+   * shape in `.claude/rules/checks-must-be-able-to-fail.md`, and it is the
+   * failure `lib/live-issues.ts`'s own docblock is about.
+   */
+  test("#1943: a family whose NAME merely begins with the engine's is not the engine", () => {
+    const LOOKALIKE = `${ENGINE}X`;
+    expect(
+      LOOKALIKE.startsWith(ENGINE),
+      "the fixture must actually be a string-prefix match, or this row cannot fire",
+    ).toBe(true);
+
+    expect(
+      familyRank(`${LOOKALIKE} Phase 2`, ENGINE),
+      "a string prefix is not a family — `EngineX Phase 2` was ranked as the engine",
+    ).toBe(1);
+
+    // The other direction of the same defect: a SHORT configured prefix
+    // swallowing the longer family whose name it begins.
+    expect(
+      familyRank(`${ENGINE} Phase 0`, ENGINE.slice(0, 3)),
+      "a truncated prefix must not claim the family whose name it begins",
+    ).toBe(1);
+
+    // End to end, because `familyRank` alone could be right while the order
+    // read something else.
+    expect(
+      [item(10, 2, [], LOOKALIKE), item(99, 6, [], ENGINE)]
+        .sort(readyOrderFor(ENGINE))
+        .map(i => i.number),
+      "the lookalike family borrowed the engine's rank and its lower phase won",
+    ).toEqual([99, 10]);
+  });
+
+  test("#1943 CONTROL: the real engine family still ranks ahead after the boundary fix", () => {
+    // Without this, the row above passes against a `familyRank` that returns
+    // 1 for everything — which deletes the family ordering entirely and is
+    // the cheapest wrong fix for a boundary bug.
+    expect(familyRank(`${ENGINE} Phase 6`, ENGINE), "the engine is still the engine").toBe(0);
+    expect(
+      familyRank(`${PAYLOAD} Phase 3`, ENGINE),
+      "and another family is still another family",
+    ).toBe(1);
+    expect(
+      [item(1764, 3, [], PAYLOAD), item(1717, 6, [], ENGINE)]
+        .sort(readyOrderFor(ENGINE))
+        .map(i => i.number),
+      "the ordering this issue exists for must survive the boundary fix",
+    ).toEqual([1717, 1764]);
+  });
+
+  /**
+   * #1965 round 3, the process finding: four keys, one exhaustive table.
+   *
+   * The review's point was not a remaining line — it was that three
+   * structurally different wrong behaviours turned up one at a time in the
+   * same thirty-line comparator, each caught by a case written after a
+   * reviewer named it:
+   *
+   *   1. family membership was a bare `startsWith` (over-matched `EngineX`);
+   *   2. an early revision hoisted family ABOVE tier (every labelled issue
+   *      became honorary engine and outranked a real `Convergence Phase 3`);
+   *   3. the null-prefix control first went green under a mutant that
+   *      invented a family split, because it asserted one pair.
+   *
+   * All three are "a key compared at the wrong level", and no number of
+   * narrative cases enumerates that. So the precedence is asserted as a
+   * TABLE, once: four keys in order, and for each one a pair that differs in
+   * THAT key alone while every key above it is held equal and every key below
+   * it is set ADVERSARIALLY — the loser is given the better value on every
+   * lower key. A comparator that consults the keys in any other order, or
+   * skips one, loses at least one row.
+   *
+   * That adversarial setting is the part the earlier cases lacked. A pair
+   * that differs in one key and agrees on the rest goes green under a
+   * comparator that ignores the key entirely, whenever the issue numbers
+   * happen to fall the right way — which is how case 3 passed.
+   *
+   * Breaking it: swapping any two adjacent lines of `readyOrderFor`'s
+   * comparison chain reddens the row named for the key that lost its place,
+   * and leaves the others green.
+   */
+  test("#1943: the precedence is tier, then family, then phase, then number — all four", () => {
+    // `winner` must sort first. Every key ABOVE the one named is equal;
+    // every key BELOW it favours the loser, so a comparator that reached
+    // the wrong key would pick the other one.
+    const rows: { key: string; winner: Rankable; loser: Rankable; why: string }[] = [
+      {
+        key: "tier",
+        // PHASE tier vs LABEL tier. The loser is in the engine family and
+        // carries the best label rank, so family and rank both favour it.
+        winner: { number: 900, milestone: `${PAYLOAD} Phase 9`, labels: [] },
+        loser: { number: 1, milestone: null, labels: ["engine"] },
+        why: "a milestone places an issue and a label does not — tier is read first",
+      },
+      {
+        key: "family",
+        // Both PHASE tier. The loser has the lower phase AND the lower
+        // number, so everything below family favours it.
+        winner: { number: 900, milestone: `${ENGINE} Phase 9`, labels: [] },
+        loser: { number: 1, milestone: `${PAYLOAD} Phase 1`, labels: [] },
+        why: "inside the PHASE tier the engine family goes first, whatever its phase number",
+      },
+      {
+        key: "phase",
+        // Same tier, same family. The loser has the lower number.
+        winner: { number: 900, milestone: `${ENGINE} Phase 1`, labels: [] },
+        loser: { number: 1, milestone: `${ENGINE} Phase 9`, labels: [] },
+        why: "inside one family the lower phase goes first, whatever the issue number",
+      },
+      {
+        key: "number",
+        // Everything above is equal, so the number is all that is left.
+        winner: { number: 1, milestone: `${ENGINE} Phase 3`, labels: [] },
+        loser: { number: 900, milestone: `${ENGINE} Phase 3`, labels: [] },
+        why: "with every other key equal the lower issue number goes first",
+      },
+    ];
+
+    const order = readyOrderFor(ENGINE);
+    for (const row of rows) {
+      expect([row.winner, row.loser].sort(order).map(i => i.number), `${row.key}: ${row.why}`).toEqual(
+        [row.winner.number, row.loser.number],
+      );
+      // Sorted from the other starting arrangement too — a comparator that
+      // returned 0 for a pair leaves input order untouched, which is
+      // indistinguishable from deciding correctly when the input already
+      // happened to be right.
+      expect(
+        [row.loser, row.winner].sort(order).map(i => i.number),
+        `${row.key}: the comparator is indifferent here — it returned 0 and the input order stood`,
+      ).toEqual([row.winner.number, row.loser.number]);
+    }
+
+    // The table's own reach. Four keys and four rows, so a row silently
+    // deleted during an edit does not shrink the guarantee unnoticed.
+    expect(
+      rows.map(r => r.key),
+      "the precedence has four keys and this table must carry one row per key, in order",
+    ).toEqual(["tier", "family", "phase", "number"]);
+  });
+
+  test("#1943 CONTROL: with NO prefix configured, phase alone orders across families", () => {
+    // The reading a tree that declares no engine family must get, and the
+    // one every consumer had before #1943. A `null` prefix inventing a
+    // family would be `.claude/rules/config-access.md`'s Silent Default
+    // Substitution pointed at an ordering.
+    expect(
+      [item(1764, 3, [], PAYLOAD), item(1717, 6, [], ENGINE)]
+        .sort(readyOrderFor(null))
+        .map(i => i.number),
+      "an unconfigured tree has one family, so phase 3 goes first",
+    ).toEqual([1764, 1717]);
+    // **Both family assignments, because one of them passes by accident.**
+    // The row above was the whole control at first, and a mutant that made
+    // a null prefix favour PAYLOAD left it green: the payload item already
+    // had the lower phase, so the invented family agreed with the right
+    // answer. `.claude/rules/checks-must-be-able-to-fail.md`, *a case that
+    // goes green under the wrong fix*.
+    //
+    // With one family, SWAPPING which family each item is in cannot change
+    // the order. Any invented split moves exactly one of these two.
+    expect(
+      [item(10, 6, [], ENGINE), item(99, 3, [], PAYLOAD)]
+        .sort(readyOrderFor(null))
+        .map(i => i.number),
+      "a null prefix invented a family that favours the payload",
+    ).toEqual([99, 10]);
+    expect(
+      [item(10, 6, [], PAYLOAD), item(99, 3, [], ENGINE)]
+        .sort(readyOrderFor(null))
+        .map(i => i.number),
+      "a null prefix invented a family that favours the engine",
+    ).toEqual([99, 10]);
+    // And the prefix that IS configured is the one that wins, not a
+    // built-in that happens to match: ranking against PAYLOAD inverts it.
+    expect(
+      [item(1764, 3, [], PAYLOAD), item(1717, 6, [], ENGINE)]
+        .sort(readyOrderFor(PAYLOAD))
+        .map(i => i.number),
+      "the family rank reads the prefix it was handed, not a name baked into the rule",
+    ).toEqual([1764, 1717]);
+  });
+
+  test("#1943: a non-engine PHASE still beats a label, and the why says why", () => {
+    // The family sits above the tier, so the obvious wrong fix — demoting
+    // a non-engine phase below the LABEL tier — has to be excluded. A
+    // milestone is still the declared plan; the family only orders phases
+    // among themselves.
+    expect(
+      [item(5, null, ["engine"]), item(900, 6, [], PAYLOAD)]
+        .sort(readyOrderFor(ENGINE))
+        .map(i => i.number),
+      "a milestone still beats a label, even in the other family",
+    ).toEqual([900, 5]);
+    expect(
+      placementOf(item(900, 6, [], PAYLOAD), ENGINE).why,
+      "the sentence must say the family, or #1943 is invisible in the report again",
+    ).toContain(ENGINE);
+    expect(placementOf(item(900, 6, [], ENGINE), ENGINE).why).toContain(`${ENGINE} family`);
   });
 
   test("THE CONTROL: the label rank is spelled at exactly one site", () => {
@@ -668,7 +1095,7 @@ describe("#1852: Ready has ONE occupancy reading", () => {
     const occ = readyOccupancy(5, 5, null);
     expect(occ.verdict).toBe("UNMEASURED");
     expect(occ.free, "a depth nobody read must not promote; that is the 36-of-46 reading").toBe(0);
-    expect(selectReady([item(1, 0)], occ).promote).toEqual([]);
+    expect(selectReady([item(1, 0)], occ, ENGINE).promote).toEqual([]);
   });
 
   test("dispatchable above cards is REFUSED, not clamped", () => {
