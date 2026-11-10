@@ -514,9 +514,80 @@ export function queueLabelFor(load: () => string | null): string | null {
  * name which queue admitted it. An exemption that reaches the tracker without
  * naming what admitted it is indistinguishable from the cap not having run.
  */
-export function queueCarveOut(labels: string[], queueLabel: string | null): string | null {
+export function queueCarveOut(
+  labels: string[],
+  queueLabel: string | null,
+  repo: string | null,
+): string | null {
+  // **A filing aimed at ANOTHER tracker is never in this project's queue**
+  // — the security review of PR #1963 found this, and it is a real hole:
+  // `board.queueLabel` is a statement about THIS project's board, and a
+  // `gh issue create --repo other/x --label engine` clause borrowed it to
+  // raise its ceiling on a tracker whose config was never consulted. The
+  // same mismatch `targetFor` exists to prevent one stage earlier.
+  if (repo !== null) return null;
   if (queueLabel === null) return null;
   return labels.includes(queueLabel) ? queueLabel : null;
+}
+
+/**
+ * The allowance for filings the project's own work queue claims.
+ *
+ * ## This is a RAISED CEILING, not an exemption, and the first spelling was
+ * an exemption
+ *
+ * PR #1963 shipped the queue route as a full bypass of the SPENT arm, beside
+ * `plannedFiling`: a queued clause did not spend the counter and was skipped
+ * by the reservation stage entirely. The security review called it an
+ * *authorization bypass / self-granted exemption of an unwaivable control*
+ * and was right. The plan route can be an exemption because a filer cannot
+ * get a title onto `origin/main` without somebody merging it. A LABEL has no
+ * such author: on a tree that declares a queue — this one declares
+ * `"engine"` — any agent can spell it, and `OVER_CAP` is unwaivable
+ * precisely so that no argument a filer can make defeats a count. An
+ * uncounted route is the strongest argument there is.
+ *
+ * So the queue route is counted, reserved, and raced exactly like every
+ * other filing. What it gets is a HIGHER number.
+ *
+ * ## Why a higher ceiling fixes what actually went wrong
+ *
+ * The 2026-11-09 failure was not that the cap existed. It was that engine
+ * work ran out of allowance **behind ad-hoc filings** — the run reached 12
+ * and the next six findings, all of them about the engine, became comments.
+ * A ceiling of 24 means the engine filings are the ones still admitted when
+ * the ad-hoc population has spent its 12, which is the whole of it.
+ *
+ * ## Why 24, and the residual it leaves
+ *
+ * Twice `FILINGS_PER_RUN_DIRECT`, and the factor is the defensible part
+ * rather than the digit: the ledger reading that set 12 measured ~11 real
+ * findings a day in one engine run-directory, so one more run's worth of
+ * headroom is the smallest bound that cannot re-run 2026-11-09. It still
+ * binds a runaway loop at 24 in a day, where the first spelling bound it at
+ * nothing.
+ *
+ * **The residual, stated rather than hidden: ONE counter, two ceilings.** A
+ * run that spends 20 on ad-hoc findings leaves the queue route 4, not 24.
+ * A second ledger lane would separate them and is the stronger design; it
+ * needs `runIntents`, `intentOrdinal` and `reserveAllowance` to carry a
+ * population, which is a bigger change than this finding justifies in one
+ * round. The direction of the weakness is toward REFUSING, which is the
+ * side a cap is allowed to be wrong on.
+ */
+export const QUEUE_FILINGS_PER_RUN = 2 * FILINGS_PER_RUN_DIRECT;
+
+/**
+ * The ceiling THIS clause is judged against — the one decider, read by the
+ * pre-read and by the reservation stage so the two cannot disagree.
+ *
+ * A clause the queue does not claim is judged against the run's ordinary
+ * allowance, unchanged. `FG-197` holds every cap consumer to taking the
+ * number rather than reaching for a constant, and this is now the thing they
+ * take.
+ */
+export function capForClause(queuedBy: string | null, runCap: number): number {
+  return queuedBy === null ? runCap : Math.max(runCap, QUEUE_FILINGS_PER_RUN);
 }
 
 /**
@@ -1002,9 +1073,11 @@ export function overCapReason(
     "  per-finding judgement drifts and a count does not. If several findings belong on the",
     "  tracker, they are one issue naming every instance, not several.",
     "",
-    "  Two routes get past it and neither is yours to grant: a title a MERGED plan names, and",
-    "  work the project has itself declared to be in its work queue. Both are recorded on the",
-    "  row, both are counted, and both are something somebody else already decided.",
+    "  Two routes exist and neither is an argument. A title a MERGED plan names is exempt,",
+    "  because somebody had to merge the plan. Work the project has itself declared to be in",
+    "  its work queue gets a HIGHER ceiling — still counted, still reserved, still finite, and",
+    "  the number above is already that ceiling if this filing qualified. Both are recorded on",
+    "  the row.",
   ].join("\n");
 }
 
@@ -3125,15 +3198,15 @@ export async function filingGate(
     // still `COMMENT_INSTEAD`; `read2` is untouched above.
     const planned = plannedFiling(attempt.title, planSource);
     // **The cap's third route: work the project's own queue claims** (#1961).
-    // Same arm, same parting — it exempts SPENT and never `uncountable` —
-    // and named as ONE local that all three cap sites read, so the exemption
-    // cannot be applied in two of them and forgotten in the third. That is
-    // FG-185's defect and it is worse than no carve-out: the exempt clause
-    // clears, spends the allowance, and its sibling's `OVER_CAP` blocks the
-    // whole command including the clause just exempted.
-    const queuedBy = queueCarveOut(attempt.labels, queueLabel);
-    const capExempt = planned.planned || queuedBy !== null;
-    const capped = uncountable || (spent >= cap && !capExempt);
+    //
+    // **A raised CEILING, not an exemption** — see `QUEUE_FILINGS_PER_RUN`
+    // for why the first spelling of this was an authorization bypass. A
+    // queued clause is counted, reserved and raced exactly like every other
+    // one; the only thing it gets is a bigger number, and `capForClause` is
+    // the one place that decides which number. Both cap sites read it.
+    const queuedBy = queueCarveOut(attempt.labels, queueLabel, attempt.repo);
+    const clauseCap = capForClause(queuedBy, cap);
+    const capped = uncountable || (spent >= clauseCap && !planned.planned);
     const verdict: FilingAdjudication =
       wouldEmit && capped
         ? {
@@ -3142,7 +3215,7 @@ export async function filingGate(
             refusal: uncountable ? "UNMEASURED_CAP" : "OVER_CAP",
             reason: uncountable
               ? uncountableReason(await targetFor(attempt.repo))
-              : overCapReason(run, spent, await targetFor(attempt.repo), cap),
+              : overCapReason(run, spent, await targetFor(attempt.repo), clauseCap),
           }
         : read2;
     const overridden = overrideOf(verdict);
@@ -3222,7 +3295,7 @@ export async function filingGate(
     // allowance: two planned clauses filing the same finding twice is still a
     // duplicate, and the plan route exempts the cap alone.
     if (cleared) {
-      if (!capExempt) spent += 1;
+      if (!planned.planned) spent += 1;
       siblings.push({ ...finding, id: String(index) });
       siblingTitles.set(String(index), attempt.title);
     }
@@ -3365,22 +3438,34 @@ export async function filingGate(
       // worse: it writes two rows per planned filing into the ledger the cap
       // is measured from, so `intentsInRun` would count planned work against
       // the population the number was calibrated on.
-      // **`queuedBy` rides the same line for the same three reasons** (#1961).
-      // It is the same question — *is this clause in the cap's accounting at
-      // all* — and the two routes answer it identically, so they share the
-      // guard rather than each getting one. Both were computed once in the
-      // loop above and written onto the row; both are read from the row here.
-      if (row.plannedBy != null || row.queuedBy != null) continue;
-      const reading = reserveAllowance(row, run, { now: nowMs, append, readLedger: readAgain, cap });
+      // **`queuedBy` does NOT ride this line, and that is the security
+      // review's finding** (#1963). A queued clause is in the cap's
+      // accounting; it just has a bigger ceiling. Skipping the reservation
+      // would leave the one route a filer can self-grant as the only route
+      // with no race protection and no intent row — unlimited in a loop and
+      // invisible to a parallel hook. It reserves with the rest, against
+      // `capForClause`, so the number the stage re-decides against is the
+      // number the pre-read used.
+      if (row.plannedBy != null) continue;
+      const reading = reserveAllowance(row, run, {
+        now: nowMs,
+        append,
+        readLedger: readAgain,
+        cap: capForClause(row.queuedBy ?? null, cap),
+      });
       if (reading.outcome === "WON") {
         reserved.push(reading.intent);
         continue;
       }
       const refusal = reading.outcome === "LOST" ? "OVER_CAP" : "UNMEASURED_CAP";
       const target = await targetFor(attempts[index].repo);
+      // The ceiling THIS row was judged against, which is not always the
+      // run's: a queued row carries the raised one, and a refusal naming
+      // the wrong number sends its reader to the wrong fact.
+      const rowCap = capForClause(row.queuedBy ?? null, cap);
       const reason =
         reading.outcome === "LOST"
-          ? overCapReason(run, reading.already, target, cap)
+          ? overCapReason(run, reading.already, target, rowCap)
           : reading.outcome === "UNRESERVED"
             ? unreservedCapReason(run, target, cap)
             : uncountableReason(target);

@@ -83,6 +83,7 @@ import {
   ledgerTitle,
   MAX_LEDGER_TITLE,
   overCapReason,
+  QUEUE_FILINGS_PER_RUN,
   queueCarveOut,
   queueLabelFor,
   unreservedCapReason,
@@ -3070,13 +3071,15 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
   /**
    * `M3` — the cap never binds, however much the run has filed.
    *
-   * The anchor is `spent >= cap`, not `spent >= FILINGS_PER_RUN`: the cap is
-   * resolved per command now, because direct-ship mode earns a larger one.
-   * `buildMutant` asserts an anchor appears EXACTLY once, so renaming the
-   * site turned this row red rather than leaving it green against a mutation
-   * that no longer applied — which is the only reason the rename was safe.
+   * The anchor is `spent >= clauseCap`, not `spent >= FILINGS_PER_RUN`: the
+   * allowance is resolved per command (direct-ship mode earns a larger one)
+   * and then per CLAUSE (#1961 — a filing the project's work queue claims is
+   * judged against a higher ceiling). `buildMutant` asserts an anchor
+   * appears EXACTLY once, so both renames turned this row red rather than
+   * leaving it green against a mutation that no longer applied — which is
+   * the only reason either rename was safe.
    */
-  const M3 = "spent >= cap";
+  const M3 = "spent >= clauseCap";
   /** `M4` — every refusal becomes waivable, including the cap. */
   const M4 = "return refusal === null || !(refusal in UNWAIVABLE_REFUSALS);";
   /** `M5` — the cap stops seeing filings the label would carry through. */
@@ -5398,7 +5401,7 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
     ).toBe("OVER_CAP");
     expect(r.rows[0].queuedBy).toBeNull();
 
-    expect(queueCarveOut(["anything"], null), "no configured label exempts nothing").toBeNull();
+    expect(queueCarveOut(["anything"], null, null), "no configured label raises nothing").toBeNull();
     expect(queueLabelFor(() => null), "an unscaffolded tree declares no queue").toBeNull();
     // And the thunk, for the reason `filingsPerRunFor` takes one: this runs
     // inside a PreToolUse hook, `tryLoadRungateConfig` is a bare
@@ -5436,47 +5439,97 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
     ).toBe("UNMEASURED_CAP");
   });
 
-  test("FG-255: a queue-labelled clause does not spend the allowance for its SIBLING", async () => {
-    // FG-185's defect, one route over. The cap is consulted in THREE places —
-    // the in-process `spent` counter, the pre-read, and the reservation stage
-    // — and a guard missing from any one of them makes the carve-out worse
-    // than useless: the exempt clause clears, increments `spent`, the
-    // sibling is refused OVER_CAP, and that refusal blocks the whole command
-    // INCLUDING the clause that was just exempted.
+  test("FG-255: the raised ceiling is FINITE — a queued filing is refused at it", async () => {
+    // **The security review of PR #1963 is this row.** The first spelling of
+    // the queue route was an exemption: a queued clause did not spend the
+    // counter and was skipped by the reservation stage, so `--label engine`
+    // in a loop filed without limit and `OVER_CAP` — the one refusal that is
+    // unwaivable on purpose — became self-grantable by spelling a word.
     //
-    // A FRESH allowance, so the only thing that can spend it is the labelled
-    // clause itself. That is why this row starts from an empty ledger where
-    // FG-251..254 start from a spent one.
-    const r = await run(
-      queued,
-      `${queueLabelled()} && ${unlabelled("a second finding nobody queued")}`,
-      () => [],
-    );
-    expect(r.rows, "two clauses").toHaveLength(2);
+    // A ceiling that cannot be reached is not a ceiling, so this is the row
+    // that has to exist: at `QUEUE_FILINGS_PER_RUN` spent, the queue route
+    // refuses like everything else.
+    const atCeiling = () =>
+      Array.from({ length: QUEUE_FILINGS_PER_RUN }, (_, i) => ({
+        ...spentIn(queued)()[0],
+        key: `b.${i}/${at}/0${INTENT_KEY_SUFFIX}`,
+        title: `already filed by this run ${i}`,
+      }));
+    const r = await run(queued, queueLabelled(), atCeiling);
+    expect(r.rows[0].refusal, "the queue route is bounded, not exempt").toBe("OVER_CAP");
     expect(
-      r.rows.map(x => (x.queuedBy === null ? "unqueued" : "queued")),
-      "the premise: clause 0 is queue-labelled and clause 1 is not",
-    ).toEqual(["queued", "unqueued"]);
-    expect(
-      r.rows.map(x => x.refusal),
-      "the queued clause must not have spent the sibling's allowance",
-    ).toEqual([null, null]);
-    expect(r.refusal, "so the command is not blocked").toBeNull();
+      r.refusal ?? "",
+      "and the refusal names the ceiling THIS clause was judged against, not the run's",
+    ).toContain(`cap is ${QUEUE_FILINGS_PER_RUN}`);
   });
 
-  test("FG-256 CONTROL: an UNQUEUED clause still spends it, so the sibling IS capped", async () => {
-    // Without this, FG-255 passes against a gate whose `spent` counter never
-    // moves at all — which would delete the cap for every multi-clause
-    // command in the tree and look exactly like the carve-out working.
-    const r = await run(
-      queued,
-      `${unlabelled("a first finding nobody queued")} && ${unlabelled("a second finding nobody queued")}`,
-      () => [],
-    );
-    expect(r.rows.map(x => x.refusal), "clause 1 is capped by clause 0").toEqual([
-      null,
-      "OVER_CAP",
-    ]);
+  test("FG-256 CONTROL: one below the ceiling the SAME filing is admitted", async () => {
+    // Without this, FG-255 passes against a gate that refuses every queued
+    // filing — which would look exactly like a bound and would be the route
+    // not working at all. It also pins WHERE the bound is: a ceiling of 1
+    // and a ceiling of 24 both satisfy FG-255 alone.
+    const belowCeiling = () =>
+      Array.from({ length: QUEUE_FILINGS_PER_RUN - 1 }, (_, i) => ({
+        ...spentIn(queued)()[0],
+        key: `b.${i}/${at}/0${INTENT_KEY_SUFFIX}`,
+        title: `already filed by this run ${i}`,
+      }));
+    const r = await run(queued, queueLabelled(), belowCeiling);
+    expect(r.rows[0].refusal, "the last slot under the ceiling is usable").toBeNull();
+    // And the ceiling really is ABOVE the ordinary allowance, or the whole
+    // change is a no-op that FG-251 would still pass by accident.
+    expect(
+      QUEUE_FILINGS_PER_RUN,
+      "the queue ceiling must out-earn the raised ad-hoc cap, or it buys nothing",
+    ).toBeGreaterThan(FILINGS_PER_RUN_DIRECT);
+  });
+
+  test("FG-257: a queued filing is COUNTED and RESERVED, not waved through", async () => {
+    // The other half of the review's finding. An admitted queued filing that
+    // leaves no intent row is invisible to a parallel hook, so two processes
+    // both read the same count and both file — and nothing ever reaches the
+    // ceiling FG-255 asserts, because the counter it is measured from never
+    // moves. The reservation is what makes the bound real rather than
+    // nominal.
+    const appended: FilingLedgerRow[] = [];
+    const r = await filingGate(queueLabelled(), {
+      projectRoot: queued,
+      now: at,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: (() => appended) as never,
+      appendLedger: (row: FilingLedgerRow) => {
+        appended.push(row);
+        return true;
+      },
+      readTarget: async () => ({ reading: "NO_PR", branch: "b" }) as never,
+      readPlan: { list: () => [] as string[], show: () => null },
+    });
+    expect(r.rows[0].refusal, "the premise: this filing was admitted").toBeNull();
+    expect(
+      appended.filter(x => x.intent === true).length,
+      "an admitted queued filing took no reservation — a parallel hook cannot see it",
+    ).toBe(1);
+    expect(
+      appended.find(x => x.intent === true)?.queuedBy,
+      "and the intent row names the queue, so the ledger can separate the populations",
+    ).toBe(QUEUE_LABEL);
+  });
+
+  test("FG-258: a filing aimed at ANOTHER tracker is not in this project's queue", async () => {
+    // Also the security review. `board.queueLabel` is a statement about THIS
+    // project's board; a `--repo other/x` clause borrowed it to raise its
+    // ceiling on a tracker whose config was never consulted. The same
+    // gate/action mismatch `targetFor` exists to prevent one stage earlier.
+    expect(
+      queueCarveOut([QUEUE_LABEL], QUEUE_LABEL, "other/x"),
+      "another tracker's filing must not ride this project's queue",
+    ).toBeNull();
+    // The control, or the row above passes against a predicate that returns
+    // null for everything.
+    expect(
+      queueCarveOut([QUEUE_LABEL], QUEUE_LABEL, null),
+      "a filing aimed at this project's own tracker still qualifies",
+    ).toBe(QUEUE_LABEL);
   });
 });
 
