@@ -155,14 +155,23 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
     const used = ids.map(id => Number(/^SC-(\d+)$/.exec(id)![1]));
     expect(reservationFaults(used, scBlocks), "the live store disagrees with this spec's ids")
       .toEqual([]);
-    // Which of the two arms the live reading took, so an empty store is a
-    // recorded state rather than a silent pass — `.claude/rules/config-access.md`,
-    // Silent Default Substitution. Both arms are exercised unconditionally by
-    // the fixture case below; this says which one the shipped file is in.
-    expect(
-      mine.length === 1 ? "own-block" : "no-own-block",
-      "the live reading did not resolve to one of the two declared arms",
-    ).toMatch(/^(own-block|no-own-block)$/);
+
+    // **There is deliberately no "which arm did the live store take" line
+    // here.** The first version of this case had one, and round 1 of this
+    // PR's review was right about it twice over:
+    // `expect(mine.length === 1 ? "own-block" : "no-own-block").toMatch(/^(own-block|no-own-block)$/)`
+    // resolves to one of exactly the two strings the pattern accepts, for
+    // every value of `mine.length`. "Assertions that hold vacuously",
+    // `.claude/rules/checks-must-be-able-to-fail.md` — written in the act of
+    // quoting the rule it broke.
+    //
+    // It has no honest form, which is why it is gone rather than repaired.
+    // Re-deriving the arm from the same file is a second decider that agrees
+    // with the first by construction, and pinning it to `0` would forbid the
+    // legal state this whole change exists to allow: a future block, declared
+    // while new ids for this spec are in flight. Both arms ARE exercised
+    // unconditionally, by the planted-store case below; what the live store
+    // is in is data, not a property.
   });
 
   test("the reservation reading, both arms, against planted stores", () => {

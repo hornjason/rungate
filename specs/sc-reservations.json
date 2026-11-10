@@ -25,8 +25,12 @@
     "AN EMPTY LIST IS THE RESTING STATE, not a store nobody has filled in. It means no",
     "branch is holding ids right now, and ids already written in specs/ are protected",
     "by lib/create-sc.ts's `taken` set rather than by a block. Until #1969 two tests",
-    "required this list to be non-empty, so the last deletion was always red and",
-    "thirteen blocks belonging to merged branches stayed here."
+    "required this list to be non-empty, so the last deletion was always red.",
+    "",
+    "Before deleting somebody else's entry, check that its branch merged — one",
+    "`gh pr list --head <owner> --state all --json number,state` per entry. #1969",
+    "records that reading for the thirteen it cleared, PR by PR; this file cannot",
+    "prove it about itself, so do not read the sentence above as proof."
   ],
   "reservations": []
 }
