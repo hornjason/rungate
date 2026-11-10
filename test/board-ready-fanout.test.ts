@@ -707,7 +707,17 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
                     ? `${blockedByOpen} open blocker${blockedByOpen === 1 ? "" : "s"} remain`
                     : assignees === null
                       ? "UNMEASURED — the assignee count could not be read"
-                      : "somebody has claimed it";
+                      : // #1941: the claim arm is `workVerdict`'s sentence, spelled
+                        // out rather than recomputed. Calling the decider to build
+                        // the expectation would make this arm agree with itself for
+                        // any output at all — the vacuous shape in
+                        // `.claude/rules/checks-must-be-able-to-fail.md`. A
+                        // `Dependent` carries no evidence field, so UNMEASURED
+                        // naming all three is the only reading reachable from here.
+                        "somebody has claimed it, and UNMEASURED — an open pull request, a pushed " +
+                        "branch and local commits were not read, so this is PARKED or INVISIBLE and " +
+                        "nothing here can tell them apart. A claim is not released on a reading " +
+                        "nobody took";
             expect(
               whyNotReady(d),
               `the reason for ${JSON.stringify({ state, phase, blockedByOpen, assignees })} ` +

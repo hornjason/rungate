@@ -60,6 +60,7 @@
 import { parseArgs } from "util";
 import { resolveGitHubToken } from "../lib/github";
 import { laneFor } from "../lib/board-flow";
+import { workVerdict } from "../lib/board-lane-health";
 
 /**
  * The one exit code this script refuses through.
@@ -398,6 +399,35 @@ export function verdictFor(item: BoardItem): Verdict {
       }
 
       if (item.idleDays >= STALE_CLAIM_DAYS) {
+        /**
+         * #1941: whether somebody is WORKING on this is decided in exactly
+         * one place, `workVerdict` in `lib/board-lane-health.ts`, and this
+         * is one of its two callers. The sentences below are its output,
+         * not a second opinion assembled here — mutate that function and
+         * these rows change.
+         *
+         * **It reads three fields and this caller can supply one.** A job
+         * running in GitHub Actions cannot see a branch that was never
+         * pushed or a commit on somebody's laptop, so `pushedBranch` and
+         * `localCommits` are `null` — NOT READ — and never `false`. The
+         * consequence is deliberate and is the finding rather than a gap
+         * to paper over: **this caller can never reach `PARKED`.** Every
+         * release it writes below is taken on an UNMEASURED work reading,
+         * and now says so in its own `why`.
+         *
+         * The release CONDITION is untouched by this. It stays the
+         * conjunction Jason called on 2026-11-06 — silence AND no open
+         * pull request — because narrowing a live writer to a verdict it
+         * structurally cannot produce would stop the sweep releasing
+         * anything at all, which is a behaviour change nobody asked for.
+         * What changed is what the row reports about itself.
+         */
+        const work = workVerdict({
+          openPullRequest: item.openLinkedPRs === null ? null : item.openLinkedPRs > 0,
+          pushedBranch: null,
+          localCommits: null,
+        });
+
         // The expensive half, and the one that must never be guessed. A
         // candidate whose pull-request reading was never taken is
         // UNDECIDABLE — a fetch that silently failed must not be able to
@@ -410,7 +440,8 @@ export function verdictFor(item: BoardItem): Verdict {
               `assigned on GitHub, silent for ${item.idleDays} day(s), and the board says ` +
               `${item.status} — but the open pull requests closing it were NOT READ, so the second half ` +
               `of staleness is unmeasured. A claim is only released on silence AND no open ` +
-              `pull request; releasing on the first alone would unassign work in review`,
+              `pull request; releasing on the first alone would unassign work in review. ` +
+              `Work reading: ${work.why}`,
           };
         }
         if (item.openLinkedPRs === 0) {
@@ -425,7 +456,8 @@ export function verdictFor(item: BoardItem): Verdict {
             why:
               `assigned on GitHub but silent for ${item.idleDays} day(s) with no open pull ` +
               `request declaring it closes this, so the claim is stale. Releasing it: the backlog is for unassigned ` +
-              `work, and board-ready.yml promotes it on merit once a slot frees`,
+              `work, and board-ready.yml promotes it on merit once a slot frees. ` +
+              `Work reading: ${work.why}`,
           };
         }
         // Silent, but a pull request is open against it. That is work in
@@ -438,7 +470,7 @@ export function verdictFor(item: BoardItem): Verdict {
           why:
             `assigned on GitHub with ${item.openLinkedPRs} open pull request(s) closing it, but the board ` +
             `says ${item.status}. The issue itself has been quiet for ${item.idleDays} day(s), ` +
-            `which is why silence alone does not release a claim`,
+            `which is why silence alone does not release a claim. Work reading: ${work.why}`,
         };
       }
 

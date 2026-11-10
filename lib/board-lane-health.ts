@@ -117,10 +117,16 @@ export function workVerdict(e: WorkEvidence): { verdict: WorkVerdict; why: strin
     .filter(([, v]) => v === null)
     .map(([name]) => name);
   if (unread.length > 0) {
+    // "a, b and c" rather than "a and b and c". The list is read by a human
+    // deciding whether to trust a release, so it is written for one.
+    const named =
+      unread.length <= 1
+        ? unread.join("")
+        : `${unread.slice(0, -1).join(", ")} and ${unread[unread.length - 1]}`;
     return {
       verdict: "UNMEASURED",
       why:
-        `UNMEASURED — ${unread.join(" and ")} ${unread.length === 1 ? "was" : "were"} not read, ` +
+        `UNMEASURED — ${named} ${unread.length === 1 ? "was" : "were"} not read, ` +
         `so this is PARKED or INVISIBLE and nothing here can tell them apart. A claim is ` +
         `not released on a reading nobody took`,
     };

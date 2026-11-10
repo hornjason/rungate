@@ -41,6 +41,7 @@
  */
 import { isReady } from "./board-mirror";
 import { laneFor } from "./board-flow";
+import { workVerdict } from "./board-lane-health";
 
 /** One issue that the closed blocker was blocking. */
 export interface Dependent {
@@ -136,7 +137,25 @@ export function whyNotReady(d: Dependent): string {
     return `${d.blockedByOpen} open blocker${d.blockedByOpen === 1 ? "" : "s"} remain`;
   }
   if (d.assignees === null) return "UNMEASURED — the assignee count could not be read";
-  return "somebody has claimed it";
+  /**
+   * #1941: "somebody has claimed it" stood here, and a claim is not work.
+   * The question is decided in one place — `workVerdict` in
+   * `lib/board-lane-health.ts` — and this is its second caller.
+   *
+   * **A `Dependent` carries none of the three evidence fields**, so every
+   * one is NOT READ and this call can only ever return UNMEASURED. That is
+   * not a wasted call and it is not a placeholder: the honest reason this
+   * issue is not going to Ready is that somebody has claimed it and nobody
+   * asked whether they are working on it. The sentence now says both, and
+   * it says it in the decider's words rather than this file's.
+   *
+   * Giving the fanout real evidence means adding a pull-request reading to
+   * `Dependent`, which is built in `scripts/board-ready.ts` — a file
+   * outside this issue and currently under review on #1971. Deliberately
+   * not done here.
+   */
+  const work = workVerdict({ openPullRequest: null, pushedBranch: null, localCommits: null });
+  return `somebody has claimed it, and ${work.why}`;
 }
 
 /**

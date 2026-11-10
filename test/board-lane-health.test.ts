@@ -2,7 +2,7 @@
  * Covers SC-2670 (specs/BOARD-FLOW-SPEC.md).
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import {
   LANES,
@@ -521,5 +521,67 @@ describe("#1941: WORKING, INVISIBLE or PARKED from the evidence, not the assigne
       produced.sort(),
       "a declared verdict no input produces is a branch nothing exercises",
     ).toEqual([...declared].sort());
+  });
+
+  /**
+   * #1941's binding requirement: ONE decider, read by both callers, so a
+   * mutation of it reddens every caller rather than one of them.
+   *
+   * This is the population half. A behavioural case can only catch the
+   * LAST site to regress — the fourth shape in
+   * `.claude/rules/checks-must-be-able-to-fail.md` — so the property is
+   * asserted over the files instead of per-file.
+   *
+   * **The reach is asserted as an equality, in both directions.** A caller
+   * that stops importing the decider is red, and a file that starts asking
+   * this question without being listed here is also red: the second
+   * direction is the one that catches a third site quietly re-deriving
+   * "is somebody working on this" instead of calling the one function.
+   */
+  test("both callers reach the one decider, and nobody re-derives it", () => {
+    const ROOT = join(import.meta.dir, "..");
+    const CALLERS = ["lib/board-ready-fanout.ts", "scripts/board-status-sweep.ts"];
+
+    // Read from disk rather than listed, so a new file is in the population
+    // the moment it exists. A hand-kept list here would make the second
+    // direction below unable to find the thing it is looking for.
+    const SOURCE_FILES = ["lib", "scripts"].flatMap(d =>
+      readdirSync(join(ROOT, d))
+        .filter(f => f.endsWith(".ts"))
+        .map(f => `${d}/${f}`),
+    );
+    expect(
+      SOURCE_FILES.length,
+      "the source census came back empty, so every assertion below holds vacuously",
+    ).toBeGreaterThan(50);
+
+    const notCalling = CALLERS.filter(
+      f => !readFileSync(join(ROOT, f), "utf-8").includes("workVerdict("),
+    );
+    expect(
+      notCalling,
+      "a declared caller of the work decider does not call it — #1941's whole point is that " +
+        "one mutation of workVerdict reddens every caller, and a caller that stopped reading " +
+        "it is a second decider nothing can see",
+    ).toEqual([]);
+
+    // The other direction. Everything under lib/ and scripts/ that imports
+    // the module must be a listed caller or the module itself.
+    const owner = "lib/board-lane-health.ts";
+    const importers = [...SOURCE_FILES]
+      .filter(f => f !== owner)
+      .filter(f => /from "\.{1,2}\/(?:lib\/)?board-lane-health"/.test(readFileSync(join(ROOT, f), "utf-8")))
+      .filter(f => readFileSync(join(ROOT, f), "utf-8").includes("workVerdict"));
+    expect(
+      importers.filter(f => !CALLERS.includes(f)).sort(),
+      "a file reads the work decider and is not listed in CALLERS. Add it — the list is what " +
+        "makes the mutation claim measurable, and a caller nobody listed is a caller nobody " +
+        "checked",
+    ).toEqual([]);
+    expect(
+      importers.sort(),
+      "a listed caller no longer imports the decider at all, so the equality above held " +
+        "vacuously over a shrinking population",
+    ).toEqual([...CALLERS].sort());
   });
 });

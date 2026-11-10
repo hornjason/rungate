@@ -375,6 +375,46 @@ describe("board status sweep", () => {
     expect(v.kind === "correct" && v.to).toBe(IN_PROGRESS);
   });
 
+  /**
+   * #1941. The sweep does not decide "is somebody working on this" itself —
+   * it reads `workVerdict` in `lib/board-lane-health.ts`, the same function
+   * `lib/board-ready-fanout.ts` reads. These two cases are what makes that
+   * claim measurable from here: without them the sweep imports the decider
+   * and no mutation of it can redden this file, which is an import rather
+   * than a dependency.
+   *
+   * The release CONDITION is deliberately not routed through the verdict —
+   * see the comment at the call site. What is routed through it is what the
+   * row says about itself.
+   */
+  test("#1941: a release says its work reading was UNMEASURED, and why", () => {
+    const v = verdictFor(item(312, "Issue", "OPEN", "Backlog", false, null, true, 16, 0));
+    expect(v.kind).toBe("release");
+    const why = v.kind === "release" ? v.why : "";
+    // A job in GitHub Actions cannot see an unpushed branch or a commit on
+    // somebody's laptop. It released on silence and no open PR, which is
+    // the call Jason made, and it now admits what it could not look at.
+    expect(
+      why,
+      "the release does not name its work reading, so nothing here observes the decider",
+    ).toContain("Work reading: UNMEASURED");
+    expect(why).toContain("a pushed branch and local commits were not read");
+    // And it must NOT claim PARKED. PARKED is the verdict that would assert
+    // nobody is working on it, and this caller cannot reach that reading.
+    expect(why, "a caller that cannot read two of three fields must not assert PARKED").not.toContain(
+      "an assignee and nothing else",
+    );
+  });
+
+  test("#1941: a claim with an open PR reads WORKING, from the same decider", () => {
+    const v = verdictFor(item(1168, "Issue", "OPEN", "Backlog", false, null, true, 90, 1));
+    expect(v.kind).toBe("correct");
+    expect(
+      v.kind === "correct" ? v.why : "",
+      "the kept claim does not carry the decider's WORKING sentence",
+    ).toContain("an open pull request declares it closes this");
+  });
+
   test("BS-58: no open PR alone does NOT release — a fresh claim is kept", () => {
     // The other half. Somebody who claimed an issue this morning has no
     // pull request yet, and releasing them would make the claim registry
