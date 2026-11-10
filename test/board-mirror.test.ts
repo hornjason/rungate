@@ -59,7 +59,7 @@ import {
 } from "../lib/board-mirror";
 import { parseCriteria } from "../lib/spec-evidence";
 import { parseRepo, readyPopulation, splitReadyChanges } from "../scripts/board-mirror";
-import { readyOrderFor } from "../lib/board-ready-rule";
+import { NO_WORK_NEXT, readyOrderFor } from "../lib/board-ready-rule";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -808,7 +808,7 @@ describe("#1647: the Ready lane", () => {
         "a later phase is pickable when the lane has room — this input carries phase 6",
       ).toBe(true);
       expect(
-        readyOrderFor("P")({ milestone: "P Phase 6", number: 1, labels: [] }, { milestone: "P Phase 0", number: 99, labels: [] }),
+        readyOrderFor("P", NO_WORK_NEXT)({ milestone: "P Phase 6", number: 1, labels: [] }, { milestone: "P Phase 0", number: 99, labels: [] }),
         "phase still decides who goes FIRST — that is where it moved to",
       ).toBeGreaterThan(0);
     });
@@ -819,7 +819,7 @@ describe("#1647: the Ready lane", () => {
         "an explicit null phase is pickable, not refused",
       ).toBe(true);
       expect(
-        readyOrderFor("P")({ milestone: null, number: 1, labels: [] }, { milestone: "P Phase 9", number: 99, labels: [] }),
+        readyOrderFor("P", NO_WORK_NEXT)({ milestone: null, number: 1, labels: [] }, { milestone: "P Phase 9", number: 99, labels: [] }),
         "a null phase ranks behind every numbered one rather than being refused",
       ).toBeGreaterThan(0);
     });

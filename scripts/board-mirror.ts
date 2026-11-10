@@ -44,6 +44,8 @@ import {
   readyCap,
   readyOccupancy,
   selectReady,
+  workNextReading,
+  type WorkNextReading,
   type ReadyOccupancy,
 } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
@@ -145,6 +147,13 @@ export function splitReadyChanges<
   readyWritable: T[];
   heldByCap: T[];
   selection: ReturnType<typeof selectReady>;
+  /**
+   * The `work-this-next` reading (#1962), RETURNED rather than printed.
+   * This function runs on every invocation; only the caller knows whether
+   * `--ready` was passed, and announcing a refused promotion during a
+   * Criteria sync is a claim about something the run never attempted.
+   */
+  workNext: WorkNextReading;
   /** The reading the caller must restate, never re-derive (#1852). */
   occ: ReadyOccupancy;
 } {
@@ -175,11 +184,28 @@ export function splitReadyChanges<
   // free-slot calculation, which is the defect #1852 closed.
   const after = Math.max(0, occupied - freed);
   const occ = readyOccupancy(after, after, cap);
-  const selection = selectReady(
-    promotions.map(c => ({ number: c.item.number, milestone: c.item.milestone, labels: c.item.labels })),
-    occ,
-    enginePrefix,
-  );
+  const candidates = promotions.map(c => ({
+    number: c.item.number,
+    milestone: c.item.milestone,
+    labels: c.item.labels,
+  }));
+  // The `work-this-next` promotion (#1962), bounded by `cap` — the SAME
+  // depth `occ` was built from, not a second reading of it. This is the
+  // writer, so this is where the label stops being a report and becomes the
+  // order cards are actually written in.
+  //
+  // `COMPLETE`: these candidates are the board's own items, which is the
+  // whole of what this lane draws from, so the ratio has a denominator
+  // somebody chose.
+  //
+  // **It does not log.** This function is called on every run, including a
+  // plain `--field Criteria --write` that never passed `--ready` — round 2
+  // of #1971's review found it announcing a refused Ready promotion during
+  // a Criteria sync, which is a claim about something the run did not
+  // attempt. The reading is RETURNED and the caller prints it under
+  // `--ready`, where it is true.
+  const workNext = workNextReading(candidates, cap, "COMPLETE");
+  const selection = selectReady(candidates, occ, enginePrefix, workNext.honoured);
   // **Written in the order `selectReady` chose, not in board order.**
   // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
   // wrong SEQUENCE, so the log and the write order stop matching the
@@ -194,6 +220,7 @@ export function splitReadyChanges<
     heldByCap: promotions.filter(c => !chosenNumbers.has(c.item.number)),
     selection,
     occ,
+    workNext,
   };
 }
 
@@ -469,7 +496,7 @@ export async function main(argv: string[]): Promise<number> {
   const engine = enginePrefixReading(root);
   if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
   const enginePrefix = engine.prefix;
-  const { readyWritable, heldByCap, selection, occ } = splitReadyChanges(
+  const { readyWritable, heldByCap, selection, occ, workNext } = splitReadyChanges(
     eligible,
     cap,
     occupied,
@@ -494,6 +521,39 @@ export async function main(argv: string[]): Promise<number> {
           readyCap: cap,
           readyOccupied: occupied,
           readyHeldByCap: heldByCap.map(c => c.item.number),
+          // ai-review round 4. The text branch below printed the work-next
+          // reading and this one did not, so a consumer parsing the JSON
+          // could not see that an ordering it is being handed was promoted
+          // — or REFUSED. The two branches render the same run; a field
+          // that exists in one of them is a field that silently does not
+          // exist for whoever reads the other.
+          //
+          // `honoured` is a Set and would serialise as `{}`, which is the
+          // Silent Default Substitution shape: present, empty, and
+          // indistinguishable from "nothing was promoted". Emitted as a
+          // sorted array.
+          //
+          // **Gated on `--ready`, exactly as the text branch is.** Round 5
+          // caught the first cut of this emitting unconditionally: with
+          // `--ready` absent, `cap` is forced `null` above, so a plain
+          // `--field Criteria --write --json` sync reported
+          // `status: "UNMEASURED"` and a `why` saying nothing was promoted
+          // — a claim about a promotion the run never attempted. That is
+          // round 2's finding, recommitted on the other surface by the fix
+          // for round 4.
+          //
+          // `null` is the honest value for "Ready was not requested", and
+          // it is distinguishable from the UNMEASURED object, which means
+          // "it was requested and the depth could not be read".
+          workNext: values.ready
+            ? {
+                status: workNext.status,
+                carrying: workNext.carrying,
+                honoured: [...workNext.honoured].sort((a, b) => a - b),
+                cap: workNext.cap,
+                why: workNext.why,
+              }
+            : null,
           wrote: values.write,
         },
         null,
@@ -515,6 +575,9 @@ export async function main(argv: string[]): Promise<number> {
         `\n  Ready lane — eligibility is unblocked and unclaimed; phase orders, it does not gate`,
       );
       console.log(`    depth: ${cap ?? "UNMEASURED"}. ${selection.why}`);
+      // Under `--ready` only (#1962, round 2): this run did attempt a Ready
+      // promotion, so a refusal here is a true statement about it.
+      if (workNext.status !== "NONE") console.log(`    ${workNext.why}`);
       if (cap === null && !values.repo) {
         console.log(
           `    pass --repo owner/name to derive the depth; a board can span repositories ` +
