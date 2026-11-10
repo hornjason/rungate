@@ -15,7 +15,7 @@ A ship harness for AI-first development: from issue to merged PR, with a report 
 
 ## Hard Constraints
 
-### How we work — ten rules; 1-7 are Jason's call of 2026-10-28, 8, 9 and 10 of 2026-10-30, 2026-10-31 and 2026-11-01
+### How we work — ten rules; 1-7 are Jason's call of 2026-10-28, 8 and 10 of 2026-10-30 and 2026-11-01, and 9 of 2026-11-09, replacing a 2026-10-31 call
 
 1. **A spec says what must be true; it is never the to-do list.** Specs still
    carry checkboxes. Nobody works from them — work comes off the tracker.
@@ -50,9 +50,12 @@ A ship harness for AI-first development: from issue to merged PR, with a report 
    that comes back empty is it logged as a blocker and left for the next
    unblocked item. Abandoning on the third try throws away the problems that
    were one search away from solved. Jason's call, 2026-10-30.
-9. **An agreement is not real until it is in `project-state.json`** — write
-   it there before the turn ends. Priority 2 says what the last unwritten
-   one cost. Jason's call, 2026-10-31.
+9. **An agreement is not real until it is an issue** — file it before the
+   turn ends, naming the files it will change. `project-state.json`
+   records decisions and their evidence; it holds no work. Jason's call,
+   2026-11-09, replacing the 2026-10-31 wording that predated blocked-by
+   edges and a Ready lane: it told sessions to write prose instead of
+   filing, and nine gaps were found living only there (#1938-#1946).
 10. **The plan is `project-state.json`'s `goal`, `goals` and `stages` —
     nowhere else.** Each item carries the command that proves it; a stage is
     complete when every command exits 0, never because a document says so,
