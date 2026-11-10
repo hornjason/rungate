@@ -1978,14 +1978,60 @@ export function resolveFiling(tokens: string[]): FilingAttempt {
 }
 
 /**
+ * Does this command set `GH_REPO` ANYWHERE in it?
+ *
+ * **Round 5 of PR #1963's review, and a change of SCOPE rather than a sixth
+ * spelling.** Rounds 1-3 were all one axis — a clause retargeting *itself* —
+ * and `directGhInvocation` answered the whole axis. This is a different one.
+ * `clauses()` splits on `&&`, `;` and `|` before anything tokenizes, so in
+ *
+ *     export GH_REPO=other/x && gh issue create --label engine …
+ *
+ * the adjudicated clause is the SECOND. It contains no assignment, it begins
+ * with `gh`, and it is byte-identical to an honest local filing — while the
+ * shell has already put `GH_REPO` in the environment `gh` reads. Measured
+ * before the fix: `repo=null, directGh=true`, the same reading a plain
+ * `gh issue create` produces.
+ *
+ * **`hooks/lib/utils.ts` already found and answered this**, for
+ * `IssueCloseGuard` (#143), and its comment is the rule adopted here: *"Tested
+ * against the WHOLE command, not the closing segment. The first version
+ * checked the segment and so caught the inline-prefix form while missing the
+ * natural one … A control that only covers the awkward spelling is not a
+ * control."* A per-clause reading cannot see an environment that outlives the
+ * clause, so the question has to be asked of the whole string.
+ *
+ * **It fails toward refusing the raise.** A `--body "GH_REPO=x"` costs a
+ * legitimate filing its bigger ceiling and nothing else: a smaller allowance,
+ * never a blocked filing. The opposite error hands this project's queue
+ * ceiling to a command aimed at somebody else's tracker, which is the
+ * authorization shape rounds 2 and 3 were closing.
+ */
+export function ambientRetarget(cmd: string): boolean {
+  return /\bGH_REPO=/.test(cmd);
+}
+
+/**
  * Every `gh issue create` in this command, one entry per clause.
  *
  * Per clause and not per command, for the reason `verifyPhaseRefusal` is:
  * `gh issue comment … && gh issue create …` is a create, and a reading over
  * the whole string lets the first half excuse the second.
+ *
+ * **One property is read from the whole command and not the clause**, and it
+ * is `directGh` — see `ambientRetarget`. `directGh` means *an invocation this
+ * file can vouch for*, and a sibling clause that exports `GH_REPO` is exactly
+ * an invocation it cannot. Nothing else widens: the dedupe, the claim check
+ * and the cap all still read the clause.
  */
 export function filingAttempts(cmd: string): FilingAttempt[] {
-  return clauses(cmd).filter(createsIssue).map(resolveFiling);
+  const retargeted = ambientRetarget(cmd);
+  return clauses(cmd)
+    .filter(createsIssue)
+    .map(tokens => {
+      const attempt = resolveFiling(tokens);
+      return retargeted ? { ...attempt, directGh: false } : attempt;
+    });
 }
 
 /**

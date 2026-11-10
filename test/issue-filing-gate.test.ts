@@ -5575,6 +5575,58 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
     ).toBeNull();
   });
 
+  test("FG-264: an assignment in ANOTHER clause gets no raise — the env outlives the clause", async () => {
+    // **Round 5, and a scope change rather than a sixth spelling.** Rounds 1-3
+    // each found a way one clause retargets ITSELF, and round 3 answered all
+    // of them with one property: the program must be the first token. This is
+    // a different axis. `clauses()` splits on `&&` before anything tokenizes,
+    // so in `export GH_REPO=other/x && gh issue create …` the adjudicated
+    // clause is the SECOND one — which contains no assignment, begins with
+    // `gh`, and is therefore indistinguishable from an honest local filing.
+    //
+    // Measured before the fix: `repo=null, directGh=true` for all three of
+    // `export … && gh …`, `GH_REPO=…; gh …` and a plain `gh …`. Byte-identical
+    // readings for a command aimed at another tracker and one aimed here.
+    //
+    // `hooks/lib/utils.ts` already hit this exact pattern for `IssueCloseGuard`
+    // (#143) and already wrote the answer down: *"Tested against the WHOLE
+    // command, not the closing segment … A control that only covers the
+    // awkward spelling is not a control."* This adopts that rule rather than
+    // inventing a second one.
+    const retargeted = `export GH_REPO=other/x && ${queueLabelled()}`;
+    expect(
+      filingAttempts(retargeted)[0]?.directGh,
+      "an assignment in a sibling clause is invisible to a per-clause reading, and " +
+        "`gh` honours it anyway",
+    ).toBe(false);
+
+    const r = await run(queued, retargeted);
+    expect(
+      r.rows[0].queuedBy,
+      "a command that retargets through the environment borrowed this project's ceiling",
+    ).toBeNull();
+
+    // The same shape with `;` rather than `&&`, so this is the property and
+    // not one operator.
+    expect(
+      filingAttempts(`GH_REPO=other/x; ${queueLabelled()}`)[0]?.directGh,
+      "the separator is not the mechanism — the assignment is",
+    ).toBe(false);
+  });
+
+  test("FG-265 CONTROL: a multi-clause command with NO assignment keeps the raise", async () => {
+    // Without this, FG-264 passes against a gate that refuses every command
+    // containing `&&` — which would be the cheapest wrong fix, and would quietly
+    // switch the queue route off for the compound commands agents actually
+    // write. The two cases differ in ONE token: the assignment.
+    const r = await run(queued, `true && ${queueLabelled()}`);
+    expect(
+      r.rows[0].queuedBy,
+      "clause splitting is not the finding — a compound command that retargets nothing " +
+        "is still in this project's queue",
+    ).toBe(QUEUE_LABEL);
+  });
+
   test("FG-261: a WRAPPED invocation gets no raise, whatever the wrapper is", async () => {
     // **Round 3, and a re-scope rather than a repair.** Rounds 1, 2 and 3
     // each found one more spelling by which a clause retargets itself:
