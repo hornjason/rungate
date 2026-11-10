@@ -4,7 +4,15 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { LANES, laneHealth, laneHealthLines, type LaneCensus } from "../lib/board-lane-health";
+import {
+  LANES,
+  laneHealth,
+  laneHealthLines,
+  workVerdict,
+  type LaneCensus,
+  type WorkEvidence,
+} from "../lib/board-lane-health";
+import { structuralCut } from "../lib/source-slice";
 
 const census = (over: Partial<LaneCensus> = {}): LaneCensus => ({
   counts: new Map([
@@ -406,5 +414,112 @@ describe("a lane count is only a reading against what should be in it", () => {
       "this prints Done=28 while the board UI shows 47, because pull requests are dropped. " +
         "A reader who is not told that concludes one of the two is wrong.",
     ).toContain("issue");
+  });
+});
+
+/**
+ * #1941 — is anybody actually working this, from the artifacts?
+ *
+ * The board asks whether an issue has an assignee. Measured 2026-11-09: six
+ * were assigned and none had an open pull request; five had no pushed branch
+ * at all; the one with real work had it unpushed in a local worktree.
+ */
+describe("#1941: WORKING, INVISIBLE or PARKED from the evidence, not the assignee", () => {
+  const ev = (over: Partial<WorkEvidence> = {}): WorkEvidence => ({
+    openPullRequest: false,
+    pushedBranch: false,
+    localCommits: false,
+    ...over,
+  });
+
+  test("a pushed branch or an open pull request is WORKING", () => {
+    expect(workVerdict(ev({ openPullRequest: true })).verdict).toBe("WORKING");
+    expect(workVerdict(ev({ pushedBranch: true })).verdict).toBe("WORKING");
+    // The premise this pair needs: the SAME evidence without either is not
+    // WORKING, so the rows above are about the fields and not about the
+    // function answering WORKING to everything.
+    expect(workVerdict(ev()).verdict).not.toBe("WORKING");
+  });
+
+  test("local commits and nothing pushed is INVISIBLE, and says what to do", () => {
+    const r = workVerdict(ev({ localCommits: true }));
+    expect(r.verdict).toBe("INVISIBLE");
+    expect(r.why, "a verdict nobody can act on is a status line").toContain("Push the branch");
+  });
+
+  test("an assignee and nothing else is PARKED — but only when all three were READ", () => {
+    // The safety property, and the reason `null` exists. PARKED is the
+    // verdict that releases somebody's claim, so it must not be reachable
+    // from an absence: a caller that never looked for local commits and one
+    // that looked and found none are different facts.
+    expect(workVerdict(ev()).verdict).toBe("PARKED");
+    for (const field of ["openPullRequest", "pushedBranch", "localCommits"] as const) {
+      const r = workVerdict(ev({ [field]: null }));
+      expect(r.verdict, `an unread ${field} still released the claim`).toBe("UNMEASURED");
+      expect(r.why, "the refusal does not say which reading was missing").toContain(
+        field === "openPullRequest"
+          ? "an open pull request"
+          : field === "pushedBranch"
+            ? "a pushed branch"
+            : "local commits",
+      );
+    }
+  });
+
+  test("an unread field does NOT suppress a positive reading that was taken", () => {
+    // The other direction, and the one a defensive `null` check written
+    // first would get wrong: evidence of real work is evidence however much
+    // else went unread, and refusing to say WORKING because the local view
+    // was missing would make every CI run UNMEASURED.
+    expect(workVerdict({ openPullRequest: true, pushedBranch: null, localCommits: null }).verdict).toBe(
+      "WORKING",
+    );
+    expect(workVerdict({ openPullRequest: null, pushedBranch: true, localCommits: null }).verdict).toBe(
+      "WORKING",
+    );
+    expect(workVerdict({ openPullRequest: null, pushedBranch: null, localCommits: true }).verdict).toBe(
+      "INVISIBLE",
+    );
+  });
+
+  test("a GitHub-only caller can never reach PARKED, and the reason is named", () => {
+    // `scripts/board-status-sweep.ts` runs in GitHub Actions, on a machine
+    // that has never seen the worktree #1931's commit lives in. This is the
+    // finding made legible rather than a limitation to work around: the
+    // sweep's honest verdict is "PARKED or INVISIBLE, and I cannot tell".
+    const fromActions = workVerdict({ openPullRequest: false, pushedBranch: false, localCommits: null });
+    expect(fromActions.verdict).toBe("UNMEASURED");
+    expect(fromActions.why).toContain("PARKED or INVISIBLE");
+    // And the control: the same runner WITH a local view reaches a verdict,
+    // so the row above is about the missing reading and not about the
+    // function refusing everything it is handed.
+    expect(
+      workVerdict({ openPullRequest: false, pushedBranch: false, localCommits: false }).verdict,
+    ).toBe("PARKED");
+  });
+
+  test("every verdict is reachable, and no two inputs collapse onto one word", () => {
+    // The population guard. A fifth verdict added without a branch, or a
+    // branch deleted, shows up here rather than in a reviewer's reading.
+    const seen = new Set(
+      [
+        ev({ openPullRequest: true }),
+        ev({ localCommits: true }),
+        ev(),
+        ev({ localCommits: null }),
+      ].map(e => workVerdict(e).verdict),
+    );
+    const declared = structuralCut(
+      readFileSync(join(import.meta.dir, "..", "lib/board-lane-health.ts"), "utf-8"),
+      "export type WorkVerdict",
+      { endAnchor: ";" },
+    )
+      .match(/"([A-Z]+)"/g)!
+      .map(s => s.replaceAll('"', ""));
+    const produced: string[] = [...seen];
+    expect(
+      produced.sort(),
+      "a declared verdict no input produces is a branch nothing exercises",
+    ).toEqual([...declared].sort());
   });
 });
