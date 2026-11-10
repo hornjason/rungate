@@ -28,14 +28,22 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  bodyWithDecline,
+  decline,
+  declineViolations,
   promote,
   promotionStatement,
   promotionViolations,
   specPath,
+  DECLINE_REFUSALS,
   PROMOTION_REFUSALS,
   STATEMENT_FIELD_NAMES,
+  type DeclineInput,
+  type DeclineRefusal,
   type PromotionInput,
 } from "../lib/finding-promotion";
+import { NAMES_NONE } from "../lib/board-mirror";
+import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf, missingSections } from "../lib/issue-shape";
 import { buildScRegistry } from "../lib/sc-ids";
 
 const SOURCE = join(import.meta.dir, "..", "lib", "finding-promotion.ts");
@@ -619,35 +627,70 @@ describe("SC-2612 / AC-6 (#1678): the CLI refuses a bad flag by NAME, for every 
 
   test("the flag set was read, not assumed", () => {
     // A regex that matched nothing would make every case below vacuous.
-    expect([...requiredFlags].sort()).toEqual(["issue", "module", "outcome", "spec", "symbol"]);
+    expect([...requiredFlags].sort()).toEqual([
+      "declines",
+      "issue",
+      "module",
+      "outcome",
+      "spec",
+      "symbol",
+    ]);
   });
 
-  /** A complete, well-formed command line. One flag gets corrupted per case. */
-  const VALID: Record<string, string> = {
-    issue: "1678",
-    spec: "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
-    symbol: "promote",
-    module: "lib/finding-promotion.ts",
-    outcome: "an outcome",
+  /**
+   * A complete, well-formed command line PER MODE. One flag is corrupted per
+   * case, and every other flag in that mode is valid, so the refusal can
+   * only be about the one under test.
+   *
+   * Two tables rather than one since #1940, because the script has two
+   * outcomes and `--declines` switches between them. Merging them would be
+   * worse than untidy: a single table carrying `--declines` would put every
+   * promote case on the DECLINE path, where `--spec`, `--outcome`,
+   * `--symbol` and `--module` are not read at all — four of six cases
+   * passing a sweep that never reached the flag they name.
+   */
+  const MODES: Record<string, Record<string, string>> = {
+    promote: {
+      issue: "1678",
+      spec: "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
+      symbol: "promote",
+      module: "lib/finding-promotion.ts",
+      outcome: "an outcome",
+    },
+    decline: {
+      issue: "1678",
+      declines: "a reason nobody has to take on trust",
+    },
   };
 
+  /** Every flag must be swept by the mode that actually reads it. */
+  test("the two mode tables between them cover every required flag", () => {
+    const covered = new Set(Object.values(MODES).flatMap(m => Object.keys(m)));
+    expect([...requiredFlags].filter(f => !covered.has(f))).toEqual([]);
+  });
+
   test("EVERY required flag refuses by name when its value is the next flag", () => {
-    for (const flag of requiredFlags) {
-      // Every OTHER flag valid, so the refusal can only be about this one.
-      // The first version corrupted one flag and omitted the rest, and
-      // `--issue is required` answered every case — four of five passing
-      // for a reason that had nothing to do with the flag under test.
-      const argv = Object.entries(VALID).flatMap(([k, v]) => [
-        `--${k}`,
-        k === flag ? "--write" : v,
-      ]);
-      const { code, err } = run(argv);
-      expect(code, `--${flag} with a flag as its value must refuse`).toBe(1);
-      expect(err, `the refusal for --${flag} must name it`).toContain(`--${flag}`);
-      expect(err, `the refusal for --${flag} must say what went wrong`).toContain(
-        "is the next flag",
-      );
+    let swept = 0;
+    for (const [mode, valid] of Object.entries(MODES)) {
+      for (const flag of Object.keys(valid)) {
+        // The first version of this corrupted one flag and omitted the rest,
+        // and `--issue is required` answered every case — four of five
+        // passing for a reason that had nothing to do with the flag.
+        const argv = Object.entries(valid).flatMap(([k, v]) => [
+          `--${k}`,
+          k === flag ? "--write" : v,
+        ]);
+        const { code, err } = run(argv);
+        expect(code, `[${mode}] --${flag} with a flag as its value must refuse`).toBe(1);
+        expect(err, `[${mode}] the refusal for --${flag} must name it`).toContain(`--${flag}`);
+        expect(err, `[${mode}] the refusal for --${flag} must say what went wrong`).toContain(
+          "is the next flag",
+        );
+        swept += 1;
+      }
     }
+    // A loop over an empty table reports success having run nothing.
+    expect(swept).toBe(7);
   });
 
   test("a non-numeric --issue refuses up front, not as a gh error about issue #NaN", () => {
@@ -677,5 +720,270 @@ describe("SC-2612 / AC-5 (#1678): the statement a promotion produces", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * #1940: the OTHER outcome of the router — declining.
+ *
+ * ## What was missing
+ *
+ * `NAMES_NONE = "serves no criterion"` is defined in `lib/board-mirror.ts`
+ * and read by `scripts/board-snapshot.ts`, which reports an issue carrying
+ * the literal in its title or body as a deliberate decline rather than a
+ * blank. SC-2609 made the phrase sayable precisely so that *not yet filled
+ * in* and *deliberately none* stop being the same zero bytes.
+ *
+ * Nothing emitted it. Grepped across `lib`, `scripts`, `bin` and `hooks` on
+ * 2026-11-09: the definition, one read, one detector, and no producer.
+ *
+ * The one creation path was WORSE than absent, and that is the correction
+ * this block records: `.github/ISSUE_TEMPLATE/spec-work.yml` tells a human
+ * author to type the phrase. So the only way the board could learn that work
+ * deliberately serves no criterion was a **self-declaration** — the exact
+ * shape `lib/criterion-issue-census.ts` refused to make a column, and that
+ * `promote`'s own docblock refuses to make a flag, because a judgement
+ * settable by whoever is looking rebuilds the tick-is-proof defect one level
+ * up inside the instrument built to measure it.
+ *
+ * `decline` makes the declaration an OUTCOME. It is refused when the board
+ * can already see a criterion, refused when the sweep could not be taken,
+ * and the phrase it writes is interpolated from the constant the detector
+ * reads rather than retyped in a second language.
+ */
+describe("#1940: declining is an outcome of the router, not a self-declaration", () => {
+  const WHY = "a worktree tidy-up: no criterion in this tree is made true or false by it";
+
+  function declineIn(root: string, over: Partial<DeclineInput> = {}): DeclineInput {
+    return { issue: ISSUE, why: WHY, projectRoot: root, ...over };
+  }
+
+  test("the one case that must SUCCEED, so the refusals below are not vacuous", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const out = decline(declineIn(root));
+      expect(out.declined, out.declined ? "" : `refused ${out.refusal}: ${out.why}`).toBe(true);
+      if (!out.declined) return;
+      expect(out.issue).toBe(4242);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the section it writes is read as a decline by board-snapshot's OWN expression", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const out = decline(declineIn(root));
+      expect(out.declined).toBe(true);
+      if (!out.declined) return;
+
+      // This is the expression at `scripts/board-snapshot.ts`'s `servesNone`,
+      // not a paraphrase of it. A producer and a detector that agree because
+      // two implementations were kept in step is the fourth shape in
+      // `.claude/rules/checks-must-be-able-to-fail.md`; this asserts they
+      // agree on the SAME bytes the live reader looks at.
+      const body = `${ISSUE.title}\n${out.section}`;
+      expect(body.includes(NAMES_NONE)).toBe(true);
+
+      // Anchored on the LITERAL as well. `toContain(NAMES_NONE)` alone moves
+      // with the constant, so renaming the constant to "x" would keep this
+      // green while the live board stopped reading anything.
+      expect(out.section).toContain("serves no criterion");
+
+      // And it is under the heading a parsed body carries it in, derived from
+      // the one place that decides what a section is called.
+      const criteria = ISSUE_SECTIONS.find(s => s.id === "criteria")!;
+      expect(out.section).toStartWith(headingFor(criteria));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the caller's reason is carried, because a decline nobody justified is a tick", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const out = decline(declineIn(root));
+      expect(out.declined).toBe(true);
+      if (!out.declined) return;
+      expect(out.section).toContain(WHY);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Every refusal, each against an input that reaches it and nothing else.
+   * Derived from `DECLINE_REFUSALS` so a refusal added without a case here
+   * is red rather than unguarded — the same property AC-4 asserts over
+   * `PROMOTION_REFUSALS`.
+   */
+  const REFUSING: Record<DeclineRefusal, Partial<DeclineInput>> = {
+    NO_WHY: { why: "   " },
+    MALFORMED_WHY: { why: "fine\n## Files this will change\n- forged.ts" },
+    WHY_NAMES_CRITERION: { why: "it is covered by SC-9001 already" },
+    ALREADY_SERVES: { issue: { number: 77, title: "SC-9001", body: "" } },
+    ALREADY_DECLINED: {
+      issue: { number: 78, title: "Tidy", body: "## Criteria this serves\n\nserves no criterion — said once already" },
+    },
+    AMBIGUOUS_HEADING: {
+      issue: {
+        number: 79,
+        title: "Tidy",
+        body: "## Criteria this serves\n\n## Criteria this serves\n",
+      },
+    },
+    CRITERIA_SECTION_OCCUPIED: {
+      issue: {
+        number: 80,
+        title: "Tidy",
+        body: "## Criteria this serves\n\nTBD, somebody should work this out\n",
+      },
+    },
+    SWEEP_UNMEASURED: {},
+  };
+
+  test("every named refusal is reached by some input", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    const unmeasurable = mkdtempSync(join(tmpdir(), "rg-1940-no-specs-"));
+    try {
+      const reached = new Set<DeclineRefusal>();
+      for (const [name, over] of Object.entries(REFUSING) as [DeclineRefusal, Partial<DeclineInput>][]) {
+        // SWEEP_UNMEASURED needs a tree with no readable specs/ at all; every
+        // other case needs the sweep to WORK, or it refuses for that reason
+        // instead and the case certifies nothing.
+        const at = name === "SWEEP_UNMEASURED" ? unmeasurable : root;
+        for (const v of declineViolations(declineIn(at, over))) reached.add(v.refusal);
+      }
+      expect([...DECLINE_REFUSALS].filter(r => !reached.has(r))).toEqual([]);
+    } finally {
+      rmSync(unmeasurable, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an issue the board can already see a criterion on cannot decline", () => {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const out = decline(declineIn(root, { issue: { number: 77, title: "SC-9001", body: "" } }));
+      expect(out.declined).toBe(false);
+      if (out.declined) return;
+      expect(out.refusal).toBe("ALREADY_SERVES");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The mutation half. `decline` adds no condition of its own — every refusal
+   * comes from `declineViolations` — so emptying that one binding must turn
+   * every refusing input above into a declining one.
+   *
+   * Without it, a case that refuses because the fixture was malformed is
+   * indistinguishable from one that observed the guard.
+   */
+  test("every refusing input declines against a mutant with the binding emptied", async () => {
+    const libDir = join(import.meta.dir, "..", "lib");
+    const mutantDir = mkdtempSync(join(libDir, "tmp-1940-mutant-"));
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const BINDING = "export function declineViolations(input: DeclineInput): DeclineViolation[] {";
+      const source = readFileSync(SOURCE, "utf8");
+      expect(source).toContain(BINDING);
+      // Exactly once, so no refusal bypasses the mutation.
+      expect(source.split(BINDING).length - 1).toBe(1);
+
+      let text = source.replace(BINDING, `${BINDING}\n  return [];`);
+      expect(text).not.toBe(source);
+      const before = text;
+      text = text.replace(/from "\.\//g, 'from "../');
+      expect(text).not.toBe(before);
+      expect(text).not.toMatch(/from "\.\/[^."]/);
+      const path = join(mutantDir, "finding-promotion-decline-mutant.ts");
+      writeFileSync(path, text);
+
+      // Baseline FIRST. A mutant row read before its baseline is a reading
+      // with nothing to compare against.
+      const refusing = Object.entries(REFUSING).filter(([n]) => n !== "SWEEP_UNMEASURED") as [
+        DeclineRefusal,
+        Partial<DeclineInput>,
+      ][];
+      for (const [, over] of refusing) {
+        expect(decline(declineIn(root, over)).declined).toBe(false);
+      }
+
+      const mutant = (await import(path)) as typeof import("../lib/finding-promotion");
+      let declinedByMutant = 0;
+      for (const [, over] of refusing) {
+        if (mutant.decline(declineIn(root, over)).declined) declinedByMutant += 1;
+      }
+      // Predicted 7 of 7 — the whole set minus SWEEP_UNMEASURED, which is
+      // excluded because it needs a different tree, not because the guard
+      // would survive.
+      expect(declinedByMutant).toBe(7);
+
+      // Membership, not just the total: the forgery is the one whose failure
+      // mode is worst, so it is the one that must be observed promoting.
+      const forged = mutant.decline(declineIn(root, REFUSING.MALFORMED_WHY));
+      expect(forged.declined).toBe(true);
+      if (!forged.declined) return;
+      expect(forged.section).toContain("## Files this will change");
+    } finally {
+      rmSync(mutantDir, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * #1940, second half: the body the CLI writes back to the tracker.
+ *
+ * Printing the section and telling an author to paste it would move the
+ * typing without removing it, and the spelling is the thing that drifts —
+ * `test/board-snapshot.test.ts` already had to add a case for a form that
+ * said `none — machinery` while the reader matched the constant. So the
+ * decline is APPLIED, and this block is about the two shapes of body it has
+ * to apply into.
+ */
+describe("#1940: bodyWithDecline puts the declaration where the readers look", () => {
+  const WHY = "maintenance on the worktree census, no criterion moves";
+
+  test("a body with no criteria heading gains the whole section", () => {
+    const out = bodyWithDecline("## What must become true\n\nTidy the census.\n", WHY);
+    expect(out).toContain("## Criteria this serves");
+    expect(out).toContain(`${NAMES_NONE} — ${WHY}`);
+    // The author's own text is still there. An apply that replaced the body
+    // would pass every assertion above and lose the issue.
+    expect(out).toContain("Tidy the census.");
+  });
+
+  test("a body with an EMPTY criteria heading gains the line, not a second heading", () => {
+    const body = "## What must become true\n\nTidy.\n\n## Criteria this serves\n\n## Files this will change\n\n- a.ts\n";
+    const out = bodyWithDecline(body, WHY);
+    expect(headingOccurrencesOf(out, "## Criteria this serves").length).toBe(1);
+    expect(out).toContain(`${NAMES_NONE} — ${WHY}`);
+    // And it landed under ITS OWN heading, not at the end of the body, which
+    // is where a naive append would put it — under Files this will change.
+    expect(missingSections(out, "spec-work")).not.toContain("## Criteria this serves");
+    expect(out).toContain("- a.ts");
+  });
+
+  test("the applied body is read as a decline by board-snapshot's own expression", () => {
+    const out = bodyWithDecline("## What must become true\n\nTidy.\n", WHY);
+    expect(`A title\n${out}`.includes(NAMES_NONE)).toBe(true);
+    // Anchored on the literal too, so renaming the constant cannot keep this
+    // green while the live board stops reading anything.
+    expect(out).toContain("serves no criterion");
+  });
+
+  test("a fenced heading is not mistaken for the section — the fence-blind bug", () => {
+    // `headingOccurrencesOf` exists because a body quoting the template in a
+    // code block looks exactly like one that has the section. If this apply
+    // were fence-blind it would insert the declaration inside the fence,
+    // where no reader of the rendered issue would ever see it.
+    const body = "## What must become true\n\nRun:\n\n```\n## Criteria this serves\n```\n";
+    const out = bodyWithDecline(body, WHY);
+    expect(headingOccurrencesOf(out, "## Criteria this serves").length).toBe(1);
+    const real = headingOccurrencesOf(out, "## Criteria this serves")[0]!;
+    expect(out.slice(real)).toContain(NAMES_NONE);
   });
 });

@@ -11,16 +11,34 @@
  *   …and add --write to append it. Without --write it prints and exits 0,
  *   having changed nothing.
  *
+ * The OTHER outcome — this finding serves no criterion, deliberately:
+ *
+ *   bun scripts/finding-promotion.ts --issue 1934 \
+ *     --declines "a worktree tidy-up; no criterion is made true or false" --write
+ *
+ * which writes the phrase `scripts/board-snapshot.ts` reads, interpolated
+ * from the constant rather than retyped. It refuses when the board can
+ * already see a criterion on the issue, so the declaration is an OUTCOME of
+ * the router and not a self-declaration — #1940.
+ *
  * `--outcome` and `--symbol` are the caller's judgement and this script does
  * not supply them — see the docblock of `lib/finding-promotion.ts` for why
- * there is no `--auto` that sweeps the backlog.
+ * there is no `--auto` that sweeps the backlog. `--declines` is the same
+ * kind of input for the same reason.
  *
  * Thin CLI consumer — all logic lives in lib/finding-promotion.ts.
  */
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
-import { promote, specPath, type PromotableIssue } from "../lib/finding-promotion";
+import {
+  bodyWithDecline,
+  decline,
+  promote,
+  specPath,
+  type PromotableIssue,
+} from "../lib/finding-promotion";
 import { readScRegistry } from "./sync-sc-status";
 import { currentScOwner } from "../lib/sc-reservations";
 import { ghWithoutGhToken } from "../lib/live-issues";
@@ -84,10 +102,22 @@ function requiredPositiveInt(name: string): number {
 }
 
 const issueNumber = requiredPositiveInt("issue");
-const spec = required("spec");
-const outcome = required("outcome");
-const symbol = required("symbol");
-const module = required("module");
+
+/**
+ * Which outcome of the router this run is.
+ *
+ * Presence, not value — `--declines --write` must refuse by NAME rather than
+ * decline with the reason `"--write"`, which is what reading the value to
+ * decide the mode would do. `required` is what names it, and it is the same
+ * one binding every other flag goes through.
+ */
+const declining = args.includes("--declines");
+const declineWhy = declining ? required("declines") : "";
+
+const spec = declining ? "" : required("spec");
+const outcome = declining ? "" : required("outcome");
+const symbol = declining ? "" : required("symbol");
+const module = declining ? "" : required("module");
 const write = args.includes("--write");
 
 // The issue's own text decides ALREADY_SERVES, so a title typed by hand here
@@ -108,6 +138,39 @@ const issue: PromotableIssue = (() => {
     process.exit(PROMOTION_EXIT);
   }
 })();
+
+if (declining) {
+  const declined = decline({ issue, why: declineWhy, projectRoot: ROOT });
+  if (!declined.declined) {
+    console.error(`REFUSED ${declined.refusal}: ${declined.why}`);
+    process.exit(PROMOTION_EXIT);
+  }
+  console.log(declined.section);
+
+  if (!write) {
+    console.log(`(dry run — nothing written. Add --write to apply it to #${issueNumber}.)`);
+    process.exit(0);
+  }
+
+  // Through a file, because the body is markdown with newlines and headings
+  // in it and an argv round-trip through a shell is where that gets eaten.
+  const scratch = mkdtempSync(join(tmpdir(), "rg-1940-decline-"));
+  try {
+    const bodyFile = join(scratch, "body.md");
+    writeFileSync(bodyFile, bodyWithDecline(issue.body ?? "", declineWhy));
+    ghWithoutGhToken(["issue", "edit", String(issueNumber), "--body-file", bodyFile]);
+  } catch (e) {
+    console.error(`REFUSED: #${issueNumber} could not be updated on the tracker`);
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(PROMOTION_EXIT);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  console.log(`#${issueNumber} now declares it serves no criterion.`);
+  console.log("board-snapshot reads it as a deliberate decline rather than a blank cell.");
+  process.exit(0);
+}
 
 const result = promote(
   { issue, spec, outcome, symbol, module, projectRoot: ROOT, owner: currentScOwner(ROOT) },

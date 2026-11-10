@@ -46,8 +46,9 @@
 import { existsSync, readFileSync } from "fs";
 import { resolve, sep } from "path";
 
-import { criteriaNamedBy, specCriteriaIn } from "./board-mirror";
+import { NAMES_NONE, criteriaNamedBy, specCriteriaIn } from "./board-mirror";
 import { allocateScNumber, formatSCLine } from "./create-sc";
+import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf } from "./issue-shape";
 import type { ScRegistry } from "./sc-ids";
 
 /** The issue a finding was filed as. The shape `criteriaNamedBy` reads. */
@@ -391,4 +392,249 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
     issue: input.issue.number,
     unmeasured: allocated.namespace.unmeasured ?? [],
   };
+}
+
+/**
+ * ## Declining — the router's other outcome
+ *
+ * `NAMES_NONE` has been readable since SC-2609 and writable by nothing.
+ * `scripts/board-snapshot.ts` reports an issue carrying the literal as a
+ * DELIBERATE decline rather than a blank cell, which is the whole point of
+ * spelling the value: *not yet filled in*, *the tool could not tell* and
+ * *deliberately none* stop being the same zero bytes.
+ *
+ * The one creation path was worse than none. `.github/ISSUE_TEMPLATE/
+ * spec-work.yml` tells a human author to type the phrase, so the board's
+ * only source for "this work serves no criterion" was a **self-declaration**
+ * — the shape `lib/criterion-issue-census.ts` refused to make a column and
+ * this module's own docblock refuses to make a flag, for the same reason in
+ * all three places: a judgement settable by whoever is looking rebuilds the
+ * tick-is-proof defect inside the instrument built to measure it.
+ *
+ * So the declaration is an OUTCOME here, on the same terms as a promotion:
+ *
+ * - The board must already agree there is no criterion. {@link decline} asks
+ *   `criteriaNamedBy` — the call the board renders from, not a second answer
+ *   to the same question.
+ * - A sweep that could not be taken refuses. "This issue serves none" is not
+ *   a reading available to something that could not enumerate the criteria.
+ * - The phrase is interpolated from {@link NAMES_NONE}. A producer that
+ *   retyped it would be a second language for one value, which is exactly
+ *   the drift `test/board-snapshot.test.ts` had to add a case for when the
+ *   form said `none — machinery` and the reader matched the constant.
+ */
+export const DECLINE_REFUSALS = [
+  "NO_WHY",
+  "MALFORMED_WHY",
+  "WHY_NAMES_CRITERION",
+  "SWEEP_UNMEASURED",
+  "ALREADY_SERVES",
+  "ALREADY_DECLINED",
+  "AMBIGUOUS_HEADING",
+  "CRITERIA_SECTION_OCCUPIED",
+] as const;
+
+export type DeclineRefusal = (typeof DECLINE_REFUSALS)[number];
+
+export interface DeclineViolation {
+  readonly refusal: DeclineRefusal;
+  readonly why: string;
+}
+
+export interface DeclineInput {
+  readonly issue: PromotableIssue;
+  /** The caller's reason. Their judgement, owned by them, and required. */
+  readonly why: string;
+  readonly projectRoot: string;
+}
+
+export type Decline =
+  | {
+      readonly declined: true;
+      /** The markdown to put under the issue's Criteria heading, verbatim. */
+      readonly section: string;
+      readonly issue: number;
+    }
+  | { readonly declined: false; readonly refusal: DeclineRefusal; readonly why: string };
+
+/** The heading a declaration lives under, from the one place that names it. */
+const CRITERIA_HEADING = headingFor(ISSUE_SECTIONS.find(s => s.id === "criteria")!);
+
+/**
+ * The text a decline writes.
+ *
+ * `NAMES_NONE` is interpolated, never retyped: `scripts/board-snapshot.ts`
+ * matches the literal, so a producer spelling it itself would be a second
+ * language for one value and the two would drift silently.
+ */
+export function declineSection(why: string): string {
+  return `${CRITERIA_HEADING}\n\n${NAMES_NONE} — ${why.trim()}\n`;
+}
+
+/**
+ * Every reason this decline must not be written.
+ *
+ * **The single binding.** {@link decline} adds no condition of its own, so
+ * short-circuiting this to `[]` turns every refusing input into a declining
+ * one — which is what `test/finding-promotion.test.ts` does to prove the
+ * refusals are observed rather than incidental.
+ */
+export function declineViolations(input: DeclineInput): DeclineViolation[] {
+  const out: DeclineViolation[] = [];
+
+  if (input.why.trim() === "") {
+    out.push({
+      refusal: "NO_WHY",
+      why:
+        "a decline with no reason is a tick — it asserts a judgement and records nothing " +
+        "anybody could later disagree with",
+    });
+  }
+
+  // The `why` is interpolated into an issue BODY that `missingSections`
+  // parses by heading, so a line opening with `#` forges a section. Same
+  // class as MALFORMED_STATEMENT above, one layer out: there the cheapest
+  // thing to append was a ticked criterion, here it is a Files heading that
+  // makes an issue look like it named files nobody wrote.
+  if (/^[ \t]*#{1,6}[ \t]/m.test(input.why)) {
+    out.push({
+      refusal: "MALFORMED_WHY",
+      why:
+        "--why opens a markdown heading, which forges a section in the issue body that " +
+        "missingSections and every reader would then treat as the author's",
+    });
+  }
+
+  const sweep = specCriteriaIn(input.projectRoot);
+
+  // FIRST among the sweep-dependent readings, and returning. An UNMEASURED
+  // sweep answers with `ids: []`, which makes "this issue serves no
+  // criterion" true of every issue — the sentence this whole function exists
+  // to stop being writable without evidence.
+  if (sweep.reading === "UNMEASURED") {
+    out.push({
+      refusal: "SWEEP_UNMEASURED",
+      why:
+        "the spec sweep could not be taken, so 'this issue serves no criterion' is not a " +
+        "reading anything here can make: " + sweep.unmeasuredReasons.join("; "),
+    });
+    return out;
+  }
+
+  // `collisions` folded in for the reason `promotionViolations` folds them
+  // in: the question is whether the issue serves ANY criterion, and an id two
+  // specs both state is still a criterion served.
+  const allIds = [...sweep.ids, ...sweep.collisions.map(c => c.id)];
+
+  // The existing decider, not a second one — the same call the board renders
+  // from. A decline and a populated criteria cell are states the board cannot
+  // hold at once, and the board, not this module, is the one that decides.
+  const serves = criteriaNamedBy(input.issue, allIds);
+  if (serves.length > 0) {
+    out.push({
+      refusal: "ALREADY_SERVES",
+      why:
+        `#${input.issue.number} already names ${serves.join(", ")}, so a decline would make the ` +
+        "board say both that it serves a criterion and that it serves none",
+    });
+  }
+
+  // Same decider again, pointed at the text about to be written. A reason
+  // mentioning an id puts that id in the cell the moment this is appended,
+  // so the declaration would contradict itself in the bytes it is made of.
+  const namedByWhy = criteriaNamedBy({ title: "", body: input.why }, allIds);
+  if (namedByWhy.length > 0) {
+    out.push({
+      refusal: "WHY_NAMES_CRITERION",
+      why:
+        `--why names ${namedByWhy.join(", ")}, and criteriaNamedBy reads the body this would be ` +
+        "appended to, so the issue would declare no criterion in text that names one",
+    });
+  }
+
+  const body = input.issue.body ?? "";
+
+  if (`${input.issue.title}\n${body}`.includes(NAMES_NONE)) {
+    out.push({
+      refusal: "ALREADY_DECLINED",
+      why:
+        `#${input.issue.number} already declares it serves no criterion, and a second ` +
+        "declaration would give board-snapshot two reasons it cannot tell apart",
+    });
+  }
+
+  // Where the declaration would go. Both readings below are about the
+  // WRITE, so they live here rather than in `bodyWithDecline`: a refusal
+  // discovered by the writer is a refusal discovered after the caller was
+  // told it would work.
+  const headings = headingOccurrencesOf(body, CRITERIA_HEADING);
+  if (headings.length > 1) {
+    out.push({
+      refusal: "AMBIGUOUS_HEADING",
+      why:
+        `#${input.issue.number} opens "${CRITERIA_HEADING}" ${headings.length} times, so there is ` +
+        "no one section to write into and a reader cannot tell which one the board read",
+    });
+  } else if (headings.length === 1 && hasTextUnder(body, headings[0]!)) {
+    out.push({
+      refusal: "CRITERIA_SECTION_OCCUPIED",
+      why:
+        `#${input.issue.number}'s criteria section already says something that names no ` +
+        "criterion, and overwriting it would delete what the author wrote while declaring " +
+        "the opposite of it",
+    });
+  }
+
+  return out;
+}
+
+/** Non-blank text between the heading at `at` and the next heading. */
+function hasTextUnder(body: string, at: number): boolean {
+  for (const line of body.slice(at).split("\n").slice(1)) {
+    if (/^#{1,6}\s+\S/.test(line)) return false;
+    if (line.trim() !== "") return true;
+  }
+  return false;
+}
+
+/**
+ * `body` with the declaration in the section the readers parse.
+ *
+ * Two shapes, because issues arrive in both: an `everyday-work` body has no
+ * criteria heading and gains the whole section, and a `spec-work` body
+ * filed through the form carries the heading with nothing under it and
+ * gains only the line. Appending blindly in the second case puts the
+ * declaration under whatever heading happens to be last — `Files this will
+ * change`, in the form's own order — where `missingSections` still reports
+ * the criteria section empty and the author sees a stray sentence in the
+ * wrong place.
+ *
+ * Fence-aware through `headingOccurrencesOf`, which is the whole reason that
+ * function was generalised out of `lib/issue-repair.ts`: these bodies quote
+ * the template constantly, and a fence-blind insert lands inside a code
+ * block where no reader of the rendered issue ever sees it.
+ *
+ * The ambiguous and occupied cases are refused upstream by
+ * {@link declineViolations}, so this handles zero or one empty heading.
+ */
+export function bodyWithDecline(body: string, why: string): string {
+  const at = headingOccurrencesOf(body, CRITERIA_HEADING)[0];
+  const line = `${NAMES_NONE} — ${why.trim()}`;
+  if (at === undefined) return `${body.trimEnd()}\n\n${declineSection(why)}`;
+  const headingEnd = body.indexOf("\n", at);
+  const cut = headingEnd === -1 ? body.length : headingEnd;
+  return `${body.slice(0, cut)}\n\n${line}\n${body.slice(cut).replace(/^\n+/, "\n")}`;
+}
+
+/**
+ * Decline on an issue's behalf, or refuse and say which refusal it was.
+ *
+ * Pure: it returns the markdown and writes nothing. The write is the
+ * caller's, so a dry run and a real run compute the same answer.
+ */
+export function decline(input: DeclineInput): Decline {
+  const violations = declineViolations(input);
+  const first = violations[0];
+  if (first) return { declined: false, refusal: first.refusal, why: first.why };
+  return { declined: true, section: declineSection(input.why), issue: input.issue.number };
 }
