@@ -51,7 +51,6 @@ import {
   criterionIdsIn,
   isReady,
   mirrorRows,
-  phaseOf,
   specCriteriaIn,
 } from "../lib/board-mirror";
 

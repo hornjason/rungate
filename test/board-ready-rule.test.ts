@@ -500,6 +500,46 @@ describe("SC-2723: nothing spells a held reason for itself", () => {
     ).toEqual([]);
   });
 
+  /**
+   * #1965 round 5: an import of `phaseOf` with no call to it.
+   *
+   * Two files imported `phaseOf` and never called it — both left by this
+   * PR's own refactor, which replaced `phase: phaseOf(title)` with
+   * `milestone: title` at every construction site and did not sweep the
+   * imports behind it. The repo sets no `noUnusedLocals`, so nothing failed.
+   *
+   * Narrow on purpose. A general unused-import ratchet is a different change
+   * over the whole tree, and this is the specific symbol a `phase` → `title`
+   * refactor leaves behind: a reader who finds it imported reasonably
+   * concludes the file still reads phase numbers, which is the belief #1943
+   * exists to remove.
+   *
+   * Breaking it: re-add the import to either script and this names it.
+   */
+  test("nothing imports phaseOf without calling it", () => {
+    const population = sourceFiles(ROOT, ["lib", "scripts", "gates", "bin"]);
+    const importers: string[] = [];
+    const offenders: string[] = [];
+    for (const path of population) {
+      const code = codeOf(readFileSync(join(ROOT, path), "utf-8"));
+      if (path === "lib/board-mirror.ts") continue; // its home — it declares it
+      if (!/\bphaseOf\b/.test(code)) continue;
+      importers.push(path);
+      if (!code.includes("phaseOf(")) offenders.push(path);
+    }
+
+    expect(
+      importers.length,
+      "no file outside its home names phaseOf — this case is measuring nothing",
+    ).toBeGreaterThanOrEqual(3);
+
+    expect(
+      offenders,
+      "an import with no call reads as 'this file still works in phase numbers', which " +
+        "#1943 made false. Delete it — the repo sets no noUnusedLocals, so nothing else will",
+    ).toEqual([]);
+  });
+
   test("the scan can find the string it looks for, and ignores comments", () => {
     expect(codeOf('console.log("at its depth");').includes("at its depth")).toBe(true);
     expect(codeOf("// never say at its depth here\nconst x = 1;").includes("at its depth")).toBe(false);
