@@ -1775,6 +1775,47 @@ describe("#1547: the routed set is complete over the census of the test populati
     ).toEqual([""]);
   });
 
+  // D4. #1931, and the spelling PR #1930 fixed in this file's SIBLING and
+  // left live here.
+  //
+  // `censusDirsRead`'s binding capture was `(join\([^;\n]*)`. `[^;\n]`
+  // excludes the newline, so a `join` broken across lines — which is what
+  // the formatter writes the moment the call passes the line width — bound
+  // NOTHING, and the `readdirSync(TESTS)` below it resolved to nothing. The
+  // suite left the population in silence and the completeness case above
+  // stayed green having witnessed nothing for it.
+  //
+  // The second assertion is the control, and it is the reason this case is
+  // not decorative: it runs the OLD capture over the SAME fixture and shows
+  // it binds nothing. Without it, a fixture that happens to pass is
+  // indistinguishable from one the fix earned. Measured when this was
+  // written: live population 9 before and 9 after, because no file in
+  // `test/` is written this way today — so the fixture is the only thing
+  // standing between the defect and its return.
+  test("#1931: a join binding broken across lines, with a trailing comma, resolves", () => {
+    const multiline =
+      'const REPO = join(import.meta.dir, "..");\n' +
+      "const TESTS = join(\n  REPO,\n  \"test\",\n);\n" +
+      "readdirSync(TESTS);\n";
+    expect(
+      censusDirsRead(multiline),
+      "a multi-line join binding is not resolved, so a suite whose directory is spelled " +
+        "this way is invisible to the population and nothing reports it",
+    ).toContain("test");
+
+    // The control: the capture this replaced, over the same bytes. It still
+    // binds `REPO`, whose join fits on one line — so the assertion is about
+    // the binding that matters, not about the count. What it could not see
+    // is the directory NAME, which is what makes the suite a census.
+    const OLD = /([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(join\([^;\n]*)/g;
+    const oldTests = [...multiline.matchAll(OLD)].find(m => m[1] === "TESTS")?.[2];
+    expect(
+      oldTests,
+      "the superseded capture already read this fixture's multi-line binding, so the case " +
+        "above cannot distinguish the fix from its absence and proves nothing",
+    ).toBe("join(");
+  });
+
   // D3. The regex-vs-division heuristic, and the second decider this check
   // had no business owning. Found by the AI review on PR #1556.
   //
