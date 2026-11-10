@@ -49,59 +49,84 @@ export const PROMOTION_EXIT = 1;
 
 const args = process.argv.slice(2);
 
-function getFlag(name: string): string | undefined {
+/**
+ * What argv says about one flag — FOUR states, enumerated, never collapsed.
+ *
+ * The reader used to return `string | undefined` and folded two different
+ * facts into that `undefined`: the flag is **absent**, and the flag is the
+ * **last token in argv** so `args[idx + 1]` does not exist. `optional()`
+ * read both as "the caller did not pass it" and took the default, so
+ * `--project-root` with the path typo'd away resolved ROOT to
+ * `node_modules/rungate` — #363, reintroduced silently through the guard
+ * added to prevent it.
+ *
+ * Rounds 2 through 4 of this pull request each repaired one FLAG, and every
+ * one of them handed the parser the same SHAPE of input ("the value is the
+ * next flag"). The defect sat on the axis nobody varied —
+ * `.claude/rules/checks-must-be-able-to-fail.md`, the seventh shape. So the
+ * states are enumerated here, in the reader, where no caller can drop one:
+ * the union is exhaustive, and a `switch` that omits a case does not
+ * compile.
+ */
+type FlagReading =
+  | { kind: "absent" }
+  | { kind: "novalue" }
+  | { kind: "nextflag"; value: string }
+  | { kind: "value"; value: string };
+
+function readFlag(name: string): FlagReading {
   const idx = args.indexOf(`--${name}`);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  return args[idx + 1];
+  if (idx === -1) return { kind: "absent" };
+  if (idx + 1 >= args.length) return { kind: "novalue" };
+  const value = args[idx + 1]!;
+  return value.startsWith("--") ? { kind: "nextflag", value } : { kind: "value", value };
 }
 
 /**
- * The "its value is the next flag" refusal, shared by required and optional.
- *
- * ONE binding, because the review of #1955 found `--project-root` reading
- * its value unvalidated three lines below the docblock warning about
- * exactly that — a new sibling added beside the five this file had already
- * repaired. An optional flag needs the same guard as a required one: absent
- * and "present with the next flag as its value" are different states, and
- * only one of them is a caller who meant it.
+ * The refusal every present-but-valueless flag gets, by name. ONE binding,
+ * so both ways of passing no value produce the same outcome and differ only
+ * in the sentence that says which it was.
  */
-function refuseFlagAsValue(name: string, v: string): void {
-  if (!v.startsWith("--")) return;
+function refuseNoValue(name: string, reading: { kind: "novalue" } | { kind: "nextflag"; value: string }): never {
+  const detail =
+    reading.kind === "nextflag"
+      ? `was given '${reading.value}', which is the next flag`
+      : "was the last argument and was given no value at all";
   console.error(
-    `ERROR: --${name} was given '${v}', which is the next flag. Its value is missing, ` +
-      "and continuing would run against a value nobody passed.",
+    `ERROR: --${name} ${detail}. Its value is missing, and continuing would run ` +
+      "against a value nobody passed.",
   );
   process.exit(PROMOTION_EXIT);
 }
 
 /** An OPTIONAL flag: absent is fine, present-with-no-value is not. */
 function optional(name: string): string | undefined {
-  const v = getFlag(name);
-  if (v === undefined) return undefined;
-  refuseFlagAsValue(name, v);
-  return v;
+  const reading = readFlag(name);
+  switch (reading.kind) {
+    case "absent":
+      return undefined;
+    case "value":
+      return reading.value;
+    default:
+      refuseNoValue(name, reading);
+  }
 }
 
 /**
- * A required flag's value, refused by NAME when it is missing or is the next
- * flag.
- *
- * The second half is the one that bit: `getFlag` returns `args[idx + 1]`
- * unconditionally, so `--issue --spec x` hands back the string `"--spec"`
- * and the run continues on a value nobody passed. Every flag has this, not
- * just the one review named — the first four rounds of this pull request
- * were all "the named instance repaired, its siblings left", and `--issue`
- * was the fifth because the previous sweep covered the LIBRARY's fields and
- * stopped at the CLI's.
+ * A required flag's value, refused by NAME in all three ways it can be
+ * unusable: absent, last-with-no-value, and "its value is the next flag".
  */
 function required(name: string): string {
-  const v = getFlag(name);
-  if (v === undefined) {
-    console.error(`ERROR: --${name} is required`);
-    process.exit(PROMOTION_EXIT);
+  const reading = readFlag(name);
+  switch (reading.kind) {
+    case "absent":
+      console.error(`ERROR: --${name} is required`);
+      process.exit(PROMOTION_EXIT);
+    case "value":
+      return reading.value;
+    default:
+      refuseNoValue(name, reading);
   }
-  refuseFlagAsValue(name, v);
-  return v;
 }
 
 /**

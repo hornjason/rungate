@@ -503,28 +503,45 @@ describe("#1955: every flag a command's script requires appears in its usage", (
   });
 
   /**
-   * #1955 round 2: `--project-root` read its value through bare `getFlag`,
-   * three lines under the docblock warning about exactly that. An OPTIONAL
-   * flag needs the guard a required one has — absent and "present with the
-   * next flag as its value" are different states.
+   * #1955 round 2: `--project-root` read its value through the bare argv
+   * reader, three lines under the docblock warning about exactly that.
    *
-   * So: no raw `getFlag` may reach a consumer. Every read goes through
-   * `required`, `requiredPositiveInt` or `optional`, all of which route the
-   * refusal through one `refuseFlagAsValue`.
+   * So: no raw `readFlag` may reach a consumer. Every read goes through
+   * `required`, `requiredPositiveInt` or `optional`, all of which switch
+   * over the reader's full union and route the refusal through one
+   * `refuseNoValue`.
    */
-  test("no flag is read through bare getFlag — every read is guarded", () => {
+  test("no flag is read through the bare argv reader — every read is guarded", () => {
     const raw: string[] = [];
     for (const { name, path } of withRequired) {
       const src = readFileSync(path, "utf8");
       // Inside the guards themselves is the ONE legal call site each.
-      const body = src.replace(/function (?:getFlag|optional|required)[\s\S]*?\n}\n/g, "");
-      for (const m of body.matchAll(/getFlag\("([a-z-]+)"\)/g)) raw.push(`${name}: --${m[1]}`);
+      const body = src.replace(/function (?:readFlag|optional|required)[\s\S]*?\n}\n/g, "");
+      for (const m of body.matchAll(/readFlag\("([a-z-]+)"\)/g)) raw.push(`${name}: --${m[1]}`);
     }
     expect(
       raw,
-      "a bare getFlag returns args[idx + 1] unconditionally, so `--x --y` sets x to '--y' — " +
-        "read it through optional() or required() instead",
+      "the bare reader hands back a FlagReading the caller then has to narrow, which is how " +
+        "`absent` and `novalue` got conflated — read it through optional() or required() instead",
     ).toEqual([]);
+  });
+
+  /**
+   * #1955 round 4: `optional()` returned `undefined` for a flag that was
+   * present as argv's LAST token, so a typo'd `--project-root` with no path
+   * took the silent default. Absent and present-with-no-value are different
+   * facts; the reader must be able to say which, by TYPE, not by comment.
+   */
+  test("the argv reader enumerates absent and present-with-no-value apart", () => {
+    const { path } = withRequired[0]!;
+    const src = readFileSync(path, "utf8");
+    const union = src.match(/type FlagReading =[\s\S]*?;\n/)?.[0] ?? "";
+    expect(union, "scripts/finding-promotion.ts must declare a FlagReading union").not.toBe("");
+    for (const kind of ["absent", "novalue", "nextflag", "value"]) {
+      expect(union, `FlagReading must name the '${kind}' state`).toContain(`"${kind}"`);
+    }
+    // And the two valueless states must reach the refusal, not a default.
+    expect(src).toContain("refuseNoValue");
   });
 
   test("the guard is real — the stripper did not eat the whole file", () => {
@@ -533,7 +550,7 @@ describe("#1955: every flag a command's script requires appears in its usage", (
     // having looked at nothing.
     const { path } = withRequired[0]!;
     const src = readFileSync(path, "utf8");
-    const body = src.replace(/function (?:getFlag|optional|required)[\s\S]*?\n}\n/g, "");
+    const body = src.replace(/function (?:readFlag|optional|required)[\s\S]*?\n}\n/g, "");
     expect(body.length).toBeGreaterThan(src.length / 2);
     expect(body, "the body still contains the call sites the scan is for").toContain("required(");
   });
