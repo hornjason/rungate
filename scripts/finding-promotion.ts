@@ -56,6 +56,33 @@ function getFlag(name: string): string | undefined {
 }
 
 /**
+ * The "its value is the next flag" refusal, shared by required and optional.
+ *
+ * ONE binding, because the review of #1955 found `--project-root` reading
+ * its value unvalidated three lines below the docblock warning about
+ * exactly that — a new sibling added beside the five this file had already
+ * repaired. An optional flag needs the same guard as a required one: absent
+ * and "present with the next flag as its value" are different states, and
+ * only one of them is a caller who meant it.
+ */
+function refuseFlagAsValue(name: string, v: string): void {
+  if (!v.startsWith("--")) return;
+  console.error(
+    `ERROR: --${name} was given '${v}', which is the next flag. Its value is missing, ` +
+      "and continuing would run against a value nobody passed.",
+  );
+  process.exit(PROMOTION_EXIT);
+}
+
+/** An OPTIONAL flag: absent is fine, present-with-no-value is not. */
+function optional(name: string): string | undefined {
+  const v = getFlag(name);
+  if (v === undefined) return undefined;
+  refuseFlagAsValue(name, v);
+  return v;
+}
+
+/**
  * A required flag's value, refused by NAME when it is missing or is the next
  * flag.
  *
@@ -73,13 +100,7 @@ function required(name: string): string {
     console.error(`ERROR: --${name} is required`);
     process.exit(PROMOTION_EXIT);
   }
-  if (v.startsWith("--")) {
-    console.error(
-      `ERROR: --${name} was given '${v}', which is the next flag. Its value is missing, ` +
-        "and continuing would run against a value nobody passed.",
-    );
-    process.exit(PROMOTION_EXIT);
-  }
+  refuseFlagAsValue(name, v);
   return v;
 }
 
@@ -102,7 +123,7 @@ function required(name: string): string {
  * entry sets `projectRootFlag` and the caller did not pass one, so the
  * default below is only reached by a direct `bun scripts/…` invocation.
  */
-const ROOT = getFlag("project-root") ?? join(import.meta.dir, "..");
+const ROOT = optional("project-root") ?? join(import.meta.dir, "..");
 
 /** A required flag that must be a positive integer, refused by name. */
 function requiredPositiveInt(name: string): number {

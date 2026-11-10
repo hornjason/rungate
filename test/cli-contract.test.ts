@@ -502,6 +502,42 @@ describe("#1955: every flag a command's script requires appears in its usage", (
     ).toEqual([]);
   });
 
+  /**
+   * #1955 round 2: `--project-root` read its value through bare `getFlag`,
+   * three lines under the docblock warning about exactly that. An OPTIONAL
+   * flag needs the guard a required one has — absent and "present with the
+   * next flag as its value" are different states.
+   *
+   * So: no raw `getFlag` may reach a consumer. Every read goes through
+   * `required`, `requiredPositiveInt` or `optional`, all of which route the
+   * refusal through one `refuseFlagAsValue`.
+   */
+  test("no flag is read through bare getFlag — every read is guarded", () => {
+    const raw: string[] = [];
+    for (const { name, path } of withRequired) {
+      const src = readFileSync(path, "utf8");
+      // Inside the guards themselves is the ONE legal call site each.
+      const body = src.replace(/function (?:getFlag|optional|required)[\s\S]*?\n}\n/g, "");
+      for (const m of body.matchAll(/getFlag\("([a-z-]+)"\)/g)) raw.push(`${name}: --${m[1]}`);
+    }
+    expect(
+      raw,
+      "a bare getFlag returns args[idx + 1] unconditionally, so `--x --y` sets x to '--y' — " +
+        "read it through optional() or required() instead",
+    ).toEqual([]);
+  });
+
+  test("the guard is real — the stripper did not eat the whole file", () => {
+    // The case above subtracts the guard definitions before scanning. If
+    // that regex ate too much, it would scan an empty string and pass
+    // having looked at nothing.
+    const { path } = withRequired[0]!;
+    const src = readFileSync(path, "utf8");
+    const body = src.replace(/function (?:getFlag|optional|required)[\s\S]*?\n}\n/g, "");
+    expect(body.length).toBeGreaterThan(src.length / 2);
+    expect(body, "the body still contains the call sites the scan is for").toContain("required(");
+  });
+
   test("the check can fail — a usage with a flag removed is caught", () => {
     // The guard above is a loop over a filtered list; both can be empty for
     // reasons that have nothing to do with the property. This performs the
