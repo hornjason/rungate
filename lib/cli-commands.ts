@@ -293,9 +293,15 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     script: "scripts/finding-promotion.ts",
     projectRootFlag: true,
     summary: "Turn a review finding that names real work into a spec criterion",
+    // TWO modes, and the usage says so because the script has two outcomes.
+    // #1940 added `--declines` after this registration was written, so the
+    // merged tree had a `required("declines")` the usage did not mention —
+    // which is exactly what the usage-vs-required-flags sweep is for. Neither
+    // pull request could see it alone; it appeared on the merge ref.
     usage:
       "rungate finding-promotion --issue <N> --spec <path> --outcome <text> --symbol <name> " +
-      "--module <path> [--project-root <path>] [--write]",
+      "--module <path> [--project-root <path>] [--write]  |  " +
+      "rungate finding-promotion --issue <N> --declines <why> [--write]",
   },
   "claim-files": {
     script: "scripts/claim-files.ts",

@@ -570,7 +570,11 @@ describe("#1955: every flag a command's script requires appears in its usage", (
     // reasons that have nothing to do with the property. This performs the
     // regression and observes it, rather than asserting the loop ran.
     const { cmd, flags } = withRequired[0]!;
-    const broken = cmd.usage.replace(`--${flags[0]} `, "");
+    // replaceAll, not replace. A usage string with two modes names the flags
+    // they share more than once — `--issue` is in both halves of
+    // finding-promotion's — so removing the first occurrence leaves the
+    // second standing and the control asserts nothing.
+    const broken = cmd.usage.replaceAll(`--${flags[0]} `, "");
     expect(broken, `removing --${flags[0]} did not change the usage string`).not.toBe(cmd.usage);
     expect(broken.includes(`--${flags[0]}`)).toBe(false);
   });
