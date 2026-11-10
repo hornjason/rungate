@@ -43,6 +43,7 @@
  */
 
 import { phaseOf } from "./board-mirror";
+import { inMilestoneFamily } from "./live-issues";
 
 /**
  * How much work was delivered, over how long.
@@ -146,6 +147,18 @@ export interface Rankable {
  * their own `^<prefix> Phase (\d+)` : two deciders, and no behavioural case
  * can tell them apart.
  *
+ * **Membership is `inMilestoneFamily`, delegated rather than re-decided.**
+ * Round 2 of this PR's review: the first version matched with a bare
+ * `milestone.startsWith(enginePrefix)`, which ranks any family whose NAME
+ * merely begins with the engine's as the engine — `EngineX Phase 2` under
+ * prefix `Engine`, and `Engine Phase 0` under a truncated `Eng`. That is the
+ * same pair `lib/live-issues.ts` records as round 2 of #1703, *"the
+ * cross-spec contamination the prefix exists to prevent, arriving through
+ * the fix for it"* — and this file's docblock cited that one while the code
+ * under it reintroduced the bug. Writing a boundary check here instead of
+ * calling the existing one would be a THIRD decider of the same question,
+ * which is what that file's whole docblock is about.
+ *
  * **A `null` prefix ranks every family 0, and that is a reading rather than a
  * default.** A tree that declares no engine milestone family has ONE family,
  * so there is nothing to rank and the order falls back to phase alone —
@@ -157,7 +170,7 @@ export interface Rankable {
  */
 export function familyRank(milestone: string | null, enginePrefix: string | null): number {
   if (enginePrefix === null) return 0;
-  return milestone !== null && milestone.startsWith(enginePrefix) ? 0 : 1;
+  return inMilestoneFamily(milestone, enginePrefix) ? 0 : 1;
 }
 
 /**

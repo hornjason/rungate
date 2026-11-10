@@ -44,6 +44,7 @@ import { join } from "path";
 import {
   LABEL_RANK,
   READY_TOLERANCE_DAYS,
+  familyRank,
   heldReason,
   holdsReadySlot,
   placementCensus,
@@ -556,6 +557,73 @@ describe("#1853: a label places an issue the milestone could not", () => {
       [item(10, 6, [], PAYLOAD), item(99, 3, [], PAYLOAD)].sort(readyOrderFor(ENGINE)).map(i => i.number),
       "and within the OTHER family too — the rank orders families, it does not flatten one",
     ).toEqual([99, 10]);
+  });
+
+  /**
+   * #1943 round 2: a prefix is a FAMILY NAME, not a string prefix.
+   *
+   * `familyRank` matched with a bare `milestone.startsWith(enginePrefix)`, so
+   * a family whose name merely begins with the engine's was ranked as the
+   * engine. Measured before the fix, with `enginePrefix = "Pipeline"`:
+   *
+   *   "PipelineX Phase 2"  familyRank=0   ← another family, ranked as engine
+   *   "Pipeline Phase 0"   familyRank=0 with prefix "Pipe"
+   *
+   * `lib/live-issues.ts` records this exact pair — *"`Pipe` matching
+   * `Pipeline Phase 0`, `Fix` matching `Fixture Phase 2`"* — as round 2 of
+   * #1703, *"the cross-spec contamination the prefix exists to prevent,
+   * arriving through the fix for it"*. The docblock over `familyRank` cited
+   * that file while the code underneath it reintroduced the bug.
+   *
+   * **Fixed by delegating to `inMilestoneFamily`, not by writing a boundary
+   * check here.** A third place that decides family membership is the fourth
+   * shape in `.claude/rules/checks-must-be-able-to-fail.md`, and it is the
+   * failure `lib/live-issues.ts`'s own docblock is about.
+   */
+  test("#1943: a family whose NAME merely begins with the engine's is not the engine", () => {
+    const LOOKALIKE = `${ENGINE}X`;
+    expect(
+      LOOKALIKE.startsWith(ENGINE),
+      "the fixture must actually be a string-prefix match, or this row cannot fire",
+    ).toBe(true);
+
+    expect(
+      familyRank(`${LOOKALIKE} Phase 2`, ENGINE),
+      "a string prefix is not a family — `EngineX Phase 2` was ranked as the engine",
+    ).toBe(1);
+
+    // The other direction of the same defect: a SHORT configured prefix
+    // swallowing the longer family whose name it begins.
+    expect(
+      familyRank(`${ENGINE} Phase 0`, ENGINE.slice(0, 3)),
+      "a truncated prefix must not claim the family whose name it begins",
+    ).toBe(1);
+
+    // End to end, because `familyRank` alone could be right while the order
+    // read something else.
+    expect(
+      [item(10, 2, [], LOOKALIKE), item(99, 6, [], ENGINE)]
+        .sort(readyOrderFor(ENGINE))
+        .map(i => i.number),
+      "the lookalike family borrowed the engine's rank and its lower phase won",
+    ).toEqual([99, 10]);
+  });
+
+  test("#1943 CONTROL: the real engine family still ranks ahead after the boundary fix", () => {
+    // Without this, the row above passes against a `familyRank` that returns
+    // 1 for everything — which deletes the family ordering entirely and is
+    // the cheapest wrong fix for a boundary bug.
+    expect(familyRank(`${ENGINE} Phase 6`, ENGINE), "the engine is still the engine").toBe(0);
+    expect(
+      familyRank(`${PAYLOAD} Phase 3`, ENGINE),
+      "and another family is still another family",
+    ).toBe(1);
+    expect(
+      [item(1764, 3, [], PAYLOAD), item(1717, 6, [], ENGINE)]
+        .sort(readyOrderFor(ENGINE))
+        .map(i => i.number),
+      "the ordering this issue exists for must survive the boundary fix",
+    ).toEqual([1717, 1764]);
   });
 
   test("#1943 CONTROL: with NO prefix configured, phase alone orders across families", () => {
