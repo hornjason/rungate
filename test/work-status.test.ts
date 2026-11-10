@@ -1181,3 +1181,65 @@ describe("#1852: the Ready gate reads one occupancy", () => {
     ).toBeNull();
   });
 });
+
+/**
+ * #1944. D4 in `project-state.json`: *it names unmerged and uncommitted
+ * work in EVERY run, not when an agent remembers to check*. "Every run" is
+ * the operative half, so these are source-position assertions — a section
+ * behind a flag, or one an agent has to ask for, is the thing the stage
+ * item says is broken.
+ */
+describe("#1944: the report names local work every run, from the one decider", () => {
+  const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+  test("all three local readings are taken, and the verdict is not re-derived here", () => {
+    for (const reader of ["readLocalWork(", "readPushedBranches(", "readWorktreeStates("]) {
+      expect(code, `${reader} is never called, so that half of the evidence is never read`).toContain(reader);
+    }
+    expect(
+      code,
+      "the verdict must come from workVerdict in lib/board-lane-health.ts — a second decider " +
+        "here would survive any mutation of that one and nothing could tell which was live",
+    ).toContain("workVerdict({");
+    // The literal strings the decider owns must NOT appear in this script.
+    for (const owned of ["INVISIBLE —", "an assignee and nothing else"]) {
+      expect(
+        code.includes(owned),
+        `scripts/work-status.ts spells out "${owned}" itself instead of printing the ` +
+          `decider's sentence`,
+      ).toBe(false);
+    }
+  });
+
+  test("the section is unconditional — no flag, no opt-in", () => {
+    const at = code.indexOf("WHAT IS ACTUALLY BEING WORKED");
+    expect(at, "the section heading is gone, so everything below holds vacuously").toBeGreaterThan(0);
+    const section = code.slice(at, at + 2600);
+    // D4's whole complaint is "when an agent remembers to check". A flag is
+    // exactly that, moved into the tool.
+    expect(
+      section.match(/if \(\s*(?:values|args|flags)\.[A-Za-z]+\s*\)/),
+      "the local-work section is behind a flag. D4 says it must name this work in EVERY run",
+    ).toBeNull();
+  });
+
+  test("an unreadable reading is announced, never dropped", () => {
+    const at = code.indexOf("WHAT IS ACTUALLY BEING WORKED");
+    const section = code.slice(at, at + 2600);
+    const announcements = section.match(/UNMEASURED —/g) ?? [];
+    expect(
+      announcements.length,
+      "each of the three local readings can fail independently and each must say so. A " +
+        "section that prints nothing when it could not look reads exactly like a clean board",
+    ).toBeGreaterThanOrEqual(2);
+    expect(section, "localCommitsFor carries the null; the script must not coerce it").toContain(
+      "localCommitsFor(localWork",
+    );
+    expect(
+      section.match(/localCommitsFor\([^)]*\)\s*(?:\?\?|\|\|)/),
+      "the script defaults the local reading when it is null, which turns 'nobody looked' " +
+        "into 'nothing found' — the one thing lib/local-work.ts exists to prevent",
+    ).toBeNull();
+  });
+});

@@ -30,7 +30,14 @@ import {
   resolveFocus,
   type TrackerFacts,
 } from "../lib/work-status";
-import { laneHealth, laneHealthLines } from "../lib/board-lane-health";
+import { laneHealth, laneHealthLines, workVerdict } from "../lib/board-lane-health";
+import {
+  issuesWithUncommittedWork,
+  localCommitsFor,
+  readLocalWork,
+  readPushedBranches,
+  readWorktreeStates,
+} from "../lib/local-work";
 import {
   LABEL_RANK,
   placementCensus,
@@ -554,17 +561,120 @@ for (const i of issues) {
 // ── open pull requests ──────────────────────────────────────────────────────
 bar("OPEN PULL REQUESTS — rollup read from GitHub, not from a previous run");
 const prs = await restAll(`repos/${REPO}/pulls?state=open`);
+/**
+ * Issues an OPEN pull request DECLARES it closes — #1944.
+ *
+ * Declares, not mentions. `closingIssuesReferences` is GitHub's own
+ * resolution of the closing keywords, so a status report that happens to
+ * name an issue number does not count as somebody working on it. The sweep
+ * learned that the expensive way (`scripts/board-status-sweep.ts`: "1 open
+ * pull request" on all seven stale claims, none of them real).
+ *
+ * Collected inside the loop that was already running, so this costs no
+ * extra request.
+ */
+const declaredClosing = new Set<number>();
+/**
+ * Pull requests whose closing list did not fit one page.
+ *
+ * `first:100` with a `pageInfo`, like every other list here, and no
+ * exemption on the grounds that no pull request closes a hundred issues.
+ * That exemption — "a sub-selection with a hard upper bound" — is the one
+ * this file's own census was written to refuse after four instances in a
+ * day, each repair correct and each sweep prose.
+ */
+const closingTruncated: number[] = [];
 for (const p of prs) {
   // Variables, not interpolation — the owner and name come from `REPO` like
   // every other read, and the number stops being pasted into query text.
   const d = await gql(
     `query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){pullRequest(number:$i){
-       mergeStateStatus commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}`,
+       mergeStateStatus commits(last:1){nodes{commit{statusCheckRollup{state}}}}
+       closingIssuesReferences(first:100){pageInfo{hasNextPage} nodes{number}}}}}`,
     { o: OWNER, n: NAME, i: p.number },
   );
   const pr = d.repository.pullRequest;
+  for (const n of pr.closingIssuesReferences?.nodes ?? []) declaredClosing.add(n.number);
+  if (pr.closingIssuesReferences?.pageInfo?.hasNextPage) closingTruncated.push(p.number);
   const roll = pr.commits.nodes[0]?.commit?.statusCheckRollup?.state ?? "NO CHECKS REPORTED";
   console.log(`  PR #${p.number}  ${pr.mergeStateStatus.padEnd(9)} checks=${roll.padEnd(8)} ${p.title.slice(0, 54)}`);
+}
+
+// ── what is actually being worked ──────────────────────────────────────────
+//
+// #1944. Every other reading on this page comes from GitHub, and GitHub
+// cannot see a commit in a worktree or a file nobody has committed. #1931's
+// only work was commit `3bd05a14` in `rg-wt-1931`, never pushed: the board,
+// the lane health, the stale sweep and this script all reported it claimed
+// and idle. The work existed and nothing could see it.
+//
+// This is the only caller of `workVerdict` that can read all three of its
+// evidence fields, which is what makes its PARKED verdict reachable at all.
+// The other two run where a laptop's git is unreachable and pass `null`.
+bar("WHAT IS ACTUALLY BEING WORKED — the local half no GitHub query can see");
+const localWork = readLocalWork(process.cwd());
+const pushedIssues = readPushedBranches(process.cwd());
+const wtStates = readWorktreeStates(process.cwd());
+const uncommitted = wtStates === null ? null : issuesWithUncommittedWork(wtStates);
+
+// Each reading says so when it could not be taken. None of them degrades to
+// "nothing found" — that is the distinction the whole feature rests on.
+if (localWork.unmeasured !== null) console.log(`  ${localWork.unmeasured}`);
+if (pushedIssues === null) {
+  console.log("  UNMEASURED — the pushed-branch refs could not be read, so no issue here can be called unpushed");
+}
+if (closingTruncated.length > 0) {
+  console.log(
+    `  UNMEASURED — the closing-issue list was truncated on PR(s) ${closingTruncated.join(", ")}, ` +
+      `so an issue they close may read as having no open pull request`,
+  );
+}
+if (uncommitted === null) {
+  console.log("  UNMEASURED — the worktree list could not be read, so uncommitted work was not looked for");
+} else if (uncommitted.unread.length > 0) {
+  console.log(
+    `  UNMEASURED — ${uncommitted.unread.length} worktree(s) would not report a status, so work in them was not seen: ` +
+      uncommitted.unread.join(", "),
+  );
+}
+
+// `allIssues` rather than `open`: this section runs before the pickable
+// walk computes that, and `allIssues` is already filtered to non-PRs.
+const assignedOpen = allIssues.filter(
+  (i: any) => i.state === "open" && (i.assignees?.length ?? 0) > 0,
+);
+const workRows = assignedOpen.map((i: any) => {
+  const v = workVerdict({
+    openPullRequest: declaredClosing.has(i.number),
+    pushedBranch: pushedIssues === null ? null : pushedIssues.has(i.number),
+    localCommits: localCommitsFor(localWork, i.number),
+  });
+  const alsoDirty = uncommitted !== null && uncommitted.dirty.has(i.number);
+  return { number: i.number, title: i.title as string, ...v, alsoDirty };
+});
+
+// INVISIBLE first, then UNMEASURED, then PARKED. WORKING is the expected
+// state and is counted rather than listed — a page that prints every healthy
+// row buries the three that need somebody.
+const ORDER_OF_ALARM: Record<string, number> = { INVISIBLE: 0, UNMEASURED: 1, PARKED: 2, WORKING: 3 };
+for (const r of [...workRows].sort(
+  (a, b) => (ORDER_OF_ALARM[a.verdict] ?? 9) - (ORDER_OF_ALARM[b.verdict] ?? 9) || a.number - b.number,
+)) {
+  if (r.verdict === "WORKING") continue;
+  console.log(`  #${r.number} ${r.verdict} — ${r.title.slice(0, 48)}`);
+  console.log(`      ${r.why}`);
+  if (r.alsoDirty) {
+    console.log(
+      `      AND uncommitted changes in ${uncommitted!.dirty.get(r.number)} — not in any ref, so losing the directory loses them`,
+    );
+  }
+}
+{
+  const n = (v: string) => workRows.filter(r => r.verdict === v).length;
+  console.log(
+    `\n  ${workRows.length} assigned open issue(s): ` +
+      `${n("WORKING")} working, ${n("INVISIBLE")} invisible, ${n("PARKED")} parked, ${n("UNMEASURED")} unmeasured`,
+  );
 }
 
 // ── what anyone may pick up ─────────────────────────────────────────────────
