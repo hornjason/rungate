@@ -589,7 +589,7 @@ jobs:
           claude_args: >-
             --allowedTools "mcp__github__create_pending_pull_request_review,mcp__github__add_comment_to_pending_review,mcp__github__submit_pending_pull_request_review"
             --disallowedTools "Bash,BashOutput,KillShell,Task,SlashCommand,ExitPlanMode,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch"
-            --max-turns 25
+            --max-turns 80
         env:
           CLAUDE_CODE_USE_VERTEX: "1"
           ANTHROPIC_VERTEX_PROJECT_ID: jhorn-pai
