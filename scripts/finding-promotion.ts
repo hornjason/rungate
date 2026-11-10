@@ -44,9 +44,6 @@ import { ghWithoutGhToken } from "../lib/live-issues";
 import { skipLine } from "../lib/derived-spec";
 import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
 
-/** Same resolution create-sc uses, so both halves read one tree. */
-const ROOT = join(import.meta.dir, "..");
-
 /** Routed through one constant so a test can prove the refusal is observed. */
 export const PROMOTION_EXIT = 1;
 
@@ -85,6 +82,27 @@ function required(name: string): string {
   }
   return v;
 }
+
+/**
+ * The tree this run reads and writes — the CALLER's, never this script's.
+ *
+ * It was `join(import.meta.dir, "..")`, which is correct for `bun
+ * scripts/finding-promotion.ts` in this repository and wrong for every
+ * consumer: under `bunx rungate finding-promotion` that is
+ * `node_modules/rungate`, so `--spec specs/MY-SPEC.md` resolved inside the
+ * installed package. The consumer's spec sits right there and the command
+ * refuses SPEC_ABSENT; worse, a spec whose basename collides with one of
+ * rungate's own would have been APPENDED TO inside `node_modules`, printing
+ * "Appended to …" for a criterion the next install deletes. That is #363
+ * exactly, which `lib/cli-commands.ts` spends its first eighty lines
+ * warning about — reintroduced by registering a script that had never
+ * needed the flag because nothing could reach it.
+ *
+ * `bin/rungate.ts` appends `--project-root <cwd>` whenever the registry
+ * entry sets `projectRootFlag` and the caller did not pass one, so the
+ * default below is only reached by a direct `bun scripts/…` invocation.
+ */
+const ROOT = getFlag("project-root") ?? join(import.meta.dir, "..");
 
 /** A required flag that must be a positive integer, refused by name. */
 function requiredPositiveInt(name: string): number {

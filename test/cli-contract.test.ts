@@ -452,3 +452,63 @@ describe("#1938 / #1939: the doors are reachable from the CLI", () => {
     }
   });
 });
+
+/**
+ * #1955 review: a usage string that omits a required flag is a documented
+ * invocation that always fails.
+ *
+ * The registry's `usage` is what `rungate --help` prints AND what the
+ * scaffold publishes into `.claude/rules/commands-routing.md`, so it is the
+ * whole discovery surface for a command. `finding-promotion` shipped
+ * omitting `--outcome`, which its script refuses without: anyone typing the
+ * documented line got `ERROR: --outcome is required` and exit 1.
+ *
+ * Derived from the SCRIPTS, not from a list typed here, so this is a sweep
+ * rather than the one instance review happened to name. The population is
+ * small today — `required("…")` is an idiom one script uses — and the
+ * assertion below states that, so a second adopter joins the sweep instead
+ * of silently widening a check nobody re-measured.
+ */
+describe("#1955: every flag a command's script requires appears in its usage", () => {
+  /** `required("x")` / `requiredPositiveInt("x")` — the one refusal binding. */
+  const REQUIRED_CALL = /required(?:PositiveInt)?\("([a-z-]+)"\)/g;
+
+  const withRequired = Object.entries(CLI_COMMANDS)
+    .map(([name, c]) => ({ name, cmd: c, path: join(ROOT, c.script) }))
+    .filter(e => existsSync(e.path))
+    .map(e => ({
+      ...e,
+      flags: [...new Set([...readFileSync(e.path, "utf8").matchAll(REQUIRED_CALL)].map(m => m[1]!))],
+    }))
+    .filter(e => e.flags.length > 0);
+
+  test("the sweep found a population — an empty one asserts nothing", () => {
+    // A regex that stopped matching, or a rename of the idiom, makes every
+    // case below vacuous. State the size rather than trusting the loop.
+    expect(withRequired.map(e => e.name)).toEqual(["finding-promotion"]);
+  });
+
+  test("no required flag is missing from the usage a consumer is shown", () => {
+    const missing: string[] = [];
+    for (const { name, cmd, flags } of withRequired) {
+      for (const flag of flags) {
+        if (!cmd.usage.includes(`--${flag}`)) missing.push(`${name}: --${flag}`);
+      }
+    }
+    expect(
+      missing,
+      "a usage string omitting a required flag documents an invocation that exits 1 — " +
+        "add the flag to `usage` in lib/cli-commands.ts",
+    ).toEqual([]);
+  });
+
+  test("the check can fail — a usage with a flag removed is caught", () => {
+    // The guard above is a loop over a filtered list; both can be empty for
+    // reasons that have nothing to do with the property. This performs the
+    // regression and observes it, rather than asserting the loop ran.
+    const { cmd, flags } = withRequired[0]!;
+    const broken = cmd.usage.replace(`--${flags[0]} `, "");
+    expect(broken, `removing --${flags[0]} did not change the usage string`).not.toBe(cmd.usage);
+    expect(broken.includes(`--${flags[0]}`)).toBe(false);
+  });
+});

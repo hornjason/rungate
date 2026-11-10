@@ -281,11 +281,21 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   // it was unreachable that decision fell to whoever found the gap — a
   // self-classification, which takes the cheaper door every time. Sixteen
   // issues were filed by hand on 2026-11-09 for exactly that reason.
+  // `projectRootFlag` is load-bearing here for the #363 reason stated at the
+  // top of this file, and registering the command is what made it live: the
+  // script resolved `ROOT` from `import.meta.dir`, its own install location.
+  // Run as `bunx rungate finding-promotion` from a consumer, that is
+  // `node_modules/rungate` — so `--spec specs/MY-SPEC.md` resolved inside the
+  // installed package, refused SPEC_ABSENT with the consumer's spec sitting
+  // right there, and on a name collision would have appended a criterion
+  // into a tree the next install wipes while printing "Appended to …".
   "finding-promotion": {
     script: "scripts/finding-promotion.ts",
+    projectRootFlag: true,
     summary: "Turn a review finding that names real work into a spec criterion",
     usage:
-      "rungate finding-promotion --issue <N> --spec <path> --symbol <name> --module <path> [--write]",
+      "rungate finding-promotion --issue <N> --spec <path> --outcome <text> --symbol <name> " +
+      "--module <path> [--project-root <path>] [--write]",
   },
   "claim-files": {
     script: "scripts/claim-files.ts",
