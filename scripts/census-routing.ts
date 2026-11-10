@@ -730,11 +730,22 @@ export function censusDirsRead(source: string): string[] {
   // lets a string manufacture one. Measured at `[""]` before this changed.
   const roots = repoRootIdents(code);
 
+  // #1931. The binding is read by BALANCING the call's brackets, exactly as
+  // `firstArgument` reads an argument, and for the same reason one function
+  // down: the previous capture was `(join\([^;\n]*)`, and `[^;\n]` stops at
+  // the first newline. A `join` written across several lines — which is how
+  // the formatter writes one the moment it passes the line width — bound
+  // nothing, so `readdirSync(X)` resolved to nothing and the suite left the
+  // population silently. That spelling is the LAST of the three PR #1930
+  // spent a review round each being defeated by, and it was still live here
+  // after that PR fixed its sibling.
   const bound = new Map<string, string>();
-  for (const m of code.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(join\([^;\n]*)/g)) {
+  for (const m of code.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(join\s*\()/g)) {
+    const open = m.index! + m[0].length - 1;
+    const close = callEnd(code, open);
+    if (close === -1) continue;
     const at = m.index! + m[0].length - m[2]!.length;
-    const expr = src.slice(at, at + m[2]!.length);
-    const dir = joinedDir(expr.replace(/\)\s*[;,].*$/, ")").trim(), roots);
+    const dir = joinedDir(src.slice(at, close + 1).trim(), roots);
     if (dir !== null) bound.set(m[1]!, dir);
   }
 
@@ -812,15 +823,48 @@ function firstArgument(scan: string, read: string, open: number): string {
 }
 
 /**
+ * The index of the `)` closing the call whose `(` sits at `open`, or `-1`.
+ *
+ * `firstArgument`'s sibling, and deliberately NOT the same function: that one
+ * stops at a top-level comma because it wants one argument, and this one runs
+ * past every comma because it wants the whole call. `censusDirsRead`'s binding
+ * capture needs the second — `join(\n  REPO,\n  "test",\n)` is the subject,
+ * and stopping at its first comma yields `REPO`.
+ *
+ * Counted over the literal-blanked view for the reason `firstArgument` gives
+ * above: a bracket inside a string is text, and counting it as structure
+ * desyncs the depth so it never returns to zero.
+ */
+function callEnd(scan: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < scan.length; i++) {
+    const ch = scan[i]!;
+    if (ch === "(" || ch === "[" || ch === "{") depth++;
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      if (--depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
  * `join(<a repo root>, "a", "b")` -> `"a/b"`; anything else -> `null`.
  *
  * Navigation segments are dropped, so `join(import.meta.dir, "..")` is the
  * repo root (`""`) and not a directory named `..`. The same refusal
  * `lib/scratch-roots.ts` makes, for the same reason: a navigation literal is
  * not a name.
+ *
+ * #1931: a space before the `(` and a TRAILING COMMA before the `)` are both
+ * accepted, because both are what a formatter writes when it breaks the call
+ * across lines — and a multi-line call is the only kind the binding capture
+ * above used to miss, so accepting one without the other would fix half the
+ * spelling and read as fixed.
  */
 function joinedDir(expr: string, roots: Set<string>): string | null {
-  const m = /^join\(\s*([A-Za-z_][A-Za-z0-9_.]*(?:\(\))?)\s*((?:,\s*"[^"]+"\s*)*)\)?$/.exec(expr);
+  const m = /^join\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*(?:\(\))?)\s*((?:,\s*"[^"]+"\s*)*),?\s*\)?$/.exec(
+    expr,
+  );
   if (!m) return null;
   const head = m[1]!;
   if (!roots.has(head) && head !== "import.meta.dir" && head !== "process.cwd()") return null;
@@ -859,11 +903,78 @@ function joinedDir(expr: string, roots: Set<string>): string | null {
  *
  * Nothing is skipped. `test/fixtures/` holds whole fixture projects carrying
  * their own `*.test.ts`, and the predicate rather than a path list is what
- * keeps them out — it finds no repo-rooted enumeration of `test/` in any of
- * them. A hand-written skip would make that silent; `test/census-routing.test.ts`
- * asserts the membership instead, so a fixture that ever did satisfy the
- * predicate is a red case somebody has to decide about.
+ * keeps them out. A hand-written skip would make that silent;
+ * `test/census-routing.test.ts` asserts the membership instead, so a fixture
+ * that ever did satisfy the predicate is a red case somebody has to decide
+ * about.
  */
+
+/**
+ * #1931 — why this row still RESOLVES the path, and does not match on the
+ * mention of one.
+ *
+ * The issue offered two endings: a predicate with no path spelling to get
+ * wrong, or the structural resolution retained with a stated, measured
+ * reason. This is the measured reason. The spelling-free predicate was
+ * built, measured against the tree, and rejected on its own numbers.
+ *
+ * **The populations, all measured over the same 677 test files before
+ * anything was changed** — the issue's "draw the population before changing
+ * the guard", and the draw is why the widest reading is not here:
+ *
+ * | predicate | count | share |
+ * |---|---|---|
+ * | enumerates ANY directory | 107 | 15.8% |
+ * | names the test directory | 260 | 38.4% |
+ * | both, whole file, loose noun | 51 | 7.5% |
+ * | both, whole file, strict noun | 38 | 5.6% |
+ * | both, scoped to the call site | 11 | 1.6% |
+ * | **this resolver** | **9** | **1.3%** |
+ *
+ * A conjunction over the WHOLE FILE is the only form with no spelling to get
+ * wrong, and it is wrong about roughly three files in four. Read at the call
+ * site, its 26 additions enumerate `tmpdir()`, `SPECS_DIR`, `GATES_DIR`,
+ * `FIXTURES` and `RUNS`; `test/create-sc.test.ts` is the plainest case —
+ * `readdirSync(SPECS_DIR, …)`, in a file that says `"test"` somewhere
+ * because every file in `test/` does. Routing those is not the safe
+ * direction. This row's output is a `bun test …` line an agent is asked to
+ * read, and a line naming 36 suites of which a dozen are real is the
+ * "warning nobody reads" that `.claude/rules/config-access.md` names.
+ *
+ * Scoping the conjunction to the enumeration's own argument, plus the
+ * binding of a bare identifier argument, reads 11 — and gets there by
+ * resolving, so it is the same instrument with a worse reach: it loses
+ * `test/verify-title-check.test.ts`, whose argument is `join(ROOT, dir)`
+ * with `dir` a loop variable, and `test/sc-fixture-namespace.test.ts`,
+ * which enumerates a recursive walk's parameter.
+ *
+ * **And the one reading that would settle it empirically returns nothing.**
+ * A test file was added to `test/` and the whole suite run against it:
+ * 21,982 pass, and the only census suite it reddened was the completeness
+ * case in `test/census-routing.test.ts` itself. The suites on this row go
+ * red on what a new file CONTAINS — an unqualified `SC-N`, a fixed scratch
+ * path, a title the scanner cannot nest — not on the count changing. So
+ * membership is a claim about capability, no observation can draw it, and a
+ * static reading of the source is the only instrument there is.
+ *
+ * What the resolver was actually losing was ONE spelling, not a class, and
+ * it is fixed above rather than traded away: `censusDirsRead`'s binding
+ * capture was `(join\([^;\n]*)`, and `[^;\n]` stops at the first newline, so
+ * a `join` the formatter had broken across lines bound nothing. It now
+ * balances brackets the way `firstArgument` has since #1930, and `joinedDir`
+ * accepts the trailing comma that comes with a multi-line call.
+ *
+ * **That fix moves the live population by nothing: 9 before, 9 after.** No
+ * file in `test/` is written that way today, so it is a latent defect
+ * closed, not a gap filled, and saying otherwise would credit this change
+ * with suites it did not find. What makes it worth closing is that the
+ * spelling is one `prettier` run away from arriving in any of the 9 — and
+ * when it arrives, the suite leaves the population silently and the
+ * completeness case stays green having witnessed nothing. The case that
+ * holds it is a fixture in `test/census-routing.test.ts`, not this
+ * sentence.
+ */
+
 export function testPopulationCensusSuites(root: string): string[] {
   const dir = join(root, "test");
   if (!existsSync(dir)) return [];
