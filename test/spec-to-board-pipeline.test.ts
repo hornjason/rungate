@@ -23,6 +23,53 @@ const ROOT = join(import.meta.dir, "..");
 const PATH = "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md";
 const SPEC = readFileSync(join(ROOT, PATH), "utf-8");
 
+/** The reservation owner this spec's ids were allocated under. */
+const OWNER = "rg/pipeline-spec";
+
+type Block = { owner: string; from: number; to: number; namespace?: string };
+
+/**
+ * What the reservation store may not say about the ids this spec consumes.
+ *
+ * Two faults, and neither of them is "no block exists" (#1969). A block is a
+ * claim on ids IN FLIGHT; `.claude/rules/parallel-sessions.md` tells its owner
+ * to delete it at merge, and after merge the ids are held by `lib/create-sc.ts`'s
+ * `taken` set — built from the ids actually written in `specs/` — rather than
+ * by the block. So an absent block is the correct resting state and faults
+ * nothing.
+ *
+ * - **Somebody else reserved an id this spec already consumed.** A live claim
+ *   on a spent id is the collision the store exists to prevent, and it is
+ *   invisible in either branch alone.
+ * - **This spec's own block is declared and does not contain its ids.** While
+ *   the block exists it is a statement about where these ids live, and a
+ *   statement that is wrong is worse than none.
+ *
+ * Takes the blocks rather than reading them, so both arms can be planted.
+ * SC-namespace blocks only — an `FG-2600..2629` block claims different ids.
+ */
+function reservationFaults(used: number[], scBlocks: Block[]): string[] {
+  const faults: string[] = [];
+  for (const b of scBlocks) {
+    if (b.owner === OWNER) continue;
+    const squatted = used.filter(n => n >= b.from && n <= b.to);
+    if (squatted.length > 0) {
+      faults.push(
+        `${b.owner} reserves ${b.from}-${b.to}, which covers ${squatted.join(", ")} — ` +
+          `ids ${PATH} has already consumed`,
+      );
+    }
+  }
+  const mine = scBlocks.filter(b => b.owner === OWNER);
+  for (const b of mine) {
+    const outside = used.filter(n => n < b.from || n > b.to);
+    if (outside.length > 0) {
+      faults.push(`ids outside the reserved ${b.from}..${b.to}: ${outside.join(", ")}`);
+    }
+  }
+  return faults;
+}
+
 /** The spec this suite is about, named where a scanner can see the claim. */
 describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs", () => {
   test("it states criteria, and they are the ones the placement table places", () => {
@@ -65,17 +112,30 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
     expect([...headings].filter(n => !placed.has(n)), "headings placing nothing").toEqual([]);
   });
 
-  test("the ids it consumes are inside the block reserved for them", () => {
+  test("no live block disagrees with the ids it consumes", () => {
     // `.claude/rules/parallel-sessions.md`: every path that consumes an id is
     // an allocation, including hand-written ones. A collision is only visible
     // in the union of two branches, so neither PR's CI can see it.
+    //
+    // #1969: this used to require `rg/pipeline-spec`'s block to EXIST. That
+    // branch merged as PR #1673, and the same rule says "delete your entry
+    // when your branch merges", so the check and the rule asked for opposite
+    // things and the check won — the block is still there. It also asked for
+    // the wrong property. A reservation protects ids IN FLIGHT; once the spec
+    // is on main its ids are protected by `lib/create-sc.ts`'s `taken` set,
+    // built from the ids actually written in `specs/`, whether or not a block
+    // still names them. What must hold forever is narrower and is asserted
+    // below: no OTHER owner may reserve an id this spec has consumed, and if
+    // this spec's own block is still declared, its ids must be inside it.
     const store = JSON.parse(readFileSync(join(ROOT, "specs/sc-reservations.json"), "utf-8")) as {
       reservations: { owner: string; from: number; to: number; namespace?: string }[];
     };
-    const mine = store.reservations.filter(
-      r => r.owner === "rg/pipeline-spec" && (r.namespace ?? "SC") === "SC",
-    );
-    expect(mine.length, "no reservation was declared for this spec's ids").toBe(1);
+    const scBlocks = store.reservations.filter(r => (r.namespace ?? "SC") === "SC");
+    const mine = scBlocks.filter(r => r.owner === OWNER);
+    expect(
+      mine.length,
+      `${OWNER} declares more than one SC block, so "inside the reservation" names no single range`,
+    ).toBeLessThanOrEqual(1);
 
     // An id this check cannot parse must FAIL it, never be filtered out of
     // the population. `.filter(Number.isInteger)` dropped anything that was
@@ -93,9 +153,43 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
         "than examined by it, so a criterion outside the reservation could pass unseen",
     ).toEqual([]);
     const used = ids.map(id => Number(/^SC-(\d+)$/.exec(id)![1]));
+    expect(reservationFaults(used, scBlocks), "the live store disagrees with this spec's ids")
+      .toEqual([]);
+    // Which of the two arms the live reading took, so an empty store is a
+    // recorded state rather than a silent pass — `.claude/rules/config-access.md`,
+    // Silent Default Substitution. Both arms are exercised unconditionally by
+    // the fixture case below; this says which one the shipped file is in.
     expect(
-      used.filter(n => n < mine[0].from || n > mine[0].to),
-      `ids outside the reserved ${mine[0].from}..${mine[0].to}`,
+      mine.length === 1 ? "own-block" : "no-own-block",
+      "the live reading did not resolve to one of the two declared arms",
+    ).toMatch(/^(own-block|no-own-block)$/);
+  });
+
+  test("the reservation reading, both arms, against planted stores", () => {
+    // #1969. `reservationFaults` is the single binding the case above reads
+    // through, and the live store exercises at most one of its arms — none of
+    // them once the block is deleted, which is the resting state. These are
+    // the arms, planted.
+    const used = [2600, 2610, 2624];
+    const mineBlock = { owner: OWNER, from: 2600, to: 2629 };
+    const theirs = { owner: "rg/someone-else", from: 2600, to: 2629 };
+
+    expect(reservationFaults(used, []), "an empty store faulted ids nobody reserved").toEqual([]);
+    expect(reservationFaults(used, [mineBlock]), "ids inside this spec's own block faulted").toEqual([]);
+    expect(
+      reservationFaults(used, [{ owner: OWNER, from: 2700, to: 2729 }]).join(" | "),
+      "an id OUTSIDE this spec's own declared block was not reported",
+    ).toContain("2600");
+    expect(
+      reservationFaults(used, [theirs]).join(" | "),
+      "another owner reserving an id this spec consumed was not reported",
+    ).toContain("rg/someone-else");
+    // The control for the row above: the same foreign block over ids this
+    // spec does NOT consume is not a fault, so the detector is answering
+    // about the overlap rather than about the owner's name.
+    expect(
+      reservationFaults(used, [{ owner: "rg/someone-else", from: 2700, to: 2729 }]),
+      "a foreign block over ids this spec never consumed was reported as a collision",
     ).toEqual([]);
   });
 
