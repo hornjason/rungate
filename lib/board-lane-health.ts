@@ -29,6 +29,114 @@
 
 import { READY_TOLERANCE_DAYS, readyCap, readyTarget, type Throughput } from "./board-ready-rule";
 
+/**
+ * Is anybody actually working this issue? #1941.
+ *
+ * ## The assignee is a self-declaration and nothing asks it for evidence
+ *
+ * Measured 2026-11-09: six issues were assigned to `hornjason` and NONE had
+ * an open pull request. Five had no pushed branch at all. The one with real
+ * work, #1931, had it as commit `3bd05a14` sitting unpushed in a local
+ * worktree — invisible to every GitHub reading there is.
+ *
+ * So the board was reporting six in progress, one of which was happening,
+ * and the one that WAS happening was the one GitHub could see least about.
+ *
+ * ## Four readings, because `null` is a reading
+ *
+ * Each field is `true`, `false`, or `null` for **not read**, and the
+ * distinction is the whole point — `.claude/rules/config-access.md`, Silent
+ * Default Substitution. `PARKED` is the verdict that releases somebody's
+ * claim, so it is the one that must not be reachable from an absence: a
+ * caller that never looked for local commits and a caller that looked and
+ * found none are different facts, and only the second may release.
+ *
+ * `scripts/board-status-sweep.ts` runs in GitHub Actions, on a machine that
+ * has never seen the worktree where #1931's commit lives. It therefore
+ * **cannot** reach `PARKED` and must not pretend to. That is not a defect in
+ * this function; it is the finding, made legible.
+ */
+export type WorkVerdict =
+  /** A pushed branch or an open pull request. The board can see it. */
+  | "WORKING"
+  /** Commits on this machine and nowhere else — real work, board-invisible. */
+  | "INVISIBLE"
+  /** An assignee and nothing else: a claim nobody can falsify. */
+  | "PARKED"
+  /** At least one reading was not taken, so no verdict is honest. */
+  | "UNMEASURED";
+
+/** What a run was able to observe. `null` is *not read*, never *no*. */
+export interface WorkEvidence {
+  /** An open pull request declaring it closes this issue. */
+  readonly openPullRequest: boolean | null;
+  /** A branch on `origin` carrying commits for it. */
+  readonly pushedBranch: boolean | null;
+  /** Commits on this machine that are on no pushed ref. */
+  readonly localCommits: boolean | null;
+}
+
+/**
+ * The ONE decider, read by the lane-health row and by the stale sweep.
+ *
+ * Two deciders answering this question would be behaviourally one guard and
+ * no behavioural test could tell them apart
+ * (`.claude/rules/checks-must-be-able-to-fail.md`). There is one, and
+ * `test/board-lane-health.test.ts` asserts the callers reach it.
+ *
+ * **Order matters and is not arbitrary.** Visible work wins over invisible
+ * work, because a pushed branch is the stronger claim and the cheaper one to
+ * verify. Invisible work wins over every absence, because releasing a claim
+ * backed by real commits is the expensive mistake and leaving a dead claim
+ * one more day is the cheap one.
+ */
+export function workVerdict(e: WorkEvidence): { verdict: WorkVerdict; why: string } {
+  if (e.openPullRequest === true) {
+    return { verdict: "WORKING", why: "an open pull request declares it closes this" };
+  }
+  if (e.pushedBranch === true) {
+    return { verdict: "WORKING", why: "a branch with commits is pushed to origin" };
+  }
+  if (e.localCommits === true) {
+    return {
+      verdict: "INVISIBLE",
+      why:
+        "commits exist on this machine and on no pushed ref — real work the board cannot " +
+        "see. Push the branch and open a draft pull request",
+    };
+  }
+  // Every positive reading has been tried. Only now does an absence mean
+  // anything, and only if every absence was actually LOOKED FOR.
+  const unread = (
+    [
+      ["an open pull request", e.openPullRequest],
+      ["a pushed branch", e.pushedBranch],
+      ["local commits", e.localCommits],
+    ] as const
+  )
+    .filter(([, v]) => v === null)
+    .map(([name]) => name);
+  if (unread.length > 0) {
+    // "a, b and c" rather than "a and b and c". The list is read by a human
+    // deciding whether to trust a release, so it is written for one.
+    const named =
+      unread.length <= 1
+        ? unread.join("")
+        : `${unread.slice(0, -1).join(", ")} and ${unread[unread.length - 1]}`;
+    return {
+      verdict: "UNMEASURED",
+      why:
+        `UNMEASURED — ${named} ${unread.length === 1 ? "was" : "were"} not read, ` +
+        `so this is PARKED or INVISIBLE and nothing here can tell them apart. A claim is ` +
+        `not released on a reading nobody took`,
+    };
+  }
+  return {
+    verdict: "PARKED",
+    why: "an assignee and nothing else — no pull request, no pushed branch, no local commits",
+  };
+}
+
 /** Every lane name the board uses, in flow order. */
 export const LANES: readonly string[] = [
   "Backlog",
