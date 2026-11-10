@@ -1629,5 +1629,25 @@ describe("#1962: the promotion reaches the writer, not only the report", () => {
       jsonBranch,
       "honoured must be spread into an array before serialising — a Set stringifies to {}",
     ).toContain("[...workNext.honoured]");
+
+    /**
+     * Round 5. The first cut of the fix above emitted the reading on EVERY
+     * run, and `splitReadyChanges` computes it whether or not `--ready` was
+     * passed. With the flag absent `cap` is forced `null`, so a plain
+     * `--field Criteria --write --json` sync reported `UNMEASURED` and a
+     * `why` saying nothing was promoted — about a promotion nobody asked
+     * for. That is round 2's finding, recommitted on the other surface by
+     * the fix for round 4.
+     *
+     * Both branches must gate on the same flag. Asserting presence alone is
+     * the weaker check that let this through: it goes green for an
+     * unconditional emit, which is the defect.
+     */
+    expect(
+      jsonBranch,
+      "the --json branch emits the work-next reading ungated. splitReadyChanges runs even " +
+        "when --ready was never passed, so an ungated emit reports UNMEASURED about a Ready " +
+        "promotion the run did not attempt — the round-2 finding on the other surface",
+    ).toContain("workNext: values.ready");
   });
 });

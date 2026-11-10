@@ -532,13 +532,28 @@ export async function main(argv: string[]): Promise<number> {
           // Silent Default Substitution shape: present, empty, and
           // indistinguishable from "nothing was promoted". Emitted as a
           // sorted array.
-          workNext: {
-            status: workNext.status,
-            carrying: workNext.carrying,
-            honoured: [...workNext.honoured].sort((a, b) => a - b),
-            cap: workNext.cap,
-            why: workNext.why,
-          },
+          //
+          // **Gated on `--ready`, exactly as the text branch is.** Round 5
+          // caught the first cut of this emitting unconditionally: with
+          // `--ready` absent, `cap` is forced `null` above, so a plain
+          // `--field Criteria --write --json` sync reported
+          // `status: "UNMEASURED"` and a `why` saying nothing was promoted
+          // — a claim about a promotion the run never attempted. That is
+          // round 2's finding, recommitted on the other surface by the fix
+          // for round 4.
+          //
+          // `null` is the honest value for "Ready was not requested", and
+          // it is distinguishable from the UNMEASURED object, which means
+          // "it was requested and the depth could not be read".
+          workNext: values.ready
+            ? {
+                status: workNext.status,
+                carrying: workNext.carrying,
+                honoured: [...workNext.honoured].sort((a, b) => a - b),
+                cap: workNext.cap,
+                why: workNext.why,
+              }
+            : null,
           wrote: values.write,
         },
         null,
