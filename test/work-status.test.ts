@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { laneHealth, type LaneHealth, type LaneReading } from "../lib/board-lane-health";
+import { structuralCut } from "../lib/source-slice";
 import {
   NO_MILESTONE,
   isPickable,
@@ -1178,6 +1179,208 @@ describe("#1852: the Ready gate reads one occupancy", () => {
       src.match(/ready\.count\s*-\s*openInReady/),
       "this file must not re-derive how many cards are undispatchable — that is the " +
         "second decider #1852 removed, and a mutation of readyOccupancy would not move it",
+    ).toBeNull();
+  });
+});
+
+/**
+ * #1944. D4 in `project-state.json`: *it names unmerged and uncommitted
+ * work in EVERY run, not when an agent remembers to check*. "Every run" is
+ * the operative half, so these are source-position assertions — a section
+ * behind a flag, or one an agent has to ask for, is the thing the stage
+ * item says is broken.
+ */
+describe("#1944: the report names local work every run, from the one decider", () => {
+  const src = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+  test("all three local readings are taken, and the verdict is not re-derived here", () => {
+    for (const reader of ["readLocalWork(", "readPushedBranches(", "readWorktreeStates("]) {
+      expect(code, `${reader} is never called, so that half of the evidence is never read`).toContain(reader);
+    }
+    expect(
+      code,
+      "the verdict must come from workVerdict in lib/board-lane-health.ts — a second decider " +
+        "here would survive any mutation of that one and nothing could tell which was live",
+    ).toContain("workVerdict({");
+    // The literal strings the decider owns must NOT appear in this script.
+    for (const owned of ["INVISIBLE —", "an assignee and nothing else"]) {
+      expect(
+        code.includes(owned),
+        `scripts/work-status.ts spells out "${owned}" itself instead of printing the ` +
+          `decider's sentence`,
+      ).toBe(false);
+    }
+  });
+
+  /**
+   * Cut to the construct, never to a character count (#664). The section
+   * runs from its own `bar(...)` heading to the next one, and both are
+   * code rather than comments, so the comment strip above cannot eat
+   * either boundary. A 2,600-character window was the first cut and CI
+   * refused it — correctly: the window is a guess about how long the
+   * section will stay that size, and the day it is wrong it accuses the
+   * wrong code.
+   */
+  const SECTION_START = 'bar("WHAT IS ACTUALLY BEING WORKED';
+  const SECTION_END = 'bar("START HERE';
+  const section = structuralCut(code, SECTION_START, { endAnchor: SECTION_END });
+
+  test("the cut found a real section, so nothing below holds vacuously", () => {
+    expect(section.length).toBeGreaterThan(800);
+    expect(section).toContain("workVerdict({");
+  });
+
+  test("the section is unconditional — no flag, no opt-in", () => {
+    // D4's whole complaint is "when an agent remembers to check". A flag is
+    // exactly that, moved into the tool.
+    expect(
+      section.match(/if \(\s*(?:values|args|flags)\.[A-Za-z]+\s*\)/),
+      "the local-work section is behind a flag. D4 says it must name this work in EVERY run",
+    ).toBeNull();
+  });
+
+  /**
+   * ai-review round 1 of #1974. The skip for healthy rows came BEFORE the
+   * line that reports uncommitted changes, so an issue with an open pull
+   * request and uncommitted edits in its worktree printed nothing at all —
+   * the "and uncommitted" half of this issue's own title, dropped for the
+   * subset most likely to have it. Uncommitted work is in no ref, so
+   * deleting the directory ends it.
+   *
+   * **This is a source-position assertion and that is a real weakness.**
+   * `scripts/work-status.ts` performs network calls at module scope, so it
+   * cannot be imported and the loop cannot be driven. The decision this
+   * case guards is a `continue`, not a value, so there was nothing to lift
+   * into `lib/` the way `openPullRequestReading` was. Stated rather than
+   * left for a reader to discover.
+   */
+  test("a healthy row is still printed when it holds uncommitted work", () => {
+    const skip = section.match(/if \(r\.verdict === "WORKING"[^)]*\) continue;/);
+    expect(skip, "the healthy-row skip was not found, so this holds vacuously").not.toBeNull();
+    expect(
+      skip![0],
+      "the skip drops every WORKING row before the uncommitted-work line can run. An issue " +
+        "with an open pull request AND uncommitted edits in its worktree then prints nothing",
+    ).toContain("!r.alsoDirty");
+    // And the count must span every verdict, not only the printed ones.
+    expect(section, "the summary must count dirty worktrees across all verdicts").toContain(
+      "workRows.filter(r => r.alsoDirty)",
+    );
+  });
+
+  /**
+   * ai-review round 2 of #1974. `issueFromBranch` reads a name, and a name
+   * is not a fact about the tracker — `rg/2620-tick` is live here against
+   * a highest issue of #1973. This script is the only caller that holds
+   * the issue list, so it is the only one that can close the gap.
+   */
+  test("the real issue list is handed to the walk, and strays are named", () => {
+    /**
+     * All three readers, not just the one a reviewer named. Round 2 wired
+     * the list into `readLocalWork` and round 3 found the other two still
+     * crediting a number read from a name — `origin/2-factor-auth` making
+     * issue #2 read WORKING. Asserting the call sites as a set is what
+     * stops the next one being found the same way.
+     */
+    const wired = [
+      "readLocalWork(process.cwd(), knownIssueNumbers)",
+      "readPushedBranches(process.cwd(), knownIssueNumbers)",
+      "issuesWithUncommittedWork(wtStates, knownIssueNumbers)",
+    ];
+    const missing = wired.filter(call => !section.includes(call));
+    expect(
+      missing,
+      "a local reading is taken without the tracker's issue list, so any branch opening " +
+        "with digits — a date stamp, a version, 2-factor-auth — is credited to whatever " +
+        "issue that number happens to be, and reports it as being worked",
+    ).toEqual([]);
+    expect(
+      section,
+      "a branch with unpushed commits and no matching issue must be printed. Dropping it " +
+        "silently is the empty-result-that-looks-clean this whole section exists to refuse",
+    ).toContain("localWork.unattributed");
+  });
+
+  /**
+   * ai-review round 4 of #1974 reported the `closingIssuesReferences`
+   * query as having one brace too many. It does not — 10 opens, 10
+   * closes, and running it against the API returns
+   * `closes: [1944]`. The finding was refused.
+   *
+   * But the reason it took executing the query to settle is that
+   * **nothing here could have caught it if it had been true.** An
+   * unbalanced query string is a runtime throw in a script no test can
+   * import, so it fails in the operator's terminal and never in CI.
+   *
+   * So the refusal comes with the guard the argument needed. Every
+   * GraphQL template in the script is balanced, counted — a cheap check
+   * for a defect class whose only other detector was somebody reading
+   * carefully.
+   */
+  /**
+   * ai-review round 5. Closing keywords resolve across repositories, so
+   * the closing list is filtered by repository — and that filter needs a
+   * field the QUERY has to ask for.
+   *
+   * The pairing is the point, and the battery showed why: dropping
+   * `repository{nameWithOwner}` from the query reddened nothing, because
+   * `declaredClosingIn` then matches no node at all and every issue reads
+   * `openPullRequest: false`. A filter silently discarding its whole
+   * input looks exactly like a repository with no closing references —
+   * the worst direction, since it sends live claims toward PARKED.
+   */
+  test("the closing query asks which repository, and the filter uses it", () => {
+    const closingQuery = [...src.matchAll(/`(query\([\s\S]*?)`/g)]
+      .map(m => m[1]!)
+      .find(t => t.includes("closingIssuesReferences"));
+    expect(closingQuery, "the closing-references query was not found").toBeDefined();
+    expect(
+      closingQuery!,
+      "the query does not request repository{nameWithOwner}, so declaredClosingIn matches " +
+        "nothing and every issue reads as having no open pull request",
+    ).toContain("repository{nameWithOwner}");
+    expect(
+      section.includes("declaredClosingIn(") || code.includes("declaredClosingIn("),
+      "the closing nodes are read without the cross-repo filter",
+    ).toBe(true);
+  });
+
+  test("every GraphQL template in the script is brace-balanced", () => {
+    const templates = [...src.matchAll(/`(query\([\s\S]*?)`/g)].map(m => m[1]!);
+    expect(
+      templates.length,
+      "no GraphQL templates were found, so this holds vacuously",
+    ).toBeGreaterThanOrEqual(2);
+    const unbalanced = templates
+      .map(t => ({
+        opens: (t.match(/\{/g) ?? []).length,
+        closes: (t.match(/\}/g) ?? []).length,
+        head: t.slice(0, 60),
+      }))
+      .filter(t => t.opens !== t.closes);
+    expect(
+      unbalanced,
+      "a GraphQL query in this script does not balance its braces. That is a runtime throw " +
+        "in a module no test can import, so it surfaces in an operator's terminal and never " +
+        "in CI",
+    ).toEqual([]);
+  });
+
+  test("an unreadable reading is announced, never dropped", () => {
+    const announcements = section.match(/UNMEASURED —/g) ?? [];
+    expect(
+      announcements.length,
+      "each of the three local readings can fail independently and each must say so. A " +
+        "section that prints nothing when it could not look reads exactly like a clean board",
+    ).toBeGreaterThanOrEqual(2);
+    expect(section, "localCommitsFor carries the null; the script must not coerce it").toContain(
+      "localCommitsFor(localWork",
+    );
+    expect(
+      section.match(/localCommitsFor\([^)]*\)\s*(?:\?\?|\|\|)/),
+      "the script defaults the local reading when it is null, which turns 'nobody looked' " +
+        "into 'nothing found' — the one thing lib/local-work.ts exists to prevent",
     ).toBeNull();
   });
 });

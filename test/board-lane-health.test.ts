@@ -540,7 +540,14 @@ describe("#1941: WORKING, INVISIBLE or PARKED from the evidence, not the assigne
    */
   test("both callers reach the one decider, and nobody re-derives it", () => {
     const ROOT = join(import.meta.dir, "..");
-    const CALLERS = ["lib/board-ready-fanout.ts", "scripts/board-status-sweep.ts"];
+    const CALLERS = [
+      "lib/board-ready-fanout.ts",
+      "scripts/board-status-sweep.ts",
+      // #1944. The first caller that can read all three evidence fields,
+      // because it is the only one that runs where the local git is
+      // reachable. Until it existed, PARKED was declared and unreachable.
+      "scripts/work-status.ts",
+    ];
 
     // Read from disk rather than listed, so a new file is in the population
     // the moment it exists. A hand-kept list here would make the second
