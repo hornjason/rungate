@@ -3556,11 +3556,20 @@ export async function filingGate(
       // `capForClause`, so the number the stage re-decides against is the
       // number the pre-read used.
       if (row.plannedBy != null) continue;
+      // The ceiling THIS row is judged against, which is not always the run's:
+      // a queued row carries the raised one. **One local, read by the
+      // reservation AND by every refusal below it** — round 4 of #1963 found
+      // the second `capForClause` call drifting from the first, with
+      // `unreservedCapReason` naming the run cap while the stage had already
+      // decided against the raised one. Two expressions answering one question
+      // are behaviourally one decider that can disagree
+      // (`.claude/rules/checks-must-be-able-to-fail.md`).
+      const rowCap = capForClause(row.queuedBy ?? null, cap);
       const reading = reserveAllowance(row, run, {
         now: nowMs,
         append,
         readLedger: readAgain,
-        cap: capForClause(row.queuedBy ?? null, cap),
+        cap: rowCap,
       });
       if (reading.outcome === "WON") {
         reserved.push(reading.intent);
@@ -3568,17 +3577,16 @@ export async function filingGate(
       }
       const refusal = reading.outcome === "LOST" ? "OVER_CAP" : "UNMEASURED_CAP";
       const target = await targetFor(attempts[index].repo);
-      // The ceiling THIS row was judged against, which is not always the
-      // run's: a queued row carries the raised one, and a refusal naming
-      // the wrong number sends its reader to the wrong fact.
-      const rowCap = capForClause(row.queuedBy ?? null, cap);
+      // Every refusal names `rowCap` — the number the stage above actually
+      // decided against. A refusal naming the wrong number sends its reader
+      // to the wrong fact.
       const reason =
         reading.outcome === "LOST"
           ? overCapReason(run, reading.already, target, rowCap)
           : reading.outcome === "UNRESERVED"
-            ? unreservedCapReason(run, target, cap)
+            ? unreservedCapReason(run, target, rowCap)
             : uncountableReason(target);
-      if (reading.outcome === "UNRESERVED") notes.push(unreservedAllowanceNote(cap));
+      if (reading.outcome === "UNRESERVED") notes.push(unreservedAllowanceNote(rowCap));
       // The intent this clause took is released with the rest below: it won
       // no position, and a losing reservation that is never given back is
       // the same stranded allowance by a rarer route.

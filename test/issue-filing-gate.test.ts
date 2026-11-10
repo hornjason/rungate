@@ -5654,6 +5654,57 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
       "an ordinary filing earned no raise and must not claim one",
     ).not.toContain("board.queueLabel");
   });
+
+  /**
+   * FG-262 and its control hold EVERYTHING fixed but the label: same tree,
+   * same empty ledger, same unwritable append. An empty ledger is what puts
+   * both rows past the clause stage and into the reservation stage, which is
+   * the only place `unreservedCapReason` is reachable from.
+   */
+  const unwritable = (cmd: string) =>
+    filingGate(cmd, {
+      projectRoot: queued,
+      now: at,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: (() => []) as never,
+      // The ledger cannot be appended to, which is the ONLY way to reach
+      // `unreservedCapReason`.
+      appendLedger: () => false,
+      readTarget: async () => ({ reading: "NO_PR", branch: "b" }) as never,
+      readPlan: { list: () => [] as string[], show: () => null },
+    });
+
+  test("FG-262: an UNRESERVED refusal on a queued row names the ceiling it was judged against", async () => {
+    // Round 4 of #1963. The reservation stage decides against
+    // `capForClause(...)`, and the LOST refusal was updated to name that
+    // number while the UNRESERVED refusal beside it still named the run cap.
+    // A refusal naming 1 for a row the gate judged at 24 sends its reader to
+    // the wrong fact — and the drift was possible only because two separate
+    // expressions answered one question.
+    const refused = await unwritable(queueLabelled());
+    expect(refused.rows[0].refusal, "an unwritable ledger refuses").toBe("UNMEASURED_CAP");
+    expect(
+      refused.refusal ?? "",
+      "the refusal names the run cap, not the raised ceiling this row was judged against",
+    ).toContain(`The cap is ${QUEUE_FILINGS_PER_RUN} per run`);
+  });
+
+  test("FG-263 CONTROL: the SAME refusal on an unqueued row names the RUN cap", async () => {
+    // Without this, FG-262 passes against a gate that prints the raised
+    // ceiling on every UNRESERVED refusal — the same defect with the sign
+    // flipped, and the cheapest wrong fix for FG-262 (hardcoding
+    // `QUEUE_FILINGS_PER_RUN` into the reason) goes green under FG-262 alone.
+    const plain = await unwritable(unlabelled());
+    expect(plain.rows[0].refusal, "an unwritable ledger refuses here too").toBe("UNMEASURED_CAP");
+    expect(
+      plain.refusal ?? "",
+      "an unqueued row was judged at the run cap and its refusal must say so",
+    ).toContain(`The cap is ${FILINGS_PER_RUN} per run`);
+    expect(
+      QUEUE_FILINGS_PER_RUN,
+      "the fixture this control replaced could not fire — the two ceilings must differ",
+    ).not.toBe(FILINGS_PER_RUN);
+  });
 });
 
 /**
