@@ -205,26 +205,58 @@ if (declining) {
   // The two failure modes are reported apart. One `catch` over both said
   // "could not be updated on the tracker" for a local disk error too, which
   // sends the reader to GitHub for a problem on their own filesystem.
+  // Bound out here: narrowing from the `recheck.declined` guard above does
+  // not reach inside the closure below, and the alternative — re-asserting
+  // the discriminant in there — is a second place for the two to disagree.
+  const declinedBody = recheck.body;
+
   const scratch = mkdtempSync(join(tmpdir(), "rg-1940-decline-"));
   const bodyFile = join(scratch, "body.md");
-  try {
+
+  /**
+   * The guarded region RETURNS its failure. It never exits.
+   *
+   * `process.exit()` does not unwind the stack, so a `finally` wrapped
+   * around a block that exits from inside it never runs — both error paths
+   * here left the mkdtemp directory, and the rendered issue body inside it,
+   * on disk. Found on #1956.
+   *
+   * The fix is the shape, not the two call sites: with no exit anywhere in
+   * the region there is no second place for one to reappear, and
+   * `test/finding-promotion.test.ts` asserts the region stays exit-free
+   * rather than asserting these two lines in particular.
+   */
+  function writeAndEdit(): string[] | null {
     try {
-      writeFileSync(bodyFile, recheck.body);
+      writeFileSync(bodyFile, declinedBody);
     } catch (e) {
-      console.error(`REFUSED: could not write the new body to ${bodyFile} — this is a LOCAL`);
-      console.error(`failure, not a tracker one. #${issueNumber} was not touched.`);
-      console.error(e instanceof Error ? e.message : String(e));
-      process.exit(PROMOTION_EXIT);
+      return [
+        `REFUSED: could not write the new body to ${bodyFile} — this is a LOCAL`,
+        `failure, not a tracker one. #${issueNumber} was not touched.`,
+        e instanceof Error ? e.message : String(e),
+      ];
     }
     try {
       ghWithoutGhToken(["issue", "edit", String(issueNumber), "--body-file", bodyFile]);
     } catch (e) {
-      console.error(`REFUSED: #${issueNumber} could not be updated on the tracker`);
-      console.error(e instanceof Error ? e.message : String(e));
-      process.exit(PROMOTION_EXIT);
+      return [
+        `REFUSED: #${issueNumber} could not be updated on the tracker`,
+        e instanceof Error ? e.message : String(e),
+      ];
     }
+    return null;
+  }
+
+  let failure: string[] | null;
+  try {
+    failure = writeAndEdit();
   } finally {
     rmSync(scratch, { recursive: true, force: true });
+  }
+
+  if (failure) {
+    for (const line of failure) console.error(line);
+    process.exit(PROMOTION_EXIT);
   }
 
   console.log(`#${issueNumber} now declares it serves no criterion.`);

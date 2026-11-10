@@ -1104,3 +1104,66 @@ describe("#1956 round 1: the decline CLI refuses a contradictory command line", 
     expect(err).not.toContain("cannot be combined");
   });
 });
+
+describe("#1956 round 2: the scratch directory is always removed", () => {
+  const SRC = readFileSync(
+    join(import.meta.dir, "..", "scripts", "finding-promotion.ts"),
+    "utf8",
+  );
+
+  /**
+   * `process.exit()` does not unwind the stack, so a `finally` around a
+   * block that exits from inside it never runs. Both decline write paths
+   * exited in there, leaking the mkdtemp directory AND the rendered issue
+   * body in it.
+   *
+   * Asserted as a property of the REGION rather than of the two call sites
+   * review named. Repairing named instances is what rounds 2 through 4 of
+   * #1955 did, and each round found a sibling of the same shape still
+   * present — `.claude/rules/checks-must-be-able-to-fail.md`, the fourth
+   * shape at N sites.
+   */
+  test("no process.exit sits between the mkdtemp and the finally that removes it", () => {
+    const open = SRC.indexOf("mkdtempSync(");
+    const close = SRC.indexOf("rmSync(scratch", open);
+    expect(open, "the decline path must still create a scratch directory").toBeGreaterThan(-1);
+    expect(close, "the scratch directory must still be removed in a finally").toBeGreaterThan(open);
+
+    // Comments stripped first. The docblock explaining this very rule says
+    // `process.exit()` in prose, and a scanner that counts the explanation
+    // as a violation is a detector wider than what it detects.
+    const region = SRC.slice(open, close)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^[ \t]*\/\/.*$/gm, "");
+
+    // Proves the cut is the region meant, not an empty or runaway slice —
+    // an empty string contains no process.exit and would pass vacuously.
+    expect(region).toContain("writeFileSync(bodyFile");
+    expect(region).toContain("issue\", \"edit\"");
+
+    const exits = [...region.matchAll(/process\.exit\(/g)].length;
+    expect(
+      exits,
+      "an exit inside the guarded region skips the finally and leaks the scratch directory — " +
+        "return the failure out of the region and exit after the cleanup has run",
+    ).toBe(0);
+  });
+
+  test("the failure still reaches the caller — the refusal was moved, not deleted", () => {
+    // Without this, deleting both error paths outright satisfies the case
+    // above: a region with no failure handling at all contains no exit.
+    // Both messages must still be BUILT inside the region...
+    const open = SRC.indexOf("mkdtempSync(");
+    const region = SRC.slice(open, SRC.indexOf("rmSync(scratch", open));
+    expect(region).toContain("could not be updated on the tracker");
+    expect(region).toContain("this is a LOCAL");
+
+    // ...and the non-zero exit must happen AFTER the cleanup, conditional
+    // on what the region returned.
+    const after = SRC.slice(SRC.indexOf("rmSync(scratch"));
+    expect(after).toContain("if (failure)");
+    expect(after.indexOf("process.exit(PROMOTION_EXIT)")).toBeGreaterThan(
+      after.indexOf("if (failure)"),
+    );
+  });
+});
