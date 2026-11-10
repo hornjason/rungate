@@ -117,3 +117,58 @@ This matters on a tree the harness was added to rather than one it created.
 One consumer ran five `engine: copilot` workflows that cost money, failed on
 quota and emailed its owner, and every scaffold run reported clean — not
 because anything went wrong, but because nothing had ever looked.
+
+
+## The four rules moved out of the always-loaded file (#1069)
+
+Moved verbatim from `.claude/rules/harness-managed.md`, which loads on
+every path under `.claude/agents/**` and `.claude/rules/**` and therefore
+sets the peak instruction surface. Nothing here was shortened.
+
+### AGENTS.md is section-owned (#568)
+
+Everything in `AGENTS.md` is generated from the scan and your
+`.claude/rungate/` config, with one exception: a `## Hard Constraints`
+section is yours, and a re-scaffold carries it forward verbatim —
+including the `<!-- BEGIN AUTO-EXTRACTED -->` block, and including any
+lines you wrote outside it. Put non-inferable project rules there — the
+ones an agent cannot read off the code — and nowhere else in the file.
+
+If a run cannot carry every one of those lines forward it **refuses the
+write**, names the lines, and leaves your file untouched.
+
+### An agent brief is section-owned too (#655)
+
+`.claude/agents/*.md` works the way `AGENTS.md` does, through the same merge
+in `lib/agents-md-sections.ts`. Add a `## Project Constraints` heading to a
+brief and everything under it, up to the next `##`, is yours: a re-scaffold
+carries it forward verbatim and rewrites the rest, or **refuses the write**
+and leaves the brief untouched. A reinforcement the hill-climb applies goes
+there in preference to `## Efficiency Rules`, `## Testing Rules` or
+`## Never Do`.
+
+### The generated CI jobs are config-driven, never hand-edited (#216, #597)
+
+rungate owns the `test` job in `ci.yml` and the `gates` job in `gates.yml` and
+regenerates exactly those; jobs you add are yours and are carried forward.
+The `npm install -g` step inside the generated `test` job comes from
+`ci.globalTools` in `.claude/rungate/config.json`, an exact-version map that is
+the only position in the tree naming a version. **To change a pinned tool,
+edit the config and re-scaffold.** A range or dist-tag is refused by name
+rather than installed unpinned.
+
+### Every workflow file is reported, owned or not (#722)
+
+A re-scaffold reports **every** file in `.github/workflows/`, not only the ones
+it owns:
+
+| Status | What it means |
+|--------|---------------|
+| generated-and-unchanged | rungate wrote it and nobody has touched it |
+| generated-and-hand-edited | rungate wrote it and the bytes have moved; preserved, not rewritten |
+| NOT-OWNED | no marker — rungate did not write this and does not manage it |
+
+**A NOT-OWNED workflow is reported by name and otherwise left alone.** What
+you do with it is yours; the harness only refuses to keep quiet about it. Each
+name is printed individually, because "5 unowned workflows" is not something
+anybody can act on.
