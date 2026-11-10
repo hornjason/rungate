@@ -1318,6 +1318,34 @@ describe("#1944: the report names local work every run, from the one decider", (
    * for a defect class whose only other detector was somebody reading
    * carefully.
    */
+  /**
+   * ai-review round 5. Closing keywords resolve across repositories, so
+   * the closing list is filtered by repository — and that filter needs a
+   * field the QUERY has to ask for.
+   *
+   * The pairing is the point, and the battery showed why: dropping
+   * `repository{nameWithOwner}` from the query reddened nothing, because
+   * `declaredClosingIn` then matches no node at all and every issue reads
+   * `openPullRequest: false`. A filter silently discarding its whole
+   * input looks exactly like a repository with no closing references —
+   * the worst direction, since it sends live claims toward PARKED.
+   */
+  test("the closing query asks which repository, and the filter uses it", () => {
+    const closingQuery = [...src.matchAll(/`(query\([\s\S]*?)`/g)]
+      .map(m => m[1]!)
+      .find(t => t.includes("closingIssuesReferences"));
+    expect(closingQuery, "the closing-references query was not found").toBeDefined();
+    expect(
+      closingQuery!,
+      "the query does not request repository{nameWithOwner}, so declaredClosingIn matches " +
+        "nothing and every issue reads as having no open pull request",
+    ).toContain("repository{nameWithOwner}");
+    expect(
+      section.includes("declaredClosingIn(") || code.includes("declaredClosingIn("),
+      "the closing nodes are read without the cross-repo filter",
+    ).toBe(true);
+  });
+
   test("every GraphQL template in the script is brace-balanced", () => {
     const templates = [...src.matchAll(/`(query\([\s\S]*?)`/g)].map(m => m[1]!);
     expect(

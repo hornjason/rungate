@@ -32,6 +32,7 @@ import {
 } from "../lib/work-status";
 import { laneHealth, laneHealthLines, workVerdict } from "../lib/board-lane-health";
 import {
+  declaredClosingIn,
   issuesWithUncommittedWork,
   localCommitsFor,
   openPullRequestReading,
@@ -591,11 +592,16 @@ for (const p of prs) {
   const d = await gql(
     `query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){pullRequest(number:$i){
        mergeStateStatus commits(last:1){nodes{commit{statusCheckRollup{state}}}}
-       closingIssuesReferences(first:100){pageInfo{hasNextPage} nodes{number}}}}}`,
+       closingIssuesReferences(first:100){pageInfo{hasNextPage} nodes{number repository{nameWithOwner}}}}}}`,
     { o: OWNER, n: NAME, i: p.number },
   );
   const pr = d.repository.pullRequest;
-  for (const n of pr.closingIssuesReferences?.nodes ?? []) declaredClosing.add(n.number);
+  // Filtered by repository, not by number. Closing keywords resolve across
+  // repositories, so `Fixes other-org/other-repo#1944` would otherwise mark
+  // THIS tracker's #1944 as having an open pull request. ai-review round 5.
+  for (const n of declaredClosingIn(pr.closingIssuesReferences?.nodes ?? [], REPO)) {
+    declaredClosing.add(n);
+  }
   if (pr.closingIssuesReferences?.pageInfo?.hasNextPage) closingTruncated.push(p.number);
   const roll = pr.commits.nodes[0]?.commit?.statusCheckRollup?.state ?? "NO CHECKS REPORTED";
   console.log(`  PR #${p.number}  ${pr.mergeStateStatus.padEnd(9)} checks=${roll.padEnd(8)} ${p.title.slice(0, 54)}`);

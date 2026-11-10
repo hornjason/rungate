@@ -277,6 +277,34 @@ export function issuesWithUncommittedWork(
  * script that performs network calls on import is reachable only by
  * reading the source.
  */
+/**
+ * The issues a pull request declares it closes **in one repository**.
+ *
+ * ai-review round 5 of #1974. `closingIssuesReferences` resolves GitHub's
+ * closing keywords, and those match across repositories: `Fixes
+ * other-org/other-repo#1944` produces a node numbered 1944 that has
+ * nothing to do with this tracker. Taking `.number` alone made a pull
+ * request here mark the local #1944 WORKING on the strength of somebody
+ * else's issue.
+ *
+ * Checked against the live tracker before fixing: of the open pull
+ * requests today exactly one declares a closing reference and it is
+ * same-repo, so this is a real mechanism that is not currently firing —
+ * worth saying, because "found a bug" and "found a bug that is happening"
+ * are different claims.
+ *
+ * Same shape as the `knownIssues` guard above, one level out: a number is
+ * not an identity until something says which tracker it belongs to.
+ */
+export function declaredClosingIn(
+  nodes: readonly { readonly number: number; readonly repository?: { readonly nameWithOwner?: string } }[],
+  repoNameWithOwner: string,
+): number[] {
+  return nodes
+    .filter(n => n.repository?.nameWithOwner === repoNameWithOwner)
+    .map(n => n.number);
+}
+
 export function openPullRequestReading(
   declared: ReadonlySet<number>,
   truncatedPRs: readonly number[],

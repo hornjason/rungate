@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  declaredClosingIn,
   issueFromBranch,
   issuesWithPushedBranch,
   issuesWithUncommittedWork,
@@ -341,6 +342,33 @@ describe("#1944: the other two evidence fields", () => {
     const w = tallyLocalWork(commits, null, null);
     expect(localCommitsFor(w, 2620)).toBe(true);
     expect(w.unattributed.size).toBe(0);
+  });
+
+  /**
+   * ai-review round 5 of #1974. GitHub's closing keywords resolve ACROSS
+   * repositories, so `Fixes other-org/other-repo#1944` produces a node
+   * numbered 1944 that has nothing to do with this tracker. Reading
+   * `.number` alone marked the local #1944 WORKING on the strength of
+   * somebody else's issue.
+   *
+   * Same class as the `knownIssues` guard one level out: a number is not
+   * an identity until something says which tracker it belongs to.
+   */
+  test("a closing reference from another repository is not this tracker's issue", () => {
+    const nodes = [
+      { number: 1944, repository: { nameWithOwner: "hornjason/rungate" } },
+      { number: 1941, repository: { nameWithOwner: "other-org/other-repo" } },
+      { number: 1931 }, // no repository in the response at all
+    ];
+    expect(
+      declaredClosingIn(nodes, "hornjason/rungate"),
+      "a cross-repo closing reference was credited to this tracker, which reports an issue " +
+        "WORKING on the strength of a pull request that does not touch it",
+    ).toEqual([1944]);
+
+    // Negative control: the filter is about the repository, not a blanket
+    // refusal. Point it at the other repo and the other issue comes back.
+    expect(declaredClosingIn(nodes, "other-org/other-repo")).toEqual([1941]);
   });
 
   test("a detached worktree has no branch, so it is attributed to no issue", () => {
