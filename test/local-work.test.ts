@@ -229,6 +229,54 @@ describe("#1944: the other two evidence fields", () => {
     ).toBeNull();
   });
 
+  /**
+   * ai-review round 2 of #1974. The positional rule closed
+   * `username-patch-1` and `adr-011-plan`, and it still reads ANY leading
+   * digit run: `release/2026-11-10-snapshot` is 2026 and `2-factor-auth`
+   * is 2. The reviewer's point is that this repository's issue numbers are
+   * in the thousands and climbing, so a date stamp will eventually land on
+   * a live issue.
+   *
+   * It is not hypothetical today either: `rg/2620-tick` exists in this
+   * checkout and the highest issue in the repository is #1973.
+   *
+   * The fix is not a better regex. "Is this a real issue" is a fact about
+   * the tracker, which the caller holds and this module cannot read.
+   */
+  test("a branch naming an issue that does not exist is unattributed, not credited", () => {
+    const commits = [
+      { sha: "a", branch: "rg/1944-local-work" },
+      { sha: "b", branch: "rg/2620-tick" }, // live here; #2620 does not exist
+      { sha: "c", branch: "release/2026-11-10-snapshot" },
+      { sha: "d", branch: "2-factor-auth" },
+    ];
+    const known = new Set([1944, 1973]);
+    const w = tallyLocalWork(commits, null, known);
+
+    expect(localCommitsFor(w, 1944)).toBe(true);
+    for (const ghost of [2620, 2026, 2]) {
+      expect(
+        localCommitsFor(w, ghost),
+        `#${ghost} was credited with work from a branch that merely starts with that number`,
+      ).toBe(false);
+    }
+    expect(
+      [...w.unattributed.keys()].sort(),
+      "a branch with real unpushed commits and no matching issue must be NAMED, not dropped — " +
+        "it is work nothing will attribute and somebody should see it",
+    ).toEqual(["2-factor-auth", "release/2026-11-10-snapshot", "rg/2620-tick"]);
+  });
+
+  test("with no issue list the caller gets name-only attribution, and knows it", () => {
+    // The negative control for the case above. Without it, a change that
+    // unattributed EVERYTHING would pass — the set is the thing under
+    // test, not the rejection.
+    const commits = [{ sha: "a", branch: "rg/2620-tick" }];
+    const w = tallyLocalWork(commits, null, null);
+    expect(localCommitsFor(w, 2620)).toBe(true);
+    expect(w.unattributed.size).toBe(0);
+  });
+
   test("a detached worktree has no branch, so it is attributed to no issue", () => {
     const { dirty, unread } = issuesWithUncommittedWork([
       { path: "/w/detached", branch: null, dirty: true },
@@ -319,6 +367,52 @@ describe("#1944: the readers refuse rather than report an empty reading", () => 
       const { dirty, unread } = issuesWithUncommittedWork(after!);
       expect(unread.length).toBe(1);
       expect(dirty.has(4242)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The battery found this one too: dropping the `knownIssues` argument
+   * where `readLocalWork` hands it to the tally scored **0 fail**. Every
+   * case above calls `tallyLocalWork` directly, so the RUNNER's wiring —
+   * the one line that carries the issue list from the caller to the
+   * decision — was covered by inspection only. The same shape as the
+   * worktree `catch` two cases up, found the same way.
+   */
+  test("the runner carries the issue list through to the attribution", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-1944-known-"));
+    const repo = join(root, "repo");
+    const git = (args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf-8" });
+    try {
+      mkdirSync(repo);
+      execFileSync("git", ["init", "-q", "-b", "main", repo], { encoding: "utf-8" });
+      git(["config", "user.email", "t@example.invalid"]);
+      git(["config", "user.name", "t"]);
+      writeFileSync(join(repo, "a.txt"), "one");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "one"]);
+      // Two branches, one commit each. No remote exists, so every commit
+      // is unpushed by construction — which is the state the walk looks for.
+      for (const [branch, file] of [
+        ["rg/4242-real", "b.txt"],
+        ["rg/999999-ghost", "c.txt"],
+      ]) {
+        git(["checkout", "-q", "-b", branch!, "main"]);
+        writeFileSync(join(repo, file!), branch!);
+        git(["add", "-A"]);
+        git(["commit", "-q", "-m", branch!]);
+      }
+
+      const w = readLocalWork(repo, new Set([4242]));
+      expect(w.unmeasured, "the fixture walk did not run").toBeNull();
+      expect(localCommitsFor(w, 4242)).toBe(true);
+      expect(
+        localCommitsFor(w, 999999),
+        "the runner credited an issue that the caller's list does not contain, so the list " +
+          "it was handed never reached the decision",
+      ).toBe(false);
+      expect([...w.unattributed.keys()]).toEqual(["rg/999999-ghost"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

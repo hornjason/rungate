@@ -40,6 +40,21 @@ export interface LocalWork {
   /** The same tally before the branch names were resolved to issues. */
   readonly byBranch: ReadonlyMap<string, number>;
   /**
+   * Branches whose leading number is not an issue that exists.
+   *
+   * ai-review round 2 of #1974. `issueFromBranch` is a reading of a NAME,
+   * and a name is not a fact about the tracker: `release/2026-11-10-x`
+   * reads as 2026 and `2-factor-auth` as 2. This checkout already carries
+   * `rg/2620-tick`, and the highest issue in the repository is #1973.
+   *
+   * Reported rather than silently dropped. A commit on one of these is
+   * real local work that nothing will now attribute, and that is a thing
+   * somebody should see rather than a tidy empty result.
+   *
+   * Empty when the caller passed no issue list — see `tallyLocalWork`.
+   */
+  readonly unattributed: ReadonlyMap<string, number>;
+  /**
    * Why the reading could not be taken, or `null` when it was taken.
    *
    * An empty `byIssue` with `unmeasured === null` means "looked, found
@@ -116,19 +131,40 @@ export function parseUnpushed(stdout: string): UnpushedCommit[] {
   return out;
 }
 
-/** Tally parsed commits by branch and by issue. Pure. */
+/**
+ * Tally parsed commits by branch and by issue. Pure.
+ *
+ * `knownIssues` is the tracker's own answer to "is this a real issue", and
+ * when it is supplied a branch whose number is not in it lands in
+ * `unattributed` instead of `byIssue`. `issueFromBranch` can only read a
+ * NAME; whether that name corresponds to anything is a fact the caller
+ * holds and this module does not. ai-review round 2 of #1974, after
+ * `rg/2620-tick` was found live against a tracker whose highest issue is
+ * #1973.
+ *
+ * `null` keeps the name-only behaviour, for a caller with no issue list.
+ * That is looser and it is the caller's declaration that it has nothing
+ * better — not a default this module picks.
+ */
 export function tallyLocalWork(
   commits: readonly UnpushedCommit[],
   unmeasured: string | null = null,
+  knownIssues: ReadonlySet<number> | null = null,
 ): LocalWork {
   const byBranch = new Map<string, number>();
   const byIssue = new Map<number, number>();
+  const unattributed = new Map<string, number>();
   for (const c of commits) {
     byBranch.set(c.branch, (byBranch.get(c.branch) ?? 0) + 1);
     const issue = issueFromBranch(c.branch);
-    if (issue !== null) byIssue.set(issue, (byIssue.get(issue) ?? 0) + 1);
+    if (issue === null) continue;
+    if (knownIssues !== null && !knownIssues.has(issue)) {
+      unattributed.set(c.branch, (unattributed.get(c.branch) ?? 0) + 1);
+      continue;
+    }
+    byIssue.set(issue, (byIssue.get(issue) ?? 0) + 1);
   }
-  return { byBranch, byIssue, unmeasured };
+  return { byBranch, byIssue, unattributed, unmeasured };
 }
 
 /**
@@ -252,7 +288,10 @@ export const UNPUSHED_ARGS: readonly string[] = [
  * non-zero exit, on a missing binary, and on a directory that is not a
  * repository, and all three mean the same thing here: nobody looked.
  */
-export function readLocalWork(repoRoot: string): LocalWork {
+export function readLocalWork(
+  repoRoot: string,
+  knownIssues: ReadonlySet<number> | null = null,
+): LocalWork {
   let stdout: string;
   try {
     stdout = execFileSync("git", ["-C", repoRoot, ...UNPUSHED_ARGS], {
@@ -267,7 +306,7 @@ export function readLocalWork(repoRoot: string): LocalWork {
         `No issue can be reported as having no local work on the strength of this`,
     );
   }
-  return tallyLocalWork(parseUnpushed(stdout));
+  return tallyLocalWork(parseUnpushed(stdout), null, knownIssues);
 }
 
 /** One `for-each-ref`. Returns `null` when it could not be run. */

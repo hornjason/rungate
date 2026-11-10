@@ -613,7 +613,19 @@ for (const p of prs) {
 // evidence fields, which is what makes its PARKED verdict reachable at all.
 // The other two run where a laptop's git is unreachable and pass `null`.
 bar("WHAT IS ACTUALLY BEING WORKED — the local half no GitHub query can see");
-const localWork = readLocalWork(process.cwd());
+// The tracker's own answer to "is this a real issue". `issueFromBranch`
+// reads a NAME, and a name is not a fact: `rg/2620-tick` is live here and
+// the highest issue is #1973. ai-review round 2 of #1974.
+const knownIssueNumbers = new Set<number>(allIssues.map((i: any) => i.number as number));
+const localWork = readLocalWork(process.cwd(), knownIssueNumbers);
+if (localWork.unattributed.size > 0) {
+  for (const [branch, n] of localWork.unattributed) {
+    console.log(
+      `  ${branch} has ${n} unpushed commit(s) and names no issue that exists — real local ` +
+        `work nothing will attribute. Rename the branch or open the issue`,
+    );
+  }
+}
 const pushedIssues = readPushedBranches(process.cwd());
 const wtStates = readWorktreeStates(process.cwd());
 const uncommitted = wtStates === null ? null : issuesWithUncommittedWork(wtStates);

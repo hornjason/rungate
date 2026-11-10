@@ -1269,6 +1269,25 @@ describe("#1944: the report names local work every run, from the one decider", (
     );
   });
 
+  /**
+   * ai-review round 2 of #1974. `issueFromBranch` reads a name, and a name
+   * is not a fact about the tracker — `rg/2620-tick` is live here against
+   * a highest issue of #1973. This script is the only caller that holds
+   * the issue list, so it is the only one that can close the gap.
+   */
+  test("the real issue list is handed to the walk, and strays are named", () => {
+    expect(
+      section,
+      "readLocalWork is called without the tracker's issue list, so any branch opening with " +
+        "digits — a date stamp, a version — is credited to whatever issue that number is",
+    ).toContain("readLocalWork(process.cwd(), knownIssueNumbers)");
+    expect(
+      section,
+      "a branch with unpushed commits and no matching issue must be printed. Dropping it " +
+        "silently is the empty-result-that-looks-clean this whole section exists to refuse",
+    ).toContain("localWork.unattributed");
+  });
+
   test("an unreadable reading is announced, never dropped", () => {
     const announcements = section.match(/UNMEASURED —/g) ?? [];
     expect(
