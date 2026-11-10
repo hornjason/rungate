@@ -1302,6 +1302,43 @@ describe("#1944: the report names local work every run, from the one decider", (
     ).toContain("localWork.unattributed");
   });
 
+  /**
+   * ai-review round 4 of #1974 reported the `closingIssuesReferences`
+   * query as having one brace too many. It does not — 10 opens, 10
+   * closes, and running it against the API returns
+   * `closes: [1944]`. The finding was refused.
+   *
+   * But the reason it took executing the query to settle is that
+   * **nothing here could have caught it if it had been true.** An
+   * unbalanced query string is a runtime throw in a script no test can
+   * import, so it fails in the operator's terminal and never in CI.
+   *
+   * So the refusal comes with the guard the argument needed. Every
+   * GraphQL template in the script is balanced, counted — a cheap check
+   * for a defect class whose only other detector was somebody reading
+   * carefully.
+   */
+  test("every GraphQL template in the script is brace-balanced", () => {
+    const templates = [...src.matchAll(/`(query\([\s\S]*?)`/g)].map(m => m[1]!);
+    expect(
+      templates.length,
+      "no GraphQL templates were found, so this holds vacuously",
+    ).toBeGreaterThanOrEqual(2);
+    const unbalanced = templates
+      .map(t => ({
+        opens: (t.match(/\{/g) ?? []).length,
+        closes: (t.match(/\}/g) ?? []).length,
+        head: t.slice(0, 60),
+      }))
+      .filter(t => t.opens !== t.closes);
+    expect(
+      unbalanced,
+      "a GraphQL query in this script does not balance its braces. That is a runtime throw " +
+        "in a module no test can import, so it surfaces in an operator's terminal and never " +
+        "in CI",
+    ).toEqual([]);
+  });
+
   test("an unreadable reading is announced, never dropped", () => {
     const announcements = section.match(/UNMEASURED —/g) ?? [];
     expect(
