@@ -478,9 +478,19 @@ export function filingsPerRunFor(
  * (`board-conformance`) cannot disagree about what the queue is called. A
  * second config key here would be a third opinion on one question.
  *
- * **It exempts the SPENT arm only, never `uncountable`** — the same parting
- * `plannedFiling` makes, for the same reason: an exemption that cannot be
- * RECORDED is what the ledger exists to prevent.
+ * **It RAISES the ceiling and exempts nothing** — see `QUEUE_FILINGS_PER_RUN`.
+ * This sentence used to say it exempted the SPENT arm the way `plannedFiling`
+ * does, which was true of the FIRST design and false of the shipped one, and
+ * round 6 of the review was right to keep pointing at it: a reader who
+ * believed it could reintroduce the authorization bypass the security review
+ * already rejected once. A queued clause increments `spent` like every other
+ * (`if (!planned.planned) spent += 1`); only the number it is compared
+ * against moves, and only via `capForClause`.
+ *
+ * The parting `plannedFiling` makes does still apply: `uncountable` is never
+ * cleared by either route, because a ledger that cannot be read cannot RECORD
+ * what it admitted, and an admission nobody can audit is what the ledger
+ * exists to prevent.
  *
  * **It takes a THUNK for the reason `filingsPerRunFor` does.**
  * `readQueueLabel` calls `tryLoadRungateConfig`, which is a bare
@@ -491,7 +501,7 @@ export function filingsPerRunFor(
  * its own production; one taking the thunk can only be called the right way.
  *
  * Absent, blank, non-string and unparseable all resolve to `null`, and the
- * direction is the property: `null` exempts nothing. A built-in substituted
+ * direction is the property: `null` raises nothing. A built-in substituted
  * for absent config would let a filer in any unscaffolded repository spell
  * its way past the cap — `.claude/rules/config-access.md`, *Silent Default
  * Substitution*. `FG-253` is the assertion rather than this sentence.
@@ -511,8 +521,8 @@ export function queueLabelFor(load: () => string | null): string | null {
  * Separate from `queueLabelFor` because they answer different questions about
  * different inputs — *what is the queue called* and *is this filing in it* —
  * and returning the LABEL rather than a boolean is what lets the ledger row
- * name which queue admitted it. An exemption that reaches the tracker without
- * naming what admitted it is indistinguishable from the cap not having run.
+ * name which queue admitted it. A raise that reaches the tracker without
+ * naming what granted it is indistinguishable from the cap not having run.
  */
 export function queueCarveOut(
   labels: string[],
@@ -1513,15 +1523,20 @@ export interface FilingLedgerRow {
    */
   plannedBy?: string | null;
   /**
-   * The configured work-queue label that admitted this filing past the cap,
-   * or `null` for one the queue does not claim (#1961).
+   * The configured work-queue label that raised this filing's ceiling, or
+   * `null` for one the queue does not claim (#1961).
+   *
+   * **A raise, never an exemption** — the row is written for every queued
+   * clause precisely because those clauses ARE counted. `plannedBy` marks a
+   * filing the cap never counted; this one marks a filing the cap counted
+   * against a bigger number.
    *
    * On EVERY row for the same reason `plannedBy` is: *how much of what we
    * file is engine work* is a ratio, and a column present only where the
-   * carve-out fired supplies a numerator and no denominator. It is also the
-   * audit trail for the carve-out — it names WHICH label, so a reader can
-   * check that label against the tree's `board.queueLabel` rather than
-   * taking the exemption on trust.
+   * raise fired supplies a numerator and no denominator. It is also the
+   * audit trail for the raise — it names WHICH label, so a reader can check
+   * that label against the tree's `board.queueLabel` rather than taking the
+   * raise on trust.
    */
   queuedBy?: string | null;
   at: string;
@@ -3031,7 +3046,7 @@ export async function filingGate(
   // The work queue's name, resolved ONCE per command for the same reason the
   // allowance is: per clause would let two clauses of one command be
   // adjudicated against two different queues if the config moved underneath
-  // them. A tree that declares none resolves to `null`, which exempts
+  // them. A tree that declares none resolves to `null`, which raises
   // nothing — `queueLabelFor`.
   //
   // No note when it is absent. A config the gate cannot PARSE already earns
