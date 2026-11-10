@@ -48,7 +48,7 @@ import {
   type Incumbent,
 } from "../lib/board-ready-fanout";
 import { phaseOf } from "../lib/board-mirror";
-import { readBoardInputs } from "../lib/config-readers";
+import { enginePrefixReading } from "../lib/config-readers";
 import {
   heldReason,
   holdsReadySlot,
@@ -749,8 +749,13 @@ async function main(): Promise<number> {
     }));
   const occ = readyOccupancy(occupied, dispatchable, cap);
   // The ENGINE milestone family, from this project's own config (#1943):
-  // a phase number only orders inside its own family.
-  const selection = selectReady(eligible, occ, readBoardInputs(process.cwd()).milestonePrefix);
+  // a phase number only orders inside its own family. It SAYS when it could
+  // not read one, because a `null` prefix is the pre-#1943 ordering and a run
+  // from a directory with no config would otherwise turn the fix off in
+  // silence — round 2 of #1965's review.
+  const engine = enginePrefixReading(process.cwd());
+  if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
+  const selection = selectReady(eligible, occ, engine.prefix);
   console.log(
     `  depth: ${cap ?? "UNMEASURED"}` +
       (throughput === null

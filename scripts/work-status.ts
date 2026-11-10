@@ -38,7 +38,7 @@ import {
   readyOrderFor,
   type Throughput,
 } from "../lib/board-ready-rule";
-import { readBoardInputs } from "../lib/config-readers";
+import { enginePrefixReading } from "../lib/config-readers";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
 
@@ -659,7 +659,16 @@ const candidateRankables = pickable.map((i: any) => ({
 // The ENGINE milestone family, from this project's own config (#1943).
 // Without it `Convergence Phase 3` outranked `Pipeline Phase 6` and the
 // report printed the payload above the engine that ships it.
-const enginePrefix = readBoardInputs(process.cwd()).milestonePrefix;
+//
+// **And it SAYS when it could not read one** — round 2 of #1965's review. A
+// `null` prefix is the pre-#1943 ordering, so a run from a directory with no
+// config turns the fix off and prints the payload above the engine again.
+// `enginePrefixReading` separates *this tree declares one family* from *I
+// could not find a config here*, which are the same `null` to
+// `readBoardInputs` and different facts to a reader.
+const engine = enginePrefixReading(process.cwd());
+if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
+const enginePrefix = engine.prefix;
 const census = placementCensus(candidateRankables, enginePrefix);
 console.log(
   `\n  placed by milestone ${census.phase}, by label ${census.label}, UNPLACED ${census.unplaced}` +

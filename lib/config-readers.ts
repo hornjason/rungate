@@ -37,7 +37,7 @@
  * pre-flight hosts. The documented migration switched the features off.
  */
 
-import { tryLoadRungateConfig } from "./config-loader";
+import { resolveConfig, tryLoadRungateConfig } from "./config-loader";
 import type { RoleConfig } from "./rungate-schema";
 
 /**
@@ -144,6 +144,46 @@ export function readBoardInputs(projectRoot: string): {
     return value === "" ? null : value;
   };
   return { engineSpec: read("engineSpec"), milestonePrefix: read("milestonePrefix") };
+}
+
+/**
+ * The engine milestone family, AND whether the absence of one was measured.
+ *
+ * **Round 2 of #1965's review, and the finding was right.** The two scripts
+ * that order Ready read `readBoardInputs(process.cwd()).milestonePrefix`, and
+ * `readBoardInputs` returns `{milestonePrefix: null}` for a config it could
+ * not find at all — the same value a tree that genuinely declares no engine
+ * family gets. A `null` prefix means *order by phase alone*, which is exactly
+ * the pre-#1943 behaviour this work exists to remove. So a run from the wrong
+ * working directory — a wrapper, a cron job, a CI `working-directory` — turns
+ * the fix off and reports the payload above the engine again, with nothing
+ * saying it did. `.claude/rules/config-access.md` names that: *Silent Default
+ * Substitution*, reached through `process.cwd()` rather than a missing key.
+ *
+ * Two `null`s with different meanings is the whole defect, so this returns
+ * both the value and the reading. `resolveConfig` is what separates them —
+ * the documented reporter for *which case did I hit* — rather than a second
+ * existence check compiled here.
+ *
+ * `unmeasured` is a MESSAGE and not a boolean, because a warning that does
+ * not name the directory it read is a warning nobody can act on: the whole
+ * failure is that the directory was not the one the caller assumed.
+ */
+export function enginePrefixReading(projectRoot: string): {
+  prefix: string | null;
+  unmeasured: string | null;
+} {
+  const prefix = readBoardInputs(projectRoot).milestonePrefix;
+  if (prefix !== null) return { prefix, unmeasured: null };
+  if (resolveConfig(projectRoot).status !== "absent") return { prefix: null, unmeasured: null };
+  return {
+    prefix: null,
+    unmeasured:
+      `UNMEASURED: no rungate config under ${projectRoot}, so the engine milestone ` +
+      `family could not be read. Ready is ordered by phase number alone, which ranks ` +
+      `another family's lower phase above the engine's higher one (#1943). Run this from ` +
+      `the project root.`,
+  };
 }
 
 /**
