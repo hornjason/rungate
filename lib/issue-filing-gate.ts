@@ -143,6 +143,7 @@ import { asIssueFiles, overlapNote } from "./issue-file-overlap";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
 import { tryLoadRungateConfig } from "./config-loader";
+import { readQueueLabel } from "./config-readers";
 
 /**
  * The label that waives this gate.
@@ -449,6 +450,73 @@ export function filingsPerRunFor(
   } catch {
     return { cap: FILINGS_PER_RUN, unreadable: true };
   }
+}
+
+/**
+ * **The cap's THIRD route: a filing the project's own work queue claims.**
+ *
+ * Jason's call, 2026-11-10: *"The filing cap shouldn't work right now if we
+ * were doing stuff specific for the car we're building."* On 2026-11-09 at
+ * 23:50 the cap refused a thirteenth filing and six agreements about the
+ * engine itself were written as issue COMMENTS instead. The cap worked; the
+ * population was wrong, the same way it was wrong for the decompose path the
+ * plan route exists for. A comment is invisible to the board and there is no
+ * path that re-files one when the allowance resets, so four of the six were
+ * still only comments a day later.
+ *
+ * **Why this is not the `arbiter-override` hole reopened.** That label waives
+ * a claim about a FINDING, which is a per-filing judgement, and `OVER_CAP` is
+ * unwaivable precisely because a valid-sounding reason defeating a count IS
+ * the bar that let three of three filings through on 2026-10-24. This waives
+ * nothing and argues nothing: it asks whether the PROJECT, in its own
+ * committed config, declared a work queue and whether this filing is in it.
+ * A filer can spell the label; it cannot make a tree declare one.
+ *
+ * **`board.queueLabel` and no new key**, read through `readQueueLabel` —
+ * #1727's single binding, created so the writer that applies the label
+ * (`plan-issues --decompose`) and the reading that scores it
+ * (`board-conformance`) cannot disagree about what the queue is called. A
+ * second config key here would be a third opinion on one question.
+ *
+ * **It exempts the SPENT arm only, never `uncountable`** — the same parting
+ * `plannedFiling` makes, for the same reason: an exemption that cannot be
+ * RECORDED is what the ledger exists to prevent.
+ *
+ * **It takes a THUNK for the reason `filingsPerRunFor` does.**
+ * `readQueueLabel` calls `tryLoadRungateConfig`, which is a bare
+ * `JSON.parse(readFileSync(...))` underneath with no catch. Evaluated as an
+ * argument expression it would throw straight out of `filingGate` — a
+ * PreToolUse hook — and block every filing on the machine, which is strictly
+ * worse than the state it guards. A signature taking the VALUE cannot guard
+ * its own production; one taking the thunk can only be called the right way.
+ *
+ * Absent, blank, non-string and unparseable all resolve to `null`, and the
+ * direction is the property: `null` exempts nothing. A built-in substituted
+ * for absent config would let a filer in any unscaffolded repository spell
+ * its way past the cap — `.claude/rules/config-access.md`, *Silent Default
+ * Substitution*. `FG-253` is the assertion rather than this sentence.
+ */
+export function queueLabelFor(load: () => string | null): string | null {
+  try {
+    return load();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The configured queue label this filing carries, or `null` for one it does
+ * not — and `null` for every filing when the tree configures no queue.
+ *
+ * Separate from `queueLabelFor` because they answer different questions about
+ * different inputs — *what is the queue called* and *is this filing in it* —
+ * and returning the LABEL rather than a boolean is what lets the ledger row
+ * name which queue admitted it. An exemption that reaches the tracker without
+ * naming what admitted it is indistinguishable from the cap not having run.
+ */
+export function queueCarveOut(labels: string[], queueLabel: string | null): string | null {
+  if (queueLabel === null) return null;
+  return labels.includes(queueLabel) ? queueLabel : null;
 }
 
 /**
@@ -929,10 +997,14 @@ export function overCapReason(
     "",
     `  run: ${run}`,
     "",
-    "  There is no argument against this and no label that waives it. It is a count, not a",
-    "  judgement about your finding, which may well be a good one — the cap exists because a",
+    "  There is no argument against this and no label waives it by argument. It is a count, not",
+    "  a judgement about your finding, which may well be a good one — the cap exists because a",
     "  per-finding judgement drifts and a count does not. If several findings belong on the",
     "  tracker, they are one issue naming every instance, not several.",
+    "",
+    "  Two routes get past it and neither is yours to grant: a title a MERGED plan names, and",
+    "  work the project has itself declared to be in its work queue. Both are recorded on the",
+    "  row, both are counted, and both are something somebody else already decided.",
   ].join("\n");
 }
 
@@ -1357,6 +1429,18 @@ export interface FilingLedgerRow {
    * indistinguishable from the cap not having been applied.
    */
   plannedBy?: string | null;
+  /**
+   * The configured work-queue label that admitted this filing past the cap,
+   * or `null` for one the queue does not claim (#1961).
+   *
+   * On EVERY row for the same reason `plannedBy` is: *how much of what we
+   * file is engine work* is a ratio, and a column present only where the
+   * carve-out fired supplies a numerator and no denominator. It is also the
+   * audit trail for the carve-out — it names WHICH label, so a reader can
+   * check that label against the tree's `board.queueLabel` rather than
+   * taking the exemption on trust.
+   */
+  queuedBy?: string | null;
   at: string;
   /**
    * This row, told apart from every other row on a shared ledger (#1318).
@@ -2725,6 +2809,17 @@ export async function filingGate(
   // STRICT cap — `filingsPerRunFor`.
   const allowance = filingsPerRunFor(() => tryLoadRungateConfig(root));
   const cap = allowance.cap;
+  // The work queue's name, resolved ONCE per command for the same reason the
+  // allowance is: per clause would let two clauses of one command be
+  // adjudicated against two different queues if the config moved underneath
+  // them. A tree that declares none resolves to `null`, which exempts
+  // nothing — `queueLabelFor`.
+  //
+  // No note when it is absent. A config the gate cannot PARSE already earns
+  // `unreadableShipPolicyNote` below, from `filingsPerRunFor`, which catches
+  // the same throw from the same file; a second note over one fact would be
+  // two voices on one repair.
+  const queueLabel = queueLabelFor(() => readQueueLabel(root));
   // Read once per TARGET TRACKER, not once per command and not once per
   // clause. Once per clause would adjudicate two creates against two
   // different snapshots; once per command would adjudicate a `--repo other/x`
@@ -3029,7 +3124,16 @@ export async function filingGate(
     // an open issue is still `DUPLICATE`, and one that declares no reason is
     // still `COMMENT_INSTEAD`; `read2` is untouched above.
     const planned = plannedFiling(attempt.title, planSource);
-    const capped = uncountable || (spent >= cap && !planned.planned);
+    // **The cap's third route: work the project's own queue claims** (#1961).
+    // Same arm, same parting — it exempts SPENT and never `uncountable` —
+    // and named as ONE local that all three cap sites read, so the exemption
+    // cannot be applied in two of them and forgotten in the third. That is
+    // FG-185's defect and it is worse than no carve-out: the exempt clause
+    // clears, spends the allowance, and its sibling's `OVER_CAP` blocks the
+    // whole command including the clause just exempted.
+    const queuedBy = queueCarveOut(attempt.labels, queueLabel);
+    const capExempt = planned.planned || queuedBy !== null;
+    const capped = uncountable || (spent >= cap && !capExempt);
     const verdict: FilingAdjudication =
       wouldEmit && capped
         ? {
@@ -3077,6 +3181,7 @@ export async function filingGate(
       refiledAfter: prior?.at ?? null,
       exemption: verdict.exemption,
       plannedBy: planned.planned ? `${planned.plan}:${planned.line}` : null,
+      queuedBy,
       run,
     });
 
@@ -3117,7 +3222,7 @@ export async function filingGate(
     // allowance: two planned clauses filing the same finding twice is still a
     // duplicate, and the plan route exempts the cap alone.
     if (cleared) {
-      if (!planned.planned) spent += 1;
+      if (!capExempt) spent += 1;
       siblings.push({ ...finding, id: String(index) });
       siblingTitles.set(String(index), attempt.title);
     }
@@ -3260,7 +3365,12 @@ export async function filingGate(
       // worse: it writes two rows per planned filing into the ledger the cap
       // is measured from, so `intentsInRun` would count planned work against
       // the population the number was calibrated on.
-      if (row.plannedBy != null) continue;
+      // **`queuedBy` rides the same line for the same three reasons** (#1961).
+      // It is the same question — *is this clause in the cap's accounting at
+      // all* — and the two routes answer it identically, so they share the
+      // guard rather than each getting one. Both were computed once in the
+      // loop above and written onto the row; both are read from the row here.
+      if (row.plannedBy != null || row.queuedBy != null) continue;
       const reading = reserveAllowance(row, run, { now: nowMs, append, readLedger: readAgain, cap });
       if (reading.outcome === "WON") {
         reserved.push(reading.intent);

@@ -83,6 +83,8 @@ import {
   ledgerTitle,
   MAX_LEDGER_TITLE,
   overCapReason,
+  queueCarveOut,
+  queueLabelFor,
   unreservedCapReason,
   unreadableRunReason,
   unreservedAllowanceNote,
@@ -4682,9 +4684,19 @@ describe("FG-143..FG-176: a numeric cap, which no argument defeats", () => {
     expect(text).toContain("cap is 1");
     expect(text).toContain("/wt/x");
     expect(text).toContain("PR #1595");
-    expect(text, "and it offers no way out, because there is not one").toContain(
-      "no label that waives it",
+    expect(text, "the override label still waives nothing here").toContain(
+      "no label waives it by argument",
     );
+    // **The route exists and is not named** — the same property FG-155 holds
+    // for `arbiter-override`, and for the same reason. #1961 added a third
+    // route past the cap: a filing the project's own `board.queueLabel`
+    // claims. A refusal that spelled that label would turn a bounded
+    // carve-out for engine work into the universal bypass every refused
+    // filer pastes, which is the per-finding judgement #1595 replaced.
+    expect(
+      text,
+      "the cap's refusal must not hand over the label that routes past it",
+    ).not.toContain("--label");
     // The same self-reference property FG-126 holds for the other refusal:
     // pasting this into a body must not declare anything.
     expect(declaredExemption(text)).toBeNull();
@@ -5250,6 +5262,221 @@ describe("FG-180..FG-184: a merged plan is the cap's second route", () => {
     const r = await run(filing("something nobody planned"), namesIt);
     expect(r.rows[0].refusal).toBe("OVER_CAP");
     expect(r.rows[0].plannedBy).toBeNull();
+  });
+});
+
+/**
+ * FG-251..FG-256: the cap's THIRD route — the project's own work queue.
+ *
+ * Jason's call, 2026-11-10: *"The filing cap shouldn't work right now if we
+ * were doing stuff specific for the car we're building."* On 2026-11-09 at
+ * 23:50 the cap refused a thirteenth filing and six agreements about the
+ * engine itself were written as issue COMMENTS instead. The cap did its job;
+ * the population was wrong. Comments are invisible to the board, there is no
+ * path that re-files one when the allowance resets, and four of the six were
+ * still only comments a day later.
+ *
+ * **Why a configured label and not a flag.** The plan route (FG-180..186)
+ * answers *who decided this may be filed* with "somebody merged a plan". The
+ * queue route answers it with "the project declared a work queue, in its own
+ * config, and this filing is in it" — `board.queueLabel`, the single binding
+ * #1727 created so the writer that applies the label and the reading that
+ * scores it cannot disagree. A filer still cannot nominate itself: it can
+ * spell the label, but only on a tree whose config already declares one, and
+ * the row records which label admitted it.
+ *
+ * Every row holds the ALLOWANCE fixed — spent, in this run, in the window —
+ * and varies only the label and the config, except FG-255/FG-256, which hold
+ * the label fixed and vary the allowance. FG-252 is why the first row means
+ * anything.
+ */
+describe("FG-251..FG-256: the configured queue label is the cap's third route", () => {
+  // `scratch` is minted in the file's own `beforeAll`, so neither tree can be
+  // resolved while the describe body runs.
+  let queued: string;
+  let unconfigured: string;
+  const at = "2026-11-10T12:00:00.000Z";
+  const TITLE = "the filing cap has no engine carve-out";
+  /**
+   * **Deliberately not `"engine"`.** This repository configures `"engine"`,
+   * so a gate that spelled the label itself would pass every row here if the
+   * fixture agreed with it. A label no tree in the wild uses means the only
+   * way these rows can go green is by reading the config.
+   */
+  const QUEUE_LABEL = "work-queue";
+
+  /** A scaffolded tree whose `board.queueLabel` is whatever the case needs. */
+  const treeWithQueue = (name: string, label: string | null): string => {
+    const root = join(scratch, name);
+    mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+    writeFileSync(
+      join(root, ".claude", "rungate", "config.json"),
+      JSON.stringify({ project: "x", board: label === null ? {} : { queueLabel: label } }),
+    );
+    return root;
+  };
+
+  const filing = (labelFlag: string, title = TITLE, claim = " Claim 7.") =>
+    `gh issue create --title "${title}" ${labelFlag} ` +
+    `--body "lib/issue-filing-gate.ts parks engine agreements in comments.${claim} ${DECLARED}"`;
+
+  const queueLabelled = (title = TITLE, claim = " Claim 7.") =>
+    filing(`--label ${QUEUE_LABEL}`, title, claim);
+  const unlabelled = (title = TITLE, claim = " Claim 7.") => filing("", title, claim);
+
+  /** The allowance, spent, in THIS tree's run. An INTENT row — what the cap counts. */
+  const spentIn = (root: string) => () => [
+    {
+      at,
+      key: `b.1/${at}/0${INTENT_KEY_SUFFIX}`,
+      id: "new",
+      title: "already filed by this run",
+      symptomHash: "h",
+      category: "correctness" as const,
+      severity: null,
+      disposition: "ISSUE" as const,
+      refusal: null,
+      emitted: false,
+      withheldBy: INTENT_PENDING,
+      jury: null,
+      duplicateOf: [],
+      overridden: false,
+      refiledAfter: null,
+      exemption: "out-of-pr-diff" as const,
+      intent: true,
+      run: runIdFor(root).run!,
+    },
+  ];
+
+  const run = (root: string, cmd: string, readLedger: () => unknown = spentIn(root)) =>
+    filingGate(cmd, {
+      projectRoot: root,
+      now: at,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: readLedger as never,
+      appendLedger: () => true,
+      readTarget: async () => ({ reading: "NO_PR", branch: "b" }) as never,
+      // No plans anywhere, so nothing below can clear by the SECOND route and
+      // be read as the third one working.
+      readPlan: { list: () => [] as string[], show: () => null },
+    });
+
+  beforeAll(() => {
+    queued = treeWithQueue("queue-route", QUEUE_LABEL);
+    unconfigured = treeWithQueue("queue-none", null);
+  });
+
+  test("FG-251: a spent allowance does not refuse a filing the work queue claims", async () => {
+    const r = await run(queued, queueLabelled());
+    expect(r.rows, "one clause").toHaveLength(1);
+    expect(r.rows[0].refusal, "the work queue is the cap's third route").toBeNull();
+    expect(r.refusal).toBeNull();
+    expect(
+      r.rows[0].queuedBy,
+      "and the row names the label it rode in on — an exemption nobody can audit is no exemption",
+    ).toBe(QUEUE_LABEL);
+  });
+
+  test("FG-252 CONTROL: the SAME filing, same spent allowance, no label — OVER_CAP", async () => {
+    // Without this, FG-251 passes against a gate whose allowance was never
+    // spent, and the carve-out would be certified by a cap that never bound.
+    const r = await run(queued, unlabelled());
+    expect(r.rows[0].refusal, "the allowance really is spent").toBe("OVER_CAP");
+    expect(r.rows[0].queuedBy, "and the column is present on an unexempted row too").toBeNull();
+  });
+
+  test("FG-253: a tree that configures NO queue label exempts nothing", async () => {
+    // `.claude/rules/config-access.md`, *Silent Default Substitution*: a tree
+    // that never declared a work queue has not got an empty one, it has none
+    // — and a built-in `"engine"` substituted here would let any filer in any
+    // repository spell its way past the cap. The behavioural case first, then
+    // the three readings that must all fail toward refusing.
+    const r = await run(unconfigured, queueLabelled());
+    expect(
+      r.rows[0].refusal,
+      "a label no config declares is just a label — it must not lift the cap",
+    ).toBe("OVER_CAP");
+    expect(r.rows[0].queuedBy).toBeNull();
+
+    expect(queueCarveOut(["anything"], null), "no configured label exempts nothing").toBeNull();
+    expect(queueLabelFor(() => null), "an unscaffolded tree declares no queue").toBeNull();
+    // And the thunk, for the reason `filingsPerRunFor` takes one: this runs
+    // inside a PreToolUse hook, `tryLoadRungateConfig` is a bare
+    // `JSON.parse(readFileSync(...))` underneath, and one malformed
+    // config.json thrown out of `filingGate` blocks every filing on the
+    // machine. A signature taking the VALUE cannot guard its own production.
+    expect(() =>
+      queueLabelFor(() => {
+        throw new SyntaxError("Unexpected token } in JSON at position 41");
+      }),
+    ).not.toThrow();
+    expect(
+      queueLabelFor(() => {
+        throw new SyntaxError("Unexpected token } in JSON at position 41");
+      }),
+      "a config that cannot be PARSED must not be a route past the cap",
+    ).toBeNull();
+  });
+
+  test("FG-254: the carve-out is scoped to the CAP and waives nothing else", async () => {
+    // A queue-labelled filing that names no SUCCESS.md claim is still
+    // refused. If the label short-circuited the adjudication rather than the
+    // cap, `board.queueLabel` would become a general override that every
+    // agent can spell — which is `arbiter-override` with no ledger column.
+    const noClaim = await run(queued, queueLabelled(TITLE, ""));
+    expect(noClaim.rows[0].refusal, "NO_CLAIM survives the queue route").toBe("NO_CLAIM");
+
+    // And `uncountable` is the half of the No the carve-out must not touch:
+    // an exemption that cannot be RECORDED is the thing the ledger exists to
+    // prevent, exactly as FG-183 holds for the plan route.
+    const unreadable = await run(queued, queueLabelled(), () => null);
+    expect(
+      unreadable.rows[0].refusal,
+      "the queue does not exempt an unmeasurable cap",
+    ).toBe("UNMEASURED_CAP");
+  });
+
+  test("FG-255: a queue-labelled clause does not spend the allowance for its SIBLING", async () => {
+    // FG-185's defect, one route over. The cap is consulted in THREE places —
+    // the in-process `spent` counter, the pre-read, and the reservation stage
+    // — and a guard missing from any one of them makes the carve-out worse
+    // than useless: the exempt clause clears, increments `spent`, the
+    // sibling is refused OVER_CAP, and that refusal blocks the whole command
+    // INCLUDING the clause that was just exempted.
+    //
+    // A FRESH allowance, so the only thing that can spend it is the labelled
+    // clause itself. That is why this row starts from an empty ledger where
+    // FG-251..254 start from a spent one.
+    const r = await run(
+      queued,
+      `${queueLabelled()} && ${unlabelled("a second finding nobody queued")}`,
+      () => [],
+    );
+    expect(r.rows, "two clauses").toHaveLength(2);
+    expect(
+      r.rows.map(x => (x.queuedBy === null ? "unqueued" : "queued")),
+      "the premise: clause 0 is queue-labelled and clause 1 is not",
+    ).toEqual(["queued", "unqueued"]);
+    expect(
+      r.rows.map(x => x.refusal),
+      "the queued clause must not have spent the sibling's allowance",
+    ).toEqual([null, null]);
+    expect(r.refusal, "so the command is not blocked").toBeNull();
+  });
+
+  test("FG-256 CONTROL: an UNQUEUED clause still spends it, so the sibling IS capped", async () => {
+    // Without this, FG-255 passes against a gate whose `spent` counter never
+    // moves at all — which would delete the cap for every multi-clause
+    // command in the tree and look exactly like the carve-out working.
+    const r = await run(
+      queued,
+      `${unlabelled("a first finding nobody queued")} && ${unlabelled("a second finding nobody queued")}`,
+      () => [],
+    );
+    expect(r.rows.map(x => x.refusal), "clause 1 is capped by clause 0").toEqual([
+      null,
+      "OVER_CAP",
+    ]);
   });
 });
 
