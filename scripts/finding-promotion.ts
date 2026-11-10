@@ -11,16 +11,33 @@
  *   …and add --write to append it. Without --write it prints and exits 0,
  *   having changed nothing.
  *
+ * The OTHER outcome — this finding serves no criterion, deliberately:
+ *
+ *   bun scripts/finding-promotion.ts --issue 1934 \
+ *     --declines "a worktree tidy-up; no criterion is made true or false" --write
+ *
+ * which writes the phrase `scripts/board-snapshot.ts` reads, interpolated
+ * from the constant rather than retyped. It refuses when the board can
+ * already see a criterion on the issue, so the declaration is an OUTCOME of
+ * the router and not a self-declaration — #1940.
+ *
  * `--outcome` and `--symbol` are the caller's judgement and this script does
  * not supply them — see the docblock of `lib/finding-promotion.ts` for why
- * there is no `--auto` that sweeps the backlog.
+ * there is no `--auto` that sweeps the backlog. `--declines` is the same
+ * kind of input for the same reason.
  *
  * Thin CLI consumer — all logic lives in lib/finding-promotion.ts.
  */
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
-import { promote, specPath, type PromotableIssue } from "../lib/finding-promotion";
+import {
+  decline,
+  promote,
+  specPath,
+  type PromotableIssue,
+} from "../lib/finding-promotion";
 import { readScRegistry } from "./sync-sc-status";
 import { currentScOwner } from "../lib/sc-reservations";
 import { ghWithoutGhToken } from "../lib/live-issues";
@@ -84,10 +101,39 @@ function requiredPositiveInt(name: string): number {
 }
 
 const issueNumber = requiredPositiveInt("issue");
-const spec = required("spec");
-const outcome = required("outcome");
-const symbol = required("symbol");
-const module = required("module");
+
+/**
+ * Which outcome of the router this run is.
+ *
+ * Presence, not value — `--declines --write` must refuse by NAME rather than
+ * decline with the reason `"--write"`, which is what reading the value to
+ * decide the mode would do. `required` is what names it, and it is the same
+ * one binding every other flag goes through.
+ */
+const declining = args.includes("--declines");
+const declineWhy = declining ? required("declines") : "";
+
+// The two modes are exclusive, and silence here was a real hazard: `--spec`,
+// `--outcome`, `--symbol` and `--module` are read ONLY when `declining` is
+// false, so a command line carrying both took the decline path and ignored
+// four flags the caller passed. A half-edited copy-paste produces exactly
+// that, and the result is indistinguishable from a deliberate decline.
+if (declining) {
+  const promoteOnly = ["spec", "outcome", "symbol", "module"].filter(f => args.includes(`--${f}`));
+  if (promoteOnly.length > 0) {
+    console.error(
+      `ERROR: --declines cannot be combined with ${promoteOnly.map(f => `--${f}`).join(", ")}. ` +
+        "Promoting a finding into a criterion and declaring that it serves none are opposite " +
+        "outcomes; this command line asks for both and the promote flags would be ignored.",
+    );
+    process.exit(PROMOTION_EXIT);
+  }
+}
+
+const spec = declining ? "" : required("spec");
+const outcome = declining ? "" : required("outcome");
+const symbol = declining ? "" : required("symbol");
+const module = declining ? "" : required("module");
 const write = args.includes("--write");
 
 // The issue's own text decides ALREADY_SERVES, so a title typed by hand here
@@ -108,6 +154,115 @@ const issue: PromotableIssue = (() => {
     process.exit(PROMOTION_EXIT);
   }
 })();
+
+if (declining) {
+  const declined = decline({ issue, why: declineWhy, projectRoot: ROOT });
+  if (!declined.declined) {
+    console.error(`REFUSED ${declined.refusal}: ${declined.why}`);
+    process.exit(PROMOTION_EXIT);
+  }
+  console.log(declined.body);
+
+  if (!write) {
+    console.log(`\n(dry run — nothing written. Add --write to apply it to #${issueNumber}.)`);
+    process.exit(0);
+  }
+
+  // RE-READ before writing. The body above came from a snapshot taken
+  // before the refusal checks ran, and `gh issue edit --body-file`
+  // overwrites the WHOLE body — so a comment-free edit by anybody else in
+  // that window is silently destroyed. The promote path already does this:
+  // `writeSpec` re-reads the target and runs its own guard against those
+  // bytes rather than the ones the caller validated.
+  //
+  // Re-validating too, not just re-reading: the fresh body is what the
+  // decline is being written into, so ALREADY_DECLINED and the heading
+  // readings have to be taken against it. A re-read that skipped them
+  // would answer a different question from the one that was asked.
+  let fresh: PromotableIssue;
+  try {
+    fresh = JSON.parse(
+      ghWithoutGhToken(["issue", "view", String(issueNumber), "--json", "number,title,body"]),
+    ) as PromotableIssue;
+  } catch (e) {
+    console.error(`REFUSED: #${issueNumber} could not be re-read before the write`);
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(PROMOTION_EXIT);
+  }
+
+  const recheck = decline({ issue: fresh, why: declineWhy, projectRoot: ROOT });
+  if (!recheck.declined) {
+    console.error(
+      `REFUSED ${recheck.refusal}: #${issueNumber} changed between the check and the write. ` +
+        recheck.why,
+    );
+    process.exit(PROMOTION_EXIT);
+  }
+
+  // Through a file, because the body is markdown with newlines and headings
+  // in it and an argv round-trip through a shell is where that gets eaten.
+  //
+  // The two failure modes are reported apart. One `catch` over both said
+  // "could not be updated on the tracker" for a local disk error too, which
+  // sends the reader to GitHub for a problem on their own filesystem.
+  // Bound out here: narrowing from the `recheck.declined` guard above does
+  // not reach inside the closure below, and the alternative — re-asserting
+  // the discriminant in there — is a second place for the two to disagree.
+  const declinedBody = recheck.body;
+
+  const scratch = mkdtempSync(join(tmpdir(), "rg-1940-decline-"));
+  const bodyFile = join(scratch, "body.md");
+
+  /**
+   * The guarded region RETURNS its failure. It never exits.
+   *
+   * `process.exit()` does not unwind the stack, so a `finally` wrapped
+   * around a block that exits from inside it never runs — both error paths
+   * here left the mkdtemp directory, and the rendered issue body inside it,
+   * on disk. Found on #1956.
+   *
+   * The fix is the shape, not the two call sites: with no exit anywhere in
+   * the region there is no second place for one to reappear, and
+   * `test/finding-promotion.test.ts` asserts the region stays exit-free
+   * rather than asserting these two lines in particular.
+   */
+  function writeAndEdit(): string[] | null {
+    try {
+      writeFileSync(bodyFile, declinedBody);
+    } catch (e) {
+      return [
+        `REFUSED: could not write the new body to ${bodyFile} — this is a LOCAL`,
+        `failure, not a tracker one. #${issueNumber} was not touched.`,
+        e instanceof Error ? e.message : String(e),
+      ];
+    }
+    try {
+      ghWithoutGhToken(["issue", "edit", String(issueNumber), "--body-file", bodyFile]);
+    } catch (e) {
+      return [
+        `REFUSED: #${issueNumber} could not be updated on the tracker`,
+        e instanceof Error ? e.message : String(e),
+      ];
+    }
+    return null;
+  }
+
+  let failure: string[] | null;
+  try {
+    failure = writeAndEdit();
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  if (failure) {
+    for (const line of failure) console.error(line);
+    process.exit(PROMOTION_EXIT);
+  }
+
+  console.log(`#${issueNumber} now declares it serves no criterion.`);
+  console.log("board-snapshot reads it as a deliberate decline rather than a blank cell.");
+  process.exit(0);
+}
 
 const result = promote(
   { issue, spec, outcome, symbol, module, projectRoot: ROOT, owner: currentScOwner(ROOT) },
