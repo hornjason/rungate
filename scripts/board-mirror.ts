@@ -521,6 +521,24 @@ export async function main(argv: string[]): Promise<number> {
           readyCap: cap,
           readyOccupied: occupied,
           readyHeldByCap: heldByCap.map(c => c.item.number),
+          // ai-review round 4. The text branch below printed the work-next
+          // reading and this one did not, so a consumer parsing the JSON
+          // could not see that an ordering it is being handed was promoted
+          // — or REFUSED. The two branches render the same run; a field
+          // that exists in one of them is a field that silently does not
+          // exist for whoever reads the other.
+          //
+          // `honoured` is a Set and would serialise as `{}`, which is the
+          // Silent Default Substitution shape: present, empty, and
+          // indistinguishable from "nothing was promoted". Emitted as a
+          // sorted array.
+          workNext: {
+            status: workNext.status,
+            carrying: workNext.carrying,
+            honoured: [...workNext.honoured].sort((a, b) => a - b),
+            cap: workNext.cap,
+            why: workNext.why,
+          },
           wrote: values.write,
         },
         null,

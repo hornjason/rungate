@@ -1590,4 +1590,44 @@ describe("#1962: the promotion reaches the writer, not only the report", () => {
     const readyBlock = code.slice(code.indexOf("if (values.ready) {"));
     expect(readyBlock, "nothing prints the reading under --ready").toContain("workNext.why");
   });
+
+  /**
+   * ai-review round 4 of #1971. The reading reached the TEXT branch and not
+   * the JSON one, so `board-mirror --json` handed a consumer an ordering
+   * without the one field that says whether anything was promoted into it.
+   *
+   * Asserted on both branches at once rather than on the JSON branch alone:
+   * a case naming only the branch that was missing goes green the moment
+   * somebody adds the field, and stays green if a later change drops it
+   * from the other. The property is that the two renderings of one run
+   * agree about whether the reading exists.
+   */
+  test("both output branches of board-mirror carry the work-next reading", () => {
+    const code = codeOf(readFileSync(join(ROOT, "scripts/board-mirror.ts"), "utf-8"));
+    const at = code.indexOf("if (values.json) {");
+    expect(at, "the --json branch was not found, so everything below holds vacuously").toBeGreaterThan(0);
+    const jsonBranch = code.slice(at, code.indexOf("\n  } else {", at));
+    expect(
+      jsonBranch.length,
+      "the slice found no branch body, so the assertions below hold vacuously",
+    ).toBeGreaterThan(200);
+
+    const missing = (["status", "carrying", "honoured", "cap", "why"] as const).filter(
+      f => !jsonBranch.includes(`workNext.${f}`),
+    );
+    expect(
+      missing,
+      "board-mirror --json omits part of the work-next reading its text output prints. A " +
+        "consumer parsing the JSON cannot tell a promoted ordering from an unpromoted one, " +
+        "and cannot see a REFUSED bound at all",
+    ).toEqual([]);
+
+    // `honoured` is a Set. `JSON.stringify(new Set([1]))` is `{}` — present,
+    // empty, and indistinguishable from nothing having been promoted. The
+    // Silent Default Substitution shape, so the spread is the assertion.
+    expect(
+      jsonBranch,
+      "honoured must be spread into an array before serialising — a Set stringifies to {}",
+    ).toContain("[...workNext.honoured]");
+  });
 });
