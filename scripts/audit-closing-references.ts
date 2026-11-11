@@ -41,6 +41,7 @@ import { readFileSync } from "fs";
 import {
   inertClosingMessage,
   inertClosingReferences,
+  linkedIssuesInThisRepo,
   missingClosingMessage,
   missingClosingReference,
 } from "../lib/closing-reference-audit";
@@ -126,11 +127,18 @@ async function main(): Promise<void> {
   // An entry whose number is unreadable contributes nothing to this set,
   // which is the safe direction: it can only cause an inert reference to be
   // reported, never suppressed.
-  const linkedIssues = new Set(
-    linked
-      .map(e => (e !== null && typeof e === "object" ? (e as { number?: unknown }).number : null))
-      .filter((n): n is number => typeof n === "number"),
-  );
+  // SCOPED TO THIS REPOSITORY — ai-review round 2 of #1978. A bare `number`
+  // is not an identity: `Fixes other-org/other-repo#9` is documented GitHub
+  // syntax and lands a node numbered 9 here. Counting it let a pull request
+  // satisfy its own branch's requirement with somebody else's issue.
+  const repoNameWithOwner = arg("repo");
+  if (repoNameWithOwner === null || !repoNameWithOwner.includes("/")) {
+    refuse(
+      "no --repo owner/name was given, so a closing reference cannot be told from a " +
+        "cross-repository one. Pass --repo \"$GITHUB_REPOSITORY\". UNMEASURED, not clean.",
+    );
+  }
+  const linkedIssues = linkedIssuesInThisRepo(linked, repoNameWithOwner);
 
   // An inert keyword naming an issue that IS linked is harmless — the issue
   // closes on the live reference regardless, so firing on it would be the
@@ -156,7 +164,11 @@ async function main(): Promise<void> {
   const missing = missingClosingReference(pr.headRefName, linkedIssues.size);
   if (missing !== null) refuse(missingClosingMessage(missing, prNumber));
 
-  const links = linked.length > 0 ? `links ${linked.length} issue(s)` : "links none and claims none";
+  // Counts what was CREDITED, not what was returned — a summary saying
+  // "links 1 issue" for a cross-repository node would describe the check as
+  // doing the thing round 2 found it was not doing.
+  const links =
+    linkedIssues.size > 0 ? `links ${linkedIssues.size} issue(s)` : "links none and claims none";
   console.log(`closing references OK: PR #${prNumber} ${links}.`);
 }
 

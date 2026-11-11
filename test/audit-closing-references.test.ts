@@ -62,11 +62,25 @@ function buildMutant(): string {
   return path;
 }
 
-function run(script: string, payload: string): { code: number; err: string; out: string } {
+/** The repository every fixture below belongs to, unless a case says otherwise. */
+const THIS_REPO = "hornjason/rungate";
+
+/** `gh pr view`'s own node shape: repository.owner.login + repository.name. */
+function closes(number: number, nameWithOwner: string = THIS_REPO) {
+  const [login, name] = nameWithOwner.split("/");
+  return { number, repository: { name, owner: { login } } };
+}
+
+function run(
+  script: string,
+  payload: string,
+  repo: string | null = THIS_REPO,
+): { code: number; err: string; out: string } {
   const file = join(scratch, "payload.json");
   writeFileSync(file, payload);
+  const argv = repo === null ? [script, "--fixture", file] : [script, "--fixture", file, "--repo", repo];
   try {
-    const out = execFileSync(process.execPath, [script, "--fixture", file], { encoding: "utf-8" });
+    const out = execFileSync(process.execPath, argv, { encoding: "utf-8" });
     return { code: 0, err: "", out };
   } catch (e: any) {
     return { code: e.status ?? -1, err: String(e.stderr ?? ""), out: String(e.stdout ?? "") };
@@ -94,7 +108,7 @@ const DEFECTIVE = JSON.stringify({
 const LINKED_PLUS_INERT = JSON.stringify({
   number: 1376,
   body: `Fixes #1362\n\n${"Fixes #777".replace(/^/, "`").replace(/$/, "`")}\n`,
-  closingIssuesReferences: [{ number: 1362 }],
+  closingIssuesReferences: [closes(1362)],
   headRefName: "rg/1362-closing-reference-audit",
 });
 
@@ -164,7 +178,7 @@ describe("what it deliberately lets through", () => {
       JSON.stringify({
         number: 2,
         body: "Fixes #9",
-        closingIssuesReferences: [{ number: 9 }],
+        closingIssuesReferences: [closes(9)],
         headRefName: "rg/9-the-thing",
       }),
     );
@@ -196,7 +210,7 @@ describe("what it deliberately lets through", () => {
       JSON.stringify({
         number: 5,
         body,
-        closingIssuesReferences: [{ number: 9 }],
+        closingIssuesReferences: [closes(9)],
         headRefName: "rg/9-the-thing",
       }),
     );
@@ -254,7 +268,7 @@ describe("#1950: the branch name says whether a reference was owed", () => {
       JSON.stringify({
         number: 8,
         body: "Fixes #1718\n",
-        closingIssuesReferences: [{ number: 1718 }],
+        closingIssuesReferences: [closes(1718)],
         headRefName: "rg/1717-phase6-readings",
       }),
     );
@@ -301,7 +315,54 @@ describe("#1950: the branch name says whether a reference was owed", () => {
     expect(r.err).toContain("closingIssuesReferences is empty");
   });
 
-  test("the workflow fetches headRefName, or the check is UNMEASURED on every pull request", () => {
+  test("a CROSS-REPOSITORY closing reference does not satisfy the branch's own issue", () => {
+    // ai-review round 2 of #1978, and the same class `declaredClosingIn` was
+    // added for in round 5 of #1974. `Fixes other-org/other-repo#9` is
+    // documented GitHub syntax and lands a node numbered 9 here; counting it
+    // let a pull request on an issue-named branch print "OK" while closing
+    // nothing in this tracker — the PR-#1903 shape, let through by the check
+    // written to catch it.
+    const r = run(
+      SCRIPT,
+      JSON.stringify({
+        number: 11,
+        body: "Fixes other-org/other-repo#9\n",
+        closingIssuesReferences: [closes(9, "other-org/other-repo")],
+        headRefName: "rg/1950-require-closing-reference",
+      }),
+    );
+    expect(r.code, r.out).toBe(REFUSE_EXIT);
+    expect(r.err).toContain("#1950");
+  });
+
+  test("the control — the SAME reference in this repository does satisfy it", () => {
+    // One variable differs from the case above: the repository on the node.
+    // Without this, a change that simply refused every linked pull request
+    // would turn the case above green for the wrong reason.
+    const r = run(
+      SCRIPT,
+      JSON.stringify({
+        number: 12,
+        body: "Fixes #9\n",
+        closingIssuesReferences: [closes(9)],
+        headRefName: "rg/1950-require-closing-reference",
+      }),
+    );
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("links 1 issue");
+  });
+
+  test("no --repo is UNMEASURED, not a clean pull request", () => {
+    const r = run(
+      SCRIPT,
+      JSON.stringify({ number: 13, body: "Fixes #9\n", closingIssuesReferences: [closes(9)], headRefName: "rg/x" }),
+      null,
+    );
+    expect(r.code).toBe(REFUSE_EXIT);
+    expect(r.err).toContain("UNMEASURED");
+  });
+
+  test("the workflow passes --repo and fetches headRefName, or the check cannot take a reading", () => {
     // The script refuses a payload without the field, so a workflow that
     // does not request it turns this check red everywhere rather than
     // silently green — loud, but still worth pinning to the one line that
@@ -310,5 +371,8 @@ describe("#1950: the branch name says whether a reference was owed", () => {
     const fetchLine = yml.split("\n").find(l => l.includes("gh pr view"));
     expect(fetchLine, "closing-references.yml no longer fetches the payload").toBeDefined();
     expect(fetchLine).toContain("headRefName");
+    const invokeLine = yml.split("\n").find(l => l.includes("audit-closing-references.ts"));
+    expect(invokeLine, "closing-references.yml no longer invokes the script").toBeDefined();
+    expect(invokeLine).toContain('--repo "$GITHUB_REPOSITORY"');
   });
 });

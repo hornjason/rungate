@@ -52,7 +52,44 @@
  * that exists, the loosened rule is wrong nineteen times out of twenty-one.
  */
 
-import { issueFromBranch } from "./local-work";
+import { declaredClosingIn, issueFromBranch } from "./local-work";
+
+/**
+ * The issues a pull request closes **in this repository**, from `gh`'s shape.
+ *
+ * ai-review round 2 of #1978. `closingIssuesReferences` resolves GitHub's
+ * closing keywords and those match across repositories: a body writing
+ * `Fixes other-org/other-repo#9` produces a node numbered 9 that has nothing
+ * to do with this tracker. Counting it made a cross-repo reference satisfy
+ * the branch's own-issue requirement, so a pull request on `rg/1950-foo`
+ * closing somebody else's #9 printed "closing references OK" — the exact
+ * PR-#1903 shape this change exists to catch, let through by the check
+ * itself.
+ *
+ * Identical to the defect `declaredClosingIn` was added for in round 5 of
+ * #1974, one consumer over, which is why that function is called here rather
+ * than re-implemented: "which of these nodes belong to us" has one decider.
+ *
+ * This only adapts the SHAPE. `gh pr view --json closingIssuesReferences`
+ * returns `repository: { name, owner: { login } }` where the GraphQL field
+ * `declaredClosingIn` was written against returns `nameWithOwner`. A node
+ * missing either half composes to a string that matches no repository, which
+ * is the safe direction: it can cause a reference to be ignored and a
+ * refusal raised, never a refusal suppressed.
+ */
+export function linkedIssuesInThisRepo(
+  nodes: readonly unknown[],
+  repoNameWithOwner: string,
+): Set<number> {
+  const shaped = nodes
+    .filter((n): n is Record<string, any> => n !== null && typeof n === "object")
+    .filter(n => typeof n.number === "number")
+    .map(n => ({
+      number: n.number as number,
+      repository: { nameWithOwner: `${n.repository?.owner?.login}/${n.repository?.name}` },
+    }));
+  return new Set(declaredClosingIn(shaped, repoNameWithOwner));
+}
 
 /**
  * The verbs GitHub acts on, in one declaring position.
