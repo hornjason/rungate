@@ -149,8 +149,15 @@ export function startFakeGitHub(plan: FakePlan): FakeGitHub {
       const q = body.query;
       const v = body.variables ?? {};
 
-      // Most specific first. A mutation also contains the word `node`, so the
-      // order of these branches is load-bearing.
+      // **The order is load-bearing, and here is the pair that makes it so.**
+      // `BLOCKING_QUERY` and `TOP_UP_QUERY` BOTH contain
+      // `projectItems(first:20)` — deliberately, because the script depends
+      // on the two sources returning the same node shape — so the `blocking`
+      // branch has to be tested first or a fan-out is answered with the
+      // top-up's payload. Nothing else here collides: the mutation text
+      // contains no `node`, and `items(first:100` appears only in the board
+      // page query. Round 2 of #1982's review caught this comment claiming
+      // the mutation was the collision, which it is not.
       if (q.includes("updateProjectV2ItemFieldValue")) {
         writes.push({ itemId: v.i, optionId: v.o, fieldId: v.f, projectId: v.p });
         return Response.json({
