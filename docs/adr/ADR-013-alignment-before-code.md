@@ -477,11 +477,25 @@ filled. Revision 3 adds that table with these seven rows:
 ladder; WIP on `rg/1984-stage-ladder-in-work-status`), #1954 (the 41 issues
 naming no criterion), #1983 (D4's check cannot fail).
 
+### Decisions taken — Jason, 2026-11-11 (after the handoff was first written)
+
+1. **The eight ladder-only items are mostly not new work.** Measured item by
+   item: D4 waits only on #1983; E1 is deferred by agreement 1; E2 is #1954;
+   E3 is covered by row 5; E5 is SC-2623, open as #1720; F1 and F2 are the
+   ladder's finish line, readings rather than tasks. Each ladder item points
+   at the issue covering it. **E4 (`board-mirror --write`) was the one real
+   gap** — no workflow runs it — and is **added to row 5's on-merge
+   workflow**, Rayford's recommendation, accepted.
+2. **Every solidified decision carries a visual.** `/flush-out` produces an
+   HTML picture of the agreed process as its last step, and the final picture
+   is committed next to the ADR as `docs/adr/ADR-NNN-flow.html`, in the same
+   acceptance PR. Agreement 10 in revision 3.
+3. **The two hand-filed issues are filed:** #1985 (the rule-9 issue for this
+   ADR, which the acceptance PR closes) and #1986 (the `hooks.json` record).
+
 ### Open decisions — Jason's
 
-1. The eight ladder-only items, D4, E1-E5, F1, F2: file each as an issue, or
-   exempt them by name in this ADR.
-2. Go-ahead to file the two hand-filed issues above and write revision 3.
+None. Revision 3 is approved to be written.
 
 ### Known defects in this branch
 
@@ -494,8 +508,8 @@ naming no criterion), #1983 (D4's check cannot fail).
 
 ### Next steps, in order
 
-1. Jason decides the two open items.
-2. File the rule-9 issue and the `hooks.json` issue.
+1. ~~Jason decides the two open items.~~ Done.
+2. ~~File the rule-9 issue and the `hooks.json` issue.~~ #1985, #1986.
 3. Write revision 3: fold every finding above into the body, replace
    agreement 8 with the agreed process, drop rule 11, move decision 3's site
    to `closing-references.yml`, add the seven-row table, fix the citations.
