@@ -514,9 +514,87 @@ naming no criterion), #1983 (D4's check cannot fail).
 7. **A whole-process audit is ordered — Jason, 2026-11-11** — covering every
    path by which work enters the board, traced end to end, before revision 3.
 
+### Whole-process audit, 2026-11-11 (fresh reader, every intake path traced on live issues)
+
+**Paths.** Not three. Five live paths onto the board, plus one that never
+reaches it. The ADR and spec paths are ONE path: `create-spec` only writes a
+file, and under the agreed process a spec reaches the board only through an
+ADR's table. The "side door" is four doors that each check different things.
+
+| path | how | notes |
+|---|---|---|
+| A | `gh issue create` by an agent or Jason | the local filing hook runs only on this machine |
+| B | GitHub web form (spec-work, everyday-work) | skips the local hook |
+| C | `plan-issues --decompose` from an ADR or spec table | hand-run today; row 5 automates |
+| D | a consumer reporting upstream, `--label from-consumer` | never used; label not ranked |
+| E | ship.js sub-issues via Octokit | dormant while `ship.mode` is direct; no hook, label, milestone or dependency edges |
+| F | an issue transferred in | intake ignores `transferred`, so it never reaches the board (#1752) |
+
+Not intake paths, because none creates an issue: `finding-promotion`,
+`ai-review-findings`/`threads`, `issue-audit`, `board-sweep`.
+`scripts/lib/gap-emit.sh` has no caller.
+
+**Two corrections to this file, verified by Rayford in the code:**
+
+- Decision 4 said an unplaced issue is "never promoted". Wrong: UNPLACED is
+  the last tier, so it **sorts last** (`lib/board-ready-rule.ts`). With 48
+  placed issues ahead and a Ready cap of 2 it starves in practice, which is
+  why the fix still matters.
+- Decision 5 blamed #1752's placement on its milestone being outside the two
+  families. Wrong: `phaseOf` in `lib/board-mirror.ts` needs `Phase N` in the
+  milestone title. "Issue intake" and "Convergence Machinery" both lack it.
+  Fix: close or rename those two milestones — no code.
+
+**Gaps, worst first:**
+
+1. **Row 8 cannot place most criteria.** Only 87 of 1,815 criteria sit in a
+   phase. An issue naming a criterion from a deferred spec is neither phased
+   nor `serves no criterion`. Fix: a criterion with no phase falls to a
+   ranked label.
+2. **Placing an issue never triggers a promotion.** `board-ready.yml` listens
+   for opened, closed, assigned, unassigned, reopened — not labeled or
+   milestoned. Placing inside `board-intake` races `board-ready` on the same
+   `opened` event. Fix: place inside `board-ready`'s own run, before ranking.
+3. **A PR without `Fixes #N` strands its issue** out of In review and Done
+   (#1921; #1717 had six merged PRs). `closing-references.yml` refuses only a
+   keyword GitHub cannot see, not a missing one, and is **not a required
+   check** — main requires only `test` and `ai-review`. Row 4 lives on that
+   job, so it is advisory too. Fix: make it required and refuse a PR with no
+   closing reference.
+4. **Two front doors cannot write the token rows 4 and 8 key on.**
+   `everyday-work.yml` has no `serves no criterion` field; the consumer text
+   in `lib/generators/agents-md.ts` asks for none; free text like "Criteria
+   this serves: none" does not match `NAMES_NONE`. Fix: a prefilled
+   declaration in both, and rank `from-consumer`.
+5. **Blocked-by on paths A, B, D, E is prose**, and `board-ready` reads only
+   dependency edges. Fix: intake turns the Blocked-by field into edges.
+6. **Row 5 misses `plan-spec`.** If the acceptance PR adds a phase,
+   decompose refuses because the milestone does not exist. Fix: run
+   `plan-spec --write` first. Also: decompose labels every row `engine`.
+7. **This ADR's own table uses the wrong columns.** The parser wants
+   `Criterion | Outcome | Files | Milestone | Blocked by`.
+
+**What rows 1-8 close:** path C end to end except gaps 3 and 6. Row 8 is
+right in intent and must also cover gaps 1, 2, 4 and 5. Rows 1, 2, 3, 6, 7
+do not move intake at all.
+
+**Over-engineering, in the auditor's view:** row 7 (`/flush-out`) and the
+per-ADR visual are ceremony that does not move the board; row 6
+(`create-adr`) could be a template file, since decompose already refuses an
+unreadable table; row 2 (`board.labels`) could wait, since one repository
+reads the labels today; row 1 measures specs, not the board. **This
+conflicts with Jason's explicit decision 2 on the visual** — his call.
+
+Could not be checked: web-form issues are indistinguishable from CLI ones
+(all 86 open issues are authored by `hornjason`), so path B is inferred from
+the templates.
+
 ### Open decisions — Jason's
 
-None. Revision 3 waits for the whole-process audit.
+1. Keep, cut or defer each of rows 1, 2, 6, 7 and the per-ADR visual, given
+   the auditor's over-engineering finding.
+2. Make `closing-references` a required check (gap 3) — a branch-protection
+   change, which is Jason's to make.
 
 ### Known defects in this branch
 
