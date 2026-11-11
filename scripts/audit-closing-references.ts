@@ -38,7 +38,13 @@
  */
 
 import { readFileSync } from "fs";
-import { inertClosingMessage, inertClosingReferences } from "../lib/closing-reference-audit";
+import {
+  inertClosingMessage,
+  inertClosingReferences,
+  linkedIssuesInThisRepo,
+  missingClosingMessage,
+  missingClosingReference,
+} from "../lib/closing-reference-audit";
 
 /** The one exit code every refusal travels through. */
 export const REFUSE_EXIT = 1;
@@ -74,7 +80,7 @@ async function main(): Promise<void> {
   const raw = (await readPayload()).trim();
   if (!raw) refuse("the payload is empty, so no reading was taken. This is UNMEASURED, not a clean pull request.");
 
-  let pr: { number?: number; body?: string; closingIssuesReferences?: unknown };
+  let pr: { number?: number; body?: string; headRefName?: unknown; closingIssuesReferences?: unknown };
   try {
     pr = JSON.parse(raw);
   } catch (e) {
@@ -93,6 +99,17 @@ async function main(): Promise<void> {
   if (typeof pr.body !== "string") {
     refuse("the payload carries no body string. Add `body` to the --json list. UNMEASURED, not clean.");
   }
+  // #1950. Same shape as the two readings above, for the same reason: a
+  // payload fetched without the branch would look exactly like a pull
+  // request on a branch that names no issue, which is the one input this
+  // check lets through. Absent is NOT READ, and NOT READ is not a pass.
+  if (typeof pr.headRefName !== "string" || pr.headRefName === "") {
+    refuse(
+      "the payload carries no headRefName string, so the branch this check reads to decide " +
+        "whether a closing reference was owed was never fetched. Add it to the --json list. " +
+        "UNMEASURED, not clean.",
+    );
+  }
 
   const prNumber = typeof pr.number === "number" ? pr.number : 0;
   const linked = pr.closingIssuesReferences as unknown[];
@@ -110,24 +127,54 @@ async function main(): Promise<void> {
   // An entry whose number is unreadable contributes nothing to this set,
   // which is the safe direction: it can only cause an inert reference to be
   // reported, never suppressed.
-  const linkedIssues = new Set(
-    linked
-      .map(e => (e !== null && typeof e === "object" ? (e as { number?: unknown }).number : null))
-      .filter((n): n is number => typeof n === "number"),
-  );
+  // SCOPED TO THIS REPOSITORY — ai-review round 2 of #1978. A bare `number`
+  // is not an identity: `Fixes other-org/other-repo#9` is documented GitHub
+  // syntax and lands a node numbered 9 here. Counting it let a pull request
+  // satisfy its own branch's requirement with somebody else's issue.
+  const repoNameWithOwner = arg("repo");
+  if (repoNameWithOwner === null || !repoNameWithOwner.includes("/")) {
+    refuse(
+      "no --repo owner/name was given, so a closing reference cannot be told from a " +
+        "cross-repository one. Pass --repo \"$GITHUB_REPOSITORY\". UNMEASURED, not clean.",
+    );
+  }
+  const linkedIssues = linkedIssuesInThisRepo(linked, repoNameWithOwner);
 
   // An inert keyword naming an issue that IS linked is harmless — the issue
   // closes on the live reference regardless, so firing on it would be the
   // false positive the docblock refuses to ship. Only the unlinked ones are
   // the contradiction.
   const inert = inertClosingReferences(pr.body).filter(r => !linkedIssues.has(r.issue));
-  if (inert.length === 0) {
-    const links =
-      linked.length > 0 ? `links ${linked.length} issue(s)` : "links none and claims none";
-    console.log(`closing references OK: PR #${prNumber} ${links}.`);
-    return;
-  }
-  refuse(inertClosingMessage(inert, prNumber));
+
+  // THE INERT READING IS REPORTED FIRST, and ai-review round 1 of #1978 was
+  // right to insist on it. My first cut ran #1950's check ahead of this one,
+  // and because `refuse` exits the process the two did not compose — they
+  // shadowed. A pull request on branch `rg/1717-fix` with a backticked
+  // `Fixes #1717` in its body hit the new check, never reached this one, and
+  // was told to ADD a reference that was already written four characters
+  // away. The actionable finding is always the more specific one: "you wrote
+  // it and GitHub cannot see it" beats "you wrote nothing".
+  //
+  // Composition rather than ordering-by-preference: #1950's check asks
+  // whether a reference is OWED and this one asks whether a written
+  // reference LANDED, so when both could speak the written one is the
+  // better remedy and the other is reported by the next run if it survives.
+  if (inert.length > 0) refuse(inertClosingMessage(inert, prNumber));
+
+  const missing = missingClosingReference(
+    pr.headRefName,
+    linkedIssues.size,
+    linked.length,
+    repoNameWithOwner,
+  );
+  if (missing !== null) refuse(missingClosingMessage(missing, prNumber));
+
+  // Counts what was CREDITED, not what was returned — a summary saying
+  // "links 1 issue" for a cross-repository node would describe the check as
+  // doing the thing round 2 found it was not doing.
+  const links =
+    linkedIssues.size > 0 ? `links ${linkedIssues.size} issue(s)` : "links none and claims none";
+  console.log(`closing references OK: PR #${prNumber} ${links}.`);
 }
 
 await main();
