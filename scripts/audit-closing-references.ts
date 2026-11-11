@@ -136,22 +136,28 @@ async function main(): Promise<void> {
   // closes on the live reference regardless, so firing on it would be the
   // false positive the docblock refuses to ship. Only the unlinked ones are
   // the contradiction.
-  // #1950 is checked FIRST, and the order is a decision. A pull request that
-  // declares nothing is the stronger finding: the inert-reference message
-  // tells an author to remove backticks from a line they did not write. When
-  // both could fire, the one naming the branch's own issue is the one to act
-  // on, and the other is reported by the next run once this is fixed.
+  const inert = inertClosingReferences(pr.body).filter(r => !linkedIssues.has(r.issue));
+
+  // THE INERT READING IS REPORTED FIRST, and ai-review round 1 of #1978 was
+  // right to insist on it. My first cut ran #1950's check ahead of this one,
+  // and because `refuse` exits the process the two did not compose — they
+  // shadowed. A pull request on branch `rg/1717-fix` with a backticked
+  // `Fixes #1717` in its body hit the new check, never reached this one, and
+  // was told to ADD a reference that was already written four characters
+  // away. The actionable finding is always the more specific one: "you wrote
+  // it and GitHub cannot see it" beats "you wrote nothing".
+  //
+  // Composition rather than ordering-by-preference: #1950's check asks
+  // whether a reference is OWED and this one asks whether a written
+  // reference LANDED, so when both could speak the written one is the
+  // better remedy and the other is reported by the next run if it survives.
+  if (inert.length > 0) refuse(inertClosingMessage(inert, prNumber));
+
   const missing = missingClosingReference(pr.headRefName, linkedIssues.size);
   if (missing !== null) refuse(missingClosingMessage(missing, prNumber));
 
-  const inert = inertClosingReferences(pr.body).filter(r => !linkedIssues.has(r.issue));
-  if (inert.length === 0) {
-    const links =
-      linked.length > 0 ? `links ${linked.length} issue(s)` : "links none and claims none";
-    console.log(`closing references OK: PR #${prNumber} ${links}.`);
-    return;
-  }
-  refuse(inertClosingMessage(inert, prNumber));
+  const links = linked.length > 0 ? `links ${linked.length} issue(s)` : "links none and claims none";
+  console.log(`closing references OK: PR #${prNumber} ${links}.`);
 }
 
 await main();

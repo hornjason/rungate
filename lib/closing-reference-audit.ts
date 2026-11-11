@@ -199,9 +199,15 @@ export function missingClosingReference(
 /** The refusal text for the above. Names the issue, and the one-line remedy. */
 export function missingClosingMessage(m: MissingClosingReference, prNumber: number): string {
   return (
-    `PR #${prNumber} is on branch "${m.branch}", which names issue #${m.issue}, and it ` +
-    `declares no closing reference at all — closingIssuesReferences is empty and the ` +
-    `body contains no closing keyword.\n\n` +
+    // STATES ONLY WHAT WAS READ — ai-review round 1 of #1978. The first
+    // version of this sentence also asserted "the body contains no closing
+    // keyword", which this function never looks at and which is false in two
+    // real cases: a keyword inside backticks (the sibling check's whole
+    // subject), and a live `Fixes #N` on a pull request whose base is not the
+    // default branch, where GitHub records no link at all — measured on
+    // throwaway PR #1923, `closingIssuesReferences.totalCount = 0`.
+    `PR #${prNumber} is on branch "${m.branch}", which names issue #${m.issue}, and ` +
+    `GitHub has recorded no closing reference for it — closingIssuesReferences is empty.\n\n` +
     `Nothing downstream can recover from this. board-flow.yml moves a card on ` +
     `pull_request_target: closed by resolving the pull request's closing references, so ` +
     `an empty list fires no event and the card freezes wherever it is. PR #1903 merged ` +

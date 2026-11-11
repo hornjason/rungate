@@ -261,6 +261,46 @@ describe("#1950: the branch name says whether a reference was owed", () => {
     expect(r.code, r.err).toBe(0);
   });
 
+  test("a branch naming an issue whose body has an INERT reference to it reports the backticks", () => {
+    // ai-review round 1 of #1978, and it was right. The first cut ran this
+    // check before `inertClosingReferences` and `refuse` exits the process,
+    // so the two shadowed instead of composing: a body already carrying
+    // `Fixes #1717` four characters away was told to ADD one.
+    //
+    // The population the reviewer named: every pre-existing inert fixture
+    // used a branch that parses to no issue, so no case could observe the
+    // shadow. This is that case.
+    const backticked = "Fixes #1717".replace(/^/, "`").replace(/$/, "`");
+    const r = run(
+      SCRIPT,
+      JSON.stringify({
+        number: 9,
+        body: `${backticked}\n`,
+        closingIssuesReferences: [],
+        headRefName: "rg/1717-phase6-readings",
+      }),
+    );
+    expect(r.code).toBe(REFUSE_EXIT);
+    // The inert message, not the missing one — it names the markup.
+    expect(r.err).toContain("inside a code-span");
+    expect(r.err).toContain("Remove the backticks");
+    expect(r.err, "the missing-reference message must not shadow the inert one").not.toContain(
+      "which names issue #1717, and GitHub has recorded no closing reference",
+    );
+  });
+
+  test("the missing-reference message asserts only what it read", () => {
+    // Same round. The sentence used to claim "the body contains no closing
+    // keyword", which this check never looks at — false for a backticked
+    // keyword, and false for a live `Fixes #N` on a pull request whose base
+    // is not the default branch, where GitHub records no link at all
+    // (measured on throwaway PR #1923: closingIssuesReferences.totalCount 0).
+    const r = noReference("rg/1717-phase6-readings", 10);
+    expect(r.code).toBe(REFUSE_EXIT);
+    expect(r.err).not.toContain("the body contains no closing keyword");
+    expect(r.err).toContain("closingIssuesReferences is empty");
+  });
+
   test("the workflow fetches headRefName, or the check is UNMEASURED on every pull request", () => {
     // The script refuses a payload without the field, so a workflow that
     // does not request it turns this check red everywhere rather than
