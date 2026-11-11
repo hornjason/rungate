@@ -2091,6 +2091,12 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
     expect(resolveApiBase("   ").base).toBe("https://api.github.com");
     expect(resolveApiBase("http://127.0.0.1:8080").base).toBe("http://127.0.0.1:8080");
     expect(resolveApiBase("http://localhost:3000/").base).toBe("http://localhost:3000");
+    // IPv6, BOTH readings, because round 1 of this PR's review found a bare
+    // `::1` sitting in the allowed list unreachable: WHATWG parsing requires
+    // the brackets, so the unbracketed form throws before any comparison and
+    // an entry for it is a host form a reader believes is handled.
+    expect(resolveApiBase("http://[::1]:8080").base).toBe("http://[::1]:8080");
+    expect(resolveApiBase("http://::1").base, "the bare form is not a URL at all").toBeNull();
     for (const bad of ["https://api.github.com.evil.test", "http://10.0.0.1", "ftp://127.0.0.1"]) {
       expect(resolveApiBase(bad).base, bad).toBeNull();
       expect(resolveApiBase(bad).why, bad).toContain("RUNGATE_GITHUB_API_BASE");

@@ -26,8 +26,15 @@ export const LIVE_API_BASE = "https://api.github.com";
  * The hosts an override may name. Closed, and spelled as a list rather than
  * a pattern: `127.0.0.1.evil.test` and `localhost.evil.test` both satisfy
  * every "starts with" and "contains" spelling of this check.
+ *
+ * **`[::1]` bracketed, and no bare `::1`.** Review round 1 of #1982 caught
+ * the unbracketed form sitting here unreachable: WHATWG parsing requires an
+ * IPv6 literal to be bracketed, so `new URL("http://::1")` THROWS and
+ * `u.hostname` never produces the bare string. An entry nothing can match is
+ * a host form a reader believes is handled. `BR-79` asserts both readings so
+ * it cannot come back silently.
  */
-const LOOPBACK_HOSTS: readonly string[] = ["127.0.0.1", "localhost", "[::1]", "::1"];
+const LOOPBACK_HOSTS: readonly string[] = ["127.0.0.1", "localhost", "[::1]"];
 
 export type ApiBaseReading =
   | { readonly base: string; readonly why: null }
