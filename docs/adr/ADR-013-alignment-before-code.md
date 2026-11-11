@@ -158,12 +158,17 @@ What each row adds for a consumer:
 
 **Row 4 goes first** (`work-this-next`): every PR after it is checked.
 
+9. **Payload waits for the car — Jason delegated, Rayford decided,
+   2026-11-11.** Under row 9 the active milestone is the lowest open
+   *Pipeline* phase; Convergence milestones enter Ready only when no
+   Pipeline phase is open. #1764 leaves Ready when row 9 ships.
+10. **Everyday work gets no milestone of its own — same.** It stays in
+    Backlog until someone moves it into the active milestone, or marks it
+    `work-this-next` when it is urgent. One focus at a time; a second
+    standing milestone would be a second queue.
+
 ## Not decided here
 
-- **Does payload (Convergence) milestone work wait until the car's phases
-  are done?** Jason's call; #1764 holds a Ready slot today.
-- **Where everyday work (`serves no criterion`) lives under row 9** — with
-  no milestone it never reaches Ready.
 - Whether a card dragged into Ready by hand is demoted by the next run —
   not yet checked.
 - Which specs are admitted after the car is done; whether
