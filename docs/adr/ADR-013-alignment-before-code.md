@@ -18,6 +18,11 @@ This document is the first instance of what it decides: the agreements were
 reached in conversation on 2026-11-11, and nothing was built from them until
 they were written here and attacked.
 
+**Read "Where this stands" at the end of this file before anything else.**
+The body below is revision 2. A second audit and a process review happened
+after it was written, and their results, the agreed replacement process, and
+the next steps are recorded there, not yet folded into the body.
+
 **Each item carries who agreed it.** Revision 1 did not, and the auditor's
 first structural finding was that it could not tell Jason's call from the
 session's inference attributed to him. Every other agreement surface in this
@@ -349,3 +354,150 @@ resolutions in this repository do not survive a compaction.
 - The duplicate ADR number: `ADR-011` exists twice, as
   `ADR-011-board-and-engine-work-is-planned-not-found.md` and
   `ADR-011-the-audit-backlog-nine-issues.md`.
+
+## Where this stands — handoff, 2026-11-11
+
+Written so a fresh session can resume with nothing but this file. Everything
+after revision 2's body is recorded here. Nothing below has been folded into
+the agreements above yet; that is revision 3.
+
+### Second audit of revision 2 (fresh reader, no conversation context)
+
+Every number and citation in revision 2 reproduced. The corrections from the
+first audit hold. Six findings against what revision 2 proposes:
+
+1. **The ratchet in agreement 1 is a bare total.** Both precedents it cites
+   bind by name: `.claude/config-access-ratchet.json` is a per-file map, and
+   `.claude/spec-write-opaque-ratchet.json` lists 268 sites. A total is
+   satisfiable by swapping members. Fix: bank the 22 deferred spec paths, each
+   with its criteria count.
+2. **Agreement 8's order manufactures criterion-less issues.** An issue filed
+   before its SC exists cannot name one, and nothing returns to it. #1954 and
+   #1984 are both live instances. Nothing at filing time checks for a
+   criterion. *Superseded by the process below, which writes the SCs during
+   acceptance so work issues are born naming them.*
+3. **Keeping the ladder is right, but rewording rule 10 does not satisfy
+   "source of truth can't be two places".** Eight ladder items — D4, E1-E5,
+   F1, F2 — exist only in the ladder, with no issue and no milestone. Either
+   file them or exempt them by name. **Pending Jason's decision.**
+4. **"All work is an issue first" is false for the work that decides what the
+   issues are**: an ADR, a retro, a review, an audit. ADR-013 is itself that
+   kind of work, and no issue preceded it. Name the exempt class.
+5. **`.claude/rungate/hooks.json` records `TopLevelCdGuard` as NOT LIVE. It is
+   live** — registered in `~/.claude/settings.json`, and it blocked the
+   auditors' commands. Decision 3 quoted the stale record as evidence. File it
+   as a bug.
+6. The `plan-spec --coverage` block in Context shows two PLANNED detail lines
+   the command does not print. The figures are right; the block was typed,
+   and should say so.
+
+### Process review (fresh reader, asked whether this is over-engineered)
+
+Verdict: mostly the process this repository already uses, with ceremony added
+at the edges, and the one step that serves SUCCESS.md Claim 7 left manual.
+ADR-008, 010, 011 and 012 each landed as a single docs PR carrying the ADR and
+its decomposition table (#1674, #1715, #1814, #1884), with no separate
+acceptance issue; `plan-issues --decompose` was then run by hand.
+
+Its findings, all accepted by Jason on 2026-11-11:
+
+- **No separate "Accept ADR" issue kind.** It is just the issue rule 9
+  already requires, and the PR closes it.
+- **No rule 11.** It restates rules 2 and 9; fold it into rule 9.
+- **A size threshold.** A decision that becomes one issue needs no ADR: file
+  it with the existing `.github/ISSUE_TEMPLATE/spec-work.yml`, which already
+  asks for criteria and files and accepts `serves no criterion`.
+- **Decision 3 was wrong about the site.** `issue-audit.yml` runs on a daily
+  schedule, against Jason's "no schedules" rule. The per-PR home is
+  `.github/workflows/closing-references.yml`.
+- **Automate the filing.** `plan-issues --decompose` run by hand breaks Claim
+  7, which counts "a board state reachable only by someone running a command
+  by hand" as failure. No workflow calls it today.
+- **A trap in that automation:** `plan-issues`' duplicate check reads only
+  OPEN issue titles. Re-running it on any ADR edit would re-file rows whose
+  issues are closed. It must fire only on the change to `status: accepted`,
+  or also check closed issues.
+
+### The agreed process — Jason and Rayford, 2026-11-11
+
+Replaces agreement 8's order. Revision 3 makes this the law.
+
+1. **Agree, and file one issue the same turn**, with the existing template.
+2. **If it is big** — it splits into more than one issue, or changes a rule or
+   a gate: write the ADR with `create-adr`, write the SC lines into the
+   governing spec (chosen by the spec's `governs:` frontmatter and
+   `.claude/rules/specs-routing.md`; `create-spec` if none governs), run
+   `/flush-out` until it holds, then one PR closes the step-1 issue carrying
+   the accepted ADR, the SC lines and the filled table. Jason merges.
+   Small decisions skip to step 4.
+3. **On merge, a workflow files every table row** with `plan-issues
+   --decompose` and `plan-deps`. Nobody places the plan by hand.
+4. **Build each issue**: PR with `Fixes #N`, and `closing-references.yml`
+   refuses a PR whose issue names neither a criterion nor `serves no
+   criterion`.
+
+**Mechanical after ADR-013 is built:** the ADR skeleton (`create-adr`),
+accepted ADR to issues on the board (the workflow), issue to card and lane
+(already), the per-PR criterion check, and the meter's population (the
+ratchet). **Stays human by design:** agreeing, writing the SC text, choosing
+the spec, judging size, merging. **Triggered by a person but scripted:** the
+audit (`/flush-out`).
+
+`create-adr` is Rayford's addition, which the process review did not
+address: the workflow in step 3 parses each ADR's table, and a hand-typed
+table is how that parse breaks (ADR-011 records one instance).
+
+### What ADR-013 will file
+
+ADR-013 builds the workflow that files issues, so its own rows are filed by
+hand this once. Every later ADR files itself.
+
+**By hand, before acceptance:**
+
+- the rule-9 issue for ADR-013 — `serves no criterion`
+- the `hooks.json` bug in audit finding 5 — one issue, so no ADR (the size
+  threshold in action)
+
+**One acceptance PR**, closing the rule-9 issue: ADR-013 at `accepted`, an SC
+block reserved in `specs/sc-reservations.json`, the SC lines in
+`specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, and the decomposition table's ids
+filled. Revision 3 adds that table with these seven rows:
+
+| # | Outcome | Main files |
+|---|---|---|
+| 1 | `spec-placement` honours a deferral declaration in spec frontmatter, with the 22 deferred specs ratcheted by path and count | `scripts/board-conformance.ts`, a new ratchet JSON |
+| 2 | one `board.labels` block in project config replaces the four hardcoded label sites | `lib/board-ready-rule.ts`, `lib/issue-filing-gate.ts`, `lib/issue-create-override.ts`, `.claude/rungate/config.json` |
+| 3 | AGENTS.md rule 9 names the exempt work and the size threshold; rule 10 narrowed to the engine build order | `AGENTS.md` |
+| 4 | a PR whose issue names neither a criterion nor `serves no criterion` is refused | `.github/workflows/closing-references.yml` |
+| 5 | merging an ADR that changes to `accepted` runs `plan-issues --decompose` and `plan-deps`; the duplicate check covers closed issues | a new workflow, `scripts/plan-issues.ts` |
+| 6 | `create-adr` writes an ADR skeleton whose table the parser is guaranteed to read | `lib/cli-commands.ts`, a new script |
+| 7 | `/flush-out` runs the adversarial audit on demand | `.claude/commands/` |
+
+**Already filed, continuing alongside:** #1984 (`work-status` reads the
+ladder; WIP on `rg/1984-stage-ladder-in-work-status`), #1954 (the 41 issues
+naming no criterion), #1983 (D4's check cannot fail).
+
+### Open decisions — Jason's
+
+1. The eight ladder-only items, D4, E1-E5, F1, F2: file each as an issue, or
+   exempt them by name in this ADR.
+2. Go-ahead to file the two hand-filed issues above and write revision 3.
+
+### Known defects in this branch
+
+- `test/line-citation-ratchet.test.ts` fails: this file carries four
+  `path:line` citations and is not in the ratchet. Fix by rewording each as a
+  symbol name, not by growing the ratchet.
+- The flow diagram for this process was drawn at
+  `~/.rungate/show-me-adr013-flow.html` — outside the repository, a picture of
+  this section and not a source of truth.
+
+### Next steps, in order
+
+1. Jason decides the two open items.
+2. File the rule-9 issue and the `hooks.json` issue.
+3. Write revision 3: fold every finding above into the body, replace
+   agreement 8 with the agreed process, drop rule 11, move decision 3's site
+   to `closing-references.yml`, add the seven-row table, fix the citations.
+4. Audit revision 3 with a fresh reader.
+5. Acceptance PR; Jason merges; file the seven rows by hand this once.
