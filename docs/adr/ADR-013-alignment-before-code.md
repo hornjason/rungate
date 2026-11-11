@@ -595,15 +595,23 @@ hardcoded labels, and Claim 5 needs it), row 7 (`/flush-out`) and the
 per-ADR visual (decision 2). **Row 6 becomes a template file**, not a
 `create-adr` command — decompose already refuses a table it cannot read.
 
-**Row 4's shape, agreed in principle — Jason, 2026-11-11:** the check is
-switched by a repository variable, `RUNGATE_REQUIRE_CLOSING_REF`, the same
-pattern `ai-review.yml` already uses with `RUNGATE_REQUIRE_AI_REVIEW`: off, it
-warns and stays green; `true`, it fails. It prints its own streak on every PR
-("last 20 merged PRs: N closed an issue, M exempt, K missed") and says when
-20 in a row are clean. The flip stays one human keystroke, because a gate
-that switches on its own enforcement needs an admin token. Measured: 14 of
-the last 40 merged PRs closed no issue, almost all session-record PRs — they
-need an exemption or an issue of their own before the switch is flipped.
+**Row 4's shape, decided — Jason, 2026-11-11: block now, fix as we go.**
+A warning nobody reads helps nothing, so this repository blocks from the day
+row 4 merges; there is no warn period and no streak counter. The check
+refuses a PR that closes no issue, or whose issue names neither a criterion
+nor "serves no criterion". Session-record PRs are exempt by name (Jason's
+call) — they were most of the 14 of the last 40 merged PRs that closed no
+issue. An old issue with no criterion (#1954) is fixed when a PR hits it, by
+adding one line to the issue. The workflow must also trigger on `edited`:
+measured, it runs on the default `pull_request` types only, so a corrected
+description would stay red. A repository variable,
+`RUNGATE_REQUIRE_CLOSING_REF`, is the switch, read exactly as
+`RUNGATE_REQUIRE_AI_REVIEW` is: `true` here; off by default for a consumer,
+whose fresh repository has no issue naming a criterion yet. Branch
+protection is per repository (no account-wide setting on a personal
+account): after row 4 merges Jason runs one command adding
+`closing-references` to main's required checks — measured 2026-11-11,
+they are `test` and `ai-review` only.
 
 **Consumers must get all of this easily — Jason, 2026-11-11:** *"our
 consumers will have to do all this as well, so we want an easy process."*
