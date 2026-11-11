@@ -38,7 +38,12 @@
  */
 
 import { readFileSync } from "fs";
-import { inertClosingMessage, inertClosingReferences } from "../lib/closing-reference-audit";
+import {
+  inertClosingMessage,
+  inertClosingReferences,
+  missingClosingMessage,
+  missingClosingReference,
+} from "../lib/closing-reference-audit";
 
 /** The one exit code every refusal travels through. */
 export const REFUSE_EXIT = 1;
@@ -74,7 +79,7 @@ async function main(): Promise<void> {
   const raw = (await readPayload()).trim();
   if (!raw) refuse("the payload is empty, so no reading was taken. This is UNMEASURED, not a clean pull request.");
 
-  let pr: { number?: number; body?: string; closingIssuesReferences?: unknown };
+  let pr: { number?: number; body?: string; headRefName?: unknown; closingIssuesReferences?: unknown };
   try {
     pr = JSON.parse(raw);
   } catch (e) {
@@ -92,6 +97,17 @@ async function main(): Promise<void> {
   }
   if (typeof pr.body !== "string") {
     refuse("the payload carries no body string. Add `body` to the --json list. UNMEASURED, not clean.");
+  }
+  // #1950. Same shape as the two readings above, for the same reason: a
+  // payload fetched without the branch would look exactly like a pull
+  // request on a branch that names no issue, which is the one input this
+  // check lets through. Absent is NOT READ, and NOT READ is not a pass.
+  if (typeof pr.headRefName !== "string" || pr.headRefName === "") {
+    refuse(
+      "the payload carries no headRefName string, so the branch this check reads to decide " +
+        "whether a closing reference was owed was never fetched. Add it to the --json list. " +
+        "UNMEASURED, not clean.",
+    );
   }
 
   const prNumber = typeof pr.number === "number" ? pr.number : 0;
@@ -120,6 +136,14 @@ async function main(): Promise<void> {
   // closes on the live reference regardless, so firing on it would be the
   // false positive the docblock refuses to ship. Only the unlinked ones are
   // the contradiction.
+  // #1950 is checked FIRST, and the order is a decision. A pull request that
+  // declares nothing is the stronger finding: the inert-reference message
+  // tells an author to remove backticks from a line they did not write. When
+  // both could fire, the one naming the branch's own issue is the one to act
+  // on, and the other is reported by the next run once this is fixed.
+  const missing = missingClosingReference(pr.headRefName, linkedIssues.size);
+  if (missing !== null) refuse(missingClosingMessage(missing, prNumber));
+
   const inert = inertClosingReferences(pr.body).filter(r => !linkedIssues.has(r.issue));
   if (inert.length === 0) {
     const links =

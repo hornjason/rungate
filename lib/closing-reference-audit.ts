@@ -52,6 +52,8 @@
  * that exists, the loosened rule is wrong nineteen times out of twenty-one.
  */
 
+import { issueFromBranch } from "./local-work";
+
 /**
  * The verbs GitHub acts on, in one declaring position.
  *
@@ -131,6 +133,87 @@ export function inertClosingReferences(body: string): InertClosingReference[] {
     out.push({ issue, keyword: m[1]!, reason: hit.reason, text: m[0] });
   }
   return out;
+}
+
+/**
+ * A pull request whose BRANCH names an issue and which declares no closing
+ * reference at all (#1950).
+ *
+ * The sibling of `inertClosingReferences`, and the half it could not see.
+ * That function asks "did you write a reference GitHub cannot read"; this one
+ * asks "did you write one at all". PR #1903 answered no to the second and was
+ * never asked: branch `rg/1717-phase6-readings`, title identical to issue
+ * #1717, merged 2026-11-08 as `dd8709e6`, `closingIssuesReferences` empty and
+ * no keyword anywhere in the body. The check passed it, #1717 stayed open,
+ * and its card sat in `In review` for two days.
+ *
+ * ## Why the branch name, and not the title
+ *
+ * Nothing may require EVERY pull request to close an issue — a state record,
+ * a docs pass and a dependency bump all legitimately close nothing, and a
+ * check that fired on them is one people route around. So the question is
+ * which pull requests OWED a reference, and the branch is the one place this
+ * repository already answers it: `rg/1717-phase6-readings`,
+ * `fix/640-644-run-branch-base`, `rungate/run-1931`. A title is prose and a
+ * body is prose; a branch name is a decision somebody made before they wrote
+ * either.
+ *
+ * `issueFromBranch` is imported rather than re-derived. It is the same
+ * positional rule `lib/local-work.ts` uses to attribute a commit, and it
+ * already refuses the shapes that would make this check wrong —
+ * `jason-patch-1` is not issue #1 and `rg/adr-011-plan` is not issue #11.
+ * Two parsers for "which issue is this branch for" would be two deciders
+ * that agree, the fourth shape in
+ * `.claude/rules/checks-must-be-able-to-fail.md`.
+ *
+ * ## What it deliberately does NOT check
+ *
+ * Whether the declared reference is the branch's own issue. A branch cut for
+ * #1717 may legitimately close the sibling it turned into, and insisting on
+ * the number would put this function in an argument with the author it cannot
+ * win. **Declaring something is the bar.** That keeps the rule where the
+ * evidence is: every instance measured — #1717 via PR #1903, and #1168 —
+ * declared nothing at all.
+ *
+ * Returns `null` when nothing is owed. `headRefName` is required by the
+ * caller before this is reached; a branch that could not be read is
+ * UNMEASURED there, never a quiet pass here.
+ */
+export interface MissingClosingReference {
+  /** The issue the branch names. */
+  issue: number;
+  /** The branch, so the message can quote what produced the reading. */
+  branch: string;
+}
+
+export function missingClosingReference(
+  headRefName: string,
+  linkedIssueCount: number,
+): MissingClosingReference | null {
+  if (linkedIssueCount > 0) return null;
+  const issue = issueFromBranch(headRefName);
+  if (issue === null) return null;
+  return { issue, branch: headRefName };
+}
+
+/** The refusal text for the above. Names the issue, and the one-line remedy. */
+export function missingClosingMessage(m: MissingClosingReference, prNumber: number): string {
+  return (
+    `PR #${prNumber} is on branch "${m.branch}", which names issue #${m.issue}, and it ` +
+    `declares no closing reference at all — closingIssuesReferences is empty and the ` +
+    `body contains no closing keyword.\n\n` +
+    `Nothing downstream can recover from this. board-flow.yml moves a card on ` +
+    `pull_request_target: closed by resolving the pull request's closing references, so ` +
+    `an empty list fires no event and the card freezes wherever it is. PR #1903 merged ` +
+    `this way on 2026-11-08 and issue #1717 is still open with its card in "In review".\n\n` +
+    `Add "Fixes #${m.issue}" to the pull request BODY — not the title, and not inside ` +
+    `backticks — then re-read the field rather than the body: ` +
+    `gh pr view ${prNumber} --json closingIssuesReferences.\n\n` +
+    `If this pull request genuinely closes nothing, the branch name is the thing that ` +
+    `is wrong: rename it so it does not open with an issue number. A state record, a ` +
+    `docs pass and a dependency bump are expected to close nothing, and a branch that ` +
+    `does not name an issue is never asked this question.`
+  );
 }
 
 /**

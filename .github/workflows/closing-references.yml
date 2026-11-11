@@ -45,5 +45,8 @@ jobs:
           # No `|| true` and no `2>/dev/null`: a `gh` failure must reach the
           # script as an empty payload, which it reports as UNMEASURED rather
           # than as a clean pull request.
-          gh pr view "$PR" --json number,body,closingIssuesReferences \
+          # `headRefName` is #1950: the branch is what says whether a closing
+          # reference was OWED. Without it the script refuses every payload
+          # as UNMEASURED rather than passing them, so a drop here is loud.
+          gh pr view "$PR" --json number,body,headRefName,closingIssuesReferences \
             | bun scripts/audit-closing-references.ts
