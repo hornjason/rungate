@@ -595,6 +595,29 @@ hardcoded labels, and Claim 5 needs it), row 7 (`/flush-out`) and the
 per-ADR visual (decision 2). **Row 6 becomes a template file**, not a
 `create-adr` command — decompose already refuses a table it cannot read.
 
+**Row 4's shape, agreed in principle — Jason, 2026-11-11:** the check is
+switched by a repository variable, `RUNGATE_REQUIRE_CLOSING_REF`, the same
+pattern `ai-review.yml` already uses with `RUNGATE_REQUIRE_AI_REVIEW`: off, it
+warns and stays green; `true`, it fails. It prints its own streak on every PR
+("last 20 merged PRs: N closed an issue, M exempt, K missed") and says when
+20 in a row are clean. The flip stays one human keystroke, because a gate
+that switches on its own enforcement needs an admin token. Measured: 14 of
+the last 40 merged PRs closed no issue, almost all session-record PRs — they
+need an exemption or an issue of their own before the switch is flipped.
+
+**Consumers must get all of this easily — Jason, 2026-11-11:** *"our
+consumers will have to do all this as well, so we want an easy process."*
+Measured: the scaffold does NOT emit `closing-references.yml`, so a consumer
+has no such check today; `lib/branch-protection.ts` (PROTECT-1) READS a
+repository's protection and reports, and nothing SETS it. So revision 3 must
+state, for every row, how a consumer receives it — by `rungate scaffold`, not
+by copying this repository — and every human step a consumer must take must
+be printed by the tool at the moment it is needed, as one command, never
+looked up in a document. Row 4 for a consumer: `scaffold` emits the check in
+warn mode; the check prints the two commands (add it to required checks;
+flip the variable) when they are due; PROTECT-1 reports a check that exists
+but is not required.
+
 ### Open decisions — Jason's
 
 1. Make `closing-references` a required check (gap 3) — a branch-protection
