@@ -93,7 +93,7 @@ Expedite: row 4</pre></div>
 <div class="gap">The milestone must exist before filing: the spec edit and plan-spec come first <span class="real">REAL</span></div>
 <div class="gap">#1764 (payload) keeps a Ready slot unless payload waits for the car</div>
 <div class="gap">Everyday work (serves no criterion) has no milestone, so under row 9 it never reaches Ready</div>
-<div class="gap">Not checked: the token row 5's workflow uses for board-mirror --write (RUNGATE_PROJECT_TOKEN is read-only by design)</div>
+<div class="gap">Open: which token row 5's workflow uses for board-mirror --write. RUNGATE_PROJECT_TOKEN was minted read:project but was measured carrying project WRITE (run 42039773150, 2026-11-05; see board-intake.yml) and is shared by 8 workflows — row 5 should not widen its reuse without a decision</div>
 
 <h2>Improves going forward</h2>
 <div class="cols">
