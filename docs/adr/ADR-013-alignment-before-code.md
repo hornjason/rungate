@@ -493,9 +493,30 @@ naming no criterion), #1983 (D4's check cannot fail).
 3. **The two hand-filed issues are filed:** #1985 (the rule-9 issue for this
    ADR, which the acceptance PR closes) and #1986 (the `hooks.json` record).
 
+4. **The board must move mechanically — Jason, 2026-11-11.** Placing #1986 by
+   hand-adding a label was proposed and rejected. Measured: `board-intake.yml`
+   writes a card and a Status column and never a placement; both issue
+   templates carry `labels: []`, and template labels apply only through the
+   web form, which `gh issue create` skips. An unplaced issue is never
+   promoted to Ready. **Row 8 is proposed:** intake places an issue when it
+   opens — a named criterion in a phase sets that phase's milestone; `serves
+   no criterion` adds the everyday label from `board.labels`; neither is
+   reported UNPLACED by name. #1986 is left alone until row 8 ships.
+5. **A second placement gap, from live `work-status` on 2026-11-11:** #1752
+   carries the milestone "Issue intake" and still reads UNPLACED, because the
+   phase tier counts only milestones in the Pipeline and Convergence
+   families. Row 8 must cover it.
+6. **Neither audit nor the process review caught the placement gap.** Every
+   reviewer audited against `board-conformance`, and none of its seven
+   readings measures whether an issue is placed. `/flush-out` must require
+   the auditor to trace one issue of each kind from filing to Ready, not only
+   read documents.
+7. **A whole-process audit is ordered — Jason, 2026-11-11** — covering every
+   path by which work enters the board, traced end to end, before revision 3.
+
 ### Open decisions — Jason's
 
-None. Revision 3 is approved to be written.
+None. Revision 3 waits for the whole-process audit.
 
 ### Known defects in this branch
 
