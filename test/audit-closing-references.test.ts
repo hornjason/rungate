@@ -385,6 +385,43 @@ describe("#1950: the branch name says whether a reference was owed", () => {
     expect(r.err).toContain(THIS_REPO);
   });
 
+  test("the gh node shape this filter reads is pinned to a real gh payload", () => {
+    // ai-review round 4 of #1978. Everything above builds its nodes with the
+    // local `closes()` helper, so the suite and the code agreed with each
+    // other about a shape neither of them had checked against `gh`.
+    //
+    // CAPTURED VERBATIM, not hand-written: the output of
+    //   gh pr view 1971 --repo hornjason/rungate --json closingIssuesReferences
+    // taken 2026-11-11. An unrelated pull request, deliberately — a fixture
+    // taken from this one would move with it.
+    const live = JSON.parse(
+      '{"closingIssuesReferences":[{"id":"I_kwDOUe1c0M8AAAABeDH43Q","number":1962,' +
+        '"repository":{"id":"R_kgDOUe1c0A","name":"rungate","owner":{"id":"MDQ6VXNlcjI2NTI5ODAw",' +
+        '"login":"hornjason"}},"url":"https://github.com/hornjason/rungate/issues/1962"}]}',
+    );
+    // The helper every other case uses must produce the same field paths the
+    // real payload does, or those cases prove nothing about `gh`.
+    const mine = closes(1962);
+    const node = live.closingIssuesReferences[0];
+    expect(typeof node.repository?.name).toBe(typeof mine.repository.name);
+    expect(typeof node.repository?.owner?.login).toBe(typeof mine.repository.owner.login);
+
+    // And the end-to-end reading, through the real script.
+    const r = run(
+      SCRIPT,
+      JSON.stringify({
+        number: 1971,
+        body: "Fixes #1962\n",
+        closingIssuesReferences: live.closingIssuesReferences,
+        headRefName: "rg/1962-work-this-next",
+      }),
+    );
+    expect(r.code, r.err).toBe(0);
+    expect(r.out, "a live gh payload must be CREDITED, not filtered to nothing").toContain(
+      "links 1 issue",
+    );
+  });
+
   test("the message may only name values the function was given", () => {
     // THE CLASS, not the instance. Rounds 1 and 3 were the same defect in
     // two different clauses, repaired one at a time, the second written
