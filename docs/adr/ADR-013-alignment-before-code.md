@@ -589,11 +589,15 @@ Could not be checked: web-form issues are indistinguishable from CLI ones
 (all 86 open issues are authored by `hornjason`), so path B is inferred from
 the templates.
 
+**Decided — Jason, 2026-11-11, taking Rayford's recommendation:** keep row 1
+(the ratchet is the meter fix), row 2 (`board.labels`: Jason asked for no
+hardcoded labels, and Claim 5 needs it), row 7 (`/flush-out`) and the
+per-ADR visual (decision 2). **Row 6 becomes a template file**, not a
+`create-adr` command — decompose already refuses a table it cannot read.
+
 ### Open decisions — Jason's
 
-1. Keep, cut or defer each of rows 1, 2, 6, 7 and the per-ADR visual, given
-   the auditor's over-engineering finding.
-2. Make `closing-references` a required check (gap 3) — a branch-protection
+1. Make `closing-references` a required check (gap 3) — a branch-protection
    change, which is Jason's to make.
 
 ### Known defects in this branch
