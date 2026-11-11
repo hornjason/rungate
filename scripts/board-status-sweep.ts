@@ -258,6 +258,45 @@ export function isStaleClaimCandidate(item: BoardItem): boolean {
 }
 
 /**
+ * Which rows are worth spending the open-pull-request query on.
+ *
+ * Two verdicts read `openLinkedPRs` and they are not the same population, so
+ * this is their union and the one thing `applyLinkedPullRequests` calls. A
+ * row the union misses keeps `null` and comes back UNDECIDABLE however
+ * correct the verdict below it is — which is how a fix can be complete in
+ * `verdictFor` and dead on the live board. BS-81.
+ */
+export function needsOpenPullRequestReading(item: BoardItem): boolean {
+  return isStaleClaimCandidate(item) || isStrandedWorkingLaneCandidate(item);
+}
+
+/**
+ * An open issue in a lane that ASSERTS work, with nobody assigned — or with
+ * assignment unread, because that row is undecidable either way and refusing
+ * the query would hide which half was missing. #1977.
+ */
+function isStrandedWorkingLaneCandidate(item: BoardItem): boolean {
+  return (
+    item.kind === "Issue" &&
+    item.state === "OPEN" &&
+    item.assigned !== true &&
+    UNASSIGNED_CONTRADICTS.includes(item.status ?? "")
+  );
+}
+
+/**
+ * The lanes an ABSENT assignment contradicts — the mirror of
+ * `ASSIGNMENT_CONTRADICTS`, and closed for the same reason.
+ *
+ * `specs/BOARD-FLOW-SPEC.md` gives In progress the entry condition
+ * `issues: [assigned]` and In review "a linked PR is not a draft". Backlog
+ * and Ready are where unassigned work belongs, and Done and Cancelled are
+ * terminal — a sweep that pulled from those would drag finished work
+ * backwards. #1977, BS-75..BS-80.
+ */
+const UNASSIGNED_CONTRADICTS: readonly string[] = [IN_PROGRESS, IN_REVIEW];
+
+/**
  * The single binding. Every decision this script makes is this function, so a
  * mutation of it moves every row and no second decider can hold a case up
  * (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape).
@@ -492,6 +531,87 @@ export function verdictFor(item: BoardItem): Verdict {
       };
     }
     // Unassigned in Backlog or Ready is exactly right. Fall through.
+  }
+
+  // THE MIRROR, AND THE ONE THE FALL-THROUGH BELOW SWALLOWED. #1977.
+  //
+  // Measured 2026-11-10 against `PVT_kwHOAZTQCM4BpMuR`: the sweep reported
+  // `agrees 328, disagrees 0` while five cards were wrong, and all five were
+  // this shape — an open issue, nobody assigned, sitting in a lane that
+  // asserts somebody is. The branch above only fires for Backlog and Ready,
+  // so these fell to `status !== DONE → agrees`: an agreement reached by
+  // never asking the question, which is the worst reading a status tool can
+  // produce because it is indistinguishable from a correct board.
+  //
+  // NOT A SECOND DECIDER on what the lanes mean. The entry conditions are
+  // `specs/BOARD-FLOW-SPEC.md`'s — In progress is `issues: [assigned]`, In
+  // review is "a linked PR is not a draft" — and `board-intake.yml` writes
+  // them on the live event. This reaches only the rows no event can reach
+  // again, and it writes the spec's own backwards rule: Backlog.
+  if (item.kind === "Issue" && UNASSIGNED_CONTRADICTS.includes(item.status ?? "")) {
+    if (item.assigned === null) {
+      return {
+        kind: "undecidable",
+        why:
+          `the board says ${item.status}, which asserts somebody is working on this, and ` +
+          `this row's assignment was NOT READ — the query did not carry \`assignees\`, ` +
+          `which is not the same fact as nobody being assigned. Re-run against a query ` +
+          `that requests \`assignees { totalCount }\` on the Issue fragment`,
+      };
+    }
+    if (item.assigned === false) {
+      // The same conjunction the release branch uses, read from the other
+      // side: nobody assigned AND no open pull request. Either half alone
+      // is wrong — an unassigned issue with a PR in flight is real work,
+      // and an assigned issue is in the right lane whatever its PRs say.
+      const work = workVerdict({
+        openPullRequest: item.openLinkedPRs === null ? null : item.openLinkedPRs > 0,
+        pushedBranch: null,
+        localCommits: null,
+      });
+
+      if (item.openLinkedPRs === null) {
+        return {
+          kind: "undecidable",
+          why:
+            `the board says ${item.status} and nobody is assigned, but the open pull ` +
+            `requests declaring they close it were NOT READ. Backlog would drag the card ` +
+            `away from work whose only evidence is the reading that failed. ` +
+            `Work reading: ${work.why}`,
+        };
+      }
+      if (item.openLinkedPRs > 0) {
+        // Work exists, so Backlog is wrong — and which working lane is
+        // right turns on whether that pull request is a draft, which this
+        // query does not carry and `board-intake.yml` already decides on
+        // the event. Naming it is the whole verdict.
+        return {
+          kind: "undecidable",
+          why:
+            `the board says ${item.status} and nobody is assigned, but ${item.openLinkedPRs} ` +
+            `open pull request(s) declare they close it, so the card is not stranded. ` +
+            `Whether it belongs in In progress or In review turns on whether that pull ` +
+            `request is a draft, which this query does not read and board-intake.yml ` +
+            `decides on the event. Work reading: ${work.why}`,
+        };
+      }
+      return {
+        kind: "correct",
+        to: BACKLOG,
+        why:
+          `the board says ${item.status} with nobody assigned and no open pull request ` +
+          `declaring it closes this, so nothing supports the lane's claim that work is ` +
+          (item.status === IN_REVIEW ? "awaiting a reader" : "underway") +
+          `. ${
+            item.status === IN_REVIEW
+              ? "In review's entry condition is a linked pull request that is not a draft"
+              : "In progress's entry condition is `issues: [assigned]`"
+          }, and BOARD-FLOW-SPEC.md sends anything moving backwards to Backlog, where ` +
+          `board-ready.yml can promote it on merit. Work reading: ${work.why}`,
+      };
+    }
+    // Assigned, in a lane that asserts work. That is the state those lanes
+    // are for. Fall through.
   }
 
   if (item.status !== DONE) return { kind: "agrees" };
@@ -1270,15 +1390,18 @@ export function countOpenPRsByIssue(nodes: readonly unknown[]): Map<number, numb
  * it is only legitimate because the caller refuses to build the map at all
  * unless the read completed.
  *
- * Everything that is not a candidate keeps `null`. No verdict outside the
- * release branch asks the question.
+ * Everything that is not a candidate keeps `null`, and which rows those are
+ * is `needsOpenPullRequestReading` — the union of every verdict that reads
+ * the field, so a new reader cannot be added without the query following it.
  */
 export function applyLinkedPullRequests(
   items: readonly BoardItem[],
   counts: ReadonlyMap<number, number>,
 ): BoardItem[] {
   return items.map(item =>
-    isStaleClaimCandidate(item) ? { ...item, openLinkedPRs: counts.get(item.number) ?? 0 } : item,
+    needsOpenPullRequestReading(item)
+      ? { ...item, openLinkedPRs: counts.get(item.number) ?? 0 }
+      : item,
   );
 }
 

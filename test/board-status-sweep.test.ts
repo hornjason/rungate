@@ -30,6 +30,7 @@ import {
   countOpenPRsByIssue,
   idleDaysSince,
   isStaleClaimCandidate,
+  needsOpenPullRequestReading,
   applyCorrections,
   clearAssignees,
   requireWrittenItem,
@@ -217,19 +218,33 @@ describe("board status sweep", () => {
     expect(/\.\.\. on PullRequest \{[^}]*isDraft/.test(BOARD_QUERY)).toBe(true);
   });
 
-  test("BS-6: an open UNASSIGNED item in any non-Done column is left alone", () => {
-    // The sweep is not a second opinion on where open work sits. Backlog,
-    // Ready and In progress are all legitimate for an open item, and moving
-    // them would make this a competing decider against board-intake.yml.
+  test("BS-6: an open UNASSIGNED item in a column that claims nothing is left alone", () => {
+    // The sweep is not a second opinion on where open work sits. Moving a
+    // card out of a lane that is legitimate for it would make this a
+    // competing decider against board-intake.yml.
     //
     // **`assigned` defaults to `false` in the helper, and that is this case's
     // whole subject rather than an incidental.** Jason's call of 2026-11-06
     // made an ASSIGNED open issue decidable — BS-47 below — so without the
     // word UNASSIGNED in this title the two cases contradict each other and
     // whichever ran second would look like the bug.
+    //
+    // **NARROWED BY #1977, AND THE TITLE CHANGED WITH IT.** This case used to
+    // run In progress and In review through the issue arm too, and that was
+    // the defect written down as a property: those two lanes ASSERT somebody
+    // is working, so an unassigned card in them is not a legitimate placement
+    // the sweep should decline to judge — it is a claim with nothing behind
+    // it. Five such cards sat on the live board while this case was green.
+    // BS-75..BS-80 hold that population now. What remains here is the half
+    // that is still true, which is why the lanes are listed rather than the
+    // loop simply being deleted.
+    for (const status of ["Backlog", "Ready", null]) {
+      expect(verdictFor(item(1741, "Issue", "OPEN", status)).kind).toBe("agrees");
+    }
+    // A pull request's OWN card is untouched in every lane: no lane table in
+    // BOARD-FLOW-SPEC.md covers one, and #1977's branch is issues only.
     for (const status of ["Backlog", "Ready", "In progress", IN_REVIEW, null]) {
       expect(verdictFor(item(1740, "PullRequest", "OPEN", status)).kind).toBe("agrees");
-      expect(verdictFor(item(1741, "Issue", "OPEN", status)).kind).toBe("agrees");
     }
   });
 
@@ -1725,6 +1740,136 @@ describe("board status sweep", () => {
     expect(parseBoardItem({ id: "a", content: null })).toBeNull();
     expect(parseBoardItem({ id: "a" })).toBeNull();
     expect(parseBoardItem({ id: "a", content: { __typename: "DraftIssue" } })).toBeNull();
+  });
+
+  // ── BS-75..BS-81: an open UNASSIGNED card in a lane that asserts work ────
+  //
+  // #1977. The sweep reported `agrees 328, disagrees 0` on a board holding
+  // five cards that were wrong, and all five were the same shape: an open
+  // issue, nobody assigned, sitting in `In progress` or `In review`. The
+  // assignment branch above only fires for `ASSIGNMENT_CONTRADICTS`
+  // (Backlog, Ready), so an unassigned issue in a working lane fell past it
+  // to `if (item.status !== DONE) return { kind: "agrees" }` — a verdict of
+  // AGREEMENT reached by never asking the question.
+  //
+  // `specs/BOARD-FLOW-SPEC.md` gives In progress the entry condition
+  // `issues: [assigned]` and In review "a linked PR is not a draft". With
+  // nobody assigned and no open pull request, neither condition holds and
+  // the spec's backwards rule names the lane: Backlog.
+  //
+  // Scope, stated so the negative control below is readable: this is about
+  // the UNASSIGNED half. An ASSIGNED card in In review with no open pull
+  // request is a different reading and is deliberately left agreeing here.
+
+  test("BS-75: an open unassigned issue in In progress is corrected to Backlog", () => {
+    const v = verdictFor(item(1764, "Issue", "OPEN", IN_PROGRESS, false, null, false, 12, 0));
+    expect(
+      v.kind,
+      "In progress asserts somebody is working on it. Nobody is assigned and no pull " +
+        "request is open, so the lane claims work that no reading supports — and the " +
+        "sweep called that agreement on five cards at once.",
+    ).toBe("correct");
+    expect(v.kind === "correct" && v.to).toBe(BACKLOG);
+  });
+
+  test("BS-76: and an open unassigned issue in In review is too", () => {
+    const v = verdictFor(item(1717, "Issue", "OPEN", IN_REVIEW, false, null, false, 20, 0));
+    expect(
+      v.kind === "correct" && v.to,
+      "In review's entry condition is a linked pull request that is not a draft. Zero " +
+        "open pull requests and nobody assigned leaves the card asserting a reader is " +
+        "waiting on something that does not exist.",
+    ).toBe(BACKLOG);
+  });
+
+  test("BS-77: assignment NOT READ in those lanes is undecidable, never agreement", () => {
+    // The whole defect, in its quiet form. `null` is the field the query did
+    // not carry; letting it reach the fall-through would make a query that
+    // lost `assignees` report a clean board having checked nothing —
+    // Silent Default Substitution, `.claude/rules/config-access.md`.
+    for (const lane of [IN_PROGRESS, IN_REVIEW]) {
+      const v = verdictFor(item(1900, "Issue", "OPEN", lane, false, null, null, 12, 0));
+      expect(v.kind, `${lane} with assignment unread`).toBe("undecidable");
+      expect(v.kind === "undecidable" && v.why).toContain("NOT READ");
+    }
+  });
+
+  test("BS-78: an unread pull-request count is undecidable, in both lanes", () => {
+    // The other unread half, and it must not resolve either way: Backlog
+    // would drag a card away from live work whose only evidence is the
+    // reading that failed.
+    for (const lane of [IN_PROGRESS, IN_REVIEW]) {
+      const v = verdictFor(item(1901, "Issue", "OPEN", lane, false, null, false, 12, null));
+      expect(v.kind, `${lane} with the pull-request count unread`).toBe("undecidable");
+      expect(v.kind === "undecidable" && v.why).toContain("NOT READ");
+    }
+  });
+
+  test("BS-79: unassigned WITH an open pull request is reported, not moved", () => {
+    // Work exists, so Backlog is wrong. Whether that pull request is a draft
+    // decides In progress against In review and this sweep cannot read it —
+    // and `board-intake.yml` already decides it on the event. Guessing here
+    // would be a second decider disagreeing with the first.
+    const v = verdictFor(item(1902, "Issue", "OPEN", IN_PROGRESS, false, null, false, 12, 2));
+    expect(v.kind).toBe("undecidable");
+    expect(v.kind === "undecidable" && v.why).toContain("2 open pull request");
+  });
+
+  test("BS-80: the negative control — unassigned in Backlog or Ready still agrees", () => {
+    // THE ROW THAT KEEPS THIS CHANGE HONEST. "Nobody is assigned" is the
+    // CORRECT state for both of these lanes, so a fix that reads assignment
+    // alone would move every card on the board. One variable differs between
+    // this case and BS-75: the lane.
+    for (const lane of [BACKLOG, "Ready"]) {
+      expect(
+        verdictFor(item(1903, "Issue", "OPEN", lane, false, null, false, 12, 0)).kind,
+        `${lane}'s entry condition is nobody assigned — this is the state, not a defect`,
+      ).toBe("agrees");
+    }
+    // And an ASSIGNED card in a working lane is what those lanes are for.
+    expect(verdictFor(item(1904, "Issue", "OPEN", IN_PROGRESS, false, null, true, 0, 0)).kind).toBe(
+      "agrees",
+    );
+    expect(verdictFor(item(1905, "Issue", "OPEN", IN_REVIEW, false, null, true, 0, 0)).kind).toBe(
+      "agrees",
+    );
+    // A pull request's OWN card in a working lane is not this rule's
+    // population: no lane table covers it, and `assigned` is always null.
+    expect(verdictFor(item(1906, "PullRequest", "OPEN", IN_PROGRESS, false, null, null, 0, 0)).kind).toBe(
+      "agrees",
+    );
+  });
+
+  test("BS-81: the sweep spends a pull-request query on these rows", () => {
+    // WITHOUT THIS THE FIX IS DEAD IN PRODUCTION. `openLinkedPRs` is
+    // resolved only for rows the candidate predicate names; every other row
+    // keeps `null`, so all five stale cards would come back UNDECIDABLE and
+    // the sweep would still correct nothing. BS-75..BS-79 run against a
+    // hand-built item and cannot see that.
+    expect(
+      needsOpenPullRequestReading(item(1764, "Issue", "OPEN", IN_PROGRESS, false, null, false, 12)),
+      "an unassigned card in a working lane needs the reading BS-75 decides on",
+    ).toBe(true);
+    expect(
+      needsOpenPullRequestReading(item(1717, "Issue", "OPEN", IN_REVIEW, false, null, false, 20)),
+    ).toBe(true);
+    // Unread assignment is a candidate too: the row is undecidable either
+    // way, and refusing to spend the query would hide which half was missing.
+    expect(
+      needsOpenPullRequestReading(item(1900, "Issue", "OPEN", IN_PROGRESS, false, null, null, 12)),
+    ).toBe(true);
+    // It still never spends one on a row no verdict asks the question about.
+    expect(
+      needsOpenPullRequestReading(item(1903, "Issue", "OPEN", BACKLOG, false, null, false, 12)),
+      "Backlog unassigned is correct — no verdict below reads a pull-request count for it",
+    ).toBe(false);
+    expect(
+      needsOpenPullRequestReading(item(1906, "PullRequest", "OPEN", IN_PROGRESS, false, null, null, 12)),
+    ).toBe(false);
+    // The stale-claim half is unchanged and still routed through the union.
+    expect(
+      needsOpenPullRequestReading(item(312, "Issue", "OPEN", BACKLOG, false, null, true, 30)),
+    ).toBe(true);
   });
 });
 
