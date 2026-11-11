@@ -362,6 +362,49 @@ describe("#1950: the branch name says whether a reference was owed", () => {
     expect(r.err).toContain("UNMEASURED");
   });
 
+  test("a cross-repo-only pull request is not told its references are empty", () => {
+    // ai-review round 3 of #1978. Round 2 added the cross-repo case and
+    // round 1 had already repaired this sentence once; the repair held only
+    // the POST-filter count, so the message went straight back to asserting
+    // a field it was not given. The two reference counts differ here and
+    // that is the whole case.
+    const r = run(
+      SCRIPT,
+      JSON.stringify({
+        number: 14,
+        body: "Fixes other-org/other-repo#9\n",
+        closingIssuesReferences: [closes(9, "other-org/other-repo")],
+        headRefName: "rg/1950-require-closing-reference",
+      }),
+    );
+    expect(r.code).toBe(REFUSE_EXIT);
+    expect(r.err, "the raw field is NOT empty — one reference was recorded").not.toContain(
+      "closingIssuesReferences is empty",
+    );
+    expect(r.err).toContain("none of the 1 closing reference(s)");
+    expect(r.err).toContain(THIS_REPO);
+  });
+
+  test("the message may only name values the function was given", () => {
+    // THE CLASS, not the instance. Rounds 1 and 3 were the same defect in
+    // two different clauses, repaired one at a time, the second written
+    // after the first was found. `missingClosingMessage` is handed one
+    // object, so every substitution in it must come off that object —
+    // anything else is a claim about a reading the function never took.
+    const lib = readFileSync(join(import.meta.dir, "..", "lib", "closing-reference-audit.ts"), "utf-8");
+    const start = lib.indexOf("export function missingClosingMessage");
+    expect(start, "missingClosingMessage is gone or renamed").toBeGreaterThan(-1);
+    const body = lib.slice(start, lib.indexOf("\n}", start));
+    const substitutions = [...body.matchAll(/\$\{([^}]+)\}/g)].map(x => x[1]!.trim());
+    expect(substitutions.length, "no interpolation left — this guard would be vacuous").toBeGreaterThan(2);
+    const foreign = substitutions.filter(s => !/^(m\.\w+|prNumber)$/.test(s));
+    expect(
+      foreign,
+      "missingClosingMessage interpolated something that is not `prNumber` or a field of `m`. " +
+        "If the message needs to say it, carry it on MissingClosingReference — see rounds 1 and 3 of #1978.",
+    ).toEqual([]);
+  });
+
   test("the workflow passes --repo and fetches headRefName, or the check cannot take a reading", () => {
     // The script refuses a payload without the field, so a workflow that
     // does not request it turns this check red everywhere rather than

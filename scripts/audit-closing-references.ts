@@ -161,7 +161,12 @@ async function main(): Promise<void> {
   // better remedy and the other is reported by the next run if it survives.
   if (inert.length > 0) refuse(inertClosingMessage(inert, prNumber));
 
-  const missing = missingClosingReference(pr.headRefName, linkedIssues.size);
+  const missing = missingClosingReference(
+    pr.headRefName,
+    linkedIssues.size,
+    linked.length,
+    repoNameWithOwner,
+  );
   if (missing !== null) refuse(missingClosingMessage(missing, prNumber));
 
   // Counts what was CREDITED, not what was returned — a summary saying

@@ -221,30 +221,58 @@ export interface MissingClosingReference {
   issue: number;
   /** The branch, so the message can quote what produced the reading. */
   branch: string;
+  /**
+   * References GitHub recorded BEFORE this repository's filter, and the
+   * repository they were filtered against.
+   *
+   * ai-review round 3 of #1978, and the same defect as round 1 one clause
+   * over: the message said "closingIssuesReferences is empty" while the
+   * function held only the POST-filter count, so it was false for a pull
+   * request whose single reference was cross-repository — the case round 2
+   * had just added. Round 1 fixed the sentence; it did not fix the shape
+   * that produced it.
+   *
+   * The shape is the rule now: **the message may only name values carried
+   * on this object**, so a claim it cannot support is a claim it cannot
+   * spell. `test/audit-closing-references.test.ts` asserts it.
+   */
+  rawReferenceCount: number;
+  repoNameWithOwner: string;
 }
 
 export function missingClosingReference(
   headRefName: string,
   linkedIssueCount: number,
+  rawReferenceCount: number,
+  repoNameWithOwner: string,
 ): MissingClosingReference | null {
   if (linkedIssueCount > 0) return null;
   const issue = issueFromBranch(headRefName);
   if (issue === null) return null;
-  return { issue, branch: headRefName };
+  return { issue, branch: headRefName, rawReferenceCount, repoNameWithOwner };
 }
 
 /** The refusal text for the above. Names the issue, and the one-line remedy. */
 export function missingClosingMessage(m: MissingClosingReference, prNumber: number): string {
   return (
-    // STATES ONLY WHAT WAS READ — ai-review round 1 of #1978. The first
-    // version of this sentence also asserted "the body contains no closing
-    // keyword", which this function never looks at and which is false in two
-    // real cases: a keyword inside backticks (the sibling check's whole
-    // subject), and a live `Fixes #N` on a pull request whose base is not the
-    // default branch, where GitHub records no link at all — measured on
-    // throwaway PR #1923, `closingIssuesReferences.totalCount = 0`.
+    // STATES ONLY WHAT WAS READ — rounds 1 and 3 of #1978, the same defect
+    // twice. Round 1: it asserted "the body contains no closing keyword",
+    // which this function never looks at, and which is false for a
+    // backticked keyword and for a live `Fixes #N` on a pull request whose
+    // base is not the default branch (measured on throwaway PR #1923,
+    // `totalCount = 0`). Round 3: it then asserted "closingIssuesReferences
+    // is empty" while holding only the POST-filter count, which is false for
+    // the cross-repository pull request round 2 had just added a case for.
+    //
+    // Both sentences were repaired one at a time and the second was written
+    // AFTER the first was found. So the fix is the shape, not the wording:
+    // every value named below is carried on `m`, and a claim this function
+    // cannot support is now a claim it cannot spell.
     `PR #${prNumber} is on branch "${m.branch}", which names issue #${m.issue}, and ` +
-    `GitHub has recorded no closing reference for it — closingIssuesReferences is empty.\n\n` +
+    (m.rawReferenceCount === 0
+      ? `GitHub has recorded no closing reference for it — closingIssuesReferences is empty.\n\n`
+      : `none of the ${m.rawReferenceCount} closing reference(s) GitHub recorded for it ` +
+        `belongs to ${m.repoNameWithOwner}.\n\n`) +
     `Nothing downstream can recover from this. board-flow.yml moves a card on ` +
     `pull_request_target: closed by resolving the pull request's closing references, so ` +
     `an empty list fires no event and the card freezes wherever it is. PR #1903 merged ` +
