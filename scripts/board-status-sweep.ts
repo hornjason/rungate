@@ -1259,8 +1259,9 @@ export function parseBoardItem(node: any, now: number = Date.now()): BoardItem |
     // timestamp is `null`, NOT zero days: "no activity recorded" and
     // "active today" are opposite answers to the staleness question.
     idleDays: idleDaysSince(content.updatedAt, now),
-    // Never resolved here. `resolveLinkedPullRequests` fills it for
-    // stale-claim candidates only; no other verdict asks the question.
+    // Never resolved here. `resolveLinkedPullRequests` fills it for the rows
+    // `needsOpenPullRequestReading` names — every verdict that reads the
+    // field, and no others.
     openLinkedPRs: null,
     statusUnread,
   };
@@ -1381,7 +1382,9 @@ export function countOpenPRsByIssue(nodes: readonly unknown[]): Map<number, numb
 }
 
 /**
- * Fill `openLinkedPRs` from a counted map, for stale-claim candidates ONLY.
+ * Fill `openLinkedPRs` from a counted map, for the rows that need it ONLY —
+ * `needsOpenPullRequestReading`, which is both populations, not just the
+ * stale-claim one.
  *
  * A candidate absent from the map has **zero** open pull requests, not an
  * unread one: the map is built from a complete read of every open pull
@@ -1461,7 +1464,8 @@ export async function resolveLinkedPullRequests(
     // stands.
     console.log(
       `::warning::could not read the open pull requests of ${repo} (${String(e)}), so every ` +
-        `stale-claim candidate is UNDECIDABLE rather than stale. Nothing was unassigned.`,
+        `row needing that reading is UNDECIDABLE — a stale claim rather than released, and a ` +
+        `card stranded in a working lane rather than corrected. Nothing was unassigned or moved.`,
     );
     return [...items];
   }
@@ -1490,7 +1494,8 @@ async function main(argv: readonly string[]): Promise<number> {
 
   const repoForReads = (values.repo as string | undefined) ?? process.env.GITHUB_REPOSITORY ?? "";
   const board = await readBoard(token);
-  // Stale-claim candidates only, and ONLY when a repository is resolvable.
+  // The rows `needsOpenPullRequestReading` names — stale claims AND cards
+  // stranded in a working lane — and ONLY when a repository is resolvable.
   // With no repo the pull-request half cannot be read, every candidate
   // keeps `openLinkedPRs: null`, and `verdictFor` reports it UNDECIDABLE —
   // which is the correct reading for "I could not check", not a silent
