@@ -1171,8 +1171,7 @@
     "summary": "THE SWEEP WAS REPORTING AGREEMENT IT HAD NEVER MEASURED. `agrees 328, disagrees 0` on a board holding five wrong cards, all one shape — an open issue, nobody assigned, in a lane that asserts somebody is. That verdict is byte-identical to a correct board on every channel, which is the worst failure a status tool has. Separately and worse for the day: #1717 was closed by accident, by me with a backticked closing keyword in a COMMIT MESSAGE, where backticks do not suppress it the way they do in a pull-request body. Reopened, coverage verified restored, #1979 filed for the unguarded door. The work-this-next label turned out never to have existed, so the lever shipped in #1962 had never fired once.",
     "issues_created": [
       1976,
-      1979,
-      1980
+      1979
     ],
     "issues_closed": [
       1950
