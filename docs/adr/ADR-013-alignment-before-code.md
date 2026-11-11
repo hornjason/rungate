@@ -643,6 +643,22 @@ simulated; writes the HTML visual next to the ADR and opens it. Found by
 its first manual run: `plan-issues --decompose` accepts criterion ids that
 exist in no spec.
 
+**Row 9: Ready refills only from the active milestone — Jason, 2026-11-11.**
+Kanban pull, as the industry runs it: one active focus, an ordered backlog,
+a WIP cap, an expedite lane. The active milestone is the lowest open phase
+(plan-deps already blocks later phases); as a slot opens, board-ready
+refills from it; inside it, blocked-by edges where order matters, else
+oldest first; `work-this-next` is the expedite lane; backlog clearing gets
+its own ordered milestone. Label-only issues never enter Ready, and with
+nothing pickable Ready stays empty. Measured today: 46 of 50 candidates are
+label-only. Row 9 also closes four holes found walking every entry path
+(visual: `~/.rungate/show-me-ready-scenarios.html`): adding a milestone or
+`work-this-next` triggers nothing (board-ready lacks `milestoned` and
+`labeled`); `board-mirror --write` is a second, hand-run writer of Ready;
+a transferred issue gets no card (#1752). Unverified: whether a card
+dragged into Ready by hand is demoted by the next run. Open: does payload
+(Convergence) milestone work wait until the car's phases are done?
+
 ### Open decisions — Jason's
 
 1. Make `closing-references` a required check (gap 3) — a branch-protection
