@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADR-013 — dry run, revision 3</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--dim:#8b949e;--hand:#f0883e;--handbg:#3d2410;--auto:#3fb950;--autobg:#0f2d18;--you:#a371f7;--youbg:#2a1d48;--warn:#f85149;--warnbg:#3d1414;--new:#58a6ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,Segoe UI,Helvetica,Arial,sans-serif}
+main{padding:24px 32px 60px;max-width:1240px}h1{margin:0 0 4px;font-size:24px}h2{margin:36px 0 8px;font-size:19px;border-bottom:1px solid var(--line);padding-bottom:6px}
+.sub{color:var(--dim);margin:0 0 12px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}
+.chip{padding:3px 10px;border-radius:999px;font-size:13px;border:1px solid}
+.you{color:var(--you);background:var(--youbg);border-color:var(--you)}.hand{color:var(--hand);background:var(--handbg);border-color:var(--hand)}.auto{color:var(--auto);background:var(--autobg);border-color:var(--auto)}.me{color:var(--new);background:#0c2340;border-color:var(--new)}
+.tl{border-left:2px solid var(--line);margin:10px 0 0 8px;padding-left:24px}
+.ev{position:relative;margin:0 0 16px}.ev::before{content:"";position:absolute;left:-33px;top:5px;width:14px;height:14px;border-radius:50%;background:var(--bg);border:3px solid var(--dim)}
+.ev.you::before{border-color:var(--you)}.ev.hand::before{border-color:var(--hand)}.ev.auto::before{border-color:var(--auto)}.ev.me::before{border-color:var(--new)}
+.ev{background:none;border:none;color:var(--text);padding:0}
+.who{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}.what{font-weight:600}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:14px}
+.card b{color:var(--new)}.card .m{color:var(--dim);font-size:12px;margin-top:4px}.card.first{border-color:var(--auto)}.card.blocked{opacity:.75;border-style:dashed}
+pre{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:12.5px;overflow:auto}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}@media(max-width:860px){.cols{grid-template-columns:1fr}}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}.box h3{margin:0 0 8px;font-size:15px}
+.gap{background:var(--warnbg);border-left:4px solid var(--warn);padding:8px 12px;border-radius:6px;margin:6px 0}
+.sim{font-size:11px;color:var(--hand);border:1px solid var(--hand);border-radius:999px;padding:1px 7px;margin-left:6px}
+.real{font-size:11px;color:var(--auto);border:1px solid var(--auto);border-radius:999px;padding:1px 7px;margin-left:6px}
+</style></head><body><main>
+<h1>ADR-013, revision 3: the dry run</h1>
+<p class="sub">What happens, step by step, if this ran now. Nothing was written. Real tool output is marked REAL; anything else is marked SIMULATED. 2026-11-11.</p>
+<div class="legend"><span class="chip you">YOU: Jason decides or merges</span><span class="chip me">ME: the agent</span><span class="chip hand">HAND: a command someone must remember</span><span class="chip auto">AUTO: a workflow on an event</span></div>
+
+<h2>The run</h2>
+<div class="tl">
+<div class="ev me"><div class="who">1 · ME</div><div class="what">Fresh auditor reads revision 3 cold</div></div>
+<div class="ev you"><div class="who">2 · YOU</div><div class="what">Agree every step on this page</div></div>
+<div class="ev me"><div class="who">3 · ME</div><div class="what">Acceptance PR: reserve 9 ids, add SC lines, renumber Phases 6-9 → 7-10, add the new Phase 6, status → accepted, commit this visual</div></div>
+<div class="ev you"><div class="who">4 · YOU</div><div class="what">Merge it; #1985 closes</div></div>
+<div class="ev hand"><div class="who">5 · HAND, this once <span class="real">REAL</span></div><div class="what">plan-spec --write: creates "Pipeline Phase 6 — alignment before code", renames 6-9 → 7-10</div>
+<pre>today, read-only: 10 milestones ok, Phase 0 … Phase 9 — the payload ships
+the rename is SIMULATED: the spec is not changed yet</pre></div>
+<div class="ev hand"><div class="who">6 · HAND, this once <span class="real">REAL</span></div><div class="what">plan-issues --decompose --write: 9 issues, 3 order links</div>
+<pre>  create  The meter counts only in-scope specs with deferred specs ratcheted by path
+  create  Ranked labels are read from one board.labels config block
+  create  Rule 9 carries the four-step process and its exempt class
+  create  A PR must close an issue that names a criterion
+  create  Merging an accepted ADR places its plan on the board
+  create  ADR template whose table the filing tool reads
+  create  The dry-run command shows a proposal as a real dry run with its visual
+  create  A new issue is placed on the board when it is opened
+  create  Ready refills only from the active milestone
+  order   "Merging an accepted ADR…" blocked by "ADR template…"
+  order   "A new issue is placed…" blocked by "Ranked labels…"
+  order   "Ready refills…" blocked by "A new issue is placed…"
+(placeholder ids; with milestone as written it refuses: milestone does not exist yet — step 5 first)</pre></div>
+<div class="ev hand"><div class="who">7 · HAND, this once <span class="real">REAL</span></div><div class="what">plan-deps --write: old Phase 6+ blocked behind the new Phase 6</div><pre>today: Frontier: Phase 6 — nothing to write</pre></div>
+<div class="ev auto"><div class="who">8 · AUTO</div><div class="what">board-intake: 9 cards in Backlog · board-ready: promotes into Ready</div></div>
+<div class="ev you"><div class="who">9 · YOU</div><div class="what">Add work-this-next to row 4</div></div>
+<div class="ev me"><div class="who">10 · ME</div><div class="what">Build row 4: PR "Fixes #N"</div></div>
+<div class="ev you"><div class="who">11 · YOU</div><div class="what">Run one command: closing-references becomes a required check</div></div>
+<div class="ev auto"><div class="who">12 · AUTO</div><div class="what">Each close refills Ready from the milestone; rows 1-3, 6, 7, then 5, 8, 9</div></div>
+<div class="ev auto"><div class="who">After row 5 ships · every future ADR</div><div class="what">Steps 5-7 run by themselves on merge</div></div>
+</div>
+
+<h2>The 9 issues</h2>
+<div class="cards">
+<div class="card first"><b>Row 4</b> A PR must close an issue that names a criterion<div class="m">expedite · first into Ready</div></div>
+<div class="card first"><b>Row 1</b> The meter counts only in-scope specs, ratcheted by path<div class="m">unblocked · oldest</div></div>
+<div class="card"><b>Row 2</b> Ranked labels read from one board.labels block<div class="m">unblocked</div></div>
+<div class="card"><b>Row 3</b> Rule 9 carries the four-step process<div class="m">unblocked</div></div>
+<div class="card"><b>Row 6</b> ADR template whose table the filing tool reads<div class="m">unblocked</div></div>
+<div class="card"><b>Row 7</b> The dry-run command, with its visual<div class="m">unblocked</div></div>
+<div class="card blocked"><b>Row 5</b> Merging an accepted ADR places its plan<div class="m">waits on row 6</div></div>
+<div class="card blocked"><b>Row 8</b> A new issue is placed when opened<div class="m">waits on row 2</div></div>
+<div class="card blocked"><b>Row 9</b> Ready refills only from the active milestone<div class="m">waits on row 8</div></div>
+</div>
+
+<h2>What reaches Ready</h2>
+<div class="cols">
+<div class="box"><h3>Today <span class="real">REAL</span></h3>
+<pre>Ready: #1764 (Convergence Phase 3), #1717 (Pipeline Phase 6)
+Candidates: 51 — milestone 2, label-only 47, unplaced 2</pre></div>
+<div class="box"><h3>After filing <span class="sim">SIMULATED</span></h3>
+<pre>Active milestone: Pipeline Phase 6 — alignment before code
+Pulled first (cap 2): row 4 (expedite), #1764 stays (incumbent)
+Next as slots open: row 1, 2, 3, 6, 7 → then 5, 8, 9
+Kept out: 47 label-only (once row 9 ships), Phases 7-10 blocked
+#1717 demoted: its phase is now behind ADR-013
+Expedite: row 4</pre></div>
+</div>
+
+<h2>Gaps found</h2>
+<div class="gap">The draft's table is unreadable until ids are reserved (SC-TBD) <span class="real">REAL</span></div>
+<div class="gap">The filing tool accepted ids that exist in no spec (SC-9901…) <span class="real">REAL</span></div>
+<div class="gap">The milestone must exist before filing: the spec edit and plan-spec come first <span class="real">REAL</span></div>
+<div class="gap">#1764 (payload) keeps a Ready slot unless payload waits for the car</div>
+<div class="gap">Everyday work (serves no criterion) has no milestone, so under row 9 it never reaches Ready</div>
+<div class="gap">Not checked: the token row 5's workflow uses for board-mirror --write (RUNGATE_PROJECT_TOKEN is read-only by design)</div>
+
+<h2>Improves going forward</h2>
+<div class="cols">
+<div class="box"><h3>Today</h3><ul>
+<li>Placing a plan: 3 commands by hand</li><li>Ready: auto-filled, mostly label-only</li><li>PR closing an issue: unchecked</li><li>ADR table: hand-typed, breaks silently</li><li>Proposal review: prose</li><li>Labels: hardcoded</li><li>Meter: wrong population</li></ul></div>
+<div class="box"><h3>After ADR-013</h3><ul>
+<li>Placing a plan: on merge (row 5)</li><li>Ready: active milestone only (row 9)</li><li>PR closing an issue: blocked (row 4)</li><li>ADR table: from the template (row 6)</li><li>Proposal review: /dry-run + this page (row 7)</li><li>Labels: config (row 2)</li><li>Meter: in-scope specs, ratcheted (row 1)</li></ul></div>
+</div>
+</main></body></html>
