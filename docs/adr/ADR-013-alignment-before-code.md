@@ -626,6 +626,23 @@ warn mode; the check prints the two commands (add it to required checks;
 flip the variable) when they are due; PROTECT-1 reports a check that exists
 but is not required.
 
+**ADR-013's own work goes AHEAD of open engine phases 6-9 — Jason,
+2026-11-11:** "we are actively working on it." Measured: Ready ranks a
+milestone above a label, then phase number ascending inside the engine
+family, then issue number — so with no milestone the 8 rows would sort
+behind ~44 older `engine` issues. `work-this-next` is bounded by Ready's
+depth (2) and refuses when more carry it, so it orders one or two items,
+not a whole ADR. "Ahead" needs a phase number below 6, and 0-5 are taken.
+
+**Row 7 is a dry-run skill — Jason, 2026-11-11:** invoked while work is
+being designed or discussed; reads the draft document (so a change is
+picked up by re-running); runs the real tools without `--write`
+(`plan-spec`, `plan-issues --decompose`, `plan-deps`) and the Ready order;
+prints the run step by step, marking hand vs automatic and real output vs
+simulated; writes the HTML visual next to the ADR and opens it. Found by
+its first manual run: `plan-issues --decompose` accepts criterion ids that
+exist in no spec.
+
 ### Open decisions — Jason's
 
 1. Make `closing-references` a required check (gap 3) — a branch-protection
