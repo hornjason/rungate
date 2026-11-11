@@ -32,7 +32,13 @@ import {
   type Incumbent,
 } from "../lib/board-ready-fanout";
 import { laneFor } from "../lib/board-flow";
+import { resolveApiBase } from "../lib/github-api-base";
 import { structuralCut } from "../lib/source-slice";
+import {
+  startFakeGitHub,
+  type FakeGitHub,
+  type FakePlan,
+} from "./helpers/fake-github";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -1868,5 +1874,232 @@ describe("BR-55..BR-58: a close that freed nothing still refills Ready", () => {
         "with `pass at least one of`, so the lane silently stops refilling for that " +
         "event. BOTH sources are legal; NEITHER is not.",
     ).toEqual([]);
+  });
+});
+
+// ── BR-72..BR-78: main() is EXECUTED, against a fixture endpoint ──────────
+//
+// #1935. Every case above this line either calls a library function or reads
+// this script's source text. Ten `readFileSync` census assertions police
+// `scripts/board-ready.ts`, and BR-21/BR-22 do spawn it — but both stop at a
+// guard that sits before the first network call, so no case has ever observed
+// a promotion or a demotion happening.
+//
+// What a source census cannot see, in the reviewer's own example: a later
+// edit passes every gathered board item into `incumbentDecisions` rather than
+// the ones gated by `holds`, or looks the demotion target up in `itemOf`
+// rather than in `readyIncumbents`. Both leave every census assertion green,
+// because both are correct functions called with the wrong argument.
+//
+// The endpoint is `test/helpers/fake-github.ts`, bound on loopback, and the
+// script reaches it through `RUNGATE_GITHUB_API_BASE` — which refuses any
+// host that is not loopback, because this run carries a board-writing
+// credential (BR-78).
+describe("BR-72: the script runs end to end and its writes are observed", () => {
+  const PROJECT = "PVT_fixture";
+  const READY_OPT = "OPT_ready";
+  const BACKLOG_OPT = "OPT_backlog";
+  const FIELD = "PVTSSF_status";
+
+  function plan(over: Partial<FakePlan> = {}): FakePlan {
+    return {
+      projectId: PROJECT,
+      statusFieldId: FIELD,
+      options: { Ready: READY_OPT, Backlog: BACKLOG_OPT, "In progress": "OPT_wip" },
+      items: [],
+      openIssues: [],
+      delivered: 20,
+      ...over,
+    };
+  }
+
+  /**
+   * **`Bun.spawn`, never `Bun.spawnSync`, and this is the whole reason the
+   * first cut of this block hung.** The fixture server lives in THIS process,
+   * so a synchronous spawn blocks the event loop that has to answer its
+   * requests: the script waits on a reply nobody can send and the suite waits
+   * on the script. A deadlock, not a slow test — and it reads as the script
+   * hanging rather than as the harness doing it.
+   */
+  async function run(
+    fake: FakeGitHub,
+    args: readonly string[],
+  ): Promise<{ code: number; out: string }> {
+    const p = Bun.spawn(
+      ["bun", "scripts/board-ready.ts", "--repo", "o/n", "--project", PROJECT, "--actor", "someone", ...args],
+      {
+        cwd: ROOT,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          BOARD_PROJECT_TOKEN: "fixture-token",
+          RUNGATE_GITHUB_API_BASE: fake.url,
+        },
+      },
+    );
+    const [stdout, stderr] = await Promise.all([
+      new Response(p.stdout).text(),
+      new Response(p.stderr).text(),
+    ]);
+    await p.exited;
+    const out = stdout + stderr;
+    // **Asserted on every run, not just the ones that look wrong.** A query
+    // the fixture does not recognise comes back as a GraphQL error, which the
+    // script converts into a refusal — and a refusal looks exactly like a
+    // board with nothing to move. Without this the whole block could be green
+    // having promoted nothing, for an instrument reason.
+    expect(fake.unknownQueries, `the fixture did not recognise a query:\n${out}`).toEqual([]);
+    return { code: p.exitCode ?? -1, out };
+  }
+
+  test("BR-73: one promotable card produces exactly one write, to the Ready option", async () => {
+    const fake = startFakeGitHub(
+      plan({
+        items: [{ itemId: "PVTI_a", number: 101, status: "Backlog", blockedBy: 0, assignees: 0 }],
+        openIssues: [101],
+      }),
+    );
+    try {
+      const { code, out } = await run(fake, ["--top-up", "--write"]);
+      expect(code, out).toBe(0);
+      // THE ASSERTION THIS ISSUE EXISTS FOR: which item, to which option —
+      // not that a mutation happened. `toEqual` on the whole array is the
+      // coverage statement too: one write observed of one write expected, so
+      // `0 of 1` and `1 of 1` are different failures.
+      expect(fake.writes, out).toEqual([
+        { itemId: "PVTI_a", optionId: READY_OPT, fieldId: FIELD, projectId: PROJECT },
+      ]);
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("BR-74: the negative control — the same board, that card blocked, writes nothing", async () => {
+    // ONE VARIABLE DIFFERS from BR-73: `blockedBy`. Same fixture, same
+    // invocation, same credential — so a green BR-73 cannot be a script that
+    // promotes everything it is shown.
+    const fake = startFakeGitHub(
+      plan({
+        items: [{ itemId: "PVTI_a", number: 101, status: "Backlog", blockedBy: 1, assignees: 0 }],
+        openIssues: [101],
+      }),
+    );
+    try {
+      const { code, out } = await run(fake, ["--top-up", "--write"]);
+      expect(code, out).toBe(0);
+      expect(fake.writes, out).toEqual([]);
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("BR-75: a blocked incumbent of Ready is demoted, by its OWN item id", async () => {
+    // The demotion path, and the one that carries both mutations #1935 names.
+    // The write target comes from `readyIncumbents`, gathered on the `holds`
+    // predicate during the board walk — NOT from `itemOf`, which is built
+    // from the CANDIDATE walk.
+    //
+    // **It runs as a fan-out, and that is what makes the two maps differ.**
+    // On a `--top-up` the candidate walk returns every open issue, so `itemOf`
+    // happens to contain the incumbent too and a run that looked the target up
+    // there would behave identically — the case would be green against the
+    // wrong lookup. A `--closed-issue` run walks only that close's dependents,
+    // so `itemOf` is empty here while the card still has to be demoted. One
+    // fixture, two maps that disagree, which is the only arrangement in which
+    // either mutation is observable.
+    const fake = startFakeGitHub(
+      plan({
+        items: [{ itemId: "PVTI_b", number: 202, status: "Ready", blockedBy: 2, assignees: 0 }],
+        openIssues: [],
+      }),
+    );
+    try {
+      const { code, out } = await run(fake, ["--closed-issue", "9", "--write"]);
+      expect(code, out).toBe(0);
+      expect(fake.writes, out).toEqual([
+        { itemId: "PVTI_b", optionId: BACKLOG_OPT, fieldId: FIELD, projectId: PROJECT },
+      ]);
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("BR-76: an unblocked incumbent of Ready is left alone", async () => {
+    // The negative control for BR-75. One variable differs — `blockedBy` —
+    // and the mode, the board and the invocation are identical.
+    const fake = startFakeGitHub(
+      plan({
+        items: [{ itemId: "PVTI_b", number: 202, status: "Ready", blockedBy: 0, assignees: 0 }],
+        openIssues: [],
+      }),
+    );
+    try {
+      const { code, out } = await run(fake, ["--closed-issue", "9", "--write"]);
+      expect(code, out).toBe(0);
+      expect(fake.writes, out).toEqual([]);
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("BR-77: without --write the same board is decided and nothing is written", async () => {
+    // The dry run reaches every decision BR-73 does — it says it would
+    // promote — and sends no mutation. So `writes: []` in BR-74 and BR-76 is
+    // a decision not to write, not a run that never got that far.
+    const fake = startFakeGitHub(
+      plan({
+        items: [{ itemId: "PVTI_a", number: 101, status: "Backlog", blockedBy: 0, assignees: 0 }],
+        openIssues: [101],
+      }),
+    );
+    try {
+      const { code, out } = await run(fake, ["--top-up"]);
+      expect(code, out).toBe(0);
+      expect(out).toContain("1 issue(s) would be promoted");
+      expect(fake.writes, out).toEqual([]);
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("BR-78: the endpoint override refuses a host that is not loopback", async () => {
+    // The variable that makes this suite possible also redirects a request
+    // carrying a ProjectsV2 PAT. A non-loopback value must stop the run
+    // BEFORE the credential is used, and must not quietly fall back to the
+    // live API — a silent fallback discards the operator's intent, and the
+    // loud refusal is the only reading that distinguishes the two.
+    for (const bad of ["https://evil.example.com", "http://169.254.169.254", "not a url", "file:///etc"]) {
+      const p = Bun.spawnSync(
+        ["bun", "scripts/board-ready.ts", "--repo", "o/n", "--project", PROJECT, "--actor", "someone", "--top-up", "--write"],
+        {
+          cwd: ROOT,
+          env: { ...process.env, BOARD_PROJECT_TOKEN: "fixture-token", RUNGATE_GITHUB_API_BASE: bad },
+        },
+      );
+      const out = new TextDecoder().decode(p.stdout) + new TextDecoder().decode(p.stderr);
+      expect(p.exitCode, `${bad} was not refused:\n${out}`).toBe(2);
+      expect(out, bad).toContain("RUNGATE_GITHUB_API_BASE");
+    }
+  }, 60_000);
+
+  test("BR-79: resolveApiBase accepts loopback and the live default, and only those", () => {
+    // The predicate's own population, so the spawned cases above do not have
+    // to enumerate it. Exported from the script because the script itself
+    // cannot be imported — it ends in `process.exit`.
+    expect(resolveApiBase(undefined).base).toBe("https://api.github.com");
+    expect(resolveApiBase("   ").base).toBe("https://api.github.com");
+    expect(resolveApiBase("http://127.0.0.1:8080").base).toBe("http://127.0.0.1:8080");
+    expect(resolveApiBase("http://localhost:3000/").base).toBe("http://localhost:3000");
+    // IPv6, BOTH readings, because round 1 of this PR's review found a bare
+    // `::1` sitting in the allowed list unreachable: WHATWG parsing requires
+    // the brackets, so the unbracketed form throws before any comparison and
+    // an entry for it is a host form a reader believes is handled.
+    expect(resolveApiBase("http://[::1]:8080").base).toBe("http://[::1]:8080");
+    expect(resolveApiBase("http://::1").base, "the bare form is not a URL at all").toBeNull();
+    for (const bad of ["https://api.github.com.evil.test", "http://10.0.0.1", "ftp://127.0.0.1"]) {
+      expect(resolveApiBase(bad).base, bad).toBeNull();
+      expect(resolveApiBase(bad).why, bad).toContain("RUNGATE_GITHUB_API_BASE");
+    }
   });
 });

@@ -57,6 +57,9 @@ import {
   workNextReading,
 } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
+// #1935: the endpoint is resolved, not hard-coded, so this script can be RUN
+// by a test rather than only read. Loopback only — it carries a PAT.
+import { API_BASE_ENV, resolveApiBase } from "../lib/github-api-base";
 import { nextCursor } from "../lib/graphql-cursor";
 
 /**
@@ -105,8 +108,13 @@ function arg(name: string): string | null {
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
 }
 
-async function gql(token: string, query: string, variables: Record<string, unknown>): Promise<any> {
-  const r = await fetch("https://api.github.com/graphql", {
+async function gql(
+  token: string,
+  base: string,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<any> {
+  const r = await fetch(`${base}/graphql`, {
     method: "POST",
     headers: {
       authorization: `bearer ${token}`,
@@ -136,8 +144,13 @@ async function gql(token: string, query: string, variables: Record<string, unkno
  * answer could not be read. `null` is UNMEASURED and refuses — see
  * `actorMayWrite`.
  */
-async function actorPermission(token: string, repo: string, actor: string): Promise<string | null> {
-  const r = await fetch(`https://api.github.com/repos/${repo}/collaborators/${actor}/permission`, {
+async function actorPermission(
+  token: string,
+  base: string,
+  repo: string,
+  actor: string,
+): Promise<string | null> {
+  const r = await fetch(`${base}/repos/${repo}/collaborators/${actor}/permission`, {
     headers: { authorization: `bearer ${token}`, accept: "application/vnd.github+json" },
   });
   // 404 is the documented answer for "not a collaborator", which is a READ
@@ -211,6 +224,15 @@ async function main(): Promise<number> {
   }
   const movingIssue = rawMoving === null ? undefined : Number(rawMoving);
 
+  // **Before the credential is touched, let alone sent** (#1935). A refused
+  // override must not reach a line that has a token in hand.
+  const resolved = resolveApiBase(process.env[API_BASE_ENV]);
+  if (resolved.base === null) {
+    console.log(`::warning::UNMEASURED — ${resolved.why}`);
+    return EXIT_REFUSED;
+  }
+  const apiBase = resolved.base;
+
   const credential = readBoardCredential(process.env);
   if (credential.kind === "UNMEASURED") {
     // A warning annotation, not silence, and not a skipped step. Naming the
@@ -242,7 +264,7 @@ async function main(): Promise<number> {
     console.log("::warning::UNMEASURED — --actor was not supplied, so nothing could be authorised. Nothing was read.");
     return EXIT_REFUSED;
   }
-  const permission = await actorPermission(token, repo, actor);
+  const permission = await actorPermission(token, apiBase, repo, actor);
   // `owner` is already destructured from `--repo` above — there is no new
   // input to forget to wire. `GITHUB_TOKEN` cannot read the permission
   // endpoint, so without the identity the person who owns the board is
@@ -341,7 +363,7 @@ async function main(): Promise<number> {
   // second walk would have resumed from the first one's page.
   let closedCursor: string | null = null;
   while (closed !== null) {
-    const d = await gql(token, BLOCKING_QUERY, { o: owner, n: name, i: closed, c: closedCursor });
+    const d = await gql(token, apiBase, BLOCKING_QUERY, { o: owner, n: name, i: closed, c: closedCursor });
     // **`issue(number:)` resolves to null, with no `errors`, for a number
     // that is not an Issue.** Issues and pull requests share one numbering
     // space and this field resolves only Issues, so a PR number — or a
@@ -375,7 +397,7 @@ async function main(): Promise<number> {
   }
   let cursor: string | null = null;
   while (topUp) {
-    const d = await gql(token, TOP_UP_QUERY, { o: owner, n: name, c: cursor });
+    const d = await gql(token, apiBase, TOP_UP_QUERY, { o: owner, n: name, c: cursor });
     // `repository` is null with no `errors` for a name the credential cannot
     // see or that does not exist — the same well-formed-but-empty response
     // BR-37 covers on the fan-out path, at the site that path does not reach.
@@ -429,7 +451,7 @@ async function main(): Promise<number> {
   // One query string, used for the first page and every page after it: it
   // used to be typed out twice, which is one edit away from two pages
   // reading different fields.
-  const all = await gql(token, BOARD_PAGE_QUERY, { p: project, c: null });
+  const all = await gql(token, apiBase, BOARD_PAGE_QUERY, { p: project, c: null });
   // **`node(id:)` is null for an id GitHub cannot resolve**, and the inline
   // fragment resolves to an empty object for an id that exists and is not a
   // ProjectV2. Both are SUCCESSFUL responses — no `errors`, so `gql()` returns
@@ -537,7 +559,7 @@ async function main(): Promise<number> {
       return EXIT_REFUSED;
     }
     if (step.kind === "done") break;
-    const next = itemsPage(await gql(token, BOARD_PAGE_QUERY, { p: project, c: step.cursor }));
+    const next = itemsPage(await gql(token, apiBase, BOARD_PAGE_QUERY, { p: project, c: step.cursor }));
     if (next === null) {
       // Mid-pagination, so a partial occupancy is already in hand — and an
       // occupancy read from SOME of the board undercounts, which promotes
@@ -575,7 +597,7 @@ async function main(): Promise<number> {
   const labelsOf = new Map<number, string[]>();
   let labelCursor: string | null = null;
   for (;;) {
-    const d = await gql(token, LABELS_QUERY, { o: owner, n: name, c: labelCursor });
+    const d = await gql(token, apiBase, LABELS_QUERY, { o: owner, n: name, c: labelCursor });
     const page = d?.repository?.issues;
     if (!page) {
       console.log(
@@ -728,7 +750,7 @@ async function main(): Promise<number> {
     return EXIT_REFUSED;
   }
   const closedReadings = await measureClosedIssues(
-    (query, variables) => gql(token, query, variables),
+    (query, variables) => gql(token, apiBase, query, variables),
     owner,
     name,
   );
@@ -840,6 +862,7 @@ async function main(): Promise<number> {
   const statusField = (
     await gql(
       token,
+      apiBase,
       `query($p:ID!){node(id:$p){... on ProjectV2{
          field(name: "Status"){... on ProjectV2SingleSelectField{id options{id name}}}}}}`,
       { p: project },
@@ -884,6 +907,7 @@ async function main(): Promise<number> {
     }
     await gql(
       token,
+      apiBase,
       `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(
          input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}`,
       { p: project, i: target.itemId, f: statusField.id, o: to.id },
@@ -903,6 +927,7 @@ async function main(): Promise<number> {
     }
     await gql(
       token,
+      apiBase,
       `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(
          input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}`,
       { p: project, i: target.itemId, f: statusField.id, o: option.id },
