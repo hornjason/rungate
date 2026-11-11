@@ -10,6 +10,7 @@
 
 import type { LaneReading } from "./board-lane-health";
 import { readyOccupancy, undispatchableRemedy } from "./board-ready-rule";
+import { ladderViolations, nextStage, retrosOwed, type ItemScope, type Stage } from "./stage-ladder";
 
 /**
  * Is this issue something anybody may pick up right now?
@@ -420,4 +421,110 @@ export function readyRefusal(
       );
     }
   }
+}
+
+/**
+ * One open item of the plan, as the report prints it.
+ *
+ * `reading` is the field that earns this type. An item with a command and an
+ * item with `verify: null` are both "not done", and printing them as one list
+ * says nine things are startable when three are: six of the nine open on
+ * 2026-11-11 had no command at all, so no run of `/stage-audit` could ever
+ * tick them. `.claude/rules/checks-must-be-able-to-fail.md` calls this the
+ * sixth shape — two states behind one observable — and the fix is to give
+ * them two spellings rather than a count.
+ */
+export interface LadderRow {
+  /** `B4` — the stage letter and the 1-based position. */
+  readonly id: string;
+  readonly stage: string;
+  readonly what: string;
+  /** `OPEN` carries a command that can tick it. `UNVERIFIABLE` does not. */
+  readonly reading: "OPEN" | "UNVERIFIABLE";
+  /** Where the command can run. Absent in the document means `repo`. */
+  readonly scope: ItemScope;
+}
+
+export type LadderReport =
+  | { readonly kind: "UNMEASURED"; readonly why: string }
+  | {
+      readonly kind: "READ";
+      /** The stage id `nextStage` names, or `null` when every stage is complete. */
+      readonly next: string | null;
+      /** `nextStage`'s precondition, verbatim. `null` when nothing blocks it. */
+      readonly blocked: string | null;
+      /** Every open item of every stage, in ladder order. */
+      readonly open: readonly LadderRow[];
+      /** Stage ids complete with no retro — rule 10's gate. */
+      readonly retrosOwed: readonly string[];
+    };
+
+/**
+ * The plan, read rather than transcribed — #1984.
+ *
+ * `scripts/work-status.ts` took **zero** reads of `project-state.json` before
+ * this. Its "THE AGREED ORDER" section printed a hand-typed array whose own
+ * docblock called itself a known defect, and the stage ladder AGENTS.md rule
+ * 10 names as the only place the plan lives appeared in no report at all. On
+ * 2026-11-11 that hid nine open items — B4, D4, E1 through E5, F1, F2 — from
+ * every session that read the report to decide what to work on.
+ *
+ * **Takes the source text, not a path.** The three ways this reading fails —
+ * the file is absent, the file is not JSON, the document is not a well-formed
+ * ladder — are different facts, and a function handed a parsed object cannot
+ * tell the first two apart. Each gets its own `why`, because *Silent Default
+ * Substitution* (`.claude/rules/config-access.md`) in this position prints an
+ * empty plan, which is byte-identical to a plan with nothing left to do.
+ *
+ * **Well-formedness is `ladderViolations`, which is already the one decider
+ * for it.** A second validator here would be two deciders over one fact: a
+ * mutation of either leaves the other holding every case up, and neither
+ * reads as dead.
+ */
+export function ladderReport(source: string | null, where: string): LadderReport {
+  if (source === null) {
+    return { kind: "UNMEASURED", why: `${where} could not be read, so the plan was not consulted` };
+  }
+  let doc: unknown;
+  try {
+    doc = JSON.parse(source);
+  } catch (e) {
+    return {
+      kind: "UNMEASURED",
+      why: `${where} is not valid JSON (${e instanceof Error ? e.message : String(e)})`,
+    };
+  }
+  const violations = ladderViolations(doc);
+  if (violations.length > 0) {
+    return {
+      kind: "UNMEASURED",
+      why: `${where} is not a well-formed plan: ${violations.join("; ")}`,
+    };
+  }
+  // `ladderViolations` returning empty is what establishes the shape. The
+  // cast is the assertion it already made, not a second opinion about it.
+  const stages = (doc as { stages: Stage[] }).stages;
+
+  const open: LadderRow[] = [];
+  for (const stage of stages) {
+    for (const item of stage.items) {
+      if (item.done) continue;
+      open.push({
+        id: item.id,
+        stage: stage.id,
+        what: item.what,
+        reading: typeof item.verify === "string" && item.verify.trim() !== "" ? "OPEN" : "UNVERIFIABLE",
+        scope: item.scope ?? "repo",
+      });
+    }
+  }
+
+  const next = nextStage(stages);
+  return {
+    kind: "READ",
+    next: next === null ? null : (next.stage?.id ?? null),
+    blocked: next === null ? null : next.blocked,
+    open,
+    retrosOwed: retrosOwed(stages),
+  };
 }
