@@ -243,6 +243,16 @@
   ],
   "sessions": [
     {
+      "date": "2026-11-12 session 91 (ADR-013 audited end to end after a reboot; its follow-ups merged one PR at a time)",
+      "items": [
+        "STOP-POINT: nothing in flight, no worktree of this session left. Ready holds #2020 (needs a design call: what 'flagged when an issue is filed' means, a comment, a label or a refusal, before a live workflow is written), #1994 (rename or close the two phase-less milestones, Jason's call per ADR-013) and #1752 (needs one real issue transfer to observe which repository the event reaches; research so far leans to the source, recorded on the issue). Next docs-only work once Ready has room: #2021.",
+        "ADR-013 AUDIT: rows 1-7 behave as written, verified live. Row 8 is partial. Ready demotion of out-of-focus cards shipped (#2027, closing #2007). The focus-source difference between board-mirror and board-ready, and the transferred trigger (#1752), remain, recorded on #2021, so SC-2741 stays unticked. adr-accepted.yml has never run, because nothing under docs/adr changed after it merged; ADR-014 will be its first live run.",
+        "STAGE D CANNOT CLOSE: D4 has verify: null, so Stage E stays gated, and with it #2024 (SC-2617, split out of #1717 and blocked by #1983). Giving D4 a verify command is a plan change, so it is Jason's.",
+        "HAND-MILESTONING BREAKS THE LIVE BOARD READINGS: an issue moved into a Pipeline phase by hand becomes an engine issue and needs the engine label, a named criterion and a board-mirror run. Without them test/stage-ladder.test.ts reads the board SHORT and reddens every open PR, which it did twice on #2023. Repaired by hand. The mechanism belongs in phase-order.yml and is tracked as a comment on #2020, because the filing cap (12 in 24h) refused it as its own issue.",
+        "WORKTREE CLEANUP NOW REACHES SIBLING WORKTREES (#2022, merged as #2023): scripts/worktree-sweep.ts removes only rows the census reads ABANDONED, never forced, re-reading HEAD first, with a 7d default. It is started detached by StaleTTLCleanup and is not gated on the launch directory being a repository. 30 rungate worktrees were removed by hand and 3 in other projects by the sweep's first live run."
+      ]
+    },
+    {
       "date": "2026-11-12 session 90 (ADR-013 rows built overnight, in order, each closed by its own PR)",
       "items": [
         "ADR-013 ROWS MERGED: row 4 as #2003 (SC-2737, every PR closes an issue naming a criterion), row 2 as #2004 (SC-2735, expedite and filing-override labels read from config), row 6 as #2008 (SC-2739, the ADR template whose table plan-issues reads), row 5 as #2009 (SC-2738, .github/workflows/adr-accepted.yml places an accepted ADR's plan on the board). Each merged pinned with --match-head-commit after CI, ai-review and a read-only security review were clean and every thread answered.",
@@ -1175,19 +1185,24 @@
     }
   ],
   "session": {
-    "number": 90,
+    "number": 91,
     "date": "2026-11-12",
-    "suite": "ADR-013 rows on rg/1998-closing-ref-required, rg/1996, rg/2000, rg/1999 (merged #2003, #2004, #2008, #2009); rg/1997-rule9-four-steps (PR #2010) and rg/2001-dry-run-command (PR #2011) open.",
-    "summary": "Four of eight ADR-013 rows merged in order (rows 4, 2, 6, 5 as #2003, #2004, #2008, #2009), each closing its own issue through its PR and ticking its criterion with a proved-by line. Rows 3 and 7 are in review as #2010 and #2011. Rows 8 and 1 wait on a decision only Jason can make: the ai-review-override label on #2006, and how a held-back spec declares so on #1995.",
+    "suite": "ADR-013 gap audit, then one PR per follow-up: #2023 (#2022 worktree sweep), #2025 (#1717, SC-2615 and SC-2616 ticked), #2026 (#1986 hook registry), #2027 (#2007 Ready demotion), #2028 (#2019 /dry-run checkout). Each merged pinned after CI, and every review thread was answered.",
+    "summary": "After a reboot, ADR-013 was audited end to end rather than assumed done. Rows 1-7 hold; row 8 is partial and its open parts are recorded on #2021. The follow-ups were then worked from the Ready lane, one PR each. #1717 was split: its two finished readings were ticked, with SC-2615 narrowed as ADR-013 decision 1 required, and SC-2617 moved to #2024 behind Stage D. Stale worktrees are now swept automatically. What waits on Jason: #2020's design, #1994, the #1752 experiment, D4's verify command and the go for ADR-014.",
     "issues_created": [
-      2005,
-      2007
+      2019,
+      2020,
+      2021,
+      2022,
+      2024
     ],
     "issues_closed": [
-      1996,
-      1998,
-      1999,
-      2000
+      1717,
+      1986,
+      2007,
+      2016,
+      2019,
+      2022
     ]
   },
   "stages": [
