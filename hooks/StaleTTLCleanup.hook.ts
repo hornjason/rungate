@@ -51,11 +51,11 @@ if (PROJECT_ROOT) try {
     }
   }
 } catch (e) { log(`WORKTREE cleanup error: ${e}`); }
+// Sibling worktrees (#2022): the census's ABANDONED rows anywhere; detached, and not gated on PROJECT_ROOT.
+try { (await import('../scripts/worktree-sweep.ts')).spawnSweep(STALE_LOG); } catch (e) { log(`WORKTREE sweep error: ${e}`); }
 
-// Scratch cleanup — test fixtures the suite leaked into the repo root (#437).
-// Reported alongside worktree cleanup deliberately: both are resources created
-// by tooling that only get cleaned on the happy path, and 34 of these
-// accumulated because each one had to be found by eye.
+// Scratch cleanup — test fixtures the suite leaked into the repo root (#437):
+// tooling cleans them only on the happy path; 34 accumulated, found by eye.
 if (PROJECT_ROOT) try {
   const { cleanupScratchDirs } = await import('../lib/scratch-cleanup.ts');
   // Gated on the directory the allowlist is derived FROM, the way the

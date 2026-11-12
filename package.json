@@ -48,6 +48,8 @@
     "scripts/audit-transcript.ts",
     "scripts/detect-sc-drift.ts",
     "scripts/check-installed-hook-currency.ts",
+    "scripts/worktree-sweep.ts",
+    "scripts/worktree-census.ts",
     "package.json"
   ],
   "exports": {
