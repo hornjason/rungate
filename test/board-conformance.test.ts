@@ -1776,6 +1776,8 @@ describe("SC-2734: deferred specs leave the meter only through a ratchet that re
     expect(declaresDeferred("---\ndoc-type: spec\nboard-scope: deferred\n---\n# X\n")).toBe(true);
     expect(declaresDeferred("---\ndoc-type: spec\n---\n# X\nboard-scope: deferred\n")).toBe(false);
     expect(declaresDeferred("---\ndoc-type: spec\nboard-scope: in\n---\n")).toBe(false);
+    // An empty value does not borrow the next line (security review of #2013).
+    expect(declaresDeferred("---\nboard-scope:\ndeferred\n---\n")).toBe(false);
   });
 
   test("SC-2734: this tree's deferred specs equal its bank exactly, and the engine and payload are in scope", async () => {

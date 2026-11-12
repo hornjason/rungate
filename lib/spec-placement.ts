@@ -229,7 +229,7 @@ export interface SpecPlacement {
 export function declaresDeferred(content: string): boolean {
   const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
   if (m === null) return false;
-  return /^board-scope:\s*["']?deferred["']?\s*$/m.test(m[1]!);
+  return /^board-scope:[ \t]*["']?deferred["']?[ \t]*\r?$/m.test(m[1]!);
 }
 
 export interface PlacementCoverage {
