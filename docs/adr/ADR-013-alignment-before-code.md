@@ -2,7 +2,7 @@
 doc-type: adr
 status: accepted
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # ADR-013 — alignment before code, and a board that moves by itself
@@ -177,7 +177,9 @@ them. All rows sit in the current frontier milestone.
 Notes per row:
 
 - **Row 4 goes first** (`work-this-next`): every PR after it is checked.
-- **Row 5** closes #1945 (E4). Its workflow splits credentials by step:
+- **Row 5** was to close #1945 (E4). It did not: PR #2009 closed #1999 only, and #1945
+  stays open until the workflow's first live run shows `board-mirror --write`
+  filling the Criteria cells (see *Where this stands*). Its workflow splits credentials by step:
   `GITHUB_TOKEN` (passed as `GITHUB_TOKEN`, because `plan-issues` drops
   `GH_TOKEN`) for issues, milestones and edges; `RUNGATE_PROJECT_TOKEN` in
   the `board-mirror` step's env only, never widened. Issues created with
@@ -203,18 +205,27 @@ Notes per row:
 - The milestones "Issue intake" and "Convergence Machinery" lack `Phase N`
   in their titles, so `phaseOf` cannot rank them: rename or close, no code.
 
-## Where this stands — 2026-11-11
+## Where this stands — 2026-11-12
 
-- Filed: #1985 (this ADR's rule-9 issue; the acceptance PR closes it),
-  #1986 (`hooks.json` records a live hook as not live), #1988 (the consumer
-  follow-up, blocked by #1985).
-- Continuing alongside: #1984 (`work-status` reads the ladder; WIP on
-  `rg/1984-stage-ladder-in-work-status`), #1954, #1983.
-- **Next:** Jason merges the acceptance PR (#1985 closes) → the eight rows
-  are filed by hand this once with `plan-issues --decompose --write` → row 4
-  gets `work-this-next` → row 4 is built first. SC-2615 is amended in row
-  1's PR.
-- **Human steps after row 4 merges, Jason's** (repository settings):
-  add `closing-references` to main's required checks, and set the variable
-  `RUNGATE_REQUIRE_CLOSING_REF` to `true`. The exact commands are printed
-  when row 4 merges.
+- **All eight rows have merged**: #1995 to #2002 are closed, SC-2734 to
+  SC-2740 are ticked. Filed by hand once with
+  `plan-issues --decompose --write`, as planned.
+- **SC-2741 (row 8) is not ticked**, though #2002 closed. Of its open parts,
+  the demotion of a Ready card outside the active milestone shipped (#2027,
+  closing #2007) and the `transferred` trigger was dropped — issues enter by
+  filing (Jason, 2026-11-12, #1752, SC-2741 amended in #2030). **One part
+  remains:** `board-mirror` takes the active milestone from the open items
+  on the project board, while `scripts/board-ready.ts` and
+  `scripts/work-status.ts` take it from every open issue in the repository,
+  so an earlier-phase issue that never reached the board gives the hand-run
+  writer a different focus from the workflow. The fix moves the repository
+  read out of `board-ready.ts` into `lib/` for both to call. Recorded on
+  #2021; SC-2741 stays unticked until it ships.
+- **`adr-accepted.yml` has never run** — no push has touched `docs/adr`
+  since it merged. Its first live run is the merge of ADR-014 (#2033).
+- **#1945 (E4) is still open** for the reason under row 5. If that first run
+  fills the Criteria cells, #1945 is answered by SC-2738; if it cannot (the
+  `read:project` token risk #2009 flagged), it needs its own criterion —
+  ADR-015 (#2034) proposes one.
+- **The human steps after row 4 are done**: `closing-references` is a
+  required check on main and `RUNGATE_REQUIRE_CLOSING_REF` is `true`.
