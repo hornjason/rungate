@@ -121,7 +121,19 @@ describe("#380 SC-847: the real AGENTS.md produces no false positives and does n
     // The second one arrived on 2026-10-31: rule 9 names `project-state.json`
     // because that is where an agreement has to land to count, and a rule
     // that will not say which file is a rule nobody can comply with.
-    const named = ["specs/CODE-REVIEW-CONVERGENCE-SPEC.md", "project-state.json"];
+    //
+    // Four more arrived on 2026-11-12 with ADR-013 row 3 (SC-2736): rule 9
+    // now names the ADR template and the workflow that places a plan (steps
+    // 2 and 3), and the three session-record files step 4 exempts, because an
+    // exemption that will not name its file set is one nobody can check.
+    const named = [
+      "specs/CODE-REVIEW-CONVERGENCE-SPEC.md",
+      "docs/adr/TEMPLATE.md",
+      ".github/workflows/adr-accepted.yml",
+      "project-state.json",
+      "PROJECT-STATE.md",
+      "SUCCESS.md",
+    ];
     expect(referencedPaths(content)).toEqual(named);
     // And they resolve — the half that makes naming them worth anything.
     for (const p of named) expect(require("fs").existsSync(join(ROOT, p))).toBe(true);
