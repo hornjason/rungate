@@ -290,7 +290,11 @@ const UNCLAIMED_RATCHET = 150;
 // 154 -> 155: SC-2734 ticked on the PR closing #1995 (ADR-013 row 1). A
 // claim about which specs a board reading counts, which no registered pattern
 // expresses; `test/board-conformance.test.ts` names it in a declaring position.
-const CLAIMED_UNBINDABLE = 155;
+// 155 -> 157: SC-2615 and SC-2616 ticked on the PR closing #1717. Claims about
+// which population a board reading counts and how it names an offender, which
+// no registered pattern expresses; `test/board-snapshot.test.ts` names both in
+// a declaring position (its `repository-wide populations` describe title).
+const CLAIMED_UNBINDABLE = 157;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

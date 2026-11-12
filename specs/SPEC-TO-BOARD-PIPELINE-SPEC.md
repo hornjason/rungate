@@ -131,9 +131,11 @@ it to 29. "States a behaviour" and "is eval-verified" are different
 properties and the marker already owns the second. Do not re-add it to buy
 the first; SC-2622 is what forbids symbol-satisfaction here.
 
-- [ ] SC-2615: every criterion in every testable spec resolves to exactly one phase, or the spec is reported UNPLANNED by name — the sweep reads all of `specs/`, never one spec named on the command line, because a board built from one spec reports every other spec's criteria as having no work
+- [x] SC-2615: every criterion in every in-scope testable spec resolves to exactly one phase; a spec held back says so in its own frontmatter and is banked by path (SC-2734)
+      proved-by: test/board-conformance.test.ts, `-t "spec-placement names the UNPLANNED spec"` (1 pass) and the `SC-2734` describe (11 pass), and test/board-snapshot.test.ts, the `repository-wide populations (SC-2615, SC-2616)` describe (4 pass) — 0 fail, 2026-11-12, on the PR that closes #1717. Live: `board-conformance` reads `spec-placement` MET 95 of 95. Wording narrowed to the in-scope population by Jason on 2026-11-12, as ADR-013 decision 1 required of row 1 and row 1's PR (#2013) did not do.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2616: an open issue naming no criterion is reported as a refusal naming the issue, never counted as covered, and a blank cell is distinguishable from a deliberate "serves none" — 25 of 71 open issues named nothing on 2026-10-30 and the two states rendered identically
+- [x] SC-2616: an open issue naming no criterion is reported as a refusal naming the issue, never counted as covered, and a blank cell is distinguishable from a deliberate "serves none" — 25 of 71 open issues named nothing on 2026-10-30 and the two states rendered identically
+      proved-by: test/board-conformance.test.ts, `-t "criteria-named names the ISSUE"` (1 pass), and test/board-snapshot.test.ts, the `repository-wide populations (SC-2615, SC-2616)` describe (4 pass) — 0 fail, 2026-11-12, on the PR that closes #1717. Live: `criteria-named` names each of its 41 offenders by number and does not count a declared `serves no criterion`. The 41 are repair work (#1954, stage item E2), not this criterion.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2617: every issue whose work depends on another carries a `blocked by` edge on the tracker, so *what is next* is computed from the graph — 0 of 71 open issues carried one on 2026-10-30, which makes every ordering claim prose
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
