@@ -284,6 +284,9 @@ const UNCLAIMED_RATCHET = 150;
 // 152 -> 153: SC-2736 ticked on the PR closing #1997 (ADR-013 row 3). A
 // claim about what a rule's prose states, which no registered pattern
 // expresses; `test/rule-provenance.test.ts` names it in a declaring position.
+// 153 -> 154: SC-2740 ticked on the PR closing #2001 (ADR-013 row 7). A
+// claim about what a command file instructs, which no registered pattern
+// expresses; `test/dry-run-command.test.ts` names it in a declaring position.
 const CLAIMED_UNBINDABLE = 154;
 
 function split() {

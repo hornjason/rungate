@@ -32,10 +32,10 @@ none, say so and stop.
 2. Run the real dry runs from the primary checkout, read-only, with
    `env -u GH_TOKEN` wrapping each call that reaches GitHub. The spec and
    milestone prefix come from `readBoardInputs` in `lib/config-readers.ts`.
-   - issues and order links: `bun bin/rungate.ts plan-issues --decompose <doc> --repo <owner/name>`
-   - milestones, if the document adds or moves a phase: `bun bin/rungate.ts plan-spec <spec> --repo <owner/name> --prefix <prefix>`
-   - phase-order links: `bun bin/rungate.ts plan-deps --repo <owner/name> --milestone-prefix <prefix>`
-   - what Ready holds now: `bun scripts/work-status.ts` (START HERE section only)
+   - issues and order links: `env -u GH_TOKEN bun bin/rungate.ts plan-issues --decompose <doc> --repo <owner/name>`
+   - milestones, if the document adds or moves a phase: `env -u GH_TOKEN bun bin/rungate.ts plan-spec <spec> --repo <owner/name> --prefix <prefix>`
+   - phase-order links: `env -u GH_TOKEN bun bin/rungate.ts plan-deps --repo <owner/name> --milestone-prefix <prefix>`
+   - what Ready holds now: `env -u GH_TOKEN bun scripts/work-status.ts` (START HERE section only)
 
    If the table is not yet in parser shape, copy it into a `mktemp -d`
    scratch file, run against that, label the ids `PLACEHOLDER`, and delete

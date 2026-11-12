@@ -48,6 +48,8 @@ describe("SC-2740: /dry-run is a project command that shows a proposal as a real
     const commandLines = text.split("\n").filter(l => /\bbun (bin|scripts)\//.test(l));
     expect(commandLines.length, "no command lines found, so the no-write check measured nothing").toBeGreaterThan(0);
     expect(commandLines.filter(l => l.includes("--write"))).toEqual([]);
+    // Each one reaches GitHub, so each must drop GH_TOKEN as written, not by inference.
+    expect(commandLines.filter(l => !/`env -u GH_TOKEN bun /.test(l))).toEqual([]);
   });
 
   test("SC-2740: it carries no executable block, so invoking it runs nothing before it is read", () => {
