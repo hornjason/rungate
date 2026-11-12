@@ -48,8 +48,9 @@ and reserve the ids first (`.claude/rules/parallel-sessions.md`).}
 One row per issue. `plan-issues --decompose` reads this table and refuses
 the whole plan if any row breaks a rule, so check each one:
 
-- **Criterion**: one `SC-<N>` id, already written in the governing spec.
-  Several rows may serve the same criterion.
+- **Criterion**: one `SC-<N>` id. Write it in the governing spec first. The
+  tool checks only the id's shape today; #1999 adds a refusal for an id no
+  spec states. Several rows may serve the same criterion.
 - **Outcome**: becomes the issue title word for word. At least 12 characters,
   and no comma, because a Blocked by cell is a comma-separated list.
 - **Files**: the paths the issue will change, comma-separated. At least one,
