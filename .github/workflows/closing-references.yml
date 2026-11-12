@@ -14,7 +14,11 @@ on:
   # A pull request is the only event with a body to read. On push and in a
   # merge queue there is nothing to check, and a job that cannot take a
   # reading must not report one.
+  #
+  # `edited` is ADR-013 decision 4: adding "Fixes #N" to the description is
+  # the remedy the refusal prints, so editing the body has to re-run it.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -33,23 +37,42 @@ jobs:
           # Pinned by .bun-version — the project's single declaration (#622).
           bun-version-file: ".bun-version"
       - run: bun install
-      - name: A closing keyword GitHub cannot see
+      - name: A closing keyword GitHub cannot see, and a pull request that closes no issue
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
+          # ADR-013 decision 4. Read exactly: only the string `true` turns the
+          # refusal on; anything else reports it as a warning annotation.
+          RUNGATE_REQUIRE_CLOSING_REF: ${{ vars.RUNGATE_REQUIRE_CLOSING_REF }}
+          QUERY: >-
+            query($owner: String!, $name: String!, $number: Int!) {
+            repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+            number body
+            files(first: 100) { nodes { path } }
+            closingIssuesReferences(first: 100) { totalCount
+            nodes { number body repository { name owner { login } } } }
+            } } }
         run: |
-          # The field is fetched here and handed to the script, so nothing in
+          # The fields are fetched here and handed to the script, so nothing in
           # the script can compute its own idea of whether an issue is linked
           # — GitHub's answer is the input, not something to agree with.
           #
-          # No `|| true` and no `2>/dev/null`: a `gh` failure must reach the
-          # script as an empty payload, which it reports as UNMEASURED rather
-          # than as a clean pull request.
-          # `headRefName` is #1950: the branch is what says whether a closing
-          # reference was OWED. Without it the script refuses every payload
-          # as UNMEASURED rather than passing them, so a drop here is loud.
-          # `--repo` is #1978 round 2: `closingIssuesReferences` resolves
-          # cross-repository keywords too, so a bare number is not an
-          # identity. Without it the script refuses rather than crediting one.
-          gh pr view "$PR" --json number,body,headRefName,closingIssuesReferences \
+          # ONE query, with each issue body on the closingIssuesReferences node
+          # GitHub returned (SC-2737). A second lookup per issue would need its
+          # own rule for which nodes belong to this repository, and that rule
+          # already has one decider: linkedIssuesInThisRepo, in the script.
+          #
+          # `files` is the diff the session-record exemption is decided from,
+          # never the branch name. Past 100 files the list is cut short, which
+          # cannot exempt anything: only three paths are session records.
+          # Closed issues are cut short the same way, and that CAN hide one, so
+          # `totalCount` goes with them and the script refuses a short list.
+          #
+          # No `|| true` and no `2>/dev/null`: `run:` is `bash -e`, so a failed
+          # query stops the step red instead of reaching the script as a clean
+          # pull request. `--repo` is #1978 round 2: a bare number is not an
+          # identity, so without it the script refuses.
+          gh api graphql -f query="$QUERY" \
+            -f owner="${GITHUB_REPOSITORY%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$PR" \
+            --jq '.data.repository.pullRequest | {number, body, files: .files.nodes, closingIssuesReferences: .closingIssuesReferences.nodes, closingIssuesTotal: .closingIssuesReferences.totalCount}' \
             | bun scripts/audit-closing-references.ts --repo "$GITHUB_REPOSITORY"

@@ -65,22 +65,59 @@ function buildMutant(): string {
 /** The repository every fixture below belongs to, unless a case says otherwise. */
 const THIS_REPO = "hornjason/rungate";
 
-/** `gh pr view`'s own node shape: repository.owner.login + repository.name. */
-function closes(number: number, nameWithOwner: string = THIS_REPO) {
+/** An issue body that names a criterion, so step 4's second half is met. */
+const SERVES = "## Criteria this serves\n\nSC-2737\n";
+
+/**
+ * `gh`'s node shape: repository.owner.login + repository.name, and — since
+ * SC-2737 — the issue body on the same node, from the workflow's one query.
+ */
+function closes(number: number, nameWithOwner: string = THIS_REPO, body: string = SERVES) {
   const [login, name] = nameWithOwner.split("/");
-  return { number, repository: { name, owner: { login } } };
+  return { number, body, repository: { name, owner: { login } } };
+}
+
+/** An ordinary diff: one file that is not a session record. */
+const CODE = [{ path: "lib/x.ts" }];
+
+/** The switch, on, exactly as the repository variable is spelled. */
+const ON = { RUNGATE_REQUIRE_CLOSING_REF: "true" };
+
+/**
+ * The workflow sends `closingIssuesTotal` beside the nodes. A payload that
+ * leaves it out gets the honest value (the node count) here, so each case
+ * keeps testing what it names; the one case about an ABSENT total passes
+ * `RAW` so nothing is filled in.
+ */
+const RAW = Symbol("raw");
+function withTotal(payload: string): string {
+  try {
+    const p = JSON.parse(payload);
+    if (p && Array.isArray(p.closingIssuesReferences) && !("closingIssuesTotal" in p)) {
+      return JSON.stringify({ ...p, closingIssuesTotal: p.closingIssuesReferences.length });
+    }
+  } catch {
+    // Not JSON: a case about an unparseable payload, passed through untouched.
+  }
+  return payload;
 }
 
 function run(
   script: string,
-  payload: string,
+  payload: string | { [RAW]: string },
   repo: string | null = THIS_REPO,
+  env: Record<string, string> = {},
 ): { code: number; err: string; out: string } {
   const file = join(scratch, "payload.json");
-  writeFileSync(file, payload);
+  writeFileSync(file, typeof payload === "string" ? withTotal(payload) : payload[RAW]);
   const argv = repo === null ? [script, "--fixture", file] : [script, "--fixture", file, "--repo", repo];
+  // The ambient switch and run id are stripped, so a developer or a CI job
+  // that has either set cannot change what a case observes.
+  const base = { ...process.env };
+  delete base.RUNGATE_REQUIRE_CLOSING_REF;
+  delete base.GITHUB_RUN_ID;
   try {
-    const out = execFileSync(process.execPath, argv, { encoding: "utf-8" });
+    const out = execFileSync(process.execPath, argv, { encoding: "utf-8", env: { ...base, ...env } });
     return { code: 0, err: "", out };
   } catch (e: any) {
     return { code: e.status ?? -1, err: String(e.stderr ?? ""), out: String(e.stdout ?? "") };
@@ -94,10 +131,7 @@ const DEFECTIVE = JSON.stringify({
   number: 1208,
   body: `${BACKTICKED}\n`,
   closingIssuesReferences: [],
-  // #1950: every payload now carries the head branch. A branch naming no
-  // issue keeps each pre-existing case testing exactly what it tested
-  // before, and makes it a negative control for the new rule as well.
-  headRefName: "rg/inert-reference-repro",
+  files: CODE,
 });
 
 // The same contradiction one issue over, and the state the script used to
@@ -109,35 +143,29 @@ const LINKED_PLUS_INERT = JSON.stringify({
   number: 1376,
   body: `Fixes #1362\n\n${"Fixes #777".replace(/^/, "`").replace(/$/, "`")}\n`,
   closingIssuesReferences: [closes(1362)],
-  headRefName: "rg/1362-closing-reference-audit",
+  files: CODE,
 });
 
 /**
- * #1950, and the shape that froze the board: PR #1903.
- *
- * Branch `rg/1717-phase6-readings`, title identical to issue #1717, merged
- * 2026-11-08 as `dd8709e6` — and `closingIssuesReferences` empty with no
- * closing keyword anywhere in the body. The old check passed it, because
- * every reading it took was about a keyword that WAS written. #1717 is still
- * open and its card sat in `In review` for two days, because
- * `board-flow.yml` moves a card by resolving the pull request's closing
- * references and an empty list fires nothing, ever.
+ * PR #1903's shape, the one that froze the board: no closing reference and
+ * no keyword anywhere. #1950 caught it only because its branch opened with
+ * an issue number; under SC-2737 the branch is not read at all.
  */
-const NAMES_AN_ISSUE_DECLARES_NOTHING = JSON.stringify({
+const DECLARES_NOTHING = JSON.stringify({
   number: 1903,
   body:
     "Produce the three Phase 6 readings the board is missing.\n\n" +
     "Neither new reading resolves an issue number, so `readsIssueRefs` is unchanged.\n",
   closingIssuesReferences: [],
-  headRefName: "rg/1717-phase6-readings",
+  files: CODE,
 });
 
-/** The same branch shape the ship workflow's run branches use. */
-const RUN_BRANCH_DECLARES_NOTHING = JSON.stringify({
-  number: 1904,
-  body: "No keyword here at all.\n",
-  closingIssuesReferences: [],
-  headRefName: "rungate/run-1931",
+/** A pull request closing an issue whose body names no criterion. */
+const CLOSES_UNNAMED = JSON.stringify({
+  number: 1905,
+  body: "Fixes #42\n",
+  closingIssuesReferences: [closes(42, THIS_REPO, "Something is wrong. No criterion here.\n")],
+  files: CODE,
 });
 
 describe("the refusal is observed, against a mutant that cannot refuse", () => {
@@ -150,52 +178,46 @@ describe("the refusal is observed, against a mutant that cannot refuse", () => {
   for (const [name, payload] of [
     ["an inert closing reference", DEFECTIVE],
     ["a linked pull request carrying an inert reference to ANOTHER issue", LINKED_PLUS_INERT],
-    // #1950. PR #1903's real shape, and the one the old check passed.
-    ["a branch naming an issue and no closing reference at all", NAMES_AN_ISSUE_DECLARES_NOTHING],
-    ["a run branch naming an issue and no closing reference at all", RUN_BRANCH_DECLARES_NOTHING],
+    // SC-2737, with the switch on.
+    ["a pull request that closes no issue", DECLARES_NOTHING],
+    ["a pull request closing an issue that names no criterion", CLOSES_UNNAMED],
     [
-      "a payload with no headRefName key",
-      JSON.stringify({ number: 6, body: "x", closingIssuesReferences: [] }),
+      "a payload with no files key",
+      JSON.stringify({ number: 6, body: "Fixes #9", closingIssuesReferences: [closes(9)] }),
     ],
-    ["a payload with no closingIssuesReferences key", JSON.stringify({ number: 1, body: "x" })],
+    [
+      "a linked issue node with no body",
+      JSON.stringify({
+        number: 7,
+        body: "Fixes #9",
+        closingIssuesReferences: [{ number: 9, repository: { name: "rungate", owner: { login: "hornjason" } } }],
+        files: CODE,
+      }),
+    ],
+    ["a payload with no closingIssuesReferences key", JSON.stringify({ number: 1, body: "x", files: CODE })],
     ["a payload that is not JSON", "not json at all"],
     ["an empty payload", ""],
   ] as const) {
     test(`${name} refuses, and the mutant does not`, () => {
-      const real = run(SCRIPT, payload);
+      const real = run(SCRIPT, payload, THIS_REPO, ON);
       expect(real.code, `real script should refuse on: ${name}`).toBe(REFUSE_EXIT);
       expect(real.err).toContain("CLOSING-REFERENCE REFUSED");
-      const mutant = run(buildMutant(), payload);
+      const mutant = run(buildMutant(), payload, THIS_REPO, ON);
       expect(mutant.code, `mutant should NOT refuse on: ${name}`).toBe(0);
     });
   }
 });
 
 describe("what it deliberately lets through", () => {
-  test("a pull request that links an issue passes", () => {
+  test("a pull request that links an issue naming a criterion passes", () => {
     const r = run(
       SCRIPT,
-      JSON.stringify({
-        number: 2,
-        body: "Fixes #9",
-        closingIssuesReferences: [closes(9)],
-        headRefName: "rg/9-the-thing",
-      }),
+      JSON.stringify({ number: 2, body: "Fixes #9", closingIssuesReferences: [closes(9)], files: CODE }),
+      THIS_REPO,
+      ON,
     );
-    expect(r.code).toBe(0);
+    expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("links 1 issue");
-  });
-
-  test("a pull request that mentions an issue without closing it passes", () => {
-    // The 23-of-24 case. A check that fired here would be wrong far more
-    // often than it was right on the only corpus available.
-    const body = "This is the same class as #1204, and #1286 is open about the writer.\n";
-    const r = run(
-      SCRIPT,
-      JSON.stringify({ number: 3, body, closingIssuesReferences: [], headRefName: "rg/mention-only" }),
-    );
-    expect(r.code).toBe(0);
-    expect(r.out).toContain("claims none");
   });
 
   test("an inert reference to an issue that IS linked passes", () => {
@@ -207,182 +229,206 @@ describe("what it deliberately lets through", () => {
     const body = "Fixes #9\n\nsee also `Fixes #9` in the old description.\n";
     const r = run(
       SCRIPT,
-      JSON.stringify({
-        number: 5,
-        body,
-        closingIssuesReferences: [closes(9)],
-        headRefName: "rg/9-the-thing",
-      }),
+      JSON.stringify({ number: 5, body, closingIssuesReferences: [closes(9)], files: CODE }),
+      THIS_REPO,
+      ON,
     );
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("links 1 issue");
   });
 
-  test("a negation passes", () => {
-    const body = "Fixes nothing on its own — leaving #713 open deliberately.\n";
-    const r = run(
-      SCRIPT,
-      JSON.stringify({ number: 4, body, closingIssuesReferences: [], headRefName: "rg/negation" }),
-    );
-    expect(r.code).toBe(0);
+  test("with the switch off, a mention or a negation is reported, not refused", () => {
+    // The 23-of-24 case and the denial case. Off, nothing new blocks: the
+    // reading is an annotation, so turning the variable on is the only step
+    // that changes what merges.
+    for (const body of [
+      "This is the same class as #1204, and #1286 is open about the writer.\n",
+      "Fixes nothing on its own — leaving #713 open deliberately.\n",
+    ]) {
+      const r = run(SCRIPT, JSON.stringify({ number: 3, body, closingIssuesReferences: [], files: CODE }));
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toContain("::warning");
+      expect(r.out).toContain("NOT ENFORCED");
+    }
   });
 });
 
 /**
- * #1950: a branch that names an issue must declare a closing reference.
+ * SC-2737: a pull request closes an issue that names a criterion.
  *
- * The negative controls are the point of this block. The whole reason the
- * old check did not require a reference is that plenty of pull requests
- * legitimately close nothing — a state record, a docs pass, a dependency
- * bump. The branch name is what separates them, so each case below fixes
- * everything except the branch.
+ * Each case fixes everything but one variable, so a change that simply
+ * refused more, or less, cannot turn one green for the wrong reason.
  */
-describe("#1950: the branch name says whether a reference was owed", () => {
-  const noReference = (headRefName: string, number = 7) =>
-    run(SCRIPT, JSON.stringify({ number, body: "No keyword anywhere.\n", closingIssuesReferences: [], headRefName }));
+describe("SC-2737: every pull request closes an issue that names a criterion", () => {
+  const payload = (files: { path: string }[], refs: unknown[] = [], number = 20) =>
+    JSON.stringify({ number, body: "Some change.\n", closingIssuesReferences: refs, files });
 
-  test("a branch naming no issue and closing nothing passes — the negative control", () => {
-    // If this ever goes red the rule has widened past the evidence and every
-    // state-record pull request in the repository is blocked.
-    for (const branch of ["rg/state-session-90", "rg/adr-011-plan", "jason-patch-1", "main", "docs/readme"]) {
-      const r = noReference(branch);
-      expect(r.code, `${branch} should pass: ${r.err}`).toBe(0);
+  test("a diff of only session-record files closes nothing and passes", () => {
+    for (const files of [
+      [{ path: "project-state.json" }],
+      [{ path: "project-state.json" }, { path: "PROJECT-STATE.md" }, { path: "SUCCESS.md" }],
+    ]) {
+      const r = run(SCRIPT, payload(files), THIS_REPO, ON);
+      expect(r.code, `${JSON.stringify(files)}: ${r.err}`).toBe(0);
     }
   });
 
-  test("a branch naming an issue and closing nothing refuses, and names the issue", () => {
-    const r = noReference("rg/1717-phase6-readings");
+  test("ONE more file in the diff and the same pull request owes a reference", () => {
+    // The bypass the AI review of #1989 found in the branch rule, closed:
+    // the exemption cannot be borrowed by a pull request that also changes
+    // something else.
+    const r = run(SCRIPT, payload([{ path: "project-state.json" }, { path: "lib/x.ts" }]), THIS_REPO, ON);
     expect(r.code).toBe(REFUSE_EXIT);
-    expect(r.err).toContain("#1717");
-    // The remedy, per `.claude/rules/self-referential-tests.md`.
-    expect(r.err).toContain("Fixes #1717");
+    expect(r.err).toContain("closes no issue");
   });
 
-  test("a branch naming an issue that DOES declare a reference passes, even a different issue", () => {
-    // Declaring something is the bar. Which issue is the author's call — a
-    // branch cut for #1717 may legitimately close the sibling it grew into,
-    // and a check that insisted on the branch's own number would be a second
-    // decider competing with the author.
+  test("a session-record file NAME outside the root is not a session record", () => {
+    const r = run(SCRIPT, payload([{ path: "docs/SUCCESS.md" }]), THIS_REPO, ON);
+    expect(r.code).toBe(REFUSE_EXIT);
+  });
+
+  test("the branch name is never read — a branch naming no issue still owes one", () => {
+    // #1950 let these through: `rg/state-session-90`, `docs/readme`. The
+    // field is not even in the payload any more; it is passed here to show
+    // that supplying it changes nothing.
     const r = run(
       SCRIPT,
       JSON.stringify({
-        number: 8,
-        body: "Fixes #1718\n",
-        closingIssuesReferences: [closes(1718)],
-        headRefName: "rg/1717-phase6-readings",
+        number: 21,
+        body: "Docs pass.\n",
+        closingIssuesReferences: [],
+        files: CODE,
+        headRefName: "docs/readme",
       }),
+      THIS_REPO,
+      ON,
+    );
+    expect(r.code).toBe(REFUSE_EXIT);
+  });
+
+  test("an issue saying it serves no criterion satisfies the second half", () => {
+    const r = run(
+      SCRIPT,
+      payload(CODE, [closes(42, THIS_REPO, "Cleanup. Serves no criterion.\n")]),
+      THIS_REPO,
+      ON,
     );
     expect(r.code, r.err).toBe(0);
   });
 
-  test("a branch naming an issue whose body has an INERT reference to it reports the backticks", () => {
-    // ai-review round 1 of #1978, and it was right. The first cut ran this
-    // check before `inertClosingReferences` and `refuse` exits the process,
-    // so the two shadowed instead of composing: a body already carrying
-    // `Fixes #1717` four characters away was told to ADD one.
-    //
-    // The population the reviewer named: every pre-existing inert fixture
-    // used a branch that parses to no issue, so no case could observe the
-    // shadow. This is that case.
-    const backticked = "Fixes #1717".replace(/^/, "`").replace(/$/, "`");
-    const r = run(
-      SCRIPT,
-      JSON.stringify({
-        number: 9,
-        body: `${backticked}\n`,
-        closingIssuesReferences: [],
-        headRefName: "rg/1717-phase6-readings",
-      }),
-    );
+  test("the unnamed-criterion refusal names the issue and prints the one rerun command", () => {
+    const r = run(SCRIPT, CLOSES_UNNAMED, THIS_REPO, { ...ON, GITHUB_RUN_ID: "4242" });
     expect(r.code).toBe(REFUSE_EXIT);
-    // The inert message, not the missing one — it names the markup.
-    expect(r.err).toContain("inside a code-span");
-    expect(r.err).toContain("Remove the backticks");
-    expect(r.err, "the missing-reference message must not shadow the inert one").not.toContain(
-      "which names issue #1717, and GitHub has recorded no closing reference",
-    );
+    expect(r.err).toContain("#42");
+    expect(r.err).toContain(`gh run rerun 4242 --repo ${THIS_REPO}`);
   });
 
-  test("the missing-reference message asserts only what it read", () => {
-    // Same round. The sentence used to claim "the body contains no closing
-    // keyword", which this check never looks at — false for a backticked
-    // keyword, and false for a live `Fixes #N` on a pull request whose base
-    // is not the default branch, where GitHub records no link at all
-    // (measured on throwaway PR #1923: closingIssuesReferences.totalCount 0).
-    const r = noReference("rg/1717-phase6-readings", 10);
-    expect(r.code).toBe(REFUSE_EXIT);
-    expect(r.err).not.toContain("the body contains no closing keyword");
-    expect(r.err).toContain("closingIssuesReferences is empty");
+  test("the switch is read exactly: only the string true refuses", () => {
+    for (const value of ["TRUE", "1", "yes", "true ", ""]) {
+      const r = run(SCRIPT, DECLARES_NOTHING, THIS_REPO, { RUNGATE_REQUIRE_CLOSING_REF: value });
+      expect(r.code, `"${value}" must not turn the refusal on`).toBe(0);
+      expect(r.out).toContain("NOT ENFORCED");
+    }
+    expect(run(SCRIPT, DECLARES_NOTHING, THIS_REPO, ON).code).toBe(REFUSE_EXIT);
   });
 
-  test("a CROSS-REPOSITORY closing reference does not satisfy the branch's own issue", () => {
+  test("a CROSS-REPOSITORY closing reference does not count as closing an issue here", () => {
     // ai-review round 2 of #1978, and the same class `declaredClosingIn` was
     // added for in round 5 of #1974. `Fixes other-org/other-repo#9` is
-    // documented GitHub syntax and lands a node numbered 9 here; counting it
-    // let a pull request on an issue-named branch print "OK" while closing
-    // nothing in this tracker — the PR-#1903 shape, let through by the check
-    // written to catch it.
+    // documented GitHub syntax and lands a node numbered 9 here.
     const r = run(
       SCRIPT,
       JSON.stringify({
         number: 11,
         body: "Fixes other-org/other-repo#9\n",
         closingIssuesReferences: [closes(9, "other-org/other-repo")],
-        headRefName: "rg/1950-require-closing-reference",
+        files: CODE,
       }),
+      THIS_REPO,
+      ON,
     );
     expect(r.code, r.out).toBe(REFUSE_EXIT);
-    expect(r.err).toContain("#1950");
+    expect(r.err, "the raw field is NOT empty — one reference was recorded").not.toContain(
+      "closingIssuesReferences is empty",
+    );
+    expect(r.err).toContain("none of the 1 closing reference(s)");
   });
 
-  test("the control — the SAME reference in this repository does satisfy it", () => {
-    // One variable differs from the case above: the repository on the node.
-    // Without this, a change that simply refused every linked pull request
-    // would turn the case above green for the wrong reason.
+  test("a SAME-NUMBER issue in another repository cannot lend this one its body", () => {
+    // AI review of #2003. `Fixes #9` here names no criterion; another
+    // repository's #9 does. Matching bodies by bare number let the foreign
+    // body pass the check for this repository's issue.
     const r = run(
       SCRIPT,
       JSON.stringify({
-        number: 12,
-        body: "Fixes #9\n",
-        closingIssuesReferences: [closes(9)],
-        headRefName: "rg/1950-require-closing-reference",
+        number: 22,
+        body: "Fixes #9\n\nFixes other-org/other-repo#9\n",
+        closingIssuesReferences: [
+          closes(9, THIS_REPO, "No criterion here.\n"),
+          closes(9, "other-org/other-repo", "SC-9999, somebody else's.\n"),
+        ],
+        files: CODE,
       }),
+      THIS_REPO,
+      ON,
     );
-    expect(r.code, r.err).toBe(0);
-    expect(r.out).toContain("links 1 issue");
+    expect(r.code, r.out).toBe(REFUSE_EXIT);
+    expect(r.err).toContain("#9, whose body names neither");
+  });
+
+  test("the control — the foreign node listed FIRST still cannot lend its body", () => {
+    // Order is the one variable changed: a last-write-wins map would pass
+    // the case above by luck and fail this one.
+    const r = run(
+      SCRIPT,
+      JSON.stringify({
+        number: 23,
+        body: "Fixes other-org/other-repo#9\n\nFixes #9\n",
+        closingIssuesReferences: [
+          closes(9, "other-org/other-repo", "SC-9999, somebody else's.\n"),
+          closes(9, THIS_REPO, "No criterion here.\n"),
+        ],
+        files: CODE,
+      }),
+      THIS_REPO,
+      ON,
+    );
+    expect(r.code, r.out).toBe(REFUSE_EXIT);
+  });
+
+  test("a closed-issue list GitHub cut short is UNMEASURED, not clean", () => {
+    // AI review of #2003. The fetched issues all name a criterion; the one
+    // past the page might not.
+    const base = { number: 24, body: "Fixes #9\n", closingIssuesReferences: [closes(9)], files: CODE };
+    const short = run(SCRIPT, JSON.stringify({ ...base, closingIssuesTotal: 2 }), THIS_REPO, ON);
+    expect(short.code).toBe(REFUSE_EXIT);
+    expect(short.err).toContain("UNMEASURED");
+    // The control: the same payload whose total matches what was fetched.
+    const whole = run(SCRIPT, JSON.stringify({ ...base, closingIssuesTotal: 1 }), THIS_REPO, ON);
+    expect(whole.code, whole.err).toBe(0);
+  });
+
+  test("an ABSENT total is UNMEASURED, and the mutant does not refuse", () => {
+    // AI review of #2003, round 2: every other field refuses when absent,
+    // and this one was skipped silently.
+    const payload = {
+      [RAW]: JSON.stringify({ number: 25, body: "Fixes #9\n", closingIssuesReferences: [closes(9)], files: CODE }),
+    };
+    const real = run(SCRIPT, payload, THIS_REPO, ON);
+    expect(real.code).toBe(REFUSE_EXIT);
+    expect(real.err).toContain("no closingIssuesTotal");
+    expect(run(buildMutant(), payload, THIS_REPO, ON).code).toBe(0);
   });
 
   test("no --repo is UNMEASURED, not a clean pull request", () => {
     const r = run(
       SCRIPT,
-      JSON.stringify({ number: 13, body: "Fixes #9\n", closingIssuesReferences: [closes(9)], headRefName: "rg/x" }),
+      JSON.stringify({ number: 13, body: "Fixes #9\n", closingIssuesReferences: [closes(9)], files: CODE }),
       null,
+      ON,
     );
     expect(r.code).toBe(REFUSE_EXIT);
     expect(r.err).toContain("UNMEASURED");
-  });
-
-  test("a cross-repo-only pull request is not told its references are empty", () => {
-    // ai-review round 3 of #1978. Round 2 added the cross-repo case and
-    // round 1 had already repaired this sentence once; the repair held only
-    // the POST-filter count, so the message went straight back to asserting
-    // a field it was not given. The two reference counts differ here and
-    // that is the whole case.
-    const r = run(
-      SCRIPT,
-      JSON.stringify({
-        number: 14,
-        body: "Fixes other-org/other-repo#9\n",
-        closingIssuesReferences: [closes(9, "other-org/other-repo")],
-        headRefName: "rg/1950-require-closing-reference",
-      }),
-    );
-    expect(r.code).toBe(REFUSE_EXIT);
-    expect(r.err, "the raw field is NOT empty — one reference was recorded").not.toContain(
-      "closingIssuesReferences is empty",
-    );
-    expect(r.err).toContain("none of the 1 closing reference(s)");
-    expect(r.err).toContain(THIS_REPO);
   });
 
   test("the gh node shape this filter reads is pinned to a real gh payload", () => {
@@ -393,28 +439,30 @@ describe("#1950: the branch name says whether a reference was owed", () => {
     // CAPTURED VERBATIM, not hand-written: the output of
     //   gh pr view 1971 --repo hornjason/rungate --json closingIssuesReferences
     // taken 2026-11-11. An unrelated pull request, deliberately — a fixture
-    // taken from this one would move with it.
+    // taken from this one would move with it. The GraphQL query the workflow
+    // runs returns the same repository.name / repository.owner.login paths.
     const live = JSON.parse(
       '{"closingIssuesReferences":[{"id":"I_kwDOUe1c0M8AAAABeDH43Q","number":1962,' +
         '"repository":{"id":"R_kgDOUe1c0A","name":"rungate","owner":{"id":"MDQ6VXNlcjI2NTI5ODAw",' +
         '"login":"hornjason"}},"url":"https://github.com/hornjason/rungate/issues/1962"}]}',
     );
-    // The helper every other case uses must produce the same field paths the
-    // real payload does, or those cases prove nothing about `gh`.
     const mine = closes(1962);
     const node = live.closingIssuesReferences[0];
     expect(typeof node.repository?.name).toBe(typeof mine.repository.name);
     expect(typeof node.repository?.owner?.login).toBe(typeof mine.repository.owner.login);
 
-    // And the end-to-end reading, through the real script.
+    // And the end-to-end reading, through the real script, with the body the
+    // workflow's query adds to each node.
     const r = run(
       SCRIPT,
       JSON.stringify({
         number: 1971,
         body: "Fixes #1962\n",
-        closingIssuesReferences: live.closingIssuesReferences,
-        headRefName: "rg/1962-work-this-next",
+        closingIssuesReferences: [{ ...node, body: SERVES }],
+        files: CODE,
       }),
+      THIS_REPO,
+      ON,
     );
     expect(r.code, r.err).toBe(0);
     expect(r.out, "a live gh payload must be CREDITED, not filtered to nothing").toContain(
@@ -423,34 +471,32 @@ describe("#1950: the branch name says whether a reference was owed", () => {
   });
 
   test("the message may only name values the function was given", () => {
-    // THE CLASS, not the instance. Rounds 1 and 3 were the same defect in
-    // two different clauses, repaired one at a time, the second written
-    // after the first was found. `missingClosingMessage` is handed one
-    // object, so every substitution in it must come off that object —
-    // anything else is a claim about a reading the function never took.
-    const lib = readFileSync(join(import.meta.dir, "..", "lib", "closing-reference-audit.ts"), "utf-8");
-    const start = lib.indexOf("export function missingClosingMessage");
-    expect(start, "missingClosingMessage is gone or renamed").toBeGreaterThan(-1);
+    // THE CLASS, not the instance. Rounds 1 and 3 of #1978 were the same
+    // defect in two different clauses, repaired one at a time. The message
+    // is handed one object, so every substitution must come off it.
+    const lib = readFileSync(LIB, "utf-8");
+    const start = lib.indexOf("export function closingRequirementMessage");
+    expect(start, "closingRequirementMessage is gone or renamed").toBeGreaterThan(-1);
     const body = lib.slice(start, lib.indexOf("\n}", start));
     const substitutions = [...body.matchAll(/\$\{([^}]+)\}/g)].map(x => x[1]!.trim());
     expect(substitutions.length, "no interpolation left — this guard would be vacuous").toBeGreaterThan(2);
-    const foreign = substitutions.filter(s => !/^(m\.\w+|prNumber)$/.test(s));
+    const foreign = substitutions.filter(
+      s => !/^(f\.\w+|f\.issues\.join\(", #"\)|prNumber|NO_CRITERION_DECLARATION)$/.test(s),
+    );
     expect(
       foreign,
-      "missingClosingMessage interpolated something that is not `prNumber` or a field of `m`. " +
-        "If the message needs to say it, carry it on MissingClosingReference — see rounds 1 and 3 of #1978.",
+      "closingRequirementMessage interpolated something that is not `prNumber`, a field of `f`, " +
+        "or the declaration constant. Carry it on ClosingRequirementFailure instead.",
     ).toEqual([]);
   });
 
-  test("the workflow passes --repo and fetches headRefName, or the check cannot take a reading", () => {
-    // The script refuses a payload without the field, so a workflow that
-    // does not request it turns this check red everywhere rather than
-    // silently green — loud, but still worth pinning to the one line that
-    // decides it.
+  test("the workflow fetches files and issue bodies, re-runs on edit, and reads the switch", () => {
     const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "closing-references.yml"), "utf-8");
-    const fetchLine = yml.split("\n").find(l => l.includes("gh pr view"));
-    expect(fetchLine, "closing-references.yml no longer fetches the payload").toBeDefined();
-    expect(fetchLine).toContain("headRefName");
+    expect(yml).toMatch(/types:\s*\[[^\]]*\bedited\b[^\]]*\]/);
+    expect(yml).toContain("files(first: 100) { nodes { path } }");
+    expect(yml).toMatch(/closingIssuesReferences\(first: \d+\) \{ totalCount\s*nodes \{ number body /);
+    expect(yml).toContain("closingIssuesTotal: .closingIssuesReferences.totalCount");
+    expect(yml).toContain("RUNGATE_REQUIRE_CLOSING_REF: ${{ vars.RUNGATE_REQUIRE_CLOSING_REF }}");
     const invokeLine = yml.split("\n").find(l => l.includes("audit-closing-references.ts"));
     expect(invokeLine, "closing-references.yml no longer invokes the script").toBeDefined();
     expect(invokeLine).toContain('--repo "$GITHUB_REPOSITORY"');
