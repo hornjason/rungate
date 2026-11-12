@@ -73,38 +73,98 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
     expect(text, `dry-run.md must contain: ${BEHIND}`).toContain(BEHIND);
   });
 
-  const lines = text.split("\n");
-  const lineOf = (s: string) => lines.findIndex(l => l.includes(s));
+  /**
+   * The whole markdown bullet or numbered step that contains \`needle\`, with
+   * its line breaks collapsed (#2019). The earlier cases counted a fixed
+   * number of physical lines forward from a line, so re-wrapping the prose
+   * turned them red without changing what it said. A bullet ends where the
+   * next one starts, at a blank line, or at a heading.
+   */
+  const bulletOf = (doc: string, needle: string): string => {
+    const starts = (l: string) => /^\s*(-|\d+\.)\s/.test(l);
+    const bullets: string[] = [];
+    let current: string | null = null;
+    for (const line of doc.split("\n")) {
+      if (starts(line)) {
+        if (current !== null) bullets.push(current);
+        current = line;
+      } else if (line.trim() === "" || line.startsWith("#")) {
+        if (current !== null) bullets.push(current);
+        current = null;
+      } else if (current !== null) {
+        current += " " + line;
+      }
+    }
+    if (current !== null) bullets.push(current);
+    // Matched on the joined text, so a needle the wrap split across two lines
+    // is still found.
+    return bullets.map(b => b.replace(/\s+/g, " ").trim()).find(b => b.includes(needle)) ?? "";
+  };
 
-  test("#2016: fetch, then count, then any planner, in that order", () => {
-    const [fetch, behind, planner] = [FETCH, BEHIND, PLANNER].map(s => text.indexOf(s));
-    expect(fetch, "no fetch found, so its order measured nothing").toBeGreaterThan(-1);
-    // A count taken before the fetch reads whatever origin/main was cached.
-    expect(fetch).toBeLessThan(behind);
-    expect(behind).toBeLessThan(planner);
+  /** Every #2016 ordering and gating property, as failures, so it can run on any wrapping of the file. */
+  const stepZeroFailures = (doc: string): string[] => {
+    const failures: string[] = [];
+    const fetch = bulletOf(doc, FETCH);
+    const count = bulletOf(doc, BEHIND);
+    const measured = bulletOf(doc, "Measured commit");
+    if (!fetch.includes("If the fetch fails, stop and run nothing else")) failures.push("the fetch bullet does not stop on a failed fetch");
+    if (!count.includes("and run nothing else")) failures.push("the count bullet does not refuse a checkout that is behind");
+    if (!count.includes("If it errors or prints anything but a number, stop")) failures.push("the count bullet does not refuse an unread count");
+    if (!/^- Only when both pass, print `Measured commit: `/.test(measured)) failures.push("the measured commit is not its own gated bullet");
+    // After both stop clauses: printed unconditionally it would hand a reader
+    // a SHA for a tree the run just refused.
+    const flat = doc.replace(/\s+/g, " ");
+    if (!(flat.indexOf(measured) > flat.indexOf(count) && flat.indexOf(count) > flat.indexOf(fetch))) {
+      failures.push("fetch, count and measured commit are not in that order");
+    }
+    return failures;
+  };
+
+  /** The same file with every paragraph and bullet re-wrapped at \`width\` columns. */
+  const rewrap = (doc: string, width: number): string =>
+    doc.split("\n\n").map(block => {
+      const out: string[] = [];
+      let line = "";
+      for (const word of block.split(/\s+/).filter(Boolean)) {
+        if (/^(-|\d+\.)$/.test(word) && line.trim() !== "") {
+          out.push(line);
+          line = "";
+        }
+        if (line.length + word.length + 1 > width && line.trim() !== "" && !/^(-|\d+\.)$/.test(line.trim())) {
+          out.push(line);
+          line = "  ";
+        }
+        line = line === "" || line === "  " ? line + word : `${line} ${word}`;
+      }
+      if (line.trim() !== "") out.push(line);
+      return out.join("\n");
+    }).join("\n\n");
+
+  test("#2016: a failed fetch, a behind checkout and an unread count each stop the run; the commit prints last", () => {
+    expect(stepZeroFailures(text)).toEqual([]);
   });
 
-  test("#2016: a failed fetch stops the run, so a stale ref is never counted", () => {
-    expect(lines[lineOf(FETCH)]).toContain("If the fetch fails, stop and run nothing else");
+  test("#2019: the same properties hold when the prose is re-wrapped, so a reflow cannot redden them", () => {
+    const narrow = rewrap(text, 52);
+    expect(narrow, "the re-wrap changed nothing, so it proved nothing").not.toBe(text);
+    expect(stepZeroFailures(narrow)).toEqual([]);
+    expect(stepZeroFailures(rewrap(text, 140))).toEqual([]);
   });
 
   test("#2016: a checkout behind origin/main is refused with the count, never measured", () => {
     expect(text).toMatch(/behind origin\/main[^\n]*stop/i);
     expect(text).toContain("how many commits behind");
-    // Within the count's own bullet, not borrowed from the fetch refusal.
-    expect(lines.slice(lineOf(BEHIND), lineOf(BEHIND) + 3).join(" ")).toContain("and run nothing else");
-    // A count that errors is refused too: an unread count is not zero.
-    expect(lines.slice(lineOf(BEHIND), lineOf(BEHIND) + 4).join(" ").replace(/\s+/g, " ")).toContain("If it errors or prints anything but a number, stop");
+    expect(text).toContain('git -C "<checkout>" rev-parse --short HEAD');
   });
 
-  test("#2016: the measured commit is printed only after both checks pass", () => {
-    expect(text).toContain('git -C "<checkout>" rev-parse --short HEAD');
-    const measured = lineOf("Measured commit");
-    expect(measured, "no Measured commit line").toBeGreaterThan(-1);
-    // Its own bullet, gated, and after both stop clauses: printed unconditionally
-    // it would hand a reader a SHA for a tree the run just refused.
-    expect(lines[measured]).toMatch(/^\s*- Only when both pass, print `Measured commit: `/);
-    expect(measured).toBeGreaterThan(lineOf(BEHIND) + 3);
-    expect(measured).toBeGreaterThan(lineOf("If the fetch fails, stop"));
+  test("#2019: <checkout> is bound to a resolved path before any command uses it", () => {
+    // Review of #2017: an agent in a worktree could substitute its own path,
+    // and the check would then read the wrong tree. --git-common-dir names the
+    // main checkout from inside any linked worktree, as repoRootFrom does.
+    const RESOLVE = "git rev-parse --path-format=absolute --git-common-dir";
+    const at = text.indexOf(RESOLVE);
+    expect(at, `dry-run.md must resolve <checkout> with: ${RESOLVE}`).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(text.indexOf(FETCH));
+    expect(bulletOf(text, RESOLVE)).toMatch(/fails?, stop/i);
   });
 });
