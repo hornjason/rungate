@@ -63,7 +63,6 @@ import {
   unmeasuredCorpus,
   UNRESOLVED_COMMENT_TARGET,
   withTimeout,
-  FILING_OVERRIDE_LABEL,
   LEDGER_SESSION_ENV,
   MAX_KEYS_PER_EXISTING_ISSUE,
   COMMENT_EXEMPTIONS,
@@ -88,6 +87,7 @@ import {
   QUEUE_FILINGS_PER_RUN,
   queueCarveOut,
   queueLabelFor,
+  filingOverrideLabelFor,
   unreservedCapReason,
   unreadableRunReason,
   unreservedAllowanceNote,
@@ -308,6 +308,28 @@ interface HookReading {
   exit: number | null;
 }
 
+/**
+ * The waiver label every fixture tree declares (SC-2735).
+ *
+ * The gate reads it from `board.filingOverrideLabel` in the filing tree's
+ * config, so a case that files from a directory with no config has NO
+ * waiver — which is the property, not an inconvenience. `scaffoldOverride`
+ * writes that config into every fixture checkout. The name is deliberately
+ * not this repository's own: a gate still matching a built-in string would
+ * honour the old token and refuse this one, and every waiver case below
+ * would say so.
+ */
+const FILING_OVERRIDE_LABEL = "zq-override-fixture";
+
+/** Declare `FILING_OVERRIDE_LABEL` as `dir`'s waiver, the way a project would. */
+function scaffoldOverride(dir: string): void {
+  mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+  writeFileSync(
+    join(dir, ".claude", "rungate", "config.json"),
+    JSON.stringify({ project: "x", board: { filingOverrideLabel: FILING_OVERRIDE_LABEL } }),
+  );
+}
+
 let scratch: string;
 let ledger: string;
 let issuesFile: string;
@@ -358,6 +380,7 @@ function checkoutAt(dir: string): void {
   expect(git("remote", "add", "origin", FIXTURE_ORIGIN).status, `${dir} must have an origin`).toBe(
     0,
   );
+  scaffoldOverride(dir);
 }
 
 /**
@@ -534,6 +557,7 @@ const noCap = {
 
 beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), "rg-filing-gate-"));
+  scaffoldOverride(scratch);
   ledger = join(scratch, "finding-ledger.jsonl");
   // **In THIS process too, not only in the hook children.** `runHook` has
   // always passed the temp ledger in the child's environment, so the cases
@@ -3196,6 +3220,7 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
     const mutant: Gate = await import(buildMutant("uncapped", M3, "false"));
     const dir = join(scratch, "mut-cap-run");
     mkdirSync(dir, { recursive: true });
+    scaffoldOverride(dir);
 
     const at = "2026-10-24T12:00:00.000Z";
     // The row a spent allowance leaves is the INTENT, not the outcome — the
@@ -3284,6 +3309,7 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
     const real: Gate = await import("../lib/issue-filing-gate");
     const dir = join(scratch, "mut-waivable-run");
     mkdirSync(dir, { recursive: true });
+    scaffoldOverride(dir);
 
     const at = "2026-10-24T12:00:00.000Z";
     const filing =
@@ -3384,6 +3410,7 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
     const real: Gate = await import("../lib/issue-filing-gate");
     const dir = join(scratch, "mut-bypass-run");
     mkdirSync(dir, { recursive: true });
+    scaffoldOverride(dir);
 
     const at = "2026-10-24T12:00:00.000Z";
     // **The vehicle changed on 2026-10-25 and the case says why.** This drove
@@ -3497,6 +3524,7 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
     const real: Gate = await import("../lib/issue-filing-gate");
     const dir = join(scratch, "mut-comment-waivable-run");
     mkdirSync(dir, { recursive: true });
+    scaffoldOverride(dir);
 
     const at = "2026-10-25T12:00:00.000Z";
     const labelled = `${UNDECLARED} --label ${FILING_OVERRIDE_LABEL}`;
@@ -3538,9 +3566,9 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
       symptomHash: "h",
       exemption: null,
     };
-    expect(real.refusalMessage(v), "the real refusal denies the label").toContain(deny);
+    expect(real.refusalMessage(v, FILING_OVERRIDE_LABEL), "the real refusal denies the label").toContain(deny);
     expect(
-      mutant.refusalMessage(v),
+      mutant.refusalMessage(v, FILING_OVERRIDE_LABEL),
       "with the key removed the refusal stops denying the label",
     ).not.toContain(deny);
 
@@ -3601,6 +3629,7 @@ describe("FG-137..FG-139, FG-153, FG-156, FG-158, FG-169, FG-177: a mutant turns
     const mutant: Gate = await import(buildMutant("unordered", M6, "false"));
     const dir = join(scratch, "mut-race-run");
     mkdirSync(dir, { recursive: true });
+    scaffoldOverride(dir);
     const at = "2026-10-24T12:00:00.000Z";
     const other = new Date(Date.parse(at) + 1).toISOString();
 
@@ -6793,3 +6822,78 @@ describe("#1833: the filing's directory comes from the command", () => {
     ).toBe(fromDir);
   });
 });
+
+/**
+ * Covers SC-2735 (SPEC-TO-BOARD-PIPELINE-SPEC.md): the filing-override label
+ * is read from project config, and no constant in library code decides it.
+ *
+ * Breaking it: restore `attempt.labels.includes("arbiter-override")` in
+ * `filingGate` and the first case goes red — the fixture's configured name
+ * stops waiving anything — while the unconfigured tree starts honouring the
+ * old token in the third.
+ */
+describe("SC-2735: the filing-override label comes from the filing tree's config", () => {
+  // FG-88's declared, claimless filing: refused NO_CLAIM, which a label waives.
+  const declaredClaimless = () =>
+    `gh issue create --title "pullRequestCache is never invalidated" --body ${shellQuoted(
+      `\`pullRequestCache\` in lib/pr-cache.ts holds 72 entries for 36 hours. ${DECLARED}`,
+    )}`;
+  let treeSeq = 0;
+  const tree = (label: string | null): string => {
+    const dir = join(scratch, `sc2735-${treeSeq++}`);
+    mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+    if (label !== null) {
+      writeFileSync(
+        join(dir, ".claude", "rungate", "config.json"),
+        JSON.stringify({ project: "x", board: { filingOverrideLabel: label } }),
+      );
+    }
+    return dir;
+  };
+  const file = (dir: string, label: string) =>
+    filingGate(`${declaredClaimless()} --label ${label}`, {
+      projectRoot: dir,
+      readExisting: async () => measuredCorpus([]),
+      ...noCap,
+    });
+
+  test("the configured name waives a waivable refusal", async () => {
+    const r = await file(tree(FILING_OVERRIDE_LABEL), FILING_OVERRIDE_LABEL);
+    expect(r.rows[0].refusal, "the premise: the filing is refused without a waiver").toBe("NO_CLAIM");
+    expect(r.rows[0].overridden, "the configured label did not waive it").toBe(true);
+    expect(r.refusal).toBeNull();
+  });
+
+  test("a label the tree did not configure waives nothing", async () => {
+    // One variable apart from the case above: the same filing and label, a
+    // tree that names a DIFFERENT waiver.
+    const r = await file(tree("some-other-label"), FILING_OVERRIDE_LABEL);
+    expect(r.rows[0].overridden, "a label the config never named waived a refusal").toBe(false);
+    expect(r.refusal).not.toBeNull();
+  });
+
+  test("a tree with no config has no waiver, and the refusal says why", async () => {
+    // The old token, in a tree that declares nothing. A built-in default
+    // would let this through in every unscaffolded repository.
+    for (const label of [FILING_OVERRIDE_LABEL, "arbiter-override"]) {
+      const r = await file(tree(null), label);
+      expect(r.rows[0].overridden, `${label} waived a refusal in an unconfigured tree`).toBe(false);
+      expect(r.refusal, "an unconfigured tree let a refused filing through").not.toBeNull();
+      expect(r.refusal!, "the refusal does not say what to configure").toContain(
+        "board.filingOverrideLabel",
+      );
+    }
+  });
+
+  test("an unreadable read is no waiver, never a throw out of the hook", () => {
+    expect(filingOverrideLabelFor(() => null)).toBeNull();
+    expect(filingOverrideLabelFor(() => "x")).toBe("x");
+    expect(
+      filingOverrideLabelFor(() => {
+        throw new SyntaxError("Unexpected token");
+      }),
+      "a malformed config must not become a waiver or a crash",
+    ).toBeNull();
+  });
+});
+

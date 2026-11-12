@@ -45,7 +45,6 @@ import {
   LABEL_RANK,
   NO_WORK_NEXT,
   READY_TOLERANCE_DAYS,
-  WORK_NEXT_LABEL,
   familyRank,
   heldReason,
   holdsReadySlot,
@@ -67,6 +66,18 @@ import { laneFor, type LaneEvent } from "../lib/board-flow";
 // #1905's BOUND rests on this gate refusing some actors who can assign, so
 // the list is imported and asserted rather than paraphrased.
 import { WRITING_PERMISSIONS } from "../lib/board-ready-fanout";
+import { readExpediteLabel, readFilingOverrideLabel } from "../lib/config-readers";
+
+/**
+ * The expedite label, as the cases below spell it.
+ *
+ * **Deliberately NOT this repository's configured name** (SC-2735). The
+ * library takes the label as an argument now; a fixture spelling the same
+ * word the old constant held could not tell a library that reads its
+ * argument from one that still matches a built-in string. A name nothing
+ * else uses can.
+ */
+const WORK_NEXT_LABEL = "zq-expedite-fixture";
 
 /**
  * The milestone families this suite ranks against.
@@ -1258,7 +1269,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
       "the premise: unpromoted, the lower phase leads",
     ).toEqual([10, 99]);
 
-    const r = workNextReading(cards, 8, "COMPLETE");
+    const r = workNextReading(cards, 8, "COMPLETE", WORK_NEXT_LABEL);
     expect(r.status).toBe("HONOURED");
     expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([99, 10]);
   });
@@ -1268,7 +1279,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     // card must hold its relative order, or the lever is moving things
     // nobody labelled.
     const cards = [item(1, 0), item(2, 1), next(3, 9), item(4, null, ["engine"]), item(5, null)];
-    const r = workNextReading(cards, 8, "COMPLETE");
+    const r = workNextReading(cards, 8, "COMPLETE", WORK_NEXT_LABEL);
     expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([
       3, 1, 2, 4, 5,
     ]);
@@ -1280,7 +1291,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
 
   test("over the bound NOTHING is promoted, and the refusal names every one", () => {
     const cards = [next(11, null), next(12, null), next(13, null), item(1, 0)];
-    const r = workNextReading(cards, 2, "COMPLETE");
+    const r = workNextReading(cards, 2, "COMPLETE", WORK_NEXT_LABEL);
     expect(r.status).toBe("OVER_BOUND");
     expect(r.honoured.size, "a truncated promotion is a promotion nobody chose").toBe(0);
     for (const n of [11, 12, 13]) expect(r.why, `the refusal does not name #${n}`).toContain(`#${n}`);
@@ -1295,15 +1306,15 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     // A non-carrier in the population, or the MINORITY rule refuses before
     // the depth is ever consulted and this row stops being about the bound.
     const at = [next(11, null), next(12, null), item(500, 0), item(501, 0)];
-    expect(workNextReading(at, 2, "COMPLETE").status, "a count equal to the depth is inside it").toBe("HONOURED");
-    expect(workNextReading([...at, next(13, null)], 2, "COMPLETE").status).toBe("OVER_BOUND");
+    expect(workNextReading(at, 2, "COMPLETE", WORK_NEXT_LABEL).status, "a count equal to the depth is inside it").toBe("HONOURED");
+    expect(workNextReading([...at, next(13, null)], 2, "COMPLETE", WORK_NEXT_LABEL).status).toBe("OVER_BOUND");
   });
 
   test("an unreadable depth promotes nothing, and says so as UNMEASURED", () => {
     // `.claude/rules/config-access.md`: a depth that could not be read is not
     // a depth of zero and not a depth of infinity. Distinct from OVER_BOUND,
     // because one is somebody over-labelling and the other is a broken read.
-    const r = workNextReading([next(11, null)], null, "COMPLETE");
+    const r = workNextReading([next(11, null)], null, "COMPLETE", WORK_NEXT_LABEL);
     expect(r.status).toBe("UNMEASURED");
     expect(r.honoured.size).toBe(0);
     expect(r.why).toContain("#11");
@@ -1311,14 +1322,14 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
   });
 
   test("no label at all is NONE, and it is not the same word as the other three", () => {
-    const r = workNextReading([item(1, 0), item(2, null, ["engine"])], 8, "COMPLETE");
+    const r = workNextReading([item(1, 0), item(2, null, ["engine"])], 8, "COMPLETE", WORK_NEXT_LABEL);
     expect(r.status).toBe("NONE");
     expect(r.carrying).toEqual([]);
     const statuses = [
       r.status,
-      workNextReading([next(1, null), item(9, 0)], 8, "COMPLETE").status,
-      workNextReading([next(1, null), next(2, null), item(9, 0)], 1, "COMPLETE").status,
-      workNextReading([next(1, null)], null, "COMPLETE").status,
+      workNextReading([next(1, null), item(9, 0)], 8, "COMPLETE", WORK_NEXT_LABEL).status,
+      workNextReading([next(1, null), next(2, null), item(9, 0)], 1, "COMPLETE", WORK_NEXT_LABEL).status,
+      workNextReading([next(1, null)], null, "COMPLETE", WORK_NEXT_LABEL).status,
     ];
     expect(new Set(statuses).size, "two of the four readings report the same word").toBe(4);
   });
@@ -1329,7 +1340,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     // refusal invisible to anybody reading the census.
     const cards = [next(11, null), next(12, null)];
     for (const cap of [8, 1, null]) {
-      expect(workNextReading(cards, cap, "COMPLETE").carrying, `cap ${String(cap)} dropped a carrier`).toEqual([
+      expect(workNextReading(cards, cap, "COMPLETE", WORK_NEXT_LABEL).carrying, `cap ${String(cap)} dropped a carrier`).toEqual([
         11, 12,
       ]);
     }
@@ -1342,11 +1353,11 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     // comfortably inside a depth of eight while the repository holds thirty.
     const slice = [next(11, null), item(1, 0), item(2, 0)];
     expect(
-      workNextReading(slice, 8, "COMPLETE").status,
+      workNextReading(slice, 8, "COMPLETE", WORK_NEXT_LABEL).status,
       "the premise: the SAME input, declared complete, is honoured",
     ).toBe("HONOURED");
 
-    const r = workNextReading(slice, 8, "SLICE");
+    const r = workNextReading(slice, 8, "SLICE", WORK_NEXT_LABEL);
     expect(r.status, "a slice bounded a ratio it has no denominator for").toBe("UNMEASURED");
     expect(r.honoured.size).toBe(0);
     expect(r.carrying, "a refused reading still names who asked").toEqual([11]);
@@ -1368,7 +1379,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
       [8, "SLICE"],
       [null, "SLICE"],
     ] as const) {
-      const r = workNextReading(quiet, cap, scope);
+      const r = workNextReading(quiet, cap, scope, WORK_NEXT_LABEL);
       expect(r.status, `cap ${String(cap)} / ${scope} spoke about a promotion nobody asked for`).toBe(
         "NONE",
       );
@@ -1377,15 +1388,15 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     // The control, one variable apart: the SAME capless slice with a single
     // carrier in it is UNMEASURED, so the row above is about the carriers
     // and not about the scope quietly ceasing to matter.
-    expect(workNextReading([...quiet, next(11, null)], null, "SLICE").status).toBe("UNMEASURED");
-    expect(workNextReading([...quiet, next(11, null)], 8, "SLICE").status).toBe("UNMEASURED");
+    expect(workNextReading([...quiet, next(11, null)], null, "SLICE", WORK_NEXT_LABEL).status).toBe("UNMEASURED");
+    expect(workNextReading([...quiet, next(11, null)], 8, "SLICE", WORK_NEXT_LABEL).status).toBe("UNMEASURED");
   });
 
   test("a slice refuses even when the depth is unreadable, naming the slice", () => {
     // Two UNMEASURED causes, and the first must not hide behind the second:
     // a run that is BOTH a slice and capless is still a slice, and telling
     // the operator only about the depth sends them to fix the wrong thing.
-    const r = workNextReading([next(11, null), item(1, 0)], null, "SLICE");
+    const r = workNextReading([next(11, null), item(1, 0)], null, "SLICE", WORK_NEXT_LABEL);
     expect(r.status).toBe("UNMEASURED");
     expect(r.why, "a capless slice reported only the depth").toContain("slice");
   });
@@ -1395,7 +1406,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     // three carriers against a depth of eight is inside the bound and still
     // orders nothing, because the label IS the population.
     const all = [next(11, null), next(12, null), next(13, null)];
-    const r = workNextReading(all, 8, "COMPLETE");
+    const r = workNextReading(all, 8, "COMPLETE", WORK_NEXT_LABEL);
     expect(r.status, "a label carried by every candidate ranks nothing and must refuse").toBe(
       "OVER_BOUND",
     );
@@ -1403,7 +1414,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     expect(r.why).toContain("all 3");
     // The control, one variable apart: the same three carriers with a single
     // unlabelled card beside them ARE a minority, and are honoured.
-    expect(workNextReading([...all, item(500, 0)], 8, "COMPLETE").status).toBe("HONOURED");
+    expect(workNextReading([...all, item(500, 0)], 8, "COMPLETE", WORK_NEXT_LABEL).status).toBe("HONOURED");
   });
 
   test("the label is NOT in LABEL_RANK — adding it there would not reach the top", () => {
@@ -1424,7 +1435,7 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
 
   test("the census counts promotions apart from the tier they came from", () => {
     const cards = [next(11, 6), item(1, 0), item(2, null, ["engine"]), item(3, null)];
-    const r = workNextReading(cards, 8, "COMPLETE");
+    const r = workNextReading(cards, 8, "COMPLETE", WORK_NEXT_LABEL);
     expect(placementCensus(cards, ENGINE, r.honoured)).toEqual({
       next: 1,
       phase: 1,
@@ -1451,19 +1462,94 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
       item(500, 0),
       item(501, 0),
     ];
-    expect(workNextReading(cards, cap, "COMPLETE").status).toBe("HONOURED");
-    expect(workNextReading([...cards, next(999, null)], cap, "COMPLETE").status).toBe("OVER_BOUND");
+    expect(workNextReading(cards, cap, "COMPLETE", WORK_NEXT_LABEL).status).toBe("HONOURED");
+    expect(workNextReading([...cards, next(999, null)], cap, "COMPLETE", WORK_NEXT_LABEL).status).toBe("OVER_BOUND");
   });
 
   test("two honoured cards order by age, and the why says where each would have sat", () => {
     const cards = [next(50, 6), next(10, 0), item(500, 0)];
-    const r = workNextReading(cards, 8, "COMPLETE");
+    const r = workNextReading(cards, 8, "COMPLETE", WORK_NEXT_LABEL);
     expect([...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number)).toEqual([
       10, 50, 500,
     ]);
     const why = placementOf(cards[0], ENGINE, r.honoured).why;
-    expect(why, "the promotion does not name the label that caused it").toContain(WORK_NEXT_LABEL);
+    expect(why, "the promotion does not name the lever that caused it").toContain("expedite label");
     expect(why, "the promotion hides where the card would otherwise have sat").toContain("phase 6");
+  });
+});
+
+/**
+ * Covers SC-2735 (SPEC-TO-BOARD-PIPELINE-SPEC.md): the expedite label and the
+ * filing-override label are read from project config, and no label that
+ * decides Ready or filing is a constant in library code.
+ *
+ * Breaking it: restore `.filter(i => i.labels.includes("work-this-next"))`
+ * in `workNextReading` and the first case goes red — the fixture's own label
+ * stops promoting anything. Restore either constant and the third names the
+ * file.
+ */
+describe("SC-2735: the labels that decide Ready and filing come from config", () => {
+  const ROOT = join(import.meta.dir, "..");
+  const codeOf = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  test("the reading honours the label it is GIVEN, and only that one", () => {
+    const cards = [item(10, 0), item(99, 6, [WORK_NEXT_LABEL])];
+    expect(workNextReading(cards, 8, "COMPLETE", WORK_NEXT_LABEL).status).toBe("HONOURED");
+    // One variable apart: the same cards, the reading handed another name.
+    // A library still matching a built-in string would honour #99 here too.
+    const other = workNextReading(cards, 8, "COMPLETE", "some-other-label");
+    expect(other.status, "a card was promoted by a label the reading was not given").toBe("NONE");
+    expect(other.honoured.size).toBe(0);
+  });
+
+  test("no configured label promotes nothing, and says what to set", () => {
+    const cards = [item(10, 0), item(99, 6, [WORK_NEXT_LABEL]), item(98, 6, ["work-this-next"])];
+    const r = workNextReading(cards, 8, "COMPLETE", null);
+    expect(r.status, "an unconfigured tree read as one where nobody asked").toBe("UNCONFIGURED");
+    expect(r.honoured.size, "an unconfigured tree promoted a card").toBe(0);
+    expect(r.why).toContain("board.expediteLabel");
+    expect(
+      [...cards].sort(readyOrderFor(ENGINE, r.honoured)).map(i => i.number),
+      "an unconfigured reading must leave the ordinary order exactly as it was",
+    ).toEqual([...cards].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number));
+  });
+
+  test("neither label is spelled as a string anywhere in library code", () => {
+    // The population is every library and script source, comments stripped,
+    // because a comment naming the label is documentation and a string
+    // literal is a decision. The control: the configured names ARE the two
+    // spellings searched for, so a rename in config cannot empty this scan.
+    const expedite = readExpediteLabel(ROOT);
+    const override = readFilingOverrideLabel(ROOT);
+    expect(expedite, "this repository configures no board.expediteLabel").not.toBeNull();
+    expect(override, "this repository configures no board.filingOverrideLabel").not.toBeNull();
+    const population = sourceFiles(ROOT, ["lib", "scripts", "hooks", "bin"]);
+    expect(population.length, "the sweep read no sources").toBeGreaterThan(50);
+    const offenders: string[] = [];
+    for (const path of population) {
+      const code = codeOf(readFileSync(join(ROOT, path), "utf-8"));
+      for (const label of [expedite!, override!]) {
+        for (const q of [`"${label}"`, `'${label}'`, `\`${label}\``]) {
+          if (code.includes(q)) offenders.push(`${path}: ${q}`);
+        }
+      }
+    }
+    expect(offenders, "a label that decides Ready or filing is a constant again — read it from config").toEqual([]);
+  });
+
+  test("every script that takes a work-next reading reads the label from config", () => {
+    const callers = sourceFiles(ROOT, ["scripts"]).filter(p =>
+      codeOf(readFileSync(join(ROOT, p), "utf-8")).includes("workNextReading("),
+    );
+    expect(callers.sort(), "the scan found no callers — it is measuring nothing").toEqual([
+      "scripts/board-mirror.ts",
+      "scripts/board-ready.ts",
+      "scripts/work-status.ts",
+    ]);
+    const offenders = callers.filter(
+      p => !codeOf(readFileSync(join(ROOT, p), "utf-8")).includes("readExpediteLabel("),
+    );
+    expect(offenders, "a caller takes a reading without reading board.expediteLabel").toEqual([]);
   });
 });
 
@@ -1485,7 +1571,7 @@ describe("#1962: the promotion reaches the writer, not only the report", () => {
       "the premise: unpromoted, the one slot goes to the lower phase",
     ).toEqual([10]);
     expect(
-      selectReady(eligible, occ, ENGINE, workNextReading(eligible, 8, "COMPLETE").honoured).promote.map(
+      selectReady(eligible, occ, ENGINE, workNextReading(eligible, 8, "COMPLETE", WORK_NEXT_LABEL).honoured).promote.map(
         i => i.number,
       ),
       "the writer ignored an honoured promotion",

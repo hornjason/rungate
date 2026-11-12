@@ -266,7 +266,15 @@ const UNCLAIMED_RATCHET = 150;
 // mutation: the step's own `run:` body, executed under `bash -e`, refuses
 // the short-board input where a copy with `exit $status` set to `exit 0`
 // ships.
-const CLAIMED_UNBINDABLE = 148;
+//
+// 150 adds SC-2735 (#1996) and SC-2737 (#1998), both ADR-013 rows and both
+// unbindable for the reason SC-2620 is: each is a claim about where a value
+// comes from or what a required check refuses, which no registered pattern
+// expresses. Each is named in a declaring position by its own suite, so the
+// ticks moved them into this population rather than opening a gap. SC-2737's
+// box was left unticked when #2003 merged, which is what reddened `main`'s
+// B2 reading at `0bae5df1`.
+const CLAIMED_UNBINDABLE = 150;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

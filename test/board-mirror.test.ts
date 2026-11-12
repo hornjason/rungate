@@ -893,13 +893,14 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       2,
       0,
       "Engine",
+      null,
     );
     expect(readyWritable.map(x => x.item.number)).toEqual([1, 3]);
     expect(heldByCap.map(x => x.item.number)).toEqual([5, 9]);
   });
 
   test("a full lane promotes nothing", () => {
-    const { readyWritable, heldByCap } = splitReadyChanges([promote(1), promote(2)], 2, 2, "Engine");
+    const { readyWritable, heldByCap } = splitReadyChanges([promote(1), promote(2)], 2, 2, "Engine", null);
     expect(readyWritable).toEqual([]);
     expect(heldByCap.map(x => x.item.number)).toEqual([1, 2]);
   });
@@ -914,6 +915,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       2,
       99,
       "Engine",
+      null,
     );
     expect(
       readyWritable.map(x => x.item.number).sort(),
@@ -931,6 +933,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       null,
       0,
       "Engine",
+      null,
     );
     expect(readyWritable.map(x => x.item.number)).toEqual([7]);
     expect(heldByCap.map(x => x.item.number)).toEqual([1, 2]);
@@ -938,7 +941,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
   });
 
   test("phase orders the promotions, and a phase-less issue is still promotable", () => {
-    const { readyWritable } = splitReadyChanges([c(4, null, "Ready"), c(9, 2, "Ready")], 1, 0, "Engine");
+    const { readyWritable } = splitReadyChanges([c(4, null, "Ready"), c(9, 2, "Ready")], 1, 0, "Engine", null);
     expect(
       readyWritable.map(x => x.item.number),
       "the phased issue goes first, and the phase-less one is queued rather than excluded",
@@ -951,7 +954,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
   // #2 outranks #1 on phase while #1 comes first on the board — and a
   // re-derived subset writes them backwards.
   test("the promotions are written in RANKED order, not in board order", () => {
-    const { readyWritable } = splitReadyChanges([c(1, 5, "Ready"), c(2, 0, "Ready")], 2, 0, "Engine");
+    const { readyWritable } = splitReadyChanges([c(1, 5, "Ready"), c(2, 0, "Ready")], 2, 0, "Engine", null);
     expect(
       readyWritable.map(x => x.item.number),
       "membership can be right while the sequence is wrong, and the log then " +
@@ -968,6 +971,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       2,
       2,
       "Engine",
+      null,
     );
     expect(
       readyWritable.map(x => x.item.number),
@@ -987,6 +991,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       2,
       2,
       "Engine",
+      null,
     );
     expect(
       readyWritable.map(x => x.item.number),

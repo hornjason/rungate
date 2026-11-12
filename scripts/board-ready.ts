@@ -47,7 +47,7 @@ import {
   type Dependent,
   type Incumbent,
 } from "../lib/board-ready-fanout";
-import { enginePrefixReading } from "../lib/config-readers";
+import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
 import {
   heldReason,
   holdsReadySlot,
@@ -789,7 +789,12 @@ async function main(): Promise<number> {
   // carriers. A run given both is a top-up, because the fan-out's candidates
   // are already a subset of it — the same sentence the dependent log above
   // is written on.
-  const workNext = workNextReading(eligible, cap, topUp ? "COMPLETE" : "SLICE");
+  const workNext = workNextReading(
+    eligible,
+    cap,
+    topUp ? "COMPLETE" : "SLICE",
+    readExpediteLabel(process.cwd()),
+  );
   if (workNext.status !== "NONE") console.log(`  ${workNext.why}`);
   const selection = selectReady(eligible, occ, engine.prefix, workNext.honoured);
   console.log(

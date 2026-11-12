@@ -143,18 +143,34 @@ import { asIssueFiles, overlapNote } from "./issue-file-overlap";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
 import { tryLoadRungateConfig } from "./config-loader";
-import { readQueueLabel } from "./config-readers";
+import { readFilingOverrideLabel, readQueueLabel } from "./config-readers";
 
 /**
- * The label that waives this gate.
+ * The label that waives this gate — `board.filingOverrideLabel`, or `null`.
  *
  * Separate from `OVERRIDE_LABELS`, which waives the VERIFY-phase lock. The
  * two gates answer different questions about the same command — *should you
  * be filing right now* and *is this finding worth filing* — and one label
  * waiving both would make it impossible to count how often each was
  * overridden, which is the measurement #1261 exists to start.
+ *
+ * **Config, not a constant** (SC-2735). It was `FILING_OVERRIDE_LABEL`, so
+ * the library chose every consumer's waiver token. `null` means NO waiver
+ * exists — absent, blank, non-string and unparseable alike — because a
+ * built-in name substituted for absent config would open the gate in every
+ * repository that never declared one.
+ *
+ * **It takes a THUNK for the reason `queueLabelFor` does**: the read is a
+ * bare `JSON.parse` underneath, and evaluated as an argument expression a
+ * malformed config would throw straight out of a PreToolUse hook.
  */
-export const FILING_OVERRIDE_LABEL = "arbiter-override";
+export function filingOverrideLabelFor(load: () => string | null): string | null {
+  try {
+    return load();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The refusals no label waives, each with the sentence saying why.
@@ -202,7 +218,7 @@ export const UNWAIVABLE_REFUSALS: Partial<Record<ArbiterRefusal, string>> = {
 };
 
 /**
- * Does `FILING_OVERRIDE_LABEL` waive this refusal?
+ * Does the filing-override label waive this refusal?
  *
  * **ONE binding, and it exists because there were briefly two.** `filingGate`
  * decided it when it chose whether the label overrides, and `refusalMessage`
@@ -3054,6 +3070,9 @@ export async function filingGate(
   // the same throw from the same file; a second note over one fact would be
   // two voices on one repair.
   const queueLabel = queueLabelFor(() => readQueueLabel(root));
+  // The waiver's name, once per command for the same reason (SC-2735). `null`
+  // waives nothing — `filingOverrideLabelFor`.
+  const overrideLabel = filingOverrideLabelFor(() => readFilingOverrideLabel(root));
   // Read once per TARGET TRACKER, not once per command and not once per
   // clause. Once per clause would adjudicate two creates against two
   // different snapshots; once per command would adjudicate a `--repo other/x`
@@ -3241,7 +3260,7 @@ export async function filingGate(
               "One issue per finding class per run, never per instance: fold this instance into " +
               "that filing and say *every instance* in it, rather than filing the second one.",
           };
-    const labelled = attempt.labels.includes(FILING_OVERRIDE_LABEL);
+    const labelled = overrideLabel !== null && attempt.labels.includes(overrideLabel);
     const prior = priorRows === null ? null : priorRefusalFor(attempt.title, priorRows);
     // **An override waives A REFUSAL, and the refusal need not be this
     // adjudication's** (#1536). `verdict.outcome === "REFUSE" && labelled`
@@ -3470,18 +3489,18 @@ export async function filingGate(
       siblingTitles.set(String(index), attempt.title);
     }
 
-    if (verdict.outcome === "REFUSE" && !overridden) refusals.push(refusalMessage(verdict));
+    if (verdict.outcome === "REFUSE" && !overridden) refusals.push(refusalMessage(verdict, overrideLabel));
     // `read1`, never `verdict`: a clause whose tracker could not be read AND
     // whose class a sibling already files is both facts at once, and the
     // conversion above keeps only the second. An UNMEASURED nobody sees is
     // the silent pass this file's header exists to prevent.
     if (read1.outcome === "UNMEASURED") notes.push(unmeasuredNote(read1));
-    if (overridden) notes.push(overrideNote(verdict, prior));
+    if (overridden) notes.push(overrideNote(verdict, overrideLabel!, prior));
     // A re-draft that cleared the gate on its own is not refused and not
     // blocked — the gate does not get stricter here (#1536). It is SAID, so
     // the honest filer who labels the override and the filer who reworded
     // until it passed stop producing the same ledger.
-    else if (prior !== null && verdict.outcome !== "REFUSE") notes.push(refiledNote(attempt.title, prior));
+    else if (prior !== null && verdict.outcome !== "REFUSE") notes.push(refiledNote(attempt.title, prior, overrideLabel));
 
     // ── #1743: this body names a file an open issue already names ──────────
     //
@@ -3667,7 +3686,7 @@ export async function filingGate(
         withheldBy: refusal,
         overridden: row.overridden && waivableRefusal(refusal),
       };
-      refusals.push(refusalMessage({ ...verdicts[index], outcome: "REFUSE", refusal, reason }));
+      refusals.push(refusalMessage({ ...verdicts[index], outcome: "REFUSE", refusal, reason }, overrideLabel));
       // Nothing after this clause can file — the refusal blocks the command
       // — so reserving for it would strand another allowance.
       break;
@@ -3803,7 +3822,7 @@ export function markBlockedCommand(rows: readonly FilingLedgerRow[]): FilingLedg
  * not already have it. Naming-to-deny and naming-to-offer are different
  * acts, and only the first is worth the words (#1595, 2026-10-25).
  */
-export function refusalMessage(v: FilingAdjudication): string {
+export function refusalMessage(v: FilingAdjudication, overrideLabel: string | null): string {
   // **The BRANCH is `waivableRefusal`, the WORDS are the map.** Reading the
   // map for both would make this a second decider over "does the label
   // waive this" — the drift FG-156 exists to catch, and the mutation that
@@ -3815,10 +3834,17 @@ export function refusalMessage(v: FilingAdjudication): string {
       : UNWAIVABLE_REFUSALS[v.refusal];
   const tail = unwaivable
     ? [
-        `--label ${FILING_OVERRIDE_LABEL} does NOT waive this one. ${unwaivable}`,
+        overrideLabel === null
+          ? `No label waives this one. ${unwaivable}`
+          : `--label ${overrideLabel} does NOT waive this one. ${unwaivable}`,
         `The attempt is recorded in ${ledgerPath()} either way.`,
       ]
-    : [
+    : overrideLabel === null
+      ? [
+          "No label waives this refusal here: this project configures no filing-override",
+          "label (board.filingOverrideLabel), so there is no route around it to record.",
+        ]
+      : [
         "A label waives this refusal. It is deliberately not spelled here and not offered",
         "as a step: every filing believes it is the exception, so a refusal that hands over",
         "the way around itself is read as the way around itself. If you reach for it, it is",
@@ -3964,15 +3990,19 @@ export function ledgerTitle(title: string): string {
  * re-drafted and the collision no longer reproduces. Naming its timestamp
  * rather than describing it is the point: a reader can find the refusal.
  */
-export function overrideNote(v: FilingAdjudication, prior: FilingLedgerRow | null = null): string {
+export function overrideNote(
+  v: FilingAdjudication,
+  overrideLabel: string,
+  prior: FilingLedgerRow | null = null,
+): string {
   if (v.refusal !== null) {
     return (
-      `[FindingArbiter] Allowed by --label ${FILING_OVERRIDE_LABEL}, over a ${v.refusal} ` +
+      `[FindingArbiter] Allowed by --label ${overrideLabel}, over a ${v.refusal} ` +
       `refusal: ${v.reason}. Recorded in ${ledgerPath()}.`
     );
   }
   return (
-    `[FindingArbiter] Allowed by --label ${FILING_OVERRIDE_LABEL}, over the ${prior?.refusal} ` +
+    `[FindingArbiter] Allowed by --label ${overrideLabel}, over the ${prior?.refusal} ` +
     `refusal of this same title at ${prior?.at}. This adjudication did not reproduce it — the ` +
     "body has changed since, and the body is an input to the symptom keys — so the override is " +
     `recorded against that row rather than this one. Recorded in ${ledgerPath()}.`
@@ -4038,13 +4068,15 @@ export function unreadableShipPolicyNote(cap: number): string {
  * stricter: the defect is that a re-draft was *invisible*, not that it got
  * through. So this is the visibility, and the filing proceeds.
  */
-export function refiledNote(title: string, prior: FilingLedgerRow): string {
+export function refiledNote(title: string, prior: FilingLedgerRow, overrideLabel: string | null): string {
   return (
     `[FindingArbiter] This title was refused at ${prior.at} (${prior.refusal}` +
     `${prior.duplicateOf.length > 0 ? `, against ${prior.duplicateOf.map(d => `#${d}`).join(", ")}` : ""}) ` +
     "and this adjudication does not reproduce it, because the body has changed and the body is " +
-    `an input to the symptom keys. The filing is ALLOWED and nothing is blocked. If you meant to ` +
-    `override that refusal, say so with --label ${FILING_OVERRIDE_LABEL} so it is counted; if the ` +
+    `an input to the symptom keys. The filing is ALLOWED and nothing is blocked. ` +
+    (overrideLabel === null
+      ? "This project configures no filing-override label, so there is no override to declare; if the "
+      : `If you meant to override that refusal, say so with --label ${overrideLabel} so it is counted; if the `) +
     `re-draft genuinely describes a different finding, this note is the only record that the two ` +
     `share a title. Title: ${title}`
   );
