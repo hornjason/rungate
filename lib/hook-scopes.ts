@@ -376,6 +376,84 @@ export function unplacedHooks(input: {
   });
 }
 
+/**
+ * A registry description that says its hook is not live (#1986).
+ *
+ * Prose, and that is the honest limit of this check: the registry carries no
+ * structured liveness field, so the claim it can compare is the one a person
+ * wrote. `TopLevelCdGuard`'s entry said "this hook is NOT LIVE" for weeks
+ * while `~/.claude/settings.json` registered it and it refused commands.
+ */
+export const NOT_LIVE_CLAIM = /\bnot live\b/i;
+
+/**
+ * Registry entries whose NOT LIVE claim the machine's registration contradicts,
+ * as lines a person reads at session start (#1986).
+ *
+ * The verdict is `hookRegistration`'s, not a second one. The registry scope is
+ * emptied first, because every registry entry carries its own command and a
+ * session does not load hooks from the registry: counted, it would make every
+ * NOT LIVE claim disagree with itself. With that scope empty, `registered`
+ * means a settings file a session loads names the hook — a disagreement;
+ * `unmeasured` means a machine scope could not be read — said as UNMEASURED,
+ * which is every CI runner; `unregistered` agrees with the claim, and is
+ * silent.
+ */
+export function liveClaimLines(
+  entries: readonly { name?: unknown; description?: unknown }[],
+  readings: ScopeReading[],
+): string[] {
+  assertEveryScopeRead(readings);
+  const loaded = readings.map(r =>
+    r.scope === "repo-registry" ? { scope: r.scope, commands: [] as string[] } : r,
+  );
+  const lines: string[] = [];
+  for (const e of entries) {
+    if (typeof e.name !== "string" || typeof e.description !== "string") continue;
+    if (!NOT_LIVE_CLAIM.test(e.description)) continue;
+    const r = hookRegistration(e.name, loaded);
+    if (r.verdict === "registered") {
+      lines.push(
+        `Hook registry DISAGREES: ${e.name} is described as not live in .claude/rungate/hooks.json, ` +
+          `but ${r.registeredIn.join(", ")} registers it — correct the entry (#1986)`,
+      );
+    } else if (r.verdict === "unmeasured") {
+      lines.push(
+        `Hook registry UNMEASURED: ${e.name} is described as not live, and ${r.unreadable.join(", ")} ` +
+          `could not be read to check that claim (#1986)`,
+      );
+    }
+  }
+  return lines;
+}
+
+/**
+ * `liveClaimLines` over a fresh reading, as its own reading (#1986).
+ *
+ * It catches its own failure and says UNMEASURED, so a caller that runs it
+ * beside another reading cannot have one throw silence the other — review of
+ * #2026 found it first sharing `HookCurrency`'s tree-currency `catch`, where a
+ * git failure there would have dropped this comparison and been reported as
+ * the other reading's error.
+ */
+export function liveClaimReport(input: {
+  repoRoot: string;
+  home: string;
+  readFile: (path: string) => string | null;
+  registry: readonly unknown[];
+  registryCommands: string[];
+}): string[] {
+  try {
+    const scopes = readRegistrationScopes(input.repoRoot, input.home, input.readFile, input.registryCommands);
+    return liveClaimLines(input.registry as { name?: unknown; description?: unknown }[], scopes);
+  } catch (e) {
+    return [
+      `Hook registry UNMEASURED: NOT LIVE claims could not be compared — ` +
+        `${e instanceof Error ? e.message : String(e)} (#1986)`,
+    ];
+  }
+}
+
 /** The same verdict for a list of hooks, over one reading. */
 export function registrationCensus(
   hooks: string[],
