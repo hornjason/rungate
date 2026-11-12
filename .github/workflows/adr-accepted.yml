@@ -89,6 +89,14 @@ jobs:
             echo "::error::UNMEASURED — board.engineSpec and board.milestonePrefix must both be set in .claude/rungate/config.json to place a plan. Nothing was written."
             exit 1
           fi
+          # A newline in either would write a second key into GITHUB_OUTPUT
+          # (security review of #2009).
+          case "$spec$prefix" in
+            *$'\n'*)
+              echo "::error::board.engineSpec or board.milestonePrefix contains a newline. Nothing was written."
+              exit 1
+              ;;
+          esac
           {
             echo "any=true"
             echo "spec=$spec"

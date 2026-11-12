@@ -599,8 +599,11 @@ export function adrStatus(text: string): string | null {
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.trim() === "---") return null;
+    // Quotes and case are YAML spelling, not a different status: `"accepted"`
+    // and `Accepted` were read as not-accepted and the plan was silently
+    // never placed (security review of #2009).
     const m = /^status:\s*(.*?)\s*$/.exec(line);
-    if (m) return m[1]!;
+    if (m) return m[1]!.replace(/^(["'])(.*)\1$/, "$2").trim().toLowerCase();
   }
   return null;
 }
@@ -613,6 +616,22 @@ export function adrStatus(text: string): string | null {
  */
 export function newlyAccepted(before: string | null, after: string): boolean {
   return adrStatus(after) === "accepted" && (before === null || adrStatus(before) !== "accepted");
+}
+
+/** The author associations whose closed issue may stand for a plan's row. */
+export const TRUSTED_AUTHORS: readonly string[] = ["OWNER", "MEMBER", "COLLABORATOR"];
+
+/**
+ * May this CLOSED issue stand for a plan row with the same title? (SC-2738)
+ *
+ * Only finished work by somebody who can merge. Security review of #2009: on a
+ * public repository anyone can open an issue titled with a row's outcome
+ * (copied from the open ADR pull request) and close it themselves; read as
+ * done, the row is never filed and its dependents point at the stranger's
+ * issue. A close as "not planned" or "duplicate" is not finished work either.
+ */
+export function closedIssueCounts(issue: { state_reason: string | null; author_association: string }): boolean {
+  return issue.state_reason === "completed" && TRUSTED_AUTHORS.includes(issue.author_association);
 }
 
 /** Whether a document carries a Decomposition table for `--decompose` to read. */

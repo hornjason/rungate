@@ -41,6 +41,7 @@ import {
 } from "../lib/issue-repair";
 import type { RepairRow } from "../lib/issue-repair";
 import {
+  closedIssueCounts,
   hasDecompositionTable,
   newlyAccepted,
   parseDecompositionPlan,
@@ -205,12 +206,18 @@ function issueTitles(repo: string, state: "open" | "closed"): Map<string, number
     "--paginate",
     `repos/${repo}/issues?state=${state}&per_page=100`,
     "--jq",
-    ".[] | select(.pull_request == null) | [.number, .title] | @json",
+    ".[] | select(.pull_request == null) | [.number, .title, .state_reason, .author_association] | @json",
   ]);
   const map = new Map<string, number>();
   for (const line of out.split("\n")) {
     if (line.trim() === "") continue;
-    const [number, title] = JSON.parse(line) as [number, string];
+    const [number, title, state_reason, author_association] = JSON.parse(line) as [
+      number,
+      string,
+      string | null,
+      string,
+    ];
+    if (state === "closed" && !closedIssueCounts({ state_reason, author_association })) continue;
     // The FIRST number seen for a title is kept. Two closed issues sharing a
     // title are both finished work; which one a blocked row points at does
     // not change what it waits for.
@@ -236,7 +243,10 @@ const LIVE_DECOMPOSE: DecomposeGitHub = {
    * and skip creating it.
    */
   openTitles: async repo => issueTitles(repo, "open"),
-  /** The same read, for closed issues. Paginated for the same reason. */
+  /**
+   * The same read, for closed issues, kept only where `closedIssueCounts`
+   * says the close is finished work by a trusted author.
+   */
   closedTitles: async repo => issueTitles(repo, "closed"),
   /**
    * Every milestone, PAGINATED, for a worse reason than `openTitles` above.

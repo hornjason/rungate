@@ -21,7 +21,7 @@ import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { adrStatus, newlyAccepted } from "../lib/issue-decomposition";
+import { adrStatus, closedIssueCounts, newlyAccepted } from "../lib/issue-decomposition";
 import { REFUSAL_EXIT, main as planIssuesMain } from "../scripts/plan-issues";
 
 const adr = (status: string, table = true) =>
@@ -59,6 +59,14 @@ describe("SC-2738: newlyAccepted reads the frontmatter status at both ends", () 
   test("SC-2738: accepted → superseded, and proposed → proposed, are not acceptances", () => {
     expect(newlyAccepted(adr("accepted"), adr("superseded"))).toBe(false);
     expect(newlyAccepted(adr("proposed"), adr("proposed"))).toBe(false);
+  });
+
+  test("SC-2738: quotes and case are spelling — `\"accepted\"` and `Accepted` are accepted", () => {
+    // Security review of #2009: an exact-match read skipped these silently,
+    // with a green run and nothing placed.
+    expect(newlyAccepted(adr("proposed"), adr('"accepted"'))).toBe(true);
+    expect(newlyAccepted(adr("proposed"), adr("Accepted"))).toBe(true);
+    expect(newlyAccepted(adr("'accepted'"), adr("accepted"))).toBe(false);
   });
 
   test("SC-2738: only the FRONTMATTER decides — a body line reading `status: accepted` does not", () => {
@@ -200,5 +208,45 @@ describe("SC-2738: .github/workflows/adr-accepted.yml runs the five steps in ord
     const decompose = steps.find(s => runOf(s).includes("plan-issues.ts --decompose"));
     expect(decompose.env.GITHUB_TOKEN).toBe("${{ secrets.GITHUB_TOKEN }}");
     expect(doc.permissions).toEqual({ contents: "read", issues: "write" });
+  });
+});
+
+describe("SC-2738: a closed issue stands for a row only when it is finished work by a trusted author", () => {
+  // Security review of #2009: anyone can open an issue on a public repository
+  // titled with a row's outcome and close it themselves.
+  test("SC-2738: completed, by an owner, member or collaborator → counts", () => {
+    for (const a of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+      expect(closedIssueCounts({ state_reason: "completed", author_association: a })).toBe(true);
+    }
+  });
+
+  test("SC-2738: completed by a stranger does NOT count — the row is filed", () => {
+    for (const a of ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER"]) {
+      expect(closedIssueCounts({ state_reason: "completed", author_association: a })).toBe(false);
+    }
+  });
+
+  test("SC-2738: closed as not planned or duplicate does NOT count, even by the owner", () => {
+    for (const r of ["not_planned", "duplicate", null]) {
+      expect(closedIssueCounts({ state_reason: r, author_association: "OWNER" })).toBe(false);
+    }
+  });
+});
+
+describe("SC-2738: the config read refuses a value that would forge a GITHUB_OUTPUT key", () => {
+  test("SC-2738: the workflow's own newline guard, executed under bash -e", () => {
+    const doc = Bun.YAML.parse(readFileSync(join(import.meta.dir, "..", ".github", "workflows", "adr-accepted.yml"), "utf-8")) as any;
+    const run = String(doc.jobs["place-the-plan"].steps.find((s: any) => s.id === "accepted").run);
+    const guard = run.slice(run.indexOf('case "$spec$prefix" in'), run.indexOf("esac") + 4);
+    expect(guard.startsWith("case")).toBe(true);
+    const sh = (spec: string) =>
+      spawnSync("bash", ["-e", "-c", `${guard}\necho passed`], { env: { spec, prefix: "Pipeline" }, encoding: "utf-8" });
+    const bad = sh("specs/A.md\nany=false");
+    expect(bad.status).toBe(1);
+    expect(bad.stdout).toContain("contains a newline");
+    // The control: a plain value passes the same guard.
+    const good = sh("specs/A.md");
+    expect(good.status).toBe(0);
+    expect(good.stdout).toContain("passed");
   });
 });
