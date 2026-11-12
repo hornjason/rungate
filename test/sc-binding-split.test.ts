@@ -287,7 +287,10 @@ const UNCLAIMED_RATCHET = 150;
 // 153 -> 154: SC-2740 ticked on the PR closing #2001 (ADR-013 row 7). A
 // claim about what a command file instructs, which no registered pattern
 // expresses; `test/dry-run-command.test.ts` names it in a declaring position.
-const CLAIMED_UNBINDABLE = 154;
+// 154 -> 155: SC-2741 ticked on the PR closing #2002 (ADR-013 row 8). A
+// claim about what the Ready writer promotes and demotes, which no registered
+// pattern expresses; `test/board-ready-fanout.test.ts` names it in a declaring position.
+const CLAIMED_UNBINDABLE = 155;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
