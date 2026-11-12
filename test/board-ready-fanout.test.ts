@@ -515,7 +515,7 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
     expect(assignedArm, "unquoted $ISSUE word-splits into flags").not.toMatch(
       /--moving-issue \$ISSUE/,
     );
-    const otherArm = /\n\s*top-up \| unassigned \| opened \| reopened\)\n([\s\S]*?);;/.exec(yml)?.[1];
+    const otherArm = /\n\s*top-up \| unassigned \| opened \| reopened \| milestoned \| demilestoned \| labeled\)\n([\s\S]*?);;/.exec(yml)?.[1];
     expect(otherArm, "no combined arm for the non-relaning modes").toBeDefined();
     expect(otherArm, "a mode board-flow does not relane must not name a mover").not.toContain(
       "--moving-issue",
