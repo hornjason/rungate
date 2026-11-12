@@ -55,9 +55,10 @@ none, say so and stop.
 7. Print **Needs you** — each decision as one yes/no line, or "nothing".
 8. Write the visual next to the document as `<document-basename>-flow.html`:
    dark theme, a legend for hand / auto / judgement, the run as a timeline,
-   every issue as a card, today against after. Open it with `open <path>`.
+   every issue as a card, today against after. Open it with `open` on macOS
+   or `xdg-open` on Linux; where neither exists, print the path instead.
 
 ## Done means
 
 The terminal shows only the numbered run, real outputs, gaps, improvements
-and decisions, and the `-flow.html` visual is written and open.
+and decisions, and the `-flow.html` visual is written and opened, or its path printed.

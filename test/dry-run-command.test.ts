@@ -35,6 +35,7 @@ describe("SC-2740: /dry-run is a project command that shows a proposal as a real
     ["it shows the gaps found", "Gaps found"],
     ["it says what needs Jason", "Needs you"],
     ["it writes the visual next to the document", "-flow.html"],
+    ["it opens the visual on Linux as well as macOS", "xdg-open"],
     ["it reads the document from disk every run", "from disk every run"],
   ];
   for (const [what, phrase] of MUST) {
