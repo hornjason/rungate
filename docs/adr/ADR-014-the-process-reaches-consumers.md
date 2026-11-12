@@ -72,7 +72,8 @@ API allows, `UNMEASURED` where it does not.
 3. **The board's identity comes from config — Rayford, same.** `board.project`
    and the project URL are read from `.claude/rungate/config.json`; no
    generator writes a literal project id. ADR-013 decision 5 already did this
-   for labels.
+   for labels. #1719 (SC-2621, already in Phase 7) does it for the scripts'
+   own reads, so row 4 is blocked by it — found by this ADR's first dry run.
 4. **Rule 9 reaches consumers as an owned rules file — open.**
    Recommendation: `.claude/rules/alignment-process.md`, scaffold-owned,
    generated from one source that this repository's AGENTS.md rule 9 is
@@ -115,7 +116,7 @@ rather than run in parallel.
 | SC-2742 | The process workflows' scripts ship in the package and run as CLI commands | lib/cli-commands.ts, package.json, scripts/board-ready.ts, scripts/audit-closing-references.ts, .claude/rules/commands-routing.md, test/package-closure.test.ts | Pipeline Phase 7 — nothing is hand-run | — |
 | SC-2743 | Scaffold emits closing-references.yml as an owned workflow | lib/scaffold/closing-references-workflow.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .github/workflows/closing-references.yml, test/closing-references-workflow.test.ts | Pipeline Phase 7 — nothing is hand-run | The process workflows' scripts ship in the package and run as CLI commands |
 | SC-2744 | Scaffold emits adr-accepted.yml as an owned workflow | lib/scaffold/adr-accepted-workflow.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .github/workflows/adr-accepted.yml, test/adr-accepted-workflow.test.ts | Pipeline Phase 7 — nothing is hand-run | Scaffold emits closing-references.yml as an owned workflow |
-| SC-2745 | Scaffold emits board-ready.yml and board-intake.yml with the board read from config | lib/scaffold/board-ready-workflow.ts, lib/scaffold/board-intake-workflow.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .github/workflows/board-ready.yml, .github/workflows/board-intake.yml, test/board-ready-fanout.test.ts, test/board-intake.test.ts | Pipeline Phase 7 — nothing is hand-run | Scaffold emits adr-accepted.yml as an owned workflow |
+| SC-2745 | Scaffold emits board-ready.yml and board-intake.yml with the board read from config | lib/scaffold/board-ready-workflow.ts, lib/scaffold/board-intake-workflow.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .github/workflows/board-ready.yml, .github/workflows/board-intake.yml, test/board-ready-fanout.test.ts, test/board-intake.test.ts | Pipeline Phase 7 — nothing is hand-run | #1719, Scaffold emits adr-accepted.yml as an owned workflow |
 | SC-2746 | Scaffold installs the dry-run command and the ADR template | lib/scaffold/owned-files.ts, lib/scaffold/write-steps.ts, .claude/rules/harness-managed.md, test/scaffold-ownership.test.ts, test/dry-run-command.test.ts | Pipeline Phase 7 — nothing is hand-run | Scaffold emits board-ready.yml and board-intake.yml with the board read from config |
 | SC-2747 | Scaffold installs the four-step process as an owned rules file | lib/scaffold/process-rules.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, test/process-rules.test.ts, test/rule-provenance.test.ts | Pipeline Phase 7 — nothing is hand-run | Scaffold installs the dry-run command and the ADR template |
 | SC-2748 | Scaffold writes the two label keys or reports each one unset | lib/scaffold/steps.ts, test/scaffold-label-keys.test.ts | Pipeline Phase 7 — nothing is hand-run | — |
