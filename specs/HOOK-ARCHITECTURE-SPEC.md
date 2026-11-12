@@ -7,6 +7,7 @@ updated: 2026-09-21
 governs: Hook architecture — hooks as thin triggers delegating to lib/ modules, not deep logic in hook files
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Hook Architecture

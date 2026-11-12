@@ -145,7 +145,8 @@ criterion below. Measured 2026-11-11: Ready topped up from 49 candidates of
 which 46 carried only a label, no workflow placed a plan on the board, and 14
 of the last 40 merged PRs closed no issue.
 
-- [ ] SC-2734: `spec-placement` measures only the specs in scope — a spec held back declares so in its own frontmatter, and the deferred specs are banked by path with their criteria counts in a ratchet that refuses both a rise and a fall, so the reading cannot go green on a population shrunk by swapping members
+- [x] SC-2734: `spec-placement` measures only the specs in scope — a spec held back declares so in its own frontmatter, and the deferred specs are banked by path with their criteria counts in a ratchet that refuses both a rise and a fall, so the reading cannot go green on a population shrunk by swapping members
+      proved-by: test/board-conformance.test.ts, the `SC-2734` describe (`-t SC-2734`) — 9 pass, 0 fail, 2026-11-12, on the PR that closes #1995. A spec is held back by `board-scope: deferred` in its frontmatter (a body line does not count); `.claude/spec-deferral-ratchet.json` banks the 22 deferred specs by path and criteria count; a swap, a rise, a fall, a moved count, or no bank read each turns `spec-placement` UNMEASURED; the live tree equals its bank and leaves exactly the engine and payload specs in scope.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2735: the expedite label and the filing-override label are read from project config, and no label that decides Ready or filing is a constant in library code
       proved-by: test/board-ready-rule.test.ts and test/issue-filing-gate.test.ts, the two `SC-2735` describes — 8 pass, 0 fail, 2026-11-11, on the PR that closes #1996. Restoring either hardcoded label string turns 4 of the 8 red; the library-wide scan finds no quoted spelling of either configured label in lib, scripts, hooks or bin.

@@ -7,6 +7,7 @@ updated: 2026-10-14
 governs: Parallel agent coordination — file-claim manifests and module-boundary decomposition to prevent merge conflicts in multi-agent AFK work
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Parallel Agent Coordination

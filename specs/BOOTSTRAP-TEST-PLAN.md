@@ -8,6 +8,7 @@ governs: Test strategy for BOOTSTRAP-DATA-FLOW-SPEC.md — verification approach
 testable: true
 compliance: strict
 parent-spec: BOOTSTRAP-DATA-FLOW-SPEC.md
+board-scope: deferred
 ---
 
 # Bootstrap Data Flow Test Plan

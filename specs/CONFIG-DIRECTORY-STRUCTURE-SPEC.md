@@ -7,6 +7,7 @@ updated: 2026-10-17
 governs: rungate config architecture — directory-based config replacing monolithic rungate.json, self-describing compliance policy, organize external sources
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Config Directory Structure

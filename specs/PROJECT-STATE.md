@@ -7,6 +7,7 @@ updated: 2026-10-17
 governs: Project state management — how project-state.json drives PROJECT-STATE.md generation and session handoff
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Project State

@@ -7,6 +7,7 @@ updated: 2026-09-20
 governs: Instruction compliance testing — grading, behavioral verification, and hill climbing template files
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Instruction Compliance Spec

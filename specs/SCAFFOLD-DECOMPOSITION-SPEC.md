@@ -7,6 +7,7 @@ updated: 2026-09-21
 governs: Scaffold decomposition — extracting scan, generation, and validation from the 1,844-line scaffold-project.ts into focused modules
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Scaffold Decomposition

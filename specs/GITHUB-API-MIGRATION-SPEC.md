@@ -7,6 +7,7 @@ updated: 2026-10-06
 governs: GitHub API access — two-layer architecture replacing gh CLI with MCP (agent prompts) and Octokit (TypeScript infrastructure)
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # GitHub API Migration

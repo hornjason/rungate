@@ -7,6 +7,7 @@ updated: 2026-10-17
 governs: Agent rule lifecycle — baseline vs mined tiers, path-scoped loading, concurrent-load budget, automatic promotion and retirement
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Rule lifecycle and context budget

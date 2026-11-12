@@ -61,7 +61,7 @@ import {
 } from "../lib/spec-placement";
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { NAMES_NONE, criteriaNamedBy, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
-import type { RepoIssueCriteria, SpecPlacementRow } from "./board-conformance";
+import type { RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -238,7 +238,38 @@ export interface ProducedSnapshot {
    * producer and #1717.
    */
   specPlacements?: SpecPlacementRow[];
+  /** SC-2734: the bank in `.claude/spec-deferral-ratchet.json`. Absent when it could not be read. */
+  specDeferrals?: SpecDeferral[];
   repoIssues?: RepoIssueCriteria[];
+}
+
+/** The path the deferral bank lives at, relative to the project root — SC-2734. */
+export const DEFERRAL_BANK = ".claude/spec-deferral-ratchet.json";
+
+/**
+ * Read the deferral bank — SC-2734. Returns `{}` (the key omitted) when the
+ * file is absent or is not `{ "deferred": [{ path, criteria }] }`, and says
+ * which on stderr, because a corrupt bank is never a missing one.
+ */
+export function readDeferralBank(root: string): { specDeferrals?: SpecDeferral[] } {
+  const path = join(root, DEFERRAL_BANK);
+  if (!existsSync(path)) {
+    process.stderr.write(`board-snapshot: ${DEFERRAL_BANK} is absent; deferred specs cannot be checked\n`);
+    return {};
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf-8"));
+  } catch (e) {
+    process.stderr.write(`board-snapshot: ${DEFERRAL_BANK} could not be parsed (${(e as Error).message}); deferred specs cannot be checked\n`);
+    return {};
+  }
+  const list = (raw as { deferred?: unknown })?.deferred;
+  if (!Array.isArray(list) || !list.every(d => typeof d?.path === "string" && Number.isInteger(d?.criteria))) {
+    process.stderr.write(`board-snapshot: ${DEFERRAL_BANK} is not { "deferred": [{ path, criteria }] }; deferred specs cannot be checked\n`);
+    return {};
+  }
+  return { specDeferrals: list.map(d => ({ path: d.path as string, criteria: d.criteria as number })) };
 }
 
 /**
@@ -727,8 +758,15 @@ export async function main(
             state: s.state,
             criteria: s.criteria,
             placed: s.placed,
+            ...(s.deferred ? { deferred: true } : {}),
           })),
         };
+
+  // SC-2734. The bank the deferred specs are compared against. An absent or
+  // malformed file omits the key, and the reading goes UNMEASURED as soon as
+  // any spec declares itself deferred — a bank nobody could read is not an
+  // empty bank, and reading it as one would let every deferral through.
+  const deferrals = readDeferralBank(root);
 
   // SC-2616. The criterion union comes from the SAME sweep `board-mirror`
   // uses to build the column, so "which ids exist" has one answer. A second
@@ -779,6 +817,7 @@ export async function main(
     queueLabel: readQueueLabel(root),
     criteria: criterionCoverage(content, snapshotIssues, columnRead),
     ...placements,
+    ...deferrals,
     ...repoIssues,
   };
 
