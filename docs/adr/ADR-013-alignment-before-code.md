@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-11
 updated: 2026-11-11
 ---
@@ -9,7 +9,7 @@ updated: 2026-11-11
 
 ## Status
 
-**Proposed, 2026-11-11. Revision 4.** Revisions 1, 2 and 3 were each audited
+**Accepted, 2026-11-11. Revision 4.** Revisions 1, 2 and 3 were each audited
 by a fresh reader with no part in the conversation; a process review and a
 whole-process audit sit between them. Every decision below carries who made
 it. Earlier revisions, with every audit finding verbatim, are in this file's
@@ -150,20 +150,20 @@ its own rule.
 
 ## Decomposition
 
-Ids are reserved in `specs/sc-reservations.json` at acceptance and written
-here then; `SC-TBD` marks each until that PR. All rows sit in the current
-frontier milestone.
+Ids SC-2734 to SC-2741 are reserved in `specs/sc-reservations.json` and
+written as criteria in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, placed in
+Phase 6. All rows sit in the current frontier milestone.
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
-| SC-TBD | The meter counts only in-scope specs with deferred specs ratcheted by path | scripts/board-conformance.ts, .claude/spec-deferral-ratchet.json, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, test/board-conformance.test.ts | Pipeline Phase 6 — the board's state is a reading | |
-| SC-TBD | The expedite and filing-override labels are read from config | .claude/rungate/config.json, lib/config-readers.ts, lib/board-ready-rule.ts, lib/issue-filing-gate.ts, test/board-ready-rule.test.ts | Pipeline Phase 6 — the board's state is a reading | |
-| SC-TBD | Rule 9 carries the four-step process and its exempt class | AGENTS.md, test/rule-provenance.test.ts | Pipeline Phase 6 — the board's state is a reading | |
-| SC-TBD | A PR must close an issue that names a criterion | .github/workflows/closing-references.yml, scripts/audit-closing-references.ts, test/audit-closing-references.test.ts | Pipeline Phase 6 — the board's state is a reading | |
-| SC-TBD | Merging an accepted ADR places its plan on the board | .github/workflows/adr-accepted.yml, scripts/plan-issues.ts, lib/issue-decomposition.ts, test/issue-decomposition.test.ts, test/adr-accepted-workflow.test.ts | Pipeline Phase 6 — the board's state is a reading | ADR template whose table the filing tool reads |
-| SC-TBD | ADR template whose table the filing tool reads | docs/adr/TEMPLATE.md, test/adr-template.test.ts | Pipeline Phase 6 — the board's state is a reading | |
-| SC-TBD | The dry-run command shows a proposal as a real dry run with its visual | .claude/commands/dry-run.md, test/dry-run-command.test.ts | Pipeline Phase 6 — the board's state is a reading | |
-| SC-TBD | Ready refills only from the active milestone | lib/board-ready-rule.ts, scripts/board-ready.ts, .github/workflows/board-ready.yml, .github/workflows/board-intake.yml, scripts/board-mirror.ts, test/board-ready-rule.test.ts, test/board-ready-fanout.test.ts | Pipeline Phase 6 — the board's state is a reading | The expedite and filing-override labels are read from config |
+| SC-2734 | The meter counts only in-scope specs with deferred specs ratcheted by path | scripts/board-conformance.ts, .claude/spec-deferral-ratchet.json, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, test/board-conformance.test.ts | Pipeline Phase 6 — the board's state is a reading | |
+| SC-2735 | The expedite and filing-override labels are read from config | .claude/rungate/config.json, lib/config-readers.ts, lib/board-ready-rule.ts, lib/issue-filing-gate.ts, test/board-ready-rule.test.ts | Pipeline Phase 6 — the board's state is a reading | |
+| SC-2736 | Rule 9 carries the four-step process and its exempt class | AGENTS.md, test/rule-provenance.test.ts | Pipeline Phase 6 — the board's state is a reading | |
+| SC-2737 | A PR must close an issue that names a criterion | .github/workflows/closing-references.yml, scripts/audit-closing-references.ts, test/audit-closing-references.test.ts | Pipeline Phase 6 — the board's state is a reading | |
+| SC-2738 | Merging an accepted ADR places its plan on the board | .github/workflows/adr-accepted.yml, scripts/plan-issues.ts, lib/issue-decomposition.ts, test/issue-decomposition.test.ts, test/adr-accepted-workflow.test.ts | Pipeline Phase 6 — the board's state is a reading | ADR template whose table the filing tool reads |
+| SC-2739 | ADR template whose table the filing tool reads | docs/adr/TEMPLATE.md, test/adr-template.test.ts | Pipeline Phase 6 — the board's state is a reading | |
+| SC-2740 | The dry-run command shows a proposal as a real dry run with its visual | .claude/commands/dry-run.md, test/dry-run-command.test.ts | Pipeline Phase 6 — the board's state is a reading | |
+| SC-2741 | Ready refills only from the active milestone | lib/board-ready-rule.ts, scripts/board-ready.ts, .github/workflows/board-ready.yml, .github/workflows/board-intake.yml, scripts/board-mirror.ts, test/board-ready-rule.test.ts, test/board-ready-fanout.test.ts | Pipeline Phase 6 — the board's state is a reading | The expedite and filing-override labels are read from config |
 
 Notes per row:
 
@@ -201,10 +201,10 @@ Notes per row:
   follow-up, blocked by #1985).
 - Continuing alongside: #1984 (`work-status` reads the ladder; WIP on
   `rg/1984-stage-ladder-in-work-status`), #1954, #1983.
-- **Next:** `/dry-run` on this revision → Jason agrees → acceptance PR (ids
-  reserved, SC lines in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, SC-2615
-  amended, visual committed) → Jason merges → rows filed by hand this once →
-  row 4 first.
+- **Next:** Jason merges the acceptance PR (#1985 closes) → the eight rows
+  are filed by hand this once with `plan-issues --decompose --write` → row 4
+  gets `work-this-next` → row 4 is built first. SC-2615 is amended in row
+  1's PR.
 - **Human steps after row 4 merges, Jason's** (repository settings):
   add `closing-references` to main's required checks, and set the variable
   `RUNGATE_REQUIRE_CLOSING_REF` to `true`. The exact commands are printed
