@@ -45,6 +45,7 @@ import { join } from 'path';
 import { tryLoadRungateConfig } from '../lib/config-loader';
 import { repoRootFrom } from '../lib/paths';
 import { currencyReportLines, readRegistrationCurrency, spawnGitRunner } from '../lib/hook-tree-currency';
+import { liveClaimLines, readRegistrationScopes } from '../lib/hook-scopes';
 import {
   readHookCurrency,
   currencyClass,
@@ -113,31 +114,33 @@ try {
 }
 
 // ── Second reading: how old are the hooks a session actually executes (#1216)
-// Its own `try`: two readings of different files, so one throwing must not
-// take the other's with it — a shared `catch` would be one refusal standing
-// for two, and nobody could tell which was never taken. The `hooks/` gate is
-// the `.git/hooks` gate above, for the same reason: a tree the scaffold never
+// Its own `try`: two readings of different files, so one throwing must not take
+// the other's with it — a shared `catch` would be one refusal standing for two.
+// The `hooks/` gate is the `.git/hooks` gate above: a tree the scaffold never
 // touched owns no hooks of ours to be stale.
 try {
   const hooksDir = join(PROJECT_ROOT, 'hooks');
   if (existsSync(hooksDir)) {
     const config = tryLoadRungateConfig(PROJECT_ROOT) as { hooks?: unknown[] } | null;
+    const readFile = (p: string) => (existsSync(p) ? readFileSync(p, 'utf-8') : null);
+    const registryCommands = (config?.hooks ?? []).map(h => String((h as { command?: string })?.command ?? h));
     const reading = readRegistrationCurrency({
       repoRoot: PROJECT_ROOT,
       home: homedir(),
-      // Named at the call site, not defaulted inside the module — its header
-      // says why.
+      // Named at the call site, not defaulted inside the module — its header says why.
       base: 'origin/main',
-      readFile: p => (existsSync(p) ? readFileSync(p, 'utf-8') : null),
+      readFile,
       ownedHooks: readdirSync(hooksDir)
         .filter(n => n.endsWith('.hook.ts'))
         .map(n => n.replace(/\.hook\.ts$/, '')),
-      registryCommands: (config?.hooks ?? []).map(h => String((h as { command?: string })?.command ?? h)),
+      registryCommands,
       // `spawnGitRunner`, never an inline spawn: these directories are the
       // unsupervised ones, and git executes its own config. See the module.
       git: spawnGitRunner(spawnSync),
     });
     for (const line of currencyReportLines(reading)) report(line);
+    const scopes = readRegistrationScopes(PROJECT_ROOT, homedir(), readFile, registryCommands); // #1986
+    for (const line of liveClaimLines((config?.hooks ?? []) as { name?: unknown }[], scopes)) report(line);
   }
 } catch (e) {
   report(`Hook tree currency UNMEASURED: ${e instanceof Error ? e.message : String(e)}`);
