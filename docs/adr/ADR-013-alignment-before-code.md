@@ -150,9 +150,13 @@ its own rule.
 
 ## Decomposition
 
-Ids SC-2734 to SC-2741 are reserved in `specs/sc-reservations.json` and
-written as criteria in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, placed in
-Phase 6. All rows sit in the current frontier milestone.
+Ids SC-2734 to SC-2741 are written as criteria in
+`specs/SPEC-TO-BOARD-PIPELINE-SPEC.md` and placed in Phase 6. They hold no
+entry in `specs/sc-reservations.json`: they were checked free across every
+open branch (none was open) and written in the same PR, and
+`test/spec-to-board-pipeline.test.ts` refuses a block covering ids the spec
+already states; once merged, `lib/create-sc.ts`'s `taken` set protects
+them. All rows sit in the current frontier milestone.
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
