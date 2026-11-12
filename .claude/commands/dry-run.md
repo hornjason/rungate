@@ -35,7 +35,8 @@ none, say so and stop.
      the count below would read a stale ref and could say zero.
    - `git -C "<checkout>" rev-list --count HEAD..origin/main`. If the count is above zero
      the tree is behind origin/main, so stop: print how many commits behind it
-     is and that it must be updated first, and run nothing else.
+     is and that it must be updated first, and run nothing else. If it errors
+     or prints anything but a number, stop the same way: no count is not zero.
    - Only when both pass, print `Measured commit: ` and the output of
      `git -C "<checkout>" rev-parse --short HEAD`, so every run names the tree it read.
 1. Read the document. Find its decomposition table
