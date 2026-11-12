@@ -52,7 +52,7 @@ if (PROJECT_ROOT) try {
   }
 } catch (e) { log(`WORKTREE cleanup error: ${e}`); }
 // Sibling worktrees (#2022): the census's ABANDONED rows anywhere; detached, and not gated on PROJECT_ROOT.
-try { (await import('../scripts/worktree-sweep.ts')).spawnSweep(process.cwd(), STALE_LOG); } catch (e) { log(`WORKTREE sweep error: ${e}`); }
+try { (await import('../scripts/worktree-sweep.ts')).spawnSweep(STALE_LOG); } catch (e) { log(`WORKTREE sweep error: ${e}`); }
 
 // Scratch cleanup — test fixtures the suite leaked into the repo root (#437):
 // tooling cleans them only on the happy path; 34 accumulated, found by eye.

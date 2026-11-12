@@ -176,8 +176,12 @@ function pullsFor(repo: string): Measured<PullRequest[]> {
  *
  * Detached so SessionStart never waits on `gh` and `lsof`; its output is
  * appended to `logPath`, the stale-cleanup log the hook already writes.
+ *
+ * The launch directory is read HERE, not passed by the hook:
+ * `test/unit/worktree-cleanup-merge.test.ts` holds the hook to one
+ * `process.cwd()`, the one that seeds `repoRootFrom` (#68).
  */
-export function spawnSweep(launchDir: string, logPath: string): void {
+export function spawnSweep(logPath: string, launchDir: string = process.cwd()): void {
   const fd = openSync(logPath, "a");
   try {
     spawn(process.execPath, [import.meta.path, "--under", launchDir], {
