@@ -60,9 +60,9 @@ A ship harness for AI-first development: from issue to merged PR, with a report 
    issue names no criterion nor `serves no criterion`. **Exempt:** step 1
    skips work that decides the issues — an ADR, a retro, a review, an audit
    — as its PR closes the issue it was filed under; step 4 skips a PR whose
-   files are all `project-state.json`, `PROJECT-STATE.md`, `SUCCESS.md` —
-   the diff decides, never the branch name. Nine gaps once lived only in
-   prose (#1938-#1946).
+   files are all `project-state.json`, `PROJECT-STATE.md`, `SUCCESS.md`
+   (DA-owned, never written from a worktree, #296) —
+   the diff decides, never the branch name. Nine gaps lived only in prose (#1938-#1946).
 10. **The engine's build order is `project-state.json`'s `goal`, `goals` and
     `stages`; all other work is an issue first (rule 9).** Each item carries the command that proves it; a stage is
     complete when every command exits 0, never because a document says so,

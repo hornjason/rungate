@@ -546,6 +546,7 @@ describe("SC-2736: AGENTS.md rule 9 carries the four-step process and its exempt
     ["the exempt work", "an ADR, a retro, a review, an audit"],
     ["the step-4 exemption names its file set", "`project-state.json`, `PROJECT-STATE.md`, `SUCCESS.md`"],
     ["the rule that decides it", "the diff decides, never the branch name"],
+    ["the exempt files stay DA-owned", "DA-owned, never written from a worktree"],
   ];
   for (const [what, phrase] of MUST) {
     test(`SC-2736: rule 9 states ${what}`, () => {
