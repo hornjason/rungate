@@ -111,7 +111,7 @@ describe("#2022: the sweep acts on the census's ABANDONED verdict and nothing el
       { path: "/w/c", verdict: "UNMEASURED" },
       { path: "/w/d", verdict: "ABANDONED" },
     ]));
-    expect(targets).toEqual(["/w/a", "/w/d"]);
+    expect(targets.map(t => t.path)).toEqual(["/w/a", "/w/d"]);
   });
 
   test("#2022: negative control — a census of all ABANDONED rows targets all of them", () => {
@@ -120,7 +120,7 @@ describe("#2022: the sweep acts on the census's ABANDONED verdict and nothing el
     expect(sweepTargets(resultWith([
       { path: "/w/a", verdict: "ABANDONED" },
       { path: "/w/b", verdict: "ABANDONED" },
-    ]))).toEqual(["/w/a", "/w/b"]);
+    ])).map(t => t.path)).toEqual(["/w/a", "/w/b"]);
   });
 
   test("#2022: the verdict is read in one place, so the sweep cannot become a second decider", () => {
@@ -132,8 +132,8 @@ describe("#2022: the sweep acts on the census's ABANDONED verdict and nothing el
 
 describe("#2022: removal leaves git's own refusal in place", () => {
   test("#2022: a clean worktree is removed from disk and from the registration", () => {
-    const { repo, done } = repoWithSiblings("clean");
-    const out = removeWorktrees(repo, [done]);
+    const { repo, done, head } = repoWithSiblings("clean");
+    const out = removeWorktrees(repo, [{ path: done, head }]);
     expect(out.removed).toEqual([done]);
     expect(out.refused).toEqual([]);
     expect(existsSync(done)).toBe(false);
@@ -141,13 +141,44 @@ describe("#2022: removal leaves git's own refusal in place", () => {
   });
 
   test("#2022: a worktree that turned dirty after the reading is refused and survives", () => {
-    const { repo, done } = repoWithSiblings("dirty");
+    const { repo, done, head } = repoWithSiblings("dirty");
     writeFileSync(join(done, "new-work.ts"), "export const unsaved = true;\n");
-    const out = removeWorktrees(repo, [done]);
+    const out = removeWorktrees(repo, [{ path: done, head }]);
     expect(out.removed).toEqual([]);
     expect(out.refused.map(r => r.path)).toEqual([done]);
     expect(existsSync(join(done, "new-work.ts"))).toBe(true);
     expect(listed(repo)).toContain(done);
+  });
+
+  test("#2022: a worktree that gained a COMMIT after the reading is refused and survives", () => {
+    // Review round 1 on #2023: a clean commit leaves nothing for git to
+    // refuse, so the head the census read is checked again before removal.
+    const { repo, done, head } = repoWithSiblings("moved");
+    writeFileSync(join(done, "later.ts"), "export const later = 1;\n");
+    git(done, "add", "-A");
+    commit(done, "work after the census");
+    const out = removeWorktrees(repo, [{ path: done, head }]);
+    expect(out.removed).toEqual([]);
+    expect(out.refused.map(r => r.path)).toEqual([done]);
+    expect(out.refused[0].why).toContain("HEAD moved");
+    expect(existsSync(join(done, "later.ts"))).toBe(true);
+  });
+
+  test("#2022: a target with no recorded head is refused, never removed", () => {
+    const { repo, done } = repoWithSiblings("nohead");
+    const out = removeWorktrees(repo, [{ path: done, head: null }]);
+    expect(out.removed).toEqual([]);
+    expect(existsSync(done)).toBe(true);
+  });
+
+  test("#2022: every git call goes through the isolated seam", () => {
+    // The census measured what an unisolated `git status` does in a repo whose
+    // own config is poisoned; this file runs the one destructive call, so it
+    // must not be the place isolation is quietly dropped.
+    const code = codeOnly(readFileSync(SCRIPT, "utf-8"));
+    expect(code.match(/execFileSync\(\s*"git"/g) ?? []).toHaveLength(1);
+    expect(code).toContain("gitIsolatedArgs(args)");
+    expect(code).toContain("env: gitIsolatedEnv()");
   });
 
   test("#2022: no --force, no prune, no recursive delete anywhere in the sweep", () => {
@@ -200,6 +231,16 @@ describe("#2022: which repositories a launch directory sweeps", () => {
     expect(reposToSweep(repo)).toEqual([repo]);
   });
 
+  test("#2022: inside a repository with no linked worktree, nothing is swept and no gh call is spent", () => {
+    const box = realpathSync(mkdtempSync(join(tmpdir(), "rg-2022-single-")));
+    scratch.push(box);
+    git(box, "init", "-q", "-b", "main");
+    writeFileSync(join(box, "c.ts"), "export const c = 1;\n");
+    git(box, "add", "-A");
+    commit(box, "base");
+    expect(reposToSweep(box)).toEqual([]);
+  });
+
   test("#2022: outside any repository, it is each primary checkout under it that has a linked worktree", () => {
     const { box, repo } = repoWithSiblings("outside");
     const lone = join(box, "lone");
@@ -225,6 +266,14 @@ describe("#2022: the pull requests are read for the repository being swept", () 
   test("#2022: a remote that is not GitHub gives no slug, so the merge reading is UNMEASURED", () => {
     expect(originSlug("https://gitlab.com/a/b.git")).toBeNull();
     expect(originSlug("")).toBeNull();
+  });
+});
+
+describe("#2022: the unattended default is the census's own", () => {
+  test("#2022: the sweep's default age is 7d, the census's default, not something tighter", () => {
+    const code = codeOnly(readFileSync(SCRIPT, "utf-8"));
+    expect(code).toContain('parseDuration("7d")');
+    expect(code).not.toMatch(/parseDuration\("(?!7d)[0-9]+[mhd]"\)/);
   });
 });
 

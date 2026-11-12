@@ -30,7 +30,7 @@
  * - **No recursive delete.** git removes the directory or nothing does.
  *
  * Usage:
- *   bun scripts/worktree-sweep.ts [--under <dir>] [--older-than 1d]
+ *   bun scripts/worktree-sweep.ts [--under <dir>] [--older-than 7d]
  *
  * `--under` is the launch directory: the repository it is inside, or, when it
  * is inside none, each primary checkout directly under it that has a linked
@@ -64,9 +64,17 @@ function sweepGit(args: readonly string[]): string {
   }).trim();
 }
 
-/** The paths the census read ABANDONED. The verdict is read here and nowhere else. */
-export function sweepTargets(result: CensusResult): string[] {
-  return result.rows.filter(row => row.verdict === "ABANDONED").map(row => row.path);
+/** A worktree the census read ABANDONED, and the commit it held when it was read. */
+export interface Target {
+  path: string;
+  head: string | null;
+}
+
+/** The rows the census read ABANDONED. The verdict is read here and nowhere else. */
+export function sweepTargets(result: CensusResult): Target[] {
+  return result.rows
+    .filter(row => row.verdict === "ABANDONED")
+    .map(row => ({ path: row.path, head: row.head }));
 }
 
 export interface RemoveOutcome {
@@ -74,10 +82,30 @@ export interface RemoveOutcome {
   refused: Array<{ path: string; why: string }>;
 }
 
-/** `git worktree remove` for each path, never forced, so git's own refusal stands. */
-export function removeWorktrees(repo: string, paths: readonly string[]): RemoveOutcome {
+/**
+ * `git worktree remove` for each target, never forced, so git's own refusal
+ * stands for a tree that turned dirty after the census.
+ *
+ * A tree that gained a COMMIT is clean again, so git has nothing to refuse,
+ * and that commit is on no other ref (review round 1 of #2023). So the head is
+ * read again first and must still be the one the census matched against the
+ * merged pull request. This is not a second verdict: it asks only whether the
+ * reading still describes the tree, and an unreadable head is a refusal.
+ */
+export function removeWorktrees(repo: string, targets: readonly Target[]): RemoveOutcome {
   const out: RemoveOutcome = { removed: [], refused: [] };
-  for (const path of paths) {
+  for (const { path, head } of targets) {
+    let now = "";
+    try {
+      now = sweepGit(["-C", path, "rev-parse", "HEAD"]);
+    } catch {
+      out.refused.push({ path, why: "HEAD could not be read again before removal" });
+      continue;
+    }
+    if (!head || now !== head) {
+      out.refused.push({ path, why: `HEAD moved since the census (${head ?? "none"} -> ${now})` });
+      continue;
+    }
     try {
       sweepGit(["-C", repo, "worktree", "remove", path]);
       out.removed.push(path);
@@ -127,12 +155,13 @@ function hasLinkedWorktree(repo: string): boolean {
  *
  * Inside a repository: its main checkout, reached from a linked worktree too.
  * Outside any: each child whose `.git` is a DIRECTORY — a primary checkout,
- * not a linked worktree, whose `.git` is a file — and that has a linked
- * worktree, so a repository with nothing to sweep costs no `gh` call.
+ * not a linked worktree, whose `.git` is a file. Either way only a repository
+ * with a linked worktree is returned, so one with nothing to sweep costs no
+ * `gh` call at SessionStart.
  */
 export function reposToSweep(launchDir: string): string[] {
   const inside = mainCheckoutOf(launchDir);
-  if (inside) return [inside];
+  if (inside) return hasLinkedWorktree(inside) ? [inside] : [];
   let children: string[];
   try {
     children = readdirSync(launchDir);
@@ -196,7 +225,9 @@ export function spawnSweep(logPath: string, launchDir: string = process.cwd()): 
 
 export function main(argv: string[]): number {
   let under = process.cwd();
-  let olderThanMs = parseDuration("1d");
+  // The census's own default. An unattended delete is no place for a tighter
+  // threshold than the report a human reads (review round 1 of #2023).
+  let olderThanMs = parseDuration("7d");
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--under" && argv[i + 1]) under = argv[++i];
     else if (argv[i] === "--older-than" && argv[i + 1]) olderThanMs = parseDuration(argv[++i]);
