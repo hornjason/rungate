@@ -51,6 +51,22 @@ describe("plannedTitles reads the Outcome column and nothing else", () => {
     ]);
   });
 
+  // Security review of #2008 (ADR-013 row 6): `docs/adr/TEMPLATE.md` carries a
+  // live table whose Outcome cell is the placeholder `{outcome}`. Read as a
+  // title, it would let a filing named `{outcome}` past the cap on a plan
+  // nobody approved.
+  test("a {placeholder} Outcome cell is not a title — the ADR template authorises nothing", () => {
+    const template = [
+      "| Criterion | Outcome | Files | Milestone | Blocked by |",
+      "|---|---|---|---|---|",
+      "| {criterion} | {outcome} | {files} | {milestone} | {blocked-by} |",
+      "| CRC-C2 | a real outcome beside it | lib/a.ts | — | — |",
+    ].join("\n");
+    expect(plannedTitles(template).map(t => t.title)).toEqual(["a real outcome beside it"]);
+    const viaGate = plannedFiling("{outcome}", sourceOf({ [`${PLAN_DIR}/TEMPLATE.md`]: template }));
+    expect(viaGate.planned, "the template's placeholder must not exempt a filing from the cap").toBe(false);
+  });
+
   test("a column that is not headed Outcome yields nothing", () => {
     const other = ["| Criterion | Summary |", "|---|---|", "| CRC-C2 | something |"].join("\n");
     expect(plannedTitles(other)).toEqual([]);

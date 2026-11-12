@@ -274,7 +274,10 @@ const UNCLAIMED_RATCHET = 150;
 // ticks moved them into this population rather than opening a gap. SC-2737's
 // box was left unticked when #2003 merged, which is what reddened `main`'s
 // B2 reading at `0bae5df1`.
-const CLAIMED_UNBINDABLE = 150;
+// 150 -> 151: SC-2739 ticked on the PR closing #2000 (ADR-013 row 6). A
+// claim that a template's table parses, which no registered pattern
+// expresses; `test/adr-template.test.ts` names it in a declaring position.
+const CLAIMED_UNBINDABLE = 151;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
