@@ -20,6 +20,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { plannedTitles } from "../lib/filing-plan";
 import { MAX_FILES, parseDecompositionPlan } from "../lib/issue-decomposition";
 
 const TEMPLATE_PATH = join(import.meta.dir, "..", "docs", "adr", "TEMPLATE.md");
@@ -93,6 +94,18 @@ describe("SC-2739: an ADR written from the template decomposes with no refusal",
     );
   });
 
+  test("SC-2739: the real template authorises no filing — its placeholder is not a planned title", () => {
+    // ai-review round 2 of #2008: the filing gate reads every live table under
+    // docs/adr/ as an approved plan, so this is asserted against the REAL file
+    // and not a hand-typed copy of it.
+    expect(plannedTitles(template), "the template's placeholder row must exempt nothing from the cap").toEqual([]);
+    // The control: the same file filled in does authorise its outcome.
+    const row = placeholderRow(template);
+    expect(plannedTitles(template.replace(row, fill(row, FILLED))).map(t => t.title)).toEqual([
+      FILLED["{outcome}"],
+    ]);
+  });
+
   test("SC-2739: the template states the rules the parser refuses on", () => {
     // An author reads the template, not the parser. Each limit the parser
     // enforces is stated where the author writes the row.
@@ -101,5 +114,7 @@ describe("SC-2739: an ADR written from the template decomposes with no refusal",
     expect(template).toMatch(/no comma/i);
     expect(template).toContain("status: proposed");
     expect(template).toContain("doc-type: adr");
+    // No date is pre-filled: a stamped date survives into every copy unnoticed.
+    expect(template, "the template must not carry a real date").not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 });

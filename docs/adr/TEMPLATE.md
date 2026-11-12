@@ -2,7 +2,7 @@
 doc-type: adr
 status: proposed
 created: {date}
-updated: 2026-11-11
+updated: {date}
 ---
 
 # ADR-{number} — {title}
