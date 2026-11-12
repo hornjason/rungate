@@ -146,13 +146,21 @@ which 46 carried only a label, no workflow placed a plan on the board, and 14
 of the last 40 merged PRs closed no issue.
 
 - [ ] SC-2734: `spec-placement` measures only the specs in scope — a spec held back declares so in its own frontmatter, and the deferred specs are banked by path with their criteria counts in a ratchet that refuses both a rise and a fall, so the reading cannot go green on a population shrunk by swapping members
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2735: the expedite label and the filing-override label are read from project config, and no label that decides Ready or filing is a constant in library code
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2736: AGENTS.md rule 9 states the four-step process — agree and file the same turn, an ADR for work bigger than one issue, the plan placed on merge, each PR closing its issue — and names the exempt work with the rule that decides it
+<!-- REVIEW: unmatched (rewriting as file-exists would assert only that AGENTS.md exists, while the criterion coordinates a further claim (file the same turn, an ADR for work bigger than one issue, the plan placed on merge, each PR closing its issue — and names the exempt work with the rule that decides it) — the file is mentioned, not what the criterion is about) -->
 - [ ] SC-2737: a pull request that closes no issue, or whose issue names neither a criterion nor "serves no criterion", is refused when `RUNGATE_REQUIRE_CLOSING_REF` is `true`; a branch naming no issue owes none; the check re-runs when the description is edited, and its refusal prints the one command that re-runs it
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2738: merging an ADR whose status changes to accepted places its plan on the board with no command typed by hand — milestones, issues, blocked-by edges, board fields and a Ready top-up — and the filing refuses both a duplicate of a closed issue and a criterion id that exists in no spec
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2739: an ADR written from the repository's ADR template carries a Decomposition table that `plan-issues --decompose` reads with no refusal
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2740: one command shows a proposal as a dry run — the real planning tools without `--write`, what reaches Ready, the gaps found — and writes its visual next to the document
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2741: Ready holds only work from the active milestone, the lowest Pipeline phase with an open issue, plus `work-this-next`; label-only and payload work never enter while a Pipeline phase has an open issue, a card outside the active milestone is demoted, and adding a milestone or a label, or transferring an issue in, triggers the refill
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### Nothing in the engine is hand-run
 

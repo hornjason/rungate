@@ -32,7 +32,5 @@
     "records that reading for the thirteen it cleared, PR by PR; this file cannot",
     "prove it about itself, so do not read the sentence above as proof."
   ],
-  "reservations": [
-    { "owner": "rg/adr-013-alignment-law", "from": 2734, "to": 2741, "note": "ADR-013's eight decomposition rows (#1985)" }
-  ]
+  "reservations": []
 }
