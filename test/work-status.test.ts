@@ -1116,13 +1116,69 @@ describe("#1944: the report names local work every run, from the one decider", (
     expect(section).toContain("workVerdict({");
   });
 
+  /**
+   * #1983: D4's binding. The first version matched three spellings of a flag
+   * (`values.x`, `args.x`, `flags.x`) inside the cut section, so a flag read
+   * any other way walked past, and a guard wrapping the section's own heading
+   * sat outside the cut entirely. Measured: `if (process.argv.includes(...))`
+   * in front of the heading left it green.
+   *
+   * So this asks a structural question instead of naming spellings: the
+   * heading and the local reading are TOP-LEVEL statements, at brace depth 0,
+   * with nothing conditional in front of them in the same statement. Any
+   * `if`, `&&` or `?:`, however the flag is read, fails it.
+   */
+  const unconditionalFailures = (source: string): string[] => {
+    const stripped = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    const depthAt = (i: number) => {
+      let d = 0;
+      for (let k = 0; k < i; k++) {
+        if (stripped[k] === "{") d++;
+        else if (stripped[k] === "}") d--;
+      }
+      return d;
+    };
+    const statementPrefix = (i: number) => {
+      let j = i - 1;
+      while (j >= 0 && !";{}".includes(stripped[j])) j--;
+      return stripped.slice(j + 1, i).trim();
+    };
+    const failures: string[] = [];
+    const anchors: [string, RegExp][] = [
+      [SECTION_START, /^$/],
+      ["readLocalWork(", /^(const|let|var)\s+\w+\s*=$/],
+    ];
+    for (const [anchor, allowed] of anchors) {
+      const at = stripped.indexOf(anchor);
+      if (at === -1) {
+        failures.push(`${anchor} is missing, so there is nothing to hold unconditional`);
+        continue;
+      }
+      if (depthAt(at) !== 0) failures.push(`${anchor} sits inside a block (depth ${depthAt(at)})`);
+      const prefix = statementPrefix(at);
+      if (!allowed.test(prefix)) failures.push(`${anchor} is guarded in its own statement: "${prefix}"`);
+    }
+    return failures;
+  };
+
   test("the section is unconditional — no flag, no opt-in", () => {
     // D4's whole complaint is "when an agent remembers to check". A flag is
     // exactly that, moved into the tool.
-    expect(
-      section.match(/if \(\s*(?:values|args|flags)\.[A-Za-z]+\s*\)/),
-      "the local-work section is behind a flag. D4 says it must name this work in EVERY run",
-    ).toBeNull();
+    expect(unconditionalFailures(src), "D4 says the local-work section must run in EVERY run").toEqual([]);
+  });
+
+  test("#1983: every way of putting the section behind a flag reddens it", () => {
+    const heading = SECTION_START;
+    const mutants: [string, string][] = [
+      ["values.local in front of the heading", src.replace(heading, `if (values.local) ${heading}`)],
+      ["process.argv in front of the heading", src.replace(heading, `if (process.argv.includes("--local")) ${heading}`)],
+      ["a block around the whole section", src.replace(heading, `if (process.argv.includes("--local")) {\n${heading}`).replace(SECTION_END, `}\n${SECTION_END}`)],
+      ["&& in front of the reading", src.replace("const localWork = readLocalWork(", "const localWork = process.argv.includes(\"--local\") && readLocalWork(")],
+    ];
+    for (const [name, mutant] of mutants) {
+      expect(mutant, `the ${name} mutant changed nothing, so it proves nothing`).not.toBe(src);
+      expect(unconditionalFailures(mutant).length, `${name}: not caught`).toBeGreaterThan(0);
+    }
   });
 
   /**
