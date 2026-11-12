@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-12
 updated: 2026-11-12
 ---
@@ -9,8 +9,9 @@ updated: 2026-11-12
 
 ## Status
 
-**Proposed, 2026-11-12. Revision 1.** Jason reviews every row. Nothing here
-is applied until he agrees; then each section's command runs with `--write`.
+**Accepted, 2026-11-12. Revision 1.** Jason accepted the four-way split,
+the write-guard call and the stale closes as recommended, and chose to review
+the 22 promote drafts with Rayford one batch at a time.
 Widens #1954 (fifteen of these issues) to all forty, and this ADR's PR
 closes it. Precedent and format: ADR-005.
 
@@ -37,16 +38,16 @@ own subject, `MEDIUM` that the link is an argument. Overrule any row.
 
 ## Decisions
 
-1. **The four-way split — open.** Recommendation: as below. 3 annotate, 12
+1. **The four-way split — Jason, 2026-11-12.** As below: 3 annotate, 12
    declare, 22 promote, 3 stale.
 2. **Promote rows need Jason's criterion text — Jason, by AGENTS.md rule 9.**
-   The drafts below are proposals; writing SC text stays human.
-3. **The write-guard cluster (#1355, #1367, #1407, #1425) — open.** Declare
+   The drafts below are reviewed with him in batches before any is written.
+3. **The write-guard cluster (#1355, #1367, #1407, #1425) — Jason, 2026-11-12.** Declare
    each, or write one bypass-resistance criterion in
    `specs/HOOK-ARCHITECTURE-SPEC.md` covering all four. Recommendation:
    declare #1367, #1407, #1425 and promote #1355, whose subject (filings
-   escaping the meter) is the engine's own SC-2613.
-4. **Stale issues are closed by hand with the evidence — open.** A hand close
+   escaping the meter) is the engine's own SC-2613. Accepted as recommended.
+4. **Stale issues are closed by hand with the evidence — Jason, 2026-11-12.** A hand close
    is attributed to nobody (#925); the comment names the merged PR so
    `issue-audit.yml` can read it.
 
@@ -127,3 +128,18 @@ no placement table.
 | #1554 | Ten reservation blocks and nothing prunes them | PR #1970 (merged 2026-11-10) removed every block; `specs/sc-reservations.json` is `[]` on main. |
 | #1565 | census-routing omits ai-review-surface-census for workflows | PR #1930 (closing #1927, merged 2026-11-09) derives the suite population, including that file. |
 | #1948 | project-state.json lacks assignment-evidence finding | PR #1937 (merged 2026-11-09) lists #1948 as closed and shipped it; it stayed open — the defect #1952 names. |
+
+## Decomposition — the gaps this repair's dry runs found
+
+Filed by `adr-accepted.yml` when this ADR merges (Jason, 2026-11-12: "we
+should file all 7"). Four of the seven serve a criterion and are rows here;
+the three that serve none (the milestone-placing repair, the converter that
+rewrote SC-2747, D4's parser binding) are filed as ordinary issues. Each
+issue's full evidence is added to its body after filing.
+
+| Criterion | Outcome | Files | Milestone | Blocked by |
+|---|---|---|---|---|
+| SC-2737 | closing-references reads the criterion question through criterionAnswer | lib/closing-reference-audit.ts, scripts/audit-closing-references.ts, lib/board-mirror.ts, test/audit-closing-references.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
+| SC-2741 | A hand-milestoned engine issue gets its queue label and Criteria cell | .github/workflows/phase-order.yml, scripts/board-mirror.ts, test/phase-order-workflow.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
+| SC-2741 | work-this-next refuses an issue labelled needs-criterion and work-status shows the count | lib/board-ready-rule.ts, test/board-ready-rule.test.ts, scripts/work-status.ts, test/work-status.test.ts | Pipeline Phase 6 — the board's state is a reading | board-mirror takes the active milestone from repository issues like board-ready |
+| SC-2741 | board-mirror takes the active milestone from repository issues like board-ready | lib/active-milestone.ts, scripts/board-mirror.ts, scripts/board-ready.ts, scripts/work-status.ts, test/board-ready-rule.test.ts | Pipeline Phase 6 — the board's state is a reading | A hand-milestoned engine issue gets its queue label and Criteria cell |
