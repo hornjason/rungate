@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-12
 updated: 2026-11-12
 ---
@@ -9,9 +9,10 @@ updated: 2026-11-12
 
 ## Status
 
-**Proposed, 2026-11-12. Revision 1.** Jason decides. Four decisions below
-are open and marked **open**; each carries a recommendation. Filed under
-#1988 (ADR-013 decision 8), which this ADR's acceptance PR closes.
+**Accepted, 2026-11-12. Revision 1.** Jason accepted all four open
+decisions as recommended, after the dry run and its visual. Filed under
+#1988 (ADR-013 decision 8), which this ADR's acceptance PR closes. Merging
+it is `adr-accepted.yml`'s first run that places a plan.
 
 ## Context
 
@@ -58,8 +59,8 @@ API allows, `UNMEASURED` where it does not.
 
 ## Decisions
 
-1. **Process workflows become scaffold-owned, regenerated — open.**
-   Recommendation: owned, the way `ai-review.yml` already is: a generator in
+1. **Process workflows become scaffold-owned, regenerated — Jason, 2026-11-12.**
+   Owned, the way `ai-review.yml` already is: a generator in
    `lib/scaffold/`, a `generated-sha` marker, WORKFLOW-DRIFT-1 reporting hand
    edits. The alternative, write-once-if-absent, leaves every consumer on the
    version they first installed, and a fix here never reaches them — the
@@ -74,18 +75,17 @@ API allows, `UNMEASURED` where it does not.
    generator writes a literal project id. ADR-013 decision 5 already did this
    for labels. #1719 (SC-2621, already in Phase 7) does it for the scripts'
    own reads, so row 4 is blocked by it — found by this ADR's first dry run.
-4. **Rule 9 reaches consumers as an owned rules file — open.**
-   Recommendation: `.claude/rules/alignment-process.md`, scaffold-owned,
+4. **Rule 9 reaches consumers as an owned rules file — Jason, 2026-11-12.** `.claude/rules/alignment-process.md`, scaffold-owned,
    generated from one source that this repository's AGENTS.md rule 9 is
    checked against, so the two cannot drift. The alternative, writing into
    AGENTS.md, means the generator starts editing a section it has always
    preserved.
-5. **Rows go into Pipeline Phase 7 — open.** Recommendation: Phase 7,
+5. **Rows go into Pipeline Phase 7 — Jason, 2026-11-12.** Phase 7,
    "nothing is hand-run" — a consumer copying workflows by hand is exactly
    that. Phase 6 still holds ADR-013's own rows (#2021, #2024), so ADR-014's
    wait until this repository's version is finished, which is the order
    ADR-013 decision 8 asked for.
-6. **Scope: ADR-013's four workflows only — open.** Recommendation: yes.
+6. **Scope: ADR-013's four workflows only — Jason, 2026-11-12.**
    `board-flow`, `board-sweep`, `phase-order`, `criterion-label` (#2020) and
    `board-conformance` also run here and are left out of revision 1: the
    process works without them, and each adds a generator. A second wave is a
