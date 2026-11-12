@@ -85,13 +85,14 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
   });
 
   test("#2016: a failed fetch stops the run, so a stale ref is never counted", () => {
-    expect(lines[lineOf(FETCH)]).toContain("If the fetch fails, stop");
+    expect(lines[lineOf(FETCH)]).toContain("If the fetch fails, stop and run nothing else");
   });
 
   test("#2016: a checkout behind origin/main is refused with the count, never measured", () => {
     expect(text).toMatch(/behind origin\/main[^\n]*stop/i);
     expect(text).toContain("how many commits behind");
-    expect(text).toContain("and run nothing else");
+    // Within the count's own bullet, not borrowed from the fetch refusal.
+    expect(lines.slice(lineOf(BEHIND), lineOf(BEHIND) + 3).join(" ")).toContain("and run nothing else");
   });
 
   test("#2016: the measured commit is printed only after both checks pass", () => {
@@ -101,7 +102,7 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
     // Its own bullet, gated, and after both stop clauses: printed unconditionally
     // it would hand a reader a SHA for a tree the run just refused.
     expect(lines[measured]).toMatch(/^\s*- Only when both pass, print `Measured commit: `/);
-    expect(measured).toBeGreaterThan(lineOf("and run nothing else"));
+    expect(measured).toBeGreaterThan(lineOf(BEHIND) + 2);
     expect(measured).toBeGreaterThan(lineOf("If the fetch fails, stop"));
   });
 });

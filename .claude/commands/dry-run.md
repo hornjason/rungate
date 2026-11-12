@@ -31,7 +31,7 @@ none, say so and stop.
 0. Check the checkout is current before measuring anything (#2016), in this
    order, against the primary checkout step 2 runs from, passed by path and
    never reached with `cd`:
-   - `git -C "<checkout>" fetch origin main`. If the fetch fails, stop and say so:
+   - `git -C "<checkout>" fetch origin main`. If the fetch fails, stop and run nothing else:
      the count below would read a stale ref and could say zero.
    - `git -C "<checkout>" rev-list --count HEAD..origin/main`. If the count is above zero
      the tree is behind origin/main, so stop: print how many commits behind it
