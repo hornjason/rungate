@@ -171,14 +171,30 @@ async function main(): Promise<void> {
   // better remedy and the other is reported by the next run if it survives.
   if (inert.length > 0) refuse(inertClosingMessage(inert, prNumber));
 
+  // A list GitHub cut short is not a list of every issue this closes. The
+  // workflow passes the total beside the nodes; when it exceeds them, an
+  // issue that names no criterion could sit in the part never fetched.
+  const total = (pr as { closingIssuesTotal?: unknown }).closingIssuesTotal;
+  if (typeof total === "number" && total > linked.length) {
+    refuse(
+      `this pull request closes ${total} issue(s) and only ${linked.length} were fetched, so ` +
+        `whether every one names a criterion was never read. UNMEASURED, not clean.`,
+    );
+  }
+
   // The body of every issue this pull request closes HERE, read off the same
   // nodes `closingIssuesReferences` returned. The workflow asks GitHub for the
   // body on each node, so no second query decides which issues are linked.
+  //
+  // Each NODE is asked whether it belongs here, through the same decider as
+  // the set above — never its bare number. AI review of #2003: `Fixes #9` and
+  // `Fixes other-org/other-repo#9` share a number, and a number-only test let
+  // the other repository's body stand in for this one's.
   const bodies = new Map<number, string>();
   for (const node of linked) {
     const n = node as { number?: unknown; body?: unknown } | null;
     if (n === null || typeof n !== "object" || typeof n.number !== "number") continue;
-    if (!linkedIssues.has(n.number)) continue;
+    if (linkedIssuesInThisRepo([n], repoNameWithOwner).size === 0) continue;
     if (typeof n.body !== "string") {
       refuse(
         `issue #${n.number} is closed by this pull request but its node carries no body, so ` +

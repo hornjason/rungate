@@ -335,6 +335,60 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
     expect(r.err).toContain("none of the 1 closing reference(s)");
   });
 
+  test("a SAME-NUMBER issue in another repository cannot lend this one its body", () => {
+    // AI review of #2003. `Fixes #9` here names no criterion; another
+    // repository's #9 does. Matching bodies by bare number let the foreign
+    // body pass the check for this repository's issue.
+    const r = run(
+      SCRIPT,
+      JSON.stringify({
+        number: 22,
+        body: "Fixes #9\n\nFixes other-org/other-repo#9\n",
+        closingIssuesReferences: [
+          closes(9, THIS_REPO, "No criterion here.\n"),
+          closes(9, "other-org/other-repo", "SC-9999, somebody else's.\n"),
+        ],
+        files: CODE,
+      }),
+      THIS_REPO,
+      ON,
+    );
+    expect(r.code, r.out).toBe(REFUSE_EXIT);
+    expect(r.err).toContain("#9, whose body names neither");
+  });
+
+  test("the control — the foreign node listed FIRST still cannot lend its body", () => {
+    // Order is the one variable changed: a last-write-wins map would pass
+    // the case above by luck and fail this one.
+    const r = run(
+      SCRIPT,
+      JSON.stringify({
+        number: 23,
+        body: "Fixes other-org/other-repo#9\n\nFixes #9\n",
+        closingIssuesReferences: [
+          closes(9, "other-org/other-repo", "SC-9999, somebody else's.\n"),
+          closes(9, THIS_REPO, "No criterion here.\n"),
+        ],
+        files: CODE,
+      }),
+      THIS_REPO,
+      ON,
+    );
+    expect(r.code, r.out).toBe(REFUSE_EXIT);
+  });
+
+  test("a closed-issue list GitHub cut short is UNMEASURED, not clean", () => {
+    // AI review of #2003. The fetched issues all name a criterion; the one
+    // past the page might not.
+    const base = { number: 24, body: "Fixes #9\n", closingIssuesReferences: [closes(9)], files: CODE };
+    const short = run(SCRIPT, JSON.stringify({ ...base, closingIssuesTotal: 2 }), THIS_REPO, ON);
+    expect(short.code).toBe(REFUSE_EXIT);
+    expect(short.err).toContain("UNMEASURED");
+    // The control: the same payload whose total matches what was fetched.
+    const whole = run(SCRIPT, JSON.stringify({ ...base, closingIssuesTotal: 1 }), THIS_REPO, ON);
+    expect(whole.code, whole.err).toBe(0);
+  });
+
   test("no --repo is UNMEASURED, not a clean pull request", () => {
     const r = run(
       SCRIPT,
@@ -409,7 +463,8 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
     const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "closing-references.yml"), "utf-8");
     expect(yml).toMatch(/types:\s*\[[^\]]*\bedited\b[^\]]*\]/);
     expect(yml).toContain("files(first: 100) { nodes { path } }");
-    expect(yml).toMatch(/closingIssuesReferences\(first: \d+\) \{\s*nodes \{ number body /);
+    expect(yml).toMatch(/closingIssuesReferences\(first: \d+\) \{ totalCount\s*nodes \{ number body /);
+    expect(yml).toContain("closingIssuesTotal: .closingIssuesReferences.totalCount");
     expect(yml).toContain("RUNGATE_REQUIRE_CLOSING_REF: ${{ vars.RUNGATE_REQUIRE_CLOSING_REF }}");
     const invokeLine = yml.split("\n").find(l => l.includes("audit-closing-references.ts"));
     expect(invokeLine, "closing-references.yml no longer invokes the script").toBeDefined();
