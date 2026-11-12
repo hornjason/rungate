@@ -1128,19 +1128,40 @@ describe("#1944: the report names local work every run, from the one decider", (
    * with nothing conditional in front of them in the same statement. Any
    * `if`, `&&` or `?:`, however the flag is read, fails it.
    */
+  /**
+   * The early exits that may run before the section, by name. Both end the
+   * WHOLE report rather than skipping this section: no GitHub credential
+   * (UNMEASURED), and an unknown `--milestone` value. Review of #2031 showed
+   * a separate guard line, `if (!flag) process.exit(0);`, gates the section
+   * with no brace and an empty statement prefix, so any further
+   * `process.exit(` before the heading reddens. A new legitimate one is named
+   * here, which is a decision a reviewer sees. Not covered: a top-level
+   * `throw` used as a guard — the script has none today, and counting them
+   * cannot tell one from the throws inside the functions above the section.
+   */
+  const KNOWN_EXITS_BEFORE_SECTION = ["no GitHub credential", "unknown --milestone value"];
+
   const unconditionalFailures = (source: string): string[] => {
     const stripped = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    // Length-preserving masks: string and template contents, then trailing
+    // `//` comments, become spaces, so a brace, semicolon or `process.exit(`
+    // inside them is not read as structure (review of #2031: a GraphQL query
+    // in a template literal sits before the anchors). Anchors are looked up
+    // in `stripped`, because the heading anchor itself is inside a string.
+    const masked = stripped
+      .replace(/`(?:\\[\s\S]|[^`\\])*`|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/g, m => m[0] + " ".repeat(m.length - 2) + m[m.length - 1])
+      .replace(/\/\/[^\n]*/g, m => " ".repeat(m.length));
     const depthAt = (i: number) => {
       let d = 0;
       for (let k = 0; k < i; k++) {
-        if (stripped[k] === "{") d++;
-        else if (stripped[k] === "}") d--;
+        if (masked[k] === "{") d++;
+        else if (masked[k] === "}") d--;
       }
       return d;
     };
     const statementPrefix = (i: number) => {
       let j = i - 1;
-      while (j >= 0 && !";{}".includes(stripped[j])) j--;
+      while (j >= 0 && !";{}".includes(masked[j])) j--;
       return stripped.slice(j + 1, i).trim();
     };
     const failures: string[] = [];
@@ -1158,6 +1179,17 @@ describe("#1944: the report names local work every run, from the one decider", (
       const prefix = statementPrefix(at);
       if (!allowed.test(prefix)) failures.push(`${anchor} is guarded in its own statement: "${prefix}"`);
     }
+    const heading = stripped.indexOf(SECTION_START);
+    if (heading !== -1) {
+      const exits = (masked.slice(0, heading).match(/process\.exit\(/g) ?? []).length;
+      if (exits !== KNOWN_EXITS_BEFORE_SECTION.length) {
+        failures.push(
+          `${exits} process.exit( call(s) before the section, ${KNOWN_EXITS_BEFORE_SECTION.length} known ` +
+            `(${KNOWN_EXITS_BEFORE_SECTION.join(", ")}). A new one can gate the section; name it in ` +
+            `KNOWN_EXITS_BEFORE_SECTION only if it ends the whole report`,
+        );
+      }
+    }
     return failures;
   };
 
@@ -1174,11 +1206,20 @@ describe("#1944: the report names local work every run, from the one decider", (
       ["process.argv in front of the heading", src.replace(heading, `if (process.argv.includes("--local")) ${heading}`)],
       ["a block around the whole section", src.replace(heading, `if (process.argv.includes("--local")) {\n${heading}`).replace(SECTION_END, `}\n${SECTION_END}`)],
       ["&& in front of the reading", src.replace("const localWork = readLocalWork(", "const localWork = process.argv.includes(\"--local\") && readLocalWork(")],
+      // Review of #2031: a separate guard line, no brace, empty prefix.
+      ["a guard clause on its own line", src.replace(heading, `if (!process.argv.includes("--local")) process.exit(0);\n${heading}`)],
     ];
     for (const [name, mutant] of mutants) {
       expect(mutant, `the ${name} mutant changed nothing, so it proves nothing`).not.toBe(src);
       expect(unconditionalFailures(mutant).length, `${name}: not caught`).toBeGreaterThan(0);
     }
+  });
+
+  test("#1983: braces, semicolons and exits inside strings before the section change nothing", () => {
+    // Negative control for the masking: none of this is structure.
+    const noisy = src.replace(SECTION_START, `console.log("{ ; process.exit( ");\n${SECTION_START}`);
+    expect(noisy).not.toBe(src);
+    expect(unconditionalFailures(noisy)).toEqual([]);
   });
 
   /**
