@@ -24,6 +24,8 @@
       "Spec coverage": "PVTV_lAHOAZTQCM4BpMuRzgMSzhk"
     },
     "queueLabel": "engine",
+    "expediteLabel": "work-this-next",
+    "filingOverrideLabel": "arbiter-override",
     "engineSpec": "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
     "milestonePrefix": "Pipeline"
   },

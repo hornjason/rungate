@@ -207,14 +207,21 @@ export const LABEL_RANK: ReadonlyMap<string, number> = new Map([
  * `LABEL_RANK` would rank it 0 inside the LABEL tier, which still loses to
  * every milestone — and the whole point is to reach the top of the queue
  * past work that outranks it. So it is its own tier, above PHASE.
+ *
+ * **Its NAME is config, never a constant here** (SC-2735). It was
+ * the constant `WORK_NEXT_LABEL`, which made this library the owner of
+ * every consumer's vocabulary for the one label that reorders Ready. It is
+ * `board.expediteLabel` now, read by `readExpediteLabel` in
+ * `lib/config-readers.ts` and passed in by each caller — the same single
+ * binding `board.queueLabel` already has — and a tree that configures none
+ * gets `UNCONFIGURED`, which promotes nothing.
  */
-export const WORK_NEXT_LABEL = "work-this-next";
 
 /** Which source placed an issue — or that nothing did. */
 export type PlacementTier = "NEXT" | "PHASE" | "LABEL" | "UNPLACED";
 
-/** What the `work-this-next` label did, and why. */
-export type WorkNextStatus = "NONE" | "HONOURED" | "OVER_BOUND" | "UNMEASURED";
+/** What the expedite label did, and why — `UNCONFIGURED` when the tree names none. */
+export type WorkNextStatus = "NONE" | "HONOURED" | "OVER_BOUND" | "UNMEASURED" | "UNCONFIGURED";
 
 /**
  * Whether a caller can see every candidate it is ordering, or only some.
@@ -238,7 +245,10 @@ export type PopulationScope = "COMPLETE" | "SLICE";
 
 export interface WorkNextReading {
   readonly status: WorkNextStatus;
-  /** Every issue carrying the label, ascending. Populated in all four states. */
+  /**
+   * Every issue carrying the label, ascending. Populated in the four states
+   * that have a label to look for; empty under `UNCONFIGURED`, which has none.
+   */
   readonly carrying: readonly number[];
   /** Whose promotion is actually applied. EMPTY unless `HONOURED`. */
   readonly honoured: ReadonlySet<number>;
@@ -275,9 +285,31 @@ export function workNextReading(
   population: readonly Rankable[],
   cap: number | null,
   scope: PopulationScope,
+  /**
+   * `board.expediteLabel`, from `readExpediteLabel` — REQUIRED, with no
+   * default, for the reason `placementOf`'s promoted set is: a caller that
+   * could omit it would receive a name it never read (SC-2735).
+   */
+  label: string | null,
 ): WorkNextReading {
+  // **No configured label, no promotion — and it says so** (SC-2735). Not
+  // `NONE`: that word means *nobody asked*, and here nobody COULD ask,
+  // because the tree never named the label. Every caller prints any status
+  // but `NONE`, so a project that has not configured one is told once per
+  // run what to set rather than being handed a built-in name.
+  if (label === null) {
+    return {
+      status: "UNCONFIGURED",
+      carrying: [],
+      honoured: new Set(),
+      cap,
+      why:
+        "UNCONFIGURED — no expedite label is set (board.expediteLabel in the rungate " +
+        "config), so nothing can be promoted to the top of Ready",
+    };
+  }
   const carrying = population
-    .filter(i => i.labels.includes(WORK_NEXT_LABEL))
+    .filter(i => i.labels.includes(label))
     .map(i => i.number)
     .sort((a, b) => a - b);
   const named = carrying.map(n => `#${n}`).join(", ");
@@ -302,7 +334,7 @@ export function workNextReading(
       carrying,
       honoured: new Set(),
       cap,
-      why: `no issue carries "${WORK_NEXT_LABEL}", so the ordinary order stands`,
+      why: `no issue carries "${label}", so the ordinary order stands`,
     };
   }
   // **A slice cannot bound anything** — round 2 of #1971's review. Both
@@ -323,7 +355,7 @@ export function workNextReading(
       cap,
       why:
         `UNMEASURED — this run sees only a slice of the candidates, so the bound on ` +
-        `"${WORK_NEXT_LABEL}" has no denominator and NOTHING was promoted, ` +
+        `"${label}" has no denominator and NOTHING was promoted, ` +
         `including ${named}`,
     };
   }
@@ -334,7 +366,7 @@ export function workNextReading(
       honoured: new Set(),
       cap,
       why:
-        `UNMEASURED — Ready's depth could not be read, so the bound on "${WORK_NEXT_LABEL}" ` +
+        `UNMEASURED — Ready's depth could not be read, so the bound on "${label}" ` +
         `is unknown and NOTHING was promoted, including ${named}`,
     };
   }
@@ -351,7 +383,7 @@ export function workNextReading(
       honoured: new Set(),
       cap,
       why:
-        `REFUSED — all ${population.length} candidate(s) carry "${WORK_NEXT_LABEL}", so it ` +
+        `REFUSED — all ${population.length} candidate(s) carry "${label}", so it ` +
         `ranks nothing among them whatever Ready's depth of ${cap} allows. NONE was ` +
         `promoted: ${named}.`,
     };
@@ -363,7 +395,7 @@ export function workNextReading(
       honoured: new Set(),
       cap,
       why:
-        `REFUSED — ${carrying.length} issues carry "${WORK_NEXT_LABEL}" and Ready's depth is ` +
+        `REFUSED — ${carrying.length} issues carry "${label}" and Ready's depth is ` +
         `${cap}, so the label ranks nothing. NONE of them was promoted: ${named}. ` +
         `Remove the label from ${carrying.length - cap} of them.`,
     };
@@ -374,7 +406,7 @@ export function workNextReading(
     honoured: new Set(carrying),
     cap,
     why:
-      `${carrying.length} of a bound of ${cap} carry "${WORK_NEXT_LABEL}" and go first: ${named}`,
+      `${carrying.length} of a bound of ${cap} carry "${label}" and go first: ${named}`,
   };
 }
 
@@ -470,7 +502,7 @@ export function placementOf(
       tier: "NEXT",
       family: 0,
       rank: 0,
-      why: `"${WORK_NEXT_LABEL}" promotes it above every tier — ${base.why}`,
+      why: `the expedite label promotes it above every tier — ${base.why}`,
     };
   }
   return unpromotedPlacement(r, enginePrefix, phase);

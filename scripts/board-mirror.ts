@@ -38,7 +38,7 @@ import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
-import { enginePrefixReading } from "../lib/config-readers";
+import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
 import {
   heldReason,
   readyCap,
@@ -143,6 +143,11 @@ export function splitReadyChanges<
    * a second reader is two deciders over one config key.
    */
   enginePrefix: string | null,
+  /**
+   * `board.expediteLabel` (SC-2735), passed in for the reason `enginePrefix`
+   * is: `lib/config-readers.ts` holds the one binding.
+   */
+  expediteLabel: string | null,
 ): {
   readyWritable: T[];
   heldByCap: T[];
@@ -204,7 +209,7 @@ export function splitReadyChanges<
   // a Criteria sync, which is a claim about something the run did not
   // attempt. The reading is RETURNED and the caller prints it under
   // `--ready`, where it is true.
-  const workNext = workNextReading(candidates, cap, "COMPLETE");
+  const workNext = workNextReading(candidates, cap, "COMPLETE", expediteLabel);
   const selection = selectReady(candidates, occ, enginePrefix, workNext.honoured);
   // **Written in the order `selectReady` chose, not in board order.**
   // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
@@ -501,6 +506,7 @@ export async function main(argv: string[]): Promise<number> {
     cap,
     occupied,
     enginePrefix,
+    readExpediteLabel(root),
   );
 
   if (values.json) {

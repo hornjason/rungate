@@ -49,7 +49,7 @@ import {
   workNextReading,
   type Throughput,
 } from "../lib/board-ready-rule";
-import { enginePrefixReading } from "../lib/config-readers";
+import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
 
@@ -835,6 +835,7 @@ const workNext = workNextReading(
   candidateRankables,
   throughput === null ? null : readyCap(throughput),
   "COMPLETE",
+  readExpediteLabel(process.cwd()),
 );
 if (workNext.status !== "NONE") console.log(`\n  ${workNext.why}`);
 

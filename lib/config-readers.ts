@@ -207,10 +207,42 @@ export function enginePrefixReading(projectRoot: string): {
  * got an empty queue, it has no queue.
  */
 export function readQueueLabel(projectRoot: string): string | null {
+  return readBoardLabel(projectRoot, "queueLabel");
+}
+
+/**
+ * The label that promotes an issue to the top of Ready, or `null` (SC-2735).
+ *
+ * It was the constant `WORK_NEXT_LABEL` in `lib/board-ready-rule.ts`, so a
+ * consumer repository could not rename it and the library decided a
+ * project's vocabulary. `null` is the honest reading for a tree that never
+ * configured one: nothing can be promoted, and `workNextReading` says so as
+ * `UNCONFIGURED` rather than honouring a name the project never chose.
+ */
+export function readExpediteLabel(projectRoot: string): string | null {
+  return readBoardLabel(projectRoot, "expediteLabel");
+}
+
+/**
+ * The label that waives a FindingArbiter refusal on a filing, or `null`
+ * (SC-2735).
+ *
+ * It was the constant `FILING_OVERRIDE_LABEL` in `lib/issue-filing-gate.ts`.
+ * `null` means **no waiver exists**, and that is the direction that matters:
+ * a built-in name substituted for absent config would hand every
+ * unscaffolded repository a way past the gate that its own config never
+ * declared — *Silent Default Substitution*, `.claude/rules/config-access.md`.
+ */
+export function readFilingOverrideLabel(projectRoot: string): string | null {
+  return readBoardLabel(projectRoot, "filingOverrideLabel");
+}
+
+/** One `board.<key>` label: absent, blank and non-string are all `null`. */
+function readBoardLabel(projectRoot: string, key: string): string | null {
   const config = tryLoadRungateConfig(projectRoot);
   const board = (config as Record<string, unknown> | null)?.board;
   if (!board || typeof board !== "object" || Array.isArray(board)) return null;
-  const raw = (board as Record<string, unknown>).queueLabel;
+  const raw = (board as Record<string, unknown>)[key];
   if (typeof raw !== "string") return null;
   const label = raw.trim();
   return label === "" ? null : label;
