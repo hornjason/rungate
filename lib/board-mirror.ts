@@ -385,6 +385,49 @@ export function criteriaNamedBy(
   );
 }
 
+/**
+ * The label an open issue carries while it has not answered the criterion
+ * question (#2020). Applied and removed by `scripts/criterion-label.ts`,
+ * by {@link criterionAnswer} and nothing else.
+ */
+export const NEEDS_CRITERION_LABEL = "needs-criterion";
+
+/**
+ * What an issue says it serves: the criteria it names, whether it declares
+ * it serves none, and whether either is true — #2020.
+ *
+ * **The one decider for "has this issue answered the criterion question".**
+ * `criteria-named` (E2, `scripts/board-snapshot.ts`) counts it and the
+ * `needs-criterion` label is applied and removed by it, so the label and the
+ * reading cannot disagree. Two copies would be two deciders, and a mutation
+ * of either would leave the other holding the case up.
+ *
+ * The declaration is the literal {@link NAMES_NONE}, case and all — the one
+ * way this repository spells it (SC-2609). Matching anything looser would
+ * let an issue opt out by accident, and *has not said* versus *says none*
+ * is the whole of SC-2616.
+ */
+/**
+ * Every id an issue can answer the criterion question with: the sweep's
+ * union PLUS the ids two specs both state (#2020, review round 1). A
+ * collision is reported, never merged, for the column — but an issue naming
+ * one still serves a criterion, which is why `finding-promotion` already read
+ * it this way. One function, so the label, `criteria-named` and the decline
+ * refusal all read the same population.
+ */
+export function answerableIds(sweep: SpecSweep): string[] {
+  return [...sweep.ids, ...sweep.collisions.map(c => c.id)];
+}
+
+export function criterionAnswer(
+  issue: { readonly title: string; readonly body?: string | null },
+  criterionIds: readonly string[],
+): { names: string[]; servesNone: boolean; answered: boolean } {
+  const names = criteriaNamedBy(issue, criterionIds);
+  const servesNone = `${issue.title}\n${issue.body ?? ""}`.includes(NAMES_NONE);
+  return { names, servesNone, answered: names.length > 0 || servesNone };
+}
+
 export function mirrorRows(
   issues: readonly { readonly number: number; readonly title: string; readonly body?: string | null }[],
   criterionIds: readonly string[],

@@ -1,0 +1,54 @@
+# Not managed by rungate: caller-owned, like issue-audit.yml.
+#
+# #2020 — an issue filed with `gh issue create --body` skips the issue forms,
+# so nothing read whether it names a criterion until a pull request hit it
+# (ADR-013 rule 9, step 4). This labels it `needs-criterion` when it is
+# opened, says why once, and takes the label off when an edit answers it.
+# The daily run re-reads every open issue, so a missed event cannot leave the
+# label stale; a dispatch run with no issue is the backfill.
+#
+# Every `uses:` is pinned to a commit SHA, and a test asserts it.
+name: Criterion label
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  schedule:
+    - cron: "41 6 * * *" # daily, off the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write # the label and the one comment are the whole point
+
+# One run per issue at a time; the daily sweep has its own group.
+concurrency:
+  group: criterion-label-${{ github.event.issue.number || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  criterion-label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version-file: ".bun-version"
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # The issue number and the event name go through env:, never into the
+      # script text. The title and body are written by whoever opened the
+      # issue, so they are read through the API and never interpolated here.
+      - name: Label issues that name no criterion
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+          ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$GITHUB_REPOSITORY" --write)
+          if [ -n "${ISSUE}" ]; then
+            args+=(--issue "$ISSUE")
+            if [ "$ACTION" = "opened" ]; then args+=(--comment); fi
+          fi
+          bun scripts/criterion-label.ts "${args[@]}"
