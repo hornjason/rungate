@@ -10,6 +10,7 @@
 
 import type { LaneReading } from "./board-lane-health";
 import { readyOccupancy, undispatchableRemedy } from "./board-ready-rule";
+import { ladderViolations, nextStage, retrosOwed, type ItemScope, type Stage } from "./stage-ladder";
 
 /**
  * Is this issue something anybody may pick up right now?
@@ -43,85 +44,6 @@ export function isPickable(issue: {
   return !issue.blockers.some(b => b.state === "open");
 }
 
-/** What a row of the agreed order can honestly say about itself. */
-export type OrderReading = "DONE" | "OPEN" | "ABANDONED" | "UNMEASURED" | "RECORDED";
-
-/**
- * What the tracker object actually is. `closed` is deliberately NOT a
- * boolean: **closed and done are different facts**, and collapsing them is
- * the defect a reviewer caught in the first version of this file.
- *
- * - a pull request is done when it **merged**; one closed unmerged is not
- * - an issue closed `not_planned` is closed and was never completed
- */
-export type TrackerFacts =
-  | { readonly kind: "pr"; readonly state: "open" | "closed"; readonly merged: boolean }
-  | {
-      readonly kind: "issue";
-      readonly state: "open" | "closed";
-      readonly stateReason: string | null;
-    };
-
-/**
- * An order item with no issue and no pull request is **UNMEASURED**, never
- * done and never open.
- *
- * This is the whole reason the report exists. Items 2 and 7 of the agreed
- * order have no tracker object, so nothing can observe their state — and the
- * failure mode this guards is reporting such an item as DONE because a
- * session remembered it that way. That happened on 2026-11-03: items 1 and 2
- * were reported ticked to Jason while `PROJECT-STATE.md` said all three of
- * 1, 2 and 3 were untouched, and item 1 was an open pull request.
- *
- * **ABANDONED is a fourth reading, not a flavour of DONE.** A pull request
- * closed without merging and an issue closed `not_planned` both end with
- * `state: "closed"` while the work they stood for did not happen. Reporting
- * either as DONE is the same class of wrong-but-healthy reading as the
- * search qualifier above, arriving by a different route.
- *
- * `.claude/rules/config-access.md`: a reading that could not be taken is not
- * one that passed.
- */
-export function orderReading(item: {
-  readonly tracker: string | null;
-  readonly facts?: TrackerFacts;
-  /**
-   * **Where a human wrote that this is finished** — not whether they did.
-   *
-   * A `boolean` here would be the 2026-11-03 defect above with an extra
-   * field: a session's memory reaching the report through a flag nobody can
-   * check. A non-empty string has to say WHERE, so a reader can go and
-   * disagree with it. Empty, blank and `null` are all the absence of a
-   * citation and read UNMEASURED.
-   *
-   * Only consulted when there is no tracker object at all. An item with an
-   * issue or a pull request is answered by the tracker, and a stale note
-   * does not get to contradict a PR that is sitting open.
-   */
-  readonly recordedDone?: string | null;
-}): OrderReading {
-  if (item.tracker === null) return item.recordedDone?.trim() ? "RECORDED" : "UNMEASURED";
-  if (item.facts === undefined) return "UNMEASURED";
-  const f = item.facts;
-  if (f.state === "open") return "OPEN";
-  if (f.kind === "pr") return f.merged ? "DONE" : "ABANDONED";
-  // CLOSED FAILS CLOSED. This was `stateReason === "not_planned" ?
-  // ABANDONED : DONE`, which handed DONE to every reason it did not know —
-  // including `null`, what GitHub returns for an issue closed before the
-  // field existed or by a client that does not set it. That is a tick for a
-  // closure nobody confirmed as completion, which is the reading this whole
-  // file exists to stop, arriving through its own default. Caught in review
-  // of #1740.
-  if (f.stateReason === "completed") return "DONE";
-  if (f.stateReason === "not_planned" || f.stateReason === "duplicate") return "ABANDONED";
-  // `reopened` on a closed issue is a contradiction; `null` is the absence
-  // of a reason; anything else is a value added after this was written.
-  // Introspected 2026-11-04: `IssueStateReason` is REOPENED, NOT_PLANNED,
-  // COMPLETED, DUPLICATE, and REST adds `null` — so the set is closed today
-  // and will not stay closed. UNMEASURED is the only honest default.
-  return "UNMEASURED";
-}
-
 /**
  * The bucket for issues carrying no milestone — A LANE, NOT A GAP.
  *
@@ -144,8 +66,8 @@ export type MilestoneRow = {
   readonly milestone: string;
   readonly open: number;
   /**
-   * Closed `completed`. **NOT every closed issue** — `orderReading` three
-   * docblocks up exists entirely to stop that conflation, and the first
+   * Closed `completed`. **NOT every closed issue** — closed and done are
+   * different facts (an issue closed `not_planned` was never done), and the first
    * version of this table reintroduced it one function later: it printed
    * `closed` under a header reading `done`, so a lane that abandoned four of
    * ten closures reported ten completed. Caught in review of #1825.
@@ -210,7 +132,7 @@ export function milestoneRollup(issues: readonly RollupIssue[]): MilestoneRow[] 
     } else if (i.state_reason === "completed") {
       r.done += 1;
     } else {
-      // CLOSED FAILS CLOSED, the same direction `orderReading` takes it: an
+      // CLOSED FAILS CLOSED: an
       // unknown reason and a `null` one are NOT completions. Over-reporting
       // `done` is the reading that makes a lane look finished.
       r.dropped += 1;
@@ -420,4 +342,144 @@ export function readyRefusal(
       );
     }
   }
+}
+
+/**
+ * One open item of the plan, as the report prints it.
+ *
+ * `reading` is the field that earns this type. An item with a command and an
+ * item with `verify: null` are both "not done", and printing them as one list
+ * says nine things are startable when three are: six of the nine open on
+ * 2026-11-11 had no command at all, so no run of `/stage-audit` could ever
+ * tick them. `.claude/rules/checks-must-be-able-to-fail.md` calls this the
+ * sixth shape — two states behind one observable — and the fix is to give
+ * them two spellings rather than a count.
+ */
+export interface LadderRow {
+  /** `B4` — the stage letter and the 1-based position. */
+  readonly id: string;
+  readonly stage: string;
+  readonly what: string;
+  /** `OPEN` carries a command that can tick it. `UNVERIFIABLE` does not. */
+  readonly reading: "OPEN" | "UNVERIFIABLE";
+  /** Where the command can run. Absent in the document means `repo`. */
+  readonly scope: ItemScope;
+}
+
+export type LadderReport =
+  | { readonly kind: "UNMEASURED"; readonly why: string }
+  | {
+      readonly kind: "READ";
+      /** The stage id `nextStage` names, or `null` when every stage is complete. */
+      readonly next: string | null;
+      /** `nextStage`'s precondition, verbatim. `null` when nothing blocks it. */
+      readonly blocked: string | null;
+      /** Every open item of every stage, in ladder order. */
+      readonly open: readonly LadderRow[];
+      /** Stage ids complete with no retro — rule 10's gate. */
+      readonly retrosOwed: readonly string[];
+    };
+
+/**
+ * The plan, read rather than transcribed — #1984.
+ *
+ * `scripts/work-status.ts` took **zero** reads of `project-state.json` before
+ * this. Its "THE AGREED ORDER" section printed a hand-typed array whose own
+ * docblock called itself a known defect, and the stage ladder AGENTS.md rule
+ * 10 names as the only place the plan lives appeared in no report at all. On
+ * 2026-11-11 that hid nine open items — B4, D4, E1 through E5, F1, F2 — from
+ * every session that read the report to decide what to work on.
+ *
+ * **Takes the source text, not a path.** The three ways this reading fails —
+ * the file is absent, the file is not JSON, the document is not a well-formed
+ * ladder — are different facts, and a function handed a parsed object cannot
+ * tell the first two apart. Each gets its own `why`, because *Silent Default
+ * Substitution* (`.claude/rules/config-access.md`) in this position prints an
+ * empty plan, which is byte-identical to a plan with nothing left to do.
+ *
+ * **Well-formedness is `ladderViolations`, which is already the one decider
+ * for it.** A second validator here would be two deciders over one fact: a
+ * mutation of either leaves the other holding every case up, and neither
+ * reads as dead.
+ */
+export function ladderReport(source: string | null, where: string): LadderReport {
+  if (source === null) {
+    return { kind: "UNMEASURED", why: `${where} could not be read, so the plan was not consulted` };
+  }
+  let doc: unknown;
+  try {
+    doc = JSON.parse(source);
+  } catch (e) {
+    return {
+      kind: "UNMEASURED",
+      why: `${where} is not valid JSON (${e instanceof Error ? e.message : String(e)})`,
+    };
+  }
+  const violations = ladderViolations(doc);
+  if (violations.length > 0) {
+    return {
+      kind: "UNMEASURED",
+      why: `${where} is not a well-formed plan: ${violations.join("; ")}`,
+    };
+  }
+  // `ladderViolations` returning empty is what establishes the shape. The
+  // cast is the assertion it already made, not a second opinion about it.
+  const stages = (doc as { stages: Stage[] }).stages;
+
+  const open: LadderRow[] = [];
+  for (const stage of stages) {
+    for (const item of stage.items) {
+      if (item.done) continue;
+      open.push({
+        id: item.id,
+        stage: stage.id,
+        what: item.what,
+        reading: typeof item.verify === "string" && item.verify.trim() !== "" ? "OPEN" : "UNVERIFIABLE",
+        scope: item.scope ?? "repo",
+      });
+    }
+  }
+
+  const next = nextStage(stages);
+  return {
+    kind: "READ",
+    next: next === null ? null : (next.stage?.id ?? null),
+    blocked: next === null ? null : next.blocked,
+    open,
+    retrosOwed: retrosOwed(stages),
+  };
+}
+
+/**
+ * The plan section of the report, as lines — #1984.
+ *
+ * A printer, not a decider: every fact here is `ladderReport`'s, and the only
+ * choice made is how two different facts look different. OPEN and
+ * UNVERIFIABLE get their own words on every row, because a reader scanning the
+ * list for something to start must not pick an item no command can tick.
+ * UNMEASURED prints its reason and no list at all — an empty list under a
+ * heading is byte-identical to a plan with nothing left to do.
+ */
+export function ladderLines(r: LadderReport): string[] {
+  // The plan is repository content any pull request can change, so its text
+  // reaches a terminal only with control characters removed: an escape code in
+  // an item could otherwise redraw the rows above it (security review, #2014).
+  const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  if (r.kind === "UNMEASURED") return [`  UNMEASURED — ${clean(r.why)}`];
+  const out: string[] = [];
+  out.push(`  Next stage: ${r.next ?? "none — every stage is complete"}`);
+  if (r.blocked !== null) out.push(`  Blocked: ${clean(r.blocked)}`);
+  const runnable = r.open.filter(o => o.reading === "OPEN").length;
+  out.push(
+    `  Open items (${r.open.length}): ${runnable} can be ticked by a command, ` +
+      `${r.open.length - runnable} are UNVERIFIABLE (verify: null)`,
+  );
+  for (const o of r.open) {
+    const text = clean(o.what);
+    const what = text.length > 90 ? `${text.slice(0, 89)}…` : text;
+    const scope = o.scope === "repo" ? "" : ` (${o.scope})`;
+    out.push(`    ${o.reading.padEnd(12)} ${o.id.padEnd(4)} ${what}${scope}`);
+  }
+  out.push(`  Retros owed: ${r.retrosOwed.length > 0 ? r.retrosOwed.join(", ") : "none"}`);
+  return out;
 }
