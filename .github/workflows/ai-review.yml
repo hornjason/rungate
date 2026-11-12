@@ -1,4 +1,4 @@
-# generated-sha: 5a2df5928b56fe3d
+# generated-sha: bc354f6325ea40f8
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 #
 # THREE OUTCOMES, and only one of them is a review that found nothing.
@@ -90,7 +90,7 @@ permissions:
 
 jobs:
   ai-review:
-    runs-on: "ubuntu-latest"
+    runs-on: "ubuntu-24.04"
     steps:
       - name: Detect AI review credentials
         id: ai-review-auth
