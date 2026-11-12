@@ -48,7 +48,7 @@ import {
 import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
-import { existsSync, readFileSync } from "fs";
+import { readFileSync } from "fs";
 import { join } from "path";
 
 const REPO = "hornjason/rungate";
@@ -341,7 +341,15 @@ const { statuses: status, abandonedOnBoard, unseenByLane } = await boardStatus()
 // malformed each print UNMEASURED with their own reason, never an empty list.
 bar("THE PLAN — stages from project-state.json, read every run");
 const STATE_FILE = join(import.meta.dir, "..", "project-state.json");
-const planSource = existsSync(STATE_FILE) ? readFileSync(STATE_FILE, "utf-8") : null;
+// Absent, unreadable, a directory, or gone between two calls: each is "could
+// not be read", which `ladderReport` turns into UNMEASURED. One read, no
+// existence pre-check, so no read can throw past it and take the report down.
+let planSource: string | null = null;
+try {
+  planSource = readFileSync(STATE_FILE, "utf-8");
+} catch {
+  planSource = null;
+}
 for (const line of ladderLines(ladderReport(planSource, "project-state.json"))) console.log(line);
 
 // ── every milestone, and the lane that is not one ───────────────────────────

@@ -144,6 +144,10 @@ describe("#1984: the report reads the plan from project-state.json", () => {
       /\bconst ORDER\b/,
     );
     expect(script).not.toMatch(/\borderReading\b/);
+    // An unreadable plan must print UNMEASURED, not throw past the report: the
+    // read sits in a try, and no existence pre-check races it.
+    expect(script).toMatch(/try \{\n\s*planSource = readFileSync\(STATE_FILE/);
+    expect(script).not.toMatch(/existsSync\(STATE_FILE\)/);
   });
 
   test("the live plan reads, so the report is not UNMEASURED on this tree", () => {
