@@ -123,6 +123,11 @@ on:
     # settle neither direction. If it is delivered to the SOURCE, this would
     # add an issue that just LEFT to our board. Unproven in both directions is
     # a reason to leave it out, not to keep it.
+    #
+    # And it stays out by decision, not only by doubt: issues enter rungate by
+    # filing (the forms, or `gh issue create --label from-consumer` from a
+    # consumer), never by transfer — Jason, 2026-11-12, #1752. SC-2741 no
+    # longer asks for a transfer trigger.
     types: [opened, reopened]
   pull_request_target:
     types: [opened, reopened, ready_for_review]
