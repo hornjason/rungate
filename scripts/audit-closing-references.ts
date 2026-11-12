@@ -1,10 +1,11 @@
 /**
  * Refuse a pull request whose closing keyword GitHub will never act on (#1362).
  *
- * Usage:
- *   gh pr view <N> --json number,body,closingIssuesReferences \
- *     | bun scripts/audit-closing-references.ts
- *   bun scripts/audit-closing-references.ts --fixture <file.json>   # offline
+ * Usage (the payload is `gh pr view`-shaped: number, body, files[].path, and
+ * closingIssuesReferences nodes that carry each issue body — the workflow
+ * builds it from one GraphQL query):
+ *   <payload> | bun scripts/audit-closing-references.ts --repo owner/name
+ *   bun scripts/audit-closing-references.ts --fixture <file.json> --repo owner/name   # offline
  *
  * ## Why this reads a payload instead of calling the API
  *
@@ -39,11 +40,11 @@
 
 import { readFileSync } from "fs";
 import {
+  closingRequirement,
+  closingRequirementMessage,
   inertClosingMessage,
   inertClosingReferences,
   linkedIssuesInThisRepo,
-  missingClosingMessage,
-  missingClosingReference,
 } from "../lib/closing-reference-audit";
 
 /** The one exit code every refusal travels through. */
@@ -71,7 +72,7 @@ async function readPayload(): Promise<string> {
   const fixture = arg("fixture");
   if (fixture) return readFileSync(fixture, "utf-8");
   if (process.stdin.isTTY) {
-    refuse("no payload on stdin and no --fixture. Pipe `gh pr view <N> --json number,body,closingIssuesReferences`.");
+    refuse("no payload on stdin and no --fixture. See the usage at the top of this file.");
   }
   return await new Response(process.stdin as unknown as ReadableStream).text();
 }
@@ -80,7 +81,7 @@ async function main(): Promise<void> {
   const raw = (await readPayload()).trim();
   if (!raw) refuse("the payload is empty, so no reading was taken. This is UNMEASURED, not a clean pull request.");
 
-  let pr: { number?: number; body?: string; headRefName?: unknown; closingIssuesReferences?: unknown };
+  let pr: { number?: number; body?: string; files?: unknown; closingIssuesReferences?: unknown };
   try {
     pr = JSON.parse(raw);
   } catch (e) {
@@ -99,16 +100,24 @@ async function main(): Promise<void> {
   if (typeof pr.body !== "string") {
     refuse("the payload carries no body string. Add `body` to the --json list. UNMEASURED, not clean.");
   }
-  // #1950. Same shape as the two readings above, for the same reason: a
-  // payload fetched without the branch would look exactly like a pull
-  // request on a branch that names no issue, which is the one input this
-  // check lets through. Absent is NOT READ, and NOT READ is not a pass.
-  if (typeof pr.headRefName !== "string" || pr.headRefName === "") {
+  // ADR-013, SC-2737. Same shape as the two readings above, for the same
+  // reason: a payload fetched without the changed files would look exactly
+  // like a pull request that touches nothing, and "all session-record files"
+  // is the one exemption this check grants. Absent is NOT READ, and NOT READ
+  // is not a pass.
+  if (!Array.isArray(pr.files)) {
     refuse(
-      "the payload carries no headRefName string, so the branch this check reads to decide " +
-        "whether a closing reference was owed was never fetched. Add it to the --json list. " +
-        "UNMEASURED, not clean.",
+      "the payload carries no files array, so whether this pull request changes only " +
+        "session-record files was never read. Add `files` to the query. UNMEASURED, not clean.",
     );
+  }
+  const changedPaths = (pr.files as unknown[]).map(f =>
+    f !== null && typeof f === "object" && typeof (f as { path?: unknown }).path === "string"
+      ? (f as { path: string }).path
+      : "",
+  );
+  if (changedPaths.includes("")) {
+    refuse("a changed file in the payload carries no path string. UNMEASURED, not clean.");
   }
 
   const prNumber = typeof pr.number === "number" ? pr.number : 0;
@@ -130,7 +139,7 @@ async function main(): Promise<void> {
   // SCOPED TO THIS REPOSITORY — ai-review round 2 of #1978. A bare `number`
   // is not an identity: `Fixes other-org/other-repo#9` is documented GitHub
   // syntax and lands a node numbered 9 here. Counting it let a pull request
-  // satisfy its own branch's requirement with somebody else's issue.
+  // satisfy its own closing requirement with somebody else's issue.
   const repoNameWithOwner = arg("repo");
   if (repoNameWithOwner === null || !repoNameWithOwner.includes("/")) {
     refuse(
@@ -155,19 +164,48 @@ async function main(): Promise<void> {
   // away. The actionable finding is always the more specific one: "you wrote
   // it and GitHub cannot see it" beats "you wrote nothing".
   //
-  // Composition rather than ordering-by-preference: #1950's check asks
-  // whether a reference is OWED and this one asks whether a written
+  // Composition rather than ordering-by-preference: the step-4 check below
+  // (SC-2737, which replaced #1950's) asks whether a reference is OWED and
+  // this one asks whether a written
   // reference LANDED, so when both could speak the written one is the
   // better remedy and the other is reported by the next run if it survives.
   if (inert.length > 0) refuse(inertClosingMessage(inert, prNumber));
 
-  const missing = missingClosingReference(
-    pr.headRefName,
-    linkedIssues.size,
-    linked.length,
-    repoNameWithOwner,
-  );
-  if (missing !== null) refuse(missingClosingMessage(missing, prNumber));
+  // The body of every issue this pull request closes HERE, read off the same
+  // nodes `closingIssuesReferences` returned. The workflow asks GitHub for the
+  // body on each node, so no second query decides which issues are linked.
+  const bodies = new Map<number, string>();
+  for (const node of linked) {
+    const n = node as { number?: unknown; body?: unknown } | null;
+    if (n === null || typeof n !== "object" || typeof n.number !== "number") continue;
+    if (!linkedIssues.has(n.number)) continue;
+    if (typeof n.body !== "string") {
+      refuse(
+        `issue #${n.number} is closed by this pull request but its node carries no body, so ` +
+          `whether it names a criterion was never read. Add \`body\` to the closingIssuesReferences ` +
+          `query. UNMEASURED, not clean.`,
+      );
+    }
+    bodies.set(n.number, n.body);
+  }
+
+  const runId = process.env.GITHUB_RUN_ID;
+  const rerun = `gh run rerun ${runId ? runId : "<run-id>"} --repo ${repoNameWithOwner}`;
+  const failure = closingRequirement(changedPaths, bodies, linked.length, repoNameWithOwner, rerun);
+  if (failure !== null) {
+    const message = closingRequirementMessage(failure, prNumber);
+    // Read EXACTLY as `RUNGATE_REQUIRE_AI_REVIEW` is: the string `true` and
+    // no other value turns the refusal on (`.claude/rules/config-access.md`).
+    if (process.env.RUNGATE_REQUIRE_CLOSING_REF === "true") refuse(message);
+    // Off, the reading is still reported, as an annotation rather than as a
+    // silent pass. Newlines are encoded so the annotation keeps all of it.
+    console.log(`::warning title=Closing reference (not enforced)::${message.replace(/\n/g, "%0A")}`);
+    console.log(
+      `closing references NOT ENFORCED: PR #${prNumber} fails ADR-013 step 4, and ` +
+        `RUNGATE_REQUIRE_CLOSING_REF is not "true".`,
+    );
+    return;
+  }
 
   // Counts what was CREDITED, not what was returned — a summary saying
   // "links 1 issue" for a cross-repository node would describe the check as

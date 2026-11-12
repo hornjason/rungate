@@ -52,7 +52,7 @@
  * that exists, the loosened rule is wrong nineteen times out of twenty-one.
  */
 
-import { declaredClosingIn, issueFromBranch } from "./local-work";
+import { declaredClosingIn } from "./local-work";
 
 /**
  * The issues a pull request closes **in this repository**, from `gh`'s shape.
@@ -173,117 +173,94 @@ export function inertClosingReferences(body: string): InertClosingReference[] {
 }
 
 /**
- * A pull request whose BRANCH names an issue and which declares no closing
- * reference at all (#1950).
+ * The files whose pull requests owe no closing reference (ADR-013, SC-2737).
  *
- * The sibling of `inertClosingReferences`, and the half it could not see.
- * That function asks "did you write a reference GitHub cannot read"; this one
- * asks "did you write one at all". PR #1903 answered no to the second and was
- * never asked: branch `rg/1717-phase6-readings`, title identical to issue
- * #1717, merged 2026-11-08 as `dd8709e6`, `closingIssuesReferences` empty and
- * no keyword anywhere in the body. The check passed it, #1717 stayed open,
- * and its card sat in `In review` for two days.
- *
- * ## Why the branch name, and not the title
- *
- * Nothing may require EVERY pull request to close an issue — a state record,
- * a docs pass and a dependency bump all legitimately close nothing, and a
- * check that fired on them is one people route around. So the question is
- * which pull requests OWED a reference, and the branch is the one place this
- * repository already answers it: `rg/1717-phase6-readings`,
- * `fix/640-644-run-branch-base`, `rungate/run-1931`. A title is prose and a
- * body is prose; a branch name is a decision somebody made before they wrote
- * either.
- *
- * `issueFromBranch` is imported rather than re-derived. It is the same
- * positional rule `lib/local-work.ts` uses to attribute a commit, and it
- * already refuses the shapes that would make this check wrong —
- * `jason-patch-1` is not issue #1 and `rg/adr-011-plan` is not issue #11.
- * Two parsers for "which issue is this branch for" would be two deciders
- * that agree, the fourth shape in
- * `.claude/rules/checks-must-be-able-to-fail.md`.
- *
- * ## What it deliberately does NOT check
- *
- * Whether the declared reference is the branch's own issue. A branch cut for
- * #1717 may legitimately close the sibling it turned into, and insisting on
- * the number would put this function in an argument with the author it cannot
- * win. **Declaring something is the bar.** That keeps the rule where the
- * evidence is: every instance measured — #1717 via PR #1903, and #1168 —
- * declared nothing at all.
- *
- * Returns `null` when nothing is owed. `headRefName` is required by the
- * caller before this is reached; a branch that could not be read is
- * UNMEASURED there, never a quiet pass here.
+ * The session record, and nothing else: a state update closes no issue and is
+ * expected not to. Paths are repository-relative and exact — the root copies,
+ * never a file of the same name somewhere else in the tree.
  */
-export interface MissingClosingReference {
-  /** The issue the branch names. */
-  issue: number;
-  /** The branch, so the message can quote what produced the reading. */
-  branch: string;
-  /**
-   * References GitHub recorded BEFORE this repository's filter, and the
-   * repository they were filtered against.
-   *
-   * ai-review round 3 of #1978, and the same defect as round 1 one clause
-   * over: the message said "closingIssuesReferences is empty" while the
-   * function held only the POST-filter count, so it was false for a pull
-   * request whose single reference was cross-repository — the case round 2
-   * had just added. Round 1 fixed the sentence; it did not fix the shape
-   * that produced it.
-   *
-   * The shape is the rule now: **the message may only name values carried
-   * on this object**, so a claim it cannot support is a claim it cannot
-   * spell. `test/audit-closing-references.test.ts` asserts it.
-   */
-  rawReferenceCount: number;
-  repoNameWithOwner: string;
+export const SESSION_RECORD_FILES: readonly string[] = [
+  "project-state.json",
+  "PROJECT-STATE.md",
+  "SUCCESS.md",
+];
+
+/** The words an issue writes when it is cleanup that serves no spec criterion. */
+export const NO_CRITERION_DECLARATION = "serves no criterion";
+
+/**
+ * Is every changed file a session-record file?
+ *
+ * **Decided from the diff, never from the branch name.** #1950 decided whether
+ * a reference was owed from the branch, and the AI review of #1989 refused
+ * that: a branch that does not open with an issue number skipped the check
+ * whatever it changed. A file-set rule has no such door — touching one other
+ * file makes the pull request owe a reference.
+ *
+ * An empty list is `false`. A pull request with no readable files has not
+ * shown it is a session record, and the caller refuses an absent list as
+ * UNMEASURED before this is reached.
+ */
+export function isSessionRecordOnly(paths: readonly string[]): boolean {
+  return paths.length > 0 && paths.every(p => SESSION_RECORD_FILES.includes(p));
 }
 
-export function missingClosingReference(
-  headRefName: string,
-  linkedIssueCount: number,
+/** Does an issue body name a criterion, or say it serves none? */
+export function namesCriterion(body: string): boolean {
+  return /\bSC-\d+\b/.test(body) || body.toLowerCase().includes(NO_CRITERION_DECLARATION);
+}
+
+/**
+ * Why a pull request fails ADR-013's step 4, or `null` when it does not.
+ *
+ * Two failures, in the order a fix has to happen: closing no issue in this
+ * repository, then closing one whose body names neither a criterion nor
+ * `serves no criterion`. Every value the message names is carried here, the
+ * rule rounds 1 and 3 of #1978 arrived at: a claim the message cannot support
+ * is a claim it cannot spell.
+ */
+export type ClosingRequirementFailure =
+  | { kind: "NO_ISSUE"; rawReferenceCount: number; repoNameWithOwner: string; rerun: string }
+  | { kind: "NO_CRITERION"; issues: number[]; rerun: string };
+
+export function closingRequirement(
+  changedPaths: readonly string[],
+  linkedIssueBodies: ReadonlyMap<number, string>,
   rawReferenceCount: number,
   repoNameWithOwner: string,
-): MissingClosingReference | null {
-  if (linkedIssueCount > 0) return null;
-  const issue = issueFromBranch(headRefName);
-  if (issue === null) return null;
-  return { issue, branch: headRefName, rawReferenceCount, repoNameWithOwner };
+  rerun: string,
+): ClosingRequirementFailure | null {
+  if (isSessionRecordOnly(changedPaths)) return null;
+  if (linkedIssueBodies.size === 0) {
+    return { kind: "NO_ISSUE", rawReferenceCount, repoNameWithOwner, rerun };
+  }
+  const issues = [...linkedIssueBodies]
+    .filter(([, body]) => !namesCriterion(body))
+    .map(([n]) => n)
+    .sort((a, b) => a - b);
+  return issues.length > 0 ? { kind: "NO_CRITERION", issues, rerun } : null;
 }
 
-/** The refusal text for the above. Names the issue, and the one-line remedy. */
-export function missingClosingMessage(m: MissingClosingReference, prNumber: number): string {
+/** The refusal text for the above. Names what was read, and the remedy. */
+export function closingRequirementMessage(f: ClosingRequirementFailure, prNumber: number): string {
+  if (f.kind === "NO_ISSUE") {
+    return (
+      `PR #${prNumber} closes no issue in ${f.repoNameWithOwner}` +
+      (f.rawReferenceCount === 0
+        ? ` — closingIssuesReferences is empty.\n\n`
+        : `: none of the ${f.rawReferenceCount} closing reference(s) GitHub recorded belongs to it.\n\n`) +
+      `Every pull request closes an issue (ADR-013, step 4). Add "Fixes #<N>" to the BODY, ` +
+      `not inside backticks, naming the issue this work was filed under. Only a pull request ` +
+      `whose changed files are all session-record files owes none. Editing the body re-runs ` +
+      `this check by itself.`
+    );
+  }
   return (
-    // STATES ONLY WHAT WAS READ — rounds 1 and 3 of #1978, the same defect
-    // twice. Round 1: it asserted "the body contains no closing keyword",
-    // which this function never looks at, and which is false for a
-    // backticked keyword and for a live `Fixes #N` on a pull request whose
-    // base is not the default branch (measured on throwaway PR #1923,
-    // `totalCount = 0`). Round 3: it then asserted "closingIssuesReferences
-    // is empty" while holding only the POST-filter count, which is false for
-    // the cross-repository pull request round 2 had just added a case for.
-    //
-    // Both sentences were repaired one at a time and the second was written
-    // AFTER the first was found. So the fix is the shape, not the wording:
-    // every value named below is carried on `m`, and a claim this function
-    // cannot support is now a claim it cannot spell.
-    `PR #${prNumber} is on branch "${m.branch}", which names issue #${m.issue}, and ` +
-    (m.rawReferenceCount === 0
-      ? `GitHub has recorded no closing reference for it — closingIssuesReferences is empty.\n\n`
-      : `none of the ${m.rawReferenceCount} closing reference(s) GitHub recorded for it ` +
-        `belongs to ${m.repoNameWithOwner}.\n\n`) +
-    `Nothing downstream can recover from this. board-flow.yml moves a card on ` +
-    `pull_request_target: closed by resolving the pull request's closing references, so ` +
-    `an empty list fires no event and the card freezes wherever it is. PR #1903 merged ` +
-    `this way on 2026-11-08 and issue #1717 is still open with its card in "In review".\n\n` +
-    `Add "Fixes #${m.issue}" to the pull request BODY — not the title, and not inside ` +
-    `backticks — then re-read the field rather than the body: ` +
-    `gh pr view ${prNumber} --json closingIssuesReferences.\n\n` +
-    `If this pull request genuinely closes nothing, the branch name is the thing that ` +
-    `is wrong: rename it so it does not open with an issue number. A state record, a ` +
-    `docs pass and a dependency bump are expected to close nothing, and a branch that ` +
-    `does not name an issue is never asked this question.`
+    `PR #${prNumber} closes issue(s) #${f.issues.join(", #")}, whose body names ` +
+    `neither a criterion (SC-<N>) nor "${NO_CRITERION_DECLARATION}".\n\n` +
+    `Add the criterion it serves to the issue, or the words "${NO_CRITERION_DECLARATION}" if it ` +
+    `is cleanup. Editing an issue fires no pull-request event, so re-run this check after: ` +
+    `${f.rerun}`
   );
 }
 
