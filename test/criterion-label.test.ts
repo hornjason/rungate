@@ -12,12 +12,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { NAMES_NONE, NEEDS_CRITERION_LABEL, criterionAnswer } from "../lib/board-mirror";
-import { COMMENT_BODY, labelPlan, run } from "../scripts/criterion-label";
+import { NAMES_NONE, NEEDS_CRITERION_LABEL, answerableIds, criterionAnswer } from "../lib/board-mirror";
+import { COMMENT_BODY, LABEL_COLOR, LABEL_DESCRIPTION, labelPlan, run } from "../scripts/criterion-label";
 
 const ROOT = join(import.meta.dir, "..");
 const IDS = ["ZZ-1", "ZZ-2"];
 const L = NEEDS_CRITERION_LABEL;
+const CREATE = ["label", "create", L, "--repo", "o/r", "--color", LABEL_COLOR, "--description", LABEL_DESCRIPTION, "--force"];
 
 type Fixture = { number: number; title: string; body: string | null; labels: string[]; labelsTruncated?: boolean };
 const issue = (number: number, body: string | null, labels: string[] = [], extra: Partial<Fixture> = {}): Fixture => ({
@@ -61,6 +62,26 @@ describe("#2020: criterionAnswer — the one decider", () => {
     expect(sites).toEqual(["lib/board-mirror.ts"]);
     const snapshot = readFileSync(join(ROOT, "scripts/board-snapshot.ts"), "utf8");
     expect(snapshot, "criteria-named must read criterionAnswer, not its own copy").toContain("criterionAnswer(");
+  });
+
+  test("an id two specs both state still answers, and the id set is built in one place", () => {
+    // Review round 1 of #2032: the label and criteria-named read the sweep's
+    // union without its collisions while finding-promotion read both, so an
+    // issue naming only SC-A1 was labelled and refused a decline at once.
+    const sweep = { reading: "MEASURED" as const, specs: [], ids: ["ZZ-1"], collisions: [{ id: "ZZ-7", specs: ["a.md", "b.md"] }], unmeasuredReasons: [] };
+    expect(answerableIds(sweep)).toEqual(["ZZ-1", "ZZ-7"]);
+    expect(criterionAnswer(issue(7, "Serves ZZ-7."), answerableIds(sweep)).answered).toBe(true);
+    const sites: string[] = [];
+    for (const dir of ["lib", "scripts"]) {
+      for (const f of readdirSync(join(ROOT, dir), { recursive: true }) as string[]) {
+        if (!f.endsWith(".ts")) continue;
+        if (readFileSync(join(ROOT, dir, f), "utf8").includes("sweep.collisions.map(")) sites.push(`${dir}/${f}`);
+      }
+    }
+    expect(sites, "build the answerable id set with answerableIds, not a copy").toEqual(["lib/board-mirror.ts"]);
+    for (const f of ["scripts/criterion-label.ts", "scripts/board-snapshot.ts", "lib/finding-promotion.ts", "scripts/plan-issues.ts"]) {
+      expect(readFileSync(join(ROOT, f), "utf8"), `${f} must read answerableIds`).toContain("answerableIds(");
+    }
   });
 });
 
@@ -139,6 +160,7 @@ describe("#2020: run", () => {
     const gh = fakeGh(fixtures());
     const r = await run(base, IDS, gh.exec);
     expect(gh.calls).toEqual([
+      CREATE,
       ["issue", "edit", "30", "--repo", "o/r", "--add-label", L],
       ["issue", "edit", "32", "--repo", "o/r", "--add-label", L],
       ["issue", "edit", "31", "--repo", "o/r", "--remove-label", L],
@@ -150,6 +172,7 @@ describe("#2020: run", () => {
     const gh = fakeGh(fixtures());
     await run({ ...base, issue: 32, comment: true }, IDS, gh.exec);
     expect(gh.calls).toEqual([
+      CREATE,
       ["issue", "edit", "32", "--repo", "o/r", "--add-label", L],
       ["issue", "comment", "32", "--repo", "o/r", "--body", COMMENT_BODY],
     ]);
@@ -180,8 +203,25 @@ describe("#2020: run", () => {
   test("an UNMEASURED issue makes the run exit non-zero, after the decidable writes", async () => {
     const gh = fakeGh([issue(40, "silent", ["x"], { labelsTruncated: true }), issue(41, "silent")]);
     const r = await run(base, IDS, gh.exec);
-    expect(gh.calls).toEqual([["issue", "edit", "41", "--repo", "o/r", "--add-label", L]]);
+    expect(gh.calls).toEqual([CREATE, ["issue", "edit", "41", "--repo", "o/r", "--add-label", L]]);
     expect(r.exit).not.toBe(0);
+  });
+
+  test("the label is created before the first add, never when nothing is added, and a failed create adds nothing", async () => {
+    const gh = fakeGh(fixtures());
+    await run({ ...base, issue: 31 }, IDS, gh.exec);
+    expect(gh.calls.some(c => c[0] === "label"), "nothing to add, so nothing to create").toBe(false);
+
+    const failing = fakeGh(fixtures());
+    const exec = (args: readonly string[]) => {
+      if (args[0] === "label") throw new Error("HTTP 403");
+      return failing.exec(args);
+    };
+    const r = await run(base, IDS, exec);
+    expect(failing.calls.filter(c => c.includes("--add-label")), "an add after a failed create would fail anyway").toEqual([]);
+    expect(failing.calls, "removals do not depend on the label being creatable").toEqual([["issue", "edit", "31", "--repo", "o/r", "--remove-label", L]]);
+    expect(r.exit).not.toBe(0);
+    expect(r.lines.join("\n")).toContain(`FAILED label ${L}`);
   });
 
   test("the comment says how to clear the label, in the exact words the board counts", () => {

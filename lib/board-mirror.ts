@@ -407,6 +407,18 @@ export const NEEDS_CRITERION_LABEL = "needs-criterion";
  * let an issue opt out by accident, and *has not said* versus *says none*
  * is the whole of SC-2616.
  */
+/**
+ * Every id an issue can answer the criterion question with: the sweep's
+ * union PLUS the ids two specs both state (#2020, review round 1). A
+ * collision is reported, never merged, for the column — but an issue naming
+ * one still serves a criterion, which is why `finding-promotion` already read
+ * it this way. One function, so the label, `criteria-named` and the decline
+ * refusal all read the same population.
+ */
+export function answerableIds(sweep: SpecSweep): string[] {
+  return [...sweep.ids, ...sweep.collisions.map(c => c.id)];
+}
+
 export function criterionAnswer(
   issue: { readonly title: string; readonly body?: string | null },
   criterionIds: readonly string[],

@@ -19,11 +19,15 @@
  *
  * Without `--write` it prints the plan and changes nothing.
  */
-import { NAMES_NONE, NEEDS_CRITERION_LABEL, criterionAnswer, specCriteriaIn } from "../lib/board-mirror";
+import { NAMES_NONE, NEEDS_CRITERION_LABEL, answerableIds, criterionAnswer, specCriteriaIn } from "../lib/board-mirror";
 import { ghWithoutGhToken, readLiveIssues, type GraphQlExec, type LiveIssue } from "../lib/live-issues";
 
 /** The one exit code every refusal travels through. */
 export const REFUSE_EXIT = 1;
+
+/** The label's colour and description, written by `gh label create --force`. */
+export const LABEL_COLOR = "D93F0B";
+export const LABEL_DESCRIPTION = "Names no criterion and does not say it serves none (#2020)";
 
 /** Posted once, when an issue is opened without an answer. */
 export const COMMENT_BODY =
@@ -118,7 +122,17 @@ export async function run(opts: RunOptions, ids: readonly string[] | null, exec:
       return false;
     }
   };
-  for (const n of plan.add) {
+  // `gh issue edit --add-label` refuses a label the repository does not
+  // define, so a fresh repository would fail every add (review round 1).
+  // `--force` makes this idempotent: it creates the label or rewrites its
+  // colour and description to these. If it fails, no add is attempted.
+  const labelReady =
+    plan.add.length === 0 ||
+    write(
+      ["label", "create", NEEDS_CRITERION_LABEL, "--repo", opts.repo, "--color", LABEL_COLOR, "--description", LABEL_DESCRIPTION, "--force"],
+      `label ${NEEDS_CRITERION_LABEL}`,
+    );
+  for (const n of labelReady ? plan.add : []) {
     const added = write(["issue", "edit", String(n), "--repo", opts.repo, "--add-label", NEEDS_CRITERION_LABEL], `#${n} add`);
     if (added && opts.comment) write(["issue", "comment", String(n), "--repo", opts.repo, "--body", COMMENT_BODY], `#${n} comment`);
   }
@@ -150,7 +164,7 @@ if (import.meta.main) {
   const sweep = specCriteriaIn(process.cwd());
   const result = await run(
     { repo: repo!, issue, comment, write: process.argv.includes("--write") },
-    sweep.reading === "UNMEASURED" ? null : sweep.ids,
+    sweep.reading === "UNMEASURED" ? null : answerableIds(sweep),
     ghWithoutGhToken,
   );
   for (const l of result.lines) console.log(l);

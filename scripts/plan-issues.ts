@@ -48,7 +48,7 @@ import {
   planDecomposition,
 } from "../lib/issue-decomposition";
 import { readQueueLabel } from "../lib/config-readers";
-import { specCriteriaIn } from "../lib/board-mirror";
+import { answerableIds, specCriteriaIn } from "../lib/board-mirror";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-issues.test.ts` can build a
@@ -441,7 +441,7 @@ async function decompose(
   }
   // An id two specs both state is still STATED; it is ambiguous for the board
   // column, not absent.
-  const statedCriteria = new Set([...sweep.ids, ...sweep.collisions.map(c => c.id)]);
+  const statedCriteria = new Set(answerableIds(sweep));
 
   let live;
   try {

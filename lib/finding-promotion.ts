@@ -46,7 +46,7 @@
 import { existsSync, readFileSync } from "fs";
 import { resolve, sep } from "path";
 
-import { NAMES_NONE, criteriaNamedBy, criterionAnswer, specCriteriaIn } from "./board-mirror";
+import { NAMES_NONE, answerableIds, criteriaNamedBy, criterionAnswer, specCriteriaIn } from "./board-mirror";
 import { allocateScNumber, formatSCLine } from "./create-sc";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf } from "./issue-shape";
 import type { ScRegistry } from "./sc-ids";
@@ -285,7 +285,7 @@ export function promotionViolations(input: PromotionInput): PromotionViolation[]
   // the ambiguity is irrelevant: an issue naming `SC-A1`, which three specs
   // in this tree state, serves a criterion whichever one it meant. Reusing
   // the narrower set let exactly those issues promote.
-  const allIds = [...sweep.ids, ...sweep.collisions.map(c => c.id)];
+  const allIds = answerableIds(sweep);
   const hereIds = sweep.specs.find(s => resolve(input.projectRoot, s.path) === path)?.ids ?? [];
 
   if (hereIds.length === 0) {
@@ -552,7 +552,7 @@ export function declineViolations(input: DeclineInput): DeclineViolation[] {
   // `collisions` folded in for the reason `promotionViolations` folds them
   // in: the question is whether the issue serves ANY criterion, and an id two
   // specs both state is still a criterion served.
-  const allIds = [...sweep.ids, ...sweep.collisions.map(c => c.id)];
+  const allIds = answerableIds(sweep);
 
   // The existing decider, not a second one — the same call the board renders
   // from. A decline and a populated criteria cell are states the board cannot
