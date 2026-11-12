@@ -61,6 +61,9 @@ import { spawnSync } from "child_process";
  */
 export const PLAN_DIR = "docs/adr";
 
+/** A template cell an author has not filled in yet: `{outcome}`, `{blocked-by}`. */
+const PLACEHOLDER = /^\{[a-z-]+\}$/;
+
 /** The column whose cells are issue titles. The header spelling is the contract. */
 export const TITLE_COLUMN = "Outcome";
 
@@ -280,7 +283,11 @@ export function plannedTitles(content: string): PlannedTitle[] {
     }
     if (table.column === null) continue;
     const title = cells[table.column];
-    if (title !== undefined && title !== "") out.push({ title, line: i + 1 });
+    // **A `{placeholder}` is not a title** (security review of #2008).
+    // `docs/adr/TEMPLATE.md` keeps a live table so the decomposition parser
+    // can be tested against it, and its Outcome cell is `{outcome}`. Read as a
+    // title, that would exempt a filing nobody planned from the cap.
+    if (title !== undefined && title !== "" && !PLACEHOLDER.test(title)) out.push({ title, line: i + 1 });
   }
   return out;
 }
