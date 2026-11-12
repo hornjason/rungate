@@ -34,7 +34,9 @@ none, say so and stop.
    - Resolve `<checkout>` first, from wherever the session is: run
      `git rev-parse --path-format=absolute --git-common-dir` on its own. If it
      errors or prints nothing, stop: the session is not inside this project.
-     `<checkout>` is what it printed with the trailing `/.git` removed. From a
+     If what it printed does not end in `/.git`, stop: a bare repository or a
+     submodule has no checkout to measure. Otherwise `<checkout>` is what it
+     printed with the trailing `/.git` removed. From a
      linked worktree that names the main checkout, never the worktree — the
      same `--git-common-dir` question `repoRootFrom` in `lib/paths.ts` asks.
      Use that path below and in step 2.

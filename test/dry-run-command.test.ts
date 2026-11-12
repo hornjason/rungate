@@ -176,5 +176,8 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
     // never fire. The command must be run, and judged, on its own.
     expect(bullet).not.toContain("$(git rev-parse");
     expect(bullet).not.toContain("dirname");
+    // Review round 2 of #2028: a bare repo or a submodule's common dir does not
+    // end in /.git, so stripping the suffix would silently yield a wrong path.
+    expect(bullet).toMatch(/does not end in `\/\.git`, stop/);
   });
 });
