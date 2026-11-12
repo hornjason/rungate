@@ -27,6 +27,13 @@ none, say so and stop.
 
 ## Steps
 
+0. Check the checkout is current before measuring anything (#2016). In the
+   checkout the planners will run from: `git fetch origin main`, then
+   `git rev-list --count HEAD..origin/main`. If the count is above zero the
+   tree is behind origin/main, so stop: print how many commits behind it is
+   and that it must be updated first, and run nothing else. Otherwise print
+   `Measured commit: ` and the output of `git rev-parse --short HEAD`, so
+   every run names the tree it read.
 1. Read the document. Find its decomposition table
    (`| Criterion | Outcome | Files | Milestone | Blocked by |`).
 2. Run the real dry runs from the primary checkout, read-only, with
