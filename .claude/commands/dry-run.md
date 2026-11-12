@@ -12,7 +12,8 @@ every change to the document until Jason agrees with every step it shows.
 ## Rules
 
 - **Never pass `--write`.** Nothing is filed or changed on GitHub; the
-  `-flow.html` visual is the only file written.
+  `-flow.html` visual is the only file written, besides the local refs
+  `git fetch` updates.
 - **Quote the path in every command, and stop if it is not an existing file.**
 - **Read the document from disk every run.** The document is the input, never
   the conversation, so an edit is picked up by re-running.
@@ -27,6 +28,17 @@ none, say so and stop.
 
 ## Steps
 
+0. Check the checkout is current before measuring anything (#2016), in this
+   order, against the primary checkout step 2 runs from, passed by path and
+   never reached with `cd`:
+   - `git -C "<checkout>" fetch origin main`. If the fetch fails, stop and run nothing else:
+     the count below would read a stale ref and could say zero.
+   - `git -C "<checkout>" rev-list --count HEAD..origin/main`. If the count is above zero
+     the tree is behind origin/main, so stop: print how many commits behind it
+     is and that it must be updated first, and run nothing else. If it errors
+     or prints anything but a number, stop the same way: no count is not zero.
+   - Only when both pass, print `Measured commit: ` and the output of
+     `git -C "<checkout>" rev-parse --short HEAD`, so every run names the tree it read.
 1. Read the document. Find its decomposition table
    (`| Criterion | Outcome | Files | Milestone | Blocked by |`).
 2. Run the real dry runs from the primary checkout, read-only, with
