@@ -67,6 +67,7 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
   const FETCH = 'git -C "<checkout>" fetch origin main';
   const BEHIND = 'git -C "<checkout>" rev-list --count HEAD..origin/main';
   const PLANNER = "plan-issues --decompose";
+  const RESOLVE = "git rev-parse --path-format=absolute --git-common-dir";
 
   test("#2016: it fetches origin/main and counts the commits HEAD is behind", () => {
     expect(text, `dry-run.md must contain: ${FETCH}`).toContain(FETCH);
@@ -119,6 +120,20 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
     }
     // Step 0 before any planner: a count taken after the dry runs measured
     // nothing in time (review of #2028 restored this from the #2016 cases).
+    // #2019: <checkout> is resolved first, by a command judged on its own.
+    // Here rather than in its own case so the re-wrap case covers it too
+    // (review round 3 of #2028).
+    const resolve = bulletOf(doc, RESOLVE);
+    if (resolve === "") failures.push("<checkout> is never resolved");
+    else {
+      if (flat.indexOf(resolve) > flat.indexOf(fetch)) failures.push("<checkout> is resolved after it is first used");
+      if (!/errors or prints nothing, stop/i.test(resolve)) failures.push("a failed resolution does not stop the run");
+      // Inside `dirname "$(...)"` a failing git call is swallowed: `dirname ""`
+      // prints "." and exits 0 (review round 1 of #2028).
+      if (resolve.includes("$(git rev-parse") || resolve.includes("dirname")) failures.push("the resolution is wrapped, so its failure is swallowed");
+      // A bare repo's or a submodule's common dir does not end in /.git (round 2).
+      if (!/does not end in `\/\.git`, stop/.test(resolve)) failures.push("a common dir not ending in /.git is not refused");
+    }
     const planner = flat.indexOf(PLANNER);
     if (planner === -1 || flat.indexOf(count) > planner) failures.push("the freshness check does not come before the planner");
     return failures;
@@ -162,22 +177,9 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
   });
 
   test("#2019: <checkout> is bound to a resolved path before any command uses it", () => {
-    // Review of #2017: an agent in a worktree could substitute its own path,
-    // and the check would then read the wrong tree. --git-common-dir names the
-    // main checkout from inside any linked worktree, as repoRootFrom does.
-    const RESOLVE = "git rev-parse --path-format=absolute --git-common-dir";
-    const at = text.indexOf(RESOLVE);
-    expect(at, `dry-run.md must resolve <checkout> with: ${RESOLVE}`).toBeGreaterThan(-1);
-    expect(at).toBeLessThan(text.indexOf(FETCH));
-    const bullet = bulletOf(text, RESOLVE);
-    expect(bullet).toMatch(/errors or prints nothing, stop/i);
-    // Review of #2028: inside \`dirname "$(...)"\` a failing git call is
-    // swallowed — \`dirname ""\` prints "." and exits 0 — so the stop could
-    // never fire. The command must be run, and judged, on its own.
-    expect(bullet).not.toContain("$(git rev-parse");
-    expect(bullet).not.toContain("dirname");
-    // Review round 2 of #2028: a bare repo or a submodule's common dir does not
-    // end in /.git, so stripping the suffix would silently yield a wrong path.
-    expect(bullet).toMatch(/does not end in `\/\.git`, stop/);
+    // Review of #2017: an agent in a worktree could substitute its own path.
+    // The properties live in stepZeroFailures; this case names them.
+    expect(bulletOf(text, RESOLVE), `dry-run.md must resolve <checkout> with: ${RESOLVE}`).not.toBe("");
+    expect(stepZeroFailures(text).filter(f => /resol|common dir|<checkout>/.test(f))).toEqual([]);
   });
 });
