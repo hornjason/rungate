@@ -117,6 +117,10 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
     if (!(flat.indexOf(measured) > flat.indexOf(count) && flat.indexOf(count) > flat.indexOf(fetch))) {
       failures.push("fetch, count and measured commit are not in that order");
     }
+    // Step 0 before any planner: a count taken after the dry runs measured
+    // nothing in time (review of #2028 restored this from the #2016 cases).
+    const planner = flat.indexOf(PLANNER);
+    if (planner === -1 || flat.indexOf(count) > planner) failures.push("the freshness check does not come before the planner");
     return failures;
   };
 
@@ -165,6 +169,12 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
     const at = text.indexOf(RESOLVE);
     expect(at, `dry-run.md must resolve <checkout> with: ${RESOLVE}`).toBeGreaterThan(-1);
     expect(at).toBeLessThan(text.indexOf(FETCH));
-    expect(bulletOf(text, RESOLVE)).toMatch(/fails?, stop/i);
+    const bullet = bulletOf(text, RESOLVE);
+    expect(bullet).toMatch(/errors or prints nothing, stop/i);
+    // Review of #2028: inside \`dirname "$(...)"\` a failing git call is
+    // swallowed — \`dirname ""\` prints "." and exits 0 — so the stop could
+    // never fire. The command must be run, and judged, on its own.
+    expect(bullet).not.toContain("$(git rev-parse");
+    expect(bullet).not.toContain("dirname");
   });
 });
