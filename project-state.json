@@ -1549,9 +1549,9 @@
         },
         {
           "id": "D4",
-          "what": "it names unmerged and uncommitted work in EVERY run, not when an agent remembers to check (the rescue arm from #1038 and PR #1687 is the input)",
-          "done": false,
-          "verify": null
+          "what": "it names unmerged and uncommitted work in EVERY run, not when an agent remembers to check (the rescue arm from #1038 and PR #1687 is the input) DELIVERED by #2031 (closing #1983), merged `812f7e04` on 2026-11-12. The first binding matched three spellings of a flag inside a cut that started AT the heading, so `if (process.argv.includes(\"--local\"))` in front of it stayed green (#1983, measured). The case now reads structure: the heading and `readLocalWork(` are top-level, unconditional statements, and every `process.exit(` before the heading is identified by its guard and must equal the two known ones. Proved able to fail on the real script: #1983's mutation and an exit swap each turn it 0 pass / 1 fail. KNOWN GAP: it is a hand-written text scanner, and review round 3 found a `process.exit(` inside a template `${}` it blanks; the follow-up (bind it with the TypeScript AST) is recorded on #1983, not repaired, per rule 5.",
+          "done": true,
+          "verify": "bun test test/work-status.test.ts -t \"the section is unconditional\""
         },
         {
           "id": "D5",
@@ -1569,7 +1569,34 @@
       ],
       "goal": "One command, runnable by Jason, that says whether the board is right",
       "serves": 2,
-      "retro": null
+      "retro": {
+        "wentWell": [
+          "Every item was ticked only once a command existed and had been proved able to fail in both directions — D2's verdict counter against zero and two verdict lines, D5's step run under `bash -e` with `exit $status` mutated to `exit 0`, D4's case against #1983's exact mutation of `scripts/work-status.ts`.",
+          "D5's first real run was the evidence, not the suite: it fired on its own merge push and caught SC-2620 going short in 11 seconds, the sequence that took a person to find for SC-2613.",
+          "D4's binding was found unable to fail (#1983) BEFORE it was ticked, by mutating the script it guards. Ticking it on the old case would have certified the regression it exists to block.",
+          "Rule 5 held on #2031: the round-3 finding was answered with what a fourth round would fix and a change of method, not repaired."
+        ],
+        "wentPoorly": [
+          "D3 took thirteen review rounds for two defects, one of them a denylist patched by named members three rounds running. D4's first binding was the same shape — a three-name denylist — and nobody connected them until a mutation did.",
+          "D4's replacement was a hand-written text scanner, and each review round found one more literal it misread: strings, then regex literals, then live `${}` interpolation. The merged commit title still says the flag is caught 'however it is spelled', which round 2 had already proved false.",
+          "Two deciders for one question surfaced while finishing the stage: `closing-references` and `criteria-named` disagree on what answers the criterion question (case, and which ids count). #1983 passed one and stayed short on the other until it was reworded.",
+          "Both follow-ups this stage produced — D3's tri-state type and D4's AST binding — were refused by the filing cap and live only as comments (#1896, #1983). The change that makes `closing-references` read `criterionAnswer` is in the same state (#2020)."
+        ],
+        "improvements": [
+          {
+            "what": "A guard's battery carries every shape review found, as a row, so a later repair cannot quietly drop one",
+            "mechanism": "test/work-status.test.ts's '#1983: every way of putting the section behind a flag reddens it' holds six mutants — two of them the round-1 and round-2 findings of #2031 — and each asserts it changed the source; a separate case holds negative controls for a string, a template, a regex and a trailing comment.",
+            "status": "in-place",
+            "verify": "bun test test/work-status.test.ts -t \"every way of putting the section behind a flag reddens it\""
+          },
+          {
+            "what": "A question with one answer has one decider, and a population test holds it there",
+            "mechanism": "`criterionAnswer` and `answerableIds` in lib/board-mirror.ts (#2020, #2032) are the only places the criterion question and its id set are decided; test/criterion-label.test.ts asserts exactly one `.includes(NAMES_NONE)` and one `sweep.collisions.map(` across lib/ and scripts/, and that criteria-named, finding-promotion, plan-issues and the label all read them.",
+            "status": "in-place",
+            "verify": "bun test test/criterion-label.test.ts -t \"the declaration is matched in exactly one place\""
+          }
+        ]
+      }
     },
     {
       "id": "E",

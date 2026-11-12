@@ -169,7 +169,7 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  * number. That is the third instance of the defect B2's entry already
  * names — a STATE reading standing in for a delivered capability.
  */
-const COMPLETE_STAGES = 4;
+const COMPLETE_STAGES = 5;
 
 /**
  * Every verify command in the plan file runs through here.
