@@ -83,14 +83,33 @@ const CODE = [{ path: "lib/x.ts" }];
 /** The switch, on, exactly as the repository variable is spelled. */
 const ON = { RUNGATE_REQUIRE_CLOSING_REF: "true" };
 
+/**
+ * The workflow sends `closingIssuesTotal` beside the nodes. A payload that
+ * leaves it out gets the honest value (the node count) here, so each case
+ * keeps testing what it names; the one case about an ABSENT total passes
+ * `RAW` so nothing is filled in.
+ */
+const RAW = Symbol("raw");
+function withTotal(payload: string): string {
+  try {
+    const p = JSON.parse(payload);
+    if (p && Array.isArray(p.closingIssuesReferences) && !("closingIssuesTotal" in p)) {
+      return JSON.stringify({ ...p, closingIssuesTotal: p.closingIssuesReferences.length });
+    }
+  } catch {
+    // Not JSON: a case about an unparseable payload, passed through untouched.
+  }
+  return payload;
+}
+
 function run(
   script: string,
-  payload: string,
+  payload: string | { [RAW]: string },
   repo: string | null = THIS_REPO,
   env: Record<string, string> = {},
 ): { code: number; err: string; out: string } {
   const file = join(scratch, "payload.json");
-  writeFileSync(file, payload);
+  writeFileSync(file, typeof payload === "string" ? withTotal(payload) : payload[RAW]);
   const argv = repo === null ? [script, "--fixture", file] : [script, "--fixture", file, "--repo", repo];
   // The ambient switch and run id are stripped, so a developer or a CI job
   // that has either set cannot change what a case observes.
@@ -387,6 +406,18 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
     // The control: the same payload whose total matches what was fetched.
     const whole = run(SCRIPT, JSON.stringify({ ...base, closingIssuesTotal: 1 }), THIS_REPO, ON);
     expect(whole.code, whole.err).toBe(0);
+  });
+
+  test("an ABSENT total is UNMEASURED, and the mutant does not refuse", () => {
+    // AI review of #2003, round 2: every other field refuses when absent,
+    // and this one was skipped silently.
+    const payload = {
+      [RAW]: JSON.stringify({ number: 25, body: "Fixes #9\n", closingIssuesReferences: [closes(9)], files: CODE }),
+    };
+    const real = run(SCRIPT, payload, THIS_REPO, ON);
+    expect(real.code).toBe(REFUSE_EXIT);
+    expect(real.err).toContain("no closingIssuesTotal");
+    expect(run(buildMutant(), payload, THIS_REPO, ON).code).toBe(0);
   });
 
   test("no --repo is UNMEASURED, not a clean pull request", () => {

@@ -174,8 +174,16 @@ async function main(): Promise<void> {
   // A list GitHub cut short is not a list of every issue this closes. The
   // workflow passes the total beside the nodes; when it exceeds them, an
   // issue that names no criterion could sit in the part never fetched.
+  // Absent is NOT READ, like every field above (AI review of #2003): a total
+  // the workflow stopped sending would otherwise turn this guard off silently.
   const total = (pr as { closingIssuesTotal?: unknown }).closingIssuesTotal;
-  if (typeof total === "number" && total > linked.length) {
+  if (typeof total !== "number") {
+    refuse(
+      "the payload carries no closingIssuesTotal number, so whether the closed-issue list was " +
+        "cut short was never read. Add `totalCount` to the query. UNMEASURED, not clean.",
+    );
+  }
+  if (total > linked.length) {
     refuse(
       `this pull request closes ${total} issue(s) and only ${linked.length} were fetched, so ` +
         `whether every one names a criterion was never read. UNMEASURED, not clean.`,
