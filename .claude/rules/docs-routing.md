@@ -1,6 +1,6 @@
 ---
 description: Documentation routing and file creation conventions
-generated-sha: 1d3a6a3d8a62c00d
+generated-sha: 3e4abf38a7e81f78
 ---
 
 ## Documentation Routing
