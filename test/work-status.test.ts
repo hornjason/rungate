@@ -14,8 +14,9 @@ import {
   NO_MILESTONE,
   isPickable,
   milestoneOf,
+  ladderLines,
+  ladderReport,
   milestoneRollup,
-  orderReading,
   readyRefusal,
   resolveFocus,
 } from "../lib/work-status";
@@ -52,172 +53,91 @@ describe("isPickable: the 44-issue error, as cases", () => {
   });
 });
 
-describe("orderReading: an item nothing can observe is UNMEASURED, never DONE", () => {
-  // The failure this exists for, by name. On 2026-11-03 items 1 and 2 of the
-  // agreed order were reported to Jason as DONE out of a session's context
-  // while PROJECT-STATE.md said 1, 2 and 3 were untouched — and item 1 was an
-  // OPEN pull request. A reading taken from memory is indistinguishable from
-  // one taken from the tracker, which is the whole defect.
-  test("no tracker object is UNMEASURED", () => {
-    expect(orderReading({ tracker: null })).toBe("UNMEASURED");
+describe("#1984: the report reads the plan from project-state.json", () => {
+  // A plan whose one finished stage owes a retro and whose next stage holds
+  // one item a command can tick, one with no command, and one already done.
+  // Membership, not a count: the two open items must print differently.
+  const plan = (stages: unknown = [
+    {
+      id: "A", name: "Write it down", goal: "the documents exist", serves: 1, agreed: "2026-10-30 Jason",
+      items: [{ id: "A1", what: "a thing", done: true, verify: "true" }],
+      retro: null,
+    },
+    {
+      id: "B", name: "Measure it", goal: "the board is a reading", serves: 1, agreed: "2026-10-30 Jason",
+      items: [
+        { id: "B1", what: "a reading with a command", done: false, verify: "bun test test/x.test.ts" },
+        { id: "B2", what: "a reading nobody can run", done: false, verify: null },
+        { id: "B3", what: "a reading already true", done: true, verify: "true" },
+      ],
+      retro: null,
+    },
+  ]) =>
+    JSON.stringify({
+      goal: { statement: "x", verify: "true" },
+      goals: [{ id: 1, goal: "g", doneWhen: "d" }],
+      stages,
+    });
+
+  test("an item with a command is OPEN and one with verify: null is UNVERIFIABLE", () => {
+    const r = ladderReport(plan(), "project-state.json");
+    expect(r.kind).toBe("READ");
+    if (r.kind !== "READ") return;
+    expect(r.open.map(o => [o.id, o.reading])).toEqual([["B1", "OPEN"], ["B2", "UNVERIFIABLE"]]);
+    const lines = ladderLines(r);
+    const b1 = lines.find(l => l.includes("B1"));
+    const b2 = lines.find(l => l.includes("B2"));
+    expect(b1).toContain("OPEN");
+    expect(b1).not.toContain("UNVERIFIABLE");
+    expect(b2).toContain("UNVERIFIABLE");
+    expect(lines.some(l => l.includes("B3"))).toBe(false);
   });
 
-  test("a tracker named but never fetched is UNMEASURED, not DONE", () => {
-    expect(orderReading({ tracker: "#1741" })).toBe("UNMEASURED");
+  test("the next stage and every retro owed are printed", () => {
+    const r = ladderReport(plan(), "project-state.json");
+    const text = ladderLines(r).join("\n");
+    expect(text).toContain("Next stage: B");
+    expect(text).toContain("Retros owed: A");
+    // nextStage's own blocker, verbatim: the retro debt on A gates B.
+    expect(text).toContain("stage A is complete and has no retro");
   });
 
-  test("open reads through, for either kind", () => {
-    expect(orderReading({ tracker: "#1741", facts: { kind: "issue", state: "open", stateReason: null } })).toBe("OPEN");
-    expect(orderReading({ tracker: "PR #1607", facts: { kind: "pr", state: "open", merged: false } })).toBe("OPEN");
+  test("no stages key is UNMEASURED, by name, and prints no open-item list", () => {
+    // Written out, not `plan(undefined)`: a default parameter would put the stages back.
+    const noStages = JSON.stringify({ goal: { statement: "x", verify: "true" }, goals: [{ id: 1, goal: "g", doneWhen: "d" }] });
+    const r = ladderReport(noStages, "project-state.json");
+    expect(r.kind).toBe("UNMEASURED");
+    const text = ladderLines(r).join("\n");
+    expect(text).toContain("UNMEASURED");
+    expect(text).toContain("stages");
+    expect(text).not.toContain("Open items");
   });
 
-  test("a merged pull request is DONE", () => {
-    expect(orderReading({ tracker: "PR #1730", facts: { kind: "pr", state: "closed", merged: true } })).toBe("DONE");
+  test("an absent file and an unparseable file are UNMEASURED for different reasons", () => {
+    const absent = ladderReport(null, "project-state.json");
+    const broken = ladderReport("{ not json", "project-state.json");
+    expect(absent.kind).toBe("UNMEASURED");
+    expect(broken.kind).toBe("UNMEASURED");
+    if (absent.kind !== "UNMEASURED" || broken.kind !== "UNMEASURED") return;
+    expect(absent.why).toContain("could not be read");
+    expect(broken.why).toContain("not valid JSON");
+    expect(ladderLines(absent).join("\n")).not.toContain("Open items");
   });
 
-  test("an issue closed as completed is DONE", () => {
-    expect(orderReading({ tracker: "#1727", facts: { kind: "issue", state: "closed", stateReason: "completed" } })).toBe("DONE");
-  });
-
-  // Caught in review of #1740. The first version asked only `state ===
-  // "closed"`, so both of these reported DONE and the report would have
-  // ticked an agreed item whose work never happened — the same
-  // wrong-but-healthy reading as the dropped search qualifier, by a
-  // different route. CLOSED and DONE are different facts.
-  test("a pull request closed WITHOUT merging is ABANDONED, not DONE", () => {
-    expect(orderReading({ tracker: "PR #1607", facts: { kind: "pr", state: "closed", merged: false } })).toBe("ABANDONED");
-  });
-
-  test("an issue closed not_planned is ABANDONED, not DONE", () => {
-    expect(orderReading({ tracker: "#999", facts: { kind: "issue", state: "closed", stateReason: "not_planned" } })).toBe("ABANDONED");
-  });
-
-  // Caught in review of #1740, and it is the same defect as the two above
-  // with the default on the other side. `stateReason === "not_planned" ?
-  // ABANDONED : DONE` FAILS OPEN: every reason the function does not know
-  // about came out DONE, including `null`, which is what GitHub returns for
-  // an issue closed before the field existed or by a client that does not
-  // set it. A tick for a closure nobody confirmed as completion is exactly
-  // the hallucinated reading this file exists to stop.
-  //
-  // Introspected rather than recalled — `IssueStateReason` on the live
-  // schema is REOPENED, NOT_PLANNED, COMPLETED, DUPLICATE, and REST adds
-  // `null`. So the set is closed today and will not stay closed, which is
-  // why the default is UNMEASURED rather than a fifth named case.
-  test("a closed issue is DONE only when GitHub says completed — everything else fails CLOSED", () => {
-    const closed = (stateReason: string | null) =>
-      orderReading({ tracker: "#999", facts: { kind: "issue", state: "closed", stateReason } });
-
-    // The positive half, in the same row. Without it the cheapest wrong fix
-    // — returning UNMEASURED for every closed issue — goes green.
-    expect(closed("completed")).toBe("DONE");
-
-    // Explicit non-completion. GitHub said the work did not happen.
-    expect(closed("not_planned")).toBe("ABANDONED");
-    expect(closed("duplicate")).toBe("ABANDONED");
-
-    // Not a claim either way. `reopened` on a CLOSED issue is contradictory,
-    // `null` is the field never having been set, and an unknown string is a
-    // value this function was written before.
-    expect(closed(null), "a null reason is the absence of a reason, not completion").toBe("UNMEASURED");
-    expect(closed("reopened"), "reopened on a closed issue is a contradiction, not a tick").toBe("UNMEASURED");
-    expect(closed("some_future_reason"), "a reason added after this code was written is not completion").toBe(
-      "UNMEASURED",
+  test("the script reads the plan through these two functions, and the hand-typed list is gone", () => {
+    const script = readFileSync(join(ROOT, "scripts", "work-status.ts"), "utf-8");
+    expect(script).toMatch(/\bladderReport\(/);
+    expect(script).toMatch(/\bladderLines\(/);
+    expect(script).toMatch(/project-state\.json/);
+    expect(script, "the hand-typed ORDER array must be deleted, not kept beside the reading").not.toMatch(
+      /\bconst ORDER\b/,
     );
+    expect(script).not.toMatch(/\borderReading\b/);
   });
 
-  // Item 7 — "re-run the Stage B audit" — WAS completed, on 2026-11-03, and
-  // printed blank for a day because it has no tracker object. Understating is
-  // a real cost: Jason read the report and asked why finished work showed as
-  // outstanding.
-  //
-  // The fix is NOT to tick it. This function's own docblock records what that
-  // costs — on 2026-11-03 items 1 and 2 were reported ticked because a session
-  // remembered them that way, while PROJECT-STATE.md said all three were
-  // untouched. A fifth reading keeps the two apart: RECORDED means a human
-  // wrote it down, DONE means the tracker was observed. They render
-  // differently and only DONE is a tick.
-  test("RECORDED is a fifth reading: written down, not observed", () => {
-    expect(
-      orderReading({ tracker: null, recordedDone: "project-state.json priorities[0], 2026-11-03 session 79" }),
-    ).toBe("RECORDED");
-  });
-
-  // Every citation into `project-state.json`'s `priorities` names the entry by
-  // its OPENING WORDS, and this asserts each named entry is still there.
-  //
-  // `priorities` is an array people PREPEND to. Two entries were unshifted on
-  // 2026-11-08 and `priorities[0]` — cited twice in scripts/work-status.ts,
-  // once in a docblock and once in the text item 7 PRINTS — silently began
-  // naming a different entry. An index is a position, so no reading of it can
-  // be wrong; a name can be, which is the only reason this case can fail.
-  //
-  // What was broken to prove it: changing one anchor to
-  // `STAGE B IS NOW TAKEN BY A CMMAND` fails with that string, and deleting
-  // both anchors fails the non-vacuity floor rather than passing over nothing.
-  test("every priorities citation in scripts/work-status.ts names an entry that exists", () => {
-    const source = readFileSync(join(ROOT, "scripts/work-status.ts"), "utf-8");
-    const anchors = [...source.matchAll(/(?:priority|entry) opening `([^`]+)`/g)].map(m => m[1]!);
-    expect(anchors.length, "no citation was found at all — the regex stopped matching, not the citations").toBeGreaterThanOrEqual(2);
-
-    const priorities: string[] = JSON.parse(readFileSync(join(ROOT, "project-state.json"), "utf-8")).priorities;
-    const missing = anchors.filter(a => !priorities.some(p => p.startsWith(a)));
-    expect(
-      missing,
-      `scripts/work-status.ts cites ${missing.length} project-state.json priority entr(ies) that no longer open ` +
-        `with the words it names. Re-read the entry and update the citation — do NOT replace it with an index, ` +
-        `which is what went stale on 2026-11-08.`,
-    ).toEqual([]);
-  });
-
-  test("RECORDED requires a citation — a bare flag is still UNMEASURED", () => {
-    // The whole guard. `recordedDone: true` would make this reading reachable
-    // by a session's memory, which is the 2026-11-03 defect with an extra
-    // field. The evidence must be a non-empty string saying WHERE it is
-    // written, so a reader can go and disagree.
-    expect(orderReading({ tracker: null, recordedDone: "" })).toBe("UNMEASURED");
-    expect(orderReading({ tracker: null, recordedDone: "   " })).toBe("UNMEASURED");
-    expect(orderReading({ tracker: null, recordedDone: null })).toBe("UNMEASURED");
-  });
-
-  test("a tracker object always wins — RECORDED never overrides an observation", () => {
-    // If the thing has an issue or a PR, the tracker is the answer and a note
-    // in project-state.json does not get to contradict it. Otherwise a stale
-    // hand-written line could tick an item whose PR is sitting open.
-    expect(
-      orderReading({
-        tracker: "PR #1607",
-        facts: { kind: "pr", state: "open", merged: false },
-        recordedDone: "somebody wrote that this was finished",
-      }),
-    ).toBe("OPEN");
-  });
-
-  // The property that makes a whole branch of the printer unreachable, so it
-  // is worth asserting rather than reasoning about. A pull request is answered
-  // OPEN while open, and DONE or ABANDONED once closed — there is no
-  // fall-through to the `stateReason` ladder, because a pull request has no
-  // `stateReason`. Every closed-issue reason the ladder does not know reads
-  // UNMEASURED; no pull request ever does.
-  test("UNMEASURED is unreachable for a pull request — the whole cross product", () => {
-    const cases = [
-      { state: "open" as const, merged: false, expect: "OPEN" as const },
-      { state: "open" as const, merged: true, expect: "OPEN" as const },
-      { state: "closed" as const, merged: true, expect: "DONE" as const },
-      { state: "closed" as const, merged: false, expect: "ABANDONED" as const },
-    ];
-    // Anti-vacuity: the loop must actually range over four inputs, and each
-    // must land on a NAMED reading. "never UNMEASURED" alone is satisfied by
-    // a function that throws, or by an empty list.
-    expect(cases.length).toBe(4);
-    for (const c of cases) {
-      const reading = orderReading({
-        tracker: "PR #1",
-        facts: { kind: "pr", state: c.state, merged: c.merged },
-      });
-      expect(reading, `a ${c.state}/${c.merged ? "merged" : "unmerged"} pull request`).toBe(c.expect);
-      expect(reading).not.toBe("UNMEASURED");
-    }
+  test("the live plan reads, so the report is not UNMEASURED on this tree", () => {
+    const r = ladderReport(readFileSync(join(ROOT, "project-state.json"), "utf-8"), "project-state.json");
+    expect(r.kind, r.kind === "UNMEASURED" ? r.why : "").toBe("READ");
   });
 });
 
@@ -455,12 +375,10 @@ describe("the script asks the dependencies endpoint, not a search qualifier", ()
     ).toEqual([]);
     // the per-issue dependency read, interpolated number and all
     expect(src).toMatch(/restAll\(`repos\/\$\{REPO\}\/issues\/\$\{[^}]+\}\/dependencies\/blocked_by`\)/);
-    // and nothing is left taking a single page: the only `rest(` calls that
-    // remain fetch ONE object.
-    expect(src.match(/await rest\(`[^`]+`\)/g) ?? []).toEqual([
-      "await rest(`repos/${REPO}/issues/${num}`)",
-      "await rest(`repos/${REPO}/pulls/${num}`)",
-    ]);
+    // and nothing is left taking a single page. The two single-object reads
+    // that used to sit here served the hand-typed agreed order, deleted by
+    // #1984; `rest()` stays as the guarded single-object reader.
+    expect(src.match(/await rest\(`[^`]+`\)/g) ?? []).toEqual([]);
   });
 
   test("the helper follows Link rel=next rather than stopping at one page", () => {
@@ -609,57 +527,6 @@ describe("the status reader does not leak the token on any hop", () => {
       "the redirect branch must release the response before re-fetching — " +
         "an unconsumed body keeps its socket out of the pool",
     ).toMatch(/r\.body\?\.cancel\(\)/);
-  });
-
-  // Caught in review of #1740. `orderReading` returns UNMEASURED for TWO
-  // different facts — no tracker named at all, and a tracker that WAS read
-  // whose closure reason is outside completed/not_planned/duplicate (`null`
-  // and `reopened` are both common). One fixed string served both, so the
-  // second printed "no tracker object" on the same line as the tracker's own
-  // id. A status tool that contradicts itself inside one row is the failure
-  // this whole file exists to stop.
-  // A second round of review of the same site said the repair had left a
-  // branch that cannot execute: `facts.kind === "issue" ? … : "pull request"`,
-  // in an arm only an UNMEASURED reading reaches — and the row above proves no
-  // pull request ever produces one. So the printer re-derived a fact it could
-  // not need, and the string it would have printed — "its closure reason is
-  // one this tool does not recognise (pull request)" — names a pull request
-  // where a closure reason belongs. The explanation is now written where the
-  // tracker is READ, which is the only place that knows what it is.
-  test("UNMEASURED says WHICH of its causes it is, and the printer does not re-derive the kind", () => {
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
-    // Anti-vacuity: one branch, so the assertions below cannot be satisfied by
-    // some other UNMEASURED site elsewhere in the file.
-    expect(
-      (code.match(/reading === "UNMEASURED"/g) ?? []).length,
-      "expected exactly one UNMEASURED branch in the order table",
-    ).toBe(1);
-
-    // Anti-vacuity for the census below: three assignments — the no-tracker
-    // default and one per fetched kind — plus the single read in the printer.
-    // A rename drops this to zero and reddens here rather than passing on an
-    // expression nothing evaluates.
-    expect(
-      (code.match(/\bunmeasuredWhy\b/g) ?? []).length,
-      "expected `unmeasuredWhy` declared with its default, assigned once in " +
-        "each of the two tracker branches, and read once by the printer",
-    ).toBe(4);
-
-    // All three causes must be spelled, or the variable is decorative.
-    expect(code).toMatch(/no tracker object/);
-    expect(code).toMatch(/tracker read, but its closure reason/);
-    expect(code).toMatch(/is a pull request, and this tool could not classify it/);
-
-    // The defect, as source. The printer may not ask what KIND the tracker
-    // was: by the row above, an UNMEASURED reading is never a pull request, so
-    // any branch on `facts.kind` has an arm that cannot be selected.
-    expect(
-      [...code.matchAll(/facts\.kind/g)].length,
-      "`facts.kind` in scripts/work-status.ts means the printer is branching " +
-        "on the tracker's kind inside the UNMEASURED arm, where one of the two " +
-        "arms is unreachable. Write the explanation in the branch that fetched " +
-        "the tracker instead — that branch knows the kind and runs for real.",
-    ).toBe(0);
   });
 
   // Caught in review of #1740. Two GraphQL queries spelled the owner and the

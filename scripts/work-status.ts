@@ -9,13 +9,8 @@
  * one of those is fetched here and none is cached.
  *
  * **`project-state.json` owns the plan** — AGENTS.md rule 10, the one place a
- * done-condition lives. The agreed ORDER of the intake items is read from it
- * and is not restated here.
- *
- * The mapping between the two — which agreed item is which issue — is the one
- * thing neither system holds, so it is declared below and printed with a
- * `tracker:` column that says plainly when an item has no object at all. An
- * item with nothing to point at is the report's most useful row.
+ * done-condition lives. Its `stages` are read on every run (#1984) and
+ * nothing about them is restated here.
  *
  * Read-only. It opens nothing, edits nothing and writes nothing.
  */
@@ -25,10 +20,10 @@ import {
   isPickable,
   milestoneOf,
   milestoneRollup,
-  orderReading,
+  ladderLines,
+  ladderReport,
   readyRefusal,
   resolveFocus,
-  type TrackerFacts,
 } from "../lib/work-status";
 import { laneHealth, laneHealthLines, workVerdict } from "../lib/board-lane-health";
 import {
@@ -53,6 +48,8 @@ import {
 import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 
 const REPO = "hornjason/rungate";
 // **Split once, so GraphQL and REST cannot disagree about the repository.**
@@ -330,120 +327,22 @@ async function boardStatus(): Promise<{
   return { statuses: out, abandonedOnBoard, unseenByLane };
 }
 
-/**
- * The agreed order, as a mapping from `project-state.json`'s numbered list to
- * the tracker objects that can be observed.
- *
- * **This array is hand-maintained and that is a known defect, not a design.**
- * The banner below says the order comes from `project-state.json`; the ORDER
- * is its, but nothing here READS it — the list lives in prose inside the
- * `priorities` entry opening `STAGE B IS NOW TAKEN BY A COMMAND`, and this is
- * a transcription of it. A transcription goes stale silently, and did: item 2
- * had no tracker for a day after #1759 was filed for it, and item 7 printed
- * blank for a day after it was completed.
- * Parsing the prose is the real fix and is not in this change.
- *
- * **Cite that entry by its opening words, never by its index.** `priorities`
- * is an array people PREPEND to — two entries were unshifted on 2026-11-08 —
- * so `priorities[0]` names a different entry every time somebody records
- * something, and both references in this file pointed at the wrong one within
- * the hour. An index is a position; the opening words are a name, and `grep`
- * finds the name.
- */
-const ORDER: {
-  n: number;
-  what: string;
-  tracker: string | null;
-  /** Where a human recorded completion, when there is no tracker object. */
-  recordedDone?: string;
-}[] = [
-  { n: 1, what: "the refusal-outcome reading", tracker: "PR #1607" },
-  { n: 2, what: "widen the parser to all three creation paths", tracker: "#1759" },
-  { n: 3, what: "one decider for issue shape", tracker: "#1741" },
-  { n: 4, what: "#1727", tracker: "#1727" },
-  { n: 5, what: "#1728", tracker: "#1728" },
-  { n: 6, what: "render the retro's open improvements", tracker: "#1745" },
-  {
-    n: 7,
-    what: "re-run the Stage B audit",
-    tracker: null,
-    recordedDone:
-      "project-state.json, the priority opening `STAGE B IS NOW TAKEN BY A COMMAND`, " +
-      "2026-11-07 — taken BY `/stage-audit` from the " +
-      "primary checkout on main at 1da3821f, not by hand: the precondition probe cleared " +
-      "and all six readings MET (B1 26/26, B2 26/26, B3 6/6, B4 6/6, B5 exit 0, B6 6/6). " +
-      "No tracker object carries this, which is why it is still `~` — re-run `/stage-audit` " +
-      "rather than trusting this line",
-  },
-  { n: 8, what: "/stage-audit and /round-rca", tracker: "#1746" },
-];
-
 const bar = (s: string) => console.log(`\n${s}\n${"─".repeat(s.length)}`);
 
 const { statuses: status, abandonedOnBoard, unseenByLane } = await boardStatus();
 
-// ── the agreed order ────────────────────────────────────────────────────────
-bar("THE AGREED ORDER — order from project-state.json, state from GitHub");
-for (const it of ORDER) {
-  let facts: TrackerFacts | undefined;
-  let detail = "";
-  // **UNMEASURED has more than one cause and they are different facts.** This
-  // printed "no tracker object — cannot be measured" for all of them, so an
-  // item whose tracker WAS set and WAS fetched — closed with a `state_reason`
-  // outside completed/not_planned/duplicate, which `null` and `reopened` both
-  // are — got a line denying it had a tracker, printed next to the tracker's
-  // own id in the same row. A status tool contradicting itself inside one line
-  // is precisely the failure this file exists to stop. Caught in review of
-  // #1740.
-  //
-  // **Written here, not in the printer.** The first repair branched the
-  // printer on `facts.kind`, which review caught in the next round: the arm is
-  // only reached by an UNMEASURED reading, and `orderReading` answers every
-  // pull request OPEN, DONE or ABANDONED with no fall-through, so the `"pull
-  // request"` arm could not be selected — and would have read "its closure
-  // reason is one this tool does not recognise (pull request)" if it ever
-  // were. The unreachability is asserted in `test/work-status.test.ts`
-  // over the whole state x merged cross product. Here, each branch writes the
-  // sentence that is true of what it just fetched, and every branch runs.
-  let unmeasuredWhy = "no tracker object — cannot be measured";
-  if (it.tracker) {
-    const num = Number(it.tracker.replace(/\D/g, ""));
-    const o = await rest(`repos/${REPO}/issues/${num}`);
-    const state = o.state === "closed" ? ("closed" as const) : ("open" as const);
-    if (o.pull_request) {
-      // merged, not closed. A pull request closed unmerged ends `closed` too
-      // and the work did not happen.
-      const pr = await rest(`repos/${REPO}/pulls/${num}`);
-      facts = { kind: "pr", state, merged: Boolean(pr.merged) };
-      detail = ` ${pr.mergeable_state ?? "?"}`;
-      unmeasuredWhy =
-        `${it.tracker} is a pull request, and this tool could not classify it — ` +
-        `every pull request is OPEN, DONE or ABANDONED, so this is a defect in ` +
-        `orderReading rather than a reading about the work`;
-    } else {
-      facts = { kind: "issue", state, stateReason: o.state_reason ?? null };
-      unmeasuredWhy =
-        `tracker read, but its closure reason is one this tool does not ` +
-        `recognise (${o.state_reason ?? "null"}) — cannot be measured`;
-    }
-  }
-  // One decider, in `lib/work-status.ts`, so a mutation of it reddens
-  // `test/work-status.test.ts` rather than leaving a second copy here holding
-  // the case up. UNMEASURED never prints a tick.
-  const reading = orderReading({ tracker: it.tracker, facts, recordedDone: it.recordedDone ?? null });
-  // RECORDED is NOT a tick. `~` and `x` are different glyphs because they are
-  // different facts: `x` means the tracker was read and says so, `~` means a
-  // person wrote it down and nothing can confirm it.
-  const mark = reading === "DONE" ? "x" : reading === "RECORDED" ? "~" : " ";
-  // One read of the sentence the fetch branch above already wrote.
-  const shown =
-    reading === "UNMEASURED"
-      ? unmeasuredWhy
-      : reading === "RECORDED"
-        ? `RECORDED, not observed — ${it.recordedDone}`
-        : `${reading}${detail}`;
-  console.log(`  [${mark}] ${it.n}. ${it.what.padEnd(44)} ${(it.tracker ?? "—").padEnd(9)} ${shown}`);
-}
+// ── the plan ────────────────────────────────────────────────────────────────
+//
+// Read, not transcribed (#1984). This section used to print a hand-typed
+// eight-row array that called itself a known defect, while the stage ladder
+// rule 10 names as the plan appeared in no report: nine open items were
+// invisible to every session that read this to decide what to work on.
+// `ladderReport` decides; `ladderLines` only prints. Absent, unparseable and
+// malformed each print UNMEASURED with their own reason, never an empty list.
+bar("THE PLAN — stages from project-state.json, read every run");
+const STATE_FILE = join(import.meta.dir, "..", "project-state.json");
+const planSource = existsSync(STATE_FILE) ? readFileSync(STATE_FILE, "utf-8") : null;
+for (const line of ladderLines(ladderReport(planSource, "project-state.json"))) console.log(line);
 
 // ── every milestone, and the lane that is not one ───────────────────────────
 //
