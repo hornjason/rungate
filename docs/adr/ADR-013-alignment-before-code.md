@@ -221,8 +221,10 @@ Notes per row:
   writer a different focus from the workflow. The fix moves the repository
   read out of `board-ready.ts` into `lib/` for both to call. Recorded on
   #2021; SC-2741 stays unticked until it ships.
-- **`adr-accepted.yml` has never run** — no push has touched `docs/adr`
-  since it merged. Its first live run is the merge of ADR-014 (#2033).
+- **`adr-accepted.yml` has never placed a plan.** It had not run at all
+  before this record's own merge, which touches `docs/adr` and so fires it —
+  a run that finds no newly accepted ADR and skips every step after the
+  read. The merge of ADR-014 (#2033) is its first run that places anything.
 - **#1945 (E4) is still open** for the reason under row 5. If that first run
   fills the Criteria cells, #1945 is answered by SC-2738; if it cannot (the
   `read:project` token risk #2009 flagged), it needs its own criterion —
