@@ -461,17 +461,22 @@ export function ladderReport(source: string | null, where: string): LadderReport
  * heading is byte-identical to a plan with nothing left to do.
  */
 export function ladderLines(r: LadderReport): string[] {
-  if (r.kind === "UNMEASURED") return [`  UNMEASURED — ${r.why}`];
+  // The plan is repository content any pull request can change, so its text
+  // reaches a terminal only with control characters removed: an escape code in
+  // an item could otherwise redraw the rows above it (security review, #2014).
+  const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  if (r.kind === "UNMEASURED") return [`  UNMEASURED — ${clean(r.why)}`];
   const out: string[] = [];
   out.push(`  Next stage: ${r.next ?? "none — every stage is complete"}`);
-  if (r.blocked !== null) out.push(`  Blocked: ${r.blocked}`);
+  if (r.blocked !== null) out.push(`  Blocked: ${clean(r.blocked)}`);
   const runnable = r.open.filter(o => o.reading === "OPEN").length;
   out.push(
     `  Open items (${r.open.length}): ${runnable} can be ticked by a command, ` +
       `${r.open.length - runnable} are UNVERIFIABLE (verify: null)`,
   );
   for (const o of r.open) {
-    const what = o.what.length > 90 ? `${o.what.slice(0, 89)}…` : o.what;
+    const text = clean(o.what);
+    const what = text.length > 90 ? `${text.slice(0, 89)}…` : text;
     const scope = o.scope === "repo" ? "" : ` (${o.scope})`;
     out.push(`    ${o.reading.padEnd(12)} ${o.id.padEnd(4)} ${what}${scope}`);
   }

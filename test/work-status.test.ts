@@ -124,6 +124,17 @@ describe("#1984: the report reads the plan from project-state.json", () => {
     expect(ladderLines(absent).join("\n")).not.toContain("Open items");
   });
 
+  test("item text reaches the terminal with control characters removed", () => {
+    const stages = [{
+      id: "A", name: "Measure it", goal: "g", serves: 1, agreed: "2026-10-30 Jason",
+      items: [{ id: "A1", what: "real\u001b[2K\u001b[1AOPEN fake row", done: false, verify: null }],
+      retro: null,
+    }];
+    const lines = ladderLines(ladderReport(plan(stages), "project-state.json"));
+    for (const l of lines) expect(l).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(lines.find(l => l.includes("A1"))).toContain("UNVERIFIABLE");
+  });
+
   test("the script reads the plan through these two functions, and the hand-typed list is gone", () => {
     const script = readFileSync(join(ROOT, "scripts", "work-status.ts"), "utf-8");
     expect(script).toMatch(/\bladderReport\(/);
