@@ -4,7 +4,7 @@
 
 **Session 91 (2026-11-12)** — After a reboot, ADR-013 was audited end to end rather than assumed done. Rows 1-7 hold; row 8 is partial and its open parts are recorded on #2021. The follow-ups were then worked from the Ready lane, one PR each. #1717 was split: its two finished readings were ticked, with SC-2615 narrowed as ADR-013 decision 1 required, and SC-2617 moved to #2024 behind Stage D. Stale worktrees are now swept automatically. What waits on Jason: #2020's design, #1994, the #1752 experiment, D4's verify command and the go for ADR-014.
 
-Suite: ADR-013 gap audit, then one PR per follow-up: #2023 (#2022 worktree sweep), #2025 (#1717, SC-2615 and SC-2616 ticked), #2026 (#1986 hook registry), #2027 (#2007 Ready demotion), #2028 (#2019 /dry-run checkout). Each merged pinned after CI, and every review thread was answered.
+Suite: #2017 (#2016, /dry-run refuses a stale checkout) merged at the start of the session; then the ADR-013 gap audit, then one PR per follow-up: #2023 (#2022 worktree sweep), #2025 (#1717, SC-2615 and SC-2616 ticked), #2026 (#1986 hook registry), #2027 (#2007 Ready demotion), #2028 (#2019 /dry-run checkout). Each merged pinned after CI, and every review thread was answered.
 Issues opened: #2019, #2020, #2021, #2022, #2024
 Issues closed: #1717, #1986, #2007, #2016, #2019, #2022
 
