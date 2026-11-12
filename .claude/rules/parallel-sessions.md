@@ -122,8 +122,9 @@ Four readings per worktree — a merged PR *at the commit it holds*, a `git
 status` that was read and was empty, no process holding a file under it, and
 nothing modified inside a declared age — and a worktree failing to produce any
 one of them is **UNMEASURED, counted apart from ABANDONED**. It deletes
-nothing; removal stays yours. What the census of this machine's 173
-worktrees found is in the reference file, in full.
+nothing. `scripts/worktree-sweep.ts`, started at SessionStart, removes the
+ABANDONED rows only, never forced (#2022); everything else stays yours. What
+the census of this machine's 173 worktrees found is in the reference file.
 
 `git worktree prune` is not the safe half of this. It drops
 `.git/worktrees/<name>` for **any** registered worktree whose directory is
