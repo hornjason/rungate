@@ -57,11 +57,16 @@ Measured 2026-11-11:
    `serves no criterion`.
 
 **Exempt from step 1:** the work that decides what the issues are — an ADR,
-a retro, a review, an audit — and session-record PRs. **The decider is the
-branch name**, the rule #1950 already uses: a branch naming no issue (for
-example `rg/session-89-state`) owes no closing reference. The bypass this
-opens is stated, not hidden: any PR can skip the check by naming its branch
-without an issue number. (Second and third audits; Jason, 2026-11-11.)
+a retro, a review, an audit — files nothing first, because its own PR closes
+the step-1 issue it was filed under. **The only PRs exempt from step 4 are
+session-record PRs, and the decider is the diff, not the branch name:** a
+PR whose changed files are all in the session-record set
+(`project-state.json`, `PROJECT-STATE.md`, `SUCCESS.md`) owes no closing
+reference. Revision 4 used #1950's branch-name rule and the AI review of
+#1989 refused it: any PR could skip the check by naming its branch without
+an issue number. A file-set rule has no such bypass — touching one other
+file makes the PR owe a reference. (Jason, 2026-11-11: session-record PRs
+exempt by name; narrowed to the diff after that review.)
 
 **No rule 11.** The law folds into rule 9. Rule 10 is narrowed: the stage
 ladder is the plan for the engine build order; all work is an issue first.
