@@ -515,7 +515,7 @@ describe("BR-17..BR-20: UNMEASURED never moves, and the reads do not truncate", 
     expect(assignedArm, "unquoted $ISSUE word-splits into flags").not.toMatch(
       /--moving-issue \$ISSUE/,
     );
-    const otherArm = /\n\s*top-up \| unassigned \| opened \| reopened \| milestoned \| demilestoned \| labeled\)\n([\s\S]*?);;/.exec(yml)?.[1];
+    const otherArm = /\n\s*top-up \| unassigned \| opened \| reopened \| milestoned \| demilestoned \| labeled \| unlabeled\)\n([\s\S]*?);;/.exec(yml)?.[1];
     expect(otherArm, "no combined arm for the non-relaning modes").toBeDefined();
     expect(otherArm, "a mode board-flow does not relane must not name a mover").not.toContain(
       "--moving-issue",
@@ -2112,6 +2112,9 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
       const { code, out } = await run(fake, ["--top-up", "--write"]);
       expect(code, out).toBe(0);
       expect(out).toContain("1 eligible issue(s) wait outside the active milestone");
+      // ai-review round 1 of #2006: the per-candidate log ran BEFORE the scope
+      // and announced a move the run then did not make.
+      expect(out, "the log must not claim a move the scope refused").not.toContain("#101 -> Ready");
       expect(fake.writes, out).toEqual([]);
     } finally {
       await fake.stop();

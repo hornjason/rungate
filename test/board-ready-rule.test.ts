@@ -1759,7 +1759,9 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
     const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "board-ready.yml"), "utf-8");
     const types = /issues:\s*\n\s*types:\s*\[([^\]]*)\]/.exec(yml)?.[1] ?? "";
     expect(types, "the trigger list must be readable, or this row witnesses nothing").not.toBe("");
-    for (const t of ["milestoned", "demilestoned", "labeled"]) {
+    // `unlabeled` too — ai-review round 1 of #2006: taking the expedite label
+    // OFF must re-check the card it was keeping in Ready.
+    for (const t of ["milestoned", "demilestoned", "labeled", "unlabeled"]) {
       expect(types.split(",").map(x => x.trim()), `board-ready must run on issues: ${t}`).toContain(t);
     }
   });

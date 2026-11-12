@@ -31,7 +31,8 @@
 #   reopened    → likewise, for work that came back
 #   milestoned  → an issue joined a phase, which can move the active
 #   demilestoned  milestone or put a card outside it (SC-2741, ADR-013 row 8)
-#   labeled     → the expedite label may have been added
+#   labeled     → the expedite label may have been added, or removed —
+#   unlabeled     a card it was keeping in Ready is then re-checked
 #
 # **Still no schedule.** A cron is the thing this exists to remove; see #1744.
 # Every trigger here is an event a person caused, and BR-12 asserts the
@@ -43,7 +44,7 @@ name: Board — keep Ready full from the events the repo already emits
 
 on:
   issues:
-    types: [closed, assigned, unassigned, opened, reopened, milestoned, demilestoned, labeled]
+    types: [closed, assigned, unassigned, opened, reopened, milestoned, demilestoned, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       mode:
@@ -327,10 +328,10 @@ jobs:
               # close and excluding a card would only promote past the cap.
               args+=(--top-up --moving-issue "$ISSUE")
               ;;
-            # `milestoned`, `demilestoned` and `labeled` (SC-2741): each can
+            # `milestoned`, `demilestoned`, `labeled` and `unlabeled` (SC-2741): each can
             # change the focus or the expedite lane, and a top-up re-reads
             # both — demoting any card the change left outside the focus.
-            top-up | unassigned | opened | reopened | milestoned | demilestoned | labeled)
+            top-up | unassigned | opened | reopened | milestoned | demilestoned | labeled | unlabeled)
               args+=(--top-up)
               ;;
             *)

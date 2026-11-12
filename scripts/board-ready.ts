@@ -753,7 +753,10 @@ async function main(): Promise<number> {
   // pure fan-out, so this one expression is what both modes always did.
   for (const dec of decisions) {
     if (!freed.has(dec.number) && !dec.move) continue;
-    console.log(dec.move ? `  #${dec.number} -> ${READY_COLUMN}` : `  #${dec.number} unchanged: ${dec.why}`);
+    // "eligible", not "-> Ready": this runs BEFORE the focus and the cap, so
+    // a move announced here could be one the run then does not make (ai-review
+    // round 1 of #2006). What actually moves is printed with the selection.
+    console.log(dec.move ? `  #${dec.number} eligible for ${READY_COLUMN}` : `  #${dec.number} unchanged: ${dec.why}`);
   }
 
   // **The cap, between deciding and writing.** `fanoutDecisions` answers
