@@ -1647,6 +1647,11 @@ describe("#1962: the promotion reaches the writer, not only the report", () => {
         "when --ready was never passed, so an ungated emit reports UNMEASURED about a Ready " +
         "promotion the run did not attempt — the round-2 finding on the other surface",
     ).toContain("workNext: values.ready");
+    // ai-review round 2 of #2006: the SC-2741 fields obey the same gate. A
+    // waiting list beside a null focus names issues judged against nothing.
+    expect(jsonBranch, "readyOutOfScope must be gated on --ready like readyFocus").toContain(
+      "readyOutOfScope: values.ready ?",
+    );
   });
 });
 

@@ -550,8 +550,10 @@ export async function main(argv: string[]): Promise<number> {
           readyCap: cap,
           readyOccupied: occupied,
           readyHeldByCap: heldByCap.map(c => c.item.number),
+          // Both gated on `--ready`, like `workNext` below: without it no Ready
+          // decision was attempted (ai-review round 2 of #2006).
           readyFocus: values.ready ? active.title : null,
-          readyOutOfScope: outOfScope.map(c => c.item.number),
+          readyOutOfScope: values.ready ? outOfScope.map(c => c.item.number) : null,
           // ai-review round 4. The text branch below printed the work-next
           // reading and this one did not, so a consumer parsing the JSON
           // could not see that an ordering it is being handed was promoted
