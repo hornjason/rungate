@@ -162,6 +162,9 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // accepted ADR's plan on the board when it merges — sixteen.
     // `phase-order` joined with #2015, which re-writes the phase-order links
     // whenever an issue's milestone changes — seventeen.
+    // `criterion-label` joined with #2020, which labels an issue that names
+    // no criterion when it is opened, and re-reads every open issue daily —
+    // eighteen.
     //
     // The floor and the list are two different claims, deliberately:
     // the floor says the scan read SOMETHING, so no case below is satisfied
@@ -171,7 +174,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // meant to turn this red once.
     const steps = setupBunStepsUnder(WORKFLOW_DIR);
     expect(steps.length, "fewer setup-bun steps than this repo has workflows that install bun")
-      .toBeGreaterThanOrEqual(17);
+      .toBeGreaterThanOrEqual(18);
     const files = new Set(steps.map(s => s.file));
     expect([...files].sort()).toEqual([
       "action-pins.yml",
@@ -186,6 +189,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
       "ci.yml",
       "claude-review.yml",
       "closing-references.yml",
+      "criterion-label.yml",
       "gates.yml",
       "issue-audit.yml",
       "phase-order.yml",

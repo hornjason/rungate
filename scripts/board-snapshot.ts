@@ -60,7 +60,7 @@ import {
   type CriterionCoverage,
 } from "../lib/spec-placement";
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
-import { NAMES_NONE, criteriaNamedBy, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
+import { criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
 import type { RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
 
 /**
@@ -793,11 +793,11 @@ export async function main(
     sweep.reading === "UNMEASURED"
       ? {}
       : {
-          repoIssues: openIssues.map(i => ({
-            number: i.number,
-            names: criteriaNamedBy({ title: i.title, body: i.body }, sweep.ids),
-            servesNone: `${i.title}\n${i.body ?? ""}`.includes(NAMES_NONE),
-          })),
+          repoIssues: openIssues.map(i => {
+            // The one decider (#2020): the `needs-criterion` label reads it too.
+            const { names, servesNone } = criterionAnswer({ title: i.title, body: i.body }, sweep.ids);
+            return { number: i.number, names, servesNone };
+          }),
         };
 
   // SC-2617's `plannedEdges` is NOT produced here, and the absence is a

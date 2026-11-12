@@ -46,7 +46,7 @@
 import { existsSync, readFileSync } from "fs";
 import { resolve, sep } from "path";
 
-import { NAMES_NONE, criteriaNamedBy, specCriteriaIn } from "./board-mirror";
+import { NAMES_NONE, criteriaNamedBy, criterionAnswer, specCriteriaIn } from "./board-mirror";
 import { allocateScNumber, formatSCLine } from "./create-sc";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf } from "./issue-shape";
 import type { ScRegistry } from "./sc-ids";
@@ -582,7 +582,8 @@ export function declineViolations(input: DeclineInput): DeclineViolation[] {
 
   const body = input.issue.body ?? "";
 
-  if (`${input.issue.title}\n${body}`.includes(NAMES_NONE)) {
+  // The one decider for the declaration (#2020), not a third copy of it.
+  if (criterionAnswer(input.issue, allIds).servesNone) {
     out.push({
       refusal: "ALREADY_DECLINED",
       why:
