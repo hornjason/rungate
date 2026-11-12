@@ -1,0 +1,73 @@
+# Not managed by rungate — caller-owned, like adr-accepted.yml.
+#
+# #2015: an issue's milestone decides its phase, and plan-deps turns phase
+# order into blocked-by edges. Until this ran, plan-deps --write ran only when
+# an ADR merged (adr-accepted.yml), so an issue milestoned by hand afterwards
+# got no order link until somebody remembered the command. The 2026-11-12 dry
+# run found #1719 missing its link to #1752 that way.
+#
+# plan-deps is idempotent: each run reads the whole tracker and writes only
+# the edges that are missing, so it does not matter which issue fired it.
+#
+# CREDENTIAL: the job's own GITHUB_TOKEN, passed as GITHUB_TOKEN. Edges are
+# issue writes, which GITHUB_TOKEN can make. RUNGATE_PROJECT_TOKEN is never
+# held here (#1761). Writes made with GITHUB_TOKEN fire no further workflow
+# runs, so the edges this writes cannot re-trigger it.
+#
+# No trust gate: setting a milestone needs triage access or above, so a
+# stranger cannot fire this.
+#
+# Every `uses:` is pinned to a full commit SHA. `test/phase-order-workflow.test.ts`
+# asserts that and the rest.
+name: Phase order — re-link on a milestone change
+
+on:
+  issues:
+    types: [milestoned, demilestoned]
+
+permissions:
+  contents: read
+  issues: write
+
+# Re-milestoning ten issues fires ten runs. They queue, so two never write the
+# same edge at once; GitHub keeps only the newest pending one, which is enough
+# because every run reads the whole tracker.
+concurrency:
+  group: phase-order
+  cancel-in-progress: false
+
+jobs:
+  phase-order:
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version-file: ".bun-version"
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # The prefix is read through lib/config-readers.ts, the one loader. An
+      # unconfigured prefix is a red run, not a skipped step: a skipped step
+      # reads as satisfied.
+      - id: prefix
+        name: Which milestones are the engine's phases?
+        run: |
+          prefix=$(bun -e 'import { readBoardInputs } from "./lib/config-readers"; process.stdout.write(readBoardInputs(".").milestonePrefix ?? "")')
+          if [ -z "$prefix" ]; then
+            echo "::error::UNMEASURED — board.milestonePrefix must be set in .claude/rungate/config.json to write phase order. Nothing was written."
+            exit 1
+          fi
+          # A newline would write a second key into GITHUB_OUTPUT.
+          case "$prefix" in
+            *$'\n'*)
+              echo "::error::board.milestonePrefix contains a newline. Nothing was written."
+              exit 1
+              ;;
+          esac
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+
+      - name: Phase-order links between milestones
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREFIX: ${{ steps.prefix.outputs.prefix }}
+        run: bun scripts/plan-deps.ts --repo "$GITHUB_REPOSITORY" --milestone-prefix "$PREFIX" --write
