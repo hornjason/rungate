@@ -1173,6 +1173,14 @@ describe("#2007 / SC-2741: board-mirror demotes a Ready incumbent outside the ac
     expect(scopeDemotions([card(4, "Engine Phase 7", READY, ["work-this-next"])], FOCUS6, "work-this-next")).toEqual([]);
   });
 
+  test("#2007: a card whose blocker count could not be read is left alone, not demoted", () => {
+    // Review of #2027: GitHub omits issueDependenciesSummary when the token
+    // cannot read it, and \`?? 0\` made that read as "unblocked". The decider
+    // refuses an unmeasured card; it has to be told the card is unmeasured.
+    const unread = { ...card(6, "Engine Phase 7"), blockersRead: false };
+    expect(scopeDemotions([unread], FOCUS6, null)).toEqual([]);
+  });
+
   test("#2007: a card that is not in Ready is never touched", () => {
     expect(scopeDemotions([card(5, "Engine Phase 7", BACKLOG)], FOCUS6, null)).toEqual([]);
   });

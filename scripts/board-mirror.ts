@@ -121,7 +121,9 @@ export function readyPopulation<T extends { state: string; status: string }>(
  * change — a card dragged in by hand, or left behind by a frontier move, held
  * its slot forever. `scripts/board-ready.ts` demoted the same card through
  * `incumbentDecisions`. This asks that same decider with the same scope, so
- * the two Ready writers cannot disagree about incumbents, and adds no
+ * the two Ready writers cannot disagree about an UNCLAIMED incumbent — this
+ * command never overwrites a claimed card (`mayWrite`, below), and claiming a
+ * card moves it out of Ready anyway — and it adds no
  * predicate of its own (`.claude/rules/checks-must-be-able-to-fail.md`, two
  * deciders that agree).
  *
@@ -133,6 +135,8 @@ export function scopeDemotions<
     state: string;
     status: string;
     blockedByOpen: number;
+    /** `false` when the blocker count was never read: the decider gets `null`, i.e. UNMEASURED. */
+    blockersRead?: boolean;
     milestone: string | null;
     labels: readonly string[];
   },
@@ -144,7 +148,7 @@ export function scopeDemotions<
       typename: "Issue",
       state: i.state,
       boardStatus: i.status,
-      blockedByOpen: i.blockedByOpen,
+      blockedByOpen: i.blockersRead === false ? null : i.blockedByOpen,
       milestone: i.milestone,
       labels: i.labels,
     })),
@@ -325,6 +329,13 @@ interface Item {
   assignees: number;
   blockedByOpen: number;
   blockedByTotal: number;
+  /**
+   * Whether `issueDependenciesSummary` came back at all. GitHub omits it when
+   * the token cannot read it, and `blockedByOpen` above defaults that to 0
+   * for the promotion path; the incumbent decider must see UNMEASURED
+   * instead (review of #2027).
+   */
+  blockersRead: boolean;
   criteriaCell: string;
   /** The milestone TITLE, or `null` — the contract `Rankable` states (#1965). */
   milestone: string | null;
@@ -493,6 +504,7 @@ export async function main(argv: string[]): Promise<number> {
         assignees: n.content.assignees?.totalCount ?? 0,
         blockedByOpen: n.content.issueDependenciesSummary?.blockedBy ?? 0,
         blockedByTotal: n.content.issueDependenciesSummary?.totalBlockedBy ?? 0,
+        blockersRead: n.content.issueDependenciesSummary != null,
         criteriaCell: n.fieldValueByName?.text ?? "",
         // `null` and never `""` — ONE absent value, matching `Rankable` and
         // the five other producers in the tree (#1965 round 4). `""` reads
