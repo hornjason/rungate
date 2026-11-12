@@ -58,7 +58,7 @@ import {
   unlocatableEntries,
 } from "../lib/board-mirror";
 import { parseCriteria } from "../lib/spec-evidence";
-import { parseRepo, readyPopulation, splitReadyChanges } from "../scripts/board-mirror";
+import { BACKLOG, READY, parseRepo, readyPopulation, scopeDemotions, splitReadyChanges } from "../scripts/board-mirror";
 import { NO_WORK_NEXT, activeMilestone, readyOrderFor } from "../lib/board-ready-rule";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -1132,5 +1132,63 @@ describe("SC-2722: a repository argument is owner/name or it is refused", () => 
     expect(parseRepo("hornjason/")).toBeNull();
     expect(parseRepo("")).toBeNull();
     expect(parseRepo("a/b/c")).toBeNull();
+  });
+});
+
+/**
+ * #2007 / SC-2741: a card already in Ready that has fallen outside the active
+ * milestone is demoted by this writer too.
+ *
+ * `isReady` computes `to = Ready` for an unblocked, unclaimed incumbent, so the
+ * change was filtered out as "no change" and the card held its slot forever,
+ * while `scripts/board-ready.ts` demoted the same card through
+ * `incumbentDecisions`. `scopeDemotions` asks that same decider, so the two
+ * writers cannot disagree about incumbents.
+ */
+describe("#2007 / SC-2741: board-mirror demotes a Ready incumbent outside the active milestone", () => {
+  const FOCUS6 = activeMilestone([{ milestone: "Engine Phase 6" }], "Engine");
+  const card = (number: number, milestone: string | null, status = READY, labels: string[] = [], blockedByOpen = 0) => ({
+    number,
+    state: "OPEN",
+    status,
+    blockedByOpen,
+    milestone,
+    labels,
+  });
+
+  test("#2007: an unblocked, unclaimed Ready card in a later phase is demoted to Backlog", () => {
+    const out = scopeDemotions([card(1, "Engine Phase 7")], FOCUS6, "work-this-next");
+    expect(out.map(d => [d.item.number, d.to])).toEqual([[1, BACKLOG]]);
+  });
+
+  test("#2007: a Ready card with no milestone is demoted too", () => {
+    expect(scopeDemotions([card(2, null)], FOCUS6, null).map(d => d.item.number)).toEqual([2]);
+  });
+
+  test("#2007: a Ready card inside the active milestone keeps its slot", () => {
+    expect(scopeDemotions([card(3, "Engine Phase 6")], FOCUS6, null)).toEqual([]);
+  });
+
+  test("#2007: the expedite label keeps an out-of-scope card in Ready", () => {
+    expect(scopeDemotions([card(4, "Engine Phase 7", READY, ["work-this-next"])], FOCUS6, "work-this-next")).toEqual([]);
+  });
+
+  test("#2007: a card whose blocker count could not be read is left alone, not demoted", () => {
+    // Review of #2027: GitHub omits issueDependenciesSummary when the token
+    // cannot read it, and \`?? 0\` made that read as "unblocked". The decider
+    // refuses an unmeasured card; it has to be told the card is unmeasured.
+    const unread = { ...card(6, "Engine Phase 7"), blockersRead: false };
+    expect(scopeDemotions([unread], FOCUS6, null)).toEqual([]);
+  });
+
+  test("#2007: a card that is not in Ready is never touched", () => {
+    expect(scopeDemotions([card(5, "Engine Phase 7", BACKLOG)], FOCUS6, null)).toEqual([]);
+  });
+
+  test("#2007: the writer merges these demotions into its Ready changes", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "scripts", "board-mirror.ts"), "utf-8");
+    expect(src).toContain("scopeDemotions(writable");
+    // One decider: the demotion comes from incumbentDecisions, not a predicate of this file's own.
+    expect(src).toContain("incumbentDecisions(");
   });
 });

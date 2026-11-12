@@ -52,6 +52,7 @@ import {
   type ReadyOccupancy,
 } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
+import { incumbentDecisions } from "../lib/board-ready-fanout";
 import {
   criterionIdsIn,
   isReady,
@@ -88,26 +89,6 @@ export function parseRepo(value: string): { owner: string; name: string } | null
 }
 
 /**
- * Split what this command MAY write into what the cap lets through.
- *
- * **The cap applies here too, and from the same function the workflow
- * uses.** This command is the hand-run second CALLER of Ready's rule —
- * not a second rule, which is the distinction that matters: it and
- * `board-ready.yml` both read `lib/board-ready-rule.ts`, so they cannot
- * size the lane differently. Before this, the workflow filled to a
- * derived depth and one hand-run of this command refilled the lane to
- * whatever happened to be eligible.
- *
- * **A demotion to Backlog is never capped**, and that is the half a
- * naive implementation gets wrong. The cap bounds what may ENTER Ready;
- * applying it to departures would pin a claimed or newly-blocked card in
- * the lane for as long as the lane stayed full — the cap would start
- * preserving exactly the staleness it exists to prevent.
- *
- * Exported so a case can hold it. Inline, the only way to observe it was
- * to run the command against a live board.
- */
-/**
  * The items this command may move, and how many of them hold Ready.
  *
  * **One array, read twice — not two filters that happen to agree.**
@@ -131,6 +112,76 @@ export function readyPopulation<T extends { state: string; status: string }>(
   return { writable, occupied: writable.filter(i => i.status === READY).length };
 }
 
+/**
+ * Ready's incumbents that have fallen outside the active milestone (#2007,
+ * SC-2741).
+ *
+ * `isReady` answers who may ENTER Ready, so an unblocked, unclaimed card
+ * already there computes `to = Ready` and its change was filtered out as no
+ * change — a card dragged in by hand, or left behind by a frontier move, held
+ * its slot forever. `scripts/board-ready.ts` demoted the same card through
+ * `incumbentDecisions`. This asks that same decider with the same scope, so
+ * the two Ready writers cannot disagree about an UNCLAIMED incumbent — this
+ * command never overwrites a claimed card (`mayWrite`, below), and claiming a
+ * card moves it out of Ready anyway — and it adds no
+ * predicate of its own (`.claude/rules/checks-must-be-able-to-fail.md`, two
+ * deciders that agree).
+ *
+ * Every item here is an Issue: the board query reads `... on Issue` only.
+ */
+export function scopeDemotions<
+  T extends {
+    number: number;
+    state: string;
+    status: string;
+    blockedByOpen: number;
+    /** `false` when the blocker count was never read: the decider gets `null`, i.e. UNMEASURED. */
+    blockersRead?: boolean;
+    milestone: string | null;
+    labels: readonly string[];
+  },
+>(items: readonly T[], active: ActiveMilestone, expediteLabel: string | null): Array<{ item: T; to: string }> {
+  const byNumber = new Map(items.map(i => [i.number, i]));
+  const decisions = incumbentDecisions(
+    items.map(i => ({
+      number: i.number,
+      typename: "Issue",
+      state: i.state,
+      boardStatus: i.status,
+      blockedByOpen: i.blockersRead === false ? null : i.blockedByOpen,
+      milestone: i.milestone,
+      labels: i.labels,
+    })),
+    READY,
+    { active, expediteLabel },
+  );
+  const out: Array<{ item: T; to: string }> = [];
+  for (const d of decisions) {
+    if (d.demote) out.push({ item: byNumber.get(d.number)!, to: d.to });
+  }
+  return out;
+}
+
+/**
+ * Split what this command MAY write into what the cap lets through.
+ *
+ * **The cap applies here too, and from the same function the workflow
+ * uses.** This command is the hand-run second CALLER of Ready's rule —
+ * not a second rule, which is the distinction that matters: it and
+ * `board-ready.yml` both read `lib/board-ready-rule.ts`, so they cannot
+ * size the lane differently. Before this, the workflow filled to a
+ * derived depth and one hand-run of this command refilled the lane to
+ * whatever happened to be eligible.
+ *
+ * **A demotion to Backlog is never capped**, and that is the half a
+ * naive implementation gets wrong. The cap bounds what may ENTER Ready;
+ * applying it to departures would pin a claimed or newly-blocked card in
+ * the lane for as long as the lane stayed full — the cap would start
+ * preserving exactly the staleness it exists to prevent.
+ *
+ * Exported so a case can hold it. Inline, the only way to observe it was
+ * to run the command against a live board.
+ */
 export function splitReadyChanges<
   T extends {
     item: { number: number; milestone: string | null; labels: readonly string[]; status: string };
@@ -278,6 +329,13 @@ interface Item {
   assignees: number;
   blockedByOpen: number;
   blockedByTotal: number;
+  /**
+   * Whether `issueDependenciesSummary` came back at all. GitHub omits it when
+   * the token cannot read it, and `blockedByOpen` above defaults that to 0
+   * for the promotion path; the incumbent decider must see UNMEASURED
+   * instead (review of #2027).
+   */
+  blockersRead: boolean;
   criteriaCell: string;
   /** The milestone TITLE, or `null` — the contract `Rankable` states (#1965). */
   milestone: string | null;
@@ -446,6 +504,7 @@ export async function main(argv: string[]): Promise<number> {
         assignees: n.content.assignees?.totalCount ?? 0,
         blockedByOpen: n.content.issueDependenciesSummary?.blockedBy ?? 0,
         blockedByTotal: n.content.issueDependenciesSummary?.totalBlockedBy ?? 0,
+        blockersRead: n.content.issueDependenciesSummary != null,
         criteriaCell: n.fieldValueByName?.text ?? "",
         // `null` and never `""` — ONE absent value, matching `Rankable` and
         // the five other producers in the tree (#1965 round 4). `""` reads
@@ -472,10 +531,38 @@ export async function main(argv: string[]): Promise<number> {
     .filter(i => (byNumber.get(i.number)?.text ?? "") !== i.criteriaCell)
     .map(i => ({ item: i, to: byNumber.get(i.number)!.text }));
 
+  // The ENGINE milestone family, from this project's own config (#1943),
+  // and whether the absence of one was MEASURED — round 3 of #1965's review.
+  //
+  // This is the call site that matters most and the one I left behind when I
+  // fixed the other two: `board-mirror --ready --write` is the only thing
+  // that writes the Ready lane. A `null` prefix orders by phase alone, so a
+  // root with no config promotes `Convergence Phase 3` ahead of `Pipeline
+  // Phase 6` — the exact pre-#1943 ordering, written to the board, in
+  // silence. `enginePrefixReading` tells that apart from a tree that
+  // genuinely declares one family.
+  const engine = enginePrefixReading(root);
+  if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
+  const enginePrefix = engine.prefix;
+  // The focus is read over every OPEN item on the board, claimed and blocked
+  // ones included (SC-2741) — the board is this command's whole view, and
+  // board-intake adds every opened issue to it.
+  const active = activeMilestone(
+    items.filter(i => i.state === "OPEN"),
+    enginePrefix,
+  );
+  const expediteLabel = readExpediteLabel(root);
+
   const { writable, occupied } = readyPopulation(items);
   const readyChanges = writable
     .map(i => ({ item: i, to: isReady(i) ? READY : BACKLOG }))
     .filter(c => c.to !== c.item.status);
+  // #2007: an incumbent outside the focus, which `isReady` alone keeps. A card
+  // already changing (blocked, so leaving for Backlog) is not added twice.
+  const changing = new Set(readyChanges.map(c => c.item.number));
+  for (const d of scopeDemotions(writable, active, expediteLabel)) {
+    if (!changing.has(d.item.number)) readyChanges.push(d);
+  }
 
   // An assignee is a person saying "mine". Where their card sits is then
   // theirs to decide, and demoting a claimed issue to Backlog makes it look
@@ -503,32 +590,12 @@ export async function main(argv: string[]): Promise<number> {
       ? await measureClosedIssues((q, v) => client.graphql(q, v), repo.owner, repo.name)
       : null;
   const cap = closedReadings === null ? null : readyCap(closedReadings.throughput);
-  // The ENGINE milestone family, from this project's own config (#1943),
-  // and whether the absence of one was MEASURED — round 3 of #1965's review.
-  //
-  // This is the call site that matters most and the one I left behind when I
-  // fixed the other two: `board-mirror --ready --write` is the only thing
-  // that writes the Ready lane. A `null` prefix orders by phase alone, so a
-  // root with no config promotes `Convergence Phase 3` ahead of `Pipeline
-  // Phase 6` — the exact pre-#1943 ordering, written to the board, in
-  // silence. `enginePrefixReading` tells that apart from a tree that
-  // genuinely declares one family.
-  const engine = enginePrefixReading(root);
-  if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
-  const enginePrefix = engine.prefix;
-  // The focus is read over every OPEN item on the board, claimed and blocked
-  // ones included (SC-2741) — the board is this command's whole view, and
-  // board-intake adds every opened issue to it.
-  const active = activeMilestone(
-    items.filter(i => i.state === "OPEN"),
-    enginePrefix,
-  );
   const { readyWritable, heldByCap, outOfScope, selection, occ, workNext } = splitReadyChanges(
     eligible,
     cap,
     occupied,
     enginePrefix,
-    readExpediteLabel(root),
+    expediteLabel,
     active,
   );
 
