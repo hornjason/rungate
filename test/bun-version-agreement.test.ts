@@ -160,6 +160,8 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // which takes the board's own reading on every push to `main` — fifteen.
     // `adr-accepted` joined with SC-2738 (ADR-013 row 5), which places an
     // accepted ADR's plan on the board when it merges — sixteen.
+    // `phase-order` joined with #2015, which re-writes the phase-order links
+    // whenever an issue's milestone changes — seventeen.
     //
     // The floor and the list are two different claims, deliberately:
     // the floor says the scan read SOMETHING, so no case below is satisfied
@@ -169,7 +171,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // meant to turn this red once.
     const steps = setupBunStepsUnder(WORKFLOW_DIR);
     expect(steps.length, "fewer setup-bun steps than this repo has workflows that install bun")
-      .toBeGreaterThanOrEqual(16);
+      .toBeGreaterThanOrEqual(17);
     const files = new Set(steps.map(s => s.file));
     expect([...files].sort()).toEqual([
       "action-pins.yml",
@@ -186,6 +188,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
       "closing-references.yml",
       "gates.yml",
       "issue-audit.yml",
+      "phase-order.yml",
       "release.yml",
       "suite-flake.yml",
     ]);
