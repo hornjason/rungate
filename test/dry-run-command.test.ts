@@ -51,6 +51,8 @@ describe("SC-2740: /dry-run is a project command that shows a proposal as a real
   });
 
   test("SC-2740: it carries no executable block, so invoking it runs nothing before it is read", () => {
-    expect(text.split("\n").filter(l => l.startsWith("!`"))).toEqual([]);
+    // Mid-line too: the runtime executes an inline !`…` as well as one opening a line.
+    expect(text.split("\n").filter(l => l.includes("!`"))).toEqual([]);
+    expect(text, "the command must tell the agent to quote the path").toContain("Quote the path in every command");
   });
 });

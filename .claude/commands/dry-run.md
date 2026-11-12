@@ -11,7 +11,9 @@ every change to the document until Jason agrees with every step it shows.
 
 ## Rules
 
-- **Never pass `--write`.** Nothing is filed, created or changed.
+- **Never pass `--write`.** Nothing is filed or changed on GitHub; the
+  `-flow.html` visual is the only file written.
+- **Quote the path in every command, and stop if it is not an existing file.**
 - **Read the document from disk every run.** The document is the input, never
   the conversation, so an edit is picked up by re-running.
 - **Real output beats description.** Where a tool can dry-run, run it and
