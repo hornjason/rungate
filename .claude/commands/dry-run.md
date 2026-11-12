@@ -28,14 +28,16 @@ none, say so and stop.
 
 ## Steps
 
-0. Check the checkout is current before measuring anything (#2016). Against
-   the primary checkout the planners run from in step 2, passed by path and
-   never reached with `cd`: `git -C "<checkout>" fetch origin main`, then
-   `git -C "<checkout>" rev-list --count HEAD..origin/main`. If the count is above zero the
-   tree is behind origin/main, so stop: print how many commits behind it is
-   and that it must be updated first, and run nothing else. Otherwise print
-   `Measured commit: ` and the output of `git -C "<checkout>" rev-parse --short HEAD`, so
-   every run names the tree it read.
+0. Check the checkout is current before measuring anything (#2016), in this
+   order, against the primary checkout step 2 runs from, passed by path and
+   never reached with `cd`:
+   - `git -C "<checkout>" fetch origin main`. If the fetch fails, stop and say so:
+     the count below would read a stale ref and could say zero.
+   - `git -C "<checkout>" rev-list --count HEAD..origin/main`. If the count is above zero
+     the tree is behind origin/main, so stop: print how many commits behind it
+     is and that it must be updated first, and run nothing else.
+   - Only when both pass, print `Measured commit: ` and the output of
+     `git -C "<checkout>" rev-parse --short HEAD`, so every run names the tree it read.
 1. Read the document. Find its decomposition table
    (`| Criterion | Outcome | Files | Milestone | Blocked by |`).
 2. Run the real dry runs from the primary checkout, read-only, with

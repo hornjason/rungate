@@ -73,19 +73,35 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
     expect(text, `dry-run.md must contain: ${BEHIND}`).toContain(BEHIND);
   });
 
-  test("#2016: the currency check comes before any planner runs", () => {
-    const at = text.indexOf(BEHIND);
-    expect(at, "no currency check found, so its order measured nothing").toBeGreaterThan(-1);
-    expect(at).toBeLessThan(text.indexOf(PLANNER));
+  const lines = text.split("\n");
+  const lineOf = (s: string) => lines.findIndex(l => l.includes(s));
+
+  test("#2016: fetch, then count, then any planner, in that order", () => {
+    const [fetch, behind, planner] = [FETCH, BEHIND, PLANNER].map(s => text.indexOf(s));
+    expect(fetch, "no fetch found, so its order measured nothing").toBeGreaterThan(-1);
+    // A count taken before the fetch reads whatever origin/main was cached.
+    expect(fetch).toBeLessThan(behind);
+    expect(behind).toBeLessThan(planner);
+  });
+
+  test("#2016: a failed fetch stops the run, so a stale ref is never counted", () => {
+    expect(lines[lineOf(FETCH)]).toContain("If the fetch fails, stop");
   });
 
   test("#2016: a checkout behind origin/main is refused with the count, never measured", () => {
     expect(text).toMatch(/behind origin\/main[^\n]*stop/i);
     expect(text).toContain("how many commits behind");
+    expect(text).toContain("and run nothing else");
   });
 
-  test("#2016: every run prints the commit it measured", () => {
+  test("#2016: the measured commit is printed only after both checks pass", () => {
     expect(text).toContain('git -C "<checkout>" rev-parse --short HEAD');
-    expect(text).toContain("Measured commit");
+    const measured = lineOf("Measured commit");
+    expect(measured, "no Measured commit line").toBeGreaterThan(-1);
+    // Its own bullet, gated, and after both stop clauses: printed unconditionally
+    // it would hand a reader a SHA for a tree the run just refused.
+    expect(lines[measured]).toMatch(/^\s*- Only when both pass, print `Measured commit: `/);
+    expect(measured).toBeGreaterThan(lineOf("and run nothing else"));
+    expect(measured).toBeGreaterThan(lineOf("If the fetch fails, stop"));
   });
 });
