@@ -7,6 +7,7 @@ updated: 2026-09-21
 governs: Test architecture — config-driven testing, matcher expansion, zero SC fallthrough, phase test migration
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Config-Driven Testing

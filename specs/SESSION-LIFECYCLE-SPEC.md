@@ -7,6 +7,7 @@ updated: 2026-09-21
 governs: Session start and end rituals — cold-start context loading, session-end state capture, handoff brief generation
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Session Lifecycle

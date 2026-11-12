@@ -7,6 +7,7 @@ updated: 2026-09-21
 governs: Session behavioral audit — two feedback loops for instruction quality improvement
 testable: false
 compliance: permissive
+board-scope: deferred
 ---
 
 # Session Behavioral Audit

@@ -28,7 +28,7 @@
  * refuses unconditionally.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { spawnSync } from "child_process";
@@ -162,6 +162,8 @@ const completeBoard = (): BoardSnapshot => ({
     // below it a complaint about the fixture.
     { path: "specs/EMPTY.md", state: "NO_CRITERIA", criteria: 0, placed: 0 },
   ],
+  // SC-2734: no spec here is deferred, so the bank is present and empty.
+  specDeferrals: [],
   // One issue that NAMES, one that DECLARES it serves none. Both are
   // conformant and they are conformant for different reasons, so a reading
   // that credited only one of the two spellings would show up here rather
@@ -1687,5 +1689,141 @@ describe("#1889: --emit-readings is the machine-readable seam", () => {
         "spec read from",
       );
     }
+  });
+});
+
+/**
+ * SC-2734: `spec-placement` measures only the specs in scope. A spec held back
+ * declares `board-scope: deferred` in its own frontmatter, and the deferred
+ * specs are banked by path with their criteria counts in
+ * `.claude/spec-deferral-ratchet.json`. The bank is an equality: a spec added
+ * to it, dropped from it, swapped for another, or whose count moved makes the
+ * reading UNMEASURED, so the meter cannot go green on a population shrunk by
+ * swapping members (ADR-013 row 1, #1995).
+ */
+describe("SC-2734: deferred specs leave the meter only through a ratchet that refuses both ways", () => {
+  const reading = (b: BoardSnapshot) => takeReadings(b).find(r => r.name === "spec-placement")!;
+  const withDeferral = (
+    deferred: { path: string; criteria: number }[],
+    bank: { path: string; criteria: number }[] | undefined,
+  ): BoardSnapshot => {
+    const b = completeBoard();
+    b.specPlacements = [
+      { path: "specs/IN.md", state: "PLANNED", criteria: 4, placed: 4 },
+      ...deferred.map(d => ({ path: d.path, state: "UNPLANNED" as const, criteria: d.criteria, placed: 0, deferred: true })),
+    ];
+    if (bank !== undefined) b.specDeferrals = bank;
+    else delete b.specDeferrals;
+    return b;
+  };
+
+  test("SC-2734: a banked deferred spec is out of both sides of the ratio and names no offender", () => {
+    const r = reading(withDeferral([{ path: "specs/OUT.md", criteria: 7 }], [{ path: "specs/OUT.md", criteria: 7 }]));
+    expect(r.status).toBe("met");
+    expect(r.target).toBe(4);
+    expect(r.offenders).toEqual([]);
+  });
+
+  test("SC-2734: the same spec NOT declared deferred is counted and named — the control", () => {
+    const b = withDeferral([], []);
+    b.specPlacements!.push({ path: "specs/OUT.md", state: "UNPLANNED", criteria: 7, placed: 0 });
+    const r = reading(b);
+    expect(r.status).toBe("short");
+    expect(r.target).toBe(11);
+  });
+
+  test("SC-2734: a swapped member refuses, naming both paths", () => {
+    const r = reading(withDeferral([{ path: "specs/OUT.md", criteria: 7 }], [{ path: "specs/OTHER.md", criteria: 7 }]));
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/OUT.md");
+    expect(r.why).toContain("specs/OTHER.md");
+  });
+
+  test("SC-2734: a rise refuses — a spec deferred that the bank does not hold", () => {
+    const r = reading(withDeferral(
+      [{ path: "specs/OUT.md", criteria: 7 }, { path: "specs/NEW.md", criteria: 3 }],
+      [{ path: "specs/OUT.md", criteria: 7 }],
+    ));
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/NEW.md");
+  });
+
+  test("SC-2734: a fall refuses — a banked spec no longer deferred", () => {
+    const r = reading(withDeferral(
+      [{ path: "specs/OUT.md", criteria: 7 }],
+      [{ path: "specs/OUT.md", criteria: 7 }, { path: "specs/GONE.md", criteria: 3 }],
+    ));
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/GONE.md");
+  });
+
+  test("SC-2734: a path banked twice refuses, whichever count matches", () => {
+    const r = reading(withDeferral(
+      [{ path: "specs/OUT.md", criteria: 7 }],
+      [{ path: "specs/OUT.md", criteria: 99 }, { path: "specs/OUT.md", criteria: 7 }],
+    ));
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/OUT.md is in the bank more than once");
+  });
+
+  test("SC-2734: the bank is read from disk, and a bank that will not read is omitted, not empty", async () => {
+    const { readDeferralBank } = await import("../scripts/board-snapshot.ts");
+    const root = mkdtempSync(join(tmpdir(), "sc2734-bank-"));
+    try {
+      expect(readDeferralBank(root)).toEqual({});
+      mkdirSync(join(root, ".claude"));
+      const bank = join(root, ".claude", "spec-deferral-ratchet.json");
+      writeFileSync(bank, "{ not json");
+      expect(readDeferralBank(root)).toEqual({});
+      writeFileSync(bank, JSON.stringify({ deferred: [{ path: "specs/X.md" }] }));
+      expect(readDeferralBank(root)).toEqual({});
+      writeFileSync(bank, JSON.stringify({ deferred: [{ path: "specs/X.md", criteria: 4 }] }));
+      expect(readDeferralBank(root)).toEqual({ specDeferrals: [{ path: "specs/X.md", criteria: 4 }] });
+      writeFileSync(bank, JSON.stringify({ deferred: [] }));
+      expect(readDeferralBank(root)).toEqual({ specDeferrals: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("SC-2734: a deferred spec whose criteria count moved refuses", () => {
+    const r = reading(withDeferral([{ path: "specs/OUT.md", criteria: 9 }], [{ path: "specs/OUT.md", criteria: 7 }]));
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/OUT.md");
+  });
+
+  test("SC-2734: deferred specs with no bank read are UNMEASURED, not quietly excluded", () => {
+    const r = reading(withDeferral([{ path: "specs/OUT.md", criteria: 7 }], undefined));
+    expect(r.status).toBe("unmeasured");
+    // The bank-difference path also refuses this input, so only the reason
+    // says the no-bank branch is the one that ran.
+    expect(r.why).toContain("was not read");
+  });
+
+  test("SC-2734: the deferral is read from frontmatter only, never from the body", async () => {
+    const { declaresDeferred } = await import("../lib/spec-placement.ts");
+    expect(declaresDeferred("---\ndoc-type: spec\nboard-scope: deferred\n---\n# X\n")).toBe(true);
+    expect(declaresDeferred("---\ndoc-type: spec\n---\n# X\nboard-scope: deferred\n")).toBe(false);
+    expect(declaresDeferred("---\ndoc-type: spec\nboard-scope: in\n---\n")).toBe(false);
+    // An empty value does not borrow the next line (security review of #2013).
+    expect(declaresDeferred("---\nboard-scope:\ndeferred\n---\n")).toBe(false);
+    // Quotes must pair: an unterminated or mismatched quote is not a declaration.
+    expect(declaresDeferred('---\nboard-scope: "deferred"\n---\n')).toBe(true);
+    expect(declaresDeferred('---\nboard-scope: "deferred\n---\n')).toBe(false);
+    expect(declaresDeferred(`---\nboard-scope: "deferred'\n---\n`)).toBe(false);
+  });
+
+  test("SC-2734: this tree's deferred specs equal its bank exactly, and the engine and payload are in scope", async () => {
+    const { placementCoverage } = await import("../lib/spec-placement.ts");
+    const { specPathSweep } = await import("../lib/board-mirror.ts");
+    const cov = placementCoverage(ROOT, specPathSweep, (b, p) => readFileSync(join(b, p), "utf-8"));
+    expect(cov.reading).toBe("MEASURED");
+    const live = cov.specs.filter(s => s.deferred).map(s => `${s.path}=${s.criteria}`).sort();
+    const bank = (JSON.parse(readFileSync(join(ROOT, ".claude/spec-deferral-ratchet.json"), "utf-8")).deferred as
+      { path: string; criteria: number }[]).map(d => `${d.path}=${d.criteria}`).sort();
+    expect(live.length, "no spec declares itself deferred, so the comparison measured nothing").toBeGreaterThan(0);
+    expect(live).toEqual(bank);
+    const inScope = cov.specs.filter(s => !s.deferred && s.criteria > 0).map(s => s.path).sort();
+    expect(inScope).toEqual(["specs/CODE-REVIEW-CONVERGENCE-SPEC.md", "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md"]);
   });
 });

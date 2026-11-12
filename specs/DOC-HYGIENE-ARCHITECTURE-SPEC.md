@@ -7,6 +7,7 @@ updated: 2026-10-02
 governs: Doc-hygiene architecture — spec discovery via governs-field, mechanical drift detection, signal-based enforcement
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Doc Hygiene Architecture

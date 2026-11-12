@@ -7,6 +7,7 @@ updated: 2026-09-20
 governs: AGENTS.md template structure — what's baked in, what's scanned, how to update
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # AGENTS.md Template Spec

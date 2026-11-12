@@ -215,6 +215,21 @@ export interface SpecPlacement {
   /** How many criteria the spec states, and how many the table places. */
   criteria: number;
   placed: number;
+  /** The spec declares `board-scope: deferred` in its frontmatter — SC-2734. */
+  deferred: boolean;
+}
+
+/**
+ * Whether a spec holds itself back from the board — SC-2734.
+ *
+ * Read from the FRONTMATTER only: a body line spelling the same words is
+ * prose about the convention, not a declaration, and reading it would let a
+ * spec defer itself by quoting this rule.
+ */
+export function declaresDeferred(content: string): boolean {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
+  if (m === null) return false;
+  return /^board-scope:[ \t]*(["']?)deferred\1[ \t]*\r?$/m.test(m[1]!);
 }
 
 export interface PlacementCoverage {
@@ -280,7 +295,7 @@ export function placementCoverage(
     try {
       content = readSpec(root, path);
     } catch (e) {
-      specs.push({ path, state: "UNREADABLE", reasons: [(e as Error).message], criteria: 0, placed: 0 });
+      specs.push({ path, state: "UNREADABLE", reasons: [(e as Error).message], criteria: 0, placed: 0, deferred: false });
       reasons.push(`could not read ${path}: ${(e as Error).message}`);
       continue;
     }
@@ -294,6 +309,7 @@ export function placementCoverage(
       reasons: state === "PLANNED" ? [] : r.unmeasuredReasons,
       criteria: r.criteria.length,
       placed,
+      deferred: declaresDeferred(content),
     });
   }
 

@@ -7,6 +7,7 @@ testable: true
 compliance: strict
 created: 2026-09-20
 governs: Harness workflow — the GOAL → DISCOVERY → EXECUTION → VERIFICATION loop and how skills chain
+board-scope: deferred
 ---
 
 # PAI Agentic Harness Standard

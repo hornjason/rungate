@@ -6,6 +6,7 @@ created: 2026-09-20
 updated: 2026-09-20
 governs: Success Criteria + 3 more
 testable: true
+board-scope: deferred
 ---
 
 ## Success Criteria

@@ -8,6 +8,7 @@ governs: Board flow — what each lane is FOR, what may enter it, who writes the
 testable: true
 compliance: strict
 evidence: required
+board-scope: deferred
 ---
 
 # Board Flow

@@ -153,6 +153,13 @@ export interface BoardSnapshot {
   specPlacements?: SpecPlacementRow[];
 
   /**
+   * The deferral bank — SC-2734. **Absent means it was never read**, and
+   * `spec-placement` goes UNMEASURED as soon as any spec declares itself
+   * deferred: an unread bank is not an empty one.
+   */
+  specDeferrals?: SpecDeferral[];
+
+  /**
    * EVERY open issue in the repository and what it says it serves — SC-2616.
    *
    * Distinct from {@link issues}, which is the engine milestone's issues. 25
@@ -182,6 +189,41 @@ export interface SpecPlacementRow {
   /** How many criteria the spec states, and how many its table places. */
   criteria: number;
   placed: number;
+  /** The spec declares `board-scope: deferred` in its frontmatter — SC-2734. */
+  deferred?: boolean;
+}
+
+/** One entry in the deferral bank, `.claude/spec-deferral-ratchet.json` — SC-2734. */
+export interface SpecDeferral {
+  path: string;
+  criteria: number;
+}
+
+/**
+ * The deferred rows that disagree with the bank, by name — SC-2734.
+ *
+ * An EQUALITY in both directions and on the count: a spec deferred that the
+ * bank does not hold, a banked spec no longer deferred, and a deferred spec
+ * whose criteria count moved are each a difference. So a member swapped for
+ * another reads as two differences, never as an unchanged population.
+ */
+export function deferralDifferences(rows: readonly SpecPlacementRow[], bank: readonly SpecDeferral[]): string[] {
+  const live = new Map(rows.filter(r => r.deferred === true).map(r => [r.path, r.criteria]));
+  const banked = new Map(bank.map(d => [d.path, d.criteria]));
+  const out: string[] = [];
+  // A path banked twice is a bank that disagrees with itself. The Map keeps
+  // only the last entry, so without this the other one vanishes unread.
+  const seen = new Set<string>();
+  for (const d of bank) {
+    if (seen.has(d.path)) out.push(`${d.path} is in the bank more than once`);
+    seen.add(d.path);
+  }
+  for (const [path, n] of live) {
+    if (!banked.has(path)) out.push(`${path} is deferred and not in the bank`);
+    else if (banked.get(path) !== n) out.push(`${path} states ${n} criteria and the bank holds ${banked.get(path)}`);
+  }
+  for (const path of banked.keys()) if (!live.has(path)) out.push(`${path} is in the bank and no longer deferred`);
+  return out;
 }
 
 /** One open issue, and the criteria it names — SC-2616. */
@@ -454,13 +496,24 @@ export const READINGS: readonly ReadingSpec[] = [
       // shorter list — `lib/spec-placement.ts` takes the same position, and
       // a shorter list is exactly what a tree with fewer specs produces.
       const broken = b.specPlacements.filter(s => s.state === "UNREADABLE").map(s => s.path);
-      return broken.length === 0
+      if (broken.length > 0) {
+        return `${broken.length} spec(s) could not be read (${broken.slice(0, 5).join(", ")}` +
+          `${broken.length > 5 ? ", …" : ""}), so the sweep covers an unknown fraction of the tree`;
+      }
+      // SC-2734. A deferred spec leaves the measure only when the bank agrees
+      // with it exactly; otherwise the population is not one anybody banked.
+      const anyDeferred = b.specPlacements.some(s => s.deferred === true);
+      if (anyDeferred && b.specDeferrals === undefined) {
+        return "specs declare themselves deferred and the deferral bank (.claude/spec-deferral-ratchet.json) " +
+          "was not read, so the population being measured is not one anybody banked";
+      }
+      const diff = deferralDifferences(b.specPlacements, b.specDeferrals ?? []);
+      return diff.length === 0
         ? null
-        : `${broken.length} spec(s) could not be read (${broken.slice(0, 5).join(", ")}` +
-            `${broken.length > 5 ? ", …" : ""}), so the sweep covers an unknown fraction of the tree`;
+        : `the deferred specs disagree with .claude/spec-deferral-ratchet.json: ${diff.join("; ")}`;
     },
     measure: b => {
-      const specs = b.specPlacements!.filter(s => s.state !== "NO_CRITERIA");
+      const specs = b.specPlacements!.filter(s => s.state !== "NO_CRITERIA" && s.deferred !== true);
       return {
         measured: specs.reduce((n, s) => n + s.placed, 0),
         target: specs.reduce((n, s) => n + s.criteria, 0),
@@ -468,7 +521,7 @@ export const READINGS: readonly ReadingSpec[] = [
     },
     offenders: b =>
       b.specPlacements!
-        .filter(s => s.state === "UNPLANNED")
+        .filter(s => s.state === "UNPLANNED" && s.deferred !== true)
         .map(s => `${s.path} — ${s.criteria - s.placed} of ${s.criteria} criteria in no phase`),
   },
   {
@@ -678,7 +731,13 @@ const normaliseSpecPlacement = (v: unknown): SpecPlacementRow | null => {
   // A row claiming more placed than stated would let one spec carry another
   // spec's shortfall, and the sum is the whole reading.
   if (criteria < 0 || placed < 0 || placed > criteria) return null;
-  return { path: s.path, state, criteria, placed };
+  return { path: s.path, state, criteria, placed, ...(s.deferred === true ? { deferred: true } : {}) };
+};
+
+const normaliseDeferral = (v: unknown): SpecDeferral | null => {
+  if (typeof v !== "object" || v === null) return null;
+  const d = v as Partial<SpecDeferral>;
+  return typeof d.path === "string" && Number.isInteger(d.criteria) ? { path: d.path, criteria: d.criteria as number } : null;
 };
 
 const normaliseRepoIssue = (v: unknown): RepoIssueCriteria | null => {
@@ -853,6 +912,11 @@ export function readSnapshotText(text: string): SnapshotRead {
   const placements = Array.isArray(raw.specPlacements)
     ? { specPlacements: raw.specPlacements.map(normaliseSpecPlacement).filter((s): s is SpecPlacementRow => s !== null) }
     : {};
+  // SC-2734. A malformed bank entry is DROPPED, which can only add a
+  // difference, so it refuses rather than shortening the comparison.
+  const deferrals = Array.isArray(raw.specDeferrals)
+    ? { specDeferrals: raw.specDeferrals.map(normaliseDeferral).filter((d): d is SpecDeferral => d !== null) }
+    : {};
   const repoIssues = Array.isArray(raw.repoIssues)
     ? { repoIssues: raw.repoIssues.map(normaliseRepoIssue).filter((i): i is RepoIssueCriteria => i !== null) }
     : {};
@@ -864,6 +928,7 @@ export function readSnapshotText(text: string): SnapshotRead {
       ...closed,
       ...queue,
       ...placements,
+      ...deferrals,
       ...repoIssues,
     },
     why: null,

@@ -6,6 +6,7 @@ owner: jason
 updated: 2026-09-22
 created: 2026-09-25
 governs: DA compliance evaluation — role-specific grading criteria for DA, Marcus, and Quinn agents with scoring dashboard
+board-scope: deferred
 ---
 
 # DA Compliance Spec

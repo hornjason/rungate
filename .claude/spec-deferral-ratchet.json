@@ -1,0 +1,92 @@
+{
+  "deferred": [
+    {
+      "path": "specs/AGENT-BRIEF-TEMPLATE-SPEC.md",
+      "criteria": 31
+    },
+    {
+      "path": "specs/AGENTS-MD-TEMPLATE-SPEC.md",
+      "criteria": 46
+    },
+    {
+      "path": "specs/BOARD-FLOW-SPEC.md",
+      "criteria": 28
+    },
+    {
+      "path": "specs/BOOTSTRAP-TEST-PLAN.md",
+      "criteria": 14
+    },
+    {
+      "path": "specs/CONFIG-DIRECTORY-STRUCTURE-SPEC.md",
+      "criteria": 87
+    },
+    {
+      "path": "specs/CONFIG-DRIVEN-TESTING-SPEC.md",
+      "criteria": 96
+    },
+    {
+      "path": "specs/DA-COMPLIANCE-SPEC.md",
+      "criteria": 14
+    },
+    {
+      "path": "specs/DOC-HYGIENE-ARCHITECTURE-SPEC.md",
+      "criteria": 47
+    },
+    {
+      "path": "specs/GATE-CONTRACTS-SPEC.md",
+      "criteria": 94
+    },
+    {
+      "path": "specs/GITHUB-API-MIGRATION-SPEC.md",
+      "criteria": 43
+    },
+    {
+      "path": "specs/HARNESS-GATES.md",
+      "criteria": 32
+    },
+    {
+      "path": "specs/HARNESS-STANDARD.md",
+      "criteria": 648
+    },
+    {
+      "path": "specs/HOOK-ARCHITECTURE-SPEC.md",
+      "criteria": 32
+    },
+    {
+      "path": "specs/INSTRUCTION-COMPLIANCE-SPEC.md",
+      "criteria": 66
+    },
+    {
+      "path": "specs/PARALLEL-AGENT-COORDINATION-SPEC.md",
+      "criteria": 25
+    },
+    {
+      "path": "specs/PROJECT-STATE.md",
+      "criteria": 12
+    },
+    {
+      "path": "specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md",
+      "criteria": 27
+    },
+    {
+      "path": "specs/SCAFFOLD-DECOMPOSITION-SPEC.md",
+      "criteria": 79
+    },
+    {
+      "path": "specs/SESSION-AUDIT-SPEC.md",
+      "criteria": 13
+    },
+    {
+      "path": "specs/SESSION-LIFECYCLE-SPEC.md",
+      "criteria": 12
+    },
+    {
+      "path": "specs/SPEC-AUTHORING-SPEC.md",
+      "criteria": 22
+    },
+    {
+      "path": "specs/bootstrap-data-flow/success-criteria.md",
+      "criteria": 260
+    }
+  ]
+}

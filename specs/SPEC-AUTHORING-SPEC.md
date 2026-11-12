@@ -8,6 +8,7 @@ governs: Spec authoring — the frame a new spec is born with, and the rule that
 testable: true
 compliance: strict
 evidence: required
+board-scope: deferred
 ---
 
 # Spec Authoring

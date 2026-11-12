@@ -7,6 +7,7 @@ updated: 2026-09-21
 governs: Gate contracts — what gates exist, their inputs/outputs, pass/fail criteria, and how they chain
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Gate Contracts

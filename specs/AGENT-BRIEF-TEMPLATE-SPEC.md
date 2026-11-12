@@ -7,6 +7,7 @@ updated: 2026-09-30
 governs: Agent brief templates — externalized markdown templates with variable substitution, not hardcoded TypeScript strings
 testable: true
 compliance: strict
+board-scope: deferred
 ---
 
 # Agent Brief Template
