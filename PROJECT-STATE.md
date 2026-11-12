@@ -4,7 +4,7 @@
 
 **Session 90 (2026-11-12)** — Four of eight ADR-013 rows merged in order (rows 4, 2, 6, 5 as #2003, #2004, #2008, #2009), each closing its own issue through its PR and ticking its criterion with a proved-by line. Rows 3 and 7 are in review as #2010 and #2011. Rows 8 and 1 wait on a decision only Jason can make: the ai-review-override label on #2006, and how a held-back spec declares so on #1995.
 
-Suite: ADR-013 rows on rg/1996, rg/2000, rg/1999 (merged #2004, #2008, #2009); rg/1997-rule9-four-steps (PR #2010) and rg/2001-dry-run-command (PR #2011) open.
+Suite: ADR-013 rows on rg/1998-closing-ref-required, rg/1996, rg/2000, rg/1999 (merged #2003, #2004, #2008, #2009); rg/1997-rule9-four-steps (PR #2010) and rg/2001-dry-run-command (PR #2011) open.
 Issues opened: #2005, #2007
 Issues closed: #1996, #1998, #1999, #2000
 
