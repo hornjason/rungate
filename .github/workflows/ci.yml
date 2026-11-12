@@ -1,4 +1,4 @@
-# generated-sha: fd1c3d3fcaf3d39a
+# generated-sha: c58f0ea2db9f5c63
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -76,7 +76,7 @@ permissions:
 
 jobs:
   test-shard:
-    runs-on: "ubuntu-latest"
+    runs-on: "ubuntu-24.04"
     # ci.suiteReadsTracker. The step below reads milestones and issues;
     # without this the token it is handed has no scope for either.
     permissions:
@@ -191,7 +191,7 @@ jobs:
   # The aggregate. Named "test" because that is the context branch protection
   # requires; it exists to turn N shard results into the one verdict.
   test:
-    runs-on: "ubuntu-latest"
+    runs-on: "ubuntu-24.04"
     needs: test-shard
     # always() so a failed or cancelled shard reaches this job instead of
     # skipping it. A skipped required check is not a failed one, and some
