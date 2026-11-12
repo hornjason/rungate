@@ -158,7 +158,8 @@ of the last 40 merged PRs closed no issue.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2738: merging an ADR whose status changes to accepted places its plan on the board with no command typed by hand — milestones, issues, blocked-by edges, board fields and a Ready top-up — and the filing refuses both a duplicate of a closed issue and a criterion id that exists in no spec
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2739: an ADR written from the repository's ADR template carries a Decomposition table that `plan-issues --decompose` reads with no refusal
+- [x] SC-2739: an ADR written from the repository's ADR template carries a Decomposition table that `plan-issues --decompose` reads with no refusal
+      proved-by: test/adr-template.test.ts, the `SC-2739` describe — 5 pass, 0 fail, 2026-11-11, on the PR that closes #2000. `docs/adr/TEMPLATE.md` filled the way an author fills it parses MEASURED through `parseDecompositionPlan`; unfilled it is refused. Renaming the Outcome header, adding a column, dropping the file limit or pre-filling the criterion each turns 1 to 3 of the 5 red.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2740: one command shows a proposal as a dry run — the real planning tools without `--write`, what reaches Ready, the gaps found — and writes its visual next to the document
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
