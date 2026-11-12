@@ -1,5 +1,5 @@
 /**
- * Covers SC-2601, SC-2602, SC-2603, SC-2604, SC-2605, SC-2607 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ * Covers SC-2601, SC-2602, SC-2603, SC-2604, SC-2605, SC-2607, SC-2738 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
  *
  * Step 4 of ADR-003: one criterion into the right number of issues.
  *
@@ -31,6 +31,23 @@ const HEAD = ["| Criterion | Outcome | Files | Milestone | Blocked by |", "|---|
 
 function plan(...rows: string[]): string {
   return ["# A plan somebody reviewed", "", ...HEAD, ...rows, ""].join("\n");
+}
+
+/** The criterion ids this file's plans name, as a spec states them. */
+const FIXTURE_IDS = ["CRC-C2", "CRC-C3", "CRC-C4"];
+const STATED: ReadonlySet<string> = new Set(FIXTURE_IDS);
+
+/**
+ * A `specs/` directory stating `FIXTURE_IDS`, for a case whose project root is
+ * a scratch directory. `--decompose` refuses a criterion no spec states
+ * (SC-2738), so a root with no specs refuses every row.
+ */
+function seedSpecs(dir: string): void {
+  mkdirSync(join(dir, "specs"), { recursive: true });
+  writeFileSync(
+    join(dir, "specs", "FIXTURE-SPEC.md"),
+    ["# Fixture", "", ...FIXTURE_IDS.map(id => `- [ ] ${id}: a criterion this fixture states`), ""].join("\n"),
+  );
 }
 
 const GOOD = "| CRC-C2 | plan-deps refuses a single-phase reading | lib/spec-deps.ts | Phase 3 | — |";
@@ -571,7 +588,7 @@ describe("planDecomposition resolves rows against the tracker as it is now", () 
     line: 3,
     ...over,
   });
-  const empty: LiveTracker = { openTitles: new Map(), milestones: new Set() };
+  const empty: LiveTracker = { openTitles: new Map(), closedTitles: new Map(), milestones: new Set(), statedCriteria: STATED };
   const HEADING = "## Criteria this serves";
 
   test("a title nothing holds becomes a create", () => {
@@ -588,8 +605,8 @@ describe("planDecomposition resolves rows against the tracker as it is now", () 
 
   test("RE-RUN: an open issue with the same title is not created again", () => {
     const live: LiveTracker = {
+      ...empty,
       openTitles: new Map([["plan-deps refuses a single-phase reading", 1700]]),
-      milestones: new Set(),
     };
     const p = planDecomposition([row()], live, "docs/adr/ADR-009.md", HEADING);
     expect(p.actions[0]).toEqual({ kind: "exists", row: row(), number: 1700 });
@@ -599,10 +616,10 @@ describe("planDecomposition resolves rows against the tracker as it is now", () 
     // The control for the re-run case. A substring match here would read a
     // longer, unrelated title as "already created" and silently skip the row.
     const live: LiveTracker = {
+      ...empty,
       openTitles: new Map([
         ["plan-deps refuses a single-phase reading, and also deletes main", 1700],
       ]),
-      milestones: new Set(),
     };
     expect(planDecomposition([row()], live, "p.md", HEADING).actions[0].kind).toBe("create");
   });
@@ -614,14 +631,14 @@ describe("planDecomposition resolves rows against the tracker as it is now", () 
   });
 
   test("a milestone that DOES exist is accepted — the control for the refusal above", () => {
-    const live: LiveTracker = { openTitles: new Map(), milestones: new Set(["Phase 9"]) };
+    const live: LiveTracker = { ...empty, milestones: new Set(["Phase 9"]) };
     expect(planDecomposition([row({ milestone: "Phase 9" })], live, "p.md", HEADING).reading).toBe(
       "MEASURED",
     );
   });
 
   test("edges are emitted for every blocker, including to a row that already exists", () => {
-    const live: LiveTracker = { openTitles: new Map([["the first half", 1700]]), milestones: new Set() };
+    const live: LiveTracker = { ...empty, openTitles: new Map([["the first half", 1700]]) };
     const p = planDecomposition(
       [
         row({ outcome: "the first half" }),
@@ -674,7 +691,12 @@ describe("decomposedBody writes what the issue has to carry", () => {
 describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
   /** Records every call, so a case asserts on what was DONE, not what was returned. */
   function recorder(
-    seed: { open?: [string, number][]; milestones?: string[]; wired?: [number, number[]][] } = {},
+    seed: {
+      open?: [string, number][];
+      closed?: [string, number][];
+      milestones?: string[];
+      wired?: [number, number[]][];
+    } = {},
   ) {
     const calls: string[] = [];
     let next = 2000;
@@ -694,6 +716,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
     }> = [];
     const api: DecomposeGitHub = {
       openTitles: async () => new Map(seed.open ?? []),
+      closedTitles: async () => new Map(seed.closed ?? []),
       milestones: async () => new Set(seed.milestones ?? []),
       blockedBy: async (_repo, issue) => {
         calls.push(`read blocked-by of #${issue}`);
@@ -742,6 +765,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
   ) {
     const dir = mkdtempSync(join(tmpdir(), "rg-decompose-root-"));
     try {
+      seedSpecs(dir);
       mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
       writeFileSync(
         join(dir, ".claude", "rungate", "config.json"),
@@ -861,9 +885,11 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
   test("the body names the plan by its path in the REPOSITORY, not on this disk", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rg-decompose-root-"));
     try {
+      seedSpecs(dir);
       const bodies: string[] = [];
       const api: DecomposeGitHub = {
         openTitles: async () => new Map(),
+        closedTitles: async () => new Map(),
         milestones: async () => new Set(["Phase 3"]),
         blockedBy: async () => [],
         create: async (_repo, issue) => {
@@ -908,9 +934,11 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
   test("a file whose NAME starts with two dots is inside the root, not outside it", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rg-decompose-dots-"));
     try {
+      seedSpecs(dir);
       const bodies: string[] = [];
       const api: DecomposeGitHub = {
         openTitles: async () => new Map(),
+        closedTitles: async () => new Map(),
         milestones: async () => new Set(["Phase 3"]),
         blockedBy: async () => [],
         create: async (_repo, issue) => {
@@ -959,6 +987,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
       writeFileSync(p, plan("| CRC-C2 | a well formed outcome here | lib/a.ts | Phase 9 | — |"));
       const api: DecomposeGitHub = {
         openTitles: async () => new Map(),
+        closedTitles: async () => new Map(),
         milestones: async () => new Set(["Phase 3"]),
         blockedBy: async () => [],
         create: async () => {
@@ -1109,6 +1138,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
       openTitles: async () => {
         throw new Error("API rate limit exceeded");
       },
+      closedTitles: async () => new Map(),
       milestones: async () => new Set(["Phase 3"]),
       blockedBy: async () => [],
       create: async () => {
@@ -1135,6 +1165,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
     const calls: string[] = [];
     const api: DecomposeGitHub = {
       openTitles: async () => new Map(),
+      closedTitles: async () => new Map(),
       milestones: async () => new Set(["Phase 3"]),
       blockedBy: async () => [],
       create: async () => {
@@ -1351,3 +1382,143 @@ describe.skipIf(process.env[MUTANT_GUARD] === "1")(
     }, 90_000);
   },
 );
+
+// ── SC-2738: the filing refuses a duplicate of a CLOSED issue and an unknown id ──
+//
+// Found by the first ADR-013 dry run, and still true after row 6 merged:
+// `--decompose` proposed creating SC-2735, SC-2737 and SC-2739 again because
+// their issues were closed and only OPEN titles were read. Once a merge runs
+// this with no person watching (the `adr-accepted` workflow), a re-proposal is
+// a duplicate filed for real.
+describe("SC-2738: --decompose files nothing twice and nothing no spec states", () => {
+  const row = (over: Partial<DecompositionRow> = {}): DecompositionRow => ({
+    criterion: "CRC-C2",
+    outcome: "plan-deps refuses a single-phase reading",
+    files: ["lib/spec-deps.ts"],
+    milestone: null,
+    blockedBy: [],
+    line: 3,
+    ...over,
+  });
+  const live = (over: Partial<LiveTracker> = {}): LiveTracker => ({
+    openTitles: new Map(),
+    closedTitles: new Map(),
+    milestones: new Set(),
+    statedCriteria: STATED,
+    ...over,
+  });
+  const HEADING = "## Criteria this serves";
+
+  test("SC-2738: a row whose title a CLOSED issue holds is not created again", () => {
+    const p = planDecomposition(
+      [row()],
+      live({ closedTitles: new Map([["plan-deps refuses a single-phase reading", 1650]]) }),
+      "p.md",
+      HEADING,
+    );
+    expect(p.reading).toBe("MEASURED");
+    expect(p.actions).toEqual([{ kind: "closed", row: row(), number: 1650 }]);
+  });
+
+  test("SC-2738: an OPEN issue wins over a closed one with the same title", () => {
+    // Reopened work, or a re-filing after a close: the open one is the live
+    // issue, and the plan's edges belong on it.
+    const t = "plan-deps refuses a single-phase reading";
+    const p = planDecomposition(
+      [row()],
+      live({ openTitles: new Map([[t, 1700]]), closedTitles: new Map([[t, 1650]]) }),
+      "p.md",
+      HEADING,
+    );
+    expect(p.actions).toEqual([{ kind: "exists", row: row(), number: 1700 }]);
+  });
+
+  test("SC-2738: a criterion id no spec states refuses the whole plan, naming the id", () => {
+    const p = planDecomposition([row(), row({ criterion: "CRC-C99", outcome: "a row for a criterion nobody wrote", line: 4 })], live(), "p.md", HEADING);
+    expect(p.reading).toBe("UNMEASURED");
+    expect(p.unmeasuredReasons.join("\n")).toMatch(/line 4: criterion "CRC-C99" is stated in no spec/);
+    // Exactly one reason: the stated row beside it is not refused.
+    expect(p.unmeasuredReasons).toHaveLength(1);
+  });
+
+  test("SC-2738 CONTROL: every id stated → MEASURED, so the refusal above is about the id", () => {
+    expect(planDecomposition([row(), row({ criterion: "CRC-C3", outcome: "the second stated row" })], live(), "p.md", HEADING).reading).toBe("MEASURED");
+  });
+
+  function api(seed: { open?: [string, number][]; closed?: [string, number][] }) {
+    const calls: string[] = [];
+    const gh: DecomposeGitHub = {
+      openTitles: async () => new Map(seed.open ?? []),
+      closedTitles: async () => new Map(seed.closed ?? []),
+      milestones: async () => new Set(["Phase 3"]),
+      blockedBy: async () => [],
+      create: async (_r, issue) => {
+        calls.push(`create "${issue.title}"`);
+        return 3000;
+      },
+      addBlockedBy: async (_r, blocked, blocker) => {
+        calls.push(`edge #${blocked} blocked by #${blocker}`);
+      },
+    };
+    return { gh, calls };
+  }
+
+  async function decomposeIn(rows: string[], gh: DecomposeGitHub, withSpecs: boolean) {
+    const dir = mkdtempSync(join(tmpdir(), "rg-decompose-sc2738-"));
+    const said: string[] = [];
+    const real = { log: console.log, error: console.error };
+    console.log = (...a: unknown[]) => void said.push(a.join(" "));
+    console.error = (...a: unknown[]) => void said.push(a.join(" "));
+    try {
+      if (withSpecs) seedSpecs(dir);
+      writeFileSync(join(dir, "plan.md"), plan(...rows));
+      const code = await planIssuesMain(
+        ["--decompose", "plan.md", "--repo", "o/r", "--project-root", dir, "--write"],
+        undefined as never,
+        gh,
+      );
+      return { code, said: said.join("\n") };
+    } finally {
+      console.log = real.log;
+      console.error = real.error;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("SC-2738 end to end: a closed row is not filed, and a row blocked by it is still wired", async () => {
+    const { gh, calls } = api({ closed: [["plan-deps refuses a single-phase reading", 1650]] });
+    const r = await decomposeIn(
+      [GOOD, "| CRC-C3 | the row that waits for the closed one | lib/b.ts | Phase 3 | plan-deps refuses a single-phase reading |"],
+      gh,
+      true,
+    );
+    expect(r.code).toBe(0);
+    expect(calls).toEqual([
+      `create "the row that waits for the closed one"`,
+      "edge #3000 blocked by #1650",
+    ]);
+    expect(r.said).toMatch(/closed\s+#1650\s+plan-deps refuses a single-phase reading/);
+  });
+
+  test("SC-2738 end to end: an unknown criterion files NOTHING, not the readable rows", async () => {
+    const { gh, calls } = api({});
+    const r = await decomposeIn(
+      [GOOD, "| CRC-C99 | a row for a criterion nobody wrote | lib/b.ts | Phase 3 | — |"],
+      gh,
+      true,
+    );
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(calls).toEqual([]);
+    expect(r.said).toContain(`"CRC-C99" is stated in no spec`);
+  });
+
+  test("SC-2738 end to end: a root whose specs cannot be read refuses — an empty id set is not a reading", async () => {
+    const { gh, calls } = api({});
+    const r = await decomposeIn([GOOD], gh, false);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(calls).toEqual([]);
+    // The sweep's own refusal, not the unknown-criterion one an empty id set
+    // would also produce (that message names `specs/` too).
+    expect(r.said).toContain("the criterion ids under");
+  });
+});

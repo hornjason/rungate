@@ -402,15 +402,21 @@ export function parseDecompositionPlan(content: string): DecompositionReading {
 export interface LiveTracker {
   /** Title → number, for every OPEN issue. The idempotence key. */
   openTitles: Map<string, number>;
+  /** Title → number, for every CLOSED issue. A row matching one is done, never re-filed (SC-2738). */
+  closedTitles: Map<string, number>;
   /** Milestone titles that exist. A plan naming one that does not is refused. */
   milestones: Set<string>;
+  /** Every criterion id a spec under `specs/` states. A row naming any other is refused (SC-2738). */
+  statedCriteria: ReadonlySet<string>;
 }
 
 export type DecomposeAction =
   /** Nothing on the tracker has this title; create it. */
   | { kind: "create"; row: DecompositionRow; title: string; body: string }
   /** An open issue already has this exact title. Re-runs land here. */
-  | { kind: "exists"; row: DecompositionRow; number: number };
+  | { kind: "exists"; row: DecompositionRow; number: number }
+  /** Only a CLOSED issue has this title: the work is done, so nothing is filed. */
+  | { kind: "closed"; row: DecompositionRow; number: number };
 
 export interface DecompositionPlan {
   /** UNMEASURED means apply NOTHING — not "apply the readable part". */
@@ -437,9 +443,24 @@ export interface DecompositionPlan {
  * would authorise every one of them, because the plan still names them.
  *
  * The match is exact, for the reason `lib/filing-plan.ts` gives about
- * substrings. A CLOSED issue with the same title does not count: closing it is
- * how somebody says the work is done, and reopening that argument by refusing
- * to create is worse than a duplicate somebody can close.
+ * substrings.
+ *
+ * ## A closed issue counts too (SC-2738)
+ *
+ * This used to read open titles only, on the reasoning that a duplicate
+ * somebody can close beats refusing to file. That held while a person read
+ * every dry run. ADR-013's first dry run proposed re-creating three rows whose
+ * issues had already closed, and once a merge runs this with nobody watching
+ * (`.github/workflows/adr-accepted.yml`) that proposal is a duplicate filed
+ * for real. So a row whose title only a closed issue holds is `closed`: not
+ * filed, and its number still resolves the rows blocked by it. An open issue
+ * with the same title wins, because that is the live one.
+ *
+ * ## A criterion no spec states is refused (SC-2738)
+ *
+ * The parser checks an id's shape and nothing else, so a transposed digit
+ * filed an issue serving a criterion that does not exist, and no test could
+ * ever tick it.
  */
 export function planDecomposition(
   rows: readonly DecompositionRow[],
@@ -461,11 +482,25 @@ export function planDecomposition(
     }
   }
 
+  for (const r of rows) {
+    if (!live.statedCriteria.has(r.criterion)) {
+      reasons.push(
+        `line ${r.line}: criterion "${r.criterion}" is stated in no spec under specs/ — ` +
+          `write it as a \`- [ ] ${r.criterion}: …\` line in the governing spec first, or correct the row`,
+      );
+    }
+  }
+
   const actions: DecomposeAction[] = [];
   for (const r of rows) {
     const existing = live.openTitles.get(r.outcome);
     if (existing !== undefined) {
       actions.push({ kind: "exists", row: r, number: existing });
+      continue;
+    }
+    const closed = live.closedTitles.get(r.outcome);
+    if (closed !== undefined) {
+      actions.push({ kind: "closed", row: r, number: closed });
       continue;
     }
     actions.push({
@@ -550,4 +585,56 @@ export function decomposedBody(
     `Created by \`rungate plan-issues --decompose ${planPath}\` from a reviewed plan.`,
     `The plan is the record of why this is one issue and not two.`,
   ].join("\n");
+}
+
+/**
+ * The `status:` an ADR's FRONTMATTER declares, or `null` when it has none.
+ *
+ * Only the frontmatter: an ADR's body quotes statuses freely ("revision 2 was
+ * accepted"), and a body line must not be able to file a plan.
+ */
+export function adrStatus(text: string): string | null {
+  const lines = text.split("\n");
+  if (lines[0]?.trim() !== "---") return null;
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.trim() === "---") return null;
+    // Quotes and case are YAML spelling, not a different status: `"accepted"`
+    // and `Accepted` were read as not-accepted and the plan was silently
+    // never placed (security review of #2009).
+    const m = /^status:\s*(.*?)\s*$/.exec(line);
+    if (m) return m[1]!.replace(/^(["'])(.*)\1$/, "$2").trim().toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * Did this change ACCEPT the ADR? True only when it is `accepted` now and was
+ * not before — `before` is `null` for a file the earlier commit did not have.
+ * An edit to an ADR that was already accepted is not an acceptance, so it
+ * re-runs nothing (SC-2738).
+ */
+export function newlyAccepted(before: string | null, after: string): boolean {
+  return adrStatus(after) === "accepted" && (before === null || adrStatus(before) !== "accepted");
+}
+
+/** The author associations whose closed issue may stand for a plan's row. */
+export const TRUSTED_AUTHORS: readonly string[] = ["OWNER", "MEMBER", "COLLABORATOR"];
+
+/**
+ * May this CLOSED issue stand for a plan row with the same title? (SC-2738)
+ *
+ * Only finished work by somebody who can merge. Security review of #2009: on a
+ * public repository anyone can open an issue titled with a row's outcome
+ * (copied from the open ADR pull request) and close it themselves; read as
+ * done, the row is never filed and its dependents point at the stranger's
+ * issue. A close as "not planned" or "duplicate" is not finished work either.
+ */
+export function closedIssueCounts(issue: { state_reason: string | null; author_association: string }): boolean {
+  return issue.state_reason === "completed" && TRUSTED_AUTHORS.includes(issue.author_association);
+}
+
+/** Whether a document carries a Decomposition table for `--decompose` to read. */
+export function hasDecompositionTable(text: string): boolean {
+  return /^\|\s*Criterion\s*\|\s*Outcome\s*\|/m.test(text);
 }

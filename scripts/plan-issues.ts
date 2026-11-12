@@ -28,7 +28,8 @@
  * issues it is itself demoting, and touches no others. The cause and the
  * cleanup are one action.
  */
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
+import { spawnSync } from "child_process";
 import { isAbsolute, join, relative, sep } from "path";
 import { parseArgs } from "util";
 import {
@@ -39,8 +40,15 @@ import {
   parseRepairPlan,
 } from "../lib/issue-repair";
 import type { RepairRow } from "../lib/issue-repair";
-import { parseDecompositionPlan, planDecomposition } from "../lib/issue-decomposition";
+import {
+  closedIssueCounts,
+  hasDecompositionTable,
+  newlyAccepted,
+  parseDecompositionPlan,
+  planDecomposition,
+} from "../lib/issue-decomposition";
 import { readQueueLabel } from "../lib/config-readers";
+import { specCriteriaIn } from "../lib/board-mirror";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-issues.test.ts` can build a
@@ -156,12 +164,20 @@ const USAGE = `rungate plan-issues (--repair | --decompose) <plan.md> --repo <ow
                where one row is one issue proving one criterion.
   --repo       owner/name. Defaults to $GITHUB_REPOSITORY.
   --write      apply it. Without this nothing is mutated.
-  --json       the whole reading.`;
+  --json       the whole reading.
+
+rungate plan-issues --accepted-since <commit> [--project-root <dir>]
+
+  Print each docs/adr/*.md that is accepted now and was not at <commit>, and
+  that carries a Decomposition table — one path per line, nothing else on
+  stdout. Reads git only; touches no tracker. Used by adr-accepted.yml.`;
 
 /** What creating issues from a plan needs. Injected so a test never shells out. */
 export interface DecomposeGitHub {
   /** Title → number for every OPEN issue. The idempotence key. */
   openTitles: (repo: string) => Promise<Map<string, number>>;
+  /** Title → number for every CLOSED issue, so finished work is never re-filed (SC-2738). */
+  closedTitles: (repo: string) => Promise<Map<string, number>>;
   /** Milestone titles that exist. `plan-spec` makes them; this never does. */
   milestones: (repo: string) => Promise<Set<string>>;
   create: (
@@ -184,6 +200,32 @@ export interface DecomposeGitHub {
   blockedBy: (repo: string, issue: number) => Promise<number[]>;
 }
 
+function issueTitles(repo: string, state: "open" | "closed"): Map<string, number> {
+  const out = gh([
+    "api",
+    "--paginate",
+    `repos/${repo}/issues?state=${state}&per_page=100`,
+    "--jq",
+    ".[] | select(.pull_request == null) | [.number, .title, .state_reason, .author_association] | @json",
+  ]);
+  const map = new Map<string, number>();
+  for (const line of out.split("\n")) {
+    if (line.trim() === "") continue;
+    const [number, title, state_reason, author_association] = JSON.parse(line) as [
+      number,
+      string,
+      string | null,
+      string,
+    ];
+    if (state === "closed" && !closedIssueCounts({ state_reason, author_association })) continue;
+    // The FIRST number seen for a title is kept. Two closed issues sharing a
+    // title are both finished work; which one a blocked row points at does
+    // not change what it waits for.
+    if (!map.has(title)) map.set(title, number);
+  }
+  return map;
+}
+
 const LIVE_DECOMPOSE: DecomposeGitHub = {
   /**
    * Every open issue, PAGINATED.
@@ -200,22 +242,12 @@ const LIVE_DECOMPOSE: DecomposeGitHub = {
    * title matched a row would otherwise read as the issue already existing
    * and skip creating it.
    */
-  openTitles: async repo => {
-    const out = gh([
-      "api",
-      "--paginate",
-      `repos/${repo}/issues?state=open&per_page=100`,
-      "--jq",
-      ".[] | select(.pull_request == null) | [.number, .title] | @json",
-    ]);
-    const map = new Map<string, number>();
-    for (const line of out.split("\n")) {
-      if (line.trim() === "") continue;
-      const [number, title] = JSON.parse(line) as [number, string];
-      map.set(title, number);
-    }
-    return map;
-  },
+  openTitles: async repo => issueTitles(repo, "open"),
+  /**
+   * The same read, for closed issues, kept only where `closedIssueCounts`
+   * says the close is finished work by a trusted author.
+   */
+  closedTitles: async repo => issueTitles(repo, "closed"),
   /**
    * Every milestone, PAGINATED, for a worse reason than `openTitles` above.
    *
@@ -325,6 +357,39 @@ export function refusalReporter(
   };
 }
 
+/**
+ * Which ADRs did the change since `since` accept? (SC-2738)
+ *
+ * A commit this clone cannot read REFUSES. A shallow checkout reading every
+ * ADR as absent at the earlier commit would list every accepted ADR in the
+ * repository, and the workflow would re-run all of their plans.
+ */
+function acceptedSince(root: string, since: string): number {
+  const git = (...args: string[]) => spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
+  if (git("cat-file", "-e", `${since}^{commit}`).status !== 0) {
+    console.error(
+      `plan-issues: UNMEASURED — commit ${since} is not in this clone, so what it held could not be read. ` +
+        `Nothing is listed. A shallow checkout needs fetch-depth: 0.`,
+    );
+    return REFUSAL_EXIT;
+  }
+  const dir = join(root, "docs", "adr");
+  const names = existsSync(dir) ? readdirSync(dir).filter(n => n.endsWith(".md")).sort() : [];
+  for (const name of names) {
+    const path = `docs/adr/${name}`;
+    const after = readFileSync(join(root, path), "utf-8");
+    const was = git("cat-file", "-e", `${since}:${path}`).status === 0 ? git("show", `${since}:${path}`) : null;
+    if (was !== null && was.status !== 0) {
+      console.error(`plan-issues: UNMEASURED — could not read ${path} at ${since}: ${was.stderr.trim()}`);
+      return REFUSAL_EXIT;
+    }
+    if (!newlyAccepted(was === null ? null : was.stdout, after)) continue;
+    if (hasDecompositionTable(after)) console.log(path);
+    else console.error(`plan-issues: ${path} was accepted, and carries no Decomposition table — nothing to place.`);
+  }
+  return 0;
+}
+
 async function decompose(
   planPath: string,
   /**
@@ -344,6 +409,8 @@ async function decompose(
    * config fixture on disk.
    */
   queueLabel: string | null,
+  /** Where `specs/` is read from, for the criterion ids a row may name. */
+  root: string,
 ): Promise<number> {
   const refuse = refusalReporter(json);
 
@@ -362,9 +429,28 @@ async function decompose(
   // every other refusal here does. A command that crashes and a command that
   // refuses are different facts, and only one of them says what to do next.
   // Found by the AI review of this change.
+  // The ids a row may name. An unreadable sweep refuses: an empty id set is
+  // what a repository with no criteria produces, and reading it as one would
+  // refuse every row for the wrong reason (or, inverted, accept them all).
+  const sweep = specCriteriaIn(root);
+  if (sweep.reading === "UNMEASURED") {
+    return refuse(
+      `UNMEASURED — the criterion ids under ${join(root, "specs")} could not be read, so no row's criterion could be checked:`,
+      [...sweep.unmeasuredReasons],
+    );
+  }
+  // An id two specs both state is still STATED; it is ambiguous for the board
+  // column, not absent.
+  const statedCriteria = new Set([...sweep.ids, ...sweep.collisions.map(c => c.id)]);
+
   let live;
   try {
-    live = { openTitles: await api.openTitles(repo), milestones: await api.milestones(repo) };
+    live = {
+      openTitles: await api.openTitles(repo),
+      closedTitles: await api.closedTitles(repo),
+      milestones: await api.milestones(repo),
+      statedCriteria,
+    };
   } catch (e) {
     return refuse(`UNMEASURED — could not read the tracker, so the plan was not applied:`, [
       (e as Error).message,
@@ -378,7 +464,7 @@ async function decompose(
 
   /** Outcome → number, grown as issues are created, so pass two can resolve. */
   const numbers = new Map<string, number>();
-  for (const a of planned.actions) if (a.kind === "exists") numbers.set(a.row.outcome, a.number);
+  for (const a of planned.actions) if (a.kind !== "create") numbers.set(a.row.outcome, a.number);
 
   const created: { title: string; number: number }[] = [];
   const failed: string[] = [];
@@ -453,6 +539,7 @@ async function decompose(
           plan: planPath,
           wouldCreate: planned.actions.filter(a => a.kind === "create").length,
           alreadyOpen: planned.actions.filter(a => a.kind === "exists").length,
+          alreadyClosed: planned.actions.filter(a => a.kind === "closed").length,
           wrote: write,
           created,
           edges,
@@ -468,6 +555,7 @@ async function decompose(
 
   for (const a of planned.actions) {
     if (a.kind === "exists") console.log(`  open    #${a.number}  ${a.row.outcome}`);
+    else if (a.kind === "closed") console.log(`  closed  #${a.number}  ${a.row.outcome}`);
     else console.log(`  create  ${a.row.criterion.padEnd(8)}  ${a.title}`);
   }
   for (const e of planned.edges) console.log(`  order   "${e.blocked}" blocked by "${e.blocker}"`);
@@ -510,6 +598,7 @@ export async function main(
         write: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         "project-root": { type: "string" },
+        "accepted-since": { type: "string" },
       },
       allowPositionals: true,
     });
@@ -518,6 +607,13 @@ export async function main(
     return REFUSAL_EXIT;
   }
   const { values } = parsed;
+  if (values["accepted-since"] !== undefined) {
+    if (values.repair || values.decompose) {
+      console.error(`plan-issues: --accepted-since lists plans; it applies none — pass it alone\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+    return acceptedSince(values["project-root"] ?? process.cwd(), values["accepted-since"]);
+  }
   // Both would mean two plans in one run, and the second would be applied
   // against a tracker the first had already moved. One or the other.
   if (values.repair && values.decompose) {
@@ -554,7 +650,7 @@ export async function main(
     const within = relative(root, planPath);
     const escapes = within === ".." || within.startsWith(`..${sep}`);
     const planLabel = within === "" || escapes ? planPath : within;
-    return await decompose(planPath, planLabel, repo, values.write, values.json, gh3, readQueueLabel(root));
+    return await decompose(planPath, planLabel, repo, values.write, values.json, gh3, readQueueLabel(root), root);
   }
 
   const reading = parseRepairPlan(readFileSync(planPath, "utf-8"));

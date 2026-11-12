@@ -277,7 +277,11 @@ const UNCLAIMED_RATCHET = 150;
 // 150 -> 151: SC-2739 ticked on the PR closing #2000 (ADR-013 row 6). A
 // claim that a template's table parses, which no registered pattern
 // expresses; `test/adr-template.test.ts` names it in a declaring position.
-const CLAIMED_UNBINDABLE = 151;
+// 151 -> 152: SC-2738 ticked on the PR closing #1999 (ADR-013 row 5). A
+// claim about what a workflow runs and what the filing refuses, which no
+// registered pattern expresses; `test/adr-accepted-workflow.test.ts` and
+// `test/issue-decomposition.test.ts` name it in a declaring position.
+const CLAIMED_UNBINDABLE = 152;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
