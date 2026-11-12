@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-11",
+  "updated": "2026-11-12",
   "priorities": [
     "AN ASSIGNMENT IS A DECLARATION; A PUSHED BRANCH OR AN OPEN PR IS EVIDENCE. Jason's call, 2026-11-09, after he asked how we know an assigned, unblocked issue is actually being worked. MEASURED THAT DAY: six issues were assigned to `hornjason` and ZERO had an open pull request — #1717, #1764, #1885, #1921, #1168 had no pushed work at all, and #1931's only work was commit `3bd05a14` sitting unpushed in a local worktree, invisible to every GitHub reading. WHY THE EXISTING MACHINERY COULD NOT SEE IT, and both halves are working as designed: `whyNotReady` in `lib/board-ready-fanout.ts` returns `somebody has claimed it` for an open, unblocked, ASSIGNED issue, so an assignment removes an issue from the Ready pool; and `scripts/board-status-sweep.ts` releases a claim only after `STALE_CLAIM_DAYS = 7` of silence AND no open PR. The sweep ran six times on 2026-11-09, all success, and correctly left all six alone, because every one of them read 0 to 2 days idle. THE CLOCK IS `updatedAt`, WHICH A COMMENT BUMPS. So writing status notes about an issue is indistinguishable from working it, and a session that claims an issue and then discusses it holds that claim forever. ACTIONS TAKEN 2026-11-09: `rg/1931-census-dirs` pushed so #1931 is visible; the other five claims released with `--remove-assignee`. DO NOT RE-CLAIM AN ISSUE YOU ARE NOT ABOUT TO PUSH A BRANCH FOR. The two fixes this implies are NOT yet built: (1) one function returning WORKING / PARKED / INVISIBLE from PR and branch rather than from the assignee field, read by both the lane-health check and the stale sweep so there is ONE decider; (2) stage item D4, which names unpushed local work in every run.",
     "THE BOARD IS REAL WHERE THE PIPELINE RAN, AND ONLY THERE. Correction of my own framing, 2026-11-09, after Jason challenged it. The CLI did fill this board: `plan-spec` wrote the milestones from the spec's Phase placement table, `plan-issues --decompose` created the issues, `plan-deps` wrote the blocked-by edges. Verified on 2026-11-09 by reading the cards: #1717 carries milestone `Pipeline Phase 6` and names SC-2615, SC-2616 and SC-2617; #1722 carries `Pipeline Phase 9` and names SC-2625. Against that, #1934 and #1935 — both filed by hand on 2026-11-09 — carry NO milestone and name NO criterion. THAT IS THE WHOLE OF WHAT IS UNREAL, and it is already measured rather than argued: board-conformance on 2026-11-09 read spec-placement SHORT at 87 of 1815 and criteria-named SHORT at 41 of 70. MAKING IT REAL IS E1 AND E2, not new tooling: for every testable spec, either plan it through the pipeline or declare it UNPLANNED, and give every open issue a criterion or a declaration that it serves none. Do NOT decompose all 1815 criteria into issues — the UNPLANNED declaration is the intended answer for a spec nobody is shipping. Separately and much smaller: `scripts/work-status.ts` prints the Ready lane with no sort, so two cards appear in array order. The ORDER IS REAL where it is decided — the promoter sorts by phase then age — so this is a display gap, not a board gap, and I overstated it before checking.",
@@ -242,6 +242,15 @@
     }
   ],
   "sessions": [
+    {
+      "date": "2026-11-12 session 90 (ADR-013 rows built overnight, in order, each closed by its own PR)",
+      "items": [
+        "ADR-013 ROWS MERGED: row 4 as #2003 (SC-2737, every PR closes an issue naming a criterion), row 2 as #2004 (SC-2735, expedite and filing-override labels read from config), row 6 as #2008 (SC-2739, the ADR template whose table plan-issues reads), row 5 as #2009 (SC-2738, .github/workflows/adr-accepted.yml places an accepted ADR's plan on the board). Each merged pinned with --match-head-commit after CI, ai-review and a read-only security review were clean and every thread answered.",
+        "ROWS STILL OPEN: row 3 (#1997, PR #2010, rule 9 carries the four steps) and row 7 (#2001, PR #2011, /dry-run as a project command). Row 8 (#2006) waits on Jason: ai-review-override, or a call to repair in round 4; the gap was re-scoped to #2007. Row 1 (#1995) waits on Jason's choice of how a held-back spec declares so.",
+        "CLOSING AN ISSUE WITHOUT TICKING ITS CRITERION REDDENS MAIN (#2005). Each row therefore ticks its SC with a proved-by line and bumps CLAIMED_UNBINDABLE in test/sc-binding-split.test.ts in the same PR; two open PRs making the same bump means the second to merge rebases.",
+        "RISK CARRIED: adr-accepted.yml's board-mirror step uses RUNGATE_PROJECT_TOKEN, which #1945 records as read:project, so its first live run may fail at that step. Not widened; that token is Jason's to change."
+      ]
+    },
     {
       "date": "2026-11-11 session 89 (the board-correctness sequence: the closing-reference door shipped, closed an issue by accident proving the OTHER door, and the sweep was caught reporting agreement it had never measured)",
       "items": [
@@ -1166,17 +1175,19 @@
     }
   ],
   "session": {
-    "number": 89,
-    "date": "2026-11-11",
-    "suite": "#1950 on rg/1950-closing-ref (PR #1978, merged 070052b5) and #1977 on rg/1977-sweep-open-unassigned (PR #1980, open). #1978 took four ai-review rounds and every finding was real. #1980's five new cases were run RED FIRST — 5 fail against the unchanged decider, with both controls green before the fix — then a mutation battery of 8 with an `applied=` column by `/usr/bin/cmp -s`: baseline 85 pass / 0 fail, and emptying UNASSIGNED_CONTRADICTS scored 6 fail, the null-assignment guard 1, the unread-PR guard 1, the open-PR branch 1, the correction target 2, dropping the union 1, and dropping the issue-only test 2. The eighth row scored 0 and is reported as a TRUE NO-OP rather than a hole: the `assigned === null` early return above it already takes the null case. Targeted: 85 pass board-status-sweep, typecheck 0 errors, census-routing reports no census test reachable from the change.",
-    "summary": "THE SWEEP WAS REPORTING AGREEMENT IT HAD NEVER MEASURED. `agrees 328, disagrees 0` on a board holding five wrong cards, all one shape — an open issue, nobody assigned, in a lane that asserts somebody is. That verdict is byte-identical to a correct board on every channel, which is the worst failure a status tool has. Separately and worse for the day: #1717 was closed by accident, by me with a backticked closing keyword in a COMMIT MESSAGE, where backticks do not suppress it the way they do in a pull-request body. Reopened, coverage verified restored, #1979 filed for the unguarded door. The work-this-next label turned out never to have existed, so the lever shipped in #1962 had never fired once.",
+    "number": 90,
+    "date": "2026-11-12",
+    "suite": "ADR-013 rows on rg/1998-closing-ref-required, rg/1996, rg/2000, rg/1999 (merged #2003, #2004, #2008, #2009); rg/1997-rule9-four-steps (PR #2010) and rg/2001-dry-run-command (PR #2011) open.",
+    "summary": "Four of eight ADR-013 rows merged in order (rows 4, 2, 6, 5 as #2003, #2004, #2008, #2009), each closing its own issue through its PR and ticking its criterion with a proved-by line. Rows 3 and 7 are in review as #2010 and #2011. Rows 8 and 1 wait on a decision only Jason can make: the ai-review-override label on #2006, and how a held-back spec declares so on #1995.",
     "issues_created": [
-      1976,
-      1977,
-      1979
+      2005,
+      2007
     ],
     "issues_closed": [
-      1950
+      1996,
+      1998,
+      1999,
+      2000
     ]
   },
   "stages": [
