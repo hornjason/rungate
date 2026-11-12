@@ -15,7 +15,7 @@ A ship harness for AI-first development: from issue to merged PR, with a report 
 
 ## Hard Constraints
 
-### How we work — ten rules; 1-7 are Jason's call of 2026-10-28, 8 and 10 of 2026-10-30 and 2026-11-01, and 9 of 2026-11-09, replacing a 2026-10-31 call
+### How we work — ten rules; 1-7 are Jason's call of 2026-10-28, 8 and 10 of 2026-10-30 and 2026-11-01, and 9 of 2026-11-09 and 2026-11-11 (ADR-013), replacing a 2026-10-31 call
 
 1. **A spec says what must be true; it is never the to-do list.** Specs still
    carry checkboxes. Nobody works from them — work comes off the tracker.
@@ -50,14 +50,21 @@ A ship harness for AI-first development: from issue to merged PR, with a report 
    that comes back empty is it logged as a blocker and left for the next
    unblocked item. Abandoning on the third try throws away the problems that
    were one search away from solved. Jason's call, 2026-10-30.
-9. **An agreement is not real until it is an issue** — file it before the
-   turn ends, naming the files it will change. `project-state.json`
-   records decisions and their evidence; it holds no work. Jason's call,
-   2026-11-09, replacing the 2026-10-31 wording that predated blocked-by
-   edges and a Ready lane: it told sessions to write prose instead of
-   filing, and nine gaps were found living only there (#1938-#1946).
-10. **The plan is `project-state.json`'s `goal`, `goals` and `stages` —
-    nowhere else.** Each item carries the command that proves it; a stage is
+9. **An agreement is not real until it is an issue — four steps.**
+   (1) Agree and file one issue the same turn, naming its files.
+   (2) Bigger than one issue, or a rule or gate change: an ADR from
+   `docs/adr/TEMPLATE.md`, its SC lines in the spec, `/dry-run` until Jason
+   agrees; he merges it. (3) On merge
+   `.github/workflows/adr-accepted.yml` places the plan. (4) Each PR says
+   `Fixes #N`; `closing-references` refuses one closing no issue, or whose
+   issue names no criterion nor `serves no criterion`. **Exempt:** step 1
+   skips work that decides the issues — an ADR, a retro, a review, an audit
+   — as its PR closes the issue it was filed under; step 4 skips a PR whose
+   files are all `project-state.json`, `PROJECT-STATE.md`, `SUCCESS.md` —
+   the diff decides, never the branch name. Nine gaps once lived only in
+   prose (#1938-#1946).
+10. **The engine's build order is `project-state.json`'s `goal`, `goals` and
+    `stages`; all other work is an issue first (rule 9).** Each item carries the command that proves it; a stage is
     complete when every command exits 0, never because a document says so,
     and carries a `retro` before the next may start. Read it before any
     stage; `bun test test/stage-ladder.test.ts` runs it. **Never restate a

@@ -520,3 +520,40 @@ describe("#1285: every cited shape ordinal resolves to a shape that exists", () 
     ).toBeGreaterThan(100);
   });
 });
+
+// SC-2736 (SPEC-TO-BOARD-PIPELINE-SPEC.md): ADR-013 folds the four-step
+// process into AGENTS.md rule 9 rather than adding a rule 11. Asserted on the
+// RULE, not the file: each phrase must sit between rule 9's number and rule
+// 10's, so a step moved into a different rule, or into prose below the list,
+// reads as missing.
+describe("SC-2736: AGENTS.md rule 9 carries the four-step process and its exempt class", () => {
+  const agents = readFileSync(join(import.meta.dir, "..", "AGENTS.md"), "utf-8");
+  const start = agents.search(/^9\. /m);
+  const end = agents.search(/^10\. /m);
+  const rule9 = start >= 0 && end > start ? agents.slice(start, end) : "";
+
+  test("SC-2736: rule 9 is found between its own number and rule 10's", () => {
+    expect(rule9.length, "AGENTS.md has no rule 9 followed by a rule 10").toBeGreaterThan(0);
+  });
+
+  const MUST: [string, string][] = [
+    ["step 1, agree and file the same turn", "the same turn"],
+    ["step 2, an ADR from the template", "docs/adr/TEMPLATE.md"],
+    ["step 2, the dry run before Jason agrees", "/dry-run"],
+    ["step 3, the plan placed on merge", ".github/workflows/adr-accepted.yml"],
+    ["step 4, each PR closes its issue", "Fixes #N"],
+    ["step 4, the check that refuses", "closing-references"],
+    ["the exempt work", "an ADR, a retro, a review, an audit"],
+    ["the step-4 exemption names its file set", "`project-state.json`, `PROJECT-STATE.md`, `SUCCESS.md`"],
+    ["the rule that decides it", "the diff decides, never the branch name"],
+  ];
+  for (const [what, phrase] of MUST) {
+    test(`SC-2736: rule 9 states ${what}`, () => {
+      expect(rule9, `rule 9 must contain: ${phrase}`).toContain(phrase);
+    });
+  }
+
+  test("SC-2736: there is no rule 11 — the law folds into rule 9", () => {
+    expect(agents).not.toMatch(/^11\. /m);
+  });
+});
