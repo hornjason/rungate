@@ -168,6 +168,14 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  * #1899's untick, no re-tick restores it: the item needs a writer, not a
  * number. That is the third instance of the defect B2's entry already
  * names — a STATE reading standing in for a delivered capability.
+ *
+ * **D completed on 2026-11-12, and this is 5** — A, C, D, G and H. D4 was
+ * its last item: #2031 (merged `812f7e04`, closing #1983) made its case able
+ * to fail, and the tick names that case. B is still the stage not counted:
+ * its reading is MET 7 of 7 today, but its writer is still a hand-run
+ * `board-mirror`, so ticking it would make the next hand-milestoned issue
+ * redden every pull request — the board self-repair recorded on #2020 is
+ * what lets it count.
  */
 const COMPLETE_STAGES = 5;
 
