@@ -57,6 +57,12 @@ describe("#2015: .github/workflows/phase-order.yml re-writes phase order when a 
     expect(doc.permissions).toEqual({ contents: "read", issues: "write" });
   });
 
+  test("#2015: every action is pinned to a full commit SHA, never a movable tag", () => {
+    const uses = steps.map(s => s.uses).filter(Boolean);
+    expect(uses.length, "no uses: steps found, so the pin check measured nothing").toBeGreaterThan(0);
+    expect(uses.filter((u: string) => !/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/.test(u))).toEqual([]);
+  });
+
   test("#2015: runs queue rather than race, so a bulk re-milestone never writes the same edge twice at once", () => {
     expect(doc.concurrency).toEqual({ group: "phase-order", "cancel-in-progress": false });
   });

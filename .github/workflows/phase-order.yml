@@ -17,8 +17,8 @@
 # No trust gate: setting a milestone needs triage access or above, so a
 # stranger cannot fire this.
 #
-# Every `uses:` is pinned to a commit SHA, and `test/action-pin-parity.test.ts`
-# asserts it. `test/phase-order-workflow.test.ts` asserts the rest.
+# Every `uses:` is pinned to a full commit SHA. `test/phase-order-workflow.test.ts`
+# asserts that and the rest.
 name: Phase order — re-link on a milestone change
 
 on:
