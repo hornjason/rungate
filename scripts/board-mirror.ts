@@ -89,26 +89,6 @@ export function parseRepo(value: string): { owner: string; name: string } | null
 }
 
 /**
- * Split what this command MAY write into what the cap lets through.
- *
- * **The cap applies here too, and from the same function the workflow
- * uses.** This command is the hand-run second CALLER of Ready's rule —
- * not a second rule, which is the distinction that matters: it and
- * `board-ready.yml` both read `lib/board-ready-rule.ts`, so they cannot
- * size the lane differently. Before this, the workflow filled to a
- * derived depth and one hand-run of this command refilled the lane to
- * whatever happened to be eligible.
- *
- * **A demotion to Backlog is never capped**, and that is the half a
- * naive implementation gets wrong. The cap bounds what may ENTER Ready;
- * applying it to departures would pin a claimed or newly-blocked card in
- * the lane for as long as the lane stayed full — the cap would start
- * preserving exactly the staleness it exists to prevent.
- *
- * Exported so a case can hold it. Inline, the only way to observe it was
- * to run the command against a live board.
- */
-/**
  * The items this command may move, and how many of them hold Ready.
  *
  * **One array, read twice — not two filters that happen to agree.**
@@ -178,6 +158,26 @@ export function scopeDemotions<
   return out;
 }
 
+/**
+ * Split what this command MAY write into what the cap lets through.
+ *
+ * **The cap applies here too, and from the same function the workflow
+ * uses.** This command is the hand-run second CALLER of Ready's rule —
+ * not a second rule, which is the distinction that matters: it and
+ * `board-ready.yml` both read `lib/board-ready-rule.ts`, so they cannot
+ * size the lane differently. Before this, the workflow filled to a
+ * derived depth and one hand-run of this command refilled the lane to
+ * whatever happened to be eligible.
+ *
+ * **A demotion to Backlog is never capped**, and that is the half a
+ * naive implementation gets wrong. The cap bounds what may ENTER Ready;
+ * applying it to departures would pin a claimed or newly-blocked card in
+ * the lane for as long as the lane stayed full — the cap would start
+ * preserving exactly the staleness it exists to prevent.
+ *
+ * Exported so a case can hold it. Inline, the only way to observe it was
+ * to run the command against a live board.
+ */
 export function splitReadyChanges<
   T extends {
     item: { number: number; milestone: string | null; labels: readonly string[]; status: string };
