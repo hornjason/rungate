@@ -64,8 +64,8 @@ describe("SC-2740: /dry-run is a project command that shows a proposal as a real
 // #2016: on 2026-11-12 the primary checkout was 3 commits behind origin/main
 // and the dry run measured that tree with nothing saying so.
 describe("#2016: /dry-run refuses a checkout behind origin/main and names the commit it measured", () => {
-  const FETCH = "git fetch origin main";
-  const BEHIND = "git rev-list --count HEAD..origin/main";
+  const FETCH = 'git -C "<checkout>" fetch origin main';
+  const BEHIND = 'git -C "<checkout>" rev-list --count HEAD..origin/main';
   const PLANNER = "plan-issues --decompose";
 
   test("#2016: it fetches origin/main and counts the commits HEAD is behind", () => {
@@ -85,7 +85,7 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
   });
 
   test("#2016: every run prints the commit it measured", () => {
-    expect(text).toContain("git rev-parse --short HEAD");
+    expect(text).toContain('git -C "<checkout>" rev-parse --short HEAD');
     expect(text).toContain("Measured commit");
   });
 });
