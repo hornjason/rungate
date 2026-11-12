@@ -23,7 +23,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-import { REGISTRATION_SCOPES, liveClaimLines, type ScopeReading } from "../lib/hook-scopes";
+import { REGISTRATION_SCOPES, liveClaimLines, liveClaimReport, type ScopeReading } from "../lib/hook-scopes";
 
 const ROOT = join(import.meta.dir, "..");
 const CMD = "bun /h/hooks/PlantedGuard.hook.ts";
@@ -74,6 +74,36 @@ describe("#1986: a registry entry's NOT LIVE claim is checked against the regist
   });
 });
 
+describe("#1986: the comparison is its own reading", () => {
+  test("#1986: a settings file that cannot be parsed gives UNMEASURED, and nothing throws", () => {
+    // Review of #2026: sharing another reading's catch let a git failure
+    // silence this check. It now catches its own, so it can run first.
+    const lines = liveClaimReport({
+      repoRoot: "/r",
+      home: "/h",
+      readFile: () => "{ not json",
+      registry: [NOT_LIVE],
+      registryCommands: [CMD],
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^Hook registry UNMEASURED: NOT LIVE claims could not be compared/);
+  });
+
+  test("#1986: with readable settings it reports exactly what liveClaimLines reports", () => {
+    const settings = JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: CMD }] }] } });
+    const lines = liveClaimReport({
+      repoRoot: "/r",
+      home: "/h",
+      readFile: p => (p === "/h/.claude/settings.json" ? settings : null),
+      registry: [NOT_LIVE],
+      registryCommands: [CMD],
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/DISAGREES/);
+    expect(lines[0]).toContain("user-settings");
+  });
+});
+
 describe("#1986: the live tree", () => {
   test("#1986: TopLevelCdGuard's entry no longer says it is NOT LIVE", () => {
     const registry = JSON.parse(readFileSync(join(ROOT, ".claude", "rungate", "hooks.json"), "utf-8"));
@@ -87,6 +117,9 @@ describe("#1986: the live tree", () => {
 
   test("#1986: the session-start hook reports the comparison", () => {
     const hook = readFileSync(join(ROOT, "hooks", "HookCurrency.hook.ts"), "utf-8");
-    expect(hook).toContain("liveClaimLines(");
+    const at = hook.indexOf("liveClaimReport(");
+    expect(at, "the hook does not call liveClaimReport").toBeGreaterThan(-1);
+    // Before the git-backed reading, so that reading throwing cannot skip it.
+    expect(at).toBeLessThan(hook.indexOf("readRegistrationCurrency({"));
   });
 });

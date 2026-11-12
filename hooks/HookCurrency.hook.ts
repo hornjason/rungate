@@ -45,7 +45,7 @@ import { join } from 'path';
 import { tryLoadRungateConfig } from '../lib/config-loader';
 import { repoRootFrom } from '../lib/paths';
 import { currencyReportLines, readRegistrationCurrency, spawnGitRunner } from '../lib/hook-tree-currency';
-import { liveClaimLines, readRegistrationScopes } from '../lib/hook-scopes';
+import { liveClaimReport } from '../lib/hook-scopes';
 import {
   readHookCurrency,
   currencyClass,
@@ -124,6 +124,8 @@ try {
     const config = tryLoadRungateConfig(PROJECT_ROOT) as { hooks?: unknown[] } | null;
     const readFile = (p: string) => (existsSync(p) ? readFileSync(p, 'utf-8') : null);
     const registryCommands = (config?.hooks ?? []).map(h => String((h as { command?: string })?.command ?? h));
+    // #1986 first, and it catches its own failure: a git error below cannot silence it.
+    for (const line of liveClaimReport({ repoRoot: PROJECT_ROOT, home: homedir(), readFile, registry: config?.hooks ?? [], registryCommands })) report(line);
     const reading = readRegistrationCurrency({
       repoRoot: PROJECT_ROOT,
       home: homedir(),
@@ -139,8 +141,6 @@ try {
       git: spawnGitRunner(spawnSync),
     });
     for (const line of currencyReportLines(reading)) report(line);
-    const scopes = readRegistrationScopes(PROJECT_ROOT, homedir(), readFile, registryCommands); // #1986
-    for (const line of liveClaimLines((config?.hooks ?? []) as { name?: unknown }[], scopes)) report(line);
   }
 } catch (e) {
   report(`Hook tree currency UNMEASURED: ${e instanceof Error ? e.message : String(e)}`);

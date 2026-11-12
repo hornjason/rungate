@@ -427,6 +427,33 @@ export function liveClaimLines(
   return lines;
 }
 
+/**
+ * `liveClaimLines` over a fresh reading, as its own reading (#1986).
+ *
+ * It catches its own failure and says UNMEASURED, so a caller that runs it
+ * beside another reading cannot have one throw silence the other — review of
+ * #2026 found it first sharing `HookCurrency`'s tree-currency `catch`, where a
+ * git failure there would have dropped this comparison and been reported as
+ * the other reading's error.
+ */
+export function liveClaimReport(input: {
+  repoRoot: string;
+  home: string;
+  readFile: (path: string) => string | null;
+  registry: readonly unknown[];
+  registryCommands: string[];
+}): string[] {
+  try {
+    const scopes = readRegistrationScopes(input.repoRoot, input.home, input.readFile, input.registryCommands);
+    return liveClaimLines(input.registry as { name?: unknown; description?: unknown }[], scopes);
+  } catch (e) {
+    return [
+      `Hook registry UNMEASURED: NOT LIVE claims could not be compared — ` +
+        `${e instanceof Error ? e.message : String(e)} (#1986)`,
+    ];
+  }
+}
+
 /** The same verdict for a list of hooks, over one reading. */
 export function registrationCensus(
   hooks: string[],
