@@ -458,9 +458,9 @@ export interface DecompositionPlan {
  *
  * ## A criterion no spec states is refused (SC-2738)
  *
- * The parser checks an id's shape and nothing else, so a typo (`SC-2783` for
- * `SC-2738`) filed an issue serving a criterion that does not exist, and no
- * test could ever tick it.
+ * The parser checks an id's shape and nothing else, so a transposed digit
+ * filed an issue serving a criterion that does not exist, and no test could
+ * ever tick it.
  */
 export function planDecomposition(
   rows: readonly DecompositionRow[],
