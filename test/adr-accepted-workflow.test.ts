@@ -67,6 +67,8 @@ describe("SC-2738: newlyAccepted reads the frontmatter status at both ends", () 
     expect(newlyAccepted(adr("proposed"), body)).toBe(false);
     // And a file with no frontmatter has no status at all.
     expect(adrStatus("status: accepted\n")).toBeNull();
+    // Frontmatter with no status, and the body says accepted: still none.
+    expect(adrStatus("---\ndoc-type: adr\n---\n\nstatus: accepted\n")).toBeNull();
   });
 });
 
