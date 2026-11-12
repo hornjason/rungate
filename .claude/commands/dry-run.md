@@ -31,6 +31,17 @@ none, say so and stop.
 0. Check the checkout is current before measuring anything (#2016), in this
    order, against the primary checkout step 2 runs from, passed by path and
    never reached with `cd`:
+   - Resolve `<checkout>` first, from wherever the session is: run
+     `git rev-parse --path-format=absolute --git-common-dir` on its own. If it
+     errors or prints nothing, stop: the session is not inside this project.
+     If what it printed does not end in `/.git`, stop: this flow measures a
+     primary checkout, and neither a bare repository (no working tree) nor a
+     submodule (its common dir sits under the superproject's `.git/modules/`)
+     is one — submodules are not supported here. Otherwise `<checkout>` is what it
+     printed with the trailing `/.git` removed. From a
+     linked worktree that names the main checkout, never the worktree — the
+     same `--git-common-dir` question `repoRootFrom` in `lib/paths.ts` asks.
+     Use that path below and in step 2.
    - `git -C "<checkout>" fetch origin main`. If the fetch fails, stop and run nothing else:
      the count below would read a stale ref and could say zero.
    - `git -C "<checkout>" rev-list --count HEAD..origin/main`. If the count is above zero
