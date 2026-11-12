@@ -41,11 +41,12 @@ import {
   readWorktreeStates,
 } from "../lib/local-work";
 import {
-  LABEL_RANK,
+  activeMilestone,
   placementCensus,
   placementOf,
   readyCap,
   readyOrderFor,
+  scopedCandidates,
   workNextReading,
   type Throughput,
 } from "../lib/board-ready-rule";
@@ -839,25 +840,38 @@ const workNext = workNextReading(
 );
 if (workNext.status !== "NONE") console.log(`\n  ${workNext.why}`);
 
+// **The focus Ready refills from** (SC-2741, ADR-013 row 8), read over every
+// OPEN issue — claimed and blocked ones included — and the same scope the
+// writers apply, so this list is what the writer would actually pull.
+const active = activeMilestone(
+  open.map((i: any) => ({ milestone: i.milestone?.title ?? null })),
+  enginePrefix,
+);
+const scoped = scopedCandidates(candidateRankables, active, workNext.honoured);
+console.log(`\n  Focus: ${active.why}`);
+console.log(
+  `  in the focus ${scoped.inScope.length}, waiting outside it ${scoped.outOfScope.length} — of ${pickable.length}`,
+);
+
 const census = placementCensus(candidateRankables, enginePrefix, workNext.honoured);
 console.log(
-  `\n  work-this-next ${census.next}, placed by milestone ${census.phase}, by label ` +
-    `${census.label}, UNPLACED ${census.unplaced} — of ${pickable.length}`,
+  `  work-this-next ${census.next}, placed by milestone ${census.phase}, ` +
+    `UNPLACED ${census.unplaced} — of ${pickable.length}`,
 );
 if (census.unplaced > 0) {
   const names = candidateRankables
     .filter(r => placementOf(r, enginePrefix, workNext.honoured).tier === "UNPLACED")
     .map(r => `#${r.number}`);
   console.log(
-    `  UNPLACED means no milestone and no ranked label, so nothing in the repository says\n` +
-      "  where these belong and they sort behind everything else by construction. Give each\n" +
-      `  one a milestone or a ranked label (${[...LABEL_RANK.keys()].join(", ")}):\n` +
+    `  UNPLACED means no milestone, so nothing in the repository says where these belong\n` +
+      "  and Ready never draws them (SC-2741). Give each one a milestone, or the expedite\n" +
+      `  label if it must go now:\n` +
       `    ${names.join(" ")}`,
   );
 }
-if (census.next + census.phase + census.label > 0) {
-  const top = [...candidateRankables].sort(readyOrderFor(enginePrefix, workNext.honoured)).slice(0, 5);
-  console.log("\n  next out of the backlog, in plan order:");
+if (scoped.inScope.length > 0) {
+  const top = [...scoped.inScope].sort(readyOrderFor(enginePrefix, workNext.honoured)).slice(0, 5);
+  console.log("\n  next out of the backlog, from the focus, in plan order:");
   for (const r of top) {
     const title = pickable.find((i: any) => i.number === r.number)?.title ?? "";
     console.log(

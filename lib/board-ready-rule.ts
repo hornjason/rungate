@@ -42,7 +42,7 @@
  * before the gate can go.
  */
 
-import { phaseOf } from "./board-mirror";
+import { openFrontier, phaseOf } from "./board-mirror";
 import { inMilestoneFamily } from "./live-issues";
 
 /**
@@ -174,26 +174,15 @@ export function familyRank(milestone: string | null, enginePrefix: string | null
 }
 
 /**
- * The order labels rank in when no milestone places an issue — Jason's call,
- * 2026-11-06. **This is the only place it is spelled.**
+ * **No label ranks an issue — SC-2741, ADR-013 row 8 (Jason, 2026-11-11).**
  *
- * `engine` leads because it is the work that reduces the backlog itself:
- * AGENTS.md rule 7 watches issues opened against issues closed, and above 1
- * the backlog diverges however fast the work goes, so engine work compounds
- * and a follow-up does not.
- *
- * **A label outside this map does not place an issue.** The set is closed
- * deliberately: ranking an unknown label by guessing is the silent default
- * `.claude/rules/config-access.md` names, and `arbiter-override` is the live
- * instance — one eligible issue carries it and nothing else, and the honest
- * answer is UNPLACED rather than a tier somebody invented for it.
+ * `LABEL_RANK` lived here from #1853: a closed map from four labels to a
+ * rank, used to order the 74% of candidates no milestone placed. It made
+ * the label a second plan beside the milestone, and on 2026-11-11 it was
+ * placing 50 of 59 candidates. It is deleted. Label-only work reaches Ready
+ * only through the expedite label below, and otherwise waits until somebody
+ * gives it a milestone — which is a decision a person makes on the tracker.
  */
-export const LABEL_RANK: ReadonlyMap<string, number> = new Map([
-  ["engine", 0],
-  ["spec:convergence", 1],
-  ["follow-up", 2],
-  ["external-audit", 3],
-]);
 
 /**
  * The label that makes one issue go next — Jason's call, 2026-11-09 (#1962).
@@ -203,10 +192,9 @@ export const LABEL_RANK: ReadonlyMap<string, number> = new Map([
  * label is data on the card, visible in the issue's own timeline, and
  * AGENTS.md rule 4 says ordering is data.
  *
- * **It is NOT a member of `LABEL_RANK`, and that is the design.** Top of
- * `LABEL_RANK` would rank it 0 inside the LABEL tier, which still loses to
- * every milestone — and the whole point is to reach the top of the queue
- * past work that outranks it. So it is its own tier, above PHASE.
+ * **It is its own tier, above PHASE, and that is the design** — the whole
+ * point is to reach the top of the queue past work that outranks it, and it
+ * is the one way label-only work enters Ready at all (SC-2741).
  *
  * **Its NAME is config, never a constant here** (SC-2735). It was
  * the constant `WORK_NEXT_LABEL`, which made this library the owner of
@@ -218,7 +206,7 @@ export const LABEL_RANK: ReadonlyMap<string, number> = new Map([
  */
 
 /** Which source placed an issue — or that nothing did. */
-export type PlacementTier = "NEXT" | "PHASE" | "LABEL" | "UNPLACED";
+export type PlacementTier = "NEXT" | "PHASE" | "UNPLACED";
 
 /** What the expedite label did, and why — `UNCONFIGURED` when the tree names none. */
 export type WorkNextStatus = "NONE" | "HONOURED" | "OVER_BOUND" | "UNMEASURED" | "UNCONFIGURED";
@@ -420,9 +408,8 @@ export interface Placement {
    * (#1943). Compared BEFORE the tier, because a phase number is only
    * meaningful inside its own family.
    *
-   * Always 0 outside the PHASE tier: a label and an absence belong to no
-   * milestone family, and giving them one would make the family a second
-   * ordering over the label tier that nothing declared.
+   * Always 0 outside the PHASE tier: an absence belongs to no milestone
+   * family, and giving it one would be an ordering nothing declared.
    */
   readonly family: number;
   /** Rank inside the tier. `POSITIVE_INFINITY` for UNPLACED. */
@@ -431,10 +418,9 @@ export interface Placement {
 }
 
 /**
- * NEXT before PHASE before LABEL before UNPLACED.
+ * NEXT before PHASE before UNPLACED.
  *
- * A milestone always beats a label — and `work-this-next` beats the
- * milestone, because an honoured promotion is a person saying *this one, now*
+ * `work-this-next` beats the milestone, because an honoured promotion is a person saying *this one, now*
  * about a bounded, auditable number of cards (#1962). Everything below it is
  * unchanged, so an empty promotion set leaves the order exactly as #1853 and
  * #1943 left it.
@@ -442,34 +428,20 @@ export interface Placement {
 const TIER_ORDER: Readonly<Record<PlacementTier, number>> = {
   NEXT: 0,
   PHASE: 1,
-  LABEL: 2,
-  UNPLACED: 3,
+  UNPLACED: 2,
 };
 
 /**
- * Where an issue sits in the plan — milestone, else label, else nowhere.
+ * Where an issue sits in the plan — milestone, else nowhere.
  *
- * ## Why a second source exists at all (#1853)
+ * ## The label tier is gone (SC-2741)
  *
- * Phase comes from `phaseOf`, which reads a number out of a MILESTONE TITLE
- * and nothing else. Measured 2026-11-06: of 38 unblocked, unclaimed issues,
- * **10** carried a milestone and **28** did not, so 74% of what Ready draws
- * from sorted as `POSITIVE_INFINITY` and fell through to the tiebreak. The
- * tiebreak is issue number. **The lane was ordered by age.**
- *
- * The obvious repair is to backfill `### Phase placement` tables so
- * `plan-spec` derives a milestone for everything. It cannot reach this
- * backlog: only **16 of 80** open issues name an `SC-` id at all. The other
- * 64 are review follow-ups, audit findings and engine work that never passed
- * through a spec, and no table placed on any spec can rank them.
- *
- * So the label is the fallback, and it is the signal this repository already
- * produces for work with no spec. A milestone still wins, because the
- * milestone is the declared plan and the label is a category.
- *
- * **An issue with several ranked labels takes the best of them.** A
- * follow-up that is also engine work is engine work; taking the worst would
- * let adding a label demote an issue, which makes the rank punish labelling.
+ * #1853 added a second source: of 38 candidates on 2026-11-06, 28 carried no
+ * milestone and the lane was ordered by age, so a closed label rank placed
+ * them. ADR-013 row 8 replaced that with a focus: Ready draws from the active
+ * milestone only (`activeMilestone`), so ranking milestone-less work is a
+ * question Ready no longer asks. Such work is UNPLACED, and the report names
+ * it so somebody can give it a milestone.
  *
  * ## The promoted set is REQUIRED, with no default (#1962)
  *
@@ -535,20 +507,6 @@ function unpromotedPlacement(
               "so every engine phase outranks this",
     };
   }
-  let best: { label: string; rank: number } | null = null;
-  for (const label of r.labels) {
-    const rank = LABEL_RANK.get(label);
-    if (rank === undefined) continue;
-    if (best === null || rank < best.rank) best = { label, rank };
-  }
-  if (best !== null) {
-    return {
-      tier: "LABEL",
-      family: 0,
-      rank: best.rank,
-      why: `no milestone, and "${best.label}" ranks ${best.rank} of ${LABEL_RANK.size}`,
-    };
-  }
   return {
     tier: "UNPLACED",
     family: 0,
@@ -556,15 +514,15 @@ function unpromotedPlacement(
     why:
       r.labels.length === 0
         ? "no milestone and no label at all — nothing in the repository says where this belongs"
-        : `no milestone, and none of its labels (${r.labels.join(", ")}) is ranked — ` +
-          "add one to LABEL_RANK deliberately, or give it a milestone",
+        : `no milestone, and a label (${r.labels.join(", ")}) places nothing — ` +
+          "label-only work enters Ready only through the expedite label (SC-2741)",
   };
 }
 
 /**
  * ORDERING: which eligible issue should be pulled first.
  *
- * Tier first (phase, then label, then unplaced), rank inside the tier, then
+ * Tier first (expedite, then phase, then unplaced), rank inside the tier, then
  * issue number. **Age still breaks ties and no longer decides the tier** —
  * before #1853 it decided the tier for 28 of 38 candidates, because every
  * one of them ranked `POSITIVE_INFINITY` and the tiebreak was the whole
@@ -588,8 +546,7 @@ export function readyOrderFor(
   return (a, b) => {
     const pa = placementOf(a, enginePrefix, honoured);
     const pb = placementOf(b, enginePrefix, honoured);
-    // Tier first, unchanged: a milestone is the declared plan and a label is
-    // a category, so a milestone still always beats a label.
+    // Tier first: an honoured expedite card, then the declared plan.
     if (TIER_ORDER[pa.tier] !== TIER_ORDER[pb.tier]) {
       return TIER_ORDER[pa.tier] - TIER_ORDER[pb.tier];
     }
@@ -599,12 +556,8 @@ export function readyOrderFor(
     // puts the payload ahead of the engine that ships it.
     //
     // **Above the tier was the first spelling and it was wrong.** `family`
-    // is 0 outside the PHASE tier, so hoisting it made every LABEL-tier
-    // issue honorary engine: an `external-audit` issue with no milestone
-    // outranked `Convergence Phase 3`, which is not engine work beating the
-    // payload, it is a category beating a declared plan. The case that
-    // caught it is `#1943: a non-engine PHASE still beats a label`, written
-    // before the code and red on the first run.
+    // is 0 outside the PHASE tier, so hoisting it made every milestone-less
+    // issue honorary engine — a category beating a declared plan.
     if (pa.family !== pb.family) return pa.family - pb.family;
     if (pa.rank !== pb.rank) return pa.rank - pb.rank;
     return a.number - b.number;
@@ -616,7 +569,6 @@ export interface PlacementCensus {
   /** Promoted by `work-this-next` and honoured (#1962). */
   readonly next: number;
   readonly phase: number;
-  readonly label: number;
   readonly unplaced: number;
 }
 
@@ -639,16 +591,122 @@ export function placementCensus(
 ): PlacementCensus {
   let next = 0;
   let phase = 0;
-  let label = 0;
   let unplaced = 0;
   for (const i of items) {
     const t = placementOf(i, enginePrefix, honoured).tier;
     if (t === "NEXT") next++;
     else if (t === "PHASE") phase++;
-    else if (t === "LABEL") label++;
     else unplaced++;
   }
-  return { next, phase, label, unplaced };
+  return { next, phase, unplaced };
+}
+
+/**
+ * The one focus Ready refills from — SC-2741, ADR-013 row 8.
+ *
+ * `title` is the milestone, or `null` when no open issue sits in any phase
+ * milestone at all — and then Ready stays empty, because nothing pickable is
+ * an answer, not a reason to reach for something else.
+ */
+export interface ActiveMilestone {
+  readonly title: string | null;
+  readonly why: string;
+}
+
+/**
+ * **The lowest engine phase with an open issue, else the payload's.**
+ *
+ * Kanban pull, Jason's call of 2026-11-11: one active focus. The frontier is
+ * `openFrontier` in `lib/board-mirror.ts` — the reading `plan-deps` already
+ * prints as "Frontier: Phase 6" — reused rather than re-decided, because a
+ * second minimum over the same phases is a second decider.
+ *
+ * - `open` is EVERY open issue the caller can see, claimed and blocked ones
+ *   included. A phase whose work is all in progress is still the focus;
+ *   reading only the pickable ones would move the focus past work that is
+ *   not finished.
+ * - Milestone open/closed state is not read. Phases 0-5 here are open
+ *   milestones holding no open issue, and they are finished.
+ * - **Payload waits for the car** (ADR-013 decision 9): a milestone outside
+ *   the engine family becomes the focus only when no engine phase has an
+ *   open issue. A `null` prefix is one family — `familyRank`'s reading — so
+ *   the lowest phase overall leads.
+ * - Two titles at one phase in one family resolve by title, so the answer
+ *   does not depend on the order GitHub returned issues in.
+ */
+export function activeMilestone(
+  open: readonly { readonly milestone: string | null }[],
+  enginePrefix: string | null,
+): ActiveMilestone {
+  const phased = open.filter(i => phaseOf(i.milestone) !== null);
+  const engine = phased.filter(i => familyRank(i.milestone, enginePrefix) === 0);
+  const payload = phased.filter(i => familyRank(i.milestone, enginePrefix) !== 0);
+  const focusIn = (pool: typeof phased): string | null => {
+    const frontier = openFrontier(pool.map(i => ({ state: "OPEN", phase: phaseOf(i.milestone) })));
+    if (frontier === null) return null;
+    const titles = pool
+      .filter(i => phaseOf(i.milestone) === frontier)
+      .map(i => i.milestone as string)
+      .sort();
+    return titles[0] ?? null;
+  };
+  const car = focusIn(engine);
+  if (car !== null) {
+    return {
+      title: car,
+      why:
+        enginePrefix === null
+          ? `${car} is the lowest phase with an open issue (no engine family is configured)`
+          : `${car} is the lowest ${enginePrefix} phase with an open issue`,
+    };
+  }
+  const load = focusIn(payload);
+  if (load !== null) {
+    return {
+      title: load,
+      why: `no ${enginePrefix} phase has an open issue, so the payload's lowest phase, ${load}, is next`,
+    };
+  }
+  return {
+    title: null,
+    why: "no open issue sits in any phase milestone, so nothing is pickable and Ready stays empty",
+  };
+}
+
+/**
+ * Is this card inside the focus? The ONE predicate, for entry and for stay.
+ *
+ * `expedited` is the caller's reading of the expedite lane: an honoured
+ * promotion on the way in, carrying the configured label for a card already
+ * in Ready. Everything else must sit in the active milestone exactly.
+ */
+export function inReadyScope(
+  r: { readonly milestone: string | null },
+  active: ActiveMilestone,
+  expedited: boolean,
+): boolean {
+  if (expedited) return true;
+  return active.title !== null && r.milestone === active.title;
+}
+
+/**
+ * Split candidates into the ones Ready may draw from and the ones it may not.
+ *
+ * Every Ready writer and the report call this between the eligibility
+ * decision and `selectReady`, so the scope is decided once (SC-2741). Order
+ * is preserved; ordering is still `readyOrderFor`'s.
+ */
+export function scopedCandidates<T extends Rankable>(
+  eligible: readonly T[],
+  active: ActiveMilestone,
+  honoured: ReadonlySet<number>,
+): { inScope: T[]; outOfScope: T[] } {
+  const inScope: T[] = [];
+  const outOfScope: T[] = [];
+  for (const c of eligible) {
+    (inReadyScope(c, active, honoured.has(c.number)) ? inScope : outOfScope).push(c);
+  }
+  return { inScope, outOfScope };
 }
 
 /**

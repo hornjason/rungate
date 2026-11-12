@@ -42,8 +42,9 @@ import { sourceFiles } from "../lib/source-census";
 import { structuralCut } from "../lib/source-slice";
 import { join } from "path";
 import {
-  LABEL_RANK,
   NO_WORK_NEXT,
+  activeMilestone,
+  scopedCandidates,
   READY_TOLERANCE_DAYS,
   familyRank,
   heldReason,
@@ -571,34 +572,15 @@ describe("SC-2723: nothing spells a held reason for itself", () => {
  * **The lane was ordered by age for 74% of what it draws from**, and nothing
  * in the report said so.
  *
- * ## The mutation battery, membership predicted before it was run
+ * ## SC-2741 retired the label tier (ADR-013 row 8)
  *
- *   mutant                                        predicted red
- *   LABEL_RANK reordered (engine last)            "engine beats", "best of several"
- *   an unknown label ranks 0 instead of UNPLACED  "unknown label", "no label at all"
- *   a label beats a milestone phase               "a milestone always beats"
- *   placementOf takes the WORST label, not best   "best of several"
- *   placementCensus folds UNPLACED into label     "census counts UNPLACED apart"
- *   the rank table copied into a script           "one site"
- *
- * Readings are in the PR body for #1853.
+ * The label rank this block was written for is deleted: Ready draws from the
+ * active milestone, so a label-only issue is UNPLACED and enters only through
+ * the expedite lane. The cases that held the rank are gone with it; the ones
+ * below still hold — a milestone beats a label, age breaks ties, UNPLACED is
+ * counted apart — and #1943's family ordering is unchanged.
  */
-describe("#1853: a label places an issue the milestone could not", () => {
-  test("engine beats spec:convergence beats follow-up beats external-audit", () => {
-    const got = [
-      item(10, null, ["external-audit"]),
-      item(20, null, ["follow-up"]),
-      item(30, null, ["engine"]),
-      item(40, null, ["spec:convergence"]),
-    ]
-      .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
-      .map(i => i.number);
-    expect(
-      got,
-      "Jason's rank of 2026-11-06 — engine leads because it is the work that reduces the backlog",
-    ).toEqual([30, 40, 20, 10]);
-  });
-
+describe("#1853: what a label no longer does, and the family order", () => {
   test("a milestone always beats a label, however high the label ranks", () => {
     const got = [item(5, null, ["engine"]), item(900, 6)].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number);
     expect(
@@ -608,39 +590,23 @@ describe("#1853: a label places an issue the milestone could not", () => {
     ).toEqual([900, 5]);
   });
 
-  test("an issue with several ranked labels takes the BEST of them", () => {
-    const got = [item(1, null, ["follow-up"]), item(2, null, ["follow-up", "engine"])]
-      .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
-      .map(i => i.number);
-    expect(
-      got,
-      "#2 is newer and still first: taking the worst label would let ADDING a label demote an " +
-        "issue, which makes the rank punish labelling",
-    ).toEqual([2, 1]);
-    expect(placementOf(item(2, null, ["follow-up", "engine"]), ENGINE, NO_WORK_NEXT).rank).toBe(0);
-  });
-
   test("age still breaks ties INSIDE a tier, and no longer decides the tier", () => {
-    const got = [item(99, null, ["engine"]), item(1, null, ["external-audit"]), item(50, null, ["engine"])]
+    const got = [item(99, 6), item(1, 7), item(50, 6)]
       .sort(readyOrderFor(ENGINE, NO_WORK_NEXT))
       .map(i => i.number);
     expect(
       got,
-      "#1 is the oldest and sorts last: before #1853 the number was the whole ordering for " +
-        "every milestone-less issue",
+      "#1 is the oldest and sorts last: its phase is later, and age only orders inside a phase",
     ).toEqual([50, 99, 1]);
   });
 
   test("an unknown label does not place an issue — it is UNPLACED, never guessed", () => {
     const p = placementOf(item(7, null, ["arbiter-override"]), ENGINE, NO_WORK_NEXT);
-    expect(p.tier, "arbiter-override is outside LABEL_RANK and is the live case on this repo").toBe(
-      "UNPLACED",
-    );
+    expect(p.tier, "a label places nothing (SC-2741)").toBe("UNPLACED");
     expect(p.rank).toBe(Number.POSITIVE_INFINITY);
     expect(p.why, "the refusal has to name the labels it could not rank").toContain(
       "arbiter-override",
     );
-    expect(LABEL_RANK.has("arbiter-override")).toBe(false);
   });
 
   test("no label at all is UNPLACED too, and says something different", () => {
@@ -676,7 +642,7 @@ describe("#1853: a label places an issue the milestone could not", () => {
       got,
       "folding UNPLACED into the label count is the defect one level up — an issue nothing " +
         "can rank would read identically to one ranked last",
-    ).toEqual({ next: 0, phase: 1, label: 2, unplaced: 2 });
+    ).toEqual({ next: 0, phase: 1, unplaced: 4 });
   });
 
   /**
@@ -939,52 +905,6 @@ describe("#1853: a label places an issue the milestone could not", () => {
     expect(placementOf(item(900, 6, [], ENGINE), ENGINE, NO_WORK_NEXT).why).toContain(`${ENGINE} family`);
   });
 
-  test("THE CONTROL: the label rank is spelled at exactly one site", () => {
-    // Two deciders that agree are behaviourally ONE decider, so a mutation
-    // of either leaves the other holding every case up and the battery above
-    // reads zero. `.claude/rules/checks-must-be-able-to-fail.md`, fourth
-    // shape. The rank is data, so the check is on where the data is written.
-    const root = join(import.meta.dir, "..");
-    const owner = "lib/board-ready-rule.ts";
-    const scanned = sourceFiles(root, ["lib", "scripts", "bin", "gates", "hooks"]);
-    expect(
-      scanned,
-      "the sweep read nothing, so an empty offender list would witness nothing",
-    ).toContain(owner);
-    // **A rank, not a mention.** `lib/issue-create-override.ts` maps every
-    // one of these labels to a HELP STRING, which is a legitimate second
-    // naming and not a second decider — a first pass flagged it and would
-    // have taught the next person that this check cries wolf. So the
-    // predicate is the two shapes a copied rank actually takes: a label
-    // beside a number, or two labels in one literal, which is a rank
-    // expressed as array order.
-    const labels = [...LABEL_RANK.keys()];
-    const quoted = labels.map(l => `"${l}"`);
-    const ranksLabel = (src: string): boolean => {
-      const named = quoted.filter(q => src.includes(q));
-      if (named.length < 2) return false;
-      return src.split("\n").some(line => {
-        const here = quoted.filter(q => line.includes(q));
-        if (here.length >= 2) return true;
-        return here.length === 1 && /"[^"\n]+"[^A-Za-z\n]{0,8}\d/.test(line);
-      });
-    };
-    const offenders = scanned
-      .filter(f => f !== owner)
-      .filter(f => ranksLabel(readFileSync(join(root, f), "utf-8")));
-    // The predicate must be able to say yes. Without this the check is the
-    // third shape — an assertion that holds because nothing reaches it.
-    expect(
-      ranksLabel(readFileSync(join(root, owner), "utf-8")),
-      "the predicate does not fire on the real rank table, so an empty offender list means nothing",
-    ).toBe(true);
-    expect(
-      offenders,
-      `${owner} is the only place the label rank may be written. These files name two or more ` +
-        "ranked labels, which is how a second rank gets built beside the first: " +
-        offenders.join(", "),
-    ).toEqual([]);
-  });
 });
 
 /**
@@ -1417,16 +1337,9 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     expect(workNextReading([...all, item(500, 0)], 8, "COMPLETE", WORK_NEXT_LABEL).status).toBe("HONOURED");
   });
 
-  test("the label is NOT in LABEL_RANK — adding it there would not reach the top", () => {
-    // The design, as an assertion rather than a comment. Ranked 0 in the
-    // LABEL tier it still loses to every milestone, which is the thing it
-    // exists to beat — so a later edit that "tidies" it into the map is a
-    // silent regression of the whole feature.
-    expect(
-      LABEL_RANK.has(WORK_NEXT_LABEL),
-      `${WORK_NEXT_LABEL} belongs to its own tier above PHASE, not to LABEL_RANK — ` +
-        "a LABEL-tier placement loses to every milestone",
-    ).toBe(false);
+  test("the bare label places nothing without a reading honouring it", () => {
+    // The design, as an assertion rather than a comment: the label is its own
+    // tier above PHASE, reached only through `workNextReading`'s bound.
     const asLabel = placementOf(item(9, null, [WORK_NEXT_LABEL]), ENGINE, NO_WORK_NEXT);
     expect(asLabel.tier, "the bare label placed an issue without a reading honouring it").toBe(
       "UNPLACED",
@@ -1439,13 +1352,12 @@ describe("#1962: work-this-next is a bounded promotion, not a flag", () => {
     expect(placementCensus(cards, ENGINE, r.honoured)).toEqual({
       next: 1,
       phase: 1,
-      label: 1,
-      unplaced: 1,
+      unplaced: 2,
     });
     expect(
       placementCensus(cards, ENGINE, NO_WORK_NEXT),
       "unpromoted, the same card must count in the tier it actually belongs to",
-    ).toEqual({ next: 0, phase: 2, label: 1, unplaced: 1 });
+    ).toEqual({ next: 0, phase: 2, unplaced: 2 });
   });
 
   test("the bound is Ready's depth, read from throughput and not typed here", () => {
@@ -1735,5 +1647,120 @@ describe("#1962: the promotion reaches the writer, not only the report", () => {
         "when --ready was never passed, so an ungated emit reports UNMEASURED about a Ready " +
         "promotion the run did not attempt — the round-2 finding on the other surface",
     ).toContain("workNext: values.ready");
+  });
+});
+
+/**
+ * SC-2741: Ready refills only from the active milestone (ADR-013 row 8).
+ *
+ * Kanban pull, Jason's call of 2026-11-11: one active focus, an ordered
+ * backlog, a WIP cap, an expedite lane. The active milestone is the lowest
+ * engine phase with an open issue — `openFrontier`, reused rather than
+ * re-decided — and the payload waits until no engine phase has one. A
+ * label never places an issue any more: `LABEL_RANK` is deleted, so
+ * label-only work enters Ready only through the expedite label.
+ *
+ * Measured before the change, 2026-11-11: Ready held #1764 (a Convergence
+ * payload issue) beside #1717 (Pipeline Phase 6), and 50 of 59 candidates
+ * were placed by label alone.
+ */
+describe("SC-2741: Ready refills only from the active milestone", () => {
+  const open = (...milestones: (string | null)[]) => milestones.map(milestone => ({ milestone }));
+
+  test("SC-2741: the active milestone is the LOWEST engine phase with an open issue", () => {
+    const a = activeMilestone(
+      open(`${ENGINE} Phase 7`, `${ENGINE} Phase 6`, `${PAYLOAD} Phase 3`, null),
+      ENGINE,
+    );
+    expect(a.title, "a lower PAYLOAD phase must not become the focus while engine work is open").toBe(
+      `${ENGINE} Phase 6`,
+    );
+    expect(a.why).toContain("Phase 6");
+  });
+
+  test("SC-2741: the payload waits for the car, then becomes the focus", () => {
+    const a = activeMilestone(open(`${PAYLOAD} Phase 4`, `${PAYLOAD} Phase 3`, null), ENGINE);
+    expect(a.title, "no engine phase has an open issue, so the payload's lowest phase is next").toBe(
+      `${PAYLOAD} Phase 3`,
+    );
+    expect(a.why, "the report must say WHY the payload is the focus").toContain(ENGINE);
+  });
+
+  test("SC-2741: nothing in any phase means no focus — Ready stays empty", () => {
+    const a = activeMilestone(open(null, null), ENGINE);
+    expect(a.title).toBeNull();
+    const scoped = scopedCandidates([item(1, null, ["engine"]), item(2, null)], a, NO_WORK_NEXT);
+    expect(scoped.inScope, "label-only and unplaced work never fills an empty focus").toEqual([]);
+    expect(scoped.outOfScope.map(i => i.number)).toEqual([1, 2]);
+  });
+
+  test("SC-2741: reopening an issue in a finished phase moves the focus back to it", () => {
+    const before = activeMilestone(open(`${ENGINE} Phase 6`), ENGINE);
+    const after = activeMilestone(open(`${ENGINE} Phase 6`, `${ENGINE} Phase 2`), ENGINE);
+    expect(before.title).toBe(`${ENGINE} Phase 6`);
+    expect(after.title, "reopened work is unfinished work in an earlier phase").toBe(`${ENGINE} Phase 2`);
+  });
+
+  test("SC-2741: only the active milestone and honoured expedite cards are in scope", () => {
+    const active = activeMilestone(open(`${ENGINE} Phase 6`, `${ENGINE} Phase 7`), ENGINE);
+    const cards = [
+      item(10, null, ["engine"]),
+      item(11, 3, [], PAYLOAD),
+      item(12, 6),
+      item(13, 7),
+      item(14, null, ["zq-expedite-fixture"]),
+    ];
+    const plain = scopedCandidates(cards, active, NO_WORK_NEXT);
+    expect(plain.inScope.map(i => i.number)).toEqual([12]);
+    expect(plain.outOfScope.map(i => i.number)).toEqual([10, 11, 13, 14]);
+    // The expedite lane, one variable apart: the same cards with #14 honoured.
+    const expedited = scopedCandidates(cards, active, new Set([14]));
+    expect(expedited.inScope.map(i => i.number), "an honoured expedite card enters from anywhere").toEqual([
+      12, 14,
+    ]);
+  });
+
+  test("SC-2741: a null engine prefix is ONE family, so the lowest phase overall leads", () => {
+    const a = activeMilestone(open(`${PAYLOAD} Phase 3`, `${ENGINE} Phase 6`), null);
+    expect(a.title).toBe(`${PAYLOAD} Phase 3`);
+  });
+
+  test("SC-2741: the frontier is openFrontier's, not a second decider", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "lib", "board-ready-rule.ts"), "utf-8");
+    const body = structuralCut(src, "export function activeMilestone(", { endAnchor: "\n}\n" });
+    expect(body, "activeMilestone must delegate to openFrontier in lib/board-mirror.ts").toContain(
+      "openFrontier(",
+    );
+    expect(body, "a Math.min here would be a second frontier decider").not.toContain("Math.min");
+  });
+
+  test("SC-2741: no label ranks an issue — LABEL_RANK and the LABEL tier are gone", async () => {
+    const rule = (await import("../lib/board-ready-rule")) as Record<string, unknown>;
+    expect("LABEL_RANK" in rule, "LABEL_RANK is deleted by ADR-013 decision 8").toBe(false);
+    const p = placementOf(item(5, null, ["engine"]), ENGINE, NO_WORK_NEXT);
+    expect(p.tier, "a label-only issue is UNPLACED, never a LABEL tier").toBe("UNPLACED");
+    expect(placementCensus([item(5, null, ["engine"])], ENGINE, NO_WORK_NEXT)).toEqual({
+      next: 0,
+      phase: 0,
+      unplaced: 1,
+    });
+  });
+
+  test("SC-2741: every Ready writer and the report apply the same scope", () => {
+    const root = join(import.meta.dir, "..");
+    for (const f of ["scripts/board-ready.ts", "scripts/board-mirror.ts", "scripts/work-status.ts"]) {
+      const code = readFileSync(join(root, f), "utf-8");
+      expect(code, `${f} must compute the focus from the rule module`).toContain("activeMilestone(");
+      expect(code, `${f} must filter candidates through the one scope`).toContain("scopedCandidates(");
+    }
+  });
+
+  test("SC-2741: adding or removing a milestone, or adding a label, triggers the refill", () => {
+    const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "board-ready.yml"), "utf-8");
+    const types = /issues:\s*\n\s*types:\s*\[([^\]]*)\]/.exec(yml)?.[1] ?? "";
+    expect(types, "the trigger list must be readable, or this row witnesses nothing").not.toBe("");
+    for (const t of ["milestoned", "demilestoned", "labeled"]) {
+      expect(types.split(",").map(x => x.trim()), `board-ready must run on issues: ${t}`).toContain(t);
+    }
   });
 });

@@ -59,7 +59,7 @@ import {
 } from "../lib/board-mirror";
 import { parseCriteria } from "../lib/spec-evidence";
 import { parseRepo, readyPopulation, splitReadyChanges } from "../scripts/board-mirror";
-import { NO_WORK_NEXT, readyOrderFor } from "../lib/board-ready-rule";
+import { NO_WORK_NEXT, activeMilestone, readyOrderFor } from "../lib/board-ready-rule";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -884,6 +884,8 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
     to,
   });
   const promote = (n: number) => c(n, 0, "Ready");
+  /** The focus for every phase-0 card here (SC-2741). */
+  const FOCUS0 = activeMilestone([{ milestone: "Engine Phase 0" }], "Engine");
   /** A card LEAVING Ready. Its status is what frees a slot in this batch. */
   const demote = (n: number) => c(n, 0, "Backlog", "Ready");
 
@@ -894,13 +896,14 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       0,
       "Engine",
       null,
+      FOCUS0,
     );
     expect(readyWritable.map(x => x.item.number)).toEqual([1, 3]);
     expect(heldByCap.map(x => x.item.number)).toEqual([5, 9]);
   });
 
   test("a full lane promotes nothing", () => {
-    const { readyWritable, heldByCap } = splitReadyChanges([promote(1), promote(2)], 2, 2, "Engine", null);
+    const { readyWritable, heldByCap } = splitReadyChanges([promote(1), promote(2)], 2, 2, "Engine", null, FOCUS0);
     expect(readyWritable).toEqual([]);
     expect(heldByCap.map(x => x.item.number)).toEqual([1, 2]);
   });
@@ -916,6 +919,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       99,
       "Engine",
       null,
+      FOCUS0,
     );
     expect(
       readyWritable.map(x => x.item.number).sort(),
@@ -934,32 +938,55 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       0,
       "Engine",
       null,
+      FOCUS0,
     );
     expect(readyWritable.map(x => x.item.number)).toEqual([7]);
     expect(heldByCap.map(x => x.item.number)).toEqual([1, 2]);
     expect(selection.why).toContain("UNMEASURED");
   });
 
-  test("phase orders the promotions, and a phase-less issue is still promotable", () => {
-    const { readyWritable } = splitReadyChanges([c(4, null, "Ready"), c(9, 2, "Ready")], 1, 0, "Engine", null);
+  test("SC-2741: only the active milestone is promoted, and a phase-less issue waits", () => {
+    const { readyWritable } = splitReadyChanges(
+      [c(4, null, "Ready"), c(9, 2, "Ready")],
+      1,
+      0,
+      "Engine",
+      null,
+      activeMilestone([{ milestone: "Engine Phase 2" }], "Engine"),
+    );
     expect(
       readyWritable.map(x => x.item.number),
-      "the phased issue goes first, and the phase-less one is queued rather than excluded",
+      "the focus is Phase 2, so the phase-less issue waits outside it",
     ).toEqual([9]);
   });
 
   // ROUND 2, finding 1. The case above cannot see this: its board order
   // and its ranked order are the same list, so a `filter` over the
   // candidates reproduces the right answer by luck. Here they disagree —
-  // #2 outranks #1 on phase while #1 comes first on the board — and a
-  // re-derived subset writes them backwards.
+  // #1 outranks #2 on age while #2 comes first on the board — and a
+  // re-derived subset writes them backwards. (Both sit in the focus since
+  // SC-2741, so age is the rank that differs.)
   test("the promotions are written in RANKED order, not in board order", () => {
-    const { readyWritable } = splitReadyChanges([c(1, 5, "Ready"), c(2, 0, "Ready")], 2, 0, "Engine", null);
+    const { readyWritable } = splitReadyChanges([c(2, 0, "Ready"), c(1, 0, "Ready")], 2, 0, "Engine", null, FOCUS0);
     expect(
       readyWritable.map(x => x.item.number),
       "membership can be right while the sequence is wrong, and the log then " +
         "claims a phase-then-age ranking it did not write",
-    ).toEqual([2, 1]);
+    ).toEqual([1, 2]);
+  });
+
+  test("SC-2741: an eligible card outside the focus waits — it is not held by the cap", () => {
+    const { readyWritable, heldByCap, outOfScope } = splitReadyChanges(
+      [c(1, 0, "Ready"), c(2, 7, "Ready"), c(3, null, "Ready", "Backlog", ["engine"])],
+      5,
+      0,
+      "Engine",
+      null,
+      FOCUS0,
+    );
+    expect(readyWritable.map(x => x.item.number)).toEqual([1]);
+    expect(heldByCap, "a waiting card reported as held by the cap is a lie about the lane").toEqual([]);
+    expect(outOfScope.map(x => x.item.number)).toEqual([2, 3]);
   });
 
   // ROUND 2, finding 3 — the HIGH one. `occupied` is counted before the
@@ -972,6 +999,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       2,
       "Engine",
       null,
+      FOCUS0,
     );
     expect(
       readyWritable.map(x => x.item.number),
@@ -992,6 +1020,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       2,
       "Engine",
       null,
+      FOCUS0,
     );
     expect(
       readyWritable.map(x => x.item.number),
