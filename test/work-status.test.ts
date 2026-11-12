@@ -1010,7 +1010,7 @@ describe("#1853 H4: the candidate list says how many are UNPLACED", () => {
     ).toBeNull();
   });
 
-  test("UNPLACED is printed as its own number, beside the two placed tiers", () => {
+  test("UNPLACED is printed as its own number, beside the placed tiers", () => {
     expect(code).toContain("UNPLACED ${census.unplaced}");
     expect(code, "a bare count is a number nobody can act on — it must name the issues").toContain(
       'tier === "UNPLACED"',
@@ -1024,10 +1024,13 @@ describe("#1853 H4: the candidate list says how many are UNPLACED", () => {
     ).toMatch(/if\s*\(census\.unplaced\s*>\s*0\)/);
   });
 
-  test("the remedy names the ranked labels from the rule, never a typed-out list", () => {
-    // A hardcoded list here would go stale the first time the rank changes,
-    // and it would be the second site #1853 exists to prevent.
-    expect(code).toContain("[...LABEL_RANK.keys()]");
+  test("SC-2741: the report lists only what Ready would pull, from the one scope", () => {
+    // The label rank this row used to assert is deleted. The report now takes
+    // the writers' scope, so its "next" list is what the writer would pull.
+    expect(code, "the report must not cite a label rank that no longer exists").not.toContain("LABEL_RANK");
+    expect(code).toContain("activeMilestone(");
+    expect(code).toContain("scopedCandidates(candidateRankables, active, workNext.honoured)");
+    expect(code, "the next list must come from the in-scope set").toContain("[...scoped.inScope].sort(");
   });
 
   test("the candidates are sorted with readyOrder, so the report shows plan order", () => {

@@ -40,10 +40,13 @@ import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
 import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
 import {
+  activeMilestone,
   heldReason,
   readyCap,
   readyOccupancy,
+  scopedCandidates,
   selectReady,
+  type ActiveMilestone,
   workNextReading,
   type WorkNextReading,
   type ReadyOccupancy,
@@ -148,9 +151,17 @@ export function splitReadyChanges<
    * is: `lib/config-readers.ts` holds the one binding.
    */
   expediteLabel: string | null,
+  /**
+   * The focus, from `activeMilestone` (SC-2741). REQUIRED: this writer used to
+   * promote on its own rule — any phase, label-ranked — and ADR-013 row 8
+   * ends that, so it draws from the same scope `scripts/board-ready.ts` does.
+   */
+  active: ActiveMilestone,
 ): {
   readyWritable: T[];
   heldByCap: T[];
+  /** Eligible promotions outside the active milestone — waiting, not held by the cap. */
+  outOfScope: T[];
   selection: ReturnType<typeof selectReady>;
   /**
    * The `work-this-next` reading (#1962), RETURNED rather than printed.
@@ -210,7 +221,10 @@ export function splitReadyChanges<
   // attempt. The reading is RETURNED and the caller prints it under
   // `--ready`, where it is true.
   const workNext = workNextReading(candidates, cap, "COMPLETE", expediteLabel);
-  const selection = selectReady(candidates, occ, enginePrefix, workNext.honoured);
+  // The one scope (SC-2741): the active milestone plus honoured expedite cards.
+  const scoped = scopedCandidates(candidates, active, workNext.honoured);
+  const waiting = new Set(scoped.outOfScope.map(c => c.number));
+  const selection = selectReady(scoped.inScope, occ, enginePrefix, workNext.honoured);
   // **Written in the order `selectReady` chose, not in board order.**
   // A `filter` over `promotions` re-derives the right MEMBERSHIP in the
   // wrong SEQUENCE, so the log and the write order stop matching the
@@ -222,7 +236,8 @@ export function splitReadyChanges<
   const chosenNumbers = new Set(chosen.map(c => c.item.number));
   return {
     readyWritable: [...demotions, ...chosen],
-    heldByCap: promotions.filter(c => !chosenNumbers.has(c.item.number)),
+    heldByCap: promotions.filter(c => !chosenNumbers.has(c.item.number) && !waiting.has(c.item.number)),
+    outOfScope: promotions.filter(c => waiting.has(c.item.number)),
     selection,
     occ,
     workNext,
@@ -501,12 +516,20 @@ export async function main(argv: string[]): Promise<number> {
   const engine = enginePrefixReading(root);
   if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
   const enginePrefix = engine.prefix;
-  const { readyWritable, heldByCap, selection, occ, workNext } = splitReadyChanges(
+  // The focus is read over every OPEN item on the board, claimed and blocked
+  // ones included (SC-2741) — the board is this command's whole view, and
+  // board-intake adds every opened issue to it.
+  const active = activeMilestone(
+    items.filter(i => i.state === "OPEN"),
+    enginePrefix,
+  );
+  const { readyWritable, heldByCap, outOfScope, selection, occ, workNext } = splitReadyChanges(
     eligible,
     cap,
     occupied,
     enginePrefix,
     readExpediteLabel(root),
+    active,
   );
 
   if (values.json) {
@@ -527,6 +550,10 @@ export async function main(argv: string[]): Promise<number> {
           readyCap: cap,
           readyOccupied: occupied,
           readyHeldByCap: heldByCap.map(c => c.item.number),
+          // Both gated on `--ready`, like `workNext` below: without it no Ready
+          // decision was attempted (ai-review round 2 of #2006).
+          readyFocus: values.ready ? active.title : null,
+          readyOutOfScope: values.ready ? outOfScope.map(c => c.item.number) : null,
           // ai-review round 4. The text branch below printed the work-next
           // reading and this one did not, so a consumer parsing the JSON
           // could not see that an ordering it is being handed was promoted
@@ -578,8 +605,12 @@ export async function main(argv: string[]): Promise<number> {
     if (fieldChanges.length === 0) console.log(`  every cell already agrees with its issue body`);
     if (values.ready) {
       console.log(
-        `\n  Ready lane — eligibility is unblocked and unclaimed; phase orders, it does not gate`,
+        `\n  Ready lane — unblocked, unclaimed, and in the active milestone (SC-2741)`,
       );
+      console.log(`    Focus: ${active.why}`);
+      if (outOfScope.length > 0) {
+        console.log(`    ${outOfScope.length} eligible issue(s) wait outside the active milestone`);
+      }
       console.log(`    depth: ${cap ?? "UNMEASURED"}. ${selection.why}`);
       // Under `--ready` only (#1962, round 2): this run did attempt a Ready
       // promotion, so a refusal here is a true statement about it.

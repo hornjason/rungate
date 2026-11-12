@@ -53,6 +53,8 @@ import {
   holdsReadySlot,
   readyCap,
   readyOccupancy,
+  activeMilestone,
+  scopedCandidates,
   selectReady,
   workNextReading,
 } from "../lib/board-ready-rule";
@@ -541,6 +543,9 @@ async function main(): Promise<number> {
           state: n.content.state ?? null,
           boardStatus: status,
           blockedByOpen: n.content.issueDependenciesSummary?.blockedBy ?? null,
+          milestone: n.content.milestone?.title ?? null,
+          // Filled from the label pass below, which runs after this walk.
+          labels: [],
           itemId: n.id ?? null,
         });
       }
@@ -593,8 +598,14 @@ async function main(): Promise<number> {
   const LABELS_QUERY = `query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
        issues(first:100,after:$c,states:[OPEN]){
          pageInfo{hasNextPage endCursor}
-         nodes{number labels(first:20){pageInfo{hasNextPage endCursor} nodes{name}}}}}}`;
+         nodes{number milestone{title} labels(first:20){pageInfo{hasNextPage endCursor} nodes{name}}}}}}`;
   const labelsOf = new Map<number, string[]>();
+  // **Every open issue's milestone, from the SAME complete pass** (SC-2741).
+  // The focus is the lowest engine phase with ANY open issue — claimed and
+  // blocked ones included — so it cannot be read off the candidates, and on a
+  // pure fan-out the candidates are one close's dependents. This pass pages
+  // the whole open list on both paths, so the focus is read here.
+  const openMilestones: { milestone: string | null }[] = [];
   let labelCursor: string | null = null;
   for (;;) {
     const d = await gql(token, apiBase, LABELS_QUERY, { o: owner, n: name, c: labelCursor });
@@ -619,6 +630,7 @@ async function main(): Promise<number> {
         );
         return EXIT_REFUSED;
       }
+      openMilestones.push({ milestone: n2?.milestone?.title ?? null });
       labelsOf.set(
         n2.number,
         (n2?.labels?.nodes ?? []).map((l: any) => l?.name).filter((x: any) => typeof x === "string"),
@@ -641,6 +653,12 @@ async function main(): Promise<number> {
     }
     if (step.kind === "done") break;
     labelCursor = step.cursor;
+  }
+  // The incumbents' labels, from the same pass, so a card carrying the
+  // expedite label keeps its slot (SC-2741). A closed incumbent has none here,
+  // and `incumbentDecisions` never reaches the scope for a closed card.
+  for (let k = 0; k < readyIncumbents.length; k++) {
+    readyIncumbents[k] = { ...readyIncumbents[k]!, labels: labelsOf.get(readyIncumbents[k]!.number) ?? [] };
   }
   for (const c of candidates) {
     // Shaped as the GraphQL response so the mapping below reads one way,
@@ -735,7 +753,10 @@ async function main(): Promise<number> {
   // pure fan-out, so this one expression is what both modes always did.
   for (const dec of decisions) {
     if (!freed.has(dec.number) && !dec.move) continue;
-    console.log(dec.move ? `  #${dec.number} -> ${READY_COLUMN}` : `  #${dec.number} unchanged: ${dec.why}`);
+    // "eligible", not "-> Ready": this runs BEFORE the focus and the cap, so
+    // a move announced here could be one the run then does not make (ai-review
+    // round 1 of #2006). What actually moves is printed with the selection.
+    console.log(dec.move ? `  #${dec.number} eligible for ${READY_COLUMN}` : `  #${dec.number} unchanged: ${dec.why}`);
   }
 
   // **The cap, between deciding and writing.** `fanoutDecisions` answers
@@ -796,7 +817,17 @@ async function main(): Promise<number> {
     readExpediteLabel(process.cwd()),
   );
   if (workNext.status !== "NONE") console.log(`  ${workNext.why}`);
-  const selection = selectReady(eligible, occ, engine.prefix, workNext.honoured);
+  // **The focus, between eligibility and selection** (SC-2741, ADR-013 row
+  // 8). Ready refills from the active milestone and the expedite lane only;
+  // everything else eligible waits, counted rather than listed, because a
+  // top-up holds every open issue and the count is what a reader needs.
+  const active = activeMilestone(openMilestones, engine.prefix);
+  console.log(`  Focus: ${active.why}`);
+  const scoped = scopedCandidates(eligible, active, workNext.honoured);
+  if (scoped.outOfScope.length > 0) {
+    console.log(`  ${scoped.outOfScope.length} eligible issue(s) wait outside the active milestone.`);
+  }
+  const selection = selectReady(scoped.inScope, occ, engine.prefix, workNext.honoured);
   console.log(
     `  depth: ${cap ?? "UNMEASURED"}` +
       (throughput === null
@@ -815,7 +846,7 @@ async function main(): Promise<number> {
   // the queue is full is a different fact from one that was never eligible,
   // and a reader who cannot tell them apart goes looking for a bug in the
   // decider.
-  for (const dec of eligible) {
+  for (const dec of scoped.inScope) {
     if (!selection.promote.includes(dec)) {
       console.log(`  #${dec.number} eligible but held: ${heldReason(occ)}`);
     }
@@ -830,7 +861,10 @@ async function main(): Promise<number> {
   // separately throughout — a run that promoted two and a run that promoted
   // two and demoted one are different events, and a single total hides the
   // half that is new.
-  const demoting = incumbentDecisions(readyIncumbents, READY_COLUMN).filter(d => d.demote);
+  const demoting = incumbentDecisions(readyIncumbents, READY_COLUMN, {
+    active,
+    expediteLabel: readExpediteLabel(process.cwd()),
+  }).filter(d => d.demote);
   for (const d of demoting) {
     console.log(`  #${d.number} is in ${READY_COLUMN} and ${d.why} -> ${d.to}`);
   }

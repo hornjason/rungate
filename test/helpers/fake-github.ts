@@ -203,6 +203,10 @@ export function startFakeGitHub(plan: FakePlan): FakeGitHub {
                 pageInfo: { hasNextPage: false, endCursor: null },
                 nodes: plan.openIssues.map(n => ({
                   number: n,
+                  milestone: (() => {
+                    const m = plan.items.find(i => i.number === n)?.milestone;
+                    return m == null ? null : { title: m };
+                  })(),
                   labels: {
                     pageInfo: { hasNextPage: false, endCursor: null },
                     nodes: (plan.items.find(i => i.number === n)?.labels ?? []).map(name => ({

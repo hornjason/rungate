@@ -42,6 +42,7 @@
 import { isReady } from "./board-mirror";
 import { laneFor } from "./board-flow";
 import { workVerdict } from "./board-lane-health";
+import { inReadyScope, type ActiveMilestone } from "./board-ready-rule";
 
 /** One issue that the closed blocker was blocking. */
 export interface Dependent {
@@ -180,6 +181,20 @@ export interface Incumbent {
    * `issueDependenciesSummary` must not read as "nothing is blocking it".
    */
   readonly blockedByOpen: number | null;
+  /** The card's milestone title, or `null` — what the focus is judged on (SC-2741). */
+  readonly milestone: string | null;
+  /** Its labels, so a card carrying the expedite label keeps its slot. */
+  readonly labels: readonly string[];
+}
+
+/**
+ * The focus Ready's incumbents are held to (SC-2741). `expediteLabel` is
+ * `board.expediteLabel`, passed in — `lib/config-readers.ts` holds the one
+ * binding — and `null` exempts nobody.
+ */
+export interface ReadyScope {
+  readonly active: ActiveMilestone;
+  readonly expediteLabel: string | null;
 }
 
 export type IncumbentDecision =
@@ -218,6 +233,11 @@ export type IncumbentDecision =
 export function incumbentDecisions(
   incumbents: readonly Incumbent[],
   readyColumn: string,
+  /**
+   * REQUIRED, with no default: a caller that could omit it would keep every
+   * card outside the focus, which is the defect SC-2741 closes.
+   */
+  scope: ReadyScope,
 ): IncumbentDecision[] {
   const backwards = laneFor({ kind: "issue_blocked_in_ready" });
   return incumbents.map((c): IncumbentDecision => {
@@ -237,7 +257,33 @@ export function incumbentDecisions(
         why: "UNMEASURED — the dependency summary could not be read",
       };
     }
-    if (c.blockedByOpen === 0) return { number: c.number, demote: false, why: "still unblocked" };
+    if (c.blockedByOpen === 0) {
+      // **Unblocked, so the focus decides** (SC-2741). A blocked card is
+      // demoted for its blocker below, once, with that reason; this branch is
+      // for the card that meets every entry condition except being in the
+      // active milestone — a card dragged in by hand, or one promoted under
+      // the label-and-phase ordering this replaced. Without it, it holds its
+      // slot forever, because no other rule ever re-asks.
+      const expedited = scope.expediteLabel !== null && c.labels.includes(scope.expediteLabel);
+      if (inReadyScope(c, scope.active, expedited)) {
+        return { number: c.number, demote: false, why: "still unblocked and inside the active milestone" };
+      }
+      if (backwards.lane === null) {
+        return {
+          number: c.number,
+          demote: false,
+          why: `UNMEASURED — laneFor gave no destination: ${backwards.why}`,
+        };
+      }
+      return {
+        number: c.number,
+        demote: true,
+        to: backwards.lane,
+        why:
+          `${c.milestone === null ? "it has no milestone" : `it sits in ${c.milestone}`}, outside the ` +
+          `active milestone — ${scope.active.why}`,
+      };
+    }
     // The lane itself is UNMEASURED if the one rule for moving backwards has
     // no answer. Writing a literal here would be the second decider.
     if (backwards.lane === null) {
