@@ -28,7 +28,7 @@
  * refuses unconditionally.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { spawnSync } from "child_process";
@@ -1757,6 +1757,35 @@ describe("SC-2734: deferred specs leave the meter only through a ratchet that re
     expect(r.why).toContain("specs/GONE.md");
   });
 
+  test("SC-2734: a path banked twice refuses, whichever count matches", () => {
+    const r = reading(withDeferral(
+      [{ path: "specs/OUT.md", criteria: 7 }],
+      [{ path: "specs/OUT.md", criteria: 99 }, { path: "specs/OUT.md", criteria: 7 }],
+    ));
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/OUT.md is in the bank more than once");
+  });
+
+  test("SC-2734: the bank is read from disk, and a bank that will not read is omitted, not empty", async () => {
+    const { readDeferralBank } = await import("../scripts/board-snapshot.ts");
+    const root = mkdtempSync(join(tmpdir(), "sc2734-bank-"));
+    try {
+      expect(readDeferralBank(root)).toEqual({});
+      mkdirSync(join(root, ".claude"));
+      const bank = join(root, ".claude", "spec-deferral-ratchet.json");
+      writeFileSync(bank, "{ not json");
+      expect(readDeferralBank(root)).toEqual({});
+      writeFileSync(bank, JSON.stringify({ deferred: [{ path: "specs/X.md" }] }));
+      expect(readDeferralBank(root)).toEqual({});
+      writeFileSync(bank, JSON.stringify({ deferred: [{ path: "specs/X.md", criteria: 4 }] }));
+      expect(readDeferralBank(root)).toEqual({ specDeferrals: [{ path: "specs/X.md", criteria: 4 }] });
+      writeFileSync(bank, JSON.stringify({ deferred: [] }));
+      expect(readDeferralBank(root)).toEqual({ specDeferrals: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("SC-2734: a deferred spec whose criteria count moved refuses", () => {
     const r = reading(withDeferral([{ path: "specs/OUT.md", criteria: 9 }], [{ path: "specs/OUT.md", criteria: 7 }]));
     expect(r.status).toBe("unmeasured");
@@ -1778,6 +1807,10 @@ describe("SC-2734: deferred specs leave the meter only through a ratchet that re
     expect(declaresDeferred("---\ndoc-type: spec\nboard-scope: in\n---\n")).toBe(false);
     // An empty value does not borrow the next line (security review of #2013).
     expect(declaresDeferred("---\nboard-scope:\ndeferred\n---\n")).toBe(false);
+    // Quotes must pair: an unterminated or mismatched quote is not a declaration.
+    expect(declaresDeferred('---\nboard-scope: "deferred"\n---\n')).toBe(true);
+    expect(declaresDeferred('---\nboard-scope: "deferred\n---\n')).toBe(false);
+    expect(declaresDeferred(`---\nboard-scope: "deferred'\n---\n`)).toBe(false);
   });
 
   test("SC-2734: this tree's deferred specs equal its bank exactly, and the engine and payload are in scope", async () => {

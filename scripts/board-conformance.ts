@@ -211,6 +211,13 @@ export function deferralDifferences(rows: readonly SpecPlacementRow[], bank: rea
   const live = new Map(rows.filter(r => r.deferred === true).map(r => [r.path, r.criteria]));
   const banked = new Map(bank.map(d => [d.path, d.criteria]));
   const out: string[] = [];
+  // A path banked twice is a bank that disagrees with itself. The Map keeps
+  // only the last entry, so without this the other one vanishes unread.
+  const seen = new Set<string>();
+  for (const d of bank) {
+    if (seen.has(d.path)) out.push(`${d.path} is in the bank more than once`);
+    seen.add(d.path);
+  }
   for (const [path, n] of live) {
     if (!banked.has(path)) out.push(`${path} is deferred and not in the bank`);
     else if (banked.get(path) !== n) out.push(`${path} states ${n} criteria and the bank holds ${banked.get(path)}`);
