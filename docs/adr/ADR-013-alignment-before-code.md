@@ -179,12 +179,15 @@ Notes per row:
 - **Row 8** is blocked by row 2 because both edit `lib/board-ready-rule.ts`.
   It names #1752 (transferred) and relates to #1976 (grouping Ready by file
   overlap). It absorbs revision 3's row 8: `board-intake` already adds a
-  card on `opened`, so only the missing triggers remain.
+  card on `opened`, so only the missing triggers remain. **It also demotes
+  any Ready card outside the active milestone** (that isn't
+  `work-this-next`): measured, `incumbentDecisions` in
+  `lib/board-ready-fanout.ts` demotes an incumbent only when it is blocked,
+  so without this a card dragged in by hand, or #1764, would hold its slot
+  forever.
 
 ## Not decided here
 
-- Whether a card dragged into Ready by hand is demoted by the next run —
-  not yet checked.
 - Which specs are admitted after the car is done; whether
   `specs/HARNESS-STANDARD.md` (`doc-type: reference`, 648 criteria) is a
   spec; the duplicate `ADR-011`.
