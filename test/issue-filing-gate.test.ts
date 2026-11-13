@@ -7150,26 +7150,37 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     expect(r.refusal ?? "").toContain("cap is 5");
   });
 
-  test("FG-274: the ceiling is ONE exported constant, read by the one decider", () => {
+  test("FG-274: the ceiling is ONE exported constant, read by the one decider", async () => {
     expect(NET_GROWTH_CEILING, "ADR-016 decided 36").toBe(36);
     expect(NET_GROWTH_CEILING, "and it is still under #1595's 57-a-day swarm").toBeLessThan(57);
     const directCap = { cap: FILINGS_PER_RUN_DIRECT, unreadable: false, direct: true };
-    expect(netGrowthCeiling(directCap, { reading: "MEASURED", opened: 1, closed: 1 }).cap).toBe(
+    const reads = (r: NetGrowthReading) => async () => r;
+    expect((await netGrowthCeiling(directCap, reads({ reading: "MEASURED", opened: 1, closed: 1 }))).cap).toBe(
       NET_GROWTH_CEILING,
     );
-    expect(netGrowthCeiling(directCap, { reading: "MEASURED", opened: 2, closed: 1 }).cap).toBe(
+    expect((await netGrowthCeiling(directCap, reads({ reading: "MEASURED", opened: 2, closed: 1 }))).cap).toBe(
       FILINGS_PER_RUN_DIRECT,
     );
-    expect(netGrowthCeiling(directCap, { reading: "UNMEASURED", why: "x" }).cap).toBe(FILINGS_PER_RUN_DIRECT);
-    expect(netGrowthCeiling(directCap, null), "no reading taken is no ceiling").toEqual({
-      cap: FILINGS_PER_RUN_DIRECT,
-      basis: null,
+    expect((await netGrowthCeiling(directCap, reads({ reading: "UNMEASURED", why: "x" }))).cap).toBe(
+      FILINGS_PER_RUN_DIRECT,
+    );
+    // A reader that throws SYNCHRONOUSLY is an unread count too, not a throw.
+    const sync = await netGrowthCeiling(directCap, () => {
+      throw new Error("no token");
     });
+    expect(sync.cap).toBe(FILINGS_PER_RUN_DIRECT);
+    expect(sync.basis).toMatchObject({ reading: "UNMEASURED" });
     // The fail-closed half of `filingsPerRunFor`: an unreadable config is
-    // never eligible, whatever the count says.
+    // never eligible, whatever the count says, and the count is not read.
     const corrupt = filingsPerRunFor(() => ({ ship: { mode: "dierct" } }));
     expect(corrupt.direct).toBe(false);
-    expect(netGrowthCeiling(corrupt, { reading: "MEASURED", opened: 0, closed: 9 }).cap).toBe(FILINGS_PER_RUN);
+    let read = false;
+    const r = await netGrowthCeiling(corrupt, async () => {
+      read = true;
+      return { reading: "MEASURED", opened: 0, closed: 9 };
+    });
+    expect(r).toEqual({ cap: FILINGS_PER_RUN, basis: null });
+    expect(read, "an ineligible cap paid for a read").toBe(false);
   });
 
   /** A client that answers `listForRepo` from memory, one array per page. */

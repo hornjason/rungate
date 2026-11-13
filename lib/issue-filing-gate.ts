@@ -743,21 +743,36 @@ export type NetGrowthBasis =
  * Returns the cap with the basis that set it, so the refusal and the ledger
  * row cannot describe a different decision from the one enforced.
  *
- * - Not the direct-ship allowance (`allowance.direct` false), or no count
- *   taken: the cap stands and records nothing.
- * - Count unreadable: the cap stands, and the reading is recorded as
- *   UNMEASURED. Never the ceiling — this is the fail-closed direction.
+ * - Not the direct-ship allowance (`allowance.direct` false): the cap
+ *   stands, records nothing, and **the count is never read**.
+ * - Count unreadable, or the reader throws: the cap stands, and the reading
+ *   is recorded as UNMEASURED. Never the ceiling — the fail-closed direction.
  * - opened − closed ≤ 0: `NET_GROWTH_CEILING`.
  * - opened − closed > 0: the cap stands.
+ *
+ * **It takes a THUNK, and that is what keeps eligibility to one site.** With
+ * a value, the caller has to decide whether to read before calling, and that
+ * guard and the one in here are two deciders over one question — mutate
+ * either and the other holds the harness case up
+ * (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape). The
+ * catch lives here too, because this runs inside a PreToolUse hook where a
+ * throw blocks every filing on the machine.
  *
  * The engine raise is applied AFTER this, by `capForClause`, exactly as
  * before: a queued clause gets the larger of this and `QUEUE_FILINGS_PER_RUN`.
  */
-export function netGrowthCeiling(
+export async function netGrowthCeiling(
   allowance: FilingCapReading,
-  growth: NetGrowthReading | null,
-): { cap: number; basis: NetGrowthBasis | null } {
-  if (!allowance.direct || growth === null) return { cap: allowance.cap, basis: null };
+  read: () => Promise<NetGrowthReading>,
+): Promise<{ cap: number; basis: NetGrowthBasis | null }> {
+  if (!allowance.direct) return { cap: allowance.cap, basis: null };
+  // `then(read)`, not `read()`: a reader that throws SYNCHRONOUSLY would
+  // otherwise escape the catch below.
+  const growth = await Promise.resolve()
+    .then(read)
+    .catch((e: unknown) =>
+    unmeasuredGrowth(`the trailing day's issues could not be read (${errorText(e)})`),
+  );
   if (growth.reading !== "MEASURED") return { cap: allowance.cap, basis: growth };
   const ceiling = growth.opened - growth.closed <= 0;
   return {
@@ -780,7 +795,14 @@ export const NET_GROWTH_PER_PAGE = 100;
  */
 export const NET_GROWTH_MAX_PAGES = 10;
 
-const unmeasuredGrowth = (why: string): NetGrowthReading => ({ reading: "UNMEASURED", why });
+function unmeasuredGrowth(why: string): NetGrowthReading {
+  return { reading: "UNMEASURED", why };
+}
+
+/** A thrown value as a bounded sentence fragment, for an UNMEASURED `why`. */
+function errorText(e: unknown): string {
+  return (e instanceof Error ? e.message : String(e)).slice(0, 200);
+}
 
 /**
  * Count the issues opened and closed in the trailing `RUN_WINDOW_MS` (#2086).
@@ -881,8 +903,7 @@ export async function readNetGrowth(
     if (slug === null) return unmeasuredGrowth("no repository slug could be resolved for this checkout");
     return await withTimeout(countNetGrowth(connect(), slug, nowMs), OPEN_ISSUE_TIMEOUT_MS);
   } catch (e) {
-    const message = (e instanceof Error ? e.message : String(e)).slice(0, 200);
-    return unmeasuredGrowth(`the trailing day's issues could not be read (${message})`);
+    return unmeasuredGrowth(`the trailing day's issues could not be read (${errorText(e)})`);
   }
 }
 
@@ -3379,19 +3400,11 @@ export async function filingGate(
   // STRICT cap — `filingsPerRunFor`.
   const allowance = filingsPerRunFor(() => tryLoadRungateConfig(root));
   // The net-growth ceiling (ADR-016), resolved ONCE per command for the same
-  // reason. Read only where it can apply — the direct-ship allowance — and a
-  // reader that throws is an unread count, never a throw out of the hook.
-  // `netGrowthCeiling` is the one decider; every cap consumer below reads
-  // `cap`, and every refusal and row reads `growth.basis`.
+  // reason. `netGrowthCeiling` is the one decider — it alone decides whether
+  // the count is read at all — and every cap consumer below reads `cap`, and
+  // every refusal and row reads `growth.basis`.
   const readGrowth = options.readGrowth ?? readNetGrowth;
-  const counted = allowance.direct
-    ? await readGrowth(root, Date.parse(at)).catch((e: unknown) =>
-        unmeasuredGrowth(
-          `the trailing day's issues could not be read (${(e instanceof Error ? e.message : String(e)).slice(0, 200)})`,
-        ),
-      )
-    : null;
-  const growth = netGrowthCeiling(allowance, counted);
+  const growth = await netGrowthCeiling(allowance, () => readGrowth(root, Date.parse(at)));
   const cap = growth.cap;
   // The work queue's name, resolved ONCE per command for the same reason the
   // allowance is: per clause would let two clauses of one command be
