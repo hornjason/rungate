@@ -17,6 +17,7 @@ import { describe, expect, test } from "bun:test";
 import {
   FILINGS_PER_RUN,
   FILINGS_PER_RUN_DIRECT,
+  FILING_CAP_OVERRIDE_MAX,
   filingsPerRunFor,
   unreadableShipPolicyNote,
 } from "../lib/issue-filing-gate";
@@ -34,9 +35,8 @@ describe("#2070: board.filingsPerRun sets the cap whatever the ship mode", () =>
     expect(filingsPerRunFor(() => ({ board: { filingsPerRun: 4 } })).cap).toBe(4);
   });
 
-  test("an override applies in direct mode too, in either direction", () => {
+  test("an override applies in direct mode too — it can lower the direct allowance", () => {
     expect(filingsPerRunFor(() => ({ ship: DIRECT, board: { filingsPerRun: 2 } })).cap).toBe(2);
-    expect(filingsPerRunFor(() => ({ ship: DIRECT, board: { filingsPerRun: 20 } })).cap).toBe(20);
   });
 
   test("CONTROL: no override is exactly the ship-mode derivation, unchanged", () => {
@@ -79,6 +79,29 @@ describe("#2070: board.filingsPerRun sets the cap whatever the ship mode", () =>
       cap: FILINGS_PER_RUN,
       unreadable: true,
     });
+  });
+
+  test("the override is bounded like the direct-ship cap, and an over-ceiling value is refused, not clamped", () => {
+    // Review finding on #2075: with no ceiling, `filingsPerRun: 999999` was a
+    // valid cap and walked past the bound FG-194 holds for direct mode —
+    // the #1595 swarm protection. Refused rather than clamped: a silent
+    // clamp is a cap nobody chose, reported as if somebody had.
+    expect(FILING_CAP_OVERRIDE_MAX, "the override ceiling is not the direct-ship allowance FG-194 bounds")
+      .toBe(FILINGS_PER_RUN_DIRECT);
+    expect(FILING_CAP_OVERRIDE_MAX, "the override ceiling drifted above the FG-194 bound")
+      .toBeLessThanOrEqual(15);
+    expect(FILING_CAP_OVERRIDE_MAX * 4, "the ceiling is no longer well below #1595's 57-per-day swarm")
+      .toBeLessThan(57);
+    expect(filingsPerRunFor(() => ({ board: { filingsPerRun: FILING_CAP_OVERRIDE_MAX } })).cap)
+      .toBe(FILING_CAP_OVERRIDE_MAX);
+    for (const over of [FILING_CAP_OVERRIDE_MAX + 1, 999999]) {
+      const r = filingsPerRunFor(() => ({ ship: DIRECT, board: { filingsPerRun: over } }));
+      expect(r, `${over} was accepted`).toEqual({
+        cap: FILINGS_PER_RUN,
+        unreadable: true,
+        unreadableSource: "`board.filingsPerRun`",
+      });
+    }
   });
 
   test("a non-object board block is the strict cap, flagged", () => {

@@ -463,6 +463,19 @@ export type FilingCapReading = {
   unreadableSource?: string;
 };
 
+/**
+ * The highest per-run cap `board.filingsPerRun` may set (#2070 review).
+ *
+ * The direct-ship allowance itself, so the override can lower a harness
+ * project's cap or raise it to what direct mode already gets, and no
+ * further. FG-194 bounds that allowance because #1595's swarm filed 57 in a
+ * day; an override with no ceiling walked straight past it. Tied to the
+ * constant rather than a second literal, so raising one is raising both and
+ * FG-194 still decides. A value above it is refused, not clamped: a silent
+ * clamp is a cap nobody chose, reported as if somebody had.
+ */
+export const FILING_CAP_OVERRIDE_MAX = FILINGS_PER_RUN_DIRECT;
+
 /** The per-run cap override's config path, as the note names it (#2070). */
 export const FILING_CAP_OVERRIDE_SOURCE = "`board.filingsPerRun`";
 
@@ -480,7 +493,9 @@ export function filingCapOverride(config: Record<string, unknown> | null | undef
   if (typeof board !== "object" || Array.isArray(board)) return "unusable";
   if (!("filingsPerRun" in board)) return null;
   const raw = (board as Record<string, unknown>).filingsPerRun;
-  return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : "unusable";
+  return typeof raw === "number" && Number.isInteger(raw) && raw > 0 && raw <= FILING_CAP_OVERRIDE_MAX
+    ? raw
+    : "unusable";
 }
 
 export function filingsPerRunFor(
