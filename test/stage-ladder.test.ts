@@ -177,7 +177,7 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  * redden every pull request — the board self-repair recorded on #2020 is
  * what lets it count.
  */
-const COMPLETE_STAGES = 5;
+const COMPLETE_STAGES = 6;
 
 /**
  * Every verify command in the plan file runs through here.
