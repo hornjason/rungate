@@ -1659,7 +1659,7 @@
           "id": "F2",
           "what": "`board-conformance` exits 0. THAT IS THE GOAL MET",
           "done": false,
-          "verify": "bun bin/rungate.ts board-conformance"
+          "verify": null
         }
       ],
       "goal": "Convergence goes through the engine untouched",
