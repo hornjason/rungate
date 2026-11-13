@@ -1456,6 +1456,17 @@ describe("SC-2764: the filing cap line names the counts and the cap they set", (
     expect(line).toMatch(/^Filing cap: 12\b/);
   });
 
+  test("the engine-queue note survives the ceiling branch if the ceiling ever sits below it", () => {
+    // Review of #2089 round 2: unobservable while 36 > 24, but nothing pins
+    // that, so the branch is held to the same shape as the others.
+    const line = netGrowthLine(
+      { cap: 20, basis: { reading: "MEASURED", opened: 1, closed: 2, ceiling: true } },
+      { ...caps, ceiling: 20 },
+    );
+    expect(line).toContain("24 for an engine-labelled filing");
+    expect(line).toContain("ceiling applies");
+  });
+
   test("a cap the ceiling cannot reach says the ceiling does not apply", () => {
     const line = netGrowthLine({ cap: 1, basis: null }, caps);
     expect(line).toMatch(/^Filing cap: 1\b/);

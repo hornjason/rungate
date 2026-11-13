@@ -529,7 +529,7 @@ export function netGrowthLine(
     );
   }
   const counts = `the repo opened ${basis.opened} and closed ${basis.closed} issue(s) in the last 24h`;
-  if (basis.ceiling) return `${head} — ${counts}, so the net-growth ceiling applies (ADR-016).`;
+  if (basis.ceiling) return `${head}${queue} — ${counts}, so the net-growth ceiling applies (ADR-016).`;
   const net = basis.opened - basis.closed;
   return (
     `${head}${queue} — ${counts} (net +${net}), so the cap stays at the ship-mode ${caps.shipCap}; ` +
