@@ -243,10 +243,10 @@
   ],
   "sessions": [
     {
-      "date": "2026-11-13 session 92 (ADR-015's review rounds, the needs-criterion row recast as SC-2762, and four PRs merged)",
+      "date": "2026-11-13 session 92 (ADR-015's review rounds, the needs-criterion row recast as SC-2762, and three engine PRs merged)",
       "items": [
         "STOP-POINT: #2034 (ADR-015) is green and waits for Jason's merge. After it merges, run `plan-issues --repair docs/adr/ADR-015-backlog-criterion-repair-the-forty.md --repo hornjason/rungate --write` by hand (adr-accepted.yml runs --decompose only), then dispatch criterion-label.yml and run board-mirror --write. #2058 (#2054, SC-2741 ticked via sync-sc-status --only) is armed. #2056 (tick SC-2617) is next, with --only once #2058 merges.",
-        "MERGED: #2052 (#2037, board-mirror's focus read from repository issues), #2053 (#2041, D4's binding through the TypeScript parser), #2055 (#2024, family-aware dependency-edges reading, live 200 of 200 after plan-deps wrote 11 Convergence edges).",
+        "MERGED: #2052 (#2037, board-mirror's focus read from repository issues), #2053 (#2041, D4's binding through the TypeScript parser), #2055 (#2024, family-aware dependency-edges reading, live 200 of 200 after plan-deps wrote 11 Convergence edges). #2055 closed #2024, SC-2617's engine issue; #2056 was filed and placed in Phase 6 before #2055 was armed, so SC-2617 stayed covered and nothing went red.",
         "CLOSING A CRITERION'S LAST ENGINE ISSUE TURNS EVERY PR RED: criterion-coverage (B2) runs live inside the required test check. #2052 closed #2037, SC-2741's only issue, and every open PR went red until Jason filed #2054 (the agent's filing cap was spent). Before arming a PR that closes an engine issue, check that its criterion keeps an open engine issue or is ticked in the same merge.",
         "SC-2762 IS NEW: ADR-015's needs-criterion row did not match SC-2741's text. Jason chose a new criterion in his wording (2026-11-13), and #2054 became SC-2741's real remaining work.",
         "OPEN DESIGN CALLS: #2042 (--repair placing milestones) assumes one milestone family per plan, and ADR-015 mixes three; a recommendation is on the issue. #2057 (one reader for the milestone-title grammar) was filed from review round 4 of #2055. #2040 stays parked (Jason's call). E3 has verify: null; dependency-edges is the natural command, which is a plan change for Jason."
