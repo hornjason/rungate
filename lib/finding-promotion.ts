@@ -402,10 +402,10 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
   // and a retry of a failed link must still reach the link (review of #2065).
   // Every other refusal holds. SYMBOL_EXISTS alone also means every spec
   // check passed, so the read below is of a spec inside the tree.
-  if (violations.some(v => v.refusal !== "SYMBOL_EXISTS")) {
-    const first = violations[0]!;
-    return { promoted: false, refusal: first.refusal, why: first.why };
-  }
+  // The blocker is reported, not SYMBOL_EXISTS, which is pushed early and
+  // would otherwise sit at index 0 over a missing spec (review of #2065).
+  const blocker = violations.find(v => v.refusal !== "SYMBOL_EXISTS");
+  if (blocker) return { promoted: false, refusal: blocker.refusal, why: blocker.why };
 
   // Inside a guard, because `promotionViolations` proved the file EXISTS and
   // existing is not the same as readable — a permission, a directory where a

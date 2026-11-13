@@ -1321,6 +1321,26 @@ describe("#2060 / SC-2612: an existing symbol is refused, and the issue is linke
     }
   });
 
+  test("an existing symbol never hides the refusal that actually blocks", () => {
+    // Review of #2065, round 3: SYMBOL_EXISTS is pushed early, so returning
+    // `violations[0]` named it while a missing spec or a doubled heading was
+    // the real blocker.
+    const root = withModule("export function promote() {}\n");
+    try {
+      const absent = promote(inputFor(root, { spec: "specs/NOT-HERE-SPEC.md" }), REGISTRY);
+      expect(absent.promoted).toBe(false);
+      if (absent.promoted) return;
+      expect(absent.refusal).toBe("SPEC_ABSENT");
+      const body = "x\n\n## Criteria this serves\n\n## Criteria this serves\n";
+      const doubled = promote(inputFor(root, { issue: { number: 77, title: "t", body } }), REGISTRY);
+      expect(doubled.promoted).toBe(false);
+      if (doubled.promoted) return;
+      expect(doubled.refusal).toBe("AMBIGUOUS_HEADING");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("an issue with two Criteria headings is refused before the spec is written", () => {
     // Review of #2065, round 2: the decline path refuses this shape; the
     // promote path wrote the spec and then linked into the first heading.
