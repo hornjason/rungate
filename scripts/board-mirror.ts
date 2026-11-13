@@ -52,6 +52,7 @@ import {
   type ReadyOccupancy,
 } from "../lib/board-ready-rule";
 import { measureClosedIssues } from "../lib/board-throughput";
+import { readOpenIssueMilestones } from "../lib/active-milestone";
 import { incumbentDecisions } from "../lib/board-ready-fanout";
 import {
   criterionIdsIn,
@@ -544,13 +545,40 @@ export async function main(argv: string[]): Promise<number> {
   const engine = enginePrefixReading(root);
   if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
   const enginePrefix = engine.prefix;
-  // The focus is read over every OPEN item on the board, claimed and blocked
-  // ones included (SC-2741) — the board is this command's whole view, and
-  // board-intake adds every opened issue to it.
-  const active = activeMilestone(
-    items.filter(i => i.state === "OPEN"),
-    enginePrefix,
-  );
+  // A board can span repositories, so there is no repository to default
+  // to and no honest depth without one. UNMEASURED, and nothing is
+  // promoted on a null cap.
+  // Re-parsed rather than carried, so there is one spelling of what a
+  // repository argument is. `main` has already refused anything this
+  // returns null for.
+  const repo = values.repo === undefined ? null : parseRepo(values.repo);
+
+  // **The focus is read over every OPEN issue in the REPOSITORY (#2037)**,
+  // claimed and blocked ones included (SC-2741) — the population
+  // `scripts/board-ready.ts` reads. It used to be the open cards on this
+  // board, so an earlier-phase issue that never reached the board (a failed
+  // intake run) moved this writer's focus and not the workflow's: two Ready
+  // writers, two answers.
+  //
+  // Read only under `--ready` with a repository, the one case that writes
+  // Ready. With no reading there is no focus — not a focus of "nothing",
+  // which `activeMilestone` reports as `title: null` and which puts every
+  // incumbent out of scope.
+  const openInRepo =
+    values.ready && repo
+      ? await readOpenIssueMilestones((q, v) => client.graphql(q, v), repo.owner, repo.name)
+      : null;
+  const active: ActiveMilestone =
+    openInRepo !== null
+      ? activeMilestone(openInRepo, enginePrefix)
+      : {
+          title: null,
+          why: !values.ready
+            ? "not computed — --ready was not passed"
+            : repo === null
+              ? "UNMEASURED — pass --repo owner/name; the focus is read from the repository's open issues"
+              : `UNMEASURED — the open issues of ${values.repo} could not be read, so no focus was computed`,
+        };
   const expediteLabel = readExpediteLabel(root);
 
   const { writable, occupied } = readyPopulation(items);
@@ -560,8 +588,13 @@ export async function main(argv: string[]): Promise<number> {
   // #2007: an incumbent outside the focus, which `isReady` alone keeps. A card
   // already changing (blocked, so leaving for Backlog) is not added twice.
   const changing = new Set(readyChanges.map(c => c.item.number));
-  for (const d of scopeDemotions(writable, active, expediteLabel)) {
-    if (!changing.has(d.item.number)) readyChanges.push(d);
+  // Only on a focus that was READ (#2037). An unread focus has `title: null`,
+  // and every incumbent is out of scope against that — a missing `--repo`
+  // would empty the lane.
+  if (openInRepo !== null) {
+    for (const d of scopeDemotions(writable, active, expediteLabel)) {
+      if (!changing.has(d.item.number)) readyChanges.push(d);
+    }
   }
 
   // An assignee is a person saying "mine". Where their card sits is then
@@ -574,13 +607,6 @@ export async function main(argv: string[]): Promise<number> {
   const eligible = readyChanges.filter(mayWrite);
   const readySkipped = readyChanges.filter(c => !mayWrite(c));
 
-  // A board can span repositories, so there is no repository to default
-  // to and no honest depth without one. UNMEASURED, and nothing is
-  // promoted on a null cap.
-  // Re-parsed rather than carried, so there is one spelling of what a
-  // repository argument is. `main` has already refused anything this
-  // returns null for.
-  const repo = values.repo === undefined ? null : parseRepo(values.repo);
   // **Gated on `--ready`, not merely on `--repo`.** This pages every
   // closed issue in the repository, and a plain Criteria sync that
   // happens to pass `--repo` has no use for a depth. ai-review round 2
