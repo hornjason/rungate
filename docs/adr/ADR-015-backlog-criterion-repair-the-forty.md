@@ -39,8 +39,9 @@ own subject, `MEDIUM` that the link is an argument. Overrule any row.
 
 ## Decisions
 
-1. **The four-way split — Jason, 2026-11-12.** As below, counted by issue: 3 annotate, 12
-   declare, 22 promote, 3 stale.
+1. **The four-way split — Jason, 2026-11-12.** As below, counted by issue: 3 annotate, 13
+   declare, 20 promote, 3 stale, and #1945 waiting (below) — 40. The batch
+   review moved #1506 from promote to declare.
 2. **Promote rows need Jason's criterion text — Jason, by AGENTS.md rule 9.**
    The drafts below are reviewed with him in batches before any is written.
 3. **The write-guard cluster (#1355, #1367, #1407, #1425) — Jason, 2026-11-12.** Declare
@@ -113,6 +114,7 @@ no placement table.
 | #1973 | scripts/board-ready.ts has no test that runs it | MEDIUM | Test coverage of a script's wiring. |
 | #1975 | A 5s timeout and a missing verdict look identical in the ladder | HIGH | Flake handling inside the stage-ladder test, which is rule 10 machinery. |
 | #1993 | audit-specs writes two REVIEW notes under one criterion | HIGH | Its body already declares this, capitalised; the write lowercases it so E2 counts it. |
+| #1506 | The SC/FG reservation protocol is unfollowable: enforce_admins blocks the 'push it to main first' step it requires | HIGH | Jason, 2026-11-12: current practice becomes the rule — ids are written in the pull request that consumes them, and the `taken` set protects them after merge. The reservation rule's text is amended in the PR that declares it. |
 
 ## Promote — reviewed with Jason, 2026-11-12, batch by batch
 
@@ -153,10 +155,7 @@ one step.
 
 **Not promoted:**
 
-- **#1506 — declared (Jason):** current practice becomes the rule — criterion
-  ids are written in the pull request that consumes them, and the `taken`
-  set protects them after merge. The reservation rule's text is amended in
-  the PR that declares it.
+- **#1506 — declared (Jason):** moved to the Declare table above.
 - **#1945 — waits (Jason):** if `adr-accepted.yml`'s first run that places a
   plan (ADR-014's merge) fills the Criteria cells, #1945 is answered by
   SC-2738; otherwise it is promoted then.
