@@ -125,6 +125,30 @@ describe("#2024 / SC-2617: phases chain within a milestone family, never across 
     expect(plan.reading).toBe("MEASURED");
   });
 
+  test("a phase title with no family readable is unphased, never chained into a shared bucket", () => {
+    // Review of #2055: `phaseOf` is unanchored, so `Release (Phase 3)` has a
+    // phase, and a `?? ""` fallback filed it with every other unreadable
+    // title — the cross-spec chain this split exists to prevent.
+    const plan = dependencyPlan([
+      fam(10, "Convergence", 0),
+      fam(11, "Convergence", 1),
+      { number: 30, state: "OPEN", milestone: "Release (Phase 3)", blockedBy: [] },
+      { number: 40, state: "OPEN", milestone: "Docs (Phase 4)", blockedBy: [] },
+    ]);
+    expect(keys(plan.missing)).toEqual(["11<-10"]);
+    expect(plan.unphased.sort()).toEqual([30, 40]);
+  });
+
+  test("bare `Phase N` titles are one family — a repository with no prefix has one sequence", () => {
+    // The same reading `familyRank` takes for a null prefix: one family.
+    const bare = (number: number, phase: number): DepIssue => ({
+      number, state: "OPEN", milestone: `Phase ${phase} — x`, blockedBy: [],
+    });
+    const plan = dependencyPlan([bare(10, 1), bare(20, 2), fam(30, "Pipeline", 2)]);
+    expect(keys(plan.missing)).toEqual(["20<-10"]);
+    expect(familyOf("Phase 2 — x")).toBe("");
+  });
+
   test("familyOf reads the same grammar as phaseInFamily, so the two cannot disagree", () => {
     // The last title says "Phase" twice: the family ends at the FIRST one.
     expect(familyOf("Pipeline Phase 6 — starts after Phase 5 ships")).toBe("Pipeline");

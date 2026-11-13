@@ -94,7 +94,10 @@ export function phaseInFamily(title: string | null | undefined, prefix: string):
 
 /**
  * The family a phase milestone belongs to — `Pipeline` for `Pipeline Phase 6
- * — …` — or null when the title is not `<family> Phase N` (#2024).
+ * — …`, `""` for a bare `Phase N` title (a repository with no prefix has one
+ * family, the reading `familyRank` takes for a null prefix), or null when
+ * the title is neither shape (#2024). Null is not a family: a caller must
+ * not fold it into one, or every unreadable title chains to every other.
  *
  * The same grammar as {@link phaseInFamily}, read the other way: for every
  * title this returns a family for, `phaseInFamily(title, familyOf(title))` is
@@ -102,8 +105,8 @@ export function phaseInFamily(title: string | null | undefined, prefix: string):
  * two cannot drift into a second decider of what a family is.
  */
 export function familyOf(title: string | null | undefined): string | null {
-  const m = (title ?? "").match(/^(.+?) Phase (\d+)\b/);
-  return m ? m[1] : null;
+  const m = (title ?? "").match(/^(?:(.+?) )?Phase (\d+)\b/);
+  return m ? (m[1] ?? "") : null;
 }
 
 export interface PlacementRow {

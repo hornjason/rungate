@@ -215,7 +215,9 @@ export function dependencyPlan(
   const byPhase = new Map<number, DepIssue[]>();
   for (const i of considered) {
     const p = phaseOf(i.milestone);
-    if (p === null) {
+    // A phase with no readable family (`Release (Phase 3)`) is unphased, not
+    // filed with every other unreadable title (review of #2055).
+    if (p === null || familyOf(i.milestone) === null) {
       unphased.push(i.number);
       continue;
     }
@@ -241,7 +243,7 @@ export function dependencyPlan(
   const byFamily = new Map<string, Map<number, DepIssue[]>>();
   for (const [p, members] of byPhase) {
     for (const i of members) {
-      const f = familyOf(i.milestone) ?? "";
+      const f = familyOf(i.milestone) as string;
       const fam = byFamily.get(f) ?? new Map<number, DepIssue[]>();
       fam.set(p, [...(fam.get(p) ?? []), i]);
       byFamily.set(f, fam);
