@@ -29,7 +29,7 @@ launch checkout over 24 hours:
 | `FILINGS_PER_RUN` | 1 | harness mode |
 | `FILINGS_PER_RUN_DIRECT` | 12 | direct mode (today) |
 | `QUEUE_FILINGS_PER_RUN` | 24 | a filing labelled `engine` with no `-R` |
-| `FILING_CAP_OVERRIDE_MAX` | 12 | the ceiling on `board.filingsPerRun` (#2070) |
+| `FILING_CAP_OVERRIDE_MAX` | 12 | the ceiling on `board.filingsPerRun` (#2070, PR #2075) |
 
 Measured on 2026-11-13, from `~/.rungate/finding-ledger.jsonl` and the
 tracker:
