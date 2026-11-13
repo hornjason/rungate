@@ -725,6 +725,11 @@ export function selectOnly(
   };
 }
 
+/** `--only` refuses when fewer criteria flipped than it selected (#2054). */
+export function onlyRefusesShortFlip(only: readonly string[] | null, asked: number, flipped: number): boolean {
+  return only !== null && flipped < asked;
+}
+
 export function flipCheckboxes(specFile: string, scIds: string[], specsDir?: string, isDryRun?: boolean): number {
   const dir = specsDir || SPECS_DIR;
   const filePath = join(dir, specFile);
@@ -1011,4 +1016,12 @@ if (isDirectExecution) {
   }
 
   console.log(`\n${dryRun ? "Would flip" : "Flipped"} ${totalFlipped} SC checkboxes`);
+  // Review of #2058: `--only` promises the named criteria are flipped or the
+  // run fails. `flipCheckboxes` can decline (a spec a generator owns, or a
+  // line that changed under us) and return fewer than asked.
+  const asked = [...selected.values()].reduce((n, ids) => n + ids.length, 0);
+  if (onlyRefusesShortFlip(onlyIds, asked, totalFlipped)) {
+    console.error(`--only: ${asked} criteria were selected and ${totalFlipped} flipped — the rest were declined above`);
+    process.exit(1);
+  }
 }

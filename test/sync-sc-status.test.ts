@@ -17,6 +17,7 @@ import {
   scopedKey,
   findDuplicateSCIds,
   selectOnly,
+  onlyRefusesShortFlip,
   type UncheckedSC,
 } from "../scripts/sync-sc-status";
 
@@ -296,6 +297,13 @@ describe("#2054: --only narrows the flip to the named criteria", () => {
     const twice = new Map([["SPEC-A.md", ["SC-1"]], ["SPEC-B.md", ["SC-1", "SC-3"]]]);
     const r = selectOnly(twice, ["SC-1"]);
     expect(r.ambiguous).toEqual([{ id: "SC-1", specs: ["SPEC-A.md", "SPEC-B.md"] }]);
+  });
+
+  test("--only refuses when a selected criterion was not flipped; a full run does not", () => {
+    // Review of #2058: a declined write returned 0 and the run exited clean.
+    expect(onlyRefusesShortFlip(["SC-1"], 1, 0)).toBe(true);
+    expect(onlyRefusesShortFlip(["SC-1"], 1, 1)).toBe(false);
+    expect(onlyRefusesShortFlip(null, 5, 0)).toBe(false);
   });
 
   test("the script decides --only before it can exit on an empty flip list", () => {
