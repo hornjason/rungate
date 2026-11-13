@@ -870,7 +870,11 @@ export function stripHeredocs(s: string, blankComments = true): string {
     if (!delim) continue;
     // #1355: the rest of a CONTINUED opener line is command, not body. The
     // body starts after the logical line, which is where the shell starts it.
-    for (const end = logicalEnd(lines, i - 1); i <= end; i++) out.push(lines[i]);
+    // A `#` line among them is a comment once the shell joins it, and gets
+    // the same #1176 blanking as any other (review round 2 of PR #2077).
+    for (const end = logicalEnd(lines, i - 1); i <= end; i++) {
+      out.push(/^\s*#/.test(lines[i]) && blankComments ? '' : lines[i]);
+    }
     // #1184: buffer the body rather than consuming to end-of-input. A
     // heredoc whose terminator never arrives is not a heredoc this module can
     // trust, and dropping the rest of the command is a BYPASS — `cat <<EOF`
@@ -1071,33 +1075,106 @@ function nest(text: string, i: number, stack: Frame[]): number {
 }
 
 /**
- * The interpreter a group's output is piped into, read from just past the
- * group's close — `) | bash`, `} | sed … | bash`. The pipeline ends at `;`,
- * `&&`, `||`, `&`, a newline, or the close of an outer group. Reads a COPY of
- * the nesting, so the caller's cursor is not moved.
+ * One element of a pipeline: its raw text, for the command word, and `flat`,
+ * the part at the pipeline's own depth with quotes, nested groups, escapes
+ * and comments blanked, for its redirections.
  */
-function pipedInterpreter(text: string, i: number, frames: Frame[]): string | null {
+interface Element {
+  raw: string;
+  flat: string;
+}
+
+/** Is this the separator that ends a pipeline element at `text[i]`? */
+function endsElement(text: string, i: number): boolean {
+  const c = text[i];
+  const redirect = text[i - 1] === '>' || text[i + 1] === '>';
+  return c === '\n' || c === ';' || c === '|' || (c === '&' && !redirect);
+}
+
+/**
+ * The elements of the pipeline starting at `i`, at the depth `frames`
+ * describe — `) > f | sed … | bash`. It ends at `;`, `&&`, `||`, `&`, a
+ * newline, or the close of an outer group. Reads a COPY of the nesting, so
+ * the caller's cursor is not moved.
+ */
+function pipeline(text: string, i: number, frames: Frame[]): Element[] {
   const stack = frames.slice();
   const base = stack.length;
-  let from = -1; // start of the current pipeline element, once the group has been piped
+  const out: Element[] = [];
+  let from = i;
+  let flat = '';
   while (i < text.length && stack.length >= base) {
-    const c = text[i];
-    if (stack.length === base) {
-      const redirect = text[i - 1] === '>' || text[i + 1] === '>';
-      if (c === '\n' || c === ';' || (c === '&' && !redirect) || (c === '|' && text[i + 1] === '|')) break;
-      if (c === '|') {
-        const word = from === -1 ? '' : commandWord(text.slice(from, i));
-        if (isInterpreterWord(word)) return word;
-        from = text[i + 1] === '&' ? i + 2 : i + 1;
-        i = from;
-        continue;
-      }
+    if (stack.length === base && endsElement(text, i)) {
+      if (text[i] !== '|' || text[i + 1] === '|') break;
+      out.push({ raw: text.slice(from, i), flat });
+      from = text[i + 1] === '&' ? i + 2 : i + 1;
+      flat = '';
+      i = from;
+      continue;
+    }
+    const depth = stack.length;
+    const next = nest(text, i, stack);
+    if (depth === base && stack.length === base) {
+      const inert = text[i] === '\\' || opensComment(text, i);
+      flat += inert ? ' '.repeat(next - i) : text.slice(i, next);
+    } else if (depth === base && stack.length > base && text[i] === '(' && /[<>]/.test(text[i - 1] ?? '')) {
+      flat = flat.slice(0, -1) + ' '; // `>(…)` is a process substitution, not a redirect
+    }
+    i = next;
+  }
+  out.push({ raw: text.slice(from, i), flat });
+  return out;
+}
+
+/**
+ * Does this element send its standard output somewhere other than the pipe?
+ * `>`, `>>`, `>|`, `1>`, `&>` and `>&N` do. `2>` and `2>&1` move another
+ * descriptor and leave stdout where it was.
+ */
+function redirectsStdout(flat: string): boolean {
+  for (let j = 0; j < flat.length; j++) {
+    if (flat[j] !== '>' || flat[j - 1] === '>' || flat[j - 1] === '<') continue;
+    const fd = /\d*$/.exec(flat.slice(0, j))![0];
+    if (fd === '' || fd === '1') return true;
+  }
+  return false;
+}
+
+/**
+ * Where a pipeline sends what enters its first element: the interpreter it
+ * reaches, `null` when a stdout redirection severs it first, or `undefined`
+ * when it flows on into the enclosing group's output.
+ *
+ * `own` is the heredoc's OWN pipeline, whose interpreters are
+ * `heredocInterpreter`'s question; here it can only be severed (review
+ * round 2 of PR #2077: `(cat <<'EOF' > x.md … ) | bash` hands `bash`
+ * nothing, because the body went to the file).
+ */
+function flow(elements: Element[], own: boolean): string | null | undefined {
+  for (let k = 0; k < elements.length; k++) {
+    if (k > 0 && !own) {
+      const word = commandWord(elements[k].raw);
+      if (isInterpreterWord(word)) return word;
+    }
+    if (redirectsStdout(elements[k].flat)) return null;
+  }
+  return undefined;
+}
+
+/** Where the heredoc's own command begins: after the last separator at its depth. */
+function elementStart(text: string, at: number, frames: Frame[]): number {
+  const stack = frames.slice();
+  const base = stack.length;
+  let i = base > 0 ? frames[base - 1].open + 1 : 0;
+  let start = i;
+  while (i < at) {
+    if (stack.length === base && endsElement(text, i)) {
+      start = ++i;
+      continue;
     }
     i = nest(text, i, stack);
   }
-  if (from === -1) return null;
-  const word = commandWord(text.slice(from, i));
-  return isInterpreterWord(word) ? word : null;
+  return start;
 }
 
 /**
@@ -1136,7 +1213,9 @@ const EVALUATORS = new Set(['eval']);
  * the interpreter is on a line after the body. Each group open at the
  * operator is walked outward in turn: a subshell or brace group reaches an
  * interpreter when its close is piped into one, and a substitution when the
- * command it is an argument of is an interpreter or `eval`.
+ * command it is an argument of is an interpreter or `eval`. A stdout
+ * redirection on the way — on the heredoc's own command or on a group —
+ * severs the body from everything outside it, and the walk stops there.
  *
  * Only the ENCLOSING groups, never the heredoc's own command line, which
  * `heredocInterpreter` already decides — so no spelling is decided twice by
@@ -1151,6 +1230,8 @@ function heredocReach(text: string, at: number): string | null {
   // disagrees is not one to widen anything on.
   if (stack.length > 0 && QUOTE_CLOSERS.has(stack[stack.length - 1].close)) return null;
   const frames = stack.slice();
+  const own = flow(pipeline(text, elementStart(text, at, frames), frames), true);
+  if (own !== undefined) return own;
   for (let level = frames.length; level > 0; level--) {
     while (i < text.length && stack.length >= level) i = nest(text, i, stack);
     if (stack.length >= level) return null; // never closed, so nothing follows it
@@ -1161,8 +1242,8 @@ function heredocReach(text: string, at: number): string | null {
       const word = enclosingWord(text, frame.open, outer);
       if (isInterpreterWord(word) || EVALUATORS.has(word)) return word;
     } else {
-      const word = pipedInterpreter(text, i, stack);
-      if (word) return word;
+      const word = flow(pipeline(text, i, stack), false);
+      if (word !== undefined) return word;
     }
   }
   return null;

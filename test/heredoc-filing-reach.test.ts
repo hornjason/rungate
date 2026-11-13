@@ -147,6 +147,33 @@ describe("#1355 controls: the destination still decides, not the writer word", (
     expect(filingAttempts(cmd)).toEqual([]);
   });
 
+  /**
+   * Review round 2 of PR #2077. The shell is the oracle in every row: the cap
+   * must count exactly what `/bin/bash` files from the same bytes.
+   *
+   * - A heredoc whose OWN stdout is redirected never reaches the group's
+   *   pipe, before or after the operator, and neither does a group whose
+   *   stdout is redirected. `2>` moves stderr only and severs nothing.
+   * - A `#` line continuing the opener is a comment once the shell joins it,
+   *   so the `| bash` in it is comment text.
+   */
+  const SHELL_IS_ORACLE: Array<[string, (f: string) => string, number]> = [
+    ["own-redirect-after", f => `(cat <<'EOF' > ${join(dir, "a.md")}\n${f}\nEOF\n) | bash\n`, 0],
+    ["own-redirect-before", f => `(cat > ${join(dir, "b.md")} <<'EOF'\n${f}\nEOF\n) | bash\n`, 0],
+    ["group-redirect", f => `{ cat <<'EOF'\n${f}\nEOF\n} > ${join(dir, "c.md")} | bash\n`, 0],
+    ["stderr-only", f => `(cat <<'EOF' 2>/dev/null\n${f}\nEOF\n) | bash\n`, 1],
+    ["comment-continuation", f => `cat <<'EOF' \\\n# note | bash\n${f}\nEOF\n`, 0],
+  ];
+  for (const [name, spell, files] of SHELL_IS_ORACLE) {
+    test(`${name}: the cap counts what the shell files (${files})`, () => {
+      const title = `probe-${name}`;
+      const { cmd, calls, stderr } = execute(name, spell(filing(title)));
+      expect(stderr).toBe("");
+      expect(calls).toEqual(files ? [logged(title)] : []);
+      expect(filingAttempts(cmd), `${name}: the shell filed ${files}`).toHaveLength(files);
+    });
+  }
+
   test("two heredocs in one group are routed separately", () => {
     // A body is a program because of where IT goes, not because some other
     // heredoc in the same statement goes to a shell.
