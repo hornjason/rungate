@@ -39,7 +39,7 @@ own subject, `MEDIUM` that the link is an argument. Overrule any row.
 
 ## Decisions
 
-1. **The four-way split — Jason, 2026-11-12.** As below: 3 annotate, 12
+1. **The four-way split — Jason, 2026-11-12.** As below, counted by issue: 3 annotate, 12
    declare, 22 promote, 3 stale.
 2. **Promote rows need Jason's criterion text — Jason, by AGENTS.md rule 9.**
    The drafts below are reviewed with him in batches before any is written.
@@ -55,7 +55,7 @@ own subject, `MEDIUM` that the link is an argument. Overrule any row.
 ## Not decided here
 
 - **No tool places a milestone on an existing issue.** `--decompose` places
-  new issues and `--repair` only demotes. The milestone column below is a
+  new issues; `--repair` annotates and demotes, and places nothing. The milestone column below is a
   suggestion; promote rows get a phase when their criterion is written into a
   spec with a placement table (only the engine and convergence specs have
   one).
@@ -63,11 +63,17 @@ own subject, `MEDIUM` that the link is an argument. Overrule any row.
   `lib/closing-reference-audit.ts`, matches `SC-\d+` only), so #1883 and #1885
   stay refused at PR time even after annotation. Recorded on #2020 as the
   follow-up that makes it read `criterionAnswer`.
-- #1987 is two subjects and should be split before it is promoted.
+- #1987 was two subjects; Jason split it (2026-11-12). #1987 keeps the strike
+  count; the workflow-script size becomes its own issue once its criterion is written.
 
 ## Repair table — annotate
 
 Applied by `plan-issues --repair docs/adr/ADR-015-backlog-criterion-repair-the-forty.md --repo hornjason/rungate --write`.
+The first three rows are the 3 **annotate** issues of the split. The rest are
+not a second annotate population: `--repair` is also the tool that links a
+promoted issue to the criterion just written for it, because
+`finding-promotion --write` does not (the RCA on #2034; fixed by this plan's
+first Decomposition row).
 `Phase` is required by the parser and used by nothing; it carries the
 suggested phase in the governing spec's family, and `0` where that spec has
 no placement table.
@@ -159,9 +165,10 @@ Each criterion below is the text Jason approved. Written into its spec by
 Filed by `adr-accepted.yml` when this ADR merges (Jason, 2026-11-12: "we
 should file all 7"). The first row was added after Jason's "should be no
 handcrafting": each promotion above needed hand edits the tool should have
-made, so the seven specs not yet written wait for it. Four of the seven serve a criterion; three are rows here, and the fourth was filed
-by hand as #2037 the moment the cap allowed, because closing #2021 left SC-2741 with no
-open issue and `criterion-coverage` short;
+made, so the seven specs not yet written wait for it. Of the seven gaps, four serve a criterion: three are rows here, and the fourth was
+filed by hand as #2037 the moment the cap allowed, because closing #2021 left
+SC-2741 with no open issue and `criterion-coverage` short. The first row is an
+eighth issue, added after the RCA;
 the three that serve none (the milestone-placing repair, the converter that
 rewrote SC-2747, D4's parser binding) are filed as ordinary issues. Each
 issue's full evidence is added to its body after filing.

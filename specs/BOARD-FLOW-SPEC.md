@@ -774,5 +774,8 @@ second: flow efficiency is the one metric this spec must not promise.**
       proved-by: test/source-census.test.ts — 8 pass, 0 fail, 2026-11-06
       fingerprint: 0e65db21
 - [ ] SC-2759: lib/board-lane-health.ts contains [handPlacedInReview] — an issue card in In review with no linked open pull request is reported as hand-placed
+      needs: test
 - [ ] SC-2760: scripts/board-status-sweep.ts contains [claimSilence] — a claim is released as stale from silence in its work — branch commits and pull-request events — never from the issue's last-updated time
+      needs: test
 - [ ] SC-2761: scripts/work-status.ts contains [fileOverlapGroups] — the what's-next report groups Ready and promotion candidates by declared file overlap, and issues naming no files are never grouped together
+      needs: test
