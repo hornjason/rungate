@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import ts from "typescript";
 import { laneHealth, type LaneHealth, type LaneReading } from "../lib/board-lane-health";
 import { structuralCut } from "../lib/source-slice";
 import {
@@ -1144,151 +1145,75 @@ describe("#1944: the report names local work every run, from the one decider", (
   const KNOWN_EXITS_BEFORE_SECTION = ["if (!token)", 'if (focus.kind === "unknown")'];
 
   /**
-   * One pass over the source, length-preserving. `code` blanks comments;
-   * `masked` also blanks the inside of every string, template and regex
-   * literal, so a brace, semicolon or `process.exit(` there is not read as
-   * structure (review of #2031: a GraphQL query in a template, and
-   * `/<([^>]+)>;\s*rel="next"/` in a regex, both sit above the anchors).
-   * A `/` opens a regex when the last code character could not end an
-   * operand; `${…}` inside a template is skipped with nested literals.
+   * #2041: read through the TypeScript parser, never a hand-written scanner.
+   * Each review round of #2031 found one more literal shape the scanner got
+   * wrong — a GraphQL query in a template, a regex holding `rel="next"`, a
+   * `process.exit(` inside a template's `${}`. The parser has no such shapes:
+   * a call is a call wherever it sits, and text inside a literal is text.
+   *
+   * A path from the anchor up to the file may pass only through these
+   * kinds. Anything else — an `if`, a `&&`, a `?:`, a block, a function
+   * that might never be called — is a condition, however the flag is read.
    */
-  const scanSource = (s: string): { code: string; masked: string } => {
-    const blank = (t: string) => t.replace(/[^\n]/g, " ");
-    const endOfQuoted = (i: number): number => {
-      const q = s[i];
-      let k = i + 1;
-      while (k < s.length) {
-        const ch = s[k];
-        if (ch === "\\") { k += 2; continue; }
-        if (ch === q) return k + 1;
-        if (q !== "`" && ch === "\n") return k;
-        if (q === "`" && ch === "$" && s[k + 1] === "{") {
-          let depth = 1;
-          k += 2;
-          while (k < s.length && depth > 0) {
-            const e = s[k];
-            if (e === '"' || e === "'" || e === "`") { k = endOfQuoted(k); continue; }
-            if (e === "{") depth++;
-            else if (e === "}") depth--;
-            k++;
-          }
-          continue;
-        }
-        k++;
-      }
-      return s.length;
-    };
-    const endOfRegex = (i: number): number => {
-      let k = i + 1;
-      let inClass = false;
-      while (k < s.length && s[k] !== "\n") {
-        if (s[k] === "\\") k++;
-        else if (s[k] === "[") inClass = true;
-        else if (s[k] === "]") inClass = false;
-        else if (s[k] === "/" && !inClass) break;
-        k++;
-      }
-      k++;
-      while (k < s.length && /[a-z]/i.test(s[k])) k++;
-      return k;
-    };
-    let code = "";
-    let masked = "";
-    let prev = "";
-    let i = 0;
-    while (i < s.length) {
-      const c = s[i];
-      const n = s[i + 1];
-      let end = -1;
-      let literal = false;
-      if (c === "/" && n === "/") end = s.indexOf("\n", i) === -1 ? s.length : s.indexOf("\n", i);
-      else if (c === "/" && n === "*") end = s.indexOf("*/", i + 2) === -1 ? s.length : s.indexOf("*/", i + 2) + 2;
-      else if (c === '"' || c === "'" || c === "`") { end = endOfQuoted(i); literal = true; }
-      else if (c === "/" && (prev === "" || "(,=:[!&|?{};+-*%<>~^".includes(prev) || /\b(return|typeof|case)\s*$/.test(code))) {
-        end = endOfRegex(i);
-        literal = true;
-      }
-      if (end === -1) {
-        code += c;
-        masked += c;
-        if (!/\s/.test(c)) prev = c;
-        i++;
-        continue;
-      }
-      const t = s.slice(i, end);
-      if (literal) {
-        code += t;
-        masked += t.length < 2 ? t : t[0] + blank(t.slice(1, -1)) + t[t.length - 1];
-        prev = t[t.length - 1];
-      } else {
-        code += blank(t);
-        masked += blank(t);
-      }
-      i = end;
-    }
-    return { code, masked };
-  };
+  const UNCONDITIONAL_PATH = new Set([
+    ts.SyntaxKind.ExpressionStatement,
+    ts.SyntaxKind.VariableStatement,
+    ts.SyntaxKind.VariableDeclarationList,
+    ts.SyntaxKind.VariableDeclaration,
+    ts.SyntaxKind.CallExpression,
+    ts.SyntaxKind.AwaitExpression,
+    ts.SyntaxKind.ParenthesizedExpression,
+  ]);
 
   const unconditionalFailures = (source: string): string[] => {
-    const { code, masked } = scanSource(source);
-    const depthAt = (i: number) => {
-      let d = 0;
-      for (let k = 0; k < i; k++) {
-        if (masked[k] === "{") d++;
-        else if (masked[k] === "}") d--;
-      }
-      return d;
-    };
-    const statementPrefix = (i: number) => {
-      let j = i - 1;
-      while (j >= 0 && !";{}".includes(masked[j])) j--;
-      return code.slice(j + 1, i).replace(/\s+/g, " ").trim();
-    };
-    // The first occurrence that is CODE: `masked` keeps an anchor's leading
-    // code characters (`bar("` keeps its quote) only where it is not inside a
-    // comment or a literal.
-    const codeIndexOf = (anchor: string) => {
-      const lead = anchor.includes('"') ? anchor.slice(0, anchor.indexOf('"') + 1) : anchor;
-      for (let at = source.indexOf(anchor); at !== -1; at = source.indexOf(anchor, at + 1)) {
-        if (masked.startsWith(lead, at)) return at;
-      }
-      return -1;
-    };
     const failures: string[] = [];
-    const anchors: [string, RegExp][] = [
-      [SECTION_START, /^$/],
-      ["readLocalWork(", /^(const|let|var)\s+\w+\s*=$/],
-    ];
-    for (const [anchor, allowed] of anchors) {
-      const at = codeIndexOf(anchor);
-      if (at === -1) {
-        failures.push(`${anchor} is missing, so there is nothing to hold unconditional`);
-        continue;
+    const sf = ts.createSourceFile("work-status.ts", source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+    const calls: ts.CallExpression[] = [];
+    const visit = (n: ts.Node) => {
+      if (ts.isCallExpression(n)) calls.push(n);
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    const callee = (c: ts.CallExpression) => c.expression.getText(sf);
+    const conditionOn = (n: ts.Node): string | null => {
+      for (let p = n.parent; p && p !== sf; p = p.parent) {
+        if (!UNCONDITIONAL_PATH.has(p.kind)) return ts.SyntaxKind[p.kind];
       }
-      if (depthAt(at) !== 0) failures.push(`${anchor} sits inside a block (depth ${depthAt(at)})`);
-      const prefix = statementPrefix(at);
-      if (!allowed.test(prefix)) failures.push(`${anchor} is guarded in its own statement: "${prefix}"`);
+      return null;
+    };
+    const topLevel = (n: ts.Node): ts.Node => {
+      let t = n;
+      while (t.parent && t.parent !== sf) t = t.parent;
+      return t;
+    };
+
+    const headings = calls.filter(
+      c => callee(c) === "bar" && ts.isStringLiteral(c.arguments[0]) &&
+        `bar("${c.arguments[0].text}`.startsWith(SECTION_START),
+    );
+    const readings = calls.filter(c => callee(c) === "readLocalWork");
+    for (const [name, found] of [[SECTION_START, headings], ["readLocalWork(", readings]] as const) {
+      if (found.length === 0) failures.push(`${name} is missing, so there is nothing to hold unconditional`);
+      for (const c of found) {
+        const cond = conditionOn(c);
+        if (cond !== null) failures.push(`${name} is reached through a ${cond}, so some run skips it`);
+      }
     }
-    const heading = codeIndexOf(SECTION_START);
-    if (heading !== -1) {
-      const guards: string[] = [];
-      for (const m of masked.slice(0, heading).matchAll(/process\.exit\(/g)) {
-        let guard = statementPrefix(m.index!);
-        if (guard === "") {
-          // Directly inside a block: the guard is whatever opens the block.
-          let d = 0;
-          let k = m.index! - 1;
-          for (; k >= 0; k--) {
-            if (masked[k] === "}") d++;
-            else if (masked[k] === "{") {
-              if (d === 0) break;
-              d--;
+
+    if (headings.length > 0) {
+      const before = topLevel(headings[0]).getStart(sf);
+      const guards = calls
+        .filter(c => callee(c) === "process.exit" && c.getStart(sf) < before)
+        .map(c => {
+          for (let p: ts.Node | undefined = c.parent; p && p !== sf; p = p.parent) {
+            if (ts.isFunctionLike(p)) return `(inside a function, line ${sf.getLineAndCharacterOfPosition(p.getStart(sf)).line + 1})`;
+            if (ts.isIfStatement(p)) return `if (${p.expression.getText(sf)})`;
+            if (!UNCONDITIONAL_PATH.has(p.kind) && p.kind !== ts.SyntaxKind.Block) {
+              return `(guarded by a ${ts.SyntaxKind[p.kind]})`;
             }
           }
-          guard = k < 0 ? "(unguarded, top level)" : statementPrefix(k);
-        }
-        guards.push(guard);
-      }
+          return "(unguarded, top level)";
+        });
       const got = [...guards].sort();
       const want = [...KNOWN_EXITS_BEFORE_SECTION].sort();
       if (JSON.stringify(got) !== JSON.stringify(want)) {
@@ -1325,6 +1250,9 @@ describe("#1944: the report names local work every run, from the one decider", (
           .replace(/(if \(focus\.kind === "unknown"\) \{[\s\S]*?)process\.exit\(2\);/, "$1")
           .replace(heading, `if (!process.argv.includes("--local")) process.exit(0);\n${heading}`),
       ],
+      // Review round 3 of #2031, #2041: an exit inside a template's `${}`
+      // runs, and a text scanner that blanks literal interiors never sees it.
+      ["an exit inside a template substitution", src.replace(heading, "console.log(`${process.argv.includes(\"--local\") ? \"\" : process.exit(0)}`);\n" + heading)],
     ];
     for (const [name, mutant] of mutants) {
       expect(mutant, `the ${name} mutant changed nothing, so it proves nothing`).not.toBe(src);
