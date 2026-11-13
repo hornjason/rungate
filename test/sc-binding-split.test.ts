@@ -294,7 +294,12 @@ const UNCLAIMED_RATCHET = 150;
 // which population a board reading counts and how it names an offender, which
 // no registered pattern expresses; `test/board-snapshot.test.ts` names both in
 // a declaring position (its `repository-wide populations` describe title).
-const CLAIMED_UNBINDABLE = 157;
+// 157 -> 158: SC-2741 ticked by `sync-sc-status --only SC-2741` on the PR
+// closing #2054 (ADR-013 row 8). A claim about which work Ready may hold and
+// what triggers its refill, which no registered pattern expresses; its
+// `SC-2741:` cases in test/board-ready-rule.test.ts, test/board-mirror.test.ts
+// and test/board-ready-fanout.test.ts name it in a declaring position.
+const CLAIMED_UNBINDABLE = 158;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

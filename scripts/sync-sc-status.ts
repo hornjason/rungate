@@ -14,6 +14,7 @@
  *   bun scripts/sync-sc-status.ts --report  # Output per-spec coverage report
  */
 
+import { parseArgs } from "util";
 import { existsSync, readFileSync, readdirSync } from "fs";
 
 import { walkTestFiles } from "../lib/walk-test-files";
@@ -47,6 +48,30 @@ const SPECS_DIR = join(ROOT, "specs");
 const TEST_DIR = join(ROOT, "test");
 const dryRun = process.argv.includes("--dry-run");
 const reportMode = process.argv.includes("--report");
+/**
+ * `--only SC-1,SC-2` (#2054): flip only these. Absent means every passing
+ * criterion, as before. A flag with no value is a mistake, not "all".
+ */
+const onlyIds: string[] | null = parseOnlyArg(process.argv.slice(2));
+
+/**
+ * `--only`, read by `util.parseArgs` so every spelling is one reading
+ * (review of #2058: `--only=SC-1` was not recognised, the value fell to
+ * null, and the run flipped every claimed criterion). Null means the flag is
+ * absent; `[]` means it is present with no ids, which the caller refuses.
+ */
+export function parseOnlyArg(argv: readonly string[]): string[] | null {
+  const { values } = parseArgs({
+    args: [...argv],
+    options: { only: { type: "string" } },
+    strict: false,
+    allowPositionals: true,
+  });
+  const raw = values.only;
+  if (raw === undefined) return null;
+  if (typeof raw !== "string" || raw.startsWith("--")) return [];
+  return raw.split(",").map(x => x.trim()).filter(x => x !== "");
+}
 
 export interface UncheckedSC {
   id: string;
@@ -682,6 +707,46 @@ export function checkConformitySCs(uncheckedSCs: UncheckedSC[], root: string): C
   return { passing, failing, unmatchable };
 }
 
+/**
+ * Narrow the per-spec flip list to `only` (#2054). Returns the ids asked for
+ * that are not passing as `missing`, so the caller refuses rather than
+ * flipping zero and exiting clean — the same observable as a real tick.
+ */
+export function selectOnly(
+  bySpec: ReadonlyMap<string, readonly string[]>,
+  only: readonly string[] | null,
+): {
+  selected: Map<string, string[]>;
+  missing: string[];
+  /** A bare id passing in more than one spec: flipping it would reach both (#330). */
+  ambiguous: { id: string; specs: string[] }[];
+} {
+  if (only === null) {
+    return { selected: new Map([...bySpec].map(([k, v]) => [k, [...v]])), missing: [], ambiguous: [] };
+  }
+  const want = new Set(only);
+  const selected = new Map<string, string[]>();
+  const specsOf = new Map<string, string[]>();
+  for (const [spec, ids] of bySpec) {
+    // Deduped: a checkbox line repeated inside ONE spec is one spec (#2058).
+    const kept = [...new Set(ids.filter(id => want.has(id)))];
+    for (const id of kept) specsOf.set(id, [...(specsOf.get(id) ?? []), spec]);
+    if (kept.length > 0) selected.set(spec, kept);
+  }
+  return {
+    selected,
+    missing: only.filter(id => !specsOf.has(id)),
+    ambiguous: [...specsOf]
+      .filter(([, specs]) => specs.length > 1)
+      .map(([id, specs]) => ({ id, specs: [...specs].sort() })),
+  };
+}
+
+/** `--only` refuses when fewer criteria flipped than it selected (#2054). */
+export function onlyRefusesShortFlip(only: readonly string[] | null, asked: number, flipped: number): boolean {
+  return only !== null && flipped < asked;
+}
+
 export function flipCheckboxes(specFile: string, scIds: string[], specsDir?: string, isDryRun?: boolean): number {
   const dir = specsDir || SPECS_DIR;
   const filePath = join(dir, specFile);
@@ -920,12 +985,9 @@ if (isDirectExecution) {
     }
   }
 
-  // Step 5: Flip passing SCs
-  if (passingSCs.size === 0) {
-    console.log("No SCs to flip");
-    process.exit(0);
-  }
-
+  // Step 5: Flip passing SCs. `--only` is decided BEFORE the empty-list exit
+  // (review of #2058): an exit here first turned a typo on a quiet tree into
+  // "No SCs to flip" and exit 0, the same observable as a real tick.
   // Group passing SCs by spec file and flip — scoped keys prevent cross-spec bleeding
   const bySpec = new Map<string, string[]>();
   for (const sc of unchecked) {
@@ -937,8 +999,32 @@ if (isDirectExecution) {
     }
   }
 
+  if (onlyIds !== null && onlyIds.length === 0) {
+    console.error("--only needs a comma-separated list of criterion ids");
+    process.exit(1);
+  }
+  const { selected, missing, ambiguous } = selectOnly(bySpec, onlyIds);
+  if (missing.length > 0) {
+    console.error(
+      `--only: ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not among the criteria a ` +
+        `passing test claims, so nothing was flipped`,
+    );
+    process.exit(1);
+  }
+  if (ambiguous.length > 0) {
+    console.error(
+      `--only: ${ambiguous.map(a => `${a.id} passes in ${a.specs.join(" and ")}`).join("; ")} — a bare ` +
+        `id would be flipped in every one, so nothing was flipped`,
+    );
+    process.exit(1);
+  }
+  if (selected.size === 0) {
+    console.log("No SCs to flip");
+    process.exit(0);
+  }
+
   let totalFlipped = 0;
-  for (const [specFile, scs] of bySpec) {
+  for (const [specFile, scs] of selected) {
     const flipped = flipCheckboxes(specFile, scs);
     if (flipped > 0) {
       console.log(`${dryRun ? "Would flip" : "Flipped"} ${flipped} SCs in ${specFile}: ${scs.join(", ")}`);
@@ -947,4 +1033,12 @@ if (isDirectExecution) {
   }
 
   console.log(`\n${dryRun ? "Would flip" : "Flipped"} ${totalFlipped} SC checkboxes`);
+  // Review of #2058: `--only` promises the named criteria are flipped or the
+  // run fails. `flipCheckboxes` can decline (a spec a generator owns, or a
+  // line that changed under us) and return fewer than asked.
+  const asked = [...selected.values()].reduce((n, ids) => n + ids.length, 0);
+  if (onlyRefusesShortFlip(onlyIds, asked, totalFlipped)) {
+    console.error(`--only: ${asked} criteria were selected and ${totalFlipped} flipped — the rest were declined above`);
+    process.exit(1);
+  }
 }
