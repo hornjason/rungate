@@ -2,7 +2,7 @@
 doc-type: adr
 status: superseded
 created: 2026-10-28
-updated: 2026-10-31
+updated: 2026-11-12
 owner: jason
 governs: how a spec's criteria reach the tracker — phase placement, milestones, and the issue-to-criterion citation
 ---
