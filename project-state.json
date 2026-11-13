@@ -1667,7 +1667,7 @@
       "goal": "The other specs get placement tables and reach the board",
       "serves": 3,
       "retro": null,
-      "why": "Measured 2026-11-06 and kept here so it is not re-derived: this stage is NOT the fix for Ready being ordered by age. plan-spec can only place work that came from a criterion, and only 16 of 80 open issues name an SC id. Placement tables order the spec-derived fifth; the label rank in Stage H orders the rest. Also measured: 22 specs carry no table, but 7 of them have ZERO open criteria and HARNESS-STANDARD.md has 12 open out of 648 — so E1 is 15 specs and 194 open criteria, not 22 specs and 1,828."
+      "why": "Measured 2026-11-06 and kept here so it is not re-derived: this stage is NOT the fix for Ready being ordered by age. plan-spec can only place work that came from a criterion, and only 16 of 80 open issues name an SC id. Placement tables order the spec-derived fifth; the label rank in Stage H orders the rest. Also measured: 22 specs carry no table, but 7 of them have ZERO open criteria and HARNESS-STANDARD.md has 12 open out of 648 — so E1 is 15 specs and 194 open criteria, not 22 specs and 1,828. 2026-11-13: E1 is done. Its command takes the spec-placement reading, which counts every criterion in every testable spec sitting in a phase or its spec being named UNPLANNED, and reads MET 115 of 115. The 15-spec figure above is the 2026-11-06 scope, kept as the record."
     },
     {
       "id": "F",
