@@ -4,18 +4,37 @@
 # order into blocked-by edges. Until this ran, plan-deps --write ran only when
 # an ADR merged (adr-accepted.yml), so an issue milestoned by hand afterwards
 # got no order link until somebody remembered the command. The 2026-11-12 dry
-# run found #1719 missing its link to #1752 that way.
+# run found #1719 missing its link to #1752.
 #
-# plan-deps is idempotent: each run reads the whole tracker and writes only
-# the edges that are missing, so it does not matter which issue fired it.
+# #2062 / SC-2609: the same event also gives the issue what the board needs.
+# Six issues milestoned by hand on 2026-11-12 got no queue label and no
+# Criteria cell, and `queue-label` and `criteria-field` fell with them (#2020).
+# So this also runs board-mirror twice: once to add the queue label, once to
+# write the Criteria column. And it links EVERY milestone family, not only the
+# engine's: #1934 placed in a Convergence phase on 2026-11-13 left
+# `dependency-edges` 9 short because only `Pipeline` was run.
 #
-# CREDENTIAL: the job's own GITHUB_TOKEN, passed as GITHUB_TOKEN. Edges are
-# issue writes, which GITHUB_TOKEN can make. RUNGATE_PROJECT_TOKEN is never
-# held here (#1761). Writes made with GITHUB_TOKEN fire no further workflow
-# runs, so the edges this writes cannot re-trigger it.
+# Every step is idempotent: each reads the whole tracker or board and writes
+# only what is missing, and NO step reads which event fired the run. That is
+# load-bearing, not tidy: the concurrency group below drops queued runs, so a
+# step keyed to the firing event's milestone would lose that milestone's work
+# whenever its run was the one dropped (review of #2092). An issue milestoned
+# by a tool (whose GITHUB_TOKEN write fires no event) is repaired by the next
+# run for the same reason. A TRANSIENT failure is repaired the same way; a
+# PERSISTENT refusal (one family's blocker list past a page, say) turns every
+# run red until somebody fixes it — and because every write step runs on
+# `!cancelled()`, it never stops the other steps meanwhile.
 #
-# No trust gate: setting a milestone needs triage access or above, so a
-# stranger cannot fire this.
+# CREDENTIALS, per ADR-013: issues, labels and edges are written with the
+# job's own GITHUB_TOKEN, passed as GITHUB_TOKEN. Those writes fire no further
+# workflow runs, so they cannot re-trigger this one. RUNGATE_PROJECT_TOKEN is
+# held in the env of the one step that writes the Criteria column, and nowhere
+# else; there is no job-level env for a step to inherit it from.
+#
+# No trust gate: setting or clearing a milestone needs triage access or above,
+# so a stranger cannot fire this. That is also why `edited` is NOT a trigger:
+# an issue's author can edit its body without any access, and that would put
+# the board token behind an event anybody can raise.
 #
 # Every `uses:` is pinned to a full commit SHA. `test/phase-order-workflow.test.ts`
 # asserts that and the rest.
@@ -66,8 +85,68 @@ jobs:
           esac
           echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
 
+      # Each write below runs whether or not an earlier one failed
+      # (`!cancelled()`), so a refusal in one cannot stop the others — review
+      # round 2 of #2092. The job still ends red when any of them failed.
       - name: Phase-order links between milestones
+        if: ${{ !cancelled() }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PREFIX: ${{ steps.prefix.outputs.prefix }}
         run: bun scripts/plan-deps.ts --repo "$GITHUB_REPOSITORY" --milestone-prefix "$PREFIX" --write
+
+      # #2062: every OTHER family with an open milestone, read from the tracker
+      # through familyOf, the one grammar for a phase title. Never from the
+      # firing event (see the header). Titles cross as JSON lines, so a title
+      # carrying a newline is one title, not two. A bare `Phase N` title is the
+      # unprefixed family, which plan-deps refuses as blank, so it is skipped.
+      #
+      # `pipefail` because the default `run:` shell is `bash -e`, which takes a
+      # pipeline's status from its LAST command: a failed `gh api` would hand
+      # `bun` an empty stdin, list no families and go green having linked
+      # nothing (review round 2). One family's refusal does not stop the next;
+      # the step exits red at the end naming every family that refused.
+      - name: Phase-order links for every other milestone family
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREFIX: ${{ steps.prefix.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          families=$(gh api --paginate "repos/$GITHUB_REPOSITORY/milestones?state=open&per_page=100" --jq '.[] | .title | @json' | bun -e 'import { familyOf } from "./lib/spec-placement"; const seen = new Set<string>(); for (const line of (await Bun.stdin.text()).split("\n")) { if (line.trim() === "") continue; const f = familyOf(JSON.parse(line)); if (f && f !== process.env.PREFIX) seen.add(f); } process.stdout.write([...seen].sort().join("\n"))')
+          refused=""
+          while IFS= read -r family; do
+            if [ -n "$family" ]; then
+              echo "== $family"
+              if ! bun scripts/plan-deps.ts --repo "$GITHUB_REPOSITORY" --milestone-prefix "$family" --write; then
+                refused="$refused [$family]"
+              fi
+            fi
+          done <<< "$families"
+          if [ -n "$refused" ]; then
+            echo "::error::plan-deps refused for$refused. Every other family was still linked."
+            exit 1
+          fi
+
+      - name: Queue label on every engine-phase issue
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun scripts/board-mirror.ts --queue-label --repo "$GITHUB_REPOSITORY" --write
+
+      # THE ONE STEP HOLDING THE BOARD TOKEN. The same command adr-accepted.yml
+      # runs; without --ready it writes the Criteria column and never Status,
+      # which board-ready.yml owns and which fires on this same event. An absent
+      # secret is the empty string with no error, so board-mirror's own refusal
+      # ("not a project this token can read") is what reports it.
+      - name: Criteria column on the board
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
+        run: |
+          if [ -z "$PROJECT_ID" ]; then
+            echo "::error::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to write."
+            exit 1
+          fi
+          bun scripts/board-mirror.ts --project "$PROJECT_ID" --write

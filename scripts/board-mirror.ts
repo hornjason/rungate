@@ -38,7 +38,14 @@ import { existsSync, readFileSync } from "fs";
 import { isAbsolute, join } from "path";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
-import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
+import { enginePrefixReading, readExpediteLabel, readQueueLabel } from "../lib/config-readers";
+import {
+  ghWithoutGhToken,
+  inMilestoneFamily,
+  readLiveIssues,
+  type GraphQlExec,
+  type LiveIssue,
+} from "../lib/live-issues";
 import {
   activeMilestone,
   heldReason,
@@ -67,6 +74,100 @@ import {
  * (`.claude/rules/checks-must-be-able-to-fail.md`).
  */
 export const REFUSAL_EXIT = 1;
+
+/**
+ * Which open issues in the engine's milestone family lack the queue label —
+ * #2062, SC-2609.
+ *
+ * `plan-issues --decompose` labels what it creates, and nothing labelled an
+ * issue somebody milestoned by hand: on 2026-11-12 six such issues took the
+ * `queue-label` reading (B6) from 12 of 12 to 6 of 12 (#2020). That reading
+ * counts open issues whose milestone is in the engine family, so this picks
+ * its population with the same {@link inMilestoneFamily} rather than a test
+ * of its own — two deciders of "engine issue" would disagree on some title,
+ * and the repair would leave the reading short while reporting nothing to do.
+ *
+ * A cut label list is `unreadable`, not missing: the label may be on the page
+ * that was not read. An issue whose label WAS read is fine either way.
+ */
+export function queueLabelRepairs(
+  issues: readonly Pick<LiveIssue, "number" | "state" | "milestone" | "labels" | "labelsTruncated">[],
+  prefix: string,
+  queueLabel: string,
+): { add: number[]; unreadable: number[] } {
+  const add: number[] = [];
+  const unreadable: number[] = [];
+  for (const i of issues) {
+    if (i.state !== "OPEN" || !inMilestoneFamily(i.milestone, prefix)) continue;
+    if (i.labels.includes(queueLabel)) continue;
+    if (i.labelsTruncated === true) unreadable.push(i.number);
+    else add.push(i.number);
+  }
+  return { add, unreadable };
+}
+
+/**
+ * `board-mirror --queue-label --repo owner/name [--write]` — #2062, SC-2609.
+ *
+ * Reads the repository's open issues through the one reader the board
+ * readings use (`readLiveIssues`), and adds `board.queueLabel` to each that
+ * {@link queueLabelRepairs} names. It never touches the project board, so it
+ * runs on the job's own `GITHUB_TOKEN`: ADR-013 puts issue writes there and
+ * keeps `RUNGATE_PROJECT_TOKEN` to the board-mirror step that writes the
+ * Criteria column. `.github/workflows/phase-order.yml` runs both, as separate
+ * steps, when an issue's milestone changes.
+ *
+ * Idempotent like `plan-deps`: every run reads the whole tracker and adds only
+ * what is missing, so it does not matter which issue fired it, and an issue
+ * milestoned by a tool (whose `GITHUB_TOKEN` write fires no event) is repaired
+ * by the next run.
+ *
+ * Refuses, writing nothing, when the engine family or the queue label is not
+ * configured — a tree that never named a queue has no queue, not an empty one
+ * — or when any candidate's label list was cut.
+ */
+export async function queueLabelRun(opts: {
+  repo: string;
+  prefix: string | null;
+  prefixUnmeasured: string | null;
+  queueLabel: string | null;
+  write: boolean;
+  exec?: GraphQlExec;
+  log?: (line: string) => void;
+}): Promise<number> {
+  const log = opts.log ?? ((line: string) => console.log(line));
+  const exec = opts.exec ?? ghWithoutGhToken;
+  if (opts.prefix === null) {
+    log(
+      opts.prefixUnmeasured ??
+        "board-mirror: UNMEASURED — board.milestonePrefix is not set, so there is no engine family to label. Nothing written.",
+    );
+    return REFUSAL_EXIT;
+  }
+  if (opts.queueLabel === null) {
+    log("board-mirror: UNMEASURED — board.queueLabel is not set, so there is no queue to label into. Nothing written.");
+    return REFUSAL_EXIT;
+  }
+  const issues = await readLiveIssues(opts.repo, false, exec);
+  const { add, unreadable } = queueLabelRepairs(issues, opts.prefix, opts.queueLabel);
+  if (unreadable.length > 0) {
+    log(
+      `board-mirror: UNMEASURED — the label list was cut for ${unreadable.map(n => `#${n}`).join(", ")}, so ` +
+        `"${opts.queueLabel}" may be on a page that was not read. Nothing written.`,
+    );
+    return REFUSAL_EXIT;
+  }
+  if (add.length === 0) {
+    log(`board-mirror: every open "${opts.prefix} Phase" issue carries "${opts.queueLabel}" — nothing to add.`);
+    return 0;
+  }
+  for (const n of add) {
+    if (opts.write) exec(["issue", "edit", String(n), "--repo", opts.repo, "--add-label", opts.queueLabel]);
+    log(`  ${opts.write ? "labelled" : "would label"}  #${n}  + ${opts.queueLabel}`);
+  }
+  if (!opts.write) log(`\n  (reporting only — pass --write to apply)`);
+  return 0;
+}
 
 /**
  * `owner/name`, or `null` for anything that is not exactly that.
@@ -297,6 +398,12 @@ export function splitReadyChanges<
 }
 
 const USAGE = `rungate board-mirror --project <node-id> [--spec <spec.md>] [--field <name>] [--write] [--ready] [--json]
+       rungate board-mirror --queue-label --repo <owner/name> [--write]
+
+  --queue-label  instead of the board, add board.queueLabel to every open
+             issue in the engine's milestone family that lacks it (#2062).
+             Needs --repo, and refuses --project: it is an issue write made
+             with the repository's own token, never the board token.
 
   --project  the ProjectV2 node id, e.g. PVT_kwHO…
   --spec     narrow the column to ONE spec's criteria. Omit it — which is the
@@ -385,6 +492,7 @@ export async function main(argv: string[]): Promise<number> {
         json: { type: "boolean", default: false },
         "project-root": { type: "string" },
         repo: { type: "string" },
+        "queue-label": { type: "boolean", default: false },
       },
       allowPositionals: false,
     });
@@ -401,6 +509,28 @@ export async function main(argv: string[]): Promise<number> {
   if (values.repo !== undefined && parseRepo(values.repo) === null) {
     console.error(`board-mirror: --repo must be owner/name, got "${values.repo}"\n\n${USAGE}`);
     return REFUSAL_EXIT;
+  }
+  // #2062: the label mode is its own run. It holds the repository's token and
+  // the board mode holds the board token (ADR-013), so one invocation doing
+  // both would need the widened credential that decision forbids.
+  if (values["queue-label"]) {
+    if (values.project !== undefined || values.ready) {
+      console.error(`board-mirror: --queue-label is its own run — it refuses --project and --ready\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+    if (values.repo === undefined) {
+      console.error(`board-mirror: --queue-label needs --repo owner/name\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+    const labelRoot = values["project-root"] ?? process.cwd();
+    const engine = enginePrefixReading(labelRoot);
+    return queueLabelRun({
+      repo: values.repo,
+      prefix: engine.prefix,
+      prefixUnmeasured: engine.unmeasured,
+      queueLabel: readQueueLabel(labelRoot),
+      write: values.write,
+    });
   }
   if (!values.project) {
     console.error(`board-mirror: --project is required\n\n${USAGE}`);
