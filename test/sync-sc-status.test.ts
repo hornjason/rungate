@@ -332,6 +332,16 @@ describe("#2054: --only narrows the flip to the named criteria", () => {
     expect(unknownSyncArgs(["--dry-run", "--verbose", "x"])).toEqual(["--verbose", "x"]);
   });
 
+  test("#2076: a flag swallowed as --only's value, or a value on a switch, is refused too", () => {
+    // Review of #2078: `--only --help` read `--help` as the id list, and
+    // `--dry-run=false` threw out of parseArgs as a raw stack trace.
+    expect(unknownSyncArgs(["--only", "--help"])).toEqual(["--only with no ids", "--help"]);
+    expect(unknownSyncArgs(["--only", "--dry-run"])).toEqual(["--only with no ids"]);
+    expect(unknownSyncArgs(["--only"])).toEqual(["--only with no ids"]);
+    expect(unknownSyncArgs(["--dry-run=false"])).toEqual(["--dry-run=false"]);
+    expect(unknownSyncArgs(["--report=1", "--only", "SC-1"])).toEqual(["--report=1"]);
+  });
+
   test("#2076: the script refuses an unknown argument before it reads a single spec", () => {
     // Asserted on the source rather than by spawning `--help`: before the fix
     // that spawn would tick the real specs, which is the defect itself.

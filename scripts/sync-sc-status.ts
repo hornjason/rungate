@@ -84,6 +84,11 @@ export function parseOnlyArg(argv: readonly string[]): string[] | null {
  * reads a spec.
  */
 export function unknownSyncArgs(argv: readonly string[]): string[] {
+  // A value on a switch (`--dry-run=false`) makes parseArgs throw even when
+  // non-strict. Named here rather than escaping as a stack trace (review of
+  // #2078).
+  const valued = argv.filter(a => /^--(?:dry-run|report)=/.test(a));
+  if (valued.length > 0) return valued;
   const { tokens } = parseArgs({
     args: [...argv],
     options: { only: { type: "string" }, "dry-run": { type: "boolean" }, report: { type: "boolean" } },
@@ -94,7 +99,12 @@ export function unknownSyncArgs(argv: readonly string[]): string[] {
   const known = new Set(["only", "dry-run", "report"]);
   const out: string[] = [];
   for (const t of tokens ?? []) {
-    if (t.kind === "option" && !known.has(t.name)) out.push(t.rawName);
+    if (t.kind === "option" && t.name === "only" && (t.value === undefined || t.value.startsWith("-"))) {
+      // `--only --help` hands `--help` to --only as its value, so it would
+      // never be checked (review of #2078). The swallowed flag is checked here.
+      out.push("--only with no ids");
+      if (t.value !== undefined && !known.has(t.value.replace(/^-+/, "").split("=")[0]!)) out.push(t.value);
+    } else if (t.kind === "option" && !known.has(t.name)) out.push(t.rawName);
     else if (t.kind === "positional") out.push(t.value);
   }
   return out;
@@ -848,7 +858,7 @@ if (isDirectExecution) {
   const unknownArgs = unknownSyncArgs(process.argv.slice(2));
   if (unknownArgs.length > 0) {
     console.error(
-      `sync-sc-status: unknown argument(s): ${unknownArgs.join(" ")}. Nothing was read or written. ` +
+      `sync-sc-status: cannot use argument(s): ${unknownArgs.join(", ")}. Nothing was read or written. ` +
         "It takes --dry-run, --report and --only <SC-id,…>; there is no --help.",
     );
     process.exit(1);
