@@ -28,7 +28,7 @@ const DIRECT = { mode: "direct", since: "2026-10-19", reason: "stabilising" };
 describe("#2070: board.filingsPerRun sets the cap whatever the ship mode", () => {
   test("a harness project with an override gets the override", () => {
     const r = filingsPerRunFor(() => ({ ship: { mode: "harness" }, board: { filingsPerRun: 5 } }));
-    expect(r).toEqual({ cap: 5, unreadable: false });
+    expect(r).toEqual({ cap: 5, unreadable: false, direct: false });
   });
 
   test("a project with no ship block and an override gets the override", () => {
@@ -43,14 +43,16 @@ describe("#2070: board.filingsPerRun sets the cap whatever the ship mode", () =>
     expect(filingsPerRunFor(() => ({ ship: { mode: "harness" } }))).toEqual({
       cap: FILINGS_PER_RUN,
       unreadable: false,
+      direct: false,
     });
     expect(filingsPerRunFor(() => ({ ship: DIRECT }))).toEqual({
       cap: FILINGS_PER_RUN_DIRECT,
       unreadable: false,
+      direct: true,
     });
     expect(filingsPerRunFor(() => ({ ship: DIRECT, board: { queueLabel: "engine" } })).cap)
       .toBe(FILINGS_PER_RUN_DIRECT);
-    expect(filingsPerRunFor(() => null)).toEqual({ cap: FILINGS_PER_RUN, unreadable: false });
+    expect(filingsPerRunFor(() => null)).toEqual({ cap: FILINGS_PER_RUN, unreadable: false, direct: false });
   });
 
   // Each of these could be read as SOME number by a loose parse — `Number("12")`,
@@ -71,13 +73,14 @@ describe("#2070: board.filingsPerRun sets the cap whatever the ship mode", () =>
     // the cap fell to the strict 1 with a note blaming the ship block.
     for (const ship of [{ mode: "dierct" }, { mode: "direct" }, "not an object"]) {
       const r = filingsPerRunFor(() => ({ ship, board: { filingsPerRun: 5 } }));
-      expect(r, `ship ${JSON.stringify(ship)} discarded a valid override`).toEqual({ cap: 5, unreadable: false });
+      expect(r, `ship ${JSON.stringify(ship)} discarded a valid override`).toEqual({ cap: 5, unreadable: false, direct: false });
     }
     // CONTROL: with no override the corrupt ship block is still the strict
     // cap and still reported, exactly as before.
     expect(filingsPerRunFor(() => ({ ship: { mode: "dierct" } }))).toEqual({
       cap: FILINGS_PER_RUN,
       unreadable: true,
+      direct: false,
     });
   });
 
@@ -100,13 +103,14 @@ describe("#2070: board.filingsPerRun sets the cap whatever the ship mode", () =>
         cap: FILINGS_PER_RUN,
         unreadable: true,
         unreadableSource: "`board.filingsPerRun`",
+        direct: false,
       });
     }
   });
 
   test("a non-object board block is the strict cap, flagged", () => {
     const r = filingsPerRunFor(() => ({ ship: DIRECT, board: ["filingsPerRun", 9] }));
-    expect(r).toEqual({ cap: FILINGS_PER_RUN, unreadable: true, unreadableSource: "`board.filingsPerRun`" });
+    expect(r).toEqual({ cap: FILINGS_PER_RUN, unreadable: true, unreadableSource: "`board.filingsPerRun`", direct: false });
   });
 
   test("the note names the setting that could not be read, not the ship block", () => {
