@@ -162,6 +162,10 @@ describe("#2024 / SC-2617: phases chain within a milestone family, never across 
       expect(family, title).not.toBeNull();
       expect(phaseInFamily(title, family!), title).toBe(phaseOf(title));
     }
+    // The stated exception: the unprefixed family has no `phaseInFamily`
+    // reading, because that function takes a prefix and `""` is not one.
+    expect(familyOf("Phase 2 — x")).toBe("");
+    expect(phaseInFamily("Phase 2 — x", "")).toBeNull();
     expect(familyOf("Convergence Machinery")).toBeNull();
     expect(familyOf(null)).toBeNull();
   });
