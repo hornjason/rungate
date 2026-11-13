@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 92 (2026-11-13)** — ADR-015 (#2034) was taken to green through its review rounds; its needs-criterion row was recast as a new criterion, SC-2762, in Jason's wording. #2052, #2053 and #2055 merged. Closing #2037 left SC-2741 with no open engine issue and turned every PR's required test check red until #2054 was filed; the check before arming a PR that closes an engine issue is now recorded.
+**Session 93 (2026-11-13)** — The filing cap kept refusing agreed work, and Jason asked whether its purpose was right. ADR-016 changed what it measures: while the repo closes issues as fast as it opens them, every run may file up to 36; otherwise today's cap of 12 stands. It went from decision to merged ADR to two built issues in one session. After Jason's merge, the workflow filed the issues and placed the board column and milestone with no hand step; the /dry-run before the merge was run by hand, because a stale gate blocks the skill. Live at session end: 34 opened, 24 closed, so the cap is still 12 until closing catches up.
 
-Suite: ADR-015 (#2034) brought to green through its review rounds; #2052, #2053 and #2055 merged; #2054 and #2056 filed to keep SC-2741 and SC-2617 covered; #2058 ticks SC-2741 with a new sync-sc-status --only.
-Issues opened: #2054, #2056, #2057
-Issues closed: #2024, #2037, #2041
+Suite: ADR-016 (the filing cap meters net growth) decided, merged and built end to end (#2085, #2088, #2089); #2060, #2042, #2072 and #2076 shipped; README (#2083) and the plan's verify commands (#2068) merged.
+Issues opened: #2061, #2062, #2063, #2066, #2067, #2072, #2076, #2079, #2081, #2082, #2084, #2086, #2087
+Issues closed: #2042, #2060, #2072, #2076, #2081, #2084, #2086, #2087
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -150,6 +150,13 @@ REPO HYGIENE, NOT STAGE B'S DOING AND NOT ON ANYONE'S LIST: 588 remote branches 
 
 ---
 
+**Session 2026-11-13 session 93 (the filing cap rethought: ADR-016 decided, merged and built; finding-promotion, repair placement and the tick tool hardened):**
+- STOP-POINT: #2077 (#1355, a heredoc reached through a subshell, brace group, continued line or eval is metered by the filing cap) is in review round 3 with an Engineer agent. Round-2 threads at 17:44/17:45 were sent back to it. It also rebinds SC-2750 to `lib/bash-write-guard.ts contains [heredocReach]`; Jason's approved outcome text is unchanged. After merge, confirm criterion-coverage still reads 49 of 49.
+- OPEN FOR JASON (none urgent): mark E1 and E3 done (both commands exit 0 since #2068); whether the goal's own verify should read the payload spec (Convergence) rather than the engine spec; whether to clear the stale #627 gate state that blocks the Skill tool (/dry-run was run by hand for ADR-016).
+- MERGED: #2065 (#2060, finding-promotion refuses an existing symbol and links the issue), #2069 (#2042, plan-issues --repair places a milestone per family), #2074 (#2072, an unsound placement table refuses), #2078 (#2076, sync-sc-status refuses an unknown argument), #2083 (#2081, README explains the pipeline and board), #2068 (verify commands for E1-E3 and F1), #2085 (#2084, ADR-016), #2088 (#2086, the cap reads net growth), #2089 (#2087, work-status prints the cap and its counts).
+- THE FILING GUARD READS ITS CODE AND CONFIG FROM THE SESSION'S LAUNCH CHECKOUT, so a stale launch tree applies old policy. It was moved to origin/main twice today. The engine route is also denied to any `gh issue create` that passes -R, and a --body-file created in the same command reads as UNMEASURED. All three are in memory.
+- NEXT: #2082 (delete the restated criterion counts; ADR-003's had to be bumped by hand for ADR-016) has no milestone, so it is not in Ready. #2079 (an interpreter inside a command or process substitution is unmetered) is in Phase 6. The FG-266..280 reservation leaves with the next PR that touches specs/sc-reservations.json. The Octokit issue-create path still caps at 12, which errs strict, and is unfiled on purpose while the backlog is net growing.
+
 **Session 2026-11-13 session 92 (ADR-015's review rounds, the needs-criterion row recast as SC-2762, and three engine PRs merged):**
 - STOP-POINT: #2034 (ADR-015) is green and waits for Jason's merge. After it merges, run `plan-issues --repair docs/adr/ADR-015-backlog-criterion-repair-the-forty.md --repo hornjason/rungate --write` by hand (adr-accepted.yml runs --decompose only), then dispatch criterion-label.yml and run board-mirror --write. #2058 (#2054, SC-2741 ticked via sync-sc-status --only) is armed. #2056 (tick SC-2617) is next, with --only once #2058 merges.
 - MERGED: #2052 (#2037, board-mirror's focus read from repository issues), #2053 (#2041, D4's binding through the TypeScript parser), #2055 (#2024, family-aware dependency-edges reading, live 200 of 200 after plan-deps wrote 11 Convergence edges). #2055 closed #2024, SC-2617's engine issue; #2056 was filed and placed in Phase 6 before #2055 was armed, so SC-2617 stayed covered and nothing went red.
@@ -163,10 +170,4 @@ REPO HYGIENE, NOT STAGE B'S DOING AND NOT ON ANYONE'S LIST: 588 remote branches 
 - STAGE D CANNOT CLOSE: D4 has verify: null, so Stage E stays gated, and with it #2024 (SC-2617, split out of #1717 and blocked by #1983). Giving D4 a verify command is a plan change, so it is Jason's.
 - HAND-MILESTONING BREAKS THE LIVE BOARD READINGS: an issue moved into a Pipeline phase by hand becomes an engine issue and needs the engine label, a named criterion and a board-mirror run. Without them test/stage-ladder.test.ts reads the board SHORT and reddens every open PR, which it did twice on #2023. Repaired by hand. The mechanism belongs in phase-order.yml and is tracked as a comment on #2020, because the filing cap (12 in 24h) refused it as its own issue.
 - WORKTREE CLEANUP NOW REACHES SIBLING WORKTREES (#2022, merged as #2023): scripts/worktree-sweep.ts removes only rows the census reads ABANDONED, never forced, re-reading HEAD first, with a 7d default. It is started detached by StaleTTLCleanup and is not gated on the launch directory being a repository. 30 rungate worktrees were removed by hand and 3 in other projects by the sweep's first live run.
-
-**Session 2026-11-12 session 90 (ADR-013 rows built overnight, in order, each closed by its own PR):**
-- ADR-013 ROWS MERGED: row 4 as #2003 (SC-2737, every PR closes an issue naming a criterion), row 2 as #2004 (SC-2735, expedite and filing-override labels read from config), row 6 as #2008 (SC-2739, the ADR template whose table plan-issues reads), row 5 as #2009 (SC-2738, .github/workflows/adr-accepted.yml places an accepted ADR's plan on the board). Each merged pinned with --match-head-commit after CI, ai-review and a read-only security review were clean and every thread answered.
-- ROWS STILL OPEN: row 3 (#1997, PR #2010, rule 9 carries the four steps) and row 7 (#2001, PR #2011, /dry-run as a project command). Row 8 (#2006) waits on Jason: ai-review-override, or a call to repair in round 4; the gap was re-scoped to #2007. Row 1 (#1995) waits on Jason's choice of how a held-back spec declares so.
-- CLOSING AN ISSUE WITHOUT TICKING ITS CRITERION REDDENS MAIN (#2005). Each row therefore ticks its SC with a proved-by line and bumps CLAIMED_UNBINDABLE in test/sc-binding-split.test.ts in the same PR; two open PRs making the same bump means the second to merge rebases.
-- RISK CARRIED: adr-accepted.yml's board-mirror step uses RUNGATE_PROJECT_TOKEN, which #1945 records as read:project, so its first live run may fail at that step. Not widened; that token is Jason's to change.
 
