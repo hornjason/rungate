@@ -153,8 +153,8 @@ bun scripts/criterion-inventory.ts --snapshot <dir> --spec specs/<SPEC>.md
 
 ## Status, honestly
 
-Steps 1 and 2 are done for `CODE-REVIEW-CONVERGENCE-SPEC.md`: 61 criteria
-placed, zero unplaced and zero double-placed.
+Steps 1 and 2 are done for `CODE-REVIEW-CONVERGENCE-SPEC.md`: 66 criteria
+placed (five of them added by ADR-015), zero unplaced and zero double-placed.
 
 **Milestones: seven derived, one not.** The placement table has exactly seven
 phase values, Phase 0 through Phase 6, so the rule above produces seven
