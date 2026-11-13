@@ -174,8 +174,10 @@ Filed by `adr-accepted.yml` when this ADR merges (Jason, 2026-11-12: "we
 should file all 7"). The first row was added after Jason's "should be no
 handcrafting": each promotion above needed hand edits the tool should have
 made, so the seven specs not yet written wait for it. Of the seven gaps, four serve a criterion: three are rows here (the board
-self-repair row serves SC-2609, the never-blank Criteria cell, rather than SC-2741 —
-review of #2034), and the fourth was
+self-repair row serves SC-2609, the never-blank Criteria cell, and the
+needs-criterion row serves SC-2762, written in this PR — review of #2034 found
+neither is SC-2741's text, and Jason chose the new criterion on 2026-11-13),
+and the fourth was
 filed by hand as #2037 the moment the cap allowed, because closing #2021 left
 SC-2741 with no open issue and `criterion-coverage` short. The first row is an
 eighth issue, added after the RCA;
@@ -195,4 +197,4 @@ Phase 6.
 | SC-2612 | finding-promotion completes a promotion with no hand step after it and refuses a symbol its module already defines | lib/finding-promotion.ts, scripts/finding-promotion.ts, lib/create-sc.ts, test/finding-promotion.test.ts, test/criterion-provenance.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
 | SC-2737 | closing-references reads the criterion question through criterionAnswer | lib/closing-reference-audit.ts, scripts/audit-closing-references.ts, lib/board-mirror.ts, test/audit-closing-references.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
 | SC-2609 | A hand-milestoned engine issue gets its queue label and Criteria cell | .github/workflows/phase-order.yml, scripts/board-mirror.ts, test/phase-order-workflow.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
-| SC-2741 | work-this-next refuses an issue labelled needs-criterion and work-status shows the count | lib/board-ready-rule.ts, test/board-ready-rule.test.ts, scripts/work-status.ts, test/work-status.test.ts | Pipeline Phase 6 — the board's state is a reading | #2037 |
+| SC-2762 | work-this-next refuses an issue labelled needs-criterion and work-status shows the count | lib/board-ready-rule.ts, test/board-ready-rule.test.ts, scripts/work-status.ts, test/work-status.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
