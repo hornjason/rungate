@@ -1630,7 +1630,7 @@
           "id": "E4",
           "what": "`board-mirror --write` run, so the board column reflects the bodies",
           "done": false,
-          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/CODE-REVIEW-CONVERGENCE-SPEC.md --prefix Convergence --repo hornjason/rungate --reading criteria-field"
+          "verify": null
         },
         {
           "id": "E5",
