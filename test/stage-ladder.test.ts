@@ -176,8 +176,17 @@ const LIVE_VERIFY_BUDGET_MS = 60_000;
  * `board-mirror`, so ticking it would make the next hand-milestoned issue
  * redden every pull request — the board self-repair recorded on #2020 is
  * what lets it count.
+ *
+ * **B completed on 2026-11-13, and this is 6** — A, B, C, D, G and H. That
+ * self-repair is #2062, shipped by PR #2092: `phase-order.yml` now runs
+ * `board-mirror --project … --write` with `RUNGATE_PROJECT_TOKEN` whenever an
+ * issue's milestone changes, so a hand-milestoned engine issue gets its
+ * Criteria cell (and its queue label) with nobody running anything. Measured
+ * the same day rather than assumed: ten engine issues were milestoned by hand
+ * and `criteria-field` went from MET 21 of 21 to MET 31 of 31 with no hand
+ * step. B4 was then ticked on that reading, and it was the stage's last item.
  */
-const COMPLETE_STAGES = 5;
+const COMPLETE_STAGES = 6;
 
 /**
  * Every verify command in the plan file runs through here.
