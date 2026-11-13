@@ -150,6 +150,13 @@ describe("#2024 / SC-2617: phases chain within a milestone family, never across 
     expect(plan.reading).toBe("UNMEASURED");
     expect(plan.unmeasuredReasons.join(" ")).toContain("family could not be read (#30, #40)");
     expect(plan.unmeasuredReasons.join(" ")).not.toContain("what phaseOf reads");
+    // Review of #2055: a mix names both causes, so fixing the named titles is
+    // not mistaken for the whole repair.
+    const mixed = dependencyPlan([
+      { number: 30, state: "OPEN", milestone: "Release (Phase 3)", blockedBy: [] },
+      { number: 50, state: "OPEN", milestone: null, blockedBy: [] },
+    ]);
+    expect(mixed.unmeasuredReasons.join(" ")).toContain("The other 1 carry no Phase milestone at all");
   });
 
   test("bare `Phase N` titles are one family — a repository with no prefix has one sequence", () => {

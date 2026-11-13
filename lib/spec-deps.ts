@@ -152,7 +152,10 @@ export function degenerateReasons(r: {
       `${r.considered} issue(s) were considered and none sits in a readable phase family — ` +
         `${r.familyUnreadable!.length} carry a phase whose family could not be read ` +
         `(${r.familyUnreadable!.map(n => `#${n}`).join(", ")}); familyOf reads ` +
-        `"<Family> Phase N" or a bare "Phase N" at the start of the title`,
+        `"<Family> Phase N" or a bare "Phase N" at the start of the title` +
+        (r.considered > r.familyUnreadable!.length
+          ? `. The other ${r.considered - r.familyUnreadable!.length} carry no Phase milestone at all`
+          : ""),
     );
   } else if (r.phases.length === 0) {
     out.push(
