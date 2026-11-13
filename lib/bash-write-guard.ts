@@ -868,6 +868,13 @@ export function stripHeredocs(s: string, blankComments = true): string {
     if (looksComment) continue;
     const delim = heredocDelimiter(line);
     if (!delim) continue;
+    // #1355: the rest of a CONTINUED opener line is command, not body. The
+    // body starts after the logical line, which is where the shell starts it.
+    // A `#` line among them is a comment once the shell joins it, and gets
+    // the same #1176 blanking as any other (review round 2 of PR #2077).
+    for (const end = logicalEnd(lines, i - 1); i <= end; i++) {
+      out.push(/^\s*#/.test(lines[i]) && blankComments ? '' : lines[i]);
+    }
     // #1184: buffer the body rather than consuming to end-of-input. A
     // heredoc whose terminator never arrives is not a heredoc this module can
     // trust, and dropping the rest of the command is a BYPASS — `cat <<EOF`
@@ -958,13 +965,286 @@ function unquotedPositions(line: string): boolean[] {
  * wrong character position (`<<<`); this is the wrong quoting position.
  */
 function heredocDelimiter(line: string): string | null {
+  return heredocOperator(line)?.delim ?? null;
+}
+
+/** `heredocDelimiter`, and where on the line its operator sits (#1355). */
+function heredocOperator(line: string): { delim: string; at: number } | null {
   // #1184: `(?<!<)` and `(?!<)` exclude a `<<<` HERESTRING, which has no
   // terminator at all. Matching one invented a delimiter from the quoted text
   // after it and then ran straight into the unterminated case above.
   const re = /(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/g;
   const open = unquotedPositions(line);
   for (let m = re.exec(line); m; m = re.exec(line)) {
-    if (open[m.index]) return m[2];
+    if (open[m.index]) return { delim: m[2], at: m.index };
+  }
+  return null;
+}
+
+/**
+ * Does this physical line continue onto the next (#1355)?
+ *
+ * An unquoted backslash immediately before the newline is a line
+ * continuation: the shell deletes the pair and reads on, so a heredoc's
+ * opener line ends further down than its newline, and its BODY starts after
+ * the logical line rather than after the physical one. `cat <<'EOF' \⏎| bash`
+ * pipes the body into a shell; reading the `| bash` line as the first line of
+ * the body deleted it from every view.
+ *
+ * An even run of backslashes is escaped backslashes, and a backslash inside
+ * a quote or a comment is data.
+ */
+function continues(line: string): boolean {
+  const run = /\\+$/.exec(line);
+  if (!run || run[0].length % 2 === 0) return false;
+  const text = line.slice(0, -1) + ' ';
+  const open = unquotedPositions(text);
+  if (!open[text.length - 1]) return false;
+  for (let k = 0; k < text.length; k++) {
+    if (open[k] && opensComment(text, k)) return false;
+  }
+  return true;
+}
+
+/**
+ * Does an unquoted `text[k]` open a comment? A `#` does when it begins a
+ * word — after whitespace OR an operator, so `;#` is a comment too.
+ *
+ * One predicate for `continues` and `nest` (review of PR #2077): with two
+ * copies, the narrower one read the backslash in `bash <<'EOF' ;# note \`
+ * as a continuation and swallowed the body's first line as opener text.
+ */
+function opensComment(text: string, k: number): boolean {
+  return text[k] === '#' && (k === 0 || /[\s;&|()]/.test(text[k - 1]));
+}
+
+/** The last physical line of the logical line that starts at line `i`. */
+function logicalEnd(lines: string[], i: number): number {
+  let end = i;
+  while (end + 1 < lines.length && continues(lines[end])) end++;
+  return end;
+}
+
+/** One level of shell nesting open at a position, and where it opened. */
+interface Frame {
+  close: string;
+  open: number;
+  /** A command substitution or process substitution: its OUTPUT is an argument. */
+  subst: boolean;
+}
+
+const QUOTE_CLOSERS = new Set(["'", '"']);
+
+/**
+ * Advance a nesting reading over `text[i]`; returns the next index (#1355).
+ *
+ * Quotes, `$( )` / `<( )` / `>( )` and backticks, subshells and brace groups.
+ * The minimum the reach question needs — where does the group this heredoc
+ * sits in END — and deliberately nothing else: keywords such as `if`/`fi`
+ * are not groups here, so a heredoc inside one reaches no further than it
+ * did before. Its failure mode is a group that never closes, which reaches
+ * nothing, so a misreading costs a missed reach and never a new refusal.
+ */
+function nest(text: string, i: number, stack: Frame[]): number {
+  const c = text[i];
+  const top = stack[stack.length - 1];
+  if (top?.close === "'") {
+    if (c === "'") stack.pop();
+    return i + 1;
+  }
+  if (c === '\\') return i + 2;
+  if (top?.close === '"' || top?.close === '`') {
+    if (c === top.close) stack.pop();
+    else if (c === '$' && text[i + 1] === '(') {
+      stack.push({ close: ')', open: i + 1, subst: true });
+      return i + 2;
+    } else if (c === '`') stack.push({ close: '`', open: i, subst: true });
+    return i + 1;
+  }
+  const wordStart = i === 0 || /[\s;&|()]/.test(text[i - 1]);
+  if (opensComment(text, i)) {
+    const nl = text.indexOf('\n', i);
+    return nl === -1 ? text.length : nl;
+  }
+  if (c === "'" || c === '"' || c === '`') stack.push({ close: c, open: i, subst: c === '`' });
+  else if (c === '(') stack.push({ close: ')', open: i, subst: /[$<>]/.test(text[i - 1] ?? '') });
+  else if (c === ')' && top?.close === ')') stack.pop();
+  else if (c === '{' && wordStart && /\s/.test(text[i + 1] ?? '')) stack.push({ close: '}', open: i, subst: false });
+  else if (c === '}' && wordStart && top?.close === '}') stack.pop();
+  return i + 1;
+}
+
+/**
+ * One element of a pipeline: its raw text, for the command word, and `flat`,
+ * the part at the pipeline's own depth with quotes, nested groups, escapes
+ * and comments blanked, for its redirections.
+ */
+interface Element {
+  raw: string;
+  flat: string;
+}
+
+/** Is this the separator that ends a pipeline element at `text[i]`? */
+function endsElement(text: string, i: number): boolean {
+  const c = text[i];
+  const redirect = text[i - 1] === '>' || text[i + 1] === '>';
+  return c === '\n' || c === ';' || c === '|' || (c === '&' && !redirect);
+}
+
+/**
+ * The elements of the pipeline starting at `i`, at the depth `frames`
+ * describe — `) > f | sed … | bash`. It ends at `;`, `&&`, `||`, `&`, a
+ * newline, or the close of an outer group. Reads a COPY of the nesting, so
+ * the caller's cursor is not moved.
+ */
+function pipeline(text: string, i: number, frames: Frame[]): Element[] {
+  const stack = frames.slice();
+  const base = stack.length;
+  const out: Element[] = [];
+  let from = i;
+  let flat = '';
+  while (i < text.length && stack.length >= base) {
+    if (stack.length === base && endsElement(text, i)) {
+      if (text[i] !== '|' || text[i + 1] === '|') break;
+      out.push({ raw: text.slice(from, i), flat });
+      from = text[i + 1] === '&' ? i + 2 : i + 1;
+      flat = '';
+      i = from;
+      continue;
+    }
+    const depth = stack.length;
+    const next = nest(text, i, stack);
+    if (depth === base && stack.length === base) {
+      const inert = text[i] === '\\' || opensComment(text, i);
+      flat += inert ? ' '.repeat(next - i) : text.slice(i, next);
+    } else if (depth === base && stack.length > base && text[i] === '(' && /[<>]/.test(text[i - 1] ?? '')) {
+      flat = flat.slice(0, -1) + ' '; // `>(…)` is a process substitution, not a redirect
+    }
+    i = next;
+  }
+  out.push({ raw: text.slice(from, i), flat });
+  return out;
+}
+
+/**
+ * Does this element send its standard output somewhere other than the pipe?
+ * `>`, `>>`, `>|`, `1>`, `&>` and `>&N` do. `2>` and `2>&1` move another
+ * descriptor and leave stdout where it was.
+ */
+function redirectsStdout(flat: string): boolean {
+  for (let j = 0; j < flat.length; j++) {
+    if (flat[j] !== '>' || flat[j - 1] === '>' || flat[j - 1] === '<') continue;
+    const fd = /\d*$/.exec(flat.slice(0, j))![0];
+    if (fd === '' || fd === '1') return true;
+  }
+  return false;
+}
+
+/**
+ * Where a pipeline sends what enters its first element: the interpreter it
+ * reaches, `null` when a stdout redirection severs it first, or `undefined`
+ * when it flows on into the enclosing group's output.
+ *
+ * `own` is the heredoc's OWN pipeline, whose interpreters are
+ * `heredocInterpreter`'s question; here it can only be severed (review
+ * round 2 of PR #2077: `(cat <<'EOF' > x.md … ) | bash` hands `bash`
+ * nothing, because the body went to the file).
+ */
+function flow(elements: Element[], own: boolean): string | null | undefined {
+  for (let k = 0; k < elements.length; k++) {
+    if (k > 0 && !own) {
+      const word = commandWord(elements[k].raw);
+      if (isInterpreterWord(word)) return word;
+    }
+    if (redirectsStdout(elements[k].flat)) return null;
+  }
+  return undefined;
+}
+
+/** Where the heredoc's own command begins: after the last separator at its depth. */
+function elementStart(text: string, at: number, frames: Frame[]): number {
+  const stack = frames.slice();
+  const base = stack.length;
+  let i = base > 0 ? frames[base - 1].open + 1 : 0;
+  let start = i;
+  while (i < at) {
+    if (stack.length === base && endsElement(text, i)) {
+      start = ++i;
+      continue;
+    }
+    i = nest(text, i, stack);
+  }
+  return start;
+}
+
+/**
+ * The command word of the command a substitution opened at `open` belongs to:
+ * the text back to the enclosing command frame, or to the start of the
+ * logical line, whichever is nearer.
+ */
+function enclosingWord(text: string, open: number, outer: Frame | undefined): string {
+  let start = text.lastIndexOf('\n', open - 1) + 1;
+  while (start > 0) {
+    const prev = text.lastIndexOf('\n', start - 2) + 1;
+    if (!continues(text.slice(prev, start - 1))) break;
+    start = prev;
+  }
+  if (outer && outer.open + 1 > start) start = outer.open + 1;
+  const segs = segments(text.slice(start, open));
+  return commandWord(segs[segs.length - 1] ?? '');
+}
+
+/** A word that runs its argument as shell text, without being an interpreter. */
+const EVALUATORS = new Set(['eval']);
+
+/**
+ * Where a heredoc's ENCLOSING groups send its body (#1355, SC-2750).
+ *
+ * `text` is the whole command with every terminated heredoc body removed, so
+ * what follows the operator is what the shell resumes reading after the
+ * terminator, and `at` is the operator's offset in it. The opener line alone
+ * cannot answer this: in
+ *
+ *     (cat <<'EOF'        { cat <<'EOF'        eval "$(cat <<'EOF'
+ *     …                   …                    …
+ *     EOF                 EOF                  EOF
+ *     ) | bash            } | bash             )"
+ *
+ * the interpreter is on a line after the body. Each group open at the
+ * operator is walked outward in turn: a subshell or brace group reaches an
+ * interpreter when its close is piped into one, and a substitution when the
+ * command it is an argument of is an interpreter or `eval`. A stdout
+ * redirection on the way — on the heredoc's own command or on a group —
+ * severs the body from everything outside it, and the walk stops there.
+ *
+ * Only the ENCLOSING groups, never the heredoc's own command line, which
+ * `heredocInterpreter` already decides — so no spelling is decided twice by
+ * two rules that could drift apart without either going red.
+ */
+function heredocReach(text: string, at: number): string | null {
+  const stack: Frame[] = [];
+  let i = 0;
+  while (i < at) i = nest(text, i, stack);
+  // The operator was read as unquoted by `heredocOperator`. A reading that
+  // places it inside a quote disagrees with that one, and a reading that
+  // disagrees is not one to widen anything on.
+  if (stack.length > 0 && QUOTE_CLOSERS.has(stack[stack.length - 1].close)) return null;
+  const frames = stack.slice();
+  const own = flow(pipeline(text, elementStart(text, at, frames), frames), true);
+  if (own !== undefined) return own;
+  for (let level = frames.length; level > 0; level--) {
+    while (i < text.length && stack.length >= level) i = nest(text, i, stack);
+    if (stack.length >= level) return null; // never closed, so nothing follows it
+    const frame = frames[level - 1];
+    if (QUOTE_CLOSERS.has(frame.close)) continue;
+    if (frame.subst) {
+      const outer = frames.slice(0, level - 1).reverse().find(f => !QUOTE_CLOSERS.has(f.close));
+      const word = enclosingWord(text, frame.open, outer);
+      if (isInterpreterWord(word) || EVALUATORS.has(word)) return word;
+    } else {
+      const word = flow(pipeline(text, i, stack), false);
+      if (word !== undefined) return word;
+    }
   }
   return null;
 }
@@ -979,6 +1259,10 @@ function heredocDelimiter(line: string): string | null {
  * those bodies is what stopped 1,860 real commands from being refused for
  * quoting the words this guard looks for. That distinction is the whole
  * reason this is a predicate rather than "stop stripping heredocs".
+ *
+ * #1355: `line` is the LOGICAL opener line, continuations joined. What lies
+ * beyond it — a group closing after the body, a substitution handed to
+ * `eval` — is `heredocReach`'s question, not this one's.
  */
 function heredocInterpreter(line: string): string | null {
   const segs = segments(line);
@@ -1002,15 +1286,30 @@ function heredocInterpreter(line: string): string | null {
  * those lines unchanged — the #1184 fail-closed direction — so every arm
  * can already see them, and returning them again would double-count a body
  * that is not hidden in the first place.
+ *
+ * #1355: a heredoc is decided once the WHOLE command has been read, because
+ * the group it sits in can close — and be piped into a shell — lines after
+ * its body ends. `skeleton` is the command as the shell parses it around the
+ * bodies; `heredocReach` reads it.
  */
 export function interpreterPrograms(cmd: string): Array<{ shell: boolean; program: string }> {
-  const out: Array<{ shell: boolean; program: string }> = [];
+  type Pending = { opener: string; at: number; body: string };
+  const found: Array<{ shell: boolean; program: string } | Pending> = [];
   const lines = cmd.split('\n');
+  const skeleton: string[] = [];
+  let offset = 0; // where the next skeleton line starts in `skeleton.join('\n')`
+  const keep = (l: string): void => {
+    skeleton.push(l);
+    offset += l.length + 1;
+  };
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    i++;
-    if (/^\s*#/.test(line)) continue; // a comment cannot open either form
+    if (/^\s*#/.test(line)) {
+      keep(line);
+      i++;
+      continue; // a comment cannot open either form
+    }
 
     // A HERESTRING has no body and no terminator, which is why
     // `heredocDelimiter` excludes it (#1184). It is still a program, and it
@@ -1021,25 +1320,36 @@ export function interpreterPrograms(cmd: string): Array<{ shell: boolean; progra
       const owner = segments(line).find(s => /(?<!<)<<<(?!<)/.test(s));
       const word = owner ? commandWord(owner) : '';
       if (isInterpreterWord(word)) {
-        out.push({ shell: isShellWord(word), program: dequote(hs[1]).trim() });
+        found.push({ shell: isShellWord(word), program: dequote(hs[1]).trim() });
       }
     }
 
-    const delim = heredocDelimiter(line);
-    if (!delim) continue;
+    const op = heredocOperator(line);
+    if (!op) {
+      keep(line);
+      i++;
+      continue;
+    }
+    const at = offset + op.at;
+    const end = logicalEnd(lines, i);
+    for (let k = i; k <= end; k++) keep(lines[k]);
     const body: string[] = [];
-    let j = i;
-    while (j < lines.length && lines[j].trim() !== delim) {
-      body.push(lines[j]);
-      j++;
+    let j = end + 1;
+    while (j < lines.length && lines[j].trim() !== op.delim) body.push(lines[j++]);
+    if (j === lines.length) break; // unterminated: already visible, see the docblock
+    found.push({ opener: lines.slice(i, end + 1).join('\n'), at, body: body.join('\n') });
+    i = j + 1;
+  }
+
+  const text = skeleton.join('\n');
+  const out: Array<{ shell: boolean; program: string }> = [];
+  for (const f of found) {
+    if (!('opener' in f)) {
+      out.push(f);
+      continue;
     }
-    if (j < lines.length) {
-      const word = heredocInterpreter(line);
-      if (word) out.push({ shell: isShellWord(word), program: body.join('\n') });
-      i = j + 1;
-    } else {
-      i = j; // unterminated: already visible, see the docblock
-    }
+    const word = heredocInterpreter(f.opener) ?? heredocReach(text, f.at);
+    if (word) out.push({ shell: isShellWord(word) || EVALUATORS.has(word), program: f.body });
   }
   return out.filter(p => p.program !== '');
 }
