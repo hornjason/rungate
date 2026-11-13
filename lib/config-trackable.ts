@@ -252,8 +252,13 @@ function trackedAndIgnoredPaths(root: string): TrackableReading {
  *     `worktrees/` and everything else stay ignored exactly as before.
  *  3./4. the two config locations, re-included by name.
  */
-export function configTrackabilityBlock(): string {
+export function configTrackabilityBlock(opts: { parentExcluded?: boolean } = {}): string {
   const parent = RUNGATE_CONFIG_PARENT_DIR;
+  // #2071: lines 1-2 are needed ONLY when the parent directory itself is
+  // excluded. Under a `.claude/*` rule git already descends into it, and a
+  // second `.claude/*` appended here re-ignores every directory the project
+  // re-included above this block — 128 tracked files on asaCommandCenter.
+  const parentLines = opts.parentExcluded === false ? [] : [`!${parent}/`, `${parent}/*`];
   return [
     "",
     `# Added by rungate scaffold: the harness config must survive a branch`,
@@ -267,8 +272,7 @@ export function configTrackabilityBlock(): string {
     `# (\`${RUNGATE_CONFIG_DIR}/nested/config.json\`) and any file this list does`,
     `# not name. Ignored is the safe side of the default for a path nobody has`,
     `# thought of yet; a new config file is a change to this list.`,
-    `!${parent}/`,
-    `${parent}/*`,
+    ...parentLines,
     `!${RUNGATE_CONFIG_DIR}/`,
     `${RUNGATE_CONFIG_DIR}/*`,
     ...DIRECTORY_CONFIG_FILES.map(f => `!${RUNGATE_CONFIG_DIR}/${f}`),
@@ -301,7 +305,7 @@ export function configTrackabilityBlock(): string {
 export function ensureConfigTrackable(
   root: string,
   actions: string[],
-  block: string = configTrackabilityBlock(),
+  blockOverride?: string,
 ): void {
   const before = configPathsIgnored(root);
   if (before.failure !== null) {
@@ -311,6 +315,24 @@ export function ensureConfigTrackable(
   if (before.ignored.length === 0) {
     actions.push("SKIP: .gitignore (the rungate config is already committable)");
     return;
+  }
+
+  // Which block depends on whether the parent DIRECTORY is excluded (#2071).
+  // An unanswerable question is UNMEASURED, never a guess at the wider block.
+  let block = blockOverride;
+  if (block === undefined) {
+    // Asked WITHOUT the trailing slash, deliberately. Measured on git with
+    // the directory present: `check-ignore --no-index .claude/` reports a
+    // match for a `.claude/*` rule as well as a `.claude/` one, so it cannot
+    // tell the two shapes apart; `.claude` answers 1 and 0 respectively. The
+    // directory exists whenever this runs, because an ignored config is in it,
+    // and the after-check below still refuses if the narrow block falls short.
+    const parent = matchedByIgnoreRules(root, [RUNGATE_CONFIG_PARENT_DIR]);
+    if (parent.failure !== null) {
+      actions.push(`UNMEASURED: .gitignore (could not ask git about ${RUNGATE_CONFIG_PARENT_DIR}/ — ${parent.failure})`);
+      return;
+    }
+    block = configTrackabilityBlock({ parentExcluded: parent.ignored.length > 0 });
   }
 
   const gitignorePath = join(root, ".gitignore");
