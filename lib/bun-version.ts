@@ -345,3 +345,39 @@ export function setupBunWith(decision: BunVersionDecision, indent: string): stri
     ) + `${indent}bun-version: "latest"`
   );
 }
+
+/**
+ * Where a generated `oven-sh/setup-bun` step installs bun (#2039).
+ *
+ * setup-bun installs into `join(homedir(), ".bun", "bin")`. Self-hosted
+ * runners on one host commonly share one HOME, so a runner whose setup-bun
+ * rewrites that binary (on a version change, a cache restore or a download)
+ * does it while another runner is executing it, and the other job dies with
+ * `bun: Text file busy`. The job that causes it is green and the one that
+ * suffers it is red.
+ *
+ * `runner.tool_cache` is per runner, so pointing HOME there for the setup step
+ * alone gives every runner its own binary. setup-bun adds the bin directory to
+ * PATH for later steps, so nothing after it needs to change, and HOME is not
+ * changed for any other step.
+ *
+ * `os.homedir()` reads `HOME` on POSIX and `USERPROFILE` on Windows, so both
+ * are set to the same path; a Windows runner pool would otherwise get a step
+ * that looks fixed and still installs into the shared profile.
+ */
+export const SETUP_BUN_HOME = "${{ runner.tool_cache }}/bun-home";
+
+/**
+ * The step-level `env:` block for a generated setup-bun step. `indent` is the
+ * indentation of the step's own keys (`uses:`, `with:`), so this is a sibling
+ * of the block `setupBunWith` renders, not part of it.
+ */
+export function setupBunEnv(indent: string): string {
+  return (
+    `${indent}env:\n` +
+    `${indent}  # A per-runner install path, so runners sharing a HOME cannot rewrite\n` +
+    `${indent}  # each other's bun mid-exec ("Text file busy").\n` +
+    `${indent}  HOME: ${SETUP_BUN_HOME}\n` +
+    `${indent}  USERPROFILE: ${SETUP_BUN_HOME}`
+  );
+}

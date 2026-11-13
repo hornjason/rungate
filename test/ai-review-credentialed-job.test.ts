@@ -68,7 +68,7 @@ import {
 import { CLAUDE_CODE_ACTION, CLAUDE_CODE_ACTION_SHA } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION, GOOGLE_AUTH_ACTION_SHA } from "../lib/google-auth-action";
 import { actionRef } from "../lib/workflow-actions";
-import { declaredBunVersion, setupBunWith } from "../lib/bun-version";
+import { declaredBunVersion, setupBunEnv, setupBunWith } from "../lib/bun-version";
 
 /**
  * The fixture's `ci` block, and the one reading of it every case shares.
@@ -108,6 +108,7 @@ function REFS(root: string) {
     setupBun: actionRef("oven-sh/setup-bun"),
     uploadArtifact: actionRef("actions/upload-artifact"),
     setupBunWith: setupBunWith(declaredBunVersion(root), "    "),
+    setupBunEnv: setupBunEnv("  "),
   };
 }
 
