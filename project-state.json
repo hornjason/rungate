@@ -243,6 +243,16 @@
   ],
   "sessions": [
     {
+      "date": "2026-11-13 session 93 (the filing cap rethought: ADR-016 decided, merged and built; finding-promotion, repair placement and the tick tool hardened)",
+      "items": [
+        "STOP-POINT: #2077 (#1355, a heredoc reached through a subshell, brace group, continued line or eval is metered by the filing cap) is in review round 3 with an Engineer agent. Round-2 threads at 17:44/17:45 were sent back to it. It also rebinds SC-2750 to `lib/bash-write-guard.ts contains [heredocReach]`; Jason's approved outcome text is unchanged. After merge, confirm criterion-coverage still reads 49 of 49.",
+        "OPEN FOR JASON (none urgent): mark E1 and E3 done (both commands exit 0 since #2068); whether the goal's own verify should read the payload spec (Convergence) rather than the engine spec; whether to clear the stale #627 gate state that blocks the Skill tool (/dry-run was run by hand for ADR-016).",
+        "MERGED: #2065 (#2060, finding-promotion refuses an existing symbol and links the issue), #2069 (#2042, plan-issues --repair places a milestone per family), #2074 (#2072, an unsound placement table refuses), #2078 (#2076, sync-sc-status refuses an unknown argument), #2083 (#2081, README explains the pipeline and board), #2068 (verify commands for E1-E3 and F1), #2085 (ADR-016), #2088 (#2086, the cap reads net growth), #2089 (#2087, work-status prints the cap and its counts).",
+        "THE FILING GUARD READS ITS CODE AND CONFIG FROM THE SESSION'S LAUNCH CHECKOUT, so a stale launch tree applies old policy. It was moved to origin/main twice today. The engine route is also denied to any `gh issue create` that passes -R, and a --body-file created in the same command reads as UNMEASURED. All three are in memory.",
+        "NEXT: #2082 (delete the restated criterion counts; ADR-003's had to be bumped by hand for ADR-016) has no milestone, so it is not in Ready. #2079 (an interpreter inside a command or process substitution is unmetered) is in Phase 6. The FG-266..280 reservation leaves with the next PR that touches specs/sc-reservations.json. The Octokit issue-create path still caps at 12, which errs strict, and is unfiled on purpose while the backlog is net growing."
+      ]
+    },
+    {
       "date": "2026-11-13 session 92 (ADR-015's review rounds, the needs-criterion row recast as SC-2762, and three engine PRs merged)",
       "items": [
         "STOP-POINT: #2034 (ADR-015) is green and waits for Jason's merge. After it merges, run `plan-issues --repair docs/adr/ADR-015-backlog-criterion-repair-the-forty.md --repo hornjason/rungate --write` by hand (adr-accepted.yml runs --decompose only), then dispatch criterion-label.yml and run board-mirror --write. #2058 (#2054, SC-2741 ticked via sync-sc-status --only) is armed. #2056 (tick SC-2617) is next, with --only once #2058 merges.",
@@ -1195,19 +1205,30 @@
     }
   ],
   "session": {
-    "number": 92,
+    "number": 93,
     "date": "2026-11-13",
-    "suite": "ADR-015 (#2034) brought to green through its review rounds; #2052, #2053 and #2055 merged; #2054 and #2056 filed to keep SC-2741 and SC-2617 covered; #2058 ticks SC-2741 with a new sync-sc-status --only.",
-    "summary": "ADR-015 (#2034) was taken to green through its review rounds; its needs-criterion row was recast as a new criterion, SC-2762, in Jason's wording. #2052, #2053 and #2055 merged. Closing #2037 left SC-2741 with no open engine issue and turned every PR's required test check red until #2054 was filed; the check before arming a PR that closes an engine issue is now recorded.",
+    "suite": "ADR-016 (the filing cap meters net growth) decided, merged and built end to end (#2085, #2088, #2089); #2060, #2042, #2072 and #2076 shipped; README (#2083) and the plan's verify commands (#2068) merged.",
+    "summary": "The filing cap kept refusing agreed work, and Jason asked whether its purpose was right. ADR-016 changed what it measures: while the repo closes issues as fast as it opens them, every run may file up to 36; otherwise today's cap of 12 stands. It went from decision to merged ADR to two built issues in one session, with the board and milestone placed by the workflow and no hand step. Live at session end: 34 opened, 24 closed, so the cap is still 12 until closing catches up.",
     "issues_created": [
-      2054,
-      2056,
-      2057
+      2061,
+      2062,
+      2063,
+      2066,
+      2067,
+      2072,
+      2076,
+      2079,
+      2084
     ],
     "issues_closed": [
-      2024,
-      2037,
-      2041
+      2042,
+      2060,
+      2072,
+      2076,
+      2081,
+      2084,
+      2086,
+      2087
     ]
   },
   "stages": [
