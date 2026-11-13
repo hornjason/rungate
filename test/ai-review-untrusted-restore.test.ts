@@ -133,7 +133,7 @@ import {
   type VertexCiDecision,
 } from "../lib/scaffold/ai-review-step";
 import { actionRef } from "../lib/workflow-actions";
-import { BUN_VERSION_FILE, declaredBunVersion, setupBunWith } from "../lib/bun-version";
+import { BUN_VERSION_FILE, declaredBunVersion, setupBunEnv, setupBunWith } from "../lib/bun-version";
 import { CLAUDE_CODE_ACTION } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../lib/google-auth-action";
 import { gitFixtureTestTimeout } from "./helpers/git-fixture-budget";
@@ -200,6 +200,7 @@ function generatedJob(): string {
       setupBun: actionRef("oven-sh/setup-bun"),
       uploadArtifact: actionRef("actions/upload-artifact"),
       setupBunWith: setupBunWith(declaredBunVersion(join(import.meta.dir, "..")), "    "),
+      setupBunEnv: setupBunEnv("  "),
     },
     // A fixture version for the adjudicator's `bunx` pin (#1013). This file is
     // about what the restore step restores, and the pin is not part of it.

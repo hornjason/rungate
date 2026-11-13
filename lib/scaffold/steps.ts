@@ -79,7 +79,7 @@ import { DEFAULT_PROFILE, isRuleIncluded, type ScaffoldProfile } from "./profile
 import { referencedPaths } from "../agents-md-refs";
 import { scanDocsDirectory } from "../doc-routing";
 import { inferredTestCommand, testCommandDecision } from "../test-command";
-import { declaredBunVersion, setupBunWith } from "../bun-version";
+import { declaredBunVersion, setupBunEnv, setupBunWith } from "../bun-version";
 import { codeMapUnreferenced, unlistedSpecs } from "../spec-listing";
 import { censusReport, stampWorkflow, workflowBody, workflowCensus } from "./workflow-census";
 import {
@@ -3893,6 +3893,7 @@ ${baseRefStep}
       - uses: ${actionRef("oven-sh/setup-bun")}
         with:
 ${bunStep}
+${setupBunEnv("        ")}
       - run: bun install${globalTools.step}${ciSetupStep()}
       - run: ${test.command} --shard=\${{ matrix.shard }}/${shards}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SHARD_LEG))}${trackerTokenEnv}${typecheckStep}
 ${buildJunitArtifactStep("      ", test.command, CI_JUNIT_SHARD_LEG)}${buildShardMarkerSteps("      ")}
@@ -3981,6 +3982,7 @@ ${baseRefStep}
       - uses: ${actionRef("oven-sh/setup-bun")}
         with:
 ${bunStep}
+${setupBunEnv("        ")}
       - run: bun install${globalTools.step}${ciSetupStep()}
       - run: ${test.command}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SINGLE_LEG))}${trackerTokenEnv}${typecheckStep}
 ${buildJunitArtifactStep("      ", test.command, CI_JUNIT_SINGLE_LEG)}`;
@@ -4018,6 +4020,7 @@ ${checkoutStep}
       - uses: ${actionRef("oven-sh/setup-bun")}
         with:
 ${bunStep}
+${setupBunEnv("        ")}
       - run: bun install
       - name: Conformity + spec drift
         run: bun test test/scaffold-conformity.test.ts
@@ -4262,6 +4265,8 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
       // The same single declaration the test and gates jobs resolve from
       // (#622), at the indent this job's step bodies use.
       setupBunWith: setupBunWith(declaredBunVersion(root), "    "),
+      // asaCommandCenter#1849, at the indent of the step's own keys.
+      setupBunEnv: setupBunEnv("  "),
     },
     // #1013. The GENERATING version, and the same reading `harnessDevDepRange`
     // takes — one function, so a scaffold cannot write a `bunx rungate@X` next
@@ -4288,6 +4293,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     // The same `bunStep` the three jobs above render, at the same indent and
     // from the same single declaration (#622).
     setupBunWith: bunStep,
+    setupBunEnv: setupBunEnv("        "),
     version: harnessVersion(),
   });
 

@@ -4,7 +4,7 @@ import { dirname, join } from "path";
 import { tmpdir } from "os";
 
 import { actionRef } from "../lib/workflow-actions";
-import { declaredBunVersion, setupBunWith } from "../lib/bun-version";
+import { declaredBunVersion, setupBunEnv, setupBunWith } from "../lib/bun-version";
 import { CLAUDE_CODE_ACTION } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../lib/google-auth-action";
 import {
@@ -97,6 +97,7 @@ const JOB = buildReviewRunStep(
     review: actionRef(CLAUDE_CODE_ACTION),
     setupBun: actionRef("oven-sh/setup-bun"),
     setupBunWith: setupBunWith(declaredBunVersion(REPO_ROOT), "    "),
+    setupBunEnv: setupBunEnv("  "),
     uploadArtifact: actionRef("actions/upload-artifact"),
   },
   "0.0.0-fixture",

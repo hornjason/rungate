@@ -161,6 +161,8 @@ export interface UnmeasuredWorkflowOptions {
    * the defect #622 removed.
    */
   setupBunWith: string;
+  /** The step's `env:` block, from `setupBunEnv` (asaCommandCenter#1849). */
+  setupBunEnv: string;
   /** The published harness version the step runs through `bunx`. */
   version: string;
 }
@@ -230,6 +232,7 @@ jobs:
       - uses: ${opts.setupBun}
         with:
 ${opts.setupBunWith}
+${opts.setupBunEnv}
       - name: Record which kind of unmeasured each round was
         env:
           ${AI_REVIEW_UNMEASURED_REPO_VAR}: \${{ github.repository }}

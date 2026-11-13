@@ -1272,6 +1272,8 @@ export interface AiReviewActionRefs {
    * re-indented by `indent` on the way out, like every script above.
    */
   setupBunWith: string;
+  /** The step's `env:` block, from `setupBunEnv("  ")` (asaCommandCenter#1849). */
+  setupBunEnv: string;
 }
 
 /**
@@ -11203,6 +11205,7 @@ export function buildReviewRunStep(
     `  uses: ${refs.setupBun}`,
     `  with:`,
     ...refs.setupBunWith.trimEnd().split("\n"),
+    ...refs.setupBunEnv.trimEnd().split("\n"),
   ];
 
   // Workload Identity Federation, and NO service-account key (#677 AC-15).

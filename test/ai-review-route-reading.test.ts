@@ -129,7 +129,7 @@ import { join } from "path";
 import { CLAUDE_CODE_ACTION } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../lib/google-auth-action";
 import { actionRef } from "../lib/workflow-actions";
-import { declaredBunVersion, setupBunWith } from "../lib/bun-version";
+import { declaredBunVersion, setupBunEnv, setupBunWith } from "../lib/bun-version";
 import type { VertexCiDecision } from "../lib/scaffold/ai-review-step";
 import {
   AI_REVIEW_ACTION_STEP_ID,
@@ -210,6 +210,7 @@ function generatedStep(id: string): any {
       setupBun: actionRef("oven-sh/setup-bun"),
       uploadArtifact: actionRef("actions/upload-artifact"),
       setupBunWith: setupBunWith(declaredBunVersion(join(import.meta.dir, "..")), "    "),
+      setupBunEnv: setupBunEnv("  "),
     },
     FIXTURE_VERSION,
   );

@@ -99,7 +99,7 @@ import {
 import { CLAUDE_CODE_ACTION } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../lib/google-auth-action";
 import { actionRef } from "../lib/workflow-actions";
-import { declaredBunVersion, setupBunWith } from "../lib/bun-version";
+import { declaredBunVersion, setupBunEnv, setupBunWith } from "../lib/bun-version";
 import { aiReviewAuthScript, aiReviewUnmeasuredViolations } from "../lib/conformity";
 import { stubBunx, stubBunxAbsent } from "./helpers/stub-bunx";
 import { gitFixtureTestTimeout } from "./helpers/git-fixture-budget";
@@ -147,6 +147,7 @@ function REFS(root: string) {
     setupBun: actionRef("oven-sh/setup-bun"),
     uploadArtifact: actionRef("actions/upload-artifact"),
     setupBunWith: setupBunWith(declaredBunVersion(root), "    "),
+    setupBunEnv: setupBunEnv("  "),
   };
 }
 
