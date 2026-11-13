@@ -45,6 +45,7 @@
  * `includeClosed` to derive them anyway; the default is to leave them out.
  */
 import { phaseOf } from "./board-mirror";
+import { familyOf } from "./spec-placement";
 
 export interface DepIssue {
   readonly number: number;
@@ -230,9 +231,26 @@ export function dependencyPlan(
     truncated: issues.filter(i => i.blockedByTruncated === true).map(i => i.number),
   });
 
-  // Adjacent members of the phases that EXIST. See the header: `p - 1` would
-  // leave a phase after a gap blocked by nothing and reading as startable.
-  const derived = chainAdjacentPhases(phases, byPhase);
+  // Adjacent members of the phases that EXIST, chained WITHIN each milestone
+  // family (#2024, SC-2617). See the header: `p - 1` would leave a phase after
+  // a gap blocked by nothing and reading as startable. And `Convergence
+  // Phase 1` follows `Convergence Phase 0`, never `Pipeline Phase 0`: a
+  // repository-wide plan bucketed by number alone chains one spec to another,
+  // which is how #1903's reading measured 129 of 154 and was withdrawn.
+  // `plan-deps` narrows to one family before calling, so it sees one bucket.
+  const byFamily = new Map<string, Map<number, DepIssue[]>>();
+  for (const [p, members] of byPhase) {
+    for (const i of members) {
+      const f = familyOf(i.milestone) ?? "";
+      const fam = byFamily.get(f) ?? new Map<number, DepIssue[]>();
+      fam.set(p, [...(fam.get(p) ?? []), i]);
+      byFamily.set(f, fam);
+    }
+  }
+  const derived: DepEdge[] = [];
+  for (const fam of byFamily.values()) {
+    derived.push(...chainAdjacentPhases([...fam.keys()].sort((a, b) => a - b), fam));
+  }
 
   const key = (e: DepEdge): string => `${e.blocked}<-${e.blocker}`;
   const derivedKeys = new Set(derived.map(key));

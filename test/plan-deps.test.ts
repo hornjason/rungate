@@ -21,6 +21,8 @@ import { describe, expect, test } from "bun:test";
 import { join } from "path";
 import { chainAdjacentPhases, dependencyPlan, groupByBlocked } from "../lib/spec-deps";
 import type { DepIssue } from "../lib/spec-deps";
+import { familyOf, phaseInFamily } from "../lib/spec-placement";
+import { phaseOf } from "../lib/board-mirror";
 import { REFUSAL_EXIT, main as planDepsMain } from "../scripts/plan-deps";
 import type { PlanDepsGitHub } from "../scripts/plan-deps";
 
@@ -72,6 +74,72 @@ describe("lib/spec-deps: the edges are the adjacent-phase cross product", () => 
     const plan = dependencyPlan([iss(10, 0), iss(20, 1)]);
     expect(plan.missing.some(e => e.blocked === 10)).toBe(false);
     expect(plan.frontier).toBe(0);
+  });
+});
+
+/**
+ * #2024 / SC-2617: the plan is repository-wide, and this repository carries
+ * two milestone families at overlapping phase numbers. `Convergence Phase 1`
+ * follows `Convergence Phase 0`; it never follows `Pipeline Phase 0`. The
+ * withdrawn reading of #1903 measured 129 of 154 over a plan that chained the
+ * two, because `phaseOf` reads the number and not the family.
+ */
+describe("#2024 / SC-2617: phases chain within a milestone family, never across one", () => {
+  const fam = (number: number, family: string, phase: number): DepIssue => ({
+    number,
+    state: "OPEN",
+    milestone: `${family} Phase ${phase} — x`,
+    blockedBy: [],
+  });
+
+  test("two families at the same numbers: each chains its own phases and nothing crosses", () => {
+    const plan = dependencyPlan([
+      fam(10, "Convergence", 0),
+      fam(11, "Convergence", 1),
+      fam(20, "Pipeline", 0),
+      fam(21, "Pipeline", 1),
+    ]);
+    expect(keys(plan.missing)).toEqual(["11<-10", "21<-20"]);
+    // The family-blind plan's two extra edges, named so the wrong answer
+    // cannot pass with a different count.
+    expect(keys(plan.missing)).not.toContain("11<-20");
+    expect(keys(plan.missing)).not.toContain("21<-10");
+  });
+
+  test("a family's gap chains the phases that family has, not the other family's", () => {
+    // Pipeline has 5 and 6; Convergence has 4 and 6. A family-blind chain
+    // would block Convergence 6 on Pipeline 5, the adjacent number overall.
+    const plan = dependencyPlan([
+      fam(40, "Convergence", 4),
+      fam(60, "Convergence", 6),
+      fam(50, "Pipeline", 5),
+      fam(61, "Pipeline", 6),
+    ]);
+    expect(keys(plan.missing)).toEqual(["60<-40", "61<-50"]);
+  });
+
+  test("a family with one phase chains nothing, and does not make the plan UNMEASURED", () => {
+    // Two phases exist across the repository; neither family alone has two.
+    const plan = dependencyPlan([fam(10, "Convergence", 0), fam(20, "Pipeline", 1)]);
+    expect(plan.missing).toEqual([]);
+    expect(plan.reading).toBe("MEASURED");
+  });
+
+  test("familyOf reads the same grammar as phaseInFamily, so the two cannot disagree", () => {
+    // The last title says "Phase" twice: the family ends at the FIRST one.
+    expect(familyOf("Pipeline Phase 6 — starts after Phase 5 ships")).toBe("Pipeline");
+    for (const title of [
+      "Pipeline Phase 6 — the board's state is a reading",
+      "Convergence Phase 0",
+      "Engine X Phase 12 — y",
+      "Pipeline Phase 6 — starts after Phase 5 ships",
+    ]) {
+      const family = familyOf(title);
+      expect(family, title).not.toBeNull();
+      expect(phaseInFamily(title, family!), title).toBe(phaseOf(title));
+    }
+    expect(familyOf("Convergence Machinery")).toBeNull();
+    expect(familyOf(null)).toBeNull();
   });
 });
 
