@@ -770,9 +770,7 @@ export async function netGrowthCeiling(
   // otherwise escape the catch below.
   const growth = await Promise.resolve()
     .then(read)
-    .catch((e: unknown) =>
-    unmeasuredGrowth(`the trailing day's issues could not be read (${errorText(e)})`),
-  );
+    .catch((e: unknown) => unmeasuredGrowth(`the trailing day's issues could not be read (${errorText(e)})`));
   if (growth.reading !== "MEASURED") return { cap: allowance.cap, basis: growth };
   const ceiling = growth.opened - growth.closed <= 0;
   return {
