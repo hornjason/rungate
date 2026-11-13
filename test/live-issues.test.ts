@@ -722,6 +722,7 @@ describe("what a --prefix argument actually said", () => {
       "board-conformance.ts",
       "board-snapshot.ts",
       "plan-deps.ts",
+      "plan-issues.ts",
       "plan-spec.ts",
     ]);
   });
