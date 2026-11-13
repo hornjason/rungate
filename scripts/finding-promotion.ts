@@ -37,6 +37,7 @@ import {
   promote,
   specPath,
   type PromotableIssue,
+  withCriterionLinked,
 } from "../lib/finding-promotion";
 import { readScRegistry } from "./sync-sc-status";
 import { currentScOwner } from "../lib/sc-reservations";
@@ -387,12 +388,60 @@ if (!write) {
 // 18 of the 22 `writeSpec` callers in this tree discard it, `create-sc.ts`
 // among them. That population is out of this pull request's scope and is
 // filed separately rather than fixed here.
-const wrote = writeSpec(target, `${content.trimEnd()}\n${result.line}\n`);
-if (!wrote.written) {
-  console.error(`REFUSED: ${wrote.refusal ?? `${spec} was not written, and gave no reason`}`);
+// A retry after a failed link: the line is already there, so write nothing
+// and go straight to the link (review of #2065).
+if (result.alreadyWritten) {
+  console.log(`${spec} already states ${result.id}; not appending it again.`);
+} else {
+  const wrote = writeSpec(target, `${content.trimEnd()}\n${result.line}\n`);
+  if (!wrote.written) {
+    console.error(`REFUSED: ${wrote.refusal ?? `${spec} was not written, and gave no reason`}`);
+    process.exit(PROMOTION_EXIT);
+  }
+  console.log(`Appended to ${spec}: ${result.line}`);
+  console.log(`  owner: ${currentScOwner(ROOT) ?? "(none — allocated above every reserved block)"}`);
+}
+
+// #2060: link the issue here rather than printing an instruction to do it.
+// Re-read first, for the reason the decline path does: `--body-file`
+// overwrites the whole body, and an edit made since the first read would be
+// lost. The spec is already written, so a failure here says exactly what is
+// left to do and exits non-zero.
+// Bound out here: the `result.promoted` narrowing above does not reach
+// inside the closure below.
+const promotedId = result.id;
+function linkIssue(): string | null {
+  let fresh: PromotableIssue;
+  try {
+    fresh = JSON.parse(
+      ghWithoutGhToken(["issue", "view", String(issueNumber), "--json", "number,title,body"]),
+    ) as PromotableIssue;
+  } catch (e) {
+    return `#${issueNumber} could not be re-read: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  const before = fresh.body ?? "";
+  const link = withCriterionLinked(before, promotedId);
+  if (!link.linked) return link.why;
+  if (link.body === before) return null;
+  const linkScratch = mkdtempSync(join(tmpdir(), "rg-2060-link-"));
+  try {
+    const linkFile = join(linkScratch, "body.md");
+    writeFileSync(linkFile, link.body);
+    ghWithoutGhToken(["issue", "edit", String(issueNumber), "--body-file", linkFile]);
+    return null;
+  } catch (e) {
+    return `#${issueNumber} could not be updated: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    rmSync(linkScratch, { recursive: true, force: true });
+  }
+}
+
+const linkFailure = linkIssue();
+if (linkFailure) {
+  console.error(
+    `REFUSED: ${spec} now states ${promotedId}, and the issue link failed — ${linkFailure}. ` +
+      `Add "${promotedId}" under #${issueNumber}'s "## Criteria this serves" heading.`,
+  );
   process.exit(PROMOTION_EXIT);
 }
-console.log(`Appended to ${spec}: ${result.line}`);
-console.log(`  owner: ${currentScOwner(ROOT) ?? "(none — allocated above every reserved block)"}`);
-console.log(`\nNow make #${issueNumber} name it: add "${result.id}" under its Criteria heading.`);
-console.log("Until it does, criterion-inventory still reports the issue as serving nothing.");
+console.log(`#${issueNumber} names ${promotedId} under its Criteria heading.`);

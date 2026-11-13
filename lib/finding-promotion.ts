@@ -92,6 +92,8 @@ export const PROMOTION_REFUSALS = [
   "NO_MODULE",
   "MALFORMED_STATEMENT",
   "ID_UNAVAILABLE",
+  "SYMBOL_EXISTS",
+  "AMBIGUOUS_HEADING",
 ] as const;
 
 export type PromotionRefusal = (typeof PROMOTION_REFUSALS)[number];
@@ -112,6 +114,11 @@ export type Promotion =
       readonly issue: number;
       /** Anything the allocator could not consult, carried rather than dropped. */
       readonly unmeasured: readonly string[];
+      /**
+       * The spec already states this exact criterion — a retry after the issue
+       * link failed (review of #2065). The caller writes nothing and links.
+       */
+      readonly alreadyWritten: boolean;
     }
   | { readonly promoted: false; readonly refusal: PromotionRefusal; readonly why: string };
 
@@ -203,11 +210,49 @@ export const STATEMENT_FIELD_NAMES = STATEMENT_FIELDS.map(f => f.field);
  * promoting one — which is what `test/finding-promotion.test.ts` does to
  * prove the refusals are observed rather than incidental.
  */
+/**
+ * Would `<module> contains [<symbol>]` already read as met? The SAME reading
+ * the matcher takes — `content-contains` in `lib/conformity.ts` is
+ * `expect(content).toContain(item)`: raw substring, comments and strings
+ * included. A narrower check here (a whole-identifier match, the first cut
+ * of #2060) let `promoted` through for symbol `promote`, which the matcher
+ * then reads as present: the false pass this refusal exists to stop.
+ */
+function matcherWouldPass(text: string, symbol: string): boolean {
+  return text.includes(symbol);
+}
+
 export function promotionViolations(input: PromotionInput): PromotionViolation[] {
   const out: PromotionViolation[] = [];
 
   for (const { field, refusal, why } of STATEMENT_FIELDS) {
     if (input[field].trim() === "") out.push({ refusal, why });
+  }
+
+  // #2060: the criterion is matched by `<module> contains [<symbol>]`, a
+  // presence check. A symbol the module already contains makes a criterion
+  // for work nobody has done read as met — `heredocInterpreter` on #2034.
+  // A module that exists and cannot be read cannot prove the symbol absent.
+  if (input.symbol.trim() !== "" && input.module.trim() !== "") {
+    const modulePath = resolve(input.projectRoot, input.module);
+    if (existsSync(modulePath)) {
+      let text: string | null;
+      try {
+        text = readFileSync(modulePath, "utf8");
+      } catch {
+        text = null;
+      }
+      if (text === null || matcherWouldPass(text, input.symbol)) {
+        out.push({
+          refusal: "SYMBOL_EXISTS",
+          why:
+            text === null
+              ? `${input.module} exists and could not be read, so ${input.symbol} cannot be shown to be absent`
+              : `${input.module} already contains ${input.symbol}, so \`contains [${input.symbol}]\` would read ` +
+                "as met before the work it names is done — pick a name the work will introduce",
+        });
+      }
+    }
   }
 
   // Checked before `existsSync`, so a path outside the tree is named for what
@@ -297,6 +342,11 @@ export function promotionViolations(input: PromotionInput): PromotionViolation[]
     });
   }
 
+  // Before the spec is written, not when the link fails after it: the link
+  // has no one section to write into (review of #2065).
+  const ambiguity = criteriaHeadingAmbiguity(input.issue.body ?? "", `#${input.issue.number}`);
+  if (ambiguity !== null) out.push({ refusal: "AMBIGUOUS_HEADING", why: ambiguity });
+
   // The existing decider, not a second one. See the module docblock.
   const alreadyServes = criteriaNamedBy(input.issue, allIds);
   if (alreadyServes.length > 0) {
@@ -347,10 +397,15 @@ export function promotionStatement(input: PromotionInput): string {
  */
 export function promote(input: PromotionInput, registry: ScRegistry): Promotion {
   const violations = promotionViolations(input);
-  if (violations.length > 0) {
-    const first = violations[0]!;
-    return { promoted: false, refusal: first.refusal, why: first.why };
-  }
+  // SYMBOL_EXISTS alone is held until the already-written scan below: once
+  // the criterion is in the spec, the symbol appearing is the work landing,
+  // and a retry of a failed link must still reach the link (review of #2065).
+  // Every other refusal holds. SYMBOL_EXISTS alone also means every spec
+  // check passed, so the read below is of a spec inside the tree.
+  // The blocker is reported, not SYMBOL_EXISTS, which is pushed early and
+  // would otherwise sit at index 0 over a missing spec (review of #2065).
+  const blocker = violations.find(v => v.refusal !== "SYMBOL_EXISTS");
+  if (blocker) return { promoted: false, refusal: blocker.refusal, why: blocker.why };
 
   // Inside a guard, because `promotionViolations` proved the file EXISTS and
   // existing is not the same as readable — a permission, a directory where a
@@ -366,6 +421,30 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
       refusal: "SPEC_UNREADABLE",
       why: `${input.spec} exists and could not be read: ${e instanceof Error ? e.message : String(e)}`,
     };
+  }
+
+  // A retry after a failed issue link finds its own line already written.
+  // Allocating again would append a second copy of one criterion for one
+  // finding (review of #2065), so the existing line is the answer.
+  const statement = promotionStatement(input);
+  for (const raw of specText.split("\n")) {
+    const m = /^- \[[ x]\] (SC-\d+): (.*)$/.exec(raw);
+    if (m && m[2] === statement) {
+      return {
+        promoted: true,
+        id: m[1]!,
+        line: raw,
+        spec: input.spec,
+        issue: input.issue.number,
+        unmeasured: [],
+        alreadyWritten: true,
+      };
+    }
+  }
+
+  if (violations.length > 0) {
+    const first = violations[0]!;
+    return { promoted: false, refusal: first.refusal, why: first.why };
   }
 
   let allocated: { number: number; namespace: { unmeasured: string[] } };
@@ -391,6 +470,7 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
     spec: input.spec,
     issue: input.issue.number,
     unmeasured: allocated.namespace.unmeasured ?? [],
+    alreadyWritten: false,
   };
 }
 
@@ -597,13 +677,9 @@ export function declineViolations(input: DeclineInput): DeclineViolation[] {
   // discovered by the writer is a refusal discovered after the caller was
   // told it would work.
   const headings = headingOccurrencesOf(body, CRITERIA_HEADING);
-  if (headings.length > 1) {
-    out.push({
-      refusal: "AMBIGUOUS_HEADING",
-      why:
-        `#${input.issue.number} opens "${CRITERIA_HEADING}" ${headings.length} times, so there is ` +
-        "no one section to write into and a reader cannot tell which one the board read",
-    });
+  const ambiguity = criteriaHeadingAmbiguity(body, `#${input.issue.number}`);
+  if (ambiguity !== null) {
+    out.push({ refusal: "AMBIGUOUS_HEADING", why: ambiguity });
   } else if (headings.length === 1 && hasTextUnder(body, headings[0]!)) {
     out.push({
       refusal: "CRITERIA_SECTION_OCCUPIED",
@@ -615,6 +691,20 @@ export function declineViolations(input: DeclineInput): DeclineViolation[] {
   }
 
   return out;
+}
+
+/**
+ * Why `body` has no one criteria section to write into, or null when it has
+ * zero or one. The one decider for the decline path, the promote path and
+ * the link (review of #2065), so the three cannot disagree about the shape.
+ */
+export function criteriaHeadingAmbiguity(body: string, who: string): string | null {
+  const count = headingOccurrencesOf(body, CRITERIA_HEADING).length;
+  if (count <= 1) return null;
+  return (
+    `${who} opens "${CRITERIA_HEADING}" ${count} times, so there is ` +
+    "no one section to write into and a reader cannot tell which one the board read"
+  );
 }
 
 /** Non-blank text between the heading at `at` and the next heading. */
@@ -653,6 +743,32 @@ export function bodyWithDecline(body: string, why: string): string {
   const headingEnd = body.indexOf("\n", at);
   const cut = headingEnd === -1 ? body.length : headingEnd;
   return `${body.slice(0, cut)}\n\n${line}\n${body.slice(cut).replace(/^\n+/, "\n")}`;
+}
+
+/**
+ * The issue body with `id` named under its `## Criteria this serves` heading
+ * (#2060). A promotion used to print "now make #N name it" and leave the
+ * edit to a person; ADR-015 linked twelve issues through repair rows
+ * instead. Unchanged when the body already names `id`.
+ *
+ * Refuses a body with two criteria headings rather than picking the first.
+ * `promote` refuses that shape before the spec is written; this catches a
+ * body that gained one between that check and the re-read.
+ */
+export type CriterionLink =
+  | { readonly linked: true; readonly body: string }
+  | { readonly linked: false; readonly why: string };
+
+export function withCriterionLinked(body: string, id: string): CriterionLink {
+  if (criteriaNamedBy({ title: "", body }, [id]).length > 0) return { linked: true, body };
+  // The number is not known here; the CLI names the issue in its message.
+  const ambiguity = criteriaHeadingAmbiguity(body, "the issue");
+  if (ambiguity !== null) return { linked: false, why: ambiguity };
+  const at = headingOccurrencesOf(body, CRITERIA_HEADING)[0];
+  if (at === undefined) return { linked: true, body: `${body.trimEnd()}\n\n${CRITERIA_HEADING}\n\n${id}\n` };
+  const headingEnd = body.indexOf("\n", at);
+  const cut = headingEnd === -1 ? body.length : headingEnd;
+  return { linked: true, body: `${body.slice(0, cut)}\n\n${id}${body.slice(cut).replace(/^\n+/, "\n")}` };
 }
 
 /**

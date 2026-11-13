@@ -35,6 +35,7 @@ import {
   promotionStatement,
   promotionViolations,
   specPath,
+  withCriterionLinked,
   DECLINE_REFUSALS,
   PROMOTION_REFUSALS,
   STATEMENT_FIELD_NAMES,
@@ -42,7 +43,7 @@ import {
   type DeclineRefusal,
   type PromotionInput,
 } from "../lib/finding-promotion";
-import { NAMES_NONE } from "../lib/board-mirror";
+import { NAMES_NONE, criterionAnswer } from "../lib/board-mirror";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf, missingSections } from "../lib/issue-shape";
 import { buildScRegistry } from "../lib/sc-ids";
 
@@ -414,6 +415,7 @@ describe("SC-2612 / AC-2 (#1678): every refusal is named, and none is a guess", 
         { module: "" },
         { outcome: "fine\n- [x] SC-9999: forged" },
         { issue: { number: 77, title: "SC-9001", body: "" } },
+        { issue: { number: 77, title: "t", body: "## Criteria this serves\n\n## Criteria this serves\n" } },
       ] as Partial<PromotionInput>[]) {
         for (const v of promotionViolations(inputFor(root, over))) reached.add(v.refusal);
       }
@@ -423,6 +425,12 @@ describe("SC-2612 / AC-2 (#1678): every refusal is named, and none is a guess", 
       mkdirSync(join(unreadable, "specs", "FIXTURE-SPEC.md"));
       for (const v of promotionViolations(inputFor(unreadable))) reached.add(v.refusal);
       rmSync(unreadable, { recursive: true, force: true });
+      // #2060: the module already contains the symbol.
+      const defined = scratch(SPEC_WITH_CRITERIA);
+      mkdirSync(join(defined, "lib"), { recursive: true });
+      writeFileSync(join(defined, "lib", "finding-promotion.ts"), "export function promote() {}\n");
+      for (const v of promotionViolations(inputFor(defined))) reached.add(v.refusal);
+      rmSync(defined, { recursive: true, force: true });
       for (const v of promotionViolations(inputFor(noCriteria))) reached.add(v.refusal);
       for (const v of promotionViolations(inputFor(measuredEmpty, { spec: "specs/EMPTY-SPEC.md" }))) {
         reached.add(v.refusal);
@@ -494,8 +502,9 @@ describe("SC-2612 / AC-3 (#1678): the module does not answer a question board-mi
       }
     }
     // Vacuity guard: if a refactor removes every read, the loop above
-    // asserts nothing and passes.
-    expect(reads).toBe(3);
+    // asserts nothing and passes. Four since #2060: the three reads of the
+    // target spec, and the read of the module SYMBOL_EXISTS checks.
+    expect(reads).toBe(4);
   });
 
   test("the registry parameter has no default, so the compiler catches every call site", () => {
@@ -1215,5 +1224,178 @@ describe("#1956 round 2: the scratch directory is always removed", () => {
     expect(after.indexOf("process.exit(PROMOTION_EXIT)")).toBeGreaterThan(
       after.indexOf("if (failure)"),
     );
+  });
+});
+
+/**
+ * #2060 / SC-2612: a promotion needs no hand step to be correct.
+ *
+ * Two of the hand steps ADR-015 needed: a symbol the module already
+ * contained (`heredocInterpreter`) made a presence-matched criterion pass
+ * falsely, and every promoted issue had to be edited by hand to name its
+ * new criterion.
+ */
+describe("#2060 / SC-2612: an existing symbol is refused, and the issue is linked", () => {
+  function withModule(text: string): string {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    mkdirSync(join(root, "lib"), { recursive: true });
+    writeFileSync(join(root, "lib", "finding-promotion.ts"), text);
+    return root;
+  }
+
+  test("a symbol the module already contains is refused before anything is allocated", () => {
+    const root = withModule("export function promote() {}\n");
+    try {
+      const out = promote(inputFor(root), REGISTRY);
+      expect(out.promoted).toBe(false);
+      if (out.promoted) return;
+      expect(out.refusal).toBe("SYMBOL_EXISTS");
+      expect(out.why).toContain("lib/finding-promotion.ts");
+      expect(out.why).toContain("promote");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the refusal reads the module the way the matcher does: any substring, comments included", () => {
+    // Review of #2065. `content-contains` (lib/conformity.ts) is
+    // `toContain(item)`, so `promoted` satisfies `contains [promote]`, and so
+    // does a comment. A narrower check here is a false pass the matcher sees.
+    for (const text of ["export const promoted = 1;\n", "// TODO: promote this later\n"]) {
+      const root = withModule(text);
+      try {
+        const out = promote(inputFor(root), REGISTRY);
+        expect(out.promoted, text).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+    const absent = withModule("export const other = 1;\n");
+    try {
+      expect(promote(inputFor(absent), REGISTRY).promoted).toBe(true);
+    } finally {
+      rmSync(absent, { recursive: true, force: true });
+    }
+  });
+
+  test("a retry finds its own line already written and allocates nothing new", () => {
+    // Review of #2065: a failed issue link exits after the spec write, and a
+    // retry used to append a second copy of the same criterion.
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const first = promote(inputFor(root), REGISTRY);
+      expect(first.promoted).toBe(true);
+      if (!first.promoted) return;
+      const path = join(root, "specs", "FIXTURE-SPEC.md");
+      writeFileSync(path, `${readFileSync(path, "utf8").trimEnd()}\n${first.line}\n`);
+      const retry = promote(inputFor(root), REGISTRY);
+      expect(retry.promoted).toBe(true);
+      if (!retry.promoted) return;
+      expect(retry.alreadyWritten).toBe(true);
+      expect(retry.id).toBe(first.id);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a retry still links after the work has landed and the module now holds the symbol", () => {
+    // Review of #2065, round 2: SYMBOL_EXISTS ran before the already-written
+    // scan, so once the fix merged a retry of the failed link was refused and
+    // the issue could never be linked by the tool.
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const first = promote(inputFor(root), REGISTRY);
+      expect(first.promoted).toBe(true);
+      if (!first.promoted) return;
+      const path = join(root, "specs", "FIXTURE-SPEC.md");
+      writeFileSync(path, `${readFileSync(path, "utf8").trimEnd()}\n${first.line}\n`);
+      mkdirSync(join(root, "lib"), { recursive: true });
+      writeFileSync(join(root, "lib", "finding-promotion.ts"), "export function promote() {}\n");
+      const retry = promote(inputFor(root), REGISTRY);
+      expect(retry.promoted).toBe(true);
+      if (!retry.promoted) return;
+      expect(retry.alreadyWritten).toBe(true);
+      expect(retry.id).toBe(first.id);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an existing symbol never hides the refusal that actually blocks", () => {
+    // Review of #2065, round 3: SYMBOL_EXISTS is pushed early, so returning
+    // `violations[0]` named it while a missing spec or a doubled heading was
+    // the real blocker.
+    const root = withModule("export function promote() {}\n");
+    try {
+      const absent = promote(inputFor(root, { spec: "specs/NOT-HERE-SPEC.md" }), REGISTRY);
+      expect(absent.promoted).toBe(false);
+      if (absent.promoted) return;
+      expect(absent.refusal).toBe("SPEC_ABSENT");
+      const body = "x\n\n## Criteria this serves\n\n## Criteria this serves\n";
+      const doubled = promote(inputFor(root, { issue: { number: 77, title: "t", body } }), REGISTRY);
+      expect(doubled.promoted).toBe(false);
+      if (doubled.promoted) return;
+      expect(doubled.refusal).toBe("AMBIGUOUS_HEADING");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an issue with two Criteria headings is refused before the spec is written", () => {
+    // Review of #2065, round 2: the decline path refuses this shape; the
+    // promote path wrote the spec and then linked into the first heading.
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const body = "x\n\n## Criteria this serves\n\n## Criteria this serves\n";
+      const out = promote(inputFor(root, { issue: { number: 77, title: "t", body } }), REGISTRY);
+      expect(out.promoted).toBe(false);
+      if (out.promoted) return;
+      expect(out.refusal).toBe("AMBIGUOUS_HEADING");
+      expect(out.why).toContain("2 times");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the link refuses a body that gained a second Criteria heading since the check", () => {
+    const twice = "x\n\n## Criteria this serves\n\nSC-1\n\n## Criteria this serves\n";
+    const out = withCriterionLinked(twice, "SC-2762");
+    expect(out.linked).toBe(false);
+    if (out.linked) return;
+    expect(out.why).toContain("2 times");
+  });
+
+  test("the link adds the id under the Criteria heading, and the board reads it as answered", () => {
+    const bareLink = withCriterionLinked("Some finding.", "SC-2762");
+    expect(bareLink.linked).toBe(true);
+    if (!bareLink.linked) return;
+    const bare = bareLink.body;
+    expect(bare).toContain("## Criteria this serves");
+    expect(criterionAnswer({ title: "t", body: bare }, ["SC-2762"]).names).toEqual(["SC-2762"]);
+
+    const existing = "Body.\n\n## Criteria this serves\n\nSC-2741\n\n## Files this will change\n- a.ts\n";
+    const link = withCriterionLinked(existing, "SC-2762");
+    expect(link.linked).toBe(true);
+    if (!link.linked) return;
+    const linked = link.body;
+    expect(linked.match(/## Criteria this serves/g)?.length).toBe(1);
+    expect(criterionAnswer({ title: "t", body: linked }, ["SC-2741", "SC-2762"]).names.sort()).toEqual(["SC-2741", "SC-2762"]);
+    // The id lands inside the Criteria section, before the next heading.
+    expect(linked.indexOf("SC-2762")).toBeLessThan(linked.indexOf("## Files this will change"));
+    // Linking twice changes nothing.
+    expect(withCriterionLinked(linked, "SC-2762")).toEqual({ linked: true, body: linked });
+  });
+
+  test("the CLI links the issue after the spec is written, through the one function", () => {
+    const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
+    const wrote = cli.indexOf("const wrote = writeSpec(");
+    const linked = cli.indexOf("withCriterionLinked(");
+    expect(wrote).toBeGreaterThan(-1);
+    expect(linked).toBeGreaterThan(wrote);
+    // The function is CALLED, and its failure exits — a definition nobody
+    // calls would satisfy the line above.
+    expect(cli.indexOf("const linkFailure = linkIssue();")).toBeGreaterThan(wrote);
+    expect(cli).toMatch(/if \(linkFailure\) \{[\s\S]*?process\.exit\(PROMOTION_EXIT\)/);
+    expect(cli).not.toContain("Now make #");
   });
 });
