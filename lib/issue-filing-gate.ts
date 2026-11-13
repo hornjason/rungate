@@ -894,8 +894,10 @@ export async function readNetGrowth(
  * unread count that read like a measured one would be the Silent Default
  * Substitution `.claude/rules/config-access.md` names.
  */
-export function netGrowthSentence(basis: NetGrowthBasis | null): string | null {
-  if (basis === null) return null;
+export function netGrowthSentence(basis: NetGrowthBasis | null | undefined): string | null {
+  // `undefined` too: a ledger row written before the column existed carries
+  // none, and that row is a refusal with nothing to say about the ceiling.
+  if (basis === null || basis === undefined) return null;
   const window = `${RUN_WINDOW_MS / 3_600_000}h`;
   if (basis.reading === "UNMEASURED") {
     return (
@@ -3384,7 +3386,9 @@ export async function filingGate(
   const readGrowth = options.readGrowth ?? readNetGrowth;
   const counted = allowance.direct
     ? await readGrowth(root, Date.parse(at)).catch((e: unknown) =>
-        unmeasuredGrowth(`the trailing day's issues could not be read (${e instanceof Error ? e.message : String(e)})`),
+        unmeasuredGrowth(
+          `the trailing day's issues could not be read (${(e instanceof Error ? e.message : String(e)).slice(0, 200)})`,
+        ),
       )
     : null;
   const growth = netGrowthCeiling(allowance, counted);

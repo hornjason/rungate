@@ -6014,6 +6014,9 @@ describe("the filing cap under direct-ship mode", () => {
       readExisting: async () => measuredCorpus([]),
       readLedger: () => [],
       readTarget: async () => onPr,
+      // A direct-ship tree reads the net-growth count (#2086); injected so
+      // this case never reaches GitHub.
+      readGrowth: async () => ({ reading: "UNMEASURED", why: "not read by FG-198" }),
     });
     expect(
       parses.note ?? "",
