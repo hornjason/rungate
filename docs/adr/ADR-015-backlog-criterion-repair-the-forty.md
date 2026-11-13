@@ -183,6 +183,13 @@ the three that serve none (the milestone-placing repair, the converter that
 rewrote SC-2747, D4's parser binding) are filed as ordinary issues. Each
 issue's full evidence is added to its body after filing.
 
+Every row is placed in Phase 6 on purpose, including the SC-2612 and SC-2609
+rows, although the placement table puts those criteria in Phases 5 and 3. Each
+row is follow-on work on a criterion that phase already finished. Ready pulls
+from the lowest phase with an open issue (SC-2741), so filing these rows into
+Phase 3 or 5 would drag the focus back to that phase and empty Ready of
+Phase 6.
+
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
 | SC-2612 | finding-promotion completes a promotion with no hand step after it and refuses a symbol its module already defines | lib/finding-promotion.ts, scripts/finding-promotion.ts, lib/create-sc.ts, test/finding-promotion.test.ts, test/criterion-provenance.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
