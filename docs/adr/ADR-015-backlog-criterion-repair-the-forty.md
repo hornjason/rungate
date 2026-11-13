@@ -119,6 +119,15 @@ no placement table.
 Each criterion below is the text Jason approved. Written into its spec by
 `finding-promotion --issue N --spec <spec> --symbol <s> --module <m> --outcome "<criterion>" --write`.
 
+**Written in this PR (12):** #1355 SC-2750, #1952 SC-2751, #1953 SC-2752,
+#1964 SC-2753, #1495/#1571 CRC-F6, #1816 CRC-M16, #1818 CRC-N7, #1887 CRC-M17,
+#1934 CRC-M18, #1921 SC-2759, #1942 SC-2760, #1976 SC-2761 — each linked through
+the annotate table above. **Not written yet (7):** #1910, #1911, #1046, #1194,
+#1553, #1559, #1987 and the split-off size criterion. They have no criterion in
+any spec yet, so they need no link row; they wait for the Decomposition's first
+row, which makes `finding-promotion` write the criterion and link the issue in
+one step.
+
 | Issue | Approved criterion | Spec | Milestone |
 |---|---|---|---|
 | #1355 | A `gh issue create` reached through a heredoc — inside a subshell, a brace group, a continued line or `eval` — is metered by the filing cap as a filing attempt, never passed unmetered. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 5 |
