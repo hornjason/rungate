@@ -38,6 +38,7 @@ import { join, resolve } from "path";
 import {
   listOpenIssues,
   parseOwnerRepo,
+  type GitHubClient,
   type OpenIssue,
   type OpenIssuePage,
 } from "../lib/github";
@@ -99,6 +100,11 @@ import {
   INTENT_PENDING,
   NON_CHECKOUT_RUN,
   RUN_WINDOW_MS,
+  NET_GROWTH_CEILING,
+  netGrowthCeiling,
+  countNetGrowth,
+  readNetGrowth,
+  type NetGrowthReading,
   type CommentExemption,
   type CommentTarget,
   type FilingLedgerRow,
@@ -4716,7 +4722,7 @@ describe("FG-143..FG-176: a numeric cap, which no argument defeats", () => {
   });
 
   test("FG-150: the refusal names the cap, the run and the comment target", () => {
-    const text = overCapReason("/wt/x", 1, onPr, FILINGS_PER_RUN);
+    const text = overCapReason("/wt/x", 1, onPr, FILINGS_PER_RUN, null);
     expect(text).toContain("cap is 1");
     expect(text).toContain("/wt/x");
     expect(text).toContain("PR #1595");
@@ -5944,7 +5950,7 @@ describe("the filing cap under direct-ship mode", () => {
     // resolved cap REACHES the prose. A signature can be required and still
     // be ignored by the body it was added for.
     expect(
-      overCapReason("/wt/x", 1, target, FILINGS_PER_RUN_DIRECT),
+      overCapReason("/wt/x", 1, target, FILINGS_PER_RUN_DIRECT, null),
       "the message must name the cap it was handed, not the constant",
     ).toContain(`cap is ${FILINGS_PER_RUN_DIRECT}`);
     expect(unreservedCapReason("/wt/x", target, FILINGS_PER_RUN_DIRECT)).toContain(
@@ -6922,6 +6928,350 @@ describe("SC-2735: the filing-override label comes from the filing tree's config
       }),
       "a malformed config must not become a waiver or a crash",
     ).toBeNull();
+  });
+});
+
+/**
+ * Covers SC-2763 (SPEC-TO-BOARD-PIPELINE-SPEC.md): while the repository has
+ * closed at least as many issues as it opened over the trailing 24 hours,
+ * every run's filing cap is the ceiling of 36; when opening outruns closing,
+ * or the count cannot be read, the cap is the ship-mode cap it is today.
+ *
+ * ADR-016, option A, H = 36 (Jason, 2026-11-13). The cap exists for rule 7's
+ * warning — opened faster than closed diverges however fast the work goes —
+ * and it measured every `gh issue create` instead. On the day the ADR was
+ * written the repository opened 30 and closed 28, a backlog that was not
+ * diverging, and the cap still refused work Jason had agreed.
+ *
+ * Every row below holds the FILING fixed — same title, same body, same
+ * corpus, no plan — and varies the net-growth reading, the ship mode, the
+ * queue label or the spent allowance. The reading is injected: nothing here
+ * reaches GitHub, and FG-275..FG-277 drive the default reader with a client
+ * that lives in memory.
+ *
+ * Proved able to fail, by hand, each mutation reverted after the run:
+ * - the UNMEASURED arm of `netGrowthCeiling` returning the ceiling: FG-271 red;
+ * - `<= 0` inverted to `> 0`: FG-266, FG-267, FG-268, FG-269 and FG-270 red;
+ * - the eligibility check dropped, so harness mode earns the ceiling: FG-272
+ *   red, and FG-273 with it for the explicit `board.filingsPerRun`.
+ */
+describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", () => {
+  const at = "2026-11-13T18:00:00.000Z";
+  const nowMs = Date.parse(at);
+  const TITLE = "zqxjNetGrowth leaves a filing unrecorded";
+  /** Not this repository's `"engine"`, for the reason FG-251's fixture gives. */
+  const QUEUE_LABEL = "ng-work-queue";
+  const DIRECT_SHIP = { mode: "direct", since: "2026-10-19", reason: "stabilising" };
+
+  let direct: string;
+  let harness: string;
+  let override: string;
+
+  const tree = (name: string, config: Record<string, unknown>): string => {
+    const root = join(scratch, `net-growth-${name}`);
+    mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+    writeFileSync(join(root, ".claude", "rungate", "config.json"), JSON.stringify({ project: "x", ...config }));
+    return root;
+  };
+
+  beforeAll(() => {
+    direct = tree("direct", { ship: DIRECT_SHIP, board: { queueLabel: QUEUE_LABEL } });
+    harness = tree("harness", { ship: { mode: "harness" }, board: { queueLabel: QUEUE_LABEL } });
+    override = tree("override", { ship: DIRECT_SHIP, board: { filingsPerRun: 5 } });
+  });
+
+  const filing = (labelFlag = "") =>
+    `gh issue create --title "${TITLE}" ${labelFlag} ` +
+    `--body "lib/issue-filing-gate.ts drops 3 of 41 rows over 900 runs. Claim 7. ${DECLARED}"`;
+  const queued = () => filing(`--label ${QUEUE_LABEL}`);
+
+  /** `n` intents already spent in `root`'s run, inside the window. */
+  const spent = (root: string, n: number): FilingLedgerRow[] =>
+    Array.from({ length: n }, (_, i) => ({
+      at,
+      key: `ng.${i}/${at}/0${INTENT_KEY_SUFFIX}`,
+      id: "new",
+      title: `already filed by this run ${i}`,
+      symptomHash: "h",
+      category: "correctness" as const,
+      severity: null,
+      disposition: "ISSUE" as const,
+      refusal: null,
+      emitted: false,
+      withheldBy: INTENT_PENDING,
+      jury: null,
+      duplicateOf: [],
+      overridden: false,
+      refiledAfter: null,
+      exemption: "out-of-pr-diff" as const,
+      intent: true,
+      run: runIdFor(root).run!,
+    }));
+
+  const measured = (opened: number, closed: number) => async (): Promise<NetGrowthReading> => ({
+    reading: "MEASURED",
+    opened,
+    closed,
+  });
+  const SHRINKING = measured(28, 30);
+  const GROWING = measured(31, 30);
+
+  const gate = (
+    root: string,
+    cmd: string,
+    already: number,
+    readGrowth: (projectRoot: string, now: number) => Promise<NetGrowthReading>,
+  ) =>
+    filingGate(cmd, {
+      projectRoot: root,
+      now: at,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: () => spent(root, already),
+      appendLedger: () => true,
+      readTarget: async () => ({ reading: "NO_PR", branch: "b" }) as never,
+      readPlan: { list: () => [] as string[], show: () => null },
+      readGrowth,
+    });
+
+  test("FG-266: closing outpaces opening — the cap is the ceiling of 36", async () => {
+    const admitted = await gate(direct, filing(), NET_GROWTH_CEILING - 1, SHRINKING);
+    expect(admitted.rows[0].refusal, "the last slot under the ceiling must be usable").toBeNull();
+
+    const refused = await gate(direct, filing(), NET_GROWTH_CEILING, SHRINKING);
+    expect(refused.rows[0].refusal, "the ceiling is finite").toBe("OVER_CAP");
+    expect(refused.refusal ?? "", "the refusal names the ceiling it was judged against").toContain(
+      `cap is ${NET_GROWTH_CEILING}`,
+    );
+    // The refusal SAYS which case applied, with the two numbers.
+    expect(refused.refusal ?? "").toContain("opened 28");
+    expect(refused.refusal ?? "").toContain("closed 30");
+    expect(refused.refusal ?? "").toContain(`ceiling of ${NET_GROWTH_CEILING} applies`);
+    // And so does the ledger row, on the admitted row as much as the refused one.
+    for (const row of [admitted.rows[0], refused.rows[0]]) {
+      expect(row.netGrowth, "the row does not record what set its cap").toEqual({
+        reading: "MEASURED",
+        opened: 28,
+        closed: 30,
+        ceiling: true,
+      });
+    }
+  });
+
+  test("FG-267: opened equal to closed is the ceiling — 'at least as many' includes equal", async () => {
+    const r = await gate(direct, filing(), NET_GROWTH_CEILING - 1, measured(30, 30));
+    expect(r.rows[0].refusal, "a backlog holding level is not diverging").toBeNull();
+    expect(r.rows[0].netGrowth).toMatchObject({ ceiling: true });
+  });
+
+  test("FG-268: opening outruns closing — the cap is the ship-mode cap of 12", async () => {
+    const refused = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT, GROWING);
+    expect(refused.rows[0].refusal, "a growing backlog must not earn the ceiling").toBe("OVER_CAP");
+    expect(refused.refusal ?? "").toContain(`cap is ${FILINGS_PER_RUN_DIRECT}`);
+    expect(refused.refusal ?? "").toContain("opened 31");
+    expect(refused.refusal ?? "").toContain("closed 30");
+    expect(refused.refusal ?? "").toContain("does not apply");
+    expect(refused.rows[0].netGrowth).toEqual({ reading: "MEASURED", opened: 31, closed: 30, ceiling: false });
+
+    // CONTROL: one below the ship-mode cap the same filing is admitted, so
+    // the row above is the cap binding and not a gate refusing everything.
+    const admitted = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT - 1, GROWING);
+    expect(admitted.rows[0].refusal).toBeNull();
+  });
+
+  test("FG-269: opening outruns closing — an engine-queued clause keeps its raise of 24", async () => {
+    const refused = await gate(direct, queued(), QUEUE_FILINGS_PER_RUN, GROWING);
+    expect(refused.rows[0].refusal).toBe("OVER_CAP");
+    expect(refused.refusal ?? "", "the queue's raise is today's, unchanged").toContain(
+      `cap is ${QUEUE_FILINGS_PER_RUN}`,
+    );
+    const admitted = await gate(direct, queued(), QUEUE_FILINGS_PER_RUN - 1, GROWING);
+    expect(admitted.rows[0].refusal).toBeNull();
+    expect(admitted.rows[0].queuedBy).toBe(QUEUE_LABEL);
+  });
+
+  test("FG-270: closing outpaces opening — a queued clause gets the ceiling, not a LOWER 24", async () => {
+    // `capForClause` takes the larger of the run cap and the queue's raise.
+    // A queue route that replaced the run cap instead of raising it would cut
+    // engine work to 24 the moment the ceiling applied.
+    const r = await gate(direct, queued(), NET_GROWTH_CEILING - 1, SHRINKING);
+    expect(r.rows[0].refusal, "the queue route lowered the ceiling").toBeNull();
+    expect(NET_GROWTH_CEILING, "the ceiling must out-earn the queue's raise").toBeGreaterThan(
+      QUEUE_FILINGS_PER_RUN,
+    );
+  });
+
+  test("FG-271: a count that cannot be read is the ship-mode cap, never the ceiling", async () => {
+    const unreadable = async (): Promise<NetGrowthReading> => ({
+      reading: "UNMEASURED",
+      why: "the trailing day's issues could not be read (HTTP 401)",
+    });
+    const r = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT, unreadable);
+    expect(r.rows[0].refusal, "an unread count lifted the cap").toBe("OVER_CAP");
+    expect(r.refusal ?? "").toContain(`cap is ${FILINGS_PER_RUN_DIRECT}`);
+    expect(r.refusal ?? "", "the refusal must say the count was never read").toContain("UNMEASURED");
+    expect(r.refusal ?? "", "and why").toContain("HTTP 401");
+    expect(r.rows[0].netGrowth).toEqual({
+      reading: "UNMEASURED",
+      why: "the trailing day's issues could not be read (HTTP 401)",
+    });
+
+    // A reader that THROWS is the same state, and must not throw out of a
+    // PreToolUse hook, where a throw blocks every filing on the machine.
+    const throws = async (): Promise<NetGrowthReading> => {
+      throw new Error("socket hang up");
+    };
+    const t = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT, throws);
+    expect(t.rows[0].refusal, "a reader that threw lifted the cap").toBe("OVER_CAP");
+    expect(t.rows[0].netGrowth).toMatchObject({ reading: "UNMEASURED" });
+  });
+
+  test("FG-272: harness mode is not lifted, and its count is never read", async () => {
+    // ADR-016, *Not decided here*: harness keeps its cap of 1.
+    let reads = 0;
+    const counted = async (): Promise<NetGrowthReading> => {
+      reads += 1;
+      return { reading: "MEASURED", opened: 28, closed: 30 };
+    };
+    const r = await gate(harness, filing(), FILINGS_PER_RUN, counted);
+    expect(r.rows[0].refusal, "the ceiling lifted a harness-mode project").toBe("OVER_CAP");
+    expect(r.refusal ?? "").toContain(`cap is ${FILINGS_PER_RUN}`);
+    expect(r.rows[0].netGrowth, "a cap the ceiling cannot reach records no reading").toBeNull();
+    expect(reads, "a harness project paid a tracker read for a ceiling it cannot get").toBe(0);
+  });
+
+  test("FG-273: an explicit board.filingsPerRun is not lifted either", async () => {
+    // The ceiling replaces the ship-mode DIRECT allowance and nothing else. A
+    // project that wrote its own number chose it.
+    const r = await gate(override, filing(), 5, SHRINKING);
+    expect(r.rows[0].refusal, "the ceiling overrode a cap the project set").toBe("OVER_CAP");
+    expect(r.refusal ?? "").toContain("cap is 5");
+  });
+
+  test("FG-274: the ceiling is ONE exported constant, read by the one decider", () => {
+    expect(NET_GROWTH_CEILING, "ADR-016 decided 36").toBe(36);
+    expect(NET_GROWTH_CEILING, "and it is still under #1595's 57-a-day swarm").toBeLessThan(57);
+    const directCap = { cap: FILINGS_PER_RUN_DIRECT, unreadable: false, direct: true };
+    expect(netGrowthCeiling(directCap, { reading: "MEASURED", opened: 1, closed: 1 }).cap).toBe(
+      NET_GROWTH_CEILING,
+    );
+    expect(netGrowthCeiling(directCap, { reading: "MEASURED", opened: 2, closed: 1 }).cap).toBe(
+      FILINGS_PER_RUN_DIRECT,
+    );
+    expect(netGrowthCeiling(directCap, { reading: "UNMEASURED", why: "x" }).cap).toBe(FILINGS_PER_RUN_DIRECT);
+    expect(netGrowthCeiling(directCap, null), "no reading taken is no ceiling").toEqual({
+      cap: FILINGS_PER_RUN_DIRECT,
+      basis: null,
+    });
+    // The fail-closed half of `filingsPerRunFor`: an unreadable config is
+    // never eligible, whatever the count says.
+    const corrupt = filingsPerRunFor(() => ({ ship: { mode: "dierct" } }));
+    expect(corrupt.direct).toBe(false);
+    expect(netGrowthCeiling(corrupt, { reading: "MEASURED", opened: 0, closed: 9 }).cap).toBe(FILINGS_PER_RUN);
+  });
+
+  /** A client that answers `listForRepo` from memory, one array per page. */
+  const fakeClient = (page: (n: number) => unknown[], seen: Record<string, unknown>[] = []) =>
+    ({
+      rest: {
+        issues: {
+          listForRepo: async (params: Record<string, unknown>) => {
+            seen.push(params);
+            return { data: page(Number(params.page ?? 1)) };
+          },
+        },
+      },
+    }) as unknown as GitHubClient;
+  const hoursAgo = (h: number) => new Date(nowMs - h * 3_600_000).toISOString();
+  const issue = (n: number, over: Record<string, unknown> = {}) => ({
+    number: n,
+    title: `issue ${n}`,
+    state: "open",
+    created_at: hoursAgo(1),
+    closed_at: null,
+    state_reason: null,
+    author_association: "OWNER",
+    ...over,
+  });
+  const closedAgo = (h: number, reason: string, who = "OWNER") => ({
+    state: "closed",
+    closed_at: hoursAgo(h),
+    state_reason: reason,
+    author_association: who,
+  });
+
+  test("FG-275: issues only, not pull requests, and closes counted the way closedIssueCounts does", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const rows = [
+      issue(1), // opened in the window
+      issue(2, { created_at: hoursAgo(2), ...closedAgo(1, "completed") }), // opened and closed
+      issue(3, { created_at: hoursAgo(48), ...closedAgo(3, "completed", "MEMBER") }), // closed
+      issue(4, { created_at: hoursAgo(48), ...closedAgo(3, "not_planned") }), // not finished work
+      issue(5, { created_at: hoursAgo(48), ...closedAgo(3, "completed", "NONE") }), // a stranger's
+      issue(6, { pull_request: { url: "u" }, ...closedAgo(1, "completed") }), // a pull request
+      issue(7, { created_at: hoursAgo(72) }), // touched in the window, opened before it
+      issue(8, { created_at: hoursAgo(30), ...closedAgo(25, "completed") }), // closed before it
+    ];
+    const r = await countNetGrowth(fakeClient(n => (n === 1 ? rows : []), seen), "o/r", nowMs);
+    expect(r).toEqual({ reading: "MEASURED", opened: 2, closed: 2 });
+    expect(seen[0], "the read must cover closed issues and the trailing window").toMatchObject({
+      owner: "o",
+      repo: "r",
+      state: "all",
+      since: new Date(nowMs - RUN_WINDOW_MS).toISOString(),
+    });
+  });
+
+  test("FG-276: every page is read, and a walk that cannot finish is UNMEASURED, not a partial count", async () => {
+    const full = Array.from({ length: 100 }, (_, i) => issue(1000 + i));
+    const twoPages = await countNetGrowth(fakeClient(n => (n === 1 ? full : n === 2 ? [issue(1)] : [])), "o/r", nowMs);
+    expect(twoPages, "the second page was never read").toEqual({ reading: "MEASURED", opened: 101, closed: 0 });
+
+    const endless = await countNetGrowth(fakeClient(() => full), "o/r", nowMs);
+    expect(endless.reading, "an incomplete walk was reported as a count").toBe("UNMEASURED");
+
+    const notAList = await countNetGrowth(fakeClient(() => ({ message: "Bad credentials" }) as never), "o/r", nowMs);
+    expect(notAList.reading).toBe("UNMEASURED");
+  });
+
+  test("FG-277: the default reader turns every failure into UNMEASURED, never a throw", async () => {
+    const dir = freshRun();
+    const noToken = await readNetGrowth(dir, nowMs, () => {
+      throw new Error("GITHUB_TOKEN environment variable is not set");
+    });
+    expect(noToken).toMatchObject({ reading: "UNMEASURED" });
+    const rejects = await readNetGrowth(dir, nowMs, () => fakeClient(() => {
+      throw new Error("HTTP 502");
+    }));
+    expect(rejects).toMatchObject({ reading: "UNMEASURED" });
+    // CONTROL: the same reader over a client that answers is a measurement.
+    const answers = await readNetGrowth(dir, nowMs, () => fakeClient(n => (n === 1 ? [issue(1)] : [])));
+    expect(answers).toEqual({ reading: "MEASURED", opened: 1, closed: 0 });
+  });
+
+  test("FG-278: the reservation stage judges against the same cap, and its refusal says why", async () => {
+    // The pre-read sees nothing spent; the re-read after the append sees 35
+    // others in flight. The stage that re-decides must read the cap the
+    // pre-read used, or a racer is admitted by one and refused by the other.
+    const race = (readGrowth: () => Promise<NetGrowthReading>) => {
+      const appended: FilingLedgerRow[] = [];
+      let reads = 0;
+      return filingGate(filing(), {
+        projectRoot: direct,
+        now: at,
+        readExisting: async () => measuredCorpus([]),
+        readLedger: () => (reads++ === 0 ? [] : [...spent(direct, NET_GROWTH_CEILING - 1), ...appended]),
+        appendLedger: (row: FilingLedgerRow) => (appended.push(row), true),
+        readTarget: async () => ({ reading: "NO_PR", branch: "b" }) as never,
+        readPlan: { list: () => [] as string[], show: () => null },
+        readGrowth,
+      });
+    };
+    const under = await race(SHRINKING);
+    expect(under.refusal, "the reservation stage refused under the ceiling").toBeNull();
+
+    const over = await race(GROWING);
+    expect(over.rows[0].refusal, "the reservation stage ignored the ship-mode cap").toBe("OVER_CAP");
+    expect(over.refusal ?? "", "the stage's refusal does not say what set the cap").toContain("opened 31");
   });
 });
 
