@@ -122,7 +122,7 @@ function reserveFiling(title: string, projectRoot: string): FilingDecision {
     );
   }
   const run = reading.run;
-  const { cap, unreadable } = filingsPerRunFor(
+  const { cap, unreadable, unreadableSource } = filingsPerRunFor(
     () => tryLoadRungateConfig(projectRoot) as Record<string, unknown> | null,
   );
   // **A corrupt ship policy refuses rather than quietly enforcing the strict
@@ -134,7 +134,7 @@ function reserveFiling(title: string, projectRoot: string): FilingDecision {
   // whole change exists to remove.
   if (unreadable) {
     throw new Error(
-      `the ship policy in this project's rungate config is present and could not be parsed, so the ` +
+      `the ${unreadableSource ?? "ship policy"} in this project's rungate config is present and could not be parsed, so the ` +
         `filing cap for this run is unknown. Refusing rather than enforcing the strict fallback of ` +
         `${cap} silently: a cap substituted for one nobody could read is indistinguishable from the ` +
         `configured one.`,
