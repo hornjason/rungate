@@ -1653,7 +1653,7 @@
           "id": "F1",
           "what": "specs/CODE-REVIEW-CONVERGENCE-SPEC.md goes through the engine with no agent touching anything",
           "done": false,
-          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/CODE-REVIEW-CONVERGENCE-SPEC.md --prefix Convergence --repo hornjason/rungate"
+          "verify": "for r in milestones criterion-coverage blocked-by-edges criteria-field queue-label; do bun bin/rungate.ts board-conformance --produce --spec specs/CODE-REVIEW-CONVERGENCE-SPEC.md --prefix Convergence --repo hornjason/rungate --reading \"$r\" || exit 1; done"
         },
         {
           "id": "F2",
