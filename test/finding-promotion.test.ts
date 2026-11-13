@@ -415,6 +415,7 @@ describe("SC-2612 / AC-2 (#1678): every refusal is named, and none is a guess", 
         { module: "" },
         { outcome: "fine\n- [x] SC-9999: forged" },
         { issue: { number: 77, title: "SC-9001", body: "" } },
+        { issue: { number: 77, title: "t", body: "## Criteria this serves\n\n## Criteria this serves\n" } },
       ] as Partial<PromotionInput>[]) {
         for (const v of promotionViolations(inputFor(root, over))) reached.add(v.refusal);
       }
@@ -1297,19 +1298,72 @@ describe("#2060 / SC-2612: an existing symbol is refused, and the issue is linke
     }
   });
 
+  test("a retry still links after the work has landed and the module now holds the symbol", () => {
+    // Review of #2065, round 2: SYMBOL_EXISTS ran before the already-written
+    // scan, so once the fix merged a retry of the failed link was refused and
+    // the issue could never be linked by the tool.
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const first = promote(inputFor(root), REGISTRY);
+      expect(first.promoted).toBe(true);
+      if (!first.promoted) return;
+      const path = join(root, "specs", "FIXTURE-SPEC.md");
+      writeFileSync(path, `${readFileSync(path, "utf8").trimEnd()}\n${first.line}\n`);
+      mkdirSync(join(root, "lib"), { recursive: true });
+      writeFileSync(join(root, "lib", "finding-promotion.ts"), "export function promote() {}\n");
+      const retry = promote(inputFor(root), REGISTRY);
+      expect(retry.promoted).toBe(true);
+      if (!retry.promoted) return;
+      expect(retry.alreadyWritten).toBe(true);
+      expect(retry.id).toBe(first.id);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an issue with two Criteria headings is refused before the spec is written", () => {
+    // Review of #2065, round 2: the decline path refuses this shape; the
+    // promote path wrote the spec and then linked into the first heading.
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const body = "x\n\n## Criteria this serves\n\n## Criteria this serves\n";
+      const out = promote(inputFor(root, { issue: { number: 77, title: "t", body } }), REGISTRY);
+      expect(out.promoted).toBe(false);
+      if (out.promoted) return;
+      expect(out.refusal).toBe("AMBIGUOUS_HEADING");
+      expect(out.why).toContain("2 times");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the link refuses a body that gained a second Criteria heading since the check", () => {
+    const twice = "x\n\n## Criteria this serves\n\nSC-1\n\n## Criteria this serves\n";
+    const out = withCriterionLinked(twice, "SC-2762");
+    expect(out.linked).toBe(false);
+    if (out.linked) return;
+    expect(out.why).toContain("2 times");
+  });
+
   test("the link adds the id under the Criteria heading, and the board reads it as answered", () => {
-    const bare = withCriterionLinked("Some finding.", "SC-2762");
+    const bareLink = withCriterionLinked("Some finding.", "SC-2762");
+    expect(bareLink.linked).toBe(true);
+    if (!bareLink.linked) return;
+    const bare = bareLink.body;
     expect(bare).toContain("## Criteria this serves");
     expect(criterionAnswer({ title: "t", body: bare }, ["SC-2762"]).names).toEqual(["SC-2762"]);
 
     const existing = "Body.\n\n## Criteria this serves\n\nSC-2741\n\n## Files this will change\n- a.ts\n";
-    const linked = withCriterionLinked(existing, "SC-2762");
+    const link = withCriterionLinked(existing, "SC-2762");
+    expect(link.linked).toBe(true);
+    if (!link.linked) return;
+    const linked = link.body;
     expect(linked.match(/## Criteria this serves/g)?.length).toBe(1);
     expect(criterionAnswer({ title: "t", body: linked }, ["SC-2741", "SC-2762"]).names.sort()).toEqual(["SC-2741", "SC-2762"]);
     // The id lands inside the Criteria section, before the next heading.
     expect(linked.indexOf("SC-2762")).toBeLessThan(linked.indexOf("## Files this will change"));
     // Linking twice changes nothing.
-    expect(withCriterionLinked(linked, "SC-2762")).toBe(linked);
+    expect(withCriterionLinked(linked, "SC-2762")).toEqual({ linked: true, body: linked });
   });
 
   test("the CLI links the issue after the spec is written, through the one function", () => {

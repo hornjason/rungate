@@ -93,6 +93,7 @@ export const PROMOTION_REFUSALS = [
   "MALFORMED_STATEMENT",
   "ID_UNAVAILABLE",
   "SYMBOL_EXISTS",
+  "AMBIGUOUS_HEADING",
 ] as const;
 
 export type PromotionRefusal = (typeof PROMOTION_REFUSALS)[number];
@@ -341,6 +342,11 @@ export function promotionViolations(input: PromotionInput): PromotionViolation[]
     });
   }
 
+  // Before the spec is written, not when the link fails after it: the link
+  // has no one section to write into (review of #2065).
+  const ambiguity = criteriaHeadingAmbiguity(input.issue.body ?? "", `#${input.issue.number}`);
+  if (ambiguity !== null) out.push({ refusal: "AMBIGUOUS_HEADING", why: ambiguity });
+
   // The existing decider, not a second one. See the module docblock.
   const alreadyServes = criteriaNamedBy(input.issue, allIds);
   if (alreadyServes.length > 0) {
@@ -391,7 +397,12 @@ export function promotionStatement(input: PromotionInput): string {
  */
 export function promote(input: PromotionInput, registry: ScRegistry): Promotion {
   const violations = promotionViolations(input);
-  if (violations.length > 0) {
+  // SYMBOL_EXISTS alone is held until the already-written scan below: once
+  // the criterion is in the spec, the symbol appearing is the work landing,
+  // and a retry of a failed link must still reach the link (review of #2065).
+  // Every other refusal holds. SYMBOL_EXISTS alone also means every spec
+  // check passed, so the read below is of a spec inside the tree.
+  if (violations.some(v => v.refusal !== "SYMBOL_EXISTS")) {
     const first = violations[0]!;
     return { promoted: false, refusal: first.refusal, why: first.why };
   }
@@ -429,6 +440,11 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
         alreadyWritten: true,
       };
     }
+  }
+
+  if (violations.length > 0) {
+    const first = violations[0]!;
+    return { promoted: false, refusal: first.refusal, why: first.why };
   }
 
   let allocated: { number: number; namespace: { unmeasured: string[] } };
@@ -661,13 +677,9 @@ export function declineViolations(input: DeclineInput): DeclineViolation[] {
   // discovered by the writer is a refusal discovered after the caller was
   // told it would work.
   const headings = headingOccurrencesOf(body, CRITERIA_HEADING);
-  if (headings.length > 1) {
-    out.push({
-      refusal: "AMBIGUOUS_HEADING",
-      why:
-        `#${input.issue.number} opens "${CRITERIA_HEADING}" ${headings.length} times, so there is ` +
-        "no one section to write into and a reader cannot tell which one the board read",
-    });
+  const ambiguity = criteriaHeadingAmbiguity(body, `#${input.issue.number}`);
+  if (ambiguity !== null) {
+    out.push({ refusal: "AMBIGUOUS_HEADING", why: ambiguity });
   } else if (headings.length === 1 && hasTextUnder(body, headings[0]!)) {
     out.push({
       refusal: "CRITERIA_SECTION_OCCUPIED",
@@ -679,6 +691,20 @@ export function declineViolations(input: DeclineInput): DeclineViolation[] {
   }
 
   return out;
+}
+
+/**
+ * Why `body` has no one criteria section to write into, or null when it has
+ * zero or one. The one decider for the decline path, the promote path and
+ * the link (review of #2065), so the three cannot disagree about the shape.
+ */
+export function criteriaHeadingAmbiguity(body: string, who: string): string | null {
+  const count = headingOccurrencesOf(body, CRITERIA_HEADING).length;
+  if (count <= 1) return null;
+  return (
+    `${who} opens "${CRITERIA_HEADING}" ${count} times, so there is ` +
+    "no one section to write into and a reader cannot tell which one the board read"
+  );
 }
 
 /** Non-blank text between the heading at `at` and the next heading. */
@@ -724,14 +750,25 @@ export function bodyWithDecline(body: string, why: string): string {
  * (#2060). A promotion used to print "now make #N name it" and leave the
  * edit to a person; ADR-015 linked twelve issues through repair rows
  * instead. Unchanged when the body already names `id`.
+ *
+ * Refuses a body with two criteria headings rather than picking the first.
+ * `promote` refuses that shape before the spec is written; this catches a
+ * body that gained one between that check and the re-read.
  */
-export function withCriterionLinked(body: string, id: string): string {
-  if (criteriaNamedBy({ title: "", body }, [id]).length > 0) return body;
+export type CriterionLink =
+  | { readonly linked: true; readonly body: string }
+  | { readonly linked: false; readonly why: string };
+
+export function withCriterionLinked(body: string, id: string): CriterionLink {
+  if (criteriaNamedBy({ title: "", body }, [id]).length > 0) return { linked: true, body };
+  // The number is not known here; the CLI names the issue in its message.
+  const ambiguity = criteriaHeadingAmbiguity(body, "the issue");
+  if (ambiguity !== null) return { linked: false, why: ambiguity };
   const at = headingOccurrencesOf(body, CRITERIA_HEADING)[0];
-  if (at === undefined) return `${body.trimEnd()}\n\n${CRITERIA_HEADING}\n\n${id}\n`;
+  if (at === undefined) return { linked: true, body: `${body.trimEnd()}\n\n${CRITERIA_HEADING}\n\n${id}\n` };
   const headingEnd = body.indexOf("\n", at);
   const cut = headingEnd === -1 ? body.length : headingEnd;
-  return `${body.slice(0, cut)}\n\n${id}${body.slice(cut).replace(/^\n+/, "\n")}`;
+  return { linked: true, body: `${body.slice(0, cut)}\n\n${id}${body.slice(cut).replace(/^\n+/, "\n")}` };
 }
 
 /**

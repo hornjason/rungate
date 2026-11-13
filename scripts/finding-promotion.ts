@@ -420,12 +420,13 @@ function linkIssue(): string | null {
     return `#${issueNumber} could not be re-read: ${e instanceof Error ? e.message : String(e)}`;
   }
   const before = fresh.body ?? "";
-  const after = withCriterionLinked(before, promotedId);
-  if (after === before) return null;
+  const link = withCriterionLinked(before, promotedId);
+  if (!link.linked) return link.why;
+  if (link.body === before) return null;
   const linkScratch = mkdtempSync(join(tmpdir(), "rg-2060-link-"));
   try {
     const linkFile = join(linkScratch, "body.md");
-    writeFileSync(linkFile, after);
+    writeFileSync(linkFile, link.body);
     ghWithoutGhToken(["issue", "edit", String(issueNumber), "--body-file", linkFile]);
     return null;
   } catch (e) {
