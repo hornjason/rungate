@@ -137,7 +137,8 @@ the first; SC-2622 is what forbids symbol-satisfaction here.
 - [x] SC-2616: an open issue naming no criterion is reported as a refusal naming the issue, never counted as covered, and a blank cell is distinguishable from a deliberate "serves none" — 25 of 71 open issues named nothing on 2026-10-30 and the two states rendered identically
       proved-by: test/board-conformance.test.ts, `-t "criteria-named names the ISSUE"` (1 pass), and test/board-snapshot.test.ts, the `repository-wide populations (SC-2615, SC-2616)` describe (4 pass) — 0 fail, 2026-11-12, on the PR that closes #1717. Live: `criteria-named` names each of its 41 offenders by number and does not count a declared `serves no criterion`. The 41 are repair work (#1954, stage item E2), not this criterion.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2617: every issue whose work depends on another carries a `blocked by` edge on the tracker, so *what is next* is computed from the graph — 0 of 71 open issues carried one on 2026-10-30, which makes every ordering claim prose
+- [x] SC-2617: every issue whose work depends on another carries a `blocked by` edge on the tracker, so *what is next* is computed from the graph — 0 of 71 open issues carried one on 2026-10-30, which makes every ordering claim prose
+      proved-by: the `dependency-edges` reading (board-conformance, item E3) reads MET 182 of 182 on the live tracker, 2026-11-13, after #2024 made the plan family-aware and `plan-deps --milestone-prefix Convergence --write` added the 11 missing edges. Its tests: test/plan-deps.test.ts, `-t "#2024"` (7 pass); test/board-snapshot.test.ts, the repository-wide populations describe (4 pass); test/board-conformance.test.ts, `-t dependency-edges` (1 pass). 0 fail. Ticked by `sync-sc-status --only SC-2617` (#2056).
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### Alignment before code, and a board that moves by itself
