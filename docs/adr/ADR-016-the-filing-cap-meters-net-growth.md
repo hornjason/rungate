@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-13
 updated: 2026-11-13
 ---
@@ -9,10 +9,10 @@ updated: 2026-11-13
 
 ## Status
 
-**Proposed, 2026-11-13.** Jason asked for this ("do we need to rethink what
-the cap is actually in place for?") and chose to fix it properly. Open
-until he picks an option and the ceiling below with `/dry-run`. The
-criterion ids in the table are placeholders until then.
+**Accepted, 2026-11-13.** Jason asked for this ("do we need to rethink what
+the cap is actually in place for?"), then picked option A with a ceiling of
+36 after the dry run. The criteria are SC-2763 and SC-2764 in
+`specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, placed in Phase 6.
 
 ## Context
 
@@ -93,7 +93,10 @@ runaway session that pushes opened above closed drops every run back to
    He chose "both" when asked. The interim raise turned out not to exist
    (`board.filingsPerRun` is capped at 12), so this ADR carries the whole
    change.
-2. **Option and ceiling: pending Jason (A, B or C; H = 36 proposed).**
+2. **Option A, the net-growth ceiling, with H = 36. Jason, 2026-11-13,
+   after the dry run.** B was the smaller change but left agreed
+   non-engine work refused. C was rejected because any agent can apply a
+   label.
 
 ## Not decided here
 
@@ -107,11 +110,10 @@ runaway session that pushes opened above closed drops every run back to
 
 ## Decomposition
 
-Placeholder ids `SC-NG1` and `SC-NG2` become real `SC-<N>` lines in
-`specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, with Phase 6 placement rows, once
-Jason has approved the option and the wording.
+Both criteria are stated in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md` and
+placed in Phase 6. Their ids were written in this PR (#1506's practice).
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
-| SC-NG1 | The filing cap rises to its ceiling while the repository closes issues as fast as it opens them | lib/issue-filing-gate.ts, test/issue-filing-gate.test.ts, specs/sc-reservations.json | Pipeline Phase 6 — the board's state is a reading | — |
-| SC-NG2 | work-status shows the trailing day's opened and closed counts and the filing cap they set | scripts/work-status.ts, test/work-status.test.ts | Pipeline Phase 6 — the board's state is a reading | The filing cap rises to its ceiling while the repository closes issues as fast as it opens them |
+| SC-2763 | The filing cap rises to its ceiling while the repository closes issues as fast as it opens them | lib/issue-filing-gate.ts, test/issue-filing-gate.test.ts, specs/sc-reservations.json | Pipeline Phase 6 — the board's state is a reading | — |
+| SC-2764 | work-status shows the trailing day's opened and closed counts and the filing cap they set | scripts/work-status.ts, test/work-status.test.ts | Pipeline Phase 6 — the board's state is a reading | The filing cap rises to its ceiling while the repository closes issues as fast as it opens them |

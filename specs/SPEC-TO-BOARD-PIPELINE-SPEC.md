@@ -270,7 +270,7 @@ is built from this document.
 | **Phase 3** | SC-2608, SC-2609, SC-2610 |
 | **Phase 4** | SC-2611 |
 | **Phase 5** | SC-2612, SC-2613, SC-2614, SC-2750 |
-| **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753, SC-2762 |
+| **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753, SC-2762, SC-2763, SC-2764 |
 | **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
 | **Phase 9** | SC-2625 |
@@ -351,3 +351,5 @@ acceptance test, so it is also the honest answer to *when is the engine done*
 - [ ] SC-2752: scripts/board-conformance.ts contains [declaredWorkUnaccounted] — every unticked criterion in an in-scope spec and every open stage item in project-state.json names an open issue, or board-conformance reports it as unaccounted, by name
 - [ ] SC-2753: lib/issue-filing-gate.ts contains [committedFilingCap] — the filing cap's size and ceiling are read from committed config only, so a working-tree edit cannot raise an agent's own cap
 - [ ] SC-2762: lib/board-ready-rule.ts contains [needsCriterionRefusal] — an issue labelled needs-criterion is never promoted into Ready (work-this-next refuses it by name), and work-status prints how many open issues carry the label and the oldest
+- [ ] SC-2763: lib/issue-filing-gate.ts contains [netGrowthCeiling] — while the repository has closed at least as many issues as it opened over the trailing 24 hours, every run's filing cap is the ceiling of 36; when opening outruns closing, or the count cannot be read, the cap is the ship-mode cap it is today
+- [ ] SC-2764: scripts/work-status.ts contains [netGrowthLine] — work-status prints the trailing day's opened and closed issue counts and the filing cap they set

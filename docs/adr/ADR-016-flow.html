@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADR-016 — the filing cap meters net growth</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#2a2f3a;--txt:#e6e8ee;--dim:#8b93a7;--hand:#f2a65a;--auto:#5ab0f2;--judge:#c792ea;--ok:#7bd88f;--warn:#ff6b6b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 -apple-system,system-ui,sans-serif;padding:28px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:28px 0 10px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+.sub{color:var(--dim);margin-bottom:18px}.legend span{display:inline-block;margin-right:16px;font-size:13px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h3{margin:0 0 6px;font-size:15px}.big{font-size:30px;font-weight:700}.ok{color:var(--ok)}.warn{color:var(--warn)}.dim{color:var(--dim)}
+.step{display:flex;gap:12px;align-items:flex-start;margin:8px 0}.tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;min-width:52px;text-align:center}
+.YOU{background:var(--judge);color:#111}.ME{background:#3a4152}.AUTO{background:var(--auto);color:#111}.HAND{background:var(--hand);color:#111}
+.opt{border-left:4px solid var(--line)}.opt.rec{border-left-color:var(--ok)}.opt.rej{border-left-color:var(--warn);opacity:.75}
+code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
+.bar{height:12px;border-radius:6px;background:#222733;overflow:hidden;margin:6px 0}.bar>i{display:block;height:100%}
+</style></head><body>
+<h1>ADR-016 — the filing cap meters net growth, not every filing</h1>
+<div class="sub">Dry run, 2026-11-13 · draft <code>docs/adr/ADR-016-the-filing-cap-meters-net-growth.md</code> · issue #2084</div>
+<div class="legend"><span><i class="dot" style="background:var(--judge)"></i>judgement (Jason)</span><span><i class="dot" style="background:var(--auto)"></i>automatic</span><span><i class="dot" style="background:var(--hand)"></i>by hand</span></div>
+
+<h2>Today, measured</h2>
+<div class="grid">
+<div class="card"><h3>Filings counted, last 24h</h3><div class="big">13</div><div class="dim">all agreed work · cap 12 (24 with the engine label)</div>
+<div class="bar"><i style="width:23%;background:var(--auto)"></i></div><div class="dim">only 3 credited to the engine route; 10 lost it to <code>-R</code> or a stale checkout</div></div>
+<div class="card"><h3>Repo-wide, same window</h3><div class="big ok">30 : 28</div><div class="dim">opened : closed → 1.07, not diverging</div>
+<div class="bar"><i style="width:52%;background:var(--ok)"></i></div><div class="dim">the cap guards against a swarm at <b class="warn">3 : 1</b> (57 in a day, FG-194)</div></div>
+<div class="card"><h3>What it refused anyway</h3><div class="big warn">2</div><div class="dim">#2081 README and #2082 counts, both agreed. Jason filed them by hand</div></div>
+</div>
+
+<h2>Options — Jason picks one</h2>
+<div class="grid">
+<div class="card opt rec"><h3>A · Net-growth ceiling <span class="ok">recommended</span></h3>Trailing 24h repo-wide <b>opened − closed ≤ 0</b> → every run's cap is the ceiling <b>H = 36</b>. Above zero → today's cap (12; 24 for the engine label). Count unreadable → today's cap.<div class="dim" style="margin-top:6px">Fixes all three: agreed work, the stand-in bypasses, the shared window.</div></div>
+<div class="card opt"><h3>B · Separate pools</h3>Engine-labelled filings stop consuming the 12-filing allowance and get their own 24.<div class="dim" style="margin-top:6px">Smallest change. README-type agreed work is still refused, and it still counts filings.</div></div>
+<div class="card opt rej"><h3>C · "Agreed" label</h3>A label exempts a filing.<div class="dim" style="margin-top:6px">Rejected: any agent can add a label.</div></div>
+</div>
+
+<h2>The run</h2>
+<div class="card">
+<div class="step"><span class="tag YOU">YOU</span><div>Pick A/B/C and the ceiling H. Approve the criterion wording.</div></div>
+<div class="step"><span class="tag ME">ME</span><div>Write the two criteria into the engine spec with real ids and add Phase 6 placement rows. Rerun this dry run.</div></div>
+<div class="step"><span class="tag YOU">YOU</span><div>Merge ADR-016 with <code>status: accepted</code> (it closes #2084).</div></div>
+<div class="step"><span class="tag AUTO">AUTO</span><div><code>adr-accepted.yml</code> files 2 issues in Pipeline Phase 6, plus 1 blocked-by edge (shown below, from the real <code>plan-issues --decompose</code> output).</div></div>
+<div class="step"><span class="tag ME">ME</span><div>Build issue 1 (the cap reads net growth), then issue 2 (work-status shows it).</div></div>
+</div>
+<pre class="card" style="white-space:pre-wrap;font-size:13px">  create  SC-NG1  The filing cap rises to its ceiling while the repository closes issues as fast as it opens them
+  create  SC-NG2  work-status shows the trailing day's opened and closed counts and the filing cap they set
+  order   "work-status shows …" blocked by "The filing cap rises to its ceiling …"
+Nothing written.</pre>
+
+<h2>What reaches Ready (simulated)</h2>
+<div class="card">Active milestone: <b>Pipeline Phase 6</b> · Ready holds 3 today: #1964, #1953, #2040 (parked) · the two new issues queue in Phase 6 behind them. Issue 2 waits on issue 1.</div>
+
+<h2>Gaps found</h2>
+<div class="card"><div>· The planner refuses criteria no spec states, so the real ids must be written before the final dry run (by design).</div><div>· <code>board.filingsPerRun</code> (#2075) cannot raise the cap. Its ceiling is 12, and a higher value drops to the strict cap.</div><div>· The <code>/dry-run</code> skill is blocked by a stale gate from issue #627. These steps were run by hand.</div></div>
+</body></html>
