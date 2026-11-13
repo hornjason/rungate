@@ -252,8 +252,13 @@ function trackedAndIgnoredPaths(root: string): TrackableReading {
  *     `worktrees/` and everything else stay ignored exactly as before.
  *  3./4. the two config locations, re-included by name.
  */
-export function configTrackabilityBlock(): string {
+export function configTrackabilityBlock(opts: { parentExcluded?: boolean } = {}): string {
   const parent = RUNGATE_CONFIG_PARENT_DIR;
+  // #2071: lines 1-2 are needed ONLY when the parent directory itself is
+  // excluded. Under a `.claude/*` rule git already descends into it, and a
+  // second `.claude/*` appended here re-ignores every directory the project
+  // re-included above this block — 128 tracked files on the consumer that reported it.
+  const parentLines = opts.parentExcluded === false ? [] : [`!${parent}/`, `${parent}/*`];
   return [
     "",
     `# Added by rungate scaffold: the harness config must survive a branch`,
@@ -267,14 +272,74 @@ export function configTrackabilityBlock(): string {
     `# (\`${RUNGATE_CONFIG_DIR}/nested/config.json\`) and any file this list does`,
     `# not name. Ignored is the safe side of the default for a path nobody has`,
     `# thought of yet; a new config file is a change to this list.`,
-    `!${parent}/`,
-    `${parent}/*`,
+    ...parentLines,
     `!${RUNGATE_CONFIG_DIR}/`,
     `${RUNGATE_CONFIG_DIR}/*`,
     ...DIRECTORY_CONFIG_FILES.map(f => `!${RUNGATE_CONFIG_DIR}/${f}`),
     `!${RUNGATE_CONFIG_IGNORE_PATHS[1]}`,
     "",
   ].join("\n");
+}
+
+type EditOutcome = { kind: "ok" } | { kind: "still-ignored" | "refused"; why: string };
+
+/**
+ * Whether the block just written made the config committable and changed
+ * nothing else. Pure measurement; the caller reverts on anything but `ok`.
+ */
+function verifyTrackableEdit(root: string, trackedBefore: string[], ignoredBefore: string[]): EditOutcome {
+  const after = configPathsIgnored(root);
+  if (after.failure !== null) return { kind: "refused", why: `could not verify the edit worked — ${after.failure}` };
+  if (after.ignored.length > 0) {
+    // The rule is not `.claude/`-shaped, so this block cannot reach it.
+    // Name the rule rather than the guess: `check-ignore -v` reports the
+    // source file, line and pattern, which is what a consumer needs.
+    const why = git(root, ["check-ignore", "--no-index", "-v", ...after.ignored]);
+    return {
+      kind: "still-ignored",
+      why:
+        `the rungate config is still ignored after the negation — ${after.ignored.join(", ")}` +
+        (why.stdout.trim() ? ` (matched by ${why.stdout.trim().split("\n").join("; ")})` : "") +
+        `. Un-ignore it by hand; a config git treats as disposable is deleted by an ordinary branch switch`,
+    };
+  }
+
+  const trackedAfter = trackedAndIgnoredPaths(root);
+  if (trackedAfter.failure !== null) {
+    return { kind: "refused", why: `could not verify the edit ignored nothing new — ${trackedAfter.failure}` };
+  }
+  const newlyIgnored = trackedAfter.ignored.filter(p => !trackedBefore.includes(p));
+  if (newlyIgnored.length > 0) {
+    return {
+      kind: "refused",
+      why:
+        `the negation would newly ignore ${newlyIgnored.length} tracked file(s) — ` +
+        `${newlyIgnored.slice(0, 3).join(", ")}${newlyIgnored.length > 3 ? ", …" : ""}`,
+    };
+  }
+
+  // The symmetric half, and the one that generalises. Exactly the config
+  // paths may leave the ignored set; a glob that reaches one path further
+  // than intended shows up here as a file that stopped being ignored, and
+  // that is a REFUSAL rather than a surprise in three consumers' trees.
+  const ignoredAfter = ignoredPaths(root);
+  if (ignoredAfter.failure !== null) {
+    return { kind: "refused", why: `could not verify the edit un-ignored nothing else — ${ignoredAfter.failure}` };
+  }
+  const stillIgnored = new Set(ignoredAfter.ignored);
+  const unIgnored = ignoredBefore.filter(
+    p => !stillIgnored.has(p) && !(RUNGATE_CONFIG_IGNORE_PATHS as readonly string[]).includes(p)
+      && !isConfigFragment(p),
+  );
+  if (unIgnored.length > 0) {
+    return {
+      kind: "refused",
+      why:
+        `the negation reaches further than the config — ${unIgnored.length} other file(s) stopped ` +
+        `being ignored: ${unIgnored.slice(0, 3).join(", ")}${unIgnored.length > 3 ? ", …" : ""}`,
+    };
+  }
+  return { kind: "ok" };
 }
 
 /**
@@ -301,7 +366,7 @@ export function configTrackabilityBlock(): string {
 export function ensureConfigTrackable(
   root: string,
   actions: string[],
-  block: string = configTrackabilityBlock(),
+  blockOverride?: string,
 ): void {
   const before = configPathsIgnored(root);
   if (before.failure !== null) {
@@ -327,69 +392,43 @@ export function ensureConfigTrackable(
     return;
   }
 
-  writeFileSync(gitignorePath, original.trimEnd() + "\n" + block);
+  // Which block (#2071). NOT decided by probing whether `.claude` itself is
+  // excluded: a bare-path probe can only match a directory-only `.claude/`
+  // rule by stat-ing the directory, and on a first scaffold there is none,
+  // so it reads `.claude/` as `.claude/*` (review of #2071). Instead the
+  // narrow block is TRIED first — it is the one that cannot re-ignore
+  // directories a `.claude/*` project re-included — and the full block is
+  // tried only when the narrow one leaves the config ignored, which is
+  // exactly the `.claude/`-excluded case. A caller-supplied block is tried
+  // alone. Every attempt is measured by the same checks and reverted
+  // byte-for-byte when it fails.
+  const attempts = blockOverride !== undefined
+    ? [blockOverride]
+    : [configTrackabilityBlock({ parentExcluded: false }), configTrackabilityBlock({ parentExcluded: true })];
 
   // Byte-for-byte, and the file is REMOVED rather than blanked when there
   // was none: a project that acquires an empty `.gitignore` from a step that
   // reported a refusal has been changed by a step that said it changed
   // nothing.
-  const revert = (why: string) => {
+  const restore = () => {
     if (had) writeFileSync(gitignorePath, original);
     else unlinkSync(gitignorePath);
-    actions.push(`REFUSED: .gitignore (${why})`);
   };
 
-  const after = configPathsIgnored(root);
-  if (after.failure !== null) {
-    revert(`could not verify the edit worked — ${after.failure}`);
-    return;
+  let refusal: string | null = null;
+  for (let i = 0; i < attempts.length; i++) {
+    writeFileSync(gitignorePath, original.trimEnd() + "\n" + attempts[i]);
+    const outcome = verifyTrackableEdit(root, trackedBefore.ignored, ignoredBefore.ignored);
+    if (outcome.kind === "ok") { refusal = null; break; }
+    restore();
+    refusal = outcome.why;
+    // Only "still ignored" earns the wider block. A narrow block that
+    // ignored or un-ignored too much is refused as it is: the wider block
+    // carries every line the narrow one does, so it could only do more.
+    if (outcome.kind !== "still-ignored") break;
   }
-  if (after.ignored.length > 0) {
-    // The rule is not `.claude/`-shaped, so this block cannot reach it.
-    // Name the rule rather than the guess: `check-ignore -v` reports the
-    // source file, line and pattern, which is what a consumer needs.
-    const why = git(root, ["check-ignore", "--no-index", "-v", ...after.ignored]);
-    revert(
-      `the rungate config is still ignored after the negation — ${after.ignored.join(", ")}` +
-        (why.stdout.trim() ? ` (matched by ${why.stdout.trim().split("\n").join("; ")})` : "") +
-        `. Un-ignore it by hand; a config git treats as disposable is deleted by an ordinary branch switch`,
-    );
-    return;
-  }
-
-  const trackedAfter = trackedAndIgnoredPaths(root);
-  if (trackedAfter.failure !== null) {
-    revert(`could not verify the edit ignored nothing new — ${trackedAfter.failure}`);
-    return;
-  }
-  const newlyIgnored = trackedAfter.ignored.filter(p => !trackedBefore.ignored.includes(p));
-  if (newlyIgnored.length > 0) {
-    revert(
-      `the negation would newly ignore ${newlyIgnored.length} tracked file(s) — ` +
-        `${newlyIgnored.slice(0, 3).join(", ")}${newlyIgnored.length > 3 ? ", …" : ""}`,
-    );
-    return;
-  }
-
-  // The symmetric half, and the one that generalises. Exactly the config
-  // paths may leave the ignored set; a glob that reaches one path further
-  // than intended shows up here as a file that stopped being ignored, and
-  // that is a REFUSAL rather than a surprise in three consumers' trees.
-  const ignoredAfter = ignoredPaths(root);
-  if (ignoredAfter.failure !== null) {
-    revert(`could not verify the edit un-ignored nothing else — ${ignoredAfter.failure}`);
-    return;
-  }
-  const stillIgnored = new Set(ignoredAfter.ignored);
-  const unIgnored = ignoredBefore.ignored.filter(
-    p => !stillIgnored.has(p) && !(RUNGATE_CONFIG_IGNORE_PATHS as readonly string[]).includes(p)
-      && !isConfigFragment(p),
-  );
-  if (unIgnored.length > 0) {
-    revert(
-      `the negation reaches further than the config — ${unIgnored.length} other file(s) stopped ` +
-        `being ignored: ${unIgnored.slice(0, 3).join(", ")}${unIgnored.length > 3 ? ", …" : ""}`,
-    );
+  if (refusal !== null) {
+    actions.push(`REFUSED: .gitignore (${refusal})`);
     return;
   }
 

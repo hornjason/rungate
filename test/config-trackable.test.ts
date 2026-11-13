@@ -434,11 +434,77 @@ describe("#505: a config in an ignored directory is deleted by an ordinary branc
     expect(run(root, "ls-files").out, "the fixture's tracked file is not tracked")
       .toContain(".claude/rules/x.md");
 
+    // Handed the FULL block explicitly. Since #2071 this fixture's parent is
+    // not excluded, so the default is the narrow block and nothing is newly
+    // ignored — which is the fix. The guard is still the subject here, so it
+    // is pointed at the block that would trip it; the #2071 case above is the
+    // control that the default no longer does.
     const actions: string[] = [];
-    ensureConfigTrackable(root, actions);
+    ensureConfigTrackable(root, actions, configTrackabilityBlock());
     expect(actions.join("\n"), "a tracked file was silently ignored").toContain("REFUSED:");
     expect(actions.join("\n")).toContain(".claude/rules/x.md");
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(original);
+  });
+
+  test("#2071: a `.claude/*` project keeps the directories it already re-included", () => {
+    // asaCommandCenter's shape, verbatim in the lines that matter: the
+    // CONTENTS of `.claude/` are excluded, `.claude/` itself is not, and two
+    // directories are re-included below it. The full block appends a second
+    // `.claude/*` AFTER those negations, which re-ignores both — measured on
+    // the real repository as 128 tracked files, refused by the after-check.
+    // The refusal is right; the block was wrong for this shape.
+    const original = ".claude/*\n!.claude/agents/\n!.claude/rules/\n";
+    const root = repo({
+      ".gitignore": original,
+      ".claude/agents/marcus.md": "# agent\n",
+      ".claude/rules/r.md": "# rule\n",
+      ".claude/settings.local.json": "{}\n",
+      [MONOLITH]: CONFIG_BODY,
+    });
+    run(root, "add", "-A");
+    run(root, "commit", "-qm", "base");
+    expect(run(root, "ls-files").out, "the fixture's re-included directories are not tracked")
+      .toContain(".claude/agents/marcus.md");
+    expect(configPathsIgnored(root).ignored, "the fixture's config is not ignored to begin with")
+      .toContain(MONOLITH);
+
+    const actions: string[] = [];
+    ensureConfigTrackable(root, actions);
+    expectMeasured(actions, "UPDATED: .gitignore");
+    expect(configPathsIgnored(root).ignored, "the config is still ignored").toEqual([]);
+
+    // The property the full block broke: nothing tracked became ignored.
+    // One path per call: `check-ignore -q` refuses several (exit 128), which
+    // is neither answer and must not be read as one.
+    for (const f of [".claude/agents/marcus.md", ".claude/rules/r.md"]) {
+      expect(run(root, "check-ignore", "--no-index", "-q", f).status, `${f} was ignored again`).toBe(1);
+    }
+    // And the rest of `.claude/` is still out.
+    expect(run(root, "check-ignore", "--no-index", "-q", ".claude/settings.local.json").status,
+      "settings.local.json stopped being ignored").toBe(0);
+    // The narrow block, and not the full one, is what was written.
+    expect(readFileSync(join(root, ".gitignore"), "utf-8").split("\n"),
+      "the full block's re-exclude of .claude/* was appended").not.toContain("!.claude/");
+  });
+
+  test("#2071 review: a `.claude/` project with NO .claude directory yet still gets the full block", () => {
+    // The first-scaffold case. A probe of the bare `.claude` path can only
+    // match a directory-only rule by stat-ing it, and there is nothing to
+    // stat, so a probe-based choice reads `.claude/` as `.claude/*`, writes
+    // the narrow block, and the after-check refuses a project the
+    // unconditional full block used to fix. Every other fixture in this file
+    // writes a file under `.claude/`, which is how that went unseen.
+    const root = repo({ ".gitignore": ".claude/\n", "README.md": "# p" });
+    expect(existsSync(join(root, ".claude")), "the fixture already has a .claude directory").toBe(false);
+    expect(configPathsIgnored(root).ignored, "the fixture's config paths are not ignored to begin with")
+      .toContain(MONOLITH);
+
+    const actions: string[] = [];
+    ensureConfigTrackable(root, actions);
+    expectMeasured(actions, "UPDATED: .gitignore");
+    expect(configPathsIgnored(root).ignored, "the config is still ignored").toEqual([]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8").split("\n"),
+      "the parent re-include the full block carries is missing").toContain("!.claude/");
   });
 
   test("a project with no .gitignore at all does not acquire an empty one", () => {
