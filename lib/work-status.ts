@@ -9,6 +9,7 @@
  */
 
 import type { LaneReading } from "./board-lane-health";
+import type { NetGrowthBasis } from "./issue-filing-gate";
 import { readyOccupancy, undispatchableRemedy } from "./board-ready-rule";
 import { ladderViolations, nextStage, retrosOwed, type ItemScope, type Stage } from "./stage-ladder";
 
@@ -483,3 +484,39 @@ export function ladderLines(r: LadderReport): string[] {
   out.push(`  Retros owed: ${r.retrosOwed.length > 0 ? r.retrosOwed.join(", ") : "none"}`);
   return out;
 }
+
+/**
+ * The FILING CAP line (#2087, SC-2764): the trailing day's opened and closed
+ * issue counts and the cap they set, under ADR-016.
+ *
+ * It formats a decision and decides nothing. The cap and its basis come from
+ * `netGrowthCeiling` in lib/issue-filing-gate.ts, the gate's own decider, so
+ * the board cannot report a cap the gate does not enforce. The numbers it
+ * needs beyond that are passed in rather than imported, which keeps this
+ * module free of the gate's runtime dependencies.
+ */
+export function netGrowthLine(
+  decision: { cap: number; basis: NetGrowthBasis | null },
+  caps: { shipCap: number; ceiling: number; queueCap: number },
+): string {
+  const head = `Filing cap: ${decision.cap}`;
+  const queue = decision.cap < caps.queueCap ? ` (${caps.queueCap} for an engine-labelled filing)` : "";
+  const basis = decision.basis;
+  if (basis === null) {
+    return `${head}${queue} — set by ship mode or board.filingsPerRun, so the net-growth ceiling does not apply.`;
+  }
+  if (basis.reading === "UNMEASURED") {
+    return (
+      `${head}${queue} — the trailing day's issue counts are UNMEASURED (${basis.why}), ` +
+      `so the ceiling of ${caps.ceiling} does not apply.`
+    );
+  }
+  const counts = `the repo opened ${basis.opened} and closed ${basis.closed} issue(s) in the last 24h`;
+  if (basis.ceiling) return `${head} — ${counts}, so the net-growth ceiling applies (ADR-016).`;
+  const net = basis.opened - basis.closed;
+  return (
+    `${head}${queue} — ${counts} (net +${net}), so the cap stays at the ship-mode ${caps.shipCap}; ` +
+    `it rises to ${caps.ceiling} once closes catch up (ADR-016).`
+  );
+}
+

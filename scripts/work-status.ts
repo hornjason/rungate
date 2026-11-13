@@ -22,9 +22,18 @@ import {
   milestoneRollup,
   ladderLines,
   ladderReport,
+  netGrowthLine,
   readyRefusal,
   resolveFocus,
 } from "../lib/work-status";
+import {
+  NET_GROWTH_CEILING,
+  QUEUE_FILINGS_PER_RUN,
+  filingsPerRunFor,
+  netGrowthCeiling,
+  readNetGrowth,
+} from "../lib/issue-filing-gate";
+import { tryLoadRungateConfig } from "../lib/config-loader";
 import { laneHealth, laneHealthLines, workVerdict } from "../lib/board-lane-health";
 import {
   declaredClosingIn,
@@ -824,6 +833,16 @@ if (focus.kind === "all") {
 // printed `Done 28` while the board's own UI showed 47. Both are correct and
 // a reader comparing them concludes one is broken — which is the precise
 // failure this whole report exists to remove.
+// #2087 / SC-2764: the cap the filing gate enforces right now, and the
+// trailing day's counts that set it (ADR-016). Decided by the gate's own
+// `netGrowthCeiling`, so this line cannot report a cap the gate does not.
+bar("FILING CAP — what the trailing day's issues allow (ADR-016)");
+const filingAllowance = filingsPerRunFor(() => tryLoadRungateConfig(process.cwd()));
+const filingCap = await netGrowthCeiling(filingAllowance, () => readNetGrowth(process.cwd(), Date.now()));
+console.log(
+  `  ${netGrowthLine(filingCap, { shipCap: filingAllowance.cap, ceiling: NET_GROWTH_CEILING, queueCap: QUEUE_FILINGS_PER_RUN })}`,
+);
+
 bar("BOARD LANE HEALTH — issues only, each lane against what should be in it");
 const laneCounts = new Map<string, number>();
 let truncated = false;

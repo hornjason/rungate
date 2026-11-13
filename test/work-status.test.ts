@@ -18,6 +18,7 @@ import {
   ladderLines,
   ladderReport,
   milestoneRollup,
+  netGrowthLine,
   readyRefusal,
   resolveFocus,
 } from "../lib/work-status";
@@ -1419,3 +1420,53 @@ describe("#1944: the report names local work every run, from the one decider", (
     ).toBeNull();
   });
 });
+
+/**
+ * #2087 / SC-2764: work-status prints the trailing day's opened and closed
+ * issue counts and the filing cap they set (ADR-016). The cap itself is
+ * decided by `netGrowthCeiling` in lib/issue-filing-gate.ts; this only says
+ * what that decision was, so the board and the gate cannot disagree.
+ */
+describe("SC-2764: the filing cap line names the counts and the cap they set", () => {
+  const caps = { shipCap: 12, ceiling: 36, queueCap: 24 };
+
+  test("closing keeps pace: the ceiling applies, and the line says so with both counts", () => {
+    const line = netGrowthLine({ cap: 36, basis: { reading: "MEASURED", opened: 20, closed: 25, ceiling: true } }, caps);
+    expect(line).toContain("36");
+    expect(line).toContain("opened 20");
+    expect(line).toContain("closed 25");
+    expect(line).toContain("ceiling applies");
+  });
+
+  test("opening outruns closing: the ship-mode cap, the net growth, and what lifts it", () => {
+    const line = netGrowthLine({ cap: 12, basis: { reading: "MEASURED", opened: 34, closed: 27, ceiling: false } }, caps);
+    expect(line).toMatch(/^Filing cap: 12\b/);
+    expect(line).toContain("opened 34");
+    expect(line).toContain("closed 27");
+    expect(line).toContain("+7");
+    expect(line).toContain("24 for an engine-labelled filing");
+    expect(line).not.toContain("ceiling applies");
+  });
+
+  test("an unread count says UNMEASURED and why, and never claims the ceiling", () => {
+    const line = netGrowthLine({ cap: 12, basis: { reading: "UNMEASURED", why: "no token" } }, caps);
+    expect(line).toContain("UNMEASURED");
+    expect(line).toContain("no token");
+    expect(line).not.toContain("ceiling applies");
+    expect(line).toMatch(/^Filing cap: 12\b/);
+  });
+
+  test("a cap the ceiling cannot reach says the ceiling does not apply", () => {
+    const line = netGrowthLine({ cap: 1, basis: null }, caps);
+    expect(line).toMatch(/^Filing cap: 1\b/);
+    expect(line).toContain("does not apply");
+  });
+
+  test("the script prints the gate's own decision, through these two functions", () => {
+    const src = readFileSync(join(ROOT, "scripts", "work-status.ts"), "utf8");
+    expect(src).toContain("netGrowthCeiling(");
+    expect(src).toContain("readNetGrowth(");
+    expect(src).toContain("netGrowthLine(");
+  });
+});
+
