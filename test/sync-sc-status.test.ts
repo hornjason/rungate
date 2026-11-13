@@ -18,6 +18,7 @@ import {
   findDuplicateSCIds,
   selectOnly,
   onlyRefusesShortFlip,
+  parseOnlyArg,
   type UncheckedSC,
 } from "../scripts/sync-sc-status";
 
@@ -304,6 +305,25 @@ describe("#2054: --only narrows the flip to the named criteria", () => {
     expect(onlyRefusesShortFlip(["SC-1"], 1, 0)).toBe(true);
     expect(onlyRefusesShortFlip(["SC-1"], 1, 1)).toBe(false);
     expect(onlyRefusesShortFlip(null, 5, 0)).toBe(false);
+  });
+
+  test("--only is read in every spelling, and a missing value is a mistake, never 'all'", () => {
+    // Review of #2058: `--only=SC-1` was not recognised, so onlyIds was null
+    // and the run flipped every claimed criterion — failing open.
+    expect(parseOnlyArg(["--only", "SC-1"])).toEqual(["SC-1"]);
+    expect(parseOnlyArg(["--only=SC-1,SC-2"])).toEqual(["SC-1", "SC-2"]);
+    expect(parseOnlyArg(["--dry-run", "--only", "SC-1"])).toEqual(["SC-1"]);
+    expect(parseOnlyArg(["--only"])).toEqual([]);
+    expect(parseOnlyArg(["--only", "--dry-run"])).toEqual([]);
+    expect(parseOnlyArg(["--dry-run"])).toBeNull();
+  });
+
+  test("an id listed twice in ONE spec is not ambiguous", () => {
+    // Review of #2058: a duplicated checkbox line inside one spec counted as
+    // two specs and refused a legitimate flip.
+    const r = selectOnly(new Map([["SPEC-A.md", ["SC-1", "SC-1"]]]), ["SC-1"]);
+    expect(r.ambiguous).toEqual([]);
+    expect(r.missing).toEqual([]);
   });
 
   test("the script decides --only before it can exit on an empty flip list", () => {

@@ -14,6 +14,7 @@
  *   bun scripts/sync-sc-status.ts --report  # Output per-spec coverage report
  */
 
+import { parseArgs } from "util";
 import { existsSync, readFileSync, readdirSync } from "fs";
 
 import { walkTestFiles } from "../lib/walk-test-files";
@@ -51,11 +52,26 @@ const reportMode = process.argv.includes("--report");
  * `--only SC-1,SC-2` (#2054): flip only these. Absent means every passing
  * criterion, as before. A flag with no value is a mistake, not "all".
  */
-const onlyAt = process.argv.indexOf("--only");
-const onlyIds: string[] | null =
-  onlyAt === -1
-    ? null
-    : (process.argv[onlyAt + 1] ?? "").split(",").map(x => x.trim()).filter(x => x !== "" && !x.startsWith("--"));
+const onlyIds: string[] | null = parseOnlyArg(process.argv.slice(2));
+
+/**
+ * `--only`, read by `util.parseArgs` so every spelling is one reading
+ * (review of #2058: `--only=SC-1` was not recognised, the value fell to
+ * null, and the run flipped every claimed criterion). Null means the flag is
+ * absent; `[]` means it is present with no ids, which the caller refuses.
+ */
+export function parseOnlyArg(argv: readonly string[]): string[] | null {
+  const { values } = parseArgs({
+    args: [...argv],
+    options: { only: { type: "string" } },
+    strict: false,
+    allowPositionals: true,
+  });
+  const raw = values.only;
+  if (raw === undefined) return null;
+  if (typeof raw !== "string" || raw.startsWith("--")) return [];
+  return raw.split(",").map(x => x.trim()).filter(x => x !== "");
+}
 
 export interface UncheckedSC {
   id: string;
@@ -712,7 +728,8 @@ export function selectOnly(
   const selected = new Map<string, string[]>();
   const specsOf = new Map<string, string[]>();
   for (const [spec, ids] of bySpec) {
-    const kept = ids.filter(id => want.has(id));
+    // Deduped: a checkbox line repeated inside ONE spec is one spec (#2058).
+    const kept = [...new Set(ids.filter(id => want.has(id)))];
     for (const id of kept) specsOf.set(id, [...(specsOf.get(id) ?? []), spec]);
     if (kept.length > 0) selected.set(spec, kept);
   }
