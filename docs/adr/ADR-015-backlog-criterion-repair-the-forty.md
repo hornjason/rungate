@@ -2,7 +2,7 @@
 doc-type: adr
 status: accepted
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # ADR-015 — repairing the forty issues that name no criterion
@@ -173,10 +173,11 @@ one step.
 Filed by `adr-accepted.yml` when this ADR merges (Jason, 2026-11-12: "we
 should file all 7"). The first row was added after Jason's "should be no
 handcrafting": each promotion above needed hand edits the tool should have
-made, so the seven specs not yet written wait for it. Of the seven gaps, four serve a criterion: three are rows here (the board
-self-repair row serves SC-2609, the never-blank Criteria cell, and the
-needs-criterion row serves SC-2762, written in this PR — review of #2034 found
-neither is SC-2741's text, and Jason chose the new criterion on 2026-11-13),
+made, so the seven specs not yet written wait for it. Of the seven gaps, four serve a criterion: three are rows here (the
+closing-references row serves SC-2737; the board self-repair row serves
+SC-2609, the never-blank Criteria cell; and the needs-criterion row serves
+SC-2762, written in this PR — review of #2034 found neither of the last two is
+SC-2741's text, and Jason chose the new criterion on 2026-11-13),
 and the fourth was
 filed by hand as #2037 the moment the cap allowed, because closing #2021 left
 SC-2741 with no open issue and `criterion-coverage` short. The first row is an
