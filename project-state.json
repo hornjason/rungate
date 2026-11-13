@@ -1208,7 +1208,7 @@
     "number": 93,
     "date": "2026-11-13",
     "suite": "ADR-016 (the filing cap meters net growth) decided, merged and built end to end (#2085, #2088, #2089); #2060, #2042, #2072 and #2076 shipped; README (#2083) and the plan's verify commands (#2068) merged.",
-    "summary": "The filing cap kept refusing agreed work, and Jason asked whether its purpose was right. ADR-016 changed what it measures: while the repo closes issues as fast as it opens them, every run may file up to 36; otherwise today's cap of 12 stands. It went from decision to merged ADR to two built issues in one session. After Jason's merge, the workflow filed the issues and placed the board column and milestone with no hand step; the /dry-run before the merge was run by hand, because a stale gate blocks the skill. Live at session end: 34 opened, 24 closed, so the cap is still 12 until closing catches up.",
+    "summary": "The filing cap kept refusing agreed work, and Jason asked whether its purpose was right. ADR-016 changed what it measures: while the repo closes issues as fast as it opens them, every run may file up to 36; otherwise today's cap of 12 stands. It went from decision to merged ADR to two built issues in one session. After Jason's merge, the workflow filed the issues and placed the board column and milestone with no hand step; the /dry-run before the merge was run by hand, because a stale gate blocks the skill. Live at session end: 34 opened, 24 closed, so the cap is still 12 until closing catches up. Later: Jason agreed to record B4, E1 and E3 done. E1 and E3 are recorded — their commands exit 0 (spec-placement 115 of 115, dependency-edges 247 of 247); E3 lost a stale `0 of 71` baseline, which the validator refuses on a done item, and E1 a stale `2 of 27`. B4 also reads MET 22 of 22 but is HELD, for #2035's reason, which still holds: a done item is run live in CI, and a hand-milestoned engine issue has no Criteria cell until #2062 lands, so placing the 14 unphased engine issues would redden every PR. Completing Stage B also bumps COMPLETE_STAGES in test/stage-ladder.test.ts. Put back to Jason.",
     "issues_created": [
       2061,
       2062,
@@ -1635,8 +1635,8 @@
       "items": [
         {
           "id": "E1",
-          "what": "Phase placement tables authored for the specs that need them — human-authored and reviewed BY DESIGN; 2 of 27 carry one today",
-          "done": false,
+          "what": "Phase placement tables authored for the specs that need them — human-authored and reviewed BY DESIGN",
+          "done": true,
           "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading spec-placement"
         },
         {
@@ -1647,8 +1647,8 @@
         },
         {
           "id": "E3",
-          "what": "`plan-deps` run, so ordering becomes data — 0 of 71 open issues carried an edge on 2026-10-30; the raw `has:blocked-by` reading of 36 of 71 may mean 'has a link' rather than 'has an OPEN blocker', so it is a reading and not yet a tick",
-          "done": false,
+          "what": "`plan-deps` run, so ordering becomes data — proved by board-conformance's dependency-edges reading, not by the raw `has:blocked-by` search, which cannot tell a link from an open blocker",
+          "done": true,
           "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading dependency-edges"
         },
         {
