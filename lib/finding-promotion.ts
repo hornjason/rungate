@@ -113,6 +113,11 @@ export type Promotion =
       readonly issue: number;
       /** Anything the allocator could not consult, carried rather than dropped. */
       readonly unmeasured: readonly string[];
+      /**
+       * The spec already states this exact criterion — a retry after the issue
+       * link failed (review of #2065). The caller writes nothing and links.
+       */
+      readonly alreadyWritten: boolean;
     }
   | { readonly promoted: false; readonly refusal: PromotionRefusal; readonly why: string };
 
@@ -204,10 +209,16 @@ export const STATEMENT_FIELD_NAMES = STATEMENT_FIELDS.map(f => f.field);
  * promoting one — which is what `test/finding-promotion.test.ts` does to
  * prove the refusals are observed rather than incidental.
  */
-/** `name` as a whole identifier in `text`, not as part of a longer one. */
-function containsIdentifier(text: string, name: string): boolean {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^A-Za-z0-9_$])${escaped}($|[^A-Za-z0-9_$])`).test(text);
+/**
+ * Would `<module> contains [<symbol>]` already read as met? The SAME reading
+ * the matcher takes — `content-contains` in `lib/conformity.ts` is
+ * `expect(content).toContain(item)`: raw substring, comments and strings
+ * included. A narrower check here (a whole-identifier match, the first cut
+ * of #2060) let `promoted` through for symbol `promote`, which the matcher
+ * then reads as present: the false pass this refusal exists to stop.
+ */
+function matcherWouldPass(text: string, symbol: string): boolean {
+  return text.includes(symbol);
 }
 
 export function promotionViolations(input: PromotionInput): PromotionViolation[] {
@@ -230,7 +241,7 @@ export function promotionViolations(input: PromotionInput): PromotionViolation[]
       } catch {
         text = null;
       }
-      if (text === null || containsIdentifier(text, input.symbol)) {
+      if (text === null || matcherWouldPass(text, input.symbol)) {
         out.push({
           refusal: "SYMBOL_EXISTS",
           why:
@@ -401,6 +412,25 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
     };
   }
 
+  // A retry after a failed issue link finds its own line already written.
+  // Allocating again would append a second copy of one criterion for one
+  // finding (review of #2065), so the existing line is the answer.
+  const statement = promotionStatement(input);
+  for (const raw of specText.split("\n")) {
+    const m = /^- \[[ x]\] (SC-\d+): (.*)$/.exec(raw);
+    if (m && m[2] === statement) {
+      return {
+        promoted: true,
+        id: m[1]!,
+        line: raw,
+        spec: input.spec,
+        issue: input.issue.number,
+        unmeasured: [],
+        alreadyWritten: true,
+      };
+    }
+  }
+
   let allocated: { number: number; namespace: { unmeasured: string[] } };
   try {
     allocated = allocateScNumber(input.projectRoot, specText, registry, {
@@ -424,6 +454,7 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
     spec: input.spec,
     issue: input.issue.number,
     unmeasured: allocated.namespace.unmeasured ?? [],
+    alreadyWritten: false,
   };
 }
 

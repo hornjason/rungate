@@ -1256,10 +1256,42 @@ describe("#2060 / SC-2612: an existing symbol is refused, and the issue is linke
     }
   });
 
-  test("a longer name that merely contains the symbol is not the symbol", () => {
-    const root = withModule("export const promoted = 1;\n");
+  test("the refusal reads the module the way the matcher does: any substring, comments included", () => {
+    // Review of #2065. `content-contains` (lib/conformity.ts) is
+    // `toContain(item)`, so `promoted` satisfies `contains [promote]`, and so
+    // does a comment. A narrower check here is a false pass the matcher sees.
+    for (const text of ["export const promoted = 1;\n", "// TODO: promote this later\n"]) {
+      const root = withModule(text);
+      try {
+        const out = promote(inputFor(root), REGISTRY);
+        expect(out.promoted, text).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+    const absent = withModule("export const other = 1;\n");
     try {
-      expect(promote(inputFor(root), REGISTRY).promoted).toBe(true);
+      expect(promote(inputFor(absent), REGISTRY).promoted).toBe(true);
+    } finally {
+      rmSync(absent, { recursive: true, force: true });
+    }
+  });
+
+  test("a retry finds its own line already written and allocates nothing new", () => {
+    // Review of #2065: a failed issue link exits after the spec write, and a
+    // retry used to append a second copy of the same criterion.
+    const root = scratch(SPEC_WITH_CRITERIA);
+    try {
+      const first = promote(inputFor(root), REGISTRY);
+      expect(first.promoted).toBe(true);
+      if (!first.promoted) return;
+      const path = join(root, "specs", "FIXTURE-SPEC.md");
+      writeFileSync(path, `${readFileSync(path, "utf8").trimEnd()}\n${first.line}\n`);
+      const retry = promote(inputFor(root), REGISTRY);
+      expect(retry.promoted).toBe(true);
+      if (!retry.promoted) return;
+      expect(retry.alreadyWritten).toBe(true);
+      expect(retry.id).toBe(first.id);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

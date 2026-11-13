@@ -388,13 +388,19 @@ if (!write) {
 // 18 of the 22 `writeSpec` callers in this tree discard it, `create-sc.ts`
 // among them. That population is out of this pull request's scope and is
 // filed separately rather than fixed here.
-const wrote = writeSpec(target, `${content.trimEnd()}\n${result.line}\n`);
-if (!wrote.written) {
-  console.error(`REFUSED: ${wrote.refusal ?? `${spec} was not written, and gave no reason`}`);
-  process.exit(PROMOTION_EXIT);
+// A retry after a failed link: the line is already there, so write nothing
+// and go straight to the link (review of #2065).
+if (result.alreadyWritten) {
+  console.log(`${spec} already states ${result.id}; not appending it again.`);
+} else {
+  const wrote = writeSpec(target, `${content.trimEnd()}\n${result.line}\n`);
+  if (!wrote.written) {
+    console.error(`REFUSED: ${wrote.refusal ?? `${spec} was not written, and gave no reason`}`);
+    process.exit(PROMOTION_EXIT);
+  }
+  console.log(`Appended to ${spec}: ${result.line}`);
+  console.log(`  owner: ${currentScOwner(ROOT) ?? "(none — allocated above every reserved block)"}`);
 }
-console.log(`Appended to ${spec}: ${result.line}`);
-console.log(`  owner: ${currentScOwner(ROOT) ?? "(none — allocated above every reserved block)"}`);
 
 // #2060: link the issue here rather than printing an instruction to do it.
 // Re-read first, for the reason the decline path does: `--body-file`
