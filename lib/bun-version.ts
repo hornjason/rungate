@@ -360,6 +360,10 @@ export function setupBunWith(decision: BunVersionDecision, indent: string): stri
  * alone gives every runner its own binary. setup-bun adds the bin directory to
  * PATH for later steps, so nothing after it needs to change, and HOME is not
  * changed for any other step.
+ *
+ * `os.homedir()` reads `HOME` on POSIX and `USERPROFILE` on Windows, so both
+ * are set to the same path; a Windows runner pool would otherwise get a step
+ * that looks fixed and still installs into the shared profile.
  */
 export const SETUP_BUN_HOME = "${{ runner.tool_cache }}/bun-home";
 
@@ -373,6 +377,7 @@ export function setupBunEnv(indent: string): string {
     `${indent}env:\n` +
     `${indent}  # A per-runner install path, so runners sharing a HOME cannot rewrite\n` +
     `${indent}  # each other's bun mid-exec ("Text file busy").\n` +
-    `${indent}  HOME: ${SETUP_BUN_HOME}`
+    `${indent}  HOME: ${SETUP_BUN_HOME}\n` +
+    `${indent}  USERPROFILE: ${SETUP_BUN_HOME}`
   );
 }

@@ -1,4 +1,4 @@
-# generated-sha: 9ce60516fb0c91bf
+# generated-sha: 17ba7dfa605bbed5
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -109,6 +109,7 @@ jobs:
           # A per-runner install path, so runners sharing a HOME cannot rewrite
           # each other's bun mid-exec ("Text file busy").
           HOME: ${{ runner.tool_cache }}/bun-home
+          USERPROFILE: ${{ runner.tool_cache }}/bun-home
       - run: bun install
       # Pinned by ci.globalTools in .claude/rungate/config.json — one declaration (#597).
       # A failed install is UNMEASURED, not fatal. lib/compliance.ts probes each tool

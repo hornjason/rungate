@@ -73,8 +73,8 @@ function setupBunSteps(files: { name: string; text: string }[]): BunStep[] {
 /** Steps whose install path is not the per-runner one. */
 function sharedHomeSteps(steps: BunStep[]): string[] {
   return steps
-    .filter(s => s.env?.HOME !== SETUP_BUN_HOME)
-    .map(s => `${s.file}:${s.job}[${s.index}] HOME=${JSON.stringify(s.env?.HOME ?? null)}`);
+    .filter(s => s.env?.HOME !== SETUP_BUN_HOME || s.env?.USERPROFILE !== SETUP_BUN_HOME)
+    .map(s => `${s.file}:${s.job}[${s.index}] HOME=${JSON.stringify(s.env?.HOME ?? null)} USERPROFILE=${JSON.stringify(s.env?.USERPROFILE ?? null)}`);
 }
 
 // Unsharded emits the `test` job; sharded emits `test-shard` instead. Both
@@ -106,15 +106,16 @@ describe("#2039: every generated setup-bun step has a per-runner HOME", () => {
     expect(SETUP_BUN_HOME).toMatch(/^\$\{\{\s*runner\.tool_cache\s*\}\}\//);
   });
 
-  test("HOME is the only env the step declares — the redirect is scoped to the install", () => {
-    const extra = STEPS.filter(s => Object.keys(s.env ?? {}).some(k => k !== "HOME"));
+  test("HOME and USERPROFILE are the only env the step declares — the redirect is scoped to the install", () => {
+    const extra = STEPS.filter(s => Object.keys(s.env ?? {}).some(k => k !== "HOME" && k !== "USERPROFILE"));
     expect(extra.map(s => `${s.file}:${s.job}`)).toEqual([]);
   });
 
   test("the emitted block is a step-level env (indented under the step, not the job)", () => {
     const block = setupBunEnv("        ");
     expect(block.split("\n")[0]).toBe("        env:");
-    expect(block.trimEnd().endsWith(`HOME: ${SETUP_BUN_HOME}`)).toBe(true);
+    expect(block).toContain(`  HOME: ${SETUP_BUN_HOME}`);
+    expect(block.trimEnd().endsWith(`USERPROFILE: ${SETUP_BUN_HOME}`)).toBe(true);
   });
 });
 
@@ -124,7 +125,7 @@ describe("negative controls — the detector reports the defect and passes the f
 
   test("a step with no env IS reported — the shipped defect", () => {
     expect(sharedHomeSteps(setupBunSteps([{ name: "x.yml", text: wf("") }]))).toEqual([
-      'x.yml:t[0] HOME=null',
+      'x.yml:t[0] HOME=null USERPROFILE=null',
     ]);
   });
 
@@ -134,10 +135,15 @@ describe("negative controls — the detector reports the defect and passes the f
   });
 
   test("the per-runner HOME is NOT reported", () => {
-    const text = wf(`        env:\n          HOME: ${SETUP_BUN_HOME}\n`);
+    const text = wf(`        env:\n          HOME: ${SETUP_BUN_HOME}\n          USERPROFILE: ${SETUP_BUN_HOME}\n`);
     const steps = setupBunSteps([{ name: "x.yml", text }]);
     expect(steps).toHaveLength(1);
     expect(sharedHomeSteps(steps)).toEqual([]);
+  });
+
+  test("HOME alone IS reported — a Windows runner reads USERPROFILE", () => {
+    const text = wf(`        env:\n          HOME: ${SETUP_BUN_HOME}\n`);
+    expect(sharedHomeSteps(setupBunSteps([{ name: "x.yml", text }]))).toHaveLength(1);
   });
 
   test("a non-setup-bun step is not collected", () => {
