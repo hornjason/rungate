@@ -1380,7 +1380,7 @@
         },
         {
           "id": "B4",
-          "what": "the board's Criteria field populated for every engine issue — a DISPLAY MIRROR; the issue body stays the source of truth, because `gh issue list --json projectItems` returns Status only and cannot see custom fields. Written by board-mirror from adr-accepted.yml on an ADR merge, and from phase-order.yml whenever an issue's milestone changes (#2062, PR #2092), with RUNGATE_PROJECT_TOKEN. REOPENED 2026-11-09 when three Phase 7 filings dropped it to 5 of 8. On 2026-11-13 ten engine issues were milestoned by hand and the reading went from MET 21 of 21 to MET 31 of 31 with no hand step, so the reason #2035 held it no longer applies; recorded done.",
+          "what": "the board's Criteria field populated for every engine issue — a DISPLAY MIRROR; the issue body stays the source of truth, because `gh issue list --json projectItems` returns Status only and cannot see custom fields. Written by board-mirror from adr-accepted.yml on an ADR merge, and from phase-order.yml whenever an issue's milestone changes (#2062, PR #2092), with RUNGATE_PROJECT_TOKEN. REOPENED 2026-11-09 when three Phase 7 filings dropped it to 5 of 8. On 2026-11-13 ten engine issues were milestoned by hand and the reading went from MET 21 of 21 to MET 31 of 31 with no hand step (21, not the morning's 22: #2062 itself had closed in between), so the reason #2035 held it no longer applies; recorded done.",
           "done": true,
           "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading criteria-field"
         },
