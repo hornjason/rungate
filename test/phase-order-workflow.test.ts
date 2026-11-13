@@ -22,7 +22,10 @@
  * onto a GITHUB_TOKEN step each turns a case red; so do deleting the
  * `f !== process.env.PREFIX` test (the engine's family is linked twice),
  * unquoting `"$family"` (a two-word family splits), and keying the family step
- * to `github.event` (the review of #2092: a dropped queued run loses its work).
+ * to `github.event` (the review of #2092: a dropped queued run loses its work);
+ * so do removing `set -euo pipefail` (a failed `gh api` goes green), running a
+ * family's plan-deps bare (one refusal stops the rest), and dropping
+ * `!cancelled()` from a write step (one failure stops the later writes).
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
@@ -141,55 +144,79 @@ describe("#2062 / SC-2609: a hand-milestoned engine issue gets its queue label a
       expect(s.env.GITHUB_TOKEN, `${s.name} must hold the job's own token`).toBe("${{ secrets.GITHUB_TOKEN }}");
     }
   });
+
+  test("#2062: every write runs whether or not an earlier one failed, so one refusal cannot stop the rest", () => {
+    // Review round 2 of #2092: one family's plan-deps refusal used to abort
+    // the job before the queue label and the Criteria column were written.
+    const writes = [...depsSteps(), ...mirrorSteps()];
+    expect(writes.length, "the four write steps were not all found").toBe(4);
+    for (const s of writes) expect(s.if, `${s.name} must run on !cancelled()`).toBe("${{ !cancelled() }}");
+  });
 });
 
 describe("#2062: every milestone family is linked on every run, whichever event fired it", () => {
   const allFamilies = () => depsSteps().find(s => runOf(s).includes('--milestone-prefix "$family"'));
-  const lines = () => runOf(allFamilies()).split("\n");
 
-  test("#2062: one step loops plan-deps over every other family, unconditionally, with the job's own token", () => {
+  test("#2062: one step loops plan-deps over every other family, with the job's own token", () => {
     const step = allFamilies();
     expect(step, "a plan-deps step looping over families").toBeDefined();
     expect(runOf(step)).toContain("--write");
     expect(runOf(step)).toContain('--repo "$GITHUB_REPOSITORY"');
     expect(runOf(step)).toContain('import { familyOf } from "./lib/spec-placement"');
     expect(step.env.PREFIX).toBe("${{ steps.prefix.outputs.prefix }}");
-    expect(step.if, "a skipped step reads as satisfied, so this one never skips").toBeUndefined();
   });
 
   test("#2062: no step reads which event fired the run, so a dropped queued run loses nothing", () => {
     // The concurrency group keeps one pending run and drops the rest. A step
     // keyed to the firing event's milestone loses that milestone whenever its
-    // run is the one dropped — the review of #2092. Reading the tracker
+    // run is the one dropped — round 1 of #2092's review. Reading the tracker
     // instead makes every surviving run cover what the dropped ones would have.
     expect(text).not.toContain("github.event");
   });
 
-  /** Run the step's real enumeration line, from the repository root, against a fake `gh` printing these titles. */
-  const families = (titles: string[]): string => {
-    const dir = mkdtempSync(join(tmpdir(), "phase-order-families-"));
+  /**
+   * Run the WHOLE step as Actions does — `bash -e`, the default `run:` shell,
+   * with no pipefail of its own — from the repository root.
+   *
+   * A fake `gh` prints the titles as `--jq '.[] | .title | @json'` would, or
+   * fails. A fake `bun` hands `-e` to the real one (the step's familyOf read)
+   * and records every other call (plan-deps), failing for `refuse`.
+   *
+   * The first version of this harness ran the enumeration line under
+   * `bash -eo pipefail`, a stricter shell than the one Actions uses, so it
+   * could not see the missing pipefail the review found (round 2).
+   */
+  const step = (opts: { titles?: string[]; ghFails?: boolean; refuse?: string }) => {
+    const dir = mkdtempSync(join(tmpdir(), "phase-order-step-"));
     try {
-      // What `gh api … --jq '.[] | .title | @json'` prints: one JSON string per line.
-      writeFileSync(join(dir, "gh"), `#!/bin/sh\ncat <<'EOF'\n${titles.map(t => JSON.stringify(t)).join("\n")}\nEOF\n`, {
-        mode: 0o755,
-      });
-      const enumerate = lines().find(l => l.trimStart().startsWith("families=$("));
-      expect(enumerate, "the enumeration line was not found, so nothing was executed").toBeDefined();
-      const r = spawnSync("bash", ["-eo", "pipefail", "-c", `${enumerate}\nprintf '%s' "$families"`], {
+      const log = join(dir, "calls");
+      const ghBody = opts.ghFails
+        ? `echo "gh: HTTP 502" >&2\nexit 1\n`
+        : `cat <<'EOF'\n${(opts.titles ?? []).map(t => JSON.stringify(t)).join("\n")}\nEOF\n`;
+      writeFileSync(join(dir, "gh"), `#!/bin/sh\n${ghBody}`, { mode: 0o755 });
+      const refuse = opts.refuse ? `case "$*" in *"--milestone-prefix ${opts.refuse} "*) exit 1 ;; esac\n` : "";
+      writeFileSync(
+        join(dir, "bun"),
+        `#!/bin/sh\nif [ "$1" = "-e" ]; then exec "${process.execPath}" "$@"; fi\n` +
+          `printf '%s|' "$@" >> "${log}"\necho >> "${log}"\n${refuse}`,
+        { mode: 0o755 },
+      );
+      const r = spawnSync("bash", ["-e", "-c", runOf(allFamilies())], {
         cwd: ROOT,
         env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PREFIX: "Pipeline", GITHUB_REPOSITORY: "o/r" },
         encoding: "utf-8",
       });
-      expect(r.status, r.stderr).toBe(0);
-      return r.stdout;
+      const calls = existsSync(log) ? readFileSync(log, "utf-8").split("\n").filter(Boolean) : [];
+      return { status: r.status, out: r.stdout + r.stderr, calls };
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   };
+  const call = (family: string) => `scripts/plan-deps.ts|--repo|o/r|--milestone-prefix|${family}|--write|`;
 
-  test("#2062: every family with an open milestone is named once, except the engine's, an unprefixed one, or a non-phase", () => {
-    expect(
-      families([
+  test("#2062: each other family is linked once, a two-word family as ONE argument; the engine's, an unprefixed one and non-phases are not", () => {
+    const r = step({
+      titles: [
         "Pipeline Phase 6 — the board's state is a reading",
         "Convergence Phase 5 — the instruments",
         "Convergence Phase 2 — stop the false findings",
@@ -198,37 +225,29 @@ describe("#2062: every milestone family is linked on every run, whichever event 
         "Spec Two Phase 1 — a two-word family",
         // One title, one JSON line: a newline inside it is not a second title.
         "Evil\nfamily=x Phase 1",
-      ]),
-    ).toBe("Convergence\nSpec Two");
-    expect(families(["Pipeline Phase 6"])).toBe("");
+      ],
+    });
+    expect(r.status, r.out).toBe(0);
+    expect(r.calls).toEqual([call("Convergence"), call("Spec Two")]);
   });
 
-  /** Run the step's loop against a fake `bun`, returning each call's arguments joined by `|`. */
-  const loop = (familyList: string): string[] => {
-    const dir = mkdtempSync(join(tmpdir(), "phase-order-loop-"));
-    try {
-      const log = join(dir, "calls");
-      writeFileSync(join(dir, "bun"), `#!/bin/sh\nprintf '%s|' "$@" >> "${log}"\necho >> "${log}"\n`, { mode: 0o755 });
-      const body = lines();
-      const from = body.findIndex(l => l.trimStart().startsWith("while IFS= read -r family"));
-      const to = body.findIndex(l => l.trimStart().startsWith('done <<< "$families"'));
-      expect(from >= 0 && to > from, "the loop was not found, so nothing was executed").toBe(true);
-      const r = spawnSync("bash", ["-e", "-c", body.slice(from, to + 1).join("\n")], {
-        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, families: familyList, GITHUB_REPOSITORY: "o/r" },
-        encoding: "utf-8",
-      });
-      expect(r.status, r.stderr).toBe(0);
-      return existsSync(log) ? readFileSync(log, "utf-8").split("\n").filter(Boolean) : [];
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  };
+  test("#2062: no other family is a green run that calls nothing", () => {
+    const r = step({ titles: ["Pipeline Phase 6"] });
+    expect(r.status, r.out).toBe(0);
+    expect(r.calls).toEqual([]);
+  });
 
-  test("#2062: the loop runs plan-deps once per family, a two-word family as ONE argument, and nothing for none", () => {
-    expect(loop("Convergence\nSpec Two")).toEqual([
-      "scripts/plan-deps.ts|--repo|o/r|--milestone-prefix|Convergence|--write|",
-      "scripts/plan-deps.ts|--repo|o/r|--milestone-prefix|Spec Two|--write|",
-    ]);
-    expect(loop("")).toEqual([]);
+  test("#2062: a failed milestone read is a red step, not an empty list of families", () => {
+    const r = step({ ghFails: true });
+    expect(r.status, "a failed gh api must fail the step under Actions' bash -e").not.toBe(0);
+    expect(r.calls).toEqual([]);
+  });
+
+  test("#2062: one family's refusal does not stop the next, and the step ends red naming it", () => {
+    const r = step({ titles: ["Convergence Phase 5", "Spec Two Phase 1"], refuse: "Convergence" });
+    expect(r.calls).toEqual([call("Convergence"), call("Spec Two")]);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("::error::plan-deps refused for [Convergence]");
   });
 });
+

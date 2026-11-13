@@ -20,7 +20,10 @@
 # step keyed to the firing event's milestone would lose that milestone's work
 # whenever its run was the one dropped (review of #2092). An issue milestoned
 # by a tool (whose GITHUB_TOKEN write fires no event) is repaired by the next
-# run for the same reason.
+# run for the same reason. A TRANSIENT failure is repaired the same way; a
+# PERSISTENT refusal (one family's blocker list past a page, say) turns every
+# run red until somebody fixes it — and because every write step runs on
+# `!cancelled()`, it never stops the other steps meanwhile.
 #
 # CREDENTIALS, per ADR-013: issues, labels and edges are written with the
 # job's own GITHUB_TOKEN, passed as GITHUB_TOKEN. Those writes fire no further
@@ -82,7 +85,11 @@ jobs:
           esac
           echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
 
+      # Each write below runs whether or not an earlier one failed
+      # (`!cancelled()`), so a refusal in one cannot stop the others — review
+      # round 2 of #2092. The job still ends red when any of them failed.
       - name: Phase-order links between milestones
+        if: ${{ !cancelled() }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PREFIX: ${{ steps.prefix.outputs.prefix }}
@@ -93,20 +100,36 @@ jobs:
       # firing event (see the header). Titles cross as JSON lines, so a title
       # carrying a newline is one title, not two. A bare `Phase N` title is the
       # unprefixed family, which plan-deps refuses as blank, so it is skipped.
+      #
+      # `pipefail` because the default `run:` shell is `bash -e`, which takes a
+      # pipeline's status from its LAST command: a failed `gh api` would hand
+      # `bun` an empty stdin, list no families and go green having linked
+      # nothing (review round 2). One family's refusal does not stop the next;
+      # the step exits red at the end naming every family that refused.
       - name: Phase-order links for every other milestone family
+        if: ${{ !cancelled() }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PREFIX: ${{ steps.prefix.outputs.prefix }}
         run: |
+          set -euo pipefail
           families=$(gh api --paginate "repos/$GITHUB_REPOSITORY/milestones?state=open&per_page=100" --jq '.[] | .title | @json' | bun -e 'import { familyOf } from "./lib/spec-placement"; const seen = new Set<string>(); for (const line of (await Bun.stdin.text()).split("\n")) { if (line.trim() === "") continue; const f = familyOf(JSON.parse(line)); if (f && f !== process.env.PREFIX) seen.add(f); } process.stdout.write([...seen].sort().join("\n"))')
+          refused=""
           while IFS= read -r family; do
             if [ -n "$family" ]; then
               echo "== $family"
-              bun scripts/plan-deps.ts --repo "$GITHUB_REPOSITORY" --milestone-prefix "$family" --write
+              if ! bun scripts/plan-deps.ts --repo "$GITHUB_REPOSITORY" --milestone-prefix "$family" --write; then
+                refused="$refused [$family]"
+              fi
             fi
           done <<< "$families"
+          if [ -n "$refused" ]; then
+            echo "::error::plan-deps refused for$refused. Every other family was still linked."
+            exit 1
+          fi
 
       - name: Queue label on every engine-phase issue
+        if: ${{ !cancelled() }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun scripts/board-mirror.ts --queue-label --repo "$GITHUB_REPOSITORY" --write
@@ -117,6 +140,7 @@ jobs:
       # secret is the empty string with no error, so board-mirror's own refusal
       # ("not a project this token can read") is what reports it.
       - name: Criteria column on the board
+        if: ${{ !cancelled() }}
         env:
           GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
