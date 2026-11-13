@@ -6952,11 +6952,19 @@ describe("SC-2735: the filing-override label comes from the filing tree's config
  * reaches GitHub, and FG-275..FG-277 drive the default reader with a client
  * that lives in memory.
  *
- * Proved able to fail, by hand, each mutation reverted after the run:
- * - the UNMEASURED arm of `netGrowthCeiling` returning the ceiling: FG-271 red;
- * - `<= 0` inverted to `> 0`: FG-266, FG-267, FG-268, FG-269 and FG-270 red;
- * - the eligibility check dropped, so harness mode earns the ceiling: FG-272
- *   red, and FG-273 with it for the explicit `board.filingsPerRun`.
+ * Proved able to fail, by hand, each mutation reverted after the run
+ * (baseline 13 pass / 0 fail, read first):
+ * - the UNMEASURED arm of `netGrowthCeiling` returning the ceiling: FG-271,
+ *   FG-274 red;
+ * - `<= 0` inverted to `> 0`: FG-266..FG-270, FG-274, FG-278 red;
+ * - the `allowance.direct` check dropped, so harness mode earns the ceiling:
+ *   FG-272, FG-273, FG-274 red;
+ * - pull requests counted, or every close counted: FG-275 red;
+ * - the walk stopped after page one: FG-276 red;
+ * - the reservation stage reading `allowance.cap`: FG-266, FG-267, FG-270,
+ *   FG-278 red;
+ * - the pre-read's refusal passed `null` for the basis: FG-266, FG-268,
+ *   FG-271 red.
  */
 describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", () => {
   const at = "2026-11-13T18:00:00.000Z";
