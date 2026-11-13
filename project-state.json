@@ -1612,19 +1612,19 @@
           "id": "E1",
           "what": "Phase placement tables authored for the specs that need them — human-authored and reviewed BY DESIGN; 2 of 27 carry one today",
           "done": false,
-          "verify": null
+          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading spec-placement"
         },
         {
           "id": "E2",
           "what": "`plan-issues --repair` run, so issues naming nothing get a criterion or an explicit 'none'",
           "done": false,
-          "verify": null
+          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading criteria-named"
         },
         {
           "id": "E3",
           "what": "`plan-deps` run, so ordering becomes data — 0 of 71 open issues carried an edge on 2026-10-30; the raw `has:blocked-by` reading of 36 of 71 may mean 'has a link' rather than 'has an OPEN blocker', so it is a reading and not yet a tick",
           "done": false,
-          "verify": null
+          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading dependency-edges"
         },
         {
           "id": "E4",
@@ -1653,7 +1653,7 @@
           "id": "F1",
           "what": "specs/CODE-REVIEW-CONVERGENCE-SPEC.md goes through the engine with no agent touching anything",
           "done": false,
-          "verify": null
+          "verify": "for r in milestones criterion-coverage blocked-by-edges criteria-field queue-label; do bun bin/rungate.ts board-conformance --produce --spec specs/CODE-REVIEW-CONVERGENCE-SPEC.md --prefix Convergence --repo hornjason/rungate --reading \"$r\" || exit 1; done"
         },
         {
           "id": "F2",
