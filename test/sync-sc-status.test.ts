@@ -19,6 +19,7 @@ import {
   selectOnly,
   onlyRefusesShortFlip,
   parseOnlyArg,
+  unknownSyncArgs,
   type UncheckedSC,
 } from "../scripts/sync-sc-status";
 
@@ -316,6 +317,40 @@ describe("#2054: --only narrows the flip to the named criteria", () => {
     expect(parseOnlyArg(["--only"])).toEqual([]);
     expect(parseOnlyArg(["--only", "--dry-run"])).toEqual([]);
     expect(parseOnlyArg(["--dry-run"])).toBeNull();
+  });
+
+  test("#2076: an argument the script does not read is named, never ignored", () => {
+    // `--help` used to run the script in write mode and tick 38 boxes in six
+    // specs: the reader was non-strict, so an unknown flag was dropped.
+    for (const ok of [[], ["--dry-run"], ["--report"], ["--only", "SC-1"], ["--only=SC-1,SC-2"], ["--dry-run", "--only", "SC-1"]]) {
+      expect(unknownSyncArgs(ok), ok.join(" ")).toEqual([]);
+    }
+    expect(unknownSyncArgs(["--help"])).toEqual(["--help"]);
+    expect(unknownSyncArgs(["-h"])).toEqual(["-h"]);
+    expect(unknownSyncArgs(["--dryrun"])).toEqual(["--dryrun"]);
+    expect(unknownSyncArgs(["specs/X.md"])).toEqual(["specs/X.md"]);
+    expect(unknownSyncArgs(["--dry-run", "--verbose", "x"])).toEqual(["--verbose", "x"]);
+  });
+
+  test("#2076: a flag swallowed as --only's value, or a value on a switch, is refused too", () => {
+    // Review of #2078: `--only --help` read `--help` as the id list, and
+    // `--dry-run=false` threw out of parseArgs as a raw stack trace.
+    expect(unknownSyncArgs(["--only", "--help"])).toEqual(["--only with no ids", "--help"]);
+    expect(unknownSyncArgs(["--only", "--dry-run"])).toEqual(["--only with no ids"]);
+    expect(unknownSyncArgs(["--only"])).toEqual(["--only with no ids"]);
+    expect(unknownSyncArgs(["--dry-run=false"])).toEqual(["--dry-run=false"]);
+    expect(unknownSyncArgs(["--report=1", "--only", "SC-1"])).toEqual(["--report=1"]);
+  });
+
+  test("#2076: the script refuses an unknown argument before it reads a single spec", () => {
+    // Asserted on the source rather than by spawning `--help`: before the fix
+    // that spawn would tick the real specs, which is the defect itself.
+    const src = readFileSync(join(import.meta.dir, "..", "scripts", "sync-sc-status.ts"), "utf8");
+    const main = src.slice(src.indexOf("if (isDirectExecution) {"));
+    const refuse = main.indexOf("unknownSyncArgs(process.argv.slice(2))");
+    expect(refuse, "main does not call unknownSyncArgs").toBeGreaterThan(-1);
+    expect(refuse).toBeLessThan(main.indexOf("findUncheckedSCs()"));
+    expect(main.slice(refuse, main.indexOf("findUncheckedSCs()"))).toContain("process.exit(1)");
   });
 
   test("an id listed twice in ONE spec is not ambiguous", () => {
