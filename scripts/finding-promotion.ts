@@ -37,6 +37,7 @@ import {
   promote,
   specPath,
   type PromotableIssue,
+  withCriterionLinked,
 } from "../lib/finding-promotion";
 import { readScRegistry } from "./sync-sc-status";
 import { currentScOwner } from "../lib/sc-reservations";
@@ -394,5 +395,46 @@ if (!wrote.written) {
 }
 console.log(`Appended to ${spec}: ${result.line}`);
 console.log(`  owner: ${currentScOwner(ROOT) ?? "(none — allocated above every reserved block)"}`);
-console.log(`\nNow make #${issueNumber} name it: add "${result.id}" under its Criteria heading.`);
-console.log("Until it does, criterion-inventory still reports the issue as serving nothing.");
+
+// #2060: link the issue here rather than printing an instruction to do it.
+// Re-read first, for the reason the decline path does: `--body-file`
+// overwrites the whole body, and an edit made since the first read would be
+// lost. The spec is already written, so a failure here says exactly what is
+// left to do and exits non-zero.
+// Bound out here: the `result.promoted` narrowing above does not reach
+// inside the closure below.
+const promotedId = result.id;
+function linkIssue(): string | null {
+  let fresh: PromotableIssue;
+  try {
+    fresh = JSON.parse(
+      ghWithoutGhToken(["issue", "view", String(issueNumber), "--json", "number,title,body"]),
+    ) as PromotableIssue;
+  } catch (e) {
+    return `#${issueNumber} could not be re-read: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  const before = fresh.body ?? "";
+  const after = withCriterionLinked(before, promotedId);
+  if (after === before) return null;
+  const linkScratch = mkdtempSync(join(tmpdir(), "rg-2060-link-"));
+  try {
+    const linkFile = join(linkScratch, "body.md");
+    writeFileSync(linkFile, after);
+    ghWithoutGhToken(["issue", "edit", String(issueNumber), "--body-file", linkFile]);
+    return null;
+  } catch (e) {
+    return `#${issueNumber} could not be updated: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    rmSync(linkScratch, { recursive: true, force: true });
+  }
+}
+
+const linkFailure = linkIssue();
+if (linkFailure) {
+  console.error(
+    `REFUSED: ${spec} now states ${promotedId}, and the issue link failed — ${linkFailure}. ` +
+      `Add "${promotedId}" under #${issueNumber}'s "## Criteria this serves" heading.`,
+  );
+  process.exit(PROMOTION_EXIT);
+}
+console.log(`#${issueNumber} names ${promotedId} under its Criteria heading.`);

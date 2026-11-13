@@ -35,6 +35,7 @@ import {
   promotionStatement,
   promotionViolations,
   specPath,
+  withCriterionLinked,
   DECLINE_REFUSALS,
   PROMOTION_REFUSALS,
   STATEMENT_FIELD_NAMES,
@@ -42,7 +43,7 @@ import {
   type DeclineRefusal,
   type PromotionInput,
 } from "../lib/finding-promotion";
-import { NAMES_NONE } from "../lib/board-mirror";
+import { NAMES_NONE, criterionAnswer } from "../lib/board-mirror";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf, missingSections } from "../lib/issue-shape";
 import { buildScRegistry } from "../lib/sc-ids";
 
@@ -423,6 +424,12 @@ describe("SC-2612 / AC-2 (#1678): every refusal is named, and none is a guess", 
       mkdirSync(join(unreadable, "specs", "FIXTURE-SPEC.md"));
       for (const v of promotionViolations(inputFor(unreadable))) reached.add(v.refusal);
       rmSync(unreadable, { recursive: true, force: true });
+      // #2060: the module already contains the symbol.
+      const defined = scratch(SPEC_WITH_CRITERIA);
+      mkdirSync(join(defined, "lib"), { recursive: true });
+      writeFileSync(join(defined, "lib", "finding-promotion.ts"), "export function promote() {}\n");
+      for (const v of promotionViolations(inputFor(defined))) reached.add(v.refusal);
+      rmSync(defined, { recursive: true, force: true });
       for (const v of promotionViolations(inputFor(noCriteria))) reached.add(v.refusal);
       for (const v of promotionViolations(inputFor(measuredEmpty, { spec: "specs/EMPTY-SPEC.md" }))) {
         reached.add(v.refusal);
@@ -494,8 +501,9 @@ describe("SC-2612 / AC-3 (#1678): the module does not answer a question board-mi
       }
     }
     // Vacuity guard: if a refactor removes every read, the loop above
-    // asserts nothing and passes.
-    expect(reads).toBe(3);
+    // asserts nothing and passes. Four since #2060: the three reads of the
+    // target spec, and the read of the module SYMBOL_EXISTS checks.
+    expect(reads).toBe(4);
   });
 
   test("the registry parameter has no default, so the compiler catches every call site", () => {
@@ -1215,5 +1223,73 @@ describe("#1956 round 2: the scratch directory is always removed", () => {
     expect(after.indexOf("process.exit(PROMOTION_EXIT)")).toBeGreaterThan(
       after.indexOf("if (failure)"),
     );
+  });
+});
+
+/**
+ * #2060 / SC-2612: a promotion needs no hand step to be correct.
+ *
+ * Two of the hand steps ADR-015 needed: a symbol the module already
+ * contained (`heredocInterpreter`) made a presence-matched criterion pass
+ * falsely, and every promoted issue had to be edited by hand to name its
+ * new criterion.
+ */
+describe("#2060 / SC-2612: an existing symbol is refused, and the issue is linked", () => {
+  function withModule(text: string): string {
+    const root = scratch(SPEC_WITH_CRITERIA);
+    mkdirSync(join(root, "lib"), { recursive: true });
+    writeFileSync(join(root, "lib", "finding-promotion.ts"), text);
+    return root;
+  }
+
+  test("a symbol the module already contains is refused before anything is allocated", () => {
+    const root = withModule("export function promote() {}\n");
+    try {
+      const out = promote(inputFor(root), REGISTRY);
+      expect(out.promoted).toBe(false);
+      if (out.promoted) return;
+      expect(out.refusal).toBe("SYMBOL_EXISTS");
+      expect(out.why).toContain("lib/finding-promotion.ts");
+      expect(out.why).toContain("promote");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a longer name that merely contains the symbol is not the symbol", () => {
+    const root = withModule("export const promoted = 1;\n");
+    try {
+      expect(promote(inputFor(root), REGISTRY).promoted).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the link adds the id under the Criteria heading, and the board reads it as answered", () => {
+    const bare = withCriterionLinked("Some finding.", "SC-2762");
+    expect(bare).toContain("## Criteria this serves");
+    expect(criterionAnswer({ title: "t", body: bare }, ["SC-2762"]).names).toEqual(["SC-2762"]);
+
+    const existing = "Body.\n\n## Criteria this serves\n\nSC-2741\n\n## Files this will change\n- a.ts\n";
+    const linked = withCriterionLinked(existing, "SC-2762");
+    expect(linked.match(/## Criteria this serves/g)?.length).toBe(1);
+    expect(criterionAnswer({ title: "t", body: linked }, ["SC-2741", "SC-2762"]).names.sort()).toEqual(["SC-2741", "SC-2762"]);
+    // The id lands inside the Criteria section, before the next heading.
+    expect(linked.indexOf("SC-2762")).toBeLessThan(linked.indexOf("## Files this will change"));
+    // Linking twice changes nothing.
+    expect(withCriterionLinked(linked, "SC-2762")).toBe(linked);
+  });
+
+  test("the CLI links the issue after the spec is written, through the one function", () => {
+    const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
+    const wrote = cli.indexOf("const wrote = writeSpec(");
+    const linked = cli.indexOf("withCriterionLinked(");
+    expect(wrote).toBeGreaterThan(-1);
+    expect(linked).toBeGreaterThan(wrote);
+    // The function is CALLED, and its failure exits — a definition nobody
+    // calls would satisfy the line above.
+    expect(cli.indexOf("const linkFailure = linkIssue();")).toBeGreaterThan(wrote);
+    expect(cli).toMatch(/if \(linkFailure\) \{[\s\S]*?process\.exit\(PROMOTION_EXIT\)/);
+    expect(cli).not.toContain("Now make #");
   });
 });

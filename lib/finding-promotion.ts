@@ -92,6 +92,7 @@ export const PROMOTION_REFUSALS = [
   "NO_MODULE",
   "MALFORMED_STATEMENT",
   "ID_UNAVAILABLE",
+  "SYMBOL_EXISTS",
 ] as const;
 
 export type PromotionRefusal = (typeof PROMOTION_REFUSALS)[number];
@@ -203,11 +204,43 @@ export const STATEMENT_FIELD_NAMES = STATEMENT_FIELDS.map(f => f.field);
  * promoting one — which is what `test/finding-promotion.test.ts` does to
  * prove the refusals are observed rather than incidental.
  */
+/** `name` as a whole identifier in `text`, not as part of a longer one. */
+function containsIdentifier(text: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^A-Za-z0-9_$])${escaped}($|[^A-Za-z0-9_$])`).test(text);
+}
+
 export function promotionViolations(input: PromotionInput): PromotionViolation[] {
   const out: PromotionViolation[] = [];
 
   for (const { field, refusal, why } of STATEMENT_FIELDS) {
     if (input[field].trim() === "") out.push({ refusal, why });
+  }
+
+  // #2060: the criterion is matched by `<module> contains [<symbol>]`, a
+  // presence check. A symbol the module already contains makes a criterion
+  // for work nobody has done read as met — `heredocInterpreter` on #2034.
+  // A module that exists and cannot be read cannot prove the symbol absent.
+  if (input.symbol.trim() !== "" && input.module.trim() !== "") {
+    const modulePath = resolve(input.projectRoot, input.module);
+    if (existsSync(modulePath)) {
+      let text: string | null;
+      try {
+        text = readFileSync(modulePath, "utf8");
+      } catch {
+        text = null;
+      }
+      if (text === null || containsIdentifier(text, input.symbol)) {
+        out.push({
+          refusal: "SYMBOL_EXISTS",
+          why:
+            text === null
+              ? `${input.module} exists and could not be read, so ${input.symbol} cannot be shown to be absent`
+              : `${input.module} already contains ${input.symbol}, so \`contains [${input.symbol}]\` would read ` +
+                "as met before the work it names is done — pick a name the work will introduce",
+        });
+      }
+    }
   }
 
   // Checked before `existsSync`, so a path outside the tree is named for what
@@ -653,6 +686,21 @@ export function bodyWithDecline(body: string, why: string): string {
   const headingEnd = body.indexOf("\n", at);
   const cut = headingEnd === -1 ? body.length : headingEnd;
   return `${body.slice(0, cut)}\n\n${line}\n${body.slice(cut).replace(/^\n+/, "\n")}`;
+}
+
+/**
+ * The issue body with `id` named under its `## Criteria this serves` heading
+ * (#2060). A promotion used to print "now make #N name it" and leave the
+ * edit to a person; ADR-015 linked twelve issues through repair rows
+ * instead. Unchanged when the body already names `id`.
+ */
+export function withCriterionLinked(body: string, id: string): string {
+  if (criteriaNamedBy({ title: "", body }, [id]).length > 0) return body;
+  const at = headingOccurrencesOf(body, CRITERIA_HEADING)[0];
+  if (at === undefined) return `${body.trimEnd()}\n\n${CRITERIA_HEADING}\n\n${id}\n`;
+  const headingEnd = body.indexOf("\n", at);
+  const cut = headingEnd === -1 ? body.length : headingEnd;
+  return `${body.slice(0, cut)}\n\n${id}${body.slice(cut).replace(/^\n+/, "\n")}`;
 }
 
 /**
