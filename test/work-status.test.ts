@@ -1188,7 +1188,7 @@ describe("#1944: the report names local work every run, from the one decider", (
     };
 
     const headings = calls.filter(
-      c => callee(c) === "bar" && ts.isStringLiteral(c.arguments[0]) &&
+      c => callee(c) === "bar" && c.arguments.length > 0 && ts.isStringLiteral(c.arguments[0]) &&
         `bar("${c.arguments[0].text}`.startsWith(SECTION_START),
     );
     const readings = calls.filter(c => callee(c) === "readLocalWork");
