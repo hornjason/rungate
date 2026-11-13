@@ -48,6 +48,7 @@ import {
   ScReservationExhaustedError,
 } from "../lib/create-sc";
 import {
+  blocksInNamespace,
   lowestFreeInBlock,
   readScReservations,
   RESERVATION_REFUSAL,
@@ -55,6 +56,7 @@ import {
   reservationsFor,
   reservedCeiling,
   reservedIdCount,
+  SC_NAMESPACE,
   SC_RESERVATIONS_PATH,
   type ScReservation,
 } from "../lib/sc-reservations";
@@ -649,11 +651,17 @@ describe("#1363: a block declares which namespace its integers belong to", () =>
       "the reader and specs/sc-reservations.json disagree about the live blocks, entry by entry",
     ).toEqual([]);
 
-    const ceiling = reservedCeiling(r.blocks);
+    // The allocator binds SC blocks only. An FG or AR block in flight claims
+    // the same integers in another namespace and must move nothing here, so
+    // the ceiling is read over the SC blocks — #2086 found this row red on
+    // the first live store holding an FG block and no SC one, where the
+    // whole-store ceiling read 280 and the allocator, correctly, read 1.
+    const scBlocks = blocksInNamespace(r.blocks, SC_NAMESPACE);
+    const ceiling = reservedCeiling(scBlocks);
     expect(
       allocateAgainstReservations(1, r.blocks, null, new Set()),
-      r.blocks.length === 0
-        ? "an EMPTY live store moved the floor — it reserves nothing, so it must bind nothing"
+      scBlocks.length === 0
+        ? "a live store with no SC block moved the floor — it reserves no SC id, so it must bind nothing"
         : "an untagged live block stopped binding the allocator",
     ).toBe(ceiling + 1);
     // `reservedCeiling([])` is 0, so the line above reads `1` either way and
@@ -661,10 +669,10 @@ describe("#1363: a block declares which namespace its integers belong to", () =>
     // says WHICH state was measured, so an empty store is a recorded reading
     // rather than a silent pass — `.claude/rules/config-access.md`, Silent
     // Default Substitution.
-    if (r.blocks.length === 0) {
-      expect(ceiling, "an empty store reserved something").toBe(0);
+    if (scBlocks.length === 0) {
+      expect(ceiling, "a store with no SC block reserved an SC id").toBe(0);
     } else {
-      expect(ceiling, "a populated store reserved nothing").toBeGreaterThan(0);
+      expect(ceiling, "a store with SC blocks reserved nothing").toBeGreaterThan(0);
     }
   });
 

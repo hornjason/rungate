@@ -106,8 +106,10 @@ import {
   listPRs,
   parseOwnerRepo,
   TRUSTED_ASSOCIATIONS,
+  type GitHubClient,
   type OpenIssuePage,
 } from "./github";
+import { closedIssueCounts } from "./issue-decomposition";
 import { branchOf, toplevel } from "./launch-base";
 import { readWorktreeRemote, repoSlug, type RemoteReading } from "./worktree-repo";
 import {
@@ -461,6 +463,18 @@ export type FilingCapReading = {
    * `unreadable` is false; the note's default names the `ship` block.
    */
   unreadableSource?: string;
+  /**
+   * The cap is the DIRECT-ship allowance, derived from `ship.mode` — not a
+   * `board.filingsPerRun` override, not harness mode, not a fallback (#2086).
+   *
+   * The only cap ADR-016's net-growth ceiling may replace. A project that
+   * wrote its own number chose it, harness mode keeps its cap of 1 (the
+   * ADR's *Not decided here*), and a cap nobody could read must never be a
+   * route to the larger number. Carried on this reading, rather than asked
+   * again from the config, so one decider answers both "what is the cap" and
+   * "where did it come from".
+   */
+  direct: boolean;
 };
 
 /**
@@ -507,13 +521,14 @@ export function filingsPerRunFor(
     // block is touched: it does not depend on the ship block, so a corrupt
     // one must not be able to discard it (review of #2075).
     const override = filingCapOverride(config);
-    if (typeof override === "number") return { cap: override, unreadable: false };
+    if (typeof override === "number") return { cap: override, unreadable: false, direct: false };
     if (override === "unusable") {
-      return { cap: FILINGS_PER_RUN, unreadable: true, unreadableSource: FILING_CAP_OVERRIDE_SOURCE };
+      return { cap: FILINGS_PER_RUN, unreadable: true, unreadableSource: FILING_CAP_OVERRIDE_SOURCE, direct: false };
     }
-    return { cap: filingsPerRun(resolveShipPolicy(config)), unreadable: false };
+    const policy = resolveShipPolicy(config);
+    return { cap: filingsPerRun(policy), unreadable: false, direct: policy.mode === "direct" };
   } catch {
-    return { cap: FILINGS_PER_RUN, unreadable: true };
+    return { cap: FILINGS_PER_RUN, unreadable: true, direct: false };
   }
 }
 
@@ -667,6 +682,254 @@ export const QUEUE_FILINGS_PER_RUN = 2 * FILINGS_PER_RUN_DIRECT;
  */
 export function capForClause(queuedBy: string | null, runCap: number): number {
   return queuedBy === null ? runCap : Math.max(runCap, QUEUE_FILINGS_PER_RUN);
+}
+
+/**
+ * The per-run cap while the repository closes issues at least as fast as it
+ * opens them (ADR-016, #2086).
+ *
+ * ## What the cap was for, and what it measured instead
+ *
+ * The cap exists for rule 7's warning: opened faster than closed, the
+ * backlog diverges however fast the work goes. It measured every
+ * `gh issue create` instead. On 2026-11-13 the repository opened 30 issues
+ * and closed 28 in a day — a backlog that was not diverging — and the cap
+ * still refused work Jason had agreed: the README (#2081) and a split he had
+ * asked for (#2082) were filed by hand.
+ *
+ * So the count changes and nothing else does. While trailing-day
+ * *opened − closed* is zero or below, every run's cap is this number. Above
+ * zero, or when the count cannot be read, it is the ship-mode cap, so the
+ * fallback is always the lower number. The duplicate, no-claim and
+ * comment-instead refusals are untouched — a review finding still defaults to
+ * a PR comment.
+ *
+ * ## Why 36
+ *
+ * Jason's number, after the dry run. Three times `FILINGS_PER_RUN_DIRECT`,
+ * and still well under the 57 a day `FG-194` was written against. One runaway
+ * session that pushes opened above closed drops every run back to 12 within
+ * the window, which is the bound `FG-194` exists to keep.
+ *
+ * `FG-274` holds the value; `netGrowthCeiling` is the only reader.
+ */
+export const NET_GROWTH_CEILING = 36;
+
+/**
+ * The repository's trailing-day issue counts, or why they could not be read.
+ *
+ * `UNMEASURED` is never zeros. Zero opened and zero closed is a quiet day and
+ * earns the ceiling; a count nobody took earns nothing.
+ */
+export type NetGrowthReading =
+  | { reading: "MEASURED"; opened: number; closed: number }
+  | { reading: "UNMEASURED"; why: string };
+
+/**
+ * What set a run's cap, as the ledger row records it (#2086).
+ *
+ * The measured counts plus whether the ceiling applied, or the UNMEASURED
+ * reading as it was taken. `null` where the ceiling was never consulted —
+ * harness mode, an explicit `board.filingsPerRun`, an unreadable config —
+ * because no count was read for a cap the ceiling cannot reach.
+ */
+export type NetGrowthBasis =
+  | { reading: "MEASURED"; opened: number; closed: number; ceiling: boolean }
+  | { reading: "UNMEASURED"; why: string };
+
+/**
+ * **The one decider: the run's cap, given its ship-mode cap and the count.**
+ *
+ * Returns the cap with the basis that set it, so the refusal and the ledger
+ * row cannot describe a different decision from the one enforced.
+ *
+ * - Not the direct-ship allowance (`allowance.direct` false): the cap
+ *   stands, records nothing, and **the count is never read**.
+ * - Count unreadable, or the reader throws: the cap stands, and the reading
+ *   is recorded as UNMEASURED. Never the ceiling — the fail-closed direction.
+ * - opened − closed ≤ 0: `NET_GROWTH_CEILING`.
+ * - opened − closed > 0: the cap stands.
+ *
+ * **It takes a THUNK, and that is what keeps eligibility to one site.** With
+ * a value, the caller has to decide whether to read before calling, and that
+ * guard and the one in here are two deciders over one question — mutate
+ * either and the other holds the harness case up
+ * (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape). The
+ * catch lives here too, because this runs inside a PreToolUse hook where a
+ * throw blocks every filing on the machine.
+ *
+ * The engine raise is applied AFTER this, by `capForClause`, exactly as
+ * before: a queued clause gets the larger of this and `QUEUE_FILINGS_PER_RUN`.
+ */
+export async function netGrowthCeiling(
+  allowance: FilingCapReading,
+  read: () => Promise<NetGrowthReading>,
+): Promise<{ cap: number; basis: NetGrowthBasis | null }> {
+  if (!allowance.direct) return { cap: allowance.cap, basis: null };
+  // `then(read)`, not `read()`: a reader that throws SYNCHRONOUSLY would
+  // otherwise escape the catch below.
+  const growth = await Promise.resolve()
+    .then(read)
+    .catch((e: unknown) => unmeasuredGrowth(`the trailing day's issues could not be read (${errorText(e)})`));
+  if (growth.reading !== "MEASURED") return { cap: allowance.cap, basis: growth };
+  const ceiling = growth.opened - growth.closed <= 0;
+  return {
+    cap: ceiling ? NET_GROWTH_CEILING : allowance.cap,
+    basis: { reading: "MEASURED", opened: growth.opened, closed: growth.closed, ceiling },
+  };
+}
+
+/** Rows per page of the trailing-day read: the REST maximum. */
+export const NET_GROWTH_PER_PAGE = 100;
+
+/**
+ * Pages the trailing-day read walks before it gives up as UNMEASURED.
+ *
+ * 1,000 issues and pull requests touched in a day is several times anything
+ * this repository has seen, and the read runs inside a PreToolUse hook. A
+ * walk that hits the bound reports that it did not finish rather than
+ * returning the count it had, because a partial count is a wrong count — it
+ * can be missing opens as easily as closes.
+ */
+export const NET_GROWTH_MAX_PAGES = 10;
+
+function unmeasuredGrowth(why: string): NetGrowthReading {
+  return { reading: "UNMEASURED", why };
+}
+
+/** A thrown value as a bounded sentence fragment, for an UNMEASURED `why`. */
+function errorText(e: unknown): string {
+  return (e instanceof Error ? e.message : String(e)).slice(0, 200);
+}
+
+/**
+ * Count the issues opened and closed in the trailing `RUN_WINDOW_MS` (#2086).
+ *
+ * One `listForRepo` walk with `state: "all"` and `since` at the window's
+ * start. `since` filters on `updated_at`, and both opening and closing an
+ * issue update it, so every row that can count is inside the walk; rows
+ * merely touched in the window are read and counted as neither.
+ *
+ * - **Pull requests are not issues.** The endpoint returns them as issues and
+ *   every one carries a `pull_request` key — `listOpenIssues` drops them for
+ *   the same reason.
+ * - **Opened** is every issue created in the window, by anyone. Counting a
+ *   stranger's issue can only push the cap DOWN.
+ * - **Closed** is an issue closed in the window that `closedIssueCounts`
+ *   accepts: closed as completed, opened by somebody who can merge. On a
+ *   public repository anyone can open an issue and close it themselves, and
+ *   a close that counted would be a stranger raising our cap.
+ *
+ * A page that is not a list, a row without a readable `created_at`, or a walk
+ * that has not finished at `maxPages` is UNMEASURED, never a partial count.
+ */
+export async function countNetGrowth(
+  client: GitHubClient,
+  repoSlug: string,
+  nowMs: number,
+  maxPages: number = NET_GROWTH_MAX_PAGES,
+): Promise<NetGrowthReading> {
+  const { owner, repo } = parseOwnerRepo(repoSlug);
+  const from = nowMs - RUN_WINDOW_MS;
+  const since = new Date(from).toISOString();
+  let opened = 0;
+  let closed = 0;
+  for (let page = 1; page <= maxPages; page++) {
+    const response = await client.rest.issues.listForRepo({
+      owner,
+      repo,
+      state: "all",
+      since,
+      per_page: NET_GROWTH_PER_PAGE,
+      page,
+    });
+    const rows: unknown = response?.data;
+    if (!Array.isArray(rows)) {
+      return unmeasuredGrowth(`page ${page} of ${repoSlug}'s trailing-day issues was not a list`);
+    }
+    for (const row of rows) {
+      if (row === null || typeof row !== "object") {
+        return unmeasuredGrowth(`page ${page} of ${repoSlug}'s trailing-day issues held a malformed row`);
+      }
+      const r = row as Record<string, unknown>;
+      if (r.pull_request !== undefined) continue;
+      const created = typeof r.created_at === "string" ? Date.parse(r.created_at) : Number.NaN;
+      if (!Number.isFinite(created)) {
+        return unmeasuredGrowth(`issue ${String(r.number)} on ${repoSlug} has no readable created_at`);
+      }
+      if (created >= from) opened += 1;
+      const closedAt = r.state === "closed" && typeof r.closed_at === "string" ? Date.parse(r.closed_at) : Number.NaN;
+      if (
+        Number.isFinite(closedAt) &&
+        closedAt >= from &&
+        closedIssueCounts({
+          state_reason: typeof r.state_reason === "string" ? r.state_reason : null,
+          author_association: typeof r.author_association === "string" ? r.author_association : "",
+        })
+      ) {
+        closed += 1;
+      }
+    }
+    if (rows.length < NET_GROWTH_PER_PAGE) return { reading: "MEASURED", opened, closed };
+  }
+  return unmeasuredGrowth(
+    `more than ${maxPages * NET_GROWTH_PER_PAGE} issues and pull requests on ${repoSlug} changed in the ` +
+      "trailing day, so the count was not finished",
+  );
+}
+
+/**
+ * The live trailing-day reading for the checkout at `projectRoot` (#2086).
+ *
+ * The same route the dedupe corpus takes — the repository slug from
+ * `resolveRepoSlug`, an Octokit client from the environment's token, the
+ * `OPEN_ISSUE_TIMEOUT_MS` ceiling — so a session that can read its tracker
+ * for one can read it for the other. `connect` is injectable so a test can
+ * hand in a client that lives in memory.
+ *
+ * Every failure is UNMEASURED with its reason: no slug, no token, a 401, a
+ * timeout, a walk that did not finish. That is the fail-closed direction —
+ * `netGrowthCeiling` gives an unread count the ship-mode cap.
+ */
+export async function readNetGrowth(
+  projectRoot: string,
+  nowMs: number,
+  connect: () => GitHubClient = createGitHubClient,
+): Promise<NetGrowthReading> {
+  try {
+    const slug = resolveRepoSlug({ projectRoot }).slug;
+    if (slug === null) return unmeasuredGrowth("no repository slug could be resolved for this checkout");
+    return await withTimeout(countNetGrowth(connect(), slug, nowMs), OPEN_ISSUE_TIMEOUT_MS);
+  } catch (e) {
+    return unmeasuredGrowth(`the trailing day's issues could not be read (${errorText(e)})`);
+  }
+}
+
+/**
+ * The sentence a cap refusal carries about what set the cap (#2086).
+ *
+ * `null` where the ceiling was never consulted, so a harness-mode refusal
+ * reads exactly as it did before. The word UNMEASURED is spelled out: an
+ * unread count that read like a measured one would be the Silent Default
+ * Substitution `.claude/rules/config-access.md` names.
+ */
+export function netGrowthSentence(basis: NetGrowthBasis | null | undefined): string | null {
+  // `undefined` too: a ledger row written before the column existed carries
+  // none, and that row is a refusal with nothing to say about the ceiling.
+  if (basis === null || basis === undefined) return null;
+  const window = `${RUN_WINDOW_MS / 3_600_000}h`;
+  if (basis.reading === "UNMEASURED") {
+    return (
+      `Whether the repository closed as many issues as it opened in the last ${window} is UNMEASURED ` +
+      `(${basis.why}), so the net-growth ceiling of ${NET_GROWTH_CEILING} does not apply and the cap is ` +
+      "the ship-mode one (ADR-016)."
+    );
+  }
+  const counts = `The repository opened ${basis.opened} and closed ${basis.closed} issue(s) in the last ${window}`;
+  return basis.ceiling
+    ? `${counts}, so the net-growth ceiling of ${NET_GROWTH_CEILING} applies (ADR-016).`
+    : `${counts}: opening outran closing, so the net-growth ceiling of ${NET_GROWTH_CEILING} does not ` +
+        "apply and the cap is the ship-mode one (ADR-016).";
 }
 
 /**
@@ -1138,10 +1401,18 @@ export function overCapReason(
   already: number,
   target: CommentTarget,
   cap: number,
+  /**
+   * What set the cap (#2086). Required, for the reason `cap` is: a site that
+   * forgot it would refuse without saying whether the ceiling applied.
+   * `null` where the ceiling was never consulted.
+   */
+  growth: NetGrowthBasis | null,
 ): string {
+  const basis = netGrowthSentence(growth);
   return [
     `this run has already filed ${already} issue(s) in the last ${RUN_WINDOW_MS / 3_600_000}h, and the cap is ` +
       `${cap}. The overflow is a comment.`,
+    ...(basis === null ? [] : ["", `  ${basis}`]),
     "",
     `  ${commentTargetSentence(target)}`,
     "",
@@ -1604,6 +1875,18 @@ export interface FilingLedgerRow {
    * raise on trust.
    */
   queuedBy?: string | null;
+  /**
+   * What set this run's cap (#2086, ADR-016): the repository's trailing-day
+   * opened and closed counts and whether the net-growth ceiling applied, or
+   * the UNMEASURED reading with why.
+   *
+   * `null` where the ceiling was never consulted — harness mode, an explicit
+   * `board.filingsPerRun`, an unreadable config — and absent on every row
+   * written before this existed and on rows from writers that cap nothing.
+   * On EVERY row of a direct-ship command, admitted or refused, for the
+   * reason `queuedBy` is: *how often does the ceiling apply* is a ratio.
+   */
+  netGrowth?: NetGrowthBasis | null;
   at: string;
   /**
    * This row, told apart from every other row on a shared ledger (#1318).
@@ -3079,6 +3362,13 @@ export async function filingGate(
      * every agent the power to write its own exemption.
      */
     readPlan?: PlanSource;
+    /**
+     * The repository's trailing-day opened and closed issue counts, for the
+     * net-growth ceiling (#2086). Injectable for the reason `readExisting`
+     * is — the live one, `readNetGrowth`, talks to GitHub. Only called when
+     * the ceiling can apply, so a harness-mode filing pays no read.
+     */
+    readGrowth?: (projectRoot: string, nowMs: number) => Promise<NetGrowthReading>;
   },
 ): Promise<FilingGateReading> {
   const attempts = filingAttempts(cmd);
@@ -3107,7 +3397,13 @@ export async function filingGate(
   // avoid one line below. A config that cannot be read resolves to the
   // STRICT cap — `filingsPerRunFor`.
   const allowance = filingsPerRunFor(() => tryLoadRungateConfig(root));
-  const cap = allowance.cap;
+  // The net-growth ceiling (ADR-016), resolved ONCE per command for the same
+  // reason. `netGrowthCeiling` is the one decider — it alone decides whether
+  // the count is read at all — and every cap consumer below reads `cap`, and
+  // every refusal and row reads `growth.basis`.
+  const readGrowth = options.readGrowth ?? readNetGrowth;
+  const growth = await netGrowthCeiling(allowance, () => readGrowth(root, Date.parse(at)));
+  const cap = growth.cap;
   // The work queue's name, resolved ONCE per command for the same reason the
   // allowance is: per clause would let two clauses of one command be
   // adjudicated against two different queues if the config moved underneath
@@ -3453,7 +3749,7 @@ export async function filingGate(
             refusal: uncountable ? "UNMEASURED_CAP" : "OVER_CAP",
             reason: uncountable
               ? uncountableReason(await targetFor(attempt.repo))
-              : overCapReason(run, spent, await targetFor(attempt.repo), clauseCap),
+              : overCapReason(run, spent, await targetFor(attempt.repo), clauseCap, growth.basis),
           }
         : read2;
     const overridden = overrideOf(verdict);
@@ -3493,6 +3789,7 @@ export async function filingGate(
       exemption: verdict.exemption,
       plannedBy: planned.planned ? `${planned.plan}:${planned.line}` : null,
       queuedBy,
+      netGrowth: growth.basis,
       run,
     });
 
@@ -3711,7 +4008,7 @@ export async function filingGate(
       // to the wrong fact.
       const reason =
         reading.outcome === "LOST"
-          ? overCapReason(run, reading.already, target, rowCap)
+          ? overCapReason(run, reading.already, target, rowCap, growth.basis)
           : reading.outcome === "UNRESERVED"
             ? unreservedCapReason(run, target, rowCap)
             : uncountableReason(target);
