@@ -16,6 +16,7 @@ import {
   generateReport,
   scopedKey,
   findDuplicateSCIds,
+  selectOnly,
   type UncheckedSC,
 } from "../scripts/sync-sc-status";
 
@@ -250,5 +251,36 @@ testable: true
 
   test("scopedKey format is specFile::id", () => {
     expect(scopedKey("MY-SPEC.md", "SC-123")).toBe("MY-SPEC.md::SC-123");
+  });
+});
+
+/**
+ * #2054: `--only <id>` ticks the named criteria and nothing else. Without it
+ * the tool flips every criterion a test claims, across every spec — 40 on
+ * 2026-11-13 — so one criterion could not be ticked without forty.
+ */
+describe("#2054: --only narrows the flip to the named criteria", () => {
+  const bySpec = new Map([
+    ["SPEC-A.md", ["SC-1", "SC-2"]],
+    ["SPEC-B.md", ["SC-3"]],
+  ]);
+
+  test("null keeps every passing criterion, as before", () => {
+    const r = selectOnly(bySpec, null);
+    expect(r.missing).toEqual([]);
+    expect([...r.selected]).toEqual([...bySpec]);
+  });
+
+  test("named ids keep only themselves, and a spec left empty is dropped", () => {
+    const r = selectOnly(bySpec, ["SC-2"]);
+    expect(r.missing).toEqual([]);
+    expect([...r.selected]).toEqual([["SPEC-A.md", ["SC-2"]]]);
+  });
+
+  test("an id that is not passing is MISSING, never silently skipped", () => {
+    // A typo, or a criterion no test proves, must refuse: flipping zero and
+    // exiting clean reads exactly like a successful tick.
+    const r = selectOnly(bySpec, ["SC-2", "SC-9"]);
+    expect(r.missing).toEqual(["SC-9"]);
   });
 });

@@ -1770,4 +1770,17 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
       expect(types.split(",").map(x => x.trim()), `board-ready must run on issues: ${t}`).toContain(t);
     }
   });
+
+  test("SC-2741: issues enter by filing, never by transfer — board-intake runs on opened, not transferred", () => {
+    // Jason, 2026-11-12, #1752: an issue reaches the board by being filed.
+    // `transferred` stays off the trigger by decision, and because GitHub does
+    // not say which side receives it — on the source it would add an issue
+    // that just LEFT.
+    const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "board-intake.yml"), "utf-8");
+    const block = /^on:\s*\n\s+issues:\s*\n(?:\s*#.*\n)*\s*types:\s*\[([^\]]*)\]/m.exec(yml)?.[1] ?? "";
+    expect(block, "the issues trigger must be readable, or this row witnesses nothing").not.toBe("");
+    const types = block.split(",").map(x => x.trim());
+    expect(types, "an issue enters by being filed").toContain("opened");
+    expect(types, "issues never enter by transfer (#1752)").not.toContain("transferred");
+  });
 });

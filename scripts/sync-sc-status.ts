@@ -47,6 +47,15 @@ const SPECS_DIR = join(ROOT, "specs");
 const TEST_DIR = join(ROOT, "test");
 const dryRun = process.argv.includes("--dry-run");
 const reportMode = process.argv.includes("--report");
+/**
+ * `--only SC-1,SC-2` (#2054): flip only these. Absent means every passing
+ * criterion, as before. A flag with no value is a mistake, not "all".
+ */
+const onlyAt = process.argv.indexOf("--only");
+const onlyIds: string[] | null =
+  onlyAt === -1
+    ? null
+    : (process.argv[onlyAt + 1] ?? "").split(",").map(x => x.trim()).filter(x => x !== "" && !x.startsWith("--"));
 
 export interface UncheckedSC {
   id: string;
@@ -682,6 +691,27 @@ export function checkConformitySCs(uncheckedSCs: UncheckedSC[], root: string): C
   return { passing, failing, unmatchable };
 }
 
+/**
+ * Narrow the per-spec flip list to `only` (#2054). Returns the ids asked for
+ * that are not passing as `missing`, so the caller refuses rather than
+ * flipping zero and exiting clean — the same observable as a real tick.
+ */
+export function selectOnly(
+  bySpec: ReadonlyMap<string, readonly string[]>,
+  only: readonly string[] | null,
+): { selected: Map<string, string[]>; missing: string[] } {
+  if (only === null) return { selected: new Map([...bySpec].map(([k, v]) => [k, [...v]])), missing: [] };
+  const want = new Set(only);
+  const selected = new Map<string, string[]>();
+  const found = new Set<string>();
+  for (const [spec, ids] of bySpec) {
+    const kept = ids.filter(id => want.has(id));
+    for (const id of kept) found.add(id);
+    if (kept.length > 0) selected.set(spec, kept);
+  }
+  return { selected, missing: only.filter(id => !found.has(id)) };
+}
+
 export function flipCheckboxes(specFile: string, scIds: string[], specsDir?: string, isDryRun?: boolean): number {
   const dir = specsDir || SPECS_DIR;
   const filePath = join(dir, specFile);
@@ -937,8 +967,21 @@ if (isDirectExecution) {
     }
   }
 
+  if (onlyIds !== null && onlyIds.length === 0) {
+    console.error("--only needs a comma-separated list of criterion ids");
+    process.exit(1);
+  }
+  const { selected, missing } = selectOnly(bySpec, onlyIds);
+  if (missing.length > 0) {
+    console.error(
+      `--only: ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not among the criteria a ` +
+        `passing test claims, so nothing was flipped`,
+    );
+    process.exit(1);
+  }
+
   let totalFlipped = 0;
-  for (const [specFile, scs] of bySpec) {
+  for (const [specFile, scs] of selected) {
     const flipped = flipCheckboxes(specFile, scs);
     if (flipped > 0) {
       console.log(`${dryRun ? "Would flip" : "Flipped"} ${flipped} SCs in ${specFile}: ${scs.join(", ")}`);
