@@ -299,7 +299,11 @@ const UNCLAIMED_RATCHET = 150;
 // what triggers its refill, which no registered pattern expresses; its
 // `SC-2741:` cases in test/board-ready-rule.test.ts, test/board-mirror.test.ts
 // and test/board-ready-fanout.test.ts name it in a declaring position.
-const CLAIMED_UNBINDABLE = 158;
+// 158 -> 159: SC-2617 ticked by `sync-sc-status --only SC-2617` on the PR
+// closing #2056. A claim about which edges the tracker carries, which no
+// registered pattern expresses; test/plan-deps.test.ts and
+// test/board-snapshot.test.ts name it in a declaring position.
+const CLAIMED_UNBINDABLE = 159;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
