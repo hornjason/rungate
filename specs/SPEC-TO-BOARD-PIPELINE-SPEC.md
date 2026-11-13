@@ -344,7 +344,7 @@ acceptance test, so it is also the honest answer to *when is the engine done*
 - Every criterion in every spec is reachable from the board: a milestone, an
   issue, or an explicit "not started".
 - `rungate plan-deps` with no `--write` reports no missing edge.
-- [ ] SC-2750: lib/bash-write-guard.ts contains [heredocInterpreter] — a gh issue create reached through a heredoc — inside a subshell, a brace group, a continued line or eval — is metered by the filing cap as a filing attempt, never passed unmetered
+- [ ] SC-2750: lib/issue-filing-gate.ts contains [heredocFilingReach] — a gh issue create reached through a heredoc — inside a subshell, a brace group, a continued line or eval — is metered by the filing cap as a filing attempt, never passed unmetered
 - [ ] SC-2751: lib/issue-closure-audit.ts contains [openWithMergedCloser] — a merged pull request whose closing reference names an issue that is still open is reported naming both, so shipped work never reads as outstanding
 - [ ] SC-2752: scripts/board-conformance.ts contains [declaredWorkUnaccounted] — every unticked criterion in an in-scope spec and every open stage item in project-state.json names an open issue, or board-conformance reports it as unaccounted, by name
 - [ ] SC-2753: lib/issue-filing-gate.ts contains [committedFilingCap] — the filing cap's size and ceiling are read from committed config only, so a working-tree edit cannot raise an agent's own cap

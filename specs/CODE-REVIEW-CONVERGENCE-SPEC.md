@@ -372,7 +372,7 @@ refuses it unless every criterion says what would prove it and every ticked crit
 says what did. The rule and the checker shipped in #1639; this is the first document
 retrofitted onto them, and the second bound to them at all.
 
-Every one of the 61 criteria carries a `needs:` line naming one of `test`,
+Every criterion carries a `needs:` line naming one of `test`,
 `measurement`, `run` or `review` — what KIND of proof it will take, which is a statement
 this document can make today about work nobody has started. Ticked criteria also carry
 `proved-by:` naming what was run, and `fingerprint:` binding that evidence to the

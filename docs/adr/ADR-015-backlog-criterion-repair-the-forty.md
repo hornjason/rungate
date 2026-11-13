@@ -186,7 +186,7 @@ issue's full evidence is added to its body after filing.
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
-| SC-2612 | finding-promotion completes a promotion with no hand step after it | lib/finding-promotion.ts, scripts/finding-promotion.ts, lib/create-sc.ts, test/finding-promotion.test.ts, test/criterion-provenance.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
+| SC-2612 | finding-promotion completes a promotion with no hand step after it and refuses a symbol its module already defines | lib/finding-promotion.ts, scripts/finding-promotion.ts, lib/create-sc.ts, test/finding-promotion.test.ts, test/criterion-provenance.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
 | SC-2737 | closing-references reads the criterion question through criterionAnswer | lib/closing-reference-audit.ts, scripts/audit-closing-references.ts, lib/board-mirror.ts, test/audit-closing-references.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
 | SC-2609 | A hand-milestoned engine issue gets its queue label and Criteria cell | .github/workflows/phase-order.yml, scripts/board-mirror.ts, test/phase-order-workflow.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
 | SC-2741 | work-this-next refuses an issue labelled needs-criterion and work-status shows the count | lib/board-ready-rule.ts, test/board-ready-rule.test.ts, scripts/work-status.ts, test/work-status.test.ts | Pipeline Phase 6 — the board's state is a reading | #2037 |
