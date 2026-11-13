@@ -1380,7 +1380,7 @@
         },
         {
           "id": "B4",
-          "what": "the board's Criteria field populated for every engine issue — a DISPLAY MIRROR; the issue body stays the source of truth, because `gh issue list --json projectItems` returns Status only and cannot see custom fields. REOPENED 2026-11-09: it was done for the population it was measured on and fell to 5 of 8 the moment three issues were filed into Pipeline Phase 7. `board-mirror` is the column's only writer, no workflow invokes it, and it reads no project token — so it authenticates as the gh CLI user and GitHub refuses every ProjectV2 field. Measured on #1945.",
+          "what": "the board's Criteria field populated for every engine issue — a DISPLAY MIRROR; the issue body stays the source of truth, because `gh issue list --json projectItems` returns Status only and cannot see custom fields. Written by board-mirror from adr-accepted.yml with RUNGATE_PROJECT_TOKEN, so only an ADR merge fills it. REOPENED 2026-11-09 when three Phase 7 filings dropped it to 5 of 8. Reads MET 22 of 22 on 2026-11-13 but is HELD for #2035's reason: a hand-milestoned engine issue gets no cell until #2062 lands, and a done item runs live in CI.",
           "done": false,
           "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --prefix Pipeline --repo hornjason/rungate --reading criteria-field"
         },
