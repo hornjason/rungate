@@ -157,13 +157,16 @@ Each criterion below is the text Jason approved. Written into its spec by
 ## Decomposition — the gaps this repair's dry runs found
 
 Filed by `adr-accepted.yml` when this ADR merges (Jason, 2026-11-12: "we
-should file all 7"). Four of the seven serve a criterion and are rows here;
+should file all 7"). The first row was added after Jason's "should be no
+handcrafting": each promotion above needed hand edits the tool should have
+made, so the seven specs not yet written wait for it. Four of the seven serve a criterion and are rows here;
 the three that serve none (the milestone-placing repair, the converter that
 rewrote SC-2747, D4's parser binding) are filed as ordinary issues. Each
 issue's full evidence is added to its body after filing.
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
+| SC-2612 | finding-promotion completes a promotion with no hand step after it | lib/finding-promotion.ts, scripts/finding-promotion.ts, lib/create-sc.ts, test/finding-promotion.test.ts, test/criterion-provenance.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
 | SC-2737 | closing-references reads the criterion question through criterionAnswer | lib/closing-reference-audit.ts, scripts/audit-closing-references.ts, lib/board-mirror.ts, test/audit-closing-references.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
 | SC-2741 | A hand-milestoned engine issue gets its queue label and Criteria cell | .github/workflows/phase-order.yml, scripts/board-mirror.ts, test/phase-order-workflow.test.ts | Pipeline Phase 6 — the board's state is a reading | — |
 | SC-2741 | work-this-next refuses an issue labelled needs-criterion and work-status shows the count | lib/board-ready-rule.ts, test/board-ready-rule.test.ts, scripts/work-status.ts, test/work-status.test.ts | Pipeline Phase 6 — the board's state is a reading | board-mirror takes the active milestone from repository issues like board-ready |
