@@ -699,17 +699,30 @@ export function checkConformitySCs(uncheckedSCs: UncheckedSC[], root: string): C
 export function selectOnly(
   bySpec: ReadonlyMap<string, readonly string[]>,
   only: readonly string[] | null,
-): { selected: Map<string, string[]>; missing: string[] } {
-  if (only === null) return { selected: new Map([...bySpec].map(([k, v]) => [k, [...v]])), missing: [] };
+): {
+  selected: Map<string, string[]>;
+  missing: string[];
+  /** A bare id passing in more than one spec: flipping it would reach both (#330). */
+  ambiguous: { id: string; specs: string[] }[];
+} {
+  if (only === null) {
+    return { selected: new Map([...bySpec].map(([k, v]) => [k, [...v]])), missing: [], ambiguous: [] };
+  }
   const want = new Set(only);
   const selected = new Map<string, string[]>();
-  const found = new Set<string>();
+  const specsOf = new Map<string, string[]>();
   for (const [spec, ids] of bySpec) {
     const kept = ids.filter(id => want.has(id));
-    for (const id of kept) found.add(id);
+    for (const id of kept) specsOf.set(id, [...(specsOf.get(id) ?? []), spec]);
     if (kept.length > 0) selected.set(spec, kept);
   }
-  return { selected, missing: only.filter(id => !found.has(id)) };
+  return {
+    selected,
+    missing: only.filter(id => !specsOf.has(id)),
+    ambiguous: [...specsOf]
+      .filter(([, specs]) => specs.length > 1)
+      .map(([id, specs]) => ({ id, specs: [...specs].sort() })),
+  };
 }
 
 export function flipCheckboxes(specFile: string, scIds: string[], specsDir?: string, isDryRun?: boolean): number {
@@ -950,12 +963,9 @@ if (isDirectExecution) {
     }
   }
 
-  // Step 5: Flip passing SCs
-  if (passingSCs.size === 0) {
-    console.log("No SCs to flip");
-    process.exit(0);
-  }
-
+  // Step 5: Flip passing SCs. `--only` is decided BEFORE the empty-list exit
+  // (review of #2058): an exit here first turned a typo on a quiet tree into
+  // "No SCs to flip" and exit 0, the same observable as a real tick.
   // Group passing SCs by spec file and flip — scoped keys prevent cross-spec bleeding
   const bySpec = new Map<string, string[]>();
   for (const sc of unchecked) {
@@ -971,13 +981,24 @@ if (isDirectExecution) {
     console.error("--only needs a comma-separated list of criterion ids");
     process.exit(1);
   }
-  const { selected, missing } = selectOnly(bySpec, onlyIds);
+  const { selected, missing, ambiguous } = selectOnly(bySpec, onlyIds);
   if (missing.length > 0) {
     console.error(
       `--only: ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not among the criteria a ` +
         `passing test claims, so nothing was flipped`,
     );
     process.exit(1);
+  }
+  if (ambiguous.length > 0) {
+    console.error(
+      `--only: ${ambiguous.map(a => `${a.id} passes in ${a.specs.join(" and ")}`).join("; ")} — a bare ` +
+        `id would be flipped in every one, so nothing was flipped`,
+    );
+    process.exit(1);
+  }
+  if (selected.size === 0) {
+    console.log("No SCs to flip");
+    process.exit(0);
   }
 
   let totalFlipped = 0;

@@ -283,4 +283,26 @@ describe("#2054: --only narrows the flip to the named criteria", () => {
     const r = selectOnly(bySpec, ["SC-2", "SC-9"]);
     expect(r.missing).toEqual(["SC-9"]);
   });
+
+  test("with nothing passing at all, a named id is still MISSING", () => {
+    // Review of #2058: an early "No SCs to flip" exit used to run before the
+    // --only check, so a typo on a quiet tree exited 0.
+    expect(selectOnly(new Map(), ["SC-9"]).missing).toEqual(["SC-9"]);
+  });
+
+  test("an id passing in two specs is AMBIGUOUS, never flipped in both", () => {
+    // Review of #2058: the rest of the script scopes ids by spec (#330); a
+    // bare --only id must not reach every spec that declares it.
+    const twice = new Map([["SPEC-A.md", ["SC-1"]], ["SPEC-B.md", ["SC-1", "SC-3"]]]);
+    const r = selectOnly(twice, ["SC-1"]);
+    expect(r.ambiguous).toEqual([{ id: "SC-1", specs: ["SPEC-A.md", "SPEC-B.md"] }]);
+  });
+
+  test("the script decides --only before it can exit on an empty flip list", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "scripts", "sync-sc-status.ts"), "utf-8");
+    const decided = src.indexOf("selectOnly(bySpec, onlyIds)");
+    const emptyExit = src.indexOf('console.log("No SCs to flip")');
+    expect(decided).toBeGreaterThan(-1);
+    expect(emptyExit).toBeGreaterThan(decided);
+  });
 });
