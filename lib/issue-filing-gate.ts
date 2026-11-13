@@ -488,12 +488,15 @@ export function filingsPerRunFor(
 ): FilingCapReading {
   try {
     const config = load();
-    const derived = filingsPerRun(resolveShipPolicy(config));
+    // The override is read FIRST, and a valid one returns before the ship
+    // block is touched: it does not depend on the ship block, so a corrupt
+    // one must not be able to discard it (review of #2075).
     const override = filingCapOverride(config);
+    if (typeof override === "number") return { cap: override, unreadable: false };
     if (override === "unusable") {
       return { cap: FILINGS_PER_RUN, unreadable: true, unreadableSource: FILING_CAP_OVERRIDE_SOURCE };
     }
-    return { cap: override ?? derived, unreadable: false };
+    return { cap: filingsPerRun(resolveShipPolicy(config)), unreadable: false };
   } catch {
     return { cap: FILINGS_PER_RUN, unreadable: true };
   }

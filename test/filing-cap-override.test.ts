@@ -65,6 +65,22 @@ describe("#2070: board.filingsPerRun sets the cap whatever the ship mode", () =>
     });
   }
 
+  test("a valid override stands even when the ship block is corrupt — it does not depend on it", () => {
+    // Review finding on #2075: the derivation was computed first, so a
+    // ship block `resolveShipPolicy` refuses threw past the override and
+    // the cap fell to the strict 1 with a note blaming the ship block.
+    for (const ship of [{ mode: "dierct" }, { mode: "direct" }, "not an object"]) {
+      const r = filingsPerRunFor(() => ({ ship, board: { filingsPerRun: 5 } }));
+      expect(r, `ship ${JSON.stringify(ship)} discarded a valid override`).toEqual({ cap: 5, unreadable: false });
+    }
+    // CONTROL: with no override the corrupt ship block is still the strict
+    // cap and still reported, exactly as before.
+    expect(filingsPerRunFor(() => ({ ship: { mode: "dierct" } }))).toEqual({
+      cap: FILINGS_PER_RUN,
+      unreadable: true,
+    });
+  });
+
   test("a non-object board block is the strict cap, flagged", () => {
     const r = filingsPerRunFor(() => ({ ship: DIRECT, board: ["filingsPerRun", 9] }));
     expect(r).toEqual({ cap: FILINGS_PER_RUN, unreadable: true, unreadableSource: "`board.filingsPerRun`" });
