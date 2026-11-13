@@ -177,4 +177,21 @@ describe("#1355 BashWriteGuard reads the same reach", () => {
     expect(stripHeredocs(cmd)).toBe(`cat <<'EOF' \\\n> ${TARGET}`);
     expect(decideBashWrite(cmd).blocked).toBe(true);
   });
+
+  test("a backslash inside a comment glued to an operator does not continue the line", () => {
+    // Review of PR #2077: `;#` opens a comment, so the trailing backslash is
+    // comment text and the next line is the BODY. Executed first, because
+    // the shell's reading is the whole question: had bash joined the lines,
+    // the filing would be comment text and the stub would never be called.
+    const opener = `bash <<'EOF' ;# note \\`;
+    const ran = execute("glued-comment", `${opener}\n${filing("probe-glued")}\nEOF\n`);
+    expect(ran.stderr).toBe("");
+    expect(ran.calls).toEqual([logged("probe-glued")]);
+
+    // `continues` and `nest` now ask one predicate where a comment starts;
+    // with the narrower copy, the first body line was swallowed as opener.
+    const cmd = `${opener}\n${write}\nEOF`;
+    expect(interpreterPrograms(cmd).map(p => p.program)).toEqual([write]);
+    expect(stripHeredocs(cmd)).toBe(opener);
+  });
 });

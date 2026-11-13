@@ -997,9 +997,21 @@ function continues(line: string): boolean {
   const open = unquotedPositions(text);
   if (!open[text.length - 1]) return false;
   for (let k = 0; k < text.length; k++) {
-    if (text[k] === '#' && open[k] && (k === 0 || /\s/.test(text[k - 1]))) return false;
+    if (open[k] && opensComment(text, k)) return false;
   }
   return true;
+}
+
+/**
+ * Does an unquoted `text[k]` open a comment? A `#` does when it begins a
+ * word — after whitespace OR an operator, so `;#` is a comment too.
+ *
+ * One predicate for `continues` and `nest` (review of PR #2077): with two
+ * copies, the narrower one read the backslash in `bash <<'EOF' ;# note \`
+ * as a continuation and swallowed the body's first line as opener text.
+ */
+function opensComment(text: string, k: number): boolean {
+  return text[k] === '#' && (k === 0 || /[\s;&|()]/.test(text[k - 1]));
 }
 
 /** The last physical line of the logical line that starts at line `i`. */
@@ -1046,7 +1058,7 @@ function nest(text: string, i: number, stack: Frame[]): number {
     return i + 1;
   }
   const wordStart = i === 0 || /[\s;&|()]/.test(text[i - 1]);
-  if (c === '#' && wordStart) {
+  if (opensComment(text, i)) {
     const nl = text.indexOf('\n', i);
     return nl === -1 ? text.length : nl;
   }
