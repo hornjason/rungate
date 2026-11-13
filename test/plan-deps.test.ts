@@ -139,6 +139,19 @@ describe("#2024 / SC-2617: phases chain within a milestone family, never across 
     expect(plan.unphased.sort()).toEqual([30, 40]);
   });
 
+  test("a plan of nothing but unreadable families names that cause, not phaseOf", () => {
+    // Review of #2055: every title here has a phase `phaseOf` reads, so the
+    // "NONE carries a Phase milestone" message would send a reader to the
+    // wrong function.
+    const plan = dependencyPlan([
+      { number: 30, state: "OPEN", milestone: "Release (Phase 3)", blockedBy: [] },
+      { number: 40, state: "OPEN", milestone: "Docs (Phase 4)", blockedBy: [] },
+    ]);
+    expect(plan.reading).toBe("UNMEASURED");
+    expect(plan.unmeasuredReasons.join(" ")).toContain("family could not be read (#30, #40)");
+    expect(plan.unmeasuredReasons.join(" ")).not.toContain("what phaseOf reads");
+  });
+
   test("bare `Phase N` titles are one family — a repository with no prefix has one sequence", () => {
     // The same reading `familyRank` takes for a null prefix: one family.
     const bare = (number: number, phase: number): DepIssue => ({
