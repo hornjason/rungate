@@ -73,6 +73,33 @@ export function parseOnlyArg(argv: readonly string[]): string[] | null {
   return raw.split(",").map(x => x.trim()).filter(x => x !== "");
 }
 
+/**
+ * Every argument this script does not read, in the order given (#2076).
+ *
+ * The readers above are deliberately lenient about each other, so this is
+ * the one place that knows the whole set. Lenient about everything else
+ * meant `--help` or a typo such as `--dryrun` ran the script in WRITE mode
+ * and ticked every passing criterion in every spec: 38 boxes in six specs
+ * on 2026-11-13. The main block refuses on a non-empty result before it
+ * reads a spec.
+ */
+export function unknownSyncArgs(argv: readonly string[]): string[] {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: { only: { type: "string" }, "dry-run": { type: "boolean" }, report: { type: "boolean" } },
+    strict: false,
+    allowPositionals: true,
+    tokens: true,
+  });
+  const known = new Set(["only", "dry-run", "report"]);
+  const out: string[] = [];
+  for (const t of tokens ?? []) {
+    if (t.kind === "option" && !known.has(t.name)) out.push(t.rawName);
+    else if (t.kind === "positional") out.push(t.value);
+  }
+  return out;
+}
+
 export interface UncheckedSC {
   id: string;
   statement?: string;
@@ -817,6 +844,15 @@ export function generateReport(specCoverage: Map<string, SpecCoverage>): string 
 const isDirectExecution = import.meta.main;
 
 if (isDirectExecution) {
+  // #2076: before any spec is read, so a mistyped flag can never write.
+  const unknownArgs = unknownSyncArgs(process.argv.slice(2));
+  if (unknownArgs.length > 0) {
+    console.error(
+      `sync-sc-status: unknown argument(s): ${unknownArgs.join(" ")}. Nothing was read or written. ` +
+        "It takes --dry-run, --report and --only <SC-id,…>; there is no --help.",
+    );
+    process.exit(1);
+  }
   const unchecked = findUncheckedSCs();
   if (unchecked.length === 0) {
     console.log("All SCs are already checked off");
