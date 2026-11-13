@@ -10,14 +10,17 @@
 # Six issues milestoned by hand on 2026-11-12 got no queue label and no
 # Criteria cell, and `queue-label` and `criteria-field` fell with them (#2020).
 # So this also runs board-mirror twice: once to add the queue label, once to
-# write the Criteria column. And it links the family of the milestone that
-# changed, not only the engine's: #1934 placed in a Convergence phase on
-# 2026-11-13 left `dependency-edges` 9 short because only `Pipeline` was run.
+# write the Criteria column. And it links EVERY milestone family, not only the
+# engine's: #1934 placed in a Convergence phase on 2026-11-13 left
+# `dependency-edges` 9 short because only `Pipeline` was run.
 #
 # Every step is idempotent: each reads the whole tracker or board and writes
-# only what is missing, so it does not matter which issue fired the run, and
-# an issue milestoned by a tool (whose GITHUB_TOKEN write fires no event) is
-# repaired by the next run.
+# only what is missing, and NO step reads which event fired the run. That is
+# load-bearing, not tidy: the concurrency group below drops queued runs, so a
+# step keyed to the firing event's milestone would lose that milestone's work
+# whenever its run was the one dropped (review of #2092). An issue milestoned
+# by a tool (whose GITHUB_TOKEN write fires no event) is repaired by the next
+# run for the same reason.
 #
 # CREDENTIALS, per ADR-013: issues, labels and edges are written with the
 # job's own GITHUB_TOKEN, passed as GITHUB_TOKEN. Those writes fire no further
@@ -85,28 +88,23 @@ jobs:
           PREFIX: ${{ steps.prefix.outputs.prefix }}
         run: bun scripts/plan-deps.ts --repo "$GITHUB_REPOSITORY" --milestone-prefix "$PREFIX" --write
 
-      # #2062: the family of the milestone that fired this run, through
-      # familyOf, the one grammar for a phase title. Written only when it is a
-      # family other than the engine's, which the step above already linked.
-      # familyOf cannot return a newline (it anchors, and `.` stops at one), so
-      # unlike the prefix this cannot forge an output key; the test asserts it.
-      - id: family
-        name: Which family does the changed milestone belong to?
-        env:
-          MILESTONE: ${{ github.event.milestone.title }}
-          PREFIX: ${{ steps.prefix.outputs.prefix }}
-        run: |
-          family=$(bun -e 'import { familyOf } from "./lib/spec-placement"; process.stdout.write(familyOf(process.env.MILESTONE) ?? "")')
-          if [ -n "$family" ] && [ "$family" != "$PREFIX" ]; then
-            echo "family=$family" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Phase-order links for the changed milestone's family
-        if: steps.family.outputs.family != ''
+      # #2062: every OTHER family with an open milestone, read from the tracker
+      # through familyOf, the one grammar for a phase title. Never from the
+      # firing event (see the header). Titles cross as JSON lines, so a title
+      # carrying a newline is one title, not two. A bare `Phase N` title is the
+      # unprefixed family, which plan-deps refuses as blank, so it is skipped.
+      - name: Phase-order links for every other milestone family
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FAMILY: ${{ steps.family.outputs.family }}
-        run: bun scripts/plan-deps.ts --repo "$GITHUB_REPOSITORY" --milestone-prefix "$FAMILY" --write
+          PREFIX: ${{ steps.prefix.outputs.prefix }}
+        run: |
+          families=$(gh api --paginate "repos/$GITHUB_REPOSITORY/milestones?state=open&per_page=100" --jq '.[] | .title | @json' | bun -e 'import { familyOf } from "./lib/spec-placement"; const seen = new Set<string>(); for (const line of (await Bun.stdin.text()).split("\n")) { if (line.trim() === "") continue; const f = familyOf(JSON.parse(line)); if (f && f !== process.env.PREFIX) seen.add(f); } process.stdout.write([...seen].sort().join("\n"))')
+          while IFS= read -r family; do
+            if [ -n "$family" ]; then
+              echo "== $family"
+              bun scripts/plan-deps.ts --repo "$GITHUB_REPOSITORY" --milestone-prefix "$family" --write
+            fi
+          done <<< "$families"
 
       - name: Queue label on every engine-phase issue
         env:

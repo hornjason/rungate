@@ -19,16 +19,16 @@
  *
  * Broken to prove it: dropping `demilestoned` from the trigger, `--write` from
  * a command, the board token from the Criteria step, or moving the board token
- * onto a GITHUB_TOKEN step each turns a case red; so does deleting the
- * `"$FAMILY" != "$PREFIX"` test, which makes the family step re-run the
- * engine's own family.
+ * onto a GITHUB_TOKEN step each turns a case red; so do deleting the
+ * `f !== process.env.PREFIX` test (the engine's family is linked twice),
+ * unquoting `"$family"` (a two-word family splits), and keying the family step
+ * to `github.event` (the review of #2092: a dropped queued run loses its work).
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { familyOf } from "../lib/spec-placement";
 
 const ROOT = join(import.meta.dir, "..");
 const PATH = join(ROOT, ".github", "workflows", "phase-order.yml");
@@ -143,49 +143,92 @@ describe("#2062 / SC-2609: a hand-milestoned engine issue gets its queue label a
   });
 });
 
-describe("#2062: the family of the milestone that changed is linked too, not only the engine's", () => {
-  const familyStep = () => steps.find(s => s.id === "family");
+describe("#2062: every milestone family is linked on every run, whichever event fired it", () => {
+  const allFamilies = () => depsSteps().find(s => runOf(s).includes('--milestone-prefix "$family"'));
+  const lines = () => runOf(allFamilies()).split("\n");
 
-  test("#2062: a second plan-deps step links the changed milestone's family, and runs only when it names one", () => {
-    const other = depsSteps().filter(s => runOf(s).includes('--milestone-prefix "$FAMILY"'));
-    expect(other, "exactly one plan-deps step for the changed family").toHaveLength(1);
-    expect(runOf(other[0])).toContain("--write");
-    expect(other[0].env.FAMILY).toBe("${{ steps.family.outputs.family }}");
-    expect(other[0].if).toBe("steps.family.outputs.family != ''");
-    expect(familyStep().env.MILESTONE).toBe("${{ github.event.milestone.title }}");
-    expect(familyStep().env.PREFIX).toBe("${{ steps.prefix.outputs.prefix }}");
+  test("#2062: one step loops plan-deps over every other family, unconditionally, with the job's own token", () => {
+    const step = allFamilies();
+    expect(step, "a plan-deps step looping over families").toBeDefined();
+    expect(runOf(step)).toContain("--write");
+    expect(runOf(step)).toContain('--repo "$GITHUB_REPOSITORY"');
+    expect(runOf(step)).toContain('import { familyOf } from "./lib/spec-placement"');
+    expect(step.env.PREFIX).toBe("${{ steps.prefix.outputs.prefix }}");
+    expect(step.if, "a skipped step reads as satisfied, so this one never skips").toBeUndefined();
   });
 
-  /** Run the family step's real script, from the repository root, and return what it wrote to GITHUB_OUTPUT. */
-  const family = (MILESTONE: string): { status: number | null; output: string } => {
-    const dir = mkdtempSync(join(tmpdir(), "phase-order-family-"));
+  test("#2062: no step reads which event fired the run, so a dropped queued run loses nothing", () => {
+    // The concurrency group keeps one pending run and drops the rest. A step
+    // keyed to the firing event's milestone loses that milestone whenever its
+    // run is the one dropped — the review of #2092. Reading the tracker
+    // instead makes every surviving run cover what the dropped ones would have.
+    expect(text).not.toContain("github.event");
+  });
+
+  /** Run the step's real enumeration line, from the repository root, against a fake `gh` printing these titles. */
+  const families = (titles: string[]): string => {
+    const dir = mkdtempSync(join(tmpdir(), "phase-order-families-"));
     try {
-      const out = join(dir, "output");
-      const r = spawnSync("bash", ["-e", "-c", runOf(familyStep())], {
+      // What `gh api … --jq '.[] | .title | @json'` prints: one JSON string per line.
+      writeFileSync(join(dir, "gh"), `#!/bin/sh\ncat <<'EOF'\n${titles.map(t => JSON.stringify(t)).join("\n")}\nEOF\n`, {
+        mode: 0o755,
+      });
+      const enumerate = lines().find(l => l.trimStart().startsWith("families=$("));
+      expect(enumerate, "the enumeration line was not found, so nothing was executed").toBeDefined();
+      const r = spawnSync("bash", ["-eo", "pipefail", "-c", `${enumerate}\nprintf '%s' "$families"`], {
         cwd: ROOT,
-        env: { ...process.env, MILESTONE, PREFIX: "Pipeline", GITHUB_OUTPUT: out },
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PREFIX: "Pipeline", GITHUB_REPOSITORY: "o/r" },
         encoding: "utf-8",
       });
-      return { status: r.status, output: existsSync(out) ? readFileSync(out, "utf-8") : "" };
+      expect(r.status, r.stderr).toBe(0);
+      return r.stdout;
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   };
 
-  test("#2062: a Convergence milestone names its family; the engine's own, or no phase at all, names none", () => {
-    expect(family("Convergence Phase 5 — the instruments")).toEqual({ status: 0, output: "family=Convergence\n" });
-    expect(family("Pipeline Phase 6 — the board's state is a reading")).toEqual({ status: 0, output: "" });
-    expect(family("Issue intake")).toEqual({ status: 0, output: "" });
-    // A bare `Phase N` title is the unprefixed family, which plan-deps refuses as a blank prefix.
-    expect(family("Phase 3")).toEqual({ status: 0, output: "" });
+  test("#2062: every family with an open milestone is named once, except the engine's, an unprefixed one, or a non-phase", () => {
+    expect(
+      families([
+        "Pipeline Phase 6 — the board's state is a reading",
+        "Convergence Phase 5 — the instruments",
+        "Convergence Phase 2 — stop the false findings",
+        "Issue intake",
+        "Phase 3",
+        "Spec Two Phase 1 — a two-word family",
+        // One title, one JSON line: a newline inside it is not a second title.
+        "Evil\nfamily=x Phase 1",
+      ]),
+    ).toBe("Convergence\nSpec Two");
+    expect(families(["Pipeline Phase 6"])).toBe("");
   });
 
-  test("#2062: the family comes from the one grammar, which cannot return a newline to forge an output key", () => {
-    expect(runOf(familyStep())).toContain('import { familyOf } from "./lib/spec-placement"');
-    // familyOf anchors at the start and `.` stops at a newline, so a title
-    // carrying one is not a phase title at all. That property is why this
-    // step needs no newline guard of its own; asserted, not assumed.
-    expect(familyOf("Evil\nfamily=Pipeline Phase 1")).toBeNull();
-    expect(family("Evil\nfamily=x Phase 1").output).toBe("");
+  /** Run the step's loop against a fake `bun`, returning each call's arguments joined by `|`. */
+  const loop = (familyList: string): string[] => {
+    const dir = mkdtempSync(join(tmpdir(), "phase-order-loop-"));
+    try {
+      const log = join(dir, "calls");
+      writeFileSync(join(dir, "bun"), `#!/bin/sh\nprintf '%s|' "$@" >> "${log}"\necho >> "${log}"\n`, { mode: 0o755 });
+      const body = lines();
+      const from = body.findIndex(l => l.trimStart().startsWith("while IFS= read -r family"));
+      const to = body.findIndex(l => l.trimStart().startsWith('done <<< "$families"'));
+      expect(from >= 0 && to > from, "the loop was not found, so nothing was executed").toBe(true);
+      const r = spawnSync("bash", ["-e", "-c", body.slice(from, to + 1).join("\n")], {
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, families: familyList, GITHUB_REPOSITORY: "o/r" },
+        encoding: "utf-8",
+      });
+      expect(r.status, r.stderr).toBe(0);
+      return existsSync(log) ? readFileSync(log, "utf-8").split("\n").filter(Boolean) : [];
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("#2062: the loop runs plan-deps once per family, a two-word family as ONE argument, and nothing for none", () => {
+    expect(loop("Convergence\nSpec Two")).toEqual([
+      "scripts/plan-deps.ts|--repo|o/r|--milestone-prefix|Convergence|--write|",
+      "scripts/plan-deps.ts|--repo|o/r|--milestone-prefix|Spec Two|--write|",
+    ]);
+    expect(loop("")).toEqual([]);
   });
 });
