@@ -130,7 +130,7 @@ any spec yet, so they need no link row; they wait for the Decomposition's first
 row, which makes `finding-promotion` write the criterion and link the issue in
 one step.
 
-| Issue | Approved criterion | Spec | Milestone |
+| Issue | Approved criterion | Spec | Phase (suggested, not a milestone title) |
 |---|---|---|---|
 | #1355 | A `gh issue create` reached through a heredoc — inside a subshell, a brace group, a continued line or `eval` — is metered by the filing cap as a filing attempt, never passed unmetered. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 5 |
 | #1952 | A merged pull request whose closing reference names an issue that is still open is reported naming both, so shipped work never reads as outstanding. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 7 |
