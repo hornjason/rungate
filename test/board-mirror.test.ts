@@ -58,7 +58,18 @@ import {
   unlocatableEntries,
 } from "../lib/board-mirror";
 import { parseCriteria } from "../lib/spec-evidence";
-import { BACKLOG, READY, parseRepo, readyPopulation, scopeDemotions, splitReadyChanges } from "../scripts/board-mirror";
+import {
+  BACKLOG,
+  READY,
+  REFUSAL_EXIT,
+  main as boardMirrorMain,
+  parseRepo,
+  queueLabelRepairs,
+  queueLabelRun,
+  readyPopulation,
+  scopeDemotions,
+  splitReadyChanges,
+} from "../scripts/board-mirror";
 import { NO_WORK_NEXT, activeMilestone, readyOrderFor } from "../lib/board-ready-rule";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -1190,5 +1201,152 @@ describe("#2007 / SC-2741: board-mirror demotes a Ready incumbent outside the ac
     expect(src).toContain("scopeDemotions(writable");
     // One decider: the demotion comes from incumbentDecisions, not a predicate of this file's own.
     expect(src).toContain("incumbentDecisions(");
+  });
+});
+
+/**
+ * #2062 / SC-2609: an engine issue placed in a phase by hand gets the queue label.
+ *
+ * Measured 2026-11-12 on #2020: milestoning six issues into Pipeline Phase 6 by
+ * hand left them without `engine`, and `queue-label` (B6) fell 12 of 12 → 6 of
+ * 12. That reading counts open issues in the engine's milestone family, so the
+ * repair must pick the same population (`inMilestoneFamily`) or the two disagree.
+ *
+ * Broken to prove it: dropping the family test labels #3, #4, #5 and #7 below;
+ * dropping the has-label test labels #2; dropping the open test labels #6. Each
+ * turns the first case red.
+ */
+describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase issue lacking the queue label", () => {
+  type Row = { number: number; state: string; milestone: string | null; labels: string[]; labelsTruncated?: boolean };
+  const row = (number: number, milestone: string | null, labels: string[] = [], extra: Partial<Row> = {}): Row => ({
+    number,
+    state: "OPEN",
+    milestone,
+    labels,
+    ...extra,
+  });
+
+  test("SC-2609: only an open issue in the engine family without the label is repaired", () => {
+    const r = queueLabelRepairs(
+      [
+        row(1, "Pipeline Phase 6 — the board's state is a reading"),
+        row(2, "Pipeline Phase 6 — the board's state is a reading", ["engine"]),
+        row(3, "Convergence Phase 5 — the instruments"),
+        row(4, null),
+        row(5, "Pipelines Phase 2"),
+        row(6, "Pipeline Phase 7 — nothing is hand-run", [], { state: "CLOSED" }),
+        row(7, "Issue intake"),
+      ],
+      "Pipeline",
+      "engine",
+    );
+    expect(r).toEqual({ add: [1], unreadable: [] });
+  });
+
+  test("SC-2609: a cut label list is UNMEASURED rather than missing, unless the label was read", () => {
+    const r = queueLabelRepairs(
+      [
+        row(8, "Pipeline Phase 6", ["a"], { labelsTruncated: true }),
+        row(9, "Pipeline Phase 6", ["engine"], { labelsTruncated: true }),
+      ],
+      "Pipeline",
+      "engine",
+    );
+    expect(r).toEqual({ add: [], unreadable: [8] });
+  });
+
+  /** A fake `gh`: one page of issues for the read, and every `issue edit` recorded. */
+  const fakeGh = (nodes: object[]) => {
+    const edits: string[][] = [];
+    const exec = (args: readonly string[]): string => {
+      if (args[0] === "api" && args[1] === "graphql") {
+        return JSON.stringify({
+          data: { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: "" }, nodes } } },
+        });
+      }
+      if (args[0] === "issue" && args[1] === "edit") {
+        edits.push([...args]);
+        return "";
+      }
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    };
+    return { exec, edits };
+  };
+  const node = (number: number, milestone: string | null, labels: string[] = [], truncated = false) => ({
+    number,
+    state: "OPEN",
+    title: `#${number}`,
+    body: null,
+    milestone: milestone === null ? null : { title: milestone },
+    labels: { pageInfo: { hasNextPage: truncated }, nodes: labels.map(name => ({ name })) },
+    blockedBy: { pageInfo: { hasNextPage: false }, nodes: [] },
+  });
+  const quiet = () => {};
+
+  test("SC-2609: --write adds the label with one gh issue edit per repair, naming the repository", async () => {
+    const gh = fakeGh([node(11, "Pipeline Phase 6"), node(12, "Pipeline Phase 6", ["engine"]), node(13, "Convergence Phase 2")]);
+    const code = await queueLabelRun({
+      repo: "o/r",
+      prefix: "Pipeline",
+      prefixUnmeasured: null,
+      queueLabel: "engine",
+      write: true,
+      exec: gh.exec,
+      log: quiet,
+    });
+    expect(code).toBe(0);
+    expect(gh.edits).toEqual([["issue", "edit", "11", "--repo", "o/r", "--add-label", "engine"]]);
+  });
+
+  test("SC-2609: without --write it reports the repair and edits nothing", async () => {
+    const gh = fakeGh([node(11, "Pipeline Phase 6")]);
+    const lines: string[] = [];
+    const code = await queueLabelRun({
+      repo: "o/r",
+      prefix: "Pipeline",
+      prefixUnmeasured: null,
+      queueLabel: "engine",
+      write: false,
+      exec: gh.exec,
+      log: s => lines.push(s),
+    });
+    expect(code).toBe(0);
+    expect(gh.edits).toEqual([]);
+    expect(lines.join("\n")).toContain("#11");
+  });
+
+  test("SC-2609: no engine family, or no queue label, refuses and edits nothing", async () => {
+    for (const cfg of [
+      { prefix: null, prefixUnmeasured: "UNMEASURED: no rungate config", queueLabel: "engine" },
+      { prefix: "Pipeline", prefixUnmeasured: null, queueLabel: null },
+    ]) {
+      const gh = fakeGh([node(11, "Pipeline Phase 6")]);
+      const code = await queueLabelRun({ repo: "o/r", ...cfg, write: true, exec: gh.exec, log: quiet });
+      expect(code).toBe(REFUSAL_EXIT);
+      expect(gh.edits).toEqual([]);
+    }
+  });
+
+  test("SC-2609: one cut label list refuses the whole run, so nothing is labelled from a partial read", async () => {
+    const gh = fakeGh([node(11, "Pipeline Phase 6"), node(14, "Pipeline Phase 6", ["x"], true)]);
+    const code = await queueLabelRun({
+      repo: "o/r",
+      prefix: "Pipeline",
+      prefixUnmeasured: null,
+      queueLabel: "engine",
+      write: true,
+      exec: gh.exec,
+      log: quiet,
+    });
+    expect(code).toBe(REFUSAL_EXIT);
+    expect(gh.edits).toEqual([]);
+  });
+
+  test("SC-2609: --queue-label needs --repo, and refuses to share a run with --project", async () => {
+    // Two credentials, two modes (ADR-013): the label is an issue write made
+    // with the job's own token, the Criteria cell a board write made with the
+    // board token. One run holding both is the widening ADR-013 forbids.
+    expect(await boardMirrorMain(["--queue-label"])).toBe(REFUSAL_EXIT);
+    expect(await boardMirrorMain(["--queue-label", "--repo", "o/r", "--project", "PVT_x"])).toBe(REFUSAL_EXIT);
   });
 });
