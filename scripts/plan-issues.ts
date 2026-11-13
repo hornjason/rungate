@@ -724,6 +724,21 @@ export async function main(
       for (const r of placement.unmeasuredReasons) console.error(`  - ${r}`);
       return REFUSAL_EXIT;
     }
+    // #2072: the three readings plan-spec and board-snapshot already refuse.
+    // A doubled id would go to whichever phase row comes last, and an
+    // unknown one reads as two families at once. `unplaced` is left out on
+    // purpose: a criterion in no row has no phase, and `rowPlacement`
+    // already skips or refuses a row naming one.
+    const unsound = [
+      ...placement.doubled.map(d => `${d.id} is placed twice: ${d.placements.join(" and ")}`),
+      ...placement.unknown.map(id => `${id} is placed but stated nowhere in the spec`),
+      ...placement.unrecognised.map(p => `"${p}" is neither a phase nor a known non-phase placement`),
+    ];
+    if (unsound.length > 0) {
+      console.error(`plan-issues: ${values.spec}'s placement table is unsound, so no row can be placed from it:`);
+      for (const u of unsound) console.error(`  - ${u}`);
+      return REFUSAL_EXIT;
+    }
     familyStated = new Set(placement.criteria);
     familyPlan = milestonePlan(specText, await gh2.milestones(repo), prefix).actions;
   }

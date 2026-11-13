@@ -455,7 +455,7 @@ describe("#2042: --repair places a milestone from the Phase column, per family",
     return { gh, calls };
   }
 
-  async function run(rows: string[], gh: PlanIssuesGitHub, extra: string[]) {
+  async function run(rows: string[], gh: PlanIssuesGitHub, extra: string[], spec = FAMILY_SPEC) {
     const dir = mkdtempSync(join(tmpdir(), "rg-plan-issues-2042-"));
     const out: string[] = [];
     const log = console.log;
@@ -464,7 +464,7 @@ describe("#2042: --repair places a milestone from the Phase column, per family",
     console.error = (...a: unknown[]) => void out.push(a.join(" "));
     try {
       mkdirSync(join(dir, "specs"));
-      writeFileSync(join(dir, "specs", "FAM-SPEC.md"), FAMILY_SPEC);
+      writeFileSync(join(dir, "specs", "FAM-SPEC.md"), spec);
       writeFileSync(join(dir, "PLAN.md"), plan(rows));
       const code = await planIssuesMain(["--repair", "PLAN.md", "--repo", "o/r", "--project-root", dir, ...extra], gh);
       return { code, out: out.join("\n") };
@@ -549,6 +549,26 @@ describe("#2042: --repair places a milestone from the Phase column, per family",
     expect(alone.code, alone.out).toBe(0);
     expect(s.calls.filter(c => c.startsWith("place#"))).toEqual([]);
     expect(alone.out).toMatch(/#17 .*no phase/);
+  });
+
+  test("#2072: an unsound family placement table refuses the run before anything is read or written", async () => {
+    // plan-spec and board-snapshot refuse all three; a doubled id otherwise
+    // resolves to whichever phase row comes last.
+    const row = "| #18 | 7 | (a) | `ZZ-1` | HIGH | which phase? |";
+    for (const [name, spec, says] of [
+      ["doubled", FAMILY_SPEC.replace("| **Phase 7** | ZZ-3 |", "| **Phase 7** | ZZ-3, ZZ-1 |"), "ZZ-1 is placed twice"],
+      ["unknown", FAMILY_SPEC.replace("| **Phase 7** | ZZ-3 |", "| **Phase 7** | ZZ-3, ZZ-9 |"), "ZZ-9"],
+      ["unrecognised", FAMILY_SPEC.replace("| **Blocked — needs a second person** |", "| **Someday** |"), "Someday"],
+    ] as const) {
+      const s = spy();
+      let reads = 0;
+      const counted: PlanIssuesGitHub = { ...s.gh, readIssue: async (r, n) => (reads++, s.gh.readIssue(r, n)) };
+      const r = await run([row], counted, [...FAMILY, "--write"], spec);
+      expect(r.code, name).toBe(REFUSAL_EXIT);
+      expect(s.calls, name).toEqual([]);
+      expect(reads, `${name}: an issue was read after the spec was known unsound`).toBe(0);
+      expect(r.out, name).toContain(says);
+    }
   });
 
   test("an issue already in its milestone is left as it is", async () => {
