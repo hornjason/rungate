@@ -128,11 +128,12 @@ describe("#1355 controls: the destination still decides, not the writer word", (
     // The cheapest wrong fix for the subshell and brace rows is "a heredoc
     // inside a group is a program". These go to a file and to a pager, and
     // the third group's pipeline ENDS at `&&` — the shell after it is fed
-    // by `echo`, not by the group.
+    // by `echo`, not by the group. No redirect on that one: a redirect would
+    // sever the body first and hold the row up for a different reason.
     for (const cmd of [
       `{ cat <<'EOF'\n${filing("doc")}\nEOF\n} > /tmp/notes.md`,
       `(cat <<'EOF'\n${filing("doc")}\nEOF\n) | less`,
-      `(cat <<'EOF'\n${filing("doc")}\nEOF\n) > /tmp/notes.md && echo ok | bash`,
+      `(cat <<'EOF'\n${filing("doc")}\nEOF\n) && echo : | bash`,
     ]) {
       expect(filingAttempts(cmd), cmd.slice(0, 24)).toEqual([]);
     }
