@@ -109,7 +109,7 @@ Every PR also gets an AI review ([`.github/workflows/ai-review.yml`](.github/wor
 
 ### One screen for all of it
 
-`bun scripts/work-status.ts` shows this repository's lanes, what is in Ready and why, progress through the active milestone, and the plan's stages from `project-state.json`. It is read-only. It needs a GitHub token that can read the project board (the `read:project` scope) in `GITHUB_TOKEN` or `GH_TOKEN`.
+`bun scripts/work-status.ts` shows this repository's lanes, what is in Ready and why, progress through the active milestone, and the plan's stages from `project-state.json`. It is read-only. It needs a GitHub token that can read the project board (the `read:project` or `project` scope) in `GITHUB_TOKEN` or `GH_TOKEN`.
 
 **These board workflows run in this repository only, for now.** `rungate scaffold` does not yet install them in other projects; [ADR-014](docs/adr/ADR-014-the-process-reaches-consumers.md) is the work that will.
 
@@ -129,7 +129,7 @@ A green test suite, a passing gate and a merged PR don't count as progress unles
 
 ## Where it stands
 
-- **Working:** the ship pipeline and gates, the spec tooling, AI-review adjudication, scaffolding, and release automation to npm. About 1,700 commits and 1,080 merged PRs (2026-11-13), most shipped through the harness itself. Since 2026-10-19 the repo has been shipping directly while RunGate is stabilised.
+- **Working:** the ship pipeline and gates, the spec tooling, AI-review adjudication, scaffolding, and release automation to npm. About 1,700 commits and 1,080 merged PRs (2026-11-13), shipped through the harness itself until 2026-10-19 and directly since, while RunGate is stabilised.
 - **Working in this repo:** the spec-to-board pipeline above. Accepted ADRs place their own plans, Ready refills itself from the active milestone, and every PR must close an issue that names a criterion.
 - **In progress:** the *engine*. The goal is for a spec to become a readable project board with no hand-run steps ([ADR-009](docs/adr/ADR-009-engine-goal-and-build-order.md)), and for the same process to reach other projects through `scaffold` ([ADR-014](docs/adr/ADR-014-the-process-reaches-consumers.md)).
 - **Next:** a full run on a consumer project with a different config layout (claim 5). Until that is done, consumer support is unproven.
