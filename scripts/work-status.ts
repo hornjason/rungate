@@ -840,7 +840,12 @@ bar("FILING CAP — what the trailing day's issues allow (ADR-016)");
 const filingAllowance = filingsPerRunFor(() => tryLoadRungateConfig(process.cwd()));
 const filingCap = await netGrowthCeiling(filingAllowance, () => readNetGrowth(process.cwd(), Date.now()));
 console.log(
-  `  ${netGrowthLine(filingCap, { shipCap: filingAllowance.cap, ceiling: NET_GROWTH_CEILING, queueCap: QUEUE_FILINGS_PER_RUN })}`,
+  `  ${netGrowthLine(filingCap, {
+    shipCap: filingAllowance.cap,
+    ceiling: NET_GROWTH_CEILING,
+    queueCap: QUEUE_FILINGS_PER_RUN,
+    unreadable: filingAllowance.unreadable ? (filingAllowance.unreadableSource ?? "the `ship` block") : null,
+  })}`,
 );
 
 bar("BOARD LANE HEALTH — issues only, each lane against what should be in it");

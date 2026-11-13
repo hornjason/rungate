@@ -1428,7 +1428,7 @@ describe("#1944: the report names local work every run, from the one decider", (
  * what that decision was, so the board and the gate cannot disagree.
  */
 describe("SC-2764: the filing cap line names the counts and the cap they set", () => {
-  const caps = { shipCap: 12, ceiling: 36, queueCap: 24 };
+  const caps = { shipCap: 12, ceiling: 36, queueCap: 24, unreadable: null };
 
   test("closing keeps pace: the ceiling applies, and the line says so with both counts", () => {
     const line = netGrowthLine({ cap: 36, basis: { reading: "MEASURED", opened: 20, closed: 25, ceiling: true } }, caps);
@@ -1462,11 +1462,22 @@ describe("SC-2764: the filing cap line names the counts and the cap they set", (
     expect(line).toContain("does not apply");
   });
 
+  test("a cap config that could not be read says so, never 'set by' a setting nobody made", () => {
+    // Review of #2089: a malformed `board.filingsPerRun` falls back to the
+    // strict cap with `unreadable: true`, and the line credited it to config.
+    const line = netGrowthLine({ cap: 1, basis: null }, { ...caps, unreadable: "`board.filingsPerRun`" });
+    expect(line).toMatch(/^Filing cap: 1\b/);
+    expect(line).toContain("UNMEASURED");
+    expect(line).toContain("`board.filingsPerRun`");
+    expect(line).not.toContain("set by ship mode");
+  });
+
   test("the script prints the gate's own decision, through these two functions", () => {
     const src = readFileSync(join(ROOT, "scripts", "work-status.ts"), "utf8");
     expect(src).toContain("netGrowthCeiling(");
     expect(src).toContain("readNetGrowth(");
     expect(src).toContain("netGrowthLine(");
+    expect(src).toContain("filingAllowance.unreadable");
   });
 });
 

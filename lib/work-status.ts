@@ -497,11 +497,28 @@ export function ladderLines(r: LadderReport): string[] {
  */
 export function netGrowthLine(
   decision: { cap: number; basis: NetGrowthBasis | null },
-  caps: { shipCap: number; ceiling: number; queueCap: number },
+  caps: {
+    shipCap: number;
+    ceiling: number;
+    queueCap: number;
+    /**
+     * The cap setting the gate could not read, or null. A corrupt `ship`
+     * block or a malformed `board.filingsPerRun` falls back to the strict cap,
+     * and that fallback must read as UNMEASURED, never as a setting (review of
+     * #2089; `.claude/rules/config-access.md`, Silent Default Substitution).
+     */
+    unreadable: string | null;
+  },
 ): string {
   const head = `Filing cap: ${decision.cap}`;
   const queue = decision.cap < caps.queueCap ? ` (${caps.queueCap} for an engine-labelled filing)` : "";
   const basis = decision.basis;
+  if (basis === null && caps.unreadable !== null) {
+    return (
+      `${head}${queue} — ${caps.unreadable} could not be read, so the gate fell back to its strict cap; ` +
+      "that cap is UNMEASURED as a setting, and the net-growth ceiling does not apply."
+    );
+  }
   if (basis === null) {
     return `${head}${queue} — set by ship mode or board.filingsPerRun, so the net-growth ceiling does not apply.`;
   }
