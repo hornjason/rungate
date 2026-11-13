@@ -61,7 +61,8 @@ import {
 } from "../lib/spec-placement";
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
-import type { RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
+import { dependencyPlan } from "../lib/spec-deps";
+import type { PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -222,7 +223,7 @@ export interface ProducedSnapshot {
    */
   criteria: CriterionCoverage[];
   /**
-   * The REPOSITORY-WIDE populations — SC-2615 and SC-2616.
+   * The three REPOSITORY-WIDE populations — SC-2615, SC-2616, SC-2617.
    *
    * Optional in the type because they are optional on the wire: each is
    * emitted only when it could be taken, and `board-conformance` reads an
@@ -233,14 +234,12 @@ export interface ProducedSnapshot {
    * `.claude/rules/checks-must-be-able-to-fail.md` — and nothing would have
    * gone red when they drifted. The import is `type`-only and the reader has
    * no relative imports of its own, so its mutation battery is untouched.
-   *
-   * SC-2617's `plannedEdges` is deliberately absent — see the note at the
-   * producer and #1717.
    */
   specPlacements?: SpecPlacementRow[];
   /** SC-2734: the bank in `.claude/spec-deferral-ratchet.json`. Absent when it could not be read. */
   specDeferrals?: SpecDeferral[];
   repoIssues?: RepoIssueCriteria[];
+  plannedEdges?: PlannedEdge[];
 }
 
 /** The path the deferral bank lives at, relative to the project root — SC-2734. */
@@ -801,13 +800,27 @@ export async function main(
           }),
         };
 
-  // SC-2617's `plannedEdges` is NOT produced here, and the absence is a
-  // decision — see #1717. It was written and withdrawn at review round 3 of
-  // #1903: `dependencyPlan` buckets by `phaseOf`, which is family-blind, so
-  // a repo-wide call chains `Convergence Phase 1` to `Pipeline Phase 0`.
-  // `plan-deps` is the function's only other caller and it REFUSES an
-  // omitted `--milestone-prefix`, so single-family is the contract. See the
-  // matching note in `scripts/board-conformance.ts`.
+  // SC-2617. `missing` and `present` are the plan's own two halves — derived
+  // edges the tracker lacks, and derived edges it carries. `extra` is
+  // deliberately excluded: an edge somebody added that the plan does not
+  // derive is reported by `plan-deps` and removed by nobody, so counting it
+  // here would let hand-added ordering satisfy a reading about derived
+  // ordering.
+  //
+  // An UNMEASURED plan omits the key. `dependencyPlan` returns UNMEASURED
+  // for a truncated `blockedBy` among other reasons, and a truncated read
+  // produces exactly the false `missing` edges this reading would then count
+  // as the tracker's failure.
+  const plan = dependencyPlan(liveIssues);
+  const edges =
+    plan.reading === "UNMEASURED"
+      ? {}
+      : {
+          plannedEdges: [
+            ...plan.present.map(e => ({ blocked: e.blocked, blocker: e.blocker, present: true })),
+            ...plan.missing.map(e => ({ blocked: e.blocked, blocker: e.blocker, present: false })),
+          ],
+        };
 
   const snapshot: ProducedSnapshot = {
     producedAt: new Date().toISOString(),
@@ -820,6 +833,7 @@ export async function main(
     ...placements,
     ...deferrals,
     ...repoIssues,
+    ...edges,
   };
 
   process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);

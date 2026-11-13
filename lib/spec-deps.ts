@@ -45,6 +45,7 @@
  * `includeClosed` to derive them anyway; the default is to leave them out.
  */
 import { phaseOf } from "./board-mirror";
+import { familyOf } from "./spec-placement";
 
 export interface DepIssue {
   readonly number: number;
@@ -129,6 +130,11 @@ export function degenerateReasons(r: {
   readonly phases: readonly number[];
   readonly includeClosed: boolean;
   readonly truncated: readonly number[];
+  /**
+   * Issues whose title `phaseOf` read and `familyOf` could not (#2024): left
+   * unphased, so a plan of nothing but these must not blame `phaseOf`.
+   */
+  readonly familyUnreadable?: readonly number[];
 }): string[] {
   const out: string[] = [];
   if (r.read === 0) {
@@ -140,6 +146,16 @@ export function degenerateReasons(r: {
     out.push(
       `${r.read} issue(s) were read and none was considered` +
         (r.includeClosed ? "" : " — every one is closed, and --include-closed was not passed"),
+    );
+  } else if (r.phases.length === 0 && (r.familyUnreadable?.length ?? 0) > 0) {
+    out.push(
+      `${r.considered} issue(s) were considered and none sits in a readable phase family — ` +
+        `${r.familyUnreadable!.length} carry a phase whose family could not be read ` +
+        `(${r.familyUnreadable!.map(n => `#${n}`).join(", ")}); familyOf reads ` +
+        `"<Family> Phase N" or a bare "Phase N" at the start of the title` +
+        (r.considered > r.familyUnreadable!.length
+          ? `. The other ${r.considered - r.familyUnreadable!.length} carry no Phase milestone at all`
+          : ""),
     );
   } else if (r.phases.length === 0) {
     out.push(
@@ -211,10 +227,14 @@ export function dependencyPlan(
 ): DependencyPlan {
   const considered = issues.filter(i => opts.includeClosed || i.state === "OPEN");
   const unphased: number[] = [];
+  const familyUnreadable: number[] = [];
   const byPhase = new Map<number, DepIssue[]>();
   for (const i of considered) {
     const p = phaseOf(i.milestone);
-    if (p === null) {
+    // A phase with no readable family (`Release (Phase 3)`) is unphased, not
+    // filed with every other unreadable title (review of #2055).
+    if (p === null || familyOf(i.milestone) === null) {
+      if (p !== null) familyUnreadable.push(i.number);
       unphased.push(i.number);
       continue;
     }
@@ -228,11 +248,29 @@ export function dependencyPlan(
     phases,
     includeClosed: opts.includeClosed === true,
     truncated: issues.filter(i => i.blockedByTruncated === true).map(i => i.number),
+    familyUnreadable,
   });
 
-  // Adjacent members of the phases that EXIST. See the header: `p - 1` would
-  // leave a phase after a gap blocked by nothing and reading as startable.
-  const derived = chainAdjacentPhases(phases, byPhase);
+  // Adjacent members of the phases that EXIST, chained WITHIN each milestone
+  // family (#2024, SC-2617). See the header: `p - 1` would leave a phase after
+  // a gap blocked by nothing and reading as startable. And `Convergence
+  // Phase 1` follows `Convergence Phase 0`, never `Pipeline Phase 0`: a
+  // repository-wide plan bucketed by number alone chains one spec to another,
+  // which is how #1903's reading measured 129 of 154 and was withdrawn.
+  // `plan-deps` narrows to one family before calling, so it sees one bucket.
+  const byFamily = new Map<string, Map<number, DepIssue[]>>();
+  for (const [p, members] of byPhase) {
+    for (const i of members) {
+      const f = familyOf(i.milestone) as string;
+      const fam = byFamily.get(f) ?? new Map<number, DepIssue[]>();
+      fam.set(p, [...(fam.get(p) ?? []), i]);
+      byFamily.set(f, fam);
+    }
+  }
+  const derived: DepEdge[] = [];
+  for (const fam of byFamily.values()) {
+    derived.push(...chainAdjacentPhases([...fam.keys()].sort((a, b) => a - b), fam));
+  }
 
   const key = (e: DepEdge): string => `${e.blocked}<-${e.blocker}`;
   const derivedKeys = new Set(derived.map(key));
