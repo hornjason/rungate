@@ -60,7 +60,7 @@ without making *not filing* the default has missed the point.
 
 ## How we open a new area of this spec
 
-**Standing practice, agreed 2026-10-28.** This spec holds 61 criteria. Picking one off
+**Standing practice, agreed 2026-10-28.** This spec holds 66 criteria. Picking one off
 the list and building it is how the work has gone so far, and it is why three of the
 figures in this document describe no system that exists. Criteria are not a queue.
 
@@ -1624,7 +1624,7 @@ deviate, so CRC-B8 counts with the remainder below and these two do not.
 
 ### Not done — the remainder, with what is there instead
 
-**33 bullets, one per criterion that leads one**, listed because the
+**38 bullets, one per criterion that leads one**, listed because the
 near-misses are the expensive ones: each has something in the tree that
 resembles it and is not it. The unit is stated because this line read `34`
 from before CRC-N6 was added until 2026-10-26, when counting it found 29 —
@@ -1632,7 +1632,7 @@ the number had been stale for long enough that nobody could say what it had
 counted, and incrementing it would have carried the error forward. One
 further id is NAMED inside these bullets without leading one (CRC-A6); it is
 accounted for in its own bucket, and one bullet leads with TWO ids
-(**CRC-E3, CRC-E9**), which is why 35 ids appear here and 33 is the right
+(**CRC-E3, CRC-E9**), which is why 40 ids appear here and 38 is the right
 count of this list.
 
 **Every number in the paragraph above is recomputed from the bullets by
@@ -1733,6 +1733,11 @@ instance of it.
 - **CRC-N5** Nothing runs review agents nightly over existing code.
 - **CRC-N6** **Named because it was measured, with nothing built.** Five consecutive rounds on #1614 re-raised one already-fixed defect: four consecutive rounds from a docblock that QUOTED the removed regex, and the FINAL round — after the quotation was deleted — from the PARAPHRASE that replaced it, reconstructing a regex literal that appears nowhere in the tree. CRC-N4's dedupe cannot absorb it, because the suppression key is `file \0 line-text \0 summary` and a regenerated finding carries a new summary: it is not a repeat, it is a new finding about code that does not exist. The near-miss is *"do not quote dead code in comments"*, which was applied and then defeated. The reading is in *Measured non-obvious facts*. **It is deliberately NOT a request for new machinery** — the prior-art section above found that a verification gate re-checking each finding against the real code at the cited line is the documented mitigation for the wider class it belongs to, and that gate is CRC-B4. This criterion names the case so a verifier can be held to it; it does not ask for a second mechanism beside one already planned.
 - **CRC-H2** Risky code requires a human. There is no `CODEOWNERS` and no required approval, so nothing does.
+- **CRC-F6** Added 2026-11-12 (ADR-015, #1495, #1571). The waiver's auto-merge disarm has never succeeded (0 of 65 on #1571) and re-arming after a waiver is not caught; nothing yet reports either.
+- **CRC-M16** Added 2026-11-12 (ADR-015, #1816). `AI_REVIEW_ROUND_CAP` in `lib/ai-review-rounds.ts` counts the reviewer's rounds; nothing reads what the author does after the round-three step-back.
+- **CRC-N7** Added 2026-11-12 (ADR-015, #1818). The author-side half of the population rule: a class finding can be resolved by fixing the one named instance, which happened seven times on one pull request.
+- **CRC-M17** Added 2026-11-12 (ADR-015, #1887). Files restored from base are reviewed at their base version and a clean verdict over them reads like any other clean; no count is printed.
+- **CRC-M18** Added 2026-11-12 (ADR-015, #1934). CRC-M12 records `diff_truncated`, and every pull request over the budget — session records among them — is then never reviewed at all.
 
 ### Shipped since this audit was taken
 
@@ -2004,12 +2009,12 @@ CRC-E8's withdrawal from Phase 0 already records once.
 | Placement | Criteria | What the value means |
 |---|---|---|
 | **Phase 0** | CRC-C3, CRC-E8, CRC-F1 | settings, no engineering — and two of the three do not survive contact: E8 is withdrawn, F1 is contested |
-| **Phase 1** | CRC-B7, CRC-N2, CRC-N3, CRC-N4, SC-2756 | stop the repeats |
+| **Phase 1** | CRC-B7, CRC-N2, CRC-N3, CRC-N4, CRC-N7 | stop the repeats |
 | **Phase 2** | CRC-B3, CRC-B4, CRC-B6, CRC-N6 | stop the false findings |
 | **Phase 3** | CRC-A4, CRC-A7, CRC-B1, CRC-B2, CRC-B9 | what the reviewer is told |
 | **Phase 4** | CRC-A1, CRC-A2, CRC-A3, CRC-A8, CRC-B8 | findings get answered, repeats fixed at the source |
-| **Phase 5** | CRC-E3, CRC-E9, CRC-M1, CRC-M2, CRC-M3, CRC-M4, CRC-M5, CRC-M6, CRC-M7, CRC-M10, CRC-M11, CRC-M12, CRC-M13, CRC-M14, SC-2755, SC-2757, SC-2758 | the instruments |
-| **Phase 6** | CRC-C1, CRC-C2, CRC-F2, CRC-F3, CRC-F4, CRC-F5, CRC-H2, CRC-M15, CRC-N5, SC-2754 | release and detection — nothing here moves rounds-to-pass |
+| **Phase 5** | CRC-E3, CRC-E9, CRC-M1, CRC-M2, CRC-M3, CRC-M4, CRC-M5, CRC-M6, CRC-M7, CRC-M10, CRC-M11, CRC-M12, CRC-M13, CRC-M14, CRC-M16, CRC-M17, CRC-M18 | the instruments |
+| **Phase 6** | CRC-C1, CRC-C2, CRC-F2, CRC-F3, CRC-F4, CRC-F5, CRC-H2, CRC-M15, CRC-N5, CRC-F6 | release and detection — nothing here moves rounds-to-pass |
 | **Done** | CRC-A5, CRC-A6, CRC-B5, CRC-C4, CRC-E1, CRC-E2, CRC-E4, CRC-N1 | ticked and bound. Not *no work ever again* — CRC-B7 and CRC-M11 are also ticked and are **not** here, because an open issue contradicts each |
 | **Blocked — needs a second person** | CRC-E5, CRC-E6, CRC-E7, CRC-M9 | one account plus `enforce_admins: true` means an approval cannot exist, so E6 and M9 are **vacuous rather than unbuilt** — there is nothing to count. The blocker is CRC-E8's withdrawal and it is named in Phase 0 |
 | **Not observable here** | CRC-H1, CRC-H3, CRC-H4, CRC-H5 | statements about human judgement. *A mechanism exists; this repository cannot observe it* above says why: nothing distinguishes them being honoured from them being ignored |
@@ -2140,7 +2145,7 @@ stops being told anything.
 **A row with no pull request is work this spec says is next and nobody has
 claimed.** That is the state worth seeing, and it is the one a tracker of
 merged work cannot show: `bun bin/rungate.ts audit-specs` reports this spec's
-61 criteria as 10 ticked and 51 unticked, and has no way to say which of them
+66 criteria as 10 ticked and 56 unticked, and has no way to say which of them
 anybody is moving. Every row here, with or without a number, names criteria from the list
 below, and `test/code-review-convergence-spec.test.ts` fails on an id this
 spec does not declare — so a row cannot point at a criterion that does not
@@ -2157,7 +2162,7 @@ to observe it. This table says what WAS observed, and it is the only place a
 phase may be called done.
 
 **Why it is a second table and not a column.** `bun bin/rungate.ts
-audit-specs` already reports this spec's criteria — 10 ticked of 61 — and
+audit-specs` already reports this spec's criteria — 10 ticked of 66 — and
 `scripts/sync-sc-status.ts` maintains that automatically.
 It is a real tracker and it is not this one: it reports whether a criterion is
 **bound by a test**, and a phase exit is an **observation on a live pull
@@ -2954,8 +2959,8 @@ Recorded because each one invalidates a naive reading of the criteria above.
 
   **21.1% is the FLOOR's reach and must not be read as CRC-N2's reach.** It is gate 1 alone. Re-measured 2026-10-25 over all 828 pull requests — 147 with a parseable ledger, 333 distinct rounds — **115 rounds (34.5%) are at or past the floor and 12 (3.6%) narrow under every gate as built**; with #1592 fixed, 20 (6.0%). The shares in the table above move with the larger corpus and the floor does not. Both numbers belong wherever either is quoted: a reader given only the first reads a change that touches a fifth to a third of all rounds, and the change touches **one in twenty-eight**.
 - **CRC-N2 cannot lower `AI_REVIEW_MAX_TURNS`, and a post-narrowing re-derivation would be reading the wrong population (#1257).** The budget was set to 80 across the shift to `scope=full`, so narrowing invites re-deriving it downward. Re-derived 2026-10-24 from the ledger's `turns` key over the same 90 PRs: of 202 entries, **57 predate #1380** (which added the key) and **34 record `turns: null`**, leaving **111 readings** — min **20**, mean **40.75**, p50 **39**, p90 **53**, p95 **59**, p99 **70**, max **75**. **80 stays**, 6.7% above the observed maximum. The reason it cannot move is in the per-round split: round 1 **n=60, max 66**; round 2 **n=20, max 70**; round 3 **n=10, max 66**; round 4 **n=12, max 53**; round 5 **n=9, max 75**. **Rounds 1 and 2 are never narrowed and are 80 of the 111 readings**, so the budget is governed by exactly the population this change does not touch. Every reading is also from the `scope=full` era — #1380 postdates #1243 — so there is no narrowed round in the corpus at all, and a lower number derived after narrowing would describe the 21% while binding the 79%. `num_turns` is not clamped at the cap, so 75 is a real reading and not a ceiling artefact.
-- [ ] SC-2754: lib/scaffold/ai-review-step.ts contains [waiverDisarmReading] — a waived review cannot reach main unread: the auto-merge disarm succeeds or the run says it could not, and auto-merge armed after the waiver is disarmed again
-- [ ] SC-2755: lib/ai-review-rounds.ts contains [repairedPastStepBack] — a pull request repaired a fourth time after the round-three step-back is reported, distinguishable from one whose author re-scoped
-- [ ] SC-2756: lib/scaffold/ai-review-findings.ts contains [populationDeclared] — a review finding tagged as a class cannot be resolved until the author states the population — N sites, M defective — and the search that found them
-- [ ] SC-2757: lib/review-execution-reading.ts contains [baseOnlyFiles] — every AI review prints which changed files it saw only at their base version — count and list, explicit zero included
-- [ ] SC-2758: lib/review-execution-reading.ts contains [reviewCoverage] — a diff over the reviewer's budget is still reviewed, and the reading states coverage as n of m files read rather than a standing DIFF_TRUNCATED
+- [ ] CRC-F6: lib/scaffold/ai-review-step.ts contains [waiverDisarmReading] — a waived review cannot reach main unread: the auto-merge disarm succeeds or the run says it could not, and auto-merge armed after the waiver is disarmed again
+- [ ] CRC-M16: lib/ai-review-rounds.ts contains [repairedPastStepBack] — a pull request repaired a fourth time after the round-three step-back is reported, distinguishable from one whose author re-scoped
+- [ ] CRC-N7: lib/scaffold/ai-review-findings.ts contains [populationDeclared] — a review finding tagged as a class cannot be resolved until the author states the population — N sites, M defective — and the search that found them
+- [ ] CRC-M17: lib/review-execution-reading.ts contains [baseOnlyFiles] — every AI review prints which changed files it saw only at their base version — count and list, explicit zero included
+- [ ] CRC-M18: lib/review-execution-reading.ts contains [reviewCoverage] — a diff over the reviewer's budget is still reviewed, and the reading states coverage as n of m files read rather than a standing DIFF_TRUNCATED

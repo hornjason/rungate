@@ -77,7 +77,19 @@ no placement table.
 | #1126 | 0 | (a) | `SC-1947` | HIGH | SC-1947 (constraint extraction runs as part of scaffold and re-scaffold) is #545 criterion 7 restated, and intake is that extraction. |
 | #1883 | 1 | (a) | `CRC-N3` | HIGH | REVIEW.md defines `population` as the size of the flagged class, so a self-declared, unchecked population is CRC-N3 failing. |
 | #1885 | 2 | (a) | `CRC-B3` | HIGH | Several independent reviewer passes merged into one is CRC-B3's "several agents look for bugs at the same time", with its warning that recall and false positives rise together. |
-| #1571 | 6 | (a) | `SC-2754` | HIGH | Shares #1495's criterion — one mechanism, the waiver's auto-merge disarm (Jason, 2026-11-12). |
+| #1571 | 6 | (a) | `CRC-F6` | HIGH | Shares #1495's criterion — one mechanism, the waiver's auto-merge disarm (Jason, 2026-11-12). |
+| #1355 | 5 | (a) | `SC-2750` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1952 | 7 | (a) | `SC-2751` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1953 | 6 | (a) | `SC-2752` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1964 | 6 | (a) | `SC-2753` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1495 | 6 | (a) | `CRC-F6` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1816 | 5 | (a) | `CRC-M16` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1818 | 1 | (a) | `CRC-N7` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1887 | 5 | (a) | `CRC-M17` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1934 | 5 | (a) | `CRC-M18` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1921 | 0 | (a) | `SC-2759` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1942 | 0 | (a) | `SC-2760` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
+| #1976 | 0 | (a) | `SC-2761` | HIGH | Its own criterion, approved by Jason 2026-11-12 (Promote, below). |
 
 ## Declare — `finding-promotion --issue N --declines "<why>" --write`
 
