@@ -257,7 +257,7 @@ export function configTrackabilityBlock(opts: { parentExcluded?: boolean } = {})
   // #2071: lines 1-2 are needed ONLY when the parent directory itself is
   // excluded. Under a `.claude/*` rule git already descends into it, and a
   // second `.claude/*` appended here re-ignores every directory the project
-  // re-included above this block — 128 tracked files on asaCommandCenter.
+  // re-included above this block — 128 tracked files on the consumer that reported it.
   const parentLines = opts.parentExcluded === false ? [] : [`!${parent}/`, `${parent}/*`];
   return [
     "",
