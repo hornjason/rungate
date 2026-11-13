@@ -5,7 +5,7 @@
  * `os.homedir()/.bun/bin` and ignores `BUN_INSTALL`. On a self-hosted pool
  * whose runners share one `$HOME`, one job's install rewrites the binary while
  * another job is executing it, and the second job dies with `Text file busy` /
- * exit 126 before running anything (hornjason/asaCommandCenter#1849: 8 job
+ * exit 126 before running anything (#2039, measured on a consumer: 8 job
  * failures, 4 jobs, 6 runners). Consumers cannot fix the jobs rungate owns —
  * a hand edit is reverted on the next scaffold — so the generator has to.
  *
@@ -95,7 +95,7 @@ describe("corpus floor — runs first, so an empty offender list is not an empty
   });
 });
 
-describe("asaCommandCenter#1849: every generated setup-bun step has a per-runner HOME", () => {
+describe("#2039: every generated setup-bun step has a per-runner HOME", () => {
   test("no generated setup-bun step installs into the shared HOME", () => {
     expect(sharedHomeSteps(STEPS)).toEqual([]);
   });

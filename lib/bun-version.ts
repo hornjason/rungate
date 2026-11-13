@@ -347,7 +347,7 @@ export function setupBunWith(decision: BunVersionDecision, indent: string): stri
 }
 
 /**
- * Where a generated `oven-sh/setup-bun` step installs bun (asaCommandCenter#1849).
+ * Where a generated `oven-sh/setup-bun` step installs bun (#2039).
  *
  * setup-bun installs into `join(homedir(), ".bun", "bin")`. Self-hosted
  * runners on one host commonly share one HOME, so a runner whose setup-bun

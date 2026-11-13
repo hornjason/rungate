@@ -4265,7 +4265,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
       // The same single declaration the test and gates jobs resolve from
       // (#622), at the indent this job's step bodies use.
       setupBunWith: setupBunWith(declaredBunVersion(root), "    "),
-      // asaCommandCenter#1849, at the indent of the step's own keys.
+      // #2039, at the indent of the step's own keys.
       setupBunEnv: setupBunEnv("  "),
     },
     // #1013. The GENERATING version, and the same reading `harnessDevDepRange`

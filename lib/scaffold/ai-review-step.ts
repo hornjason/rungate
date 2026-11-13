@@ -1272,7 +1272,7 @@ export interface AiReviewActionRefs {
    * re-indented by `indent` on the way out, like every script above.
    */
   setupBunWith: string;
-  /** The step's `env:` block, from `setupBunEnv("  ")` (asaCommandCenter#1849). */
+  /** The step's `env:` block, from `setupBunEnv("  ")` (#2039). */
   setupBunEnv: string;
 }
 

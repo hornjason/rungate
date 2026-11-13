@@ -161,7 +161,7 @@ export interface UnmeasuredWorkflowOptions {
    * the defect #622 removed.
    */
   setupBunWith: string;
-  /** The step's `env:` block, from `setupBunEnv` (asaCommandCenter#1849). */
+  /** The step's `env:` block, from `setupBunEnv` (#2039). */
   setupBunEnv: string;
   /** The published harness version the step runs through `bunx`. */
   version: string;
