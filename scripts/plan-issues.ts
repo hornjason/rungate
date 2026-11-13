@@ -38,6 +38,7 @@ import {
   annotatedBody,
   multiplyAnnotated,
   parseRepairPlan,
+  rowPlacement,
 } from "../lib/issue-repair";
 import type { RepairRow } from "../lib/issue-repair";
 import {
@@ -49,6 +50,8 @@ import {
 } from "../lib/issue-decomposition";
 import { readQueueLabel } from "../lib/config-readers";
 import { answerableIds, specCriteriaIn } from "../lib/board-mirror";
+import { milestonePlan, placementReading } from "../lib/spec-placement";
+import type { LiveMilestone, MilestoneAction } from "../lib/spec-placement";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-issues.test.ts` can build a
@@ -71,6 +74,9 @@ export interface PlanIssuesGitHub {
   setBody: (repo: string, number: number, body: string) => Promise<void>;
   clearMilestone: (repo: string, number: number) => Promise<void>;
   removeBlockedBy: (repo: string, blocked: number, blocker: number) => Promise<void>;
+  /** Every milestone, for `--milestone-prefix` placement (#2042). */
+  milestones: (repo: string) => Promise<LiveMilestone[]>;
+  setMilestone: (repo: string, number: number, title: string) => Promise<void>;
 }
 
 /**
@@ -152,6 +158,27 @@ const LIVE_GITHUB: PlanIssuesGitHub = {
   removeBlockedBy: async (repo, blocked, blocker) => {
     gh(["issue", "edit", String(blocked), "--repo", repo, "--remove-blocked-by", String(blocker)]);
   },
+  // PAGINATED, for the reason `LIVE_DECOMPOSE.milestones` gives: a phase
+  // milestone on page two would read as absent and refuse the run.
+  milestones: async repo => {
+    const out = gh([
+      "api",
+      "--paginate",
+      `repos/${repo}/milestones?state=all&per_page=100`,
+      "--jq",
+      ".[] | [.number, .title, .description] | @json",
+    ]);
+    return out
+      .split("\n")
+      .filter(l => l.trim() !== "")
+      .map(l => {
+        const [number, title, description] = JSON.parse(l) as [number, string, string | null];
+        return { number, title, description };
+      });
+  },
+  setMilestone: async (repo, number, title) => {
+    gh(["issue", "edit", String(number), "--repo", repo, "--milestone", title]);
+  },
 };
 
 const USAGE = `rungate plan-issues (--repair | --decompose) <plan.md> --repo <owner/name> [--write] [--json]
@@ -159,6 +186,12 @@ const USAGE = `rungate plan-issues (--repair | --decompose) <plan.md> --repo <ow
   --repair     an approved repair plan. A table of
                | Issue | Phase | Repair | Criteria | Confidence | Why |
                where Repair is (a) annotate or (b) demote.
+  --milestone-prefix <family> --spec <family spec>
+               with --repair: also move each (a) row's issue into
+               <family> Phase N, the phase its Phase column names. Only rows
+               whose criteria the family spec places are moved; a phase with
+               no milestone, or a Phase column the spec disagrees with,
+               refuses the run before anything is written.
   --decompose  a decomposition plan — step 4 of ADR-003. A table of
                | Criterion | Outcome | Files | Milestone | Blocked by |
                where one row is one issue proving one criterion.
@@ -575,8 +608,10 @@ async function decompose(
 /** What one row would do, resolved against the issue's live state. */
 interface Action {
   row: RepairRow;
-  kind: "annotate" | "demote" | "unchanged" | "refused";
+  kind: "annotate" | "demote" | "unchanged" | "refused" | "place" | "skip";
   body?: string;
+  /** For a placement: the milestone title the issue moves into (#2042). */
+  milestone?: string;
   /** For a demotion: every edge the demotion orphans. */
   edges: { blocked: number; blocker: number }[];
   note: string;
@@ -599,6 +634,8 @@ export async function main(
         json: { type: "boolean", default: false },
         "project-root": { type: "string" },
         "accepted-since": { type: "string" },
+        "milestone-prefix": { type: "string" },
+        spec: { type: "string" },
       },
       allowPositionals: true,
     });
@@ -623,6 +660,10 @@ export async function main(
   const given = values.repair ?? values.decompose;
   if (!given) {
     console.error(`plan-issues: --repair <plan.md> or --decompose <plan.md> is required\n\n${USAGE}`);
+    return REFUSAL_EXIT;
+  }
+  if ((values["milestone-prefix"] !== undefined || values.spec !== undefined) && !values.repair) {
+    console.error(`plan-issues: --milestone-prefix and --spec place a repair plan's rows — pass them with --repair\n\n${USAGE}`);
     return REFUSAL_EXIT;
   }
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
@@ -653,6 +694,34 @@ export async function main(
     return await decompose(planPath, planLabel, repo, values.write, values.json, gh3, readQueueLabel(root), root);
   }
 
+  // #2042: placement is opt-in per family and needs that family's spec — the
+  // family names the milestones, the spec says which criteria each phase
+  // holds. Settled before any issue is read.
+  const prefix = values["milestone-prefix"];
+  let familyPlan: MilestoneAction[] | null = null;
+  if (prefix !== undefined || values.spec !== undefined) {
+    if (prefix === undefined || prefix.trim() === "" || values.spec === undefined) {
+      console.error(
+        `plan-issues: --milestone-prefix <family> and --spec <family spec> go together — the family ` +
+          `names the milestones and the spec says which criteria each phase holds\n\n${USAGE}`,
+      );
+      return REFUSAL_EXIT;
+    }
+    const specPath = isAbsolute(values.spec) ? values.spec : join(root, values.spec);
+    if (!existsSync(specPath)) {
+      console.error(`plan-issues: no such spec: ${specPath}`);
+      return REFUSAL_EXIT;
+    }
+    const specText = readFileSync(specPath, "utf-8");
+    const placement = placementReading(specText);
+    if (placement.reading === "UNMEASURED") {
+      console.error(`plan-issues: UNMEASURED — ${values.spec} cannot place a row:`);
+      for (const r of placement.unmeasuredReasons) console.error(`  - ${r}`);
+      return REFUSAL_EXIT;
+    }
+    familyPlan = milestonePlan(specText, await gh2.milestones(repo), prefix).actions;
+  }
+
   const reading = parseRepairPlan(readFileSync(planPath, "utf-8"));
 
   // The refusal, decided BEFORE anything is written and read by every path.
@@ -666,6 +735,10 @@ export async function main(
   }
 
   const actions: Action[] = [];
+  // A placement refusal stops the WHOLE run before any write, unlike a body
+  // refusal, which stops only its row (#2042: "refused before anything is
+  // written").
+  const placementRefusals: Action[] = [];
   for (const row of reading.rows) {
     const live = await gh2.readIssue(repo, row.issue);
     if (row.kind === "annotate") {
@@ -678,19 +751,37 @@ export async function main(
           edges: [],
           note: `body carries "${CRITERIA_HEADING}" more than once — resolve it by hand`,
         });
-        continue;
-      }
-      if (alreadyAnnotated(live.body, row.criteria)) {
+      } else if (alreadyAnnotated(live.body, row.criteria)) {
         actions.push({ row, kind: "unchanged", edges: [], note: `already names ${row.criteria.join(", ")}` });
-        continue;
+      } else {
+        actions.push({
+          row,
+          kind: "annotate",
+          body: annotatedBody(live.body, row.criteria),
+          edges: [],
+          note: `+ ${row.criteria.join(", ")}`,
+        });
       }
-      actions.push({
-        row,
-        kind: "annotate",
-        body: annotatedBody(live.body, row.criteria),
-        edges: [],
-        note: `+ ${row.criteria.join(", ")}`,
-      });
+      if (familyPlan !== null) {
+        const p = rowPlacement(row, familyPlan, prefix!);
+        if (p.kind === "refuse") {
+          const refused: Action = { row, kind: "refused", edges: [], note: `cannot place: ${p.why}` };
+          actions.push(refused);
+          placementRefusals.push(refused);
+        } else if (p.kind === "skip") {
+          actions.push({ row, kind: "skip", edges: [], note: p.why });
+        } else if (live.milestone === p.milestone) {
+          actions.push({ row, kind: "unchanged", edges: [], note: `already in "${p.milestone}"` });
+        } else {
+          actions.push({
+            row,
+            kind: "place",
+            milestone: p.milestone,
+            edges: [],
+            note: `${live.milestone === null ? "no milestone" : `"${live.milestone}"`} → "${p.milestone}"`,
+          });
+        }
+      }
       continue;
     }
     if (live.milestone === null) {
@@ -714,25 +805,34 @@ export async function main(
     // swallowed every failure into a string nothing read — so a run that
     // failed on all eleven rows emitted "yes" and exited 0. Fail-open status
     // reporting, caught by the security review of this PR.
-    const results = values.write && !refuseWrite ? await apply(gh2, repo, actions) : [];
+    const blocked = refuseWrite || placementRefusals.length > 0;
+    const results = values.write && !blocked ? await apply(gh2, repo, actions) : [];
     const failures = results.filter(r => r.startsWith("FAILED"));
     const refusedRows = actions.filter(a => a.kind === "refused");
     const wrote = !values.write
       ? "not-requested"
-      : refuseWrite
+      : blocked
         ? "refused"
         : failures.length > 0 || refusedRows.length > 0
           ? "partial"
           : "yes";
-    console.log(JSON.stringify({ ...reading, actions, results, wrote }, null, 2));
-    return refuseWrite || failures.length > 0 || refusedRows.length > 0 ? REFUSAL_EXIT : 0;
+    const placement = familyPlan === null ? "not-requested" : prefix;
+    console.log(JSON.stringify({ ...reading, actions, results, wrote, placement }, null, 2));
+    return blocked || failures.length > 0 || refusedRows.length > 0 ? REFUSAL_EXIT : 0;
   }
 
   const edges = actions.reduce((n, a) => n + a.edges.length, 0);
   console.log(`${values.repair} — ${reading.rows.length} row(s)\n`);
   console.log(`ACTIONS`);
   for (const a of actions) {
-    const mark = { annotate: "ANNOTATE", demote: "DEMOTE  ", unchanged: "ok      ", refused: "REFUSED " }[a.kind];
+    const mark = {
+      annotate: "ANNOTATE",
+      demote: "DEMOTE  ",
+      unchanged: "ok      ",
+      refused: "REFUSED ",
+      place: "PLACE   ",
+      skip: "skip    ",
+    }[a.kind];
     console.log(`  ${mark}  #${a.row.issue}  ${a.note}`);
     if (a.edges.length > 0) {
       console.log(`            and remove ${a.edges.length} edge(s) the demotion orphans:`);
@@ -742,8 +842,22 @@ export async function main(
   console.log(
     `\n  ${actions.filter(a => a.kind === "annotate").length} annotate, ` +
       `${actions.filter(a => a.kind === "demote").length} demote, ` +
+      `${actions.filter(a => a.kind === "place").length} place, ` +
       `${actions.filter(a => a.kind === "unchanged").length} already correct, ${edges} edge(s) to remove`,
   );
+  if (familyPlan === null && reading.rows.some(r => r.kind === "annotate")) {
+    console.log(
+      `\n  The Phase column was not applied — no milestone is moved without ` +
+        `--milestone-prefix <family> --spec <family spec>.`,
+    );
+  }
+  if (placementRefusals.length > 0) {
+    console.error(
+      `\nplan-issues: ${placementRefusals.length} row(s) cannot be placed, so nothing was written. ` +
+        `Fix the plan or the spec and re-run.`,
+    );
+    return REFUSAL_EXIT;
+  }
 
   if (!values.write) {
     console.log(`\nNothing written. Re-run with --write to apply.`);
@@ -804,6 +918,9 @@ async function apply(gh2: PlanIssuesGitHub, repo: string, actions: readonly Acti
         for (const e of a.edges) await gh2.removeBlockedBy(repo, e.blocked, e.blocker);
         await gh2.clearMilestone(repo, a.row.issue);
         done.push(`demoted   #${a.row.issue}  and removed ${a.edges.length} edge(s)`);
+      } else if (a.kind === "place") {
+        await gh2.setMilestone(repo, a.row.issue, a.milestone!);
+        done.push(`placed    #${a.row.issue}  in "${a.milestone}"`);
       }
     } catch (e) {
       done.push(`FAILED    #${a.row.issue}: ${(e as Error).message}`);

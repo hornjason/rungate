@@ -19,7 +19,7 @@
  * A test asserting only the SET of calls is green against that ordering bug.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -48,6 +48,38 @@ function plan(rows: string[]): string {
 
 const ANNOTATE = "| #10 | 1 | (a) | `CRC-N2` | HIGH | because |";
 const DEMOTE = "| #20 | 5 | **(b)** | — | HIGH | machinery |";
+
+/**
+ * #2042: the family `Fam`, its spec, and the milestones the tracker carries.
+ * `ZZ-<N>` ids are a namespace no spec uses. Phase 7 is placed in the spec
+ * and has no milestone, which is the refusal case.
+ */
+const FAMILY_SPEC = [
+  "# Fam",
+  "",
+  "### Phase 5 — earlier",
+  "### Phase 6 — the one",
+  "### Phase 7 — unbuilt",
+  "",
+  "- [ ] ZZ-1: lib/a.ts contains [a] — first",
+  "- [ ] ZZ-2: lib/b.ts contains [b] — second",
+  "- [ ] ZZ-3: lib/c.ts contains [c] — third",
+  "",
+  "### Phase placement",
+  "",
+  "| Placement | Criteria | What |",
+  "|---|---|---|",
+  "| **Phase 5** | ZZ-2 | earlier |",
+  "| **Phase 6** | ZZ-1 | the one |",
+  "| **Phase 7** | ZZ-3 | unbuilt |",
+  "",
+  "## After",
+].join("\n");
+const LIVE_MILESTONES = [
+  { number: 1, title: "Fam Phase 5 — earlier", description: null },
+  { number: 2, title: "Fam Phase 6 — the one", description: null },
+  { number: 3, title: "Other Phase 6 — elsewhere", description: null },
+];
 
 describe("lib/issue-repair: the plan parses, and only the plan's table", () => {
   test("an (a) row is annotate with its ids, a (b) row is demote with none", () => {
@@ -204,6 +236,8 @@ describe("scripts/plan-issues --repair: what reaches GitHub", () => {
       setBody: async (_r, n, b) => void calls.push(`body#${n}:${b.includes("CRC") ? "withIds" : "noIds"}`),
       clearMilestone: async (_r, n) => void calls.push(`milestone#${n}`),
       removeBlockedBy: async (_r, blocked, blocker) => void calls.push(`edge-${blocked}<-${blocker}`),
+      milestones: async () => LIVE_MILESTONES,
+      setMilestone: async (_r, n, title) => void calls.push(`place#${n}:${title}`),
     };
     return { gh, calls };
   }
@@ -300,6 +334,8 @@ describe("scripts/plan-issues --repair: what reaches GitHub", () => {
       setBody: async () => { throw new Error("gh refused"); },
       clearMilestone: async (_r, n) => void calls.push(`milestone#${n}`),
       removeBlockedBy: async () => {},
+      milestones: async () => [],
+      setMilestone: async () => {},
     };
     const dir = mkdtempSync(join(tmpdir(), "rg-fail-"));
     try {
@@ -322,6 +358,8 @@ describe("scripts/plan-issues --repair: what reaches GitHub", () => {
       setBody: async () => { throw new Error("gh refused"); },
       clearMilestone: async () => {},
       removeBlockedBy: async () => {},
+      milestones: async () => [],
+      setMilestone: async () => {},
     };
     const dir = mkdtempSync(join(tmpdir(), "rg-partial-"));
     let code;
@@ -359,6 +397,8 @@ describe("scripts/plan-issues --repair: what reaches GitHub", () => {
       setBody: async (_r, _n, b) => void bodies.push(b),
       clearMilestone: async () => {},
       removeBlockedBy: async () => {},
+      milestones: async () => [],
+      setMilestone: async () => {},
     };
     const dir = mkdtempSync(join(tmpdir(), "rg-whole-"));
     try {
@@ -390,5 +430,115 @@ describe("scripts/plan-issues --repair: what reaches GitHub", () => {
     expect(good.calls).toEqual(["body#10:withIds"]);
     expect(bad.calls).toEqual([]);
     expect(badCode).toBe(REFUSAL_EXIT);
+  });
+});
+
+/**
+ * #2042: `--repair --milestone-prefix <family> --spec <family spec>` places
+ * each row's issue in the phase milestone the family's spec puts its
+ * criterion in. Opt-in per family (Jason, 2026-11-13): a table mixing
+ * families, like ADR-015's, moves only the named family's rows.
+ */
+describe("#2042: --repair places a milestone from the Phase column, per family", () => {
+  function spy(state: Record<number, Partial<IssueState>> = {}) {
+    const calls: string[] = [];
+    const gh: PlanIssuesGitHub = {
+      readIssue: async (_r, number) => ({ number, body: "Body.", milestone: null, blockedBy: [], blocking: [], ...state[number] }),
+      setBody: async (_r, n) => void calls.push(`body#${n}`),
+      clearMilestone: async (_r, n) => void calls.push(`clear#${n}`),
+      removeBlockedBy: async () => {},
+      milestones: async () => LIVE_MILESTONES,
+      setMilestone: async (_r, n, title) => void calls.push(`place#${n}:${title}`),
+    };
+    return { gh, calls };
+  }
+
+  async function run(rows: string[], gh: PlanIssuesGitHub, extra: string[]) {
+    const dir = mkdtempSync(join(tmpdir(), "rg-plan-issues-2042-"));
+    const out: string[] = [];
+    const log = console.log;
+    const err = console.error;
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void out.push(a.join(" "));
+    try {
+      mkdirSync(join(dir, "specs"));
+      writeFileSync(join(dir, "specs", "FAM-SPEC.md"), FAMILY_SPEC);
+      writeFileSync(join(dir, "PLAN.md"), plan(rows));
+      const code = await planIssuesMain(["--repair", "PLAN.md", "--repo", "o/r", "--project-root", dir, ...extra], gh);
+      return { code, out: out.join("\n") };
+    } finally {
+      console.log = log;
+      console.error = err;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const FAMILY = ["--milestone-prefix", "Fam", "--spec", "specs/FAM-SPEC.md"];
+  const IN_FAMILY = "| #10 | 6 | (a) | `ZZ-1` | HIGH | placed in Phase 6 |";
+  const OTHER_FAMILY = "| #11 | 6 | (a) | `CRC-N2` | HIGH | another family's criterion |";
+
+  test("a row whose criterion the family spec places in Phase 6 moves into that milestone", async () => {
+    const s = spy();
+    const r = await run([IN_FAMILY], s.gh, [...FAMILY, "--write"]);
+    expect(r.code, r.out).toBe(0);
+    expect(s.calls).toEqual(["body#10", "place#10:Fam Phase 6 — the one"]);
+  });
+
+  test("another family's row in the same table is left alone, and says why", async () => {
+    // The family filter. Placing every row from its Phase column alone would
+    // move #11 into `Fam Phase 6` too, which is ADR-015's #1355 case.
+    const s = spy();
+    const r = await run([IN_FAMILY, OTHER_FAMILY], s.gh, [...FAMILY, "--write"]);
+    expect(r.code, r.out).toBe(0);
+    expect(s.calls.filter(c => c.startsWith("place#"))).toEqual(["place#10:Fam Phase 6 — the one"]);
+    expect(r.out).toContain("#11");
+    expect(r.out).toMatch(/#11 .*not placed in a Fam phase/);
+  });
+
+  test("a phase with no milestone refuses the run before anything is written", async () => {
+    const s = spy();
+    const r = await run([IN_FAMILY, "| #12 | 7 | (a) | `ZZ-3` | HIGH | Phase 7 has no milestone |"], s.gh, [...FAMILY, "--write"]);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(s.calls, "a write went out from a run that refused").toEqual([]);
+    expect(r.out).toContain("Fam Phase 7");
+  });
+
+  test("a Phase column that disagrees with the spec refuses the run before anything is written", async () => {
+    const s = spy();
+    const r = await run(["| #13 | 5 | (a) | `ZZ-1` | HIGH | the plan says 5, the spec says 6 |"], s.gh, [...FAMILY, "--write"]);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(s.calls).toEqual([]);
+    expect(r.out).toContain("Phase 6");
+  });
+
+  test("an issue already in its milestone is left as it is", async () => {
+    const s = spy({ 10: { milestone: "Fam Phase 6 — the one", body: annotatedBody("Body.", ["ZZ-1"]) } });
+    const r = await run([IN_FAMILY], s.gh, [...FAMILY, "--write"]);
+    expect(r.code, r.out).toBe(0);
+    expect(s.calls).toEqual([]);
+  });
+
+  test("without --milestone-prefix nothing moves, and the run says the Phase column was not applied", async () => {
+    const s = spy();
+    const r = await run([IN_FAMILY], s.gh, ["--write"]);
+    expect(r.code, r.out).toBe(0);
+    expect(s.calls).toEqual(["body#10"]);
+    expect(r.out).toContain("Phase column was not applied");
+  });
+
+  test("--milestone-prefix without --spec is refused by name, and nothing is read or written", async () => {
+    const s = spy();
+    const r = await run([IN_FAMILY], s.gh, ["--milestone-prefix", "Fam", "--write"]);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(s.calls).toEqual([]);
+    expect(r.out).toContain("--spec");
+  });
+
+  test("without --write the placement is reported and nothing is called", async () => {
+    const s = spy();
+    const r = await run([IN_FAMILY], s.gh, FAMILY);
+    expect(r.code, r.out).toBe(0);
+    expect(s.calls).toEqual([]);
+    expect(r.out).toContain("Fam Phase 6 — the one");
   });
 });

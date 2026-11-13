@@ -32,6 +32,7 @@
  */
 
 import { headingOccurrencesOf } from "./issue-shape";
+import type { MilestoneAction } from "./spec-placement";
 
 /** The section a repaired body carries. One spelling, by fiat. */
 export const CRITERIA_HEADING = "## Criteria this serves";
@@ -226,4 +227,64 @@ export function multiplyAnnotated(body: string): boolean {
 /** True when the body already names every criterion the row asks for. */
 export function alreadyAnnotated(body: string, criteria: readonly string[]): boolean {
   return annotatedBody(body, criteria) === body;
+}
+
+/** Where a repair row's issue belongs in one milestone family (#2042). */
+export type RowPlacement =
+  | { kind: "place"; milestone: string; phase: number }
+  | { kind: "skip"; why: string }
+  | { kind: "refuse"; why: string };
+
+/**
+ * Which `<prefix> Phase N` milestone a row's issue belongs in, read from the
+ * family spec's placement table through `milestonePlan`, the one decider of
+ * which criteria a phase holds.
+ *
+ * Opt-in per family (Jason, 2026-11-13). A repair table can mix families,
+ * as ADR-015's does, so a row the family's spec does not place is skipped,
+ * never moved on its Phase column alone. Disagreement is a refusal: the
+ * row's Phase column against the spec, criteria split across phases, or a
+ * row naming criteria both inside and outside the family. So is a phase
+ * whose milestone does not exist; `plan-spec` makes milestones, and this
+ * never does.
+ */
+export function rowPlacement(
+  row: RepairRow,
+  plan: readonly MilestoneAction[],
+  prefix: string,
+): RowPlacement {
+  const phaseOf = new Map<string, MilestoneAction>();
+  for (const a of plan) for (const id of a.criteria) phaseOf.set(id, a);
+  const placed = row.criteria.filter(id => phaseOf.has(id));
+  if (placed.length === 0) {
+    return { kind: "skip", why: `names nothing ${prefix}'s spec places in a phase — not placed in a ${prefix} phase` };
+  }
+  const outside = row.criteria.filter(id => !phaseOf.has(id));
+  if (outside.length > 0) {
+    return {
+      kind: "refuse",
+      why: `names ${placed.join(", ")} from ${prefix}'s spec and ${outside.join(", ")} from outside it — one row cannot sit in two families`,
+    };
+  }
+  const actions = [...new Set(placed.map(id => phaseOf.get(id)!))];
+  if (actions.length > 1) {
+    return {
+      kind: "refuse",
+      why: `its criteria sit in ${actions.map(a => `Phase ${a.phase}`).join(" and ")} of ${prefix}'s spec`,
+    };
+  }
+  const target = actions[0]!;
+  if (target.phase !== row.phase) {
+    return {
+      kind: "refuse",
+      why: `the plan says Phase ${row.phase} and ${prefix}'s spec places ${placed.join(", ")} in Phase ${target.phase}`,
+    };
+  }
+  if (!target.existing) {
+    return {
+      kind: "refuse",
+      why: `"${target.title}" has no milestone — run plan-spec for ${prefix}'s spec first; this never creates one`,
+    };
+  }
+  return { kind: "place", milestone: target.existing.title, phase: target.phase };
 }
