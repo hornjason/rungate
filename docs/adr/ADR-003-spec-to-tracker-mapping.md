@@ -12,8 +12,8 @@ governs: how a spec's criteria reach the tracker — phase placement, milestones
 ## Status
 
 **Superseded by `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md` on 2026-10-31.** This
-ADR states 0 criteria of its own; the pipeline spec states 42 — SC-2600
-through SC-2625, SC-2734 through SC-2741 added by ADR-013, and SC-2742 through SC-2749 added by ADR-014 — covering the same subject: how a spec's criteria reach the
+ADR states 0 criteria of its own; the pipeline spec states 47 — SC-2600
+through SC-2625, SC-2734 through SC-2741 added by ADR-013, SC-2742 through SC-2749 added by ADR-014, and SC-2750 through SC-2753 and SC-2762 added by ADR-015 — covering the same subject: how a spec's criteria reach the
 tracker as milestones, issues and blocked-by edges. The content moved, so
 this is superseded rather than accepted, per the A7 rule recorded in
 project-state Priority 2.
@@ -153,8 +153,8 @@ bun scripts/criterion-inventory.ts --snapshot <dir> --spec specs/<SPEC>.md
 
 ## Status, honestly
 
-Steps 1 and 2 are done for `CODE-REVIEW-CONVERGENCE-SPEC.md`: 61 criteria
-placed, zero unplaced and zero double-placed.
+Steps 1 and 2 are done for `CODE-REVIEW-CONVERGENCE-SPEC.md`: 66 criteria
+placed (five of them added by ADR-015), zero unplaced and zero double-placed.
 
 **Milestones: seven derived, one not.** The placement table has exactly seven
 phase values, Phase 0 through Phase 6, so the rule above produces seven
