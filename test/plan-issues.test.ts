@@ -511,6 +511,19 @@ describe("#2042: --repair places a milestone from the Phase column, per family",
     expect(r.out).toContain("Phase 6");
   });
 
+  test("a row mixing families, or splitting phases, is refused rather than half-placed", async () => {
+    for (const [row, says] of [
+      ["| #14 | 6 | (a) | `ZZ-1`, `CRC-N2` | HIGH | two families |", "from outside it"],
+      ["| #15 | 6 | (a) | `ZZ-1`, `ZZ-2` | HIGH | two phases |", "Phase 6 and Phase 5"],
+    ] as const) {
+      const s = spy();
+      const r = await run([row], s.gh, [...FAMILY, "--write"]);
+      expect(r.code, row).toBe(REFUSAL_EXIT);
+      expect(s.calls, row).toEqual([]);
+      expect(r.out, row).toContain(says);
+    }
+  });
+
   test("an issue already in its milestone is left as it is", async () => {
     const s = spy({ 10: { milestone: "Fam Phase 6 — the one", body: annotatedBody("Body.", ["ZZ-1"]) } });
     const r = await run([IN_FAMILY], s.gh, [...FAMILY, "--write"]);
