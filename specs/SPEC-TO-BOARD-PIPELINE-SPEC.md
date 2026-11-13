@@ -172,6 +172,31 @@ of the last 40 merged PRs closed no issue.
 - [ ] SC-2741: Ready holds only work from the active milestone, the lowest Pipeline phase with an open issue, plus `work-this-next`; label-only and payload work never enter while a Pipeline phase has an open issue, a card outside the active milestone is demoted, and adding or removing a milestone, or adding a label, triggers the refill — issues enter by filing, never by transfer (Jason, 2026-11-12, #1752)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
+### The process reaches consumers through scaffold
+
+ADR-014 records the decisions; its Decomposition table files one issue per
+criterion below. Measured 2026-11-12 at `812f7e04`: the scaffold owns four
+workflows and none of ADR-013's four, two of the scripts they run ship in
+neither `files[]` nor the CLI, and nothing prints the steps only a person can
+take.
+
+- [ ] SC-2742: every script a process workflow runs ships in `package.json` `files[]` and runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`
+<!-- REVIEW: unmatched (rewriting as file-exists would assert only that package.json exists, while the criterion coordinates a further claim (runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`) — the file is mentioned, not what the criterion is about) -->
+- [ ] SC-2743: `rungate scaffold` emits `.github/workflows/closing-references.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
+<!-- REVIEW: unmatched (rewriting as file-exists would assert only that github/workflows/closing-references.yml exists, while the criterion coordinates a further claim (this repository's copy is the generated one) — the file is mentioned, not what the criterion is about) -->
+- [ ] SC-2744: `rungate scaffold` emits `.github/workflows/adr-accepted.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
+<!-- REVIEW: unmatched (rewriting as file-exists would assert only that github/workflows/adr-accepted.yml exists, while the criterion coordinates a further claim (this repository's copy is the generated one) — the file is mentioned, not what the criterion is about) -->
+- [ ] SC-2745: `rungate scaffold` emits `board-ready.yml` and `board-intake.yml` as owned workflows that read the board's identity from project config, and no generated workflow contains a literal project id or URL
+<!-- REVIEW: unmatched (rewriting as file-exists would assert only that board-ready.yml exists, while the criterion coordinates a further claim (`board-intake.yml` as owned workflows that read the board's identity from project config, and no generated workflow contains a literal project id or URL) — the file is mentioned, not what the criterion is about) -->
+- [ ] SC-2746: `rungate scaffold` installs `.claude/commands/dry-run.md` and `docs/adr/TEMPLATE.md` as owned files
+<!-- REVIEW: unmatched (rewriting as file-exists would assert only that claude/commands/dry-run.md exists, while the criterion coordinates a further claim (`docs/adr/TEMPLATE.md` as owned files) — the file is mentioned, not what the criterion is about) -->
+- [ ] SC-2747: `rungate scaffold` installs the four-step process as an owned rules file, generated from the same single source that this repository's own rule 9 is checked against, so the consumer's copy and ours cannot drift
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2748: `rungate scaffold` writes `board.expediteLabel` and `board.filingOverrideLabel` when the config lacks them, or names each one that stays unset
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2749: `rungate scaffold` ends by printing each human step still owed as one command — the project token secret, `RUNGATE_REQUIRE_CLOSING_REF`, and every process check that runs but is not required on the default branch — and prints `UNMEASURED` for any it could not read, never "done"
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+
 ### Nothing in the engine is hand-run
 
 The engine is the tooling that turns a spec into board state. The payload is a
@@ -244,7 +269,7 @@ is built from this document.
 | **Phase 4** | SC-2611 |
 | **Phase 5** | SC-2612, SC-2613, SC-2614 |
 | **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741 |
-| **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621 |
+| **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
 | **Phase 9** | SC-2625 |
 

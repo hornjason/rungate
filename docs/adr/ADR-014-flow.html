@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ADR-014 — the process reaches consumers (dry run)</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e6e8ee; --dim:#8a92a6;
+          --hand:#f2a541; --auto:#4fb3a9; --judge:#b18cf2; --warn:#e5605a; --ok:#6cc070; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:32px; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system, system-ui, sans-serif; }
+  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:15px; margin:32px 0 12px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
+  .sub { color:var(--dim); margin-bottom:20px; }
+  .legend span { display:inline-block; margin-right:18px; } .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .hand { background:var(--hand); } .auto { background:var(--auto); } .judge { background:var(--judge); }
+  .timeline { position:relative; margin-left:12px; border-left:2px solid var(--line); padding-left:24px; }
+  .step { position:relative; margin:0 0 14px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 14px; }
+  .step::before { content:""; position:absolute; left:-32px; top:14px; width:12px; height:12px; border-radius:50%; background:var(--c); }
+  .step b { color:var(--c); } .step .who { float:right; font-size:12px; color:var(--c); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .card .id { font:12px ui-monospace, monospace; color:var(--auto); } .card h3 { font-size:14px; margin:4px 0 8px; }
+  .card .files { font:12px ui-monospace, monospace; color:var(--dim); } .card .blk { margin-top:8px; font-size:12px; color:var(--hand); }
+  .cmp { display:grid; grid-template-columns:1fr 1fr; gap:12px; } .cmp div { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 16px; }
+  .cmp h3 { margin:0 0 8px; font-size:14px; } .cmp li { margin:3px 0; } .bad { color:var(--warn); } .good { color:var(--ok); }
+  .gap { border-left:3px solid var(--warn); padding:6px 12px; margin:6px 0; background:var(--panel); }
+  .open { border-left:3px solid var(--judge); padding:6px 12px; margin:6px 0; background:var(--panel); }
+  code { font:12px ui-monospace, monospace; color:#c9d1e0; }
+</style>
+</head>
+<body>
+<h1>ADR-014 — the alignment process reaches consumers through scaffold</h1>
+<div class="sub">Dry run, 2026-11-12, against main at <code>812f7e04</code>. Revision 1 — accepted by Jason, all four decisions as recommended.</div>
+<div class="legend"><span><i class="dot hand"></i>by hand</span><span><i class="dot auto"></i>automatic</span><span><i class="dot judge"></i>judgement (Jason)</span></div>
+
+<h2>The run</h2>
+<div class="timeline">
+  <div class="step" style="--c:var(--judge)"><span class="who">YOU</span><b>1.</b> Decide the four open decisions (owned workflows, rules file, Phase 7, scope) → edits to the ADR</div>
+  <div class="step" style="--c:var(--judge)"><span class="who">YOU</span><b>2.</b> Flip <code>status: proposed</code> → <code>accepted</code> and merge the PR → closes #1988</div>
+  <div class="step" style="--c:var(--auto)"><span class="who">AUTO</span><b>3.</b> <code>adr-accepted.yml</code> fires (its first live run) → <code>plan-spec --write</code> updates Phase 7's description (12 criteria)</div>
+  <div class="step" style="--c:var(--auto)"><span class="who">AUTO</span><b>4.</b> <code>plan-issues --decompose --write</code> → 8 issues in Phase 7, 7 blocked-by links (one to #1719)</div>
+  <div class="step" style="--c:var(--auto)"><span class="who">AUTO</span><b>5.</b> <code>plan-deps --write</code> → Phase 6's open issues block the new Phase 7 issues</div>
+  <div class="step" style="--c:var(--auto)"><span class="who">AUTO</span><b>6.</b> <code>board-mirror --write</code> fills the Criteria cells; <code>board-ready --top-up --write</code> — nothing new enters Ready while Phase 6 is open</div>
+  <div class="step" style="--c:var(--hand)"><span class="who">ME</span><b>7.</b> Build row 1 first once Phase 6 closes; each PR says <code>Fixes #N</code></div>
+</div>
+
+<h2>The eight issues (Pipeline Phase 7)</h2>
+<div class="cards">
+  <div class="card"><div class="id">SC-2742 · row 1</div><h3>The process workflows' scripts ship in the package and run as CLI commands</h3><div class="files">lib/cli-commands.ts, package.json, scripts/board-ready.ts, scripts/audit-closing-references.ts, .claude/rules/commands-routing.md, test/package-closure.test.ts</div><div class="blk">blocked by: —</div></div>
+  <div class="card"><div class="id">SC-2743 · row 2</div><h3>Scaffold emits closing-references.yml as an owned workflow</h3><div class="files">lib/scaffold/closing-references-workflow.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .github/workflows/closing-references.yml, test/closing-references-workflow.test.ts</div><div class="blk">blocked by: row 1</div></div>
+  <div class="card"><div class="id">SC-2744 · row 3</div><h3>Scaffold emits adr-accepted.yml as an owned workflow</h3><div class="files">lib/scaffold/adr-accepted-workflow.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .github/workflows/adr-accepted.yml, test/adr-accepted-workflow.test.ts</div><div class="blk">blocked by: row 2</div></div>
+  <div class="card"><div class="id">SC-2745 · row 4</div><h3>Scaffold emits board-ready.yml and board-intake.yml with the board read from config</h3><div class="files">lib/scaffold/board-ready-workflow.ts, lib/scaffold/board-intake-workflow.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, 2 workflows, 2 tests (8 files)</div><div class="blk">blocked by: #1719, row 3</div></div>
+  <div class="card"><div class="id">SC-2746 · row 5</div><h3>Scaffold installs the dry-run command and the ADR template</h3><div class="files">lib/scaffold/owned-files.ts, lib/scaffold/write-steps.ts, .claude/rules/harness-managed.md, test/scaffold-ownership.test.ts, test/dry-run-command.test.ts</div><div class="blk">blocked by: row 4</div></div>
+  <div class="card"><div class="id">SC-2747 · row 6</div><h3>Scaffold installs the four-step process as an owned rules file</h3><div class="files">lib/scaffold/process-rules.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, test/process-rules.test.ts, test/rule-provenance.test.ts</div><div class="blk">blocked by: row 5</div></div>
+  <div class="card"><div class="id">SC-2748 · row 7</div><h3>Scaffold writes the two label keys or reports each one unset</h3><div class="files">lib/scaffold/steps.ts, test/scaffold-label-keys.test.ts</div><div class="blk">blocked by: —</div></div>
+  <div class="card"><div class="id">SC-2749 · row 8</div><h3>Scaffold ends by printing every human step still owed as one command</h3><div class="files">lib/branch-protection.ts, lib/scaffold/human-steps.ts, scripts/scaffold-project.ts, test/human-steps.test.ts, test/branch-protection-gate.test.ts</div><div class="blk">blocked by: row 4</div></div>
+</div>
+
+<h2>Today vs after</h2>
+<div class="cmp">
+  <div><h3>A consumer today</h3><ul>
+    <li class="bad">gets 4 workflows, none of ADR-013's 4</li>
+    <li class="bad">cannot run board-ready or closing-references — not shipped</li>
+    <li class="bad">no /dry-run, no ADR template, no rule 9</li>
+    <li class="bad">workflows copied by hand would point at this repo's board</li>
+    <li class="bad">nothing says to create the token, set the variable, require the check</li>
+    <li class="bad">expedite lane and filing waiver silently off</li>
+  </ul></div>
+  <div><h3>After all eight rows</h3><ul>
+    <li class="good">scaffold writes the 4 process workflows, regenerated on every run</li>
+    <li class="good">every called script is a CLI command in the package</li>
+    <li class="good">/dry-run, TEMPLATE.md and the process rule installed as owned files</li>
+    <li class="good">board identity read from config; no literal ids generated</li>
+    <li class="good">scaffold prints each owed human step as one command, UNMEASURED when unreadable</li>
+    <li class="good">label keys written or named as unset</li>
+  </ul></div>
+</div>
+
+<h2>What reaches Ready</h2>
+<div class="open">Active milestone: Pipeline Phase 6 (#2020 in review, #2021, #2024). The eight new issues sit in Phase 7, blocked, and enter only when Phase 6 has no open issue. Expedite: none. Today's rule pulls the same — this ADR adds nothing to Ready until Phase 6 closes.</div>
+
+<h2>Gaps found by this dry run</h2>
+<div class="gap">#1719 (Phase 7, SC-2621) already moves the board's ids into config for the scripts. Row 4 now depends on it — added.</div>
+<div class="gap">No tool assigns a milestone to an existing issue; only <code>--decompose</code> (new issues) and <code>--repair</code> (demote) touch milestones. Not this ADR's gap — recorded for the backlog repair.</div>
+<div class="gap">Rows 2–6 share <code>owned-files.ts</code> and <code>harness-managed.md</code>, so they run in sequence, not in parallel.</div>
+
+<h2>Needs you</h2>
+<div class="open">1. Process workflows scaffold-owned and regenerated? (recommended: yes)</div>
+<div class="open">2. Rule 9 as an owned rules file rather than an AGENTS.md edit? (recommended: yes)</div>
+<div class="open">3. Rows in Pipeline Phase 7? (recommended: yes)</div>
+<div class="open">4. Revision 1 covers only ADR-013's four workflows? (recommended: yes)</div>
+</body>
+</html>
