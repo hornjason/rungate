@@ -244,7 +244,9 @@ export type RowPlacement =
  * as ADR-015's does, so a row the family's spec does not place is skipped,
  * never moved on its Phase column alone. Disagreement is a refusal: the
  * row's Phase column against the spec, criteria split across phases, or a
- * row naming criteria both inside and outside the family. So is a phase
+ * row naming criteria both inside and outside the family, or one of the
+ * family's criteria that its spec places in no phase (`Blocked`, `Done` and
+ * the other `NON_PHASE_PLACEMENTS`) beside one it does. So is a phase
  * whose milestone does not exist; `plan-spec` makes milestones, and this
  * never does.
  */
@@ -252,21 +254,35 @@ export function rowPlacement(
   row: RepairRow,
   plan: readonly MilestoneAction[],
   prefix: string,
+  /** Every criterion the family spec states, placed in a phase or not. */
+  stated: ReadonlySet<string>,
 ): RowPlacement {
-  const phaseOf = new Map<string, MilestoneAction>();
-  for (const a of plan) for (const id of a.criteria) phaseOf.set(id, a);
-  const placed = row.criteria.filter(id => phaseOf.has(id));
-  if (placed.length === 0) {
-    return { kind: "skip", why: `names nothing ${prefix}'s spec places in a phase — not placed in a ${prefix} phase` };
+  const actionFor = new Map<string, MilestoneAction>();
+  for (const a of plan) for (const id of a.criteria) actionFor.set(id, a);
+  const placed = row.criteria.filter(id => actionFor.has(id));
+  const unphased = row.criteria.filter(id => stated.has(id) && !actionFor.has(id));
+  const outside = row.criteria.filter(id => !stated.has(id));
+  if (placed.length === 0 && unphased.length === 0) {
+    return { kind: "skip", why: `names nothing ${prefix}'s spec states — not placed in a ${prefix} phase` };
   }
-  const outside = row.criteria.filter(id => !phaseOf.has(id));
   if (outside.length > 0) {
     return {
       kind: "refuse",
-      why: `names ${placed.join(", ")} from ${prefix}'s spec and ${outside.join(", ")} from outside it — one row cannot sit in two families`,
+      why:
+        `names ${[...placed, ...unphased].join(", ")} from ${prefix}'s spec and ${outside.join(", ")} ` +
+        "from outside it — one row cannot sit in two families",
     };
   }
-  const actions = [...new Set(placed.map(id => phaseOf.get(id)!))];
+  if (placed.length === 0) {
+    return { kind: "skip", why: `${prefix}'s spec places ${unphased.join(", ")} in no phase, so there is no milestone to move into` };
+  }
+  if (unphased.length > 0) {
+    return {
+      kind: "refuse",
+      why: `${placed.join(", ")} sit in a phase and ${unphased.join(", ")} has no phase in ${prefix}'s spec`,
+    };
+  }
+  const actions = [...new Set(placed.map(id => actionFor.get(id)!))];
   if (actions.length > 1) {
     return {
       kind: "refuse",

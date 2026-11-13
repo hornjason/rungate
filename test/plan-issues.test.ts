@@ -64,6 +64,7 @@ const FAMILY_SPEC = [
   "- [ ] ZZ-1: lib/a.ts contains [a] — first",
   "- [ ] ZZ-2: lib/b.ts contains [b] — second",
   "- [ ] ZZ-3: lib/c.ts contains [c] — third",
+  "- [ ] ZZ-4: lib/d.ts contains [d] — fourth, blocked",
   "",
   "### Phase placement",
   "",
@@ -72,6 +73,7 @@ const FAMILY_SPEC = [
   "| **Phase 5** | ZZ-2 | earlier |",
   "| **Phase 6** | ZZ-1 | the one |",
   "| **Phase 7** | ZZ-3 | unbuilt |",
+  "| **Blocked — needs a second person** | ZZ-4 | no phase |",
   "",
   "## After",
 ].join("\n");
@@ -522,6 +524,31 @@ describe("#2042: --repair places a milestone from the Phase column, per family",
       expect(s.calls, row).toEqual([]);
       expect(r.out, row).toContain(says);
     }
+  });
+
+  test("a row whose body edit is refused is not placed either", async () => {
+    // Review of #2069: the milestone moved while the criteria section stayed
+    // ambiguous, so the tracker was half-applied.
+    const twice = "x\n\n## Criteria this serves\n\nZZ-1\n\n## Criteria this serves\n";
+    const s = spy({ 10: { body: twice } });
+    const r = await run([IN_FAMILY], s.gh, [...FAMILY, "--write"]);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(s.calls.filter(c => c.startsWith("place#")), r.out).toEqual([]);
+  });
+
+  test("a criterion in the family spec with no phase is named as that, never as another family", async () => {
+    // Review of #2069: `Blocked`, `Done` and the other non-phase placements
+    // never reach a milestone action, so they read as "outside the family".
+    const mixed = await run(["| #16 | 6 | (a) | `ZZ-1`, `ZZ-4` | HIGH | one phased, one blocked |"], spy().gh, [...FAMILY, "--write"]);
+    expect(mixed.code).toBe(REFUSAL_EXIT);
+    expect(mixed.out).toContain("ZZ-4");
+    expect(mixed.out).toContain("no phase");
+    expect(mixed.out).not.toContain("from outside it");
+    const s = spy();
+    const alone = await run(["| #17 | 6 | (a) | `ZZ-4` | HIGH | blocked only |"], s.gh, [...FAMILY, "--write"]);
+    expect(alone.code, alone.out).toBe(0);
+    expect(s.calls.filter(c => c.startsWith("place#"))).toEqual([]);
+    expect(alone.out).toMatch(/#17 .*no phase/);
   });
 
   test("an issue already in its milestone is left as it is", async () => {

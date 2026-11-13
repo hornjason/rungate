@@ -51,6 +51,7 @@ import {
 import { readQueueLabel } from "../lib/config-readers";
 import { answerableIds, specCriteriaIn } from "../lib/board-mirror";
 import { milestonePlan, placementReading } from "../lib/spec-placement";
+import { readMilestonePrefix } from "../lib/live-issues";
 import type { LiveMilestone, MilestoneAction } from "../lib/spec-placement";
 
 /**
@@ -697,10 +698,14 @@ export async function main(
   // #2042: placement is opt-in per family and needs that family's spec — the
   // family names the milestones, the spec says which criteria each phase
   // holds. Settled before any issue is read.
-  const prefix = values["milestone-prefix"];
+  // The one reading of what a prefix argument said (`lib/live-issues.ts`),
+  // so blank and absent are decided where plan-deps decides them.
+  const prefixRead = readMilestonePrefix(values["milestone-prefix"]);
+  const prefix = prefixRead.kind === "given" ? prefixRead.prefix : undefined;
   let familyPlan: MilestoneAction[] | null = null;
-  if (prefix !== undefined || values.spec !== undefined) {
-    if (prefix === undefined || prefix.trim() === "" || values.spec === undefined) {
+  let familyStated: Set<string> = new Set();
+  if (prefixRead.kind !== "absent" || values.spec !== undefined) {
+    if (prefix === undefined || values.spec === undefined) {
       console.error(
         `plan-issues: --milestone-prefix <family> and --spec <family spec> go together — the family ` +
           `names the milestones and the spec says which criteria each phase holds\n\n${USAGE}`,
@@ -719,6 +724,7 @@ export async function main(
       for (const r of placement.unmeasuredReasons) console.error(`  - ${r}`);
       return REFUSAL_EXIT;
     }
+    familyStated = new Set(placement.criteria);
     familyPlan = milestonePlan(specText, await gh2.milestones(repo), prefix).actions;
   }
 
@@ -744,7 +750,8 @@ export async function main(
     if (row.kind === "annotate") {
       // Two sections means editing the first is a guess, and the second keeps
       // whatever stale ids it holds. Refuse the row by name.
-      if (multiplyAnnotated(live.body)) {
+      const bodyRefused = multiplyAnnotated(live.body);
+      if (bodyRefused) {
         actions.push({
           row,
           kind: "refused",
@@ -762,8 +769,12 @@ export async function main(
           note: `+ ${row.criteria.join(", ")}`,
         });
       }
-      if (familyPlan !== null) {
-        const p = rowPlacement(row, familyPlan, prefix!);
+      if (familyPlan !== null && bodyRefused) {
+        // Review of #2069: moving the milestone while the criteria section
+        // stays ambiguous leaves the tracker half-applied.
+        actions.push({ row, kind: "skip", edges: [], note: "not placed: its body was refused above" });
+      } else if (familyPlan !== null) {
+        const p = rowPlacement(row, familyPlan, prefix!, familyStated);
         if (p.kind === "refuse") {
           const refused: Action = { row, kind: "refused", edges: [], note: `cannot place: ${p.why}` };
           actions.push(refused);
