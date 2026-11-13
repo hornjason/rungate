@@ -456,13 +456,44 @@ export type FilingCapReading = {
    * reports `false` and earns no note. This is the corrupt case alone.
    */
   unreadable: boolean;
+  /**
+   * Which setting could not be read, for the note (#2070). Absent when
+   * `unreadable` is false; the note's default names the `ship` block.
+   */
+  unreadableSource?: string;
 };
+
+/** The per-run cap override's config path, as the note names it (#2070). */
+export const FILING_CAP_OVERRIDE_SOURCE = "`board.filingsPerRun`";
+
+/**
+ * `board.filingsPerRun`, the cap set apart from `ship.mode` (#2070).
+ *
+ * `null` when it is not set, so the ship-mode derivation stands. A value
+ * that is present and is not a positive integer is `"unusable"`, never
+ * coerced: `Number("12")` or `Math.floor(1.5)` would turn a typo into a cap
+ * nobody chose, and the direction a bad config may push this is down.
+ */
+export function filingCapOverride(config: Record<string, unknown> | null | undefined): number | null | "unusable" {
+  const board = config?.board;
+  if (board === undefined || board === null) return null;
+  if (typeof board !== "object" || Array.isArray(board)) return "unusable";
+  if (!("filingsPerRun" in board)) return null;
+  const raw = (board as Record<string, unknown>).filingsPerRun;
+  return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : "unusable";
+}
 
 export function filingsPerRunFor(
   load: () => Record<string, unknown> | null | undefined,
 ): FilingCapReading {
   try {
-    return { cap: filingsPerRun(resolveShipPolicy(load())), unreadable: false };
+    const config = load();
+    const derived = filingsPerRun(resolveShipPolicy(config));
+    const override = filingCapOverride(config);
+    if (override === "unusable") {
+      return { cap: FILINGS_PER_RUN, unreadable: true, unreadableSource: FILING_CAP_OVERRIDE_SOURCE };
+    }
+    return { cap: override ?? derived, unreadable: false };
   } catch {
     return { cap: FILINGS_PER_RUN, unreadable: true };
   }
@@ -3114,7 +3145,7 @@ export async function filingGate(
   // exist yet there, and the ordering is deliberate: this is the first note a
   // reader sees, because it is the one that explains the NUMBER every later
   // refusal quotes.
-  if (allowance.unreadable) notes.push(unreadableShipPolicyNote(cap));
+  if (allowance.unreadable) notes.push(unreadableShipPolicyNote(cap, allowance.unreadableSource));
   /** The queue-ceiling note is one fact about the project, said once. */
   let notedQueueCeiling = false;
 
@@ -4050,9 +4081,9 @@ export function queueCeilingNote(label: string, ceiling: number, runCap: number)
   );
 }
 
-export function unreadableShipPolicyNote(cap: number): string {
+export function unreadableShipPolicyNote(cap: number, source: string = "`ship` block"): string {
   return (
-    `[FindingArbiter] This project's \`ship\` block is present and could not be resolved, so the ` +
+    `[FindingArbiter] This project's ${source} is present and could not be resolved, so the ` +
     `per-run cap is the STRICT ${cap} rather than whatever the config meant. The filing is NOT ` +
     `blocked by this note and the number is deliberately the conservative one — a corrupt config ` +
     `must never be a route to a larger allowance. But if you expected direct-ship mode's raised ` +

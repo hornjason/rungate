@@ -6015,6 +6015,34 @@ describe("the filing cap under direct-ship mode", () => {
     ).not.toContain("could not be resolved");
   });
 
+  test("#2070: an unusable board.filingsPerRun is named in the gate's note, not the ship block", async () => {
+    // The gate's own call site, which a unit case on the note function cannot
+    // reach: dropping the source argument there measured 0 red of 16 in
+    // test/filing-cap-override.test.ts. Same shape as the case above, with
+    // the ship block valid and the override not.
+    const AT = "2026-11-13T18:00:00.000Z";
+    const onPr: CommentTarget = { reading: "PR", number: 2070, branch: "rg/2070-filing-cap-setting" };
+    const filing =
+      'gh issue create --title "zqxjCapOverride drops a reading it resolved" ' +
+      `--body "\`zqxjCapOverride\` in lib/zqxj-cap-override.ts loses 19 of 37 readings over 6203 runs. Claim 4. ${DECLARED}"`;
+    const dir = freshRun();
+    mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+    writeFileSync(
+      join(dir, ".claude", "rungate", "config.json"),
+      JSON.stringify({ ship: { mode: "harness" }, board: { filingsPerRun: "12" } }),
+    );
+    const r = await filingGate(filing, {
+      projectRoot: dir,
+      now: AT,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: () => [],
+      readTarget: async () => onPr,
+    });
+    expect(r.note ?? "", "the note does not name the unusable override").toContain("`board.filingsPerRun`");
+    expect(r.note ?? "", "the note blamed the ship block, which is valid").not.toContain("`ship` block");
+    expect(r.note ?? "").toContain(`STRICT ${FILINGS_PER_RUN}`);
+  });
+
   test("FG-194: the raised cap is bounded, so it cannot drift into a swarm's number", () => {
     // #1595's swarm ran at 57 filed against 53 closed. A cap that creeps
     // upward one PR at a time ends there, and nothing else in this file
