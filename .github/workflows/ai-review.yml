@@ -1,4 +1,4 @@
-# generated-sha: bc354f6325ea40f8
+# generated-sha: c9d383ac5f66985a
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 #
 # THREE OUTCOMES, and only one of them is a review that found nothing.
@@ -630,6 +630,10 @@ jobs:
           # Pinned by .bun-version — the project's single declaration (#622).
           # setup-bun reads that file, so there is no version spelled here to drift from it.
           bun-version-file: ".bun-version"
+        env:
+          # A per-runner install path, so runners sharing a HOME cannot rewrite
+          # each other's bun mid-exec ("Text file busy").
+          HOME: ${{ runner.tool_cache }}/bun-home
       - name: Count the review rounds on this pull request
         id: ai-review-rounds
         env:

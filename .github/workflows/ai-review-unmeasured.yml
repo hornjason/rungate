@@ -1,4 +1,4 @@
-# generated-sha: 4671128e4f4ada18
+# generated-sha: 61e6c7225e2bb611
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 #
 # WHICH KIND of unmeasured each unmeasured AI review round was (#1488).
@@ -51,6 +51,10 @@ jobs:
           # Pinned by .bun-version — the project's single declaration (#622).
           # setup-bun reads that file, so there is no version spelled here to drift from it.
           bun-version-file: ".bun-version"
+        env:
+          # A per-runner install path, so runners sharing a HOME cannot rewrite
+          # each other's bun mid-exec ("Text file busy").
+          HOME: ${{ runner.tool_cache }}/bun-home
       - name: Record which kind of unmeasured each round was
         env:
           AI_REVIEW_UNMEASURED_REPO: ${{ github.repository }}
