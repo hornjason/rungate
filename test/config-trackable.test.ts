@@ -487,6 +487,26 @@ describe("#505: a config in an ignored directory is deleted by an ordinary branc
       "the full block's re-exclude of .claude/* was appended").not.toContain("!.claude/");
   });
 
+  test("#2071 review: a `.claude/` project with NO .claude directory yet still gets the full block", () => {
+    // The first-scaffold case. A probe of the bare `.claude` path can only
+    // match a directory-only rule by stat-ing it, and there is nothing to
+    // stat, so a probe-based choice reads `.claude/` as `.claude/*`, writes
+    // the narrow block, and the after-check refuses a project the
+    // unconditional full block used to fix. Every other fixture in this file
+    // writes a file under `.claude/`, which is how that went unseen.
+    const root = repo({ ".gitignore": ".claude/\n", "README.md": "# p" });
+    expect(existsSync(join(root, ".claude")), "the fixture already has a .claude directory").toBe(false);
+    expect(configPathsIgnored(root).ignored, "the fixture's config paths are not ignored to begin with")
+      .toContain(MONOLITH);
+
+    const actions: string[] = [];
+    ensureConfigTrackable(root, actions);
+    expectMeasured(actions, "UPDATED: .gitignore");
+    expect(configPathsIgnored(root).ignored, "the config is still ignored").toEqual([]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8").split("\n"),
+      "the parent re-include the full block carries is missing").toContain("!.claude/");
+  });
+
   test("a project with no .gitignore at all does not acquire an empty one", () => {
     // The config can be ignored with no root `.gitignore` in the tree at
     // all — here by a nested one. The block cannot reach that, so it
