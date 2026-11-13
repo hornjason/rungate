@@ -267,9 +267,9 @@ is built from this document.
 | **Phase 2** | SC-2606, SC-2607 |
 | **Phase 3** | SC-2608, SC-2609, SC-2610 |
 | **Phase 4** | SC-2611 |
-| **Phase 5** | SC-2612, SC-2613, SC-2614 |
-| **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741 |
-| **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749 |
+| **Phase 5** | SC-2612, SC-2613, SC-2614, SC-2750 |
+| **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753 |
+| **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
 | **Phase 9** | SC-2625 |
 
@@ -344,3 +344,7 @@ acceptance test, so it is also the honest answer to *when is the engine done*
 - Every criterion in every spec is reachable from the board: a milestone, an
   issue, or an explicit "not started".
 - `rungate plan-deps` with no `--write` reports no missing edge.
+- [ ] SC-2750: lib/bash-write-guard.ts contains [heredocInterpreter] — a gh issue create reached through a heredoc — inside a subshell, a brace group, a continued line or eval — is metered by the filing cap as a filing attempt, never passed unmetered
+- [ ] SC-2751: lib/issue-closure-audit.ts contains [openWithMergedCloser] — a merged pull request whose closing reference names an issue that is still open is reported naming both, so shipped work never reads as outstanding
+- [ ] SC-2752: scripts/board-conformance.ts contains [declaredWorkUnaccounted] — every unticked criterion in an in-scope spec and every open stage item in project-state.json names an open issue, or board-conformance reports it as unaccounted, by name
+- [ ] SC-2753: lib/issue-filing-gate.ts contains [committedFilingCap] — the filing cap's size and ceiling are read from committed config only, so a working-tree edit cannot raise an agent's own cap

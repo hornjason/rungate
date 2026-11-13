@@ -9,9 +9,10 @@ updated: 2026-11-12
 
 ## Status
 
-**Accepted, 2026-11-12. Revision 1.** Jason accepted the four-way split,
-the write-guard call and the stale closes as recommended, and chose to review
-the 22 promote drafts with Rayford one batch at a time.
+**Accepted, 2026-11-12. Revision 2.** Jason accepted the four-way split,
+the write-guard call and the stale closes as recommended, then reviewed
+the 22 promote drafts with Rayford batch by batch: 20 approved (three
+narrowed or rewritten), #1506 declared, #1945 waiting, #1987 split.
 Widens #1954 (fifteen of these issues) to all forty, and this ADR's PR
 closes it. Precedent and format: ADR-005.
 
@@ -76,6 +77,7 @@ no placement table.
 | #1126 | 0 | (a) | `SC-1947` | HIGH | SC-1947 (constraint extraction runs as part of scaffold and re-scaffold) is #545 criterion 7 restated, and intake is that extraction. |
 | #1883 | 1 | (a) | `CRC-N3` | HIGH | REVIEW.md defines `population` as the size of the flagged class, so a self-declared, unchecked population is CRC-N3 failing. |
 | #1885 | 2 | (a) | `CRC-B3` | HIGH | Several independent reviewer passes merged into one is CRC-B3's "several agents look for bugs at the same time", with its warning that recall and false positives rise together. |
+| #1571 | 6 | (a) | `SC-2754` | HIGH | Shares #1495's criterion — one mechanism, the waiver's auto-merge disarm (Jason, 2026-11-12). |
 
 ## Declare — `finding-promotion --issue N --declines "<why>" --write`
 
@@ -94,32 +96,43 @@ no placement table.
 | #1975 | A 5s timeout and a missing verdict look identical in the ladder | HIGH | Flake handling inside the stage-ladder test, which is rule 10 machinery. |
 | #1993 | audit-specs writes two REVIEW notes under one criterion | HIGH | Its body already declares this, capitalised; the write lowercases it so E2 counts it. |
 
-## Promote — Jason writes the criterion, then `finding-promotion --issue N --spec <spec> --symbol <s> --module <m> --outcome "<criterion>" --write`
+## Promote — reviewed with Jason, 2026-11-12, batch by batch
 
-| Issue | Title | Draft criterion | Spec | Suggested milestone |
-|---|---|---|---|---|
-| #1046 | Harness measures agent time and suites but nothing about CI | Every merged PR carries a CI reading — per-check duration, queue time, open→first-check→last-check→merge — and a check that did not run reads UNMEASURED, never 0. | HARNESS-STANDARD.md | — |
-| #1194 | Consumer-shaped test: install the tarball, assemble a brief | A brief assembled from the installed package contains `_shared.md`, and the same test fails against a version that does not ship `gates/`. | AGENT-BRIEF-TEMPLATE-SPEC.md | — |
-| #1355 | heredocInterpreter reads only the opener line | A `gh issue create` reached through a heredoc in a subshell, brace group, continued line or `eval` is metered as a filing attempt. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 5 (beside SC-2613) |
-| #1495 | ai-review waiver disarm is one-shot; re-arm never seen | A waived review cannot merge unread: auto-merge armed after the review's last run is disarmed or refused. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 6 |
-| #1506 | Reservation protocol unfollowable under enforce_admins | An id reservation reaches the shared store before any id it covers is consumed, by a route branch protection permits. | PARALLEL-AGENT-COORDINATION-SPEC.md | — |
-| #1553 | Rewriting a stale generated rule row needs per-row provenance | A re-scaffold refreshes a stale generated row in a preserved rule file and cannot change a hand-edited row beside it. | RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md | — |
-| #1559 | prove-evidence.schema.json has no live reader | Every gate artifact with a declared schema is validated against it, so a required field the writer does not emit turns the suite red. | GATE-CONTRACTS-SPEC.md | — |
-| #1571 | #1242's disarm step has never succeeded (0 of 65) | A waived review whose auto-merge cannot be disarmed reads differently from one that found something, and the operator learns it when arming. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 6 |
-| #1816 | Nothing sees an author repairing past round three | A PR repaired a fourth time after the round-three step-back is reported, distinguishable from one whose author re-scoped. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 5 |
-| #1818 | A finding naming one member of a population is not checked | A class-tagged finding's thread cannot resolve until the author states the population — N sites, M defective — and the search that found it. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 1 |
-| #1887 | ai-review returns clean over files restored from base, unread | Every review prints which changed files it saw only at their base version — count and list, explicit zero included. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 5 |
-| #1910 | Nothing pins forge behaviours our tools depend on | Every forge behaviour a tool depends on has a live probe reading CONFIRMED, CHANGED or UNMEASURED, and a dependency with no probe turns the suite red. | GITHUB-API-MIGRATION-SPEC.md | — |
-| #1911 | remoteRepoReading compares path but never host | A merge-ref reading against a remote whose host or owner/name differs from the PR's repository is UNMEASURED. | PARALLEL-AGENT-COORDINATION-SPEC.md | — |
-| #1921 | What writes In review for an issue with no closing reference? | An issue card in In review with no linked PR is reported as hand-placed, so In review has a second source. | BOARD-FLOW-SPEC.md | — |
-| #1934 | Review reports DIFF_TRUNCATED on every state-record PR | A diff over the reviewer's budget is still reviewed, and the reading states coverage as n of m files read. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 5 |
-| #1942 | Stale-claim sweep reads updatedAt, which a comment bumps | A claim is released as stale from silence in its work artifacts — commits and PR events — never from `updatedAt`. | BOARD-FLOW-SPEC.md | — |
-| #1945 | board-mirror --write has no criterion, evidence or issue | The board's Criteria column agrees with every engine issue's body, written by a workflow holding a project credential, never by hand. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 7 |
-| #1952 | Merged PR with a valid closing ref left its issue open | A merged PR whose closing reference names a still-open issue is reported naming both. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 7 |
-| #1953 | Nothing reports declared work that no issue covers | Every declaration of work in a tracked file names an open issue or is reported unaccounted. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 6 |
-| #1964 | Filing cap size and ceiling read from the working tree | The filing cap's size and ceiling resolve from committed config, so a working-tree edit cannot raise an agent's own cap. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 6 |
-| #1976 | Group Ready by file overlap in work-status | The what's-next report groups Ready and candidates by declared file overlap, and issues naming no files are never grouped. | BOARD-FLOW-SPEC.md | — |
-| #1987 | GateEnforcement counts .archive runs; ship.js over the script cap | Split first: (1) an archived run never counts toward a strike; (2) every workflow entry script stays under 524,288 bytes. | HARNESS-GATES.md | — |
+Each criterion below is the text Jason approved. Written into its spec by
+`finding-promotion --issue N --spec <spec> --symbol <s> --module <m> --outcome "<criterion>" --write`.
+
+| Issue | Approved criterion | Spec | Milestone |
+|---|---|---|---|
+| #1355 | A `gh issue create` reached through a heredoc — inside a subshell, a brace group, a continued line or `eval` — is metered by the filing cap as a filing attempt, never passed unmetered. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 5 |
+| #1952 | A merged pull request whose closing reference names an issue that is still open is reported naming both, so shipped work never reads as outstanding. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 7 |
+| #1953 | Every unticked criterion in an in-scope spec and every open stage item in project-state.json names an open issue, or board-conformance reports it as unaccounted, by name. (Narrowed by Jason from "every declaration of work", which cannot be measured.) | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 6 |
+| #1964 | The filing cap's size and ceiling are read from committed config only, so a working-tree edit cannot raise an agent's own cap. | SPEC-TO-BOARD-PIPELINE-SPEC.md | Pipeline Phase 6 |
+| #1921 | An issue card in In review with no linked open pull request is reported as hand-placed. | BOARD-FLOW-SPEC.md | — |
+| #1942 | A claim is released as stale from silence in its work — branch commits and pull-request events — never from the issue's last-updated time. | BOARD-FLOW-SPEC.md | — |
+| #1976 | The what's-next report groups Ready and promotion candidates by declared file overlap, and issues naming no files are never grouped together. | BOARD-FLOW-SPEC.md | — |
+| #1495, #1571 | A waived review cannot reach main unread: the auto-merge disarm succeeds or the run says it could not, and auto-merge armed after the waiver is disarmed again. (One criterion for both — Jason.) | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 6 |
+| #1816 | A pull request repaired a fourth time after the round-three step-back is reported, distinguishable from one whose author re-scoped. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 5 |
+| #1818 | A review finding tagged as a class cannot be resolved until the author states the population — N sites, M defective — and the search that found them. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 1 |
+| #1887 | Every AI review prints which changed files it saw only at their base version — count and list, explicit zero included. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 5 |
+| #1934 | A diff over the reviewer's budget is still reviewed, and the reading states coverage as n of m files read rather than a standing DIFF_TRUNCATED. | CODE-REVIEW-CONVERGENCE-SPEC.md | Convergence Phase 5 |
+| #1910 | Every forge behaviour listed in a committed inventory has a live probe reading CONFIRMED, CHANGED or UNMEASURED, and a tool that cites an unlisted behaviour turns the suite red. (Narrowed: a committed list makes "every" countable.) | GITHUB-API-MIGRATION-SPEC.md | — |
+| #1911 | A merge-ref reading against a remote whose host or owner/name differs from the pull request's repository is UNMEASURED. | PARALLEL-AGENT-COORDINATION-SPEC.md | — |
+| #1046 | Every merged pull request carries a CI reading — per-check duration, queue time, and open → first check → last check → merge — and a check that did not run reads UNMEASURED, never 0. | HARNESS-STANDARD.md | — |
+| #1194 | A brief assembled from the installed package contains `_shared.md`, and the same test fails against a version that does not ship `gates/`. | AGENT-BRIEF-TEMPLATE-SPEC.md | — |
+| #1553 | Every scaffold-owned file that allows hand edits carries a marked section for them; re-scaffold rewrites everything outside the marked section and carries the section forward verbatim, so a hand edit never freezes the rest of the file. First target: `.claude/rules/*.md`. (Jason's model: owned files stay owned.) | RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md | — |
+| #1559 | Every gate artifact with a declared schema is validated against it, so a required field the writer does not emit turns the suite red. | GATE-CONTRACTS-SPEC.md | — |
+| #1987 | A run archived under `~/.rungate/.archive` never counts toward a gate's strike threshold. (Split — Jason: the second half becomes its own issue, below.) | HARNESS-GATES.md | — |
+| new | Every workflow entry script stays under the Workflow tool's 524,288-byte script limit. (`workflows/ship.js` is 556,509 bytes, so harness mode cannot launch today.) | HARNESS-GATES.md | — |
+
+**Not promoted:**
+
+- **#1506 — declared (Jason):** current practice becomes the rule — criterion
+  ids are written in the pull request that consumes them, and the `taken`
+  set protects them after merge. The reservation rule's text is amended in
+  the PR that declares it.
+- **#1945 — waits (Jason):** if `adr-accepted.yml`'s first run that places a
+  plan (ADR-014's merge) fills the Criteria cells, #1945 is answered by
+  SC-2738; otherwise it is promoted then.
 
 ## Stale — close with the evidence
 
