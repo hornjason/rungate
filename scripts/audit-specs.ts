@@ -608,6 +608,25 @@ function followsWith(content: string, match: RegExpMatchArray, marker: string): 
 }
 
 /**
+ * Write `marker` on the line below the matched criterion, REPLACING a REVIEW
+ * marker already there rather than stacking a second one above it (#2040).
+ *
+ * A marker's text carries the reason, and a reason changes when the rewriter
+ * does: #2040's removal of the last resort changed why two criteria are kept,
+ * and the old code inserted the new marker above the old, so each criterion
+ * carried two contradictory reasons and the tree stopped being a fixed point
+ * of its own generator. Returns `content` unchanged when the marker is current.
+ */
+function withMarkerBelow(content: string, match: RegExpMatchArray, marker: string): string {
+  if (followsWith(content, match, marker)) return content;
+  const lineEnd = match.index! + match[0].length;
+  const rest = content.slice(lineEnd);
+  const stale = /^\n<!-- REVIEW: unmatched \(.*\) -->(?=\n|$)/.exec(rest);
+  if (stale) return content.slice(0, lineEnd) + `\n${marker}` + rest.slice(stale[0].length);
+  return replaceLine(content, match, `${match[0]}\n${marker}`);
+}
+
+/**
  * Whether this criterion carries a non-empty `proved-by:` line.
  *
  * One decider, borrowed rather than rebuilt: `parseCriteria` is the same
@@ -763,8 +782,9 @@ export function auditSpecs(
           // at four unmatched criteria and one marker. The three unmarked
           // ones read as reviewed because of a comment about a different
           // criterion.
-          if (!followsWith(modified, scMatch, marker)) {
-            modified = replaceLine(modified, scMatch, `${scMatch[0]}\n${marker}`);
+          const marked = withMarkerBelow(modified, scMatch, marker);
+          if (marked !== modified) {
+            modified = marked;
             hasChanges = true;
           }
           rewrites.push({

@@ -310,7 +310,7 @@ The enforcement lives in `scripts/check-instruction-surface.ts`
 - [x] SC-1939: Promotion ranks on the mechanical evidence score — a candidate with no evidence never outranks one with evidence
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-1940: Rejecting a promoted rule writes its hash to `reference/rejected-constraints.md` and it is never re-promoted
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that reference/rejected-constraints.md exists, while the criterion coordinates a further claim (it is never re-promoted) — the file is mentioned, not what the criterion is about) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-1941: A rule whose cited `file:line` no longer resolves is auto-retired, not warned about
 
 Implemented by #544 in `lib/rule-retirement.ts`, run by
@@ -344,9 +344,9 @@ retire.
 ### Sources
 
 - [ ] SC-1943: Makefile targets, `package.json` scripts and CI workflow files are scanned for constraints alongside markdown
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that package.json exists, while the criterion coordinates a further claim (CI workflow files are scanned for constraints alongside markdown) — the file is mentioned, not what the criterion is about) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-1944: `CODE-MAP.md` is excluded from constraint sources
-<!-- REVIEW: unmatched (rewriting as file-exists would drop the file `CODE-MAP.md` the criterion names) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-1945: A consumer scaffolded with zero mined rules is reported as such, not as a complete rule set
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 

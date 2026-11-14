@@ -304,6 +304,32 @@ describe("SC-2001: the REVIEW marker goes below the criterion, never into it", (
     expect(lines).not.toContain(`- [ ] ${rid}: ${rstatement}`);
   });
 
+  test("a marker whose reason has changed is replaced, never stacked", () => {
+    // Found by #2040's own fixed-point run: removing the fallback changed the
+    // reason two criteria are kept for, and `--fix` wrote the new marker
+    // ABOVE the old one, so each criterion carried two contradictory reasons
+    // and the repository stopped being a fixed point of its generator.
+    mkdirSync(join(FIXTURE, "specs"), { recursive: true });
+    const path = join(FIXTURE, "specs", "STALE-SPEC.md");
+    writeFileSync(
+      path,
+      `---\ndoc-type: spec\nstatus: active\ntestable: true\ncompliance: strict\n` +
+        `updated: 2026-11-14\ngoverns: the #2040 stale-marker fixture\n---\n\n# Stale\n\n` +
+        `## Success Criteria\n\n` +
+        `- [ ] SC-9407: Baseline rules carry no \`owner:\` key in frontmatter\n` +
+        `<!-- REVIEW: unmatched (a reason no current guard gives) -->\n` +
+        `- [ ] SC-9408: Baseline rules carry no \`owner:\` key in frontmatter\n`,
+    );
+    auditSpecs(FIXTURE, { fix: true });
+    const lines = readFileSync(path, "utf-8").split("\n");
+    expect(lines.join("\n"), "the stale reason survived beside the new one").not.toContain("a reason no current guard gives");
+    for (const id of ["SC-9407", "SC-9408"]) {
+      const at = lines.findIndex(l => l.startsWith(`- [ ] ${id}: `));
+      expect(lines[at + 1], `${id} carries no current marker`).toMatch(/^<!-- REVIEW: unmatched \(.+\) -->$/);
+      expect(lines[at + 2] ?? "", `${id} carries two markers`).not.toMatch(/^<!-- REVIEW: unmatched/);
+    }
+  });
+
   test("SC-2002: two criteria declined for the same reason each get a marker", () => {
     // The suppression, stated as a count rather than as a shape. All four
     // declines carry the identical reason, so a file-wide `includes` guard
