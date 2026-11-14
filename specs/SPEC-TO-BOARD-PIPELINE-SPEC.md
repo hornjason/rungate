@@ -191,7 +191,8 @@ take.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2746: `rungate scaffold` installs `.claude/commands/dry-run.md` and `docs/adr/TEMPLATE.md` as owned files
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2747: `rungate scaffold` installs the four-step process as an owned rules file, generated from the same single source that this repository's own rule 9 is checked against, so the consumer's copy and ours cannot drift
+- [x] SC-2747: `rungate scaffold` installs the four-step process as an owned rules file, generated from the same single source that this repository's own rule 9 is checked against, so the consumer's copy and ours cannot drift
+      proved-by: test/process-rules.test.ts — 7 pass, 0 fail; 2026-11-14, on the PR for #2049. `generateScopedRules` emits `.claude/rules/alignment-process.md` from `PROCESS_STEPS` in `lib/scaffold/process-rules.ts`, loaded at launch for a consumer; this repository's copy is byte-equal to the generator's output; and `ruleNineViolations` checks AGENTS.md's rule 9 against the same source, failing on a lost mechanism, a phrase under the wrong step, a dropped exemption, and an absent rule 9.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2748: `rungate scaffold` writes `board.expediteLabel` and `board.filingOverrideLabel` when the config lacks them, or names each one that stays unset
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
