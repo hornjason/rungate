@@ -7,13 +7,9 @@ owner: jason
 updated: 2026-10-21
 ---
 
-Every incident behind the rules below — the four SC collisions in one day, the
-two worktrees deleted with uncommitted work in them, the merges that captured a
-commit four behind the head — is kept verbatim in
-`reference/parallel-sessions-worked-instances.md`, one section per heading.
-Moved there by #1069, which did not shorten any of it: this file is loaded by
-every agent at launch, and the evidence for a rule is read once, by whoever is
-deciding whether to believe it.
+Every incident behind the rules below is kept verbatim in
+`reference/parallel-sessions-worked-instances.md`, one section per heading
+(#1069): this file loads at launch, and the evidence is read once.
 
 ## Claim the issue before you write code
 
@@ -27,6 +23,10 @@ see, so a claim that lives anywhere else — a message, another session's
 context, a branch nobody pushed — is not a claim. An issue reading "open" while
 the work is finished is indistinguishable from an issue nobody has started, and
 whoever picks it up rebuilds finished work on a branch they cannot see.
+
+**Filing:** `gh issue create` without `--repo`, from a session launched in
+the project root. The filing gate reads its config from the launch directory,
+and a `--repo` filing gets no queue raise.
 
 ## Reserve an SC block in the repository before you consume any id
 
@@ -156,7 +156,7 @@ repo's, or anything the project marks as requiring sign-off.
 ```bash
 SHA="$(bun scripts/verify-merge-ref.ts --pr <N>)" \
   && gh pr merge <N> --squash --auto --match-head-commit "$SHA"
-gh pr checks <N> --watch   # --auto only ARMS; the merge fires later
+gh pr checks <N> --watch --fail-fast   # --auto only ARMS; the first red ends the wait
 bun scripts/verify-merge-ref.ts --pr <N> --after-merge   # not optional
 ```
 

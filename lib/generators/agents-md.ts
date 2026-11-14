@@ -340,6 +340,7 @@ description: Shared behavioral principles for all agents working in this project
 - Skip ACs without rationale
 - Commit secrets or credentials
 - Spawn subagents for single-file tasks — do the work directly
+- Hand-patch what a process tool's \`--write\` left red — that is a tool defect; fix the tool
 `,
   });
 
@@ -645,6 +646,17 @@ nobody can interpret becomes a number nobody lowers.
 `,
   });
 
+  // The filing gate runs from this repository's own hooks and no consumer's
+  // defaults install it, so the line would name machinery a consumer lacks
+  // (review of #2155).
+  const filingLine = isHarnessItself(scan.root)
+    ? `
+**Filing:** \`gh issue create\` without \`--repo\`, from a session launched in
+the project root. The filing gate reads its config from the launch directory,
+and a \`--repo\` filing gets no queue raise.
+`
+    : "";
+
   rules.push({
     filename: "parallel-sessions.md",
     content: `---
@@ -661,7 +673,7 @@ gh issue edit <N> --add-assignee @me # then start
 The issue tracker is the claim registry. It is the only place every session can
 see, so a claim that lives anywhere else — a message, another session's
 context, a branch nobody pushed — is not a claim.
-
+${filingLine}
 **Why this is a rule and not a nicety:** an issue reading "open" while the work
 is finished is indistinguishable from an issue nobody has started. That is not
 hypothetical. On 2026-10-06 one session described #70 as "unclaimed, small,
@@ -674,6 +686,9 @@ collided with a branch they could not see.
 
 When the work is done and CI is green: push, open a PR, merge it. Do not hold a
 finished branch pending approval, and do not ask whether to push.
+
+Wait on checks with \`gh pr checks <N> --watch --fail-fast\`: the first red
+ends the wait, not the whole suite.
 
 **Why:** unpushed finished work is invisible. It makes the tracker lie, it
 makes other sessions duplicate effort, and it is lost entirely if the session

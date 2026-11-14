@@ -558,3 +558,26 @@ describe("SC-2736: AGENTS.md rule 9 carries the four-step process and its exempt
     expect(agents).not.toMatch(/^11\. /m);
   });
 });
+
+describe("#2043: the operational finds of 2026-11-12 reach a consumer's generated rules", () => {
+  // Claim 5. Each line is a lesson this repository paid for once; a consumer
+  // whose rules lack it relearns it.
+  const rules = generateScopedRules(mockProjectScan({ name: "consumer" }));
+  const text = (f: string) => rules.find(r => r.filename === f)?.content ?? "";
+  test("parallel-sessions.md watches checks with --fail-fast", () => {
+    expect(text("parallel-sessions.md")).toContain("gh pr checks <N> --watch --fail-fast");
+  });
+  // Review of #2155: the filing gate runs from this repo's own hooks and is
+  // not in any consumer's defaults, so the line names machinery a consumer
+  // does not have. It is generated for this repository only.
+  test("the filing line is generated for this repository, and never for a consumer", () => {
+    expect(text("parallel-sessions.md"), "a consumer has no filing gate").not.toContain("`gh issue create` without `--repo`");
+    const own = generateScopedRules(mockProjectScan({ root: ROOT, name: "rungate" }));
+    const t = own.find(r => r.filename === "parallel-sessions.md")?.content ?? "";
+    expect(t).toContain("`gh issue create` without `--repo`");
+    expect(t).toContain("reads its config from the launch directory");
+  });
+  test("agent-principles.md forbids hand-patching what a tool's --write left red", () => {
+    expect(text("agent-principles.md")).toContain("Hand-patch what a process tool's `--write` left red");
+  });
+});
