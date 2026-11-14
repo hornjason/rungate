@@ -181,8 +181,7 @@ workflows and none of ADR-013's four, two of the scripts they run ship in
 neither `files[]` nor the CLI, and nothing prints the steps only a person can
 take.
 
-- [x] SC-2742: every script a process workflow runs ships in `package.json` `files[]` and runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`
-      proved-by: test/package-closure.test.ts, the `SC-2742` describe — 3 pass, 0 fail, 2026-11-14, on the PR for #2044. It reads what ADR-014's four process workflows run and requires every script to be in `files[]` and registered in `CLI_COMMANDS`, and every `rungate` command they call to exist. Unregistering `board-ready`, unpublishing `audit-closing-references`, or reading comment lines as runs each turns one case red.
+- [ ] SC-2742: every script a process workflow runs ships in `package.json` `files[]` and runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2743: `rungate scaffold` emits `.github/workflows/closing-references.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
