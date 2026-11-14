@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -18,6 +18,7 @@ import {
   REQUIRE_CLOSING_REF_VARIABLE,
   humanSteps,
   readHumanSteps,
+  timed,
   type HumanStepProbes,
   type HumanStepReadings,
 } from "../lib/scaffold/human-steps";
@@ -81,6 +82,24 @@ describe("SC-2749: every human step still owed is one command", () => {
       `Human steps: none owed — measured: ${PROJECT_TOKEN_SECRET} is set; ${REQUIRE_CLOSING_REF_VARIABLE} is true; closing-references required on main.`,
     ]);
     expect(lines[0]).not.toMatch(/\bdone\b/i);
+  });
+});
+
+describe("SC-2749: a read that never answers is UNMEASURED, not a hung scaffold", () => {
+  test("timed rejects after its bound, naming what it waited for", async () => {
+    // Review of #2154: the secret and variable reads had no bound, and the
+    // scaffold awaits them on every run.
+    const never = new Promise<never>(() => {});
+    await expect(timed(never, "GET the secret", 20)).rejects.toThrow("GET the secret did not answer within 20ms");
+    expect(await timed(Promise.resolve(7), "fast", 20)).toBe(7);
+  });
+
+  test("both live reads go through the bound", () => {
+    const src = readFileSync(join(ROOT, "lib", "scaffold", "human-steps.ts"), "utf-8");
+    const calls = src.match(/\.rest\.actions\.getRepo(Secret|Variable)\(/g) ?? [];
+    const bounded = src.match(/timed\(\s*createGitHubClient\(\)\.rest\.actions\.getRepo(Secret|Variable)\(/g) ?? [];
+    expect(calls.length, "the scan found no live read, so it measured nothing").toBe(2);
+    expect(bounded.length, "a live read is not the first argument of timed(").toBe(calls.length);
   });
 });
 

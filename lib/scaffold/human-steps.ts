@@ -104,6 +104,19 @@ export interface HumanStepProbes {
   protection: ProtectionProbe;
 }
 
+/** The same bound the protection probe puts on each GET: a hung socket is UNMEASURED, never a hung scaffold. */
+export const PROBE_TIMEOUT_MS = 15_000;
+
+/** `p`, or a rejection naming `what` after `ms`. The rejection carries no status, so it reads UNMEASURED. */
+export function timed<T>(p: Promise<T>, what: string, ms: number = PROBE_TIMEOUT_MS): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${what} did not answer within ${ms}ms`)), ms).unref?.(),
+    ),
+  ]);
+}
+
 const status = (e: unknown) => (e as { status?: unknown })?.status;
 const why = (e: unknown) => `${typeof status(e) === "number" ? `HTTP ${status(e)}: ` : ""}${(e as Error)?.message ?? e}`;
 
@@ -113,7 +126,10 @@ export const LIVE_PROBES: HumanStepProbes = {
   secret: async slug => {
     try {
       const { owner, repo } = parseOwnerRepo(slug);
-      await createGitHubClient().rest.actions.getRepoSecret({ owner, repo, secret_name: PROJECT_TOKEN_SECRET });
+      await timed(
+        createGitHubClient().rest.actions.getRepoSecret({ owner, repo, secret_name: PROJECT_TOKEN_SECRET }),
+        `GET the ${PROJECT_TOKEN_SECRET} secret`,
+      );
       return { kind: "READ", value: true };
     } catch (e) {
       // 404 is the documented answer for an absent secret; anything else —
@@ -124,7 +140,10 @@ export const LIVE_PROBES: HumanStepProbes = {
   variable: async slug => {
     try {
       const { owner, repo } = parseOwnerRepo(slug);
-      const r = await createGitHubClient().rest.actions.getRepoVariable({ owner, repo, name: REQUIRE_CLOSING_REF_VARIABLE });
+      const r = await timed(
+        createGitHubClient().rest.actions.getRepoVariable({ owner, repo, name: REQUIRE_CLOSING_REF_VARIABLE }),
+        `GET the ${REQUIRE_CLOSING_REF_VARIABLE} variable`,
+      );
       return { kind: "READ", value: String(r.data?.value ?? "") };
     } catch (e) {
       return status(e) === 404 ? { kind: "READ", value: null } : { kind: "UNMEASURED", why: why(e) };
