@@ -40,10 +40,13 @@
 
 import { readFileSync } from "fs";
 import {
+  type ClosedIssue,
+  closingCriterionIds,
   closingRequirement,
   closingRequirementMessage,
   inertClosingMessage,
   inertClosingReferences,
+  isSessionRecordOnly,
   linkedIssuesInThisRepo,
 } from "../lib/closing-reference-audit";
 
@@ -198,9 +201,13 @@ async function main(): Promise<void> {
   // the set above — never its bare number. AI review of #2003: `Fixes #9` and
   // `Fixes other-org/other-repo#9` share a number, and a number-only test let
   // the other repository's body stand in for this one's.
-  const bodies = new Map<number, string>();
+  //
+  // The TITLE too (#2061): `criterionAnswer` reads title and body, so a
+  // declaration written in the title answers the question for the label and
+  // the board, and a node fetched without one was never fully read.
+  const issues = new Map<number, ClosedIssue>();
   for (const node of linked) {
-    const n = node as { number?: unknown; body?: unknown } | null;
+    const n = node as { number?: unknown; title?: unknown; body?: unknown } | null;
     if (n === null || typeof n !== "object" || typeof n.number !== "number") continue;
     if (linkedIssuesInThisRepo([n], repoNameWithOwner).size === 0) continue;
     if (typeof n.body !== "string") {
@@ -210,12 +217,34 @@ async function main(): Promise<void> {
           `query. UNMEASURED, not clean.`,
       );
     }
-    bodies.set(n.number, n.body);
+    if (typeof n.title !== "string") {
+      refuse(
+        `issue #${n.number} is closed by this pull request but its node carries no title, so ` +
+          `whether it names a criterion was never fully read. Add \`title\` to the ` +
+          `closingIssuesReferences query. UNMEASURED, not clean.`,
+      );
+    }
+    issues.set(n.number, { title: n.title, body: n.body });
+  }
+
+  // The ids a criterion can be named by come from the checkout's specs/ — the
+  // pull request's merge commit, so a criterion it adds counts. Taken only
+  // when an issue's answer depends on it: a session-record diff owes none.
+  let criterionIds: string[] = [];
+  if (!isSessionRecordOnly(changedPaths) && issues.size > 0) {
+    const ids = closingCriterionIds(process.cwd());
+    if (ids === null) {
+      refuse(
+        `the spec sweep of ${process.cwd()}/specs could not be taken, so no closed issue's ` +
+          `criteria can be read. UNMEASURED, not an issue that names none.`,
+      );
+    }
+    criterionIds = ids;
   }
 
   const runId = process.env.GITHUB_RUN_ID;
   const rerun = `gh run rerun ${runId ? runId : "<run-id>"} --repo ${repoNameWithOwner}`;
-  const failure = closingRequirement(changedPaths, bodies, linked.length, repoNameWithOwner, rerun);
+  const failure = closingRequirement(changedPaths, issues, criterionIds, linked.length, repoNameWithOwner, rerun);
   if (failure !== null) {
     const message = closingRequirementMessage(failure, prNumber);
     // Read EXACTLY as `RUNGATE_REQUIRE_AI_REVIEW` is: the string `true` and

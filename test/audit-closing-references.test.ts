@@ -458,14 +458,14 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
     expect(typeof node.repository?.name).toBe(typeof mine.repository.name);
     expect(typeof node.repository?.owner?.login).toBe(typeof mine.repository.owner.login);
 
-    // And the end-to-end reading, through the real script, with the body the
-    // workflow's query adds to each node.
+    // And the end-to-end reading, through the real script, with the title and
+    // body the workflow's query adds to each node (#2061 added the title).
     const r = run(
       SCRIPT,
       JSON.stringify({
         number: 1971,
         body: "Fixes #1962\n",
-        closingIssuesReferences: [{ ...node, body: SERVES }],
+        closingIssuesReferences: [{ ...node, title: "An issue", body: SERVES }],
         files: CODE,
       }),
       THIS_REPO,
