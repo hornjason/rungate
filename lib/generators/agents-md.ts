@@ -435,9 +435,8 @@ description: Every command the rungate CLI exposes in this project, generated fr
 
 ## Command Routing
 
-Generated from the CLI's own command registry, so it cannot list a subset.
-Run one as \`${cliPrefix} <command>\`.
-\`${cliPrefix} --help\` prints each command's own arguments.
+Generated from the CLI's command registry. Run one as
+\`${cliPrefix} <command>\`; \`--help\` prints its arguments.
 
 ${commandRoutingTable()}
 `,

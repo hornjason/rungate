@@ -1,13 +1,12 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: a61f46f60e2339af
+generated-sha: 693811fb0673cc3c
 ---
 
 ## Command Routing
 
-Generated from the CLI's own command registry, so it cannot list a subset.
-Run one as `bun bin/rungate.ts <command>`.
-`bun bin/rungate.ts --help` prints each command's own arguments.
+Generated from the CLI's command registry. Run one as
+`bun bin/rungate.ts <command>`; `--help` prints its arguments.
 
 | Command | What it does |
 |---------|--------------|
@@ -25,6 +24,7 @@ Run one as `bun bin/rungate.ts <command>`.
 | `plan-issues` | Apply an approved issue plan — --decompose creates issues from criteria (step 4), --repair links and demotes existing ones |
 | `plan-deps` | Write a spec's phase order onto the tracker as blocked-by edges |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
+| `board-id` | Print the board's node id from config |
 | `audit-closing-references` | Refuse a pull request whose closing reference GitHub will not act on, or that closes no issue |
 | `sync-spec-tests` | Regenerate the conformity suite from the specs |
 | `generate-code-map` | Regenerate CODE-MAP.md from the source tree |
