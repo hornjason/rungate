@@ -181,6 +181,16 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't edit the generated `place-the-plan` job",
   },
   {
+    // #2045, ADR-014 row 2. Hand-written and NOT-OWNED until ADR-013 rule 9
+    // made the check every consumer's policy; declared the moment the
+    // generator learned to write it, for #631's reason above.
+    path: ".github/workflows/closing-references.yml",
+    strategy: "job-preserving",
+    servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
+    customize: "Set the `RUNGATE_REQUIRE_CLOSING_REF` variable to `true` to refuse, not warn, and require the check; add your own jobs alongside the generated `closing-references` job",
+    avoid: "Don't edit the generated `closing-references` job",
+  },
+  {
     // `regenerate` until #655, and the declaration was never consulted:
     // `generateAgentBriefsStep` called `writeFileSync` directly, so the row
     // described behaviour that a bare overwrite happened to coincide with.
