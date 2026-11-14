@@ -315,7 +315,11 @@ const UNCLAIMED_RATCHET = 150;
 // #2050. A claim about which config keys scaffold writes and which it only
 // reports, which no registered pattern expresses; the `SC-2748` describe in
 // test/scaffold-label-keys.test.ts names it in a declaring position.
-const CLAIMED_UNBINDABLE = 162;
+// 162 -> 163: SC-2749 ticked by `sync-sc-status --only SC-2749` on the PR for
+// #2051. A claim about what scaffold prints after it writes, which no
+// registered pattern expresses; test/human-steps.test.ts names it in a
+// declaring position.
+const CLAIMED_UNBINDABLE = 163;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
