@@ -514,7 +514,10 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: it states no count of its own c
       new RegExp(`Of the unticked boxes, ${N}\\b`, "gi"),
       new RegExp(`\\b${N} of them are not engineering`, "gi"),
     ];
-    const restated = shapes.flatMap(p => [...body!.matchAll(p)].map(m => m[0]));
+    // Collapsed first: the spec is hard-wrapped, so a literal space in a
+    // shape misses a count split across a line break (round 3 of PR #2157).
+    const flatBody = body!.replace(/\s+/g, " ");
+    const restated = shapes.flatMap(p => [...flatBody.matchAll(p)].map(m => m[0]));
     expect(
       restated,
       `${SPEC} restates a count of its own criteria. #2082 deleted these: the criteria ` +
