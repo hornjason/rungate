@@ -1,6 +1,6 @@
 ---
 description: Shared behavioral principles for all agents working in this project
-generated-sha: 5befcb8301451a88
+generated-sha: d00fdebf7fc50d7b
 ---
 
 ## Core Principles
@@ -14,3 +14,4 @@ generated-sha: 5befcb8301451a88
 - Skip ACs without rationale
 - Commit secrets or credentials
 - Spawn subagents for single-file tasks — do the work directly
+- Hand-patch what a process tool's `--write` left red — that is a tool defect; fix the tool

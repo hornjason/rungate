@@ -558,3 +558,21 @@ describe("SC-2736: AGENTS.md rule 9 carries the four-step process and its exempt
     expect(agents).not.toMatch(/^11\. /m);
   });
 });
+
+describe("#2043: the operational finds of 2026-11-12 reach a consumer's generated rules", () => {
+  // Claim 5. Each line is a lesson this repository paid for once; a consumer
+  // whose rules lack it relearns it.
+  const rules = generateScopedRules(mockProjectScan({ name: "consumer" }));
+  const text = (f: string) => rules.find(r => r.filename === f)?.content ?? "";
+  test("parallel-sessions.md watches checks with --fail-fast", () => {
+    expect(text("parallel-sessions.md")).toContain("gh pr checks <N> --watch --fail-fast");
+  });
+  test("parallel-sessions.md says how to file so the gate reads the right config and raises the queue", () => {
+    const t = text("parallel-sessions.md");
+    expect(t).toContain("`gh issue create` without `--repo`");
+    expect(t).toContain("reads its config from the launch directory");
+  });
+  test("agent-principles.md forbids hand-patching what a tool's --write left red", () => {
+    expect(text("agent-principles.md")).toContain("Hand-patch what a process tool's `--write` left red");
+  });
+});
