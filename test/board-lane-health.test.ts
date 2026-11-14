@@ -6,9 +6,12 @@ import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import {
   LANES,
+  handPlacedInReview,
+  handPlacedInReviewLine,
   laneHealth,
   laneHealthLines,
   workVerdict,
+  type InReviewCensus,
   type LaneCensus,
   type WorkEvidence,
 } from "../lib/board-lane-health";
@@ -590,5 +593,93 @@ describe("#1941: WORKING, INVISIBLE or PARKED from the evidence, not the assigne
       "a listed caller no longer imports the decider at all, so the equality above held " +
         "vacuously over a shrinking population",
     ).toEqual([...CALLERS].sort());
+  });
+});
+
+/**
+ * #1921 / SC-2759: an issue card in In review that no open pull request
+ * declares it closes is reported as hand-placed.
+ *
+ * In review's entry condition is a ready pull request declaring it closes
+ * the issue (`specs/BOARD-FLOW-SPEC.md`), and `laneFor`'s `pr_ready` arm
+ * resolves its target through exactly that declaration. With none, nothing
+ * in this repository writes the card there and no event moves it out. #1717
+ * sat in In review for a week with no link ever recorded on its timeline,
+ * and the only visible symptom was In progress reading SHORT.
+ *
+ * Not a denominator — the In review row keeps NO_TARGET. This names cards.
+ */
+describe("#1921 / SC-2759: handPlacedInReview", () => {
+  const read = (over: Partial<InReviewCensus> = {}): InReviewCensus => ({
+    inReview: [1717, 2079],
+    declaredClosing: new Set([2079, 2131]),
+    closingTruncated: [],
+    complete: true,
+    ...over,
+  });
+
+  test("an In-review issue no open pull request declares is reported, by number", () => {
+    const r = handPlacedInReview(read());
+    expect(r, "#1717 has no open pull request declaring it, #2079 has one").toEqual({
+      kind: "read",
+      issues: [1717],
+    });
+    const line = handPlacedInReviewLine(r);
+    expect(line).toContain("#1717");
+    expect(line, "an issue with a declaring pull request is not hand-placed").not.toContain("#2079");
+    expect(line).toContain("hand-placed");
+  });
+
+  test("the control: every In-review issue declared by an open pull request reads none", () => {
+    // One variable differs from the case above: #1717 is gone. A decider
+    // that reports every In-review card reddens here.
+    const r = handPlacedInReview(read({ inReview: [2079] }));
+    expect(r).toEqual({ kind: "read", issues: [] });
+    expect(handPlacedInReviewLine(r)).toContain(
+      "every issue card in In review has an open pull request declaring it closes the issue",
+    );
+  });
+
+  test("the numbers are distinct and in order", () => {
+    const r = handPlacedInReview(read({ inReview: [2140, 1717, 2140], declaredClosing: new Set() }));
+    expect(r).toEqual({ kind: "read", issues: [1717, 2140] });
+  });
+
+  test("a closing list cut at one page is UNMEASURED, never a list and never none", () => {
+    // #1717 would be named here if the cut were ignored, and it may be the
+    // very issue the missing page declares.
+    const r = handPlacedInReview(read({ closingTruncated: [2150] }));
+    expect(r.kind, "a partial closing list reads an issue it covers as having none").toBe("unmeasured");
+    const line = handPlacedInReviewLine(r);
+    expect(line).toContain("UNMEASURED");
+    expect(line, "the reader needs to know which pull request was cut").toContain("#2150");
+    expect(line).not.toContain("#1717");
+  });
+
+  test("an incomplete board is UNMEASURED, never none", () => {
+    const r = handPlacedInReview(read({ inReview: [2079], complete: false }));
+    expect(r.kind, "a board read in part may be missing the very card in question").toBe("unmeasured");
+    expect(handPlacedInReviewLine(r)).toContain("UNMEASURED");
+  });
+
+  test("unread, none and some never print the same line", () => {
+    const lines = [
+      handPlacedInReviewLine(handPlacedInReview(read())),
+      handPlacedInReviewLine(handPlacedInReview(read({ inReview: [2079] }))),
+      handPlacedInReviewLine(handPlacedInReview(read({ complete: false }))),
+    ];
+    expect(new Set(lines).size).toBe(3);
+  });
+
+  test("the work-status report prints it from the closing list it already reads", () => {
+    // Fed by `declaredClosing` and `closingTruncated`, which the OPEN PULL
+    // REQUESTS section collects from `closingIssuesReferences` — no new
+    // query, and no sub-selection on the board walk (BR-46).
+    const src = readFileSync(join(import.meta.dir, "..", "scripts/work-status.ts"), "utf-8");
+    const call = src.slice(src.indexOf("handPlacedInReview({"));
+    expect(src.indexOf("handPlacedInReview({"), "the report never asks the question").toBeGreaterThan(-1);
+    expect(call.slice(0, call.indexOf("})"))).toContain("declaredClosing");
+    expect(call.slice(0, call.indexOf("})"))).toContain("closingTruncated");
+    expect(src, "the reading is decided and never printed").toContain("handPlacedInReviewLine(");
   });
 });
