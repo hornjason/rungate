@@ -27,7 +27,7 @@
     "expediteLabel": "work-this-next",
     "filingOverrideLabel": "arbiter-override",
     "engineSpec": "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
-    "milestonePrefix": "Pipeline"
+    "milestonePrefix": "Engine"
   },
   "ship": {
     "mode": "direct",
