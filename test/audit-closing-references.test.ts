@@ -17,9 +17,11 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { specCriteriaIn } from "../lib/board-mirror";
+import { closingCriteria } from "../lib/closing-reference-audit";
 
 const SCRIPT = join(import.meta.dir, "..", "scripts", "audit-closing-references.ts");
 const LIB = join(import.meta.dir, "..", "lib", "closing-reference-audit.ts");
@@ -527,7 +529,9 @@ describe("#2061: the closing check and the board answer the criterion question t
     JSON.stringify({ number: 2061, body: "Some change.\n", closingIssuesReferences: refs, files });
 
   test("an issue naming a payload criterion (not SC-<N>) satisfies the second half", () => {
-    const r = run(SCRIPT, payload([closes(42, THIS_REPO, "## Criteria this serves\n\nCRC-B4\n")]), THIS_REPO, ON);
+    // A TICKED payload criterion, so this case is about the criterion
+    // question alone; #2005's tick requirement has its own block below.
+    const r = run(SCRIPT, payload([closes(42, THIS_REPO, "## Criteria this serves\n\nCRC-A5\n")]), THIS_REPO, ON);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("closing references OK");
   });
@@ -577,5 +581,93 @@ describe("#2061: the closing check and the board answer the criterion question t
     // unreadable tree does not stop it.
     const record = run(SCRIPT, payload([], [{ path: "project-state.json" }]), THIS_REPO, ON, scratch);
     expect(record.code, record.err).toBe(0);
+  });
+});
+
+/**
+ * #2005: a pull request that closes a criterion's issue ticks the criterion,
+ * or says it does not complete it.
+ *
+ * Twice in three days a merge closed the last open issue naming an engine
+ * criterion while the criterion stayed unticked: #2003 closing #1998 (SC-2737)
+ * and #2094 closing #1964 (SC-2753). `criterion-coverage` then read short on
+ * main, every open pull request's CI went red on the stage proof, and the only
+ * repair was reopening the issue by hand. Neither merge's own CI could see it,
+ * because the reading takes the spec from main. This check reads the spec from
+ * the pull request's own tree, before the merge.
+ */
+describe("#2005: closing a criterion's issue ticks the criterion, or says it does not complete it", () => {
+  const roots: string[] = [];
+  afterAll(() => roots.forEach(r => rmSync(r, { recursive: true, force: true })));
+
+  /** A checkout whose one spec states SC-9101, ticked or not. */
+  const tree = (ticked: boolean): string => {
+    const root = mkdtempSync(join(tmpdir(), "closing-tick-"));
+    roots.push(root);
+    mkdirSync(join(root, "specs"));
+    writeFileSync(
+      join(root, "specs", "FIXTURE-SPEC.md"),
+      `# Fixture\n\n- [${ticked ? "x" : " "}] SC-9101: the fixture criterion\n- [x] SC-9102: a ticked neighbour\n`,
+    );
+    return root;
+  };
+  const payload = (body: string, issueBody = "## Criteria this serves\n\nSC-9101\n") =>
+    JSON.stringify({ number: 2005, body, closingIssuesReferences: [closes(77, THIS_REPO, issueBody)], files: CODE });
+
+  test("closing an issue whose criterion is unticked in this tree is refused, by name", () => {
+    const root = tree(false);
+    const real = run(SCRIPT, payload("Fixes #77\n"), THIS_REPO, ON, root);
+    expect(real.code, real.out).toBe(REFUSE_EXIT);
+    expect(real.err).toContain("#77");
+    expect(real.err).toContain("SC-9101");
+    expect(real.err, "the refusal must print the exact words that excuse it").toContain("does not complete SC-9101");
+    expect(run(buildMutant(), payload("Fixes #77\n"), THIS_REPO, ON, root).code).toBe(0);
+  });
+
+  test("the same pull request with the criterion ticked passes", () => {
+    const r = run(SCRIPT, payload("Fixes #77\n"), THIS_REPO, ON, tree(true));
+    expect(r.code, r.err).toBe(0);
+  });
+
+  test("saying it does not complete the criterion passes, for that criterion only", () => {
+    const root = tree(false);
+    const said = run(SCRIPT, payload("Fixes #77\n\nThis does not complete SC-9101; #78 carries it.\n"), THIS_REPO, ON, root);
+    expect(said.code, said.err).toBe(0);
+    // Excusing a different criterion excuses nothing here.
+    const other = run(SCRIPT, payload("Fixes #77\n\nThis does not complete SC-9102.\n"), THIS_REPO, ON, root);
+    expect(other.code).toBe(REFUSE_EXIT);
+    // Nor does a longer id that merely starts with it.
+    const longer = run(SCRIPT, payload("Fixes #77\n\nThis does not complete SC-91010.\n"), THIS_REPO, ON, root);
+    expect(longer.code).toBe(REFUSE_EXIT);
+  });
+
+  test("an issue that serves no criterion owes no tick", () => {
+    const r = run(SCRIPT, payload("Fixes #77\n", "Cleanup. This serves no criterion.\n"), THIS_REPO, ON, tree(false));
+    expect(r.code, r.err).toBe(0);
+  });
+
+  test("with the switch off, the unticked criterion is reported, not refused", () => {
+    const r = run(SCRIPT, payload("Fixes #77\n"), THIS_REPO, {}, tree(false));
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("NOT ENFORCED");
+    expect(r.out).toContain("SC-9101");
+  });
+
+  test("an id two specs both state is not demanded: it is ambiguous everywhere else too", () => {
+    // AI review of #2115. The sweep reports a collided id rather than
+    // attributing it, so a tick here could not say which spec's box to tick.
+    const root = tree(false);
+    writeFileSync(join(root, "specs", "OTHER-SPEC.md"), "# Other\n\n- [x] SC-9101: the same id, ticked here\n");
+    const r = run(SCRIPT, payload("Fixes #77\n"), THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(0);
+    expect(closingCriteria(root)!.unticked).toEqual([]);
+  });
+
+  test("the sweep says which criteria are unticked, from the same read as the ids", () => {
+    const root = tree(false);
+    const sweep = specCriteriaIn(root);
+    expect(sweep.reading).toBe("MEASURED");
+    expect(sweep.specs.flatMap(s => s.unticked)).toEqual(["SC-9101"]);
+    expect(closingCriteria(root)).toEqual({ ids: ["SC-9101", "SC-9102"], unticked: ["SC-9101"] });
   });
 });

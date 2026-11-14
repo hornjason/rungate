@@ -41,7 +41,8 @@
 import { readFileSync } from "fs";
 import {
   type ClosedIssue,
-  closingCriterionIds,
+  type ClosingCriteria,
+  closingCriteria,
   closingRequirement,
   closingRequirementMessage,
   inertClosingMessage,
@@ -230,21 +231,33 @@ async function main(): Promise<void> {
   // The ids a criterion can be named by come from the checkout's specs/ — the
   // pull request's merge commit, so a criterion it adds counts. Taken only
   // when an issue's answer depends on it: a session-record diff owes none.
-  let criterionIds: string[] = [];
+  //
+  // The same read says which criteria are still unticked (#2005), so a tick
+  // this pull request makes is seen and one it forgot is caught here, before
+  // the merge, rather than as a short criterion-coverage on main.
+  let criteria: ClosingCriteria = { ids: [], unticked: [] };
   if (!isSessionRecordOnly(changedPaths) && issues.size > 0) {
-    const ids = closingCriterionIds(process.cwd());
-    if (ids === null) {
+    const read = closingCriteria(process.cwd());
+    if (read === null) {
       refuse(
         `the spec sweep of ${process.cwd()}/specs could not be taken, so no closed issue's ` +
           `criteria can be read. UNMEASURED, not an issue that names none.`,
       );
     }
-    criterionIds = ids;
+    criteria = read;
   }
 
   const runId = process.env.GITHUB_RUN_ID;
   const rerun = `gh run rerun ${runId ? runId : "<run-id>"} --repo ${repoNameWithOwner}`;
-  const failure = closingRequirement(changedPaths, issues, criterionIds, linked.length, repoNameWithOwner, rerun);
+  const failure = closingRequirement(
+    changedPaths,
+    issues,
+    criteria,
+    pr.body,
+    linked.length,
+    repoNameWithOwner,
+    rerun,
+  );
   if (failure !== null) {
     const message = closingRequirementMessage(failure, prNumber);
     // Read EXACTLY as `RUNGATE_REQUIRE_AI_REVIEW` is: the string `true` and

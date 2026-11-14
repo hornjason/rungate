@@ -41,6 +41,12 @@ export interface SpecCriteria {
   /** Repo-relative, with `/` separators, so a reading is comparable across machines. */
   readonly path: string;
   readonly ids: readonly string[];
+  /**
+   * The ids whose box is NOT ticked in this spec, from the same read as
+   * `ids` (#2005). A pull request closing an issue that names one of these
+   * leaves the criterion with one fewer open issue and no tick.
+   */
+  readonly unticked: readonly string[];
 }
 
 /** What `specCriteriaIn` found, including what it could not resolve. */
@@ -205,6 +211,7 @@ export function specCriteriaIn(root: string, readDir: SpecDirReader = readSpecDi
   const seen = new Map<string, string[]>();
   for (const path of files) {
     let ids: string[];
+    let unticked: string[];
     try {
       // De-duplicated WITHIN the spec. `parseCriteria` matches every
       // `- [ ] ID:` line independently and does not dedupe, so one spec
@@ -215,7 +222,9 @@ export function specCriteriaIn(root: string, readDir: SpecDirReader = readSpecDi
       // misreported as ambiguous, with a nonsensical reason. Found by the
       // AI review of #1679; zero specs state a duplicate today, so nothing
       // observable changes and the guard is for the case that arrives.
-      ids = criterionIdsIn(readFileSync(join(root, path), "utf-8"));
+      const text = readFileSync(join(root, path), "utf-8");
+      ids = criterionIdsIn(text);
+      unticked = [...new Set(parseCriteria(text).filter(c => !c.ticked).map(c => c.id))];
     } catch (e) {
       // One unreadable spec does not make a SHORTER id list — it makes the
       // whole sweep unmeasured, because a shorter list is exactly what a
@@ -223,7 +232,7 @@ export function specCriteriaIn(root: string, readDir: SpecDirReader = readSpecDi
       reasons.push(`could not read ${path}: ${(e as Error).message}`);
       continue;
     }
-    specs.push({ path, ids });
+    specs.push({ path, ids, unticked });
     for (const id of ids) seen.set(id, [...(seen.get(id) ?? []), path]);
   }
 
