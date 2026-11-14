@@ -108,6 +108,9 @@ export const PROMOTION_REFUSALS = [
   "PHASE_ROW_ABSENT",
   "BANK_DRIFT",
   "ALREADY_PLACED",
+  "SECTION_REQUIRED",
+  "SECTION_UNKNOWN",
+  "SECTION_AMBIGUOUS",
 ] as const;
 
 export type PromotionRefusal = (typeof PROMOTION_REFUSALS)[number];
@@ -583,6 +586,7 @@ export function specWithCriterion(
   line: string,
   id: string,
   phase: number | null,
+  section: string | null = null,
 ): { ok: true; text: string } | { ok: false; refusal: PromotionRefusal; why: string } {
   // Already written (a retry after a failed link): the line stays where it
   // is, and the phase and placement checks below still run on it, so a retry
@@ -590,11 +594,98 @@ export function specWithCriterion(
   const lines = specText.split("\n");
   const present = lines.includes(line);
   const [, family, group] = /^([A-Z]+)-([A-Z]?)\d+$/.exec(id) ?? [];
-  let last = -1;
+  // #2110: the SECTION each criterion of this family sits in, so a spec
+  // keeping them in several is not appended to after whichever comes last.
+  // A section is a heading OCCURRENCE, not its text: HARNESS-STANDARD.md has
+  // `### Success Criteria` twenty-six times, one per feature (review of
+  // #2127). Each is named by its path of parent headings, so `Feature A >
+  // Success Criteria` and `Feature B > Success Criteria` are told apart.
+  // A `#` line inside a fenced block is code, and an unclosed fence refuses
+  // rather than hiding every line after it.
+  type Section = { line: number; path: string; text: string };
+  const sectionOf: { at: number; section: Section }[] = [];
+  const stack: { level: number; text: string }[] = [];
+  let current: Section = { line: 0, path: "", text: "" };
+  // CommonMark: a fence closes only on the SAME character, at least as many
+  // times, with nothing after it. Any other fence-shaped line inside is
+  // content (review round 2 of #2127: ``` holding ~~~, and the reverse).
+  let open: { char: string; len: number } | null = null;
+  let fenceOpenedAt = -1;
   for (let i = 0; i < lines.length; i++) {
-    const m = ANY_CRITERION_LINE.exec(lines[i]!);
-    if (m && (family === "SC" || (m[1] === family && m[2] === group))) last = i;
+    const raw = lines[i]!;
+    const fence = /^\s*(`{3,}|~{3,})(.*)$/.exec(raw);
+    if (fence) {
+      const marker = fence[1]!;
+      if (open === null) {
+        open = { char: marker[0]!, len: marker.length };
+        fenceOpenedAt = i;
+        continue;
+      }
+      if (marker[0] === open.char && marker.length >= open.len && fence[2]!.trim() === "") {
+        open = null;
+        fenceOpenedAt = -1;
+        continue;
+      }
+    }
+    if (open !== null) continue;
+    const h = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(raw);
+    if (h) {
+      const level = h[1]!.length;
+      while (stack.length > 0 && stack[stack.length - 1]!.level >= level) stack.pop();
+      stack.push({ level, text: h[2]! });
+      current = { line: i + 1, path: stack.map(x => x.text).join(" > "), text: h[2]! };
+    }
+    const m = ANY_CRITERION_LINE.exec(raw);
+    if (m && (family === "SC" || (m[1] === family && m[2] === group))) sectionOf.push({ at: i, section: current });
   }
+  if (fenceOpenedAt !== -1 && !present) {
+    return {
+      ok: false,
+      refusal: "SPEC_UNREADABLE",
+      why:
+        `the code fence opened at line ${fenceOpenedAt + 1} is never closed, so no heading or ` +
+        "criterion after it can be read; close it, then re-run",
+    };
+  }
+  const sections = [...new Map(sectionOf.map(s => [s.section.line, s.section])).values()];
+  const label = (sec: Section) => (sec.path === "" ? "(before any heading)" : `"${sec.path}" (line ${sec.line})`);
+  let candidates = sectionOf;
+  if (!present && section !== null) {
+    const asked = section.trim();
+    const byLine = /^line (\d+)$/.exec(asked);
+    const matches = sections.filter(sec =>
+      byLine ? sec.line === Number(byLine[1]) : sec.path === asked || sec.path.endsWith(` > ${asked}`) || sec.text === asked,
+    );
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        refusal: "SECTION_UNKNOWN",
+        why:
+          `no criterion sits under a section "${asked}"` +
+          (sections.length > 0 ? `; the sections holding this spec's criteria are ${sections.map(label).join(", ")}` : ""),
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        refusal: "SECTION_AMBIGUOUS",
+        why:
+          `"${asked}" names ${matches.length} sections: ${matches.map(label).join(", ")}. ` +
+          'Name one by its path ("Parent > Heading") or by its heading line ("line N")',
+      };
+    }
+    candidates = sectionOf.filter(s => s.section.line === matches[0]!.line);
+  } else if (!present && sections.length > 1) {
+    return {
+      ok: false,
+      refusal: "SECTION_REQUIRED",
+      why:
+        `this spec keeps its criteria in ${sections.length} sections, so the line needs --section ` +
+        `naming one: ${sections.map(label).join(", ")}. After the last criterion in the file can be ` +
+        "inside an unrelated section, above that section's own analysis",
+    };
+  }
+  const last = candidates.length === 0 ? -1 : candidates[candidates.length - 1]!.at;
   let text: string;
   if (present) {
     text = specText;

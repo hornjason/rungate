@@ -507,6 +507,16 @@ describe("SC-2612 / AC-2 (#1678): every refusal is named, and none is a guess", 
       // #2107: an id already placed in another phase.
       const twice = specWithCriterion(PLANNED_SPEC, "- [ ] SC-9002: lib/fixture.ts contains [beta] — and something else", "SC-9002", 1);
       if (!twice.ok) reached.add(twice.refusal);
+      // #2110: criteria under two headings, with no section and an unknown one.
+      const twoHeadings = SPEC_WITH_CRITERIA.replace("- [x] SC-9002", "## Later\n\n- [x] SC-9002");
+      for (const section of [null, "Nowhere"]) {
+        const out = specWithCriterion(twoHeadings, "- [ ] SC-9010: lib/x.ts contains [x] — y", "SC-9010", null, section);
+        if (!out.ok) reached.add(out.refusal);
+      }
+      // Review of #2127: one heading text over two sections, named by text alone.
+      const repeated = SPEC_WITH_CRITERIA.replace("- [x] SC-9002", "## Elsewhere\n\n## Success Criteria\n\n- [x] SC-9002");
+      const ambiguous = specWithCriterion(repeated, "- [ ] SC-9010: lib/x.ts contains [x] — y", "SC-9010", null, "Success Criteria");
+      if (!ambiguous.ok) reached.add(ambiguous.refusal);
 
       expect([...reached].sort()).toEqual([...PROMOTION_REFUSALS].sort());
     } finally {
@@ -1473,6 +1483,203 @@ describe("#2060 / SC-2612: an existing symbol is refused, and the issue is linke
   });
 });
 
+/**
+ * #2110: a spec keeping criteria under several headings needs the caller to
+ * name one.
+ *
+ * "After the last criterion in the file" put SC-2767 inside HARNESS-STANDARD's
+ * launch-base block, above that block's own analysis, and SC-2768 above
+ * another block's mutation battery. Which section a criterion belongs in is
+ * the caller's judgement, like `--group`, so a spec with more than one heading
+ * over its criteria refuses until `--section` names one.
+ */
+describe("#2110: a spec with criteria under several headings takes --section", () => {
+  const TWO_SECTIONS = `---
+doc-type: spec
+testable: true
+governs: a two-section fixture
+---
+
+# Two sections
+
+## A — the first feature
+
+- [ ] SC-9001: lib/a.ts contains [a] — first
+      proved-by: test/a.test.ts — 1 pass
+
+What was broken to prove A.
+
+## B — the second feature
+
+- [ ] SC-9002: lib/b.ts contains [b] — second
+
+What was broken to prove B.
+`;
+  const LINE = "- [ ] SC-9010: lib/x.ts contains [x] — new";
+  const A = "A — the first feature";
+  const B = "B — the second feature";
+
+  test("with no --section it refuses SECTION_REQUIRED and names both headings", () => {
+    const out = specWithCriterion(TWO_SECTIONS, LINE, "SC-9010", null);
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusal).toBe("SECTION_REQUIRED");
+    expect(out.why).toContain(A);
+    expect(out.why).toContain(B);
+  });
+
+  test("--section A puts the line after A's last criterion and its proof, not after B's", () => {
+    const out = specWithCriterion(TWO_SECTIONS, LINE, "SC-9010", null, A);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const lines = out.text.split("\n");
+    const at = lines.indexOf(LINE);
+    expect(lines[at - 1]).toContain("proved-by: test/a.test.ts");
+    expect(out.text.indexOf(LINE)).toBeLessThan(out.text.indexOf("What was broken to prove A."));
+  });
+
+  test("--section B puts it after B's last criterion", () => {
+    const out = specWithCriterion(TWO_SECTIONS, LINE, "SC-9010", null, B);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const lines = out.text.split("\n");
+    expect(lines[lines.indexOf(LINE) - 1]).toStartWith("- [ ] SC-9002:");
+  });
+
+  test("a --section naming no heading over a criterion refuses SECTION_UNKNOWN and lists the real ones", () => {
+    const out = specWithCriterion(TWO_SECTIONS, LINE, "SC-9010", null, "C");
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusal).toBe("SECTION_UNKNOWN");
+    expect(out.why).toContain(A);
+    expect(out.why).toContain(B);
+  });
+
+  test("CONTROL: a one-heading spec is unchanged, with or without its heading named", () => {
+    for (const section of [null, "Success Criteria"]) {
+      const out = specWithCriterion(SPEC_WITH_CRITERIA, LINE, "SC-9010", null, section);
+      expect(out.ok, `section ${JSON.stringify(section)}`).toBe(true);
+      if (!out.ok) return;
+      const lines = out.text.split("\n");
+      expect(lines[lines.indexOf(LINE) - 1]).toStartWith("- [x] SC-9002:");
+    }
+  });
+
+  test("a retry whose line is already written is not refused for want of a section", () => {
+    const written = TWO_SECTIONS.replace("- [ ] SC-9002: lib/b.ts contains [b] — second", `- [ ] SC-9002: lib/b.ts contains [b] — second\n${LINE}`);
+    const out = specWithCriterion(written, LINE, "SC-9010", null);
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.text).toBe(written);
+  });
+
+  test("a `#` line inside a fenced block is not a heading", () => {
+    const fenced = SPEC_WITH_CRITERIA.replace(
+      "- [x] SC-9002",
+      "```sh\n# a shell comment, not a heading\n```\n\n- [x] SC-9002",
+    );
+    expect(specWithCriterion(fenced, LINE, "SC-9010", null).ok).toBe(true);
+  });
+
+  test("a grouped id counts only its own group's headings", () => {
+    const split = CRC_SPEC.replace("- [ ] CRC-N2:", "## The N group\n\n- [ ] CRC-N2:");
+    expect(specWithCriterion(split, "- [ ] CRC-M17: lib/z.ts contains [z] — third", "CRC-M17", null).ok).toBe(true);
+  });
+
+  // ── Review of #2127 ──────────────────────────────────────────────────────
+
+  /** Two features, each with its own `### Success Criteria` — HARNESS-STANDARD's shape, 26 times over. */
+  const REPEATED = `---
+doc-type: spec
+testable: true
+governs: a repeated-heading fixture
+---
+
+# Repeated
+
+## Feature A
+
+### Success Criteria
+
+- [ ] SC-9001: lib/a.ts contains [a] — first
+
+What was broken to prove A.
+
+## Feature B
+
+### Success Criteria
+
+- [ ] SC-9002: lib/b.ts contains [b] — second
+`;
+
+  test("one heading TEXT over several sections is several sections: no --section refuses", () => {
+    const out = specWithCriterion(REPEATED, LINE, "SC-9010", null);
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusal).toBe("SECTION_REQUIRED");
+    expect(out.why).toContain("Feature A > Success Criteria");
+    expect(out.why).toContain("Feature B > Success Criteria");
+  });
+
+  test("a --section matching several sections refuses SECTION_AMBIGUOUS and names each path", () => {
+    const out = specWithCriterion(REPEATED, LINE, "SC-9010", null, "Success Criteria");
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusal).toBe("SECTION_AMBIGUOUS");
+    expect(out.why).toContain("Feature A > Success Criteria");
+    expect(out.why).toContain("Feature B > Success Criteria");
+  });
+
+  test("a path, or a heading's line, picks one of the repeated sections", () => {
+    for (const section of ["Feature A > Success Criteria", "Repeated > Feature A > Success Criteria", "line 11"]) {
+      const out = specWithCriterion(REPEATED, LINE, "SC-9010", null, section);
+      expect(out.ok, section).toBe(true);
+      if (!out.ok) return;
+      expect(out.text.indexOf(LINE), section).toBeLessThan(out.text.indexOf("What was broken to prove A."));
+      expect(out.text.indexOf(LINE), section).toBeGreaterThan(out.text.indexOf("SC-9001"));
+    }
+  });
+
+  test("an unclosed fence refuses as unreadable rather than hiding every line after it", () => {
+    const broken = TWO_SECTIONS.replace("## B — the second feature", "```sh\n\n## B — the second feature");
+    const out = specWithCriterion(broken, LINE, "SC-9010", null, B);
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusal).toBe("SPEC_UNREADABLE");
+    expect(out.why).toContain("fence");
+  });
+
+  test("a fence closes only on its own marker, so a nested one never exposes a `#` line — review round 2", () => {
+    // ``` holding a ~~~ line, and ~~~ holding a ``` block: the inner marker is
+    // content. Closing on it read `# inside` as a heading, which split one
+    // section into two and refused SECTION_REQUIRED.
+    for (const block of ["```md\n~~~\n# inside\n~~~\n```", "~~~\n```\n# inside\n```\n~~~", "````\n```\n# inside\n````"]) {
+      const spec = SPEC_WITH_CRITERIA.replace("- [x] SC-9002", `${block}\n\n- [x] SC-9002`);
+      const out = specWithCriterion(spec, LINE, "SC-9010", null);
+      expect(out.ok, JSON.stringify(block)).toBe(true);
+      if (!out.ok) return;
+      const lines = out.text.split("\n");
+      expect(lines[lines.indexOf(LINE) - 1], JSON.stringify(block)).toStartWith("- [x] SC-9002:");
+    }
+  });
+
+  test("a --section is checked even when no criterion of the family exists yet", () => {
+    const out = specWithCriterion(SPEC_NO_CRITERIA, LINE, "SC-9010", null, "Nowhere");
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.refusal).toBe("SECTION_UNKNOWN");
+  });
+
+  test("the CLI reads --section, passes it to the placement, and refuses it beside --declines", () => {
+    const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
+    expect(cli).toMatch(/specWithCriterion\(content, result\.line, result\.id, phase, section\b/);
+    const p = Bun.spawnSync(
+      ["bun", join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "--issue", "1678", "--declines", "a reason", "--section", A],
+      { cwd: join(import.meta.dir, "..") },
+    );
+    expect(p.exitCode).toBe(1);
+    expect(new TextDecoder().decode(p.stderr)).toContain("--section");
+  });
+});
+
 describe("#2066 / SC-2612: finding-promotion writes the spec's family, section, phase and bank", () => {
   test("the id family is the spec's own: SC by default, CRC where every criterion is CRC", () => {
     expect(idFamily(SPEC_WITH_CRITERIA)).toBe("SC");
@@ -1687,7 +1894,7 @@ describe("#2107: three edges of the new flags", () => {
 
   test("--group and --phase are refused beside --declines, like the other promote-only flags", () => {
     const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
-    expect(cli).toContain('const promoteOnly = ["spec", "outcome", "symbol", "module", "group", "phase"]');
+    expect(cli).toContain('const promoteOnly = ["spec", "outcome", "symbol", "module", "group", "phase", "section"]');
   });
 
   test("a new line never lands between a criterion and the note under it", () => {
