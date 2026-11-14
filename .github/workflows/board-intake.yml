@@ -1,179 +1,92 @@
-# Not managed by rungate. The scaffold regenerates named jobs in ci.yml,
-# gates.yml, ai-review.yml and ai-review-unmeasured.yml; this file is
-# caller-owned and is carried forward untouched on re-scaffold.
+# generated-sha: bffcb2a662517322
+# Managed by rungate — do not edit. The board is board.id in .claude/rungate/config.json.
 #
-# EVERY ISSUE AND EVERY PULL REQUEST GOES ON THE BOARD, AUTOMATICALLY.
+# Every new issue and pull request goes on the board, and a pull request
+# offered for review moves to In review. Generated since #2166, and it names
+# no project id or URL: `rungate board-id` reads board.id from the
+# default branch's config, and the add uses that node id.
 #
-# Before this file there was no process at all. Measured 2026-11-04: zero
-# workflows in this repository wrote to the board, and the five pull requests
-# that were on it had been added by hand. #1747 and #1749 were missing for the
-# ordinary reason — nothing was ever going to put them there.
-#
-# The board READING that already exists does not cover this and was never going
-# to. `board-conformance`'s five readings all ask whether engine CRITERIA and
-# engine ISSUES agree with the pipeline spec; none of them asks whether all the
-# work is on the board, so every one stayed green while two pull requests were
-# absent. A reading scoped to one population cannot see a gap in another.
-#
-# THIS IS GITHUB'S OWN ACTION, used the way GitHub documents it. There is no
-# script here and nothing to maintain: `actions/add-to-project` takes a project
-# URL and a token and adds the event's item.
-#
-# It is pinned to a commit SHA because a tag is the publisher's to repoint at
-# any time. NOTHING IN THIS REPOSITORY ENFORCES THAT, and the first draft of
-# this comment claimed otherwise — it said `test/action-pin-parity.test.ts`
-# asserts it for every action. That test only checks the CLAUDE_CODE_ACTION
-# pin agrees between `ai-review.yml` and `claude-review.yml`, and
-# `test/release-guard.test.ts` walks `uses:` lines in `release.yml` alone.
-# Replacing the SHA below with `@v2` and running the pin suite is 16 pass /
-# 0 fail, which is how the false claim was found. A repo-wide pin check would
-# ship red — `closing-references.yml` uses `actions/checkout@v4` — so it is a
-# ratchet and its own piece of work, not a line to slip in here.
-#
-# IT SETS Status FOR PULL REQUESTS, AND THE REASON IT ONCE DID NOT WAS FALSE.
-# This header used to say the omission was "fine, because GitHub's built-in
-# project workflows already move Status", and cited #1744 reaching
-# `In progress` when #1747 linked to it. That observation was real and the
-# generalisation from it was wrong: the built-ins move ISSUES, not pull
-# requests. Measured 2026-11-04, after this file had been live for a day —
-# #1751, #1747 and #1740 all sat in Backlog, and #1607 read Done while open
-# and BLOCKED. All seven built-in workflows are enabled and the set contains
-# no rule for a pull request being opened, so for that transition there were
-# never two deciders competing. There were none.
-#
-# `actions/add-to-project` takes only `project-url`, `github-token`, `labeled`
-# and `label-operator` — no field input — so the transition is a SECOND step
-# that writes the field directly. It keys off `steps.add.outputs.itemId`
-# rather than re-querying the board, because a re-query races the built-in
-# "Item added to project" workflow, which is the thing that puts the item in
-# Backlog.
-#
-# THE SPLIT IS DELIBERATE AND IS THE WHOLE DESIGN: this workflow owns ONLY the
-# opened -> In review edge. `merged -> Done` and `closed -> Done` stay with
-# GitHub's built-ins. Neither end writes what the other writes, so there is
-# still exactly one decider per transition
-# (`.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape). Do not
-# add a merge or close handler here; it would recreate the two-deciders
-# problem this split exists to avoid.
-#
-# The field and the option are resolved BY NAME at run time rather than by
-# pasting node ids. A board rename then fails the job loudly instead of
-# writing a stale id, or worse, silently writing nothing.
-#
-# THE TOKEN MUST CARRY PROJECT **WRITE**. `GITHUB_TOKEN` cannot write ProjectsV2
-# at all, at any permission level, so a PAT or App is required and that is
-# GitHub's documented answer rather than a workaround here.
-#
-# `RUNGATE_PROJECT_TOKEN` was minted `read:project` on 2026-11-02 and used only
-# to READ the board from `ci.yml` and `release.yml`.
-#
-# WHETHER IT NOW CARRIES WRITE IS NOT KNOWABLE FROM INSIDE THIS REPOSITORY, and
-# this comment does not claim it. A secret's scope is not readable by any job,
-# any test, or any reader of this tree; the only artifact that can settle it is
-# a run of this workflow. An earlier revision asserted the scope had been
-# widened, and a reviewer refused that correctly: the assertion's only evidence
-# was itself, added by the same diff it was defending. Prose about a credential
-# is not a reading of one.
-#
-# IT HAS NOW BEEN MEASURED, AND IT CARRIES WRITE. The artifact this comment
-# asked for exists: run `42039773150`, 2026-11-05T13:53:19Z, opened by pull
-# request #1760. The reading is not that run's green conclusion — a job can
-# exit 0 having written nothing, which is the failure this whole file guards.
-# It is the BOARD: `#1760` resolves to project item `PVTI_lAHOAZTQCM4BpMuRzhGSYuQ`
-# on `PVT_kwHOAZTQCM4BpMuR` with `Status = "In review"`, which is a value only
-# `updateProjectV2ItemFieldValue` can have put there. A read-only token cannot
-# produce that row.
-#
-# So the FIRST REAL EVENT is the measurement — the next issue or pull request
-# opened after this merges. A refusal prints a permission error naming the
-# project, which is unambiguous and is the reading. Do NOT silence it with
-# `continue-on-error`: a job that quietly fails to add items is
-# indistinguishable from the state this file exists to end.
-#
-# DO NOT ADD `workflow_dispatch` TO TRIGGER THAT PROBE ON DEMAND. It was added
-# in round 3 for exactly that reason and removed in round 4, because it cannot
-# work: `src/add-to-project.ts` line 49 resolves the item as
-# `context.payload.issue ?? context.payload.pull_request`, and a manual run has
-# neither. The job would run against an undefined item and tell you nothing
-# about the credential — a probe that reports on the exit code while never
-# reaching the mechanism it was added to measure
-# (`.claude/rules/checks-must-be-able-to-fail.md`, the sixth shape).
-#
-# ONE COST, IF IT IS WIDENED: the same secret is handed to `bun test` in
-# `ci.yml` and `release.yml`, so the suite would run with a credential that can
-# modify the board. Nothing in the suite writes to it. If that ever stops being
-# true, the fix is a second secret scoped to this workflow alone, not a
-# narrower reader here.
-#
-# IT ADDS NOTHING RETROSPECTIVELY, BY DESIGN. Every trigger below is an event,
-# so an issue or pull request opened BEFORE this merges is never added — which
-# is the gap this file closes, left open for everything that already exists.
-# The backfill was therefore done by hand on 2026-11-04: #1747 and #1749 were
-# added, and a paginated sweep of every open pull request against the board
-# then returned zero missing. Anything opened in the window between that sweep
-# and this merge needs the same treatment once; after that the triggers cover
-# it. The first sweep read `first:100` against a 118-item board and reported a
-# false zero, so page the query or do not trust its answer.
+# Needs the RUNGATE_PROJECT_TOKEN secret: a token that can write the project
+# board, which GITHUB_TOKEN cannot. Without it, or without board.id, the run
+# is an UNMEASURED annotation, not a red run.
 name: Board intake
 
 on:
   issues:
-    # NOT `transferred`. GitHub documents it as "an issue was transferred to
-    # another repository" and does not say which side receives it; the docs
-    # settle neither direction. If it is delivered to the SOURCE, this would
-    # add an issue that just LEFT to our board. Unproven in both directions is
-    # a reason to leave it out, not to keep it.
-    #
-    # And it stays out by decision, not only by doubt: issues enter rungate by
-    # filing (the forms, or `gh issue create --label from-consumer` from a
-    # consumer), never by transfer — Jason, 2026-11-12, #1752. SC-2741 no
-    # longer asks for a transfer trigger.
     types: [opened, reopened]
   pull_request_target:
     types: [opened, reopened, ready_for_review]
 
-# `pull_request_target` runs in the context of the BASE repository and so can
-# see secrets, which `pull_request` cannot — and that is the whole reason it is
-# used here, because this job needs a token that can write the board.
-#
-# THERE IS NOW A `run:` STEP, and an earlier revision of this paragraph said
-# there was not. That sentence was load-bearing, so read what replaced it: the
-# property that makes `pull_request_target` safe is not the absence of a
-# script, it is that NO ATTACKER-CONTROLLED VALUE IS EVER EXECUTED. Two things
-# hold that up and both are asserted by `test/board-intake.test.ts`:
-#
-#   BI-3  nothing checks out the pull request's head, so no contributor code
-#         runs in a job holding a board-writing token
-#   BI-4  no `run:` block contains `${{ }}` at all. Interpolation happens
-#         BEFORE the shell starts, so a pull request title carrying shell
-#         syntax would be code rather than data. Values arrive through `env:`
-#
-# The only event data this job touches is an item id minted by GitHub and a
-# boolean. Neither is attacker-authored. If you add a step that needs a title,
-# a branch name or a body, it goes in `env:` and is quoted on use — and if you
-# ever need a checkout, move the trigger back to `pull_request` first.
 permissions:
   contents: read
 
 jobs:
   add-to-board:
-    runs-on: ubuntu-latest
+    runs-on: "ubuntu-24.04"
     steps:
-      - id: add
-        uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+      # The default branch, never the pull request: pull_request_target holds a
+      # board-writing token, and the config is the only input read from the tree.
+      - uses: actions/checkout@v4
         with:
-          project-url: https://github.com/users/hornjason/projects/3
-          github-token: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
-
-      # Only pull requests, and only ones offered for review. `opened` fires
-      # for a draft too, and a draft in `In review` says somebody is waiting
-      # on a reader when nobody is. Drafts stay in Backlog until
-      # `ready_for_review`, which this workflow also subscribes to.
-      - name: Move the pull request to In review
-        if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == false
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          # Pinned by .bun-version — the project's single declaration (#622).
+          # setup-bun reads that file, so there is no version spelled here to drift from it.
+          bun-version-file: ".bun-version"
+        env:
+          # A per-runner install path, so runners sharing a HOME cannot rewrite
+          # each other's bun mid-exec ("Text file busy").
+          HOME: ${{ runner.tool_cache }}/bun-home
+          USERPROFILE: ${{ runner.tool_cache }}/bun-home
+      - id: add
+        name: Add the issue or pull request to the board
         env:
           GH_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
-          PROJECT_ID: PVT_kwHOAZTQCM4BpMuR
+          CONTENT_ID: ${{ github.event.issue.node_id || github.event.pull_request.node_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning title=Board intake::UNMEASURED — RUNGATE_PROJECT_TOKEN is not set, so nothing was added to the board."
+            exit 0
+          fi
+          # The board is board.id in the default branch's config. Exit 2 is the one
+          # refusal that means none is set.
+          code=0
+          project=$(bunx rungate@0.8.17 board-id 2>"${RUNNER_TEMP}/board-id.stderr") || code=$?
+          cat "${RUNNER_TEMP}/board-id.stderr" >&2
+          if [ "${code}" -eq 2 ]; then
+            echo "::warning title=Board intake::UNMEASURED — no board.id in the rungate config, so nothing was added. Set board.id and this runs."
+            exit 0
+          fi
+          if [ "${code}" -ne 0 ]; then
+            exit "${code}"
+          fi
+          item=""
+          for attempt in 1 2 3; do
+            if item=$(gh api graphql -f project="${project}" -f content="${CONTENT_ID}" -f query='
+              mutation($project: ID!, $content: ID!) {
+                addProjectV2ItemById(input: { projectId: $project, contentId: $content }) { item { id } }
+              }' --jq '.data.addProjectV2ItemById.item.id' 2>"${RUNNER_TEMP}/add.stderr"); then
+              break
+            fi
+            item=""
+            sleep $(( attempt * 2 ))
+          done
+          if [ -z "${item}" ] || [ "${item}" = "null" ]; then
+            echo "::error title=Board intake::addProjectV2ItemById gave no item after three attempts, so the item is NOT on the board. Last error: $(cat "${RUNNER_TEMP}/add.stderr")" >&2
+            exit 1
+          fi
+          echo "itemId=${item}" >> "${GITHUB_OUTPUT}"
+          echo "projectId=${project}" >> "${GITHUB_OUTPUT}"
+      # Only the opened -> In review edge; merged and closed stay with GitHub's
+      # built-in workflows, so each transition has one decider. Drafts stay put.
+      - name: Move the pull request to In review
+        if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == false && steps.add.outputs.itemId != ''
+        env:
+          GH_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          PROJECT_ID: ${{ steps.add.outputs.projectId }}
           ITEM_ID: ${{ steps.add.outputs.itemId }}
           COLUMN: In review
         run: |

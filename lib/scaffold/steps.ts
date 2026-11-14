@@ -51,6 +51,7 @@ import {
 import { buildAdrAcceptedWorkflow } from "./adr-accepted-workflow";
 import { buildClosingReferencesWorkflow } from "./closing-references-workflow";
 import { buildBoardReadyWorkflow } from "./board-ready-workflow";
+import { buildBoardIntakeWorkflow } from "./board-intake-workflow";
 import { CI_SUITE_FETCH_DEPTH, baseRefFetchDepth } from "../ci-history-depth";
 import { CLAUDE_CODE_ACTION } from "../claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../google-auth-action";
@@ -4506,6 +4507,10 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
   // already emits. It names no board: the published CLI reads board.id from
   // the checked-out config (#2165), so no generated workflow carries an id.
   const boardReadyYml = buildBoardReadyWorkflow({
+  // #2166, ADR-014 row 4: new issues and pull requests onto the board. It
+  // names no board: the published CLI prints board.id from the default
+  // branch's config (#2173), and the add uses that node id.
+  const boardIntakeYml = buildBoardIntakeWorkflow({
     runsOn,
     checkout: actionRef("actions/checkout"),
     setupBun: actionRef("oven-sh/setup-bun"),
@@ -4529,7 +4534,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
   // lib/conformity.ts reads back, and the two are held together by
   // test/ai-review-workflow.test.ts AC-1, which looks for the constant's
   // filename in what this loop actually wrote.
-  for (const [name, content] of [["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml], ["adr-accepted.yml", adrAcceptedYml], ["closing-references.yml", closingReferencesYml], ["board-ready.yml", boardReadyYml]] as const) {
+  for (const [name, content] of [["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml], ["adr-accepted.yml", adrAcceptedYml], ["closing-references.yml", closingReferencesYml], ["board-ready.yml", boardReadyYml], ["board-intake.yml", boardIntakeYml]] as const) {
     const label = `.github/workflows/${name}`;
     try {
       // Keyed by FILE, and the lookup is here because this loop is the only

@@ -22,8 +22,14 @@
  * non-empty so stripping can never turn a check into a vacuous pass.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  BOARD_ID_COMMAND,
+  buildBoardIntakeAddScript,
+  buildBoardIntakeWorkflow,
+} from "../lib/scaffold/board-intake-workflow";
 
 const WORKFLOW = join(import.meta.dir, "..", ".github", "workflows", "board-intake.yml");
 const source = readFileSync(WORKFLOW, "utf8");
@@ -90,8 +96,17 @@ describe("board-intake workflow", () => {
     // `pull_request_target` runs with secrets in the BASE repository's
     // context. Checking out the head would execute a contributor's code with
     // a token that can write the board.
+    //
+    // Since #2166 the job checks out ONE tree, the default branch, because the
+    // board id is read from its config. So the property is now: exactly one
+    // checkout, its ref the default branch, no credential kept, and nothing in
+    // the file names the pull request's head.
     const checkouts = usesLines.filter(l => l.includes("actions/checkout"));
-    expect(checkouts).toEqual([]);
+    expect(checkouts.length, "expected exactly one checkout").toBe(1);
+    const body = code.join("\n");
+    expect(body).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(body).toContain("persist-credentials: false");
+    expect(body, "nothing may name the pull request's head").not.toMatch(/pull_request\.head\./);
   });
 
   test("BI-6: the write is read back, and an unverified write is not reported as success", () => {
@@ -420,5 +435,101 @@ describe("board-intake workflow", () => {
         "immediately after the mktemp, so the file goes away on the failure paths too " +
         "— a trailing `rm` is skipped by every early exit above it.",
     ).toEqual([]);
+  });
+});
+
+/**
+ * #2166, ADR-014 row 4: the scaffold writes board-intake.yml, and this
+ * repository's copy is the generated one. The board is read from the default
+ * branch's config by the published CLI (#2173), so the file carries no
+ * project id and no project URL. With #2047 this completes the area's
+ * generation; the criterion is ticked by its own follow-up.
+ */
+describe("#2166: board-intake.yml is generated and names no board", () => {
+  const version = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")).version as string;
+
+  test("the committed file is the generator's, and says so", () => {
+    expect(source, "board-intake.yml is not the generated copy").toMatch(/^(?:# generated-sha: [0-9a-f]+\n)?# Managed by rungate/);
+    const indented = buildBoardIntakeAddScript(version).trimEnd().split("\n").map(l => (l === "" ? "" : `          ${l}`)).join("\n");
+    expect(source, "the add step's run: body is not the generator's").toContain(indented);
+  });
+
+  test("it learns the board from the published CLI, and adds by node id", () => {
+    const body = code.join("\n");
+    expect(body).toContain(`bunx rungate@${version} ${BOARD_ID_COMMAND}`);
+    expect(body).toContain("addProjectV2ItemById");
+    expect(body, "add-to-project takes only a URL").not.toContain("actions/add-to-project");
+  });
+
+  test("no project id, no project URL, anywhere in it", () => {
+    // The whole file, comments included: an id in a comment is still an id.
+    expect(source).not.toMatch(/PVT_[A-Za-z0-9_-]+/);
+    expect(source).not.toMatch(/github\.com\/(?:users|orgs)\/[^/\s]+\/projects\//);
+    expect(source).not.toContain("RUNGATE_PROJECT_ID");
+    const src = readFileSync(join(import.meta.dir, "..", "lib/scaffold/board-intake-workflow.ts"), "utf8");
+    const iface = /export interface BoardIntakeWorkflowOptions \{([\s\S]*?)\n\}/.exec(src)?.[1];
+    expect(iface, "BoardIntakeWorkflowOptions not found — this row would pass vacuously").toBeDefined();
+    const fields = [...iface!.matchAll(/^\s*(\w+)\??:/gm)].map(m => m[1]!);
+    expect(fields.length).toBeGreaterThan(0);
+    expect(fields.filter(f => /project|board|url/i.test(f)), "a board input on the generator can be emitted").toEqual([]);
+  });
+
+  test("the move step waits for an item, so an unconfigured add skips it", () => {
+    const guard = ifLines.find(l => l.includes("draft"));
+    expect(guard).toContain("steps.add.outputs.itemId != ''");
+  });
+});
+
+/**
+ * #2166: the add step, EXECUTED against stub `bunx` and `gh`. An unconfigured
+ * tree is an annotation; every other failure stands.
+ */
+describe("#2166: the add step's readings", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "board-intake-add-")));
+  const stubs = join(dir, "bin");
+  mkdirSync(stubs);
+  writeFileSync(join(stubs, "bunx"), '#!/bin/sh\n[ -n "$ID_ERR" ] && printf "%s\\n" "$ID_ERR" >&2\n[ -n "$ID_OUT" ] && printf "%s\\n" "$ID_OUT"\nexit "$ID_CODE"\n', { mode: 0o755 });
+  writeFileSync(join(stubs, "gh"), '#!/bin/sh\nprintf "%s" "$GH_OUT"\nexit "${GH_CODE:-0}"\n', { mode: 0o755 });
+  writeFileSync(join(stubs, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const script = join(dir, "add.sh");
+  writeFileSync(script, buildBoardIntakeAddScript("9.9.9"));
+
+  function add(env: Record<string, string>) {
+    const output = join(dir, `out-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(output, "");
+    const r = Bun.spawnSync(["bash", script], {
+      env: { PATH: `${stubs}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_OUTPUT: output, CONTENT_ID: "I_x", ID_CODE: "0", ...env },
+    });
+    return { code: r.exitCode, out: r.stdout.toString(), written: readFileSync(output, "utf8") };
+  }
+
+  test("no token: a warning, exit 0, and no item id", () => {
+    const r = add({ GH_TOKEN: "" });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("UNMEASURED — RUNGATE_PROJECT_TOKEN is not set");
+    expect(r.written).toBe("");
+  });
+
+  test("no board.id (board-id exits 2): a warning, exit 0, and no item id", () => {
+    const r = add({ GH_TOKEN: "t", ID_CODE: "2", ID_ERR: "UNMEASURED: no board — set board.id" });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("UNMEASURED — no board.id in the rungate config");
+    expect(r.written).toBe("");
+  });
+
+  test("any other board-id failure stands", () => {
+    expect(add({ GH_TOKEN: "t", ID_CODE: "1", ID_ERR: "SyntaxError: bad config" }).code).toBe(1);
+  });
+
+  test("an add that never returns an item is a red run, not a silent one", () => {
+    const r = add({ GH_TOKEN: "t", ID_OUT: "PVT_fixture", GH_CODE: "1" });
+    expect(r.code).toBe(1);
+    expect(r.written).toBe("");
+  });
+
+  test("success writes the item and the project for the move step", () => {
+    const r = add({ GH_TOKEN: "t", ID_OUT: "PVT_fixture", GH_OUT: "PVTI_item" });
+    expect(r.code).toBe(0);
+    expect(r.written).toBe("itemId=PVTI_item\nprojectId=PVT_fixture\n");
   });
 });
