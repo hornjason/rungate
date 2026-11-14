@@ -129,13 +129,18 @@ const LIVE_GITHUB: PlanSpecGitHub = {
   renameMilestone,
 };
 
-const USAGE = `rungate plan-spec <spec.md> --repo <owner/name> --prefix <name> [--write] [--json]
+const USAGE = `rungate plan-spec <spec.md> --repo <owner/name> --prefix <name> [--rename-from <old name>] [--write] [--json]
 rungate plan-spec --coverage [--project-root <dir>] [--json]
 
   --repo     owner/name. Defaults to $GITHUB_REPOSITORY.
   --prefix   the milestone name prefix, e.g. "Convergence" gives
              "Convergence Phase 1 — stop the repeats". Required: deriving it
              from the filename would call the live milestones something else.
+  --rename-from
+             the family the milestones are called today, when --prefix is
+             their new name. Each phase's old milestone is renamed in place,
+             keeping its number and its issues, instead of a new one being
+             created. A phase both families hold is refused (#2124).
   --write    create and rename milestones. Without it, nothing is mutated.
   --json     the whole reading, for something other than a person.
   --coverage every spec in the tree and whether its criteria are placed,
@@ -188,6 +193,7 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
       options: {
         repo: { type: "string" },
         prefix: { type: "string" },
+        "rename-from": { type: "string" },
         write: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         coverage: { type: "boolean", default: false },
@@ -237,6 +243,28 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
     );
   }
   const prefix = prefixRead.prefix;
+  // #2124: the old family is read exactly as --prefix is, because it is one.
+  // Blank would adopt nothing and plan the creates a rename exists to avoid.
+  // Equal to --prefix would adopt nothing either, and say it had renamed.
+  let renameFrom: string | undefined;
+  if (values["rename-from"] !== undefined) {
+    const fromRead = readMilestonePrefix(values["rename-from"]);
+    if (fromRead.kind !== "given") {
+      return refuse(
+        values.json,
+        `--rename-from was given as ${JSON.stringify(values["rename-from"])}, which is blank.`,
+        true,
+      );
+    }
+    if (fromRead.prefix === prefix) {
+      return refuse(
+        values.json,
+        `--rename-from ${JSON.stringify(fromRead.prefix)} names the same family as --prefix; there is nothing to rename.`,
+        true,
+      );
+    }
+    renameFrom = fromRead.prefix;
+  }
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) {
     return refuse(values.json, `--repo is required (or set GITHUB_REPOSITORY)`, true);
@@ -300,7 +328,24 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
   // ── Step 2: what the milestones should be ────────────────────────────────
   const client = gh.createClient();
   const live = await gh.listMilestones(client, repo);
-  const { actions, unmanaged } = milestonePlan(content, live, prefix);
+  const { actions, unmanaged, conflicts } = milestonePlan(content, live, prefix, renameFrom);
+  // #2124: a phase both families hold cannot be renamed into without
+  // stranding one milestone's issues, and which to keep is a person's call.
+  // Refused before the coverage read and before any write.
+  if (conflicts.length > 0) {
+    return refuse(
+      values.json,
+      `${conflicts.length} phase(s) have a milestone in both ${JSON.stringify(prefix)} and ` +
+        `${JSON.stringify(renameFrom)}, so neither can be picked. Nothing was written:\n` +
+        conflicts
+          .map(
+            c =>
+              `  Phase ${c.phase}: #${c.current.number} ${c.current.title}  and  ` +
+              `#${c.previous.number} ${c.previous.title}`,
+          )
+          .join("\n"),
+    );
+  }
 
   // ── Step 3, reported not enforced: what no open issue names ──────────────
   const open = await gh.listOpenIssues(client, repo, 100);
