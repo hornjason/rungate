@@ -26,6 +26,8 @@
  * here bytes the instruction-surface budget does not have.
  */
 
+import { NAMES_NONE } from "../board-mirror";
+
 /** The file this module generates, under `.claude/rules/`. */
 export const ALIGNMENT_PROCESS_RULE_FILE = "alignment-process.md";
 
@@ -60,8 +62,8 @@ export const PROCESS_STEPS: readonly ProcessStep[] = [
     step: 4,
     text:
       "Each pull request says `Fixes #N`; `closing-references` refuses one that closes no issue, or whose " +
-      "issue names no criterion nor `serves no criterion`.",
-    names: ["Fixes #N", "closing-references", "serves no criterion"],
+      `issue names no criterion nor \`${NAMES_NONE}\`.`,
+    names: ["Fixes #N", "closing-references", NAMES_NONE],
   },
 ];
 
