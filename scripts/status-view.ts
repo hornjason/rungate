@@ -47,6 +47,8 @@ import { ladderReport } from "../lib/work-status";
 export const STATUS_MARKER = "<!-- rungate:status-view -->";
 /** Longest list a section prints before it links to the rest. */
 export const LIST_LIMIT = 10;
+/** The label a session puts on an issue it parks for a person to decide (#2138). */
+export const NEEDS_DECISION = "needs-decision";
 /** Every refusal exits through this. */
 export const REFUSAL_EXIT = 1;
 
@@ -518,9 +520,11 @@ export function gather(
 /**
  * What only a person can decide, as far as the tracker records it: an open
  * pull request that changes a decision record (`docs/adr/`), which a person
- * merges, and open issues labelled `needs-criterion`, whose criterion text a
- * person writes. Anything a session parked in prose is invisible here, and
- * the section's own name does not claim otherwise.
+ * merges; open issues labelled `needs-criterion`, whose criterion text a
+ * person writes; and open issues labelled `needs-decision`, which a session
+ * parked for a person (#2138). A decision parked only in prose is still
+ * invisible here: on 2026-11-14 two were, and this section said nothing was
+ * waiting. Label the issue, or it is not on this list.
  */
 function readDecisions(gh: Gh, repo: string, items: Reading<OpenItem[]>): Reading<WorkLine[]> {
   if (items.kind === "UNMEASURED") return unmeasured(items.why);
@@ -530,8 +534,12 @@ function readDecisions(gh: Gh, repo: string, items: Reading<OpenItem[]>): Readin
     if (files.kind === "UNMEASURED") return unmeasured(`files of pull request #${pr.number}: ${files.why}`);
     if (files.value.some(f => f.startsWith("docs/adr/"))) out.push({ number: pr.number, title: pr.title, url: pr.url, note: "decision record to merge" });
   }
-  for (const i of items.value.filter(i => !i.pr && i.labels.includes("needs-criterion"))) {
-    out.push({ number: i.number, title: i.title, url: i.url, note: "names no criterion" });
+  for (const i of items.value.filter(i => !i.pr)) {
+    const notes = [
+      ...(i.labels.includes("needs-criterion") ? ["names no criterion"] : []),
+      ...(i.labels.includes(NEEDS_DECISION) ? ["parked for a decision"] : []),
+    ];
+    if (notes.length > 0) out.push({ number: i.number, title: i.title, url: i.url, note: notes.join("; ") });
   }
   return read(out);
 }
