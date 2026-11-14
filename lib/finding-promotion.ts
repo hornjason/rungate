@@ -606,14 +606,28 @@ export function specWithCriterion(
   const sectionOf: { at: number; section: Section }[] = [];
   const stack: { level: number; text: string }[] = [];
   let current: Section = { line: 0, path: "", text: "" };
+  // CommonMark: a fence closes only on the SAME character, at least as many
+  // times, with nothing after it. Any other fence-shaped line inside is
+  // content (review round 2 of #2127: ``` holding ~~~, and the reverse).
+  let open: { char: string; len: number } | null = null;
   let fenceOpenedAt = -1;
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!;
-    if (/^\s*(```|~~~)/.test(raw)) {
-      fenceOpenedAt = fenceOpenedAt === -1 ? i : -1;
-      continue;
+    const fence = /^\s*(`{3,}|~{3,})(.*)$/.exec(raw);
+    if (fence) {
+      const marker = fence[1]!;
+      if (open === null) {
+        open = { char: marker[0]!, len: marker.length };
+        fenceOpenedAt = i;
+        continue;
+      }
+      if (marker[0] === open.char && marker.length >= open.len && fence[2]!.trim() === "") {
+        open = null;
+        fenceOpenedAt = -1;
+        continue;
+      }
     }
-    if (fenceOpenedAt !== -1) continue;
+    if (open !== null) continue;
     const h = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(raw);
     if (h) {
       const level = h[1]!.length;
