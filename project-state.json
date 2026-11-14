@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-13",
+  "updated": "2026-11-14",
   "priorities": [
     "AN ASSIGNMENT IS A DECLARATION; A PUSHED BRANCH OR AN OPEN PR IS EVIDENCE. Jason's call, 2026-11-09, after he asked how we know an assigned, unblocked issue is actually being worked. MEASURED THAT DAY: six issues were assigned to `hornjason` and ZERO had an open pull request — #1717, #1764, #1885, #1921, #1168 had no pushed work at all, and #1931's only work was commit `3bd05a14` sitting unpushed in a local worktree, invisible to every GitHub reading. WHY THE EXISTING MACHINERY COULD NOT SEE IT, and both halves are working as designed: `whyNotReady` in `lib/board-ready-fanout.ts` returns `somebody has claimed it` for an open, unblocked, ASSIGNED issue, so an assignment removes an issue from the Ready pool; and `scripts/board-status-sweep.ts` releases a claim only after `STALE_CLAIM_DAYS = 7` of silence AND no open PR. The sweep ran six times on 2026-11-09, all success, and correctly left all six alone, because every one of them read 0 to 2 days idle. THE CLOCK IS `updatedAt`, WHICH A COMMENT BUMPS. So writing status notes about an issue is indistinguishable from working it, and a session that claims an issue and then discusses it holds that claim forever. ACTIONS TAKEN 2026-11-09: `rg/1931-census-dirs` pushed so #1931 is visible; the other five claims released with `--remove-assignee`. DO NOT RE-CLAIM AN ISSUE YOU ARE NOT ABOUT TO PUSH A BRANCH FOR. The two fixes this implies are NOT yet built: (1) one function returning WORKING / PARKED / INVISIBLE from PR and branch rather than from the assignee field, read by both the lane-health check and the stale sweep so there is ONE decider; (2) stage item D4, which names unpushed local work in every run.",
     "THE BOARD IS REAL WHERE THE PIPELINE RAN, AND ONLY THERE. Correction of my own framing, 2026-11-09, after Jason challenged it. The CLI did fill this board: `plan-spec` wrote the milestones from the spec's Phase placement table, `plan-issues --decompose` created the issues, `plan-deps` wrote the blocked-by edges. Verified on 2026-11-09 by reading the cards: #1717 carries milestone `Pipeline Phase 6` and names SC-2615, SC-2616 and SC-2617; #1722 carries `Pipeline Phase 9` and names SC-2625. Against that, #1934 and #1935 — both filed by hand on 2026-11-09 — carry NO milestone and name NO criterion. THAT IS THE WHOLE OF WHAT IS UNREAL, and it is already measured rather than argued: board-conformance on 2026-11-09 read spec-placement SHORT at 87 of 1815 and criteria-named SHORT at 41 of 70. MAKING IT REAL IS E1 AND E2, not new tooling: for every testable spec, either plan it through the pipeline or declare it UNPLANNED, and give every open issue a criterion or a declaration that it serves none. Do NOT decompose all 1815 criteria into issues — the UNPLANNED declaration is the intended answer for a spec nobody is shipping. Separately and much smaller: `scripts/work-status.ts` prints the Ready lane with no sort, so two cards appear in array order. The ORDER IS REAL where it is decided — the promoter sorts by phase then age — so this is a display gap, not a board gap, and I overstated it before checking.",
@@ -242,6 +242,19 @@
     }
   ],
   "sessions": [
+    {
+      "date": "2026-11-14 session 94 (one decider for the criterion question, the claim clock and the tick at close; board 8 of 9)",
+      "items": [
+        "MERGED: #2094 and #2101 (#1964: the filing cap reads committed config only, through committedFilingCap; SC-2753 ticked), #2096 (#1953: board-conformance's declared-work reading, SC-2752), #2103 (#2097: one pinned issue, #2106, rewritten on every change, and /board step 6 prints it), #2105 and #2108 (#2066, #2107: finding-promotion writes the id family, section, phase row and deferral bank), #2109 (#2104: ADR-015's seven promotions), #2111 (#1506: SC ids are reserved in the pull request that consumes them), #2113 (#2061), #2114 (#1942), #2115 (#2005), #2117 (#2116).",
+        "THE CLOSING CHECK AND THE BOARD NOW ANSWER ONE QUESTION ONE WAY (#2113). The check's own copy accepted only SC-<digits>, so the 37 open payload issues naming CRC-… criteria could never have had a closing PR merged. It also accepted ids no spec states, and read 'serves no criterion' in any case and in the body only. Measured: 71 of the last 400 issues judged differently. It now reads criterionAnswer, including the title, and the population test counts every literal of the words, which is how the old copy had hidden.",
+        "A PR THAT CLOSES A CRITERION'S ISSUE MUST TICK IT OR SAY 'does not complete SC-N' (#2115). This is the state that turned every PR red twice this week: #2003 closing #1998 and #2094 closing #1964, each repaired by reopening an issue by hand. The check reads the spec from the PR's merge commit, so it catches the state before main does. A collided id is not demanded (AI review).",
+        "STALE CLAIMS ARE JUDGED BY WORK, NOT COMMENTS (#2114, SC-2760). Quiet time is days since the newest of the assigned event, the tip commit of a branch issueFromBranch attributes to the issue, and the opening and newest commit of each PR declaring it closes the issue. Run live against #2061 and #1942.",
+        "E2 PROVED: criteria-named reads MET 97 of 97 on main. Recording it done is PR #2112, left for Jason's merge as E1 and E3 were. Its cost: every open issue then has to name a criterion, or every PR's stage proof goes red. The board reads 8 of 9 checks met. declared-work is 17 short: 12 payload criteria with no issue, which F1 is for, and the open stage items E2, E4, E5, F1 and F2, which name no issue.",
+        "OPEN FOR JASON: merge #2112 (E2 done). #2040 stays parked on his call; the count its resume condition asked for was posted: the last-resort file-exists rewrite changes 0 criteria in specs/ today, and removing it costs three test controls whose criteria would change with it. E4 has no proving reading yet (no check compares the Criteria column to the bodies), and E5 waits on #1720, which sits behind Phase 7.",
+        "FOUND AND FIXED IN PASSING: census-routing did not route a criterion tick to test/spec-evidence.test.ts, so #2114's tick passed locally and failed CI on a missing fingerprint (#2116, #2117). #2102 was closed as a duplicate of #2005. #2116 was filed under the engine label by mistake and the label removed. The needs-criterion label had drifted from criteria-named on 7 issues labelled before their criteria reached main; the daily sweep's backfill was dispatched and the count is 0.",
+        "IN FLIGHT AT SESSION END: #2118 (#1976: work-status says which startable issues collide on a file, SC-2761) and #1979 (a closing keyword in a commit message is checked, backticks or not; this repository squashes with the commit messages as the body), both built and tested."
+      ]
+    },
     {
       "date": "2026-11-13 session 93 (the filing cap rethought: ADR-016 decided, merged and built; finding-promotion, repair placement and the tick tool hardened)",
       "items": [
@@ -1205,34 +1218,36 @@
     }
   ],
   "session": {
-    "number": 93,
-    "date": "2026-11-13",
-    "suite": "ADR-016 (the filing cap meters net growth) decided, merged and built end to end (#2085, #2088, #2089); #2060, #2042, #2072 and #2076 shipped; README (#2083) and the plan's verify commands (#2068) merged.",
-    "summary": "The filing cap kept refusing agreed work, and Jason asked whether its purpose was right. ADR-016 changed what it measures: while the repo closes issues as fast as it opens them, every run may file up to 36; otherwise today's cap of 12 stands. It went from decision to merged ADR to two built issues in one session. After Jason's merge, the workflow filed the issues and placed the board column and milestone with no hand step; the /dry-run before the merge was run by hand, because a stale gate blocks the skill. Live at session end: 34 opened, 24 closed, so the cap is still 12 until closing catches up. Later: Jason agreed to record B4, E1 and E3 done. E1 and E3 are recorded — their commands exit 0 (spec-placement 115 of 115, dependency-edges 247 of 247); E3 lost a stale `0 of 71` baseline, which the validator refuses on a done item, and E1 a stale `2 of 27`. B4 also reads MET 22 of 22 but is HELD, for #2035's reason, which still holds: a done item is run live in CI, and a hand-milestoned engine issue has no Criteria cell until #2062 lands, so placing the 14 unphased engine issues would redden every PR. Completing Stage B also bumps COMPLETE_STAGES in test/stage-ladder.test.ts. Put back to Jason. Then #2062 shipped (PR #2092): an issue given a phase now gets its queue label, its Criteria cell and every family's phase links from phase-order.yml. Ten unphased engine issues were then placed by hand (six into Phase 6, four into Phase 7); of the ten runs it fired, GitHub kept two and dropped eight, and those two left queue-label, criteria-field and blocked-by-edges MET 31 of 31 and dependency-edges MET 370 of 370 with no hand step. B4 is recorded done and Stage B is complete.",
+    "number": 94,
+    "date": "2026-11-14",
+    "suite": "Twelve PRs merged (#2094, #2096, #2101, #2103, #2105, #2108, #2109, #2111, #2113, #2114, #2115, #2117); criteria-named MET 97 of 97; board 8 of 9 checks met.",
+    "summary": "The engine's checks now share their deciders. The PR closing check asks the board's criterion question (#2113), so payload issues can be closed at all. A PR closing a criterion's issue must tick it or say it does not complete it (#2115), which removes the hand-reopen repair that turned every PR red twice this week. Stale claims are judged by branch commits and PR activity rather than comments (#2114). criteria-named reached MET 97 of 97, so E2's proof passes; recording it done is #2112, for Jason. declared-work is the one short reading: 12 payload criteria waiting on F1, and five open stage items that name no issue.",
     "issues_created": [
-      2061,
-      2062,
-      2063,
-      2066,
-      2067,
-      2072,
-      2076,
-      2079,
-      2081,
-      2082,
-      2084,
-      2086,
-      2087
+      2095,
+      2097,
+      2098,
+      2099,
+      2100,
+      2102,
+      2104,
+      2106,
+      2107,
+      2110,
+      2116
     ],
     "issues_closed": [
-      2042,
-      2060,
-      2072,
-      2076,
-      2081,
-      2084,
-      2086,
-      2087
+      1506,
+      1942,
+      1953,
+      1964,
+      2005,
+      2061,
+      2066,
+      2097,
+      2102,
+      2104,
+      2107,
+      2116
     ]
   },
   "stages": [
