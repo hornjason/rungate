@@ -75,8 +75,14 @@ const CHECKED_SC_BASELINE = 261;
  * two in `test/sc-binding-split.test.ts` are the ones that are supposed to
  * refuse a tick. 320 is 18 above the live 302 and 23 above the split's sum,
  * which is a margin stated here rather than a number that tracks the tree.
+ *
+ * 320 -> 340 on 2026-11-14 (#2045). The same drift as #1718: honest ticks
+ * since had brought the live count back to 320, and ticking SC-2743 —
+ * proved by `test/audit-closing-references.test.ts` — took it to 321. The
+ * split's halves then summed to 316 (150 + 166). 340 is 19 above the live 321
+ * and 24 above that sum, the same margin #1718 chose.
  */
-const UNMATCHED_BACKSTOP = 320;
+const UNMATCHED_BACKSTOP = 340;
 function specFiles(): string[] {
   return readdirSync(SPECS_DIR).filter(f => f.endsWith(".md"));
 }
