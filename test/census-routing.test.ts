@@ -2137,6 +2137,8 @@ describe("#2150: an edit that adds a criterion id or a write site routes the cen
       change({ path: "test/status-view.test.ts", removed: ['  const spec = "- [ ] SC-9905: a fixture";'] }),
       change({ path: "hooks/h.ts", added: ['const spec = "SC-9905";'] }),
       change({ path: "docs/x.md", added: ["SC-9905 is cited here"] }),
+      // Round 3: a hyphen after the digits is not the end of an id (#148).
+      change({ path: "lib/x.ts", added: ['const s = "SC-9906-old";'] }),
     ]) {
       const { tests } = censusTestsFor([c]);
       for (const t of NAMESPACE) expect(tests, `${t} routed for ${c.path}`).not.toContain(t);

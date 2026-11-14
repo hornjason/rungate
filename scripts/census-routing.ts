@@ -46,7 +46,7 @@ import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 
 import { LINE_CITATION } from "../lib/line-citation";
-import { SC_ID_SOURCE, SC_SOURCE_DIRS, TRACKED_ID_PREFIX_SOURCE } from "../lib/sc-ids";
+import { SC_SOURCE_DIRS, scMentionPattern, TRACKED_ID_PREFIX_SOURCE } from "../lib/sc-ids";
 import { repoRootIdents } from "../lib/scratch-roots";
 import { stripJsComments } from "../lib/strip-js-comments";
 import { SWEPT_DIRS, SWEPT_JS_DIRS, WRITE_PRIMITIVES } from "../lib/spec-write-sweep";
@@ -214,9 +214,6 @@ const UNTICKED_CRITERION = new RegExp(`^\\s*[-*]\\s*\\[ \\]\\s*${TRACKED_ID_PREF
  * rule file is a new file AND a doc AND a rule doc — because the union is what
  * you run and the per-row reasons are what make the union readable.
  */
-/** Any tracked criterion id, in the census's own shape (#2150). */
-const SOURCE_CRITERION_ID = new RegExp(`\\b${SC_ID_SOURCE}\\b`);
-
 /** A call to any primitive the write-site sweep counts (#2150). */
 const WRITE_CALL = new RegExp(
   `\\b(?:${WRITE_PRIMITIVES.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\s*\\(`,
@@ -405,7 +402,7 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
     id: "source-criterion-id",
     event: `added a criterion id in ${SC_SOURCE_DIRS.map(d => `${d}/`).join(", ")}`,
     tests: ["test/sc-id-namespace.test.ts", "test/sc-fixture-namespace.test.ts"],
-    fires: c => SC_SOURCE_DIRS.some(d => inDir(c.path, d)) && c.added.some(l => SOURCE_CRITERION_ID.test(l)),
+    fires: c => SC_SOURCE_DIRS.some(d => inDir(c.path, d)) && c.added.some(l => scMentionPattern().test(l)),
   },
   {
     // #2150, second instance (#2148): an added writeFileSync in lib/scaffold
