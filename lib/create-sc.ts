@@ -9,7 +9,13 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 import type { ScRegistry } from "./sc-ids";
-import { isFixtureScId, scIdsSpelledInSourceReading, SC_SOURCE_DIRS } from "./sc-ids";
+import {
+  isFixtureScId,
+  parseScDeclarations,
+  parseScHeadingDeclarations,
+  scIdsSpelledInSourceReading,
+  SC_SOURCE_DIRS,
+} from "./sc-ids";
 import type { ScNamespaceReading, SourceReading } from "./sc-id-cross-tree";
 import { readScNamespace } from "./sc-id-cross-tree";
 import type { ScReservation, ScReservationReading } from "./sc-reservations";
@@ -288,9 +294,26 @@ export function listPatterns(): string {
  * scans of the same string would be two deciders that agree, and a reading
  * whose numbers come from a different pattern than the allocation used is a
  * reading of something else.
+ *
+ * #2067: a fixture-range id the spec only MENTIONS is left out, exactly as it
+ * is for source above. One sentence citing `SC-9999` used to send the next
+ * criterion to `SC-10000`. A fixture-range id the spec DECLARES, as a checkbox
+ * or a `### SC-N:` heading, stays in: a declaration is authoritative at any
+ * number.
  */
 function idsInSpecContent(specContent: string): string[] {
-  return [...specContent.matchAll(/SC-(\d+)/g)].map(m => m[0]);
+  // Indented checkboxes count as declarations here (review of #2128). The
+  // registry patterns anchor at column 0, and missing a nested declaration
+  // would hand its id out again; for an allocator, over-counting is safe.
+  const indented = [...specContent.matchAll(/^[ \t]+[-*][ \t]+\[[ xX]\][ \t]+(SC-\d+):/gm)].map(m => m[1]!);
+  const declared = new Set([
+    ...parseScDeclarations(specContent, "").map(d => d.id),
+    ...parseScHeadingDeclarations(specContent, "").map(d => d.id),
+    ...indented,
+  ]);
+  return [...specContent.matchAll(/SC-(\d+)/g)]
+    .map(m => m[0])
+    .filter(id => !isFixtureScId(id) || declared.has(id));
 }
 
 export function nextSCNumber(
