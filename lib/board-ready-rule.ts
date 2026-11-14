@@ -42,7 +42,7 @@
  * before the gate can go.
  */
 
-import { NEEDS_CRITERION_LABEL, openFrontier, phaseOf } from "./board-mirror";
+import { NAMES_NONE, NEEDS_CRITERION_LABEL, openFrontier, phaseOf } from "./board-mirror";
 import { inMilestoneFamily } from "./live-issues";
 
 /**
@@ -373,7 +373,7 @@ export function workNextReading(
       why:
         `REFUSED — ${refusedNames} carr${refused.length === 1 ? "ies" : "y"} "${label}" and also ` +
         `${NEEDS_CRITERION_LABEL}, so NOTHING was promoted: an issue that names no criterion is ` +
-        `never expedited. Name the criterion it serves, or "serves no criterion", and the label lifts.`,
+        `never expedited. Name the criterion it serves, or "${NAMES_NONE}", and the label lifts.`,
     };
   }
   const refusedNote =
