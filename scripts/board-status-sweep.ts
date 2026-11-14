@@ -61,6 +61,7 @@ import { parseArgs } from "util";
 import { resolveGitHubToken } from "../lib/github";
 import { laneFor } from "../lib/board-flow";
 import { workVerdict } from "../lib/board-lane-health";
+import { issueFromBranch } from "../lib/local-work";
 
 /**
  * The one exit code this script refuses through.
@@ -160,16 +161,18 @@ export interface BoardItem {
    */
   readonly assigned: boolean | null;
   /**
-   * Days since anything happened on this issue, or `null` for NOT READ.
+   * Days since the claim or any work on it, or `null` for NOT READ.
    *
-   * Derived from the issue's `updatedAt` in `readBoard`, so the clock lives
-   * at the edge and `verdictFor` stays a pure function of its argument with
-   * no hidden input. A decider that reads the wall clock cannot be tested
-   * for a boundary without the test also controlling time.
+   * `claimSilence` (#1942, SC-2760), filled by `applyClaimSilence` for the
+   * rows `needsClaimActivityReading` names and `null` on every other row, so
+   * the clock lives at the edge and `verdictFor` stays a pure function of
+   * its argument. A decider that reads the wall clock cannot be tested for a
+   * boundary without the test also controlling time.
    *
-   * `updatedAt` deliberately does NOT move when a linked pull request is
-   * pushed to, which is exactly why staleness needs the second condition
-   * below rather than this one alone.
+   * **Never the issue's `updatedAt`.** A comment moves that, so writing
+   * about an issue read as working on it: on 2026-11-09 six
+   * claimed-but-unworked issues all read 0 to 2 days idle and none was
+   * released.
    */
   readonly idleDays: number | null;
   /**
@@ -228,6 +231,49 @@ export function idleDaysSince(updatedAt: unknown, now: number): number | null {
   // a runner is real and small; a negative age compares `false` against the
   // threshold either way, so this only makes the printed figure believable.
   return Math.max(0, Math.floor((now - then) / 86_400_000));
+}
+
+/**
+ * What a claim's silence is read from (#1942, SC-2760): when it was made,
+ * and every moment somebody did work on it.
+ *
+ * `claimedAt` is the newest `assigned` event, `null` when none was read.
+ * `workAt` holds the tip commit of every branch `issueFromBranch` attributes
+ * to the issue, plus the opening and newest commit of every pull request
+ * declaring it closes the issue. A comment is in neither, on purpose.
+ */
+export interface ClaimActivity {
+  readonly claimedAt: string | null;
+  readonly workAt: readonly string[];
+}
+
+/**
+ * Whole days since the claim or its latest work, or `null` for NOT READ.
+ *
+ * The latest of the claim and every work moment, so a re-claim restarts the
+ * clock and older work cannot age a fresh claim. An unread claim or ANY
+ * unparseable work date is `null`: dropping the date would leave a shorter
+ * list, which reads as longer silence, which releases somebody's claim.
+ */
+export function claimSilence(activity: ClaimActivity | null, now: number): number | null {
+  if (activity === null || activity.claimedAt === null) return null;
+  const moments = [activity.claimedAt, ...activity.workAt].map(t => Date.parse(t));
+  if (moments.some(m => Number.isNaN(m))) return null;
+  return idleDaysSince(new Date(Math.max(...moments)).toISOString(), now);
+}
+
+/**
+ * The rows whose silence decides anything: an assigned open issue in a lane
+ * assignment contradicts. Every other row's `idleDays` is never read by
+ * `verdictFor`, so no query is spent on it.
+ */
+export function needsClaimActivityReading(item: BoardItem): boolean {
+  return (
+    item.kind === "Issue" &&
+    item.state === "OPEN" &&
+    item.assigned === true &&
+    ASSIGNMENT_CONTRADICTS.includes(item.status ?? "")
+  );
 }
 
 /**
@@ -727,7 +773,10 @@ query($project: ID!, $endCursor: String) {
             # "is anybody on it", the count answers it in one field, and a
             # \`first: N\` page would reintroduce the same truncation
             # hazard \`statusUnread\` exists to handle one level up.
-            ... on Issue { number state stateReason updatedAt assignees { totalCount } }
+            #
+            # No last-updated time: a comment moves it, so it is not a clock
+            # for whether a claim is worked (#1942). \`CLAIM_ACTIVITY_QUERY\` is.
+            ... on Issue { number state stateReason assignees { totalCount } }
             ... on PullRequest { number state isDraft }
           }
         }
@@ -1253,12 +1302,10 @@ export function parseBoardItem(node: any, now: number = Date.now()): BoardItem |
       typeof content.assignees?.totalCount === "number"
         ? content.assignees.totalCount > 0
         : null,
-    // `now` is injected rather than read here, so a boundary case is
-    // testable without the test controlling the clock — and so this stays
-    // a pure function of its two arguments. An unparseable or absent
-    // timestamp is `null`, NOT zero days: "no activity recorded" and
-    // "active today" are opposite answers to the staleness question.
-    idleDays: idleDaysSince(content.updatedAt, now),
+    // Never derived here (#1942). `applyClaimSilence` fills it from the
+    // work for the rows `needsClaimActivityReading` names; the issue's own
+    // `updatedAt` moved on every comment, so it read discussion as work.
+    idleDays: null,
     // Never resolved here. `resolveLinkedPullRequests` fills it for the rows
     // `needsOpenPullRequestReading` names — every verdict that reads the
     // field, and no others.
@@ -1472,6 +1519,136 @@ export async function resolveLinkedPullRequests(
   return applyLinkedPullRequests(items, countOpenPRsByIssue(nodes));
 }
 
+/**
+ * The work on one claimed issue (#1942, SC-2760): its newest `assigned`
+ * event, every pull request declaring it closes the issue, and every branch
+ * whose name contains the number — `parseClaimActivity` keeps only the ones
+ * `issueFromBranch` attributes to it, the same reader `lib/local-work.ts`
+ * uses, so "which branch is this issue's" has one owner.
+ *
+ * One query per row, and the rows are few: only an assigned open issue in a
+ * lane assignment contradicts (`needsClaimActivityReading`).
+ */
+export const CLAIM_ACTIVITY_QUERY = `
+query($owner: String!, $name: String!, $number: Int!, $branch: String!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      timelineItems(itemTypes: [ASSIGNED_EVENT], last: 1) { nodes { ... on AssignedEvent { createdAt } } }
+      closedByPullRequestsReferences(first: 50, includeClosedPrs: true) {
+        pageInfo { hasNextPage }
+        nodes { createdAt commits(last: 1) { nodes { commit { committedDate } } } }
+      }
+    }
+    refs(refPrefix: "refs/heads/", query: $branch, first: 100) {
+      pageInfo { hasNextPage }
+      nodes { name target { ... on Commit { committedDate } } }
+    }
+  }
+}`;
+
+/**
+ * `CLAIM_ACTIVITY_QUERY`'s response as a `ClaimActivity`, or `null` for NOT
+ * READ.
+ *
+ * A cut page, a missing connection or a work moment with no readable date is
+ * `null`, never a shorter list: less work reads as longer silence, and
+ * longer silence unassigns somebody. No assigned event at all keeps the row
+ * but leaves `claimedAt` `null`, which `claimSilence` reads as unread.
+ */
+export function parseClaimActivity(data: unknown, issue: number): ClaimActivity | null {
+  const repo = (data as { repository?: any } | null | undefined)?.repository;
+  const found = repo?.issue;
+  if (found === null || typeof found !== "object") return null;
+  const timeline = found.timelineItems?.nodes;
+  const prs = found.closedByPullRequestsReferences;
+  const refs = repo.refs;
+  if (
+    !Array.isArray(timeline) ||
+    !Array.isArray(prs?.nodes) ||
+    typeof prs?.pageInfo?.hasNextPage !== "boolean" ||
+    !Array.isArray(refs?.nodes) ||
+    typeof refs?.pageInfo?.hasNextPage !== "boolean"
+  ) {
+    return null;
+  }
+  if (prs.pageInfo.hasNextPage || refs.pageInfo.hasNextPage) return null;
+
+  const last = timeline[timeline.length - 1];
+  const claimedAt = typeof last?.createdAt === "string" ? last.createdAt : null;
+  const workAt: string[] = [];
+  for (const ref of refs.nodes) {
+    if (typeof ref?.name !== "string" || issueFromBranch(ref.name) !== issue) continue;
+    const at = ref.target?.committedDate;
+    if (typeof at !== "string") return null;
+    workAt.push(at);
+  }
+  for (const pr of prs.nodes) {
+    if (typeof pr?.createdAt !== "string") return null;
+    workAt.push(pr.createdAt);
+    const commits = pr.commits?.nodes;
+    if (!Array.isArray(commits)) return null;
+    if (commits.length > 0) {
+      const at = commits[commits.length - 1]?.commit?.committedDate;
+      if (typeof at !== "string") return null;
+      workAt.push(at);
+    }
+  }
+  return { claimedAt, workAt };
+}
+
+/**
+ * Fill `idleDays` from the read activity, for the rows that need it ONLY.
+ * A needing row with no reading in the map keeps `null`, which `verdictFor`
+ * reports UNDECIDABLE — an unread clock never releases a claim.
+ */
+export function applyClaimSilence(
+  items: readonly BoardItem[],
+  activities: ReadonlyMap<number, ClaimActivity | null>,
+  now: number,
+): BoardItem[] {
+  return items.map(item =>
+    needsClaimActivityReading(item)
+      ? { ...item, idleDays: claimSilence(activities.get(item.number) ?? null, now) }
+      : item,
+  );
+}
+
+/**
+ * Read the work on every row that needs it, then fill `idleDays`.
+ *
+ * A failed read is named and leaves that row `null`; the others still
+ * proceed, because each row's reading is its own query and one failure says
+ * nothing about another issue's work.
+ */
+export async function resolveClaimSilence(
+  token: string,
+  repo: string,
+  items: readonly BoardItem[],
+  now: number = Date.now(),
+): Promise<BoardItem[]> {
+  const [owner, name] = repo.split("/");
+  const activities = new Map<number, ClaimActivity | null>();
+  for (const item of items) {
+    if (!needsClaimActivityReading(item)) continue;
+    try {
+      const data = await graphql(token, CLAIM_ACTIVITY_QUERY, {
+        owner,
+        name,
+        number: item.number,
+        branch: String(item.number),
+      });
+      activities.set(item.number, parseClaimActivity(data, item.number));
+    } catch (e) {
+      console.log(
+        `::warning::could not read the work on #${item.number} (${String(e)}), so its claim's ` +
+          `silence is NOT READ and the row is UNDECIDABLE. Nothing was unassigned or moved.`,
+      );
+      activities.set(item.number, null);
+    }
+  }
+  return applyClaimSilence(items, activities, now);
+}
+
 async function main(argv: readonly string[]): Promise<number> {
   const { values } = parseArgs({
     args: [...argv],
@@ -1500,10 +1677,19 @@ async function main(argv: readonly string[]): Promise<number> {
   // keeps `openLinkedPRs: null`, and `verdictFor` reports it UNDECIDABLE —
   // which is the correct reading for "I could not check", not a silent
   // decision to leave claims alone.
+  //
+  // The claim's silence is read FIRST (#1942): `isStaleClaimCandidate`,
+  // which picks the rows the pull-request read serves, asks `idleDays`. With
+  // no repo neither can be read, and every assigned row in Backlog or Ready
+  // is UNDECIDABLE rather than decided on a clock nobody looked at.
   const items =
     repoForReads === ""
       ? board
-      : await resolveLinkedPullRequests(token, repoForReads, board);
+      : await resolveLinkedPullRequests(
+          token,
+          repoForReads,
+          await resolveClaimSilence(token, repoForReads, board),
+        );
   const reading = sweep(items);
 
   console.log(`Board status sweep — ${items.length} item(s) read from ${PROJECT_ID}\n`);

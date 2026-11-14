@@ -2137,3 +2137,14 @@ describe("#1942 / SC-2760: a claim's silence is read from its work", () => {
     expect(CLAIM_ACTIVITY_QUERY).toContain("refs(");
   });
 });
+
+test("#1942: main reads each claim's silence before the pull-request read that depends on it", () => {
+  // `isStaleClaimCandidate` picks the rows the pull-request read serves, and
+  // it asks `idleDays`. Read in the other order — or not at all — every
+  // claim stays `null`, every assigned row is UNDECIDABLE, and nothing is
+  // ever released: green tests over a sweep that does nothing.
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+  expect(code).toMatch(
+    /resolveLinkedPullRequests\(\s*token,\s*repoForReads,\s*await resolveClaimSilence\(token, repoForReads, board\),?\s*\)/,
+  );
+});
