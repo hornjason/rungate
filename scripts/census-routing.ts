@@ -46,9 +46,10 @@ import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 
 import { LINE_CITATION } from "../lib/line-citation";
-import { TRACKED_ID_PREFIX_SOURCE } from "../lib/sc-ids";
+import { SC_SOURCE_DIRS, scMentionPattern, TRACKED_ID_PREFIX_SOURCE } from "../lib/sc-ids";
 import { repoRootIdents } from "../lib/scratch-roots";
 import { stripJsComments } from "../lib/strip-js-comments";
+import { SWEPT_DIRS, SWEPT_JS_DIRS, WRITE_PRIMITIVES } from "../lib/spec-write-sweep";
 
 /**
  * One changed file, with enough of the diff to tell an edit from an event.
@@ -213,6 +214,17 @@ const UNTICKED_CRITERION = new RegExp(`^\\s*[-*]\\s*\\[ \\]\\s*${TRACKED_ID_PREF
  * rule file is a new file AND a doc AND a rule doc — because the union is what
  * you run and the per-row reasons are what make the union readable.
  */
+/** A call to any primitive the write-site sweep counts (#2150). */
+// Longest first: alternation takes the first match, so `writeFile` listed
+// before `writeFileSync` would eat the prefix and the `\s*\(` would fail.
+// Same guard as TRACKED_ID_PREFIX_SOURCE in lib/sc-ids.ts.
+const WRITE_CALL = new RegExp(
+  `\\b(?:${[...WRITE_PRIMITIVES]
+    .sort((a, b) => b.length - a.length)
+    .map(n => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|")})\\s*\\(`,
+);
+
 export const CENSUS_TRIGGERS: CensusTrigger[] = [
   {
     id: "new-file",
@@ -384,6 +396,29 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
       "test/census-routing.test.ts",
     ],
     fires: c => c.isNew && /^test\/.*\.test\.tsx?$/.test(c.path),
+  },
+  {
+    // #2150. sc-fixture-namespace reads every criterion id spelled in
+    // `SC_SOURCE_DIRS`; sc-id-namespace reads test/ only, so routing it for
+    // the other three over-triggers, the safe direction. `new-test-file`
+    // reached them only when a file was ADDED. On #2149 an existing suite gained fixture ids below the floor;
+    // the router said nothing was reachable and sc-fixture-namespace refused
+    // on CI. The directories and the id shape are the census's own (review of
+    // PR #2158: `SC-\d+` misses `SC-A1` and `CRC-`, and test/ is one of four).
+    id: "source-criterion-id",
+    event: `added a criterion id in ${SC_SOURCE_DIRS.map(d => `${d}/`).join(", ")}`,
+    tests: ["test/sc-id-namespace.test.ts", "test/sc-fixture-namespace.test.ts"],
+    fires: c => SC_SOURCE_DIRS.some(d => inDir(c.path, d)) && c.added.some(l => scMentionPattern().test(l)),
+  },
+  {
+    // #2150, second instance (#2148): an added writeFileSync in lib/scaffold
+    // reddened spec-write-chokepoint on CI. The directories and the call
+    // names are the sweep's own, so this row and that suite read one list.
+    id: "write-site",
+    event: "added a file write where the write-site sweep looks",
+    tests: ["test/spec-write-chokepoint.test.ts"],
+    fires: c =>
+      [...SWEPT_DIRS, ...SWEPT_JS_DIRS].some(d => inDir(c.path, d)) && c.added.some(l => WRITE_CALL.test(l)),
   },
   {
     id: "spec-edit",

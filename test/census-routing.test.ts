@@ -86,6 +86,7 @@ import {
   type Change,
 } from "../scripts/census-routing";
 import { TRACKED_ID_PREFIXES } from "../lib/sc-ids";
+import { WRITE_PRIMITIVES } from "../lib/spec-write-sweep";
 import { LINE_CITATION } from "../lib/line-citation";
 import { stripJsComments } from "../lib/strip-js-comments";
 
@@ -2099,6 +2100,82 @@ describe("#1547: the routed set is complete over the census of the test populati
       expect(tests, `${path} routed the registry census`).not.toContain(
         "test/check-registry.test.ts",
       );
+    }
+  });
+});
+
+describe("#2150: an edit that adds a criterion id or a write site routes the census that reads it", () => {
+  const NAMESPACE = ["test/sc-id-namespace.test.ts", "test/sc-fixture-namespace.test.ts"];
+  const CHOKEPOINT = "test/spec-write-chokepoint.test.ts";
+
+  // #2149: an EXISTING test file gained fixture ids below the floor, the
+  // router said nothing was reachable, and sc-fixture-namespace refused on CI.
+  test("an existing test file gaining a criterion id routes both namespace suites", () => {
+    const { tests } = censusTestsFor([
+      change({ path: "test/status-view.test.ts", added: ['  const spec = "- [ ] SC-9905: a fixture";'] }),
+    ]);
+    for (const t of NAMESPACE) expect(tests, `${t} was not routed`).toContain(t);
+  });
+
+  // Round 1 of PR #2158: the fixture census reads lib/, scripts/ and gates/
+  // as well as test/, and the id shape includes a class letter and CRC-.
+  test("an id added anywhere the id census reads, in any tracked shape, routes both", () => {
+    for (const c of [
+      change({ path: "lib/example-helper.ts", added: ['const label = "SC-9906 placeholder";'] }),
+      change({ path: "scripts/x.ts", added: ['// see SC-9907'] }),
+      change({ path: "gates/g.test.ts", added: ['  const id = "SC-9908";'] }),
+      change({ path: "test/x.test.ts", added: ['  const anti = "SC-A9";'] }),
+      change({ path: "test/x.test.ts", added: ['  const crc = "CRC-Z9";'] }),
+    ]) {
+      const { tests } = censusTestsFor([c]);
+      for (const t of NAMESPACE) expect(tests, `${t} not routed for ${c.path}: ${c.added[0]}`).toContain(t);
+    }
+  });
+
+  test("control: no id, an id only removed, or an id outside the scanned directories, routes neither", () => {
+    for (const c of [
+      change({ path: "test/status-view.test.ts", added: ['  const spec = "a fixture";'] }),
+      change({ path: "test/status-view.test.ts", removed: ['  const spec = "- [ ] SC-9905: a fixture";'] }),
+      change({ path: "hooks/h.ts", added: ['const spec = "SC-9905";'] }),
+      change({ path: "docs/x.md", added: ["SC-9905 is cited here"] }),
+      // Round 3: a hyphen after the digits is not the end of an id (#148).
+      change({ path: "lib/x.ts", added: ['const s = "SC-9906-old";'] }),
+    ]) {
+      const { tests } = censusTestsFor([c]);
+      for (const t of NAMESPACE) expect(tests, `${t} routed for ${c.path}`).not.toContain(t);
+    }
+  });
+
+  // #2148: a writeFileSync added to lib/scaffold/steps.ts reddened
+  // spec-write-chokepoint on CI, and the router never named it.
+  test("an added write call in a swept directory routes the chokepoint suite", () => {
+    for (const c of [
+      change({ path: "lib/scaffold/steps.ts", added: ["    writeFileSync(join(root, file), body);"] }),
+      change({ path: "scripts/x.ts", added: ["  await Bun.write(out, json);"] }),
+      change({ path: "workflows/ship.js", added: ["  fs.appendFileSync(log, line);"] }),
+    ]) {
+      expect(censusTestsFor([c]).tests, `${c.path} did not route the chokepoint`).toContain(CHOKEPOINT);
+    }
+  });
+
+  // Round 2 of PR #2158: every primitive the sweep counts, not three samples.
+  // The alternation is sorted longest-first so a prefix name cannot shadow a
+  // longer one whatever order the list is in.
+  test("every write primitive the sweep counts routes the chokepoint", () => {
+    expect(WRITE_PRIMITIVES.length, "no primitives read, so the loop is over nothing").toBeGreaterThan(3);
+    const missed = WRITE_PRIMITIVES.filter(
+      n => !censusTestsFor([change({ path: "lib/x.ts", added: [`  ${n}(target, body);`] })]).tests.includes(CHOKEPOINT),
+    );
+    expect(missed, "these write calls did not route spec-write-chokepoint").toEqual([]);
+  });
+
+  test("control: a line with no write call, or a write call outside the swept directories, does not", () => {
+    for (const c of [
+      change({ path: "lib/scaffold/steps.ts", added: ["    const body = render(file);"] }),
+      change({ path: "test/x.test.ts", added: ["    writeFileSync(join(root, file), body);"] }),
+      change({ path: "lib/scaffold/steps.ts", removed: ["    writeFileSync(join(root, file), body);"] }),
+    ]) {
+      expect(censusTestsFor([c]).tests, `${c.path} routed the chokepoint with no added write`).not.toContain(CHOKEPOINT);
     }
   });
 });
