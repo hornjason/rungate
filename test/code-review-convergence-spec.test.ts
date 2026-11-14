@@ -486,6 +486,12 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: a cited figure's source still e
  * call on 2026-11-13 was to delete the copies, so the case now refuses the
  * sentence shapes they had: a count typed back in is a copy again.
  */
+const NUMBER_WORDS = [
+  "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+  "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+].join("|");
+
 describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: it states no count of its own criteria", () => {
   const body = existsSync(join(REPO, SPEC)) ? readFileSync(join(REPO, SPEC), "utf-8") : null;
 
@@ -495,14 +501,18 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: it states no count of its own c
     expect(declared.length, "no criteria parsed, so the spec is not the file this case means")
       .toBeGreaterThan(40);
 
+    // A count typed in words is the same copy (round 2 of PR #2157: the
+    // deleted "Seventeen of them" was spelled out).
+    const N = `(?:\\d+|(?:${NUMBER_WORDS})(?:[- ](?:${NUMBER_WORDS}))?)`;
     const shapes = [
-      /This spec holds \d+ criteria/g,
-      /this spec's\s+\d+ criteria/g,
-      /\d+ ticked of \d+/g,
-      /\d+ unticked boxes/g,
+      new RegExp(`This spec holds ${N} criteria`, "gi"),
+      new RegExp(`this spec's\\s+${N} criteria`, "gi"),
+      new RegExp(`\\b${N} ticked of ${N}\\b`, "gi"),
+      new RegExp(`\\b${N} unticked boxes`, "gi"),
       // Round 1 of PR #2157: the partition behind "the backlog is 30, not 47".
-      /backlog is \d+/gi,
-      /Of the unticked boxes, \d+/g,
+      new RegExp(`backlog is ${N}\\b`, "gi"),
+      new RegExp(`Of the unticked boxes, ${N}\\b`, "gi"),
+      new RegExp(`\\b${N} of them are not engineering`, "gi"),
     ];
     const restated = shapes.flatMap(p => [...body!.matchAll(p)].map(m => m[0]));
     expect(
