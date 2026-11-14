@@ -500,6 +500,9 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: it states no count of its own c
       /this spec's\s+\d+ criteria/g,
       /\d+ ticked of \d+/g,
       /\d+ unticked boxes/g,
+      // Round 1 of PR #2157: the partition behind "the backlog is 30, not 47".
+      /backlog is \d+/gi,
+      /Of the unticked boxes, \d+/g,
     ];
     const restated = shapes.flatMap(p => [...body!.matchAll(p)].map(m => m[0]));
     expect(

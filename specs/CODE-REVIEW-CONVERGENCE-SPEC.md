@@ -1748,10 +1748,10 @@ failure this section exists to stop: an agent spends a session discovering
 that the criterion it chose is blocked behind one nobody has scheduled, and
 writes the discovery down instead of the code.
 
-**The backlog is 30, not 47.** Of the unticked boxes, 8 are mechanisms this
-tree cannot observe, 4 cannot be meaningful in this deployment, 2 are
-declared deviations, and 3 are repository settings. Only the remainder is
-engineering, and the four categories above are not a smaller version of it —
+**The backlog is smaller than the unticked boxes.** Some of them are
+mechanisms this tree cannot observe, some cannot be meaningful in this
+deployment, some are declared deviations, and some are repository settings.
+Only the remainder is engineering, and the four categories above are not a smaller version of it —
 they are a different kind of fact, and the tables above say which is which.
 
 Phases are ordered by **effect on rounds-to-pass**, which the table in *Where
