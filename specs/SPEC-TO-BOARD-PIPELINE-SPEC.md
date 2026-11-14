@@ -189,7 +189,8 @@ take.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2745: `rungate scaffold` emits `board-ready.yml` and `board-intake.yml` as owned workflows that read the board's identity from project config, and no generated workflow contains a literal project id or URL
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2746: `rungate scaffold` installs `.claude/commands/dry-run.md` and `docs/adr/TEMPLATE.md` as owned files
+- [x] SC-2746: `rungate scaffold` installs `.claude/commands/dry-run.md` and `docs/adr/TEMPLATE.md` as owned files
+      proved-by: test/dry-run-command.test.ts, the `SC-2746` describe — 4 pass, 0 fail; 2026-11-14, on the PR for #2048. A consumer's scaffold writes both from `templates/process/`: the command calls `bunx rungate`, passes no `--write` and carries a provenance marker, so a hand edit is preserved and reported; the template is regenerated with no marker, because every ADR is copied from it. This repository's copies equal the rendered output, and an installation missing a source refuses by name.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2747: `rungate scaffold` installs the four-step process as an owned rules file, generated from the same single source that this repository's own rule 9 is checked against, so the consumer's copy and ours cannot drift
       proved-by: test/process-rules.test.ts — 7 pass, 0 fail; 2026-11-14, on the PR for #2049. `generateScopedRules` emits `.claude/rules/alignment-process.md` from `PROCESS_STEPS` in `lib/scaffold/process-rules.ts`, loaded at launch for a consumer; this repository's copy is byte-equal to the generator's output; and `ruleNineViolations` checks AGENTS.md's rule 9 against the same source, failing on a lost mechanism, a phrase under the wrong step, a dropped exemption, and an absent rule 9.
