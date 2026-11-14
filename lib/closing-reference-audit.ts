@@ -157,16 +157,40 @@ function maskedRanges(body: string): { start: number; end: number; reason: Inert
  * backticks is one mistake, not two, and a message listing it twice reads as
  * two problems to fix.
  */
+/**
+ * A closing keyword beside an issue number: `Fixes #12`, `closes: #12`.
+ *
+ * The one place the keyword list and its adjacency are decided, for a pull
+ * request body and a commit message alike (#1979). Two patterns would be two
+ * deciders, free to disagree about the same text.
+ */
+function closingKeywordPattern(): RegExp {
+  // `(` as well as `:` may sit between verb and number: GitHub closed #1148
+  // from the squash subject "fix(#1148): …" (PR #1208), the conventional-commit
+  // form most subjects here take.
+  // And an optional `owner/repo` before the `#` (AI review of #2120):
+  // `Fixes hornjason/rungate#1717` closes #1717 as surely as the bare form.
+  // Group 1 the keyword, 2 the repository if spelled, 3 the number.
+  return new RegExp(
+    `\\b(${CLOSING_KEYWORDS.join("|")})\\b[ \\t]*[:(]?[ \\t]*([\\w.-]+\\/[\\w.-]+)?#(\\d+)\\b`,
+    "gi",
+  );
+}
+
 export function inertClosingReferences(body: string): InertClosingReference[] {
   if (!body) return [];
   const ranges = maskedRanges(body);
-  const pattern = new RegExp(`\\b(${CLOSING_KEYWORDS.join("|")})\\b[ \\t]*:?[ \\t]*#(\\d+)\\b`, "gi");
+  const pattern = closingKeywordPattern();
   const seen = new Set<number>();
   const out: InertClosingReference[] = [];
   for (const m of body.matchAll(pattern)) {
     const hit = ranges.find(r => m.index! >= r.start && m.index! < r.end);
     if (!hit) continue;
-    const issue = Number.parseInt(m[2]!, 10);
+    // A spelled-out repository is left out here, as it always was: the body
+    // check compares numbers against this repository's linked set, and another
+    // repository's #9 is not this one's.
+    if (m[2] !== undefined) continue;
+    const issue = Number.parseInt(m[3]!, 10);
     if (seen.has(issue)) continue;
     seen.add(issue);
     out.push({ issue, keyword: m[1]!, reason: hit.reason, text: m[0] });
@@ -369,6 +393,53 @@ export function closingRequirementMessage(f: ClosingRequirementFailure, prNumber
  * remedy is an obstacle. The remedy here is one character of punctuation, so
  * the message says exactly which.
  */
+/** A closing keyword in a commit message, which GitHub acts on wherever it sits. */
+export interface CommitClosingReference {
+  readonly sha: string;
+  readonly issue: number;
+  /** The matched text, so the message can quote what to reword. */
+  readonly text: string;
+}
+
+/**
+ * Every closing keyword in these commit messages, backticks and fences
+ * included (#1979).
+ *
+ * A commit message is not markdown. GitHub reads a keyword in it wherever it
+ * sits, so the markup that makes `Fixes #12` inert in a pull request body
+ * changes nothing here. That asymmetry closed #1717: PR #1978's squash commit
+ * quoted a backticked keyword while describing the defect.
+ */
+export function commitClosingReferences(
+  commits: readonly { readonly sha: string; readonly message: string }[],
+  repoNameWithOwner: string,
+): CommitClosingReference[] {
+  const out: CommitClosingReference[] = [];
+  for (const c of commits) {
+    for (const m of c.message.matchAll(closingKeywordPattern())) {
+      // Bare `#N`, or this repository spelled out. Another repository's issue
+      // is not this pull request's to declare.
+      if (m[2] !== undefined && m[2].toLowerCase() !== repoNameWithOwner.toLowerCase()) continue;
+      out.push({ sha: c.sha, issue: Number.parseInt(m[3]!, 10), text: m[0] });
+    }
+  }
+  return out;
+}
+
+/** The refusal for a commit message that would close an issue this pull request does not declare. */
+export function commitClosingMessage(refs: readonly CommitClosingReference[], prNumber: number): string {
+  const rows = refs.map(r => `  ${r.sha.slice(0, 8)}: "${r.text}" would close #${r.issue}`).join("\n");
+  return (
+    `PR #${prNumber} carries commit messages with a closing keyword for an issue it does ` +
+    `not declare:\n${rows}\n\n` +
+    `This repository squashes with the commit messages as the body, and merge and rebase ` +
+    `keep them as they are, so the merge closes each of these. Backticks do not stop it ` +
+    `in a commit message. Reword the commit so the number is not beside the verb ` +
+    `(write "issue #N"), then push. Or, if closing it is intended, add "Fixes #N" to this ` +
+    `description so the pull request declares it.`
+  );
+}
+
 export function inertClosingMessage(refs: InertClosingReference[], prNumber: number): string {
   const rows = refs
     .map(r => `  ${r.text}  — inside a ${r.reason}, so GitHub never linked it (issue #${r.issue})`)

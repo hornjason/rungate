@@ -21,11 +21,23 @@
  *
  * ## What it refuses, and what it deliberately does not
  *
- * It refuses exactly one state: **`closingIssuesReferences` is empty AND the
- * body contains a closing keyword adjacent to an issue number inside markup
- * the markdown parser does not scan.** That is a contradiction inside one
- * pull request — the author wrote a closing reference and GitHub recorded
- * none — and it is the state that left #1157 open after PR #1208 merged.
+ * Four refusals, in the order the script reaches them. The first two refuse
+ * whatever `RUNGATE_REQUIRE_CLOSING_REF` says; the last two only when it is
+ * the string `true`, and are an annotation otherwise.
+ *
+ *  1. **An inert reference:** a closing keyword beside an issue number inside
+ *     markup the markdown parser does not scan, for an issue GitHub did not
+ *     link. The author wrote a closing reference and GitHub recorded none —
+ *     the state that left #1157 open after PR #1208 merged.
+ *  2. **A commit message that closes an undeclared issue (#1979):** GitHub
+ *     acts on a keyword in a commit message wherever it sits, and this
+ *     repository squashes with the messages as the body.
+ *  3. **No issue closed, or one that has not answered the criterion question**
+ *     (ADR-013 step 4, #2061).
+ *  4. **A closed issue naming a criterion this tree leaves unticked**, unless
+ *     the description says `does not complete <id>` (#2005).
+ *
+ * A payload missing a field any of these reads is UNMEASURED and refused.
  *
  * It does NOT refuse a pull request that merely mentions an issue without
  * closing it. Measured at 2026-10-23T15:31Z, 27 of the 50 open issues had a
@@ -45,6 +57,8 @@ import {
   closingCriteria,
   closingRequirement,
   closingRequirementMessage,
+  commitClosingMessage,
+  commitClosingReferences,
   inertClosingMessage,
   inertClosingReferences,
   isSessionRecordOnly,
@@ -193,6 +207,38 @@ async function main(): Promise<void> {
         `whether every one names a criterion was never read. UNMEASURED, not clean.`,
     );
   }
+
+  // #1979: the commit messages the merge will carry. GitHub acts on a closing
+  // keyword in a commit message wherever it sits, backticks included, and this
+  // repository squashes with the messages as the body. Refused whatever the
+  // switch says, like the inert reading above: it closes live work.
+  //
+  // Absent is NOT READ and a cut list is UNMEASURED, like every field above:
+  // the issue a missing commit would close is exactly the one nobody sees.
+  const rawCommits = (pr as { commits?: unknown }).commits;
+  const commitsTotal = (pr as { commitsTotal?: unknown }).commitsTotal;
+  if (!Array.isArray(rawCommits) || typeof commitsTotal !== "number") {
+    refuse(
+      "the payload carries no commits array with a commitsTotal, so whether a commit message " +
+        "closes an issue this pull request does not declare was never read. Add `commits` to " +
+        "the query. UNMEASURED, not clean.",
+    );
+  }
+  if (commitsTotal > rawCommits.length) {
+    refuse(
+      `this pull request has ${commitsTotal} commit(s) and only ${rawCommits.length} were ` +
+        `fetched, so a closing keyword in the rest was never read. UNMEASURED, not clean.`,
+    );
+  }
+  const commits = rawCommits.map(c => {
+    const node = c as { sha?: unknown; message?: unknown } | null;
+    if (typeof node?.sha !== "string" || typeof node?.message !== "string") {
+      refuse("a commit in the payload carries no sha or message string. UNMEASURED, not clean.");
+    }
+    return { sha: node.sha, message: node.message };
+  });
+  const undeclared = commitClosingReferences(commits, repoNameWithOwner).filter(r => !linkedIssues.has(r.issue));
+  if (undeclared.length > 0) refuse(commitClosingMessage(undeclared, prNumber));
 
   // The body of every issue this pull request closes HERE, read off the same
   // nodes `closingIssuesReferences` returned. The workflow asks GitHub for the

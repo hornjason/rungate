@@ -101,8 +101,16 @@ const RAW = Symbol("raw");
 function withTotal(payload: string): string {
   try {
     const p = JSON.parse(payload);
-    if (p && Array.isArray(p.closingIssuesReferences) && !("closingIssuesTotal" in p)) {
-      return JSON.stringify({ ...p, closingIssuesTotal: p.closingIssuesReferences.length });
+    if (p && Array.isArray(p.closingIssuesReferences)) {
+      // #1979: the commits the merge would carry, honest-empty unless a case
+      // supplies them, so every case keeps testing what it names.
+      const commits = Array.isArray(p.commits) ? p.commits : [];
+      return JSON.stringify({
+        closingIssuesTotal: p.closingIssuesReferences.length,
+        commitsTotal: commits.length,
+        ...p,
+        commits,
+      });
     }
   } catch {
     // Not JSON: a case about an unparseable payload, passed through untouched.
@@ -669,5 +677,112 @@ describe("#2005: closing a criterion's issue ticks the criterion, or says it doe
     expect(sweep.reading).toBe("MEASURED");
     expect(sweep.specs.flatMap(s => s.unticked)).toEqual(["SC-9101"]);
     expect(closingCriteria(root)).toEqual({ ids: ["SC-9101", "SC-9102"], unticked: ["SC-9101"] });
+  });
+});
+
+/**
+ * #1979: a closing keyword in a COMMIT MESSAGE fires, backticks or not.
+ *
+ * This repository squashes with the commit messages as the body
+ * (`squash_merge_commit_message: COMMIT_MESSAGES`) and allows merge and
+ * rebase too, so every commit message lands on main and GitHub acts on any
+ * keyword in it. PR #1978's squash commit `070052b5` carried a line
+ * DESCRIBING the defect, a backticked `Fixes #1717`, and closed #1717 the
+ * second it merged. In a pull request body the same text is inert, which is
+ * the asymmetry this check exists for.
+ */
+describe("#1979: a closing keyword in a commit message is checked, backticks or not", () => {
+  const LINE_070052B5 =
+    "on `rg/1717-fix` whose body carries a backticked `Fixes #1717` was told to ADD";
+  const pr = (commits: { sha: string; message: string }[], refs = [closes(1978)]) =>
+    JSON.stringify({ number: 1978, body: "Fixes #1978\n", closingIssuesReferences: refs, files: CODE, commits });
+
+  test("070052b5's real line is refused, naming #1717 and the commit, and the mutant does not refuse", () => {
+    const p = pr([{ sha: "070052b5aa", message: `#1950: require a closing reference\n\n${LINE_070052B5}\n` }]);
+    const real = run(SCRIPT, p, THIS_REPO, ON);
+    expect(real.code, real.out).toBe(REFUSE_EXIT);
+    expect(real.err).toContain("#1717");
+    expect(real.err).toContain("070052b5");
+    expect(run(buildMutant(), p, THIS_REPO, ON).code).toBe(0);
+  });
+
+  test("it refuses with the switch OFF too: closing live work is not a warning", () => {
+    const p = pr([{ sha: "abc1234", message: "Tidy.\n\nThis closes #1717 as a side effect.\n" }]);
+    expect(run(SCRIPT, p, THIS_REPO, {}).code).toBe(REFUSE_EXIT);
+  });
+
+  test("the conventional-commit subject fix(#N) is a closing keyword too", () => {
+    // Measured, not assumed: PR #1208's squash commit subject "fix(#1148): …"
+    // closed #1148 (recorded in inertClosingMessage). A pattern that needs a
+    // space or a colon after the verb misses the commonest subject here.
+    const p = pr([{ sha: "d1", message: "fix(#1717): tidy the reader\n" }]);
+    const r = run(SCRIPT, p, THIS_REPO, ON);
+    expect(r.code, r.out).toBe(REFUSE_EXIT);
+    expect(r.err).toContain("would close #1717");
+  });
+
+  test("this repository spelled out, owner/repo#N, closes the same issue and is caught", () => {
+    // AI review of #2120: `Fixes hornjason/rungate#1717` closes #1717 on merge
+    // as surely as the bare form, and the verb is not beside the `#`.
+    const same = run(SCRIPT, pr([{ sha: "e1", message: "Fixes hornjason/rungate#1717\n" }]), THIS_REPO, ON);
+    expect(same.code, same.out).toBe(REFUSE_EXIT);
+    expect(same.err).toContain("would close #1717");
+    // Another repository's issue is not this pull request's to declare.
+    const other = run(SCRIPT, pr([{ sha: "e2", message: "Fixes other-org/other-repo#1717\n" }]), THIS_REPO, ON);
+    expect(other.code, other.err).toBe(0);
+  });
+
+  test("the body check still ignores another repository's issue, backticked or not", () => {
+    // The widened pattern now SEES `other-org/other-repo#9`; the body check
+    // must keep leaving it alone, or this repository's #9 reads as inert.
+    const body = "Quoting: " + "Fixes other-org/other-repo#9".replace(/^/, "`").replace(/$/, "`") + "\n";
+    const r = run(SCRIPT, JSON.stringify({ number: 7, body, closingIssuesReferences: [], files: CODE }), THIS_REPO, {});
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("NOT ENFORCED");
+  });
+
+  test("the negative control: a commit message naming an issue with no keyword beside it is accepted", () => {
+    const p = pr([
+      { sha: "a1", message: "#1717 is still open; see #1717 for the history.\n" },
+      { sha: "a2", message: "Mentions issue #1717 without any verb in front.\n" },
+    ]);
+    const r = run(SCRIPT, p, THIS_REPO, ON);
+    expect(r.code, r.err).toBe(0);
+  });
+
+  test("the positive control: a commit that closes the issue this pull request declares is accepted", () => {
+    const r = run(SCRIPT, pr([{ sha: "b1", message: "Fixes #1978\n" }]), THIS_REPO, ON);
+    expect(r.code, r.err).toBe(0);
+  });
+
+  test("an absent commit list is UNMEASURED, not clean, and the mutant does not refuse", () => {
+    const payload = {
+      [RAW]: JSON.stringify({
+        number: 1978,
+        body: "Fixes #1978\n",
+        closingIssuesReferences: [closes(1978)],
+        closingIssuesTotal: 1,
+        files: CODE,
+      }),
+    };
+    const real = run(SCRIPT, payload, THIS_REPO, ON);
+    expect(real.code).toBe(REFUSE_EXIT);
+    expect(real.err).toContain("no commits array");
+    expect(run(buildMutant(), payload, THIS_REPO, ON).code).toBe(0);
+  });
+
+  test("a commit list GitHub cut short is UNMEASURED", () => {
+    const p = JSON.parse(pr([{ sha: "c1", message: "Fine.\n" }]));
+    const r = run(SCRIPT, JSON.stringify({ ...p, closingIssuesTotal: 1, commitsTotal: 300 }), THIS_REPO, ON);
+    expect(r.code).toBe(REFUSE_EXIT);
+    expect(r.err).toContain("UNMEASURED");
+  });
+
+  test("the keyword and its adjacency are decided once, for the body and the commits alike", () => {
+    const lib = readFileSync(LIB, "utf-8");
+    expect(lib.split("CLOSING_KEYWORDS.join(").length - 1, "a second keyword pattern is a second decider").toBe(1);
+    const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "closing-references.yml"), "utf-8");
+    expect(yml).toMatch(/commits\(first: \d+\) \{ totalCount\s*nodes \{ commit \{ oid message \} \} \}/);
+    expect(yml).toContain("commitsTotal: .commits.totalCount");
   });
 });

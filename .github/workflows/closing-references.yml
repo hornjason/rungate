@@ -51,6 +51,7 @@ jobs:
             files(first: 100) { nodes { path } }
             closingIssuesReferences(first: 100) { totalCount
             nodes { number title body repository { name owner { login } } } }
+            commits(first: 250) { totalCount nodes { commit { oid message } } }
             } } }
         run: |
           # The fields are fetched here and handed to the script, so nothing in
@@ -74,5 +75,5 @@ jobs:
           # identity, so without it the script refuses.
           gh api graphql -f query="$QUERY" \
             -f owner="${GITHUB_REPOSITORY%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$PR" \
-            --jq '.data.repository.pullRequest | {number, body, files: .files.nodes, closingIssuesReferences: .closingIssuesReferences.nodes, closingIssuesTotal: .closingIssuesReferences.totalCount}' \
+            --jq '.data.repository.pullRequest | {number, body, files: .files.nodes, closingIssuesReferences: .closingIssuesReferences.nodes, closingIssuesTotal: .closingIssuesReferences.totalCount, commits: [.commits.nodes[].commit | {sha: .oid, message}], commitsTotal: .commits.totalCount}' \
             | bun scripts/audit-closing-references.ts --repo "$GITHUB_REPOSITORY"
