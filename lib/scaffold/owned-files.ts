@@ -177,7 +177,7 @@ export const OWNED_FILES: OwnedFile[] = [
     path: ".github/workflows/adr-accepted.yml",
     strategy: "job-preserving",
     servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
-    customize: "Set `board.engineSpec` and `board.milestonePrefix` in `.claude/rungate/config.json` and re-scaffold; the board steps read the `RUNGATE_PROJECT_TOKEN` secret and the `RUNGATE_PROJECT_ID` variable; add your own jobs alongside the generated one",
+    customize: "Set `board.engineSpec` and `board.milestonePrefix` in `.claude/rungate/config.json` and re-scaffold; add your own jobs alongside the generated `place-the-plan` job",
     avoid: "Don't edit the generated `place-the-plan` job",
   },
   {
