@@ -271,7 +271,9 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
     }
   });
 
-  test("a stat error other than not-found is UNMEASURED, never read as an absent workflow", () => {
+  // Skipped, and reported as skipped, under root: root reads through any mode,
+  // so the case would pass having exercised nothing (round 3 of PR #2162).
+  test.skipIf(process.getuid?.() === 0)("a stat error other than not-found is UNMEASURED, never read as an absent workflow", () => {
     const root = mkdtempSync(join(tmpdir(), "rg-human-steps-eacces-"));
     const dir = join(root, ".github", "workflows");
     try {
@@ -279,7 +281,6 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
       writeFileSync(join(dir, "closing-references.yml"), "jobs:\n  closing-references: {}\n");
       chmodSync(dir, 0o000);
       const { checks, unreadable } = processChecksIn(root);
-      if (process.getuid?.() === 0) return; // root reads through any mode; nothing to measure
       expect(checks).toEqual([]);
       expect(unreadable.join("\n")).toMatch(/closing-references\.yml could not be read/);
     } finally {

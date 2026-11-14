@@ -132,14 +132,20 @@ export function processChecksIn(root: string): { checks: string[]; unreadable: s
   for (const file of PROCESS_CHECK_WORKFLOWS) {
     const rel = `.github/workflows/${file}`;
     const p = join(root, ".github", "workflows", file);
-    // One try around the stat and the read: existsSync answers false for an
-    // untraversable directory too, which would read a permission error as an
-    // absent workflow (round 2 of PR #2162). Only ENOENT means absent.
+    // The stat decides absence, and only its ENOENT counts: existsSync also
+    // answers false for an untraversable directory (round 2 of PR #2162).
+    // The read gets its own try, so a file removed after the stat is a reading
+    // not taken rather than an absent workflow (round 3).
     try {
       statSync(p);
-      checks.push(...jobContextNames(readFileSync(p, "utf-8")));
     } catch (e) {
       if ((e as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+      unreadable.push(`${rel} could not be read (${(e as Error).message})`);
+      continue;
+    }
+    try {
+      checks.push(...jobContextNames(readFileSync(p, "utf-8")));
+    } catch (e) {
       unreadable.push(`${rel} could not be read (${(e as Error).message})`);
     }
   }
