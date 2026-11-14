@@ -41,6 +41,45 @@ function scaffold(config: Record<string, unknown> | null) {
   }
 }
 
+/** Scaffold a monolith `.claude/rungate.json`; hand back the directory config if one was written, and what was said. */
+function scaffoldMonolith(config: Record<string, unknown>) {
+  const root = mkdtempSync(join(tmpdir(), "rg-label-keys-mono-"));
+  try {
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(join(root, ".claude", "rungate.json"), JSON.stringify(config, null, 2));
+    const actions: string[] = [];
+    generateOrAuditProjectHarness(root, actions);
+    const dir = join(root, ".claude", "rungate", "config.json");
+    return { split: existsSync(dir) ? JSON.parse(readFileSync(dir, "utf-8")) : null, said: actions.join("\n") };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("#2050 review: every config path reaches the label keys, and names the file it read", () => {
+  test("a monolith split into the directory layout gets the expedite key and the override report", () => {
+    const { split, said } = scaffoldMonolith({ project: "x", roles: { engineer: { model: "opus" } } });
+    expect(split, "the monolith was not split — this case is not on the split path").not.toBeNull();
+    expect(split.board?.expediteLabel).toBe(EXPEDITE_LABEL_DEFAULT);
+    expect(said).toMatch(/UNSET: board\.filingOverrideLabel/);
+  });
+
+  test("a monolith left in place is told about .claude/rungate.json, never the directory file", () => {
+    const { split, said } = scaffoldMonolith({ project: "x" });
+    expect(split, "this case is meant to stay a monolith").toBeNull();
+    expect(said).toMatch(/UNSET: board\.expediteLabel/);
+    expect(said).toMatch(/UNSET: board\.filingOverrideLabel/);
+    expect(said, "a monolith consumer was pointed at a file they do not have").not.toContain(".claude/rungate/config.json");
+    expect(said).toContain(".claude/rungate.json");
+  });
+
+  test("a monolith whose board is not an object is refused naming .claude/rungate.json", () => {
+    const { said } = scaffoldMonolith({ project: "x", board: "work-board" });
+    expect(said).toMatch(/REFUSED: board\.expediteLabel .*\.claude\/rungate\.json/);
+    expect(said).not.toContain(".claude/rungate/config.json");
+  });
+});
+
 describe("SC-2748: scaffold writes the expedite key, and names the override key as unset", () => {
   test("the shipped default is the name this repository runs on", () => {
     // Premise for every case below: a null here would make each `toBe` compare
@@ -51,7 +90,7 @@ describe("SC-2748: scaffold writes the expedite key, and names the override key 
 
   test("an installation missing the template writes nothing and names the expedite key as unset", () => {
     expect(expediteLabelDefault(join(tmpdir(), "rg-no-such-template.json"))).toBeNull();
-    const { config, changed, lines } = labelKeyRepairs({ project: "x", board: {} }, null);
+    const { config, changed, lines } = labelKeyRepairs({ project: "x", board: {} }, { expediteDefault: null });
     expect(changed).toBe(false);
     expect("expediteLabel" in config.board, "a blank or null label was written").toBe(false);
     expect(lines.join("\n"), "the missing template was not named").toMatch(
