@@ -311,7 +311,7 @@ const UNCLAIMED_RATCHET = 150;
 // #2049. A claim that the process rules file and AGENTS.md's rule 9 come from
 // one source, which no registered pattern expresses; the `SC-2747` describes
 // in test/process-rules.test.ts name it in a declaring position.
-const CLAIMED_UNBINDABLE = 161;
+const CLAIMED_UNBINDABLE = 162;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
