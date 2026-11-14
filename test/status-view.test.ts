@@ -39,7 +39,7 @@ function view(over: Partial<StatusView> = {}): StatusView {
     repo: "o/r",
     generatedAt: "2026-11-13T00:00:00Z",
     commit: "0123456789abcdef",
-    family: "Engine",
+    family: "Zqengine",
     goal: read("A spec becomes a board."),
     stages: read([
       { id: "A", name: "Write it down", meaning: "the goal exists", state: "done", open: [], total: 2 },
@@ -47,8 +47,8 @@ function view(over: Partial<StatusView> = {}): StatusView {
       { id: "C", name: "Ship", meaning: "it ships", state: "later", open: ["C1", "C2"], total: 2 },
     ]),
     phases: read([
-      { number: 1, title: "Engine Phase 1 — a", meaning: "First.", open: 0, closed: 4, url: "u1", state: "done" },
-      { number: 2, title: "Engine Phase 2 — b", meaning: null, open: 3, closed: 1, url: "u2", state: "current" },
+      { number: 1, title: "Zqengine Phase 1 — a", meaning: "First.", open: 0, closed: 4, url: "u1", state: "done" },
+      { number: 2, title: "Zqengine Phase 2 — b", meaning: null, open: 3, closed: 1, url: "u2", state: "current" },
     ]),
     otherFamilies: read([{ family: "Payload", phases: 2, open: 5, closed: 1 }]),
     inProgress: read([{ number: 7, title: "doing it", url: "i7", note: "someone" }]),
@@ -127,15 +127,15 @@ describe("#2097: phases come from the focus family's milestones and the spec's o
 
   test("phaseLines keeps only the focus family, in phase order, and marks done / current / later", () => {
     const ms = [
-      { title: "Engine Phase 7 — later", open: 2, closed: 0, url: "u7" },
+      { title: "Zqengine Phase 7 — later", open: 2, closed: 0, url: "u7" },
       { title: "Payload Phase 1 — other", open: 1, closed: 0, url: "p1" },
-      { title: "Engine Phase 6 — now", open: 3, closed: 5, url: "u6" },
-      { title: "Engine Phase 5 — done", open: 0, closed: 2, url: "u5" },
-      { title: "Engine Phase 4 — empty", open: 0, closed: 0, url: "u4" },
+      { title: "Zqengine Phase 6 — now", open: 3, closed: 5, url: "u6" },
+      { title: "Zqengine Phase 5 — done", open: 0, closed: 2, url: "u5" },
+      { title: "Zqengine Phase 4 — empty", open: 0, closed: 0, url: "u4" },
       { title: "Phase 1 — unprefixed", open: 1, closed: 0, url: "x" },
       { title: "Not a phase", open: 1, closed: 0, url: "y" },
     ];
-    const lines = phaseLines(ms, "Engine", SPEC);
+    const lines = phaseLines(ms, "Zqengine", SPEC);
     expect(lines.map(l => [l.number, l.state])).toEqual([
       [4, "empty"],
       [5, "done"],
@@ -145,9 +145,9 @@ describe("#2097: phases come from the focus family's milestones and the spec's o
     expect(lines[2].meaning).toContain("about its output");
     // An empty milestone is not a finished one: no tick, and no "0 of 0 done".
     const md = renderMarkdown(view({ phases: read(lines) }));
-    expect(md).toContain("– [Engine Phase 4 — empty](u4) — no issues");
+    expect(md).toContain("– [Zqengine Phase 4 — empty](u4) — no issues");
     expect(md).not.toContain("0 of 0");
-    expect(otherFamilyLines(ms, "Engine")).toEqual([{ family: "Payload", phases: 1, open: 1, closed: 0 }]);
+    expect(otherFamilyLines(ms, "Zqengine")).toEqual([{ family: "Payload", phases: 1, open: 1, closed: 0 }]);
   });
 });
 
@@ -156,12 +156,12 @@ describe("#2097: what the pinned issue says", () => {
     const md = renderMarkdown(view());
     expect(md.startsWith(STATUS_MARKER)).toBe(true);
     expect(md).toContain(NAMES_NONE);
-    for (const h of ["The goal", "The finish line", "Phases (Engine)", "Other work", "In progress", "Ready next", "Needs a decision", "Unphased", "Health", "Links"]) {
+    for (const h of ["The goal", "The finish line", "Phases (Zqengine)", "Other work", "In progress", "Ready next", "Needs a decision", "Unphased", "Health", "Links"]) {
       expect(md).toContain(`### ${h}`);
     }
     expect(md).toContain("✓ **A** Write it down");
     expect(md).toContain("● **B** Build: the board exists — 1 of 3 left: B2");
-    expect(md).toContain("[Engine Phase 2 — b](u2) — 1 of 4 done");
+    expect(md).toContain("[Zqengine Phase 2 — b](u2) — 1 of 4 done");
     expect(md).toContain("board checks: 1 of 2 met");
     expect(md).toContain("SHORT criterion-coverage: 2 of 3");
   });
@@ -201,11 +201,11 @@ describe("#2097: what the pinned issue says", () => {
     const md = renderMarkdown(
       view({
         inProgress: read([{ number: 1, title: hostile, url: "u" }]),
-        phases: read([{ number: 6, title: "Engine Phase 6 — x", meaning: "Serves SC-2752.", open: 1, closed: 0, url: "u", state: "current" }]),
+        phases: read([{ number: 6, title: "Zqengine Phase 6 — x", meaning: "Serves SC-2752.", open: 1, closed: 0, url: "u", state: "current" }]),
       }),
     );
     // The real reader `criteria-named` and criterion-coverage use, over the real body.
-    expect(criteriaNamedBy({ title: viewTitle("Engine"), body: md }, ["SC-2752", "CRC-E5"])).toEqual([]);
+    expect(criteriaNamedBy({ title: viewTitle("Zqengine"), body: md }, ["SC-2752", "CRC-E5"])).toEqual([]);
     // CONTROL: the same reader does see the raw title.
     expect(criteriaNamedBy({ title: "x", body: hostile }, ["SC-2752", "CRC-E5"])).toEqual(["SC-2752", "CRC-E5"]);
   });
@@ -263,7 +263,7 @@ describe("#2097: publish writes only the marked pinned issue", () => {
 
   test("the pinned issue carrying the marker is edited, and no other", () => {
     const { gh, calls } = fake(pinnedWith({ number: 5, body: "someone else's pin" }, { number: 9, body: `${STATUS_MARKER}\nold` }));
-    expect(publish(body, "o/r", "Where we are: Engine", gh)).toEqual({ ok: true, message: "updated #9" });
+    expect(publish(body, "o/r", "Where we are: Zqengine", gh)).toEqual({ ok: true, message: "updated #9" });
     expect(calls.filter(c => c[0] === "issue").map(c => c.slice(0, 3))).toEqual([["issue", "edit", "9"]]);
   });
 

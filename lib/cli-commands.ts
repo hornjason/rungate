@@ -162,7 +162,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   "plan-spec": {
     script: "scripts/plan-spec.ts",
     summary: "Derive a repository's milestones from a spec's Phase placement table",
-    usage: "rungate plan-spec <spec.md> --repo <owner/name> --prefix <name> [--write] [--json]",
+    usage: "rungate plan-spec <spec.md> --repo <owner/name> --prefix <name> [--rename-from <old name>] [--write] [--json]",
     projectRootFlag: true,
   },
   // Registered after two hours of building a weaker version of it beside it

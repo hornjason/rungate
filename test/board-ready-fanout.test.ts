@@ -33,6 +33,7 @@ import {
 } from "../lib/board-ready-fanout";
 import { laneFor } from "../lib/board-flow";
 import { activeMilestone } from "../lib/board-ready-rule";
+import { readBoardInputs } from "../lib/config-readers";
 import { resolveApiBase } from "../lib/github-api-base";
 import { structuralCut } from "../lib/source-slice";
 import {
@@ -46,7 +47,7 @@ const ROOT = join(import.meta.dir, "..");
 const dep = (over: Partial<Dependent> = {}): Dependent => ({
   number: 1,
   state: "OPEN",
-  milestone: "Engine Phase 3",
+  milestone: "Zqengine Phase 3",
   labels: [],
   blockedByOpen: 0,
   assignees: 0,
@@ -71,14 +72,14 @@ const inc = (over: Partial<Incumbent> = {}): Incumbent => ({
   state: "OPEN",
   boardStatus: "Ready",
   blockedByOpen: 0,
-  milestone: "Engine Phase 3",
+  milestone: "Zqengine Phase 3",
   labels: [],
   ...over,
 });
 
 /** The focus every #1929 case sits inside, so those cases test blockers alone. */
 const SCOPE = {
-  active: activeMilestone([{ milestone: "Engine Phase 3" }], "Engine"),
+  active: activeMilestone([{ milestone: "Zqengine Phase 3" }], "Zqengine"),
   expediteLabel: "zq-expedite-fixture",
 };
 
@@ -288,7 +289,7 @@ describe("BR-1..BR-6: the fan-out from one closed blocker", () => {
   // the case stays, inverted, because deleting it would let the gate come
   // back without a single test objecting.
   test("BR-4: a later phase is unblocked and therefore Ready", () => {
-    const [d] = fanoutDecisions([dep({ milestone: "Engine Phase 7" })], "Ready");
+    const [d] = fanoutDecisions([dep({ milestone: "Zqengine Phase 7" })], "Ready");
     expect(d.move, "phase orders the lane; it does not gate entry to it").toBe(true);
   });
 
@@ -663,7 +664,7 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
           for (const assignees of [0, 1, null]) {
             const d = dep({
               state,
-              milestone: phase === null ? null : `Engine Phase ${phase}`,
+              milestone: phase === null ? null : `Zqengine Phase ${phase}`,
               blockedByOpen,
               assignees,
             });
@@ -701,7 +702,7 @@ describe("BR-7: the verdict is isReady's, and the reason cannot change it", () =
           for (const assignees of [0, 1, null]) {
             const d = dep({
               state,
-              milestone: phase === null ? null : `Engine Phase ${phase}`,
+              milestone: phase === null ? null : `Zqengine Phase ${phase}`,
               blockedByOpen,
               assignees,
             });
@@ -1906,9 +1907,12 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
   const BACKLOG_OPT = "OPT_backlog";
   const FIELD = "PVTSSF_status";
   // The focus every end-to-end case sits in (SC-2741). The script reads the
-  // engine prefix from this repository's own config, so the family is the
-  // configured one and not a fixture name.
-  const FOCUS = "Pipeline Phase 6";
+  // engine prefix from this repository's own config, so the family is READ
+  // from that config here too, never typed: a literal went stale the day the
+  // milestones were renamed from Pipeline to Engine (#2124).
+  const FAMILY = readBoardInputs(ROOT).milestonePrefix;
+  if (FAMILY === null) throw new Error("board.milestonePrefix is unset in this repository's config");
+  const FOCUS = `${FAMILY} Phase 6`;
 
   function plan(over: Partial<FakePlan> = {}): FakePlan {
     return {
@@ -2102,7 +2106,7 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
     const fake = startFakeGitHub(
       plan({
         items: [
-          { itemId: "PVTI_a", number: 101, status: "Backlog", blockedBy: 0, assignees: 0, milestone: "Pipeline Phase 7" },
+          { itemId: "PVTI_a", number: 101, status: "Backlog", blockedBy: 0, assignees: 0, milestone: `${FAMILY} Phase 7` },
           { itemId: "PVTI_c", number: 303, status: "In progress", blockedBy: 0, assignees: 1, milestone: FOCUS },
         ],
         openIssues: [101, 303],
@@ -2173,7 +2177,7 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
  */
 describe("SC-2741: Ready's incumbents are held to the active milestone", () => {
   const scope = (title: string | null) => ({
-    active: activeMilestone(title === null ? [] : [{ milestone: title }], "Engine"),
+    active: activeMilestone(title === null ? [] : [{ milestone: title }], "Zqengine"),
     expediteLabel: "zq-expedite-fixture",
   });
 
@@ -2181,7 +2185,7 @@ describe("SC-2741: Ready's incumbents are held to the active milestone", () => {
     const [d] = incumbentDecisions(
       [inc({ number: 1764, milestone: "Payload Phase 3" })],
       "Ready",
-      scope("Engine Phase 6"),
+      scope("Zqengine Phase 6"),
     );
     expect(d.demote, "a payload card must not hold a slot while engine work is open").toBe(true);
     if (d.demote) {
@@ -2194,9 +2198,9 @@ describe("SC-2741: Ready's incumbents are held to the active milestone", () => {
 
   test("SC-2741 CONTROL: the same card inside the active milestone stays", () => {
     const [d] = incumbentDecisions(
-      [inc({ number: 1717, milestone: "Engine Phase 6" })],
+      [inc({ number: 1717, milestone: "Zqengine Phase 6" })],
       "Ready",
-      scope("Engine Phase 6"),
+      scope("Zqengine Phase 6"),
     );
     expect(d.demote).toBe(false);
   });
@@ -2205,7 +2209,7 @@ describe("SC-2741: Ready's incumbents are held to the active milestone", () => {
     const [d] = incumbentDecisions(
       [inc({ number: 9, milestone: null, labels: ["engine"] })],
       "Ready",
-      scope("Engine Phase 6"),
+      scope("Zqengine Phase 6"),
     );
     expect(d.demote, "label-only work never holds a Ready slot").toBe(true);
   });
@@ -2214,14 +2218,14 @@ describe("SC-2741: Ready's incumbents are held to the active milestone", () => {
     const [d] = incumbentDecisions(
       [inc({ number: 9, milestone: null, labels: ["zq-expedite-fixture"] })],
       "Ready",
-      scope("Engine Phase 6"),
+      scope("Zqengine Phase 6"),
     );
     expect(d.demote, "the expedite lane is the one way in from outside the focus").toBe(false);
   });
 
   test("SC-2741: with no focus at all, nothing but expedite work stays", () => {
     const out = incumbentDecisions(
-      [inc({ number: 1, milestone: "Engine Phase 6" }), inc({ number: 2, labels: ["zq-expedite-fixture"] })],
+      [inc({ number: 1, milestone: "Zqengine Phase 6" }), inc({ number: 2, labels: ["zq-expedite-fixture"] })],
       "Ready",
       scope(null),
     );
@@ -2232,7 +2236,7 @@ describe("SC-2741: Ready's incumbents are held to the active milestone", () => {
     const [d] = incumbentDecisions(
       [inc({ number: 3, milestone: "Payload Phase 3", blockedByOpen: 1 })],
       "Ready",
-      scope("Engine Phase 6"),
+      scope("Zqengine Phase 6"),
     );
     expect(d.demote).toBe(true);
     if (d.demote) expect(d.why).toContain("blocker");

@@ -86,13 +86,13 @@ const WORK_NEXT_LABEL = "zq-expedite-fixture";
 /**
  * The milestone families this suite ranks against.
  *
- * **Deliberately not `"Pipeline"` and `"Convergence"`.** This repository
- * configures `board.milestonePrefix: "Pipeline"`, so a rule that spelled the
- * prefix itself would pass every row here if the fixture agreed with it. Two
- * names no tree uses mean the only way these rows go green is by reading the
- * prefix they are handed.
+ * **Deliberately not `"Engine"` and `"Convergence"`.** This repository
+ * configures `board.milestonePrefix: "Engine"` (renamed from `Pipeline` by
+ * #2124), so a rule that spelled the prefix itself would pass every row here
+ * if the fixture agreed with it. Two names no tree uses mean the only way
+ * these rows go green is by reading the prefix they are handed.
  */
-const ENGINE = "Engine";
+const ENGINE = "Zqengine";
 const PAYLOAD = "Payload";
 
 /** A rankable in the ENGINE family unless another family is named. */

@@ -79,8 +79,9 @@ export const PHASE_VALUE = new RegExp(`^${PHASE_TOKEN}$`);
  * them a case is holding up: `.claude/rules/checks-must-be-able-to-fail.md`,
  * fourth shape.
  *
- * The prefix is escaped, so a family name containing regex punctuation is
- * matched literally rather than compiled.
+ * The family is compared as a string against `readMilestoneTitle`'s reading,
+ * never compiled into a pattern, so a family name containing regex
+ * punctuation (`C++`) means itself.
  *
  * Not to be confused with `phaseOf` in `lib/board-mirror.ts`, which reads a
  * phase number out of ANY title regardless of family. That one answers a
@@ -487,12 +488,34 @@ export function milestoneBody(criteria: string[]): string {
  * A live milestone whose title carries no `Phase N` for this prefix is left
  * alone and reported by the caller, not deleted. `Convergence Machinery` is
  * the live instance: real, in use, and derived from nothing here.
+ *
+ * ## `renameFrom`: moving a whole family to a new name (#2124)
+ *
+ * Without it, renaming the family in config plans a CREATE per phase, and
+ * every issue stays in the old milestones, now unmanaged. With it, a phase
+ * that has no milestone in `prefix` takes the one `renameFrom` holds for that
+ * phase as its existing milestone. The action is then a rename that keeps
+ * the milestone number, so every issue keeps its lane. Only the table's
+ * phases are adopted; an old-family milestone for any other phase stays
+ * unmanaged.
+ *
+ * A phase both families hold is a `conflict`. Neither milestone is picked,
+ * because either pick strands the other's issues. The caller refuses.
  */
+export interface FamilyConflict {
+  phase: number;
+  /** The milestone already in the family being written. */
+  current: LiveMilestone;
+  /** The milestone in the family being renamed from. */
+  previous: LiveMilestone;
+}
+
 export function milestonePlan(
   content: string,
   live: LiveMilestone[],
   prefix: string,
-): { actions: MilestoneAction[]; unmanaged: LiveMilestone[] } {
+  renameFrom?: string,
+): { actions: MilestoneAction[]; unmanaged: LiveMilestone[]; conflicts: FamilyConflict[] } {
   const headings = new Map(parsePhaseHeadings(content).map(h => [h.number, h]));
   const rows = parsePlacementRows(content);
   const byPhase = new Map<number, string[]>();
@@ -507,13 +530,31 @@ export function milestonePlan(
     const n = phaseOf(l.title);
     if (n !== null) liveByPhase.set(n, l);
   }
+  const previousByPhase = new Map<number, LiveMilestone>();
+  if (renameFrom !== undefined) {
+    for (const l of live) {
+      const n = phaseInFamily(l.title, renameFrom);
+      if (n !== null && byPhase.has(n)) previousByPhase.set(n, l);
+    }
+  }
+  const conflicts: FamilyConflict[] = [];
+  for (const [phase, previous] of previousByPhase) {
+    const current = liveByPhase.get(phase);
+    if (current) conflicts.push({ phase, current, previous });
+  }
+  // Adopted means USED as a phase's existing milestone. A conflicting phase
+  // keeps its current-family milestone, so its old one is in no action and
+  // must stay in `unmanaged` rather than vanish (review of #2126).
+  const adopted = new Set(
+    [...previousByPhase].filter(([phase]) => !liveByPhase.has(phase)).map(([, m]) => m.number),
+  );
 
   const actions = [...byPhase.keys()]
     .sort((a, b) => a - b)
     .map((phase): MilestoneAction => {
       const heading = headings.get(phase);
       const title = `${prefix} ${heading ? heading.heading : `Phase ${phase}`}`;
-      const existing = liveByPhase.get(phase);
+      const existing = liveByPhase.get(phase) ?? previousByPhase.get(phase);
       const criteria = byPhase.get(phase) ?? [];
       if (!existing) return { title, phase, criteria, action: "create" };
       // Both halves of what `--write` would put there, so `unchanged` means
@@ -532,7 +573,11 @@ export function milestonePlan(
       };
     });
 
-  return { actions, unmanaged: live.filter(l => phaseOf(l.title) === null) };
+  return {
+    actions,
+    unmanaged: live.filter(l => phaseOf(l.title) === null && !adopted.has(l.number)),
+    conflicts: conflicts.sort((a, b) => a.phase - b.phase),
+  };
 }
 
 /**
