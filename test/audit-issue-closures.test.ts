@@ -38,6 +38,10 @@ import {
   NOT_PLANNED,
   AUDIT_EPOCH,
   PROTECTED_LABELS,
+  openWithMergedCloser,
+  openCloserReport,
+  toMergedCloser,
+  mergedPullNodes,
   type ClosedIssue,
   type ClosureFinding,
 } from "../lib/issue-closure-audit";
@@ -576,5 +580,109 @@ describe("#144 SC-835: the hook is reclassified, and the control is scheduled", 
     for (const line of src.filter(l => l.includes("${{"))) {
       expect(ENV_ASSIGNMENT.test(line), `an expression reaches a shell: ${line.trim()}`).toBe(true);
     }
+  });
+});
+
+/**
+ * #1952 / SC-2751: a merged pull request whose closing reference names an
+ * issue that is still open is reported naming both, so shipped work never
+ * reads as outstanding.
+ *
+ * #1937 merged with `closingIssuesReferences` resolving to #1948 before and
+ * after the merge, and #1948 stayed OPEN. Nobody can clear that state
+ * correctly by hand (#925), so the audit has to say it exists.
+ */
+describe("#1952 / SC-2751: an open issue whose closer merged is reported, naming both", () => {
+  const pull = (number: number, closes: { number: number; state: string }[], totalCount = closes.length) => ({
+    number,
+    closingIssuesReferences: { totalCount, nodes: closes },
+  });
+
+  test("SC-2751: the open issue and the merged pull request are both named", () => {
+    const reading = openWithMergedCloser([
+      toMergedCloser(pull(1937, [{ number: 1948, state: "OPEN" }])),
+      toMergedCloser(pull(1940, [{ number: 1941, state: "CLOSED" }])),
+    ]);
+    expect(reading.open).toEqual([{ pull: 1937, issue: 1948 }]);
+    expect(reading.unmeasured).toEqual([]);
+    const text = openCloserReport(reading, 2);
+    expect(text).toContain("#1948");
+    expect(text).toContain("#1937");
+  });
+
+  test("a closed issue, or a pull request that closes nothing, is not a finding", () => {
+    const reading = openWithMergedCloser([
+      toMergedCloser(pull(10, [{ number: 11, state: "CLOSED" }])),
+      toMergedCloser(pull(12, [])),
+    ]);
+    expect(reading.open).toEqual([]);
+    expect(openCloserReport(reading, 2)).toContain("none");
+  });
+
+  test("a truncated closing list is UNMEASURED, never read as nothing open", () => {
+    // 51 references, 50 returned: the 51st may be the open one.
+    const reading = openWithMergedCloser([toMergedCloser(pull(20, [{ number: 21, state: "CLOSED" }], 51))]);
+    expect(reading.open).toEqual([]);
+    expect(reading.unmeasured).toEqual([20]);
+    expect(openCloserReport(reading, 1)).toContain("UNMEASURED");
+  });
+
+  test("a node with no closing-reference field is UNMEASURED, not an empty list", () => {
+    const reading = openWithMergedCloser([toMergedCloser({ number: 30 })]);
+    expect(reading.unmeasured).toEqual([30]);
+  });
+
+  test("the script reports it and goes red, and only through REFUSE_EXIT", () => {
+    const issues = fixtureFile([]);
+    const pulls = fixtureFile([pull(1937, [{ number: 1948, state: "OPEN" }])]);
+    const real = run(SCRIPT, ["--fixture", issues, "--pulls-fixture", pulls]);
+    expect(real.code, real.out).not.toBe(0);
+    expect(real.out).toContain("#1948 is OPEN, but #1937 merged closing it");
+    const mutant = run(mutantScript(), ["--fixture", issues, "--pulls-fixture", pulls]);
+    expect(mutant.code, "zeroing REFUSE_EXIT changed nothing — the refusal has another path").toBe(0);
+    expect(mutant.out).toContain("#1948 is OPEN, but #1937 merged closing it");
+  });
+
+  test("a clean pulls reading leaves an otherwise clean run green", () => {
+    const pulls = fixtureFile([pull(10, [{ number: 11, state: "CLOSED" }])]);
+    const r = run(SCRIPT, ["--fixture", fixtureFile([]), "--pulls-fixture", pulls]);
+    expect(r.code, r.out).toBe(0);
+  });
+});
+
+describe("#1952 review round 1: no false clean, and no other repository's issues", () => {
+  test("a closing reference into another repository is not this tracker's issue", () => {
+    const node = {
+      number: 50,
+      closingIssuesReferences: {
+        totalCount: 2,
+        nodes: [
+          { number: 42, state: "OPEN", repository: { name: "other-repo", owner: { login: "otherorg" } } },
+          { number: 43, state: "CLOSED", repository: { name: "n", owner: { login: "o" } } },
+        ],
+      },
+    };
+    const reading = openWithMergedCloser([toMergedCloser(node, "o/n")]);
+    expect(reading.open, "otherorg/other-repo#42 was reported against this tracker").toEqual([]);
+    expect(reading.unmeasured, "a filtered reference read as a truncated list").toEqual([]);
+    // Without the repository to compare, nothing is dropped.
+    expect(openWithMergedCloser([toMergedCloser(node)]).open).toEqual([{ pull: 50, issue: 42 }]);
+  });
+
+  test("a response with no pull request list is no reading, not an empty one", () => {
+    expect(mergedPullNodes({ repository: null })).toBeNull();
+    expect(mergedPullNodes({ repository: { pullRequests: null } })).toBeNull();
+    expect(mergedPullNodes(undefined)).toBeNull();
+    expect(mergedPullNodes({ repository: { pullRequests: { nodes: [] } } })).toEqual([]);
+  });
+
+  test("the script drops another repository's open issue when --repo names this one", () => {
+    const pulls = fixtureFile([{
+      number: 50,
+      closingIssuesReferences: { totalCount: 1, nodes: [{ number: 42, state: "OPEN", repository: { name: "x", owner: { login: "y" } } }] },
+    }]);
+    const r = run(SCRIPT, ["--fixture", fixtureFile([]), "--pulls-fixture", pulls, "--repo", "o/n"]);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).not.toContain("#42 is OPEN");
   });
 });
