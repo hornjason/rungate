@@ -1662,6 +1662,35 @@ What was broken to prove A.
     }
   });
 
+  test("#2131: the label printed for a section before any heading is one --section accepts", () => {
+    // Criteria straight after the front matter, then more under `## B`. The
+    // refusal names each section by a string; passing back the one it printed
+    // for the headless section must place the line there, not loop.
+    const headless = `---
+doc-type: spec
+testable: true
+governs: a headless fixture
+---
+
+- [ ] SC-9001: lib/a.ts contains [a] — before any heading
+
+## B
+
+- [ ] SC-9002: lib/b.ts contains [b] — under B
+`;
+    const refused = specWithCriterion(headless, LINE, "SC-9010", null);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.refusal).toBe("SECTION_REQUIRED");
+    const printed = /"([^"]+)" \(before any heading\)/.exec(refused.why)?.[1];
+    expect(printed, `no quoted, passable name for the headless section in: ${refused.why}`).toBeDefined();
+    const placed = specWithCriterion(headless, LINE, "SC-9010", null, printed!);
+    expect(placed.ok, `--section ${JSON.stringify(printed)} was refused`).toBe(true);
+    if (!placed.ok) return;
+    const lines = placed.text.split("\n");
+    expect(lines[lines.indexOf(LINE) - 1]).toStartWith("- [ ] SC-9001:");
+  });
+
   test("a --section is checked even when no criterion of the family exists yet", () => {
     const out = specWithCriterion(SPEC_NO_CRITERIA, LINE, "SC-9010", null, "Nowhere");
     expect(out.ok).toBe(false);
