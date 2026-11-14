@@ -785,6 +785,23 @@ describe("SC-2752: declared-work — every unticked criterion and open stage ite
     const r = takeReading(declared(), noIssues);
     expect(r.status, "an unread issue set credited or blamed declared work it never looked at").toBe("unmeasured");
   });
+
+  test("SC-2752: one malformed declared-work row makes the whole population unread, never a smaller one", () => {
+    // Dropping the row would shrink the denominator by exactly the work the
+    // reader could not identify, and the shrunk population can then read MET.
+    const board = completeBoard();
+    const text = JSON.stringify({
+      ...board,
+      declaredWork: [...board.declaredWork!, { kind: "stage-item", id: "E9", source: "project-state.json", issue: "2" }],
+    });
+    const read = readSnapshotText(text);
+    expect(read.board, read.why).not.toBeNull();
+    expect(read.board!.declaredWork, "a malformed row was dropped and the rest read as the whole population").toBeUndefined();
+    expect(takeReading(declared(), read.board!).status).toBe("unmeasured");
+    // CONTROL: the same board with the row well-formed is read in full.
+    const good = readSnapshotText(JSON.stringify(board)).board!;
+    expect(good.declaredWork).toHaveLength(board.declaredWork!.length);
+  });
 });
 
 describe("the milestones reading (B1)", () => {
