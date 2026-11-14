@@ -12,7 +12,7 @@
  * any command line in it turns the no-write case red.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -246,6 +246,20 @@ describe("SC-2746: rungate scaffold installs the dry-run command and the ADR tem
       expect(second.join("\n")).toContain(`PRESERVED: ${DRY_RUN_COMMAND_PATH}`);
       expect(command).toContain("\nmine\n");
       expect(template).toBe(processFiles(false)[1].content!);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a directory where the command belongs is refused by name, and the scaffold run completes", () => {
+    // Review of #2153: readFileSync on a directory threw EISDIR out of the step.
+    const root = mkdtempSync(join(tmpdir(), "rg-process-dir-"));
+    try {
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "consumer", version: "0.0.0" }));
+      mkdirSync(join(root, DRY_RUN_COMMAND_PATH), { recursive: true });
+      const actions: string[] = [];
+      expect(() => runScaffoldWriteSteps(root, "node" as never, actions)).not.toThrow();
+      expect(actions.join("\n")).toContain(`REFUSED: ${DRY_RUN_COMMAND_PATH}`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

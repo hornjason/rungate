@@ -235,16 +235,20 @@ export function writeProcessFiles(projectPath: string, actions: string[]): void 
       regenerateOwned(target, file.content, file.path, actions, "regenerate");
       continue;
     }
-    // `lstatSync`, not `existsSync`: a write would FOLLOW a link out of the project.
-    const linked = (() => {
+    // `lstatSync`, not `existsSync`: a write would FOLLOW a link out of the
+    // project, and a read of a directory throws EISDIR out of the whole run —
+    // the same two refusals `regenerateOwned` makes for every owned file.
+    const entry = (() => {
       try {
-        return lstatSync(target).isSymbolicLink();
+        return lstatSync(target);
       } catch {
-        return false;
+        return null;
       }
     })();
-    if (linked) {
-      actions.push(`REFUSED: ${file.path} (a symbolic link; the scaffold writes no file through a link)`);
+    if (entry !== null && (entry.isSymbolicLink() || !entry.isFile())) {
+      actions.push(
+        `REFUSED: ${file.path} (${entry.isSymbolicLink() ? "a symbolic link" : "not a regular file"}; the scaffold writes only regular files)`,
+      );
       continue;
     }
     mkdirSync(dirname(target), { recursive: true });
