@@ -24,7 +24,9 @@
  * reading OK. Backlog is a DISPLAY — five of the six lanes are mechanisms
  * and it is the exception — and the other two have no cheap second source to
  * compare against. **An unmeasured lane must not spell the same as a healthy
- * one**, which is the defect this whole area keeps producing.
+ * one**, which is the defect this whole area keeps producing. In review does
+ * have one cheap reading that is not a denominator: `handPlacedInReview`
+ * names the issue cards no open pull request accounts for (SC-2759).
  */
 
 import { READY_TOLERANCE_DAYS, readyCap, readyTarget, type Throughput } from "./board-ready-rule";
@@ -440,6 +442,93 @@ export function laneHealth(c: LaneCensus): LaneReading[] {
       why: `this report does not know the lane "${lane}", so its items are unaccounted for above`,
     })),
   ];
+}
+
+/**
+ * What `handPlacedInReview` reads. #1921, SC-2759.
+ */
+export interface InReviewCensus {
+  /** Open issues whose card's Status is In review. */
+  readonly inReview: readonly number[];
+  /**
+   * Issues on this repository that an OPEN pull request declares it closes,
+   * through `closingIssuesReferences` — declares, not mentions. Drafts count:
+   * a ready pull request converted back to draft leaves its issue in In
+   * review with no event to move it, so that card was not placed by hand.
+   */
+  readonly declaredClosing: ReadonlySet<number>;
+  /** Open pull requests whose closing list did not fit one page. */
+  readonly closingTruncated: readonly number[];
+  /** False when the board could not be paged in full. */
+  readonly complete: boolean;
+}
+
+export type HandPlacedReading =
+  | {
+      readonly kind: "read";
+      /**
+       * How many distinct In-review issue cards were checked. Carried so an
+       * empty lane and a lane checked and found covered never print the same
+       * sentence — "every card has a pull request" over zero cards is
+       * vacuously true (review round 1 of #2134).
+       */
+      readonly checked: number;
+      readonly issues: readonly number[];
+    }
+  | { readonly kind: "unmeasured"; readonly why: string };
+
+/**
+ * Issue cards in In review that no open pull request declares it closes.
+ * #1921, SC-2759.
+ *
+ * In review's entry condition in `specs/BOARD-FLOW-SPEC.md` is a ready pull
+ * request, and `lib/board-flow.ts` resolves `pr_ready`'s target through the
+ * pull request's closing references. Measured on #1921: no writer in this
+ * repository puts an issue card in In review without one, and with none, no
+ * event will ever move it out — the lane's exits resolve through the same
+ * declaration. So the card was placed by hand, or its pull request stopped
+ * declaring it after it entered; either way only a person can move it.
+ *
+ * **A second source for a lane the header above gives none**, without being
+ * a denominator: the In review row stays NO_TARGET and this names cards.
+ * #1717 sat there a week with no link ever on its timeline, and the only
+ * visible symptom was In progress reading SHORT — blaming the wrong lane.
+ *
+ * UNMEASURED, never an empty list, when either input is partial: a board
+ * read in part may be missing the card, and a cut closing list reads the
+ * issue it would have declared as having none.
+ */
+export function handPlacedInReview(c: InReviewCensus): HandPlacedReading {
+  if (!c.complete) {
+    return {
+      kind: "unmeasured",
+      why: "the board could not be paged in full, so a card in In review may be missing from it",
+    };
+  }
+  if (c.closingTruncated.length > 0) {
+    const cut = [...c.closingTruncated].sort((a, b) => a - b).map(n => `#${n}`).join(", ");
+    return {
+      kind: "unmeasured",
+      why: `the closing list of ${cut} did not fit one page, so an issue it declares would read as having no pull request`,
+    };
+  }
+  const cards = [...new Set(c.inReview)];
+  const issues = cards.filter(n => !c.declaredClosing.has(n)).sort((a, b) => a - b);
+  return { kind: "read", checked: cards.length, issues };
+}
+
+/** The line the report prints for `handPlacedInReview`, one per state. */
+export function handPlacedInReviewLine(r: HandPlacedReading): string {
+  if (r.kind === "unmeasured") return `  (hand-placed In review cards UNMEASURED — ${r.why})`;
+  if (r.checked === 0) return `  no issue card is in In review, so none is hand-placed`;
+  if (r.issues.length === 0) {
+    return `  all ${r.checked} issue card(s) in In review have an open pull request declaring it closes the issue`;
+  }
+  return (
+    `  ${r.issues.length} issue card(s) in In review are hand-placed — no open pull request declares it ` +
+    `closes them, nothing in this repository writes In review without one, and no event will move them ` +
+    `out: ${r.issues.map(n => `#${n}`).join(", ")}`
+  );
 }
 
 /**
