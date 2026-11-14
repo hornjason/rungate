@@ -1,45 +1,14 @@
-# Not managed by rungate — the scaffold owns ci.yml, gates.yml and the two
-# ai-review files, and regenerates them by job name. This one is caller-owned.
+# generated-sha: 9f65797c1cb796fe
+# Managed by rungate — do not edit. The board is board.id in .claude/rungate/config.json.
 #
-# #1744 — Ready is reachable today only by somebody running `board-mirror
-# --ready --write` by hand, which is Claim 7's third falsification verbatim:
-# "a board state reachable only by someone running a command by hand".
+# Keeps the board's Ready lane full from the events the repository already
+# emits (#1744). A close fans out to what it freed; the other issue events top
+# the lane up from every open issue (#1842). No schedule: every trigger is an
+# event a person caused. Generated since #2047, and it names no project id —
+# `rungate board-ready` reads board.id from the checked-out config.
 #
-# There is no "became unblocked" event. `issue_dependencies` exists as a
-# webhook but is NOT a valid Actions `on:` trigger, and `blocked_by_removed`
-# fires when somebody unlinks a dependency rather than when the blocker
-# closes. So the trigger is the close itself, and the script fans out to that
-# issue's `blocking` list.
-#
-# ## And a close cannot reach an issue nobody blocked — #1842, G1
-#
-# That fan-out answers "what did this close free", which is all it can answer.
-# An issue with no dependencies appears in no `blocking` list, so for a
-# repository whose next piece of work was never blocked there was no event at
-# all that could put it in Ready: the lane drained and was refilled by
-# somebody running a command by hand. Claim 7's third falsification, surviving
-# inside the mechanism written to remove it.
-#
-# So the other four `issues:` types below run `--top-up`, which asks the same
-# question of every OPEN issue. They are the events that change whether Ready
-# SHOULD be refilled:
-#
-#   closed      → fan out from what that close freed (unchanged)
-#   assigned    → somebody pulled an item; a Ready slot just freed
-#   unassigned  → a claim was dropped; that issue is eligible again
-#   opened      → new work exists that no close will ever mention
-#   reopened    → likewise, for work that came back
-#   milestoned  → an issue joined a phase, which can move the active
-#   demilestoned  milestone or put a card outside it (SC-2741, ADR-013 row 8)
-#   labeled     → the expedite label may have been added, or removed —
-#   unlabeled     a card it was keeping in Ready is then re-checked
-#
-# **Still no schedule.** A cron is the thing this exists to remove; see #1744.
-# Every trigger here is an event a person caused, and BR-12 asserts the
-# absence of `schedule:` and `cron:` over this whole file.
-#
-# Every `uses:` is pinned to a commit SHA, and both
-# `test/action-pin-parity.test.ts` and BR-14 assert it.
+# Needs the RUNGATE_PROJECT_TOKEN secret: a token that can write the project
+# board, which GITHUB_TOKEN cannot.
 name: Board — keep Ready full from the events the repo already emits
 
 on:
@@ -64,97 +33,22 @@ on:
 permissions:
   contents: read
 
-# ONE RUN AT A TIME, REPOSITORY-WIDE — ai-review round 1 of #1846, and it was
-# right. Occupancy is read once per run and the write happens later, so two
-# overlapping runs each compute `slots = cap - occupied` from the SAME snapshot
-# and each promote that many: Ready ends up over its cap with no warning, and
-# the cap is the property #1846's own description calls what makes top-up safe.
-#
-# That race existed with `issues: [closed]` alone and needed two closes in the
-# same few seconds. Adding `assigned`/`unassigned`/`opened`/`reopened` makes it
-# ordinary — those cluster during any triage session — so the widening is what
-# obliges the group, not the group that was always missing.
-#
-# `cancel-in-progress: false`, and a superseded PENDING run costs nothing.
-# Every mode here is a pure function of LIVE state: both walks re-read the
-# board, the throughput and the dependency summaries on each run, and neither
-# consumes anything. So a run dropped from the queue would have done exactly
-# what the run that replaces it does, against fresher data. Cancelling the
-# RUNNING one is the option that would lose something — it can be mid-write.
+# One run at a time: occupancy is read once and written later, so overlapping
+# runs over-fill Ready. Never cancel the running one — it can be mid-write.
 concurrency:
   group: board-ready
   cancel-in-progress: false
 
 jobs:
   move-freed-issues-to-ready:
-    runs-on: "ubuntu-latest"
-    # `issues: [closed]` is triggerable by anyone who can close an issue, and
-    # an issue's own author can close it — so an outside contributor can start
-    # a job that holds a ProjectsV2 PAT.
-    #
-    # **The first gate here was wrong, and review caught it.** It read
-    # `github.event.issue.author_association`, which is the association of
-    # whoever OPENED the issue, not whoever closed it. Those differ in both
-    # directions, and the direction that bit is the ordinary one: a
-    # maintainer closing an outside contributor's issue would have been
-    # refused, so the feature would have silently not worked for exactly the
-    # issues most likely to be filed from outside.
-    #
-    # There is no actor permission in an Actions expression, so the check
-    # moved into the script, where the API can answer it:
-    # `GET /repos/{repo}/collaborators/{actor}/permission` must say `write`,
-    # `maintain` or `admin`. A control that needs a fact expressions cannot
-    # see does not belong in an expression.
-    #
-    # That relocation was then caught being too LATE: the check sat just
-    # before the write, so an untrusted close still started a job that read
-    # the whole board with the PAT. It now runs before the first `gql()`,
-    # and BR-27 asserts the ordering against every read rather than only
-    # against the mutation.
-    #
-    # What this deliberately does NOT do is the other suggested fix —
-    # defaulting the untrusted trigger to report-only and requiring a manual
-    # dispatch to write. That is precisely the hand-run command #1744 exists
-    # to remove; it would leave the feature looking present and doing nothing.
-    #
-    # And then caught being too EXPENSIVE, which is a different problem from
-    # being too late. `issues: [closed]` on a PUBLIC repository is triggerable
-    # by anybody with a GitHub account — open an issue, close your own issue —
-    # and the script cannot refuse anything until a checkout, a bun install
-    # and a full dependency fetch have already run. The gate below needs only
-    # `gh`, which is preinstalled, so the setup steps are now behind it.
-    #
-    # **This does not decide trust twice.** `WRITING_PERMISSIONS` in
-    # `lib/board-ready-fanout.ts` is the decider and the script still consults
-    # it — this step cannot import it without the checkout it exists to
-    # prevent. BR-33 asserts the two spellings are the same set, so they
-    # cannot drift into two guards that disagree.
+    runs-on: "ubuntu-24.04"
     steps:
-      # THE SECRET IS `RUNGATE_PROJECT_TOKEN`; THE ENV VAR IS
-      # `BOARD_PROJECT_TOKEN`. Two names on purpose, and do not "tidy" either
-      # into the other. `readBoardCredential` in `lib/board-ready-fanout.ts`
-      # reads the env var, and the repository secret is the one that exists.
-      #
-      # This file shipped naming a secret nobody had minted, and the failure
-      # mode is the quiet one: `secrets.<name>` for an absent secret is the
-      # EMPTY STRING, with no error and no annotation of its own. So the gate
-      # below took the `-z "$GH_TOKEN"` branch on every run, reported
-      # `UNMEASURED — BOARD_PROJECT_TOKEN is not set`, exited 0, and the run
-      # went green. Run `41950972882` on 2026-11-05T01:48:16Z is the record:
-      # #1744 closed, the fan-out fired, and the Ready lane moved nothing.
-      #
-      # BR-13 censuses EVERY `secrets.` reference in this file rather than one
-      # of them, because a wrong secret name is a population and repairing one
-      # site leaves the gate authorising itself with nothing.
+      # Before any checkout: an untrusted trigger is refused with only gh.
       - id: gate
         name: May the acting identity move the board?
         env:
           GH_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
-          # The identity that TRIGGERED this run, through env: rather than
-          # interpolated into the script line — BR-16.
           ACTOR: ${{ github.actor }}
-          # The account that owns this repository. Same reason, same rule, and
-          # GitHub sets it — a contributor cannot present themselves as it.
           OWNER: ${{ github.repository_owner }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
@@ -162,47 +56,13 @@ jobs:
             echo "trusted=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # THE OWNER ARM, AND WHY IT IS FIRST (BR-34).
-          #
-          # Dispatch `42074926758` on 2026-11-05 is the first run this
-          # workflow has ever had past #1761's secret-name repair, and it
-          # refused the repository owner:
-          #
-          #   refusing to run: hornjason has permission "UNMEASURED" on
-          #   hornjason/rungate, and this job holds a board-writing credential.
-          #
-          # The endpoint below returned nothing this job could read, `perm`
-          # was empty, and the `case` fell to its refusing arm. That refusal is
-          # CORRECT and is not what changed — a permission nobody could read is
-          # not a permission anybody was granted, and defaulting it to trusted
-          # is the cheapest wrong fix available here.
-          #
-          # What the measurement says is that the endpoint is not the problem:
-          # the same call, same actor, same repository, made with an ordinary
-          # credential answers `admin` at once. The difference is the
-          # capability of the token this job holds, and nothing inside this
-          # repository can read a secret's capability — only a run can show it,
-          # and this run did.
-          #
-          # So the owner is authorised without asking anybody. This costs no
-          # API call and needs no scope, which is the point: the one identity
-          # that certainly may move this board stops depending on a credential
-          # that may not be able to say so.
-          #
-          # NOT A DUPLICATE DECIDER. Each arm answers an input the other
-          # cannot: this one cannot authorise a collaborator who is not the
-          # owner, and the endpoint cannot authorise anybody while the
-          # credential cannot read it. If either could answer every input the
-          # other can, they would be the fourth shape in
-          # `.claude/rules/checks-must-be-able-to-fail.md` — behaviourally one
-          # guard, with nothing able to say which half is live.
+          # The owner may move its own board, with no API call and no token scope (BR-34).
           if [ "$ACTOR" = "$OWNER" ]; then
             echo "trusted=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # GITHUB_TOKEN cannot answer this endpoint; it needs admin access.
-          # A read that failed is "" and refuses with the rest — a permission
-          # we could not read is not a permission we were granted.
+          # A read that failed is "" and refuses with the rest — a permission we could
+          # not read is not a permission we were granted.
           perm=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null) || perm=""
           case "$perm" in
             admin|maintain|write)
@@ -213,86 +73,31 @@ jobs:
               echo "trusted=false" >> "$GITHUB_OUTPUT"
               ;;
           esac
+      # The checkout is the config the command reads the board from.
       - if: steps.gate.outputs.trusted == 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+        uses: actions/checkout@v4
       - if: steps.gate.outputs.trusted == 'true'
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
+          # Pinned by .bun-version — the project's single declaration (#622).
+          # setup-bun reads that file, so there is no version spelled here to drift from it.
           bun-version-file: ".bun-version"
-      # `--ignore-scripts`: this job carries a PAT, and a postinstall script in
-      # any transitive dependency runs as the job. The secret is scoped to the
-      # fan-out step's `env:` and not to this one, so it is not reachable from
-      # here today — but step-scoped env is one careless edit from job-scoped,
-      # and the flag costs nothing. `--frozen-lockfile` so the tree that runs
-      # is the tree that was reviewed.
-      - if: steps.gate.outputs.trusted == 'true'
-        run: bun install --frozen-lockfile --ignore-scripts
-
-      # The credential is resolved INSIDE `run:`, never in an `if:`.
-      # `secrets` is not available in `if:` at all, and a step skipped by
-      # `if:` reports SKIPPED — which reads as satisfied. The script emits a
-      # `::warning::UNMEASURED` naming BOARD_PROJECT_TOKEN and exits 2, so a
-      # repository that has never configured a PAT gets an annotation it can
-      # act on rather than a quiet green. See `.claude/rules/config-access.md`.
-      #
-      # GITHUB_TOKEN cannot write ProjectsV2, which is why this is a PAT and
-      # not the built-in token.
-      #
-      # ISSUE and WRITE go through env:, never interpolated into the script
-      # line — `${{ inputs.* }}` read directly is one input-type change away
-      # from the injection GitHub's own guidance opens with.
-      # No `continue-on-error`. It was here to keep an unconfigured
-      # repository from showing a red X, and review was right that it buys
-      # that by swallowing EVERY failure — a GraphQL error, a bad argument,
-      # a board with no Ready option all become green. That is the silent
-      # pass this file's credential handling exists to refuse, reintroduced
-      # one level up. This workflow is not scaffolded to consumers; it runs
-      # here, where the PAT is configured, and a red run is the signal.
+        env:
+          # A per-runner install path, so runners sharing a HOME cannot rewrite
+          # each other's bun mid-exec ("Text file busy").
+          HOME: ${{ runner.tool_cache }}/bun-home
+          USERPROFILE: ${{ runner.tool_cache }}/bun-home
       - name: Fill Ready from whatever this event changed
         if: steps.gate.outputs.trusted == 'true'
         env:
           BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
-          PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
           WRITE: ${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
-          # WHICH candidate source. `github.event.action` is set on every
-          # `issues:` trigger and absent on a dispatch, where the operator's
-          # `mode` choice answers instead. Both are closed-set values GitHub
-          # or the `choice` input produces — never free text — so the `case`
-          # below cannot be reached with anything it has no arm for.
           MODE: ${{ github.event.action || inputs.mode }}
-          # The identity that TRIGGERED this run, which is the one the script
-          # asks the permission endpoint about. Not the issue's author.
           ACTOR: ${{ github.actor }}
         run: |
-          if [ -z "$PROJECT_ID" ]; then
-            echo "::warning::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to read."
-            exit 0
-          fi
-          # `closed` keeps the fan-out; everything else tops Ready up. An
-          # unrecognised mode REFUSES rather than falling through to either —
-          # a default here would silently run the wrong source, and "which
-          # candidates did this consider" is the one thing the log must not
-          # have to be guessed from.
-          # AN ARRAY, AND EVERY EXPANSION QUOTED — ai-review round 2 of #1846.
-          #
-          # The first spelling built `SOURCE="--closed-issue $ISSUE"` and
-          # expanded it unquoted at the call site, with a comment claiming
-          # both composed variables came from the closed set above. That was
-          # true of MODE and WRITE and false of the one that mattered: ISSUE
-          # is the `workflow_dispatch` free-text input, `type: string`, with
-          # no validation. A dispatch with `issue: "7 --write"` and the write
-          # checkbox UNCHECKED word-split into `--closed-issue`, `7`,
-          # `--write`, and the run performed real board mutations for an
-          # operator who asked for a report. The script cannot defend against
-          # this — by the time it reads argv the tokens are already separate,
-          # and `arg("closed-issue")` sees a perfectly valid `7`.
-          #
-          # So: the number is validated as digits before it is used, and
-          # nothing is composed into a string that is later re-split. Every
-          # `$` below is inside double quotes, which is what BR-54 censuses
-          # over this whole block rather than over the line that was wrong.
-          args=(--repo "$GITHUB_REPOSITORY" --project "$PROJECT_ID" --actor "$ACTOR")
+          # An array, and every expansion quoted, so no input can become a flag (BR-54).
+          args=(--repo "$GITHUB_REPOSITORY" --actor "$ACTOR")
           case "$MODE" in
             closed)
               case "$ISSUE" in
@@ -301,36 +106,13 @@ jobs:
                   exit 1
                   ;;
               esac
-              # **BOTH sources on a close** (#1917). A close is the one event
-              # that reliably FREES a slot in Ready, and it was the one event
-              # that could not refill the lane from the general pool: when the
-              # closed issue was blocking nothing, the fan-out had nothing to
-              # offer and the lane stayed one short until a person ran a
-              # command. Measured 2026-11-08 — #1889 closed, run
-              # `42528160275` moved nothing, 33 candidates were eligible, and
-              # a hand-run top-up moved #1157 within seconds.
-              #
-              # `--closed-issue` stays because it is what names the freed
-              # issues in the log; it adds no candidate the top-up lacks.
+              # Both sources: a close frees a slot even when it blocked nothing (#1917).
               args+=(--closed-issue "$ISSUE" --top-up)
               ;;
             assigned)
-              # **`--moving-issue`, and only on `assigned`** (#1905).
-              # `board-flow.yml` fires on this same event and moves THIS
-              # issue out of Ready; a run that counts it reads the lane as
-              # full and promotes nothing, and a second later the lane is
-              # empty. Naming the one card bounds the exclusion to it — the
-              # predicate refuses to exclude anything when the flag is
-              # absent, so every other mode is unchanged.
-              #
-              # Not on `unassigned`, `opened` or `reopened`: `board-flow`
-              # relanes none of those out of Ready, so there is no race to
-              # close and excluding a card would only promote past the cap.
+              # board-flow moves this card out of Ready on the same event (#1905).
               args+=(--top-up --moving-issue "$ISSUE")
               ;;
-            # `milestoned`, `demilestoned`, `labeled` and `unlabeled` (SC-2741): each can
-            # change the focus or the expedite lane, and a top-up re-reads
-            # both — demoting any card the change left outside the focus.
             top-up | unassigned | opened | reopened | milestoned | demilestoned | labeled | unlabeled)
               args+=(--top-up)
               ;;
@@ -339,11 +121,18 @@ jobs:
               exit 1
               ;;
           esac
-          # The literal, not the variable. WRITE is a closed set today and
-          # this stops it mattering: there is no path by which the contents
-          # of any input become a FLAG rather than a flag's value.
           if [ -n "$WRITE" ]; then
             args+=(--write)
           fi
           echo "mode=$MODE, args=${args[*]}"
-          bun scripts/board-ready.ts "${args[@]}"
+          # A tree with no board.id is UNMEASURED, an annotation and not a red run
+          # (.claude/rules/config-access.md). Only that refusal is: every other exit stands.
+          err="$RUNNER_TEMP/board-ready.stderr"
+          code=0
+          bunx rungate@0.8.17 board-ready "${args[@]}" 2>"$err" || code=$?
+          cat "$err" >&2
+          if [ "$code" -eq 2 ] && grep -q '^UNMEASURED: no board' "$err"; then
+            echo "::warning::UNMEASURED — no board.id in the rungate config, so there is no board to read. Set board.id and this runs."
+            exit 0
+          fi
+          exit "$code"

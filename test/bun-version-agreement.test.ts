@@ -59,11 +59,11 @@ const REPO_ROOT = join(import.meta.dir, "..");
  * in `gates.yml`, since #1013 one in `ai-review.yml`, which installs bun for
  * the findings adjudicator, and since #1488 one in `ai-review-unmeasured.yml`,
  * which installs it for the unmeasured classifier, since #2046 one in
- * `adr-accepted.yml` and since #2045 one in `closing-references.yml`, both of
- * which run the published CLI. Declared once, because three cases below count
+ * `adr-accepted.yml`, since #2045 one in `closing-references.yml` and since
+ * #2047 one in `board-ready.yml`, all three of which run the published CLI. Declared once, because three cases below count
  * them and three literals would drift apart.
  */
-const GENERATED_BUN_STEPS = 6;
+const GENERATED_BUN_STEPS = 7;
 
 const WORKFLOW_DIR = join(REPO_ROOT, ".github", "workflows");
 

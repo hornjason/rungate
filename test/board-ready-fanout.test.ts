@@ -37,6 +37,15 @@ import { activeMilestone } from "../lib/board-ready-rule";
 import { readBoardInputs } from "../lib/config-readers";
 import { resolveApiBase } from "../lib/github-api-base";
 import { structuralCut } from "../lib/source-slice";
+import { actionRef } from "../lib/workflow-actions";
+import { CLI_COMMANDS } from "../lib/cli-commands";
+import {
+  BOARD_READY_COMMAND,
+  NO_BOARD_REFUSAL,
+  buildBoardReadyGateScript,
+  buildBoardReadyScript,
+  buildBoardReadyWorkflow,
+} from "../lib/scaffold/board-ready-workflow";
 import {
   startFakeGitHub,
   type FakeGitHub,
@@ -959,7 +968,9 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
     // checkout or a dependency fetch, and each of those carries its `if:`.
     const gateAt = code.indexOf("id: gate");
     expect(gateAt, "no step with `id: gate` — this row would pass vacuously").toBeGreaterThan(-1);
-    const costly = ["actions/checkout@", "oven-sh/setup-bun@", "bun install"];
+    // Since #2047 the step runs the published CLI through `bunx`, which
+    // fetches the package itself, so there is no `bun install` to order.
+    const costly = ["actions/checkout@", "oven-sh/setup-bun@", "bunx rungate@"];
     for (const needle of costly) {
       const at = code.indexOf(needle);
       expect(at, `${needle} is not in the workflow — the ordering census is measuring nothing`).toBeGreaterThan(-1);
@@ -971,9 +982,9 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
     const guards = code.split("\n").filter(l => /if:\s*steps\.gate\.outputs\.trusted == 'true'/.test(l));
     expect(
       guards.length,
-      "every step after the gate must be conditional on it: checkout, setup-bun, " +
-        "bun install and the fan-out step itself",
-    ).toBe(4);
+      "every step after the gate must be conditional on it: checkout, setup-bun " +
+        "and the fan-out step itself",
+    ).toBe(3);
   });
 
   // `secrets` is not available in `if:` at all, and a step skipped by `if:`
@@ -1006,9 +1017,10 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
     ]);
   });
 
-  // Every `uses:` pinned to a commit SHA — asserted here as well as by
-  // `test/action-pin-parity.test.ts`, because this file is new.
-  test("BR-14: every action is pinned to a 40-character SHA", () => {
+  // Every `uses:` is the generator's own declaration (#2047): since this file
+  // is generated, `lib/workflow-actions.ts` decides each pin, and the one
+  // third-party action, the one that runs setup code, is a 40-character SHA.
+  test("BR-14: every action is the declared pin, and setup-bun is a SHA", () => {
     // `- uses:` was the first spelling and it stopped seeing both actions
     // the moment they grew an `if:`, which moves `uses:` off the dash line.
     // A pin census that silently reads nothing is the vacuous shape, and the
@@ -1016,14 +1028,20 @@ describe("BR-12..BR-14: the workflow is wired the way the rules require", () => 
     // passing. The dash is optional now; the count is not.
     const uses = [...yml.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)/gm)].map(m => m[1]);
     expect(uses.length, "no `uses:` found in board-ready.yml — this row would pass vacuously").toBe(2);
-    for (const u of uses) expect(u).toMatch(/@[0-9a-f]{40}$/);
+    for (const u of uses) expect(u).toBe(actionRef(u!.split("@")[0]!).split(" ")[0]);
+    const bun = uses.find(u => u!.startsWith("oven-sh/setup-bun@"));
+    expect(bun, "setup-bun is not in board-ready.yml").toBeDefined();
+    expect(bun).toMatch(/@[0-9a-f]{40}$/);
   });
 
-  // The workflow and the entry point have to agree on a path, and nothing
-  // else in the tree relates them — a renamed script leaves a workflow that
-  // fails only when an issue closes in production.
-  test("BR-15: the workflow invokes scripts/board-ready.ts, which exists", () => {
-    expect(yml).toContain("bun scripts/board-ready.ts");
+  // The workflow and the entry point have to agree, and nothing else in the
+  // tree relates them — a renamed command leaves a workflow that fails only
+  // when an issue closes in production. Since #2047 the workflow calls the
+  // published CLI, so the agreement is through the command registry.
+  test("BR-15: the workflow invokes the registered board-ready command, whose script exists", () => {
+    expect(yml).toContain("bunx rungate@");
+    expect(yml).toContain(" board-ready \"${args[@]}\"");
+    expect(CLI_COMMANDS["board-ready"]?.script).toBe("scripts/board-ready.ts");
     expect(readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8")).toContain("fanoutDecisions");
   });
 
@@ -1609,8 +1627,8 @@ describe("BR-47..BR-52: an issue that was never blocked reaches Ready", () => {
     const at = ymlLive.lastIndexOf("run: |");
     expect(at, "no `run: |` block found — this row would pass vacuously").toBeGreaterThan(-1);
     const block = ymlLive.slice(at);
-    expect(block, "the censused block is not the one that invokes the script").toContain(
-      "bun scripts/board-ready.ts",
+    expect(block, "the censused block is not the one that invokes the command").toContain(
+      "bunx rungate@",
     );
     // Strip every correctly-quoted expansion, then anything left that still
     // looks like one is unquoted. `"${args[@]}"` and `"$ISSUE"` go; a bare
@@ -2330,5 +2348,115 @@ describe("SC-2741: Ready's incumbents are held to the active milestone", () => {
     );
     expect(d.demote).toBe(true);
     if (d.demote) expect(d.why).toContain("blocker");
+  });
+});
+
+/**
+ * #2047, ADR-014 row 4: the scaffold writes board-ready.yml, and this
+ * repository's copy is the generated one.
+ *
+ * The board's identity is read from the checked-out config by the published
+ * CLI (#2165), so the file carries no project id and no project URL. This is
+ * half of the criterion for this area; board-intake.yml is #2166's.
+ */
+describe("#2047: board-ready.yml is generated and names no board", () => {
+  const yml = readFileSync(join(ROOT, ".github/workflows/board-ready.yml"), "utf-8");
+  const live = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+  const version = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8")).version as string;
+
+  test("the committed file is the generator's, and says so", () => {
+    expect(yml, "board-ready.yml is not the generated copy").toMatch(/^(?:# generated-sha: [0-9a-f]+\n)?# Managed by rungate/);
+    const generated = buildBoardReadyWorkflow({
+      runsOn: '"ubuntu-24.04"',
+      checkout: "actions/checkout@v4",
+      setupBun: "oven-sh/setup-bun@0000000000000000000000000000000000000000",
+      setupBunWith: '          bun-version-file: ".bun-version"',
+      setupBunEnv: "",
+      version: "9.9.9",
+    });
+    // The two run bodies are the generator's text, byte for byte, indented.
+    for (const body of [buildBoardReadyGateScript(), buildBoardReadyScript(version)]) {
+      const indented = body.trimEnd().split("\n").map(l => (l === "" ? "" : `          ${l}`)).join("\n");
+      expect(yml, "a run: body in board-ready.yml is not the generator's").toContain(indented);
+    }
+    expect(generated).toContain(`bunx rungate@9.9.9 ${BOARD_READY_COMMAND} "\${args[@]}"`);
+  });
+
+  test("it calls the published CLI at the generating version, and runs no script", () => {
+    expect(live).toContain(`bunx rungate@${version} board-ready "\${args[@]}"`);
+    expect(live, "a consumer has no scripts/ to run").not.toMatch(/\bbun\s+scripts\//);
+  });
+
+  test("no project id, no project URL, and no --project anywhere in it", () => {
+    // Read over the WHOLE file, comments included: an id in a comment is still
+    // an id somebody will copy.
+    expect(yml).not.toMatch(/PVT_[A-Za-z0-9_-]+/);
+    expect(yml).not.toMatch(/github\.com\/(?:users|orgs)\/[^/\s]+\/projects\//);
+    expect(yml).not.toContain("RUNGATE_PROJECT_ID");
+    expect(live).not.toContain("--project");
+    // The generator takes no board input at all, so it cannot emit one. Read
+    // from the options interface itself (review round 2: an arity check counts
+    // one options object however many fields it grows).
+    const src = readFileSync(join(ROOT, "lib/scaffold/board-ready-workflow.ts"), "utf-8");
+    const iface = /export interface BoardReadyWorkflowOptions \{([\s\S]*?)\n\}/.exec(src)?.[1];
+    expect(iface, "BoardReadyWorkflowOptions not found — this row would pass vacuously").toBeDefined();
+    const fields = [...iface!.matchAll(/^\s*(\w+)\??:/gm)].map(m => m[1]!);
+    expect(fields.length, "no fields parsed from BoardReadyWorkflowOptions").toBeGreaterThan(0);
+    expect(fields.filter(f => /project|board|url/i.test(f)), "a board input on the generator can be emitted").toEqual([]);
+  });
+});
+
+/**
+ * #2047, review round 1: a tree with no `board.id` gets an annotation, not a
+ * red run on every issue event. Only that one refusal is softened; every
+ * other exit of the command stands. The fill step's run body is EXECUTED
+ * against a stub `bunx`, not read.
+ */
+describe("#2047: no board.id is an annotation, and nothing else is", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "board-ready-fill-")));
+  const stubs = join(dir, "bin");
+  mkdirSync(stubs);
+  // The stub stands in for the published CLI: it prints STUB_ERR to stderr
+  // and exits STUB_CODE.
+  writeFileSync(join(stubs, "bunx"), '#!/bin/sh\nprintf "%s\\n" "$STUB_ERR" >&2\nexit "$STUB_CODE"\n', { mode: 0o755 });
+  const body = join(dir, "fill.sh");
+  writeFileSync(body, buildBoardReadyScript("9.9.9"));
+
+  function fill(code: number, err: string) {
+    const r = Bun.spawnSync(["bash", "-e", "-o", "pipefail", body], {
+      env: {
+        PATH: `${stubs}:${process.env.PATH}`,
+        RUNNER_TEMP: dir,
+        GITHUB_REPOSITORY: "o/n",
+        ACTOR: "someone",
+        MODE: "top-up",
+        ISSUE: "",
+        WRITE: "",
+        STUB_CODE: String(code),
+        STUB_ERR: err,
+      },
+    });
+    return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
+  }
+
+  test("the softened refusal is the command's own wording", () => {
+    // Held to the script, so a reworded refusal reddens here rather than
+    // turning every consumer's no-board run red.
+    expect(readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8")).toContain(`${NO_BOARD_REFUSAL} —`);
+  });
+
+  test("no board: exit 0 with an UNMEASURED warning, and the command's own line still shown", () => {
+    const r = fill(2, `${NO_BOARD_REFUSAL} — pass --project <id>, or set board.id in the rungate config under /x. Nothing was read.`);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("::warning::UNMEASURED — no board.id in the rungate config");
+    expect(r.err).toContain(NO_BOARD_REFUSAL);
+  });
+
+  test("any other refusal, failure or success keeps its exit", () => {
+    expect(fill(2, "UNMEASURED: --project-root needs a directory after it. Nothing was read.").code).toBe(2);
+    expect(fill(1, "TypeError: boom").code).toBe(1);
+    const ok = fill(0, "");
+    expect(ok.code).toBe(0);
+    expect(ok.out).not.toContain("::warning::");
   });
 });
