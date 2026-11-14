@@ -39,9 +39,19 @@ not. First measured 2026-10-28 against `LucasDesenvGit/financas-local`, when
 this repository had no edges to measure on; `is:blocked` was not part of that
 reading.
 
-**Only advanced search applies these qualifiers.** The REST search endpoint
-and GraphQL `search(type: ISSUE)` ignore them: all three return either every
-open issue or none (76, 76 and 0 on the same day).
+**Only advanced search applies these qualifiers.** Two other search
+interfaces ignore them. On the same day, both returned 76 (every open issue)
+for `has:blocked-by` and for `no:blocked-by`, and 0 for `is:blocked`:
+
+```bash
+# REST search
+gh api -X GET search/issues -f q='repo:hornjason/rungate is:issue is:open no:blocked-by' -q .total_count
+# GraphQL, the non-advanced search type
+gh api graphql -f query='query{search(type:ISSUE,first:1,query:"repo:hornjason/rungate is:issue is:open no:blocked-by"){issueCount}}'
+```
+
+Swap `no:blocked-by` for `has:blocked-by` or `is:blocked` to take the other
+two readings.
 
 ## This repository's branch protection, read live
 
