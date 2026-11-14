@@ -107,6 +107,7 @@ export const PROMOTION_REFUSALS = [
   "PHASE_REQUIRED",
   "PHASE_ROW_ABSENT",
   "BANK_DRIFT",
+  "ALREADY_PLACED",
 ] as const;
 
 export type PromotionRefusal = (typeof PROMOTION_REFUSALS)[number];
@@ -601,10 +602,29 @@ export function specWithCriterion(
     text = `${specText.trimEnd()}\n${line}\n`;
   } else {
     let at = last + 1;
-    while (at < lines.length && /^\s+\S/.test(lines[at]!) && !ANY_CRITERION_LINE.test(lines[at]!)) at++;
+    // Past the criterion's indented proof lines AND any note directly under
+    // it, such as a `<!-- REVIEW: … -->` line: both belong to that criterion,
+    // and a new line between them moves the note onto the wrong one (#2107).
+    while (
+      at < lines.length &&
+      (/^\s+\S/.test(lines[at]!) || /^<!--.*-->\s*$/.test(lines[at]!)) &&
+      !ANY_CRITERION_LINE.test(lines[at]!)
+    ) {
+      at++;
+    }
     text = [...lines.slice(0, at), line, ...lines.slice(at)].join("\n");
   }
   if (phase !== null) {
+    // One home per criterion: an id already in a DIFFERENT phase row is refused
+    // rather than listed twice (#2107). Its own row again is a no-op below.
+    const elsewhere = parsePlacementRows(text).find(r => r.ids.includes(id) && r.placement !== `Phase ${phase}`);
+    if (elsewhere) {
+      return {
+        ok: false,
+        refusal: "ALREADY_PLACED",
+        why: `${id} is already placed in ${elsewhere.placement}; a criterion has one phase, so move it by editing the table`,
+      };
+    }
     const placed = withPhase(text, id, phase);
     if (placed === null) {
       return { ok: false, refusal: "PHASE_ROW_ABSENT", why: `this spec's Phase placement table has no row for Phase ${phase}` };
