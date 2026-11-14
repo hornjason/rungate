@@ -49,6 +49,7 @@ import { resolve, sep } from "path";
 import { NAMES_NONE, answerableIds, criteriaNamedBy, criterionAnswer, specCriteriaIn } from "./board-mirror";
 import { allocateScNumber, formatSCLine } from "./create-sc";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf } from "./issue-shape";
+import { fenceOpening, readFences } from "./markdown-fence";
 import type { ScRegistry } from "./sc-ids";
 import { declaresDeferred, parsePlacementRows, placementReading } from "./spec-placement";
 
@@ -609,25 +610,12 @@ export function specWithCriterion(
   // CommonMark: a fence closes only on the SAME character, at least as many
   // times, with nothing after it. Any other fence-shaped line inside is
   // content (review round 2 of #2127: ``` holding ~~~, and the reverse).
-  let open: { char: string; len: number } | null = null;
-  let fenceOpenedAt = -1;
+  // The grammar is `lib/markdown-fence.ts`'s, shared with every lib/ reader
+  // (#2130).
+  const fences = readFences(lines);
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!;
-    const fence = /^\s*(`{3,}|~{3,})(.*)$/.exec(raw);
-    if (fence) {
-      const marker = fence[1]!;
-      if (open === null) {
-        open = { char: marker[0]!, len: marker.length };
-        fenceOpenedAt = i;
-        continue;
-      }
-      if (marker[0] === open.char && marker.length >= open.len && fence[2]!.trim() === "") {
-        open = null;
-        fenceOpenedAt = -1;
-        continue;
-      }
-    }
-    if (open !== null) continue;
+    if (fences.roles[i] !== "prose") continue;
     const h = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(raw);
     if (h) {
       const level = h[1]!.length;
@@ -638,12 +626,12 @@ export function specWithCriterion(
     const m = ANY_CRITERION_LINE.exec(raw);
     if (m && (family === "SC" || (m[1] === family && m[2] === group))) sectionOf.push({ at: i, section: current });
   }
-  if (fenceOpenedAt !== -1 && !present) {
+  if (fences.unclosedAt !== null && !present) {
     return {
       ok: false,
       refusal: "SPEC_UNREADABLE",
       why:
-        `the code fence opened at line ${fenceOpenedAt + 1} is never closed, so no heading or ` +
+        `the code fence opened at line ${fences.unclosedAt + 1} is never closed, so no heading or ` +
         "criterion after it can be read; close it, then re-run",
     };
   }
@@ -945,8 +933,10 @@ export function declineViolations(input: DeclineInput): DeclineViolation[] {
   // fences the same way — so every later heading in the body becomes
   // invisible to all three at once and the issue parses as having no
   // sections at all. Refused outright rather than balanced, because a
-  // one-line reason has no use for a code block.
-  if (/^[ \t]*```/m.test(input.why)) {
+  // one-line reason has no use for a code block. A `~~~` line too: every
+  // heading reader shares `lib/markdown-fence.ts` now (#2130), so it flips
+  // fence state for all of them exactly as a ``` line does.
+  if (input.why.split("\n").some(line => fenceOpening(line) !== null)) {
     out.push({
       refusal: "MALFORMED_WHY",
       why:
