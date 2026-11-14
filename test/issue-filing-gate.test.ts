@@ -7548,6 +7548,41 @@ describe("#1964 / SC-2753: the filing cap is read from committed config, never t
     expect(readWorktreeRemote(root).url, "run identity took the mirror, not the origin fetch uses").toBe(FIXTURE_ORIGIN);
   });
 
+  test("#2095 review: an origin URL planted in the global git config does not change run identity", () => {
+    // Unscoped, `--get-all` lists system, then global, then local values, so a
+    // `remote.origin.url` in `~/.gitconfig` would come first. Measured on git
+    // 2.50.1: `git remote get-url origin`, main's read before #2095, returned
+    // the planted URL too.
+    const root = freshRun();
+    const dir = mkdtempSync(join(tmpdir(), "fg-global-gitconfig-"));
+    const global = join(dir, "gitconfig");
+    writeFileSync(global, '[remote "origin"]\n\turl = https://example.com/planted/elsewhere.git\n');
+    // In a child, because Bun's spawnSync hands a child the environment it
+    // started with: setting `process.env.GIT_CONFIG_GLOBAL` here reaches no
+    // git that `readWorktreeRemote` spawns, and the first draft of this case
+    // passed on the unfixed code for exactly that reason.
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: global };
+    try {
+      // late-env-ok: the child is `git` reading config with an explicit env,
+      // and it reads none of the RUNGATE_* variables this file writes.
+      const premise = spawnSync("git", ["-C", root, "config", "--get-all", "remote.origin.url"], { encoding: "utf-8", env });
+      expect(premise.stdout.split("\n")[0], "the planted URL is not first in an unscoped read, so this measures nothing")
+        .toBe("https://example.com/planted/elsewhere.git");
+      const module = JSON.stringify(join(import.meta.dir, "..", "lib", "worktree-repo.ts"));
+      // late-env-ok: the child is bun running `readWorktreeRemote` alone; it
+      // reads none of the RUNGATE_* variables, only the GIT_CONFIG_GLOBAL set here.
+      const probe = spawnSync(
+        process.execPath,
+        ["-e", `import { readWorktreeRemote } from ${module}; console.log(JSON.stringify(readWorktreeRemote(${JSON.stringify(root)})));`],
+        { encoding: "utf-8", env },
+      );
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(JSON.parse(probe.stdout).url, "a global git config chose this checkout's run").toBe(FIXTURE_ORIGIN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("#2095 review: one filing reads the remote's main once, and both readers are handed that reading", () => {
     // Two live readings in one adjudication could straddle a merge and judge
     // the plan exemption and the cap against two different commits. The

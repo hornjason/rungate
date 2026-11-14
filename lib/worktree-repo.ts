@@ -195,7 +195,10 @@ export function readWorktreeRemote(worktreePath: string): RemoteReading {
   // rewrite set, `get-url` printed the `file://` path and this printed the
   // https one. `--get-all` and the first line, because `--get` on a remote
   // with two URLs prints the LAST, and fetch uses the first (review of #2140).
-  const got = spawnSync("git", ["-C", worktreePath, "config", "--get-all", "remote.origin.url"], {
+  // `--local`, as `absentOrigin` below already is: unscoped, a
+  // `remote.origin.url` in the global config is listed FIRST and would choose
+  // the run (review of #2140; `get-url`, main's read before, did the same).
+  const got = spawnSync("git", ["-C", worktreePath, "config", "--local", "--get-all", "remote.origin.url"], {
     timeout: 10_000,
     encoding: "utf-8",
   });
