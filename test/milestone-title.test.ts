@@ -57,9 +57,17 @@ describe("#2057: readMilestoneTitle", () => {
     expect(readMilestoneTitle(null)).toBeNull();
   });
 
-  test("a double space is not the family it looks like", () => {
-    expect(readMilestoneTitle("Pipeline  Phase 6")?.family).not.toBe("Pipeline");
-    expect(phaseInFamily("Pipeline  Phase 6", "Pipeline")).toBeNull();
+  test("any run of whitespace separates family from phase, and the family is trimmed", () => {
+    // AI review of #2121: a double space left the family "Pipeline " with a
+    // trailing space, so phaseOf read phase 6 while inMilestoneFamily said the
+    // title belonged to no family, and plan-deps dropped the issue silently.
+    expect(readMilestoneTitle("Pipeline  Phase 6")).toEqual({ family: "Pipeline", phase: 6 });
+    expect(readMilestoneTitle("Pipeline\tPhase 6")).toEqual({ family: "Pipeline", phase: 6 });
+    expect(phaseInFamily("Pipeline  Phase 6", "Pipeline")).toBe(6);
+    expect(inMilestoneFamily("Pipeline  Phase 6", "Pipeline")).toBe(true);
+    // Leading whitespace is no family, not a family of spaces.
+    expect(readMilestoneTitle("  Phase 2 — x")).toEqual({ family: "", phase: 2 });
+    expect(readMilestoneTitle("  Pipeline Phase 6")).toEqual({ family: "Pipeline", phase: 6 });
   });
 });
 

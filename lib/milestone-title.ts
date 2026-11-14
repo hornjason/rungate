@@ -24,13 +24,15 @@
 export const PHASE_TOKEN = String.raw`Phase (\d+)`;
 
 /**
- * The family is everything before the FIRST ` Phase N`, lazily, so a title
+ * The family is everything before the FIRST `Phase N`, lazily, so a title
  * that says "Phase" again later (`… starts after Phase 5 ships`) keeps the
- * family it opened with. The family must end in a space before `Phase`: a
- * word ending in `Phase` (`TestPhase 3`) and a parenthetical (`Release
- * (Phase 3)`) are not phase milestones.
+ * family it opened with. Whitespace must separate them — any run of it, and
+ * the family is trimmed, so `Pipeline  Phase 6` is family `Pipeline` rather
+ * than `Pipeline ` (AI review of #2121: the trailing space made phaseOf and
+ * inMilestoneFamily disagree). A word ending in `Phase` (`TestPhase 3`) and a
+ * parenthetical (`Release (Phase 3)`) are not phase milestones.
  */
-const MILESTONE_TITLE = new RegExp(String.raw`^(?:(.+?) )?${PHASE_TOKEN}\b`);
+const MILESTONE_TITLE = new RegExp(String.raw`^(?:(.*?)\s+)?${PHASE_TOKEN}\b`);
 
 export interface MilestoneTitle {
   /** `Pipeline`, or `""` for a bare `Phase N` title. */
@@ -40,5 +42,5 @@ export interface MilestoneTitle {
 
 export function readMilestoneTitle(title: string | null | undefined): MilestoneTitle | null {
   const m = MILESTONE_TITLE.exec(title ?? "");
-  return m ? { family: m[1] ?? "", phase: Number(m[2]) } : null;
+  return m ? { family: (m[1] ?? "").trim(), phase: Number(m[2]) } : null;
 }
