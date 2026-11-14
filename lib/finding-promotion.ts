@@ -108,6 +108,8 @@ export const PROMOTION_REFUSALS = [
   "PHASE_ROW_ABSENT",
   "BANK_DRIFT",
   "ALREADY_PLACED",
+  "SECTION_REQUIRED",
+  "SECTION_UNKNOWN",
 ] as const;
 
 export type PromotionRefusal = (typeof PROMOTION_REFUSALS)[number];
@@ -583,6 +585,7 @@ export function specWithCriterion(
   line: string,
   id: string,
   phase: number | null,
+  section: string | null = null,
 ): { ok: true; text: string } | { ok: false; refusal: PromotionRefusal; why: string } {
   // Already written (a retry after a failed link): the line stays where it
   // is, and the phase and placement checks below still run on it, so a retry
@@ -590,11 +593,44 @@ export function specWithCriterion(
   const lines = specText.split("\n");
   const present = lines.includes(line);
   const [, family, group] = /^([A-Z]+)-([A-Z]?)\d+$/.exec(id) ?? [];
-  let last = -1;
+  // #2110: the heading each criterion of this family sits under, so a spec
+  // keeping them in several sections is not appended to after whichever
+  // section happens to come last. A `#` line inside a fenced block is code.
+  const sectionOf: { at: number; heading: string }[] = [];
+  let heading = "";
+  let fenced = false;
   for (let i = 0; i < lines.length; i++) {
-    const m = ANY_CRITERION_LINE.exec(lines[i]!);
-    if (m && (family === "SC" || (m[1] === family && m[2] === group))) last = i;
+    const raw = lines[i]!;
+    if (/^\s*(```|~~~)/.test(raw)) fenced = !fenced;
+    if (fenced) continue;
+    const h = /^#{1,6}\s+(.*?)\s*#*\s*$/.exec(raw);
+    if (h) heading = h[1]!;
+    const m = ANY_CRITERION_LINE.exec(raw);
+    if (m && (family === "SC" || (m[1] === family && m[2] === group))) sectionOf.push({ at: i, heading });
   }
+  const headings = [...new Set(sectionOf.map(s => s.heading))];
+  const named = (h: string) => (h === "" ? "(before any heading)" : `"${h}"`);
+  let candidates = sectionOf;
+  if (!present && section !== null) {
+    candidates = sectionOf.filter(s => s.heading === section.trim());
+    if (candidates.length === 0 && sectionOf.length > 0) {
+      return {
+        ok: false,
+        refusal: "SECTION_UNKNOWN",
+        why: `no criterion sits under a heading "${section.trim()}"; the headings over this spec's criteria are ${headings.map(named).join(", ")}`,
+      };
+    }
+  } else if (!present && headings.length > 1) {
+    return {
+      ok: false,
+      refusal: "SECTION_REQUIRED",
+      why:
+        `this spec keeps its criteria under ${headings.length} headings, so the line needs --section ` +
+        `naming one: ${headings.map(named).join(", ")}. After the last criterion in the file can be ` +
+        "inside an unrelated section, above that section's own analysis",
+    };
+  }
+  const last = candidates.length === 0 ? -1 : candidates[candidates.length - 1]!.at;
   let text: string;
   if (present) {
     text = specText;

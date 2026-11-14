@@ -11,6 +11,11 @@
  *   …and add --write to append it. Without --write it prints and exits 0,
  *   having changed nothing.
  *
+ *   A spec keeping its criteria under more than one heading also needs
+ *   --section "<heading>", and the line goes after that section's last
+ *   criterion; without it the run refuses SECTION_REQUIRED and lists the
+ *   headings (#2110).
+ *
  * The OTHER outcome — this finding serves no criterion, deliberately:
  *
  *   bun scripts/finding-promotion.ts --issue 1934 \
@@ -188,7 +193,7 @@ const declineWhy = declining ? required("declines") : "";
 // four flags the caller passed. A half-edited copy-paste produces exactly
 // that, and the result is indistinguishable from a deliberate decline.
 if (declining) {
-  const promoteOnly = ["spec", "outcome", "symbol", "module", "group", "phase"].filter(f => args.includes(`--${f}`));
+  const promoteOnly = ["spec", "outcome", "symbol", "module", "group", "phase", "section"].filter(f => args.includes(`--${f}`));
   if (promoteOnly.length > 0) {
     console.error(
       `ERROR: --declines cannot be combined with ${promoteOnly.map(f => `--${f}`).join(", ")}. ` +
@@ -208,6 +213,9 @@ const write = args.includes("--write");
 // the id in. Both optional here; `promote` and `specWithCriterion` refuse by
 // name when the spec needs one.
 const group = declining ? undefined : optional("group");
+// #2110: the heading a criterion goes under, when the spec keeps its criteria
+// under more than one. `specWithCriterion` refuses by name when it is needed.
+const section = declining ? undefined : optional("section");
 const phaseRaw = declining ? undefined : optional("phase");
 const phase = phaseRaw === undefined ? null : Number(phaseRaw);
 if (phase !== null && (!Number.isInteger(phase) || phase < 0)) {
@@ -389,7 +397,7 @@ if (!early.allowed) {
 // #2066: where the line goes, its phase, and the deferral bank — all decided
 // BEFORE the dry-run exit, for the reason `maySpecBeWritten` is: a preview
 // that succeeds where the write would refuse is a second answer.
-const inserted = specWithCriterion(content, result.line, result.id, phase);
+const inserted = specWithCriterion(content, result.line, result.id, phase, section ?? null);
 if (!inserted.ok) {
   console.error(`REFUSED ${inserted.refusal}: ${inserted.why}`);
   process.exit(PROMOTION_EXIT);

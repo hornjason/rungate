@@ -1807,7 +1807,7 @@ describe("#2107: three edges of the new flags", () => {
 
   test("--group and --phase are refused beside --declines, like the other promote-only flags", () => {
     const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
-    expect(cli).toContain('const promoteOnly = ["spec", "outcome", "symbol", "module", "group", "phase"]');
+    expect(cli).toContain('const promoteOnly = ["spec", "outcome", "symbol", "module", "group", "phase", "section"]');
   });
 
   test("a new line never lands between a criterion and the note under it", () => {
