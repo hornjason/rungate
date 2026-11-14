@@ -33,7 +33,7 @@ const READY_NOW = {
   consumer:
     "   - what Ready holds now, and what a top-up would move into it (read-only as written): " +
     '`env -u GH_TOKEN BOARD_PROJECT_TOKEN="$(env -u GH_TOKEN gh auth token)" bunx rungate board-ready ' +
-    "--repo <owner/name> --project <board id> --actor \"$(gh api user -q .login)\" --top-up`",
+    "--repo <owner/name> --project <board id> --actor \"$(env -u GH_TOKEN gh api user -q .login)\" --top-up`",
 };
 
 /** A rendered process file, or why it could not be. */

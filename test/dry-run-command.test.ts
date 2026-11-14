@@ -219,7 +219,14 @@ describe("SC-2746: rungate scaffold installs the dry-run command and the ADR tem
       expect(command).toContain("bunx rungate board-ready");
       // Review of #2153: board-ready refuses before reading anything when no
       // `--actor` is given, so a line without one can only ever print a refusal.
-      expect(command.split("\n").find(l => l.includes("bunx rungate board-ready"))).toContain("--actor ");
+      const ready = command.split("\n").find(l => l.includes("bunx rungate board-ready")) ?? "";
+      expect(ready).toContain("--actor ");
+      // Round 3 of #2153: a `$(gh …)` inside the line runs before the outer
+      // `env -u GH_TOKEN` applies, so an exported GH_TOKEN for another account
+      // names a different actor than the token. Every inner `gh` unsets it too.
+      const inner = [...ready.matchAll(/\$\(([^)]*\bgh [^)]*)\)/g)].map(m => m[1]);
+      expect(inner.length, "no `$(gh …)` substitution found, so the check below is over nothing").toBeGreaterThan(1);
+      expect(inner.filter(s => !s.startsWith("env -u GH_TOKEN ")), "an inner gh call sees the ambient GH_TOKEN").toEqual([]);
       const cli = command.split("\n").filter(l => l.includes("bunx rungate"));
       expect(cli.length, "no CLI line was found, so the no-write check measured nothing").toBeGreaterThan(2);
       expect(cli.filter(l => l.includes("--write")), "a dry run passes --write").toEqual([]);
