@@ -70,14 +70,19 @@
  * costs a line in a report. A derived file wrongly written costs the
  * consumer's suite, and the edit is thrown away at the next regeneration.
  *
- * ## No relative imports, on purpose
+ * ## One relative import, and the mutant trees carry it
  *
- * `test/derived-spec-guard.test.ts` builds a mutant copy of this file in an
- * `mkdtemp` directory and runs the real write path against it. A relative
- * import here would make that mutant die on module resolution, and a mutant
- * that failed to load is indistinguishable from a guard that held —
- * `.claude/rules/checks-must-be-able-to-fail.md`.
+ * `test/derived-spec-guard.test.ts` and `test/spec-write-chokepoint.test.ts`
+ * build a mutant copy of this file in an `mkdtemp` directory and run the real
+ * write path against it. A relative import the copier did not carry would
+ * make that mutant die on module resolution, and a mutant that failed to load
+ * is indistinguishable from a guard that held —
+ * `.claude/rules/checks-must-be-able-to-fail.md`. So the one import here,
+ * `./markdown-fence` (#2135), is copied into both trees, and the guard test
+ * asserts it is the only one.
  */
+
+import { readFences } from "./markdown-fence";
 
 /** The frontmatter key by which a file declares which generator produces it. */
 export const DERIVED_KEY = "generated-by";
@@ -109,9 +114,16 @@ const PROSE_DECLARATIONS = [
   /\bgenerated\s+by\b/i,
 ];
 
-/** Fenced blocks hold examples OF markers, never markers. */
+/**
+ * Fenced blocks hold examples OF markers, never markers. Each fenced line is
+ * blanked, so the head's line structure is kept. The grammar is
+ * `lib/markdown-fence.ts`'s (#2135): the regex this replaced ended a ````
+ * block at its first ``` content line.
+ */
 function stripFences(text: string): string {
-  return text.replace(/^(```|~~~)[\s\S]*?^\1[^\n]*$/gm, "");
+  const lines = text.split("\n");
+  const { roles } = readFences(lines);
+  return lines.map((line, i) => (roles[i] === "prose" ? line : "")).join("\n");
 }
 
 /**

@@ -548,6 +548,12 @@ ${DERIVED_KEY}: scripts/sync-spec.ts
       join(mutantDir, "lib", "write-spec.ts"),
       readFileSync(CHOKEPOINT_SOURCE, "utf-8"),
     );
+    // #2135: the guard's one relative import. Without it the import below
+    // throws and every row in this block errors instead of measuring.
+    writeFileSync(
+      join(mutantDir, "lib", "markdown-fence.ts"),
+      readFileSync(join(GUARD_SOURCE, "..", "markdown-fence.ts"), "utf-8"),
+    );
     mutantWriteSpec = (await import(join(mutantDir, "lib", "write-spec.ts"))).writeSpec;
   });
 

@@ -36,6 +36,8 @@
  * documentation is briefed to an agent as a thing to build.
  */
 
+import { closesFence, fenceOpening, type FenceOpening } from "./markdown-fence";
+
 /**
  * Markers that identify a blockquote as harness-authored metadata rather than
  * the author's prose.
@@ -129,22 +131,22 @@ export interface CriteriaReading {
 export function stripCodeBlocks(body: string): string {
   const lines = String(body ?? "").split("\n");
   const out: string[] = [];
-  let fence: string | null = null;
+  let fence: FenceOpening | null = null;
   let inList = false;
 
   for (const line of lines) {
     if (fence !== null) {
       // A closing fence is the same character, at least as long, alone on its
-      // line. Anything else is content.
-      const close = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+      // line — `lib/markdown-fence.ts`'s rule (#2135). Anything else is
+      // content. Three spaces at most, because four is indented code here.
       out.push("");
-      if (close && close[1]![0] === fence[0] && close[1]!.length >= fence.length) fence = null;
+      if ((fenceOpening(line)?.indent ?? 4) <= 3 && closesFence(line, fence)) fence = null;
       continue;
     }
 
-    const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-    if (open) {
-      fence = open[1]!;
+    const open = fenceOpening(line);
+    if (open !== null && open.indent <= 3) {
+      fence = open;
       out.push("");
       continue;
     }

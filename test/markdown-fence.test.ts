@@ -15,10 +15,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 
+import { codeSpans } from "../lib/cli-commands";
 import { inertClosingReferences } from "../lib/closing-reference-audit";
+import { readDerivedDeclaration } from "../lib/derived-spec";
 import { plannedTitles } from "../lib/filing-plan";
 import { decline } from "../lib/finding-promotion";
 import { declaredFiles } from "../lib/issue-file-overlap";
+import { stripCodeBlocks } from "../lib/issue-extraction";
 import { headingOccurrencesOf } from "../lib/issue-shape";
 import { closesFence, fencedBlocks, fenceOpening, readFences } from "../lib/markdown-fence";
 import { sourceFiles } from "../lib/source-census";
@@ -101,12 +104,11 @@ const FENCE_REGEX_LITERAL =
   /(?:^|[=(,:!&|?{};]|\breturn)\s*\/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])*?(?:```|~~~|`\{3|~\{3)/;
 
 /**
- * Sites still tracking fences themselves. **This list only shrinks.** #2135
- * moves all three and empties it. `lib/derived-spec.ts` is here, not in
- * #2130, because `test/derived-spec-guard.test.ts` requires it to stay
- * import-free for its mutation battery.
+ * Sites still tracking fences themselves: none. #2130 held three here and
+ * #2135 moved them. **Never add an entry** — a new site calls the shared
+ * reader instead.
  */
-const REMAINING = ["lib/cli-commands.ts", "lib/derived-spec.ts", "lib/issue-extraction.ts"];
+const REMAINING: string[] = [];
 const OWNER = "lib/markdown-fence.ts";
 
 const codeLines = (src: string) => src.split("\n").filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l));
@@ -204,5 +206,59 @@ describe("#2130: each site, through its own entry point", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("#2135: the last three sites, through their own entry points", () => {
+  test("derived-spec: a ```` block holding ``` does not end at the ```, so the marker after it is read", () => {
+    // The regex this replaced captured ``` from the ```` line and ended the
+    // block at the first ``` content line. The `# example` left behind ended
+    // the document head, so the real marker below it was never read and the
+    // file read as authored: the unsafe direction, because `--fix` writes it.
+    const content = [
+      "---",
+      "doc-type: spec",
+      "governs: a fixture",
+      "---",
+      "",
+      "````",
+      "```",
+      "# example heading inside the outer fence",
+      "````",
+      "<!-- DERIVED FILE — do not edit here. -->",
+      "",
+      "# Real heading",
+      "",
+    ].join("\n");
+    expect(readDerivedDeclaration(content).status).toBe("unprotected");
+  });
+
+  test("cli-commands: codeSpans returns a ~~~ block and the whole of a ```` block", () => {
+    expect(codeSpans("prose\n~~~\nbun bin/rungate.ts scaffold .\n~~~\n")).toContain("scaffold .");
+    expect(codeSpans("````\n```\nbun bin/rungate.ts plan-spec x\n````\n")).toContain("plan-spec x");
+  });
+
+  test("cli-commands: prose outside a fence is still not a code span", () => {
+    // The control. `codeSpans` returning the whole document would pass the
+    // case above.
+    const spans = codeSpans("run plan-spec by hand\n```\nscaffold .\n```\n");
+    expect(spans).toContain("scaffold .");
+    expect(spans).not.toContain("by hand");
+  });
+
+  test("issue-extraction: stripCodeBlocks blanks a ``` block holding ~~~, and keeps the prose after it", () => {
+    const out = stripCodeBlocks("```\n~~~\n## Success Criteria\n```\n## After\n");
+    expect(out).not.toContain("Success Criteria");
+    expect(out).toContain("## After");
+  });
+
+  test("issue-extraction: four spaces is indented code, so it neither opens nor closes a fence", () => {
+    // The three-space limit stays in the caller, which also reads indented
+    // code. The shared reader opens at any indentation; this site must not.
+    const notOpened = stripCodeBlocks("intro\n\n    ```\n## Success Criteria\n");
+    expect(notOpened, "an indented ``` opened a fence and hid the heading").toContain("## Success Criteria");
+    const notClosed = stripCodeBlocks("```\n    ```\n## Inside\n```\n## After\n");
+    expect(notClosed, "an indented ``` closed the fence early").not.toContain("## Inside");
+    expect(notClosed).toContain("## After");
   });
 });
