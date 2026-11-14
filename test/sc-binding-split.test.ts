@@ -303,11 +303,7 @@ const UNCLAIMED_RATCHET = 150;
 // closing #2056. A claim about which edges the tracker carries, which no
 // registered pattern expresses; test/plan-deps.test.ts and
 // test/board-snapshot.test.ts name it in a declaring position.
-// 159 -> 160: SC-2742 ticked by `sync-sc-status --only SC-2742` on the PR for
-// #2044 (ADR-014 row 1). A claim about which scripts ship and are commands,
-// which no registered pattern expresses; its `SC-2742:` describe in
-// test/package-closure.test.ts names it in a declaring position.
-const CLAIMED_UNBINDABLE = 160;
+const CLAIMED_UNBINDABLE = 159;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
