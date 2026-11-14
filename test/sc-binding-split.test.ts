@@ -307,7 +307,7 @@ const UNCLAIMED_RATCHET = 150;
 // #1719. A claim about where the board's identifiers are read from, which no
 // registered pattern expresses; test/board-status-sweep.test.ts and
 // test/work-status.test.ts name it in a declaring position.
-const CLAIMED_UNBINDABLE = 160;
+const CLAIMED_UNBINDABLE = 161;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
