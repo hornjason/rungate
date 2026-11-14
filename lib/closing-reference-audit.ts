@@ -165,7 +165,10 @@ function maskedRanges(body: string): { start: number; end: number; reason: Inert
  * deciders, free to disagree about the same text.
  */
 function closingKeywordPattern(): RegExp {
-  return new RegExp(`\\b(${CLOSING_KEYWORDS.join("|")})\\b[ \\t]*:?[ \\t]*#(\\d+)\\b`, "gi");
+  // `(` as well as `:` may sit between verb and number: GitHub closed #1148
+  // from the squash subject "fix(#1148): …" (PR #1208), the conventional-commit
+  // form most subjects here take.
+  return new RegExp(`\\b(${CLOSING_KEYWORDS.join("|")})\\b[ \\t]*[:(]?[ \\t]*#(\\d+)\\b`, "gi");
 }
 
 export function inertClosingReferences(body: string): InertClosingReference[] {

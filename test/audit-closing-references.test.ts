@@ -711,6 +711,16 @@ describe("#1979: a closing keyword in a commit message is checked, backticks or 
     expect(run(SCRIPT, p, THIS_REPO, {}).code).toBe(REFUSE_EXIT);
   });
 
+  test("the conventional-commit subject fix(#N) is a closing keyword too", () => {
+    // Measured, not assumed: PR #1208's squash commit subject "fix(#1148): …"
+    // closed #1148 (recorded in inertClosingMessage). A pattern that needs a
+    // space or a colon after the verb misses the commonest subject here.
+    const p = pr([{ sha: "d1", message: "fix(#1717): tidy the reader\n" }]);
+    const r = run(SCRIPT, p, THIS_REPO, ON);
+    expect(r.code, r.out).toBe(REFUSE_EXIT);
+    expect(r.err).toContain("would close #1717");
+  });
+
   test("the negative control: a commit message naming an issue with no keyword beside it is accepted", () => {
     const p = pr([
       { sha: "a1", message: "#1717 is still open; see #1717 for the history.\n" },
