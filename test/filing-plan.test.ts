@@ -22,6 +22,7 @@ import {
   plannedTitles,
   type PlanSource,
 } from "../lib/filing-plan";
+import { gitCommittedFiles, remoteMainCommit } from "../lib/config-loader";
 
 /** A plan with one authorised title, in the shape a decomposition plan has. */
 const PLAN = [
@@ -525,6 +526,56 @@ describe("gitSource reads the merged ref, not the working tree", () => {
       git("push", "-q", "origin", "HEAD:refs/heads/main");
       const pushed = plannedFiling("plan-deps refuses a single-phase reading", gitSource(root));
       expect(pushed.planned, "a plan the remote carries must still exempt").toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(`${root}.remote.git`, { recursive: true, force: true });
+    }
+  });
+
+  test("#2095 review: both readers read the commit they are handed, after the remote has moved on", () => {
+    // The gate reads the remote's main once and hands that reading to the plan
+    // check and the cap check. Two independent readings could straddle a merge
+    // and judge one filing against two commits. Here the remote moves between
+    // the reading and the reads, which is that race made deterministic.
+    const root = mkdtempSync(join(tmpdir(), "rg-filing-plan-anchor-"));
+    try {
+      const git = (...args: string[]) => {
+        const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
+        if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
+      };
+      const config = join(root, ".claude", "rungate", "config.json");
+      git("init", "-q", "-b", "main");
+      git("config", "user.email", "t@example.com");
+      git("config", "user.name", "t");
+      mkdirSync(join(root, PLAN_DIR), { recursive: true });
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(join(root, PLAN_DIR, "ADR-009-plan.md"), PLAN);
+      writeFileSync(config, JSON.stringify({ project: "x", ship: { mode: "harness" } }));
+      git("add", "-A");
+      git("commit", "-q", "-m", "commit A: a plan, and harness mode");
+      publish(root);
+      const anchor = remoteMainCommit(root);
+      expect("sha" in anchor, `the remote's main could not be read: ${JSON.stringify(anchor)}`).toBe(true);
+
+      rmSync(join(root, PLAN_DIR), { recursive: true });
+      writeFileSync(config, JSON.stringify({ project: "x", ship: { mode: "direct" } }));
+      git("add", "-A");
+      git("commit", "-q", "-m", "commit B: no plan, direct mode");
+      git("push", "-q", "origin", "HEAD:refs/heads/main");
+
+      // The control: read afresh, the remote really is at B now.
+      expect(plannedFiling("plan-deps refuses a single-phase reading", gitSource(root)).planned).toBe(false);
+      expect(gitCommittedFiles(root).show(".claude/rungate/config.json") ?? "").toContain('"direct"');
+
+      // Handed A, both read A.
+      expect(
+        plannedFiling("plan-deps refuses a single-phase reading", gitSource(root, () => anchor)).planned,
+        "the plan check ignored the reading it was handed and read the remote again",
+      ).toBe(true);
+      expect(
+        gitCommittedFiles(root, anchor).show(".claude/rungate/config.json") ?? "",
+        "the cap's config ignored the reading it was handed and read the remote again",
+      ).toContain('"harness"');
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(`${root}.remote.git`, { recursive: true, force: true });

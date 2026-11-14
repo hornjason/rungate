@@ -346,12 +346,12 @@ export function remoteMainCommit(root: string): RemoteMain {
 /**
  * `git`, reading the commit the remote's `main` names ({@link remoteMainCommit})
  * and never the working tree or the local `origin/main` ref — the same anchor
- * `gitSource` in `lib/filing-plan.ts` gives the plan route. Paths in
- * `<sha>:path` are taken from the tree's root, so a `root` below the top level
- * reads the same files.
+ * `gitSource` in `lib/filing-plan.ts` gives the plan route. A caller that
+ * reads both passes ONE `anchor` to each, so they cannot straddle a merge
+ * (review of #2140). Paths in `<sha>:path` are taken from the tree's root, so
+ * a `root` below the top level reads the same files.
  */
-export function gitCommittedFiles(root: string): CommittedFiles {
-  const anchor = remoteMainCommit(root);
+export function gitCommittedFiles(root: string, anchor: RemoteMain = remoteMainCommit(root)): CommittedFiles {
   if ("unread" in anchor) {
     return { ref: "origin/main", readable: false, show: () => null, unreadableWhy: anchor.unread };
   }

@@ -193,8 +193,9 @@ export function readWorktreeRemote(worktreePath: string): RemoteReading {
   // bare repository while still naming `owner/name`, and it means an agent
   // cannot change which allowance it spends by adding one. Measured: with a
   // rewrite set, `get-url` printed the `file://` path and this printed the
-  // https one.
-  const got = spawnSync("git", ["-C", worktreePath, "config", "--get", "remote.origin.url"], {
+  // https one. `--get-all` and the first line, because `--get` on a remote
+  // with two URLs prints the LAST, and fetch uses the first (review of #2140).
+  const got = spawnSync("git", ["-C", worktreePath, "config", "--get-all", "remote.origin.url"], {
     timeout: 10_000,
     encoding: "utf-8",
   });
@@ -211,7 +212,7 @@ export function readWorktreeRemote(worktreePath: string): RemoteReading {
     const said = String(got.stderr || "").trim().split("\n")[0] || `git exited ${got.status}`;
     return { url: null, error: redactRemote(said), missing: absentOrigin(worktreePath) };
   }
-  const url = String(got.stdout || "").trim();
+  const url = (String(got.stdout || "").split("\n")[0] ?? "").trim();
   return url
     ? { url, error: null, missing: false }
     : { url: null, error: "git printed no url", missing: false };

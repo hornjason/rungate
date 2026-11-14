@@ -299,19 +299,21 @@ export interface PlanSource {
 /**
  * `git`, reading the commit the REMOTE's `main` names and never the working
  * tree or the local `origin/main` ref — #2095. The anchor is
- * `remoteMainCommit` in `lib/config-loader.ts`, shared with the filing cap's
- * config read, so the cap and the plan exemption have one trust anchor. A
- * plan an agent committed and pinned under a forged `origin/main` exempts
- * nothing, because the remote never saw it.
+ * `remoteMainCommit` in `lib/config-loader.ts`. A plan an agent committed and
+ * pinned under a forged `origin/main` exempts nothing, because the remote
+ * never saw it.
  *
- * Resolved once, on first use, so a source nobody consults costs no network
- * call. An anchor that cannot be read makes `list` and `show` `null`: could
- * not read, never "no plans".
+ * `anchorOf` lets the filing gate hand in the ONE reading it also gives the
+ * cap's config read, so a merge landing mid-filing cannot judge the plan
+ * exemption and the cap against two commits (review of #2140). Alone, it
+ * reads the remote itself. Either way it is resolved once, on first use, so a
+ * source nobody consults costs no network call. An anchor that cannot be read
+ * makes `list` and `show` `null`: could not read, never "no plans".
  */
-export function gitSource(root: string): PlanSource {
+export function gitSource(root: string, anchorOf: () => RemoteMain = () => remoteMainCommit(root)): PlanSource {
   let anchor: RemoteMain | undefined;
   const ref = (): string | null => {
-    anchor ??= remoteMainCommit(root);
+    anchor ??= anchorOf();
     return "sha" in anchor ? anchor.sha : null;
   };
   const git = (args: string[]): string | null => {

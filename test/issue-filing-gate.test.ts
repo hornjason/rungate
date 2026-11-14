@@ -7534,6 +7534,31 @@ describe("#1964 / SC-2753: the filing cap is read from committed config, never t
     expect(runIdFor(root).run, "a checkout of a named repository is its own run").toBe(checkoutTop(root));
   });
 
+  test("#2095 review: an origin with two URLs is identified by the first, the one fetch uses", () => {
+    // `git config --get` on a key with two values prints the LAST one, while
+    // `git remote get-url` and `git fetch` use the first. Measured on git
+    // 2.50.1 before the fix: `--get` printed the second URL and exited 0.
+    const root = freshRun();
+    // late-env-ok: the child is `git` adding a second remote URL, and it reads
+    // none of the RUNGATE_* variables this file writes for the gate under test.
+    const added = spawnSync("git", ["-C", root, "config", "--add", "remote.origin.url", "https://example.com/mirror.git"], {
+      encoding: "utf-8",
+    });
+    expect(added.status, added.stderr).toBe(0);
+    expect(readWorktreeRemote(root).url, "run identity took the mirror, not the origin fetch uses").toBe(FIXTURE_ORIGIN);
+  });
+
+  test("#2095 review: one filing reads the remote's main once, and both readers are handed that reading", () => {
+    // Two live readings in one adjudication could straddle a merge and judge
+    // the plan exemption and the cap against two different commits. The
+    // property is a site property, so it is asserted over the gate's source:
+    // one reading, and neither reader called without it.
+    const src = readFileSync(join(import.meta.dir, "..", "lib", "issue-filing-gate.ts"), "utf-8");
+    expect(src.match(/\bremoteMainCommit\(/g)?.length ?? 0, "the gate reads the remote's main more than once, or never").toBe(1);
+    expect(src, "the plan check reads the remote on its own").not.toMatch(/\bgitSource\(\s*root\s*\)/);
+    expect(src, "the cap's config reads the remote on its own").not.toMatch(/\bgitCommittedFiles\(\s*root\s*\)/);
+  });
+
   test("FG-285: the monolith layout is read from the commit too", async () => {
     // `.claude/rules/config-access.md`: a reader that handles one layout
     // silently switches the gate off for consumers on the other.
