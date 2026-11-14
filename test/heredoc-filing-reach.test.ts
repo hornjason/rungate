@@ -250,12 +250,25 @@ const INSIDE: Array<[string, (f: string) => string, { sourcesProcessSubstitution
  * bash 4 and later, which is CI's, runs it. The oracle is the shell on this
  * machine, so those rows expect what it does. The cap counts one either way:
  * an agent's shell is not ours to choose, and every current bash files it.
+ *
+ * Read in `beforeAll`, never at module load, and `null` when it could not be
+ * read: a missing or failing `/bin/bash` then fails the rows that need the
+ * version, by name, instead of crashing the whole file during collection.
  */
-const BASH_MAJOR = Number(spawnSync("/bin/bash", ["-c", "echo ${BASH_VERSINFO[0]}"], { encoding: "utf8" }).stdout.trim());
+function bashMajor(): number | null {
+  const r = spawnSync("/bin/bash", ["-c", "echo ${BASH_VERSINFO[0]}"], { encoding: "utf8" });
+  const major = Number((r.stdout ?? "").trim());
+  return r.status === 0 && Number.isInteger(major) && major >= 3 ? major : null;
+}
 
 describe("#2079: a heredoc owned by a command inside a substitution is metered", () => {
+  let BASH_MAJOR: number | null = null;
+  beforeAll(() => {
+    BASH_MAJOR = bashMajor();
+  });
+
   test("the oracle's bash version was read", () => {
-    expect(Number.isInteger(BASH_MAJOR) && BASH_MAJOR >= 3).toBe(true);
+    expect(BASH_MAJOR, "/bin/bash did not report BASH_VERSINFO, so no version-dependent row can be judged").not.toBeNull();
   });
 
   for (const [name, spell, how] of INSIDE) {
@@ -263,7 +276,8 @@ describe("#2079: a heredoc owned by a command inside a substitution is metered",
       const title = `probe-${name}`;
       const { cmd, calls, stderr } = execute(name, spell(filing(title)));
       expect(stderr, `${name}: bash reported an error, so the fixture is not the spelling`).toBe("");
-      const shellFiles = !how.sourcesProcessSubstitution || BASH_MAJOR >= 4;
+      if (how.sourcesProcessSubstitution) expect(BASH_MAJOR, `${name}: depends on the bash version, which was not read`).not.toBeNull();
+      const shellFiles = !how.sourcesProcessSubstitution || (BASH_MAJOR ?? 0) >= 4;
       expect(calls).toEqual(shellFiles ? [logged(title)] : []);
       const attempts = filingAttempts(cmd);
       expect(attempts, `${name}: the shell filed and the cap recorded nothing`).toHaveLength(1);
