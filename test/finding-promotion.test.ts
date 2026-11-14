@@ -513,6 +513,10 @@ describe("SC-2612 / AC-2 (#1678): every refusal is named, and none is a guess", 
         const out = specWithCriterion(twoHeadings, "- [ ] SC-9010: lib/x.ts contains [x] — y", "SC-9010", null, section);
         if (!out.ok) reached.add(out.refusal);
       }
+      // Review of #2127: one heading text over two sections, named by text alone.
+      const repeated = SPEC_WITH_CRITERIA.replace("- [x] SC-9002", "## Elsewhere\n\n## Success Criteria\n\n- [x] SC-9002");
+      const ambiguous = specWithCriterion(repeated, "- [ ] SC-9010: lib/x.ts contains [x] — y", "SC-9010", null, "Success Criteria");
+      if (!ambiguous.ok) reached.add(ambiguous.refusal);
 
       expect([...reached].sort()).toEqual([...PROMOTION_REFUSALS].sort());
     } finally {
@@ -1579,6 +1583,75 @@ What was broken to prove B.
   test("a grouped id counts only its own group's headings", () => {
     const split = CRC_SPEC.replace("- [ ] CRC-N2:", "## The N group\n\n- [ ] CRC-N2:");
     expect(specWithCriterion(split, "- [ ] CRC-M17: lib/z.ts contains [z] — third", "CRC-M17", null).ok).toBe(true);
+  });
+
+  // ── Review of #2127 ──────────────────────────────────────────────────────
+
+  /** Two features, each with its own `### Success Criteria` — HARNESS-STANDARD's shape, 26 times over. */
+  const REPEATED = `---
+doc-type: spec
+testable: true
+governs: a repeated-heading fixture
+---
+
+# Repeated
+
+## Feature A
+
+### Success Criteria
+
+- [ ] SC-9001: lib/a.ts contains [a] — first
+
+What was broken to prove A.
+
+## Feature B
+
+### Success Criteria
+
+- [ ] SC-9002: lib/b.ts contains [b] — second
+`;
+
+  test("one heading TEXT over several sections is several sections: no --section refuses", () => {
+    const out = specWithCriterion(REPEATED, LINE, "SC-9010", null);
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusal).toBe("SECTION_REQUIRED");
+    expect(out.why).toContain("Feature A > Success Criteria");
+    expect(out.why).toContain("Feature B > Success Criteria");
+  });
+
+  test("a --section matching several sections refuses SECTION_AMBIGUOUS and names each path", () => {
+    const out = specWithCriterion(REPEATED, LINE, "SC-9010", null, "Success Criteria");
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusal).toBe("SECTION_AMBIGUOUS");
+    expect(out.why).toContain("Feature A > Success Criteria");
+    expect(out.why).toContain("Feature B > Success Criteria");
+  });
+
+  test("a path, or a heading's line, picks one of the repeated sections", () => {
+    for (const section of ["Feature A > Success Criteria", "Repeated > Feature A > Success Criteria", "line 11"]) {
+      const out = specWithCriterion(REPEATED, LINE, "SC-9010", null, section);
+      expect(out.ok, section).toBe(true);
+      if (!out.ok) return;
+      expect(out.text.indexOf(LINE), section).toBeLessThan(out.text.indexOf("What was broken to prove A."));
+      expect(out.text.indexOf(LINE), section).toBeGreaterThan(out.text.indexOf("SC-9001"));
+    }
+  });
+
+  test("an unclosed fence refuses as unreadable rather than hiding every line after it", () => {
+    const broken = TWO_SECTIONS.replace("## B — the second feature", "```sh\n\n## B — the second feature");
+    const out = specWithCriterion(broken, LINE, "SC-9010", null, B);
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusal).toBe("SPEC_UNREADABLE");
+    expect(out.why).toContain("fence");
+  });
+
+  test("a --section is checked even when no criterion of the family exists yet", () => {
+    const out = specWithCriterion(SPEC_NO_CRITERIA, LINE, "SC-9010", null, "Nowhere");
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.refusal).toBe("SECTION_UNKNOWN");
   });
 
   test("the CLI reads --section, passes it to the placement, and refuses it beside --declines", () => {
