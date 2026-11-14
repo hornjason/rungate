@@ -12345,6 +12345,7 @@ built deliberately NOT to meet the precondition every other run now asserts
 past.
 
 - [x] SC-2184: test/unit/launch-base-wiring.test.ts contains [with no reading injected the real script refuses] — the seam the rest of the suite needs is proved not to be a bypass by executing the real script without it, with a control varying only the injected reading so the pair is a measurement of the seam rather than of a script that refuses everything
+- [ ] SC-2767: lib/ci-reading.ts contains [ciReadingFor] — Every merged pull request carries a CI reading — per-check duration, queue time, and open → first check → last check → merge — and a check that did not run reads UNMEASURED, never 0.
 
 ### What was broken to prove the cases fail
 

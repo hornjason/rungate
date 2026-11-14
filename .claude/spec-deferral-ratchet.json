@@ -2,7 +2,7 @@
   "deferred": [
     {
       "path": "specs/AGENT-BRIEF-TEMPLATE-SPEC.md",
-      "criteria": 31
+      "criteria": 32
     },
     {
       "path": "specs/AGENTS-MD-TEMPLATE-SPEC.md",
@@ -34,19 +34,19 @@
     },
     {
       "path": "specs/GATE-CONTRACTS-SPEC.md",
-      "criteria": 94
+      "criteria": 95
     },
     {
       "path": "specs/GITHUB-API-MIGRATION-SPEC.md",
-      "criteria": 43
+      "criteria": 44
     },
     {
       "path": "specs/HARNESS-GATES.md",
-      "criteria": 32
+      "criteria": 33
     },
     {
       "path": "specs/HARNESS-STANDARD.md",
-      "criteria": 648
+      "criteria": 649
     },
     {
       "path": "specs/HOOK-ARCHITECTURE-SPEC.md",
@@ -58,7 +58,7 @@
     },
     {
       "path": "specs/PARALLEL-AGENT-COORDINATION-SPEC.md",
-      "criteria": 25
+      "criteria": 26
     },
     {
       "path": "specs/PROJECT-STATE.md",
@@ -66,7 +66,7 @@
     },
     {
       "path": "specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md",
-      "criteria": 27
+      "criteria": 28
     },
     {
       "path": "specs/SCAFFOLD-DECOMPOSITION-SPEC.md",

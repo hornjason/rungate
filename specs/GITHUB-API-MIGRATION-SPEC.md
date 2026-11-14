@@ -250,3 +250,4 @@ the flipper trusts the detector. Filed separately — splitting here keeps
 
 - [x] SC-A1: No `gh` CLI calls remain in lib/, hooks/, or gates/ after Phase 2 complete (behavioral)
 - [x] SC-A2: No `PUT /labels` (replace-all) used anywhere — only POST (additive) (behavioral)
+- [ ] SC-2765: scripts/probe-forge-behaviour.ts contains [forgeBehaviourReading] — Every forge behaviour listed in a committed inventory has a live probe reading CONFIRMED, CHANGED or UNMEASURED, and a tool that cites an unlisted behaviour turns the suite red.

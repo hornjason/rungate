@@ -2031,3 +2031,4 @@ that cannot see a loss. Set to the measured 9, both rows are 1.
 - [x] SC-1820: test/source-anchor-citations.test.ts contains [all of them resolve] — with the count floor at today's number, so a citation cannot be deleted without the row saying so
 - [x] SC-1821: test/source-anchor-citations.test.ts contains [the line-number form is gone and does not come back] — converting seven is worth nothing if the eighth is written the old way next week
 - [x] SC-1822: test/source-anchor-citations.test.ts contains [the citation form itself round-trips] — a form the parser cannot see is a citation nothing checks, which reads exactly like one that passes
+- [ ] SC-2770: gates/gate-executor.ts contains [validateArtifactSchema] — Every gate artifact with a declared schema is validated against it, so a required field the writer does not emit turns the suite red.

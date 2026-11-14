@@ -203,6 +203,7 @@ state.
 - [ ] SC-2137: test/brief-project-region.test.ts contains [a COMMIT reinforcement lands in the region and survives a re-scaffold]
 - [ ] SC-2138: test/brief-project-region.test.ts contains [with no region the loop still uses a generated heading, and NO_SECTION still fires]
 - [ ] SC-2139: test/brief-project-region.test.ts contains [the brief write reads OWNED_FILES rather than naming a strategy] — asserted over a structural cut of the write loop, not a fixed window (#664)
+- [ ] SC-2768: test/installed-brief.test.ts contains [installedBrief] — A brief assembled from the installed package contains `_shared.md`, and the same test fails against a version that does not ship `gates/`.
 
 ### The mutation battery, predicted and measured
 

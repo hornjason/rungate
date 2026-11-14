@@ -667,3 +667,4 @@ while pushing nothing goes red.
 
 - [ ] SC-2630: lib/worktree-cleanup.ts contains [export function strandedBranches] — every local branch holding commits reachable from no origin ref, asked of branches rather than worktrees, with a repo that has no origin returning an empty list rather than every branch
 - [ ] SC-2631: lib/worktree-cleanup.ts contains [export function rescueStrandedBranches] — the branches are pushed rather than reported, never with --force and never the default branch, and the result separates a clean tree from a reading that could not be taken
+- [ ] SC-2766: scripts/verify-merge-ref.ts contains [remoteHostMismatch] — A merge-ref reading against a remote whose host or owner/name differs from the pull request's repository is UNMEASURED.
