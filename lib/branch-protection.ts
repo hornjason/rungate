@@ -126,6 +126,14 @@ export interface ProtectionFacts {
    */
   mergeQueueEnabled: boolean | null;
   /**
+   * Which of the three states the branch is in, when the probe established it
+   * (#2154). Only `required-checks` accepts a POST to `…/contexts`; an
+   * unprotected branch needs the protection created, and a protected one
+   * with no required checks cannot take that POST either. Absent when the
+   * reading was not taken.
+   */
+  statusChecks?: "unprotected" | "no-required-checks" | "required-checks";
+  /**
    * `required_conversation_resolution`, or null when the payload said nothing
    * either way — CRC-C3, #1650.
    *
@@ -541,7 +549,7 @@ export const githubProtectionProbe: ProtectionProbe = async (slug) => {
   // Reading it as `null` would call that unestablished when it is the one
   // case the endpoint lets us establish without admin (#1650).
   if (!isProtected) {
-    return { slug, branch, strict: false, ownerType, contexts: [], mergeQueueEnabled: null, conversationResolution: false, unreadable: null };
+    return { slug, branch, strict: false, ownerType, contexts: [], mergeQueueEnabled: null, conversationResolution: false, unreadable: null, statusChecks: "unprotected" };
   }
 
   try {
@@ -582,7 +590,7 @@ export function protectionFactsFromPayload(
   // No required_status_checks block: protection exists but requires no
   // checks, so there is no strictness and nothing to be out of date against.
   if (!rsc || typeof rsc !== "object") {
-    return { slug, branch, strict: false, ownerType, contexts: [], mergeQueueEnabled: mergeQueueFrom(d), conversationResolution: conversationResolutionFrom(d), unreadable: null };
+    return { slug, branch, strict: false, ownerType, contexts: [], mergeQueueEnabled: mergeQueueFrom(d), conversationResolution: conversationResolutionFrom(d), unreadable: null, statusChecks: "no-required-checks" };
   }
 
   const strict = typeof rsc.strict === "boolean" ? rsc.strict : null;
@@ -596,7 +604,7 @@ export function protectionFactsFromPayload(
     (c: unknown): c is string => typeof c === "string" && c.length > 0,
   );
 
-  return { slug, branch, strict, ownerType, contexts, mergeQueueEnabled: mergeQueueFrom(d), conversationResolution: conversationResolutionFrom(d), unreadable: null };
+  return { slug, branch, strict, ownerType, contexts, mergeQueueEnabled: mergeQueueFrom(d), conversationResolution: conversationResolutionFrom(d), unreadable: null, statusChecks: "required-checks" };
 }
 
 function mergeQueueFrom(d: Record<string, any>): boolean | null {

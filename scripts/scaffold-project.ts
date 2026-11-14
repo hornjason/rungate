@@ -12,6 +12,7 @@ import { basename } from "path";
 import { detectProjectType } from "../lib/scanner";
 import { reportScaffoldActions } from "../lib/scaffold/steps";
 import { runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
+import { humanSteps, readHumanSteps } from "../lib/scaffold/human-steps";
 import { cloneForRehearsal, discardRehearsal, rehearsalNotice } from "../lib/scaffold/rehearsal";
 import type { ProjectType } from "../lib/generators/types";
 import { parseProfile, STEPS_NOT_MINIMAL, type ScaffoldProfile } from "../lib/scaffold/profiles";
@@ -121,4 +122,12 @@ if (fix) {
 // what a grep, a `| tail`, a scrolled terminal and an agent reading the last
 // N lines of a tool result each receive, and without this every one of them
 // was byte-identical to the line a run that really wrote the file prints.
-if (reportScaffoldActions(actions, { rehearsed: !fix }) > 0) process.exit(1);
+const refusals = reportScaffoldActions(actions, { rehearsed: !fix });
+
+// #2051, SC-2749: what the scaffold cannot do. Read, never written, and
+// printed after the report so it is the last thing a reader sees. Each line is
+// one command, or UNMEASURED with why — never "done".
+console.log("\nHuman steps owed on GitHub:");
+for (const line of humanSteps(await readHumanSteps(projectPath))) console.log(`  ${line}`);
+
+if (refusals > 0) process.exit(1);
