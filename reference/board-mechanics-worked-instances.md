@@ -74,3 +74,10 @@ merge conflict. The merge conflict must be resolved first." The event builds
 GitHub reports as `DIRTY` has no merge commit to run on, and its checks
 simply never start. That looks the same as a queue that has not picked them
 up yet. Rebase first, then read the checks.
+
+To take the reading on any pull request whose checks have not started:
+
+```bash
+gh pr view <N> --json mergeable,mergeStateStatus   # CONFLICTING / DIRTY means no run is coming
+gh pr checks <N>                                    # empty while it stays conflicted
+```
