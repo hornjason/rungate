@@ -32,6 +32,7 @@ import {
   LIVE_GIT,
   REFUSAL_EXIT,
   main as boardSnapshotMain,
+  readDeclaredWork,
   type BoardSnapshotGitHub,
   type GitSpawn,
   type ProducedSnapshot,
@@ -2047,6 +2048,34 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
     });
   });
 
+  test("SC-2752: the declared-work population is emitted, and the reader names what no open issue covers", async () => {
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      writeFileSync(
+        join(dir, "project-state.json"),
+        JSON.stringify({ stages: [{ id: "E", items: [{ id: "E1", done: false, issue: 10 }, { id: "E2", done: false }] }] }),
+      );
+      const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+
+      expect(snap.declaredWork?.map(w => [w.kind, w.id])).toEqual([
+        ["criterion", "SC-9001"],
+        ["criterion", "SC-9002"],
+        ["criterion", "SC-9003"],
+        ["stage-item", "E1"],
+        ["stage-item", "E2"],
+      ]);
+      // The producer's real output through the reader's real parser: SC-9002
+      // is named by neither open issue, and E2 names no issue at all.
+      const reading = takeReadings(readSnapshotText(JSON.stringify(snap)).board).find(r => r.name === "declared-work")!;
+      expect(reading.status).toBe("short");
+      expect(reading.offenders).toEqual([
+        "SC-9002 (specs/FIXTURE-SPEC.md) names no open issue",
+        "E2 (project-state.json) names no open issue",
+      ]);
+    });
+  });
+
   test("an UNMEASURED specs sweep omits `repoIssues` — an empty id union reads every issue as naming nothing", async () => {
     // No `specs/` at all, so `specCriteriaIn` refuses and its `ids` is `[]`.
     // An empty union matches nothing in any body, so an ungated producer
@@ -2106,6 +2135,78 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
         r => r.name === "criteria-named",
       )!;
       expect([reading.status, reading.why]).toEqual(["met", "2 of 2"]);
+    });
+  });
+});
+
+/**
+ * SC-2752 / #1953: `readDeclaredWork`, the producer's half of `declared-work`.
+ *
+ * In scope means a spec that states criteria and is not deferred — the same
+ * rows `spec-placement` counts. A consumer repository has no
+ * `project-state.json`, so an absent file is no declared stage work; a file
+ * that is present and will not parse is UNMEASURED, which the producer says by
+ * omitting the key. Broken to prove it: including deferred specs adds SC-9201;
+ * counting ticked criteria adds SC-9102; dropping the `done === false` filter
+ * adds E1; reading an unparseable state file as empty turns the malformed case
+ * into a population.
+ */
+describe("SC-2752 / #1953: readDeclaredWork — unticked criteria and open stage items", () => {
+  const withTree = <T>(files: Record<string, string>, fn: (dir: string) => T): T => {
+    const dir = mkdtempSync(join(tmpdir(), "declared-work-"));
+    try {
+      for (const [path, content] of Object.entries(files)) {
+        mkdirSync(join(dir, path, ".."), { recursive: true });
+        writeFileSync(join(dir, path), content);
+      }
+      return fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const SPECS = {
+    "specs/A.md": "- [ ] SC-9101: open\n- [x] SC-9102: done\n",
+    "specs/D.md": "- [ ] SC-9201: deferred, so out of scope\n",
+  };
+  const ROWS = [
+    { path: "specs/A.md", state: "UNPLANNED" as const },
+    { path: "specs/D.md", state: "PLANNED" as const, deferred: true },
+    { path: "specs/EMPTY.md", state: "NO_CRITERIA" as const },
+  ];
+  const STATE = JSON.stringify({
+    stages: [
+      { id: "D", items: [{ id: "D1", done: true, issue: 5 }] },
+      { id: "E", items: [{ id: "E1", done: false, issue: 7 }, { id: "E2", done: false }] },
+    ],
+  });
+
+  test("SC-2752: unticked criteria of in-scope specs, then open stage items with their issue", () => {
+    withTree({ ...SPECS, "project-state.json": STATE }, dir => {
+      expect(readDeclaredWork(dir, ROWS)).toEqual({
+        declaredWork: [
+          { kind: "criterion", id: "SC-9101", source: "specs/A.md" },
+          { kind: "stage-item", id: "E1", source: "project-state.json", issue: 7 },
+          { kind: "stage-item", id: "E2", source: "project-state.json", issue: null },
+        ],
+      });
+    });
+  });
+
+  test("SC-2752: no project-state.json is no declared stage work — criteria only", () => {
+    withTree(SPECS, dir => {
+      expect(readDeclaredWork(dir, ROWS).declaredWork?.map(w => w.id)).toEqual(["SC-9101"]);
+    });
+  });
+
+  test("SC-2752: a project-state.json that will not parse omits the key, never an empty list", () => {
+    withTree({ ...SPECS, "project-state.json": "{ not json" }, dir => {
+      expect(readDeclaredWork(dir, ROWS)).toEqual({});
+    });
+  });
+
+  test("SC-2752: an UNREADABLE in-scope spec omits the key — a shorter list is what fewer specs produce", () => {
+    withTree({ ...SPECS, "project-state.json": STATE }, dir => {
+      expect(readDeclaredWork(dir, [...ROWS, { path: "specs/GONE.md", state: "UNREADABLE" as const }])).toEqual({});
     });
   });
 });

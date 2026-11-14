@@ -40,6 +40,7 @@ import {
   REFUSE_EXIT,
   PRODUCE_TIMEOUT_MS,
   conformant,
+  declaredWorkUnaccounted,
   formatReading,
   produceBoard,
   readSnapshotText,
@@ -173,6 +174,13 @@ const completeBoard = (): BoardSnapshot => ({
     { number: 2, names: [], servesNone: true },
   ],
   plannedEdges: [{ blocked: 2, blocker: 1, present: true }],
+  // SC-2752: one unticked criterion an open issue names, and one open stage
+  // item whose `issue` is an open issue — accounted for by the two different
+  // routes, so a reading that honoured only one route shows up here.
+  declaredWork: [
+    { kind: "criterion", id: "SC-2618", source: "specs/A.md" },
+    { kind: "stage-item", id: "E2", source: "project-state.json", issue: 2 },
+  ],
 });
 
 /**
@@ -577,6 +585,11 @@ describe("each reading, planted short and planted complete", () => {
       what: "an ordering the plan derives that the tracker does not carry",
       break: b => void (b.plannedEdges![0]!.present = false),
     },
+    {
+      reading: "declared-work",
+      what: "an open stage item that names no open issue",
+      break: b => void (b.declaredWork![1]!.issue = null),
+    },
   ];
 
   test("the break list covers every reading, so none is silently untested", () => {
@@ -620,7 +633,7 @@ describe("each reading, planted short and planted complete", () => {
       READINGS.filter(r => r.readsIssueRefs).map(r => r.name).sort(),
       "a reading's readsIssueRefs declaration moved. If a new reading resolves an issue number it must set " +
         "the flag AND validate the reference against the board — see the rounds this battery replaced.",
-    ).toEqual(["blocked-by-edges", "criterion-coverage", "dependency-edges"]);
+    ).toEqual(["blocked-by-edges", "criterion-coverage", "declared-work", "dependency-edges"]);
 
     // Every row carries a reference, and every reference names nothing.
     //
@@ -646,6 +659,8 @@ describe("each reading, planted short and planted complete", () => {
     // own list or the sweep below asserts on a reading that was never
     // handed a dangling pointer — green while witnessing nothing.
     for (const e of dangling.plannedEdges!) e.blocker = 9999;
+    // SC-2752: a stage item naming an issue that is not open names nothing.
+    for (const w of dangling.declaredWork!) if (w.kind === "stage-item") w.issue = 9999;
 
     // A row whose references are PARTLY stale, which the all-9999 board
     // above cannot produce. Round 7 found the gap it left: the battery
@@ -698,12 +713,73 @@ describe("each reading, planted short and planted complete", () => {
         "criteria-field",
         "criteria-named",
         "criterion-coverage",
+        "declared-work",
         "dependency-edges",
         "milestones",
         "spec-placement",
       ],
     );
-    expect(conformant(readings), "seven of eight met read as conformant").toBe(false);
+    expect(conformant(readings), "eight of nine met read as conformant").toBe(false);
+  });
+});
+
+/**
+ * SC-2752 / #1953: declared work that no open issue accounts for is reported
+ * by name.
+ *
+ * Two routes to "accounted for", one per kind: an unticked criterion is named
+ * by some open issue (the `repoIssues` population, read through the one
+ * decider `criterionAnswer`), and an open stage item carries an `issue` that
+ * is an open issue. Broken to prove it: crediting a stage item whose `issue`
+ * is merely a number (not checked against the open set) turns the dangling
+ * case green; crediting every criterion turns the unnamed-criterion case
+ * green; dropping either UNMEASURED gate turns its case into a count.
+ */
+describe("SC-2752: declared-work — every unticked criterion and open stage item names an open issue", () => {
+  const declared = () => READINGS.find(r => r.name === "declared-work")!;
+
+  test("SC-2752: an unticked criterion no open issue names is unaccounted, by name and source", () => {
+    const board = completeBoard();
+    board.declaredWork!.push({ kind: "criterion", id: "SC-2620", source: "specs/B.md" });
+    const r = takeReading(declared(), board);
+    expect(r.status).toBe("short");
+    expect(r.measured).toBe(2);
+    expect(r.target).toBe(3);
+    expect(r.offenders).toEqual(["SC-2620 (specs/B.md) names no open issue"]);
+    expect(declaredWorkUnaccounted(board).map(w => w.id)).toEqual(["SC-2620"]);
+  });
+
+  test("SC-2752: a stage item with no issue, or one naming a closed or missing issue, is unaccounted", () => {
+    const board = completeBoard();
+    board.declaredWork!.push(
+      { kind: "stage-item", id: "E4", source: "project-state.json", issue: null },
+      { kind: "stage-item", id: "E5", source: "project-state.json", issue: 777 },
+    );
+    const r = takeReading(declared(), board);
+    expect(r.status).toBe("short");
+    expect(r.offenders).toEqual([
+      "E4 (project-state.json) names no open issue",
+      "E5 (project-state.json) names no open issue",
+    ]);
+  });
+
+  test("SC-2752: no declared work at all is the framework's 0 of 0 — UNMEASURED, never a pass", () => {
+    const board = completeBoard();
+    board.declaredWork = [];
+    const r = takeReading(declared(), board);
+    expect(r.status).toBe("unmeasured");
+    expect(r.target).toBe(0);
+  });
+
+  test("SC-2752: declared work never read is UNMEASURED, and so are open issues never read", () => {
+    const noWork = completeBoard();
+    delete noWork.declaredWork;
+    expect(takeReading(declared(), noWork).status).toBe("unmeasured");
+
+    const noIssues = completeBoard();
+    delete noIssues.repoIssues;
+    const r = takeReading(declared(), noIssues);
+    expect(r.status, "an unread issue set credited or blamed declared work it never looked at").toBe("unmeasured");
   });
 });
 
