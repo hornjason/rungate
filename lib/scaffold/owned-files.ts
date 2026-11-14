@@ -187,7 +187,7 @@ export const OWNED_FILES: OwnedFile[] = [
     path: ".github/workflows/closing-references.yml",
     strategy: "job-preserving",
     servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
-    customize: "Set the `RUNGATE_REQUIRE_CLOSING_REF` variable to `true` to refuse, not warn, and require the check; add your own jobs alongside the generated `closing-references` job",
+    customize: "Variable `RUNGATE_REQUIRE_CLOSING_REF=true` refuses rather than warns; add your own jobs alongside the generated `closing-references` job",
     avoid: "Don't edit the generated `closing-references` job",
   },
   {
@@ -197,7 +197,7 @@ export const OWNED_FILES: OwnedFile[] = [
     path: ".github/workflows/board-ready.yml",
     strategy: "job-preserving",
     servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
-    customize: "Set `board.id` in `.claude/rungate/config.json` and the `RUNGATE_PROJECT_TOKEN` secret; add your own jobs alongside the generated `move-freed-issues-to-ready` job",
+    customize: "Set `board.id` in config and secret `RUNGATE_PROJECT_TOKEN`; add your own jobs alongside the generated `move-freed-issues-to-ready` job",
     avoid: "Don't edit the generated `move-freed-issues-to-ready` job",
   },
   {

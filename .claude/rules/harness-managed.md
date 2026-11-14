@@ -12,9 +12,7 @@ generated-sha: 5c9c9cb87f5f036f
 ---
 
 These files are managed by rungate. **Do not edit them directly.** What
-"managed" means differs per file — the third column says which, because
-#208 was a row that promised regeneration for a file the generator skipped
-forever.
+"managed" means differs per file; the Strategy column says which (#208).
 
 | File | Strategy | How to customize | What NOT to do |
 |------|----------|-----------------|----------------|
@@ -24,8 +22,8 @@ forever.
 | `.github/workflows/ai-review.yml` | job-preserving | Set `ci.vertex` in `.claude/rungate/config.json` to authenticate on Vertex with Workload Identity Federation; add your own jobs alongside the generated `ai-review` job | Don't edit the generated `ai-review` job |
 | `.github/workflows/ai-review-unmeasured.yml` | job-preserving | Set `ci.runner` in `.claude/rungate/config.json`; add your own jobs alongside the generated `record-unmeasured` job | Don't edit the generated `record-unmeasured` job, and don't give it a `merge_group` trigger — it reports no status to the pull request and cannot be a required check |
 | `.github/workflows/adr-accepted.yml` | job-preserving | Set `board.engineSpec` and `board.milestonePrefix` in `.claude/rungate/config.json` and re-scaffold; add your own jobs alongside the generated `place-the-plan` job | Don't edit the generated `place-the-plan` job |
-| `.github/workflows/closing-references.yml` | job-preserving | Set the `RUNGATE_REQUIRE_CLOSING_REF` variable to `true` to refuse, not warn, and require the check; add your own jobs alongside the generated `closing-references` job | Don't edit the generated `closing-references` job |
-| `.github/workflows/board-ready.yml` | job-preserving | Set `board.id` in `.claude/rungate/config.json` and the `RUNGATE_PROJECT_TOKEN` secret; add your own jobs alongside the generated `move-freed-issues-to-ready` job | Don't edit the generated `move-freed-issues-to-ready` job |
+| `.github/workflows/closing-references.yml` | job-preserving | Variable `RUNGATE_REQUIRE_CLOSING_REF=true` refuses rather than warns; add your own jobs alongside the generated `closing-references` job | Don't edit the generated `closing-references` job |
+| `.github/workflows/board-ready.yml` | job-preserving | Set `board.id` in config and secret `RUNGATE_PROJECT_TOKEN`; add your own jobs alongside the generated `move-freed-issues-to-ready` job | Don't edit the generated `move-freed-issues-to-ready` job |
 | `.claude/agents/*.md` | section-preserving | Everything but `## Project Constraints` is generated from `.claude/rungate/roles.json` and the templates; put rules mined from this repo's own history in that section and they carry forward | Don't hand-edit the generated sections — a re-scaffold rewrites them without reporting it |
 | `.claude/commands/dry-run.md` | provenance | Edit freely — a hand-edited command is preserved and reported | Don't delete its `generated-sha` marker, or edits stop surviving |
 | `docs/adr/TEMPLATE.md` | regenerate | Copy it to docs/adr/ADR-<n>-<slug>.md and edit the copy | Don't edit the template itself — a re-scaffold rewrites it |
@@ -39,12 +37,10 @@ forever.
 | Strategy | What re-scaffold does |
 |----------|----------------------|
 | regenerate | Rewrites it every run; reports CHANGED only when the bytes differ |
-| provenance | Rewrites it unless you edited it, in which case it is preserved and reported (#370) |
+| provenance | Rewrites it unless you edited it; then it is preserved and reported (#370) |
 | job-preserving | Owns named jobs inside a file you also write to; your jobs are carried forward |
-| section-preserving | Rewrites the file every run except for named sections, which are carried forward verbatim |
+| section-preserving | Rewrites the file except named sections, carried forward verbatim |
 | create-only | Seeds it once and never touches it again — the content is yours, not the harness's |
 
-Section ownership, the CI-job rules and the incidents behind each strategy
-are in `reference/harness-managed-worked-instances.md`: this file loads on
-every `.claude/agents/**` and `.claude/rules/**` path and sets the PEAK
-instruction surface (#544, #1069).
+Section ownership, CI-job rules and incidents: `reference/harness-managed-worked-instances.md`.
+This file sets the PEAK instruction surface (#544, #1069).
