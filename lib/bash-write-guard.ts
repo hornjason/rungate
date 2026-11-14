@@ -1239,16 +1239,15 @@ function heredocReach(text: string, at: number): string | null {
   if (stack.length > 0 && QUOTE_CLOSERS.has(stack[stack.length - 1].close)) return null;
   const frames = stack.slice();
   const ownElements = pipeline(text, elementStart(text, at, frames), frames);
-  // #2079: inside a substitution or group, the heredoc belongs to the
-  // INNERMOST command, not the one the line starts with: `X=$(bash <<'EOF'`
-  // feeds `bash`, and `heredocInterpreter`, reading from the line start, sees
-  // the assignment. Only reached when that reading found nothing, so no
+  // #2079: the heredoc belongs to the INNERMOST command that owns the `<<`,
+  // not to whatever the line starts with. `X=$(bash <<'EOF'` feeds `bash`,
+  // and so does `T=$(echo x 2>&1) bash <<'EOF'`, whose `&` the line-start
+  // reading splits on. `heredocInterpreter` reads from the line start and
+  // decides first, so this is reached only when it found nothing, and no
   // spelling is decided twice. Before the sever check, because an
   // interpreter runs its stdin wherever its own stdout goes.
-  if (frames.some(f => !QUOTE_CLOSERS.has(f.close))) {
-    const owner = commandWord(ownElements[0]?.raw ?? '');
-    if (isInterpreterWord(owner)) return owner;
-  }
+  const owner = commandWord(ownElements[0]?.raw ?? '');
+  if (isInterpreterWord(owner)) return owner;
   const own = flow(ownElements, true);
   if (own !== undefined) return own;
   for (let level = frames.length; level > 0; level--) {

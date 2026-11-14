@@ -237,6 +237,10 @@ const INSIDE: Array<[string, (f: string) => string, { sourcesProcessSubstitution
   ["echo-substitution", f => `echo "$(bash <<'EOF'\n${f}\nEOF\n)"\n`, {}],
   // The interpreter runs its stdin wherever its own stdout goes.
   ["assign-substitution-redirected", f => `X=$(bash <<'EOF' > /dev/null\n${f}\nEOF\n)\n`, {}],
+  // Not inside anything: the line STARTS with an assignment holding a
+  // substitution, so the line-start reading sees no command word at all.
+  // Found in the corpus as `T=$(gcloud …) python3 -I - <<'EOF'`.
+  ["assignment-prefix", f => `T=$(echo x 2>&1) bash <<'EOF'\n${f}\nEOF\n`, {}],
   ["source-process-substitution", f => `source <(cat <<'EOF'\n${f}\nEOF\n)\n`, { sourcesProcessSubstitution: true }],
   ["dot-process-substitution", f => `. <(cat <<'EOF'\n${f}\nEOF\n)\n`, { sourcesProcessSubstitution: true }],
 ];
