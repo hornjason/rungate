@@ -113,11 +113,16 @@ const ROUTED_TEST_PATH = /test\/[\w.\/-]+\.test\.tsx?/g;
 // cause, in a file the spec edit does not touch. Written out rather than
 // read from `CENSUS_TRIGGERS`, because a list derived from the thing it
 // checks agrees with it by construction.
+//
+// Five since #2116 added `spec-evidence`: a tick in a spec that declares
+// `evidence: required` must record a `fingerprint:`, and on 2026-11-14 PR
+// #2114 passed all four suites above locally and went red in CI on that one.
 const SC_CENSUS = [
   "test/sc-binding-split.test.ts",
   "test/ticked-sc-cover.test.ts",
   "test/behavioral-sc-ratchet.test.ts",
   "test/ticked-sc-absent-symbol.test.ts",
+  "test/spec-evidence.test.ts",
 ];
 
 // The two files #1306 measured as reddening on a new spec and routed by
