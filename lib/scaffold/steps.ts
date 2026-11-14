@@ -322,6 +322,9 @@ export function injectEnvironmentSection(root: string, actions: string[]): void 
   } else {
     return;
   }
+  // #2156: a config that parses to null, a number or an array has nothing to
+  // inject; the audit step has already refused it by name.
+  if (!isJsonObject(harness)) return;
 
   const lines: string[] = [];
   if (harness.dev) {
@@ -1135,12 +1138,22 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
     // files #75 only ever fixed for greenfield projects (#121).
     const existing = JSON.parse(readFileSync(join(rungateDir, "config.json"), "utf-8"));
     repairEmptySidecars(rungateDir, actions);
+    // #2156: `null`, a number or an array parses and has no keys to audit;
+    // dereferencing it threw and took the whole scaffold run down.
+    if (!isJsonObject(existing)) {
+      actions.push(notAnObjectRefusal(RUNGATE_CONFIG_RELATIVE_PATH, existing));
+      return;
+    }
     auditExistingConfig(existing, scannedPages, scannedConsumers, actions, rungateDir, opts.pruneConsumers === true);
     // #2050: the two label keys that fail closed when absent.
     reconcileLabelKeys(rungateDir, actions);
   } else if (existsSync(harnessPath)) {
     // Monolith exists — split into directory structure
     const existing = JSON.parse(readFileSync(harnessPath, "utf-8"));
+    if (!isJsonObject(existing)) {
+      actions.push(notAnObjectRefusal(relative(root, harnessPath), existing));
+      return;
+    }
 
     // Check if monolith has roles/hooks/compliance to split
     if (existing.roles || existing.hooks || existing.compliance) {
@@ -1252,19 +1265,43 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
  */
 export const BOARD_DEFAULTS_TEMPLATE = join(import.meta.dir, "..", "..", "templates", "board-defaults.json");
 
+/** A parsed config that has keys to read: not `null`, not an array, not a scalar. */
+function isJsonObject(v: unknown): v is Record<string, any> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/** What scaffold says about a config file that parses to something with no keys (#2156). */
+function notAnObjectRefusal(file: string, value: unknown): string {
+  const kind = value === null ? "null" : Array.isArray(value) ? "an array" : `a ${typeof value}`;
+  return `REFUSED: ${file} is valid JSON but not an object (it is ${kind}), so scaffold neither audited nor repaired it. Fix the file and re-run.`;
+}
+
+/** The template's expedite label, or why there is none — three different reasons, each named (#2156). */
+export type ExpediteTemplate = { label: string } | { label: null; why: string };
+
 /**
- * The expedite label scaffold writes when a config has none, or `null` when
- * this installation's template is missing or unreadable. `null` is reported
- * as UNSET by {@link labelKeyRepairs}, never written as a blank.
+ * Read the expedite label scaffold writes when a config has none. A `null`
+ * label is reported as UNSET by {@link labelKeyRepairs} with its `why`, never
+ * written as a blank.
  */
-export function expediteLabelDefault(path: string = BOARD_DEFAULTS_TEMPLATE): string | null {
-  if (!existsSync(path)) return null;
+export function expediteLabelTemplate(path: string = BOARD_DEFAULTS_TEMPLATE): ExpediteTemplate {
+  const name = "templates/board-defaults.json";
+  if (!existsSync(path)) return { label: null, why: `${name} is missing from this rungate installation` };
+  let parsed: unknown;
   try {
-    const value = JSON.parse(readFileSync(path, "utf-8")).expediteLabel;
-    return typeof value === "string" && value.trim() !== "" ? value : null;
-  } catch {
-    return null;
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch (err) {
+    return { label: null, why: `${name} could not be parsed (${(err as Error).message})` };
   }
+  const value = isJsonObject(parsed) ? parsed.expediteLabel : undefined;
+  if (typeof value === "string" && value.trim() !== "") return { label: value };
+  const detail = value === undefined ? "absent" : typeof value !== "string" ? "not a string" : "blank";
+  return { label: null, why: `${name} carries no expediteLabel (${detail})` };
+}
+
+/** {@link expediteLabelTemplate}'s label alone, for callers that only need the value. */
+export function expediteLabelDefault(path: string = BOARD_DEFAULTS_TEMPLATE): string | null {
+  return expediteLabelTemplate(path).label;
 }
 
 /**
@@ -1292,15 +1329,23 @@ export function expediteLabelDefault(path: string = BOARD_DEFAULTS_TEMPLATE): st
 export function labelKeyRepairs(
   config: Record<string, any>,
   {
-    expediteDefault = expediteLabelDefault(),
+    template = expediteLabelTemplate(),
     file = RUNGATE_CONFIG_RELATIVE_PATH,
     rewrites = true,
-  }: { expediteDefault?: string | null; file?: string; rewrites?: boolean } = {},
+  }: { template?: ExpediteTemplate; file?: string; rewrites?: boolean } = {},
 ): {
   config: Record<string, any>;
   changed: boolean;
   lines: string[];
 } {
+  if (!isJsonObject(config)) {
+    return {
+      config,
+      changed: false,
+      lines: [`REFUSED: board.expediteLabel / board.filingOverrideLabel (${file} is not a JSON object, so neither key could be read or written)`],
+    };
+  }
+  const expediteDefault = template.label;
   const raw = config.board;
   if (raw !== undefined && (raw === null || typeof raw !== "object" || Array.isArray(raw))) {
     return {
@@ -1316,11 +1361,10 @@ export function labelKeyRepairs(
   const lines: string[] = [];
   let next = config;
   let changed = false;
-  if (!isSet(board.expediteLabel) && expediteDefault === null) {
+  if (!isSet(board.expediteLabel) && template.label === null) {
     lines.push(
-      "UNSET: board.expediteLabel — no expedite lane, and none was written: templates/board-defaults.json is " +
-        'missing or unreadable in this rungate installation. To set one, add "expediteLabel": "<label>" under ' +
-        `"board" in ${file}`,
+      `UNSET: board.expediteLabel — no expedite lane, and none was written: ${template.why}. ` +
+        `To set one, add "expediteLabel": "<label>" under "board" in ${file}`,
     );
   } else if (!isSet(board.expediteLabel) && !rewrites) {
     lines.push(
