@@ -34,7 +34,13 @@ import {
   readNetGrowth,
 } from "../lib/issue-filing-gate";
 import { gitCommittedFiles, readCommittedConfig } from "../lib/config-loader";
-import { laneHealth, laneHealthLines, workVerdict } from "../lib/board-lane-health";
+import {
+  handPlacedInReview,
+  handPlacedInReviewLine,
+  laneHealth,
+  laneHealthLines,
+  workVerdict,
+} from "../lib/board-lane-health";
 import {
   declaredClosingIn,
   issuesWithUncommittedWork,
@@ -936,6 +942,19 @@ const laneReadings = laneHealth({
   complete: !truncated && status.size > 0,
 });
 for (const line of laneHealthLines(laneReadings, offBoardCount)) console.log(line);
+// #1921, SC-2759. In review has no denominator, but an issue card there that
+// no open pull request declares is one nothing here wrote and nothing will
+// move. Fed by the closing list the OPEN PULL REQUESTS section already read,
+// so no new query and no sub-selection on the board walk (BR-46).
+const handPlaced = handPlacedInReview({
+  inReview: open
+    .filter((i: any) => !i.pull_request && status.get(i.number) === "In review")
+    .map((i: any) => i.number as number),
+  declaredClosing,
+  closingTruncated,
+  complete: !truncated && status.size > 0,
+});
+console.log(handPlacedInReviewLine(handPlaced));
 
 console.log("\n  Nothing above was remembered. Re-run to re-read.");
 

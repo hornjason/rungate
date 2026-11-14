@@ -676,10 +676,14 @@ describe("#1921 / SC-2759: handPlacedInReview", () => {
     // REQUESTS section collects from `closingIssuesReferences` — no new
     // query, and no sub-selection on the board walk (BR-46).
     const src = readFileSync(join(import.meta.dir, "..", "scripts/work-status.ts"), "utf-8");
-    const call = src.slice(src.indexOf("handPlacedInReview({"));
     expect(src.indexOf("handPlacedInReview({"), "the report never asks the question").toBeGreaterThan(-1);
-    expect(call.slice(0, call.indexOf("})"))).toContain("declaredClosing");
-    expect(call.slice(0, call.indexOf("})"))).toContain("closingTruncated");
-    expect(src, "the reading is decided and never printed").toContain("handPlacedInReviewLine(");
+    const rest = src.slice(src.indexOf("handPlacedInReview({"));
+    const call = rest.slice(0, rest.indexOf("});"));
+    // The variables themselves, not their names: `closingTruncated: []`
+    // contains the name and throws the reading away.
+    expect(call, "the report's own closing list").toMatch(/^\s*declaredClosing,\s*$/m);
+    expect(call, "the report's own record of cut closing lists").toMatch(/^\s*closingTruncated,\s*$/m);
+    expect(call, "the board's own completeness").toMatch(/complete:\s*!truncated\b/);
+    expect(src, "the reading is decided and never printed").toContain("handPlacedInReviewLine(handPlaced)");
   });
 });
