@@ -193,7 +193,8 @@ take.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2747: `rungate scaffold` installs the four-step process as an owned rules file, generated from the same single source that this repository's own rule 9 is checked against, so the consumer's copy and ours cannot drift
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2748: `rungate scaffold` writes `board.expediteLabel` and `board.filingOverrideLabel` when the config lacks them, or names each one that stays unset
+- [x] SC-2748: `rungate scaffold` writes `board.expediteLabel` and `board.filingOverrideLabel` when the config lacks them, or names each one that stays unset
+      proved-by: test/scaffold-label-keys.test.ts — 10 pass, 0 fail (the `SC-2748` describe and the `#2050 review` describe); 2026-11-14, on the PR for #2050. Scaffold writes `board.expediteLabel` from `templates/board-defaults.json` on the new-config, existing-config and monolith-split paths, and names it UNSET on the monolith path and when the template is missing. It never writes `board.filingOverrideLabel` and names it UNSET with the line that sets it — Jason's call of 2026-11-14, because a defaulted waiver name would hand every consumer's agents the escape hatch from the FindingArbiter.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2749: `rungate scaffold` ends by printing each human step still owed as one command — the project token secret, `RUNGATE_REQUIRE_CLOSING_REF`, and every process check that runs but is not required on the default branch — and prints `UNMEASURED` for any it could not read, never "done"
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->

@@ -10,7 +10,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, statSync } from "fs";
 import { readdirSorted } from "../readdir-sorted";
 import { fileExtensions } from "../file-extensions";
-import { join, basename, dirname, resolve, sep } from "path";
+import { join, basename, dirname, relative, resolve, sep } from "path";
 import { auditSpecs } from "../../scripts/audit-specs";
 import { writeSpec } from "../write-spec";
 import { generateAgentsMd as buildAgentsMdContent, generateScopedRules } from "../generators/agents-md";
@@ -51,7 +51,7 @@ import {
 import { CI_SUITE_FETCH_DEPTH, baseRefFetchDepth } from "../ci-history-depth";
 import { CLAUDE_CODE_ACTION } from "../claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../google-auth-action";
-import { loadComplianceConfig, tryLoadRungateConfig } from "../config-loader";
+import { RUNGATE_CONFIG_RELATIVE_PATH, loadComplianceConfig, tryLoadRungateConfig } from "../config-loader";
 import { organizeProjectReport } from "../organize";
 import type { ProjectScan, ProjectType, SpecEntry, TestFile, RefFile, DocRoute, Category } from "../generators/types";
 import {
@@ -1136,6 +1136,8 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
     const existing = JSON.parse(readFileSync(join(rungateDir, "config.json"), "utf-8"));
     repairEmptySidecars(rungateDir, actions);
     auditExistingConfig(existing, scannedPages, scannedConsumers, actions, rungateDir, opts.pruneConsumers === true);
+    // #2050: the two label keys that fail closed when absent.
+    reconcileLabelKeys(rungateDir, actions);
   } else if (existsSync(harnessPath)) {
     // Monolith exists — split into directory structure
     const existing = JSON.parse(readFileSync(harnessPath, "utf-8"));
@@ -1143,11 +1145,16 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
     // Check if monolith has roles/hooks/compliance to split
     if (existing.roles || existing.hooks || existing.compliance) {
       splitMonolithToDirectory(root, existing, actions);
+      // #2050: the split wrote a fresh config.json, which is the directory
+      // layout's file and gets the same repair as any other.
+      reconcileLabelKeys(rungateDir, actions);
     } else {
       // Simple monolith without split-worthy content — audit only
       // No rungateDir on this path (the monolith layout), so pruning has
       // nowhere to write and is not offered rather than silently not happening.
       auditExistingConfig(existing, scannedPages, scannedConsumers, actions);
+      // #2050: the monolith is not rewritten, so each missing key is named.
+      actions.push(...labelKeyRepairs(existing, { file: relative(root, harnessPath), rewrites: false }).lines);
     }
   } else {
     // No config exists — create directory structure
@@ -1225,12 +1232,134 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
     // The split path below is deliberately NOT routed through these defaults.
     const roles = buildDefaultRoles();
     const hooks = buildDefaultHooks();
-    writeDirectoryStructure(root, config, roles, hooks, undefined, actions);
+    // #2050: a new project gets the expedite key and is told the override key is unset.
+    const labelled = labelKeyRepairs(config);
+    writeDirectoryStructure(root, labelled.config as typeof config, roles, hooks, undefined, actions);
+    actions.push(...labelled.lines);
     actions.push(
       `CREATED: .claude/rungate/ (${Object.keys(scannedPages).length} pages, ${scannedConsumers.length} consumers, ` +
       `${Object.keys(roles).length} roles, ${hooks.length} hooks)`
     );
   }
+}
+
+/**
+ * Where the expedite label's seed value lives — #2050, SC-2748. A data file
+ * and not a string literal: `test/board-ready-rule.test.ts` refuses either
+ * label spelled as a string anywhere in library code (#1962), because the
+ * name is configuration and code only reads it. The seed is configuration
+ * too, so it sits beside `SUCCESS-TEMPLATE.md` in `templates/`.
+ */
+export const BOARD_DEFAULTS_TEMPLATE = join(import.meta.dir, "..", "..", "templates", "board-defaults.json");
+
+/**
+ * The expedite label scaffold writes when a config has none, or `null` when
+ * this installation's template is missing or unreadable. `null` is reported
+ * as UNSET by {@link labelKeyRepairs}, never written as a blank.
+ */
+export function expediteLabelDefault(path: string = BOARD_DEFAULTS_TEMPLATE): string | null {
+  if (!existsSync(path)) return null;
+  try {
+    const value = JSON.parse(readFileSync(path, "utf-8")).expediteLabel;
+    return typeof value === "string" && value.trim() !== "" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What scaffold does about the two label keys that fail closed when absent
+ * (#2004) — decided once, for the new-config and existing-config paths alike.
+ *
+ * Jason's call, 2026-11-14:
+ * - `board.expediteLabel` is WRITTEN when missing or blank. The label moves an
+ *   issue to the top of Ready, and does nothing until someone with triage
+ *   access applies it, so a default costs nothing and stops the lane
+ *   silently not existing.
+ * - `board.filingOverrideLabel` is NEVER written. It is the escape hatch from
+ *   the FindingArbiter, whose refusal deliberately never names it; a default
+ *   would hand every consumer's agents its name, read straight from config.
+ *   It is reported as unset, with what that switches off and how to set it.
+ *
+ * A `board` that is present and not an object is refused, never replaced:
+ * overwriting it would discard whatever the consumer put there.
+ *
+ * `file` is the config the reader actually has, and every line names it: a
+ * monolith consumer has `.claude/rungate.json` and no directory file. With
+ * `rewrites: false` (the monolith, which scaffold never rewrites) a missing
+ * expedite key is reported UNSET with the value to add, never SET.
+ */
+export function labelKeyRepairs(
+  config: Record<string, any>,
+  {
+    expediteDefault = expediteLabelDefault(),
+    file = RUNGATE_CONFIG_RELATIVE_PATH,
+    rewrites = true,
+  }: { expediteDefault?: string | null; file?: string; rewrites?: boolean } = {},
+): {
+  config: Record<string, any>;
+  changed: boolean;
+  lines: string[];
+} {
+  const raw = config.board;
+  if (raw !== undefined && (raw === null || typeof raw !== "object" || Array.isArray(raw))) {
+    return {
+      config,
+      changed: false,
+      lines: [
+        `REFUSED: board.expediteLabel / board.filingOverrideLabel (board in ${file} is not an object, so neither key could be read or written)`,
+      ],
+    };
+  }
+  const board: Record<string, unknown> = raw ?? {};
+  const isSet = (v: unknown) => typeof v === "string" && v.trim() !== "";
+  const lines: string[] = [];
+  let next = config;
+  let changed = false;
+  if (!isSet(board.expediteLabel) && expediteDefault === null) {
+    lines.push(
+      "UNSET: board.expediteLabel — no expedite lane, and none was written: templates/board-defaults.json is " +
+        'missing or unreadable in this rungate installation. To set one, add "expediteLabel": "<label>" under ' +
+        `"board" in ${file}`,
+    );
+  } else if (!isSet(board.expediteLabel) && !rewrites) {
+    lines.push(
+      `UNSET: board.expediteLabel — no expedite lane. Scaffold does not rewrite ${file}; to have one, add ` +
+        `"expediteLabel": "${expediteDefault}" under "board" there`,
+    );
+  } else if (!isSet(board.expediteLabel)) {
+    next = { ...config, board: { ...board, expediteLabel: expediteDefault } };
+    changed = true;
+    lines.push(
+      `SET: board.expediteLabel = "${expediteDefault}" in ${file} — an open issue ` +
+        `carrying that label goes to the top of Ready. Rename it there if you like.`,
+    );
+  }
+  if (!isSet(board.filingOverrideLabel)) {
+    lines.push(
+      "UNSET: board.filingOverrideLabel — this project has no FindingArbiter waiver, so a refused filing stays " +
+        "refused. Scaffold never writes one: a waiver's name should be chosen, not defaulted. To set one, add " +
+        `"filingOverrideLabel": "<label>" under "board" in ${file}`,
+    );
+  }
+  return { config: next, changed, lines };
+}
+
+/** Apply {@link labelKeyRepairs} to an existing `config.json`, writing only when a key was added. */
+function reconcileLabelKeys(rungateDir: string, actions: string[]): void {
+  const configPath = join(rungateDir, "config.json");
+  let config: Record<string, any>;
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch (err) {
+    // A corrupt config is never an empty one: rewriting it would discard
+    // every key this function does not know about.
+    actions.push(`REFUSED: board label keys (config.json is unreadable: ${(err as Error).message})`);
+    return;
+  }
+  const repaired = labelKeyRepairs(config);
+  if (repaired.changed) writeFileSync(configPath, JSON.stringify(repaired.config, null, 2) + "\n");
+  actions.push(...repaired.lines);
 }
 
 /**
