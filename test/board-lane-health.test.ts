@@ -622,6 +622,7 @@ describe("#1921 / SC-2759: handPlacedInReview", () => {
     const r = handPlacedInReview(read());
     expect(r, "#1717 has no open pull request declaring it, #2079 has one").toEqual({
       kind: "read",
+      checked: 2,
       issues: [1717],
     });
     const line = handPlacedInReviewLine(r);
@@ -634,15 +635,26 @@ describe("#1921 / SC-2759: handPlacedInReview", () => {
     // One variable differs from the case above: #1717 is gone. A decider
     // that reports every In-review card reddens here.
     const r = handPlacedInReview(read({ inReview: [2079] }));
-    expect(r).toEqual({ kind: "read", issues: [] });
+    expect(r).toEqual({ kind: "read", checked: 1, issues: [] });
     expect(handPlacedInReviewLine(r)).toContain(
-      "every issue card in In review has an open pull request declaring it closes the issue",
+      "all 1 issue card(s) in In review have an open pull request declaring it closes the issue",
     );
+  });
+
+  test("an empty In review lane says so, and never claims every card is covered", () => {
+    // Review round 1 of #2134: "every card has a pull request" over zero
+    // cards is vacuously true and reads exactly like a lane that was checked
+    // and found healthy. Nothing checked and all covered are different facts.
+    const r = handPlacedInReview(read({ inReview: [] }));
+    expect(r).toEqual({ kind: "read", checked: 0, issues: [] });
+    const line = handPlacedInReviewLine(r);
+    expect(line).toContain("no issue card is in In review");
+    expect(line, "a claim about every card, over no cards").not.toMatch(/\ball\b|\bevery\b/);
   });
 
   test("the numbers are distinct and in order", () => {
     const r = handPlacedInReview(read({ inReview: [2140, 1717, 2140], declaredClosing: new Set() }));
-    expect(r).toEqual({ kind: "read", issues: [1717, 2140] });
+    expect(r).toEqual({ kind: "read", checked: 2, issues: [1717, 2140] });
   });
 
   test("a closing list cut at one page is UNMEASURED, never a list and never none", () => {
@@ -662,13 +674,14 @@ describe("#1921 / SC-2759: handPlacedInReview", () => {
     expect(handPlacedInReviewLine(r)).toContain("UNMEASURED");
   });
 
-  test("unread, none and some never print the same line", () => {
+  test("unread, empty, none and some never print the same line", () => {
     const lines = [
       handPlacedInReviewLine(handPlacedInReview(read())),
+      handPlacedInReviewLine(handPlacedInReview(read({ inReview: [] }))),
       handPlacedInReviewLine(handPlacedInReview(read({ inReview: [2079] }))),
       handPlacedInReviewLine(handPlacedInReview(read({ complete: false }))),
     ];
-    expect(new Set(lines).size).toBe(3);
+    expect(new Set(lines).size).toBe(4);
   });
 
   test("the work-status report prints it from the closing list it already reads", () => {

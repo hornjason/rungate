@@ -464,7 +464,17 @@ export interface InReviewCensus {
 }
 
 export type HandPlacedReading =
-  | { readonly kind: "read"; readonly issues: readonly number[] }
+  | {
+      readonly kind: "read";
+      /**
+       * How many distinct In-review issue cards were checked. Carried so an
+       * empty lane and a lane checked and found covered never print the same
+       * sentence — "every card has a pull request" over zero cards is
+       * vacuously true (review round 1 of #2134).
+       */
+      readonly checked: number;
+      readonly issues: readonly number[];
+    }
   | { readonly kind: "unmeasured"; readonly why: string };
 
 /**
@@ -502,15 +512,17 @@ export function handPlacedInReview(c: InReviewCensus): HandPlacedReading {
       why: `the closing list of ${cut} did not fit one page, so an issue it declares would read as having no pull request`,
     };
   }
-  const issues = [...new Set(c.inReview)].filter(n => !c.declaredClosing.has(n)).sort((a, b) => a - b);
-  return { kind: "read", issues };
+  const cards = [...new Set(c.inReview)];
+  const issues = cards.filter(n => !c.declaredClosing.has(n)).sort((a, b) => a - b);
+  return { kind: "read", checked: cards.length, issues };
 }
 
 /** The line the report prints for `handPlacedInReview`, one per state. */
 export function handPlacedInReviewLine(r: HandPlacedReading): string {
   if (r.kind === "unmeasured") return `  (hand-placed In review cards UNMEASURED — ${r.why})`;
+  if (r.checked === 0) return `  no issue card is in In review, so none is hand-placed`;
   if (r.issues.length === 0) {
-    return `  every issue card in In review has an open pull request declaring it closes the issue`;
+    return `  all ${r.checked} issue card(s) in In review have an open pull request declaring it closes the issue`;
   }
   return (
     `  ${r.issues.length} issue card(s) in In review are hand-placed — no open pull request declares it ` +
