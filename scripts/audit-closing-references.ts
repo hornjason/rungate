@@ -45,6 +45,8 @@ import {
   closingCriteria,
   closingRequirement,
   closingRequirementMessage,
+  commitClosingMessage,
+  commitClosingReferences,
   inertClosingMessage,
   inertClosingReferences,
   isSessionRecordOnly,
@@ -193,6 +195,38 @@ async function main(): Promise<void> {
         `whether every one names a criterion was never read. UNMEASURED, not clean.`,
     );
   }
+
+  // #1979: the commit messages the merge will carry. GitHub acts on a closing
+  // keyword in a commit message wherever it sits, backticks included, and this
+  // repository squashes with the messages as the body. Refused whatever the
+  // switch says, like the inert reading above: it closes live work.
+  //
+  // Absent is NOT READ and a cut list is UNMEASURED, like every field above:
+  // the issue a missing commit would close is exactly the one nobody sees.
+  const rawCommits = (pr as { commits?: unknown }).commits;
+  const commitsTotal = (pr as { commitsTotal?: unknown }).commitsTotal;
+  if (!Array.isArray(rawCommits) || typeof commitsTotal !== "number") {
+    refuse(
+      "the payload carries no commits array with a commitsTotal, so whether a commit message " +
+        "closes an issue this pull request does not declare was never read. Add `commits` to " +
+        "the query. UNMEASURED, not clean.",
+    );
+  }
+  if (commitsTotal > rawCommits.length) {
+    refuse(
+      `this pull request has ${commitsTotal} commit(s) and only ${rawCommits.length} were ` +
+        `fetched, so a closing keyword in the rest was never read. UNMEASURED, not clean.`,
+    );
+  }
+  const commits = rawCommits.map(c => {
+    const node = c as { sha?: unknown; message?: unknown } | null;
+    if (typeof node?.sha !== "string" || typeof node?.message !== "string") {
+      refuse("a commit in the payload carries no sha or message string. UNMEASURED, not clean.");
+    }
+    return { sha: node.sha, message: node.message };
+  });
+  const undeclared = commitClosingReferences(commits).filter(r => !linkedIssues.has(r.issue));
+  if (undeclared.length > 0) refuse(commitClosingMessage(undeclared, prNumber));
 
   // The body of every issue this pull request closes HERE, read off the same
   // nodes `closingIssuesReferences` returned. The workflow asks GitHub for the
