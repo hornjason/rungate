@@ -41,6 +41,8 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
 import { readMilestoneTitle } from "../lib/milestone-title";
+import { parseCriteria } from "../lib/spec-evidence";
+import { PHASE_VALUE, parsePlacementRows } from "../lib/spec-placement";
 import { ladderReport } from "../lib/work-status";
 
 /** The marker that identifies the pinned issue this script owns. */
@@ -71,6 +73,12 @@ export interface PhaseLine {
   closed: number;
   url: string;
   state: "done" | "current" | "later" | "empty";
+  /**
+   * For a phase with no issues only: how many criteria the spec's Phase
+   * placement table puts in it, and how many of those are unticked (#2147).
+   * Absent when the phase has issues, or the spec places nothing in it.
+   */
+  criteria?: { placed: number; unticked: number };
 }
 
 export interface FamilyLine {
@@ -187,7 +195,30 @@ export function phaseBlurb(specText: string, phase: number, limit = 280): string
   return out.trim();
 }
 
-/** The focus family's phases, in phase order, each with its meaning and progress. */
+/**
+ * Per phase number, the criteria the spec's Phase placement table puts there
+ * and how many are unticked. A placed id the spec never states counts as
+ * unticked: a criterion nobody can find has not been shown true.
+ */
+export function placedCriteria(specText: string): Map<number, { placed: number; unticked: number }> {
+  const ticked = new Map(parseCriteria(specText).map(c => [c.id, c.ticked]));
+  const out = new Map<number, { placed: number; unticked: number }>();
+  for (const row of parsePlacementRows(specText)) {
+    const m = row.placement.match(PHASE_VALUE);
+    if (m === null || row.ids.length === 0) continue;
+    out.set(Number(m[1]), { placed: row.ids.length, unticked: row.ids.filter(id => ticked.get(id) !== true).length });
+  }
+  return out;
+}
+
+/**
+ * The focus family's phases, in phase order, each with its meaning and progress.
+ *
+ * A phase with issues is judged by its issues. A phase with none is done only
+ * when the spec places criteria in it and every one is ticked (#2147) — work
+ * that landed before criteria became issues leaves a milestone empty and the
+ * phase finished. Anything less stays "empty", never done.
+ */
 export function phaseLines(milestones: readonly Milestone[], family: string, specText: string | null): PhaseLine[] {
   const mine = milestones
     .map(m => ({ m, r: readMilestoneTitle(m.title) }))
@@ -195,15 +226,30 @@ export function phaseLines(milestones: readonly Milestone[], family: string, spe
     .map(x => ({ m: x.m, number: x.r!.phase }))
     .sort((a, b) => a.number - b.number);
   const current = mine.find(x => x.m.open > 0)?.number;
-  return mine.map(({ m, number }) => ({
-    number,
-    title: m.title,
-    meaning: specText === null ? null : phaseBlurb(specText, number),
-    open: m.open,
-    closed: m.closed,
-    url: m.url,
-    state: m.open + m.closed === 0 ? "empty" : m.open === 0 ? "done" : number === current ? "current" : "later",
-  }));
+  const placed = specText === null ? new Map<number, { placed: number; unticked: number }>() : placedCriteria(specText);
+  return mine.map(({ m, number }) => {
+    const criteria = m.open + m.closed === 0 ? placed.get(number) : undefined;
+    const state: PhaseLine["state"] =
+      m.open + m.closed === 0
+        ? criteria !== undefined && criteria.unticked === 0
+          ? "done"
+          : "empty"
+        : m.open === 0
+          ? "done"
+          : number === current
+            ? "current"
+            : "later";
+    return {
+      number,
+      title: m.title,
+      meaning: specText === null ? null : phaseBlurb(specText, number),
+      open: m.open,
+      closed: m.closed,
+      url: m.url,
+      state,
+      ...(criteria === undefined ? {} : { criteria }),
+    };
+  });
 }
 
 /** One summary line per family other than the focus family. */
@@ -324,7 +370,14 @@ function render(v: StatusView, f: Fmt, markdown: boolean): string {
         ? [f.item(`no milestone is in the ${f.text(v.family ?? "")} family`)]
         : phases.flatMap(p => {
             const total = p.open + p.closed;
-            const progress = total === 0 ? "no issues" : `${p.closed} of ${total} done`;
+            const c = p.criteria;
+            const why =
+              c === undefined
+                ? ""
+                : c.unticked === 0
+                  ? `; its ${c.placed} criteria are ticked`
+                  : `; ${c.unticked} of its ${c.placed} criteria unticked`;
+            const progress = total === 0 ? `no issues${why}` : `${p.closed} of ${total} done`;
             const head = f.item(`${PHASE_MARK[p.state]} ${f.link(p.title, p.url)} — ${progress}`);
             return p.meaning ? [head, `${markdown ? "  " : "      "}${f.text(p.meaning)}`] : [head];
           }),
