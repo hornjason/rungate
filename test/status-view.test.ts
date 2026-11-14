@@ -151,6 +151,64 @@ describe("#2097: phases come from the focus family's milestones and the spec's o
   });
 });
 
+describe("#2147: a phase with no issues is judged by the criteria the spec places in it", () => {
+  // Live on 2026-11-14: Engine Phase 1 held no issues, because its work landed
+  // before criteria became issues, and all three criteria the spec places
+  // there were ticked. The view printed "– … no issues" between two ✓ phases.
+  const spec = (box: " " | "x") =>
+    [
+      "## Success Criteria",
+      "- [x] SC-901: one",
+      "- [x] SC-902: two",
+      `- [${box}] SC-903: three`,
+      "- [ ] SC-904: placed in a phase that has issues",
+      "",
+      "### Phase placement",
+      "",
+      "| Placement | Criteria |",
+      "|---|---|",
+      "| **Phase 1** | SC-901, SC-902, SC-903 |",
+      "| **Phase 2** | SC-904 |",
+      "",
+    ].join("\n");
+  const ms = [
+    { title: "Zqengine Phase 1 — a criterion becomes issues", open: 0, closed: 0, url: "u1" },
+    { title: "Zqengine Phase 2 — open work", open: 2, closed: 1, url: "u2" },
+    { title: "Zqengine Phase 3 — nothing placed", open: 0, closed: 0, url: "u3" },
+  ];
+
+  test("every placed criterion ticked: done, and the line says why", () => {
+    const lines = phaseLines(ms, "Zqengine", spec("x"));
+    expect(lines.map(l => [l.number, l.state])).toEqual([
+      [1, "done"],
+      [2, "current"],
+      [3, "empty"],
+    ]);
+    const md = renderMarkdown(view({ phases: read(lines) }));
+    expect(md).toContain("✓ [Zqengine Phase 1 — a criterion becomes issues](u1) — no issues; its 3 criteria are ticked");
+    expect(md, "a phase the spec places nothing in has no criteria to judge it by").toContain(
+      "– [Zqengine Phase 3 — nothing placed](u3) — no issues\n",
+    );
+  });
+
+  test("control: one placed criterion unticked stays 'no issues' and says how many", () => {
+    const lines = phaseLines(ms, "Zqengine", spec(" "));
+    expect(lines[0].state).toBe("empty");
+    const md = renderMarkdown(view({ phases: read(lines) }));
+    expect(md).toContain("– [Zqengine Phase 1 — a criterion becomes issues](u1) — no issues; 1 of its 3 criteria unticked");
+  });
+
+  test("a placed id the spec never states is unticked, not done", () => {
+    const missing = spec("x").replace("- [x] SC-903: three\n", "");
+    expect(phaseLines(ms, "Zqengine", missing)[0].state).toBe("empty");
+  });
+
+  test("a phase with issues is judged by its issues, and no spec text leaves an empty phase empty", () => {
+    expect(phaseLines(ms, "Zqengine", spec("x"))[1].criteria, "criteria were read for a phase with issues").toBeUndefined();
+    expect(phaseLines(ms, "Zqengine", null)[0].state).toBe("empty");
+  });
+});
+
 describe("#2097: what the pinned issue says", () => {
   test("the body starts with the marker, says it serves no criterion, and every section is there", () => {
     const md = renderMarkdown(view());
