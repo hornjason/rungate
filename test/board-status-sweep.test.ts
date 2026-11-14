@@ -2041,6 +2041,12 @@ describe("#1719 / SC-2621: the board's identifiers are read from project config"
       const mutant = run(MUTANT);
       expect(mutant.out).toContain("board.id");
       expect(mutant.code, mutant.out).toBe(0);
+      // The board is decided BEFORE the credential: with neither, the refusal
+      // names the board. Checked the other way round, this names the token.
+      delete env.GITHUB_TOKEN;
+      const neither = run(REAL);
+      expect(neither.out, `with no board and no credential the refusal was not the board's:\n${neither.out}`)
+        .toContain("board.id");
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }

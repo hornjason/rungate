@@ -37,16 +37,25 @@ describe("#1719 / SC-2621: the report reads the board's id from project config",
     try {
       const env: Record<string, string | undefined> = { ...process.env, GITHUB_TOKEN: "not-a-real-token" };
       delete env.GH_TOKEN;
-      const r = spawnSync("bun", [join(ROOT, "scripts", "work-status.ts")], {
-        encoding: "utf-8",
-        env,
-        cwd: empty,
-        timeout: 30_000,
-      });
-      const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+      const run = () => {
+        const r = spawnSync("bun", [join(ROOT, "scripts", "work-status.ts")], {
+          encoding: "utf-8",
+          env,
+          cwd: empty,
+          timeout: 30_000,
+        });
+        return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+      };
+      const { status, out } = run();
       expect(out, `the refusal did not name the missing key:\n${out}`).toContain("board.id");
       expect(out).toContain("UNMEASURED");
-      expect(r.status, out).toBe(2);
+      expect(status, out).toBe(2);
+      // Decided BEFORE the credential: with neither, the refusal names the
+      // board. Checked the other way round, this names the token.
+      delete env.GITHUB_TOKEN;
+      const neither = run();
+      expect(neither.out, `with no board and no credential the refusal was not the board's:\n${neither.out}`)
+        .toContain("board.id");
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
