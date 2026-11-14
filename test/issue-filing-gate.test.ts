@@ -371,6 +371,8 @@ function commitConfigTree(dir: string): void {
   git("commit", "-q", "--allow-empty", "-m", "fixture");
   const bare = `${dir}.remote.git`;
   if (!existsSync(bare)) {
+    // late-env-ok: the child is `git` creating a bare repository, and it reads
+    // none of the RUNGATE_* variables this file writes for the gate under test.
     const made = spawnSync("git", ["init", "-q", "--bare", bare], { encoding: "utf-8" });
     if (made.status !== 0) throw new Error(`could not create the fixture remote ${bare}: ${made.stderr}`);
   }
@@ -7326,9 +7328,9 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     // configured URL; the slug reader is outside #2095 and unchanged.
     const dir = join(scratch, "fg-277-plain-origin");
     mkdirSync(dir, { recursive: true });
-    // late-env-ok: the child is `git`, which reads none of the variables this
-    // file writes for the gate under test.
     for (const args of [["init", "-q", "-b", "main"], ["remote", "add", "origin", FIXTURE_ORIGIN]]) {
+      // late-env-ok: the child is `git`, which reads none of the variables
+      // this file writes for the gate under test.
       expect(spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" }).status).toBe(0);
     }
     const noToken = await readNetGrowth(dir, nowMs, () => {
@@ -7500,9 +7502,9 @@ describe("#1964 / SC-2753: the filing cap is read from committed config, never t
     // #2095 the gate read that ref and raised the agent's cap.
     const root = tree({ ship: { mode: "harness" } });
     writeFileSync(CONFIG(root), JSON.stringify({ project: "x", ship: DIRECT_SHIP }));
-    // late-env-ok: the child is `git` forging a ref, and it reads none of the
-    // RUNGATE_* variables this file writes for the gate under test.
     const git = (...args: string[]) =>
+      // late-env-ok: the child is `git` forging a ref, and it reads none of
+      // the RUNGATE_* variables this file writes for the gate under test.
       spawnSync("git", ["-C", root, "-c", "user.email=fg@example.invalid", "-c", "user.name=fg", ...args], {
         encoding: "utf-8",
       });
