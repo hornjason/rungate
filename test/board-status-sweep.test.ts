@@ -20,17 +20,22 @@ import { join } from "path";
 import {
   BACKLOG,
   BOARD_QUERY,
+  CLAIM_ACTIVITY_QUERY,
   DONE,
   IN_PROGRESS,
   IN_REVIEW,
   ISSUE_TOKEN_ENV,
   OPEN_PR_CLOSING_REFS_QUERY,
   STALE_CLAIM_DAYS,
+  applyClaimSilence,
   applyLinkedPullRequests,
+  claimSilence,
   countOpenPRsByIssue,
   idleDaysSince,
   isStaleClaimCandidate,
+  needsClaimActivityReading,
   needsOpenPullRequestReading,
+  parseClaimActivity,
   applyCorrections,
   clearAssignees,
   requireWrittenItem,
@@ -1978,4 +1983,168 @@ describe("BS-28: DRIFT_EXIT is the refusal, and the mutant proves it", () => {
     const literals = [...source.matchAll(/^\s*return\s+([1-9]\d*)\s*;/gm)].map(m => m[0].trim());
     expect(literals, "a literal non-zero return bypasses DRIFT_EXIT").toEqual([]);
   });
+});
+
+// ── #1942 / SC-2760: silence is read from the work, never from the issue ───
+//
+// Measured 2026-11-09: the sweep ran six times, all success, and left six
+// claimed-but-unworked issues alone, every one reading 0 to 2 days idle —
+// because they had been COMMENTED on. `updatedAt` moves on a comment, so
+// discussing an issue was indistinguishable from working it, and a session
+// that claimed an issue and then wrote about it held the claim for ever.
+//
+// The clock is now the latest of three moments, each a piece of work or the
+// claim itself: the newest `assigned` event, the tip commit of every branch
+// `issueFromBranch` attributes to the issue, and the opening and newest
+// commit of every pull request declaring it closes the issue.
+describe("#1942 / SC-2760: a claim's silence is read from its work", () => {
+  const now = Date.parse("2026-11-13T12:00:00Z");
+  const daysAgo = (n: number) => new Date(now - n * 86_400_000).toISOString();
+
+  /** The response `CLAIM_ACTIVITY_QUERY` returns, built from its parts. */
+  const activityResponse = (
+    o: {
+      assignedAt?: string | null;
+      branches?: { name: string; at: string }[];
+      prs?: { created: string; lastCommit?: string }[];
+      refsTruncated?: boolean;
+      prsTruncated?: boolean;
+    } = {},
+  ) => ({
+    repository: {
+      issue: {
+        timelineItems: { nodes: o.assignedAt === null ? [] : [{ createdAt: o.assignedAt ?? daysAgo(10) }] },
+        closedByPullRequestsReferences: {
+          pageInfo: { hasNextPage: o.prsTruncated === true },
+          nodes: (o.prs ?? []).map(p => ({
+            createdAt: p.created,
+            commits: { nodes: p.lastCommit ? [{ commit: { committedDate: p.lastCommit } }] : [] },
+          })),
+        },
+      },
+      refs: {
+        pageInfo: { hasNextPage: o.refsTruncated === true },
+        nodes: (o.branches ?? []).map(b => ({ name: b.name, target: { committedDate: b.at } })),
+      },
+    },
+  });
+
+  /** An assigned open issue in Backlog, updated TODAY — a comment, not work. */
+  const commentedToday = {
+    id: "PVTI_1942",
+    content: {
+      __typename: "Issue",
+      number: 1942,
+      state: "OPEN",
+      stateReason: null,
+      updatedAt: daysAgo(0),
+      assignees: { totalCount: 1 },
+    },
+    fieldValues: { pageInfo: { hasNextPage: false }, nodes: [{ name: "Backlog", field: { name: "Status" } }] },
+  };
+
+  test("SC-2760: an issue commented on today but unworked for 10 days is released", () => {
+    // The regression end to end: parse the live node shape, read the work,
+    // decide. Against the `updatedAt` clock this row reads 0 days idle and
+    // is promoted to In progress instead.
+    const parsed = parseBoardItem(commentedToday, now)!;
+    expect(parsed.idleDays, "the issue's own last-updated time is still being read as activity").toBeNull();
+    expect(needsClaimActivityReading(parsed)).toBe(true);
+
+    const activity = parseClaimActivity(activityResponse({ assignedAt: daysAgo(10) }), 1942);
+    const [withSilence] = applyClaimSilence([parsed], new Map([[1942, activity]]), now);
+    expect(withSilence!.idleDays).toBe(10);
+
+    const [read] = applyLinkedPullRequests([withSilence!], new Map());
+    const v = verdictFor(read!);
+    expect(v.kind, `expected a release, got ${JSON.stringify(v)}`).toBe("release");
+  });
+
+  test("claimSilence: the latest of the claim and every work moment, in whole days", () => {
+    expect(claimSilence({ claimedAt: daysAgo(20), workAt: [] }, now)).toBe(20);
+    expect(claimSilence({ claimedAt: daysAgo(20), workAt: [daysAgo(9), daysAgo(2)] }, now)).toBe(2);
+    // Work older than the claim does not age it: a re-claim restarts the clock.
+    expect(claimSilence({ claimedAt: daysAgo(3), workAt: [daysAgo(30)] }, now)).toBe(3);
+  });
+
+  test("claimSilence: an unread claim or an unreadable work date is NOT READ, never zero", () => {
+    // Zero is "worked today" — the answer that keeps a claim — and a dropped
+    // date is a shorter list that reads as older silence, the answer that
+    // releases one. Both are substitutions; null is the only honest value.
+    expect(claimSilence({ claimedAt: null, workAt: [daysAgo(1)] }, now)).toBeNull();
+    expect(claimSilence({ claimedAt: daysAgo(20), workAt: ["not a date"] }, now)).toBeNull();
+    expect(claimSilence(null, now)).toBeNull();
+  });
+
+  test("parseClaimActivity: a branch counts only when issueFromBranch names this issue", () => {
+    const a = parseClaimActivity(
+      activityResponse({
+        assignedAt: daysAgo(20),
+        branches: [
+          { name: "rg/1942", at: daysAgo(4) },
+          { name: "rg/19420", at: daysAgo(1) }, //      another issue
+          { name: "rg/adr-1942-plan", at: daysAgo(1) }, // not an issue branch
+        ],
+      }),
+      1942,
+    );
+    expect(a).not.toBeNull();
+    expect(a!.claimedAt).toBe(daysAgo(20));
+    expect(a!.workAt).toEqual([daysAgo(4)]);
+  });
+
+  test("parseClaimActivity: a declaring pull request counts by its opening and its newest commit", () => {
+    const a = parseClaimActivity(
+      activityResponse({ prs: [{ created: daysAgo(8), lastCommit: daysAgo(5) }, { created: daysAgo(6) }] }),
+      1942,
+    );
+    expect([...a!.workAt].sort()).toEqual([daysAgo(8), daysAgo(6), daysAgo(5)].sort());
+  });
+
+  test("parseClaimActivity: a truncated page or a missing issue is NOT READ", () => {
+    // A cut page is a shorter list, and a shorter list of work reads as
+    // longer silence — the direction that unassigns somebody.
+    expect(parseClaimActivity(activityResponse({ refsTruncated: true }), 1942)).toBeNull();
+    expect(parseClaimActivity(activityResponse({ prsTruncated: true }), 1942)).toBeNull();
+    expect(parseClaimActivity({ repository: { issue: null, refs: { pageInfo: { hasNextPage: false }, nodes: [] } } }, 1942)).toBeNull();
+    expect(parseClaimActivity(undefined, 1942)).toBeNull();
+    // No assigned event at all: the claim time is unread, not "never".
+    expect(parseClaimActivity(activityResponse({ assignedAt: null }), 1942)!.claimedAt).toBeNull();
+  });
+
+  test("applyClaimSilence: only the rows that need it, and an absent reading stays NOT READ", () => {
+    const backlog = item(1, "Issue", "OPEN", "Backlog", false, null, true, null);
+    const inProgress = item(2, "Issue", "OPEN", "In progress", false, null, true, null);
+    const unassigned = item(3, "Issue", "OPEN", "Backlog", false, null, false, null);
+    const unread = item(4, "Issue", "OPEN", "Ready", false, null, true, null);
+    const out = applyClaimSilence(
+      [backlog, inProgress, unassigned, unread],
+      new Map([
+        [1, { claimedAt: daysAgo(9), workAt: [] }],
+        [2, { claimedAt: daysAgo(9), workAt: [] }],
+        [3, { claimedAt: daysAgo(9), workAt: [] }],
+      ]),
+      now,
+    );
+    expect(out.map(i => i.idleDays)).toEqual([9, null, null, null]);
+  });
+
+  test("the board query no longer asks for the issue's last-updated time", () => {
+    // A field nobody reads invites the next reader to use it as a clock.
+    expect(BOARD_QUERY).not.toMatch(/\bupdatedAt\b/);
+    expect(CLAIM_ACTIVITY_QUERY).toContain("ASSIGNED_EVENT");
+    expect(CLAIM_ACTIVITY_QUERY).toContain("closedByPullRequestsReferences");
+    expect(CLAIM_ACTIVITY_QUERY).toContain("refs(");
+  });
+});
+
+test("#1942: main reads each claim's silence before the pull-request read that depends on it", () => {
+  // `isStaleClaimCandidate` picks the rows the pull-request read serves, and
+  // it asks `idleDays`. Read in the other order — or not at all — every
+  // claim stays `null`, every assigned row is UNDECIDABLE, and nothing is
+  // ever released: green tests over a sweep that does nothing.
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+  expect(code).toMatch(
+    /resolveLinkedPullRequests\(\s*token,\s*repoForReads,\s*await resolveClaimSilence\(token, repoForReads, board\),?\s*\)/,
+  );
 });
