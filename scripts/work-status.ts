@@ -771,7 +771,7 @@ console.log(
       labels: (i.labels ?? [])
         .map((l: any) => (typeof l === "string" ? l : l?.name))
         .filter((n: any) => typeof n === "string"),
-      createdAt: String(i.created_at ?? ""),
+      createdAt: typeof i.created_at === "string" && i.created_at !== "" ? i.created_at : null,
     })),
   ),
 );

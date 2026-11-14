@@ -233,11 +233,24 @@ export function needsCriterionRefusal(
  * a number somebody has to go and look up.
  */
 export function needsCriterionLine(
-  open: readonly { readonly number: number; readonly labels: readonly string[]; readonly createdAt: string }[],
+  open: readonly {
+    readonly number: number;
+    readonly labels: readonly string[];
+    /** `null` when the creation date could not be read — never `""`, which sorts as the oldest. */
+    readonly createdAt: string | null;
+  }[],
 ): string {
   const carrying = open.filter(i => i.labels.includes(NEEDS_CRITERION_LABEL));
   if (carrying.length === 0) return `  No open issue carries ${NEEDS_CRITERION_LABEL}.`;
-  const oldest = [...carrying].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number)[0]!;
+  const undated = carrying.filter(i => i.createdAt === null).map(i => `#${i.number}`);
+  if (undated.length > 0) {
+    return (
+      `  ${carrying.length} open issue(s) carry ${NEEDS_CRITERION_LABEL}; the oldest is UNMEASURED, ` +
+      `because ${undated.join(", ")} came back with no creation date.`
+    );
+  }
+  const dated = carrying as readonly { number: number; createdAt: string }[];
+  const oldest = [...dated].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number)[0]!;
   return (
     `  ${carrying.length} open issue(s) carry ${NEEDS_CRITERION_LABEL}, oldest #${oldest.number} ` +
     `(${oldest.createdAt.slice(0, 10)}). None of them can be expedited until it names a criterion.`
@@ -360,22 +373,12 @@ export function workNextReading(
   }
   // #2063, SC-2762: a carrier that also carries needs-criterion is refused by
   // name, and holds no place in the bound — only the eligible carriers are
-  // counted against Ready's depth or honoured.
+  // counted against Ready's depth or honoured. Computed here, decided below
+  // the two UNMEASURED guards: a slice or an unread depth must not be
+  // reported as a confident REFUSED (review of #2123).
   const refused = needsCriterionRefusal(population, carrying);
   const asking = carrying.filter(n => !refused.includes(n));
   const refusedNames = refused.map(n => `#${n}`).join(", ");
-  if (asking.length === 0) {
-    return {
-      status: "REFUSED",
-      carrying,
-      honoured: new Set(),
-      cap,
-      why:
-        `REFUSED — ${refusedNames} carr${refused.length === 1 ? "ies" : "y"} "${label}" and also ` +
-        `${NEEDS_CRITERION_LABEL}, so NOTHING was promoted: an issue that names no criterion is ` +
-        `never expedited. Name the criterion it serves, or "${NAMES_NONE}", and the label lifts.`,
-    };
-  }
   const refusedNote =
     refused.length === 0
       ? ""
@@ -414,13 +417,29 @@ export function workNextReading(
         `is unknown and NOTHING was promoted, including ${named}`,
     };
   }
+  if (asking.length === 0) {
+    return {
+      status: "REFUSED",
+      carrying,
+      honoured: new Set(),
+      cap,
+      why:
+        `REFUSED — ${refusedNames} carr${refused.length === 1 ? "ies" : "y"} "${label}" and also ` +
+        `${NEEDS_CRITERION_LABEL}, so NOTHING was promoted: an issue that names no criterion is ` +
+        `never expedited. Name the criterion it serves, or "${NAMES_NONE}", and the label lifts.`,
+    };
+  }
   // **Two ways to rank nothing, and the second is not the depth.** A lane
   // of three candidates all carrying the label is unordered by it however
   // deep Ready is — the issue's own sentence, *if every issue carries the
   // label, the label ranks nothing*, is a ratio against the population and
   // not against the cap. Round 2 of #1971's review found the cap test alone
   // reading HONOURED over exactly that input.
-  if (asking.length >= population.length) {
+  //
+  // Keyed on EVERY carrier, refused or not: whether the label tells anyone
+  // apart from the rest is a fact about who carries it, and refusing one of
+  // them does not make it discriminate (review of #2123).
+  if (carrying.length >= population.length) {
     return {
       status: "OVER_BOUND",
       carrying,
@@ -429,7 +448,7 @@ export function workNextReading(
       why:
         `REFUSED — all ${population.length} candidate(s) carry "${label}", so it ` +
         `ranks nothing among them whatever Ready's depth of ${cap} allows. NONE was ` +
-        `promoted: ${askingNames}.${refusedNote}`,
+        `promoted: ${named}.${refusedNote}`,
     };
   }
   if (asking.length > cap) {
