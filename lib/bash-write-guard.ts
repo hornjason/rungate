@@ -1198,6 +1198,14 @@ function enclosingWord(text: string, open: number, outer: Frame | undefined): st
 const EVALUATORS = new Set(['eval']);
 
 /**
+ * Words that run a FILE as shell text in the current shell (#2079). Handed a
+ * process substitution `<(…)`, the file IS the substitution's output, so a
+ * heredoc inside it is a program. Handed `$(…)`, the output is only a file
+ * NAME, so these are not evaluators there.
+ */
+const SOURCERS = new Set(['source', '.']);
+
+/**
  * Where a heredoc's ENCLOSING groups send its body (#1355, SC-2750).
  *
  * `text` is the whole command with every terminated heredoc body removed, so
@@ -1230,7 +1238,18 @@ function heredocReach(text: string, at: number): string | null {
   // disagrees is not one to widen anything on.
   if (stack.length > 0 && QUOTE_CLOSERS.has(stack[stack.length - 1].close)) return null;
   const frames = stack.slice();
-  const own = flow(pipeline(text, elementStart(text, at, frames), frames), true);
+  const ownElements = pipeline(text, elementStart(text, at, frames), frames);
+  // #2079: inside a substitution or group, the heredoc belongs to the
+  // INNERMOST command, not the one the line starts with: `X=$(bash <<'EOF'`
+  // feeds `bash`, and `heredocInterpreter`, reading from the line start, sees
+  // the assignment. Only reached when that reading found nothing, so no
+  // spelling is decided twice. Before the sever check, because an
+  // interpreter runs its stdin wherever its own stdout goes.
+  if (frames.some(f => !QUOTE_CLOSERS.has(f.close))) {
+    const owner = commandWord(ownElements[0]?.raw ?? '');
+    if (isInterpreterWord(owner)) return owner;
+  }
+  const own = flow(ownElements, true);
   if (own !== undefined) return own;
   for (let level = frames.length; level > 0; level--) {
     while (i < text.length && stack.length >= level) i = nest(text, i, stack);
@@ -1241,6 +1260,7 @@ function heredocReach(text: string, at: number): string | null {
       const outer = frames.slice(0, level - 1).reverse().find(f => !QUOTE_CLOSERS.has(f.close));
       const word = enclosingWord(text, frame.open, outer);
       if (isInterpreterWord(word) || EVALUATORS.has(word)) return word;
+      if (SOURCERS.has(word) && text[frame.open - 1] === '<') return word;
     } else {
       const word = flow(pipeline(text, i, stack), false);
       if (word !== undefined) return word;
@@ -1349,7 +1369,7 @@ export function interpreterPrograms(cmd: string): Array<{ shell: boolean; progra
       continue;
     }
     const word = heredocInterpreter(f.opener) ?? heredocReach(text, f.at);
-    if (word) out.push({ shell: isShellWord(word) || EVALUATORS.has(word), program: f.body });
+    if (word) out.push({ shell: isShellWord(word) || EVALUATORS.has(word) || SOURCERS.has(word), program: f.body });
   }
   return out.filter(p => p.program !== '');
 }
