@@ -1136,6 +1136,8 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
     const existing = JSON.parse(readFileSync(join(rungateDir, "config.json"), "utf-8"));
     repairEmptySidecars(rungateDir, actions);
     auditExistingConfig(existing, scannedPages, scannedConsumers, actions, rungateDir, opts.pruneConsumers === true);
+    // #2050: the two label keys that fail closed when absent.
+    reconcileLabelKeys(rungateDir, actions);
   } else if (existsSync(harnessPath)) {
     // Monolith exists — split into directory structure
     const existing = JSON.parse(readFileSync(harnessPath, "utf-8"));
@@ -1148,6 +1150,10 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
       // No rungateDir on this path (the monolith layout), so pruning has
       // nowhere to write and is not offered rather than silently not happening.
       auditExistingConfig(existing, scannedPages, scannedConsumers, actions);
+      // #2050: the monolith is not rewritten, so each missing key is named.
+      for (const line of labelKeyRepairs(existing).lines) {
+        actions.push(line.startsWith("SET: ") ? "UNSET: board.expediteLabel — no expedite lane; the monolith layout is not rewritten, so add it under \"board\" yourself" : line);
+      }
     }
   } else {
     // No config exists — create directory structure
@@ -1225,12 +1231,93 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
     // The split path below is deliberately NOT routed through these defaults.
     const roles = buildDefaultRoles();
     const hooks = buildDefaultHooks();
-    writeDirectoryStructure(root, config, roles, hooks, undefined, actions);
+    // #2050: a new project gets the expedite key and is told the override key is unset.
+    const labelled = labelKeyRepairs(config);
+    writeDirectoryStructure(root, labelled.config as typeof config, roles, hooks, undefined, actions);
+    actions.push(...labelled.lines);
     actions.push(
       `CREATED: .claude/rungate/ (${Object.keys(scannedPages).length} pages, ${scannedConsumers.length} consumers, ` +
       `${Object.keys(roles).length} roles, ${hooks.length} hooks)`
     );
   }
+}
+
+/**
+ * The expedite label scaffold writes when a config has none — #2050, SC-2748.
+ * The same name this repository uses.
+ */
+export const EXPEDITE_LABEL_DEFAULT = "work-this-next";
+
+/**
+ * What scaffold does about the two label keys that fail closed when absent
+ * (#2004) — decided once, for the new-config and existing-config paths alike.
+ *
+ * Jason's call, 2026-11-14:
+ * - `board.expediteLabel` is WRITTEN when missing or blank. The label moves an
+ *   issue to the top of Ready, and does nothing until someone with triage
+ *   access applies it, so a default costs nothing and stops the lane
+ *   silently not existing.
+ * - `board.filingOverrideLabel` is NEVER written. It is the escape hatch from
+ *   the FindingArbiter, whose refusal deliberately never names it; a default
+ *   would hand every consumer's agents its name, read straight from config.
+ *   It is reported as unset, with what that switches off and how to set it.
+ *
+ * A `board` that is present and not an object is refused, never replaced:
+ * overwriting it would discard whatever the consumer put there.
+ */
+export function labelKeyRepairs(config: Record<string, any>): {
+  config: Record<string, any>;
+  changed: boolean;
+  lines: string[];
+} {
+  const raw = config.board;
+  if (raw !== undefined && (raw === null || typeof raw !== "object" || Array.isArray(raw))) {
+    return {
+      config,
+      changed: false,
+      lines: [
+        "REFUSED: board.expediteLabel / board.filingOverrideLabel (board in .claude/rungate/config.json is not an object, so neither key could be read or written)",
+      ],
+    };
+  }
+  const board: Record<string, unknown> = raw ?? {};
+  const isSet = (v: unknown) => typeof v === "string" && v.trim() !== "";
+  const lines: string[] = [];
+  let next = config;
+  let changed = false;
+  if (!isSet(board.expediteLabel)) {
+    next = { ...config, board: { ...board, expediteLabel: EXPEDITE_LABEL_DEFAULT } };
+    changed = true;
+    lines.push(
+      `SET: board.expediteLabel = "${EXPEDITE_LABEL_DEFAULT}" in .claude/rungate/config.json — an open issue ` +
+        `carrying that label goes to the top of Ready. Rename it there if you like.`,
+    );
+  }
+  if (!isSet(board.filingOverrideLabel)) {
+    lines.push(
+      "UNSET: board.filingOverrideLabel — this project has no FindingArbiter waiver, so a refused filing stays " +
+        "refused. Scaffold never writes one: a waiver's name should be chosen, not defaulted. To set one, add " +
+        '"filingOverrideLabel": "<label>" under "board" in .claude/rungate/config.json',
+    );
+  }
+  return { config: next, changed, lines };
+}
+
+/** Apply {@link labelKeyRepairs} to an existing `config.json`, writing only when a key was added. */
+function reconcileLabelKeys(rungateDir: string, actions: string[]): void {
+  const configPath = join(rungateDir, "config.json");
+  let config: Record<string, any>;
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch (err) {
+    // A corrupt config is never an empty one: rewriting it would discard
+    // every key this function does not know about.
+    actions.push(`REFUSED: board label keys (config.json is unreadable: ${(err as Error).message})`);
+    return;
+  }
+  const repaired = labelKeyRepairs(config);
+  if (repaired.changed) writeFileSync(configPath, JSON.stringify(repaired.config, null, 2) + "\n");
+  actions.push(...repaired.lines);
 }
 
 /**
