@@ -183,7 +183,8 @@ take.
 
 - [ ] SC-2742: every script a process workflow runs ships in `package.json` `files[]` and runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2743: `rungate scaffold` emits `.github/workflows/closing-references.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
+- [x] SC-2743: `rungate scaffold` emits `.github/workflows/closing-references.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
+      proved-by: test/closing-references-workflow.test.ts, the `SC-2743` describe, 0 fail; 2026-11-14, on the PR for #2045. The scaffold emits the workflow from `buildClosingReferencesWorkflow`, calling `bunx rungate@<pinned> audit-closing-references` on pull requests and the merge queue, recovering the pull request number from the queue ref and refusing UNMEASURED when none can be named, and this repository's copy is byte-identical to the scaffold's output.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2744: `rungate scaffold` emits `.github/workflows/adr-accepted.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
       proved-by: test/adr-accepted-workflow.test.ts, the `SC-2744` describe, 0 fail; 2026-11-14, on the PR for #2046. The scaffold emits the workflow from `buildAdrAcceptedWorkflow` with the engine spec and milestone prefix read from config at scaffold time, calls `bunx rungate@<pinned>` for every step, refuses UNMEASURED naming any input it could not read, and this repository's copy is byte-identical to the scaffold's output.

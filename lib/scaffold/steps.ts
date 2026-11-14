@@ -49,6 +49,7 @@ import {
   buildAiReviewUnmeasuredWorkflow,
 } from "./ai-review-unmeasured-workflow";
 import { buildAdrAcceptedWorkflow } from "./adr-accepted-workflow";
+import { buildClosingReferencesWorkflow } from "./closing-references-workflow";
 import { CI_SUITE_FETCH_DEPTH, baseRefFetchDepth } from "../ci-history-depth";
 import { CLAUDE_CODE_ACTION } from "../claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../google-auth-action";
@@ -4488,6 +4489,18 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     milestonePrefix: boardInputs.milestonePrefix,
   });
 
+  // #2045, ADR-014 row 2: the closing-references check, generated so a
+  // consumer gets ADR-013 rule 9 step 4 and this repository's copy is the
+  // generated one. It calls the published CLI, at the generating version.
+  const closingReferencesYml = buildClosingReferencesWorkflow({
+    runsOn,
+    checkout: actionRef("actions/checkout"),
+    setupBun: actionRef("oven-sh/setup-bun"),
+    setupBunWith: bunStep,
+    setupBunEnv: setupBunEnv("        "),
+    version: harnessVersion(),
+  });
+
   // Not `writeFileSync`. The harness owns the `test` and `gates` jobs; it does
   // not own the file, and a consumer's own jobs have to survive the update
   // that re-scaffolding IS. A refusal is recorded rather than thrown so that
@@ -4503,7 +4516,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
   // lib/conformity.ts reads back, and the two are held together by
   // test/ai-review-workflow.test.ts AC-1, which looks for the constant's
   // filename in what this loop actually wrote.
-  for (const [name, content] of [["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml], ["adr-accepted.yml", adrAcceptedYml]] as const) {
+  for (const [name, content] of [["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml], ["adr-accepted.yml", adrAcceptedYml], ["closing-references.yml", closingReferencesYml]] as const) {
     const label = `.github/workflows/${name}`;
     try {
       // Keyed by FILE, and the lookup is here because this loop is the only

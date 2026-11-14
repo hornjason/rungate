@@ -174,6 +174,7 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
       "ai-review-unmeasured.yml",
       "ai-review.yml",
       "ci.yml",
+      "closing-references.yml",
       "gates.yml",
     ]);
 
@@ -182,7 +183,8 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
     // admitted or dropped a file would make them pass over the wrong set —
     // so the derivation's own answer is pinned here.
     const { requirable, reportsNothing } = splitByRequirability(sharded);
-    expect(requirable).toEqual(["ai-review.yml", "ci.yml", "gates.yml"]);
+    // closing-references.yml since #2045: a required check on pull requests.
+    expect(requirable).toEqual(["ai-review.yml", "ci.yml", "closing-references.yml", "gates.yml"]);
     expect(
       reportsNothing,
       "a generated workflow stopped reporting on pull requests, so the queue cases below " +

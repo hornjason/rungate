@@ -514,9 +514,12 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
     expect(yml).toMatch(/closingIssuesReferences\(first: \d+\) \{ totalCount\s*nodes \{ number title body /);
     expect(yml).toContain("closingIssuesTotal: .closingIssuesReferences.totalCount");
     expect(yml).toContain("RUNGATE_REQUIRE_CLOSING_REF: ${{ vars.RUNGATE_REQUIRE_CLOSING_REF }}");
-    const invokeLine = yml.split("\n").find(l => l.includes("audit-closing-references.ts"));
-    expect(invokeLine, "closing-references.yml no longer invokes the script").toBeDefined();
+    // #2045: generated, so it calls the published CLI rather than a script
+    // path a consumer does not have.
+    const invokeLine = yml.split("\n").find(l => /\bbunx rungate@\S+ audit-closing-references\b/.test(l));
+    expect(invokeLine, "closing-references.yml no longer invokes the published audit-closing-references").toBeDefined();
     expect(invokeLine).toContain('--repo "$GITHUB_REPOSITORY"');
+    expect(yml, "a generated workflow runs a repository script").not.toMatch(/\bbun scripts\//);
   });
 });
 
