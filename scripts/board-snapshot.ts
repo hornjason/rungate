@@ -62,7 +62,8 @@ import {
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
 import { dependencyPlan } from "../lib/spec-deps";
-import type { PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
+import type { DeclaredWork, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
+import { parseCriteria } from "../lib/spec-evidence";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -240,6 +241,67 @@ export interface ProducedSnapshot {
   specDeferrals?: SpecDeferral[];
   repoIssues?: RepoIssueCriteria[];
   plannedEdges?: PlannedEdge[];
+  /** SC-2752: unticked criteria in in-scope specs and open stage items. Absent when it could not be read. */
+  declaredWork?: DeclaredWork[];
+}
+
+/**
+ * The work this repository DECLARES — SC-2752, #1953.
+ *
+ * Every unticked criterion in an in-scope spec, then every open stage item
+ * in `project-state.json`. In scope is the same population `spec-placement`
+ * counts: a spec that states criteria (`PLANNED` or `UNPLANNED`) and is not
+ * deferred. The criteria are read through `parseCriteria`, the one reader of
+ * a spec's checkbox lines, so "unticked" has one answer in the tree.
+ *
+ * A consumer repository has no `project-state.json`: an absent file declares
+ * no stage work, which is a measured fact. A file that is present and will
+ * not parse, an UNREADABLE in-scope spec, or a spec that cannot be read is
+ * returned as `{}` — the key omitted, which `declared-work` reads as
+ * UNMEASURED. A shorter list is exactly what a tree with fewer commitments
+ * produces, so a partial read must never be emitted as one.
+ */
+export function readDeclaredWork(
+  root: string,
+  specs: readonly { path: string; state: SpecPlacementRow["state"]; deferred?: boolean }[],
+): { declaredWork?: DeclaredWork[] } {
+  const work: DeclaredWork[] = [];
+  for (const s of specs) {
+    if (s.deferred === true || s.state === "NO_CRITERIA") continue;
+    if (s.state === "UNREADABLE") return {};
+    let content: string;
+    try {
+      content = readFileSync(join(root, s.path), "utf-8");
+    } catch {
+      // Named as UNMEASURED by the omitted key, never read as an empty spec.
+      return {};
+    }
+    for (const c of parseCriteria(content)) if (!c.ticked) work.push({ kind: "criterion", id: c.id, source: s.path });
+  }
+  const statePath = join(root, "project-state.json");
+  if (existsSync(statePath)) {
+    let state: unknown;
+    try {
+      state = JSON.parse(readFileSync(statePath, "utf-8"));
+    } catch {
+      return {};
+    }
+    const stages = (state as { stages?: unknown } | null)?.stages;
+    if (stages !== undefined && !Array.isArray(stages)) return {};
+    for (const stage of (stages ?? []) as { items?: unknown }[]) {
+      if (!Array.isArray(stage?.items)) continue;
+      for (const item of stage.items as Record<string, unknown>[]) {
+        if (item?.done !== false || typeof item.id !== "string") continue;
+        work.push({
+          kind: "stage-item",
+          id: item.id,
+          source: "project-state.json",
+          issue: typeof item.issue === "number" ? item.issue : null,
+        });
+      }
+    }
+  }
+  return { declaredWork: work };
 }
 
 /** The path the deferral bank lives at, relative to the project root — SC-2734. */
@@ -822,6 +884,12 @@ export async function main(
           ],
         };
 
+  // SC-2752. Built from the SAME sweep rows `spec-placement` reads, so the two
+  // readings cannot disagree about which specs are in scope. A sweep that
+  // could not enumerate `specs/` emits no rows, and `declared-work` is then
+  // UNMEASURED rather than a stage-only count.
+  const declared = placements.specPlacements === undefined ? {} : readDeclaredWork(root, placements.specPlacements);
+
   const snapshot: ProducedSnapshot = {
     producedAt: new Date().toISOString(),
     spec: specArg,
@@ -834,6 +902,7 @@ export async function main(
     ...deferrals,
     ...repoIssues,
     ...edges,
+    ...declared,
   };
 
   process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);

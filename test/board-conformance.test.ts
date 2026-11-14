@@ -284,19 +284,23 @@ describe("the command's shape", () => {
     // printed nothing and exited 0 would satisfy the exit code alone, and
     // B5's own verify command reads this output.
     for (const name of READING_NAMES) expect(r.out, `--list-readings did not name "${name}"`).toContain(name);
-    // Five engine-scoped readings (B1..B4, B6) and three repository-wide
-    // ones (E1..E3, added by #1717). The number is asserted as well as the
-    // names because `--list-readings` printing a SUBSET would satisfy every
-    // `toContain` above — a list can only be checked by its length and its
-    // membership together.
-    expect(READING_NAMES.length, "the five engine readings plus the three repository-wide ones").toBe(8);
+    // Five engine-scoped readings (B1..B4, B6), three repository-wide ones
+    // (E1..E3, added by #1717) and declared work (SC-2752, #1953). The number
+    // is asserted as well as the names because `--list-readings` printing a
+    // SUBSET would satisfy every `toContain` above — a list can only be
+    // checked by its length and its membership together.
+    expect(READING_NAMES.length, "five engine, three repository-wide, and declared work").toBe(9);
   });
 
   test("every reading names the ladder item that owns wiring its source", () => {
     // Without this, a reading can exist with nobody on the hook for making
     // it real, which is the "declared and nothing reads it" shape this
     // whole stage exists to close.
-    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2", "E3"]);
+    // `declared-work` came from a criterion, not a ladder item, so the
+    // criterion is what is on the hook: SC-2752 is ticked only by a test that
+    // exercises it (rule 6), which is the same obligation a ladder item's
+    // verify command carries.
+    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2", "E3", "SC-2752"]);
   });
 });
 

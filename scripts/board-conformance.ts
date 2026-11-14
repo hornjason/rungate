@@ -186,6 +186,53 @@ export interface BoardSnapshot {
    * that needs none.
    */
   plannedEdges?: PlannedEdge[];
+
+  /**
+   * Work the repository DECLARES, and what each piece points at — SC-2752.
+   *
+   * Every unticked criterion in an in-scope spec (one that states criteria
+   * and is not deferred), and every open stage item in `project-state.json`.
+   * A commitment written into a file is indistinguishable from one never
+   * made until something reads the file and asks for its tracker object;
+   * thirteen were found by hand on 2026-11-09 (#1938-#1946, #1948-#1951).
+   *
+   * **Absent means the producer never read it**, and `declared-work` goes
+   * UNMEASURED — same convention as {@link closedBlockers}.
+   */
+  declaredWork?: DeclaredWork[];
+}
+
+/** One piece of declared work — SC-2752. */
+export interface DeclaredWork {
+  /** `criterion`: an unticked criterion in an in-scope spec. `stage-item`: an open item in project-state.json. */
+  kind: "criterion" | "stage-item";
+  /** The criterion id, or the stage item id. */
+  id: string;
+  /** Where it is declared: the spec's repo-relative path, or `project-state.json`. */
+  source: string;
+  /**
+   * A stage item's own `issue` field, or `null` when it names none. Absent on
+   * a criterion, which is accounted for by an open issue NAMING it, read from
+   * {@link BoardSnapshot.repoIssues} — the one decider of what an issue names.
+   */
+  issue?: number | null;
+}
+
+/**
+ * The declared work no open issue accounts for, in declaration order — SC-2752.
+ *
+ * A criterion is accounted for when some open issue names it; a stage item
+ * when its `issue` is an OPEN issue. A stage item pointing at a closed or
+ * nonexistent issue names nothing: the work it declared is still not done and
+ * the tracker no longer says so, which is the `readsIssueRefs` battery's
+ * dangling reference.
+ */
+export function declaredWorkUnaccounted(b: BoardSnapshot): DeclaredWork[] {
+  const open = new Set((b.repoIssues ?? []).map(i => i.number));
+  const named = new Set((b.repoIssues ?? []).flatMap(i => i.names));
+  return (b.declaredWork ?? []).filter(w =>
+    w.kind === "criterion" ? !named.has(w.id) : !(typeof w.issue === "number" && open.has(w.issue)),
+  );
 }
 
 /** One spec in the repository-wide placement sweep — SC-2615. */
@@ -628,6 +675,30 @@ export const READINGS: readonly ReadingSpec[] = [
         );
     },
   },
+  {
+    name: "declared-work",
+    item: "SC-2752",
+    what: "every unticked criterion in an in-scope spec and every open stage item names an open issue",
+    // A stage item's `issue` is an issue number, validated against the OPEN
+    // set in `declaredWorkUnaccounted` — so this joins the battery's
+    // dangling-reference sweep rather than crediting a pointer to nothing.
+    readsIssueRefs: true,
+    // Both halves of the question must have been read. Declared work with no
+    // issue set to resolve it against would blame every row on a lookup that
+    // never happened; an issue set with no declared work has nothing to ask.
+    unreadable: b =>
+      b.declaredWork === undefined
+        ? "declared work was never read — no unticked criteria and no stage items reached the snapshot, " +
+          "which is not the same as a repository that declares none"
+        : b.repoIssues === undefined
+          ? "open issues were never read, so whether any of them accounts for the declared work is unknown"
+          : null,
+    measure: b => {
+      const total = b.declaredWork!.length;
+      return { measured: total - declaredWorkUnaccounted(b).length, target: total };
+    },
+    offenders: b => declaredWorkUnaccounted(b).map(w => `${w.id} (${w.source}) names no open issue`),
+  },
 ];
 
 export const READING_NAMES: readonly string[] = READINGS.map(r => r.name);
@@ -993,6 +1064,15 @@ export function readSnapshotText(text: string): SnapshotRead {
   const edges = Array.isArray(raw.plannedEdges)
     ? { plannedEdges: raw.plannedEdges.map(normalisePlannedEdge).filter((e): e is PlannedEdge => e !== null) }
     : {};
+  // SC-2752. ONE malformed row makes the whole population unread, the
+  // opposite of the drop rule above, because here a dropped row shortens
+  // exactly the list the reading blames: a declared item the parser could not
+  // identify would vanish from `declared-work` and the reading would get
+  // easier. Omitting the key is UNMEASURED, which is the honest reading of a
+  // population this command could not fully identify.
+  const declaredRows = Array.isArray(raw.declaredWork) ? raw.declaredWork.map(normaliseDeclaredWork) : null;
+  const declared =
+    declaredRows !== null && declaredRows.every(w => w !== null) ? { declaredWork: declaredRows as DeclaredWork[] } : {};
 
   return {
     board: {
@@ -1005,9 +1085,23 @@ export function readSnapshotText(text: string): SnapshotRead {
       ...deferrals,
       ...repoIssues,
       ...edges,
+      ...declared,
     },
     why: null,
   };
+}
+
+/** One declared-work row, or `null` for one this command cannot identify — SC-2752. */
+function normaliseDeclaredWork(raw: unknown): DeclaredWork | null {
+  if (raw === null || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.id !== "string" || r.id === "" || typeof r.source !== "string") return null;
+  if (r.kind === "criterion") return { kind: "criterion", id: r.id, source: r.source };
+  if (r.kind !== "stage-item") return null;
+  if (r.issue === null || r.issue === undefined) return { kind: "stage-item", id: r.id, source: r.source, issue: null };
+  return typeof r.issue === "number" && Number.isInteger(r.issue)
+    ? { kind: "stage-item", id: r.id, source: r.source, issue: r.issue }
+    : null;
 }
 
 /**
