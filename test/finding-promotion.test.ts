@@ -51,6 +51,7 @@ import { NAMES_NONE, criterionAnswer } from "../lib/board-mirror";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf, missingSections } from "../lib/issue-shape";
 import { buildScRegistry } from "../lib/sc-ids";
 import { placementReading } from "../lib/spec-placement";
+import { DEFERRAL_BANK } from "../scripts/board-snapshot";
 
 const SOURCE = join(import.meta.dir, "..", "lib", "finding-promotion.ts");
 
@@ -1574,8 +1575,53 @@ describe("#2066 / SC-2612: finding-promotion writes the spec's family, section, 
     expect(cli.indexOf("bankWithPromotion(")).toBeLessThan(dryRun);
     expect(cli).toContain("writeSpec(target, inserted.text)");
     expect(cli).not.toContain("content.trimEnd()}\\n${result.line}");
-    expect(cli.indexOf("writeFileSync(bankPath, bankText)")).toBeGreaterThan(cli.indexOf("writeSpec(target, inserted.text)"));
-    // One name for the bank's path: the constant board-snapshot reads it from.
-    expect(cli).toContain('import { DEFERRAL_BANK } from "./board-snapshot"');
+    expect(cli.indexOf("writeSpec(bankPath, bankText)")).toBeGreaterThan(cli.indexOf("writeSpec(target, inserted.text)"));
+
+  });
+});
+
+describe("#2066 review round 1", () => {
+  const line = "- [ ] SC-9002: lib/fixture.ts contains [beta] — and something else";
+
+  test("a criterion already in the spec still gets its phase, and a missing row still refuses", () => {
+    // Review: the already-written branch coalesced a missing row to "ok" and
+    // the CLI never wrote the placement it computed.
+    const unplaced = PLANNED_SPEC.replace("| **Phase 2** | SC-9002 |", "| **Phase 2** |  |");
+    const placed = specWithCriterion(unplaced, line, "SC-9002", 2);
+    expect(placed.ok).toBe(true);
+    if (placed.ok) expect(placed.text).toContain("| **Phase 2** | SC-9002 |");
+    const missing = specWithCriterion(unplaced, line, "SC-9002", 9);
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.refusal).toBe("PHASE_ROW_ABSENT");
+    const none = specWithCriterion(unplaced, line, "SC-9002", null);
+    expect(none.ok, "already written and still unplaced in a planned spec").toBe(false);
+    if (!none.ok) expect(none.refusal).toBe("PHASE_REQUIRED");
+  });
+
+  test("the CLI writes a placement-only change for a criterion already written", () => {
+    const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
+    const branch = cli.slice(cli.indexOf("if (result.alreadyWritten) {"));
+    const end = branch.indexOf("} else {");
+    expect(branch.slice(0, end)).toContain("inserted.text !== content");
+    expect(branch.slice(0, end)).toContain("writeSpec(target, inserted.text)");
+  });
+
+  test("a grouped id says it was allocated with no reservation registry behind it", () => {
+    const root = scratch(CRC_SPEC);
+    try {
+      const out = promote(inputFor(root, { group: "M" }), REGISTRY);
+      expect(out.promoted).toBe(true);
+      if (out.promoted) expect(out.unmeasured.join(" ")).toContain("no reservation");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the bank is keyed by the spec's path inside the project, however --spec was spelled", () => {
+    const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
+    expect(cli).toContain("bankWithPromotion(current, specKey,");
+    expect(cli).toMatch(/const specKey = relative\(ROOT, target\)/);
+    // The literal path the sweep can follow, agreeing with the reader's constant.
+    expect(cli).toContain(`join(ROOT, "${DEFERRAL_BANK}")`);
   });
 });

@@ -30,7 +30,7 @@
  */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, relative, sep } from "path";
 
 import {
   bankWithPromotion,
@@ -42,7 +42,6 @@ import {
   type PromotableIssue,
   withCriterionLinked,
 } from "../lib/finding-promotion";
-import { DEFERRAL_BANK } from "./board-snapshot";
 import { readScRegistry } from "./sync-sc-status";
 import { currentScOwner } from "../lib/sc-reservations";
 import { ghWithoutGhToken } from "../lib/live-issues";
@@ -394,7 +393,14 @@ if (!inserted.ok) {
   console.error(`REFUSED ${inserted.refusal}: ${inserted.why}`);
   process.exit(PROMOTION_EXIT);
 }
-const bankPath = join(ROOT, DEFERRAL_BANK);
+// A literal, so the spec-write sweep (#1584) can see this write targets the
+// bank and not a spec. `test/finding-promotion.test.ts` holds it equal to
+// `DEFERRAL_BANK`, the constant board-snapshot reads the bank from.
+const DEFERRAL_BANK = ".claude/spec-deferral-ratchet.json";
+const bankPath = join(ROOT, ".claude/spec-deferral-ratchet.json");
+// The bank is keyed by the spec's path inside the project, never by however
+// --spec was spelled (`./specs/X.md`, an absolute path): review of #2105.
+const specKey = relative(ROOT, target).split(sep).join("/");
 const counts = { before: placementCount(content), after: placementCount(inserted.text) };
 let bankText: string | null = null;
 if (counts.before.deferred && counts.after.criteria !== counts.before.criteria) {
@@ -405,7 +411,7 @@ if (counts.before.deferred && counts.after.criteria !== counts.before.criteria) 
     console.error(`REFUSED BANK_DRIFT: ${spec} is deferred and ${DEFERRAL_BANK} could not be read: ${(e as Error).message}`);
     process.exit(PROMOTION_EXIT);
   }
-  const banked = bankWithPromotion(current, spec, counts.before.criteria, counts.after.criteria);
+  const banked = bankWithPromotion(current, specKey, counts.before.criteria, counts.after.criteria);
   if (!banked.ok) {
     console.error(`REFUSED ${banked.refusal}: ${banked.why}`);
     process.exit(PROMOTION_EXIT);
@@ -435,6 +441,17 @@ if (!write) {
 // and go straight to the link (review of #2065).
 if (result.alreadyWritten) {
   console.log(`${spec} already states ${result.id}; not appending it again.`);
+  // A retry may still carry a placement the first run did not make. Write it,
+  // or --phase is computed and dropped while the run reports success
+  // (review of #2105).
+  if (inserted.text !== content) {
+    const placedOnly = writeSpec(target, inserted.text);
+    if (!placedOnly.written) {
+      console.error(`REFUSED: ${placedOnly.refusal ?? `${spec} was not written, and gave no reason`}`);
+      process.exit(PROMOTION_EXIT);
+    }
+    console.log(`Placed ${result.id} in Phase ${phase}.`);
+  }
 } else {
   const wrote = writeSpec(target, inserted.text);
   if (!wrote.written) {
@@ -449,16 +466,23 @@ if (result.alreadyWritten) {
 // reads the deferred spec as disagreeing with it. The spec is already
 // written, so a failure here names exactly what is left.
 if (bankText !== null) {
+  // Through `writeSpec`, the one write path the spec-write sweep (#1552)
+  // allows for a file whose path matches /spec/i. The bank is JSON and
+  // carries no generated-file marker, so `writeSpec` writes it as authored.
+  let banked: { written: boolean; refusal: string | null };
   try {
-    writeFileSync(bankPath, bankText);
-    console.log(`${DEFERRAL_BANK}: ${spec} now ${counts.after.criteria} criteria.`);
+    banked = writeSpec(bankPath, bankText);
   } catch (e) {
+    banked = { written: false, refusal: (e as Error).message };
+  }
+  if (!banked.written) {
     console.error(
-      `REFUSED: ${spec} now states ${result.id}, and ${DEFERRAL_BANK} could not be written (${(e as Error).message}). ` +
-        `Set ${spec}'s count there to ${counts.after.criteria}.`,
+      `REFUSED: ${spec} now states ${result.id}, and ${DEFERRAL_BANK} could not be written (${banked.refusal ?? "no reason given"}). ` +
+        `Set ${specKey}'s count there to ${counts.after.criteria}.`,
     );
     process.exit(PROMOTION_EXIT);
   }
+  console.log(`${DEFERRAL_BANK}: ${specKey} now ${counts.after.criteria} criteria.`);
 }
 
 // #2060: link the issue here rather than printing an instruction to do it.

@@ -473,7 +473,12 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
       line: `- [ ] ${grouped.id}: ${statement}`,
       spec: input.spec,
       issue: input.issue.number,
-      unmeasured: [],
+      // Said, not hidden: `SC-` ids go through specs/sc-reservations.json, and
+      // a grouped family has no reservation registry, so another branch
+      // promoting into the same group can take the same id (review of #2105).
+      unmeasured: [
+        `${family}-* ids have no reservation registry: an id another branch allocated in group ${input.group} is not visible here`,
+      ],
       alreadyWritten: false,
     };
   }
@@ -578,8 +583,11 @@ export function specWithCriterion(
   id: string,
   phase: number | null,
 ): { ok: true; text: string } | { ok: false; refusal: PromotionRefusal; why: string } {
-  if (specText.split("\n").includes(line)) return { ok: true, text: withPhase(specText, id, phase) ?? specText };
+  // Already written (a retry after a failed link): the line stays where it
+  // is, and the phase and placement checks below still run on it, so a retry
+  // with --phase places it and a missing row still refuses (review of #2105).
   const lines = specText.split("\n");
+  const present = lines.includes(line);
   const [, family, group] = /^([A-Z]+)-([A-Z]?)\d+$/.exec(id) ?? [];
   let last = -1;
   for (let i = 0; i < lines.length; i++) {
@@ -587,7 +595,9 @@ export function specWithCriterion(
     if (m && (family === "SC" || (m[1] === family && m[2] === group))) last = i;
   }
   let text: string;
-  if (last === -1) {
+  if (present) {
+    text = specText;
+  } else if (last === -1) {
     text = `${specText.trimEnd()}\n${line}\n`;
   } else {
     let at = last + 1;
