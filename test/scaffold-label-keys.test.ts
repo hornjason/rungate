@@ -22,6 +22,7 @@ import {
   expediteLabelDefault,
   expediteLabelTemplate,
   generateOrAuditProjectHarness,
+  injectEnvironmentSection,
   labelKeyRepairs,
 } from "../lib/scaffold/steps";
 
@@ -154,6 +155,22 @@ describe("#2156: input edge cases are refused or reported by name, never crashed
       expect(said).toMatch(/REFUSED: \.claude\/rungate\.json is valid JSON but not an object/);
     });
   }
+
+  // The full scaffold reads the config a second time after the audit; that
+  // reader crashed on the same input once the first stopped crashing.
+  test("the environment-section reader skips a non-object config instead of throwing", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-label-env-"));
+    try {
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(join(root, "AGENTS.md"), "# x\n");
+      for (const v of ["null", "7", "[]"]) {
+        writeFileSync(join(root, ".claude", "rungate", "config.json"), v);
+        expect(() => injectEnvironmentSection(root, []), `config ${v} threw`).not.toThrow();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test("labelKeyRepairs refuses a non-object config by name rather than throwing", () => {
     const { changed, lines } = labelKeyRepairs(null as never, { file: "cfg.json" });

@@ -322,6 +322,9 @@ export function injectEnvironmentSection(root: string, actions: string[]): void 
   } else {
     return;
   }
+  // #2156: a config that parses to null, a number or an array has nothing to
+  // inject; the audit step has already refused it by name.
+  if (!isJsonObject(harness)) return;
 
   const lines: string[] = [];
   if (harness.dev) {
