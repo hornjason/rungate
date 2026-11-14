@@ -249,7 +249,7 @@ function resolveWith(files: ConfigFileAccess): ConfigResolution {
   if (files.exists(MONOLITH_REL)) {
     return {
       status: "resolved",
-      config: normaliseConfig(JSON.parse(files.read(MONOLITH_REL))),
+      config: loadFromMonolith(files),
       source: "monolith",
       path: files.locate(MONOLITH_REL),
     };
@@ -448,6 +448,10 @@ function loadFromDirectory(files: ConfigFileAccess): ResolvedConfig {
   const compliance = files.exists(`${DIR_REL}/compliance.json`) ? json("compliance.json") : undefined;
 
   return normaliseConfig({ ...config, roles, hooks, compliance });
+}
+
+function loadFromMonolith(files: ConfigFileAccess): ResolvedConfig {
+  return normaliseConfig(JSON.parse(files.read(MONOLITH_REL)));
 }
 
 function readJson(path: string): any {
