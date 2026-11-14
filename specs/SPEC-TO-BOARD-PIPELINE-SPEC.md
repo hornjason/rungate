@@ -185,7 +185,8 @@ take.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2743: `rungate scaffold` emits `.github/workflows/closing-references.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2744: `rungate scaffold` emits `.github/workflows/adr-accepted.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
+- [x] SC-2744: `rungate scaffold` emits `.github/workflows/adr-accepted.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
+      proved-by: test/adr-accepted-workflow.test.ts, the `SC-2744` describe, 0 fail; 2026-11-14, on the PR for #2046. The scaffold emits the workflow from `buildAdrAcceptedWorkflow` with the engine spec and milestone prefix read from config at scaffold time, calls `bunx rungate@<pinned>` for every step, refuses UNMEASURED naming any input it could not read, and this repository's copy is byte-identical to the scaffold's output.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2745: `rungate scaffold` emits `board-ready.yml` and `board-intake.yml` as owned workflows that read the board's identity from project config, and no generated workflow contains a literal project id or URL
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->

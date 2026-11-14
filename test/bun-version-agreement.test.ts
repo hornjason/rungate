@@ -58,10 +58,11 @@ const REPO_ROOT = join(import.meta.dir, "..");
  * How many `setup-bun` steps `createCiWorkflows` emits: one in `ci.yml`, one
  * in `gates.yml`, since #1013 one in `ai-review.yml`, which installs bun for
  * the findings adjudicator, and since #1488 one in `ai-review-unmeasured.yml`,
- * which installs it for the unmeasured classifier. Declared once, because
+ * which installs it for the unmeasured classifier, and since #2046 one in
+ * `adr-accepted.yml`, which runs the published CLI. Declared once, because
  * three cases below count them and three literals would drift apart.
  */
-const GENERATED_BUN_STEPS = 4;
+const GENERATED_BUN_STEPS = 5;
 
 const WORKFLOW_DIR = join(REPO_ROOT, ".github", "workflows");
 

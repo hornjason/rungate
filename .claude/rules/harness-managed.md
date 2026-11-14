@@ -23,6 +23,7 @@ forever.
 | `.github/workflows/gates.yml` | job-preserving | Settings from `.claude/rungate/config.json`; add your own jobs alongside the generated `gates` job | Don't edit the generated `gates` job |
 | `.github/workflows/ai-review.yml` | job-preserving | Set `ci.vertex` in `.claude/rungate/config.json` to authenticate on Vertex with Workload Identity Federation; add your own jobs alongside the generated `ai-review` job | Don't edit the generated `ai-review` job |
 | `.github/workflows/ai-review-unmeasured.yml` | job-preserving | Set `ci.runner` in `.claude/rungate/config.json`; add your own jobs alongside the generated `record-unmeasured` job | Don't edit the generated `record-unmeasured` job, and don't give it a `merge_group` trigger — it reports no status to the pull request and cannot be a required check |
+| `.github/workflows/adr-accepted.yml` | job-preserving | Set `board.engineSpec` and `board.milestonePrefix` in `.claude/rungate/config.json` and re-scaffold; add your own jobs alongside the generated `place-the-plan` job | Don't edit the generated `place-the-plan` job |
 | `.claude/agents/*.md` | section-preserving | Everything but `## Project Constraints` is generated from `.claude/rungate/roles.json` and the templates; put rules mined from this repo's own history in that section and they carry forward | Don't hand-edit the generated sections — a re-scaffold rewrites them without reporting it |
 | `.claude/commands/dry-run.md` | provenance | Edit freely — a hand-edited command is preserved and reported | Don't delete its `generated-sha` marker, or edits stop surviving |
 | `docs/adr/TEMPLATE.md` | regenerate | Copy it to docs/adr/ADR-<n>-<slug>.md and edit the copy | Don't edit the template itself — a re-scaffold rewrites it |
@@ -41,26 +42,7 @@ forever.
 | section-preserving | Rewrites the file every run except for named sections, which are carried forward verbatim |
 | create-only | Seeds it once and never touches it again — the content is yours, not the harness's |
 
-### The four section-ownership and CI rules moved out (#1069)
-
-`AGENTS.md`'s `## Hard Constraints` and an agent brief's
-`## Project Constraints` are **yours** — carried forward verbatim, or the
-run **refuses the write** and names the lines it could not carry. The
-generated CI jobs are config-driven and never hand-edited. Every workflow
-in `.github/workflows/` is reported, owned or not.
-
-Those four rules in full, with the mechanisms and the incidents:
-`reference/harness-managed-worked-instances.md`. Moved there because this
-file loads on every path under `.claude/agents/**` and `.claude/rules/**`
-and sets the PEAK instruction surface — the same reason #544 moved the
-worked records, and the budget was down to 246 bytes when this was done.
-
----
-
-The incidents behind each strategy above — the 37 constraint lines #568 lost,
-the unpinned install that re-ran red to green on an identical SHA, the five
-`engine: copilot` workflows a clean report never mentioned — are in
-`reference/harness-managed-worked-instances.md`. They were moved there by #544
-because this rule loads on every file under `.claude/agents/**` and
-`.claude/rules/**`, and at 9,484 bytes it put the peak instruction surface
-2,124 bytes over budget.
+Section ownership, the CI-job rules and the incidents behind each strategy
+are in `reference/harness-managed-worked-instances.md`: this file loads on
+every `.claude/agents/**` and `.claude/rules/**` path and sets the PEAK
+instruction surface (#544, #1069).

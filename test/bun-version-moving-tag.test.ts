@@ -58,6 +58,7 @@ const UNPINNED = "UNPINNED";
 // #1488 added the fourth for the same reason one workflow over — the
 // unmeasured classifier runs through `bunx` on `workflow_run: completed`.
 const GENERATED = [
+  "adr-accepted.yml",
   "ai-review-unmeasured.yml",
   "ai-review.yml",
   "ci.yml",
