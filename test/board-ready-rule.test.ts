@@ -57,9 +57,12 @@ import {
   readyTarget,
   selectReady,
   undispatchableRemedy,
+  needsCriterionLine,
+  needsCriterionRefusal,
   workNextReading,
   type Rankable,
 } from "../lib/board-ready-rule";
+import { NEEDS_CRITERION_LABEL } from "../lib/board-mirror";
 // #1905's premise lives in another module, so it is imported and asserted
 // rather than restated. A docblock claiming `laneFor` always returns
 // `In progress` would be the reason nobody checks.
@@ -1782,5 +1785,65 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
     const types = block.split(",").map(x => x.trim());
     expect(types, "an issue enters by being filed").toContain("opened");
     expect(types, "issues never enter by transfer (#1752)").not.toContain("transferred");
+  });
+});
+
+/**
+ * #2063 / SC-2762: an issue that has not answered the criterion question is
+ * never jumped to the top of Ready, and the report counts how many such
+ * issues are open and names the oldest of them.
+ *
+ * `needs-criterion` is put on and taken off by `criterion-label.yml`, from
+ * `criterionAnswer`. The expedite label is the one lever that skips the
+ * ordinary order; spending it on an issue nobody can say the purpose of
+ * promotes exactly the work the board cannot account for.
+ */
+describe("#2063 / SC-2762: work-this-next refuses an issue labelled needs-criterion", () => {
+  const next = (number: number, extra: readonly string[] = []): Rankable =>
+    item(number, null, [WORK_NEXT_LABEL, ...extra]);
+
+  test("SC-2762: a carrier labelled needs-criterion is refused by name; the others are honoured", () => {
+    const cards = [next(5, [NEEDS_CRITERION_LABEL]), next(6), item(1, 0), item(2, 1)];
+    const r = workNextReading(cards, 4, "COMPLETE", WORK_NEXT_LABEL);
+    expect(r.status).toBe("HONOURED");
+    expect([...r.honoured]).toEqual([6]);
+    expect(r.why).toContain("#5");
+    expect(r.why).toContain(NEEDS_CRITERION_LABEL);
+    expect(needsCriterionRefusal(cards, [5, 6])).toEqual([5]);
+  });
+
+  test("SC-2762: when every carrier is refused, nothing is promoted and the status says why", () => {
+    // Not NONE: somebody asked. Every caller prints any status but NONE, so a
+    // refusal nobody sees would be the silent kind.
+    const cards = [next(5, [NEEDS_CRITERION_LABEL]), item(1, 0), item(2, 1)];
+    const r = workNextReading(cards, 4, "COMPLETE", WORK_NEXT_LABEL);
+    expect(r.status).toBe("REFUSED");
+    expect(r.honoured.size).toBe(0);
+    expect(r.why).toContain("#5");
+  });
+
+  test("a refused carrier does not count against the bound", () => {
+    // Two carriers and a depth of one: honouring #6 alone fits, because #5
+    // is refused and holds no slot.
+    const cards = [next(5, [NEEDS_CRITERION_LABEL]), next(6), item(1, 0), item(2, 1)];
+    expect(workNextReading(cards, 1, "COMPLETE", WORK_NEXT_LABEL).status).toBe("HONOURED");
+  });
+
+  test("SC-2762: the count of open issues carrying the label, and the oldest of them", () => {
+    const line = needsCriterionLine([
+      { number: 30, labels: [NEEDS_CRITERION_LABEL], createdAt: "2026-11-10T00:00:00Z" },
+      { number: 12, labels: [NEEDS_CRITERION_LABEL], createdAt: "2026-11-01T00:00:00Z" },
+      { number: 7, labels: ["engine"], createdAt: "2026-10-01T00:00:00Z" },
+    ]);
+    expect(line).toContain("2 open issue(s)");
+    expect(line).toContain("oldest #12");
+    expect(needsCriterionLine([{ number: 7, labels: [], createdAt: "2026-10-01T00:00:00Z" }])).toContain(
+      "No open issue",
+    );
+  });
+
+  test("work-status prints the line", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "scripts", "work-status.ts"), "utf-8");
+    expect(src).toContain("needsCriterionLine(");
   });
 });
