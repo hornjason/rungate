@@ -31,7 +31,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 
@@ -122,7 +122,7 @@ import { DROPPED_CATEGORIES } from "../lib/finding-jury";
 import type { ArbiterRefusal } from "../lib/finding-arbiter";
 import type { FilingAdjudication } from "../lib/issue-filing-gate";
 import { toplevel } from "../lib/launch-base";
-import type { RemoteReading } from "../lib/worktree-repo";
+import { readWorktreeRemote, type RemoteReading } from "../lib/worktree-repo";
 import {
   readFindingOutcomes,
   summariseFindingOutcomes,
@@ -337,28 +337,49 @@ function scaffoldOverride(dir: string): void {
 }
 
 /**
- * Commit everything in `dir` and publish it as `origin/main` — #1964.
+ * Commit everything in `dir` and PUSH it to the remote's `main` — #1964, #2095.
  *
  * The filing cap's size and ceiling come from COMMITTED config only
- * (SC-2753): `gitCommittedFiles` reads `origin/main`, never the working tree.
- * So a fixture whose cap depends on its config has to commit that config, or
- * the gate reads nothing and takes the strict cap. Re-running it after an edit
- * moves `origin/main` to the new commit, which is how a fixture changes what
- * is committed. A `git init` on a tree that already is one is a no-op.
+ * (SC-2753), and since #2095 "committed" means the commit the REMOTE's `main`
+ * names (`git ls-remote`), never the local `origin/main` ref, which any agent
+ * can move with `git update-ref`. So a fixture publishes the way a merge does:
+ * by changing what the remote says.
+ *
+ * The remote is a bare repository beside the checkout, `<dir>.remote.git`.
+ * A checkout whose origin is `FIXTURE_ORIGIN` reaches it through a
+ * `url.<bare>.insteadOf` rewrite, so `ls-remote` stays on this machine while
+ * run identity still reads the configured `owner/name` URL — #2095's call,
+ * that `readWorktreeRemote` reads the configured URL and not the rewritten
+ * one. A tree with no origin gets the bare path as its origin directly, which
+ * names no repository and so keeps the bucket identity it had before.
+ * Re-running this after an edit pushes the new commit.
  */
 function commitConfigTree(dir: string): void {
-  const git = (...args: string[]) => {
+  const run = (cwd: string, ...args: string[]) =>
     // late-env-ok: the child is `git` committing a fixture, and it reads none
     // of the RUNGATE_* variables this file writes for the gate under test.
-    const r = spawnSync("git", ["-C", dir, "-c", "user.email=fg@example.invalid", "-c", "user.name=fg", ...args], {
+    spawnSync("git", ["-C", cwd, "-c", "user.email=fg@example.invalid", "-c", "user.name=fg", ...args], {
       encoding: "utf-8",
     });
+  const git = (...args: string[]) => {
+    const r = run(dir, ...args);
     if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed in ${dir}: ${r.stderr}`);
+    return r.stdout.trim();
   };
   git("init", "-q");
   git("add", "-A");
   git("commit", "-q", "--allow-empty", "-m", "fixture");
-  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  const bare = `${dir}.remote.git`;
+  if (!existsSync(bare)) {
+    // late-env-ok: the child is `git` creating a bare repository, and it reads
+    // none of the RUNGATE_* variables this file writes for the gate under test.
+    const made = spawnSync("git", ["init", "-q", "--bare", bare], { encoding: "utf-8" });
+    if (made.status !== 0) throw new Error(`could not create the fixture remote ${bare}: ${made.stderr}`);
+  }
+  const configured = run(dir, "config", "--get", "remote.origin.url").stdout.trim();
+  if (configured === "") git("remote", "add", "origin", bare);
+  else if (configured !== bare) git("config", `url.${bare}.insteadOf`, configured);
+  git("push", "-q", "-f", "origin", "HEAD:refs/heads/main");
 }
 
 let scratch: string;
@@ -7300,7 +7321,18 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
   });
 
   test("FG-277: the default reader turns every failure into UNMEASURED, never a throw", async () => {
-    const dir = freshRun();
+    // A checkout with NO insteadOf rewrite. `resolveRepoSlug` reads the slug
+    // through `git remote get-url`, which applies the rewrite every
+    // `freshRun()` checkout carries since #2095, and would see the fixture's
+    // bare-repository path rather than `owner/name`. Run identity reads the
+    // configured URL; the slug reader is outside #2095 and unchanged.
+    const dir = join(scratch, "fg-277-plain-origin");
+    mkdirSync(dir, { recursive: true });
+    for (const args of [["init", "-q", "-b", "main"], ["remote", "add", "origin", FIXTURE_ORIGIN]]) {
+      // late-env-ok: the child is `git`, which reads none of the variables
+      // this file writes for the gate under test.
+      expect(spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" }).status).toBe(0);
+    }
     const noToken = await readNetGrowth(dir, nowMs, () => {
       throw new Error("GITHUB_TOKEN environment variable is not set");
     });
@@ -7450,17 +7482,116 @@ describe("#1964 / SC-2753: the filing cap is read from committed config, never t
   });
 
   test("FG-284: no committed copy to read is UNMEASURED and STRICT, never the working tree's number", async () => {
-    // A checkout with a direct-mode config on disk and no origin/main at all.
+    // A checkout with a direct-mode config on disk and a remote that cannot
+    // be read. Since #2095 the committed copy is the REMOTE's main, so the way
+    // to have none is to lose the remote — deleting the local ref is no
+    // longer the same fact, which the forgery case below depends on.
     const root = freshRun();
     writeFileSync(CONFIG(root), JSON.stringify({ project: "x", ship: DIRECT_SHIP, board: { queueLabel: QUEUE_LABEL } }));
-    // late-env-ok: the child is `git` deleting a ref, and it reads none of the
-    // RUNGATE_* variables this file writes for the gate under test.
-    spawnSync("git", ["-C", root, "update-ref", "-d", "refs/remotes/origin/main"]);
+    rmSync(`${root}.remote.git`, { recursive: true, force: true });
     const r = await run(root, filing(QUEUE_LABEL));
     expect(r.rows[0].refusal, "an unreadable commit fell through to the working tree").toBe("OVER_CAP");
     expect(r.rows[0].queuedBy).toBeNull();
     expect(r.note ?? "", "the strict cap must say it could not measure").toContain("UNMEASURED");
     expect(r.note ?? "").toContain("origin/main");
+  });
+
+  test("#2095 CONTROL: origin/main forged locally with update-ref — the remote still says harness, the cap stays 1", async () => {
+    // The attack, in the agent's own checkout: commit direct mode and move
+    // the local origin/main onto it. No push, no network, no review. Before
+    // #2095 the gate read that ref and raised the agent's cap.
+    const root = tree({ ship: { mode: "harness" } });
+    writeFileSync(CONFIG(root), JSON.stringify({ project: "x", ship: DIRECT_SHIP }));
+    const git = (...args: string[]) =>
+      // late-env-ok: the child is `git` forging a ref, and it reads none of
+      // the RUNGATE_* variables this file writes for the gate under test.
+      spawnSync("git", ["-C", root, "-c", "user.email=fg@example.invalid", "-c", "user.name=fg", ...args], {
+        encoding: "utf-8",
+      });
+    expect(git("commit", "-q", "-am", "forged direct mode").status).toBe(0);
+    expect(git("update-ref", "refs/remotes/origin/main", "HEAD").status).toBe(0);
+    // The premise, measured: the local ref really does point at the forgery.
+    expect(git("show", "origin/main:.claude/rungate/config.json").stdout).toContain('"direct"');
+
+    const forged = await run(root, filing());
+    expect(forged.rows[0].refusal, "a locally forged origin/main raised the agent's own cap").toBe("OVER_CAP");
+
+    // The pair, one axis: the same commit PUSHED, so the remote's main now
+    // carries direct mode. The raised cap applies — the gate reads the
+    // remote, it does not refuse everything.
+    expect(git("push", "-q", "origin", "HEAD:refs/heads/main").status).toBe(0);
+    const pushed = await run(root, filing());
+    expect(pushed.rows[0].refusal, "a direct mode the remote carries must raise the cap").toBeNull();
+  });
+
+  test("#2095: run identity reads the configured origin, not the insteadOf rewrite", () => {
+    // The seam the fixtures use, asserted rather than assumed: every checkout
+    // above reaches its remote through `url.<bare>.insteadOf`, and if run
+    // identity read the rewritten file path, each would bucket with the
+    // nowheres and the cap cases would be about the wrong allowance.
+    const root = freshRun();
+    expect(readWorktreeRemote(root).url).toBe(FIXTURE_ORIGIN);
+    expect(runIdFor(root).run, "a checkout of a named repository is its own run").toBe(checkoutTop(root));
+  });
+
+  test("#2095 review: an origin with two URLs is identified by the first, the one fetch uses", () => {
+    // `git config --get` on a key with two values prints the LAST one, while
+    // `git remote get-url` and `git fetch` use the first. Measured on git
+    // 2.50.1 before the fix: `--get` printed the second URL and exited 0.
+    const root = freshRun();
+    // late-env-ok: the child is `git` adding a second remote URL, and it reads
+    // none of the RUNGATE_* variables this file writes for the gate under test.
+    const added = spawnSync("git", ["-C", root, "config", "--add", "remote.origin.url", "https://example.com/mirror.git"], {
+      encoding: "utf-8",
+    });
+    expect(added.status, added.stderr).toBe(0);
+    expect(readWorktreeRemote(root).url, "run identity took the mirror, not the origin fetch uses").toBe(FIXTURE_ORIGIN);
+  });
+
+  test("#2095 review: an origin URL planted in the global git config does not change run identity", () => {
+    // Unscoped, `--get-all` lists system, then global, then local values, so a
+    // `remote.origin.url` in `~/.gitconfig` would come first. Measured on git
+    // 2.50.1: `git remote get-url origin`, main's read before #2095, returned
+    // the planted URL too.
+    const root = freshRun();
+    const dir = mkdtempSync(join(tmpdir(), "fg-global-gitconfig-"));
+    const global = join(dir, "gitconfig");
+    writeFileSync(global, '[remote "origin"]\n\turl = https://example.com/planted/elsewhere.git\n');
+    // In a child, because Bun's spawnSync hands a child the environment it
+    // started with: setting `process.env.GIT_CONFIG_GLOBAL` here reaches no
+    // git that `readWorktreeRemote` spawns, and the first draft of this case
+    // passed on the unfixed code for exactly that reason.
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: global };
+    try {
+      // late-env-ok: the child is `git` reading config with an explicit env,
+      // and it reads none of the RUNGATE_* variables this file writes.
+      const premise = spawnSync("git", ["-C", root, "config", "--get-all", "remote.origin.url"], { encoding: "utf-8", env });
+      expect(premise.stdout.split("\n")[0], "the planted URL is not first in an unscoped read, so this measures nothing")
+        .toBe("https://example.com/planted/elsewhere.git");
+      const module = JSON.stringify(join(import.meta.dir, "..", "lib", "worktree-repo.ts"));
+      // late-env-ok: the child is bun running `readWorktreeRemote` alone; it
+      // reads none of the RUNGATE_* variables, only the GIT_CONFIG_GLOBAL set here.
+      const probe = spawnSync(
+        process.execPath,
+        ["-e", `import { readWorktreeRemote } from ${module}; console.log(JSON.stringify(readWorktreeRemote(${JSON.stringify(root)})));`],
+        { encoding: "utf-8", env },
+      );
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(JSON.parse(probe.stdout).url, "a global git config chose this checkout's run").toBe(FIXTURE_ORIGIN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2095 review: one filing reads the remote's main once, and both readers are handed that reading", () => {
+    // Two live readings in one adjudication could straddle a merge and judge
+    // the plan exemption and the cap against two different commits. The
+    // property is a site property, so it is asserted over the gate's source:
+    // one reading, and neither reader called without it.
+    const src = readFileSync(join(import.meta.dir, "..", "lib", "issue-filing-gate.ts"), "utf-8");
+    expect(src.match(/\bremoteMainCommit\(/g)?.length ?? 0, "the gate reads the remote's main more than once, or never").toBe(1);
+    expect(src, "the plan check reads the remote on its own").not.toMatch(/\bgitSource\(\s*root\s*\)/);
+    expect(src, "the cap's config reads the remote on its own").not.toMatch(/\bgitCommittedFiles\(\s*root\s*\)/);
   });
 
   test("FG-285: the monolith layout is read from the commit too", async () => {

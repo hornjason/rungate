@@ -186,7 +186,19 @@ export function readWorktreeRemote(worktreePath: string): RemoteReading {
   if (typeof worktreePath !== "string" || !worktreePath.trim()) {
     return { url: null, error: "no worktree path was given", missing: false };
   }
-  const got = spawnSync("git", ["-C", worktreePath, "remote", "get-url", "origin"], {
+  // The CONFIGURED url, not `git remote get-url`, which applies any
+  // `url.<base>.insteadOf` rewrite (#2095, Jason's call of 2026-11-14). Run
+  // identity answers "which repository is this a checkout of", and a rewrite
+  // is a transport detail: it lets the filing gate's fixtures reach a local
+  // bare repository while still naming `owner/name`, and it means an agent
+  // cannot change which allowance it spends by adding one. Measured: with a
+  // rewrite set, `get-url` printed the `file://` path and this printed the
+  // https one. `--get-all` and the first line, because `--get` on a remote
+  // with two URLs prints the LAST, and fetch uses the first (review of #2140).
+  // `--local`, as `absentOrigin` below already is: unscoped, a
+  // `remote.origin.url` in the global config is listed FIRST and would choose
+  // the run (review of #2140; `get-url`, main's read before, did the same).
+  const got = spawnSync("git", ["-C", worktreePath, "config", "--local", "--get-all", "remote.origin.url"], {
     timeout: 10_000,
     encoding: "utf-8",
   });
@@ -203,7 +215,7 @@ export function readWorktreeRemote(worktreePath: string): RemoteReading {
     const said = String(got.stderr || "").trim().split("\n")[0] || `git exited ${got.status}`;
     return { url: null, error: redactRemote(said), missing: absentOrigin(worktreePath) };
   }
-  const url = String(got.stdout || "").trim();
+  const url = (String(got.stdout || "").split("\n")[0] ?? "").trim();
   return url
     ? { url, error: null, missing: false }
     : { url: null, error: "git printed no url", missing: false };

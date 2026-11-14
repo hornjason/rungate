@@ -149,8 +149,10 @@ import {
   committedConfig,
   gitCommittedFiles,
   readCommittedConfig,
+  remoteMainCommit,
   type CommittedConfigReading,
   type CommittedFiles,
+  type RemoteMain,
 } from "./config-loader";
 import { queueLabelIn, readFilingOverrideLabel } from "./config-readers";
 
@@ -3439,17 +3441,20 @@ export async function filingGate(
   // resolve; `readBodyFile` is what decides that, so it stays its decision.
   const readBody = (path: string): string | null =>
     readBodyFile(path === "-" ? path : resolve(root, path));
-  const planSource = options.readPlan ?? gitSource(root);
+  // ONE reading of the remote's main for the whole command, handed to both
+  // readers below. Two live readings could straddle a merge and judge the
+  // plan exemption and the cap against two commits (review of #2140).
+  let remoteMain: RemoteMain | undefined;
+  const anchor = (): RemoteMain => (remoteMain ??= remoteMainCommit(root));
+  const planSource = options.readPlan ?? gitSource(root, anchor);
   // **The cap's config is the COMMITTED config, never the working tree**
   // (#1964, SC-2753). `ship.mode`, `board.filingsPerRun` and `board.queueLabel`
   // each move the cap, and read from the working tree any one of them let an
-  // agent raise its own allowance by editing its own checkout. Read once from
-  // `origin/main` — the provenance `gitSource` gives the plan route — so a
-  // working-tree edit cannot raise it. That ref is still LOCAL state, and an
-  // agent forging it with `git update-ref` is not stopped here; anchoring
-  // both readers on the remote's own `main` is #2095. An unreadable commit
+  // agent raise its own allowance by editing its own checkout. Read from the
+  // commit the REMOTE's `main` names (#2095), never the local `origin/main`
+  // ref, which an agent can forge with `git update-ref`. An unreadable commit
   // is the STRICT cap and an UNMEASURED note, never a fall-through to disk.
-  const committed = readCommittedConfig(options.readConfigAt ?? gitCommittedFiles(root));
+  const committed = readCommittedConfig(options.readConfigAt ?? gitCommittedFiles(root, anchor()));
   // The run's allowance, resolved ONCE per command. Per clause would let two
   // clauses of one command be adjudicated against two different caps if the
   // config moved underneath them, which is the shape `readFor` is cached to

@@ -51,6 +51,7 @@
  */
 import { spawnSync } from "child_process";
 
+import { remoteMainCommit, type RemoteMain } from "./config-loader";
 import { closesFence, fenceOpening, type FenceOpening } from "./markdown-fence";
 
 /**
@@ -295,8 +296,26 @@ export interface PlanSource {
   show: (path: string) => string | null;
 }
 
-/** `git`, reading `origin/main` and never the working tree. */
-export function gitSource(root: string, ref: string = "origin/main"): PlanSource {
+/**
+ * `git`, reading the commit the REMOTE's `main` names and never the working
+ * tree or the local `origin/main` ref — #2095. The anchor is
+ * `remoteMainCommit` in `lib/config-loader.ts`. A plan an agent committed and
+ * pinned under a forged `origin/main` exempts nothing, because the remote
+ * never saw it.
+ *
+ * `anchorOf` lets the filing gate hand in the ONE reading it also gives the
+ * cap's config read, so a merge landing mid-filing cannot judge the plan
+ * exemption and the cap against two commits (review of #2140). Alone, it
+ * reads the remote itself. Either way it is resolved once, on first use, so a
+ * source nobody consults costs no network call. An anchor that cannot be read
+ * makes `list` and `show` `null`: could not read, never "no plans".
+ */
+export function gitSource(root: string, anchorOf: () => RemoteMain = () => remoteMainCommit(root)): PlanSource {
+  let anchor: RemoteMain | undefined;
+  const ref = (): string | null => {
+    anchor ??= anchorOf();
+    return "sha" in anchor ? anchor.sha : null;
+  };
   const git = (args: string[]): string | null => {
     const r = spawnSync("git", ["-C", root, ...args], {
       encoding: "utf-8",
@@ -330,13 +349,18 @@ export function gitSource(root: string, ref: string = "origin/main"): PlanSource
      * ways on 2026-10-29; found by the AI review of this change.
      */
     list: () => {
+      const sha = ref();
+      if (sha === null) return null;
       const out = git([
-        "ls-tree", "-r", "--full-name", "--name-only", ref, "--", `:(top)${PLAN_DIR}/`,
+        "ls-tree", "-r", "--full-name", "--name-only", sha, "--", `:(top)${PLAN_DIR}/`,
       ]);
       if (out === null) return null;
       return out.split("\n").map(s => s.trim()).filter(s => s.endsWith(".md"));
     },
-    show: path => git(["show", `${ref}:${path}`]),
+    show: path => {
+      const sha = ref();
+      return sha === null ? null : git(["show", `${sha}:${path}`]);
+    },
   };
 }
 
