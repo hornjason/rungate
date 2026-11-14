@@ -10,7 +10,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, statSync } from "fs";
 import { readdirSorted } from "../readdir-sorted";
 import { fileExtensions } from "../file-extensions";
-import { join, basename, dirname, resolve, sep } from "path";
+import { join, basename, dirname, relative, resolve, sep } from "path";
 import { auditSpecs } from "../../scripts/audit-specs";
 import { writeSpec } from "../write-spec";
 import { generateAgentsMd as buildAgentsMdContent, generateScopedRules } from "../generators/agents-md";
@@ -51,7 +51,7 @@ import {
 import { CI_SUITE_FETCH_DEPTH, baseRefFetchDepth } from "../ci-history-depth";
 import { CLAUDE_CODE_ACTION } from "../claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../google-auth-action";
-import { loadComplianceConfig, tryLoadRungateConfig } from "../config-loader";
+import { RUNGATE_CONFIG_RELATIVE_PATH, loadComplianceConfig, tryLoadRungateConfig } from "../config-loader";
 import { organizeProjectReport } from "../organize";
 import type { ProjectScan, ProjectType, SpecEntry, TestFile, RefFile, DocRoute, Category } from "../generators/types";
 import {
@@ -1154,7 +1154,7 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
       // nowhere to write and is not offered rather than silently not happening.
       auditExistingConfig(existing, scannedPages, scannedConsumers, actions);
       // #2050: the monolith is not rewritten, so each missing key is named.
-      actions.push(...labelKeyRepairs(existing, { file: ".claude/rungate.json", rewrites: false }).lines);
+      actions.push(...labelKeyRepairs(existing, { file: relative(root, harnessPath), rewrites: false }).lines);
     }
   } else {
     // No config exists — create directory structure
@@ -1293,7 +1293,7 @@ export function labelKeyRepairs(
   config: Record<string, any>,
   {
     expediteDefault = expediteLabelDefault(),
-    file = ".claude/rungate/config.json",
+    file = RUNGATE_CONFIG_RELATIVE_PATH,
     rewrites = true,
   }: { expediteDefault?: string | null; file?: string; rewrites?: boolean } = {},
 ): {
