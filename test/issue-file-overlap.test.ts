@@ -30,10 +30,15 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { readFileSync } from "fs";
+import { join } from "path";
+
 import {
   collisionsWith,
   contestedFiles,
   declaredFiles,
+  fileOverlapGroups,
+  overlapLines,
   overlapNote,
   sharedFiles,
 } from "../lib/issue-file-overlap";
@@ -378,5 +383,55 @@ describe("FO-50: what is NOT a path", () => {
     // the docblock claimed `Makefile` was read while the code rejected it,
     // and a sentence a test cannot contradict is not a property.
     expect(paths("- `Makefile`")).toEqual([]);
+  });
+});
+
+/**
+ * #1976 / SC-2761: the what's-next report says which Ready issues and
+ * promotion candidates collide on a file.
+ *
+ * Keyed by FILE, like `contestedFiles` — the correction this module already
+ * went through, when a transitive grouping told two issues sharing nothing
+ * that they shared work. Every issue in a row declares that row's path.
+ */
+describe("#1976 / SC-2761: fileOverlapGroups", () => {
+  const issue = (number: number, paths: readonly string[] | null) => ({
+    number,
+    body: paths === null ? "No files section at all." : bodyWith(paths),
+  });
+
+  test("SC-2761: two issues naming the same file land in one row; disjoint ones in none", () => {
+    const groups = fileOverlapGroups([issue(12, ["lib/a.ts"]), issue(34, ["lib/a.ts"]), issue(56, ["lib/b.ts"])]);
+    expect(groups).toEqual([{ file: "lib/a.ts", lead: 12, blocked: [34] }]);
+  });
+
+  test("SC-2761: issues naming no files are never grouped, on an empty set or a missing section", () => {
+    // The negative control the issue asks for: grouping on a shared EMPTY set
+    // would tell two silent issues they collide.
+    expect(fileOverlapGroups([issue(1, []), issue(2, []), issue(3, null), issue(4, null)])).toEqual([]);
+  });
+
+  test("the unit is a file: A and C sharing nothing are never put in one row through B", () => {
+    const groups = fileOverlapGroups([issue(1, ["lib/a.ts"]), issue(2, ["lib/a.ts", "lib/b.ts"]), issue(3, ["lib/b.ts"])]);
+    expect(groups).toEqual([
+      { file: "lib/a.ts", lead: 1, blocked: [2] },
+      { file: "lib/b.ts", lead: 2, blocked: [3] },
+    ]);
+  });
+
+  test("overlapLines: one line per contested file, a clean line when none, nothing for a list of one", () => {
+    const groups = fileOverlapGroups([issue(12, ["lib/a.ts"]), issue(34, ["lib/a.ts"])]);
+    const lines = overlapLines(groups, 2);
+    expect(lines.join("\n")).toContain("lib/a.ts: #12, #34");
+    expect(overlapLines([], 3).join("\n")).toContain("No two of these name the same file");
+    expect(overlapLines([], 1)).toEqual([]);
+  });
+
+  test("work-status prints the groups under START HERE and under PROMOTION CANDIDATES", () => {
+    // Structural, because the report reads the live board. Both lists must
+    // be fed through the one reading, or one heading silently goes without.
+    const src = readFileSync(join(import.meta.dir, "..", "scripts", "work-status.ts"), "utf-8");
+    expect(src).toContain("fileOverlapGroups(readyNow)");
+    expect(src).toContain("fileOverlapGroups(pickable)");
   });
 });
