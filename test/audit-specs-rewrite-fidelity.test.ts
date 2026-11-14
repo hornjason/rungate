@@ -139,60 +139,37 @@ describe("#586: a rewrite keeps what the criterion was about", () => {
     }
   });
 
-  test("SC-1998: the loose file fallback downgrades, and records that it did", () => {
-    // Found by running the fixed enricher over the real tree rather than by
-    // reading it: two criteria are replaced through the loose fallback, and
-    // both keep the filename — so the distinguishing-terms guard passes them
-    // while the requirement itself becomes a file-existence check.
-    //
-    // **This is a downgrade, not a loss, and #586 is about loss.** The
-    // fallback reports `ambiguous: true`, which is what writes
-    // `<!-- REVIEW: original — … -->` beside the rewritten line, so the
-    // statement it replaced is still in the file. #426 kept this path for
-    // exactly that reason and pinned it in SC-1587 and SC-1594.
-    //
-    // The first draft of this case narrowed the fallback to statements whose
-    // verb is existence. It turned both of those criteria red — a fix for a
-    // defect that is real but is a DIFFERENT defect, filed rather than
-    // folded in. What is pinned here instead is the property that makes the
-    // downgrade survivable: the marker.
-    //
-    // **#589 closed the filed defect, and the DECISION half of this case
-    // moved with it.** The two criteria below are now KEPT, by
-    // `coordinatedClaims` — each coordinates a second claim that
-    // `<file> exists` cannot be about — and `test/audit-specs-fallback-scope.test.ts`
-    // owns that. What stays here is what this case was always for: the
-    // fallback reports `ambiguous: true`, so wherever it DOES rewrite, the
-    // statement it replaced is written beside the line. The vacuity control
-    // below therefore drives a statement the fallback still acts on.
-    const behaviour =
+  test("SC-1998: a criterion that only mentions a file is kept, and says why", () => {
+    // Found by running the fixed enricher over the real tree: two criteria
+    // were replaced through the loose last resort, which took any filename in
+    // the sentence and rendered the criterion as `<file> exists`. #586 pinned
+    // the marker that made that downgrade survivable; #589 fenced it to
+    // single-claim sentences; **#2040 removed it** after it turned SC-2747
+    // into `AGENTS.md exists` on #2033. So what is pinned now is the property
+    // itself: a sentence that only mentions a file is offered no pattern, and
+    // the decision keeps it with a reason a reader can act on.
+    for (const statement of [
       "Rejecting a promoted rule writes its hash to `reference/rejected-constraints.md` " +
-      "and it is never re-promoted";
-    const closest = closestPatternFor(behaviour);
-    expect(closest?.patternName, "the fallback no longer fires on the case it is for")
-      .toBe("file-exists");
-    expect(
-      closest?.ambiguous,
-      "a behavioural criterion is replaced by a file-existence one AND the original is " +
-        "not written beside it — the rewrite is now unrecoverable",
-    ).toBe(true);
-    const scanned =
+        "and it is never re-promoted",
       "Makefile targets, `package.json` scripts and CI workflow files are scanned for " +
-      "constraints alongside markdown";
-    expect(closestPatternFor(scanned)?.ambiguous).toBe(true);
+        "constraints alongside markdown",
+      "the generator should emit a tidy CODE-MAP.md for every project",
+    ]) {
+      const closest = closestPatternFor(statement);
+      expect(closest, `offered a pattern off a filename it only mentions: ${statement}`).toBeNull();
+      const decision = decideRewrite(statement, closest);
+      expect(decision.kind).toBe("keep");
+      expect(decision.kind === "keep" && decision.reason).toMatch(/no registry pattern/);
+    }
 
-    // The vacuity control: the fallback must still rewrite SOMETHING, or the
-    // `ambiguous` assertions above are about a flag nothing ever reads. This
-    // is the statement #426 pinned as having to survive, and #589's own
-    // positive control.
-    const single = "the generator should emit a tidy CODE-MAP.md for every project";
-    const singleClosest = closestPatternFor(single);
-    expect(singleClosest?.ambiguous, "the fallback stopped marking its rewrites for review")
-      .toBe(true);
+    // The vacuity control: the rewriter must still rewrite SOMETHING, or the
+    // keeps above hold over a rewriter that was switched off. A sentence that
+    // SAYS the file should exist is bound by the `file-exists` heuristic.
+    const bound = "the file CODE-MAP.md should exist for every project";
     expect(
-      decideRewrite(single, singleClosest).kind,
-      "nothing is rewritten, so the marker assertions above hold vacuously",
-    ).toBe("rewrite");
+      decideRewrite(bound, closestPatternFor(bound)),
+      "nothing is rewritten, so the keeps above hold vacuously",
+    ).toEqual({ kind: "rewrite", statement: "CODE-MAP.md exists" });
 
     // The negative control, because every `ambiguous` in the registry being
     // `true` would satisfy the assertions above while saying nothing. A
@@ -277,8 +254,8 @@ describe("SC-2001: the REVIEW marker goes below the criterion, never into it", (
     ["SC-9403", "Baseline rules carry no $1 key in frontmatter"],
     ["SC-9404", "Baseline rules carry no `owner:` key in frontmatter"],
   ];
-  /** A criterion the rewriter genuinely acts on. The control. */
-  const REWRITTEN = ["SC-9405", "the generator should emit a tidy CODE-MAP.md for every project"] as const;
+  /** A criterion the rewriter genuinely acts on — it says the file should exist. The control. */
+  const REWRITTEN = ["SC-9405", "the file CODE-MAP.md should exist for every project"] as const;
 
   function plant(): string {
     mkdirSync(join(FIXTURE, "specs"), { recursive: true });
@@ -317,13 +294,65 @@ describe("SC-2001: the REVIEW marker goes below the criterion, never into it", (
     }
 
     // The control, and it is the half that stops "never write anything" from
-    // passing: a criterion the registry CAN bind is still rewritten, and its
-    // original is still written beside it.
+    // passing: a criterion the registry CAN bind is still rewritten. Its
+    // binding is exact, so no `REVIEW: original` is written beside it — that
+    // marker belonged to the last resort #2040 removed.
     const [rid, rstatement] = REWRITTEN;
     const rat = lines.indexOf(`- [ ] ${rid}: CODE-MAP.md exists`);
     expect(rat, "the rewriter stopped rewriting, so the assertions above prove nothing")
       .toBeGreaterThan(-1);
-    expect(lines[rat + 1]).toBe(`<!-- REVIEW: original — ${rstatement} -->`);
+    expect(lines).not.toContain(`- [ ] ${rid}: ${rstatement}`);
+  });
+
+  test("a marker whose reason has changed is replaced, never stacked", () => {
+    // Found by #2040's own fixed-point run: removing the fallback changed the
+    // reason two criteria are kept for, and `--fix` wrote the new marker
+    // ABOVE the old one, so each criterion carried two contradictory reasons
+    // and the repository stopped being a fixed point of its generator.
+    mkdirSync(join(FIXTURE, "specs"), { recursive: true });
+    const path = join(FIXTURE, "specs", "STALE-SPEC.md");
+    writeFileSync(
+      path,
+      `---\ndoc-type: spec\nstatus: active\ntestable: true\ncompliance: strict\n` +
+        `updated: 2026-11-14\ngoverns: the #2040 stale-marker fixture\n---\n\n# Stale\n\n` +
+        `## Success Criteria\n\n` +
+        `- [ ] SC-9407: Baseline rules carry no \`owner:\` key in frontmatter\n` +
+        `<!-- REVIEW: unmatched (a reason no current guard gives) -->\n` +
+        `- [ ] SC-9408: Baseline rules carry no \`owner:\` key in frontmatter\n`,
+    );
+    auditSpecs(FIXTURE, { fix: true });
+    const lines = readFileSync(path, "utf-8").split("\n");
+    expect(lines.join("\n"), "the stale reason survived beside the new one").not.toContain("a reason no current guard gives");
+    for (const id of ["SC-9407", "SC-9408"]) {
+      const at = lines.findIndex(l => l.startsWith(`- [ ] ${id}: `));
+      expect(lines[at + 1], `${id} carries no current marker`).toMatch(/^<!-- REVIEW: unmatched \(.+\) -->$/);
+      expect(lines[at + 2] ?? "", `${id} carries two markers`).not.toMatch(/^<!-- REVIEW: unmatched/);
+    }
+  });
+
+  test("a criterion that is now rewritten loses the unmatched marker an earlier run left", () => {
+    // Review of #2139: the marker said "no registry pattern was close
+    // enough", the criterion was then reworded into one the heuristic binds,
+    // and the rewrite left that marker under a line it had just matched.
+    mkdirSync(join(FIXTURE, "specs"), { recursive: true });
+    const path = join(FIXTURE, "specs", "LEFTOVER-SPEC.md");
+    writeFileSync(
+      path,
+      `---\ndoc-type: spec\nstatus: active\ntestable: true\ncompliance: strict\n` +
+        `updated: 2026-11-14\ngoverns: the #2040 leftover-marker fixture\n---\n\n# Leftover\n\n` +
+        `## Success Criteria\n\n` +
+        `- [ ] SC-9409: the file CODE-MAP.md should exist for every project\n` +
+        `<!-- REVIEW: unmatched (no registry pattern was close enough) -->\n` +
+        `- [ ] SC-9410: Baseline rules carry no \`owner:\` key in frontmatter\n`,
+    );
+    auditSpecs(FIXTURE, { fix: true });
+    const lines = readFileSync(path, "utf-8").split("\n");
+    const at = lines.indexOf("- [ ] SC-9409: CODE-MAP.md exists");
+    expect(at, "the bound criterion was not rewritten, so this measures nothing").toBeGreaterThan(-1);
+    expect(lines[at + 1], "a matched criterion kept a marker saying nothing matched it").not.toMatch(/^<!-- REVIEW: unmatched/);
+    // The control: the kept criterion below still carries its marker.
+    const kept = lines.findIndex(l => l.startsWith("- [ ] SC-9410: "));
+    expect(lines[kept + 1]).toMatch(/^<!-- REVIEW: unmatched \(.+\) -->$/);
   });
 
   test("SC-2002: two criteria declined for the same reason each get a marker", () => {

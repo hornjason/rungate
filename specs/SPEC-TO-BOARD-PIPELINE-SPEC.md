@@ -156,10 +156,9 @@ of the last 40 merged PRs closed no issue.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2736: AGENTS.md rule 9 states the four-step process — agree and file the same turn, an ADR for work bigger than one issue, the plan placed on merge, each PR closing its issue — and names the exempt work with the rule that decides it
       proved-by: test/rule-provenance.test.ts, the `SC-2736` describe — 12 pass, 0 fail, 2026-11-12, on the PR that closes #1997. Each step's anchor, the exempt work and the diff-not-branch decider are read between rule 9's number and rule 10's, so a phrase moved out of the rule reads as missing; no rule 11 exists, and the exempt files are stated DA-owned. Removing `Fixes #N`, the decider, or two of the four exempt kinds each turns one case red.
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that AGENTS.md exists, while the criterion coordinates a further claim (file the same turn, an ADR for work bigger than one issue, the plan placed on merge, each PR closing its issue — and names the exempt work with the rule that decides it) — the file is mentioned, not what the criterion is about) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2737: a pull request that closes no issue, or whose issue names neither a criterion nor "serves no criterion", is refused when `RUNGATE_REQUIRE_CLOSING_REF` is `true`; only a PR whose changed files are all session-record files (`project-state.json`, `PROJECT-STATE.md`, `SUCCESS.md`) owes none, decided from the diff and never from the branch name; the check re-runs when the description is edited, and its refusal prints the one command that re-runs it
       proved-by: test/audit-closing-references.test.ts — 29 pass, 0 fail, 2026-11-11, merged in #2003 (closing #1998). Live: `RUNGATE_REQUIRE_CLOSING_REF` is `true` and `closing-references` is a required check on main, so the refusal is enforced rather than annotated.
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that project-state.json exists, while the criterion coordinates a further claim (whose issue names neither a criterion nor "serves no criterion", is refused when `RUNGATE_REQUIRE_CLOSING_REF` is `true`; only a PR whose changed files are all session-record files (`project-state.json`, `PROJECT-STATE.md`, `SUCCESS.md`) owes none, decided from the diff and never from the branch name; the check re-runs when the description is edited, and its refusal prints the one command that re-runs it) — the file is mentioned, not what the criterion is about) -->
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2738: merging an ADR whose status changes to accepted places its plan on the board with no command typed by hand — milestones, issues, blocked-by edges, board fields and a Ready top-up — and the filing refuses both a duplicate of a closed issue and a criterion id that exists in no spec
       proved-by: test/adr-accepted-workflow.test.ts (16 pass) and the `SC-2738` describe in test/issue-decomposition.test.ts (7 pass), 0 fail, 2026-11-12, on the PR that closes #1999. `.github/workflows/adr-accepted.yml` is parsed: it fires on a push to main touching docs/adr, runs plan-spec, plan-issues --decompose, plan-deps, board-mirror and board-ready --top-up in that order, each gated on the acceptance read, with the board token in the two board steps only. `plan-issues --accepted-since` lists exactly the ADR a real git history accepted and refuses a commit the clone lacks; `--decompose` files nothing for a title closed as completed by a trusted author, and refuses an id no spec states. Ten mutants, each caught. The first live run is the first ADR accepted after merge.
@@ -183,15 +182,15 @@ neither `files[]` nor the CLI, and nothing prints the steps only a person can
 take.
 
 - [ ] SC-2742: every script a process workflow runs ships in `package.json` `files[]` and runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that package.json exists, while the criterion coordinates a further claim (runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`) — the file is mentioned, not what the criterion is about) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2743: `rungate scaffold` emits `.github/workflows/closing-references.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that github/workflows/closing-references.yml exists, while the criterion coordinates a further claim (this repository's copy is the generated one) — the file is mentioned, not what the criterion is about) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2744: `rungate scaffold` emits `.github/workflows/adr-accepted.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that github/workflows/adr-accepted.yml exists, while the criterion coordinates a further claim (this repository's copy is the generated one) — the file is mentioned, not what the criterion is about) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2745: `rungate scaffold` emits `board-ready.yml` and `board-intake.yml` as owned workflows that read the board's identity from project config, and no generated workflow contains a literal project id or URL
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that board-ready.yml exists, while the criterion coordinates a further claim (`board-intake.yml` as owned workflows that read the board's identity from project config, and no generated workflow contains a literal project id or URL) — the file is mentioned, not what the criterion is about) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2746: `rungate scaffold` installs `.claude/commands/dry-run.md` and `docs/adr/TEMPLATE.md` as owned files
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that claude/commands/dry-run.md exists, while the criterion coordinates a further claim (`docs/adr/TEMPLATE.md` as owned files) — the file is mentioned, not what the criterion is about) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2747: `rungate scaffold` installs the four-step process as an owned rules file, generated from the same single source that this repository's own rule 9 is checked against, so the consumer's copy and ours cannot drift
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2748: `rungate scaffold` writes `board.expediteLabel` and `board.filingOverrideLabel` when the config lacks them, or names each one that stays unset
@@ -254,7 +253,7 @@ population, and a criterion that belongs to neither is how 25 of 71 open
 issues came to name nothing at all.
 
 - [ ] SC-2625: the engine is finished when `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` reaches the board through the pipeline with no agent editing any issue, milestone, edge or field by hand — the acceptance test is a payload shipping untouched, not a count of criteria ticked here, because every criterion in this document can be green on a tool nobody else can run; a run in which any hand edit occurs fails it and names the edit
-<!-- REVIEW: unmatched (rewriting as file-exists would assert only that specs/CODE-REVIEW-CONVERGENCE-SPEC.md exists, while the criterion coordinates a further claim (field by hand — the acceptance test is a payload shipping untouched, not a count of criteria ticked here, because every criterion in this document can be green on a tool nobody else can run; a run in which any hand edit occurs fails it and names the edit) — the file is mentioned, not what the criterion is about) -->
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### Phase placement — every criterion has exactly one home
 
