@@ -228,6 +228,38 @@ export function contestedFiles(issues: readonly IssueFiles[]): FileContention[] 
 }
 
 /**
+ * Which of these issues contend for a file — #1976, SC-2761.
+ *
+ * What `scripts/work-status.ts` prints under START HERE and PROMOTION
+ * CANDIDATES, so the page says which of the startable issues can run at once.
+ * `contestedFiles` over `declaredFiles`: one reading of a body, one decider
+ * of contention, keyed by FILE for the reason that function records. An
+ * issue naming no files is in no row, so two silent issues are never grouped
+ * on a shared empty set.
+ */
+export function fileOverlapGroups(
+  issues: readonly { readonly number: number; readonly body?: string | null }[],
+): FileContention[] {
+  return contestedFiles(issues.map(i => ({ id: i.number, files: declaredFiles(i.body ?? "") })));
+}
+
+/**
+ * The lines the report prints for one list of `listed` issues. Nothing for a
+ * list of one, which cannot collide with itself; a clean line when nothing is
+ * contested, so "no collisions" is said rather than left as silence.
+ */
+export function overlapLines(groups: readonly FileContention[], listed: number): string[] {
+  if (listed < 2) return [];
+  if (groups.length === 0) {
+    return ["  No two of these name the same file, so any of them can run at once."];
+  }
+  return [
+    "  Collide on a file (start one per row, not two):",
+    ...groups.map(g => `    ${g.file}: #${[g.lead, ...g.blocked].join(", #")}`),
+  ];
+}
+
+/**
  * Corpus rows as the thing this file reasons about.
  *
  * Takes the structural shape rather than importing `Finding`, so the direction
