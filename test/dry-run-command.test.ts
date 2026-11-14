@@ -217,6 +217,9 @@ describe("SC-2746: rungate scaffold installs the dry-run command and the ADR tem
       expect(command).toContain("bunx rungate plan-issues --decompose");
       expect(command, "a consumer has no bin/ or scripts/").not.toMatch(/\bbun (bin|scripts)\//);
       expect(command).toContain("bunx rungate board-ready");
+      // Review of #2153: board-ready refuses before reading anything when no
+      // `--actor` is given, so a line without one can only ever print a refusal.
+      expect(command.split("\n").find(l => l.includes("bunx rungate board-ready"))).toContain("--actor ");
       const cli = command.split("\n").filter(l => l.includes("bunx rungate"));
       expect(cli.length, "no CLI line was found, so the no-write check measured nothing").toBeGreaterThan(2);
       expect(cli.filter(l => l.includes("--write")), "a dry run passes --write").toEqual([]);
