@@ -3425,7 +3425,9 @@ export async function filingGate(
   // each move the cap, and read from the working tree any one of them let an
   // agent raise its own allowance by editing its own checkout. Read once from
   // `origin/main` — the provenance `gitSource` gives the plan route — so a
-  // filer cannot author its own raise without a merge. An unreadable commit
+  // working-tree edit cannot raise it. That ref is still LOCAL state, and an
+  // agent forging it with `git update-ref` is not stopped here; anchoring
+  // both readers on the remote's own `main` is #2095. An unreadable commit
   // is the STRICT cap and an UNMEASURED note, never a fall-through to disk.
   const committed = readCommittedConfig(options.readConfigAt ?? gitCommittedFiles(root));
   // The run's allowance, resolved ONCE per command. Per clause would let two
