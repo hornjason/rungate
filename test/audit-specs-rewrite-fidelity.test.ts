@@ -330,6 +330,31 @@ describe("SC-2001: the REVIEW marker goes below the criterion, never into it", (
     }
   });
 
+  test("a criterion that is now rewritten loses the unmatched marker an earlier run left", () => {
+    // Review of #2139: the marker said "no registry pattern was close
+    // enough", the criterion was then reworded into one the heuristic binds,
+    // and the rewrite left that marker under a line it had just matched.
+    mkdirSync(join(FIXTURE, "specs"), { recursive: true });
+    const path = join(FIXTURE, "specs", "LEFTOVER-SPEC.md");
+    writeFileSync(
+      path,
+      `---\ndoc-type: spec\nstatus: active\ntestable: true\ncompliance: strict\n` +
+        `updated: 2026-11-14\ngoverns: the #2040 leftover-marker fixture\n---\n\n# Leftover\n\n` +
+        `## Success Criteria\n\n` +
+        `- [ ] SC-9409: the file CODE-MAP.md should exist for every project\n` +
+        `<!-- REVIEW: unmatched (no registry pattern was close enough) -->\n` +
+        `- [ ] SC-9410: Baseline rules carry no \`owner:\` key in frontmatter\n`,
+    );
+    auditSpecs(FIXTURE, { fix: true });
+    const lines = readFileSync(path, "utf-8").split("\n");
+    const at = lines.indexOf("- [ ] SC-9409: CODE-MAP.md exists");
+    expect(at, "the bound criterion was not rewritten, so this measures nothing").toBeGreaterThan(-1);
+    expect(lines[at + 1], "a matched criterion kept a marker saying nothing matched it").not.toMatch(/^<!-- REVIEW: unmatched/);
+    // The control: the kept criterion below still carries its marker.
+    const kept = lines.findIndex(l => l.startsWith("- [ ] SC-9410: "));
+    expect(lines[kept + 1]).toMatch(/^<!-- REVIEW: unmatched \(.+\) -->$/);
+  });
+
   test("SC-2002: two criteria declined for the same reason each get a marker", () => {
     // The suppression, stated as a count rather than as a shape. All four
     // declines carry the identical reason, so a file-wide `includes` guard
