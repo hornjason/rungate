@@ -62,13 +62,20 @@ const STRUCTURED_UNMATCHED =
   "workflows/ship.js GRADE phase does not contain [Grade each agent] — the grading is data, not a prompt";
 
 /**
- * Prose a heuristic CAN bind, so `--fix` rewrites it. The control.
+ * Prose that only MENTIONS a file. Until #2040 the last resort rewrote it to
+ * `CODE-MAP.md exists`; now no pattern is offered and it is kept.
+ */
+const UNSTRUCTURED = "the generator should emit a tidy CODE-MAP.md for every project";
+
+/**
+ * Prose a heuristic CAN bind — it says the file should exist — so `--fix`
+ * rewrites it. The control.
  *
  * It has to be a line the rewriter genuinely acts on: a statement with no
  * close pattern at all is merely KEPT, which would make the "still rewrites
  * something" assertion pass over a rewriter that had been switched off.
  */
-const UNSTRUCTURED = "the generator should emit a tidy CODE-MAP.md for every project";
+const BOUND = "the file CODE-MAP.md should exist for every project";
 
 function writeFixtureSpec(body: string): string {
   mkdirSync(join(FIXTURE, "specs"), { recursive: true });
@@ -95,9 +102,9 @@ beforeEach(() => { if (existsSync(FIXTURE)) rmSync(FIXTURE, { recursive: true })
 afterEach(() => { if (existsSync(FIXTURE)) rmSync(FIXTURE, { recursive: true }); });
 
 describe("SC-1587: --fix leaves a structured criterion byte-identical", () => {
-  test("SC-1469's exact line survives, and an unstructured line beside it is still rewritten", () => {
+  test("SC-1469's exact line survives, so does a line that only mentions a file, and a bound line beside them is rewritten", () => {
     const path = writeFixtureSpec(
-      `- [ ] SC-1469: ${SC_1469}\n- [ ] SC-9002: ${STRUCTURED_UNMATCHED}\n- [ ] SC-9001: ${UNSTRUCTURED}`,
+      `- [ ] SC-1469: ${SC_1469}\n- [ ] SC-9002: ${STRUCTURED_UNMATCHED}\n- [ ] SC-9001: ${UNSTRUCTURED}\n- [ ] SC-9003: ${BOUND}`,
     );
     const before = readFileSync(path, "utf-8");
 
@@ -119,15 +126,21 @@ describe("SC-1587: --fix leaves a structured criterion byte-identical", () => {
     // AC-4's other half, and the reason this assertion lives in the SAME test:
     // a fix that simply stopped rewriting anything would satisfy both cases
     // above and leave --fix doing nothing at all.
+    // #2040: a line that only mentions a file is no longer rewritten into a
+    // check that the file exists.
+    expect(
+      after.includes(`- [ ] SC-9001: ${UNSTRUCTURED}`),
+      "a criterion that only mentions a file was rewritten into `<file> exists`",
+    ).toBe(true);
+    expect(after).not.toContain("- [ ] SC-9001: CODE-MAP.md exists");
+
+    // AC-4's other half, and the reason this assertion lives in the SAME test:
+    // a fix that simply stopped rewriting anything would satisfy every case
+    // above and leave --fix doing nothing at all.
     expect(after, "nothing was rewritten — --fix has become a no-op").not.toBe(before);
-    expect(after).not.toContain(`- [ ] SC-9001: ${UNSTRUCTURED}`);
     expect(after, "the rewrite did not produce the canonical form").toContain(
-      "- [ ] SC-9001: CODE-MAP.md exists",
+      "- [ ] SC-9003: CODE-MAP.md exists",
     );
-    // And the original survives beside it. `file-exists` is a lossy render
-    // by nature — it is kept as the one remaining rewrite path precisely
-    // because it writes the statement it replaced into the next line.
-    expect(after).toContain(`<!-- REVIEW: original — ${UNSTRUCTURED} -->`);
   });
 
   test("SC-1588: running --fix twice is a fixed point", () => {
@@ -135,7 +148,7 @@ describe("SC-1587: --fix leaves a structured criterion byte-identical", () => {
     // run re-truncates after a `git checkout --`. A rewriter that is not
     // idempotent is editing something it has already decided about.
     const path = writeFixtureSpec(
-      `- [ ] SC-1469: ${SC_1469}\n- [ ] SC-9002: ${STRUCTURED_UNMATCHED}\n- [ ] SC-9001: ${UNSTRUCTURED}`,
+      `- [ ] SC-1469: ${SC_1469}\n- [ ] SC-9002: ${STRUCTURED_UNMATCHED}\n- [ ] SC-9001: ${UNSTRUCTURED}\n- [ ] SC-9003: ${BOUND}`,
     );
     auditSpecs(FIXTURE, { fix: true });
     const once = readFileSync(path, "utf-8");
@@ -225,7 +238,7 @@ describe("SC-1593: the absence form binds to a matcher, so the claim is executed
 describe("SC-1594: a rewrite is reported, naming the spec and the id", () => {
   test("the audit result distinguishes a rewrite from a line left intact", () => {
     writeFixtureSpec(
-      `- [ ] SC-1469: ${SC_1469}\n- [ ] SC-9002: ${STRUCTURED_UNMATCHED}\n- [ ] SC-9001: ${UNSTRUCTURED}`,
+      `- [ ] SC-1469: ${SC_1469}\n- [ ] SC-9002: ${STRUCTURED_UNMATCHED}\n- [ ] SC-9003: ${BOUND}`,
     );
     const result = auditSpecs(FIXTURE, { fix: true });
 
@@ -242,8 +255,8 @@ describe("SC-1594: a rewrite is reported, naming the spec and the id", () => {
     expect(kept!.kept, "a kept line is indistinguishable from a rewritten one").toBeTruthy();
     expect(kept!.before).toBe(kept!.after);
 
-    const rewritten = (result.rewrites ?? []).find(r => r.scId === "SC-9001");
-    expect(rewritten, "the unstructured line was not reported").toBeTruthy();
+    const rewritten = (result.rewrites ?? []).find(r => r.scId === "SC-9003");
+    expect(rewritten, "the bound line was not reported").toBeTruthy();
     expect(rewritten!.kept, "a real rewrite was reported as kept").toBeUndefined();
   });
 
@@ -389,7 +402,7 @@ describe("SC-2000: --fix is a fixed point per criterion, not merely per file", (
         `- [ ] SC-9302: ${DOLLAR_MATCH}`,
         `- [ ] SC-9303: ${DOLLAR_GROUP}`,
         `- [ ] SC-9304: ${PLAIN}`,
-        `- [ ] SC-9305: ${UNSTRUCTURED}`,
+        `- [ ] SC-9305: ${BOUND}`,
       ].join("\n"),
     );
     const before = statementsById(readFileSync(path, "utf-8"));
