@@ -58,6 +58,7 @@
     "lib/scaffold/steps.ts::claudeMdPath | root: parameter (nested)",
     "lib/scaffold/steps.ts::claudeMdPath | root: parameter (nested)",
     "lib/scaffold/steps.ts::configPath | rungateDir: parameter (nested)",
+    "lib/scaffold/steps.ts::configPath | rungateDir: parameter (nested)",
     "lib/scaffold/steps.ts::filePath | filePath: parameter",
     "lib/scaffold/steps.ts::filePath | filePath: parameter",
     "lib/scaffold/steps.ts::filePath | filePath: parameter",
