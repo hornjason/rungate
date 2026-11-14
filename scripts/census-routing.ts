@@ -395,9 +395,10 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
     fires: c => c.isNew && /^test\/.*\.test\.tsx?$/.test(c.path),
   },
   {
-    // #2150. The two namespace suites read every criterion id spelled in
-    // `SC_SOURCE_DIRS`, and `new-test-file` reaches them only when a file is
-    // ADDED. On #2149 an existing suite gained fixture ids below the floor;
+    // #2150. sc-fixture-namespace reads every criterion id spelled in
+    // `SC_SOURCE_DIRS`; sc-id-namespace reads test/ only, so routing it for
+    // the other three over-triggers, the safe direction. `new-test-file`
+    // reached them only when a file was ADDED. On #2149 an existing suite gained fixture ids below the floor;
     // the router said nothing was reachable and sc-fixture-namespace refused
     // on CI. The directories and the id shape are the census's own (review of
     // PR #2158: `SC-\d+` misses `SC-A1` and `CRC-`, and test/ is one of four).
