@@ -398,6 +398,14 @@ describe("#2067: the spec's own fixture-range mentions are read the way source o
     expect(nextSCNumber("### SC-9999: a heading declaration\n")).toBe(10000);
   });
 
+  test("an INDENTED declaration is a declaration too — review of #2128", () => {
+    // A sub-bullet checkbox declares as surely as a column-0 one. Missing it
+    // would hand the id out again, the collision this exists to prevent; for
+    // an allocator, counting too much as taken is the safe direction.
+    expect(nextSCNumber("- [ ] SC-41: lib/x.ts contains [x] — y\n  - [ ] SC-9500: lib/y.ts contains [y] — nested\n")).toBe(9501);
+    expect(takenScNumbers("    - [x] SC-9500: nested and ticked\n").has(9500)).toBe(true);
+  });
+
   test("the free-id set agrees with the maximum about the same text", () => {
     expect(takenScNumbers(PROSE).has(9999)).toBe(false);
     expect(takenScNumbers(DECLARED).has(9999)).toBe(true);

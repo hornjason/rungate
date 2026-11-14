@@ -302,9 +302,15 @@ export function listPatterns(): string {
  * number.
  */
 function idsInSpecContent(specContent: string): string[] {
-  const declared = new Set(
-    [...parseScDeclarations(specContent, ""), ...parseScHeadingDeclarations(specContent, "")].map(d => d.id),
-  );
+  // Indented checkboxes count as declarations here (review of #2128). The
+  // registry patterns anchor at column 0, and missing a nested declaration
+  // would hand its id out again; for an allocator, over-counting is safe.
+  const indented = [...specContent.matchAll(/^[ \t]+[-*][ \t]+\[[ xX]\][ \t]+(SC-\d+):/gm)].map(m => m[1]!);
+  const declared = new Set([
+    ...parseScDeclarations(specContent, "").map(d => d.id),
+    ...parseScHeadingDeclarations(specContent, "").map(d => d.id),
+    ...indented,
+  ]);
   return [...specContent.matchAll(/SC-(\d+)/g)]
     .map(m => m[0])
     .filter(id => !isFixtureScId(id) || declared.has(id));
