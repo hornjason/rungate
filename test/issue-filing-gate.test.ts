@@ -7319,7 +7319,18 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
   });
 
   test("FG-277: the default reader turns every failure into UNMEASURED, never a throw", async () => {
-    const dir = freshRun();
+    // A checkout with NO insteadOf rewrite. `resolveRepoSlug` reads the slug
+    // through `git remote get-url`, which applies the rewrite every
+    // `freshRun()` checkout carries since #2095, and would see the fixture's
+    // bare-repository path rather than `owner/name`. Run identity reads the
+    // configured URL; the slug reader is outside #2095 and unchanged.
+    const dir = join(scratch, "fg-277-plain-origin");
+    mkdirSync(dir, { recursive: true });
+    // late-env-ok: the child is `git`, which reads none of the variables this
+    // file writes for the gate under test.
+    for (const args of [["init", "-q", "-b", "main"], ["remote", "add", "origin", FIXTURE_ORIGIN]]) {
+      expect(spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" }).status).toBe(0);
+    }
     const noToken = await readNetGrowth(dir, nowMs, () => {
       throw new Error("GITHUB_TOKEN environment variable is not set");
     });

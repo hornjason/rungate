@@ -287,25 +287,88 @@ export interface CommittedFiles {
   readable: boolean;
   /** A path's content at the revision, relative to the tree's root, or `null` when it is not there. */
   show: (rel: string) => string | null;
+  /** Why the revision could not be read, when the reader knows better than "does not resolve". */
+  unreadableWhy?: string;
 }
 
 /** Bounds each `git` call, so a wedged repository cannot hang the filing hook. */
 export const COMMITTED_READ_TIMEOUT_MS = 10_000;
 
+/** The remote's `main` as a commit this checkout holds, or why it could not be read. */
+export type RemoteMain = { readonly sha: string } | { readonly unread: string };
+
 /**
- * `git`, reading `ref` (default `origin/main`) and never the working tree —
- * the same provenance `gitSource` in `lib/filing-plan.ts` gives the plan
- * route. Paths in `ref:path` are taken from the tree's root, so a `root`
- * below the top level reads the same files.
+ * The one trust anchor for "committed" — #2095.
+ *
+ * Both readers of committed state, the filing cap's config here and the plan
+ * exemption's `gitSource` in `lib/filing-plan.ts`, used to read the local
+ * `refs/remotes/origin/main`. That ref is local state: an agent can commit
+ * `ship.mode: "direct"` and run `git update-ref refs/remotes/origin/main
+ * HEAD`, with no push, no network and no review, and the gate read the
+ * forgery as committed. `lib/verified-push.ts` already says the same of a
+ * remote-tracking ref: it cannot say whether a commit ever left the machine.
+ *
+ * So the anchor is what the REMOTE says its `main` is (`git ls-remote`), read
+ * at that object — which a local forgery cannot produce. The object must be
+ * in this checkout, or nothing can be read from it.
+ *
+ * **Every failure is `unread`, and the callers take the strict reading**: no
+ * remote, an unreachable one, a remote with no `main`, or an object never
+ * fetched. Never the local ref as a fallback, which would reopen the hole.
+ *
+ * **Residual risk, stated:** `git remote set-url origin <a repository the
+ * agent controls>`, or an `insteadOf` rewrite, moves the anchor itself. Run
+ * identity reads the CONFIGURED URL (`readWorktreeRemote`), so a rewrite
+ * cannot also change which allowance is spent, but the content read here
+ * follows wherever the remote points.
  */
-export function gitCommittedFiles(root: string, ref: string = "origin/main"): CommittedFiles {
+export function remoteMainCommit(root: string): RemoteMain {
+  const listed = spawnSync("git", ["-C", root, "ls-remote", "origin", "refs/heads/main"], {
+    encoding: "utf-8",
+    timeout: COMMITTED_READ_TIMEOUT_MS,
+    // A hook has no one to answer a credential prompt; fail instead of waiting.
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  if (listed.error !== undefined || listed.status !== 0) {
+    return { unread: "the remote's main could not be read (`git ls-remote origin refs/heads/main` failed)" };
+  }
+  const sha = /^([0-9a-f]{40,64})\trefs\/heads\/main$/m.exec(String(listed.stdout ?? ""))?.[1];
+  if (sha === undefined) return { unread: "the remote names no refs/heads/main" };
+  const held = spawnSync("git", ["-C", root, "cat-file", "-e", `${sha}^{commit}`], {
+    timeout: COMMITTED_READ_TIMEOUT_MS,
+  });
+  if (held.error !== undefined || held.status !== 0) {
+    return { unread: `the remote's main is ${sha.slice(0, 12)}, which this checkout does not have — fetch it` };
+  }
+  return { sha };
+}
+
+/**
+ * `git`, reading the commit the remote's `main` names ({@link remoteMainCommit})
+ * and never the working tree or the local `origin/main` ref — the same anchor
+ * `gitSource` in `lib/filing-plan.ts` gives the plan route. Paths in
+ * `<sha>:path` are taken from the tree's root, so a `root` below the top level
+ * reads the same files.
+ */
+export function gitCommittedFiles(root: string): CommittedFiles {
+  const anchor = remoteMainCommit(root);
+  if ("unread" in anchor) {
+    return { ref: "origin/main", readable: false, show: () => null, unreadableWhy: anchor.unread };
+  }
+  return committedFilesAt(root, anchor.sha, `origin/main@${anchor.sha.slice(0, 12)}`);
+}
+
+/** Every config file a layout can be made of, read at one commit. */
+function committedFilesAt(root: string, sha: string, ref: string): CommittedFiles {
   // ONE `git cat-file --batch` resolves the revision and reads every file a
   // layout can be made of. The filing gate runs as a PreToolUse hook on every
   // `gh issue create`, and a spawn per file cost five processes a filing.
   // A name the commit does not have comes back `<name> missing`; a revision
   // that does not resolve makes its `^{commit}` line missing too.
   const paths = [...DIRECTORY_CONFIG_FILES.map(file => `${DIR_REL}/${file}`), MONOLITH_REL];
-  const names = [`${ref}^{commit}`, ...paths.map(p => `${ref}:${p}`)];
+  // Named by the SHA, never by `ref`: `ref` is the label for messages, and
+  // resolving a ref name here would read local state again.
+  const names = [`${sha}^{commit}`, ...paths.map(p => `${sha}:${p}`)];
   const r = spawnSync("git", ["-C", root, "cat-file", "--batch"], {
     input: names.join("\n") + "\n",
     timeout: COMMITTED_READ_TIMEOUT_MS,
@@ -366,7 +429,7 @@ export function readCommittedConfig(files: CommittedFiles): CommittedConfigReadi
       status: "unreadable",
       kind: "ref",
       ref: files.ref,
-      why: `${files.ref} does not resolve here — no git, no remote, or never fetched`,
+      why: files.unreadableWhy ?? `${files.ref} does not resolve here — no git, no remote, or never fetched`,
     };
   }
   const cache = new Map<string, string | null>();
