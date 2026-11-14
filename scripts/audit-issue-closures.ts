@@ -37,6 +37,7 @@ import {
   toMergedCloser,
   openWithMergedCloser,
   openCloserReport,
+  mergedPullNodes,
   CROSS_REFERENCE_FIELD,
   EXEMPT_LABEL,
   FINDING_LABEL,
@@ -125,7 +126,7 @@ query($owner: String!, $name: String!, $limit: Int!) {
     pullRequests(states: MERGED, first: $limit, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
         number
-        closingIssuesReferences(first: 50) { totalCount nodes { number state } }
+        closingIssuesReferences(first: 50) { totalCount nodes { number state repository { name owner { login } } } }
       }
     }
   }
@@ -176,7 +177,7 @@ async function main(): Promise<void> {
   const pullsFixture = arg("pulls-fixture");
   if (pullsFixture) {
     try {
-      pulls = JSON.parse(readFileSync(pullsFixture, "utf-8")).map(toMergedCloser);
+      pulls = JSON.parse(readFileSync(pullsFixture, "utf-8")).map((n: unknown) => toMergedCloser(n, repo ?? undefined));
     } catch (e) {
       refuse(`could not read the pulls fixture: ${(e as Error).message}`);
     }
@@ -184,7 +185,10 @@ async function main(): Promise<void> {
     try {
       const { owner, repo: name } = parseOwnerRepo(repo!);
       const data = await createGitHubClient().graphql(PULLS_QUERY, { owner, name, limit: Number(arg("limit") ?? 100) });
-      pulls = (data?.repository?.pullRequests?.nodes ?? []).map(toMergedCloser);
+      // A response with no list is no reading, not an empty one (review of #2181).
+      const nodes = mergedPullNodes(data);
+      if (nodes === null) throw new Error("the response carried no pullRequests list");
+      pulls = nodes.map((n: unknown) => toMergedCloser(n, repo!));
     } catch (e) {
       refuse(`could not read merged pull requests: ${(e as Error).message}`);
     }

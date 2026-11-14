@@ -385,14 +385,31 @@ export interface MergedCloser {
   closesTotal: number;
 }
 
-/** One merged pull request's GraphQL node, as the audit reads it. */
-export function toMergedCloser(node: any): MergedCloser {
+/**
+ * One merged pull request's GraphQL node, as the audit reads it.
+ *
+ * `repo` (`owner/name`) drops a closing reference into ANOTHER repository:
+ * GitHub resolves `Fixes other/repo#42` across repositories, and that issue
+ * is not this tracker's #42 (review of #2181; board-flow and work-status
+ * filter the same way). A node with no `repository` is kept, so a fixture
+ * written without it still reads.
+ */
+export function toMergedCloser(node: any, repo?: string): MergedCloser {
   const refs = node?.closingIssuesReferences;
   if (!refs || !Array.isArray(refs.nodes)) return { pull: Number(node?.number), closes: null, closesTotal: 0 };
+  const here = (n: any): boolean => {
+    const r = n?.repository;
+    if (!repo || !r) return true;
+    return `${r.owner?.login}/${r.name}`.toLowerCase() === repo.toLowerCase();
+  };
+  const all = refs.nodes as any[];
+  const kept = all.filter(here);
   return {
     pull: Number(node.number),
-    closes: refs.nodes.map((n: any) => ({ number: Number(n?.number), state: String(n?.state ?? "") })),
-    closesTotal: Number(refs.totalCount ?? refs.nodes.length),
+    closes: kept.map((n: any) => ({ number: Number(n?.number), state: String(n?.state ?? "") })),
+    // The cut is judged on GitHub's count against what was RETURNED, before the
+    // cross-repo filter, so a filtered reference never reads as a truncation.
+    closesTotal: Number(refs.totalCount ?? all.length) - (all.length - kept.length),
   };
 }
 
@@ -437,4 +454,15 @@ export function openCloserReport(reading: OpenCloserReading, scanned: number): s
     lines.push(`- UNMEASURED: #${n}'s closing references could not be read whole, so an open one may be missing`);
   }
   return lines.join("\n");
+}
+
+/**
+ * The merged pull requests a GraphQL response carries, or `null` when it
+ * carries no list at all. A response with no `repository`, or no
+ * `pullRequests`, is no reading, not an empty one (review of #2181): read as
+ * `[]` it would print "none" in exactly the no-data case.
+ */
+export function mergedPullNodes(data: any): unknown[] | null {
+  const nodes = data?.repository?.pullRequests?.nodes;
+  return Array.isArray(nodes) ? nodes : null;
 }

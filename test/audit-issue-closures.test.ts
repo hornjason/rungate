@@ -41,6 +41,7 @@ import {
   openWithMergedCloser,
   openCloserReport,
   toMergedCloser,
+  mergedPullNodes,
   type ClosedIssue,
   type ClosureFinding,
 } from "../lib/issue-closure-audit";
@@ -646,5 +647,42 @@ describe("#1952 / SC-2751: an open issue whose closer merged is reported, naming
     const pulls = fixtureFile([pull(10, [{ number: 11, state: "CLOSED" }])]);
     const r = run(SCRIPT, ["--fixture", fixtureFile([]), "--pulls-fixture", pulls]);
     expect(r.code, r.out).toBe(0);
+  });
+});
+
+describe("#1952 review round 1: no false clean, and no other repository's issues", () => {
+  test("a closing reference into another repository is not this tracker's issue", () => {
+    const node = {
+      number: 50,
+      closingIssuesReferences: {
+        totalCount: 2,
+        nodes: [
+          { number: 42, state: "OPEN", repository: { name: "other-repo", owner: { login: "otherorg" } } },
+          { number: 43, state: "CLOSED", repository: { name: "n", owner: { login: "o" } } },
+        ],
+      },
+    };
+    const reading = openWithMergedCloser([toMergedCloser(node, "o/n")]);
+    expect(reading.open, "otherorg/other-repo#42 was reported against this tracker").toEqual([]);
+    expect(reading.unmeasured, "a filtered reference read as a truncated list").toEqual([]);
+    // Without the repository to compare, nothing is dropped.
+    expect(openWithMergedCloser([toMergedCloser(node)]).open).toEqual([{ pull: 50, issue: 42 }]);
+  });
+
+  test("a response with no pull request list is no reading, not an empty one", () => {
+    expect(mergedPullNodes({ repository: null })).toBeNull();
+    expect(mergedPullNodes({ repository: { pullRequests: null } })).toBeNull();
+    expect(mergedPullNodes(undefined)).toBeNull();
+    expect(mergedPullNodes({ repository: { pullRequests: { nodes: [] } } })).toEqual([]);
+  });
+
+  test("the script drops another repository's open issue when --repo names this one", () => {
+    const pulls = fixtureFile([{
+      number: 50,
+      closingIssuesReferences: { totalCount: 1, nodes: [{ number: 42, state: "OPEN", repository: { name: "x", owner: { login: "y" } } }] },
+    }]);
+    const r = run(SCRIPT, ["--fixture", fixtureFile([]), "--pulls-fixture", pulls, "--repo", "o/n"]);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).not.toContain("#42 is OPEN");
   });
 });
