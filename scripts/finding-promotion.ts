@@ -11,10 +11,12 @@
  *   …and add --write to append it. Without --write it prints and exits 0,
  *   having changed nothing.
  *
- *   A spec keeping its criteria under more than one heading also needs
- *   --section "<heading>", and the line goes after that section's last
- *   criterion; without it the run refuses SECTION_REQUIRED and lists the
- *   headings (#2110).
+ *   A spec keeping its criteria in more than one section also needs
+ *   --section, and the line goes after that section's last criterion;
+ *   without it the run refuses SECTION_REQUIRED and lists the sections
+ *   (#2110). Name a section by its heading, by its path of parent headings
+ *   ("Feature A > Success Criteria") when the heading text repeats, or by its
+ *   heading line ("line 7802"); a name matching several is SECTION_AMBIGUOUS.
  *
  * The OTHER outcome — this finding serves no criterion, deliberately:
  *
