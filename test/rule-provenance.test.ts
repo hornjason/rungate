@@ -567,8 +567,13 @@ describe("#2043: the operational finds of 2026-11-12 reach a consumer's generate
   test("parallel-sessions.md watches checks with --fail-fast", () => {
     expect(text("parallel-sessions.md")).toContain("gh pr checks <N> --watch --fail-fast");
   });
-  test("parallel-sessions.md says how to file so the gate reads the right config and raises the queue", () => {
-    const t = text("parallel-sessions.md");
+  // Review of #2155: the filing gate runs from this repo's own hooks and is
+  // not in any consumer's defaults, so the line names machinery a consumer
+  // does not have. It is generated for this repository only.
+  test("the filing line is generated for this repository, and never for a consumer", () => {
+    expect(text("parallel-sessions.md"), "a consumer has no filing gate").not.toContain("`gh issue create` without `--repo`");
+    const own = generateScopedRules(mockProjectScan({ root: ROOT, name: "rungate" }));
+    const t = own.find(r => r.filename === "parallel-sessions.md")?.content ?? "";
     expect(t).toContain("`gh issue create` without `--repo`");
     expect(t).toContain("reads its config from the launch directory");
   });
