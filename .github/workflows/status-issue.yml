@@ -1,0 +1,82 @@
+# Not managed by rungate — caller-owned, like phase-order.yml.
+#
+# #2097: one pinned issue says where the current plan stands, so nobody has
+# to ask an agent or open several pages. `scripts/status-view.ts` renders it
+# from live readings (the plan in project-state.json, the milestones, open
+# issues and pull requests, the board's Ready lane, board-conformance) and
+# this rewrites the pinned issue carrying its marker. `/board` prints the same
+# render in a terminal, so the two cannot disagree.
+#
+# Every run reads everything and no step reads which event fired it, so the
+# concurrency group can cancel a superseded run without losing anything: the
+# newest run renders the same state the cancelled one would have. No
+# schedule: a change is what fires it, and a cron is what this repository is
+# removing (board-conformance.yml says why).
+#
+# CREDENTIALS, per ADR-013. Reading needs the board token (the Ready lane and
+# board-conformance read a ProjectV2 board, which GITHUB_TOKEN cannot see), so
+# the read step holds RUNGATE_PROJECT_TOKEN and writes nothing; an empty
+# secret falls back to GITHUB_TOKEN and the board sections render UNMEASURED.
+# The write step holds only the job's GITHUB_TOKEN, whose writes fire no
+# further workflow runs, so updating the issue cannot re-trigger this.
+#
+# Triggers. `opened` and `edited` are deliberately absent: anyone can raise
+# them, and they would put the board token behind an event a stranger fires
+# (phase-order.yml's rule). `closed` and `reopened` are present although an
+# issue's author can raise them on their own issue: progress is what this view
+# reports, and no step reads the event, so all such an event can buy is one
+# more run of main's code. A new issue still appears, because filing with a
+# label or a milestone fires `labeled` or `milestoned`.
+#
+# Every `uses:` is pinned to a full commit SHA. `test/status-issue-workflow.test.ts`
+# asserts that and the rest.
+name: Status — rewrite the pinned "where we are" issue
+
+on:
+  push:
+    branches: [main]
+  issues:
+    types: [closed, reopened, milestoned, demilestoned, labeled, unlabeled, assigned, unassigned]
+  # Ready is written by these three, with the board token, and a board write
+  # fires no event this workflow can listen for (GitHub Actions has no
+  # ProjectV2 item trigger). So it re-reads when one of them finishes (AI
+  # review of #2103), instead of waiting for the next unrelated change.
+  workflow_run:
+    workflows:
+      - "Board — keep Ready full from the events the repo already emits"
+      - "Board — one decider writes every lane"
+      - "Board — reconcile every card against GitHub"
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: status-issue
+  cancel-in-progress: true
+
+jobs:
+  status:
+    runs-on: "ubuntu-latest"
+    steps:
+      # Full history: board-conformance reads the spec from origin/main.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+        with:
+          bun-version-file: ".bun-version"
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Read every source and render the view
+        env:
+          GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: bun scripts/status-view.ts --markdown --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/status.md"
+
+      - name: Write it into the pinned issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun scripts/status-view.ts --publish "$RUNNER_TEMP/status.md" --repo "$GITHUB_REPOSITORY"
