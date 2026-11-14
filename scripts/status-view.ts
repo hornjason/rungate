@@ -618,13 +618,18 @@ export function publish(body: string, repo: string, title: string, gh: Gh = live
   const pinnedMine = (pinned.value.data?.repository?.pinnedIssues?.nodes ?? []).find(n => n.issue.body.startsWith(STATUS_MARKER));
   let number: string | null = pinnedMine ? String(pinnedMine.issue.number) : null;
   if (number === null) {
-    const open = ghLines<{ number: number; body: string | null }>(
+    // Only an issue this workflow or a maintainer wrote. The marker is text
+    // anyone can type into an issue they open; reusing a stranger's issue
+    // would pin it, and its author could edit it back afterwards while it
+    // stays pinned (security review of #2103). A pinned issue needs no such
+    // check: pinning already takes maintainer rights.
+    const open = ghLines<{ number: number; body: string | null; login: string | null; association: string | null }>(
       gh,
       `repos/${repo}/issues?state=open&per_page=100`,
-      ".[] | select(.pull_request == null) | {number, body}",
+      ".[] | select(.pull_request == null) | {number, body, login: .user.login, association: .author_association}",
     );
     if (open.kind === "UNMEASURED") return { ok: false, message: `UNMEASURED — the open issues could not be read: ${open.why}` };
-    const found = open.value.find(i => (i.body ?? "").startsWith(STATUS_MARKER));
+    const found = open.value.find(i => (i.body ?? "").startsWith(STATUS_MARKER) && trustedAuthor(i.login, i.association));
     if (found) number = String(found.number);
   }
   const dir = mkdtempSync(join(tmpdir(), "status-publish-"));
@@ -656,6 +661,11 @@ export function publish(body: string, repo: string, title: string, gh: Gh = live
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** The workflow's own identity, or someone with write access to the repository. */
+export function trustedAuthor(login: string | null, association: string | null): boolean {
+  return login === "github-actions[bot]" || ["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? "");
 }
 
 /** The pinned issue's title: follows the focus family, never a fixed name. */

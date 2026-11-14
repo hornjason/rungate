@@ -25,6 +25,7 @@ import {
   publish,
   renderMarkdown,
   renderText,
+  trustedAuthor,
   viewTitle,
 } from "../scripts/status-view";
 
@@ -290,7 +291,7 @@ describe("#2097: publish writes only the marked pinned issue", () => {
 describe("#2097 review round 2", () => {
   const body = `${STATUS_MARKER}\nhello\n`;
   const pinnedNone = { data: { repository: { pinnedIssues: { nodes: [] } } } };
-  const fakeGh = (open: { number: number; body: string }[], pinFails = false) => {
+  const fakeGh = (open: { number: number; body: string; login: string; association: string }[], pinFails = false) => {
     const calls: string[][] = [];
     const gh = (args: string[]) => {
       calls.push(args);
@@ -305,7 +306,13 @@ describe("#2097 review round 2", () => {
 
   test("an unpinned status issue is found by its marker and reused, never a second one created", () => {
     // Review: a pin that failed once made every later run create another issue.
-    const { gh, calls } = fakeGh([{ number: 3, body: "someone else's" }, { number: 77, body: `${STATUS_MARKER}\nold` }], true);
+    const { gh, calls } = fakeGh(
+      [
+        { number: 3, body: "someone else's", login: "x", association: "NONE" },
+        { number: 77, body: `${STATUS_MARKER}\nold`, login: "github-actions[bot]", association: "NONE" },
+      ],
+      true,
+    );
     const r = publish(body, "o/r", "t", gh);
     expect(r.ok).toBe(true);
     expect(calls.filter(c => c[0] === "issue").map(c => c.slice(0, 3))).toEqual([
@@ -315,6 +322,21 @@ describe("#2097 review round 2", () => {
     expect(calls.some(c => c[1] === "create")).toBe(false);
     // The warning is an annotation GitHub reads: on its own line.
     expect(r.message.split("\n").some(l => l.startsWith("::warning"))).toBe(true);
+  });
+
+  test("a marker issue a stranger opened is never reused or pinned; a new one is created instead", () => {
+    // Security review of #2103: the marker is text anyone can type.
+    const { gh, calls } = fakeGh([{ number: 66, body: `${STATUS_MARKER}\nbait`, login: "stranger", association: "NONE" }]);
+    expect(publish(body, "o/r", "t", gh).message).toContain("#42");
+    expect(calls.some(c => c[0] === "issue" && c[2] === "66")).toBe(false);
+    expect(calls.filter(c => c[0] === "issue").map(c => c.slice(0, 2))).toEqual([
+      ["issue", "create"],
+      ["issue", "pin"],
+    ]);
+    // A maintainer's issue is trusted; so is the workflow's own bot.
+    expect(trustedAuthor("hornjason", "OWNER")).toBe(true);
+    expect(trustedAuthor("github-actions[bot]", "NONE")).toBe(true);
+    expect(trustedAuthor("stranger", "CONTRIBUTOR")).toBe(false);
   });
 
   test("Other work, read and empty, still shows its heading and says so", () => {
