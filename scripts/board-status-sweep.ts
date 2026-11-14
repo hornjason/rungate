@@ -59,6 +59,7 @@
  */
 import { parseArgs } from "util";
 import { resolveGitHubToken } from "../lib/github";
+import { readBoardProjectId } from "../lib/config-readers";
 import { laneFor } from "../lib/board-flow";
 import { workVerdict } from "../lib/board-lane-health";
 import { issueFromBranch } from "../lib/local-work";
@@ -74,7 +75,7 @@ import { issueFromBranch } from "../lib/local-work";
  */
 export const DRIFT_EXIT = 1;
 
-export const PROJECT_ID = "PVT_kwHOAZTQCM4BpMuR";
+
 export const DONE = "Done";
 export const IN_REVIEW = "In review";
 /**
@@ -978,7 +979,7 @@ export function requireConnection(data: unknown, key: string, what: string): Rec
     throw new Error(
       `GitHub answered the ${what} query with a node carrying no "${key}" connection ` +
         `(it was ${page === undefined ? "absent" : JSON.stringify(page)}). The query ` +
-        `SUCCEEDED — this is not an error response. ${PROJECT_ID} resolved to something ` +
+        `SUCCEEDED — this is not an error response. The configured board.id resolved to something ` +
         `that is not a ProjectV2, so the "... on ProjectV2" fragment matched nothing. ` +
         `Check the id; nothing was read and nothing was written.`,
     );
@@ -1060,7 +1061,7 @@ export function requireNode(data: unknown, what: string): Record<string, unknown
   const node = (data as { node?: unknown }).node;
   if (node === null || node === undefined) {
     throw new Error(
-      `GitHub answered the ${what} query with node: null for ${PROJECT_ID}. The query ` +
+      `GitHub answered the ${what} query with node: null for the configured board.id. The query ` +
         `SUCCEEDED — this is not a syntax or id error. A project id the token cannot see ` +
         `reads as null, so check the credential carries project scope; read:project is ` +
         `enough to read the board and not enough to write it.`,
@@ -1315,12 +1316,12 @@ export function parseBoardItem(node: any, now: number = Date.now()): BoardItem |
 }
 
 /** Every item, paginated. A bare first:100 against a 121-item board returns a FALSE ZERO. */
-async function readBoard(token: string): Promise<BoardItem[]> {
+async function readBoard(token: string, project: string): Promise<BoardItem[]> {
   const items: BoardItem[] = [];
   let endCursor: string | null = null;
 
   for (;;) {
-    const data = await graphql(token, BOARD_QUERY, { project: PROJECT_ID, endCursor });
+    const data = await graphql(token, BOARD_QUERY, { project, endCursor });
     const page = requireConnection(data, "items", "project board");
 
     for (const node of page.nodes) {
@@ -1660,6 +1661,17 @@ async function main(argv: readonly string[]): Promise<number> {
     allowPositionals: false,
   });
 
+  // The board from project config, never a literal (#1719, SC-2621), and
+  // before the credential: a run with no board to read is refused on that.
+  const project = readBoardProjectId(process.cwd());
+  if (project === null) {
+    console.error(
+      "UNMEASURED: no board is configured — board.id is absent or blank in this project's " +
+        ".claude/rungate config. Nothing was read, so this is not a board that agrees.",
+    );
+    return DRIFT_EXIT;
+  }
+
   const token = resolveGitHubToken();
   if (token === undefined) {
     console.error(
@@ -1670,7 +1682,7 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   const repoForReads = (values.repo as string | undefined) ?? process.env.GITHUB_REPOSITORY ?? "";
-  const board = await readBoard(token);
+  const board = await readBoard(token, project);
   // The rows `needsOpenPullRequestReading` names — stale claims AND cards
   // stranded in a working lane — and ONLY when a repository is resolvable.
   // With no repo the pull-request half cannot be read, every candidate
@@ -1692,7 +1704,7 @@ async function main(argv: readonly string[]): Promise<number> {
         );
   const reading = sweep(items);
 
-  console.log(`Board status sweep — ${items.length} item(s) read from ${PROJECT_ID}\n`);
+  console.log(`Board status sweep — ${items.length} item(s) read from ${project}\n`);
   console.log(`  agrees with GitHub : ${reading.agrees}`);
   console.log(`  disagrees          : ${reading.corrections.length}`);
   console.log(`  stale claims       : ${reading.releases.length}`);
@@ -1770,7 +1782,7 @@ async function main(argv: readonly string[]): Promise<number> {
     return DRIFT_EXIT;
   }
 
-  const fields = await graphql(token, FIELDS_QUERY, { project: PROJECT_ID });
+  const fields = await graphql(token, FIELDS_QUERY, { project });
   const fieldPage = requireConnection(fields, "fields", "project fields");
   const statusField = fieldPage.nodes.find((f: any) => f?.name === "Status");
   if (statusField === undefined) {
@@ -1799,7 +1811,7 @@ async function main(argv: readonly string[]): Promise<number> {
   const applied = await applyCorrections(reading.corrections, async c => {
     requireWrittenItem(
       await graphql(token, SET_STATUS, {
-        project: PROJECT_ID,
+        project,
         item: c.itemId,
         field: statusField.id,
         option: optionId(c.to),
@@ -1855,7 +1867,7 @@ async function main(argv: readonly string[]): Promise<number> {
       if (back !== null) {
         requireWrittenItem(
           await graphql(token, SET_STATUS, {
-            project: PROJECT_ID,
+            project,
             item: r.itemId,
             field: statusField.id,
             option: optionId(back),

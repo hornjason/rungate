@@ -61,7 +61,7 @@ import {
   workNextReading,
   type Throughput,
 } from "../lib/board-ready-rule";
-import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
+import { enginePrefixReading, readBoardProjectId, readExpediteLabel } from "../lib/config-readers";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
 import { fileOverlapGroups, overlapLines } from "../lib/issue-file-overlap";
@@ -77,7 +77,17 @@ const REPO = "hornjason/rungate";
 // WORKING against the wrong repository while the REST reads followed the
 // constant: one table, two repositories, no error. Caught in review of #1740.
 const [OWNER, NAME] = REPO.split("/");
-const PROJECT = "PVT_kwHOAZTQCM4BpMuR";
+// The board from project config, never a literal (#1719, SC-2621). Read
+// before the credential: a run with nowhere to look is refused on that, not
+// on what it would have looked with.
+const PROJECT = readBoardProjectId(process.cwd());
+if (PROJECT === null) {
+  console.error(
+    "UNMEASURED: no board is configured — board.id is absent or blank in this project's " +
+      "harness config, so there is no board to read the lanes from. Nothing was read.",
+  );
+  process.exit(2);
+}
 
 /**
  * WHICH MILESTONE TO DETAIL — and the default is EVERY ONE.
