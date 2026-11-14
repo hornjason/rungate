@@ -48,10 +48,13 @@ export interface HumanStepReadings {
 
 /** One line per step owed or unread, then a line saying what was measured. Pure. */
 export function humanSteps(r: HumanStepReadings): string[] {
+  const unreadWorkflows = r.unreadableWorkflows.map(why => `UNMEASURED: process checks — ${why}`);
   if (r.slug === null) {
     return [
       "UNMEASURED: human steps — the origin remote names no GitHub repository, so the project token, " +
         `${REQUIRE_CLOSING_REF_VARIABLE} and the required checks were not read.`,
+      // Read from the tree, not from GitHub, so it is owed whatever the remote is.
+      ...unreadWorkflows,
     ];
   }
   const out: string[] = [];
@@ -71,7 +74,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
     );
   } else measured.push(`${REQUIRE_CLOSING_REF_VARIABLE} is true`);
 
-  for (const why of r.unreadableWorkflows) out.push(`UNMEASURED: process checks — ${why}`);
+  out.push(...unreadWorkflows);
 
   if (r.processChecks.length > 0) {
     if (r.protection.kind === "UNMEASURED") {

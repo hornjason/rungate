@@ -256,6 +256,13 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
     }
   });
 
+  // Round 1 of PR #2162: the no-repository early return swallowed it.
+  test("an unreadable workflow is still reported when there is no GitHub origin", () => {
+    const lines = humanSteps({ ...allSet, slug: null, unreadableWorkflows: [".github/workflows/closing-references.yml could not be read (EISDIR)"] });
+    expect(lines[0]).toStartWith("UNMEASURED: human steps");
+    expect(lines.join("\n")).toContain("UNMEASURED: process checks — .github/workflows/closing-references.yml could not be read");
+  });
+
   test("an unreadable process workflow is an UNMEASURED line naming it, and the read completes", async () => {
     const root = mkdtempSync(join(tmpdir(), "rg-human-steps-unreadable-"));
     try {
