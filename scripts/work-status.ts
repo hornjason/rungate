@@ -57,6 +57,7 @@ import {
 import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
+import { fileOverlapGroups, overlapLines } from "../lib/issue-file-overlap";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -676,6 +677,9 @@ if (readyNow.length === 0) {
 } else {
   for (const i of readyNow) console.log(`    #${i.number} ${i.title.slice(0, 62)}`);
 }
+// #1976, SC-2761: which of these collide on a file, so two sessions do not
+// start two issues that rewrite the same one.
+for (const line of overlapLines(fileOverlapGroups(readyNow), readyNow.length)) console.log(line);
 // #1842: say what this reading could not see. A draft has no issue number,
 // so it is invisible to every tool here while still occupying a slot the
 // depth rule budgeted for workable items. Reporting `1` on a column holding
@@ -697,6 +701,7 @@ console.log(
     "  the dependencies API, not from a search. These are what Ready draws from;\n" +
     "  starting one directly is how the board stops describing the work.",
 );
+for (const line of overlapLines(fileOverlapGroups(pickable), pickable.length)) console.log(line);
 
 // ## What places each candidate — #1853
 //
