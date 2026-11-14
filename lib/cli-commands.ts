@@ -257,6 +257,30 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     usage:
       "rungate plan-deps --repo <owner/name> --milestone-prefix <name> [--write] [--json] [--include-closed]",
   },
+  // The two scripts ADR-014's process workflows ran and no consumer could
+  // (#2044, SC-2742). A consumer has `node_modules/rungate`, not `scripts/`,
+  // so `board-ready.yml`, `adr-accepted.yml` and `closing-references.yml`
+  // could only be emitted for a consumer once these were commands.
+  //
+  // No `projectRootFlag` on either: both read their project from
+  // `process.cwd()`, which the dispatcher's child inherits, and neither
+  // parses `--project-root`, so an appended flag would be ignored at best.
+  // `board-ready`'s own `--project-root` is #1968.
+  "board-ready": {
+    script: "scripts/board-ready.ts",
+    summary: "Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane",
+    usage:
+      "rungate board-ready --repo <owner/name> --project <node-id> [--closed-issue <n>] [--top-up] " +
+      "[--moving-issue <n>] [--actor <login>] [--write]   (at least one of --closed-issue, --top-up)",
+  },
+  // Reads a `gh pr view`-shaped payload on stdin, which the dispatcher passes
+  // through (`stdio: "inherit"`), or `--fixture` offline.
+  "audit-closing-references": {
+    script: "scripts/audit-closing-references.ts",
+    summary: "Refuse a pull request whose closing reference GitHub will not act on, or that closes no issue",
+    usage: "<payload> | rungate audit-closing-references --repo <owner/name>  |  " +
+      "rungate audit-closing-references --fixture <file.json> --repo <owner/name>",
+  },
   "sync-spec-tests": {
     script: "scripts/sync-spec-tests.ts",
     summary: "Regenerate the conformity suite from the specs",

@@ -139,6 +139,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSyn
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { remedyMessage } from "../lib/check-remedy";
+import { CLI_COMMANDS } from "../lib/cli-commands";
 import {
   instructionPaths,
   packageClosureViolations,
@@ -758,5 +759,62 @@ describe("#1174 CLOSURE-15: the instruction scanner is load-bearing", () => {
       JSON.stringify({ name: "f", version: "0.0.0", files: ["hooks/", "gates/"] }),
     );
     expect(packageClosureViolations(dir, publishedFiles(dir, readPackageFiles(dir)))).toEqual([]);
+  });
+});
+
+/**
+ * #2044, ADR-014 row 1: every script a process workflow runs ships and is a
+ * `rungate` command.
+ *
+ * This is the half of SC-2742 that can be true before any consumer workflow
+ * exists, so it does not claim the criterion: the other half, a consumer's
+ * workflow calling the CLI and never `bun scripts/…`, becomes measurable when
+ * the scaffold emits the four workflows, and #2047 carries it (review of
+ * #2142, which ticked it here and was right to be refused).
+ *
+ * ADR-014 decision 2: a consumer has `node_modules/rungate`, not `scripts/`,
+ * so every script a process workflow runs must ship and be a command before
+ * a generator can emit a workflow that calls it. On main at `812f7e04` two
+ * did neither: `scripts/board-ready.ts` and `scripts/audit-closing-references.ts`.
+ */
+describe("#2044: every script a process workflow runs ships and is a rungate command", () => {
+  /** ADR-014's four, decision 6. */
+  const PROCESS_WORKFLOWS = ["closing-references", "adr-accepted", "board-ready", "board-intake"];
+  /** `bun scripts/x.ts`, the form this repository's copies use today. */
+  const SCRIPT_RUN = /\bbun\s+(scripts\/[A-Za-z0-9._-]+\.ts)\b/g;
+
+  /** The scripts one workflow runs, comment lines excluded: a sentence about a run is not a run. */
+  function scriptsRun(yaml: string): string[] {
+    const code = yaml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+    return [...code.matchAll(SCRIPT_RUN)].map(m => m[1]!);
+  }
+
+  const published = publishedFiles(ROOT, readPackageFiles(ROOT));
+  const registered = new Set(Object.values(CLI_COMMANDS).map(c => c.script));
+  const read = PROCESS_WORKFLOWS.map(name => ({
+    name,
+    scripts: scriptsRun(readFileSync(join(ROOT, ".github", "workflows", `${name}.yml`), "utf-8")),
+  }));
+
+  test("the sweep reads a real population, and a comment is not a run", () => {
+    // The control. A regex that matched nothing would pass the case below.
+    expect(read.flatMap(w => w.scripts)).toContain("scripts/board-ready.ts");
+    expect(read.flatMap(w => w.scripts)).toContain("scripts/audit-closing-references.ts");
+    expect(scriptsRun("  # bun scripts/board-ready.ts in a comment")).toEqual([]);
+  });
+
+  test("every script a process workflow runs is in files[] and registered as a command", () => {
+    const missing: string[] = [];
+    for (const w of read) {
+      for (const s of w.scripts) {
+        if (!published.has(s)) missing.push(`${w.name}.yml runs ${s}, which is not in package.json files[]`);
+        if (!registered.has(s)) missing.push(`${w.name}.yml runs ${s}, which no entry in CLI_COMMANDS runs`);
+      }
+    }
+    expect(
+      missing,
+      "a consumer's copy of this workflow could not run it: register the script in lib/cli-commands.ts " +
+        "and add it to package.json files[] (ADR-014 decision 2)",
+    ).toEqual([]);
   });
 });
