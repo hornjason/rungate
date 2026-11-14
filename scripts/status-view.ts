@@ -42,7 +42,7 @@ import { join } from "path";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
 import { readMilestoneTitle } from "../lib/milestone-title";
 import { parseCriteria } from "../lib/spec-evidence";
-import { parsePlacementRows } from "../lib/spec-placement";
+import { PHASE_VALUE, parsePlacementRows } from "../lib/spec-placement";
 import { ladderReport } from "../lib/work-status";
 
 /** The marker that identifies the pinned issue this script owns. */
@@ -204,7 +204,7 @@ export function placedCriteria(specText: string): Map<number, { placed: number; 
   const ticked = new Map(parseCriteria(specText).map(c => [c.id, c.ticked]));
   const out = new Map<number, { placed: number; unticked: number }>();
   for (const row of parsePlacementRows(specText)) {
-    const m = row.placement.match(/^Phase\s+(\d+)$/);
+    const m = row.placement.match(PHASE_VALUE);
     if (m === null || row.ids.length === 0) continue;
     out.set(Number(m[1]), { placed: row.ids.length, unticked: row.ids.filter(id => ticked.get(id) !== true).length });
   }

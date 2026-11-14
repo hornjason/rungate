@@ -198,6 +198,15 @@ describe("#2147: a phase with no issues is judged by the criteria the spec place
     expect(md).toContain("– [Zqengine Phase 1 — a criterion becomes issues](u1) — no issues; 1 of its 3 criteria unticked");
   });
 
+  test("a placement cell is read by the one phase grammar: 'Phase  1' (two spaces) places nothing", () => {
+    // Review of #2149: a second regex for the same cell would score a row the
+    // milestone planner refuses (#1705's stray space, the other way round).
+    const stray = spec("x").replace("| **Phase 1** |", "| **Phase  1** |");
+    const lines = phaseLines(ms, "Zqengine", stray);
+    expect(lines[0].state).toBe("empty");
+    expect(lines[0].criteria).toBeUndefined();
+  });
+
   test("a placed id the spec never states is unticked, not done", () => {
     const missing = spec("x").replace("- [x] SC-9903: three\n", "");
     expect(phaseLines(ms, "Zqengine", missing)[0].state).toBe("empty");
