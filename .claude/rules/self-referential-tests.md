@@ -156,29 +156,11 @@ reading it (#1004); why the two routers are complements:
 
 ## If you are writing one of these
 
-Say what to do in the failure message. `SC-1466` is the best in the tree —
-*"…or add it to `WARN_TIER_CHECKS` in `lib/gate-check-audit.ts` with why"* —
-and it is the difference between a check and an obstacle. A bare
-`expect(violations).toEqual([])` makes the next agent re-derive the whole
-mechanism.
-
-**Use `remedyMessage` from `lib/check-remedy.ts`** (#813). It composes the
-violation list, the remedy, and a pointer back to this file:
-
-```ts
-expect(
-  unlisted,
-  remedyMessage({ root, check: "HYGIENE-4", violations: unlisted, fix: "add a row to …" }),
-).toEqual([]);
-```
-
-The `fix` argument has no default and the pointer back to this file is
-DERIVED, not hardcoded; both choices and the count behind #813 are in
-`reference/self-referential-tests-worked-instances.md`.
-
-Every Tier 1 check above now carries one, and `test/check-remedy.test.ts`
-holds the population: delete a remedy and that test goes red naming the
-check that lost it. Adding a Tier 1 check means adding its row there too.
+Say what to do in the failure message, through **`remedyMessage` from
+`lib/check-remedy.ts`** (#813), and add a Tier 1 check's row to
+`test/check-remedy.test.ts`. The example and why:
+`reference/self-referential-tests-worked-instances.md`, *If you are writing
+one of these*.
 
 Related: `.claude/rules/checks-must-be-able-to-fail.md`,
 `.claude/rules/claiming-sc-coverage.md`,

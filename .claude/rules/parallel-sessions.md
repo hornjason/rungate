@@ -108,12 +108,7 @@ your work survive the worktree. Make it before you start anything that will
 hold the session for minutes — a full suite, a mutation battery, a long agent
 run — not when the change feels done.
 
-**Why:** `git worktree list` marks a worktree whose branch is merged exactly
-the same as an abandoned one, and nothing makes an uncommitted worktree
-visibly in use from outside. Two sessions lost in-flight work to an ordinary
-hand cleanup on 2026-10-16, one of them about 500 lines. The window between
-starting and committing is exactly the window where your work is invisible to
-everyone else, so make it short.
+Why, and the two sessions that lost work to a hand cleanup: the reference file.
 
 ## Take the census before you tidy a worktree, and never run `git worktree prune`
 
@@ -129,22 +124,15 @@ nothing. `scripts/worktree-sweep.ts`, started at SessionStart, removes the
 ABANDONED rows only, never forced (#2022); everything else stays yours. What
 the census of this machine's 173 worktrees found is in the reference file.
 
-`git worktree prune` is not the safe half of this. It drops
-`.git/worktrees/<name>` for **any** registered worktree whose directory is
-already gone, not only yours, so a session whose directory vanished loses the
-registration `git worktree repair` needs. The census warns when there is
-anything for prune to take.
+`git worktree prune` is not the safe half: it drops the registration of
+**any** worktree whose directory is gone, not only yours (reference file).
 
 ## Push finished work. Do not park it waiting for review
 
 When the work is done and CI is green: push, open a PR, merge it. Do not hold a
 finished branch pending approval, and do not ask whether to push.
 
-**Why:** unpushed finished work is invisible. It makes the tracker lie, it
-makes other sessions duplicate effort, and it is lost entirely if the session
-or the worktree goes away. Review happens on the PR, where it is durable and
-where CI already runs — not in a conversation that has to be in someone's
-context at the right moment.
+Why: the reference file.
 
 Escalate only for things that are genuinely hard to reverse or reach outside
 the repo: force-pushing a shared branch, deleting branches holding unmerged

@@ -119,6 +119,22 @@ no other ref, in a tree `git status` calls clean. That is what "merged,
 therefore delete" takes, and it is the shape that cost 500 lines on
 2026-10-16.
 
+**Why `git worktree prune` is not the safe half** (moved from the rule by
+#2176). It drops `.git/worktrees/<name>` for **any** registered worktree whose
+directory is already gone, not only yours, so a session whose directory
+vanished loses the registration `git worktree repair` needs. The census warns
+when there is anything for prune to take.
+
+---
+
+## Push finished work. Do not park it waiting for review
+
+**Why** (moved from the rule by #2176): unpushed finished work is invisible.
+It makes the tracker lie, it makes other sessions duplicate effort, and it is
+lost entirely if the session or the worktree goes away. Review happens on the
+PR, where it is durable and where CI already runs — not in a conversation that
+has to be in someone's context at the right moment.
+
 ---
 
 ## Pin the head when you merge, and verify by content when you did not

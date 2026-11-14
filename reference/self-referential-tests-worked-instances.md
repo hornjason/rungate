@@ -414,3 +414,31 @@ rather than a moved agreement. `config/prove-evidence.schema.json` — the file
 that prompted the report — has **no live reader in the tree at all**, so an
 edit to it reddens nothing today; the routing hole was real and that
 particular agreement is still unguarded by any test.
+
+---
+
+## If you are writing one of these (moved from the rule by #2176)
+
+Say what to do in the failure message. `SC-1466` is the best in the tree —
+*"…or add it to `WARN_TIER_CHECKS` in `lib/gate-check-audit.ts` with why"* —
+and it is the difference between a check and an obstacle. A bare
+`expect(violations).toEqual([])` makes the next agent re-derive the whole
+mechanism.
+
+**Use `remedyMessage` from `lib/check-remedy.ts`** (#813). It composes the
+violation list, the remedy, and a pointer back to the rule file:
+
+```ts
+expect(
+  unlisted,
+  remedyMessage({ root, check: "HYGIENE-4", violations: unlisted, fix: "add a row to …" }),
+).toEqual([]);
+```
+
+The `fix` argument has no default and the pointer back to the rule file is
+DERIVED, not hardcoded; both choices and the count behind #813 are above, in
+*Why `remedyMessage` has no default fix and a derived pointer*.
+
+Every Tier 1 check in the rule now carries one, and `test/check-remedy.test.ts`
+holds the population: delete a remedy and that test goes red naming the
+check that lost it. Adding a Tier 1 check means adding its row there too.
