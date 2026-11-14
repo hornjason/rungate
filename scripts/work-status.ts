@@ -846,6 +846,7 @@ console.log(
     ceiling: NET_GROWTH_CEILING,
     queueCap: QUEUE_FILINGS_PER_RUN,
     unreadable: filingAllowance.unreadable ? (filingAllowance.unreadableSource ?? "the `ship` block") : null,
+    committedUnmeasured: filingAllowance.committedUnmeasured ?? null,
   })}`,
 );
 

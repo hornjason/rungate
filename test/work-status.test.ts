@@ -1483,12 +1483,33 @@ describe("SC-2764: the filing cap line names the counts and the cap they set", (
     expect(line).not.toContain("set by ship mode");
   });
 
+  test("#1964: no committed config to read names origin/main and a fetch, never the ship block", () => {
+    // AI review round 2 of #2094: the script passed `unreadableSource ?? "the
+    // \`ship\` block"`, and `unreadableSource` is unset when the revision did
+    // not resolve, so a checkout that never fetched was told to repair its
+    // ship block. `unreadable` below is exactly what the script computed.
+    const line = netGrowthLine(
+      { cap: 1, basis: null },
+      {
+        ...caps,
+        unreadable: "the `ship` block",
+        committedUnmeasured: "the committed config at origin/main could not be read: origin/main does not resolve here",
+      },
+    );
+    expect(line).toMatch(/^Filing cap: 1\b/);
+    expect(line).toContain("UNMEASURED");
+    expect(line).toContain("origin/main does not resolve here");
+    expect(line).toContain("git fetch");
+    expect(line).not.toContain("`ship` block");
+  });
+
   test("the script prints the gate's own decision, through these two functions", () => {
     const src = readFileSync(join(ROOT, "scripts", "work-status.ts"), "utf8");
     expect(src).toContain("netGrowthCeiling(");
     expect(src).toContain("readNetGrowth(");
     expect(src).toContain("netGrowthLine(");
     expect(src).toContain("filingAllowance.unreadable");
+    expect(src).toContain("committedUnmeasured: filingAllowance.committedUnmeasured");
   });
 });
 
