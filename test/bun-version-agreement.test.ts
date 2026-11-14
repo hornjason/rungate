@@ -164,7 +164,8 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // whenever an issue's milestone changes — seventeen.
     // `criterion-label` joined with #2020, which labels an issue that names
     // no criterion when it is opened, and re-reads every open issue daily —
-    // eighteen.
+    // eighteen. `status-issue` joined with #2097, which rewrites the pinned
+    // "where we are" issue from live readings on every change — nineteen.
     //
     // The floor and the list are two different claims, deliberately:
     // the floor says the scan read SOMETHING, so no case below is satisfied
@@ -174,7 +175,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // meant to turn this red once.
     const steps = setupBunStepsUnder(WORKFLOW_DIR);
     expect(steps.length, "fewer setup-bun steps than this repo has workflows that install bun")
-      .toBeGreaterThanOrEqual(18);
+      .toBeGreaterThanOrEqual(19);
     const files = new Set(steps.map(s => s.file));
     expect([...files].sort()).toEqual([
       "action-pins.yml",
@@ -194,6 +195,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
       "issue-audit.yml",
       "phase-order.yml",
       "release.yml",
+      "status-issue.yml",
       "suite-flake.yml",
     ]);
   });
