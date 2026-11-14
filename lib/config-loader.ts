@@ -417,17 +417,6 @@ export function committedConfig(reading: CommittedConfigReading): ResolvedConfig
   return reading.status === "resolved" ? reading.config : null;
 }
 
-/**
- * `root`'s config as committed at `origin/main` — the one call every reader
- * of the filing cap makes (#1964): the `gh issue create` gate, the Octokit
- * `issue-create` door in `scripts/github-op.ts`, and the cap `work-status`
- * prints. One binding, so no door can quietly go back to the working tree
- * while the others read the commit. Same contract as {@link committedConfig}.
- */
-export function loadCommittedConfig(root: string): ResolvedConfig | null {
-  return committedConfig(readCommittedConfig(gitCommittedFiles(root)));
-}
-
 export function loadRungateConfig(projectRoot: string): ResolvedConfig {
   const dirPath = join(projectRoot, ".claude", "rungate");
   const monolithPath = join(projectRoot, ".claude", "rungate.json");

@@ -67,7 +67,7 @@ import { commitSubject } from "../lib/commit-subject";
 import {
   committedConfigUnmeasuredNote,
   filingBatch,
-  filingsPerRunFor,
+  committedFilingCap,
   ledgerPath,
   readLedgerRows,
   recordAdjudication,
@@ -78,7 +78,7 @@ import {
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
 import { UNFILED_ID } from "../lib/finding-arbiter";
-import { loadCommittedConfig } from "../lib/config-loader";
+import { gitCommittedFiles, readCommittedConfig } from "../lib/config-loader";
 
 /**
  * Take this run's filing allowance for one tool-path issue (#1677, SC-2613).
@@ -127,7 +127,7 @@ function reserveFiling(title: string, projectRoot: string): FilingDecision {
   // same read the `gh issue create` gate makes. This door used to read the
   // working tree, so an agent refused by the gate could edit its own
   // `ship.mode` and file through here instead (review of PR #2094).
-  const { cap, unreadable, unreadableSource, committedUnmeasured } = filingsPerRunFor(() => loadCommittedConfig(projectRoot));
+  const { cap, unreadable, unreadableSource, committedUnmeasured } = committedFilingCap(readCommittedConfig(gitCommittedFiles(projectRoot)));
   // No `origin/main` to read is not a corrupt config: there is nothing to
   // parse and nothing that could raise the cap, so the run takes the STRICT
   // cap and says so, as the gate does — a refusal here would block every

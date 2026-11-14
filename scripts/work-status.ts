@@ -29,11 +29,11 @@ import {
 import {
   NET_GROWTH_CEILING,
   QUEUE_FILINGS_PER_RUN,
-  filingsPerRunFor,
+  committedFilingCap,
   netGrowthCeiling,
   readNetGrowth,
 } from "../lib/issue-filing-gate";
-import { loadCommittedConfig } from "../lib/config-loader";
+import { gitCommittedFiles, readCommittedConfig } from "../lib/config-loader";
 import { laneHealth, laneHealthLines, workVerdict } from "../lib/board-lane-health";
 import {
   declaredClosingIn,
@@ -838,7 +838,7 @@ if (focus.kind === "all") {
 // `netGrowthCeiling`, so this line cannot report a cap the gate does not.
 bar("FILING CAP — what the trailing day's issues allow (ADR-016)");
 // Committed config, as the gate reads it (#1964), so the two cannot disagree.
-const filingAllowance = filingsPerRunFor(() => loadCommittedConfig(process.cwd()));
+const filingAllowance = committedFilingCap(readCommittedConfig(gitCommittedFiles(process.cwd())));
 const filingCap = await netGrowthCeiling(filingAllowance, () => readNetGrowth(process.cwd(), Date.now()));
 console.log(
   `  ${netGrowthLine(filingCap, {

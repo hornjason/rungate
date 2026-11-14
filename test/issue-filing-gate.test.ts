@@ -7474,24 +7474,38 @@ describe("#1964 / SC-2753: the filing cap is read from committed config, never t
     expect(r.rows[0].refusal, "a committed monolith's direct mode was not read").toBeNull();
   });
 
-  test("FG-287: EVERY reader of the cap reads committed config — the property across the sites, not one door", () => {
+  test("FG-287: committedFilingCap is the ONE place the cap is computed, and every reader goes through it", () => {
     // Review of PR #2094: the gate was fixed and `scripts/github-op.ts`'s
     // `issue-create` door still read the working tree, so an agent refused by
     // one door could raise its own cap and file through the other. A
     // behavioural case per door catches only the last door to regress, so
-    // this asserts the property over every call site instead.
-    const sites: string[] = [];
+    // this asserts the property over every site instead. SC-2753 names the
+    // binding: `committedFilingCap`. With one call to `filingsPerRunFor`
+    // outside its definition, a door that computes its own cap is a second
+    // call site, and this goes red naming the file.
+    const calls: string[] = [];
+    const readers: string[] = [];
     for (const dir of ["lib", "scripts"]) {
       for (const file of readdirSync(join(import.meta.dir, "..", dir))) {
         if (!file.endsWith(".ts")) continue;
         const src = readFileSync(join(import.meta.dir, "..", dir, file), "utf-8");
-        const re = /filingsPerRunFor\(\s*\(\)\s*=>\s*([^\n]+)/g;
-        for (const m of src.matchAll(re)) sites.push(`${dir}/${file}: ${m[1]!.trim()}`);
+        for (const _ of src.matchAll(/(?<!function )\bfilingsPerRunFor\(/g)) calls.push(`${dir}/${file}`);
+        if (/(?<!function )\bcommittedFilingCap\(/.test(src)) readers.push(`${dir}/${file}`);
       }
     }
-    expect(sites.length, "no filingsPerRunFor call site was found, so this measured nothing").toBeGreaterThanOrEqual(3);
-    const fromWorkingTree = sites.filter(s => !/committedConfig\(|loadCommittedConfig\(/.test(s));
-    expect(fromWorkingTree, "a cap reader that does not read the committed config reopens #1964").toEqual([]);
+    expect(calls, "the cap is computed somewhere other than committedFilingCap, which reopens #1964").toEqual([
+      "lib/issue-filing-gate.ts",
+    ]);
+    const gate = readFileSync(join(import.meta.dir, "..", "lib", "issue-filing-gate.ts"), "utf-8");
+    const body = gate.slice(gate.indexOf("export function committedFilingCap("));
+    expect(body.slice(0, body.indexOf("\n}")), "committedFilingCap must read the committed config").toContain(
+      "filingsPerRunFor(() => committedConfig(",
+    );
+    expect(readers.sort(), "a cap reader stopped going through committedFilingCap").toEqual([
+      "lib/issue-filing-gate.ts",
+      "scripts/github-op.ts",
+      "scripts/work-status.ts",
+    ]);
   });
 
   test("FG-286: readCommittedConfig names WHICH failure, and never reads a failure as absent", () => {
