@@ -1657,7 +1657,7 @@
         {
           "id": "E2",
           "what": "`plan-issues --repair` run, so issues naming nothing get a criterion or an explicit 'none'",
-          "done": false,
+          "done": true,
           "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --repo hornjason/rungate --reading criteria-named"
         },
         {
