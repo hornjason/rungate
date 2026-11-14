@@ -21,8 +21,8 @@
  * below is the view every safety row reads, and BI-5 asserts that view is
  * non-empty so stripping can never turn a check into a vacuous pass.
  */
-import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -487,6 +487,7 @@ describe("#2166: board-intake.yml is generated and names no board", () => {
  */
 describe("#2166: the add step's readings", () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "board-intake-add-")));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const stubs = join(dir, "bin");
   mkdirSync(stubs);
   writeFileSync(join(stubs, "bunx"), '#!/bin/sh\n[ -n "$ID_ERR" ] && printf "%s\\n" "$ID_ERR" >&2\n[ -n "$ID_OUT" ] && printf "%s\\n" "$ID_OUT"\nexit "$ID_CODE"\n', { mode: 0o755 });
