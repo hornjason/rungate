@@ -34,6 +34,7 @@
  * 7's opened-to-closed ratio. {@link uncoveredByMilestone} reports the input
  * to that decision and stops there.
  */
+import { PHASE_TOKEN, readMilestoneTitle } from "./milestone-title";
 import { oneScMentionPattern } from "./sc-ids";
 import { parseCriteria } from "./spec-evidence";
 
@@ -57,7 +58,7 @@ export const NON_PHASE_PLACEMENTS = [
 ] as const;
 
 /** `Phase 0`, `Phase 11`. The capture is the number. */
-export const PHASE_VALUE = /^Phase (\d+)$/;
+export const PHASE_VALUE = new RegExp(`^${PHASE_TOKEN}$`);
 
 /**
  * Which phase of `prefix`'s family this milestone title is, or `null`.
@@ -88,8 +89,11 @@ export const PHASE_VALUE = /^Phase (\d+)$/;
  * is derived.
  */
 export function phaseInFamily(title: string | null | undefined, prefix: string): number | null {
-  const m = (title ?? "").match(new RegExp(String.raw`^${escapeRe(prefix)} Phase (\d+)\b`));
-  return m ? Number(m[1]) : null;
+  // #2057: compared against the one reading, not interpolated into a second
+  // regex. An empty prefix is no family here: it is refused upstream
+  // (lib/live-issues.ts) and must not match every bare `Phase N` title.
+  const r = readMilestoneTitle(title);
+  return prefix !== "" && r !== null && r.family === prefix ? r.phase : null;
 }
 
 /**
@@ -107,8 +111,7 @@ export function phaseInFamily(title: string | null | undefined, prefix: string):
  * two cannot drift into a second decider of what a family is.
  */
 export function familyOf(title: string | null | undefined): string | null {
-  const m = (title ?? "").match(/^(?:(.+?) )?Phase (\d+)\b/);
-  return m ? (m[1] ?? "") : null;
+  return readMilestoneTitle(title)?.family ?? null;
 }
 
 export interface PlacementRow {
@@ -160,11 +163,14 @@ export function parsePlacementRows(content: string): PlacementRow[] {
   return out;
 }
 
+/** `## Phase N — title` to `#### …`: the heading a milestone is named from. */
+const PHASE_HEADING = new RegExp(String.raw`^#{2,4} (${PHASE_TOKEN}(?:\s*[—–-]\s*(.*))?)\s*$`);
+
 /** Every `### Phase N — …` heading, in document order. */
 export function parsePhaseHeadings(content: string): PhaseHeading[] {
   const out: PhaseHeading[] = [];
   content.split("\n").forEach((line, i) => {
-    const m = line.match(/^#{2,4} (Phase (\d+)(?:\s*[—–-]\s*(.*))?)\s*$/);
+    const m = line.match(PHASE_HEADING);
     if (!m) return;
     out.push({ number: Number(m[2]), title: (m[3] ?? "").trim(), heading: m[1].trim(), line: i + 1 });
   });
@@ -527,10 +533,6 @@ export function milestonePlan(
     });
 
   return { actions, unmanaged: live.filter(l => phaseOf(l.title) === null) };
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

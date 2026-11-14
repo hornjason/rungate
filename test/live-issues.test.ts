@@ -611,11 +611,11 @@ describe("which milestones belong to a spec's family", () => {
     }
     expect(
       found,
-      `the <prefix> Phase anchor is the family grammar and belongs to phaseInFamily in ` +
-        `lib/spec-placement.ts alone. A second copy is a second decider: it agrees today, ` +
-        `no behavioural case can tell which one is holding a result up, and the pair drifts ` +
-        `the moment either is edited.`,
-    ).toEqual(["lib/spec-placement.ts"]);
+      `no file compiles a <prefix> Phase anchor: since #2057 a family is read once, by ` +
+        `readMilestoneTitle in lib/milestone-title.ts, and compared. An interpolated anchor ` +
+        `is a second decider of what a family is — it agrees today, no behavioural case can ` +
+        `tell which one is holding a result up, and the pair drifts the moment either is edited.`,
+    ).toEqual([]);
   });
 
   test("the anchored parse returns the NUMBER, which is what milestonePlan needs", () => {

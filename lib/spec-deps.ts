@@ -130,11 +130,6 @@ export function degenerateReasons(r: {
   readonly phases: readonly number[];
   readonly includeClosed: boolean;
   readonly truncated: readonly number[];
-  /**
-   * Issues whose title `phaseOf` read and `familyOf` could not (#2024): left
-   * unphased, so a plan of nothing but these must not blame `phaseOf`.
-   */
-  readonly familyUnreadable?: readonly number[];
 }): string[] {
   const out: string[] = [];
   if (r.read === 0) {
@@ -146,16 +141,6 @@ export function degenerateReasons(r: {
     out.push(
       `${r.read} issue(s) were read and none was considered` +
         (r.includeClosed ? "" : " — every one is closed, and --include-closed was not passed"),
-    );
-  } else if (r.phases.length === 0 && (r.familyUnreadable?.length ?? 0) > 0) {
-    out.push(
-      `${r.considered} issue(s) were considered and none sits in a readable phase family — ` +
-        `${r.familyUnreadable!.length} carry a phase whose family could not be read ` +
-        `(${r.familyUnreadable!.map(n => `#${n}`).join(", ")}); familyOf reads ` +
-        `"<Family> Phase N" or a bare "Phase N" at the start of the title` +
-        (r.considered > r.familyUnreadable!.length
-          ? `. The other ${r.considered - r.familyUnreadable!.length} carry no Phase milestone at all`
-          : ""),
     );
   } else if (r.phases.length === 0) {
     out.push(
@@ -227,14 +212,13 @@ export function dependencyPlan(
 ): DependencyPlan {
   const considered = issues.filter(i => opts.includeClosed || i.state === "OPEN");
   const unphased: number[] = [];
-  const familyUnreadable: number[] = [];
   const byPhase = new Map<number, DepIssue[]>();
   for (const i of considered) {
+    // One reading of the title (#2057): a phase always has a family, so the
+    // "phase but no family" state the review of #2055 had to report is gone.
+    // `Release (Phase 3)` is not a phase milestone, to every reader.
     const p = phaseOf(i.milestone);
-    // A phase with no readable family (`Release (Phase 3)`) is unphased, not
-    // filed with every other unreadable title (review of #2055).
-    if (p === null || familyOf(i.milestone) === null) {
-      if (p !== null) familyUnreadable.push(i.number);
+    if (p === null) {
       unphased.push(i.number);
       continue;
     }
@@ -248,7 +232,6 @@ export function dependencyPlan(
     phases,
     includeClosed: opts.includeClosed === true,
     truncated: issues.filter(i => i.blockedByTruncated === true).map(i => i.number),
-    familyUnreadable,
   });
 
   // Adjacent members of the phases that EXIST, chained WITHIN each milestone

@@ -139,24 +139,19 @@ describe("#2024 / SC-2617: phases chain within a milestone family, never across 
     expect(plan.unphased.sort()).toEqual([30, 40]);
   });
 
-  test("a plan of nothing but unreadable families names that cause, not phaseOf", () => {
-    // Review of #2055: every title here has a phase `phaseOf` reads, so the
-    // "NONE carries a Phase milestone" message would send a reader to the
-    // wrong function.
+  test("a parenthetical phase is not a phase milestone, to every reader at once (#2057)", () => {
+    // Review of #2055 found phaseOf reading `Release (Phase 3)` as phase 3
+    // while familyOf read no family, and added a message for the split. With
+    // one reader of the title (lib/milestone-title.ts) the split cannot occur:
+    // the title is not a phase milestone, and the plan says nothing was read.
     const plan = dependencyPlan([
       { number: 30, state: "OPEN", milestone: "Release (Phase 3)", blockedBy: [] },
       { number: 40, state: "OPEN", milestone: "Docs (Phase 4)", blockedBy: [] },
     ]);
     expect(plan.reading).toBe("UNMEASURED");
-    expect(plan.unmeasuredReasons.join(" ")).toContain("family could not be read (#30, #40)");
-    expect(plan.unmeasuredReasons.join(" ")).not.toContain("what phaseOf reads");
-    // Review of #2055: a mix names both causes, so fixing the named titles is
-    // not mistaken for the whole repair.
-    const mixed = dependencyPlan([
-      { number: 30, state: "OPEN", milestone: "Release (Phase 3)", blockedBy: [] },
-      { number: 50, state: "OPEN", milestone: null, blockedBy: [] },
-    ]);
-    expect(mixed.unmeasuredReasons.join(" ")).toContain("The other 1 carry no Phase milestone at all");
+    expect(plan.unmeasuredReasons.join(" ")).toContain("NONE carries a Phase milestone");
+    expect(phaseOf("Release (Phase 3)")).toBeNull();
+    expect(familyOf("Release (Phase 3)")).toBeNull();
   });
 
   test("bare `Phase N` titles are one family — a repository with no prefix has one sequence", () => {

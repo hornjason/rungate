@@ -33,6 +33,7 @@
  */
 import { readdirSync, readFileSync } from "fs";
 import { join, relative, sep } from "path";
+import { readMilestoneTitle } from "./milestone-title";
 import { idBoundedPattern, oneScMentionPattern } from "./sc-ids";
 import { parseCriteria } from "./spec-evidence";
 
@@ -474,8 +475,7 @@ export function isUnblocked(summary: { readonly blockedBy: number }, assignees: 
 
 /** The phase number in a milestone title, or null for a milestone that is not a phase. */
 export function phaseOf(milestoneTitle: string | null | undefined): number | null {
-  const m = /\bPhase (\d+)\b/.exec(milestoneTitle ?? "");
-  return m ? Number(m[1]) : null;
+  return readMilestoneTitle(milestoneTitle)?.phase ?? null;
 }
 
 /**
