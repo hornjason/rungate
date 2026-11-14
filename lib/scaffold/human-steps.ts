@@ -16,12 +16,13 @@
  * printed `UNMEASURED` with why, never folded into "nothing owed", and the
  * all-clear names what it measured rather than saying "done".
  */
+import { spawnSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
 import { createGitHubClient, parseOwnerRepo } from "../github";
 import { githubProtectionProbe, jobContextNames, type ProtectionFacts, type ProtectionProbe } from "../branch-protection";
-import { originSlug } from "../verified-push";
+import { parseRemoteSlug } from "../verified-push";
 
 export type Reading<T> = { kind: "READ"; value: T } | { kind: "UNMEASURED"; why: string };
 
@@ -41,6 +42,8 @@ export interface HumanStepReadings {
   protection: Reading<{ branch: string; contexts: string[]; statusChecks: NonNullable<ProtectionFacts["statusChecks"]> }>;
   /** Job names of the process checks this tree's workflows define. */
   processChecks: string[];
+  /** Process workflows present but unreadable, each with why (#2161). */
+  unreadableWorkflows: string[];
 }
 
 /** One line per step owed or unread, then a line saying what was measured. Pure. */
@@ -67,6 +70,8 @@ export function humanSteps(r: HumanStepReadings): string[] {
       `OWED: gh variable set ${REQUIRE_CLOSING_REF_VARIABLE} -R ${r.slug} --body true   # closing-references refuses instead of warning`,
     );
   } else measured.push(`${REQUIRE_CLOSING_REF_VARIABLE} is true`);
+
+  for (const why of r.unreadableWorkflows) out.push(`UNMEASURED: process checks — ${why}`);
 
   if (r.processChecks.length > 0) {
     if (r.protection.kind === "UNMEASURED") {
@@ -112,12 +117,56 @@ export function humanSteps(r: HumanStepReadings): string[] {
   return out;
 }
 
-/** The job names of the process checks present in `root`'s workflows. */
-export function processChecksIn(root: string): string[] {
-  return PROCESS_CHECK_WORKFLOWS.flatMap(file => {
+/**
+ * The job names of the process checks present in `root`'s workflows, and the
+ * workflows that are present but could not be read (#2161). A directory, a
+ * permission error or a file removed between the two calls throws on read;
+ * that is a reading not taken, never a crash and never "nothing owed".
+ */
+export function processChecksIn(root: string): { checks: string[]; unreadable: string[] } {
+  const checks: string[] = [];
+  const unreadable: string[] = [];
+  for (const file of PROCESS_CHECK_WORKFLOWS) {
+    const rel = `.github/workflows/${file}`;
     const p = join(root, ".github", "workflows", file);
-    return existsSync(p) ? jobContextNames(readFileSync(p, "utf-8")) : [];
-  });
+    if (!existsSync(p)) continue;
+    try {
+      checks.push(...jobContextNames(readFileSync(p, "utf-8")));
+    } catch (e) {
+      unreadable.push(`${rel} could not be read (${(e as Error).message})`);
+    }
+  }
+  return { checks, unreadable };
+}
+
+/**
+ * `owner/name` when `url` is a github.com remote, else `null` (#2161).
+ *
+ * The GitHub client only ever talks to github.com (`lib/github.ts` refuses
+ * any other API host), so a remote on another forge has no settings this
+ * module can read. `parseRemoteSlug` deliberately ignores the host, because
+ * repo identity is its question; which forge to ask is this one's.
+ */
+export function githubSlugOf(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  let host: string | null = null;
+  if (/^[a-z+]+:\/\//i.test(trimmed)) {
+    try {
+      host = new URL(trimmed).hostname;
+    } catch {
+      return null; // not a URL at all, so it names no GitHub repository
+    }
+  } else {
+    host = trimmed.match(/^(?:[^@/]+@)?([^:/]+):/)?.[1] ?? null;
+  }
+  return host?.toLowerCase() === "github.com" ? parseRemoteSlug(trimmed) : null;
+}
+
+/** The configured `origin` url of `root`, or "" when there is none. */
+function originUrl(root: string): string {
+  const r = spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd: root, encoding: "utf-8", timeout: 5000 });
+  return r.status === 0 ? r.stdout : "";
 }
 
 export interface HumanStepProbes {
@@ -145,7 +194,7 @@ const why = (e: unknown) => `${typeof status(e) === "number" ? `HTTP ${status(e)
 
 /** The live reads: two GETs here, three in the protection probe. No writes. */
 export const LIVE_PROBES: HumanStepProbes = {
-  slug: root => originSlug(root),
+  slug: root => githubSlugOf(originUrl(root)),
   secret: async slug => {
     try {
       const { owner, repo } = parseOwnerRepo(slug);
@@ -178,10 +227,10 @@ export const LIVE_PROBES: HumanStepProbes = {
 /** Read everything {@link humanSteps} needs for `root`. */
 export async function readHumanSteps(root: string, probes: HumanStepProbes = LIVE_PROBES): Promise<HumanStepReadings> {
   const slug = probes.slug(root);
-  const processChecks = processChecksIn(root);
+  const { checks: processChecks, unreadable: unreadableWorkflows } = processChecksIn(root);
   if (slug === null) {
     const none = { kind: "UNMEASURED", why: "no repository" } as const;
-    return { slug, secretPresent: none, requireClosingRef: none, protection: none, processChecks };
+    return { slug, secretPresent: none, requireClosingRef: none, protection: none, processChecks, unreadableWorkflows };
   }
   const [secretPresent, requireClosingRef, facts] = await Promise.all([
     probes.secret(slug),
@@ -194,5 +243,5 @@ export async function readHumanSteps(root: string, probes: HumanStepProbes = LIV
       : facts.statusChecks === undefined
         ? { kind: "UNMEASURED", why: "the protection probe did not say whether the branch is protected" }
         : { kind: "READ", value: { branch: facts.branch, contexts: facts.contexts, statusChecks: facts.statusChecks } };
-  return { slug, secretPresent, requireClosingRef, protection, processChecks };
+  return { slug, secretPresent, requireClosingRef, protection, processChecks, unreadableWorkflows };
 }

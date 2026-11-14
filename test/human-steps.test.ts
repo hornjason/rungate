@@ -14,8 +14,10 @@ import { join } from "path";
 
 import { protectionFactsFromPayload, unreadableFacts } from "../lib/branch-protection";
 import {
+  LIVE_PROBES,
   PROJECT_TOKEN_SECRET,
   REQUIRE_CLOSING_REF_VARIABLE,
+  githubSlugOf,
   humanSteps,
   readHumanSteps,
   timed,
@@ -33,6 +35,7 @@ const allSet: HumanStepReadings = {
   requireClosingRef: read("true"),
   protection: read({ branch: "main", contexts: ["test", "closing-references"], statusChecks: "required-checks" }),
   processChecks: ["closing-references"],
+  unreadableWorkflows: [],
 };
 
 describe("SC-2749: every human step still owed is one command", () => {
@@ -213,4 +216,63 @@ describe("SC-2749: the readings come from the tree and the probes, and the scaff
       rmSync(root, { recursive: true, force: true });
     }
   }, 150_000);
+});
+
+describe("#2161: a reading that cannot be taken is UNMEASURED, never read against the wrong forge or crashed on", () => {
+  test("githubSlugOf accepts a github.com remote in every spelling, and nothing else", () => {
+    for (const url of [
+      "git@github.com:o/n.git",
+      "https://github.com/o/n",
+      "https://x:token@github.com/o/n.git",
+      "ssh://git@github.com/o/n.git",
+      "https://GitHub.com/O/N.git",
+    ]) expect(githubSlugOf(url), url).toBe("o/n");
+    for (const url of [
+      "git@gitlab.com:o/n.git",
+      "https://gitlab.com/o/n",
+      "https://github.com.evil.com/o/n",
+      "/tmp/some/fixture.git",
+      "",
+    ]) expect(githubSlugOf(url), url).toBeNull();
+  });
+
+  test("a live read of a gitlab origin is the no-repository line and calls no GitHub probe", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-gitlab-"));
+    try {
+      spawnSync("git", ["init", "-q"], { cwd: root });
+      spawnSync("git", ["remote", "add", "origin", "git@gitlab.com:org/proj.git"], { cwd: root });
+      const called: string[] = [];
+      const r = await readHumanSteps(root, {
+        slug: LIVE_PROBES.slug,
+        secret: async () => (called.push("secret"), read(true)),
+        variable: async () => (called.push("variable"), read("true")),
+        protection: async slug => (called.push("protection"), unreadableFacts(slug, "")),
+      });
+      expect(r.slug).toBeNull();
+      expect(called, "a GitHub probe ran for a non-GitHub origin").toEqual([]);
+      expect(humanSteps(r)[0]).toStartWith("UNMEASURED: human steps");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable process workflow is an UNMEASURED line naming it, and the read completes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-unreadable-"));
+    try {
+      // A directory where the workflow file belongs: existsSync is true and readFileSync throws.
+      mkdirSync(join(root, ".github", "workflows", "closing-references.yml"), { recursive: true });
+      const r = await readHumanSteps(root, {
+        slug: () => "o/n",
+        secret: async () => read(true),
+        variable: async () => read("true"),
+        protection: async slug => ({ ...unreadableFacts(slug, ""), unreadable: null, branch: "main", contexts: [], statusChecks: "unprotected" as const }),
+      });
+      expect(r.unreadableWorkflows).toHaveLength(1);
+      const lines = humanSteps(r);
+      expect(lines.join("\n")).toMatch(/UNMEASURED: process checks — \.github\/workflows\/closing-references\.yml could not be read/);
+      expect(lines.join("\n"), "an unread workflow was folded into nothing owed").not.toMatch(/none owed/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
