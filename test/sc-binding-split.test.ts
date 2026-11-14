@@ -323,7 +323,11 @@ const UNCLAIMED_RATCHET = 150;
 // #2048. A claim about which files scaffold owns and how, which no registered
 // pattern expresses; the `SC-2746` describe in test/dry-run-command.test.ts
 // names it in a declaring position.
-const CLAIMED_UNBINDABLE = 164;
+// 164 -> 165: SC-2744 ticked by `sync-sc-status --only SC-2744` on the PR for
+// #2046. A claim that scaffold emits adr-accepted.yml and this repository's
+// copy is the generated one, which no registered pattern expresses; the
+// `SC-2744` describe in test/adr-accepted-workflow.test.ts names it.
+const CLAIMED_UNBINDABLE = 165;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
