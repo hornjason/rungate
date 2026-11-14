@@ -48,10 +48,12 @@ import {
   AI_REVIEW_WORKFLOW_NAME,
   buildAiReviewUnmeasuredWorkflow,
 } from "./ai-review-unmeasured-workflow";
+import { buildAdrAcceptedWorkflow } from "./adr-accepted-workflow";
 import { CI_SUITE_FETCH_DEPTH, baseRefFetchDepth } from "../ci-history-depth";
 import { CLAUDE_CODE_ACTION } from "../claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../google-auth-action";
 import { loadComplianceConfig, tryLoadRungateConfig } from "../config-loader";
+import { readBoardInputs } from "../config-readers";
 import { organizeProjectReport } from "../organize";
 import type { ProjectScan, ProjectType, SpecEntry, TestFile, RefFile, DocRoute, Category } from "../generators/types";
 import {
@@ -4297,6 +4299,22 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     version: harnessVersion(),
   });
 
+  // #2046, ADR-014 row 3: merging an accepted ADR places its plan, in a
+  // consumer too. It calls the published CLI at the generating version, and
+  // the engine's spec and family are read here, through the one loader,
+  // because a consumer has no lib/ to import at run time.
+  const boardInputs = readBoardInputs(root);
+  const adrAcceptedYml = buildAdrAcceptedWorkflow({
+    runsOn,
+    checkout: actionRef("actions/checkout"),
+    setupBun: actionRef("oven-sh/setup-bun"),
+    setupBunWith: bunStep,
+    setupBunEnv: setupBunEnv("        "),
+    version: harnessVersion(),
+    engineSpec: boardInputs.engineSpec,
+    milestonePrefix: boardInputs.milestonePrefix,
+  });
+
   // Not `writeFileSync`. The harness owns the `test` and `gates` jobs; it does
   // not own the file, and a consumer's own jobs have to survive the update
   // that re-scaffolding IS. A refusal is recorded rather than thrown so that
@@ -4312,7 +4330,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
   // lib/conformity.ts reads back, and the two are held together by
   // test/ai-review-workflow.test.ts AC-1, which looks for the constant's
   // filename in what this loop actually wrote.
-  for (const [name, content] of [["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml]] as const) {
+  for (const [name, content] of [["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml], ["adr-accepted.yml", adrAcceptedYml]] as const) {
     const label = `.github/workflows/${name}`;
     try {
       // Keyed by FILE, and the lookup is here because this loop is the only
