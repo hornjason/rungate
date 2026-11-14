@@ -237,6 +237,63 @@ describe("#2097: gather — a tree where nothing can be read renders every secti
   });
 });
 
+describe("#2138: an issue labelled needs-decision is listed under Needs a decision", () => {
+  // A GitHub that answers the open-issues read the way the REST endpoint does:
+  // it filters on the `state=` the caller asked for, so a reader that asked for
+  // every issue would be handed the closed one too.
+  type Issue = { number: number; title: string; labels: string[]; state: "open" | "closed" };
+  const github = (issues: Issue[]) => (args: string[]) => {
+    const path = args[0] === "api" ? args.find(a => a.startsWith("repos/")) ?? "" : "";
+    if (!path.startsWith("repos/o/r/issues?")) return { ok: true as const, out: "" };
+    const state = new URLSearchParams(path.split("?")[1]).get("state") ?? "open";
+    return {
+      ok: true as const,
+      out: issues
+        .filter(i => state === "all" || i.state === state)
+        .map(i => JSON.stringify({
+          number: i.number, title: i.title, url: `https://github.com/o/r/issues/${i.number}`,
+          pr: false, assignees: [], labels: i.labels, milestone: null,
+        }))
+        .join("\n"),
+    };
+  };
+  const decisionsOf = (issues: Issue[]) => {
+    const dir = mkdtempSync(join(tmpdir(), "status-view-decision-"));
+    try {
+      const v = gather(dir, "o/r", github(issues), new Date("2026-11-14T00:00:00Z"), () => gone("not run in this case"));
+      expect(v.decisions.kind, "the decisions section was not read, so nothing below measures it").toBe("READ");
+      return v.decisions.kind === "READ" ? v.decisions.value : [];
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("an open labelled issue is listed with its title and link; the same issue unlabelled is not", () => {
+    const listed = decisionsOf([{ number: 2095, title: "which remote to trust", labels: ["needs-decision"], state: "open" }]);
+    expect(listed.map(l => [l.number, l.title, l.url])).toEqual([
+      [2095, "which remote to trust", "https://github.com/o/r/issues/2095"],
+    ]);
+    // The control: everything identical but the label.
+    expect(decisionsOf([{ number: 2095, title: "which remote to trust", labels: ["engine"], state: "open" }])).toEqual([]);
+  });
+
+  test("a closed labelled issue is not listed", () => {
+    const listed = decisionsOf([
+      { number: 2040, title: "decided already", labels: ["needs-decision"], state: "closed" },
+      { number: 2095, title: "still open", labels: ["needs-decision"], state: "open" },
+    ]);
+    // The open one is the control: without it an empty list passes this case.
+    expect(listed.map(l => l.number)).toEqual([2095]);
+  });
+
+  test("an issue carrying both labels is one line, not two", () => {
+    const listed = decisionsOf([{ number: 7, title: "both", labels: ["needs-criterion", "needs-decision"], state: "open" }]);
+    expect(listed.map(l => l.number)).toEqual([7]);
+    expect(listed[0]?.note).toContain("names no criterion");
+    expect(listed[0]?.note).toContain("decision");
+  });
+});
+
 describe("#2097: publish writes only the marked pinned issue", () => {
   type Call = string[];
   const fake = (
