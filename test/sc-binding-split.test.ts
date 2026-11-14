@@ -307,6 +307,10 @@ const UNCLAIMED_RATCHET = 150;
 // #1719. A claim about where the board's identifiers are read from, which no
 // registered pattern expresses; test/board-status-sweep.test.ts and
 // test/work-status.test.ts name it in a declaring position.
+// 160 -> 161: SC-2748 ticked by `sync-sc-status --only SC-2748` on the PR for
+// #2050. A claim about which config keys scaffold writes and which it only
+// reports, which no registered pattern expresses; the `SC-2748` describe in
+// test/scaffold-label-keys.test.ts names it in a declaring position.
 const CLAIMED_UNBINDABLE = 161;
 
 function split() {
