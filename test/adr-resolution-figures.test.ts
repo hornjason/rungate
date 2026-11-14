@@ -8,6 +8,10 @@
  * three files in two directories cite it; ADR-004 listed #1425 in a scope
  * the document itself excludes.
  *
+ * ADR-003's count is gone rather than bound: #2082 deleted it from the
+ * prose, because a spec's criteria are their own count and a copy of it is
+ * one more line every promotion has to move.
+ *
  * One number at a time is not a fix, because the next sibling edit
  * reintroduces the shape. These cases bind the figures that this repository
  * can measure for itself, so the document and the tree cannot drift apart
@@ -34,26 +38,6 @@ const adr = (name: string) => readFileSync(join(ROOT, "docs/adr", name), "utf-8"
 const flat = (s: string) => s.replace(/\s+/g, " ");
 
 describe("the ADR resolutions state figures this tree can still prove", () => {
-  test("ADR-003's criteria count is the count the pipeline spec actually states", () => {
-    const claim = /pipeline spec states (\d+)/.exec(flat(adr("ADR-003-spec-to-tracker-mapping.md")));
-    expect(
-      claim,
-      "ADR-003's Status no longer states a criteria count in the form this case reads. " +
-        "Do not delete this assertion to make it pass — the count going unstated is how " +
-        "the claim stopped being checkable in the first place.",
-    ).not.toBeNull();
-
-    const spec = readFileSync(join(ROOT, "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md"), "utf-8");
-    const actual = spec.split("\n").filter(l => /^- \[[ x]\]/.test(l)).length;
-    expect(actual, "the spec states no criteria at all, so the comparison is vacuous").toBeGreaterThan(0);
-
-    expect(
-      Number(claim![1]),
-      `ADR-003 says the pipeline spec states ${claim![1]} criteria; it states ${actual}. ` +
-        "Re-derive with: grep -c '^- \\[[ x]\\]' specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
-    ).toBe(actual);
-  });
-
   test("ADR-005 names exactly the files that cite it", () => {
     // Only the claim, not the paragraph retracting the old one. That
     // retraction names `test/organize-project.test.ts` in order to explain

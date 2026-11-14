@@ -60,7 +60,7 @@ without making *not filing* the default has missed the point.
 
 ## How we open a new area of this spec
 
-**Standing practice, agreed 2026-10-28.** This spec holds 66 criteria. Picking one off
+**Standing practice, agreed 2026-10-28.** Picking one off
 the list and building it is how the work has gone so far, and it is why three of the
 figures in this document describe no system that exists. Criteria are not a queue.
 
@@ -1349,8 +1349,8 @@ Five of them are recorded here because an unticked box nobody can ever tick,
 one waiting on a person, one the repository itself argues both sides of, and
 one nobody has started all look identical, and only the last is work.
 
-The split is load-bearing rather than tidy: 47 unticked boxes read as 47
-pieces of engineering. Seventeen of them are not engineering at all.
+The split is load-bearing rather than tidy: every unticked box reads as a
+piece of engineering, and many of them are not engineering at all.
 
 ### A mechanism exists; this repository cannot observe it
 
@@ -1624,26 +1624,18 @@ deviate, so CRC-B8 counts with the remainder below and these two do not.
 
 ### Not done — the remainder, with what is there instead
 
-**38 bullets, one per criterion that leads one**, listed because the
-near-misses are the expensive ones: each has something in the tree that
-resembles it and is not it. The unit is stated because this line read `34`
-from before CRC-N6 was added until 2026-10-26, when counting it found 29 —
-the number had been stale for long enough that nobody could say what it had
-counted, and incrementing it would have carried the error forward. One
-further id is NAMED inside these bullets without leading one (CRC-A6); it is
-accounted for in its own bucket, and one bullet leads with TWO ids
-(**CRC-E3, CRC-E9**), which is why 40 ids appear here and 38 is the right
-count of this list.
+**One bullet per criterion that leads one**, listed because the near-misses
+are the expensive ones: each has something in the tree that resembles it and
+is not it. No count is stated: `test/code-review-convergence-spec.test.ts`
+reads the bullets, and the count typed here drifted for weeks before anyone
+noticed (#2082).
 
-**Every number in the paragraph above is recomputed from the bullets by
-`test/code-review-convergence-spec.test.ts`, and that is the fix rather than
-the recount.** This sentence drifted three times inside one pull request
-(#1619) and every repair was another hand tally — the instrument that
-produced the drift. Round 4's reviewer said so as an approach finding and was
-right. It had also named CRC-E9 as mentioned-but-not-leading, which it is
-not: it co-leads a bullet with CRC-E3, so 29 bullets carry 30 leading ids.
-Three quantities live in one sentence — bullets, leading ids, ids mentioned
-anywhere — and conflating any two of them is how it moved each time.
+**The count lives in the test, not here.** The tally this paragraph used to
+carry drifted three times inside one pull request (#1619), and every repair
+was another hand tally — the instrument that produced the drift. Round 4's
+reviewer said so as an approach finding and was right. Three quantities are
+easy to conflate — bullets, leading ids, ids mentioned anywhere — because
+CRC-E9 co-leads a bullet with CRC-E3 and CRC-A6 is named without leading one.
 
 **Round 5 then asked the right question about the rest of the document, and
 one of its two proposed answers is wrong.** It observed that this file
@@ -2144,8 +2136,8 @@ stops being told anything.
 
 **A row with no pull request is work this spec says is next and nobody has
 claimed.** That is the state worth seeing, and it is the one a tracker of
-merged work cannot show: `bun bin/rungate.ts audit-specs` reports this spec's
-66 criteria as 10 ticked and 56 unticked, and has no way to say which of them
+merged work cannot show: `bun bin/rungate.ts audit-specs` reports how many of
+this spec's criteria are ticked, and has no way to say which of them
 anybody is moving. Every row here, with or without a number, names criteria from the list
 below, and `test/code-review-convergence-spec.test.ts` fails on an id this
 spec does not declare — so a row cannot point at a criterion that does not
@@ -2162,7 +2154,7 @@ to observe it. This table says what WAS observed, and it is the only place a
 phase may be called done.
 
 **Why it is a second table and not a column.** `bun bin/rungate.ts
-audit-specs` already reports this spec's criteria — 10 ticked of 66 — and
+audit-specs` already reports this spec's criteria and
 `scripts/sync-sc-status.ts` maintains that automatically.
 It is a real tracker and it is not this one: it reports whether a criterion is
 **bound by a test**, and a phase exit is an **observation on a live pull
