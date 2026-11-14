@@ -2116,14 +2116,30 @@ describe("#2150: an edit that adds a criterion id or a write site routes the cen
     for (const t of NAMESPACE) expect(tests, `${t} was not routed`).toContain(t);
   });
 
-  test("control: the same edit with no id, or with the id only removed, routes neither", () => {
+  // Round 1 of PR #2158: the fixture census reads lib/, scripts/ and gates/
+  // as well as test/, and the id shape includes a class letter and CRC-.
+  test("an id added anywhere the id census reads, in any tracked shape, routes both", () => {
+    for (const c of [
+      change({ path: "lib/example-helper.ts", added: ['const label = "SC-9906 placeholder";'] }),
+      change({ path: "scripts/x.ts", added: ['// see SC-9907'] }),
+      change({ path: "gates/g.test.ts", added: ['  const id = "SC-9908";'] }),
+      change({ path: "test/x.test.ts", added: ['  const anti = "SC-A9";'] }),
+      change({ path: "test/x.test.ts", added: ['  const crc = "CRC-Z9";'] }),
+    ]) {
+      const { tests } = censusTestsFor([c]);
+      for (const t of NAMESPACE) expect(tests, `${t} not routed for ${c.path}: ${c.added[0]}`).toContain(t);
+    }
+  });
+
+  test("control: no id, an id only removed, or an id outside the scanned directories, routes neither", () => {
     for (const c of [
       change({ path: "test/status-view.test.ts", added: ['  const spec = "a fixture";'] }),
       change({ path: "test/status-view.test.ts", removed: ['  const spec = "- [ ] SC-9905: a fixture";'] }),
-      change({ path: "lib/status.ts", added: ['const spec = "SC-9905";'] }),
+      change({ path: "hooks/h.ts", added: ['const spec = "SC-9905";'] }),
+      change({ path: "docs/x.md", added: ["SC-9905 is cited here"] }),
     ]) {
       const { tests } = censusTestsFor([c]);
-      for (const t of NAMESPACE) expect(tests, `${t} routed for ${c.path} with no added id under test/`).not.toContain(t);
+      for (const t of NAMESPACE) expect(tests, `${t} routed for ${c.path}`).not.toContain(t);
     }
   });
 
