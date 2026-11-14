@@ -170,6 +170,7 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
     const plain = generate(1);
 
     expect(Object.keys(sharded).sort()).toEqual([
+      "adr-accepted.yml",
       "ai-review-unmeasured.yml",
       "ai-review.yml",
       "ci.yml",
@@ -186,7 +187,9 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
       reportsNothing,
       "a generated workflow stopped reporting on pull requests, so the queue cases below " +
         "no longer cover it — say why here or give it back its pull_request trigger",
-    ).toEqual(["ai-review-unmeasured.yml"]);
+      // adr-accepted.yml since #2046: it runs on a push to main after a merge,
+      // never on a pull request, so it is never a required check.
+    ).toEqual(["adr-accepted.yml", "ai-review-unmeasured.yml"]);
 
     // The two bodies must actually differ, or this file is testing one thing
     // twice and the sharded/unsharded distinction is unmeasured.
