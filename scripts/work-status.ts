@@ -66,7 +66,7 @@ import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
 import { fileOverlapGroups, overlapLines } from "../lib/issue-file-overlap";
 import { readFileSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 
 const REPO = "hornjason/rungate";
 // **Split once, so GraphQL and REST cannot disagree about the repository.**
@@ -77,10 +77,25 @@ const REPO = "hornjason/rungate";
 // WORKING against the wrong repository while the REST reads followed the
 // constant: one table, two repositories, no error. Caught in review of #1740.
 const [OWNER, NAME] = REPO.split("/");
+// **The tree every read below names** (#1968, Claim 2), read once:
+// `--project-root <dir>`, else the directory the run started in — the shape
+// `board-mirror.ts` takes. Config, local branches and worktrees all come from
+// it. A flag with no directory after it is refused rather than read as the
+// current one, the same reasoning as `--milestone` below.
+const ROOT = (() => {
+  const i = Bun.argv.indexOf("--project-root");
+  if (i === -1) return process.cwd();
+  const dir = Bun.argv[i + 1];
+  if (dir === undefined || dir.trim() === "" || dir.startsWith("--")) {
+    console.error("UNMEASURED: --project-root needs a directory after it. Nothing was read.");
+    process.exit(2);
+  }
+  return resolve(dir);
+})();
 // The board from project config, never a literal (#1719, SC-2621). Read
 // before the credential: a run with nowhere to look is refused on that, not
 // on what it would have looked with.
-const PROJECT = readBoardProjectId(process.cwd());
+const PROJECT = readBoardProjectId(ROOT);
 if (PROJECT === null) {
   console.error(
     "UNMEASURED: no board is configured — board.id is absent or blank in this project's " +
@@ -558,7 +573,7 @@ bar("WHAT IS ACTUALLY BEING WORKED — the local half no GitHub query can see");
 // reads a NAME, and a name is not a fact: `rg/2620-tick` is live here and
 // the highest issue is #1973. ai-review round 2 of #1974.
 const knownIssueNumbers = new Set<number>(allIssues.map((i: any) => i.number as number));
-const localWork = readLocalWork(process.cwd(), knownIssueNumbers);
+const localWork = readLocalWork(ROOT, knownIssueNumbers);
 if (localWork.unattributed.size > 0) {
   for (const [branch, n] of localWork.unattributed) {
     console.log(
@@ -567,8 +582,8 @@ if (localWork.unattributed.size > 0) {
     );
   }
 }
-const pushedIssues = readPushedBranches(process.cwd(), knownIssueNumbers);
-const wtStates = readWorktreeStates(process.cwd());
+const pushedIssues = readPushedBranches(ROOT, knownIssueNumbers);
+const wtStates = readWorktreeStates(ROOT);
 const uncommitted = wtStates === null ? null : issuesWithUncommittedWork(wtStates, knownIssueNumbers);
 
 // Each reading says so when it could not be taken. None of them degrades to
@@ -750,7 +765,7 @@ const candidateRankables = pickable.map((i: any) => ({
 // `enginePrefixReading` separates *this tree declares one family* from *I
 // could not find a config here*, which are the same `null` to
 // `readBoardInputs` and different facts to a reader.
-const engine = enginePrefixReading(process.cwd());
+const engine = enginePrefixReading(ROOT);
 if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
 const enginePrefix = engine.prefix;
 
@@ -774,7 +789,7 @@ const workNext = workNextReading(
   candidateRankables,
   throughput === null ? null : readyCap(throughput),
   "COMPLETE",
-  readExpediteLabel(process.cwd()),
+  readExpediteLabel(ROOT),
 );
 if (workNext.status !== "NONE") console.log(`\n  ${workNext.why}`);
 // SC-2762: open issues that have not answered the criterion question, and the
@@ -874,8 +889,8 @@ if (focus.kind === "all") {
 // `netGrowthCeiling`, so this line cannot report a cap the gate does not.
 bar("FILING CAP — what the trailing day's issues allow (ADR-016)");
 // Committed config, as the gate reads it (#1964), so the two cannot disagree.
-const filingAllowance = committedFilingCap(readCommittedConfig(gitCommittedFiles(process.cwd())));
-const filingCap = await netGrowthCeiling(filingAllowance, () => readNetGrowth(process.cwd(), Date.now()));
+const filingAllowance = committedFilingCap(readCommittedConfig(gitCommittedFiles(ROOT)));
+const filingCap = await netGrowthCeiling(filingAllowance, () => readNetGrowth(ROOT, Date.now()));
 console.log(
   `  ${netGrowthLine(filingCap, {
     shipCap: filingAllowance.cap,

@@ -16,7 +16,8 @@
  * agreement across a generated grid rather than trusting the import.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { isReady, isUnblocked } from "../lib/board-mirror";
 import {
@@ -1937,11 +1938,12 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
   async function run(
     fake: FakeGitHub,
     args: readonly string[],
+    cwd: string = ROOT,
   ): Promise<{ code: number; out: string }> {
     const p = Bun.spawn(
-      ["bun", "scripts/board-ready.ts", "--repo", "o/n", "--project", PROJECT, "--actor", "someone", ...args],
+      ["bun", join(ROOT, "scripts", "board-ready.ts"), "--repo", "o/n", "--project", PROJECT, "--actor", "someone", ...args],
       {
-        cwd: ROOT,
+        cwd,
         stdout: "pipe",
         stderr: "pipe",
         env: {
@@ -2003,6 +2005,37 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
       expect(code, out).toBe(0);
       expect(fake.writes, out).toEqual([]);
     } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("BR-80: --project-root names the tree the config is read from (#1968)", async () => {
+    // Claim 2. Run from a directory with no rungate config, the same board and
+    // the same invocation, differing in the flag alone: without it the engine
+    // family is UNMEASURED naming the empty directory; with it the family is
+    // read from the named tree and nothing is UNMEASURED.
+    const fake = startFakeGitHub(
+      plan({
+        items: [{ itemId: "PVTI_a", number: 101, status: "Backlog", blockedBy: 1, assignees: 0 }],
+        openIssues: [101],
+      }),
+    );
+    // Real path: macOS hands back /var/… and the child's cwd reads /private/var/….
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "board-ready-elsewhere-")));
+    try {
+      const without = await run(fake, ["--top-up"], elsewhere);
+      expect(without.out, `the control did not miss the config:\n${without.out}`).toContain(
+        `no rungate config under ${elsewhere}`,
+      );
+      const flagged = await run(fake, ["--top-up", "--project-root", ROOT], elsewhere);
+      expect(flagged.code, flagged.out).toBe(0);
+      expect(flagged.out, `the flag was parsed and ignored:\n${flagged.out}`).not.toContain("no rungate config under");
+      const bare = await run(fake, ["--top-up", "--project-root"], elsewhere);
+      expect(bare.out, "a bare flag was read as the current directory").toContain("UNMEASURED: --project-root");
+      // 2 is `EXIT_REFUSED`; the script runs `main` on import, so it is spelled here.
+      expect(bare.code).toBe(2);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
       await fake.stop();
     }
   }, 60_000);

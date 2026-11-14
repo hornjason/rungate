@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import ts from "typescript";
@@ -56,6 +56,59 @@ describe("#1719 / SC-2621: the report reads the board's id from project config",
       const neither = run();
       expect(neither.out, `with no board and no credential the refusal was not the board's:\n${neither.out}`)
         .toContain("board.id");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("#1968: --project-root names the tree the report measures", () => {
+  // Claim 2. A wrapper, a cron job or a CI step with a working-directory runs
+  // the report from somewhere else, and before this the tree it read was
+  // whichever one it happened to start in.
+  const run = (cwd: string, args: string[]) => {
+    const env: Record<string, string | undefined> = { ...process.env };
+    // No credential, so a run that gets PAST the board read stops at the
+    // credential refusal — which names the token, never board.id.
+    delete env.GITHUB_TOKEN;
+    delete env.GH_TOKEN;
+    const r = spawnSync("bun", [join(ROOT, "scripts", "work-status.ts"), ...args], {
+      encoding: "utf-8",
+      env,
+      cwd,
+      timeout: 30_000,
+    });
+    return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+
+  test("from a directory with no config, the flag reads the named tree; the same run without it refuses on board.id", () => {
+    const empty = mkdtempSync(join(tmpdir(), "work-status-elsewhere-"));
+    const tree = mkdtempSync(join(tmpdir(), "work-status-tree-"));
+    try {
+      mkdirSync(join(tree, ".claude", "rungate"), { recursive: true });
+      writeFileSync(
+        join(tree, ".claude", "rungate", "config.json"),
+        JSON.stringify({ project: "fixture", board: { id: "PVT_fixture" } }),
+      );
+      const without = run(empty, []);
+      expect(without.out, `the control did not refuse on the board:\n${without.out}`).toContain("board.id");
+      const flagged = run(empty, ["--project-root", tree]);
+      expect(flagged.out, `the flag was parsed and ignored:\n${flagged.out}`).not.toContain("board.id");
+      expect(flagged.out, "the flagged run did not reach the credential read").toContain("no GitHub credential");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
+  test("the flag with no directory after it is refused, not read as the current one", () => {
+    const empty = mkdtempSync(join(tmpdir(), "work-status-bare-flag-"));
+    try {
+      for (const args of [["--project-root"], ["--project-root", "--milestone"], ["--project-root", "  "]]) {
+        const r = run(empty, args);
+        expect(r.status, `${args.join(" ")}:\n${r.out}`).toBe(2);
+        expect(r.out).toContain("UNMEASURED: --project-root");
+      }
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
@@ -964,7 +1017,7 @@ describe("#1853 H4: the candidate list says how many are UNPLACED", () => {
       code,
       "the report resolves the engine family from config — a literal here is the second " +
         "spelling lib/config-readers.ts exists to prevent",
-    ).toContain("enginePrefixReading(process.cwd())");
+    ).toContain("enginePrefixReading(ROOT)");
     // **And with the promotion set, not `NO_WORK_NEXT`** (#1962). Passing
     // the empty set compiles, orders correctly, and silently turns the
     // `work-this-next` lever off in this report alone — so the shape of the
@@ -1180,7 +1233,14 @@ describe("#1944: the report names local work every run, from the one decider", (
    */
   // `PROJECT === null` is #1719's: no board is configured, so there are no
   // lanes to read and the whole report ends, as it does with no credential.
-  const KNOWN_EXITS_BEFORE_SECTION = ["if (PROJECT === null)", "if (!token)", 'if (focus.kind === "unknown")'];
+  // #1968 added the `--project-root` guard: a flag with no directory ends the
+  // whole report, the same as an absent board or credential.
+  const KNOWN_EXITS_BEFORE_SECTION = [
+    "if (PROJECT === null)",
+    "if (!token)",
+    'if (focus.kind === "unknown")',
+    'if (dir === undefined || dir.trim() === "" || dir.startsWith("--"))',
+  ];
 
   /**
    * #2041: read through the TypeScript parser, never a hand-written scanner.
@@ -1357,8 +1417,8 @@ describe("#1944: the report names local work every run, from the one decider", (
      * stops the next one being found the same way.
      */
     const wired = [
-      "readLocalWork(process.cwd(), knownIssueNumbers)",
-      "readPushedBranches(process.cwd(), knownIssueNumbers)",
+      "readLocalWork(ROOT, knownIssueNumbers)",
+      "readPushedBranches(ROOT, knownIssueNumbers)",
       "issuesWithUncommittedWork(wtStates, knownIssueNumbers)",
     ];
     const missing = wired.filter(call => !section.includes(call));
