@@ -428,11 +428,17 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
     // literal member: it refuses a tick naming a symbol the tree does not
     // contain, which is an event only a spec edit can cause, in a file the
     // spec edit does not touch.
+    //
+    // `spec-evidence` joined in #2116: a tick in a spec that declares
+    // `evidence: required` must record a `fingerprint:` beside its
+    // `proved-by:`, and PR #2114 passed the four suites above locally and
+    // went red in CI on that one, one push from the tool that writes it.
     tests: [
       "test/sc-binding-split.test.ts",
       "test/ticked-sc-cover.test.ts",
       "test/behavioral-sc-ratchet.test.ts",
       "test/ticked-sc-absent-symbol.test.ts",
+      "test/spec-evidence.test.ts",
     ],
     fires: c =>
       inDir(c.path, "specs") &&
