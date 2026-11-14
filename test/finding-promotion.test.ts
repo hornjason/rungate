@@ -1648,6 +1648,20 @@ What was broken to prove A.
     expect(out.why).toContain("fence");
   });
 
+  test("a fence closes only on its own marker, so a nested one never exposes a `#` line — review round 2", () => {
+    // ``` holding a ~~~ line, and ~~~ holding a ``` block: the inner marker is
+    // content. Closing on it read `# inside` as a heading, which split one
+    // section into two and refused SECTION_REQUIRED.
+    for (const block of ["```md\n~~~\n# inside\n~~~\n```", "~~~\n```\n# inside\n```\n~~~", "````\n```\n# inside\n````"]) {
+      const spec = SPEC_WITH_CRITERIA.replace("- [x] SC-9002", `${block}\n\n- [x] SC-9002`);
+      const out = specWithCriterion(spec, LINE, "SC-9010", null);
+      expect(out.ok, JSON.stringify(block)).toBe(true);
+      if (!out.ok) return;
+      const lines = out.text.split("\n");
+      expect(lines[lines.indexOf(LINE) - 1], JSON.stringify(block)).toStartWith("- [x] SC-9002:");
+    }
+  });
+
   test("a --section is checked even when no criterion of the family exists yet", () => {
     const out = specWithCriterion(SPEC_NO_CRITERIA, LINE, "SC-9010", null, "Nowhere");
     expect(out.ok).toBe(false);
