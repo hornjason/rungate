@@ -225,6 +225,17 @@ they record a fact that already happened. Automating Backlog→Ready and
 Ready→In progress allocates capacity, and those two are the ones that must
 answer to a limit.
 
+### Why Ready is computed rather than a saved search
+
+GitHub's `no:blocked-by` matches on the *link*, not on whether the blocker
+is still open. So `is:open no:blocked-by` hides an issue for ever once
+anything was linked to it, including a blocker that shipped. Readiness is
+`issueDependenciesSummary.blockedBy == 0`, which only GraphQL exposes.
+Advanced search's `is:blocked` does track an open blocker; the REST search
+and GraphQL `search(type: ISSUE)` ignore all of these qualifiers. Measured
+2026-11-14, with the commands and counts, in
+`reference/board-mechanics-worked-instances.md`.
+
 ## Outcomes
 
 | Outcome | Baseline today | Command that produced the baseline | Target |
