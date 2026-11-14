@@ -173,17 +173,16 @@ function readingDefects(body: string): string[] {
 }
 
 /**
- * The "Not done — the remainder" bullet list, and the sentence that tallies it.
+ * The "Not done — the remainder" bullet list, parsed.
  *
- * This exists because the tally drifted three times in one pull request
- * (#1619), each time in the same way: a number hand-counted into prose, read
- * by nobody until a reviewer re-counted it by eye. A fourth manual recount is
- * the same instrument that produced the first three. The reviewer's own
- * meta-finding on round 4 said so and was right — so the count is now
- * recomputed from the bullets themselves and the prose has to agree with it.
+ * The spec used to state how many bullets and ids this list held, and this
+ * file used to check the prose against the parse. The tally drifted three
+ * times in one pull request (#1619); #2082 deleted it from the prose, so the
+ * count lives here and nowhere else. What is left is the parse itself, kept
+ * as the positive control for the re-takeability case below, which reads the
+ * same section.
  *
- * Three different quantities live in that sentence and conflating any two is
- * exactly how it drifted:
+ * Three quantities, still worth keeping apart:
  *   - **bullets** — lines beginning `- **CRC-…`
  *   - **leading ids** — ids in the bold lead of a bullet. One bullet leads
  *     with TWO (`**CRC-E3, CRC-E9**`), so this exceeds the bullet count.
@@ -194,23 +193,13 @@ interface BulletTally {
   bullets: number;
   leading: string[];
   mentioned: string[];
-  namedNotLeading: string[];
-}
-
-function remainderSection(body: string): string | null {
-  const at = body.indexOf("**29 bullets");
-  const start = at === -1 ? body.search(/^\*\*\d+ bullets/m) : at;
-  if (start === -1) return null;
-  const rest = body.slice(start);
-  const end = rest.search(/^### /m);
-  return end === -1 ? rest : rest.slice(0, end);
 }
 
 /**
  * Every measurement in *Measured non-obvious facts* must be RE-TAKEABLE.
  *
  * This document separates two kinds of number, and the separation is stated
- * in the remainder tally's note above. Document-derived ones are properties
+ * in the spec's own table of the two kinds. Document-derived ones are properties
  * of this file and are recomputed by the cases above. World-derived ones —
  * `15 ai-review runs`, `147 parseable ledgers`, a blame walk over a merged
  * branch — cannot be recomputed by a test, because re-measuring gives a
@@ -348,68 +337,20 @@ function tally(section: string): BulletTally {
     bullets: bulletLines.length,
     leading: sort(leading),
     mentioned: sort(mentioned),
-    namedNotLeading: sort(mentioned).filter(id => !leading.has(id)),
   };
 }
 
-describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: the remainder tally is recomputed, not retyped", () => {
+describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: the remainder list parses", () => {
   const body = existsSync(join(REPO, SPEC)) ? readFileSync(join(REPO, SPEC), "utf-8") : null;
-  const section = body === null ? null : remainderSection(body);
+  const section = body === null ? null : notDoneSection(body);
 
-  test("the section parses and holds bullets, so the tallies below are not vacuous", () => {
-    // The positive control. Every assertion here is over a parse, and a parse
-    // that found nothing satisfies all of them.
-    expect(section, "the '<N> bullets' paragraph was not found in the spec").not.toBeNull();
+  test("the section parses and holds bullets, so the case reading it is not vacuous", () => {
+    // The positive control. Every assertion over this section is over a
+    // parse, and a parse that found nothing satisfies all of them.
+    expect(section, "'### Not done — the remainder' was not found in the spec").not.toBeNull();
     const t = tally(section!);
     expect(t.bullets, "no `- **CRC-…` bullets parsed out of the section").toBeGreaterThan(10);
     expect(t.mentioned.length).toBeGreaterThanOrEqual(t.leading.length);
-  });
-
-  test("the stated bullet count equals the bullets", () => {
-    // Guarded here too, not only in the control above. Each `test()` runs
-    // independently, so a `section` that failed to parse would reach `tally`
-    // as null and throw a bare TypeError rather than saying what went wrong
-    // (raised on #1619). The suite still goes red either way; this is about
-    // whether the next reader can tell WHY.
-    expect(section, "the '<N> bullets' paragraph was not found in the spec").not.toBeNull();
-    const t = tally(section!);
-    const stated = section!.match(/^\*\*(\d+) bullets/m);
-    expect(stated, "the paragraph must open `**<N> bullets`").not.toBeNull();
-    expect(
-      Number(stated![1]),
-      `the prose says ${stated![1]} bullets; ${t.bullets} parse out of the section. ` +
-        "Recompute, do not retype — this sentence has drifted three times.",
-    ).toBe(t.bullets);
-  });
-
-  test("the stated id count equals the ids, and names the right non-leading ones", () => {
-    expect(section, "the '<N> bullets' paragraph was not found in the spec").not.toBeNull();
-    const t = tally(section!);
-    // Matched against COLLAPSED whitespace. The paragraph is hard-wrapped, so
-    // a literal space in the pattern breaks the moment an edit rewraps the
-    // line — a detector narrower than what it detects, and it was: the first
-    // version of this case went red on a rewrap rather than on a wrong count.
-    const flat = section!.replace(/\s+/g, " ");
-    const m = flat.match(
-      /without leading one \(([^)]*)\);[^.]*?why (\d+) ids appear here and (\d+) is the right count/,
-    );
-    expect(
-      m,
-      "the reconciliation sentence must keep its shape: `… without leading one (<ids>); … " +
-        "why <N> ids appear here and <M> is the right count …`",
-    ).not.toBeNull();
-    // Spread before sorting: `String.match` returns a `RegExpMatchArray`, and
-    // `toEqual` has no overload for one against a `string[]`. Caught by
-    // typecheck in CI rather than locally, because the suite is outside
-    // `tsconfig` — `bun test` green does not mean `bun run typecheck` green.
-    const named: string[] = [...(m![1].match(/CRC-[A-Z]+\d+/g) ?? [])].sort();
-    expect(
-      named,
-      "the ids the sentence names as mentioned-but-not-leading are not the ones that are. " +
-        "CRC-E9 CO-LEADS a bullet with CRC-E3 and is a leading id.",
-    ).toEqual(t.namedNotLeading);
-    expect(Number(m![2]), "the stated total id count").toBe(t.mentioned.length);
-    expect(Number(m![3]), "the stated bullet count, restated in the same sentence").toBe(t.bullets);
   });
 });
 
@@ -536,69 +477,74 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: a cited figure's source still e
 });
 
 /**
- * The document counts its own criteria in prose, and prose drifts.
+ * The document no longer counts its own criteria in prose (#2082).
  *
- * Round 6 of #1637 found "this spec holds 56 criteria" off by five, in the
- * same section whose own rule is that a document-derived number must be
- * computed rather than typed. It was wrong in THREE places — the standing
- * practice, the work-in-flight note and the readings-table rationale — which
- * is the shape round 5 named: a fact corrected at one site while independent
- * copies are left stale.
- *
- * So the count stops being hand-maintained. Each pattern below is also
- * asserted to match at least once, because a reword that silently stops
- * matching is a check that silently stops checking — and that is the failure
- * mode of every text-scanning guard in this repository.
+ * Round 6 of #1637 found "this spec holds 56 criteria" off by five, wrong in
+ * three places at once, and this case was written to compare each such
+ * sentence with the criteria declared. That kept the copies honest and still
+ * made every promotion edit three lines outside the new criterion. Jason's
+ * call on 2026-11-13 was to delete the copies, so the case now refuses the
+ * sentence shapes they had: a count typed back in is a copy again.
  */
-describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: its own counts are computed, not typed", () => {
+const NUMBER_WORDS = [
+  "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+  "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+].join("|");
+
+describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: it states no count of its own criteria", () => {
   const body = existsSync(join(REPO, SPEC)) ? readFileSync(join(REPO, SPEC), "utf-8") : null;
 
-  test("every stated criterion count equals the criteria actually declared", () => {
+  test("no sentence restates the criterion total or the ticked split", () => {
     expect(body, `${SPEC} is missing`).not.toBeNull();
     const declared = [...body!.matchAll(/^- \[([ xX])\] (CRC-[A-Z]?\d+):/gm)];
-    const total = declared.length;
-    const ticked = declared.filter(m => m[1].toLowerCase() === "x").length;
-    expect(total, "no criteria parsed, so every claim below would be compared to zero")
+    expect(declared.length, "no criteria parsed, so the spec is not the file this case means")
       .toBeGreaterThan(40);
-    expect(ticked, "no criterion is ticked, so the ticked claims would be vacuous")
-      .toBeGreaterThan(0);
 
-    const claims: { what: string; pattern: RegExp; expected: number[] }[] = [
-      { what: "This spec holds N criteria", pattern: /This spec holds (\d+) criteria/g, expected: [total] },
-      {
-        what: "this spec's N criteria as T ticked and U unticked",
-        pattern: /this spec's\s+(\d+) criteria as (\d+) ticked and (\d+) unticked/g,
-        expected: [total, ticked, total - ticked],
-      },
-      { what: "N ticked of M", pattern: /(\d+) ticked of (\d+)/g, expected: [ticked, total] },
+    // A count typed in words is the same copy (round 2 of PR #2157: the
+    // deleted "Seventeen of them" was spelled out).
+    const N = `(?:\\d+|(?:${NUMBER_WORDS})(?:[- ](?:${NUMBER_WORDS}))?)`;
+    const shapes = [
+      new RegExp(`This spec holds ${N} criteria`, "gi"),
+      new RegExp(`this spec's\\s+${N} criteria`, "gi"),
+      new RegExp(`\\b${N} ticked of ${N}\\b`, "gi"),
+      new RegExp(`\\b${N} unticked boxes`, "gi"),
+      // Round 1 of PR #2157: the partition behind "the backlog is 30, not 47".
+      new RegExp(`backlog is ${N}\\b`, "gi"),
+      new RegExp(`Of the unticked boxes, ${N}\\b`, "gi"),
+      new RegExp(`\\b${N} of them are not engineering`, "gi"),
+      // Round 5: the Not-done tally, "38 bullets … 40 ids".
+      new RegExp(`\\b${N} (?:bullets|leading ids)\\b`, "gi"),
     ];
+    // Positive control, per shape (round 4 of PR #2157): the sentences these
+    // shapes refuse are gone from the spec, so an empty result below holds by
+    // construction unless each shape is shown to match a planted copy.
+    const PLANTED = [
+      "This spec holds 66 criteria",
+      "this spec's\nsixty-six criteria",
+      "10 ticked of 66",
+      "47 unticked boxes",
+      "The backlog is thirty",
+      "Of the unticked boxes, 8 are",
+      "Seventeen of them are not engineering",
+      "29 bullets carry 30 leading ids",
+    ];
+    expect(PLANTED.length, "one planted sentence per shape").toBe(shapes.length);
+    shapes.forEach((p, i) => {
+      p.lastIndex = 0;
+      expect(p.test(PLANTED[i].replace(/\s+/g, " ")), `shape ${i} matches nothing it was written for: ${p}`).toBe(true);
+      p.lastIndex = 0;
+    });
 
-    const wrong: string[] = [];
-    for (const claim of claims) {
-      const hits = [...body!.matchAll(claim.pattern)];
-      // Anti-vacuity, per claim. A reworded sentence that no longer matches
-      // leaves the number unchecked while the suite stays green, which is
-      // worse than the drift this case was written for.
-      expect(
-        hits.length,
-        `no sentence in ${SPEC} matches "${claim.what}". Either the claim was removed — ` +
-          `then delete this row — or it was reworded and is now unchecked. A text guard ` +
-          `whose pattern stops matching stops guarding, silently.`,
-      ).toBeGreaterThan(0);
-      for (const hit of hits) {
-        claim.expected.forEach((want, i) => {
-          const got = Number(hit[i + 1]);
-          if (got !== want) wrong.push(`"${hit[0]}" — group ${i + 1} says ${got}, the file has ${want}`);
-        });
-      }
-    }
-
+    // Collapsed first: the spec is hard-wrapped, so a literal space in a
+    // shape misses a count split across a line break (round 3 of PR #2157).
+    const flatBody = body!.replace(/\s+/g, " ");
+    const restated = shapes.flatMap(p => [...flatBody.matchAll(p)].map(m => m[0]));
     expect(
-      wrong,
-      `${SPEC} states a count of its own criteria that disagrees with the criteria it ` +
-        `declares. This is document-derived — the document's own table says such a number ` +
-        `"must be computed. A hand-typed one is a defect." Update the prose; do not raise ` +
-        `the number here.`,
+      restated,
+      `${SPEC} restates a count of its own criteria. #2082 deleted these: the criteria ` +
+        `are the count, and \`bun bin/rungate.ts audit-specs\` reads it. Delete the number ` +
+        `from the sentence rather than updating it.`,
     ).toEqual([]);
   });
 });
