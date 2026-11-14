@@ -440,7 +440,9 @@ ${opts.setupBunEnv}
         run: |
 ${indent(buildBoardIntakeAddScript(opts.version), "          ")}
       # Only the opened -> In review edge; merged and closed stay with GitHub's
-      # built-in workflows, so each transition has one decider. Drafts stay put.
+      # built-in workflows, so each transition has one decider. Not a draft:
+      # a draft in \`In review\` says somebody is waiting on a reader when nobody is.
+      # Drafts stay in Backlog until \`ready_for_review\`, which this subscribes to.
       - name: Move the pull request to In review
         if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == false && steps.add.outputs.itemId != ''
         env:

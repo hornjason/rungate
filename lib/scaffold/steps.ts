@@ -4507,6 +4507,14 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
   // already emits. It names no board: the published CLI reads board.id from
   // the checked-out config (#2165), so no generated workflow carries an id.
   const boardReadyYml = buildBoardReadyWorkflow({
+    runsOn,
+    checkout: actionRef("actions/checkout"),
+    setupBun: actionRef("oven-sh/setup-bun"),
+    setupBunWith: bunStep,
+    setupBunEnv: setupBunEnv("        "),
+    version: harnessVersion(),
+  });
+
   // #2166, ADR-014 row 4: new issues and pull requests onto the board. It
   // names no board: the published CLI prints board.id from the default
   // branch's config (#2173), and the add uses that node id.

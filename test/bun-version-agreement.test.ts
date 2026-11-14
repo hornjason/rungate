@@ -60,10 +60,11 @@ const REPO_ROOT = join(import.meta.dir, "..");
  * the findings adjudicator, and since #1488 one in `ai-review-unmeasured.yml`,
  * which installs it for the unmeasured classifier, since #2046 one in
  * `adr-accepted.yml`, since #2045 one in `closing-references.yml` and since
- * #2047 one in `board-ready.yml`, all three of which run the published CLI. Declared once, because three cases below count
+ * #2047 one in `board-ready.yml` and since #2166 one in `board-intake.yml`, all
+ * four of which run the published CLI. Declared once, because three cases below count
  * them and three literals would drift apart.
  */
-const GENERATED_BUN_STEPS = 7;
+const GENERATED_BUN_STEPS = 8;
 
 const WORKFLOW_DIR = join(REPO_ROOT, ".github", "workflows");
 
@@ -186,6 +187,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
       "ai-review.yml",
       "board-conformance.yml",
       "board-flow.yml",
+      "board-intake.yml",
       "board-ready.yml",
       "board-sweep.yml",
       "board-walkthrough.yml",
