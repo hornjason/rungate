@@ -184,6 +184,23 @@ export const OWNED_FILES: OwnedFile[] = [
     sections: BRIEF_CONSTRAINTS_SECTION,
   },
   {
+    // #2048, ADR-014 row 5: step 2's command. A provenance file like a rule,
+    // because a consumer may tailor it; a hand edit is preserved and reported.
+    path: ".claude/commands/dry-run.md",
+    strategy: "provenance",
+    servedBy: "writeProcessFiles (lib/scaffold/write-steps.ts) via decideRuleWrite — the rule-provenance decision",
+    customize: "Edit freely — a hand-edited command is preserved and reported",
+    avoid: "Don't delete its `generated-sha` marker, or edits stop surviving",
+  },
+  {
+    // #2048, ADR-014 row 5: step 2's template. Regenerated with no marker,
+    // because every ADR is copied from it and a marker would travel into each.
+    path: "docs/adr/TEMPLATE.md",
+    strategy: "regenerate",
+    customize: "Copy it to docs/adr/ADR-<n>-<slug>.md and edit the copy",
+    avoid: "Don't edit the template itself — a re-scaffold rewrites it",
+  },
+  {
     path: ".claude/rules/*.md",
     strategy: "provenance",
     servedBy: "decideRuleWrite (lib/rule-provenance.ts) — a frontmatter `generated-sha:` key, because a markdown file has no line comments",

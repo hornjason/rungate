@@ -14,8 +14,11 @@
  * are carried verbatim.
  */
 
-import { existsSync, writeFileSync } from "fs";
-import { join } from "path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
+import { ADR_TEMPLATE_PATH, processFiles } from "./process-files";
+import { decideRuleWrite } from "../rule-provenance";
+import { isHarnessItself } from "../harness-identity";
 
 import {
   safeDir,
@@ -104,6 +107,7 @@ export function runScaffoldWriteSteps(
   safeDir(join(projectPath, "scripts"), "scripts", actions);
   safeDir(join(projectPath, "docs"), "docs", actions);
   safeDir(join(projectPath, "docs", "adr"), "docs/adr", actions);
+  writeProcessFiles(projectPath, actions);
 
   const testDirName = existsSync(join(projectPath, "test")) ? "test" : "tests";
   safeDir(join(projectPath, testDirName), testDirName, actions);
@@ -211,4 +215,50 @@ What does this workflow produce?
 
   // Leaves the tree. See STEPS_NOT_REHEARSED.
   if (!rehearsing) postScaffoldCommit(projectPath, actions, { commit });
+}
+
+/**
+ * #2048, ADR-014 row 5: the dry-run command and the ADR template, step 2 of
+ * the four-step process. The template is regenerated (no marker: every ADR is
+ * copied from it, and a provenance line would travel into each copy). The
+ * command is a provenance file like a rule — a consumer may tailor it, and a
+ * hand edit is preserved and reported rather than overwritten.
+ */
+export function writeProcessFiles(projectPath: string, actions: string[]): void {
+  for (const file of processFiles(isHarnessItself(projectPath))) {
+    if (file.content === null) {
+      actions.push(`REFUSED: ${file.path} (${file.why}) — nothing was written`);
+      continue;
+    }
+    const target = join(projectPath, file.path);
+    if (file.path === ADR_TEMPLATE_PATH) {
+      regenerateOwned(target, file.content, file.path, actions, "regenerate");
+      continue;
+    }
+    // `lstatSync`, not `existsSync`: a write would FOLLOW a link out of the
+    // project, and a read of a directory throws EISDIR out of the whole run —
+    // the same two refusals `regenerateOwned` makes for every owned file.
+    const entry = (() => {
+      try {
+        return lstatSync(target);
+      } catch {
+        return null;
+      }
+    })();
+    if (entry !== null && (entry.isSymbolicLink() || !entry.isFile())) {
+      actions.push(
+        `REFUSED: ${file.path} (${entry.isSymbolicLink() ? "a symbolic link" : "not a regular file"}; the scaffold writes only regular files)`,
+      );
+      continue;
+    }
+    mkdirSync(dirname(target), { recursive: true });
+    const existing = existsSync(target) ? readFileSync(target, "utf-8") : null;
+    const decision = decideRuleWrite(existing, file.content);
+    if (decision.action === "preserve") {
+      actions.push(`PRESERVED: ${file.path} (${decision.reason}) — generator output withheld; delete the file and re-run to accept it`);
+      continue;
+    }
+    writeFileSync(target, decision.content!);
+    actions.push(`${decision.action === "create" ? "GENERATED" : "UPDATED"}: ${file.path}`);
+  }
 }
