@@ -34,6 +34,8 @@
     "scripts/board-snapshot.ts",
     "scripts/plan-deps.ts",
     "scripts/plan-issues.ts",
+    "scripts/board-ready.ts",
+    "scripts/audit-closing-references.ts",
     "scripts/create-spec.ts",
     "scripts/create-success.ts",
     "scripts/create-sc.ts",

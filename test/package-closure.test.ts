@@ -139,6 +139,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSyn
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { remedyMessage } from "../lib/check-remedy";
+import { CLI_COMMANDS } from "../lib/cli-commands";
 import {
   instructionPaths,
   packageClosureViolations,
@@ -758,5 +759,68 @@ describe("#1174 CLOSURE-15: the instruction scanner is load-bearing", () => {
       JSON.stringify({ name: "f", version: "0.0.0", files: ["hooks/", "gates/"] }),
     );
     expect(packageClosureViolations(dir, publishedFiles(dir, readPackageFiles(dir)))).toEqual([]);
+  });
+});
+
+/**
+ * Covers SC-2742 (SPEC-TO-BOARD-PIPELINE-SPEC.md), #2044.
+ *
+ * ADR-014 decision 2: a consumer has `node_modules/rungate`, not `scripts/`,
+ * so every script a process workflow runs must ship and be a `rungate`
+ * command before a generator can emit a workflow that calls it. On main at
+ * `812f7e04` two did neither: `scripts/board-ready.ts` and
+ * `scripts/audit-closing-references.ts`.
+ */
+describe("SC-2742: every script a process workflow runs ships and is a rungate command", () => {
+  /** ADR-014's four, decision 6: the process workflows this criterion is about. */
+  const PROCESS_WORKFLOWS = ["closing-references", "adr-accepted", "board-ready", "board-intake"];
+  /** `bun scripts/x.ts`, the form this repository's copies use today. */
+  const SCRIPT_RUN = /\bbun\s+(scripts\/[A-Za-z0-9._-]+\.ts)\b/g;
+  /** The CLI forms a generated workflow may use instead. */
+  const COMMAND_RUN = /(?:\b(?:bunx|npx|bun\s+x)\s+(?:--bun\s+)?rungate(?:@\S+)?|\bbin\/rungate(?:\.ts)?)\s+([a-z][a-z0-9-]*)/g;
+
+  /** What one workflow runs, comment lines excluded: a sentence about a run is not a run. */
+  function runs(yaml: string): { scripts: string[]; commands: string[] } {
+    const code = yaml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+    return {
+      scripts: [...code.matchAll(SCRIPT_RUN)].map(m => m[1]!),
+      commands: [...code.matchAll(COMMAND_RUN)].map(m => m[1]!),
+    };
+  }
+
+  const published = publishedFiles(ROOT, readPackageFiles(ROOT));
+  const registered = new Map(Object.entries(CLI_COMMANDS).map(([name, c]) => [c.script, name]));
+  const read = PROCESS_WORKFLOWS.map(name => ({
+    name,
+    ...runs(readFileSync(join(ROOT, ".github", "workflows", `${name}.yml`), "utf-8")),
+  }));
+
+  test("the sweep reads a real population, and the runner forms it matches are real", () => {
+    // The control. A regex that matched nothing would pass both cases below.
+    expect(read.flatMap(w => w.scripts)).toContain("scripts/board-ready.ts");
+    expect(read.flatMap(w => w.scripts)).toContain("scripts/audit-closing-references.ts");
+    expect(runs("        run: bunx rungate board-ready --repo o/r").commands).toEqual(["board-ready"]);
+    expect(runs("          bun bin/rungate.ts plan-deps --write").commands).toEqual(["plan-deps"]);
+    expect(runs("  # bun scripts/board-ready.ts in a comment").scripts).toEqual([]);
+  });
+
+  test("every script a process workflow runs is in files[] and registered as a command", () => {
+    const missing: string[] = [];
+    for (const w of read) {
+      for (const s of w.scripts) {
+        if (!published.has(s)) missing.push(`${w.name}.yml runs ${s}, which is not in package.json files[]`);
+        if (!registered.has(s)) missing.push(`${w.name}.yml runs ${s}, which no entry in CLI_COMMANDS runs`);
+      }
+    }
+    expect(
+      missing,
+      "a consumer's copy of this workflow could not run it: register the script in lib/cli-commands.ts " +
+        "and add it to package.json files[] (ADR-014 decision 2)",
+    ).toEqual([]);
+  });
+
+  test("every rungate command a process workflow calls is registered", () => {
+    const unknown = read.flatMap(w => w.commands.filter(c => !(c in CLI_COMMANDS)).map(c => `${w.name}.yml calls rungate ${c}`));
+    expect(unknown, "the CLI has no such command, so the step would exit non-zero").toEqual([]);
   });
 });
