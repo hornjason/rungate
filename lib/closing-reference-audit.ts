@@ -216,9 +216,35 @@ export interface ClosedIssue {
  * `null` is UNMEASURED, never an empty list: read as "no ids", every issue
  * naming a criterion would be refused for naming none (#2061).
  */
-export function closingCriterionIds(root: string): string[] | null {
+export function closingCriteria(root: string): ClosingCriteria | null {
   const sweep = specCriteriaIn(root);
-  return sweep.reading === "UNMEASURED" ? null : answerableIds(sweep);
+  if (sweep.reading === "UNMEASURED") return null;
+  return { ids: answerableIds(sweep), unticked: [...new Set(sweep.specs.flatMap(s => s.unticked))] };
+}
+
+/**
+ * The criteria a closing check reads from the checkout (#2061, #2005): every
+ * id an issue can name, and the ids still unticked in at least one spec that
+ * states them. The checkout is the pull request's merge commit, so a tick the
+ * pull request makes is already here.
+ */
+export interface ClosingCriteria {
+  readonly ids: readonly string[];
+  readonly unticked: readonly string[];
+}
+
+/**
+ * The words a pull request writes when it closes an issue naming a criterion
+ * it does not finish, followed by the id (#2005): `does not complete SC-12`.
+ * For a criterion more than one issue carries, so the last of them is the one
+ * that has to tick it. Exact, like the criterion declaration: a looser match
+ * would let a sentence excuse a criterion by accident.
+ */
+export const DOES_NOT_COMPLETE = "does not complete";
+
+/** Does this pull request body excuse `id` with the exact words? */
+export function excusesCriterion(prBody: string, id: string): boolean {
+  return new RegExp(`${DOES_NOT_COMPLETE} ${id}(?![\\w-])`).test(prBody);
 }
 
 /**
@@ -237,12 +263,32 @@ export function closingCriterionIds(root: string): string[] | null {
  */
 export type ClosingRequirementFailure =
   | { kind: "NO_ISSUE"; rawReferenceCount: number; repoNameWithOwner: string; rerun: string }
-  | { kind: "NO_CRITERION"; issues: number[]; rerun: string };
+  | { kind: "NO_CRITERION"; issues: number[]; rerun: string }
+  | {
+      kind: "UNTICKED";
+      /** Each closed issue and the unticked, unexcused criteria it names. */
+      unticked: { issue: number; ids: string[] }[];
+      /** `#77 (SC-12, SC-13)`, one per issue: what the message names. */
+      named: string;
+      /** The one sync command per criterion that ticks it. */
+      ticks: string;
+      /** The exact words that excuse each criterion instead. */
+      excuses: string;
+    };
 
+/**
+ * Third, after an issue is closed and has answered the criterion question
+ * (#2005): every criterion it names is ticked in this tree, or this pull
+ * request says it does not complete it. A merge that removes a criterion's
+ * last open issue without a tick turns `criterion-coverage` short on main for
+ * every other pull request, and no pull request can repair that from its own
+ * tree — #2003 closing #1998 and #2094 closing #1964 both did.
+ */
 export function closingRequirement(
   changedPaths: readonly string[],
   linkedIssues: ReadonlyMap<number, ClosedIssue>,
-  criterionIds: readonly string[],
+  criteria: ClosingCriteria,
+  prBody: string,
   rawReferenceCount: number,
   repoNameWithOwner: string,
   rerun: string,
@@ -251,11 +297,29 @@ export function closingRequirement(
   if (linkedIssues.size === 0) {
     return { kind: "NO_ISSUE", rawReferenceCount, repoNameWithOwner, rerun };
   }
-  const issues = [...linkedIssues]
-    .filter(([, issue]) => !criterionAnswer(issue, criterionIds).answered)
-    .map(([n]) => n)
-    .sort((a, b) => a - b);
-  return issues.length > 0 ? { kind: "NO_CRITERION", issues, rerun } : null;
+  const ordered = [...linkedIssues].sort(([a], [b]) => a - b);
+  const issues = ordered
+    .filter(([, issue]) => !criterionAnswer(issue, criteria.ids).answered)
+    .map(([n]) => n);
+  if (issues.length > 0) return { kind: "NO_CRITERION", issues, rerun };
+
+  const unticked = ordered
+    .map(([issue, body]) => ({
+      issue,
+      ids: criterionAnswer(body, criteria.ids).names.filter(
+        id => criteria.unticked.includes(id) && !excusesCriterion(prBody, id),
+      ),
+    }))
+    .filter(u => u.ids.length > 0);
+  if (unticked.length === 0) return null;
+  const ids = [...new Set(unticked.flatMap(u => u.ids))];
+  return {
+    kind: "UNTICKED",
+    unticked,
+    named: unticked.map(u => `#${u.issue} (${u.ids.join(", ")})`).join(", "),
+    ticks: ids.map(id => `bun scripts/sync-sc-status.ts --only ${id}`).join("; "),
+    excuses: ids.map(id => `"${DOES_NOT_COMPLETE} ${id}"`).join(", "),
+  };
 }
 
 /** The refusal text for the above. Names what was read, and the remedy. */
@@ -270,6 +334,16 @@ export function closingRequirementMessage(f: ClosingRequirementFailure, prNumber
       `not inside backticks, naming the issue this work was filed under. Only a pull request ` +
       `whose changed files are all session-record files owes none. Editing the body re-runs ` +
       `this check by itself.`
+    );
+  }
+  if (f.kind === "UNTICKED") {
+    return (
+      `PR #${prNumber} closes issue(s) naming criteria that are not ticked in its own tree: ` +
+      `${f.named}. Merging would leave each criterion with one fewer open issue and no tick, ` +
+      `and criterion-coverage would read short on main for every other pull request.\n\n` +
+      `Tick each in this pull request (${f.ticks}, then its proved-by: line), or, if another ` +
+      `open issue still carries it, write the exact words ${f.excuses} in this description. ` +
+      `Editing the description re-runs this check by itself.`
     );
   }
   return (

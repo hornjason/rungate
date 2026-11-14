@@ -529,7 +529,9 @@ describe("#2061: the closing check and the board answer the criterion question t
     JSON.stringify({ number: 2061, body: "Some change.\n", closingIssuesReferences: refs, files });
 
   test("an issue naming a payload criterion (not SC-<N>) satisfies the second half", () => {
-    const r = run(SCRIPT, payload([closes(42, THIS_REPO, "## Criteria this serves\n\nCRC-B4\n")]), THIS_REPO, ON);
+    // A TICKED payload criterion, so this case is about the criterion
+    // question alone; #2005's tick requirement has its own block below.
+    const r = run(SCRIPT, payload([closes(42, THIS_REPO, "## Criteria this serves\n\nCRC-A5\n")]), THIS_REPO, ON);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("closing references OK");
   });
@@ -634,6 +636,9 @@ describe("#2005: closing a criterion's issue ticks the criterion, or says it doe
     // Excusing a different criterion excuses nothing here.
     const other = run(SCRIPT, payload("Fixes #77\n\nThis does not complete SC-9102.\n"), THIS_REPO, ON, root);
     expect(other.code).toBe(REFUSE_EXIT);
+    // Nor does a longer id that merely starts with it.
+    const longer = run(SCRIPT, payload("Fixes #77\n\nThis does not complete SC-91010.\n"), THIS_REPO, ON, root);
+    expect(longer.code).toBe(REFUSE_EXIT);
   });
 
   test("an issue that serves no criterion owes no tick", () => {
