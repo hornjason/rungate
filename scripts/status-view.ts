@@ -69,7 +69,7 @@ export interface PhaseLine {
   open: number;
   closed: number;
   url: string;
-  state: "done" | "current" | "later";
+  state: "done" | "current" | "later" | "empty";
 }
 
 export interface FamilyLine {
@@ -173,11 +173,14 @@ export function phaseBlurb(specText: string, phase: number, limit = 280): string
     para.push(line.trim());
   }
   if (para.length === 0) return null;
-  const sentences = para.join(" ").match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g) ?? [];
+  // A sentence ends at punctuation FOLLOWED BY WHITESPACE, so the dot in
+  // "AGENTS.md" stays inside its sentence.
+  const sentences = para.join(" ").split(/(?<=[.!?])\s+/);
   let out = "";
   for (const s of sentences) {
-    if (out !== "" && (out + s).trim().length > limit) break;
-    out += s;
+    const next = out === "" ? s : `${out} ${s}`;
+    if (out !== "" && next.length > limit) break;
+    out = next;
   }
   return out.trim();
 }
@@ -197,7 +200,7 @@ export function phaseLines(milestones: readonly Milestone[], family: string, spe
     open: m.open,
     closed: m.closed,
     url: m.url,
-    state: m.open === 0 ? "done" : number === current ? "current" : "later",
+    state: m.open + m.closed === 0 ? "empty" : m.open === 0 ? "done" : number === current ? "current" : "later",
   }));
 }
 
@@ -247,7 +250,7 @@ function term(s: string): string {
 }
 
 const STAGE_MARK = { done: "✓", next: "●", later: "○" } as const;
-const PHASE_MARK = { done: "✓", current: "●", later: "○" } as const;
+const PHASE_MARK = { done: "✓", current: "●", later: "○", empty: "–" } as const;
 
 type Fmt = {
   text: (s: string) => string;
@@ -319,7 +322,8 @@ function render(v: StatusView, f: Fmt, markdown: boolean): string {
         ? [f.item(`no milestone is in the ${f.text(v.family ?? "")} family`)]
         : phases.flatMap(p => {
             const total = p.open + p.closed;
-            const head = f.item(`${PHASE_MARK[p.state]} ${f.link(p.title, p.url)} — ${p.closed} of ${total} done`);
+            const progress = total === 0 ? "no issues" : `${p.closed} of ${total} done`;
+            const head = f.item(`${PHASE_MARK[p.state]} ${f.link(p.title, p.url)} — ${progress}`);
             return p.meaning ? [head, `${markdown ? "  " : "      "}${f.text(p.meaning)}`] : [head];
           }),
     ),

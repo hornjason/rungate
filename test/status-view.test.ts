@@ -117,22 +117,35 @@ describe("#2097: phases come from the focus family's milestones and the spec's o
     expect(phaseBlurb(SPEC, 9)).toBeNull();
   });
 
+  test("a full stop inside a word is not a sentence end", () => {
+    // Live on 2026-11-13, Phase 2 rendered as "md rule 4." — the splitter
+    // dropped everything up to the dot in "AGENTS.md".
+    const spec = "### Phase 2 — order\n\nPer AGENTS.md rule 4, order is data. More after.\n";
+    expect(phaseBlurb(spec, 2, 40)).toBe("Per AGENTS.md rule 4, order is data.");
+  });
+
   test("phaseLines keeps only the focus family, in phase order, and marks done / current / later", () => {
     const ms = [
       { title: "Engine Phase 7 — later", open: 2, closed: 0, url: "u7" },
       { title: "Payload Phase 1 — other", open: 1, closed: 0, url: "p1" },
       { title: "Engine Phase 6 — now", open: 3, closed: 5, url: "u6" },
       { title: "Engine Phase 5 — done", open: 0, closed: 2, url: "u5" },
+      { title: "Engine Phase 4 — empty", open: 0, closed: 0, url: "u4" },
       { title: "Phase 1 — unprefixed", open: 1, closed: 0, url: "x" },
       { title: "Not a phase", open: 1, closed: 0, url: "y" },
     ];
     const lines = phaseLines(ms, "Engine", SPEC);
     expect(lines.map(l => [l.number, l.state])).toEqual([
+      [4, "empty"],
       [5, "done"],
       [6, "current"],
       [7, "later"],
     ]);
-    expect(lines[1].meaning).toContain("about its output");
+    expect(lines[2].meaning).toContain("about its output");
+    // An empty milestone is not a finished one: no tick, and no "0 of 0 done".
+    const md = renderMarkdown(view({ phases: read(lines) }));
+    expect(md).toContain("– [Engine Phase 4 — empty](u4) — no issues");
+    expect(md).not.toContain("0 of 0");
     expect(otherFamilyLines(ms, "Engine")).toEqual([{ family: "Payload", phases: 1, open: 1, closed: 0 }]);
   });
 });
