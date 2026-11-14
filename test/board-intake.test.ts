@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BOARD_ID_COMMAND,
+  BOARD_INTAKE_MOVE_SCRIPT,
   NO_BOARD_REFUSAL,
   buildBoardIntakeAddScript,
   buildBoardIntakeWorkflow,
@@ -453,6 +454,9 @@ describe("#2166: board-intake.yml is generated and names no board", () => {
     expect(source, "board-intake.yml is not the generated copy").toMatch(/^(?:# generated-sha: [0-9a-f]+\n)?# Managed by rungate/);
     const indented = buildBoardIntakeAddScript(version).trimEnd().split("\n").map(l => (l === "" ? "" : `          ${l}`)).join("\n");
     expect(source, "the add step's run: body is not the generator's").toContain(indented);
+    // And the move step, the larger half (review round 3): byte for byte, indented.
+    const move = BOARD_INTAKE_MOVE_SCRIPT.trimEnd().split("\n").map(l => (l === "" ? "" : `          ${l}`)).join("\n");
+    expect(source, "the move step's run: body is not the generator's").toContain(move);
   });
 
   test("it learns the board from the published CLI, and adds by node id", () => {
