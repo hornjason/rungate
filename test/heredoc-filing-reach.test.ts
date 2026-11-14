@@ -235,6 +235,8 @@ describe("#1355 BashWriteGuard reads the same reach", () => {
 const INSIDE: Array<[string, (f: string) => string, { sourcesProcessSubstitution?: true }]> = [
   ["assign-substitution", f => `X=$(bash <<'EOF'\n${f}\nEOF\n)\n`, {}],
   ["echo-substitution", f => `echo "$(bash <<'EOF'\n${f}\nEOF\n)"\n`, {}],
+  // The interpreter runs its stdin wherever its own stdout goes.
+  ["assign-substitution-redirected", f => `X=$(bash <<'EOF' > /dev/null\n${f}\nEOF\n)\n`, {}],
   ["source-process-substitution", f => `source <(cat <<'EOF'\n${f}\nEOF\n)\n`, { sourcesProcessSubstitution: true }],
   ["dot-process-substitution", f => `. <(cat <<'EOF'\n${f}\nEOF\n)\n`, { sourcesProcessSubstitution: true }],
 ];
@@ -278,6 +280,16 @@ describe("#2079: a heredoc owned by a command inside a substitution is metered",
       expect(stderr, name).toBe("");
       expect(calls, name).toEqual([]);
       expect(filingAttempts(cmd), name).toEqual([]);
+    }
+  });
+
+  test("`source` given a COMMAND substitution reads a file name, so its heredoc is no program", () => {
+    // `source "$(…)"` sources the file the output NAMES; only `source <(…)`
+    // runs the output itself. Treating both alike would read a path as code.
+    const TARGET = "/opt/bwprobe/" + "workflow-" + "state.json";
+    for (const word of ["source", "."]) {
+      const cmd = `${word} "$(cat <<'EOF'\necho x > ${TARGET}\nEOF\n)"`;
+      expect(interpreterPrograms(cmd), word).toEqual([]);
     }
   });
 
