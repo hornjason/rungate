@@ -61,6 +61,14 @@ export const BOARD_INTAKE_JOB = "add-to-board";
 /** The CLI command the add step runs to learn the board (#2173). */
 export const BOARD_ID_COMMAND = "board-id";
 
+/**
+ * How `rungate board-id` begins its no-board refusal. Exit 2 alone also
+ * covers a usage error, so the add step softens only this wording;
+ * `test/board-intake.test.ts` holds it to `scripts/board-id.ts`.
+ */
+export { NO_BOARD_REFUSAL } from "./board-ready-workflow";
+import { NO_BOARD_REFUSAL } from "./board-ready-workflow";
+
 /** The add step's `run:` body. Exported so a test executes THIS text. */
 export function buildBoardIntakeAddScript(version: string): string {
   return `set -euo pipefail
@@ -68,12 +76,12 @@ if [ -z "\${GH_TOKEN}" ]; then
   echo "::warning title=Board intake::UNMEASURED — RUNGATE_PROJECT_TOKEN is not set, so nothing was added to the board."
   exit 0
 fi
-# The board is board.id in the default branch's config. Exit 2 is the one
-# refusal that means none is set.
+# The board is board.id in the default branch's config. Only the no-board
+# refusal (exit 2 AND its own wording) is an annotation; a usage error is red.
 code=0
 project=$(bunx rungate@${version} ${BOARD_ID_COMMAND} 2>"\${RUNNER_TEMP}/board-id.stderr") || code=$?
 cat "\${RUNNER_TEMP}/board-id.stderr" >&2
-if [ "\${code}" -eq 2 ]; then
+if [ "\${code}" -eq 2 ] && grep -q '^${NO_BOARD_REFUSAL}' "\${RUNNER_TEMP}/board-id.stderr"; then
   echo "::warning title=Board intake::UNMEASURED — no board.id in the rungate config, so nothing was added. Set board.id and this runs."
   exit 0
 fi

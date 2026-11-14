@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BOARD_ID_COMMAND,
+  NO_BOARD_REFUSAL,
   buildBoardIntakeAddScript,
   buildBoardIntakeWorkflow,
 } from "../lib/scaffold/board-intake-workflow";
@@ -517,8 +518,17 @@ describe("#2166: the add step's readings", () => {
     expect(r.written).toBe("");
   });
 
-  test("any other board-id failure stands", () => {
+  test("any other board-id failure stands, including an exit-2 usage error", () => {
     expect(add({ GH_TOKEN: "t", ID_CODE: "1", ID_ERR: "SyntaxError: bad config" }).code).toBe(1);
+    // Review round 1: exit 2 also means a usage error, so the code alone
+    // would soften a real defect into "nothing to do".
+    const usage = add({ GH_TOKEN: "t", ID_CODE: "2", ID_ERR: "UNMEASURED: unknown argument \"--x\". Usage: rungate board-id" });
+    expect(usage.code).toBe(2);
+    expect(usage.out).not.toContain("no board.id in the rungate config");
+  });
+
+  test("the softened refusal is board-id's own wording", () => {
+    expect(readFileSync(join(import.meta.dir, "..", "scripts/board-id.ts"), "utf8")).toContain(`${NO_BOARD_REFUSAL} —`);
   });
 
   test("an add that never returns an item is a red run, not a silent one", () => {
