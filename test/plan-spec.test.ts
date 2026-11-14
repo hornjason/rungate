@@ -353,6 +353,50 @@ describe("lib/spec-placement: milestones are derived, and matched on the phase N
 });
 
 /**
+ * #2124: a family rename keeps every milestone, so every issue keeps its lane.
+ *
+ * `milestonePlan` matched live milestones only inside the family it was
+ * given, so renaming the engine's milestones from `Pipeline` to `Engine`
+ * planned ten CREATEs and left every issue in the old ten. `renameFrom` names
+ * the old family: within the table's phases, its milestone IS the existing
+ * one, and the action is a rename that keeps the number.
+ */
+describe("#2124: milestonePlan renames a whole family when told the old name", () => {
+  const spec = plant({});
+  const OLD_1 = { number: 7, title: "Old Phase 1 — stop the repeats", description: null };
+  const OLD_2 = { number: 8, title: "Old Phase 2 — stop the false findings", description: null };
+
+  test("every old-family phase is a RENAME that keeps its number, and nothing is created", () => {
+    const { actions, unmanaged, conflicts } = milestonePlan(spec, [OLD_1, OLD_2], "Conv", "Old");
+    expect(actions.map(a => `${a.action} #${a.existing?.number} ${a.title}`)).toEqual([
+      "rename #7 Conv Phase 1 — stop the repeats",
+      "rename #8 Conv Phase 2 — stop the false findings",
+    ]);
+    expect(unmanaged).toEqual([]);
+    expect(conflicts).toEqual([]);
+  });
+
+  test("the control: without the old name, the same milestones are unmanaged and every phase is a create", () => {
+    const { actions, unmanaged } = milestonePlan(spec, [OLD_1, OLD_2], "Conv");
+    expect(actions.map(a => a.action)).toEqual(["create", "create"]);
+    expect(unmanaged.map(m => m.number)).toEqual([7, 8]);
+  });
+
+  test("a phase present in BOTH families is a conflict naming both, never a silent pick", () => {
+    const NEW_1 = { number: 3, title: "Conv Phase 1 — stop the repeats", description: null };
+    const { conflicts } = milestonePlan(spec, [NEW_1, OLD_1, OLD_2], "Conv", "Old");
+    expect(conflicts).toEqual([{ phase: 1, current: NEW_1, previous: OLD_1 }]);
+  });
+
+  test("an old-family milestone for a phase the table does not hold is left alone and reported", () => {
+    const OLD_9 = { number: 9, title: "Old Phase 9 — later", description: null };
+    const { actions, unmanaged } = milestonePlan(spec, [OLD_1, OLD_9], "Conv", "Old");
+    expect(actions.map(a => `${a.action} ${a.phase}`)).toEqual(["rename 1", "create 2"]);
+    expect(unmanaged).toEqual([OLD_9]);
+  });
+});
+
+/**
  * `scripts/plan-spec.ts --write` — what reaches GitHub, and when it does not.
  *
  * **These assert on the CALLS, not on the exit code.** The defect they cover
@@ -569,6 +613,17 @@ describe("scripts/plan-spec --write: nothing reaches GitHub on an unsound table"
       names: "UNMEASURED",
       spec: "# A spec with no placement table at all\n",
     },
+    // #2124: the old family name is read the way --prefix is.
+    {
+      why: "a blank --rename-from",
+      argv: ["SPEC.md", "--repo", "o/r", "--prefix", "C", "--rename-from", "   "],
+      names: "--rename-from was given as",
+    },
+    {
+      why: "a --rename-from naming the --prefix family",
+      argv: ["SPEC.md", "--repo", "o/r", "--prefix", "C", "--rename-from", " C "],
+      names: "same family",
+    },
   ];
 
   for (const r of PLAN_SPEC_REFUSALS) {
@@ -696,6 +751,59 @@ describe("scripts/plan-spec --write: nothing reaches GitHub on an unsound table"
     expect(renamed).toEqual(["#4 -> Conv Phase 1 — stop the repeats"]);
     expect(created).toEqual([]);
     expect(code).toBe(0);
+  });
+
+  // ── #2124: --rename-from ─────────────────────────────────────────────────
+  const OLD_FAMILY = [
+    { number: 7, title: "Old Phase 1 — stop the repeats", description: null },
+    { number: 8, title: "Old Phase 2 — stop the false findings", description: null },
+  ];
+
+  test("#2124: --rename-from --write renames the old family in place and creates nothing", async () => {
+    const { code, created, renamed } = await run(SOUND, ["--rename-from", "Old", "--write"], OLD_FAMILY);
+    expect(renamed).toEqual([
+      "#7 -> Conv Phase 1 — stop the repeats",
+      "#8 -> Conv Phase 2 — stop the false findings",
+    ]);
+    expect(created).toEqual([]);
+    expect(code).toBe(0);
+  });
+
+  test("#2124: a phase in both families refuses, names both, and writes NOTHING", async () => {
+    const both = [{ number: 3, title: "Conv Phase 1 — stop the repeats", description: null }, ...OLD_FAMILY];
+    const err: string[] = [];
+    const error = console.error;
+    console.error = (...a: unknown[]) => void err.push(a.join(" "));
+    let r;
+    try {
+      r = await run(SOUND, ["--rename-from", "Old", "--write"], both);
+    } finally {
+      console.error = error;
+    }
+    expect(r.created).toEqual([]);
+    expect(r.renamed).toEqual([]);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(err.join("\n")).toContain("#3 Conv Phase 1 — stop the repeats");
+    expect(err.join("\n")).toContain("#7 Old Phase 1 — stop the repeats");
+  });
+
+  test("#2124: the same conflict under --json is a parseable refusal naming both", async () => {
+    const both = [{ number: 3, title: "Conv Phase 1 — stop the repeats", description: null }, ...OLD_FAMILY];
+    const out: string[] = [];
+    const log = console.log;
+    console.log = (s: string) => void out.push(s);
+    let r;
+    try {
+      r = await run(SOUND, ["--rename-from", "Old", "--write", "--json"], both);
+    } finally {
+      console.log = log;
+    }
+    expect(r.created).toEqual([]);
+    expect(r.renamed).toEqual([]);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    const payload = JSON.parse(out.join("\n"));
+    expect(payload.wrote).toBe("refused");
+    expect(payload.problems.join(" ")).toContain("#7 Old Phase 1");
   });
 });
 
