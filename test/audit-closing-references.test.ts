@@ -71,10 +71,16 @@ const SERVES = "## Criteria this serves\n\nSC-2737\n";
 /**
  * `gh`'s node shape: repository.owner.login + repository.name, and — since
  * SC-2737 — the issue body on the same node, from the workflow's one query.
+ * Since #2061 the title too: `criterionAnswer` reads both.
  */
-function closes(number: number, nameWithOwner: string = THIS_REPO, body: string = SERVES) {
+function closes(
+  number: number,
+  nameWithOwner: string = THIS_REPO,
+  body: string = SERVES,
+  title: string = "An issue",
+) {
   const [login, name] = nameWithOwner.split("/");
-  return { number, body, repository: { name, owner: { login } } };
+  return { number, title, body, repository: { name, owner: { login } } };
 }
 
 /** An ordinary diff: one file that is not a session record. */
@@ -107,6 +113,7 @@ function run(
   payload: string | { [RAW]: string },
   repo: string | null = THIS_REPO,
   env: Record<string, string> = {},
+  cwd: string = join(import.meta.dir, ".."),
 ): { code: number; err: string; out: string } {
   const file = join(scratch, "payload.json");
   writeFileSync(file, typeof payload === "string" ? withTotal(payload) : payload[RAW]);
@@ -117,7 +124,7 @@ function run(
   delete base.RUNGATE_REQUIRE_CLOSING_REF;
   delete base.GITHUB_RUN_ID;
   try {
-    const out = execFileSync(process.execPath, argv, { encoding: "utf-8", env: { ...base, ...env } });
+    const out = execFileSync(process.execPath, argv, { encoding: "utf-8", env: { ...base, ...env }, cwd });
     return { code: 0, err: "", out };
   } catch (e: any) {
     return { code: e.status ?? -1, err: String(e.stderr ?? ""), out: String(e.stdout ?? "") };
@@ -309,7 +316,7 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
   test("an issue saying it serves no criterion satisfies the second half", () => {
     const r = run(
       SCRIPT,
-      payload(CODE, [closes(42, THIS_REPO, "Cleanup. Serves no criterion.\n")]),
+      payload(CODE, [closes(42, THIS_REPO, "Cleanup. This serves no criterion.\n")]),
       THIS_REPO,
       ON,
     );
@@ -373,7 +380,7 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
       ON,
     );
     expect(r.code, r.out).toBe(REFUSE_EXIT);
-    expect(r.err).toContain("#9, whose body names neither");
+    expect(r.err).toContain("#9, whose title and body name neither");
   });
 
   test("the control — the foreign node listed FIRST still cannot lend its body", () => {
@@ -481,7 +488,7 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
     const substitutions = [...body.matchAll(/\$\{([^}]+)\}/g)].map(x => x[1]!.trim());
     expect(substitutions.length, "no interpolation left — this guard would be vacuous").toBeGreaterThan(2);
     const foreign = substitutions.filter(
-      s => !/^(f\.\w+|f\.issues\.join\(", #"\)|prNumber|NO_CRITERION_DECLARATION)$/.test(s),
+      s => !/^(f\.\w+|f\.issues\.join\(", #"\)|prNumber|NAMES_NONE)$/.test(s),
     );
     expect(
       foreign,
@@ -494,11 +501,81 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
     const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "closing-references.yml"), "utf-8");
     expect(yml).toMatch(/types:\s*\[[^\]]*\bedited\b[^\]]*\]/);
     expect(yml).toContain("files(first: 100) { nodes { path } }");
-    expect(yml).toMatch(/closingIssuesReferences\(first: \d+\) \{ totalCount\s*nodes \{ number body /);
+    expect(yml).toMatch(/closingIssuesReferences\(first: \d+\) \{ totalCount\s*nodes \{ number title body /);
     expect(yml).toContain("closingIssuesTotal: .closingIssuesReferences.totalCount");
     expect(yml).toContain("RUNGATE_REQUIRE_CLOSING_REF: ${{ vars.RUNGATE_REQUIRE_CLOSING_REF }}");
     const invokeLine = yml.split("\n").find(l => l.includes("audit-closing-references.ts"));
     expect(invokeLine, "closing-references.yml no longer invokes the script").toBeDefined();
     expect(invokeLine).toContain('--repo "$GITHUB_REPOSITORY"');
+  });
+});
+
+/**
+ * #2061 (SC-2737): the closing check asks "has this issue answered the
+ * criterion question" through `criterionAnswer`, the one decider the
+ * `needs-criterion` label and the `criteria-named` reading already use.
+ *
+ * Its own copy disagreed with them three ways, each measured against the
+ * last 400 issues on 2026-11-13: it accepted any `SC-<digits>`, so the 37
+ * open payload issues naming `CRC-…` criteria were refused a closing PR while
+ * the board counted them answered; it accepted a NONEXISTENT `SC-` id; and it
+ * read "serves no criterion" in any case, in the body only. Every case below
+ * fails against that copy.
+ */
+describe("#2061: the closing check and the board answer the criterion question the same way", () => {
+  const payload = (refs: unknown[], files: unknown[] = CODE) =>
+    JSON.stringify({ number: 2061, body: "Some change.\n", closingIssuesReferences: refs, files });
+
+  test("an issue naming a payload criterion (not SC-<N>) satisfies the second half", () => {
+    const r = run(SCRIPT, payload([closes(42, THIS_REPO, "## Criteria this serves\n\nCRC-B4\n")]), THIS_REPO, ON);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("closing references OK");
+  });
+
+  test("an SC id no spec states does not, and the mutant does not refuse it", () => {
+    const p = payload([closes(42, THIS_REPO, "## Criteria this serves\n\nSC-9998\n")]);
+    const real = run(SCRIPT, p, THIS_REPO, ON);
+    expect(real.code).toBe(REFUSE_EXIT);
+    expect(real.err).toContain("#42, whose title and body name neither");
+    expect(run(buildMutant(), p, THIS_REPO, ON).code).toBe(0);
+  });
+
+  test("the declaration in the TITLE answers it, as it does for the label", () => {
+    const r = run(
+      SCRIPT,
+      payload([closes(42, THIS_REPO, "Tidy the helper.\n", "Rename a helper — serves no criterion")]),
+      THIS_REPO,
+      ON,
+    );
+    expect(r.code, r.err).toBe(0);
+  });
+
+  test("the declaration is the exact words: a capitalised one is refused, exactly as the label reads it", () => {
+    const r = run(SCRIPT, payload([closes(42, THIS_REPO, "Cleanup. Serves no criterion.\n")]), THIS_REPO, ON);
+    expect(r.code).toBe(REFUSE_EXIT);
+    expect(r.err, "the refusal must print the exact words to write").toContain('"serves no criterion"');
+  });
+
+  test("a node with no title is UNMEASURED, not an issue that declared nothing", () => {
+    const node = { number: 42, body: SERVES, repository: { name: "rungate", owner: { login: "hornjason" } } };
+    const real = run(SCRIPT, payload([node]), THIS_REPO, ON);
+    expect(real.code).toBe(REFUSE_EXIT);
+    expect(real.err).toContain("carries no title");
+    expect(run(buildMutant(), payload([node]), THIS_REPO, ON).code).toBe(0);
+  });
+
+  test("a spec sweep that cannot be taken is UNMEASURED, and the mutant does not refuse", () => {
+    // `scratch` has no specs/, so no criterion id can be read from it. Read as
+    // "no ids", every issue that names one would be refused for naming none.
+    const p = payload([closes(42)]);
+    const real = run(SCRIPT, p, THIS_REPO, ON, scratch);
+    expect(real.code).toBe(REFUSE_EXIT);
+    expect(real.err).toContain("spec sweep");
+    expect(real.err).toContain("UNMEASURED");
+    expect(run(buildMutant(), p, THIS_REPO, ON, scratch).code).toBe(0);
+    // The control: a session-record-only diff owes no criterion, so the same
+    // unreadable tree does not stop it.
+    const record = run(SCRIPT, payload([], [{ path: "project-state.json" }]), THIS_REPO, ON, scratch);
+    expect(record.code, record.err).toBe(0);
   });
 });

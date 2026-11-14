@@ -64,6 +64,32 @@ describe("#2020: criterionAnswer — the one decider", () => {
     expect(snapshot, "criteria-named must read criterionAnswer, not its own copy").toContain("criterionAnswer(");
   });
 
+  test("#2061: the words are written once, so no copy can hide behind another constant", () => {
+    // The `.includes(NAMES_NONE)` count above could not see the closing
+    // check's copy: it matched `.includes(NO_CRITERION_DECLARATION)` on a
+    // lowercased body, a second decider under a second name (a detector
+    // narrower than what it detects). The words as a string literal, in any
+    // quote, are the population; the comment lines describing them are not.
+    const literal = /(["'`])serves no criterion\1/i;
+    const sites: string[] = [];
+    for (const dir of ["lib", "scripts"]) {
+      for (const f of readdirSync(join(ROOT, dir), { recursive: true }) as string[]) {
+        if (!f.endsWith(".ts")) continue;
+        for (const line of readFileSync(join(ROOT, dir, f), "utf8").split("\n")) {
+          if (/^\s*(\/\/|\*)/.test(line)) continue;
+          if (literal.test(line)) sites.push(`${dir}/${f}`);
+        }
+      }
+    }
+    expect(sites, "spell the declaration as NAMES_NONE from lib/board-mirror.ts, never a second literal").toEqual([
+      "lib/board-mirror.ts",
+    ]);
+    const closing = readFileSync(join(ROOT, "lib/closing-reference-audit.ts"), "utf8");
+    expect(closing, "closing-references must read criterionAnswer, not its own copy").toContain("criterionAnswer(");
+    expect(closing, "closing-references must read answerableIds, not its own id set").toContain("answerableIds(");
+    expect(closing, "an SC-<digits> pattern is a second idea of what a criterion is").not.toMatch(/SC-\\d/);
+  });
+
   test("an id two specs both state still answers, and the id set is built in one place", () => {
     // Review round 1 of #2032: the label and criteria-named read the sweep's
     // union without its collisions while finding-promotion read both, so an
