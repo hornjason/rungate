@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import type { ProjectScan } from "./types";
 import { OWNED_FILES, ownedFilesTable } from "../scaffold/owned-files";
+import { ALIGNMENT_PROCESS_RULE_FILE, alignmentProcessRule } from "../scaffold/process-rules";
 import { commandRoutingTable } from "../cli-commands";
 import { isHarnessItself } from "../harness-identity";
 import { typecheckDecision } from "../typescript-project";
@@ -439,6 +440,14 @@ Run one as \`${cliPrefix} <command>\`.
 
 ${commandRoutingTable()}
 `,
+  });
+
+  // #2049, ADR-014 decision 4: the four-step process, from the one source
+  // this repository's own rule 9 is checked against. Scoped only here, where
+  // AGENTS.md already carries rule 9 at launch — `lib/scaffold/process-rules.ts`.
+  rules.push({
+    filename: ALIGNMENT_PROCESS_RULE_FILE,
+    content: alignmentProcessRule({ scoped: isHarnessItself(scan.root) }),
   });
 
   rules.push({
