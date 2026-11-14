@@ -384,8 +384,12 @@ describe("#2124: milestonePlan renames a whole family when told the old name", (
 
   test("a phase present in BOTH families is a conflict naming both, never a silent pick", () => {
     const NEW_1 = { number: 3, title: "Conv Phase 1 — stop the repeats", description: null };
-    const { conflicts } = milestonePlan(spec, [NEW_1, OLD_1, OLD_2], "Conv", "Old");
+    const { conflicts, actions, unmanaged } = milestonePlan(spec, [NEW_1, OLD_1, OLD_2], "Conv", "Old");
     expect(conflicts).toEqual([{ phase: 1, current: NEW_1, previous: OLD_1 }]);
+    // Review of #2126: the conflicting old milestone is in no action, so it
+    // must be reported as left alone rather than vanish from the output.
+    expect(actions.some(a => a.existing?.number === 7)).toBe(false);
+    expect(unmanaged.map(m => m.number)).toContain(7);
   });
 
   test("an old-family milestone for a phase the table does not hold is left alone and reported", () => {

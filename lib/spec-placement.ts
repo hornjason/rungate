@@ -79,8 +79,9 @@ export const PHASE_VALUE = new RegExp(`^${PHASE_TOKEN}$`);
  * them a case is holding up: `.claude/rules/checks-must-be-able-to-fail.md`,
  * fourth shape.
  *
- * The prefix is escaped, so a family name containing regex punctuation is
- * matched literally rather than compiled.
+ * The family is compared as a string against `readMilestoneTitle`'s reading,
+ * never compiled into a pattern, so a family name containing regex
+ * punctuation (`C++`) means itself.
  *
  * Not to be confused with `phaseOf` in `lib/board-mirror.ts`, which reads a
  * phase number out of ANY title regardless of family. That one answers a
@@ -541,7 +542,12 @@ export function milestonePlan(
     const current = liveByPhase.get(phase);
     if (current) conflicts.push({ phase, current, previous });
   }
-  const adopted = new Set([...previousByPhase.values()].map(m => m.number));
+  // Adopted means USED as a phase's existing milestone. A conflicting phase
+  // keeps its current-family milestone, so its old one is in no action and
+  // must stay in `unmanaged` rather than vanish (review of #2126).
+  const adopted = new Set(
+    [...previousByPhase].filter(([phase]) => !liveByPhase.has(phase)).map(([, m]) => m.number),
+  );
 
   const actions = [...byPhase.keys()]
     .sort((a, b) => a - b)
