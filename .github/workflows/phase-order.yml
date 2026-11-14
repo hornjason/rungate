@@ -36,13 +36,23 @@
 # an issue's author can edit its body without any access, and that would put
 # the board token behind an event anybody can raise.
 #
+# `reopened` IS a trigger (#2099): reopening #1964 made the plan derive an
+# edge nothing wrote, and a stage proof stayed red in every PR until a hand
+# run. Unlike the other two it does not always need access — an author can
+# reopen an issue they closed themselves — and that narrow case is accepted
+# rather than keeping the board-token step off it. Skipping that step on one
+# event would mean reading which event fired, which the paragraph above says
+# loses work when a queued run is dropped; and since no step reads the event,
+# what an author can buy this way is one more idempotent run of code from the
+# default branch, never a different write.
+#
 # Every `uses:` is pinned to a full commit SHA. `test/phase-order-workflow.test.ts`
 # asserts that and the rest.
 name: Phase order — re-link on a milestone change
 
 on:
   issues:
-    types: [milestoned, demilestoned]
+    types: [milestoned, demilestoned, reopened]
 
 permissions:
   contents: read
@@ -113,6 +123,12 @@ jobs:
           PREFIX: ${{ steps.prefix.outputs.prefix }}
         run: |
           set -euo pipefail
+          # #2099: the prefix step failed, so PREFIX is empty and would exclude
+          # nothing — the engine's own family would be linked here.
+          if [ -z "${PREFIX:-}" ]; then
+            echo "::error::PREFIX is empty — the prefix step did not produce board.milestonePrefix, so the engine's family cannot be told apart from the others. Nothing was written."
+            exit 1
+          fi
           families=$(gh api --paginate "repos/$GITHUB_REPOSITORY/milestones?state=open&per_page=100" --jq '.[] | .title | @json' | bun -e 'import { familyOf } from "./lib/spec-placement"; const seen = new Set<string>(); for (const line of (await Bun.stdin.text()).split("\n")) { if (line.trim() === "") continue; const f = familyOf(JSON.parse(line)); if (f && f !== process.env.PREFIX) seen.add(f); } process.stdout.write([...seen].sort().join("\n"))')
           refused=""
           while IFS= read -r family; do

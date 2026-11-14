@@ -1327,6 +1327,36 @@ describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase 
     }
   });
 
+  test("#2099: a failed label write does not stop the rest; the run ends REFUSAL_EXIT naming it", async () => {
+    // Before #2099 the first failed `gh issue edit` threw out of the loop, and
+    // the rest of the batch waited for the next run with no record of which.
+    const gh = fakeGh([node(21, "Pipeline Phase 6"), node(22, "Pipeline Phase 6"), node(23, "Pipeline Phase 6")]);
+    const exec = (args: readonly string[]): string => {
+      const out = gh.exec(args);
+      if (args[0] === "issue" && args[2] === "22") throw new Error("gh issue exited 1: HTTP 502");
+      return out;
+    };
+    const lines: string[] = [];
+    const code = await queueLabelRun({
+      repo: "o/r",
+      prefix: "Pipeline",
+      prefixUnmeasured: null,
+      queueLabel: "engine",
+      write: true,
+      exec,
+      log: s => lines.push(s),
+    });
+    expect(gh.edits.map(e => e[2]), "a failure stopped the batch").toEqual(["21", "22", "23"]);
+    expect(code).toBe(REFUSAL_EXIT);
+    const said = lines.join("\n");
+    expect(said, "the failed issue is not named").toContain("#22");
+    expect(said).toContain("HTTP 502");
+    // The two that succeeded are reported as labelled, and #22 is not.
+    expect(said).toContain("labelled  #21");
+    expect(said).toContain("labelled  #23");
+    expect(said).not.toContain("labelled  #22");
+  });
+
   test("SC-2609: one cut label list refuses the whole run, so nothing is labelled from a partial read", async () => {
     const gh = fakeGh([node(11, "Pipeline Phase 6"), node(14, "Pipeline Phase 6", ["x"], true)]);
     const code = await queueLabelRun({

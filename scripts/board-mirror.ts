@@ -161,11 +161,27 @@ export async function queueLabelRun(opts: {
     log(`board-mirror: every open "${opts.prefix} Phase" issue carries "${opts.queueLabel}" — nothing to add.`);
     return 0;
   }
+  // Every repair is attempted, and the run ends red naming each that failed
+  // (#2099). The first failure used to throw out of the loop, so the rest of
+  // the batch waited for the next run with no record of which were skipped.
+  const failed: string[] = [];
   for (const n of add) {
-    if (opts.write) exec(["issue", "edit", String(n), "--repo", opts.repo, "--add-label", opts.queueLabel]);
+    if (opts.write) {
+      try {
+        exec(["issue", "edit", String(n), "--repo", opts.repo, "--add-label", opts.queueLabel]);
+      } catch (e) {
+        failed.push(`#${n} (${(e as Error).message})`);
+        log(`  FAILED     #${n}  + ${opts.queueLabel}: ${(e as Error).message}`);
+        continue;
+      }
+    }
     log(`  ${opts.write ? "labelled" : "would label"}  #${n}  + ${opts.queueLabel}`);
   }
   if (!opts.write) log(`\n  (reporting only — pass --write to apply)`);
+  if (failed.length > 0) {
+    log(`board-mirror: ${failed.length} of ${add.length} label write(s) failed: ${failed.join(", ")}. Every other was attempted.`);
+    return REFUSAL_EXIT;
+  }
   return 0;
 }
 

@@ -43,10 +43,14 @@ const depsSteps = () => steps.filter(s => runOf(s).includes("scripts/plan-deps.t
 const mirrorSteps = () => steps.filter(s => runOf(s).includes("scripts/board-mirror.ts"));
 
 describe("#2015: .github/workflows/phase-order.yml re-writes phase order when a milestone changes", () => {
-  test("#2015: it exists and fires on milestoned and demilestoned issues, and nothing else", () => {
+  test("#2015 / #2099: it fires on milestoned, demilestoned and reopened issues, and nothing else", () => {
     expect(text.length, "phase-order.yml does not exist").toBeGreaterThan(0);
     expect(Object.keys(doc.on)).toEqual(["issues"]);
-    expect(doc.on.issues.types).toEqual(["milestoned", "demilestoned"]);
+    // #2099 item 3: reopening #1964 made the plan derive an edge nothing
+    // wrote, and a stage proof stayed red in every PR until a hand run.
+    expect(doc.on.issues.types).toEqual(["milestoned", "demilestoned", "reopened"]);
+    // An author with no access can raise these, so they stay off.
+    for (const open of ["opened", "edited"]) expect(doc.on.issues.types).not.toContain(open);
   });
 
   test("#2015: it runs plan-deps with --write against this repository, for the engine's family", () => {
@@ -186,7 +190,7 @@ describe("#2062: every milestone family is linked on every run, whichever event 
    * `bash -eo pipefail`, a stricter shell than the one Actions uses, so it
    * could not see the missing pipefail the review found (round 2).
    */
-  const step = (opts: { titles?: string[]; ghFails?: boolean; refuse?: string }) => {
+  const step = (opts: { titles?: string[]; ghFails?: boolean; refuse?: string; prefix?: string }) => {
     const dir = mkdtempSync(join(tmpdir(), "phase-order-step-"));
     try {
       const log = join(dir, "calls");
@@ -203,7 +207,7 @@ describe("#2062: every milestone family is linked on every run, whichever event 
       );
       const r = spawnSync("bash", ["-e", "-c", runOf(allFamilies())], {
         cwd: ROOT,
-        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PREFIX: "Pipeline", GITHUB_REPOSITORY: "o/r" },
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PREFIX: opts.prefix ?? "Pipeline", GITHUB_REPOSITORY: "o/r" },
         encoding: "utf-8",
       });
       const calls = existsSync(log) ? readFileSync(log, "utf-8").split("\n").filter(Boolean) : [];
@@ -248,6 +252,16 @@ describe("#2062: every milestone family is linked on every run, whichever event 
     expect(r.calls).toEqual([call("Convergence"), call("Spec Two")]);
     expect(r.status).toBe(1);
     expect(r.out).toContain("::error::plan-deps refused for [Convergence]");
+  });
+
+  test("#2099: with the prefix step failed, the step refuses by name and links nothing", () => {
+    // `PREFIX=""` excludes nothing, so the engine's own family would be linked
+    // through this loop, breaking the prefix step's "Nothing was written".
+    const r = step({ titles: ["Pipeline Phase 6", "Convergence Phase 5"], prefix: "" });
+    expect(r.calls, "a family was linked with no engine prefix to exclude").toEqual([]);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("::error::");
+    expect(r.out, "the refusal does not name the empty prefix").toContain("PREFIX is empty");
   });
 });
 
