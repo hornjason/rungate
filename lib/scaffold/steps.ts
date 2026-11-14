@@ -1145,15 +1145,16 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
     // Check if monolith has roles/hooks/compliance to split
     if (existing.roles || existing.hooks || existing.compliance) {
       splitMonolithToDirectory(root, existing, actions);
+      // #2050: the split wrote a fresh config.json, which is the directory
+      // layout's file and gets the same repair as any other.
+      reconcileLabelKeys(rungateDir, actions);
     } else {
       // Simple monolith without split-worthy content — audit only
       // No rungateDir on this path (the monolith layout), so pruning has
       // nowhere to write and is not offered rather than silently not happening.
       auditExistingConfig(existing, scannedPages, scannedConsumers, actions);
       // #2050: the monolith is not rewritten, so each missing key is named.
-      for (const line of labelKeyRepairs(existing).lines) {
-        actions.push(line.startsWith("SET: ") ? "UNSET: board.expediteLabel — no expedite lane; the monolith layout is not rewritten, so add it under \"board\" yourself" : line);
-      }
+      actions.push(...labelKeyRepairs(existing, { file: ".claude/rungate.json", rewrites: false }).lines);
     }
   } else {
     // No config exists — create directory structure
@@ -1282,10 +1283,19 @@ export function expediteLabelDefault(path: string = BOARD_DEFAULTS_TEMPLATE): st
  *
  * A `board` that is present and not an object is refused, never replaced:
  * overwriting it would discard whatever the consumer put there.
+ *
+ * `file` is the config the reader actually has, and every line names it: a
+ * monolith consumer has `.claude/rungate.json` and no directory file. With
+ * `rewrites: false` (the monolith, which scaffold never rewrites) a missing
+ * expedite key is reported UNSET with the value to add, never SET.
  */
 export function labelKeyRepairs(
   config: Record<string, any>,
-  expediteDefault: string | null = expediteLabelDefault(),
+  {
+    expediteDefault = expediteLabelDefault(),
+    file = ".claude/rungate/config.json",
+    rewrites = true,
+  }: { expediteDefault?: string | null; file?: string; rewrites?: boolean } = {},
 ): {
   config: Record<string, any>;
   changed: boolean;
@@ -1297,7 +1307,7 @@ export function labelKeyRepairs(
       config,
       changed: false,
       lines: [
-        "REFUSED: board.expediteLabel / board.filingOverrideLabel (board in .claude/rungate/config.json is not an object, so neither key could be read or written)",
+        `REFUSED: board.expediteLabel / board.filingOverrideLabel (board in ${file} is not an object, so neither key could be read or written)`,
       ],
     };
   }
@@ -1310,13 +1320,18 @@ export function labelKeyRepairs(
     lines.push(
       "UNSET: board.expediteLabel — no expedite lane, and none was written: templates/board-defaults.json is " +
         'missing or unreadable in this rungate installation. To set one, add "expediteLabel": "<label>" under ' +
-        '"board" in .claude/rungate/config.json',
+        `"board" in ${file}`,
+    );
+  } else if (!isSet(board.expediteLabel) && !rewrites) {
+    lines.push(
+      `UNSET: board.expediteLabel — no expedite lane. Scaffold does not rewrite ${file}; to have one, add ` +
+        `"expediteLabel": "${expediteDefault}" under "board" there`,
     );
   } else if (!isSet(board.expediteLabel)) {
     next = { ...config, board: { ...board, expediteLabel: expediteDefault } };
     changed = true;
     lines.push(
-      `SET: board.expediteLabel = "${expediteDefault}" in .claude/rungate/config.json — an open issue ` +
+      `SET: board.expediteLabel = "${expediteDefault}" in ${file} — an open issue ` +
         `carrying that label goes to the top of Ready. Rename it there if you like.`,
     );
   }
@@ -1324,7 +1339,7 @@ export function labelKeyRepairs(
     lines.push(
       "UNSET: board.filingOverrideLabel — this project has no FindingArbiter waiver, so a refused filing stays " +
         "refused. Scaffold never writes one: a waiver's name should be chosen, not defaulted. To set one, add " +
-        '"filingOverrideLabel": "<label>" under "board" in .claude/rungate/config.json',
+        `"filingOverrideLabel": "<label>" under "board" in ${file}`,
     );
   }
   return { config: next, changed, lines };
