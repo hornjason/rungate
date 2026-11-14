@@ -81,6 +81,13 @@ const AUDIT_SOURCE = join(REPO, "scripts", "audit-specs.ts");
  * trusting this comment.
  */
 const CHOKEPOINT_SOURCE = join(REPO, "lib", "write-spec.ts");
+/**
+ * #2135: the guard reads fences through `lib/markdown-fence.ts`, its one
+ * relative import. Carried into the mutant tree verbatim, or the mutant guard
+ * dies on module resolution and reads as a guard that held.
+ */
+const FENCE_SOURCE = join(REPO, "lib", "markdown-fence.ts");
+const GUARD_IMPORTS = ["./markdown-fence"];
 
 /** The one line the write decision is made on, and the single site mutated. */
 const DECISION = 'return reading.status === "authored";';
@@ -204,6 +211,8 @@ function buildMutantTree(): string {
   // #1552: copied verbatim. Its one relative import, `./derived-spec`, now
   // resolves to the mutant guard beside it.
   writeFileSync(join(dir, "lib", "write-spec.ts"), readFileSync(CHOKEPOINT_SOURCE, "utf-8"));
+  // #2135: the guard's one relative import, copied so it resolves in-tree.
+  writeFileSync(join(dir, "lib", "markdown-fence.ts"), readFileSync(FENCE_SOURCE, "utf-8"));
   writeFileSync(
     join(dir, "scripts", "audit-specs.ts"),
     retargetImports(readFileSync(AUDIT_SOURCE, "utf-8")),
@@ -321,9 +330,16 @@ describe("#1286: a spec a generator owns is not written by --fix", () => {
     ).toBe(1);
   });
 
-  test("lib/derived-spec.ts has no relative imports, so the mutant can load", () => {
+  test("lib/derived-spec.ts imports only what the mutant tree carries, so the mutant can load", () => {
     const src = readFileSync(GUARD_SOURCE, "utf-8");
-    expect([...src.matchAll(/from "(\.[^"]*)"/g)].map((m) => m[1])).toEqual([]);
+    expect([...src.matchAll(/from "(\.[^"]*)"/g)].map((m) => m[1])).toEqual(GUARD_IMPORTS);
+    // And the carried module imports nothing relative itself, or its copy
+    // would die the same way one level down.
+    const fence = readFileSync(FENCE_SOURCE, "utf-8");
+    expect([...fence.matchAll(/from "(\.[^"]*)"/g)].map((m) => m[1])).toEqual([]);
+    for (const spec of GUARD_IMPORTS) {
+      expect(existsSync(join(mutantDir, "lib", `${spec.slice(2)}.ts`)), `${spec} is not in the mutant tree`).toBe(true);
+    }
   });
 
   test("the mutant audit-specs keeps only the in-tree specifiers relative", () => {

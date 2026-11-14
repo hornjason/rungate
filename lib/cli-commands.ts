@@ -61,6 +61,8 @@
  */
 import { spawnSync } from "child_process";
 
+import { fencedBlocks } from "./markdown-fence";
+
 export interface CliCommand {
   /** The script this runs, relative to the package root. Must be in `files`. */
   script: string;
@@ -492,8 +494,14 @@ export function commandRoutingTable(): string {
  * not the document").
  */
 export function codeSpans(markdown: string): string {
-  const fenced = markdown.match(/```[\s\S]*?```/g) ?? [];
-  const withoutFences = markdown.replace(/```[\s\S]*?```/g, "\n");
+  // Fenced blocks through `lib/markdown-fence.ts` (#2135). The regex this
+  // replaced ignored `~~~` fences and ended a ```` block at its first ```.
+  const blocks = fencedBlocks(markdown);
+  const fenced = blocks.map(b => markdown.slice(b.start, b.end));
+  let withoutFences = markdown;
+  for (const b of [...blocks].reverse()) {
+    withoutFences = withoutFences.slice(0, b.start) + "\n" + withoutFences.slice(b.end);
+  }
   const inline = withoutFences.match(/`[^`\n]+`/g) ?? [];
   return [...fenced, ...inline].join("\n");
 }
