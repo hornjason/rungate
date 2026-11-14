@@ -32,6 +32,7 @@ import {
   bodyWithDecline,
   decline,
   declineViolations,
+  bankForRetry,
   idFamily,
   placementCount,
   promote,
@@ -1623,5 +1624,44 @@ describe("#2066 review round 1", () => {
     expect(cli).toMatch(/const specKey = relative\(ROOT, target\)/);
     // The literal path the sweep can follow, agreeing with the reader's constant.
     expect(cli).toContain(`join(ROOT, "${DEFERRAL_BANK}")`);
+  });
+});
+
+describe("#2066 review round 2", () => {
+  test("a criterion ticked with a capital X is seen by every new scan, so no id is handed out twice", () => {
+    // Review: `[X]` is accepted by every other criterion matcher in the tree.
+    const capital = CRC_SPEC.replace("- [x] CRC-M16:", "- [X] CRC-M16:");
+    expect(idFamily(capital)).toBe("CRC");
+    const root = scratch(capital);
+    try {
+      const out = promote(inputFor(root, { group: "M" }), REGISTRY);
+      expect(out.promoted).toBe(true);
+      if (out.promoted) expect(out.id, "CRC-M16 was invisible and its id handed out again").toBe("CRC-M17");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    const placed = specWithCriterion(capital, "- [ ] CRC-M17: lib/z.ts contains [z] — third", "CRC-M17", null);
+    expect(placed.ok).toBe(true);
+    if (placed.ok) expect(placed.text.split("\n").indexOf("- [ ] CRC-M17: lib/z.ts contains [z] — third")).toBeGreaterThan(
+      placed.text.split("\n").findIndex(l => l.startsWith("- [X] CRC-M16:")),
+    );
+  });
+
+  test("a retry repairs a bank one behind, and refuses a bank further out", () => {
+    // Review: the spec write landed, the bank write failed, and a retry saw
+    // no count change so never looked at the bank again.
+    const bank = (n: number) => `${JSON.stringify({ deferred: [{ path: "specs/A.md", criteria: n }] }, null, 2)}\n`;
+    const behind = bankForRetry(bank(31), "specs/A.md", 32);
+    expect(behind).toEqual({ ok: true, text: bank(32) });
+    expect(bankForRetry(bank(32), "specs/A.md", 32), "already in step: nothing to write").toEqual({ ok: true, text: null });
+    const far = bankForRetry(bank(29), "specs/A.md", 32);
+    expect(far.ok).toBe(false);
+    if (!far.ok) expect(far.refusal).toBe("BANK_DRIFT");
+  });
+
+  test("the CLI checks the bank on a retry into a deferred spec, not only when the count moved", () => {
+    const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
+    expect(cli).toContain("bankForRetry(");
+    expect(cli.indexOf("bankForRetry(")).toBeLessThan(cli.indexOf("if (!write) {\n  const where"));
   });
 });

@@ -33,6 +33,7 @@ import { tmpdir } from "os";
 import { join, relative, sep } from "path";
 
 import {
+  bankForRetry,
   bankWithPromotion,
   decline,
   placementCount,
@@ -403,7 +404,11 @@ const bankPath = join(ROOT, ".claude/spec-deferral-ratchet.json");
 const specKey = relative(ROOT, target).split(sep).join("/");
 const counts = { before: placementCount(content), after: placementCount(inserted.text) };
 let bankText: string | null = null;
-if (counts.before.deferred && counts.after.criteria !== counts.before.criteria) {
+// A new criterion moves the bank from its old count; a RETRY (the line is
+// already written) checks it, and repairs it when an earlier run's bank
+// write failed after its spec write landed (review of #2105).
+const moved = counts.after.criteria !== counts.before.criteria;
+if (counts.before.deferred && (moved || result.alreadyWritten)) {
   let current: string;
   try {
     current = readFileSync(bankPath, "utf8");
@@ -411,7 +416,9 @@ if (counts.before.deferred && counts.after.criteria !== counts.before.criteria) 
     console.error(`REFUSED BANK_DRIFT: ${spec} is deferred and ${DEFERRAL_BANK} could not be read: ${(e as Error).message}`);
     process.exit(PROMOTION_EXIT);
   }
-  const banked = bankWithPromotion(current, specKey, counts.before.criteria, counts.after.criteria);
+  const banked = moved
+    ? bankWithPromotion(current, specKey, counts.before.criteria, counts.after.criteria)
+    : bankForRetry(current, specKey, counts.after.criteria);
   if (!banked.ok) {
     console.error(`REFUSED ${banked.refusal}: ${banked.why}`);
     process.exit(PROMOTION_EXIT);

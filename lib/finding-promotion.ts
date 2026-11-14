@@ -441,7 +441,7 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
   // finding (review of #2065), so the existing line is the answer.
   const statement = promotionStatement(input);
   for (const raw of specText.split("\n")) {
-    const m = /^- \[[ x]\] ([A-Z]+-[A-Z]?\d+): (.*)$/.exec(raw);
+    const m = /^- \[[ xX]\] ([A-Z]+-[A-Z]?\d+): (.*)$/.exec(raw);
     if (m && m[2] === statement) {
       return {
         promoted: true,
@@ -511,7 +511,7 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
 }
 
 /** A criterion id at the start of a checkbox line, any family: `SC-12`, `CRC-M17`. */
-const ANY_CRITERION_LINE = /^- \[[ x]\] ([A-Z]+)-([A-Z]?)(\d+):/;
+const ANY_CRITERION_LINE = /^- \[[ xX]\] ([A-Z]+)-([A-Z]?)(\d+):/;
 
 /**
  * The id family a spec's criteria use — #2066.
@@ -670,6 +670,32 @@ export function bankWithPromotion(
   }
   row.criteria = after;
   return { ok: true, text: `${JSON.stringify(bank, null, 2)}\n` };
+}
+
+/**
+ * The bank on a RETRY, when the criterion is already in the spec — review of
+ * #2105.
+ *
+ * A run whose spec write landed and whose bank write failed leaves the bank
+ * one behind. A retry finds the line already written, sees no count change,
+ * and without this would report success over a bank that disagrees with the
+ * spec, so the next unrelated promotion is the one refused. So: in step, write
+ * nothing (`text: null`); exactly one behind, move it; further out, refuse.
+ */
+export function bankForRetry(
+  bankText: string,
+  specPath: string,
+  count: number,
+): { ok: true; text: string | null } | { ok: false; refusal: PromotionRefusal; why: string } {
+  let bank: { deferred?: { path: string; criteria: number }[] };
+  try {
+    bank = JSON.parse(bankText);
+  } catch (e) {
+    return { ok: false, refusal: "BANK_DRIFT", why: `the deferral bank is not JSON (${(e as Error).message})` };
+  }
+  const row = Array.isArray(bank.deferred) ? bank.deferred.find(d => d.path === specPath) : undefined;
+  if (row?.criteria === count) return { ok: true, text: null };
+  return bankWithPromotion(bankText, specPath, count - 1, count);
 }
 
 /** Whether `specText` is deferred, and how many criteria it states, as `spec-placement` reads them. */
