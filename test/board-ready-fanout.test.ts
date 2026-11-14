@@ -16,7 +16,7 @@
  * agreement across a generated grid rather than trusting the import.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { isReady, isUnblocked } from "../lib/board-mirror";
@@ -2039,6 +2039,63 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
       await fake.stop();
     }
   }, 60_000);
+
+  // #2165: the generated board-ready.yml names no project id (SC-2745), so
+  // the published CLI has to find the board in the project's own config.
+  async function runWithout(fake: FakeGitHub, args: readonly string[]): Promise<{ code: number; out: string }> {
+    const p = Bun.spawn(["bun", join(ROOT, "scripts", "board-ready.ts"), "--repo", "o/n", "--actor", "someone", ...args], {
+      cwd: ROOT,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, BOARD_PROJECT_TOKEN: "fixture-token", RUNGATE_GITHUB_API_BASE: fake.url },
+    });
+    const [stdout, stderr] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    await p.exited;
+    return { code: p.exitCode ?? -1, out: stdout + stderr };
+  }
+
+  /** A project root whose config is this repository's, with `board.id` set to `id` (or removed). */
+  function treeWithBoard(id: string | null): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "board-ready-config-")));
+    const config = JSON.parse(readFileSync(join(ROOT, ".claude", "rungate", "config.json"), "utf-8"));
+    if (id === null) delete config.board.id;
+    else config.board.id = id;
+    mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+    writeFileSync(join(root, ".claude", "rungate", "config.json"), JSON.stringify(config, null, 2));
+    return root;
+  }
+
+  test("BR-81: without --project the board is board.id from config, and --project still wins (#2165)", async () => {
+    const promotable = plan({
+      items: [{ itemId: "PVTI_a", number: 101, status: "Backlog", blockedBy: 0, assignees: 0, milestone: FOCUS }],
+      openIssues: [101],
+    });
+    const configured = treeWithBoard(PROJECT);
+    const unconfigured = treeWithBoard(null);
+    const elsewhere = treeWithBoard("PVT_not_the_fixture");
+    let fake = startFakeGitHub(promotable);
+    try {
+      const read = await runWithout(fake, ["--top-up", "--write", "--project-root", configured]);
+      expect(read.code, read.out).toBe(0);
+      expect(fake.writes, read.out).toEqual([{ itemId: "PVTI_a", optionId: READY_OPT, fieldId: FIELD, projectId: PROJECT }]);
+      await fake.stop();
+
+      fake = startFakeGitHub(promotable);
+      const missing = await runWithout(fake, ["--top-up", "--project-root", unconfigured]);
+      expect(missing.code, missing.out).toBe(2);
+      expect(missing.out).toMatch(/UNMEASURED: .*--project.*board\.id/);
+      expect(fake.writes).toEqual([]);
+      await fake.stop();
+
+      fake = startFakeGitHub(promotable);
+      const flagged = await runWithout(fake, ["--top-up", "--write", "--project", PROJECT, "--project-root", elsewhere]);
+      expect(flagged.code, flagged.out).toBe(0);
+      expect(fake.writes.map(w => w.projectId), "config overrode an explicit --project").toEqual([PROJECT]);
+    } finally {
+      for (const d of [configured, unconfigured, elsewhere]) rmSync(d, { recursive: true, force: true });
+      await fake.stop();
+    }
+  }, 90_000);
 
   test("BR-75: a blocked incumbent of Ready is demoted, by its OWN item id", async () => {
     // The demotion path, and the one that carries both mutations #1935 names.

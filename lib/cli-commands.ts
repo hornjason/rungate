@@ -270,8 +270,9 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     script: "scripts/board-ready.ts",
     summary: "Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane",
     usage:
-      "rungate board-ready --repo <owner/name> --project <node-id> [--closed-issue <n>] [--top-up] " +
-      "[--moving-issue <n>] [--actor <login>] [--write]   (at least one of --closed-issue, --top-up)",
+      "rungate board-ready --repo <owner/name> [--project <node-id>] [--project-root <dir>] [--closed-issue <n>] " +
+      "[--top-up] [--moving-issue <n>] [--actor <login>] [--write]   (at least one of --closed-issue, --top-up; " +
+      "--project defaults to board.id in the rungate config)",
   },
   // Reads a `gh pr view`-shaped payload on stdin, which the dispatcher passes
   // through (`stdio: "inherit"`), or `--fixture` offline.
