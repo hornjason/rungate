@@ -319,7 +319,11 @@ const UNCLAIMED_RATCHET = 150;
 // #2051. A claim about what scaffold prints after it writes, which no
 // registered pattern expresses; test/human-steps.test.ts names it in a
 // declaring position.
-const CLAIMED_UNBINDABLE = 163;
+// 163 -> 164: SC-2746 ticked by `sync-sc-status --only SC-2746` on the PR for
+// #2048. A claim about which files scaffold owns and how, which no registered
+// pattern expresses; the `SC-2746` describe in test/dry-run-command.test.ts
+// names it in a declaring position.
+const CLAIMED_UNBINDABLE = 164;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
