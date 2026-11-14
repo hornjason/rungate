@@ -53,6 +53,7 @@
  */
 
 import { NAMES_NONE, answerableIds, criterionAnswer, specCriteriaIn } from "./board-mirror";
+import { idBoundedPattern } from "./sc-ids";
 import { declaredClosingIn } from "./local-work";
 
 /**
@@ -219,7 +220,12 @@ export interface ClosedIssue {
 export function closingCriteria(root: string): ClosingCriteria | null {
   const sweep = specCriteriaIn(root);
   if (sweep.reading === "UNMEASURED") return null;
-  return { ids: answerableIds(sweep), unticked: [...new Set(sweep.specs.flatMap(s => s.unticked))] };
+  // Only the ids ONE spec states (`sweep.ids`). A collided id is reported,
+  // never attributed (AI review of #2115): a tick could not say which spec's
+  // box to tick, so it is not demanded here either.
+  const unambiguous = new Set(sweep.ids);
+  const unticked = [...new Set(sweep.specs.flatMap(s => s.unticked))].filter(id => unambiguous.has(id));
+  return { ids: answerableIds(sweep), unticked };
 }
 
 /**
@@ -244,7 +250,7 @@ export const DOES_NOT_COMPLETE = "does not complete";
 
 /** Does this pull request body excuse `id` with the exact words? */
 export function excusesCriterion(prBody: string, id: string): boolean {
-  return new RegExp(`${DOES_NOT_COMPLETE} ${id}(?![\\w-])`).test(prBody);
+  return idBoundedPattern(`${DOES_NOT_COMPLETE} `, id).test(prBody);
 }
 
 /**

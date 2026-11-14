@@ -653,6 +653,16 @@ describe("#2005: closing a criterion's issue ticks the criterion, or says it doe
     expect(r.out).toContain("SC-9101");
   });
 
+  test("an id two specs both state is not demanded: it is ambiguous everywhere else too", () => {
+    // AI review of #2115. The sweep reports a collided id rather than
+    // attributing it, so a tick here could not say which spec's box to tick.
+    const root = tree(false);
+    writeFileSync(join(root, "specs", "OTHER-SPEC.md"), "# Other\n\n- [x] SC-9101: the same id, ticked here\n");
+    const r = run(SCRIPT, payload("Fixes #77\n"), THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(0);
+    expect(closingCriteria(root)!.unticked).toEqual([]);
+  });
+
   test("the sweep says which criteria are unticked, from the same read as the ids", () => {
     const root = tree(false);
     const sweep = specCriteriaIn(root);
