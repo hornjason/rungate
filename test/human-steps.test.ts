@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { unreadableFacts } from "../lib/branch-protection";
+import { protectionFactsFromPayload, unreadableFacts } from "../lib/branch-protection";
 import {
   PROJECT_TOKEN_SECRET,
   REQUIRE_CLOSING_REF_VARIABLE,
@@ -31,7 +31,7 @@ const allSet: HumanStepReadings = {
   slug: "o/n",
   secretPresent: read(true),
   requireClosingRef: read("true"),
-  protection: read({ branch: "main", contexts: ["test", "closing-references"] }),
+  protection: read({ branch: "main", contexts: ["test", "closing-references"], statusChecks: "required-checks" }),
   processChecks: ["closing-references"],
 };
 
@@ -41,13 +41,47 @@ describe("SC-2749: every human step still owed is one command", () => {
       ...allSet,
       secretPresent: read(false),
       requireClosingRef: read(null),
-      protection: read({ branch: "main", contexts: ["test"] }),
+      protection: read({ branch: "main", contexts: ["test"], statusChecks: "required-checks" }),
     });
     expect(lines).toHaveLength(3);
     expect(lines[0]).toStartWith(`OWED: gh secret set ${PROJECT_TOKEN_SECRET} -R o/n`);
     expect(lines[1]).toStartWith(`OWED: gh variable set ${REQUIRE_CLOSING_REF_VARIABLE} -R o/n --body true`);
     expect(lines[2]).toStartWith(
       "OWED: gh api -X POST repos/o/n/branches/main/protection/required_status_checks/contexts -f 'contexts[]=closing-references'",
+    );
+  });
+
+  // Review of #2154, round 2: the add-a-context call only works on a branch
+  // that already requires checks. A fresh repository's branch is unprotected,
+  // and the old line 404'd there — for exactly the audience it was written for.
+  test("an unprotected branch gets one PUT that protects it and requires only the missing checks", () => {
+    const lines = humanSteps({ ...allSet, protection: read({ branch: "main", contexts: [], statusChecks: "unprotected" }) });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toStartWith("OWED: gh api -X PUT repos/o/n/branches/main/protection --input - <<<'");
+    const body = JSON.parse(lines[0].match(/<<<'([^']*)'/)![1]);
+    expect(body).toEqual({
+      required_status_checks: { strict: false, contexts: ["closing-references"] },
+      enforce_admins: null,
+      required_pull_request_reviews: null,
+      restrictions: null,
+    });
+    expect(lines[0]).not.toContain("-X POST");
+  });
+
+  test("a protected branch requiring no checks is never sent a call that would replace its rule", () => {
+    const lines = humanSteps({ ...allSet, protection: read({ branch: "main", contexts: [], statusChecks: "no-required-checks" }) });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toStartWith("OWED: require closing-references on main");
+    expect(lines[0], "PUT replaces the existing protection; POST 404s without required checks").not.toMatch(/-X (PUT|POST)/);
+  });
+
+  test("the protection probe says which of the three a branch is", () => {
+    expect(protectionFactsFromPayload("o/n", "main", "User", {}).statusChecks).toBe("no-required-checks");
+    expect(protectionFactsFromPayload("o/n", "main", "User", { required_status_checks: { contexts: [] } }).statusChecks)
+      .toBe("required-checks");
+    const src = readFileSync(join(ROOT, "lib", "branch-protection.ts"), "utf-8");
+    expect(src, "the unprotected return in githubProtectionProbe does not say so").toMatch(
+      /if \(!isProtected\) \{\s*return \{[^}]*statusChecks: "unprotected"/,
     );
   });
 
@@ -94,6 +128,19 @@ describe("SC-2749: a read that never answers is UNMEASURED, not a hung scaffold"
     expect(await timed(Promise.resolve(7), "fast", 20)).toBe(7);
   });
 
+  test("a read that answers clears its deadline instead of leaving it to fire", async () => {
+    // Review of #2154, round 2: the losing timer still fired up to 15s later.
+    const real = globalThis.clearTimeout;
+    let cleared = 0;
+    globalThis.clearTimeout = ((h: Parameters<typeof real>[0]) => { cleared++; return real(h); }) as typeof real;
+    try {
+      expect(await timed(Promise.resolve(7), "fast", 10_000)).toBe(7);
+    } finally {
+      globalThis.clearTimeout = real;
+    }
+    expect(cleared, "the winning branch left its timer armed").toBeGreaterThan(0);
+  });
+
   test("both live reads go through the bound", () => {
     const src = readFileSync(join(ROOT, "lib", "scaffold", "human-steps.ts"), "utf-8");
     const calls = src.match(/\.rest\.actions\.getRepo(Secret|Variable)\(/g) ?? [];
@@ -108,7 +155,13 @@ describe("SC-2749: the readings come from the tree and the probes, and the scaff
     slug: () => "o/n",
     secret: async () => read(false),
     variable: async () => read(null),
-    protection: async slug => ({ ...unreadableFacts(slug, ""), unreadable: null, branch: "main", contexts: [] }),
+    protection: async slug => ({
+      ...unreadableFacts(slug, ""),
+      unreadable: null,
+      branch: "main",
+      contexts: [],
+      statusChecks: "unprotected" as const,
+    }),
     ...over,
   });
 
@@ -125,6 +178,16 @@ describe("SC-2749: the readings come from the tree and the probes, and the scaff
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("the probe's protection state reaches the reading, and a probe that does not say is UNMEASURED", async () => {
+    const r = await readHumanSteps(ROOT, probes());
+    expect(r.protection).toEqual(read({ branch: "main", contexts: [], statusChecks: "unprotected" }));
+    const silent = await readHumanSteps(
+      ROOT,
+      probes({ protection: async slug => ({ ...unreadableFacts(slug, ""), unreadable: null, branch: "main", contexts: [] }) }),
+    );
+    expect(silent.protection.kind).toBe("UNMEASURED");
   });
 
   test("an unreadable protection probe reaches the report as UNMEASURED", async () => {

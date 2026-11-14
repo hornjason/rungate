@@ -20,7 +20,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
 import { createGitHubClient, parseOwnerRepo } from "../github";
-import { githubProtectionProbe, jobContextNames, type ProtectionProbe } from "../branch-protection";
+import { githubProtectionProbe, jobContextNames, type ProtectionFacts, type ProtectionProbe } from "../branch-protection";
 import { originSlug } from "../verified-push";
 
 export type Reading<T> = { kind: "READ"; value: T } | { kind: "UNMEASURED"; why: string };
@@ -37,8 +37,8 @@ export interface HumanStepReadings {
   secretPresent: Reading<boolean>;
   /** The variable's value, or null when it is not set. */
   requireClosingRef: Reading<string | null>;
-  /** The default branch and its required status checks. */
-  protection: Reading<{ branch: string; contexts: string[] }>;
+  /** The default branch, its required status checks, and which protection state it is in. */
+  protection: Reading<{ branch: string; contexts: string[]; statusChecks: NonNullable<ProtectionFacts["statusChecks"]> }>;
   /** Job names of the process checks this tree's workflows define. */
   processChecks: string[];
 }
@@ -72,12 +72,35 @@ export function humanSteps(r: HumanStepReadings): string[] {
     if (r.protection.kind === "UNMEASURED") {
       out.push(`UNMEASURED: required checks (${r.processChecks.join(", ")}) — ${r.protection.why}`);
     } else {
-      const { branch, contexts } = r.protection.value;
-      for (const check of r.processChecks) {
-        if (contexts.includes(check)) continue;
+      const { branch, contexts, statusChecks } = r.protection.value;
+      const missing = r.processChecks.filter(c => !contexts.includes(c));
+      if (missing.length > 0 && statusChecks === "required-checks") {
+        for (const check of missing) {
+          out.push(
+            `OWED: gh api -X POST repos/${r.slug}/branches/${branch}/protection/required_status_checks/contexts ` +
+              `-f 'contexts[]=${check}'   # ${check} runs on every pull request and blocks nothing until it is required`,
+          );
+        }
+      } else if (missing.length > 0 && statusChecks === "unprotected") {
+        // PUT replaces the whole rule, which is safe only because there is no
+        // rule yet: it protects the branch and requires the missing checks.
+        const body = {
+          required_status_checks: { strict: false, contexts: missing },
+          enforce_admins: null,
+          required_pull_request_reviews: null,
+          restrictions: null,
+        };
         out.push(
-          `OWED: gh api -X POST repos/${r.slug}/branches/${branch}/protection/required_status_checks/contexts ` +
-            `-f 'contexts[]=${check}'   # ${check} runs on every pull request and blocks nothing until it is required`,
+          `OWED: gh api -X PUT repos/${r.slug}/branches/${branch}/protection --input - <<<'${JSON.stringify(body)}'` +
+            `   # ${branch} is unprotected; this protects it and requires ${missing.join(", ")}, nothing else`,
+        );
+      } else if (missing.length > 0) {
+        // Protected with no required checks: the POST above 404s here and a
+        // PUT would replace the rule's other settings, so no single call is safe.
+        out.push(
+          `OWED: require ${missing.join(", ")} on ${branch} — in the repository's Settings → Branches, edit the rule ` +
+            `for ${branch}, turn on "Require status checks to pass" and add ${missing.join(", ")}` +
+            `   # no single API call adds a check here without replacing the rest of the rule`,
         );
       }
       const required = r.processChecks.filter(c => contexts.includes(c));
@@ -109,12 +132,12 @@ export const PROBE_TIMEOUT_MS = 15_000;
 
 /** `p`, or a rejection naming `what` after `ms`. The rejection carries no status, so it reads UNMEASURED. */
 export function timed<T>(p: Promise<T>, what: string, ms: number = PROBE_TIMEOUT_MS): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`${what} did not answer within ${ms}ms`)), ms).unref?.(),
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not answer within ${ms}ms`)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([p, deadline]).finally(() => clearTimeout(timer));
 }
 
 const status = (e: unknown) => (e as { status?: unknown })?.status;
@@ -168,6 +191,8 @@ export async function readHumanSteps(root: string, probes: HumanStepProbes = LIV
   const protection: HumanStepReadings["protection"] =
     facts.unreadable || facts.branch === null
       ? { kind: "UNMEASURED", why: facts.unreadable ?? "the default branch could not be read" }
-      : { kind: "READ", value: { branch: facts.branch, contexts: facts.contexts } };
+      : facts.statusChecks === undefined
+        ? { kind: "UNMEASURED", why: "the protection probe did not say whether the branch is protected" }
+        : { kind: "READ", value: { branch: facts.branch, contexts: facts.contexts, statusChecks: facts.statusChecks } };
   return { slug, secretPresent, requireClosingRef, protection, processChecks };
 }
