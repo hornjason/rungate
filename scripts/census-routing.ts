@@ -49,6 +49,7 @@ import { LINE_CITATION } from "../lib/line-citation";
 import { TRACKED_ID_PREFIX_SOURCE } from "../lib/sc-ids";
 import { repoRootIdents } from "../lib/scratch-roots";
 import { stripJsComments } from "../lib/strip-js-comments";
+import { SWEPT_DIRS, SWEPT_JS_DIRS, WRITE_PRIMITIVES } from "../lib/spec-write-sweep";
 
 /**
  * One changed file, with enough of the diff to tell an edit from an event.
@@ -213,6 +214,11 @@ const UNTICKED_CRITERION = new RegExp(`^\\s*[-*]\\s*\\[ \\]\\s*${TRACKED_ID_PREF
  * rule file is a new file AND a doc AND a rule doc — because the union is what
  * you run and the per-row reasons are what make the union readable.
  */
+/** A call to any primitive the write-site sweep counts (#2150). */
+const WRITE_CALL = new RegExp(
+  `\\b(?:${WRITE_PRIMITIVES.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\s*\\(`,
+);
+
 export const CENSUS_TRIGGERS: CensusTrigger[] = [
   {
     id: "new-file",
@@ -384,6 +390,26 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
       "test/census-routing.test.ts",
     ],
     fires: c => c.isNew && /^test\/.*\.test\.tsx?$/.test(c.path),
+  },
+  {
+    // #2150. The two namespace suites read every `SC-<N>` under test/, and
+    // `new-test-file` reaches them only when a file is ADDED. On #2149 an
+    // existing suite gained fixture ids below the floor; the router said
+    // nothing was reachable and sc-fixture-namespace refused on CI.
+    id: "test-criterion-id",
+    event: "added a criterion id to a test",
+    tests: ["test/sc-id-namespace.test.ts", "test/sc-fixture-namespace.test.ts"],
+    fires: c => c.path.startsWith("test/") && c.added.some(l => /\bSC-\d+/.test(l)),
+  },
+  {
+    // #2150, second instance (#2148): an added writeFileSync in lib/scaffold
+    // reddened spec-write-chokepoint on CI. The directories and the call
+    // names are the sweep's own, so this row and that suite read one list.
+    id: "write-site",
+    event: "added a file write where the write-site sweep looks",
+    tests: ["test/spec-write-chokepoint.test.ts"],
+    fires: c =>
+      [...SWEPT_DIRS, ...SWEPT_JS_DIRS].some(d => inDir(c.path, d)) && c.added.some(l => WRITE_CALL.test(l)),
   },
   {
     id: "spec-edit",

@@ -132,6 +132,8 @@ events.** Why a `--name-only` router cannot tell them apart:
 | edited any markdown outside test/fixtures/ | `test/prose-self-distance.test.ts` |
 | added or edited CLAUDE.md, AGENTS.md or a .claude/rules/ doc | `test/rule-provenance.test.ts` `test/instruction-surface-budget.test.ts` `test/harness-fixed-point.test.ts` |
 | added a test file | `test/sc-id-namespace.test.ts` `test/sc-fixture-namespace.test.ts` `test/scratch-paths-unique.test.ts` `test/scratch-cleanup.test.ts` `test/consumer-no-rebuild-delegation.test.ts` `test/ai-review-runner-shell-parity.test.ts` `test/unit/ambiguous-anchor.test.ts` `test/source-census.test.ts` `test/verify-title-check.test.ts` `test/census-routing.test.ts` |
+| added a criterion id to a test | `test/sc-id-namespace.test.ts` `test/sc-fixture-namespace.test.ts` |
+| added a file write where the write-site sweep looks | `test/spec-write-chokepoint.test.ts` |
 | touched specs/ | `test/agents-md-spec-listing.test.ts` `test/spec-requirements.test.ts` |
 | added a specs/ file | `test/audit-specs.test.ts` `test/scanner.test.ts` |
 | ticked or unticked an SC (ran sync-sc-status) | `test/sc-binding-split.test.ts` `test/ticked-sc-cover.test.ts` `test/behavioral-sc-ratchet.test.ts` `test/ticked-sc-absent-symbol.test.ts` `test/spec-evidence.test.ts` |

@@ -2102,3 +2102,50 @@ describe("#1547: the routed set is complete over the census of the test populati
     }
   });
 });
+
+describe("#2150: an edit that adds a criterion id or a write site routes the census that reads it", () => {
+  const NAMESPACE = ["test/sc-id-namespace.test.ts", "test/sc-fixture-namespace.test.ts"];
+  const CHOKEPOINT = "test/spec-write-chokepoint.test.ts";
+
+  // #2149: an EXISTING test file gained fixture ids below the floor, the
+  // router said nothing was reachable, and sc-fixture-namespace refused on CI.
+  test("an existing test file gaining a criterion id routes both namespace suites", () => {
+    const { tests } = censusTestsFor([
+      change({ path: "test/status-view.test.ts", added: ['  const spec = "- [ ] SC-9905: a fixture";'] }),
+    ]);
+    for (const t of NAMESPACE) expect(tests, `${t} was not routed`).toContain(t);
+  });
+
+  test("control: the same edit with no id, or with the id only removed, routes neither", () => {
+    for (const c of [
+      change({ path: "test/status-view.test.ts", added: ['  const spec = "a fixture";'] }),
+      change({ path: "test/status-view.test.ts", removed: ['  const spec = "- [ ] SC-9905: a fixture";'] }),
+      change({ path: "lib/status.ts", added: ['const spec = "SC-9905";'] }),
+    ]) {
+      const { tests } = censusTestsFor([c]);
+      for (const t of NAMESPACE) expect(tests, `${t} routed for ${c.path} with no added id under test/`).not.toContain(t);
+    }
+  });
+
+  // #2148: a writeFileSync added to lib/scaffold/steps.ts reddened
+  // spec-write-chokepoint on CI, and the router never named it.
+  test("an added write call in a swept directory routes the chokepoint suite", () => {
+    for (const c of [
+      change({ path: "lib/scaffold/steps.ts", added: ["    writeFileSync(join(root, file), body);"] }),
+      change({ path: "scripts/x.ts", added: ["  await Bun.write(out, json);"] }),
+      change({ path: "workflows/ship.js", added: ["  fs.appendFileSync(log, line);"] }),
+    ]) {
+      expect(censusTestsFor([c]).tests, `${c.path} did not route the chokepoint`).toContain(CHOKEPOINT);
+    }
+  });
+
+  test("control: a line with no write call, or a write call outside the swept directories, does not", () => {
+    for (const c of [
+      change({ path: "lib/scaffold/steps.ts", added: ["    const body = render(file);"] }),
+      change({ path: "test/x.test.ts", added: ["    writeFileSync(join(root, file), body);"] }),
+      change({ path: "lib/scaffold/steps.ts", removed: ["    writeFileSync(join(root, file), body);"] }),
+    ]) {
+      expect(censusTestsFor([c]).tests, `${c.path} routed the chokepoint with no added write`).not.toContain(CHOKEPOINT);
+    }
+  });
+});
