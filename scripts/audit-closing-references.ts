@@ -21,11 +21,23 @@
  *
  * ## What it refuses, and what it deliberately does not
  *
- * It refuses exactly one state: **`closingIssuesReferences` is empty AND the
- * body contains a closing keyword adjacent to an issue number inside markup
- * the markdown parser does not scan.** That is a contradiction inside one
- * pull request — the author wrote a closing reference and GitHub recorded
- * none — and it is the state that left #1157 open after PR #1208 merged.
+ * Four refusals, in the order the script reaches them. The first two refuse
+ * whatever `RUNGATE_REQUIRE_CLOSING_REF` says; the last two only when it is
+ * the string `true`, and are an annotation otherwise.
+ *
+ *  1. **An inert reference:** a closing keyword beside an issue number inside
+ *     markup the markdown parser does not scan, for an issue GitHub did not
+ *     link. The author wrote a closing reference and GitHub recorded none —
+ *     the state that left #1157 open after PR #1208 merged.
+ *  2. **A commit message that closes an undeclared issue (#1979):** GitHub
+ *     acts on a keyword in a commit message wherever it sits, and this
+ *     repository squashes with the messages as the body.
+ *  3. **No issue closed, or one that has not answered the criterion question**
+ *     (ADR-013 step 4, #2061).
+ *  4. **A closed issue naming a criterion this tree leaves unticked**, unless
+ *     the description says `does not complete <id>` (#2005).
+ *
+ * A payload missing a field any of these reads is UNMEASURED and refused.
  *
  * It does NOT refuse a pull request that merely mentions an issue without
  * closing it. Measured at 2026-10-23T15:31Z, 27 of the 50 open issues had a
@@ -225,7 +237,7 @@ async function main(): Promise<void> {
     }
     return { sha: node.sha, message: node.message };
   });
-  const undeclared = commitClosingReferences(commits).filter(r => !linkedIssues.has(r.issue));
+  const undeclared = commitClosingReferences(commits, repoNameWithOwner).filter(r => !linkedIssues.has(r.issue));
   if (undeclared.length > 0) refuse(commitClosingMessage(undeclared, prNumber));
 
   // The body of every issue this pull request closes HERE, read off the same

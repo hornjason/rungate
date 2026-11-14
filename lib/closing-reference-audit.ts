@@ -168,7 +168,13 @@ function closingKeywordPattern(): RegExp {
   // `(` as well as `:` may sit between verb and number: GitHub closed #1148
   // from the squash subject "fix(#1148): …" (PR #1208), the conventional-commit
   // form most subjects here take.
-  return new RegExp(`\\b(${CLOSING_KEYWORDS.join("|")})\\b[ \\t]*[:(]?[ \\t]*#(\\d+)\\b`, "gi");
+  // And an optional `owner/repo` before the `#` (AI review of #2120):
+  // `Fixes hornjason/rungate#1717` closes #1717 as surely as the bare form.
+  // Group 1 the keyword, 2 the repository if spelled, 3 the number.
+  return new RegExp(
+    `\\b(${CLOSING_KEYWORDS.join("|")})\\b[ \\t]*[:(]?[ \\t]*([\\w.-]+\\/[\\w.-]+)?#(\\d+)\\b`,
+    "gi",
+  );
 }
 
 export function inertClosingReferences(body: string): InertClosingReference[] {
@@ -180,7 +186,11 @@ export function inertClosingReferences(body: string): InertClosingReference[] {
   for (const m of body.matchAll(pattern)) {
     const hit = ranges.find(r => m.index! >= r.start && m.index! < r.end);
     if (!hit) continue;
-    const issue = Number.parseInt(m[2]!, 10);
+    // A spelled-out repository is left out here, as it always was: the body
+    // check compares numbers against this repository's linked set, and another
+    // repository's #9 is not this one's.
+    if (m[2] !== undefined) continue;
+    const issue = Number.parseInt(m[3]!, 10);
     if (seen.has(issue)) continue;
     seen.add(issue);
     out.push({ issue, keyword: m[1]!, reason: hit.reason, text: m[0] });
@@ -402,11 +412,15 @@ export interface CommitClosingReference {
  */
 export function commitClosingReferences(
   commits: readonly { readonly sha: string; readonly message: string }[],
+  repoNameWithOwner: string,
 ): CommitClosingReference[] {
   const out: CommitClosingReference[] = [];
   for (const c of commits) {
     for (const m of c.message.matchAll(closingKeywordPattern())) {
-      out.push({ sha: c.sha, issue: Number.parseInt(m[2]!, 10), text: m[0] });
+      // Bare `#N`, or this repository spelled out. Another repository's issue
+      // is not this pull request's to declare.
+      if (m[2] !== undefined && m[2].toLowerCase() !== repoNameWithOwner.toLowerCase()) continue;
+      out.push({ sha: c.sha, issue: Number.parseInt(m[3]!, 10), text: m[0] });
     }
   }
   return out;

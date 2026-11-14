@@ -721,6 +721,26 @@ describe("#1979: a closing keyword in a commit message is checked, backticks or 
     expect(r.err).toContain("would close #1717");
   });
 
+  test("this repository spelled out, owner/repo#N, closes the same issue and is caught", () => {
+    // AI review of #2120: `Fixes hornjason/rungate#1717` closes #1717 on merge
+    // as surely as the bare form, and the verb is not beside the `#`.
+    const same = run(SCRIPT, pr([{ sha: "e1", message: "Fixes hornjason/rungate#1717\n" }]), THIS_REPO, ON);
+    expect(same.code, same.out).toBe(REFUSE_EXIT);
+    expect(same.err).toContain("would close #1717");
+    // Another repository's issue is not this pull request's to declare.
+    const other = run(SCRIPT, pr([{ sha: "e2", message: "Fixes other-org/other-repo#1717\n" }]), THIS_REPO, ON);
+    expect(other.code, other.err).toBe(0);
+  });
+
+  test("the body check still ignores another repository's issue, backticked or not", () => {
+    // The widened pattern now SEES `other-org/other-repo#9`; the body check
+    // must keep leaving it alone, or this repository's #9 reads as inert.
+    const body = "Quoting: " + "Fixes other-org/other-repo#9".replace(/^/, "`").replace(/$/, "`") + "\n";
+    const r = run(SCRIPT, JSON.stringify({ number: 7, body, closingIssuesReferences: [], files: CODE }), THIS_REPO, {});
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("NOT ENFORCED");
+  });
+
   test("the negative control: a commit message naming an issue with no keyword beside it is accepted", () => {
     const p = pr([
       { sha: "a1", message: "#1717 is still open; see #1717 for the history.\n" },
