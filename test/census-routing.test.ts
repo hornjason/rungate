@@ -86,6 +86,7 @@ import {
   type Change,
 } from "../scripts/census-routing";
 import { TRACKED_ID_PREFIXES } from "../lib/sc-ids";
+import { WRITE_PRIMITIVES } from "../lib/spec-write-sweep";
 import { LINE_CITATION } from "../lib/line-citation";
 import { stripJsComments } from "../lib/strip-js-comments";
 
@@ -2155,6 +2156,17 @@ describe("#2150: an edit that adds a criterion id or a write site routes the cen
     ]) {
       expect(censusTestsFor([c]).tests, `${c.path} did not route the chokepoint`).toContain(CHOKEPOINT);
     }
+  });
+
+  // Round 2 of PR #2158: every primitive the sweep counts, not three samples.
+  // The alternation is sorted longest-first so a prefix name cannot shadow a
+  // longer one whatever order the list is in.
+  test("every write primitive the sweep counts routes the chokepoint", () => {
+    expect(WRITE_PRIMITIVES.length, "no primitives read, so the loop is over nothing").toBeGreaterThan(3);
+    const missed = WRITE_PRIMITIVES.filter(
+      n => !censusTestsFor([change({ path: "lib/x.ts", added: [`  ${n}(target, body);`] })]).tests.includes(CHOKEPOINT),
+    );
+    expect(missed, "these write calls did not route spec-write-chokepoint").toEqual([]);
   });
 
   test("control: a line with no write call, or a write call outside the swept directories, does not", () => {

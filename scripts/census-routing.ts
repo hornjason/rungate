@@ -215,8 +215,14 @@ const UNTICKED_CRITERION = new RegExp(`^\\s*[-*]\\s*\\[ \\]\\s*${TRACKED_ID_PREF
  * you run and the per-row reasons are what make the union readable.
  */
 /** A call to any primitive the write-site sweep counts (#2150). */
+// Longest first: alternation takes the first match, so `writeFile` listed
+// before `writeFileSync` would eat the prefix and the `\s*\(` would fail.
+// Same guard as TRACKED_ID_PREFIX_SOURCE in lib/sc-ids.ts.
 const WRITE_CALL = new RegExp(
-  `\\b(?:${WRITE_PRIMITIVES.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\s*\\(`,
+  `\\b(?:${[...WRITE_PRIMITIVES]
+    .sort((a, b) => b.length - a.length)
+    .map(n => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|")})\\s*\\(`,
 );
 
 export const CENSUS_TRIGGERS: CensusTrigger[] = [
