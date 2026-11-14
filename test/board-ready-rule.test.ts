@@ -1846,4 +1846,36 @@ describe("#2063 / SC-2762: work-this-next refuses an issue labelled needs-criter
     const src = readFileSync(join(import.meta.dir, "..", "scripts", "work-status.ts"), "utf-8");
     expect(src).toContain("needsCriterionLine(");
   });
+
+  // ── Review of #2123 ──────────────────────────────────────────────────────
+
+  test("a label every candidate carries ranks nothing, even when one carrier is refused", () => {
+    // Both candidates carry the label and #5 is refused. Refusing #5 does not
+    // make the label tell #6 apart from anyone, so nothing is promoted.
+    const cards = [next(5, [NEEDS_CRITERION_LABEL]), next(6)];
+    const r = workNextReading(cards, 4, "COMPLETE", WORK_NEXT_LABEL);
+    expect(r.status).toBe("OVER_BOUND");
+    expect(r.honoured.size).toBe(0);
+  });
+
+  test("a slice whose visible carriers are all refused is UNMEASURED, not a confident REFUSED", () => {
+    const cards = [next(5, [NEEDS_CRITERION_LABEL]), item(1, 0)];
+    const r = workNextReading(cards, 4, "SLICE", WORK_NEXT_LABEL);
+    expect(r.status).toBe("UNMEASURED");
+  });
+
+  test("an unread depth with every carrier refused is UNMEASURED, not REFUSED", () => {
+    const cards = [next(5, [NEEDS_CRITERION_LABEL]), item(1, 0)];
+    expect(workNextReading(cards, null, "COMPLETE", WORK_NEXT_LABEL).status).toBe("UNMEASURED");
+  });
+
+  test("an issue with no creation date makes the oldest UNMEASURED, never the oldest", () => {
+    const line = needsCriterionLine([
+      { number: 12, labels: [NEEDS_CRITERION_LABEL], createdAt: "2026-11-01T00:00:00Z" },
+      { number: 40, labels: [NEEDS_CRITERION_LABEL], createdAt: null },
+    ]);
+    expect(line).toContain("UNMEASURED");
+    expect(line).toContain("#40");
+    expect(line).not.toContain("oldest #40");
+  });
 });
