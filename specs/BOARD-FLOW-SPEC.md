@@ -773,8 +773,10 @@ second: flow efficiency is the one metric this spec must not promise.**
       needs: test
       proved-by: test/source-census.test.ts — 8 pass, 0 fail, 2026-11-06
       fingerprint: 0e65db21
-- [ ] SC-2759: lib/board-lane-health.ts contains [handPlacedInReview] — an issue card in In review with no linked open pull request is reported as hand-placed
+- [x] SC-2759: lib/board-lane-health.ts contains [handPlacedInReview] — an issue card in In review with no linked open pull request is reported as hand-placed
       needs: test
+      proved-by: test/board-lane-health.test.ts "#1921 / SC-2759: handPlacedInReview" — 38 pass, 0 fail, 2026-11-14, on the PR that closes #1921. An In-review issue no open pull request declares is named by number; the control with a declaring pull request reads none; a cut closing list and a partial board both read UNMEASURED, never none. Ten mutants each redden the cases naming them: board completeness ignored, cut list ignored, every card reported, nothing reported, some printed as none, unsorted, duplicates kept, and the report dropping its closing list, its cut list, or the line. Live: work-status printed "every issue card in In review has an open pull request declaring it closes the issue" with one card there (#2079, PR #2132).
+      fingerprint: 81dd05a8
 - [x] SC-2760: scripts/board-status-sweep.ts contains [claimSilence] — a claim is released as stale from silence in its work — branch commits and pull-request events — never from the issue's last-updated time
       needs: test
       proved-by: test/board-status-sweep.test.ts "#1942 / SC-2760: a claim's silence is read from its work" — 94 pass, 0 fail, 2026-11-13, on the PR that closes #1942. The regression runs the live node shape end to end: an issue updated today by a comment, claimed 10 days ago with no work, is released. Seven mutants each redden exactly the case naming them: work ignored, the last-updated clock restored, any branch counted, a cut page read, a bad date dropped, every row given a clock, main skipping the read. The query was run against live GitHub for #2061 (claim, branch rg/2061, PR #2113 read) and #1942 (claim, no work).
