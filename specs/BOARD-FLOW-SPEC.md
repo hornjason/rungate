@@ -778,5 +778,6 @@ second: flow efficiency is the one metric this spec must not promise.**
 - [x] SC-2760: scripts/board-status-sweep.ts contains [claimSilence] — a claim is released as stale from silence in its work — branch commits and pull-request events — never from the issue's last-updated time
       needs: test
       proved-by: test/board-status-sweep.test.ts "#1942 / SC-2760: a claim's silence is read from its work" — 94 pass, 0 fail, 2026-11-13, on the PR that closes #1942. The regression runs the live node shape end to end: an issue updated today by a comment, claimed 10 days ago with no work, is released. Seven mutants each redden exactly the case naming them: work ignored, the last-updated clock restored, any branch counted, a cut page read, a bad date dropped, every row given a clock, main skipping the read. The query was run against live GitHub for #2061 (claim, branch rg/2061, PR #2113 read) and #1942 (claim, no work).
+      fingerprint: 976b8025
 - [ ] SC-2761: scripts/work-status.ts contains [fileOverlapGroups] — the what's-next report groups Ready and promotion candidates by declared file overlap, and issues naming no files are never grouped together
       needs: test
