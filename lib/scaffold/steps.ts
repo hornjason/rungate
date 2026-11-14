@@ -1243,10 +1243,28 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
 }
 
 /**
- * The expedite label scaffold writes when a config has none — #2050, SC-2748.
- * The same name this repository uses.
+ * Where the expedite label's seed value lives — #2050, SC-2748. A data file
+ * and not a string literal: `test/board-ready-rule.test.ts` refuses either
+ * label spelled as a string anywhere in library code (#1962), because the
+ * name is configuration and code only reads it. The seed is configuration
+ * too, so it sits beside `SUCCESS-TEMPLATE.md` in `templates/`.
  */
-export const EXPEDITE_LABEL_DEFAULT = "work-this-next";
+export const BOARD_DEFAULTS_TEMPLATE = join(import.meta.dir, "..", "..", "templates", "board-defaults.json");
+
+/**
+ * The expedite label scaffold writes when a config has none, or `null` when
+ * this installation's template is missing or unreadable. `null` is reported
+ * as UNSET by {@link labelKeyRepairs}, never written as a blank.
+ */
+export function expediteLabelDefault(path: string = BOARD_DEFAULTS_TEMPLATE): string | null {
+  if (!existsSync(path)) return null;
+  try {
+    const value = JSON.parse(readFileSync(path, "utf-8")).expediteLabel;
+    return typeof value === "string" && value.trim() !== "" ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * What scaffold does about the two label keys that fail closed when absent
@@ -1265,7 +1283,10 @@ export const EXPEDITE_LABEL_DEFAULT = "work-this-next";
  * A `board` that is present and not an object is refused, never replaced:
  * overwriting it would discard whatever the consumer put there.
  */
-export function labelKeyRepairs(config: Record<string, any>): {
+export function labelKeyRepairs(
+  config: Record<string, any>,
+  expediteDefault: string | null = expediteLabelDefault(),
+): {
   config: Record<string, any>;
   changed: boolean;
   lines: string[];
@@ -1285,11 +1306,17 @@ export function labelKeyRepairs(config: Record<string, any>): {
   const lines: string[] = [];
   let next = config;
   let changed = false;
-  if (!isSet(board.expediteLabel)) {
-    next = { ...config, board: { ...board, expediteLabel: EXPEDITE_LABEL_DEFAULT } };
+  if (!isSet(board.expediteLabel) && expediteDefault === null) {
+    lines.push(
+      "UNSET: board.expediteLabel — no expedite lane, and none was written: templates/board-defaults.json is " +
+        'missing or unreadable in this rungate installation. To set one, add "expediteLabel": "<label>" under ' +
+        '"board" in .claude/rungate/config.json',
+    );
+  } else if (!isSet(board.expediteLabel)) {
+    next = { ...config, board: { ...board, expediteLabel: expediteDefault } };
     changed = true;
     lines.push(
-      `SET: board.expediteLabel = "${EXPEDITE_LABEL_DEFAULT}" in .claude/rungate/config.json — an open issue ` +
+      `SET: board.expediteLabel = "${expediteDefault}" in .claude/rungate/config.json — an open issue ` +
         `carrying that label goes to the top of Ready. Rename it there if you like.`,
     );
   }

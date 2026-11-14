@@ -17,7 +17,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { EXPEDITE_LABEL_DEFAULT, generateOrAuditProjectHarness } from "../lib/scaffold/steps";
+import { readExpediteLabel } from "../lib/config-readers";
+import { expediteLabelDefault, generateOrAuditProjectHarness, labelKeyRepairs } from "../lib/scaffold/steps";
+
+/** Read from the shipped template, never spelled here — the census in board-ready-rule.test.ts refuses a literal. */
+const EXPEDITE_LABEL_DEFAULT = expediteLabelDefault();
 
 /** Scaffold `config` (or nothing) into a throwaway tree; hand back what was written and said. */
 function scaffold(config: Record<string, unknown> | null) {
@@ -38,6 +42,23 @@ function scaffold(config: Record<string, unknown> | null) {
 }
 
 describe("SC-2748: scaffold writes the expedite key, and names the override key as unset", () => {
+  test("the shipped default is the name this repository runs on", () => {
+    // Premise for every case below: a null here would make each `toBe` compare
+    // against null, and a config that never gained the key would pass.
+    expect(EXPEDITE_LABEL_DEFAULT, "templates/board-defaults.json gave no expedite label").not.toBeNull();
+    expect(EXPEDITE_LABEL_DEFAULT).toBe(readExpediteLabel(join(import.meta.dir, "..")));
+  });
+
+  test("an installation missing the template writes nothing and names the expedite key as unset", () => {
+    expect(expediteLabelDefault(join(tmpdir(), "rg-no-such-template.json"))).toBeNull();
+    const { config, changed, lines } = labelKeyRepairs({ project: "x", board: {} }, null);
+    expect(changed).toBe(false);
+    expect("expediteLabel" in config.board, "a blank or null label was written").toBe(false);
+    expect(lines.join("\n"), "the missing template was not named").toMatch(
+      /UNSET: board\.expediteLabel — .*templates\/board-defaults\.json/,
+    );
+  });
+
   test("a config lacking both: the expedite key is written, the override key is reported and never written", () => {
     const { written, said } = scaffold({ project: "x", board: { queueLabel: "work" } });
     expect(written.board.expediteLabel).toBe(EXPEDITE_LABEL_DEFAULT);
