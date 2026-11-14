@@ -60,6 +60,10 @@ import {
   needsCriterionLine,
   needsCriterionRefusal,
   workNextReading,
+  WORK_NEXT_FACTS,
+  WORK_NEXT_ROWS,
+  workNextRows,
+  type WorkNextFacts,
   type Rankable,
 } from "../lib/board-ready-rule";
 import { NEEDS_CRITERION_LABEL } from "../lib/board-mirror";
@@ -1877,5 +1881,56 @@ describe("#2063 / SC-2762: work-this-next refuses an issue labelled needs-criter
     expect(line).toContain("UNMEASURED");
     expect(line).toContain("#40");
     expect(line).not.toContain("oldest #40");
+  });
+});
+
+/**
+ * #2125: `workNextReading` decides from a table, and the table covers every
+ * combination of the facts it reads.
+ *
+ * Re-scoped from PR #2123 at its third review round. The outcome used to be
+ * chosen by the ORDER of an if-chain, and each round found one more
+ * combination the order got wrong. The table says each row's conditions out
+ * loud, and the first case below walks all of them, so a missing or doubled
+ * row is named instead of found by the next reviewer.
+ */
+describe("#2125: the work-next outcome is a table every combination lands on once", () => {
+  const combinations = (): WorkNextFacts[] =>
+    Array.from({ length: 1 << WORK_NEXT_FACTS.length }, (_, bits) =>
+      Object.fromEntries(WORK_NEXT_FACTS.map((k, i) => [k, Boolean(bits & (1 << i))])) as unknown as WorkNextFacts,
+    );
+
+  test("each of the 64 combinations of the six facts matches exactly one row", () => {
+    const unclaimed: string[] = [];
+    const doubled: string[] = [];
+    for (const f of combinations()) {
+      const rows = workNextRows(f);
+      if (rows.length === 0) unclaimed.push(JSON.stringify(f));
+      if (rows.length > 1) doubled.push(`${JSON.stringify(f)} -> ${rows.map(r => r.outcome).join(", ")}`);
+    }
+    expect(unclaimed, "no row decides these").toEqual([]);
+    expect(doubled, "more than one row decides these").toEqual([]);
+  });
+
+  test("the rows read only the facts the coverage walk varies", () => {
+    for (const row of WORK_NEXT_ROWS) {
+      for (const k of Object.keys(row.when)) expect(WORK_NEXT_FACTS as readonly string[]).toContain(k);
+    }
+    expect(WORK_NEXT_FACTS.length).toBe(6);
+  });
+
+  test("round 3 of #2123: every candidate carries the label and every carrier is refused", () => {
+    // The chain answered REFUSED and promised that naming the criterion would
+    // lift the label. It cannot: the label is still on every candidate, so the
+    // next reading is OVER_BOUND. Universality is decided first.
+    const cards = [
+      item(5, null, [WORK_NEXT_LABEL, NEEDS_CRITERION_LABEL]),
+      item(6, null, [WORK_NEXT_LABEL, NEEDS_CRITERION_LABEL]),
+    ];
+    const r = workNextReading(cards, 4, "COMPLETE", WORK_NEXT_LABEL);
+    expect(r.status).toBe("OVER_BOUND");
+    expect(r.honoured.size).toBe(0);
+    expect(r.why).not.toContain("lifts");
+    expect(r.why).toContain(NEEDS_CRITERION_LABEL);
   });
 });

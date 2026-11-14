@@ -292,6 +292,79 @@ export interface WorkNextReading {
 }
 
 /**
+ * The six facts the work-next outcome is decided from — #2125.
+ *
+ * The outcome used to be chosen by the ORDER of an if-chain, and each review
+ * round of PR #2123 found one more combination the order got wrong. These
+ * are the inputs that order was secretly enumerating, named, so
+ * `test/board-ready-rule.test.ts` can walk every combination of them.
+ */
+export const WORK_NEXT_FACTS = ["carries", "slice", "depthUnread", "universal", "allRefused", "overDepth"] as const;
+
+export type WorkNextFacts = { readonly [K in (typeof WORK_NEXT_FACTS)[number]]: boolean };
+
+export type WorkNextOutcome =
+  | "NONE"
+  | "UNMEASURED_SLICE"
+  | "UNMEASURED_DEPTH"
+  | "OVER_BOUND_UNIVERSAL"
+  | "REFUSED"
+  | "OVER_BOUND_DEPTH"
+  | "HONOURED";
+
+export interface WorkNextRow {
+  /** The facts this row requires. A fact it does not name is one it does not depend on. */
+  readonly when: Partial<WorkNextFacts>;
+  readonly outcome: WorkNextOutcome;
+}
+
+/**
+ * Every outcome, with its conditions said out loud rather than implied by
+ * position. Each row names the facts every earlier row tested, negated, so
+ * the rows are disjoint by construction and the coverage test proves it.
+ */
+export const WORK_NEXT_ROWS: readonly WorkNextRow[] = [
+  // Nobody asked, so there is nothing to measure (round 3 of #1971's review).
+  // A bound answers "are there too many"; with none the question is unasked,
+  // and every caller's `status !== "NONE"` gate is written against this row.
+  { when: { carries: false }, outcome: "NONE" },
+  // A slice cannot bound anything (round 2 of #1971's review): both tests the
+  // bound applies are ratios against a population nobody chose. Before the
+  // depth, so two UNMEASURED causes never hide each other.
+  { when: { carries: true, slice: true }, outcome: "UNMEASURED_SLICE" },
+  // An unread depth is not zero and not infinity (Silent Default Substitution).
+  { when: { carries: true, slice: false, depthUnread: true }, outcome: "UNMEASURED_DEPTH" },
+  // If every candidate carries the label, it ranks nothing — keyed on EVERY
+  // carrier, refused or not, because refusing one does not make the label
+  // discriminate (review of #2123). Before REFUSED: with the label universal,
+  // naming a criterion cannot lift anything, so the refusal must not promise
+  // it would (round 3 of #2123).
+  { when: { carries: true, slice: false, depthUnread: false, universal: true }, outcome: "OVER_BOUND_UNIVERSAL" },
+  // Every carrier is refused for needs-criterion (#2063, SC-2762).
+  {
+    when: { carries: true, slice: false, depthUnread: false, universal: false, allRefused: true },
+    outcome: "REFUSED",
+  },
+  // More eligible carriers than Ready is deep: nothing is promoted, never "the
+  // first cap of them", which would be a promotion nobody chose.
+  {
+    when: { carries: true, slice: false, depthUnread: false, universal: false, allRefused: false, overDepth: true },
+    outcome: "OVER_BOUND_DEPTH",
+  },
+  {
+    when: { carries: true, slice: false, depthUnread: false, universal: false, allRefused: false, overDepth: false },
+    outcome: "HONOURED",
+  },
+];
+
+/** The rows whose conditions `facts` meets. Exactly one, for every combination. */
+export function workNextRows(facts: WorkNextFacts): WorkNextRow[] {
+  return WORK_NEXT_ROWS.filter(row =>
+    (Object.keys(row.when) as (keyof WorkNextFacts)[]).every(k => row.when[k] === facts[k]),
+  );
+}
+
+/**
  * Whether the `work-this-next` label is honoured, and over how many issues.
  *
  * ## The bound is the whole of the design
@@ -347,35 +420,8 @@ export function workNextReading(
     .map(i => i.number)
     .sort((a, b) => a - b);
   const named = carrying.map(n => `#${n}`).join(", ");
-  // **Nobody asked, so there is nothing to measure** — round 3 of #1971's
-  // review, and it goes FIRST, above both refusals.
-  //
-  // A bound only exists to answer *are there too many of these*. With none
-  // of them the question is not unanswerable, it is unasked, and the two
-  // are different facts — the same distinction every other branch in this
-  // function is built on, applied one level up. Below the slice and cap
-  // checks it reported UNMEASURED for the ordinary case of a repository
-  // where nobody has used the label: every `board-mirror` and `board-ready`
-  // run whose throughput read failed, and every fan-out unconditionally,
-  // would print *nothing was promoted* about a promotion no card requested.
-  //
-  // It is also the branch the callers' `status !== "NONE"` gate is written
-  // against, so getting it wrong is not a wording problem — it is noise on
-  // a channel that exists to carry refusals somebody has to act on.
-  if (carrying.length === 0) {
-    return {
-      status: "NONE",
-      carrying,
-      honoured: new Set(),
-      cap,
-      why: `no issue carries "${label}", so the ordinary order stands`,
-    };
-  }
   // #2063, SC-2762: a carrier that also carries needs-criterion is refused by
-  // name, and holds no place in the bound — only the eligible carriers are
-  // counted against Ready's depth or honoured. Computed here, decided below
-  // the two UNMEASURED guards: a slice or an unread depth must not be
-  // reported as a confident REFUSED (review of #2123).
+  // name, and holds no place in the bound.
   const refused = needsCriterionRefusal(population, carrying);
   const asking = carrying.filter(n => !refused.includes(n));
   const refusedNames = refused.map(n => `#${n}`).join(", ");
@@ -384,93 +430,83 @@ export function workNextReading(
       ? ""
       : ` Refused: ${refusedNames}, which carr${refused.length === 1 ? "ies" : "y"} ${NEEDS_CRITERION_LABEL}.`;
   const askingNames = asking.map(n => `#${n}`).join(", ");
-  // **A slice cannot bound anything** — round 2 of #1971's review. Both
-  // tests the bound applies are ratios against the population: *more than
-  // the depth* and *all of them*. Handed a slice, both are answered about a
-  // denominator nobody chose. `scripts/board-ready.ts`'s fan-out mode is the
-  // live instance: with `--closed-issue N` its candidates are the direct
-  // dependents of one issue, so one labelled card out of three read
-  // HONOURED while the repository held thirty carriers.
-  //
-  // First, before the cap, because a slice is unbounded whether or not the
-  // depth was readable — and two UNMEASURED causes must not hide each other.
-  if (scope === "SLICE") {
-    return {
-      status: "UNMEASURED",
-      carrying,
-      honoured: new Set(),
-      cap,
-      why:
-        `UNMEASURED — this run sees only a slice of the candidates, so the bound on ` +
-        `"${label}" has no denominator and NOTHING was promoted, ` +
-        `including ${named}`,
-    };
-  }
-  if (cap === null) {
-    return {
-      status: "UNMEASURED",
-      carrying,
-      honoured: new Set(),
-      cap,
-      why:
-        `UNMEASURED — Ready's depth could not be read, so the bound on "${label}" ` +
-        `is unknown and NOTHING was promoted, including ${named}`,
-    };
-  }
-  if (asking.length === 0) {
-    return {
-      status: "REFUSED",
-      carrying,
-      honoured: new Set(),
-      cap,
-      why:
-        `REFUSED — ${refusedNames} carr${refused.length === 1 ? "ies" : "y"} "${label}" and also ` +
-        `${NEEDS_CRITERION_LABEL}, so NOTHING was promoted: an issue that names no criterion is ` +
-        `never expedited. Name the criterion it serves, or "${NAMES_NONE}", and the label lifts.`,
-    };
-  }
-  // **Two ways to rank nothing, and the second is not the depth.** A lane
-  // of three candidates all carrying the label is unordered by it however
-  // deep Ready is — the issue's own sentence, *if every issue carries the
-  // label, the label ranks nothing*, is a ratio against the population and
-  // not against the cap. Round 2 of #1971's review found the cap test alone
-  // reading HONOURED over exactly that input.
-  //
-  // Keyed on EVERY carrier, refused or not: whether the label tells anyone
-  // apart from the rest is a fact about who carries it, and refusing one of
-  // them does not make it discriminate (review of #2123).
-  if (carrying.length >= population.length) {
-    return {
-      status: "OVER_BOUND",
-      carrying,
-      honoured: new Set(),
-      cap,
-      why:
-        `REFUSED — all ${population.length} candidate(s) carry "${label}", so it ` +
-        `ranks nothing among them whatever Ready's depth of ${cap} allows. NONE was ` +
-        `promoted: ${named}.${refusedNote}`,
-    };
-  }
-  if (asking.length > cap) {
-    return {
-      status: "OVER_BOUND",
-      carrying,
-      honoured: new Set(),
-      cap,
-      why:
-        `REFUSED — ${asking.length} issues carry "${label}" and Ready's depth is ` +
-        `${cap}, so the label ranks nothing. NONE of them was promoted: ${askingNames}. ` +
-        `Remove the label from ${asking.length - cap} of them.${refusedNote}`,
-    };
-  }
-  return {
-    status: "HONOURED",
-    carrying,
-    honoured: new Set(asking),
-    cap,
-    why:
-      `${asking.length} of a bound of ${cap} carry "${label}" and go first: ${askingNames}.${refusedNote}`,
+  const facts: WorkNextFacts = {
+    carries: carrying.length > 0,
+    slice: scope === "SLICE",
+    depthUnread: cap === null,
+    universal: carrying.length > 0 && carrying.length >= population.length,
+    allRefused: asking.length === 0,
+    overDepth: cap !== null && asking.length > cap,
   };
+  const rows = workNextRows(facts);
+  const base = { carrying, honoured: new Set<number>(), cap };
+  // Fails toward NOT promoting. The coverage test makes this unreachable; if a
+  // row were ever lost, an undecided combination promotes nothing and says so.
+  if (rows.length !== 1) {
+    return {
+      ...base,
+      status: "UNMEASURED",
+      why:
+        `UNMEASURED — the work-next table matched ${rows.length} rows for ${JSON.stringify(facts)}, ` +
+        `so NOTHING was promoted${named ? `, including ${named}` : ""}`,
+    };
+  }
+  switch (rows[0]!.outcome) {
+    case "NONE":
+      return { ...base, status: "NONE", why: `no issue carries "${label}", so the ordinary order stands` };
+    case "UNMEASURED_SLICE":
+      return {
+        ...base,
+        status: "UNMEASURED",
+        why:
+          `UNMEASURED — this run sees only a slice of the candidates, so the bound on ` +
+          `"${label}" has no denominator and NOTHING was promoted, ` +
+          `including ${named}`,
+      };
+    case "UNMEASURED_DEPTH":
+      return {
+        ...base,
+        status: "UNMEASURED",
+        why:
+          `UNMEASURED — Ready's depth could not be read, so the bound on "${label}" ` +
+          `is unknown and NOTHING was promoted, including ${named}`,
+      };
+    case "OVER_BOUND_UNIVERSAL":
+      return {
+        ...base,
+        status: "OVER_BOUND",
+        why:
+          `REFUSED — all ${population.length} candidate(s) carry "${label}", so it ` +
+          `ranks nothing among them whatever Ready's depth of ${cap} allows. NONE was ` +
+          `promoted: ${named}.${refusedNote}`,
+      };
+    case "REFUSED":
+      return {
+        ...base,
+        status: "REFUSED",
+        why:
+          `REFUSED — ${refusedNames} carr${refused.length === 1 ? "ies" : "y"} "${label}" and also ` +
+          `${NEEDS_CRITERION_LABEL}, so NOTHING was promoted: an issue that names no criterion is ` +
+          `never expedited. Name the criterion it serves, or "${NAMES_NONE}", and the label lifts.`,
+      };
+    case "OVER_BOUND_DEPTH":
+      return {
+        ...base,
+        status: "OVER_BOUND",
+        why:
+          `REFUSED — ${asking.length} issues carry "${label}" and Ready's depth is ` +
+          `${cap}, so the label ranks nothing. NONE of them was promoted: ${askingNames}. ` +
+          `Remove the label from ${asking.length - cap!} of them.${refusedNote}`,
+      };
+    case "HONOURED":
+      return {
+        ...base,
+        status: "HONOURED",
+        honoured: new Set(asking),
+        why:
+          `${asking.length} of a bound of ${cap} carry "${label}" and go first: ${askingNames}.${refusedNote}`,
+      };
+  }
 }
 
 /** Nothing is promoted. The reading a caller that has not taken one must pass. */
