@@ -63,6 +63,7 @@ import { measureClosedIssues } from "../lib/board-throughput";
 // by a test rather than only read. Loopback only — it carries a PAT.
 import { API_BASE_ENV, resolveApiBase } from "../lib/github-api-base";
 import { nextCursor } from "../lib/graphql-cursor";
+import { resolve } from "path";
 
 /**
  * Every refusal leaves through this one constant, so a mutant copy with it
@@ -181,6 +182,17 @@ async function main(): Promise<number> {
     console.error("UNMEASURED: --repo <owner/name> and --project <id> are both required");
     return EXIT_REFUSED;
   }
+  // **The tree every config read below names** (#1968, Claim 2), read once.
+  // `--project-root <dir>`, else the directory the run started in — the shape
+  // `board-mirror.ts` takes. A flag with no directory after it is refused
+  // rather than read as the current one: a truncated command that silently
+  // measured wherever it started is the defect this flag exists to remove.
+  const rootArg = process.argv.includes("--project-root") ? arg("project-root") : undefined;
+  if (rootArg === null || (rootArg !== undefined && (rootArg.trim() === "" || rootArg.startsWith("--")))) {
+    console.error("UNMEASURED: --project-root needs a directory after it. Nothing was read.");
+    return EXIT_REFUSED;
+  }
+  const root = rootArg === undefined ? process.cwd() : resolve(rootArg);
   // **At least one candidate source.** An invocation with no source has
   // nothing to look at and must not quietly become either one.
   //
@@ -796,7 +808,7 @@ async function main(): Promise<number> {
   // not read one, because a `null` prefix is the pre-#1943 ordering and a run
   // from a directory with no config would otherwise turn the fix off in
   // silence — round 2 of #1965's review.
-  const engine = enginePrefixReading(process.cwd());
+  const engine = enginePrefixReading(root);
   if (engine.unmeasured !== null) console.error(`  ${engine.unmeasured}`);
   // The `work-this-next` promotion, bounded by the SAME depth the lane is
   // judged against (#1962) — `cap`, two lines up, not a second reading. Over
@@ -814,7 +826,7 @@ async function main(): Promise<number> {
     eligible,
     cap,
     topUp ? "COMPLETE" : "SLICE",
-    readExpediteLabel(process.cwd()),
+    readExpediteLabel(root),
   );
   if (workNext.status !== "NONE") console.log(`  ${workNext.why}`);
   // **The focus, between eligibility and selection** (SC-2741, ADR-013 row
@@ -863,7 +875,7 @@ async function main(): Promise<number> {
   // half that is new.
   const demoting = incumbentDecisions(readyIncumbents, READY_COLUMN, {
     active,
-    expediteLabel: readExpediteLabel(process.cwd()),
+    expediteLabel: readExpediteLabel(root),
   }).filter(d => d.demote);
   for (const d of demoting) {
     console.log(`  #${d.number} is in ${READY_COLUMN} and ${d.why} -> ${d.to}`);
