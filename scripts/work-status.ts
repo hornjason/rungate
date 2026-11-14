@@ -51,6 +51,7 @@ import {
   readyCap,
   readyOrderFor,
   scopedCandidates,
+  needsCriterionLine,
   workNextReading,
   type Throughput,
 } from "../lib/board-ready-rule";
@@ -760,6 +761,20 @@ const workNext = workNextReading(
   readExpediteLabel(process.cwd()),
 );
 if (workNext.status !== "NONE") console.log(`\n  ${workNext.why}`);
+// SC-2762: open issues that have not answered the criterion question, and the
+// oldest — none of them can be expedited, and the count is printed rather
+// than left for somebody to look up.
+console.log(
+  needsCriterionLine(
+    open.map((i: any) => ({
+      number: i.number,
+      labels: (i.labels ?? [])
+        .map((l: any) => (typeof l === "string" ? l : l?.name))
+        .filter((n: any) => typeof n === "string"),
+      createdAt: String(i.created_at ?? ""),
+    })),
+  ),
+);
 
 // **The focus Ready refills from** (SC-2741, ADR-013 row 8), read over every
 // OPEN issue — claimed and blocked ones included — and the same scope the
