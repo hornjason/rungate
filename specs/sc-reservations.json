@@ -32,13 +32,5 @@
     "records that reading for the thirteen it cleared, PR by PR; this file cannot",
     "prove it about itself, so do not read the sentence above as proof."
   ],
-  "reservations": [
-    {
-      "owner": "rg/1964",
-      "from": 279,
-      "to": 290,
-      "namespace": "FG",
-      "note": "#1964 - the filing cap is read from committed config only (SC-2753). FG-278 is the highest id in test/issue-filing-gate.test.ts on main; the rg/2086-net-growth-cap block (FG-266..280) it replaces belonged to PR #2088, merged. FG has no allocator, so this is the eyeballed-headroom method .claude/rules/parallel-sessions.md names, declared before any id is consumed. Delete when the PR merges."
-    }
-  ]
+  "reservations": []
 }
