@@ -18,16 +18,21 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { readExpediteLabel } from "../lib/config-readers";
-import { expediteLabelDefault, generateOrAuditProjectHarness, labelKeyRepairs } from "../lib/scaffold/steps";
+import {
+  expediteLabelDefault,
+  expediteLabelTemplate,
+  generateOrAuditProjectHarness,
+  labelKeyRepairs,
+} from "../lib/scaffold/steps";
 
 /** Read from the shipped template, never spelled here — the census in board-ready-rule.test.ts refuses a literal. */
 const EXPEDITE_LABEL_DEFAULT = expediteLabelDefault();
 
 /** Scaffold `config` (or nothing) into a throwaway tree; hand back what was written and said. */
-function scaffold(config: Record<string, unknown> | null) {
+function scaffold(config: unknown) {
   const root = mkdtempSync(join(tmpdir(), "rg-label-keys-"));
   try {
-    if (config !== null) {
+    if (config !== undefined) {
       mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
       writeFileSync(join(root, ".claude", "rungate", "config.json"), JSON.stringify(config, null, 2));
     }
@@ -42,7 +47,7 @@ function scaffold(config: Record<string, unknown> | null) {
 }
 
 /** Scaffold a monolith `.claude/rungate.json`; hand back the directory config if one was written, and what was said. */
-function scaffoldMonolith(config: Record<string, unknown>) {
+function scaffoldMonolith(config: unknown) {
   const root = mkdtempSync(join(tmpdir(), "rg-label-keys-mono-"));
   try {
     mkdirSync(join(root, ".claude"), { recursive: true });
@@ -89,8 +94,9 @@ describe("SC-2748: scaffold writes the expedite key, and names the override key 
   });
 
   test("an installation missing the template writes nothing and names the expedite key as unset", () => {
-    expect(expediteLabelDefault(join(tmpdir(), "rg-no-such-template.json"))).toBeNull();
-    const { config, changed, lines } = labelKeyRepairs({ project: "x", board: {} }, { expediteDefault: null });
+    const missing = join(tmpdir(), "rg-no-such-template.json");
+    expect(expediteLabelDefault(missing)).toBeNull();
+    const { config, changed, lines } = labelKeyRepairs({ project: "x", board: {} }, { template: expediteLabelTemplate(missing) });
     expect(changed).toBe(false);
     expect("expediteLabel" in config.board, "a blank or null label was written").toBe(false);
     expect(lines.join("\n"), "the missing template was not named").toMatch(
@@ -129,10 +135,56 @@ describe("SC-2748: scaffold writes the expedite key, and names the override key 
   });
 
   test("a new project's config carries the expedite key and reports the override key unset", () => {
-    const { written, said } = scaffold(null);
+    const { written, said } = scaffold(undefined);
     expect(written, "no config was created").not.toBeNull();
     expect(written.board?.expediteLabel).toBe(EXPEDITE_LABEL_DEFAULT);
     expect(written.board && "filingOverrideLabel" in written.board).toBe(false);
     expect(said).toMatch(/UNSET: board\.filingOverrideLabel/);
+  });
+});
+
+describe("#2156: input edge cases are refused or reported by name, never crashed on or misreported", () => {
+  for (const [what, value] of [["null", null], ["a number", 7], ["an array", []]] as const) {
+    test(`a directory config.json of ${what} is refused naming the file, and the run completes`, () => {
+      const { said } = scaffold(value);
+      expect(said).toMatch(/REFUSED: \.claude\/rungate\/config\.json is valid JSON but not an object/);
+    });
+    test(`a monolith of ${what} is refused naming .claude/rungate.json, and the run completes`, () => {
+      const { said } = scaffoldMonolith(value);
+      expect(said).toMatch(/REFUSED: \.claude\/rungate\.json is valid JSON but not an object/);
+    });
+  }
+
+  test("labelKeyRepairs refuses a non-object config by name rather than throwing", () => {
+    const { changed, lines } = labelKeyRepairs(null as never, { file: "cfg.json" });
+    expect(changed).toBe(false);
+    expect(lines.join("\n")).toMatch(/REFUSED: board\.expediteLabel .*cfg\.json is not a JSON object/);
+  });
+
+  test("a template with no usable expediteLabel says so, never that it is missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-label-template-"));
+    try {
+      const cases: [string, string, RegExp][] = [
+        ["blank", '{"expediteLabel": ""}', /carries no expediteLabel \(blank\)/],
+        ["absent", "{}", /carries no expediteLabel \(absent\)/],
+        ["not a string", '{"expediteLabel": 3}', /carries no expediteLabel \(not a string\)/],
+        ["unparseable", "{", /could not be parsed/],
+      ];
+      for (const [name, body, why] of cases) {
+        const path = join(dir, `${name.replace(/ /g, "-")}.json`);
+        writeFileSync(path, body);
+        const reading = expediteLabelTemplate(path);
+        expect(reading.label, `${name}: a label was read`).toBeNull();
+        const said = labelKeyRepairs({ board: {} }, { template: reading }).lines.join("\n");
+        expect(said, `${name}: wrong reason`).toMatch(why);
+        expect(said, `${name}: reported as missing`).not.toMatch(/missing/);
+      }
+      expect(expediteLabelTemplate(join(dir, "nope.json"))).toEqual({
+        label: null,
+        why: expect.stringContaining("is missing"),
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
