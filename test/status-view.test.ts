@@ -158,17 +158,17 @@ describe("#2147: a phase with no issues is judged by the criteria the spec place
   const spec = (box: " " | "x") =>
     [
       "## Success Criteria",
-      "- [x] SC-901: one",
-      "- [x] SC-902: two",
-      `- [${box}] SC-903: three`,
-      "- [ ] SC-904: placed in a phase that has issues",
+      "- [x] SC-9901: one",
+      "- [x] SC-9902: two",
+      `- [${box}] SC-9903: three`,
+      "- [ ] SC-9904: placed in a phase that has issues",
       "",
       "### Phase placement",
       "",
       "| Placement | Criteria |",
       "|---|---|",
-      "| **Phase 1** | SC-901, SC-902, SC-903 |",
-      "| **Phase 2** | SC-904 |",
+      "| **Phase 1** | SC-9901, SC-9902, SC-9903 |",
+      "| **Phase 2** | SC-9904 |",
       "",
     ].join("\n");
   const ms = [
@@ -199,7 +199,7 @@ describe("#2147: a phase with no issues is judged by the criteria the spec place
   });
 
   test("a placed id the spec never states is unticked, not done", () => {
-    const missing = spec("x").replace("- [x] SC-903: three\n", "");
+    const missing = spec("x").replace("- [x] SC-9903: three\n", "");
     expect(phaseLines(ms, "Zqengine", missing)[0].state).toBe("empty");
   });
 
