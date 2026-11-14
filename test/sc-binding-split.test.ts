@@ -327,7 +327,12 @@ const UNCLAIMED_RATCHET = 150;
 // #2046. A claim that scaffold emits adr-accepted.yml and this repository's
 // copy is the generated one, which no registered pattern expresses; the
 // `SC-2744` describe in test/adr-accepted-workflow.test.ts names it.
-const CLAIMED_UNBINDABLE = 165;
+// 165 -> 166: SC-2743 ticked by `sync-sc-status --only SC-2743` on the PR for
+// #2045. A claim that scaffold emits closing-references.yml and this
+// repository's copy is the generated one, which no registered pattern
+// expresses; the `SC-2743` describe in test/closing-references-workflow.test.ts
+// names it.
+const CLAIMED_UNBINDABLE = 166;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
