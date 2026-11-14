@@ -69,7 +69,12 @@ permissions:
 
 jobs:
   release:
-    runs-on: "ubuntu-latest"
+    # The image ci.yml tests on, never `ubuntu-latest` (#2145). The full suite
+    # runs here before `npm publish`, so this must be the environment the
+    # suite is known green in. `ubuntu-latest` moved to ubuntu-26.04 between
+    # v0.8.14 (2026-11-07, green on 24.04) and v0.8.15 (2026-11-14), and 23
+    # tests that pass on 24.04 failed there: v0.8.15 published nothing.
+    runs-on: "ubuntu-24.04"
     permissions:
       contents: read
       id-token: write # the OIDC credential npm publish authenticates with

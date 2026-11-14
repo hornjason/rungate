@@ -186,7 +186,7 @@ registry, and goes red when either drifts. Bumping `package.json` without
 updating this line turns it red, which is what makes a release a two-commit
 operation rather than a tag somebody remembers to annotate.
 
-- **Distribution standing (2026-11-07)** — tree `0.8.14`, published `rungate@0.8.14`.
+- **Distribution standing (2026-11-14)** — tree `0.8.16`, published `rungate@0.8.16`.
 
 **This is the follow-up commit the two-commit operation refers to, and the
 numbers now agree.** `distributionViolations` compares the first to
