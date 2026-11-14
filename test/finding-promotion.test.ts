@@ -1663,5 +1663,8 @@ describe("#2066 review round 2", () => {
     const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
     expect(cli).toContain("bankForRetry(");
     expect(cli.indexOf("bankForRetry(")).toBeLessThan(cli.indexOf("if (!write) {\n  const where"));
+    // The bank is read on a retry too, not only when the count moved — the
+    // condition, not just the call, is what the review found missing.
+    expect(cli).toContain("if (counts.before.deferred && (moved || result.alreadyWritten)) {");
   });
 });
