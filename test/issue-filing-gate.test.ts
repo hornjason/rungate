@@ -410,6 +410,9 @@ function checkoutAt(dir: string): void {
     0,
   );
   scaffoldOverride(dir);
+  // A real checkout has an `origin/main`, and the cap reads its config from
+  // there (#1964) — without one every fixture would read UNMEASURED.
+  commitConfigTree(dir);
 }
 
 /**
@@ -5378,6 +5381,8 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
       join(root, ".claude", "rungate", "config.json"),
       JSON.stringify({ project: "x", board: label === null ? {} : { queueLabel: label } }),
     );
+    // Committed, because the queue label is read from origin/main (#1964).
+    commitConfigTree(root);
     return root;
   };
 
@@ -6008,6 +6013,9 @@ describe("the filing cap under direct-ship mode", () => {
     // Present and unparseable — NOT absent. The two resolve to the same cap
     // on purpose and must not resolve to the same report.
     writeFileSync(join(dir, ".claude", "rungate", "config.json"), '{"ship": {"mode": "dierct"');
+    // Committed: the cap reads the config at origin/main (#1964), so a
+    // corrupt config has to be the COMMITTED one for this case to reach it.
+    commitConfigTree(dir);
 
     const corrupt = await filingGate(filing, {
       projectRoot: dir,
@@ -6031,6 +6039,7 @@ describe("the filing cap under direct-ship mode", () => {
       join(dir, ".claude", "rungate", "config.json"),
       JSON.stringify({ ship: { mode: "direct", since: "2026-10-19", reason: "stabilising" } }),
     );
+    commitConfigTree(dir);
     const parses = await filingGate(filing, {
       projectRoot: dir,
       now: AT,
@@ -6063,6 +6072,7 @@ describe("the filing cap under direct-ship mode", () => {
       join(dir, ".claude", "rungate", "config.json"),
       JSON.stringify({ ship: { mode: "harness" }, board: { filingsPerRun: "12" } }),
     );
+    commitConfigTree(dir);
     const r = await filingGate(filing, {
       projectRoot: dir,
       now: AT,
@@ -7005,6 +7015,8 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     const root = join(scratch, `net-growth-${name}`);
     mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
     writeFileSync(join(root, ".claude", "rungate", "config.json"), JSON.stringify({ project: "x", ...config }));
+    // Committed, because the cap is read from origin/main (#1964).
+    commitConfigTree(root);
     return root;
   };
 
@@ -7020,6 +7032,13 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
   const queued = () => filing(`--label ${QUEUE_LABEL}`);
 
   /** `n` intents already spent in `root`'s run, inside the window. */
+  // The run id once per tree, not once per row: these trees are git checkouts
+  // now (#1964 commits their config), and `runIdFor` shells out to git there.
+  const runOf = new Map<string, string>();
+  const runFor = (root: string): string => {
+    if (!runOf.has(root)) runOf.set(root, runIdFor(root).run!);
+    return runOf.get(root)!;
+  };
   const spent = (root: string, n: number): FilingLedgerRow[] =>
     Array.from({ length: n }, (_, i) => ({
       at,
@@ -7039,7 +7058,7 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
       refiledAfter: null,
       exemption: "out-of-pr-diff" as const,
       intent: true,
-      run: runIdFor(root).run!,
+      run: runFor(root),
     }));
 
   const measured = (opened: number, closed: number) => async (): Promise<NetGrowthReading> => ({

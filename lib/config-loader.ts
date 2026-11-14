@@ -299,12 +299,43 @@ export const COMMITTED_READ_TIMEOUT_MS = 10_000;
  * below the top level reads the same files.
  */
 export function gitCommittedFiles(root: string, ref: string = "origin/main"): CommittedFiles {
-  const git = (args: string[]): string | null => {
-    const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8", timeout: COMMITTED_READ_TIMEOUT_MS });
-    return r.error === undefined && r.status === 0 ? r.stdout : null;
-  };
-  const readable = git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]) !== null;
-  return { ref, readable, show: rel => (readable ? git(["show", `${ref}:${rel}`]) : null) };
+  // ONE `git cat-file --batch` resolves the revision and reads every file a
+  // layout can be made of. The filing gate runs as a PreToolUse hook on every
+  // `gh issue create`, and a spawn per file cost five processes a filing.
+  // A name the commit does not have comes back `<name> missing`; a revision
+  // that does not resolve makes its `^{commit}` line missing too.
+  const paths = [...DIRECTORY_CONFIG_FILES.map(file => `${DIR_REL}/${file}`), MONOLITH_REL];
+  const names = [`${ref}^{commit}`, ...paths.map(p => `${ref}:${p}`)];
+  const r = spawnSync("git", ["-C", root, "cat-file", "--batch"], {
+    input: names.join("\n") + "\n",
+    timeout: COMMITTED_READ_TIMEOUT_MS,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (r.error !== undefined || r.status !== 0 || !Buffer.isBuffer(r.stdout)) {
+    return { ref, readable: false, show: () => null };
+  }
+  const out = r.stdout;
+  const results: (string | null)[] = [];
+  let at = 0;
+  for (let i = 0; i < names.length; i++) {
+    const eol = out.indexOf(0x0a, at);
+    if (eol === -1) return { ref, readable: false, show: () => null };
+    const header = out.subarray(at, eol).toString("utf-8");
+    at = eol + 1;
+    // `<name> missing` / `<name> ambiguous` carry no body. Anything else is
+    // `<oid> <type> <size>`, then exactly `size` bytes, then a newline.
+    if (header.endsWith(" missing") || header.endsWith(" ambiguous")) {
+      results.push(null);
+      continue;
+    }
+    const size = Number(header.split(" ")[2]);
+    if (!Number.isInteger(size) || size < 0) return { ref, readable: false, show: () => null };
+    results.push(out.subarray(at, at + size).toString("utf-8"));
+    at += size + 1;
+  }
+  const readable = results[0] !== null;
+  const content = new Map(paths.map((p, i) => [p, results[i + 1] ?? null]));
+  return { ref, readable, show: rel => (readable ? (content.get(rel) ?? null) : null) };
 }
 
 /**
