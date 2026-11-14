@@ -251,4 +251,14 @@ describe("#2135: the last three sites, through their own entry points", () => {
     expect(out).not.toContain("Success Criteria");
     expect(out).toContain("## After");
   });
+
+  test("issue-extraction: four spaces is indented code, so it neither opens nor closes a fence", () => {
+    // The three-space limit stays in the caller, which also reads indented
+    // code. The shared reader opens at any indentation; this site must not.
+    const notOpened = stripCodeBlocks("intro\n\n    ```\n## Success Criteria\n");
+    expect(notOpened, "an indented ``` opened a fence and hid the heading").toContain("## Success Criteria");
+    const notClosed = stripCodeBlocks("```\n    ```\n## Inside\n```\n## After\n");
+    expect(notClosed, "an indented ``` closed the fence early").not.toContain("## Inside");
+    expect(notClosed).toContain("## After");
+  });
 });
