@@ -57,10 +57,13 @@ const UNPINNED = "UNPINNED";
 // adjudicator, and it resolves the version from the same single declaration.
 // #1488 added the fourth for the same reason one workflow over — the
 // unmeasured classifier runs through `bunx` on `workflow_run: completed`.
+// #2046 and #2045 added adr-accepted.yml and closing-references.yml, which
+// run the published CLI.
 const GENERATED = [
   "adr-accepted.yml",
   "ai-review-unmeasured.yml",
   "ai-review.yml",
+  "closing-references.yml",
   "ci.yml",
   "gates.yml",
 ] as const;

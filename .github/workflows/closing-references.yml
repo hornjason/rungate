@@ -1,24 +1,24 @@
-# NOT a rungate-generated workflow, deliberately (#1362).
+# generated-sha: 09b1d3754c543b6f
+# Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 #
-# This file carries no `generated-sha` marker, so a re-scaffold reports it
-# NOT-OWNED and leaves it alone — `.claude/rules/harness-managed.md`. That is
-# the right ownership for it: the check is a policy this repository holds
-# about its own pull request bodies, not something the harness generates for
-# its consumers. Putting the job inside the generated `gates.yml` instead
-# makes that file `generated-and-hand-edited` with no key declared in
-# `ci.workflowOverrides`, which WORKFLOW-DRIFT-1 FAILs — correctly, because
-# `bunx rungate scaffold .` would then overwrite the job without saying so.
+# A closing keyword GitHub cannot see, and a pull request that closes no issue
+# (#1362, ADR-013 rule 9 step 4). Generated since #2045: rule 9 is every
+# consumer's policy, so the scaffold writes this file and this repository's
+# copy is the generated one.
+#
+# RUNGATE_REQUIRE_CLOSING_REF turns the last two refusals on when it is the
+# string `true`, and at no other value; otherwise they are a warning
+# annotation. Make `closing-references` a required check to enforce it.
 name: Closing references
 
 on:
-  # A pull request is the only event with a body to read. On push and in a
-  # merge queue there is nothing to check, and a job that cannot take a
-  # reading must not report one.
-  #
   # `edited` is ADR-013 decision 4: adding "Fixes #N" to the description is
-  # the remedy the refusal prints, so editing the body has to re-run it.
+  # the remedy the refusal prints, so editing the body re-runs it.
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  # A required check must report in a merge queue or the queue waits for it
+  # forever. The queue run reads the pull request its ref names.
+  merge_group:
 
 permissions:
   contents: read
@@ -29,20 +29,24 @@ permissions:
 
 jobs:
   closing-references:
-    runs-on: "ubuntu-latest"
+    runs-on: "ubuntu-24.04"
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           # Pinned by .bun-version — the project's single declaration (#622).
+          # setup-bun reads that file, so there is no version spelled here to drift from it.
           bun-version-file: ".bun-version"
-      - run: bun install
+        env:
+          # A per-runner install path, so runners sharing a HOME cannot rewrite
+          # each other's bun mid-exec ("Text file busy").
+          HOME: ${{ runner.tool_cache }}/bun-home
+          USERPROFILE: ${{ runner.tool_cache }}/bun-home
       - name: A closing keyword GitHub cannot see, and a pull request that closes no issue
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
-          # ADR-013 decision 4. Read exactly: only the string `true` turns the
-          # refusal on; anything else reports it as a warning annotation.
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
           RUNGATE_REQUIRE_CLOSING_REF: ${{ vars.RUNGATE_REQUIRE_CLOSING_REF }}
           QUERY: >-
             query($owner: String!, $name: String!, $number: Int!) {
@@ -54,26 +58,20 @@ jobs:
             commits(first: 250) { totalCount nodes { commit { oid message } } }
             } } }
         run: |
-          # The fields are fetched here and handed to the script, so nothing in
-          # the script can compute its own idea of whether an issue is linked
-          # — GitHub's answer is the input, not something to agree with.
-          #
-          # ONE query, with each issue body on the closingIssuesReferences node
-          # GitHub returned (SC-2737). A second lookup per issue would need its
-          # own rule for which nodes belong to this repository, and that rule
-          # already has one decider: linkedIssuesInThisRepo, in the script.
-          #
-          # `files` is the diff the session-record exemption is decided from,
-          # never the branch name. Past 100 files the list is cut short, which
-          # cannot exempt anything: only three paths are session records.
-          # Closed issues are cut short the same way, and that CAN hide one, so
-          # `totalCount` goes with them and the script refuses a short list.
-          #
-          # No `|| true` and no `2>/dev/null`: `run:` is `bash -e`, so a failed
-          # query stops the step red instead of reaching the script as a clean
-          # pull request. `--repo` is #1978 round 2: a bare number is not an
-          # identity, so without it the script refuses.
+          set -o pipefail
+          # A pull request run carries its number. A merge-queue run does not, but its
+          # ref names the pull request: gh-readonly-queue/<base>/pr-<N>-<sha>.
+          number="${PR:-}"
+          if [ -z "$number" ]; then
+            number=$(printf '%s' "${QUEUE_REF:-}" | sed -n 's|^.*/pr-\([0-9][0-9]*\)-[0-9a-f][0-9a-f]*$|\1|p')
+          fi
+          if [ -z "$number" ]; then
+            echo "::error::UNMEASURED — this run carries no pull request number and its ref (${QUEUE_REF:-none}) names none, so there is no pull request body to check. Nothing was read."
+            exit 1
+          fi
+          # GitHub's answer is the input: the command never computes its own idea of
+          # whether an issue is linked. --repo because a bare number is not an identity.
           gh api graphql -f query="$QUERY" \
-            -f owner="${GITHUB_REPOSITORY%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$PR" \
+            -f owner="${GITHUB_REPOSITORY%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$number" \
             --jq '.data.repository.pullRequest | {number, body, files: .files.nodes, closingIssuesReferences: .closingIssuesReferences.nodes, closingIssuesTotal: .closingIssuesReferences.totalCount, commits: [.commits.nodes[].commit | {sha: .oid, message}], commitsTotal: .commits.totalCount}' \
-            | bun scripts/audit-closing-references.ts --repo "$GITHUB_REPOSITORY"
+            | bunx rungate@0.8.16 audit-closing-references --repo "$GITHUB_REPOSITORY"
