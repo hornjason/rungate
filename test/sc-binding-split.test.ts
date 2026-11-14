@@ -311,7 +311,11 @@ const UNCLAIMED_RATCHET = 150;
 // #2049. A claim that the process rules file and AGENTS.md's rule 9 come from
 // one source, which no registered pattern expresses; the `SC-2747` describes
 // in test/process-rules.test.ts name it in a declaring position.
-const CLAIMED_UNBINDABLE = 161;
+// 161 -> 162: SC-2748 ticked by `sync-sc-status --only SC-2748` on the PR for
+// #2050. A claim about which config keys scaffold writes and which it only
+// reports, which no registered pattern expresses; the `SC-2748` describe in
+// test/scaffold-label-keys.test.ts names it in a declaring position.
+const CLAIMED_UNBINDABLE = 162;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
