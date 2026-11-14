@@ -795,7 +795,7 @@ describe("SC-2752: declared-work — every unticked criterion and open stage ite
       declaredWork: [...board.declaredWork!, { kind: "stage-item", id: "E9", source: "project-state.json", issue: "2" }],
     });
     const read = readSnapshotText(text);
-    expect(read.board, read.why).not.toBeNull();
+    expect(read.board, read.why ?? undefined).not.toBeNull();
     expect(read.board!.declaredWork, "a malformed row was dropped and the rest read as the whole population").toBeUndefined();
     expect(takeReading(declared(), read.board!).status).toBe("unmeasured");
     // CONTROL: the same board with the row well-formed is read in full.
