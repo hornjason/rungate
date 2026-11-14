@@ -75,6 +75,7 @@
     "lib/scaffold/steps.ts::rulePath | rule: no-initialiser (nested), projectPath: parameter (nested)",
     "lib/scaffold/steps.ts::settingsPath | consumer: no-initialiser (nested), root: parameter (nested)",
     "lib/scaffold/steps.ts::tsconfigPath | root: parameter (nested)",
+    "lib/scaffold/write-steps.ts::target | projectPath: parameter (nested), file: no-initialiser (nested)",
     "lib/stale-cleanup.ts::destPath | entry: no-initialiser (nested), workDir: parameter (nested)",
     "lib/stale-cleanup.ts::destPath | entry: no-initialiser (nested), workDir: parameter (nested)",
     "lib/test-suite-lock.ts::counterPath(lockDir, counterKey(sessionId, options)) | sessionId: parameter, options: parameter",

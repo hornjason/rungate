@@ -197,7 +197,6 @@ export const OWNED_FILES: OwnedFile[] = [
     // because every ADR is copied from it and a marker would travel into each.
     path: "docs/adr/TEMPLATE.md",
     strategy: "regenerate",
-    servedBy: "writeProcessFiles (lib/scaffold/write-steps.ts) via regenerateOwned",
     customize: "Copy it to docs/adr/ADR-<n>-<slug>.md and edit the copy",
     avoid: "Don't edit the template itself — a re-scaffold rewrites it",
   },

@@ -224,7 +224,7 @@ What does this workflow produce?
  * command is a provenance file like a rule — a consumer may tailor it, and a
  * hand edit is preserved and reported rather than overwritten.
  */
-function writeProcessFiles(projectPath: string, actions: string[]): void {
+export function writeProcessFiles(projectPath: string, actions: string[]): void {
   for (const file of processFiles(isHarnessItself(projectPath))) {
     if (file.content === null) {
       actions.push(`REFUSED: ${file.path} (${file.why}) — nothing was written`);
