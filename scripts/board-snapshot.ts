@@ -286,12 +286,20 @@ export function readDeclaredWork(
     } catch {
       return {};
     }
-    const stages = (state as { stages?: unknown } | null)?.stages;
+    // Every level must be the shape it claims, or the population is unread.
+    // `JSON.parse` accepts `null` and `[]`, and optional chaining on either
+    // reads as "no stages", which would drop the stage half silently (AI
+    // review of #2096). Only a plan with no `stages` key declares none.
+    const isObject = (v: unknown): v is Record<string, unknown> =>
+      v !== null && typeof v === "object" && !Array.isArray(v);
+    if (!isObject(state)) return {};
+    const stages = state.stages;
     if (stages !== undefined && !Array.isArray(stages)) return {};
-    for (const stage of (stages ?? []) as { items?: unknown }[]) {
-      if (!Array.isArray(stage?.items)) continue;
-      for (const item of stage.items as Record<string, unknown>[]) {
-        if (item?.done !== false || typeof item.id !== "string") continue;
+    for (const stage of (stages ?? []) as unknown[]) {
+      if (!isObject(stage) || !Array.isArray(stage.items)) return {};
+      for (const item of stage.items as unknown[]) {
+        if (!isObject(item)) return {};
+        if (item.done !== false || typeof item.id !== "string") continue;
         work.push({
           kind: "stage-item",
           id: item.id,

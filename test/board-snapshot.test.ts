@@ -2204,6 +2204,28 @@ describe("SC-2752 / #1953: readDeclaredWork — unticked criteria and open stage
     });
   });
 
+  test("SC-2752: a plan whose root, a stage or an item is not an object omits the key, never drops it", () => {
+    // AI review of #2096: `JSON.parse` accepts `null` and `[]`, and optional
+    // chaining on either reads as "no stages", so the stage half vanished and
+    // the criteria alone could read MET.
+    const shapes = {
+      "root is null": "null",
+      "root is an array": "[]",
+      "a stage is not an object": JSON.stringify({ stages: [7] }),
+      "a stage's items is not a list": JSON.stringify({ stages: [{ id: "E", items: "E2" }] }),
+      "an item is not an object": JSON.stringify({ stages: [{ id: "E", items: [null] }] }),
+    };
+    for (const [label, text] of Object.entries(shapes)) {
+      withTree({ ...SPECS, "project-state.json": text }, dir => {
+        expect(readDeclaredWork(dir, ROWS), label).toEqual({});
+      });
+    }
+    // CONTROL: a plan with no `stages` key at all declares no stage work.
+    withTree({ ...SPECS, "project-state.json": JSON.stringify({ goal: {} }) }, dir => {
+      expect(readDeclaredWork(dir, ROWS).declaredWork?.map(w => w.id)).toEqual(["SC-9101"]);
+    });
+  });
+
   test("SC-2752: an UNREADABLE in-scope spec omits the key — a shorter list is what fewer specs produce", () => {
     withTree({ ...SPECS, "project-state.json": STATE }, dir => {
       expect(readDeclaredWork(dir, [...ROWS, { path: "specs/GONE.md", state: "UNREADABLE" as const }])).toEqual({});
