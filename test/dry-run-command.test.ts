@@ -12,8 +12,12 @@
  * any command line in it turns the no-write case red.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
+
+import { ADR_TEMPLATE_PATH, DRY_RUN_COMMAND_PATH, processFiles } from "../lib/scaffold/process-files";
+import { runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
 
 const PATH = join(import.meta.dir, "..", ".claude", "commands", "dry-run.md");
 const text = existsSync(PATH) ? readFileSync(PATH, "utf-8") : "";
@@ -181,5 +185,80 @@ describe("#2016: /dry-run refuses a checkout behind origin/main and names the co
     // The properties live in stepZeroFailures; this case names them.
     expect(bulletOf(text, RESOLVE), `dry-run.md must resolve <checkout> with: ${RESOLVE}`).not.toBe("");
     expect(stepZeroFailures(text).filter(f => /resol|common dir|<checkout>/.test(f))).toEqual([]);
+  });
+});
+
+/**
+ * Covers SC-2746 (SPEC-TO-BOARD-PIPELINE-SPEC.md), #2048, ADR-014 row 5:
+ * `rungate scaffold` installs `.claude/commands/dry-run.md` and
+ * `docs/adr/TEMPLATE.md` as owned files. Step 2 of the process names both,
+ * and a consumer had neither.
+ */
+describe("SC-2746: rungate scaffold installs the dry-run command and the ADR template as owned files", () => {
+  const scaffoldConsumer = (edit?: (root: string) => void) => {
+    const root = mkdtempSync(join(tmpdir(), "rg-process-files-"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "consumer", version: "0.0.0" }));
+    const first: string[] = [];
+    runScaffoldWriteSteps(root, "node" as never, first);
+    const second: string[] = [];
+    if (edit) {
+      edit(root);
+      runScaffoldWriteSteps(root, "node" as never, second);
+    }
+    const read = (p: string) => (existsSync(join(root, p)) ? readFileSync(join(root, p), "utf-8") : "");
+    return { root, first, second, command: read(DRY_RUN_COMMAND_PATH), template: read(ADR_TEMPLATE_PATH) };
+  };
+
+  test("a consumer's scaffold writes both, and the command calls the published CLI, never a script path", () => {
+    const { root, command, template } = scaffoldConsumer();
+    try {
+      expect(command, "no dry-run command was written").not.toBe("");
+      expect(template, "no ADR template was written").not.toBe("");
+      expect(command).toContain("bunx rungate plan-issues --decompose");
+      expect(command, "a consumer has no bin/ or scripts/").not.toMatch(/\bbun (bin|scripts)\//);
+      expect(command).toContain("bunx rungate board-ready");
+      const cli = command.split("\n").filter(l => l.includes("bunx rungate"));
+      expect(cli.length, "no CLI line was found, so the no-write check measured nothing").toBeGreaterThan(2);
+      expect(cli.filter(l => l.includes("--write")), "a dry run passes --write").toEqual([]);
+      expect(command).toMatch(/^generated-sha: /m);
+      expect(template, "a marker in the template would travel into every ADR copied from it").not.toMatch(/generated-sha/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("this repository's copies are the rendered ones", () => {
+    const [command, template] = processFiles(true);
+    const ours = readFileSync(join(import.meta.dir, "..", DRY_RUN_COMMAND_PATH), "utf-8").replace(/^generated-sha: .*\n/m, "");
+    expect(ours).toBe(command.content!);
+    expect(readFileSync(join(import.meta.dir, "..", ADR_TEMPLATE_PATH), "utf-8")).toBe(template.content!);
+  });
+
+  test("a hand-edited command is preserved and reported; a hand-edited template is rewritten", () => {
+    const { root, second, command, template } = scaffoldConsumer(r => {
+      writeFileSync(join(r, DRY_RUN_COMMAND_PATH), readFileSync(join(r, DRY_RUN_COMMAND_PATH), "utf-8") + "\nmine\n");
+      writeFileSync(join(r, ADR_TEMPLATE_PATH), "edited\n");
+    });
+    try {
+      expect(second.join("\n")).toContain(`PRESERVED: ${DRY_RUN_COMMAND_PATH}`);
+      expect(command).toContain("\nmine\n");
+      expect(template).toBe(processFiles(false)[1].content!);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an installation missing a source refuses by name and writes nothing", () => {
+    const empty = mkdtempSync(join(tmpdir(), "rg-process-templates-"));
+    try {
+      const files = processFiles(false, empty);
+      expect(files.map(f => f.content)).toEqual([null, null]);
+      expect(files.map(f => ("why" in f ? f.why : ""))).toEqual([
+        "templates/process/dry-run.md is missing from this rungate installation",
+        "templates/process/adr-template.md is missing from this rungate installation",
+      ]);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
   });
 });

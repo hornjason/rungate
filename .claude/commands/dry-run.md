@@ -4,10 +4,12 @@ description: Show a proposal as a dry run — the real planning tools without --
 doc-type: reference
 status: active
 updated: 2026-11-12
+generated-sha: de74f34b22e95426
 ---
 
-Show **$ARGUMENTS** as a dry run (ADR-013 step 2, SC-2740). Re-run it after
-every change to the document until Jason agrees with every step it shows.
+Show **$ARGUMENTS** as a dry run (step 2 of the four-step process,
+`.claude/rules/alignment-process.md`). Re-run it after every change to the
+document until the repository owner agrees with every step it shows.
 
 ## Rules
 
@@ -55,7 +57,7 @@ none, say so and stop.
 2. Run the real dry runs from the primary checkout, read-only, with
    `env -u GH_TOKEN` wrapping each call that reaches GitHub. Each tool reads
    `GITHUB_TOKEN` and reports UNMEASURED without it, so pass it as shown. The spec and
-   milestone prefix come from `readBoardInputs` in `lib/config-readers.ts`.
+   milestone prefix are `board.engineSpec` and `board.milestonePrefix` in the rungate config.
    - issues and order links: `env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)" bun bin/rungate.ts plan-issues --decompose <doc> --repo <owner/name>`
    - milestones, if the document adds or moves a phase: `env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)" bun bin/rungate.ts plan-spec <spec> --repo <owner/name> --prefix <prefix>`
    - phase-order links: `env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)" bun bin/rungate.ts plan-deps --repo <owner/name> --milestone-prefix <prefix>`
@@ -66,12 +68,12 @@ none, say so and stop.
    the scratch in the same command.
 3. Print the run, one line per step, and paste each real output under it:
    `N. [YOU|ME|HAND|AUTO] what happens → what it creates or changes`.
-   YOU = Jason decides or merges. ME = the agent. HAND = a command someone
+   YOU = the repository owner decides or merges. ME = the agent. HAND = a command someone
    must remember. AUTO = a workflow fires on an event.
 4. Print **What reaches Ready** once the proposal lands: the active milestone,
    what is pulled first and the cap, what follows as slots open, what is kept
-   out and why, and any expedite. Beside it, what work-status START HERE
-   pulls today, so the difference is visible.
+   out and why, and any expedite. Beside it, what Ready holds today (the
+   reading in step 2), so the difference is visible.
 5. Print **Gaps found** — anything the dry run refused, accepted wrongly, or
    left by hand. One line each.
 6. Print **Improves going forward** — one line per change: what stops being

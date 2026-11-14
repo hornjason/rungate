@@ -24,6 +24,8 @@ forever.
 | `.github/workflows/ai-review.yml` | job-preserving | Set `ci.vertex` in `.claude/rungate/config.json` to authenticate on Vertex with Workload Identity Federation; add your own jobs alongside the generated `ai-review` job | Don't edit the generated `ai-review` job |
 | `.github/workflows/ai-review-unmeasured.yml` | job-preserving | Set `ci.runner` in `.claude/rungate/config.json`; add your own jobs alongside the generated `record-unmeasured` job | Don't edit the generated `record-unmeasured` job, and don't give it a `merge_group` trigger — it reports no status to the pull request and cannot be a required check |
 | `.claude/agents/*.md` | section-preserving | Everything but `## Project Constraints` is generated from `.claude/rungate/roles.json` and the templates; put rules mined from this repo's own history in that section and they carry forward | Don't hand-edit the generated sections — a re-scaffold rewrites them without reporting it |
+| `.claude/commands/dry-run.md` | provenance | Edit freely — a hand-edited command is preserved and reported | Don't expect edits to survive if you also delete the `generated-sha` marker |
+| `docs/adr/TEMPLATE.md` | regenerate | Copy it to docs/adr/ADR-<n>-<slug>.md and edit the copy | Don't edit the template itself — a re-scaffold rewrites it |
 | `.claude/rules/*.md` | provenance | Edit freely — a hand-edited rule is preserved and reported (#370) | Don't expect edits to survive if you also delete the `generated-sha` marker |
 | `test/scaffold-conformity.test.ts` | regenerate | Runs automatically | Don't edit |
 | `CODE-MAP.md` | regenerate | Auto-generated from code scan | Don't edit |

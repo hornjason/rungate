@@ -8,14 +8,14 @@ updated: {date}
 # ADR-{number} — {title}
 
 <!--
-The ADR template (ADR-013 row 6, SC-2739). Copy this file to
+The ADR template, written by `rungate scaffold`. Copy this file to
 docs/adr/ADR-<next number>-<slug>.md and replace every {placeholder}.
 
 Write an ADR when the work is bigger than one issue, or when it changes a
-rule or a gate (AGENTS.md rule 9, step 2). Small decisions skip straight to
-an issue.
+rule or a gate (step 2 of `.claude/rules/alignment-process.md`). Small
+decisions skip straight to an issue.
 
-Leave `status: proposed` until Jason accepts it. Merging the ADR with
+Leave `status: proposed` until the repository owner accepts it. Merging the ADR with
 `status: accepted` is what places its plan on the board.
 -->
 
@@ -43,18 +43,17 @@ claim with no measurement behind it belongs under "Not decided here".}
 ## Decomposition
 
 {Write each criterion id as a `- [ ] SC-<N>: …` line in the governing spec,
-and reserve the ids first (`.claude/rules/parallel-sessions.md`).}
+and reserve the ids first if several branches allocate them.}
 
 One row per issue. `plan-issues --decompose` reads this table and refuses
 the whole plan if any row breaks a rule, so check each one:
 
 - **Criterion**: one `SC-<N>` id. Write it in the governing spec first. The
-  tool checks only the id's shape today; #1999 adds a refusal for an id no
-  spec states. Several rows may serve the same criterion.
+  tool checks the id's shape. Several rows may serve the same criterion.
 - **Outcome**: becomes the issue title word for word. At least 12 characters,
   and no comma, because a Blocked by cell is a comma-separated list.
 - **Files**: the paths the issue will change, comma-separated. At least one,
-  and at most 9 files (AGENTS.md rules 2 and 3).
+  and at most 9 files: an issue that names more is two issues.
 - **Milestone**: the exact title of a milestone that exists, or `—` for
   none.
 - **Blocked by**: `#<issue>`, or another row's Outcome word for word, or `—`.

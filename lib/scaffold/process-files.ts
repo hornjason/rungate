@@ -31,7 +31,7 @@ const TOKEN = 'env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)"';
 const READY_NOW = {
   harness: `   - what Ready holds now: \`${TOKEN} bun scripts/work-status.ts\` (START HERE section only)`,
   consumer:
-    "   - what Ready holds now, and what a top-up would move into it — it changes nothing without `--write`: " +
+    "   - what Ready holds now, and what a top-up would move into it (read-only as written): " +
     '`env -u GH_TOKEN BOARD_PROJECT_TOKEN="$(env -u GH_TOKEN gh auth token)" bunx rungate board-ready ' +
     "--repo <owner/name> --project <board id> --top-up`",
 };
