@@ -4,6 +4,7 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 import { matchPattern, type ParsedSC } from "../lib/conformity";
 import { buildScRegistry } from "../lib/sc-ids";
+import { nextSCNumber, takenScNumbers } from "../lib/create-sc";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "create-sc.ts");
@@ -371,5 +372,34 @@ describe("create-spec SC validation", () => {
     ]);
     expect(result.exitCode).toBe(0);
     expect(existsSync(testSpecPath)).toBe(true);
+  });
+});
+
+/**
+ * #2067: a fixture-range id in a spec's PROSE does not move the allocation.
+ *
+ * The fixture floor was honoured for ids spelled in source and ignored for
+ * ids spelled in the spec itself, so one sentence citing `SC-9999` sent the
+ * next criterion to `SC-10000`. ADR-015's promotions needed a reservation
+ * every time to step around it. A spec DECLARATION stays authoritative at any
+ * number: a fixture-range id the spec actually declares is still taken.
+ */
+describe("#2067: the spec's own fixture-range mentions are read the way source ones are", () => {
+  const PROSE = "Ids at or above the floor, like SC-9999, are fixtures.\n";
+  const DECLARED = "- [ ] SC-9999: lib/x.ts contains [x] — declared in the reserved range\n";
+
+  test("a prose mention of SC-9999 does not push the next id to 10000", () => {
+    expect(nextSCNumber(PROSE)).toBe(1);
+    expect(nextSCNumber(`- [ ] SC-41: lib/x.ts contains [x] — y\n${PROSE}`)).toBe(42);
+  });
+
+  test("a fixture-range id the spec DECLARES is still taken", () => {
+    expect(nextSCNumber(DECLARED)).toBe(10000);
+    expect(nextSCNumber("### SC-9999: a heading declaration\n")).toBe(10000);
+  });
+
+  test("the free-id set agrees with the maximum about the same text", () => {
+    expect(takenScNumbers(PROSE).has(9999)).toBe(false);
+    expect(takenScNumbers(DECLARED).has(9999)).toBe(true);
   });
 });
