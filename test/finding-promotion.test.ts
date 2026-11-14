@@ -1691,8 +1691,8 @@ describe("#2107: three edges of the new flags", () => {
   });
 
   test("a new line never lands between a criterion and the note under it", () => {
-    // #2104: SC-2769 went between SC-1948 and SC-1948's REVIEW note, and
-    // scaffold --fix then re-added a note under SC-1948.
+    // #2104: the #1553 promotion went between the previous criterion and
+    // that criterion's REVIEW note, and scaffold --fix then re-added the note.
     const spec = [
       "## Criteria",
       "",
