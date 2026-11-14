@@ -28,10 +28,14 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  bankWithPromotion,
   bodyWithDecline,
   decline,
   declineViolations,
+  idFamily,
+  placementCount,
   promote,
+  specWithCriterion,
   promotionStatement,
   promotionViolations,
   specPath,
@@ -46,6 +50,7 @@ import {
 import { NAMES_NONE, criterionAnswer } from "../lib/board-mirror";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf, missingSections } from "../lib/issue-shape";
 import { buildScRegistry } from "../lib/sc-ids";
+import { placementReading } from "../lib/spec-placement";
 
 const SOURCE = join(import.meta.dir, "..", "lib", "finding-promotion.ts");
 
@@ -72,6 +77,54 @@ governs: a fixture that states none
 # States None
 
 This spec deliberately declares no criteria.
+`;
+
+/** #2066: a spec whose criteria are grouped `CRC-*` ids, with a section after them. */
+const CRC_SPEC = `---
+doc-type: spec
+testable: true
+governs: a grouped fixture
+---
+
+# Grouped
+
+## Criteria
+
+- [ ] CRC-M15: lib/a.ts contains [a] — first
+- [x] CRC-M16: lib/b.ts contains [b] — second
+      proved-by: test/b.test.ts — 1 pass
+- [ ] CRC-N2: lib/c.ts contains [c] — other group
+
+## Notes
+
+Prose after the criteria.
+`;
+
+/** #2066: a spec that places every criterion in a phase. */
+const PLANNED_SPEC = `---
+doc-type: spec
+testable: true
+governs: a planned fixture
+---
+
+# Planned
+
+## Success Criteria
+
+- [ ] SC-9001: lib/fixture.ts contains [alpha] — the fixture states something
+      proved-by: nothing yet
+- [ ] SC-9002: lib/fixture.ts contains [beta] — and something else
+
+## Notes
+
+Prose after the criteria.
+
+### Phase placement — every criterion has one home
+
+| Placement | Criteria |
+|---|---|
+| **Phase 1** | SC-9001 |
+| **Phase 2** | SC-9002 |
 `;
 
 /** A project root with one spec in it. Caller removes it. */
@@ -435,6 +488,20 @@ describe("SC-2612 / AC-2 (#1678): every refusal is named, and none is a guess", 
       for (const v of promotionViolations(inputFor(measuredEmpty, { spec: "specs/EMPTY-SPEC.md" }))) {
         reached.add(v.refusal);
       }
+      // #2066: raised by `promote` for a grouped family, by `specWithCriterion`
+      // and by `bankWithPromotion`, each with its own case below.
+      const grouped = scratch(CRC_SPEC);
+      for (const g of [null, "Z"]) {
+        const out = promote(inputFor(grouped, { group: g }), REGISTRY);
+        if (!out.promoted) reached.add(out.refusal);
+      }
+      rmSync(grouped, { recursive: true, force: true });
+      for (const phase of [null, 9]) {
+        const out = specWithCriterion(PLANNED_SPEC, "- [ ] SC-9010: lib/x.ts contains [x] — y", "SC-9010", phase);
+        if (!out.ok) reached.add(out.refusal);
+      }
+      const drift = bankWithPromotion(JSON.stringify({ deferred: [] }), "specs/X.md", 1, 2);
+      if (!drift.ok) reached.add(drift.refusal);
 
       expect([...reached].sort()).toEqual([...PROMOTION_REFUSALS].sort());
     } finally {
@@ -503,8 +570,9 @@ describe("SC-2612 / AC-3 (#1678): the module does not answer a question board-mi
     }
     // Vacuity guard: if a refactor removes every read, the loop above
     // asserts nothing and passes. Four since #2060: the three reads of the
-    // target spec, and the read of the module SYMBOL_EXISTS checks.
-    expect(reads).toBe(4);
+    // target spec, and the read of the module SYMBOL_EXISTS checks. Five since
+    // #2066: the read of the deferral bank.
+    expect(reads).toBe(5);
   });
 
   test("the registry parameter has no default, so the compiler catches every call site", () => {
@@ -1397,5 +1465,117 @@ describe("#2060 / SC-2612: an existing symbol is refused, and the issue is linke
     expect(cli.indexOf("const linkFailure = linkIssue();")).toBeGreaterThan(wrote);
     expect(cli).toMatch(/if \(linkFailure\) \{[\s\S]*?process\.exit\(PROMOTION_EXIT\)/);
     expect(cli).not.toContain("Now make #");
+  });
+});
+
+describe("#2066 / SC-2612: finding-promotion writes the spec's family, section, phase and bank", () => {
+  test("the id family is the spec's own: SC by default, CRC where every criterion is CRC", () => {
+    expect(idFamily(SPEC_WITH_CRITERIA)).toBe("SC");
+    expect(idFamily(CRC_SPEC)).toBe("CRC");
+    expect(idFamily(`${CRC_SPEC}\n- [ ] SC-1: lib/x.ts contains [x] — mixed\n`), "a mixture has no family to continue").toBe("SC");
+    expect(idFamily(SPEC_NO_CRITERIA)).toBe("SC");
+  });
+
+  test("a grouped spec allocates the next id in the named group, and refuses with no group or an unknown one", () => {
+    const root = scratch(CRC_SPEC);
+    try {
+      const out = promote(inputFor(root, { group: "M" }), REGISTRY);
+      expect(out.promoted).toBe(true);
+      if (!out.promoted) return;
+      expect(out.id).toBe("CRC-M17");
+      expect(out.line).toBe(`- [ ] CRC-M17: ${promotionStatement(inputFor(root))}`);
+      for (const [group, refusal] of [[null, "GROUP_REQUIRED"], ["Z", "GROUP_UNKNOWN"]] as const) {
+        const refused = promote(inputFor(root, { group }), REGISTRY);
+        expect(refused.promoted).toBe(false);
+        if (!refused.promoted) expect(refused.refusal).toBe(refusal);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the line lands after the last criterion and its proved-by lines, never at the end of the file", () => {
+    const line = "- [ ] SC-9010: lib/x.ts contains [x] — new";
+    const out = specWithCriterion(PLANNED_SPEC.replace("| **Phase 2** | SC-9002 |", "| **Phase 2** | SC-9002, SC-9010 |"), line, "SC-9010", null);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const lines = out.text.split("\n");
+    expect(lines[lines.indexOf(line) - 1]).toStartWith("- [ ] SC-9002:");
+    expect(out.text.indexOf(line)).toBeLessThan(out.text.indexOf("## Notes"));
+    // Below an indented proved-by line, never between a criterion and its proof.
+    const grouped = specWithCriterion(CRC_SPEC, "- [ ] CRC-M17: lib/z.ts contains [z] — third", "CRC-M17", null);
+    expect(grouped.ok).toBe(true);
+    if (!grouped.ok) return;
+    const g = grouped.text.split("\n");
+    const at = g.indexOf("- [ ] CRC-M17: lib/z.ts contains [z] — third");
+    expect(g[at - 1]).toContain("proved-by:");
+    expect(g[at + 1], "a grouped id goes after its own group, before the next group").toStartWith("- [ ] CRC-N2:");
+  });
+
+  test("--phase puts the id in that Phase row, and the placement reader then places it", () => {
+    const line = "- [ ] SC-9010: lib/x.ts contains [x] — new";
+    const out = specWithCriterion(PLANNED_SPEC, line, "SC-9010", 2);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.text).toContain("| **Phase 2** | SC-9002, SC-9010 |");
+    const reading = placementReading(out.text);
+    expect(reading.reading).toBe("MEASURED");
+    expect(reading.unplaced).toEqual([]);
+  });
+
+  test("a spec that places its criteria refuses an unplaced one, and a phase with no row is refused", () => {
+    const line = "- [ ] SC-9010: lib/x.ts contains [x] — new";
+    const none = specWithCriterion(PLANNED_SPEC, line, "SC-9010", null);
+    expect(none.ok).toBe(false);
+    if (!none.ok) {
+      expect(none.refusal).toBe("PHASE_REQUIRED");
+      expect(none.why).toContain("spec-placement");
+    }
+    const missing = specWithCriterion(PLANNED_SPEC, line, "SC-9010", 9);
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.refusal).toBe("PHASE_ROW_ABSENT");
+    // CONTROL: a spec with no placement table takes the line with no phase.
+    expect(specWithCriterion(SPEC_WITH_CRITERIA, line, "SC-9010", null).ok).toBe(true);
+  });
+
+  test("a deferred spec's bank count moves from its old count to its new one, and nothing else changes", () => {
+    const bank = `${JSON.stringify(
+      { deferred: [{ path: "specs/A.md", criteria: 31 }, { path: "specs/B.md", criteria: 7 }] },
+      null,
+      2,
+    )}\n`;
+    const out = bankWithPromotion(bank, "specs/A.md", 31, 32);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.text).toBe(bank.replace('"criteria": 31', '"criteria": 32'));
+    for (const [text, path, before] of [
+      [bank, "specs/A.md", 30],
+      [bank, "specs/C.md", 1],
+      ["{ nope", "specs/A.md", 31],
+    ] as const) {
+      const refused = bankWithPromotion(text, path, before, before + 1);
+      expect(refused.ok, `${path} from ${before}`).toBe(false);
+      if (!refused.ok) expect(refused.refusal).toBe("BANK_DRIFT");
+    }
+  });
+
+  test("placementCount reads deferral and count the way spec-placement does", () => {
+    const deferred = PLANNED_SPEC.replace("governs: a planned fixture", "governs: a planned fixture\nboard-scope: deferred");
+    expect(placementCount(deferred)).toEqual({ deferred: true, criteria: 2 });
+    expect(placementCount(PLANNED_SPEC)).toEqual({ deferred: false, criteria: 2 });
+  });
+
+  test("the CLI inserts and banks before its dry-run exit, and writes the inserted text, never an append", () => {
+    const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
+    const dryRun = cli.indexOf("if (!write) {\n  const where");
+    expect(dryRun).toBeGreaterThan(-1);
+    expect(cli.indexOf("specWithCriterion(content")).toBeGreaterThan(-1);
+    expect(cli.indexOf("specWithCriterion(content")).toBeLessThan(dryRun);
+    expect(cli.indexOf("bankWithPromotion(")).toBeLessThan(dryRun);
+    expect(cli).toContain("writeSpec(target, inserted.text)");
+    expect(cli).not.toContain("content.trimEnd()}\\n${result.line}");
+    expect(cli.indexOf("writeFileSync(bankPath, bankText)")).toBeGreaterThan(cli.indexOf("writeSpec(target, inserted.text)"));
+    // One name for the bank's path: the constant board-snapshot reads it from.
+    expect(cli).toContain('import { DEFERRAL_BANK } from "./board-snapshot"');
   });
 });

@@ -33,12 +33,16 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  bankWithPromotion,
   decline,
+  placementCount,
   promote,
   specPath,
+  specWithCriterion,
   type PromotableIssue,
   withCriterionLinked,
 } from "../lib/finding-promotion";
+import { DEFERRAL_BANK } from "./board-snapshot";
 import { readScRegistry } from "./sync-sc-status";
 import { currentScOwner } from "../lib/sc-reservations";
 import { ghWithoutGhToken } from "../lib/live-issues";
@@ -200,6 +204,16 @@ const outcome = declining ? "" : required("outcome");
 const symbol = declining ? "" : required("symbol");
 const module = declining ? "" : required("module");
 const write = args.includes("--write");
+// #2066: the letter group for a grouped id family, and the Phase row to place
+// the id in. Both optional here; `promote` and `specWithCriterion` refuse by
+// name when the spec needs one.
+const group = declining ? undefined : optional("group");
+const phaseRaw = declining ? undefined : optional("phase");
+const phase = phaseRaw === undefined ? null : Number(phaseRaw);
+if (phase !== null && (!Number.isInteger(phase) || phase < 0)) {
+  console.error(`ERROR: --phase must be a phase number, got '${phaseRaw}'`);
+  process.exit(PROMOTION_EXIT);
+}
 
 // The issue's own text decides ALREADY_SERVES, so a title typed by hand here
 // would let a promotion through that the board can see is a second criterion
@@ -330,7 +344,7 @@ if (declining) {
 }
 
 const result = promote(
-  { issue, spec, outcome, symbol, module, projectRoot: ROOT, owner: currentScOwner(ROOT) },
+  { issue, spec, outcome, symbol, module, projectRoot: ROOT, owner: currentScOwner(ROOT), group: group ?? null },
   readScRegistry(),
 );
 
@@ -372,8 +386,37 @@ if (!early.allowed) {
   process.exit(PROMOTION_EXIT);
 }
 
+// #2066: where the line goes, its phase, and the deferral bank — all decided
+// BEFORE the dry-run exit, for the reason `maySpecBeWritten` is: a preview
+// that succeeds where the write would refuse is a second answer.
+const inserted = specWithCriterion(content, result.line, result.id, phase);
+if (!inserted.ok) {
+  console.error(`REFUSED ${inserted.refusal}: ${inserted.why}`);
+  process.exit(PROMOTION_EXIT);
+}
+const bankPath = join(ROOT, DEFERRAL_BANK);
+const counts = { before: placementCount(content), after: placementCount(inserted.text) };
+let bankText: string | null = null;
+if (counts.before.deferred && counts.after.criteria !== counts.before.criteria) {
+  let current: string;
+  try {
+    current = readFileSync(bankPath, "utf8");
+  } catch (e) {
+    console.error(`REFUSED BANK_DRIFT: ${spec} is deferred and ${DEFERRAL_BANK} could not be read: ${(e as Error).message}`);
+    process.exit(PROMOTION_EXIT);
+  }
+  const banked = bankWithPromotion(current, spec, counts.before.criteria, counts.after.criteria);
+  if (!banked.ok) {
+    console.error(`REFUSED ${banked.refusal}: ${banked.why}`);
+    process.exit(PROMOTION_EXIT);
+  }
+  bankText = banked.text;
+}
+
 if (!write) {
-  console.log(`\n(dry run — nothing written. Add --write to append to ${spec}.)`);
+  const where = phase === null ? "" : `, placed in Phase ${phase}`;
+  const bank = bankText === null ? "" : `, and ${DEFERRAL_BANK} moves to ${counts.after.criteria}`;
+  console.log(`\n(dry run — nothing written. Add --write to add it to ${spec}${where}${bank}.)`);
   process.exit(0);
 }
 
@@ -393,13 +436,29 @@ if (!write) {
 if (result.alreadyWritten) {
   console.log(`${spec} already states ${result.id}; not appending it again.`);
 } else {
-  const wrote = writeSpec(target, `${content.trimEnd()}\n${result.line}\n`);
+  const wrote = writeSpec(target, inserted.text);
   if (!wrote.written) {
     console.error(`REFUSED: ${wrote.refusal ?? `${spec} was not written, and gave no reason`}`);
     process.exit(PROMOTION_EXIT);
   }
-  console.log(`Appended to ${spec}: ${result.line}`);
+  console.log(`Added to ${spec}${phase === null ? "" : ` (Phase ${phase})`}: ${result.line}`);
   console.log(`  owner: ${currentScOwner(ROOT) ?? "(none — allocated above every reserved block)"}`);
+}
+
+// #2066: the bank moves in the same run as the spec, or `spec-placement`
+// reads the deferred spec as disagreeing with it. The spec is already
+// written, so a failure here names exactly what is left.
+if (bankText !== null) {
+  try {
+    writeFileSync(bankPath, bankText);
+    console.log(`${DEFERRAL_BANK}: ${spec} now ${counts.after.criteria} criteria.`);
+  } catch (e) {
+    console.error(
+      `REFUSED: ${spec} now states ${result.id}, and ${DEFERRAL_BANK} could not be written (${(e as Error).message}). ` +
+        `Set ${spec}'s count there to ${counts.after.criteria}.`,
+    );
+    process.exit(PROMOTION_EXIT);
+  }
 }
 
 // #2060: link the issue here rather than printing an instruction to do it.
