@@ -52,6 +52,7 @@
  * that exists, the loosened rule is wrong nineteen times out of twenty-one.
  */
 
+import { NAMES_NONE, answerableIds, criterionAnswer, specCriteriaIn } from "./board-mirror";
 import { declaredClosingIn } from "./local-work";
 
 /**
@@ -185,9 +186,6 @@ export const SESSION_RECORD_FILES: readonly string[] = [
   "SUCCESS.md",
 ];
 
-/** The words an issue writes when it is cleanup that serves no spec criterion. */
-export const NO_CRITERION_DECLARATION = "serves no criterion";
-
 /**
  * Is every changed file a session-record file?
  *
@@ -205,19 +203,37 @@ export function isSessionRecordOnly(paths: readonly string[]): boolean {
   return paths.length > 0 && paths.every(p => SESSION_RECORD_FILES.includes(p));
 }
 
-/** Does an issue body name a criterion, or say it serves none? */
-export function namesCriterion(body: string): boolean {
-  return /\bSC-\d+\b/.test(body) || body.toLowerCase().includes(NO_CRITERION_DECLARATION);
+/** An issue this pull request closes, as the workflow's one query returns it. */
+export interface ClosedIssue {
+  readonly title: string;
+  readonly body: string;
+}
+
+/**
+ * Every id an issue can answer the criterion question with, read from the
+ * checkout's `specs/` — or `null` when the sweep could not be taken.
+ *
+ * `null` is UNMEASURED, never an empty list: read as "no ids", every issue
+ * naming a criterion would be refused for naming none (#2061).
+ */
+export function closingCriterionIds(root: string): string[] | null {
+  const sweep = specCriteriaIn(root);
+  return sweep.reading === "UNMEASURED" ? null : answerableIds(sweep);
 }
 
 /**
  * Why a pull request fails ADR-013's step 4, or `null` when it does not.
  *
  * Two failures, in the order a fix has to happen: closing no issue in this
- * repository, then closing one whose body names neither a criterion nor
- * `serves no criterion`. Every value the message names is carried here, the
- * rule rounds 1 and 3 of #1978 arrived at: a claim the message cannot support
- * is a claim it cannot spell.
+ * repository, then closing one that has not answered the criterion question.
+ * Every value the message names is carried here, the rule rounds 1 and 3 of
+ * #1978 arrived at: a claim the message cannot support is a claim it cannot
+ * spell.
+ *
+ * **The criterion question is `criterionAnswer`'s, not this file's** (#2061).
+ * The `needs-criterion` label and the `criteria-named` reading ask it there;
+ * a copy here accepted any `SC-<digits>`, so a payload issue naming `CRC-B4`
+ * was refused a closing pull request while the board counted it answered.
  */
 export type ClosingRequirementFailure =
   | { kind: "NO_ISSUE"; rawReferenceCount: number; repoNameWithOwner: string; rerun: string }
@@ -225,17 +241,18 @@ export type ClosingRequirementFailure =
 
 export function closingRequirement(
   changedPaths: readonly string[],
-  linkedIssueBodies: ReadonlyMap<number, string>,
+  linkedIssues: ReadonlyMap<number, ClosedIssue>,
+  criterionIds: readonly string[],
   rawReferenceCount: number,
   repoNameWithOwner: string,
   rerun: string,
 ): ClosingRequirementFailure | null {
   if (isSessionRecordOnly(changedPaths)) return null;
-  if (linkedIssueBodies.size === 0) {
+  if (linkedIssues.size === 0) {
     return { kind: "NO_ISSUE", rawReferenceCount, repoNameWithOwner, rerun };
   }
-  const issues = [...linkedIssueBodies]
-    .filter(([, body]) => !namesCriterion(body))
+  const issues = [...linkedIssues]
+    .filter(([, issue]) => !criterionAnswer(issue, criterionIds).answered)
     .map(([n]) => n)
     .sort((a, b) => a - b);
   return issues.length > 0 ? { kind: "NO_CRITERION", issues, rerun } : null;
@@ -256,9 +273,9 @@ export function closingRequirementMessage(f: ClosingRequirementFailure, prNumber
     );
   }
   return (
-    `PR #${prNumber} closes issue(s) #${f.issues.join(", #")}, whose body names ` +
-    `neither a criterion (SC-<N>) nor "${NO_CRITERION_DECLARATION}".\n\n` +
-    `Add the criterion it serves to the issue, or the words "${NO_CRITERION_DECLARATION}" if it ` +
+    `PR #${prNumber} closes issue(s) #${f.issues.join(", #")}, whose title and body name ` +
+    `neither a criterion any spec states nor "${NAMES_NONE}".\n\n` +
+    `Add the criterion it serves to the issue, or the exact words "${NAMES_NONE}" if it ` +
     `is cleanup. Editing an issue fires no pull-request event, so re-run this check after: ` +
     `${f.rerun}`
   );

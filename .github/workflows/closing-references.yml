@@ -50,7 +50,7 @@ jobs:
             number body
             files(first: 100) { nodes { path } }
             closingIssuesReferences(first: 100) { totalCount
-            nodes { number body repository { name owner { login } } } }
+            nodes { number title body repository { name owner { login } } } }
             } } }
         run: |
           # The fields are fetched here and handed to the script, so nothing in
