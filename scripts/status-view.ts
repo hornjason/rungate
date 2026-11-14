@@ -39,7 +39,6 @@ import { spawnSync } from "child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { tryLoadRungateConfig } from "../lib/config-loader";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
 import { familyOf } from "../lib/spec-placement";
 import { ladderReport } from "../lib/work-status";
@@ -107,7 +106,8 @@ export interface StatusView {
   decisions: Reading<WorkLine[]>;
   unphased: Reading<WorkLine[]>;
   health: Reading<HealthLine[]>;
-  links: { label: string; url: string }[];
+  /** A link whose address could not be read carries `url: null` and why, rendered as UNMEASURED. */
+  links: { label: string; url: string | null; why?: string }[];
 }
 
 export interface Milestone {
@@ -328,13 +328,13 @@ function render(v: StatusView, f: Fmt, markdown: boolean): string {
           }),
     ),
   );
-  if (v.otherFamilies.kind === "UNMEASURED" || v.otherFamilies.value.length > 0) {
-    out.push(
-      ...section(f, "Other work", v.otherFamilies, fams =>
-        fams.map(x => f.item(`${f.text(x.family)}: ${x.phases} phase(s), ${x.closed} of ${x.open + x.closed} done`)),
-      ),
-    );
-  }
+  out.push(
+    ...section(f, "Other work", v.otherFamilies, fams =>
+      fams.length === 0
+        ? [f.item("no other milestone family")]
+        : fams.map(x => f.item(`${f.text(x.family)}: ${x.phases} phase(s), ${x.closed} of ${x.open + x.closed} done`)),
+    ),
+  );
 
   out.push(...section(f, "In progress", v.inProgress, w => workList(f, w, "nothing is assigned or in a pull request")));
   out.push(...section(f, "Ready next", v.ready, w => workList(f, w, "nothing is in Ready")));
@@ -353,7 +353,10 @@ function render(v: StatusView, f: Fmt, markdown: boolean): string {
       ];
     }),
   );
-  out.push(f.heading("Links"), ...v.links.map(l => f.item(f.link(l.label, l.url))));
+  out.push(
+    f.heading("Links"),
+    ...v.links.map(l => f.item(l.url === null ? `${f.text(l.label)} — UNMEASURED: ${f.text(l.why ?? "unknown")}` : f.link(l.label, l.url))),
+  );
   if (markdown) {
     out.push("", "_This view serves no criterion; it reports on the ones the plan names._");
   }
@@ -425,9 +428,6 @@ export function gather(
   const plan = planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json");
   const { engineSpec, milestonePrefix } = readBoardInputs(root);
   const queueLabel = readQueueLabel(root);
-  const board = (tryLoadRungateConfig(root) as Record<string, unknown> | null)?.board as
-    | { owner?: unknown; number?: unknown }
-    | undefined;
   let specText: string | null = null;
   if (engineSpec !== null && existsSync(join(root, engineSpec))) specText = readFileSync(join(root, engineSpec), "utf-8");
 
@@ -473,9 +473,21 @@ export function gather(
   const healthReading = health(root);
   const head = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf-8" });
 
-  const links: { label: string; url: string }[] = [{ label: "Milestones", url: `https://github.com/${repo}/milestones` }];
-  if (typeof board?.owner === "string" && typeof board?.number === "number") {
-    links.push({ label: "The board", url: `https://github.com/users/${board.owner}/projects/${board.number}` });
+  const links: StatusView["links"] = [{ label: "Milestones", url: `https://github.com/${repo}/milestones` }];
+  // The board's address comes from the API, never built from config: a
+  // project owned by an organisation lives under /orgs/, one owned by a user
+  // under /users/, and the config does not say which (AI review of #2103).
+  const boardConfig = readBoardConfig(root);
+  if (boardConfig !== null) {
+    const r = ghJson<{ data?: { node?: { url?: string } } }>(gh, [
+      "api", "graphql", "-f", "query=query($p:ID!){node(id:$p){... on ProjectV2{url}}}", "-f", `p=${boardConfig.projectId}`,
+    ]);
+    const url = r.kind === "READ" ? r.value.data?.node?.url : undefined;
+    links.push(
+      typeof url === "string" && url.startsWith("https://")
+        ? { label: "The board", url }
+        : { label: "The board", url: null, why: r.kind === "UNMEASURED" ? r.why : "this token cannot see the project" },
+    );
   }
   if (queueLabel !== null) {
     links.push({
@@ -583,9 +595,16 @@ function readHealth(root: string): Reading<HealthLine[]> {
 }
 
 /**
- * Write the rendered body into the pinned issue that carries the marker. If
- * none is pinned, create one and pin it; a pin the token may not make is a
- * warning that names itself, and the body is still written.
+ * Write the rendered body into the issue that carries the marker, pinned or
+ * not. If there is none, create one. Then make sure it is pinned.
+ *
+ * **Found by marker among ALL open issues, not only the pinned ones** (AI
+ * review of #2103). Looking only at pinned issues meant a pin that failed
+ * once (the repository's three pin slots full, or a token without the right)
+ * created a fresh issue on every later run, because the one just created was
+ * never pinned and so was never found. Now it is found, reused, and the pin is
+ * retried. A pin that still fails is a warning annotation on its own line,
+ * and the body is still written.
  */
 export function publish(body: string, repo: string, title: string, gh: Gh = liveGh): { ok: boolean; message: string } {
   if (!body.startsWith(STATUS_MARKER)) return { ok: false, message: "refusing to publish a body without the status marker" };
@@ -596,24 +615,44 @@ export function publish(body: string, repo: string, title: string, gh: Gh = live
     "-f", `o=${owner}`, "-f", `n=${name}`,
   ]);
   if (pinned.kind === "UNMEASURED") return { ok: false, message: `UNMEASURED — the pinned issues could not be read: ${pinned.why}` };
-  const nodes = pinned.value.data?.repository?.pinnedIssues?.nodes ?? [];
-  const mine = nodes.find(n => n.issue.body.startsWith(STATUS_MARKER));
+  const pinnedMine = (pinned.value.data?.repository?.pinnedIssues?.nodes ?? []).find(n => n.issue.body.startsWith(STATUS_MARKER));
+  let number: string | null = pinnedMine ? String(pinnedMine.issue.number) : null;
+  if (number === null) {
+    const open = ghLines<{ number: number; body: string | null }>(
+      gh,
+      `repos/${repo}/issues?state=open&per_page=100`,
+      ".[] | select(.pull_request == null) | {number, body}",
+    );
+    if (open.kind === "UNMEASURED") return { ok: false, message: `UNMEASURED — the open issues could not be read: ${open.why}` };
+    const found = open.value.find(i => (i.body ?? "").startsWith(STATUS_MARKER));
+    if (found) number = String(found.number);
+  }
   const dir = mkdtempSync(join(tmpdir(), "status-publish-"));
   try {
     const file = join(dir, "body.md");
     writeFileSync(file, body);
-    if (mine) {
-      const r = gh(["issue", "edit", String(mine.issue.number), "-R", repo, "--title", title, "--body-file", file]);
-      return r.ok ? { ok: true, message: `updated #${mine.issue.number}` } : { ok: false, message: r.why };
+    let verb: string;
+    if (number !== null) {
+      const r = gh(["issue", "edit", number, "-R", repo, "--title", title, "--body-file", file]);
+      if (!r.ok) return { ok: false, message: r.why };
+      verb = "updated";
+    } else {
+      const created = gh(["issue", "create", "-R", repo, "--title", title, "--body-file", file]);
+      if (!created.ok) return { ok: false, message: created.why };
+      number = /\/issues\/(\d+)/.exec(created.out)?.[1] ?? null;
+      if (number === null) return { ok: false, message: `created an issue but could not read its number from: ${created.out.trim()}` };
+      verb = "created";
     }
-    const created = gh(["issue", "create", "-R", repo, "--title", title, "--body-file", file]);
-    if (!created.ok) return { ok: false, message: created.why };
-    const number = /\/issues\/(\d+)/.exec(created.out)?.[1];
-    if (!number) return { ok: false, message: `created an issue but could not read its number from: ${created.out.trim()}` };
+    if (pinnedMine) return { ok: true, message: `${verb} #${number}` };
     const pin = gh(["issue", "pin", number, "-R", repo]);
     return pin.ok
-      ? { ok: true, message: `created and pinned #${number}` }
-      : { ok: true, message: `created #${number}; ::warning::it could not be pinned (${pin.why}). Pin it by hand once.` };
+      ? { ok: true, message: `${verb} and pinned #${number}` }
+      : {
+          ok: true,
+          message:
+            `${verb} #${number}\n::warning title=Status view::#${number} could not be pinned (${pin.why}). ` +
+            "Pin it once by hand; later runs find and reuse it either way.",
+        };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

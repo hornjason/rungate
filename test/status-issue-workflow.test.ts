@@ -6,7 +6,7 @@
  * tokens, the same way test/phase-order-workflow.test.ts reads its own.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 
 const PATH = join(import.meta.dir, "..", ".github", "workflows", "status-issue.yml");
@@ -63,5 +63,18 @@ describe("#2097: the status workflow", () => {
     expect(uses.length, "no uses: steps found, so the pin check measured nothing").toBeGreaterThan(0);
     expect(uses.filter((u: string) => !/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/.test(u))).toEqual([]);
     expect(steps.find(s => String(s.uses ?? "").startsWith("actions/checkout@"))?.with?.["fetch-depth"]).toBe(0);
+  });
+});
+
+describe("#2097 review round 2: Ready changes reach the view", () => {
+  test("it re-reads when a workflow that writes Ready finishes, and every one it names exists", () => {
+    const names = doc.on.workflow_run?.workflows ?? [];
+    expect(doc.on.workflow_run?.types).toEqual(["completed"]);
+    expect(names.length, "no Ready-writing workflow is listed").toBeGreaterThan(0);
+    const dir = join(import.meta.dir, "..", ".github", "workflows");
+    const declared = readdirSync(dir)
+      .filter(f => f.endsWith(".yml"))
+      .map(f => (Bun.YAML.parse(readFileSync(join(dir, f), "utf-8")) as any)?.name);
+    for (const n of names) expect(declared, `no workflow is named "${n}", so this trigger never fires`).toContain(n);
   });
 });

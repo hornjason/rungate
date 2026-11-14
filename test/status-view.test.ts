@@ -238,13 +238,18 @@ describe("#2097: gather — a tree where nothing can be read renders every secti
 
 describe("#2097: publish writes only the marked pinned issue", () => {
   type Call = string[];
-  const fake = (pinned: unknown, fail: Partial<Record<string, string>> = {}) => {
+  const fake = (
+    pinned: unknown,
+    fail: Partial<Record<string, string>> = {},
+    open: { number: number; body: string }[] = [],
+  ) => {
     const calls: Call[] = [];
     const gh = (args: string[]) => {
       calls.push(args);
-      const key = args[0] === "api" ? "graphql" : `${args[0]} ${args[1]}`;
+      const key = args[0] === "api" ? (args[1] === "graphql" ? "graphql" : "open issues") : `${args[0]} ${args[1]}`;
       if (fail[key]) return { ok: false as const, why: fail[key]! };
       if (key === "graphql") return { ok: true as const, out: JSON.stringify(pinned) };
+      if (key === "open issues") return { ok: true as const, out: open.map(o => JSON.stringify(o)).join("\n") };
       if (key === "issue create") return { ok: true as const, out: "https://github.com/o/r/issues/42\n" };
       return { ok: true as const, out: "" };
     };
@@ -279,5 +284,53 @@ describe("#2097: publish writes only the marked pinned issue", () => {
     expect(r.ok).toBe(false);
     expect(r.message).toContain("UNMEASURED");
     expect(b.calls.some(c => c[0] === "issue")).toBe(false);
+  });
+});
+
+describe("#2097 review round 2", () => {
+  const body = `${STATUS_MARKER}\nhello\n`;
+  const pinnedNone = { data: { repository: { pinnedIssues: { nodes: [] } } } };
+  const fakeGh = (open: { number: number; body: string }[], pinFails = false) => {
+    const calls: string[][] = [];
+    const gh = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "api" && args[1] === "graphql") return { ok: true as const, out: JSON.stringify(pinnedNone) };
+      if (args[0] === "api") return { ok: true as const, out: open.map(o => JSON.stringify(o)).join("\n") };
+      if (args[0] === "issue" && args[1] === "pin" && pinFails) return { ok: false as const, why: "gh issue exited 1: pin limit" };
+      if (args[0] === "issue" && args[1] === "create") return { ok: true as const, out: "https://github.com/o/r/issues/42\n" };
+      return { ok: true as const, out: "" };
+    };
+    return { gh, calls };
+  };
+
+  test("an unpinned status issue is found by its marker and reused, never a second one created", () => {
+    // Review: a pin that failed once made every later run create another issue.
+    const { gh, calls } = fakeGh([{ number: 3, body: "someone else's" }, { number: 77, body: `${STATUS_MARKER}\nold` }], true);
+    const r = publish(body, "o/r", "t", gh);
+    expect(r.ok).toBe(true);
+    expect(calls.filter(c => c[0] === "issue").map(c => c.slice(0, 3))).toEqual([
+      ["issue", "edit", "77"],
+      ["issue", "pin", "77"],
+    ]);
+    expect(calls.some(c => c[1] === "create")).toBe(false);
+    // The warning is an annotation GitHub reads: on its own line.
+    expect(r.message.split("\n").some(l => l.startsWith("::warning"))).toBe(true);
+  });
+
+  test("Other work, read and empty, still shows its heading and says so", () => {
+    const md = renderMarkdown(view({ otherFamilies: read([]) }));
+    expect(md).toContain("### Other work");
+    expect(md).toContain("no other milestone family");
+  });
+
+  test("the board's link is the address the API returns, and UNMEASURED when it cannot be read", () => {
+    const org = renderMarkdown(view({ links: [{ label: "The board", url: "https://github.com/orgs/acme/projects/4" }] }));
+    expect(org).toContain("[The board](https://github.com/orgs/acme/projects/4)");
+    const unread = renderMarkdown(view({ links: [{ label: "The board", url: null, why: "this token cannot see the project" }] }));
+    expect(unread).toContain("The board — UNMEASURED: this token cannot see the project");
+    const src = readFileSync(join(ROOT, "scripts", "status-view.ts"), "utf-8");
+    expect(src, "the board's address is built from config, which cannot tell a user from an organisation").not.toContain(
+      "github.com/users/",
+    );
   });
 });

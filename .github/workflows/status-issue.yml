@@ -37,6 +37,16 @@ on:
     branches: [main]
   issues:
     types: [closed, reopened, milestoned, demilestoned, labeled, unlabeled, assigned, unassigned]
+  # Ready is written by these three, with the board token, and a board write
+  # fires no event this workflow can listen for (GitHub Actions has no
+  # ProjectV2 item trigger). So it re-reads when one of them finishes (AI
+  # review of #2103), instead of waiting for the next unrelated change.
+  workflow_run:
+    workflows:
+      - "Board — keep Ready full from the events the repo already emits"
+      - "Board — one decider writes every lane"
+      - "Board — reconcile every card against GitHub"
+    types: [completed]
   workflow_dispatch:
 
 permissions:
