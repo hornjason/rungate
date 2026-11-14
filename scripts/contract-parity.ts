@@ -1150,6 +1150,9 @@ export const KNOWN_UNDECLARED_WRITES: Record<string, string> = {
   "scripts/sync-spec-tests.ts → test/spec-compliance-auto.test.ts": "generated test file, regenerated on demand",
   "scripts/generate-spec-template-patterns.ts → specs/SPEC-TEMPLATE.md": "generated spec template",
   "scripts/typecheck.ts → .claude": "the typecheck baseline ratchet",
+  "scripts/finding-promotion.ts → .claude/spec-deferral-ratchet.json":
+    "the deferral bank moves with the criterion it counts (#2066); the promotion's caller commits both in one pull " +
+    "request, exactly as it commits the spec line the same run writes",
 };
 
 /**

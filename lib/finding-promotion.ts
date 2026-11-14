@@ -50,6 +50,7 @@ import { NAMES_NONE, answerableIds, criteriaNamedBy, criterionAnswer, specCriter
 import { allocateScNumber, formatSCLine } from "./create-sc";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf } from "./issue-shape";
 import type { ScRegistry } from "./sc-ids";
+import { declaresDeferred, parsePlacementRows, placementReading } from "./spec-placement";
 
 /** The issue a finding was filed as. The shape `criteriaNamedBy` reads. */
 export interface PromotableIssue {
@@ -71,6 +72,13 @@ export interface PromotionInput {
   readonly projectRoot: string;
   /** Branch the reservation allocator should draw this id out of. */
   readonly owner?: string | null;
+  /**
+   * The letter group for a spec whose ids are grouped, like the convergence
+   * spec's `CRC-M17` (#2066). Which section a criterion belongs to is the
+   * caller's judgement, like the symbol; it is refused when the spec needs
+   * one and none is given.
+   */
+  readonly group?: string | null;
 }
 
 /**
@@ -94,6 +102,11 @@ export const PROMOTION_REFUSALS = [
   "ID_UNAVAILABLE",
   "SYMBOL_EXISTS",
   "AMBIGUOUS_HEADING",
+  "GROUP_REQUIRED",
+  "GROUP_UNKNOWN",
+  "PHASE_REQUIRED",
+  "PHASE_ROW_ABSENT",
+  "BANK_DRIFT",
 ] as const;
 
 export type PromotionRefusal = (typeof PROMOTION_REFUSALS)[number];
@@ -428,7 +441,7 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
   // finding (review of #2065), so the existing line is the answer.
   const statement = promotionStatement(input);
   for (const raw of specText.split("\n")) {
-    const m = /^- \[[ x]\] (SC-\d+): (.*)$/.exec(raw);
+    const m = /^- \[[ xX]\] ([A-Z]+-[A-Z]?\d+): (.*)$/.exec(raw);
     if (m && m[2] === statement) {
       return {
         promoted: true,
@@ -445,6 +458,29 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
   if (violations.length > 0) {
     const first = violations[0]!;
     return { promoted: false, refusal: first.refusal, why: first.why };
+  }
+
+  // #2066: a spec whose criteria use their own grouped family (the
+  // convergence spec's `CRC-M17`) gets an id in that family, never an `SC-`
+  // id. It used to be allocated `SC-N` and renamed by hand.
+  const family = idFamily(specText);
+  if (family !== "SC") {
+    const grouped = nextGroupedId(specText, family, input.group ?? null);
+    if (!grouped.ok) return { promoted: false, refusal: grouped.refusal, why: grouped.why };
+    return {
+      promoted: true,
+      id: grouped.id,
+      line: `- [ ] ${grouped.id}: ${statement}`,
+      spec: input.spec,
+      issue: input.issue.number,
+      // Said, not hidden: `SC-` ids go through specs/sc-reservations.json, and
+      // a grouped family has no reservation registry, so another branch
+      // promoting into the same group can take the same id (review of #2105).
+      unmeasured: [
+        `${family}-* ids have no reservation registry: an id another branch allocated in group ${input.group} is not visible here`,
+      ],
+      alreadyWritten: false,
+    };
   }
 
   let allocated: { number: number; namespace: { unmeasured: string[] } };
@@ -472,6 +508,199 @@ export function promote(input: PromotionInput, registry: ScRegistry): Promotion 
     unmeasured: allocated.namespace.unmeasured ?? [],
     alreadyWritten: false,
   };
+}
+
+/** A criterion id at the start of a checkbox line, any family: `SC-12`, `CRC-M17`. */
+const ANY_CRITERION_LINE = /^- \[[ xX]\] ([A-Z]+)-([A-Z]?)(\d+):/;
+
+/**
+ * The id family a spec's criteria use — #2066.
+ *
+ * `SC` unless every criterion in the spec uses one other prefix, as the
+ * convergence spec's `CRC-*` do. A spec with no criteria, or a mixture, is
+ * `SC`: a mixture has no single family to continue, and `SC` is the
+ * repository's default.
+ */
+export function idFamily(specText: string): string {
+  const prefixes = new Set<string>();
+  for (const line of specText.split("\n")) {
+    const m = ANY_CRITERION_LINE.exec(line);
+    if (m) prefixes.add(m[1]!);
+  }
+  return prefixes.size === 1 && !prefixes.has("SC") ? [...prefixes][0]! : "SC";
+}
+
+/**
+ * The next id in a grouped family: one above the highest number in the
+ * group. The group must already exist in the spec — a letter nothing uses is
+ * almost always a typo, and a new section is a spec edit, not a promotion.
+ */
+export function nextGroupedId(
+  specText: string,
+  family: string,
+  group: string | null,
+): { ok: true; id: string } | { ok: false; refusal: PromotionRefusal; why: string } {
+  if (group === null || group.trim() === "") {
+    return {
+      ok: false,
+      refusal: "GROUP_REQUIRED",
+      why: `this spec's criteria are ${family}-* ids in letter groups; pass --group <letter> to say which section this one belongs to`,
+    };
+  }
+  let highest = 0;
+  let seen = false;
+  for (const line of specText.split("\n")) {
+    const m = ANY_CRITERION_LINE.exec(line);
+    if (m && m[1] === family && m[2] === group) {
+      seen = true;
+      highest = Math.max(highest, Number(m[3]));
+    }
+  }
+  if (!seen) {
+    return { ok: false, refusal: "GROUP_UNKNOWN", why: `no criterion in this spec is ${family}-${group}*; check the letter` };
+  }
+  return { ok: true, id: `${family}-${group}${highest + 1}` };
+}
+
+/**
+ * The spec with the criterion line inserted where the spec keeps its
+ * criteria, and its id placed in a phase when asked — #2066.
+ *
+ * The line goes after the last criterion of its own group (any criterion, for
+ * an ungrouped family), below that criterion's indented `proved-by:` lines.
+ * It used to be appended at the end of the file, under whatever section came
+ * last, and moved by hand.
+ *
+ * **A spec that places its criteria refuses an unplaced one.** When the spec
+ * has a Phase placement table that is fully read, a criterion with no phase
+ * leaves `spec-placement` short, and that reading is stage item E1's proof,
+ * run live in every pull request's CI. So `--phase` is required there, and
+ * the result is re-read with `placementReading`, the reader the check uses.
+ */
+export function specWithCriterion(
+  specText: string,
+  line: string,
+  id: string,
+  phase: number | null,
+): { ok: true; text: string } | { ok: false; refusal: PromotionRefusal; why: string } {
+  // Already written (a retry after a failed link): the line stays where it
+  // is, and the phase and placement checks below still run on it, so a retry
+  // with --phase places it and a missing row still refuses (review of #2105).
+  const lines = specText.split("\n");
+  const present = lines.includes(line);
+  const [, family, group] = /^([A-Z]+)-([A-Z]?)\d+$/.exec(id) ?? [];
+  let last = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const m = ANY_CRITERION_LINE.exec(lines[i]!);
+    if (m && (family === "SC" || (m[1] === family && m[2] === group))) last = i;
+  }
+  let text: string;
+  if (present) {
+    text = specText;
+  } else if (last === -1) {
+    text = `${specText.trimEnd()}\n${line}\n`;
+  } else {
+    let at = last + 1;
+    while (at < lines.length && /^\s+\S/.test(lines[at]!) && !ANY_CRITERION_LINE.test(lines[at]!)) at++;
+    text = [...lines.slice(0, at), line, ...lines.slice(at)].join("\n");
+  }
+  if (phase !== null) {
+    const placed = withPhase(text, id, phase);
+    if (placed === null) {
+      return { ok: false, refusal: "PHASE_ROW_ABSENT", why: `this spec's Phase placement table has no row for Phase ${phase}` };
+    }
+    text = placed;
+  }
+  const reading = placementReading(text);
+  if (reading.reading === "MEASURED" && reading.unplaced.includes(id)) {
+    return {
+      ok: false,
+      refusal: "PHASE_REQUIRED",
+      why: `this spec places every criterion in a phase, so ${id} needs --phase N; unplaced, it would leave spec-placement short`,
+    };
+  }
+  return { ok: true, text };
+}
+
+/** The spec with `id` added to its `Phase N` placement row, or null when there is no such row. */
+function withPhase(specText: string, id: string, phase: number | null): string | null {
+  if (phase === null) return specText;
+  const row = parsePlacementRows(specText).find(r => r.placement === `Phase ${phase}`);
+  if (!row) return null;
+  if (row.ids.includes(id)) return specText;
+  const lines = specText.split("\n");
+  const cells = lines[row.line - 1]!.split("|");
+  // `| **Phase 6** | SC-1, SC-2 | notes |` splits to ["", " **Phase 6** ", " SC-1, SC-2 ", " notes ", ""].
+  const idsCell = cells[2]!.trim();
+  cells[2] = ` ${idsCell === "" ? id : `${idsCell}, ${id}`} `;
+  lines[row.line - 1] = cells.join("|");
+  return lines.join("\n");
+}
+
+/**
+ * The deferral bank with this spec's count moved to its new number, when the
+ * spec is deferred — #2066.
+ *
+ * `spec-placement` refuses a deferred spec whose criteria count disagrees with
+ * `.claude/spec-deferral-ratchet.json`, so a promotion into one left E1's proof
+ * red until the bank was edited by hand. The bank moves only from the count
+ * the spec had BEFORE this promotion: a bank already out of step is drift
+ * someone has to look at, and moving it silently would hide it.
+ */
+export function bankWithPromotion(
+  bankText: string,
+  specPath: string,
+  before: number,
+  after: number,
+): { ok: true; text: string } | { ok: false; refusal: PromotionRefusal; why: string } {
+  let bank: { deferred?: { path: string; criteria: number }[] };
+  try {
+    bank = JSON.parse(bankText);
+  } catch (e) {
+    return { ok: false, refusal: "BANK_DRIFT", why: `the deferral bank is not JSON (${(e as Error).message})` };
+  }
+  const row = Array.isArray(bank.deferred) ? bank.deferred.find(d => d.path === specPath) : undefined;
+  if (!row) return { ok: false, refusal: "BANK_DRIFT", why: `${specPath} is deferred and not in the deferral bank` };
+  if (row.criteria !== before) {
+    return {
+      ok: false,
+      refusal: "BANK_DRIFT",
+      why: `the deferral bank holds ${row.criteria} for ${specPath}, which states ${before}; reconcile it before promoting`,
+    };
+  }
+  row.criteria = after;
+  return { ok: true, text: `${JSON.stringify(bank, null, 2)}\n` };
+}
+
+/**
+ * The bank on a RETRY, when the criterion is already in the spec — review of
+ * #2105.
+ *
+ * A run whose spec write landed and whose bank write failed leaves the bank
+ * one behind. A retry finds the line already written, sees no count change,
+ * and without this would report success over a bank that disagrees with the
+ * spec, so the next unrelated promotion is the one refused. So: in step, write
+ * nothing (`text: null`); exactly one behind, move it; further out, refuse.
+ */
+export function bankForRetry(
+  bankText: string,
+  specPath: string,
+  count: number,
+): { ok: true; text: string | null } | { ok: false; refusal: PromotionRefusal; why: string } {
+  let bank: { deferred?: { path: string; criteria: number }[] };
+  try {
+    bank = JSON.parse(bankText);
+  } catch (e) {
+    return { ok: false, refusal: "BANK_DRIFT", why: `the deferral bank is not JSON (${(e as Error).message})` };
+  }
+  const row = Array.isArray(bank.deferred) ? bank.deferred.find(d => d.path === specPath) : undefined;
+  if (row?.criteria === count) return { ok: true, text: null };
+  return bankWithPromotion(bankText, specPath, count - 1, count);
+}
+
+/** Whether `specText` is deferred, and how many criteria it states, as `spec-placement` reads them. */
+export function placementCount(specText: string): { deferred: boolean; criteria: number } {
+  return { deferred: declaresDeferred(specText), criteria: placementReading(specText).criteria.length };
 }
 
 /**
