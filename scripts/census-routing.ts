@@ -468,12 +468,18 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
     // `evidence: required` must record a `fingerprint:` beside its
     // `proved-by:`, and PR #2114 passed the four suites above locally and
     // went red in CI on that one, one push from the tool that writes it.
+    //
+    // `conformity-sc-binding` joined in #2168: its backstop bounds the live
+    // count of ticked criteria no matcher can assert, so a tick raises the
+    // number it reads. PR #2164 passed the five suites above locally and
+    // went red in CI on it, 321 against a backstop of 320.
     tests: [
       "test/sc-binding-split.test.ts",
       "test/ticked-sc-cover.test.ts",
       "test/behavioral-sc-ratchet.test.ts",
       "test/ticked-sc-absent-symbol.test.ts",
       "test/spec-evidence.test.ts",
+      "test/conformity-sc-binding.test.ts",
     ],
     fires: c =>
       inDir(c.path, "specs") &&

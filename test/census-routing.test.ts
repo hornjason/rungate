@@ -118,12 +118,17 @@ const ROUTED_TEST_PATH = /test\/[\w.\/-]+\.test\.tsx?/g;
 // Five since #2116 added `spec-evidence`: a tick in a spec that declares
 // `evidence: required` must record a `fingerprint:`, and on 2026-11-14 PR
 // #2114 passed all four suites above locally and went red in CI on that one.
+//
+// Six since #2168 added `conformity-sc-binding`: a tick raises the live
+// unmatched count its backstop bounds, and on 2026-11-14 PR #2164 passed all
+// five suites above locally and went red in CI on that one, 321 against 320.
 const SC_CENSUS = [
   "test/sc-binding-split.test.ts",
   "test/ticked-sc-cover.test.ts",
   "test/behavioral-sc-ratchet.test.ts",
   "test/ticked-sc-absent-symbol.test.ts",
   "test/spec-evidence.test.ts",
+  "test/conformity-sc-binding.test.ts",
 ];
 
 // The two files #1306 measured as reddening on a new spec and routed by
