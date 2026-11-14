@@ -2394,8 +2394,15 @@ describe("#2047: board-ready.yml is generated and names no board", () => {
     expect(yml).not.toMatch(/github\.com\/(?:users|orgs)\/[^/\s]+\/projects\//);
     expect(yml).not.toContain("RUNGATE_PROJECT_ID");
     expect(live).not.toContain("--project");
-    // The generator takes no board input at all, so it cannot emit one.
-    expect(buildBoardReadyWorkflow.length).toBe(1);
+    // The generator takes no board input at all, so it cannot emit one. Read
+    // from the options interface itself (review round 2: an arity check counts
+    // one options object however many fields it grows).
+    const src = readFileSync(join(ROOT, "lib/scaffold/board-ready-workflow.ts"), "utf-8");
+    const iface = /export interface BoardReadyWorkflowOptions \{([\s\S]*?)\n\}/.exec(src)?.[1];
+    expect(iface, "BoardReadyWorkflowOptions not found — this row would pass vacuously").toBeDefined();
+    const fields = [...iface!.matchAll(/^\s*(\w+)\??:/gm)].map(m => m[1]!);
+    expect(fields.length, "no fields parsed from BoardReadyWorkflowOptions").toBeGreaterThan(0);
+    expect(fields.filter(f => /project|board|url/i.test(f)), "a board input on the generator can be emitted").toEqual([]);
   });
 });
 
