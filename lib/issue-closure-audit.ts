@@ -370,3 +370,71 @@ export function report(findings: ClosureFinding[], scanned: number): string {
     blocks.join("\n\n")
   );
 }
+
+/**
+ * A merged pull request and the issues GitHub says it closes (#1952).
+ *
+ * `closes` is `null` when the node carried no `closingIssuesReferences` at
+ * all: a field nobody selected and a pull request that closes nothing are
+ * different readings, and only the second is clean.
+ */
+export interface MergedCloser {
+  pull: number;
+  closes: { number: number; state: string }[] | null;
+  /** GitHub's own count, so a cut-short list is visible as one. */
+  closesTotal: number;
+}
+
+/** One merged pull request's GraphQL node, as the audit reads it. */
+export function toMergedCloser(node: any): MergedCloser {
+  const refs = node?.closingIssuesReferences;
+  if (!refs || !Array.isArray(refs.nodes)) return { pull: Number(node?.number), closes: null, closesTotal: 0 };
+  return {
+    pull: Number(node.number),
+    closes: refs.nodes.map((n: any) => ({ number: Number(n?.number), state: String(n?.state ?? "") })),
+    closesTotal: Number(refs.totalCount ?? refs.nodes.length),
+  };
+}
+
+export interface OpenCloserReading {
+  /** Each issue still OPEN while a merged pull request names it as closed. */
+  open: { pull: number; issue: number }[];
+  /** Pull requests whose closing list could not be read whole. */
+  unmeasured: number[];
+}
+
+/**
+ * SC-2751: every issue still OPEN that a merged pull request's closing
+ * reference names, paired with that pull request.
+ *
+ * #1937 merged with `closingIssuesReferences` resolving to #1948 before and
+ * after the merge, and #1948 stayed OPEN. The close GitHub was meant to make
+ * did not happen, and the rules forbid making it by hand (#925), so the only
+ * correct response is to report it: the tracker otherwise says shipped work
+ * is outstanding. A list GitHub cut short, or a node with no list, is
+ * UNMEASURED rather than clean — the missing reference may be the open one.
+ */
+export function openWithMergedCloser(pulls: readonly MergedCloser[]): OpenCloserReading {
+  const open: OpenCloserReading["open"] = [];
+  const unmeasured: number[] = [];
+  for (const p of pulls) {
+    if (p.closes === null || p.closesTotal > p.closes.length) unmeasured.push(p.pull);
+    for (const issue of p.closes ?? []) {
+      if (issue.state === "OPEN") open.push({ pull: p.pull, issue: issue.number });
+    }
+  }
+  return { open, unmeasured };
+}
+
+/** The reading as text, naming both numbers in every finding. Empty says so. */
+export function openCloserReport(reading: OpenCloserReading, scanned: number): string {
+  const lines = [`Merged-closer audit: ${scanned} merged pull requests scanned.`];
+  if (reading.open.length === 0 && reading.unmeasured.length === 0) {
+    lines.push("none: every issue a merged pull request closes is closed.");
+  }
+  for (const f of reading.open) lines.push(`- #${f.issue} is OPEN, but #${f.pull} merged closing it`);
+  for (const n of reading.unmeasured) {
+    lines.push(`- UNMEASURED: #${n}'s closing references could not be read whole, so an open one may be missing`);
+  }
+  return lines.join("\n");
+}

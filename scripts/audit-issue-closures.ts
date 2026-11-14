@@ -34,12 +34,17 @@ import {
   report,
   shouldReopen,
   toClosedIssue,
+  toMergedCloser,
+  openWithMergedCloser,
+  openCloserReport,
   CROSS_REFERENCE_FIELD,
   EXEMPT_LABEL,
   FINDING_LABEL,
   LABEL_FOR_KIND,
   LINK_LOST_LABEL,
   type ClosedIssue,
+  type MergedCloser,
+  type OpenCloserReading,
 } from "../lib/issue-closure-audit";
 import { addLabels, createGitHubClient, parseOwnerRepo, updateIssue } from "../lib/github";
 
@@ -109,6 +114,23 @@ query($owner: String!, $name: String!, $limit: Int!) {
   }
 }`;
 
+/**
+ * #1952 / SC-2751: the recently merged pull requests, each with the issues
+ * GitHub says it closes and their state. `totalCount` travels with the list so
+ * a cut-short one reads UNMEASURED, not clean.
+ */
+const PULLS_QUERY = `
+query($owner: String!, $name: String!, $limit: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: MERGED, first: $limit, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number
+        closingIssuesReferences(first: 50) { totalCount nodes { number state } }
+      }
+    }
+  }
+}`;
+
 async function main(): Promise<void> {
   const fixture = arg("fixture");
   const repo = arg("repo");
@@ -147,7 +169,40 @@ async function main(): Promise<void> {
   const findings = closedWithoutRecord(issues!, epoch);
   console.log(report(findings, issues!.length));
 
-  if (findings.length === 0) return;
+  // #1952 / SC-2751: the other direction — an issue still OPEN although the
+  // pull request that closes it merged. Read live, or from `--pulls-fixture`
+  // offline; an offline `--fixture` run without one does not take it.
+  let pulls: MergedCloser[] | null = null;
+  const pullsFixture = arg("pulls-fixture");
+  if (pullsFixture) {
+    try {
+      pulls = JSON.parse(readFileSync(pullsFixture, "utf-8")).map(toMergedCloser);
+    } catch (e) {
+      refuse(`could not read the pulls fixture: ${(e as Error).message}`);
+    }
+  } else if (!fixture) {
+    try {
+      const { owner, repo: name } = parseOwnerRepo(repo!);
+      const data = await createGitHubClient().graphql(PULLS_QUERY, { owner, name, limit: Number(arg("limit") ?? 100) });
+      pulls = (data?.repository?.pullRequests?.nodes ?? []).map(toMergedCloser);
+    } catch (e) {
+      refuse(`could not read merged pull requests: ${(e as Error).message}`);
+    }
+  }
+  let closer: OpenCloserReading | null = null;
+  if (pulls !== null) {
+    closer = openWithMergedCloser(pulls);
+    console.log(`\n${openCloserReport(closer, pulls.length)}`);
+  }
+  const closerFindings = closer === null ? 0 : closer.open.length + closer.unmeasured.length;
+
+  if (findings.length === 0 && closerFindings === 0) return;
+  if (findings.length === 0) {
+    refuse(
+      `${closer!.open.length} open issue(s) whose closing pull request merged, ` +
+        `${closer!.unmeasured.length} merged pull request(s) UNMEASURED`,
+    );
+  }
 
   // `--apply` governs whether anything is WRITTEN. It does not govern
   // whether the run is red: the scheduled job runs read-only, so letting a
@@ -184,7 +239,8 @@ async function main(): Promise<void> {
   const noTrace = findings.filter(f => f.kind === "NO_TRACE").length;
   refuse(
     `${findings.length} issue(s) closed without a ship record ` +
-      `(${noTrace} with no merged pull request referencing them at all)`,
+      `(${noTrace} with no merged pull request referencing them at all)` +
+      (closerFindings > 0 ? `; ${closerFindings} merged-closer finding(s) above` : ""),
   );
 }
 
