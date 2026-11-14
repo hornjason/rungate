@@ -1,7 +1,9 @@
 /**
- * Covers SC-2738 (SPEC-TO-BOARD-PIPELINE-SPEC.md): merging an ADR whose status
- * changes to accepted places its plan on the board with no command typed by
- * hand.
+ * Covers SC-2738, SC-2744 (SPEC-TO-BOARD-PIPELINE-SPEC.md): merging an ADR whose
+ * status changes to accepted places its plan on the board with no command
+ * typed by hand, and `rungate scaffold` writes the workflow that does it
+ * (#2046, ADR-014 row 3), so a consumer gets it and this repository's copy is
+ * the generated one.
  *
  * ADR-013 row 5. Until this shipped, step 4 of the four-step process was a
  * person remembering five commands in order — `plan-spec`, `plan-issues
@@ -13,16 +15,29 @@
  *   1. `newlyAccepted` — the one decider for "did this push accept it".
  *   2. `plan-issues --accepted-since <sha>` against a real git history, so the
  *      read of the ADR at the earlier commit is inside what is measured.
- *   3. The workflow file, parsed: the trigger, the order of the five steps,
- *      and which credential each step holds.
+ *   3. The GENERATED workflow, parsed: the trigger, the order of the five
+ *      steps, and which credential each step holds — and the committed copy
+ *      compared with what the generator writes.
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { adrStatus, closedIssueCounts, newlyAccepted } from "../lib/issue-decomposition";
 import { REFUSAL_EXIT, main as planIssuesMain } from "../scripts/plan-issues";
+import { CLI_COMMANDS } from "../lib/cli-commands";
+import { actionRef } from "../lib/workflow-actions";
+import {
+  ADR_ACCEPTED_COMMANDS,
+  ADR_ACCEPTED_JOB,
+  ADR_ACCEPTED_WORKFLOW_FILE,
+  boardInput,
+} from "../lib/scaffold/adr-accepted-workflow";
+import { createCiWorkflows } from "../lib/scaffold/steps";
+import { workflowCensus } from "../lib/scaffold/workflow-census";
+
+const ROOT = join(import.meta.dir, "..");
 
 const adr = (status: string, table = true) =>
   [
@@ -157,11 +172,60 @@ describe("SC-2738: plan-issues --accepted-since lists what a push accepted", () 
   });
 });
 
-describe("SC-2738: .github/workflows/adr-accepted.yml runs the five steps in order", () => {
-  const path = join(import.meta.dir, "..", ".github", "workflows", "adr-accepted.yml");
-  const text = readFileSync(path, "utf-8");
-  const doc = Bun.YAML.parse(text) as any;
-  const steps: any[] = doc.jobs["place-the-plan"].steps;
+/** Scaffold a throwaway consumer with `board` in its config; hand back the generated adr-accepted.yml. */
+function generated(board: Record<string, unknown> = { engineSpec: "specs/ENGINE.md", milestonePrefix: "Engine" }): string {
+  const root = mkdtempSync(join(tmpdir(), "rg-adr-accepted-"));
+  try {
+    mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+    writeFileSync(
+      join(root, ".claude", "rungate", "config.json"),
+      JSON.stringify({ project: "fixture", repo: "fixture/fixture", ci: { bunVersion: "1.3.14" }, test: { command: "bun test" }, board }),
+    );
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", version: "0.0.0" }));
+    createCiWorkflows(root, [], { force: true });
+    const path = join(root, ".github", "workflows", ADR_ACCEPTED_WORKFLOW_FILE);
+    return existsSync(path) ? readFileSync(path, "utf-8") : "";
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("SC-2744: scaffold emits adr-accepted.yml as an owned workflow", () => {
+  const yml = generated();
+
+  test("a consumer's scaffold writes it, stamped as the harness's", () => {
+    expect(yml, `scaffold wrote no ${ADR_ACCEPTED_WORKFLOW_FILE}`).not.toBe("");
+    expect(yml).toContain("generated-sha:");
+    expect(Object.keys((Bun.YAML.parse(yml) as any).jobs)).toEqual([ADR_ACCEPTED_JOB]);
+  });
+
+  test("it calls the published CLI, never a script path or a lib/ import a consumer does not have", () => {
+    expect(yml, "a consumer has node_modules/rungate, not scripts/").not.toContain("bun scripts/");
+    expect(yml, "a consumer has no ./lib to import at run time").not.toContain("./lib/");
+    for (const cmd of ADR_ACCEPTED_COMMANDS) {
+      expect(yml).toMatch(new RegExp(`bunx rungate@\\S+ ${cmd} `));
+      expect(cmd in CLI_COMMANDS, `the workflow calls ${cmd}, which the CLI does not register`).toBe(true);
+    }
+  });
+
+  test("every action is the reference lib/workflow-actions.ts declares for it", () => {
+    const steps = (Bun.YAML.parse(yml) as any).jobs[ADR_ACCEPTED_JOB].steps as any[];
+    const uses = steps.map(s => s.uses).filter(Boolean) as string[];
+    expect(uses.map(u => u.split("@")[0])).toEqual(["actions/checkout", "oven-sh/setup-bun"]);
+    // The YAML parser drops the trailing `# vN` comment actionRef appends.
+    expect(uses.filter(u => u !== actionRef(u.split("@")[0]!).split(" #")[0])).toEqual([]);
+  });
+
+  test("this repository's copy is the generated one, untouched", () => {
+    const row = workflowCensus(ROOT).files.find(f => f.name === ADR_ACCEPTED_WORKFLOW_FILE);
+    expect(row?.status, row?.detail).toBe("generated-and-unchanged");
+  });
+});
+
+describe("SC-2738: the generated workflow runs the five steps in order", () => {
+  const doc = Bun.YAML.parse(generated()) as any;
+  const job = doc.jobs[ADR_ACCEPTED_JOB];
+  const steps: any[] = job.steps;
   const runOf = (s: any) => String(s.run ?? "");
 
   test("SC-2738: it fires on a push to main that touches docs/adr, and on nothing else", () => {
@@ -177,12 +241,12 @@ describe("SC-2738: .github/workflows/adr-accepted.yml runs the five steps in ord
 
   test("SC-2738: the five board commands run in plan order, each after the acceptance read", () => {
     const order = [
-      "plan-issues.ts --accepted-since",
-      "plan-spec.ts",
-      "plan-issues.ts --decompose",
-      "plan-deps.ts",
-      "board-mirror.ts",
-      "board-ready.ts",
+      "plan-issues --accepted-since",
+      "plan-spec ",
+      "plan-issues --decompose",
+      "plan-deps ",
+      "board-mirror ",
+      "board-ready ",
     ];
     const at = order.map(cmd => steps.findIndex(s => runOf(s).includes(cmd)));
     expect(at.every(i => i >= 0), `every command is present: ${JSON.stringify(at)}`).toBe(true);
@@ -194,6 +258,13 @@ describe("SC-2738: .github/workflows/adr-accepted.yml runs the five steps in ord
     expect(runOf(steps[at[5]])).toContain("--write");
   });
 
+  test("SC-2738: the engine spec and family come from config, into the job's env", () => {
+    expect(job.env).toEqual({ SPEC: "specs/ENGINE.md", PREFIX: "Engine" });
+    const planSpec = steps.find(s => runOf(s).includes("plan-spec "));
+    expect(runOf(planSpec)).toContain('"$SPEC"');
+    expect(runOf(planSpec)).toContain('--prefix "$PREFIX"');
+  });
+
   test("SC-2738: the board token reaches only the two board steps, through env", () => {
     // `RUNGATE_PROJECT_TOKEN` is never widened (ADR-013 row 5's note): the
     // issue, milestone and edge writes use the job's own GITHUB_TOKEN.
@@ -201,13 +272,19 @@ describe("SC-2738: .github/workflows/adr-accepted.yml runs the five steps in ord
       .filter(s => JSON.stringify(s.env ?? {}).includes("secrets.RUNGATE_PROJECT_TOKEN"))
       .map(runOf);
     expect(holders).toHaveLength(2);
-    expect(holders[0]).toContain("board-mirror.ts");
-    expect(holders[1]).toContain("board-ready.ts");
+    expect(holders[0]).toContain("board-mirror ");
+    expect(holders[1]).toContain("board-ready ");
     for (const s of steps) expect(runOf(s), "no secret is interpolated into a script line").not.toMatch(/\$\{\{\s*secrets\./);
     // plan-issues drops GH_TOKEN, so the issue writes get it as GITHUB_TOKEN.
-    const decompose = steps.find(s => runOf(s).includes("plan-issues.ts --decompose"));
+    const decompose = steps.find(s => runOf(s).includes("plan-issues --decompose"));
     expect(decompose.env.GITHUB_TOKEN).toBe("${{ secrets.GITHUB_TOKEN }}");
     expect(doc.permissions).toEqual({ contents: "read", issues: "write" });
+  });
+
+  test("SC-2738: the package is fetched by a step that holds no token, before any step that holds the PAT", () => {
+    const firstBunx = steps.findIndex(s => runOf(s).includes("bunx rungate@"));
+    expect(steps[firstBunx].id).toBe("accepted");
+    expect(JSON.stringify(steps[firstBunx].env ?? {})).not.toContain("secrets.");
   });
 });
 
@@ -233,20 +310,58 @@ describe("SC-2738: a closed issue stands for a row only when it is finished work
   });
 });
 
-describe("SC-2738: the config read refuses a value that would forge a GITHUB_OUTPUT key", () => {
-  test("SC-2738: the workflow's own newline guard, executed under bash -e", () => {
-    const doc = Bun.YAML.parse(readFileSync(join(import.meta.dir, "..", ".github", "workflows", "adr-accepted.yml"), "utf-8")) as any;
-    const run = String(doc.jobs["place-the-plan"].steps.find((s: any) => s.id === "accepted").run);
-    const guard = run.slice(run.indexOf('case "$spec$prefix" in'), run.indexOf("esac") + 4);
-    expect(guard.startsWith("case")).toBe(true);
-    const sh = (spec: string) =>
-      spawnSync("bash", ["-e", "-c", `${guard}\necho passed`], { env: { spec, prefix: "Pipeline" }, encoding: "utf-8" });
-    const bad = sh("specs/A.md\nany=false");
-    expect(bad.status).toBe(1);
-    expect(bad.stdout).toContain("contains a newline");
-    // The control: a plain value passes the same guard.
-    const good = sh("specs/A.md");
-    expect(good.status).toBe(0);
-    expect(good.stdout).toContain("passed");
+describe("SC-2738: an engine input that would read as something else is never written", () => {
+  // The hand-written file read these at run time and guarded GITHUB_OUTPUT
+  // against a newline (security review of #2009). The generator reads them at
+  // scaffold time, so the guard moved with the read: an unwritable value is
+  // not written, and the acceptance step refuses naming it.
+  const acceptance = (board: Record<string, unknown>) => {
+    const doc = Bun.YAML.parse(generated(board)) as any;
+    const job = doc.jobs[ADR_ACCEPTED_JOB];
+    return { env: job.env, run: String(job.steps.find((s: any) => s.id === "accepted").run) };
+  };
+
+  /** Run the acceptance step's script under bash -e, with a stub `bunx` that lists one accepted ADR. */
+  const execute = (run: string, env: Record<string, string>) => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-adr-accepted-step-"));
+    try {
+      writeFileSync(join(dir, "bunx"), "#!/bin/sh\necho docs/adr/ADR-099.md\n", { mode: 0o755 });
+      const out = join(dir, "output");
+      writeFileSync(out, "");
+      const r = spawnSync("bash", ["-e", "-c", run], {
+        cwd: dir,
+        env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: out, BEFORE: "abc", ...env },
+        encoding: "utf-8",
+      });
+      return { status: r.status, stdout: r.stdout, output: readFileSync(out, "utf-8") };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("SC-2738: a newline or an Actions expression is refused by name, and the step refuses UNMEASURED", () => {
+    expect(boardInput("engineSpec", "specs/A.md\nany=false")).toEqual({ value: null, why: "board.engineSpec contains a newline" });
+    expect(boardInput("milestonePrefix", "${{ secrets.X }}").value).toBeNull();
+    const { env, run } = acceptance({ engineSpec: "specs/A.md\nany=false", milestonePrefix: "Engine" });
+    expect(env.SPEC, "the forged value reached the job's env").toBe("");
+    const r = execute(run, { SPEC: env.SPEC, PREFIX: env.PREFIX });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain("UNMEASURED — board.engineSpec contains a newline");
+    expect(r.output, "the refusal wrote a GITHUB_OUTPUT key").not.toContain("any=");
+  });
+
+  test("SC-2738: an unset family refuses UNMEASURED naming the key", () => {
+    const { run, env } = acceptance({ engineSpec: "specs/A.md" });
+    const r = execute(run, { SPEC: env.SPEC, PREFIX: env.PREFIX });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain("UNMEASURED — board.milestonePrefix is not set");
+  });
+
+  test("SC-2738 CONTROL: plain values pass, and the step says what it accepted", () => {
+    const { run, env } = acceptance({ engineSpec: "specs/A.md", milestonePrefix: "Engine" });
+    expect(run, "a configured project carries no refusal").not.toContain("UNMEASURED");
+    const r = execute(run, { SPEC: env.SPEC, PREFIX: env.PREFIX });
+    expect(r.status).toBe(0);
+    expect(r.output).toBe("any=true\n");
   });
 });

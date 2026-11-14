@@ -171,6 +171,16 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't edit the generated `record-unmeasured` job, and don't give it a `merge_group` trigger — it reports no status to the pull request and cannot be a required check",
   },
   {
+    // #2046, ADR-014 row 3. Hand-written and caller-owned until ADR-013
+    // rule 9 made placing an accepted plan every consumer's step; declared
+    // the moment the generator learned to write it, for #631's reason above.
+    path: ".github/workflows/adr-accepted.yml",
+    strategy: "job-preserving",
+    servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
+    customize: "Set `board.engineSpec` and `board.milestonePrefix` in `.claude/rungate/config.json` and re-scaffold; the board steps read the `RUNGATE_PROJECT_TOKEN` secret and the `RUNGATE_PROJECT_ID` variable; add your own jobs alongside the generated one",
+    avoid: "Don't edit the generated `place-the-plan` job",
+  },
+  {
     // `regenerate` until #655, and the declaration was never consulted:
     // `generateAgentBriefsStep` called `writeFileSync` directly, so the row
     // described behaviour that a bare overwrite happened to coincide with.
