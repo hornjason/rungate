@@ -781,3 +781,5 @@ second: flow efficiency is the one metric this spec must not promise.**
       fingerprint: 976b8025
 - [x] SC-2761: scripts/work-status.ts contains [fileOverlapGroups] — the what's-next report groups Ready and promotion candidates by declared file overlap, and issues naming no files are never grouped together
       needs: test
+      proved-by: test/issue-file-overlap.test.ts "#1976 / SC-2761: fileOverlapGroups", 2026-11-14, on the PR that closes #1976. Two issues naming one file share a row, disjoint ones share none, and issues naming no files or no section are never grouped. Keyed by file, so A and C sharing nothing are never joined through B. Four mutants each redden the cases naming them: no groups (3), grouping on an empty set (4), Ready not read (1), a list of one printed (1). Live: the report ran against the board and printed three contested files among 40 candidates and none among the 4 in Ready.
+      fingerprint: 67c33164
