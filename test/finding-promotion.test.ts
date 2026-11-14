@@ -504,6 +504,9 @@ describe("SC-2612 / AC-2 (#1678): every refusal is named, and none is a guess", 
       }
       const drift = bankWithPromotion(JSON.stringify({ deferred: [] }), "specs/X.md", 1, 2);
       if (!drift.ok) reached.add(drift.refusal);
+      // #2107: an id already placed in another phase.
+      const twice = specWithCriterion(PLANNED_SPEC, "- [ ] SC-9002: lib/fixture.ts contains [beta] — and something else", "SC-9002", 1);
+      if (!twice.ok) reached.add(twice.refusal);
 
       expect([...reached].sort()).toEqual([...PROMOTION_REFUSALS].sort());
     } finally {
@@ -1666,5 +1669,45 @@ describe("#2066 review round 2", () => {
     // The bank is read on a retry too, not only when the count moved — the
     // condition, not just the call, is what the review found missing.
     expect(cli).toContain("if (counts.before.deferred && (moved || result.alreadyWritten)) {");
+  });
+});
+
+describe("#2107: three edges of the new flags", () => {
+  test("an id already placed in one phase is refused for another, and asking for its own phase again is a no-op", () => {
+    const line = "- [ ] SC-9002: lib/fixture.ts contains [beta] — and something else";
+    const other = specWithCriterion(PLANNED_SPEC, line, "SC-9002", 1);
+    expect(other.ok, "SC-9002 sits in Phase 2 and was placed in Phase 1 too").toBe(false);
+    if (!other.ok) {
+      expect(other.refusal).toBe("ALREADY_PLACED");
+      expect(other.why).toContain("Phase 2");
+    }
+    const same = specWithCriterion(PLANNED_SPEC, line, "SC-9002", 2);
+    expect(same).toEqual({ ok: true, text: PLANNED_SPEC });
+  });
+
+  test("--group and --phase are refused beside --declines, like the other promote-only flags", () => {
+    const cli = readFileSync(join(import.meta.dir, "..", "scripts", "finding-promotion.ts"), "utf8");
+    expect(cli).toContain('const promoteOnly = ["spec", "outcome", "symbol", "module", "group", "phase"]');
+  });
+
+  test("a new line never lands between a criterion and the note under it", () => {
+    // #2104: the #1553 promotion went between the previous criterion and
+    // that criterion's REVIEW note, and scaffold --fix then re-added the note.
+    const spec = [
+      "## Criteria",
+      "",
+      "- [ ] SC-9001: lib/a.ts contains [a] — first",
+      "<!-- REVIEW: unmatched (no registry pattern was close enough) -->",
+      "",
+      "## After",
+      "",
+    ].join("\n");
+    const line = "- [ ] SC-9010: lib/x.ts contains [x] — new";
+    const out = specWithCriterion(spec, line, "SC-9010", null);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const lines = out.text.split("\n");
+    expect(lines[lines.indexOf(line) - 1]).toStartWith("<!-- REVIEW:");
+    expect(lines[lines.indexOf(line) - 2]).toStartWith("- [ ] SC-9001:");
   });
 });

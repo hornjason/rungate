@@ -188,7 +188,7 @@ const declineWhy = declining ? required("declines") : "";
 // four flags the caller passed. A half-edited copy-paste produces exactly
 // that, and the result is indistinguishable from a deliberate decline.
 if (declining) {
-  const promoteOnly = ["spec", "outcome", "symbol", "module"].filter(f => args.includes(`--${f}`));
+  const promoteOnly = ["spec", "outcome", "symbol", "module", "group", "phase"].filter(f => args.includes(`--${f}`));
   if (promoteOnly.length > 0) {
     console.error(
       `ERROR: --declines cannot be combined with ${promoteOnly.map(f => `--${f}`).join(", ")}. ` +
