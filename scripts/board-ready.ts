@@ -47,7 +47,7 @@ import {
   type Dependent,
   type Incumbent,
 } from "../lib/board-ready-fanout";
-import { enginePrefixReading, readExpediteLabel } from "../lib/config-readers";
+import { enginePrefixReading, readBoardProjectId, readExpediteLabel } from "../lib/config-readers";
 import {
   heldReason,
   holdsReadySlot,
@@ -169,7 +169,7 @@ async function actorPermission(
 async function main(): Promise<number> {
   const repo = arg("repo");
   const rawClosed = arg("closed-issue");
-  const project = arg("project");
+  const projectFlag = arg("project");
   const actor = arg("actor");
   const apply = process.argv.includes("--write");
   const topUp = process.argv.includes("--top-up");
@@ -178,8 +178,8 @@ async function main(): Promise<number> {
   // and fanned out from issue 0. Caught in review of #1747. The absence is
   // checked before the conversion, and the value must be a positive integer
   // rather than merely finite — `1e9`, `0` and `-3` are all finite.
-  if (repo === null || project === null) {
-    console.error("UNMEASURED: --repo <owner/name> and --project <id> are both required");
+  if (repo === null) {
+    console.error("UNMEASURED: --repo <owner/name> is required");
     return EXIT_REFUSED;
   }
   // **The tree every config read below names** (#1968, Claim 2), read once.
@@ -193,6 +193,17 @@ async function main(): Promise<number> {
     return EXIT_REFUSED;
   }
   const root = rootArg === undefined ? process.cwd() : resolve(rootArg);
+  // #2165: the board is `--project`, else `board.id` in this tree's config —
+  // the one reader work-status and status-view use. The generated
+  // board-ready.yml names no project id (SC-2745), so the published CLI has
+  // to find the board itself. An explicit flag still wins.
+  const project = projectFlag ?? readBoardProjectId(root);
+  if (project === null) {
+    console.error(
+      `UNMEASURED: no board — pass --project <id>, or set board.id in the rungate config under ${root}. Nothing was read.`,
+    );
+    return EXIT_REFUSED;
+  }
   // **At least one candidate source.** An invocation with no source has
   // nothing to look at and must not quietly become either one.
   //
