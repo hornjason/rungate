@@ -514,6 +514,25 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: it states no count of its own c
       new RegExp(`Of the unticked boxes, ${N}\\b`, "gi"),
       new RegExp(`\\b${N} of them are not engineering`, "gi"),
     ];
+    // Positive control, per shape (round 4 of PR #2157): the sentences these
+    // shapes refuse are gone from the spec, so an empty result below holds by
+    // construction unless each shape is shown to match a planted copy.
+    const PLANTED = [
+      "This spec holds 66 criteria",
+      "this spec's\nsixty-six criteria",
+      "10 ticked of 66",
+      "47 unticked boxes",
+      "The backlog is thirty",
+      "Of the unticked boxes, 8 are",
+      "Seventeen of them are not engineering",
+    ];
+    expect(PLANTED.length, "one planted sentence per shape").toBe(shapes.length);
+    shapes.forEach((p, i) => {
+      p.lastIndex = 0;
+      expect(p.test(PLANTED[i].replace(/\s+/g, " ")), `shape ${i} matches nothing it was written for: ${p}`).toBe(true);
+      p.lastIndex = 0;
+    });
+
     // Collapsed first: the spec is hard-wrapped, so a literal space in a
     // shape misses a count split across a line break (round 3 of PR #2157).
     const flatBody = body!.replace(/\s+/g, " ");
