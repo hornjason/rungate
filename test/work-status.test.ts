@@ -6,7 +6,9 @@
  * (`.claude/rules/checks-must-be-able-to-fail.md`).
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { spawnSync } from "child_process";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import ts from "typescript";
 import { laneHealth, type LaneHealth, type LaneReading } from "../lib/board-lane-health";
@@ -26,6 +28,39 @@ import {
 const ROOT = join(import.meta.dir, "..");
 const open = (blockers: { state: string }[] = [], assignees: unknown[] = []) =>
   ({ state: "open", assignees, blockers }) as const;
+
+describe("#1719 / SC-2621: the report reads the board's id from project config", () => {
+  test("run where no board is configured, it refuses UNMEASURED and names board.id, before any read", () => {
+    // A credential IS present, so the only refusal that can name `board.id`
+    // is the board's. Before #1719 the script read the hardcoded board.
+    const empty = mkdtempSync(join(tmpdir(), "work-status-unconfigured-"));
+    try {
+      const env: Record<string, string | undefined> = { ...process.env, GITHUB_TOKEN: "not-a-real-token" };
+      delete env.GH_TOKEN;
+      const run = () => {
+        const r = spawnSync("bun", [join(ROOT, "scripts", "work-status.ts")], {
+          encoding: "utf-8",
+          env,
+          cwd: empty,
+          timeout: 30_000,
+        });
+        return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+      };
+      const { status, out } = run();
+      expect(out, `the refusal did not name the missing key:\n${out}`).toContain("board.id");
+      expect(out).toContain("UNMEASURED");
+      expect(status, out).toBe(2);
+      // Decided BEFORE the credential: with neither, the refusal names the
+      // board. Checked the other way round, this names the token.
+      delete env.GITHUB_TOKEN;
+      const neither = run();
+      expect(neither.out, `with no board and no credential the refusal was not the board's:\n${neither.out}`)
+        .toContain("board.id");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("isPickable: the 44-issue error, as cases", () => {
   test("an issue with no blockers and no assignee is pickable", () => {
@@ -1143,7 +1178,9 @@ describe("#1944: the report names local work every run, from the one decider", (
    * Not covered: a top-level `throw` used as a guard — the script has none,
    * and nothing here can tell one from the throws inside the functions above.
    */
-  const KNOWN_EXITS_BEFORE_SECTION = ["if (!token)", 'if (focus.kind === "unknown")'];
+  // `PROJECT === null` is #1719's: no board is configured, so there are no
+  // lanes to read and the whole report ends, as it does with no credential.
+  const KNOWN_EXITS_BEFORE_SECTION = ["if (PROJECT === null)", "if (!token)", 'if (focus.kind === "unknown")'];
 
   /**
    * #2041: read through the TypeScript parser, never a hand-written scanner.

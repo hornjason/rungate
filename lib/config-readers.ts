@@ -88,19 +88,49 @@ export function readProjectSlug(projectRoot: string): string | null {
  * as blank with nothing saying so.
  */
 export function readBoardConfig(projectRoot: string): { projectId: string; criteriaFieldId: string } | null {
-  const config = tryLoadRungateConfig(projectRoot);
-  const board = (config as Record<string, unknown> | null)?.board;
-  if (!board || typeof board !== "object" || Array.isArray(board)) return null;
-  const row = board as Record<string, unknown>;
+  const row = boardBlock(projectRoot);
+  if (row === null) return null;
   const fields = row.fields;
   const criteria =
     fields && typeof fields === "object" && !Array.isArray(fields)
       ? (fields as Record<string, unknown>).Criteria
       : undefined;
-  const projectId = typeof row.id === "string" ? row.id.trim() : "";
+  const projectId = projectIdIn(row);
   const criteriaFieldId = typeof criteria === "string" ? criteria.trim() : "";
-  if (projectId === "" || criteriaFieldId === "") return null;
+  if (projectId === null || criteriaFieldId === "") return null;
   return { projectId, criteriaFieldId };
+}
+
+/**
+ * The project board's node id, `board.id`, and nothing else — #1719, SC-2621.
+ *
+ * For a reader that addresses the board and reads no custom field
+ * (`scripts/work-status.ts`, `scripts/board-status-sweep.ts`): requiring the
+ * Criteria field id too, as {@link readBoardConfig} does, would refuse a board
+ * those readers can read perfectly well. Both readers decide the id here, in
+ * `projectIdIn`, so they cannot disagree about what counts as one.
+ *
+ * `null` for no config, no `board` block, or a blank id. Never a literal: until
+ * #1719 both scripts spelled this repository's node id, so a consumer, or a
+ * session told nothing, read OUR board under its own name.
+ */
+export function readBoardProjectId(projectRoot: string): string | null {
+  const row = boardBlock(projectRoot);
+  return row === null ? null : projectIdIn(row);
+}
+
+/** The resolved config's `board` block, or `null` when there is none to read. */
+function boardBlock(projectRoot: string): Record<string, unknown> | null {
+  const config = tryLoadRungateConfig(projectRoot);
+  const board = (config as Record<string, unknown> | null)?.board;
+  if (!board || typeof board !== "object" || Array.isArray(board)) return null;
+  return board as Record<string, unknown>;
+}
+
+/** `board.id`, trimmed; blank and non-string are `null`. The one decider for both readers. */
+function projectIdIn(row: Record<string, unknown>): string | null {
+  const id = typeof row.id === "string" ? row.id.trim() : "";
+  return id === "" ? null : id;
 }
 
 /**

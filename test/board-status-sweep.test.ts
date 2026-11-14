@@ -14,7 +14,8 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { readBoardProjectId } from "../lib/config-readers";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -1907,6 +1908,10 @@ beforeAll(() => {
   cpSync(join(ROOT, "lib"), join(SANDBOX, "lib"), { recursive: true });
   cpSync(join(ROOT, "scripts"), join(SANDBOX, "scripts"), { recursive: true });
   cpSync(join(ROOT, "package.json"), join(SANDBOX, "package.json"));
+  // The board's id is read from config before the credential (#1719), so a
+  // sandbox without it would refuse on the board and never reach the
+  // credential check these cases are about.
+  cpSync(join(ROOT, ".claude", "rungate"), join(SANDBOX, ".claude", "rungate"), { recursive: true });
   symlinkSync(join(ROOT, "node_modules"), join(SANDBOX, "node_modules"));
 
   REAL = join(SANDBOX, SWEEP);
@@ -1939,6 +1944,8 @@ describe("BS-28: DRIFT_EXIT is the refusal, and the mutant proves it", () => {
     // The DECISION first. A non-zero exit on its own is also what a crash,
     // a missing module and a syntax error produce.
     expect(r.out, `the script printed no UNMEASURED reading:\n${r.out}`).toContain("UNMEASURED");
+    // And the CREDENTIAL's decision, not the board's: both print UNMEASURED.
+    expect(r.out, `the refusal was not about the credential:\n${r.out}`).toContain("no GitHub credential");
     expect(r.code, `expected a refusal, got ${r.code}:\n${r.out}`).toBe(1);
   });
 
@@ -1982,6 +1989,88 @@ describe("BS-28: DRIFT_EXIT is the refusal, and the mutant proves it", () => {
     ).toBe(false);
     const literals = [...source.matchAll(/^\s*return\s+([1-9]\d*)\s*;/gm)].map(m => m[0].trim());
     expect(literals, "a literal non-zero return bypasses DRIFT_EXIT").toEqual([]);
+  });
+});
+
+/**
+ * Covers SC-2621 (SPEC-TO-BOARD-PIPELINE-SPEC.md), #1719.
+ *
+ * The board's identifiers come from project config, so a session told nothing
+ * can address the board, and an unconfigured board is UNMEASURED rather than
+ * a read of this repository's board under another project's name. On main at
+ * c6218cbe two scripts still spelled the node id: this one and
+ * `scripts/work-status.ts`.
+ */
+describe("#1719 / SC-2621: the board's identifiers are read from project config", () => {
+  test("readBoardProjectId reads board.id; no config, no board block, or a blank id is null", () => {
+    const dir = mkdtempSync(join(tmpdir(), "board-id-reader-"));
+    const write = (config: unknown) => {
+      mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+      writeFileSync(join(dir, ".claude", "rungate", "config.json"), JSON.stringify(config));
+    };
+    try {
+      expect(readBoardProjectId(dir)).toBeNull();
+      write({ project: "x" });
+      expect(readBoardProjectId(dir)).toBeNull();
+      write({ project: "x", board: { id: "   " } });
+      expect(readBoardProjectId(dir), "a blank id names no board").toBeNull();
+      write({ project: "x", board: { id: "PVT_fixtureBoardId" } });
+      expect(readBoardProjectId(dir)).toBe("PVT_fixtureBoardId");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("run where no board is configured, the sweep refuses UNMEASURED and names board.id", () => {
+    // A credential IS present, so the only refusal that can name `board.id`
+    // is the board's. Before #1719 this run read the hardcoded board instead.
+    const empty = mkdtempSync(join(tmpdir(), "board-sweep-unconfigured-"));
+    try {
+      const env: Record<string, string | undefined> = { ...process.env, GITHUB_TOKEN: "not-a-real-token" };
+      delete env.GH_TOKEN;
+      const run = (script: string) => {
+        const r = spawnSync("bun", [script], { encoding: "utf-8", env, cwd: empty, timeout: 30_000 });
+        return { code: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+      };
+      const real = run(REAL);
+      expect(real.out, `the refusal did not name the missing key:\n${real.out}`).toContain("board.id");
+      expect(real.out).toContain("UNMEASURED");
+      expect(real.code, real.out).toBe(1);
+      // Through DRIFT_EXIT, like every other refusal: the mutant prints the
+      // same decision and exits 0.
+      const mutant = run(MUTANT);
+      expect(mutant.out).toContain("board.id");
+      expect(mutant.code, mutant.out).toBe(0);
+      // The board is decided BEFORE the credential: with neither, the refusal
+      // names the board. Checked the other way round, this names the token.
+      delete env.GITHUB_TOKEN;
+      const neither = run(REAL);
+      expect(neither.out, `with no board and no credential the refusal was not the board's:\n${neither.out}`)
+        .toContain("board.id");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  test("no board identifier is spelled in lib/, scripts/, bin/, hooks/ or gates/ code", () => {
+    // Comment lines are records (dated measurements name the board) and are
+    // not reads. A code line holding a ProjectV2 id is a board this tool
+    // reads whatever the config says.
+    const ID = /PVT(?:SSF|F|V|I)?_[A-Za-z0-9_-]{8,}/;
+    const spelled: string[] = [];
+    let scanned = 0;
+    for (const dir of ["lib", "scripts", "bin", "hooks", "gates"]) {
+      for (const rel of readdirSync(join(ROOT, dir), { recursive: true }) as string[]) {
+        if (!rel.endsWith(".ts")) continue;
+        scanned++;
+        readFileSync(join(ROOT, dir, rel), "utf-8").split("\n").forEach((line, i) => {
+          if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+          if (ID.test(line)) spelled.push(`${dir}/${rel}:${i + 1}`);
+        });
+      }
+    }
+    expect(scanned, "the sweep read no source, so an empty list proves nothing").toBeGreaterThan(100);
+    expect(spelled, "read the id with readBoardProjectId (lib/config-readers.ts) instead").toEqual([]);
   });
 });
 

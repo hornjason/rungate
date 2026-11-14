@@ -303,7 +303,11 @@ const UNCLAIMED_RATCHET = 150;
 // closing #2056. A claim about which edges the tracker carries, which no
 // registered pattern expresses; test/plan-deps.test.ts and
 // test/board-snapshot.test.ts name it in a declaring position.
-const CLAIMED_UNBINDABLE = 159;
+// 159 -> 160: SC-2621 ticked by `sync-sc-status --only SC-2621` on the PR for
+// #1719. A claim about where the board's identifiers are read from, which no
+// registered pattern expresses; test/board-status-sweep.test.ts and
+// test/work-status.test.ts name it in a declaring position.
+const CLAIMED_UNBINDABLE = 160;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
