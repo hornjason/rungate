@@ -513,6 +513,8 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: it states no count of its own c
       new RegExp(`backlog is ${N}\\b`, "gi"),
       new RegExp(`Of the unticked boxes, ${N}\\b`, "gi"),
       new RegExp(`\\b${N} of them are not engineering`, "gi"),
+      // Round 5: the Not-done tally, "38 bullets … 40 ids".
+      new RegExp(`\\b${N} (?:bullets|leading ids)\\b`, "gi"),
     ];
     // Positive control, per shape (round 4 of PR #2157): the sentences these
     // shapes refuse are gone from the spec, so an empty result below holds by
@@ -525,6 +527,7 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: it states no count of its own c
       "The backlog is thirty",
       "Of the unticked boxes, 8 are",
       "Seventeen of them are not engineering",
+      "29 bullets carry 30 leading ids",
     ];
     expect(PLANTED.length, "one planted sentence per shape").toBe(shapes.length);
     shapes.forEach((p, i) => {
