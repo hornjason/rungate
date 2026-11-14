@@ -40,7 +40,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs
 import { tmpdir } from "os";
 import { join } from "path";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
-import { familyOf } from "../lib/spec-placement";
+import { readMilestoneTitle } from "../lib/milestone-title";
 import { ladderReport } from "../lib/work-status";
 
 /** The marker that identifies the pinned issue this script owns. */
@@ -188,9 +188,9 @@ export function phaseBlurb(specText: string, phase: number, limit = 280): string
 /** The focus family's phases, in phase order, each with its meaning and progress. */
 export function phaseLines(milestones: readonly Milestone[], family: string, specText: string | null): PhaseLine[] {
   const mine = milestones
-    .filter(m => familyOf(m.title) === family)
-    .map(m => ({ m, number: Number(/Phase (\d+)/.exec(m.title)?.[1] ?? NaN) }))
-    .filter(x => Number.isInteger(x.number))
+    .map(m => ({ m, r: readMilestoneTitle(m.title) }))
+    .filter(x => x.r !== null && x.r.family === family)
+    .map(x => ({ m: x.m, number: x.r!.phase }))
     .sort((a, b) => a.number - b.number);
   const current = mine.find(x => x.m.open > 0)?.number;
   return mine.map(({ m, number }) => ({
@@ -208,7 +208,7 @@ export function phaseLines(milestones: readonly Milestone[], family: string, spe
 export function otherFamilyLines(milestones: readonly Milestone[], family: string): FamilyLine[] {
   const by = new Map<string, FamilyLine>();
   for (const m of milestones) {
-    const f = familyOf(m.title);
+    const f = readMilestoneTitle(m.title)?.family ?? null;
     if (f === null || f === "" || f === family) continue;
     const row = by.get(f) ?? { family: f, phases: 0, open: 0, closed: 0 };
     row.phases += 1;
