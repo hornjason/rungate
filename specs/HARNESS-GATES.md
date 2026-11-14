@@ -514,3 +514,4 @@ prediction, not the test weaker — confirmed by mutating the other branch,
 which is the row above it.
 - [x] SC-2520: lib/gate-check-audit.ts contains [unassertedWarnPaths,checksThatCannotFail]
 - [x] SC-2521: test/gate-check-audit.test.ts contains [the body-level predicate is blind to a warn-return path,the widened predicate names it]
+- [ ] SC-2771: lib/gate-enforcement.ts contains [excludeArchivedRuns] — A run archived under `~/.rungate/.archive` never counts toward a gate's strike threshold.

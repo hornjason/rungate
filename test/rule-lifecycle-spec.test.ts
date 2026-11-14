@@ -38,6 +38,9 @@ const SPEC = join(ROOT, SPEC_REL);
 const SC_RANGES = [
   { owner: "#544", lo: 1930, hi: 1948 },
   { owner: "#1009 (PR #1011)", lo: 2440, hi: 2459 },
+  // #2104: ADR-015 promoted #1553's marked-section criterion into this spec,
+  // allocated by finding-promotion in the pull request that consumes it.
+  { owner: "#2104 (ADR-015, #1553)", lo: 2769, hi: 2769 },
 ] as const;
 
 function specBody(): string {
@@ -66,8 +69,9 @@ describe("RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC: document integrity", () => {
     // .claude/rules/claiming-sc-coverage.md. The count below is of claims.
     // 19 -> 27 on 2026-10-21: #1009's eight, SC-2440..SC-2447. #544 ticks
     // five of the original nineteen rather than adding any, so the count is
-    // unchanged and the enumeration below is what moved.
-    expect(scs.length).toBe(27);
+    // unchanged and the enumeration below is what moved. 27 -> 28 on
+    // 2026-11-13: ADR-015's promotion of #1553 (#2104).
+    expect(scs.length).toBe(28);
   });
 
   test("SC ids are unique", () => {
