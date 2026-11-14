@@ -160,6 +160,9 @@ gh pr checks <N> --watch --fail-fast   # --auto only ARMS; the first red ends th
 bun scripts/verify-merge-ref.ts --pr <N> --after-merge   # not optional
 ```
 
+A conflicted (`DIRTY`) pull request runs no checks at all; rebase before
+waiting (`reference/board-mechanics-worked-instances.md`).
+
 Pin the head every time. Exit zero always writes a SHA, so `&&` cannot hand
 the flag an empty string; the two runs ask different questions, so they clear
 on different readings. **The second run is the one that
