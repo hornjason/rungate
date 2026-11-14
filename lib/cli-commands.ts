@@ -274,6 +274,14 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
       "[--top-up] [--moving-issue <n>] [--actor <login>] [--write]   (at least one of --closed-issue, --top-up; " +
       "--project defaults to board.id in the rungate config)",
   },
+  // #2173. For a generated workflow that works in shell (`board-intake.yml`,
+  // #2166) and so cannot read the config through the loader itself. No
+  // `projectRootFlag`: it reads `process.cwd()`, which the child inherits.
+  "board-id": {
+    script: "scripts/board-id.ts",
+    summary: "Print the board's node id from config",
+    usage: "rungate board-id [--project-root <dir>]   (UNMEASURED and exit 2 when the config names no board)",
+  },
   // Reads a `gh pr view`-shaped payload on stdin, which the dispatcher passes
   // through (`stdio: "inherit"`), or `--fixture` offline.
   "audit-closing-references": {
