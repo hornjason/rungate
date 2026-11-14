@@ -223,3 +223,71 @@ describe("#1355 BashWriteGuard reads the same reach", () => {
     expect(stripHeredocs(cmd)).toBe(opener);
   });
 });
+
+/**
+ * #2079: a heredoc whose interpreter sits INSIDE a command or process
+ * substitution. The opener line's command word was read from the line start
+ * (`X=$(bash`), not from the innermost command that owns the `<<` (`bash`),
+ * and `source` / `.` run a file as shell text without being on the
+ * interpreter list. Four spellings filed under `/bin/bash` while the cap
+ * recorded 0. The shell is the oracle in every row.
+ */
+const INSIDE: Array<[string, (f: string) => string, { sourcesProcessSubstitution?: true }]> = [
+  ["assign-substitution", f => `X=$(bash <<'EOF'\n${f}\nEOF\n)\n`, {}],
+  ["echo-substitution", f => `echo "$(bash <<'EOF'\n${f}\nEOF\n)"\n`, {}],
+  ["source-process-substitution", f => `source <(cat <<'EOF'\n${f}\nEOF\n)\n`, { sourcesProcessSubstitution: true }],
+  ["dot-process-substitution", f => `. <(cat <<'EOF'\n${f}\nEOF\n)\n`, { sourcesProcessSubstitution: true }],
+];
+
+/**
+ * `source <(…)` reads nothing under bash 3.2, which is macOS's `/bin/bash`;
+ * bash 4 and later, which is CI's, runs it. The oracle is the shell on this
+ * machine, so those rows expect what it does. The cap counts one either way:
+ * an agent's shell is not ours to choose, and every current bash files it.
+ */
+const BASH_MAJOR = Number(spawnSync("/bin/bash", ["-c", "echo ${BASH_VERSINFO[0]}"], { encoding: "utf8" }).stdout.trim());
+
+describe("#2079: a heredoc owned by a command inside a substitution is metered", () => {
+  test("the oracle's bash version was read", () => {
+    expect(Number.isInteger(BASH_MAJOR) && BASH_MAJOR >= 3).toBe(true);
+  });
+
+  for (const [name, spell, how] of INSIDE) {
+    test(`${name}: the shell files it, and the cap counts exactly one attempt`, () => {
+      const title = `probe-${name}`;
+      const { cmd, calls, stderr } = execute(name, spell(filing(title)));
+      expect(stderr, `${name}: bash reported an error, so the fixture is not the spelling`).toBe("");
+      const shellFiles = !how.sourcesProcessSubstitution || BASH_MAJOR >= 4;
+      expect(calls).toEqual(shellFiles ? [logged(title)] : []);
+      const attempts = filingAttempts(cmd);
+      expect(attempts, `${name}: the shell filed and the cap recorded nothing`).toHaveLength(1);
+      expect(attempts[0].title).toBe(title);
+    });
+  }
+
+  test("a document captured into a variable, echoed, or sourced into a file stays at 0", () => {
+    // The cheapest wrong fix is "a heredoc inside a substitution is a
+    // program". These capture or print the text; the shell files nothing.
+    const CAPTURED: Array<[string, (f: string) => string]> = [
+      ["assign-cat", f => `X=$(cat <<'EOF'\n${f}\nEOF\n)\n`],
+      ["echo-cat", f => `echo "$(cat <<'EOF'\n${f}\nEOF\n)" > ${join(dir, "echoed.md")}\n`],
+      ["source-severed", f => `source <(cat <<'EOF' > ${join(dir, "sev.md")}\n${f}\nEOF\n)\n`],
+    ];
+    for (const [name, spell] of CAPTURED) {
+      const { cmd, calls, stderr } = execute(name, spell(filing(`doc-${name}`)));
+      expect(stderr, name).toBe("");
+      expect(calls, name).toEqual([]);
+      expect(filingAttempts(cmd), name).toEqual([]);
+    }
+  });
+
+  test("BashWriteGuard reads the same reach: a protected write in each body is refused", () => {
+    const TARGET = "/opt/bwprobe/" + "workflow-" + "state.json";
+    const write = `echo x > ${TARGET}`;
+    for (const [name, spell] of INSIDE) {
+      const cmd = spell(write);
+      expect(interpreterPrograms(cmd).map(p => p.program), name).toEqual([write]);
+      expect(decideBashWrite(cmd).blocked, name).toBe(true);
+    }
+  });
+});
