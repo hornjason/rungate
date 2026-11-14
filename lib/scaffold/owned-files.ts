@@ -190,7 +190,7 @@ export const OWNED_FILES: OwnedFile[] = [
     strategy: "provenance",
     servedBy: "writeProcessFiles (lib/scaffold/write-steps.ts) via decideRuleWrite — the rule-provenance decision",
     customize: "Edit freely — a hand-edited command is preserved and reported",
-    avoid: "Don't expect edits to survive if you also delete the `generated-sha` marker",
+    avoid: "Don't delete its `generated-sha` marker, or edits stop surviving",
   },
   {
     // #2048, ADR-014 row 5: step 2's template. Regenerated with no marker,
