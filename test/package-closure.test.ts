@@ -798,8 +798,10 @@ describe("#2044: every script a process workflow runs ships and is a rungate com
 
   test("the sweep reads a real population, and a comment is not a run", () => {
     // The control. A regex that matched nothing would pass the case below.
+    // closing-references.yml left this population with #2045: it is generated
+    // and calls the published CLI. board-ready.yml still runs its script
+    // until #2047 generates it too.
     expect(read.flatMap(w => w.scripts)).toContain("scripts/board-ready.ts");
-    expect(read.flatMap(w => w.scripts)).toContain("scripts/audit-closing-references.ts");
     expect(scriptsRun("  # bun scripts/board-ready.ts in a comment")).toEqual([]);
   });
 
