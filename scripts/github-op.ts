@@ -65,6 +65,7 @@ import {
 } from "../lib/github";
 import { commitSubject } from "../lib/commit-subject";
 import {
+  committedConfigUnmeasuredNote,
   filingBatch,
   filingsPerRunFor,
   ledgerPath,
@@ -77,7 +78,7 @@ import {
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
 import { UNFILED_ID } from "../lib/finding-arbiter";
-import { tryLoadRungateConfig } from "../lib/config-loader";
+import { loadCommittedConfig } from "../lib/config-loader";
 
 /**
  * Take this run's filing allowance for one tool-path issue (#1677, SC-2613).
@@ -122,9 +123,16 @@ function reserveFiling(title: string, projectRoot: string): FilingDecision {
     );
   }
   const run = reading.run;
-  const { cap, unreadable, unreadableSource } = filingsPerRunFor(
-    () => tryLoadRungateConfig(projectRoot) as Record<string, unknown> | null,
-  );
+  // **The COMMITTED config, never the working tree** (#1964, SC-2753) — the
+  // same read the `gh issue create` gate makes. This door used to read the
+  // working tree, so an agent refused by the gate could edit its own
+  // `ship.mode` and file through here instead (review of PR #2094).
+  const { cap, unreadable, unreadableSource, committedUnmeasured } = filingsPerRunFor(() => loadCommittedConfig(projectRoot));
+  // No `origin/main` to read is not a corrupt config: there is nothing to
+  // parse and nothing that could raise the cap, so the run takes the STRICT
+  // cap and says so, as the gate does — a refusal here would block every
+  // filing from a checkout that has not fetched.
+  if (committedUnmeasured !== undefined) console.error(committedConfigUnmeasuredNote(cap, committedUnmeasured));
   // **A corrupt ship policy refuses rather than quietly enforcing the strict
   // fallback.** `filingsPerRunFor` reports `unreadable` precisely so a caller
   // can tell "no policy" from "a policy nobody could parse", and the CLI path
@@ -132,7 +140,7 @@ function reserveFiling(title: string, projectRoot: string): FilingDecision {
   // be Silent Default Substitution — `.claude/rules/config-access.md` — on
   // the door that has no parser watching it, which is the combination this
   // whole change exists to remove.
-  if (unreadable) {
+  if (unreadable && committedUnmeasured === undefined) {
     throw new Error(
       `the ${unreadableSource ?? "ship policy"} in this project's rungate config is present and could not be parsed, so the ` +
         `filing cap for this run is unknown. Refusing rather than enforcing the strict fallback of ` +

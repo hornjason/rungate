@@ -207,7 +207,19 @@ export function enginePrefixReading(projectRoot: string): {
  * got an empty queue, it has no queue.
  */
 export function readQueueLabel(projectRoot: string): string | null {
-  return readBoardLabel(projectRoot, "queueLabel");
+  return queueLabelIn(tryLoadRungateConfig(projectRoot));
+}
+
+/**
+ * The same queue label, read out of a config already loaded — #1964.
+ *
+ * The filing gate must take the label from COMMITTED config (SC-2753), so it
+ * loads that itself and asks here. The extraction stays one function, so the
+ * gate and every working-tree reader above agree on what the label is called
+ * and differ only in which copy of the config they were handed.
+ */
+export function queueLabelIn(config: unknown): string | null {
+  return boardLabelIn(config, "queueLabel");
 }
 
 /**
@@ -239,8 +251,11 @@ export function readFilingOverrideLabel(projectRoot: string): string | null {
 
 /** One `board.<key>` label: absent, blank and non-string are all `null`. */
 function readBoardLabel(projectRoot: string, key: string): string | null {
-  const config = tryLoadRungateConfig(projectRoot);
-  const board = (config as Record<string, unknown> | null)?.board;
+  return boardLabelIn(tryLoadRungateConfig(projectRoot), key);
+}
+
+function boardLabelIn(config: unknown, key: string): string | null {
+  const board = (config as Record<string, unknown> | null | undefined)?.board;
   if (!board || typeof board !== "object" || Array.isArray(board)) return null;
   const raw = (board as Record<string, unknown>)[key];
   if (typeof raw !== "string") return null;

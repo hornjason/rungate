@@ -117,7 +117,7 @@ import {
   missingSections,
   requiredSections,
 } from "../lib/issue-shape";
-import { loadRungateConfig } from "../lib/config-loader";
+import { loadRungateConfig, readCommittedConfig } from "../lib/config-loader";
 import { DROPPED_CATEGORIES } from "../lib/finding-jury";
 import type { ArbiterRefusal } from "../lib/finding-arbiter";
 import type { FilingAdjudication } from "../lib/issue-filing-gate";
@@ -336,6 +336,31 @@ function scaffoldOverride(dir: string): void {
   );
 }
 
+/**
+ * Commit everything in `dir` and publish it as `origin/main` — #1964.
+ *
+ * The filing cap's size and ceiling come from COMMITTED config only
+ * (SC-2753): `gitCommittedFiles` reads `origin/main`, never the working tree.
+ * So a fixture whose cap depends on its config has to commit that config, or
+ * the gate reads nothing and takes the strict cap. Re-running it after an edit
+ * moves `origin/main` to the new commit, which is how a fixture changes what
+ * is committed. A `git init` on a tree that already is one is a no-op.
+ */
+function commitConfigTree(dir: string): void {
+  const git = (...args: string[]) => {
+    // late-env-ok: the child is `git` committing a fixture, and it reads none
+    // of the RUNGATE_* variables this file writes for the gate under test.
+    const r = spawnSync("git", ["-C", dir, "-c", "user.email=fg@example.invalid", "-c", "user.name=fg", ...args], {
+      encoding: "utf-8",
+    });
+    if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed in ${dir}: ${r.stderr}`);
+  };
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-q", "--allow-empty", "-m", "fixture");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+}
+
 let scratch: string;
 let ledger: string;
 let issuesFile: string;
@@ -387,6 +412,9 @@ function checkoutAt(dir: string): void {
     0,
   );
   scaffoldOverride(dir);
+  // A real checkout has an `origin/main`, and the cap reads its config from
+  // there (#1964) — without one every fixture would read UNMEASURED.
+  commitConfigTree(dir);
 }
 
 /**
@@ -5355,6 +5383,8 @@ describe("FG-251..FG-256: the configured queue label is the cap's third route", 
       join(root, ".claude", "rungate", "config.json"),
       JSON.stringify({ project: "x", board: label === null ? {} : { queueLabel: label } }),
     );
+    // Committed, because the queue label is read from origin/main (#1964).
+    commitConfigTree(root);
     return root;
   };
 
@@ -5985,6 +6015,9 @@ describe("the filing cap under direct-ship mode", () => {
     // Present and unparseable — NOT absent. The two resolve to the same cap
     // on purpose and must not resolve to the same report.
     writeFileSync(join(dir, ".claude", "rungate", "config.json"), '{"ship": {"mode": "dierct"');
+    // Committed: the cap reads the config at origin/main (#1964), so a
+    // corrupt config has to be the COMMITTED one for this case to reach it.
+    commitConfigTree(dir);
 
     const corrupt = await filingGate(filing, {
       projectRoot: dir,
@@ -6008,6 +6041,7 @@ describe("the filing cap under direct-ship mode", () => {
       join(dir, ".claude", "rungate", "config.json"),
       JSON.stringify({ ship: { mode: "direct", since: "2026-10-19", reason: "stabilising" } }),
     );
+    commitConfigTree(dir);
     const parses = await filingGate(filing, {
       projectRoot: dir,
       now: AT,
@@ -6040,6 +6074,7 @@ describe("the filing cap under direct-ship mode", () => {
       join(dir, ".claude", "rungate", "config.json"),
       JSON.stringify({ ship: { mode: "harness" }, board: { filingsPerRun: "12" } }),
     );
+    commitConfigTree(dir);
     const r = await filingGate(filing, {
       projectRoot: dir,
       now: AT,
@@ -6982,6 +7017,8 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     const root = join(scratch, `net-growth-${name}`);
     mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
     writeFileSync(join(root, ".claude", "rungate", "config.json"), JSON.stringify({ project: "x", ...config }));
+    // Committed, because the cap is read from origin/main (#1964).
+    commitConfigTree(root);
     return root;
   };
 
@@ -6997,6 +7034,13 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
   const queued = () => filing(`--label ${QUEUE_LABEL}`);
 
   /** `n` intents already spent in `root`'s run, inside the window. */
+  // The run id once per tree, not once per row: these trees are git checkouts
+  // now (#1964 commits their config), and `runIdFor` shells out to git there.
+  const runOf = new Map<string, string>();
+  const runFor = (root: string): string => {
+    if (!runOf.has(root)) runOf.set(root, runIdFor(root).run!);
+    return runOf.get(root)!;
+  };
   const spent = (root: string, n: number): FilingLedgerRow[] =>
     Array.from({ length: n }, (_, i) => ({
       at,
@@ -7016,7 +7060,7 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
       refiledAfter: null,
       exemption: "out-of-pr-diff" as const,
       intent: true,
-      run: runIdFor(root).run!,
+      run: runFor(root),
     }));
 
   const measured = (opened: number, closed: number) => async (): Promise<NetGrowthReading> => ({
@@ -7294,6 +7338,187 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     const over = await race(GROWING);
     expect(over.rows[0].refusal, "the reservation stage ignored the ship-mode cap").toBe("OVER_CAP");
     expect(over.refusal ?? "", "the stage's refusal does not say what set the cap").toContain("opened 31");
+  });
+});
+
+/**
+ * #1964 / SC-2753: the filing cap's size and ceiling are read from COMMITTED
+ * config only, so a working-tree edit cannot raise an agent's own cap.
+ *
+ * Found by the security review of PR #1963: `filingsPerRunFor` read
+ * `ship.mode` (cap 1 → 12) and `queueLabelFor` read `board.queueLabel` (cap →
+ * 24) out of the mutable working tree, so an agent could write either into
+ * its own checkout and raise its own allowance. `board.filingsPerRun` (#2070)
+ * reached the cap the same way. The plan route already had the property:
+ * `gitSource` reads `origin/main`, so a filer cannot author its own exemption
+ * without a merge.
+ *
+ * The CONTROL rows (FG-279, FG-281, FG-283) are the vulnerability: a tree
+ * whose working copy says more than its commit does. Each fails against a
+ * reader that falls back to the working tree, and each pair row (FG-280,
+ * FG-282) proves the committed value really does still raise the cap, so the
+ * controls cannot pass on a cap that never moves at all.
+ */
+describe("#1964 / SC-2753: the filing cap is read from committed config, never the working tree", () => {
+  const at = "2026-11-13T23:00:00.000Z";
+  const TITLE = "zqxjCommittedCap leaves a filing unrecorded";
+  /** Not this repository's `"engine"`, for the reason FG-251's fixture gives. */
+  const QUEUE_LABEL = "cc-work-queue";
+  const DIRECT_SHIP = { mode: "direct", since: "2026-10-19", reason: "stabilising" };
+  const CONFIG = (root: string) => join(root, ".claude", "rungate", "config.json");
+  let seq = 0;
+
+  /**
+   * A checkout whose COMMITTED config is `committed`, and whose working copy
+   * is `working` when given — the shape an agent editing its own config has.
+   */
+  const tree = (committed: Record<string, unknown>, working?: Record<string, unknown>): string => {
+    const root = freshRun();
+    writeFileSync(CONFIG(root), JSON.stringify({ project: "x", ...committed }));
+    commitConfigTree(root);
+    if (working !== undefined) writeFileSync(CONFIG(root), JSON.stringify({ project: "x", ...working }));
+    return root;
+  };
+
+  /** One filing already made by THIS tree's run, so a cap of 1 is spent. */
+  const spentOnce = (root: string) => () => [
+    {
+      at,
+      key: `b.${seq++}/${at}/0${INTENT_KEY_SUFFIX}`,
+      id: "new",
+      title: "already filed by this run",
+      symptomHash: "h",
+      category: "correctness" as const,
+      severity: null,
+      disposition: "ISSUE" as const,
+      refusal: null,
+      emitted: false,
+      withheldBy: INTENT_PENDING,
+      jury: null,
+      duplicateOf: [],
+      overridden: false,
+      refiledAfter: null,
+      exemption: "out-of-pr-diff" as const,
+      intent: true,
+      run: runIdFor(root).run!,
+    },
+  ];
+
+  const filing = (label = "") =>
+    `gh issue create --title "${TITLE}" ${label ? `--label ${label} ` : ""}` +
+    `--body "lib/zqxj-committed-cap.ts loses 11 of 29 readings. Claim 7. ${DECLARED}"`;
+
+  const run = (root: string, cmd: string) =>
+    filingGate(cmd, {
+      projectRoot: root,
+      now: at,
+      readExisting: async () => measuredCorpus([]),
+      readLedger: spentOnce(root) as never,
+      appendLedger: () => true,
+      readTarget: async () => ({ reading: "NO_PR", branch: "b" }) as never,
+      readPlan: { list: () => [] as string[], show: () => null },
+      // A growing repository, so ADR-016's ceiling never lifts the cap and
+      // the number under test is the one the config sets.
+      readGrowth: async () => ({ reading: "MEASURED" as const, opened: 30, closed: 10 }),
+    });
+
+  test("FG-279 CONTROL: ship.mode edited to direct in the working tree only — the cap stays 1", async () => {
+    const r = await run(tree({ ship: { mode: "harness" } }, { ship: DIRECT_SHIP }), filing());
+    expect(r.rows[0].refusal, "a working-tree ship.mode raised the agent's own cap").toBe("OVER_CAP");
+  });
+
+  test("FG-280: ship.mode direct COMMITTED — the raised cap applies", async () => {
+    const r = await run(tree({ ship: DIRECT_SHIP }), filing());
+    expect(r.rows[0].refusal, "a committed direct mode must still raise the cap").toBeNull();
+  });
+
+  test("FG-281 CONTROL: board.queueLabel added in the working tree only — no queue ceiling", async () => {
+    const r = await run(tree({ board: {} }, { board: { queueLabel: QUEUE_LABEL } }), filing(QUEUE_LABEL));
+    expect(r.rows[0].refusal, "a working-tree queue label raised the agent's own ceiling").toBe("OVER_CAP");
+    expect(r.rows[0].queuedBy).toBeNull();
+  });
+
+  test("FG-282: board.queueLabel COMMITTED — the queue ceiling applies", async () => {
+    const r = await run(tree({ board: { queueLabel: QUEUE_LABEL } }), filing(QUEUE_LABEL));
+    expect(r.rows[0].refusal, "a committed queue label must still raise the ceiling").toBeNull();
+    expect(r.rows[0].queuedBy).toBe(QUEUE_LABEL);
+  });
+
+  test("FG-283 CONTROL: board.filingsPerRun set in the working tree only — the cap stays 1", async () => {
+    const r = await run(tree({ ship: { mode: "harness" } }, { ship: { mode: "harness" }, board: { filingsPerRun: 12 } }), filing());
+    expect(r.rows[0].refusal, "a working-tree filingsPerRun raised the agent's own cap").toBe("OVER_CAP");
+  });
+
+  test("FG-284: no committed copy to read is UNMEASURED and STRICT, never the working tree's number", async () => {
+    // A checkout with a direct-mode config on disk and no origin/main at all.
+    const root = freshRun();
+    writeFileSync(CONFIG(root), JSON.stringify({ project: "x", ship: DIRECT_SHIP, board: { queueLabel: QUEUE_LABEL } }));
+    // late-env-ok: the child is `git` deleting a ref, and it reads none of the
+    // RUNGATE_* variables this file writes for the gate under test.
+    spawnSync("git", ["-C", root, "update-ref", "-d", "refs/remotes/origin/main"]);
+    const r = await run(root, filing(QUEUE_LABEL));
+    expect(r.rows[0].refusal, "an unreadable commit fell through to the working tree").toBe("OVER_CAP");
+    expect(r.rows[0].queuedBy).toBeNull();
+    expect(r.note ?? "", "the strict cap must say it could not measure").toContain("UNMEASURED");
+    expect(r.note ?? "").toContain("origin/main");
+  });
+
+  test("FG-285: the monolith layout is read from the commit too", async () => {
+    // `.claude/rules/config-access.md`: a reader that handles one layout
+    // silently switches the gate off for consumers on the other.
+    const root = freshRun();
+    rmSync(join(root, ".claude", "rungate"), { recursive: true, force: true });
+    writeFileSync(join(root, ".claude", "rungate.json"), JSON.stringify({ project: "x", ship: DIRECT_SHIP }));
+    commitConfigTree(root);
+    const r = await run(root, filing());
+    expect(r.rows[0].refusal, "a committed monolith's direct mode was not read").toBeNull();
+  });
+
+  test("FG-287: EVERY reader of the cap reads committed config — the property across the sites, not one door", () => {
+    // Review of PR #2094: the gate was fixed and `scripts/github-op.ts`'s
+    // `issue-create` door still read the working tree, so an agent refused by
+    // one door could raise its own cap and file through the other. A
+    // behavioural case per door catches only the last door to regress, so
+    // this asserts the property over every call site instead.
+    const sites: string[] = [];
+    for (const dir of ["lib", "scripts"]) {
+      for (const file of readdirSync(join(import.meta.dir, "..", dir))) {
+        if (!file.endsWith(".ts")) continue;
+        const src = readFileSync(join(import.meta.dir, "..", dir, file), "utf-8");
+        const re = /filingsPerRunFor\(\s*\(\)\s*=>\s*([^\n]+)/g;
+        for (const m of src.matchAll(re)) sites.push(`${dir}/${file}: ${m[1]!.trim()}`);
+      }
+    }
+    expect(sites.length, "no filingsPerRunFor call site was found, so this measured nothing").toBeGreaterThanOrEqual(3);
+    const fromWorkingTree = sites.filter(s => !/committedConfig\(|loadCommittedConfig\(/.test(s));
+    expect(fromWorkingTree, "a cap reader that does not read the committed config reopens #1964").toEqual([]);
+  });
+
+  test("FG-286: readCommittedConfig names WHICH failure, and never reads a failure as absent", () => {
+    const files = (map: Record<string, string>, readable = true) => ({
+      ref: "origin/main",
+      readable,
+      show: (rel: string) => map[rel] ?? null,
+    });
+    expect(readCommittedConfig(files({}, false))).toMatchObject({ status: "unreadable", kind: "ref" });
+    expect(readCommittedConfig(files({}))).toEqual({ status: "absent", ref: "origin/main" });
+    expect(readCommittedConfig(files({ ".claude/rungate/config.json": "{ nope" }))).toMatchObject({
+      status: "unreadable",
+      kind: "content",
+    });
+    // Orphaned fragments with no config.json: a broken config, not an absent one.
+    expect(readCommittedConfig(files({ ".claude/rungate/roles.json": "{}" }))).toMatchObject({
+      status: "unreadable",
+      kind: "content",
+    });
+    // The directory form wins over a monolith, exactly as on the working tree.
+    const both = readCommittedConfig(
+      files({
+        ".claude/rungate/config.json": JSON.stringify({ project: "dir" }),
+        ".claude/rungate.json": JSON.stringify({ project: "mono" }),
+      }),
+    );
+    expect(both).toMatchObject({ status: "resolved", source: "directory" });
   });
 });
 

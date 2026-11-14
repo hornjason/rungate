@@ -508,11 +508,23 @@ export function netGrowthLine(
      * #2089; `.claude/rules/config-access.md`, Silent Default Substitution).
      */
     unreadable: string | null;
+    /**
+     * Why the COMMITTED config could not be read at all — no `origin/main`
+     * resolved, so nothing was read (#1964). Wins over `unreadable`: there is
+     * no setting to name, and the repair is a fetch, not a config edit.
+     */
+    committedUnmeasured?: string | null;
   },
 ): string {
   const head = `Filing cap: ${decision.cap}`;
   const queue = decision.cap < caps.queueCap ? ` (${caps.queueCap} for an engine-labelled filing)` : "";
   const basis = decision.basis;
+  if (basis === null && typeof caps.committedUnmeasured === "string") {
+    return (
+      `${head}${queue} — UNMEASURED: ${caps.committedUnmeasured}, so the gate fell back to its strict cap ` +
+      "and the net-growth ceiling does not apply. The repair is a `git fetch`, not a config edit."
+    );
+  }
   if (basis === null && caps.unreadable !== null) {
     return (
       `${head}${queue} — ${caps.unreadable} could not be read, so the gate fell back to its strict cap; ` +

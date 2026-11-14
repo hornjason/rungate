@@ -144,8 +144,14 @@ import { headingFor, missingSections, requiredSections } from "./issue-shape";
 import { asIssueFiles, overlapNote } from "./issue-file-overlap";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
-import { tryLoadRungateConfig } from "./config-loader";
-import { readFilingOverrideLabel, readQueueLabel } from "./config-readers";
+import {
+  CommittedConfigUnreadable,
+  committedConfig,
+  gitCommittedFiles,
+  readCommittedConfig,
+  type CommittedFiles,
+} from "./config-loader";
+import { queueLabelIn, readFilingOverrideLabel } from "./config-readers";
 
 /**
  * The label that waives this gate — `board.filingOverrideLabel`, or `null`.
@@ -464,6 +470,14 @@ export type FilingCapReading = {
    */
   unreadableSource?: string;
   /**
+   * Set when the COMMITTED config could not be read at all — the revision did
+   * not resolve, so nothing was read (#1964). It carries why, for the
+   * UNMEASURED note. A commit that carries a malformed config is the other
+   * case, and reports through `unreadableSource` like a malformed working tree
+   * did, because that config IS present.
+   */
+  committedUnmeasured?: string;
+  /**
    * The cap is the DIRECT-ship allowance, derived from `ship.mode` — not a
    * `board.filingsPerRun` override, not harness mode, not a fallback (#2086).
    *
@@ -527,7 +541,15 @@ export function filingsPerRunFor(
     }
     const policy = resolveShipPolicy(config);
     return { cap: filingsPerRun(policy), unreadable: false, direct: policy.mode === "direct" };
-  } catch {
+  } catch (e) {
+    // #1964: a committed config that could not be read is named, not merely
+    // strict. `ref` means no revision resolved; `content` means the commit
+    // carries a config that will not resolve, which is the malformed case.
+    if (e instanceof CommittedConfigUnreadable) {
+      return e.kind === "ref"
+        ? { cap: FILINGS_PER_RUN, unreadable: true, committedUnmeasured: e.message, direct: false }
+        : { cap: FILINGS_PER_RUN, unreadable: true, unreadableSource: `committed config (at \`${e.ref}\`)`, direct: false };
+    }
     return { cap: FILINGS_PER_RUN, unreadable: true, direct: false };
   }
 }
@@ -3363,6 +3385,13 @@ export async function filingGate(
      */
     readPlan?: PlanSource;
     /**
+     * The committed config the cap is read from (#1964, SC-2753). Same rule
+     * as `readPlan`: injectable so a test can hand it a fixture, and the
+     * default — `origin/main`, never the working tree — is the only one that
+     * ships. A caller passing the working tree here reopens #1964.
+     */
+    readConfigAt?: CommittedFiles;
+    /**
      * The repository's trailing-day opened and closed issue counts, for the
      * net-growth ceiling (#2086). Injectable for the reason `readExisting`
      * is — the live one, `readNetGrowth`, talks to GitHub. Only called when
@@ -3391,12 +3420,22 @@ export async function filingGate(
   const readBody = (path: string): string | null =>
     readBodyFile(path === "-" ? path : resolve(root, path));
   const planSource = options.readPlan ?? gitSource(root);
+  // **The cap's config is the COMMITTED config, never the working tree**
+  // (#1964, SC-2753). `ship.mode`, `board.filingsPerRun` and `board.queueLabel`
+  // each move the cap, and read from the working tree any one of them let an
+  // agent raise its own allowance by editing its own checkout. Read once from
+  // `origin/main` — the provenance `gitSource` gives the plan route — so a
+  // working-tree edit cannot raise it. That ref is still LOCAL state, and an
+  // agent forging it with `git update-ref` is not stopped here; anchoring
+  // both readers on the remote's own `main` is #2095. An unreadable commit
+  // is the STRICT cap and an UNMEASURED note, never a fall-through to disk.
+  const committed = readCommittedConfig(options.readConfigAt ?? gitCommittedFiles(root));
   // The run's allowance, resolved ONCE per command. Per clause would let two
   // clauses of one command be adjudicated against two different caps if the
   // config moved underneath them, which is the shape `readFor` is cached to
   // avoid one line below. A config that cannot be read resolves to the
   // STRICT cap — `filingsPerRunFor`.
-  const allowance = filingsPerRunFor(() => tryLoadRungateConfig(root));
+  const allowance = filingsPerRunFor(() => committedConfig(committed));
   // The net-growth ceiling (ADR-016), resolved ONCE per command for the same
   // reason. `netGrowthCeiling` is the one decider — it alone decides whether
   // the count is read at all — and every cap consumer below reads `cap`, and
@@ -3414,7 +3453,7 @@ export async function filingGate(
   // `unreadableShipPolicyNote` below, from `filingsPerRunFor`, which catches
   // the same throw from the same file; a second note over one fact would be
   // two voices on one repair.
-  const queueLabel = queueLabelFor(() => readQueueLabel(root));
+  const queueLabel = queueLabelFor(() => queueLabelIn(committedConfig(committed)));
   // The waiver's name, once per command for the same reason (SC-2735). `null`
   // waives nothing — `filingOverrideLabelFor`.
   const overrideLabel = filingOverrideLabelFor(() => readFilingOverrideLabel(root));
@@ -3459,7 +3498,13 @@ export async function filingGate(
   // exist yet there, and the ordering is deliberate: this is the first note a
   // reader sees, because it is the one that explains the NUMBER every later
   // refusal quotes.
-  if (allowance.unreadable) notes.push(unreadableShipPolicyNote(cap, allowance.unreadableSource));
+  if (allowance.unreadable) {
+    notes.push(
+      allowance.committedUnmeasured !== undefined
+        ? committedConfigUnmeasuredNote(cap, allowance.committedUnmeasured)
+        : unreadableShipPolicyNote(cap, allowance.unreadableSource),
+    );
+  }
   /** The queue-ceiling note is one fact about the project, said once. */
   let notedQueueCeiling = false;
 
@@ -4393,6 +4438,25 @@ export function queueCeilingNote(label: string, ceiling: number, runCap: number)
     `against a ceiling of ${ceiling} rather than this run's ${runCap}. It is still counted, still ` +
     `reserved and still finite — the queue route raises the number and exempts nothing. If that ` +
     `declaration is not what you expected, the config is the thing to read.`
+  );
+}
+
+/**
+ * The committed config could not be read at all, so the cap is strict and
+ * nothing in the working tree can raise it (#1964, SC-2753).
+ *
+ * Its own note rather than `unreadableShipPolicyNote`, because that one says
+ * the config "is present and could not be resolved" and names the file to
+ * repair. Here nothing was read: the repair is a fetch, or a checkout that
+ * has an `origin/main`, and an edit to the config file changes nothing.
+ */
+export function committedConfigUnmeasuredNote(cap: number, why: string): string {
+  return (
+    `[FindingArbiter] UNMEASURED — ${why}. The filing cap is read from committed config only ` +
+    `(origin/main, never the working tree), so the per-run cap is the STRICT ${cap} and no ` +
+    `work-queue label raises it. The filing is NOT blocked by this note. The repair is a ` +
+    `\`git fetch\` in a checkout that has an \`origin\` remote; editing \`.claude/rungate/config.json\` ` +
+    `changes nothing until it merges.`
   );
 }
 
