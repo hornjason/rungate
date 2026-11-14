@@ -149,6 +149,7 @@ import {
   committedConfig,
   gitCommittedFiles,
   readCommittedConfig,
+  type CommittedConfigReading,
   type CommittedFiles,
 } from "./config-loader";
 import { queueLabelIn, readFilingOverrideLabel } from "./config-readers";
@@ -552,6 +553,25 @@ export function filingsPerRunFor(
     }
     return { cap: FILINGS_PER_RUN, unreadable: true, direct: false };
   }
+}
+
+/**
+ * The filing cap, read from COMMITTED config only — SC-2753's one binding
+ * (#1964).
+ *
+ * Every reader of the cap calls this: the `gh issue create` gate,
+ * `scripts/github-op.ts`'s Octokit `issue-create` door, and `work-status`'s
+ * FILING CAP line. Round 1 of PR #2094 found the second door still reading
+ * the working tree after the gate was fixed, so an agent refused at one door
+ * could raise its own cap and file through the other. One function means a
+ * door that computes its own cap is a second call to `filingsPerRunFor`,
+ * which FG-287 refuses by file name.
+ *
+ * Takes the reading, not a root, because the gate reads the committed config
+ * once per command and also takes the queue label from that same reading.
+ */
+export function committedFilingCap(reading: CommittedConfigReading): FilingCapReading {
+  return filingsPerRunFor(() => committedConfig(reading));
 }
 
 /**
@@ -3434,8 +3454,8 @@ export async function filingGate(
   // clauses of one command be adjudicated against two different caps if the
   // config moved underneath them, which is the shape `readFor` is cached to
   // avoid one line below. A config that cannot be read resolves to the
-  // STRICT cap — `filingsPerRunFor`.
-  const allowance = filingsPerRunFor(() => committedConfig(committed));
+  // STRICT cap — `filingsPerRunFor`, through `committedFilingCap`.
+  const allowance = committedFilingCap(committed);
   // The net-growth ceiling (ADR-016), resolved ONCE per command for the same
   // reason. `netGrowthCeiling` is the one decider — it alone decides whether
   // the count is read at all — and every cap consumer below reads `cap`, and
