@@ -621,9 +621,23 @@ function withMarkerBelow(content: string, match: RegExpMatchArray, marker: strin
   if (followsWith(content, match, marker)) return content;
   const lineEnd = match.index! + match[0].length;
   const rest = content.slice(lineEnd);
-  const stale = /^\n<!-- REVIEW: unmatched \(.*\) -->(?=\n|$)/.exec(rest);
+  const stale = STALE_UNMATCHED.exec(rest);
   if (stale) return content.slice(0, lineEnd) + `\n${marker}` + rest.slice(stale[0].length);
   return replaceLine(content, match, `${match[0]}\n${marker}`);
+}
+
+/** A REVIEW unmatched marker on the line directly after a criterion. */
+const STALE_UNMATCHED = /^\n<!-- REVIEW: unmatched \(.*\) -->(?=\n|$)/;
+
+/**
+ * Drop an unmatched marker an earlier run left below a criterion that is now
+ * being rewritten (review of #2139). The text after the match is cut, so the
+ * match's own index stays valid for the rewrite that follows.
+ */
+function withoutMarkerBelow(content: string, match: RegExpMatchArray): string {
+  const lineEnd = match.index! + match[0].length;
+  const stale = STALE_UNMATCHED.exec(content.slice(lineEnd));
+  return stale ? content.slice(0, lineEnd) + content.slice(lineEnd + stale[0].length) : content;
 }
 
 /**
@@ -803,6 +817,7 @@ export function auditSpecs(
         if (closest!.ambiguous) {
           replacement += `\n<!-- REVIEW: original — ${usc.statement} -->`;
         }
+        modified = withoutMarkerBelow(modified, scMatch);
         modified = replaceLine(modified, scMatch, replacement);
         hasChanges = true;
         rewrites.push({
