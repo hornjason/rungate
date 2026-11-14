@@ -111,6 +111,15 @@ export interface GitHubClient {
        */
       listForRef: (params: { owner: string; repo: string; ref: string; per_page?: number }) => Promise<{ data: { total_count: number; check_runs: any[] } }>;
     };
+    /**
+     * Repository Actions settings, read by `lib/scaffold/human-steps.ts`
+     * (#2051). Both 404 when the secret or variable is not set, which is a
+     * reading; anything else is not.
+     */
+    actions: {
+      getRepoSecret: (params: { owner: string; repo: string; secret_name: string }) => Promise<{ data: any }>;
+      getRepoVariable: (params: { owner: string; repo: string; name: string }) => Promise<{ data: { value?: string } }>;
+    };
   };
   /**
    * The GraphQL endpoint, for the handful of operations REST does not expose.
