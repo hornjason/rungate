@@ -205,15 +205,6 @@ export interface ClosestPattern {
   patternName: string;
   rewrite: string;
   ambiguous: boolean;
-  /**
-   * Set ONLY by the last-resort file-token match (#589).
-   *
-   * `patternName` cannot carry this: the last resort renders `file-exists`,
-   * which is also the name of a real heuristic, so a caller reading the name
-   * alone cannot tell a pattern the statement matched from one inferred off a
-   * filename that happened to be in the sentence.
-   */
-  fallback?: boolean;
 }
 
 /**
@@ -385,45 +376,22 @@ function findClosestPattern(statement: string): ClosestPattern | null {
     }
   }
 
-  // If no heuristic matched, try a loose file-exists match.
-  // Look for any filename-like token (word.ext) in the statement.
+  // Nothing the statement SAYS matched, so nothing is proposed.
   //
-  // #586 looked hard at narrowing this to statements whose verb is
-  // existence, and did not. The fallback does turn behaviour into presence —
-  // measured over the real tree, two criteria go through it:
+  // There used to be a last resort here: take any filename-like token from
+  // anywhere in the sentence and render the whole criterion as `<file>
+  // exists`. #586 kept it because it wrote the original beside the rewrite;
+  // #589 fenced it to single-claim sentences. #2040 removed it after it
+  // turned SC-2747, a criterion about what `scaffold` installs, into
+  // `AGENTS.md exists` on #2033 — a check that holds against a file that
+  // obviously exists whatever the criterion claimed. Jason's call,
+  // 2026-11-14: a filename a criterion only mentions is never what it is
+  // rewritten to. The `file-exists` heuristic above still binds a sentence
+  // that SAYS a file should exist, because that rewrite says the same thing.
   //
-  //   "Rejecting a promoted rule writes its hash to
-  //    `reference/rejected-constraints.md` and it is never re-promoted"
-  //      -> "reference/rejected-constraints.md exists"
-  //
-  //   "Makefile targets, `package.json` scripts and CI workflow files are
-  //    scanned for constraints alongside markdown"
-  //      -> "package.json exists"
-  //
-  // — but it reports `ambiguous: true`, and an ambiguous rewrite writes
-  // `<!-- REVIEW: original — … -->` beside the line. #426 kept this path for
-  // exactly that reason (see SC-1587: "a lossy render by nature … kept as the
-  // one remaining rewrite path precisely because it writes the statement it
-  // replaced into the next line"). Nothing is discarded, so this is a
-  // DOWNGRADE, not a LOSS, and #586 is about loss.
-  //
-  // Narrowing it here turns SC-1587 and SC-1594 red for a reason those
-  // criteria are right about, which is how the distinction got found. The
-  // downgrade is #589, and it is now scoped by `coordinatedClaims` below
-  // rather than by narrowing the token match: WHICH statements this may
-  // speak for is a question about the criterion, not about the filename.
-  const fileToken = statement.match(/\b(\S+\.\w{1,5})\b/);
-  if (fileToken) {
-    return {
-      patternName: "file-exists",
-      rewrite: `${fileToken[1]} exists`,
-      ambiguous: true,
-      fallback: true,
-    };
-  }
-
-  // Truly unresolvable
-  return null;
+  // `test/audit-specs-fallback-scope.test.ts` restores the last resort in a
+  // mutant at the line below, so it must stay a single, exact line.
+  return null; // #2040: a filename the statement only mentions is never a pattern
 }
 
 // ── Whether to rewrite at all, and into what (#426) ───────────
@@ -434,8 +402,8 @@ function findClosestPattern(statement: string): ClosestPattern | null {
  * Anchored, because the question is whether the statement OPENS by naming
  * its target. A filename mentioned halfway through a sentence of prose is
  * not a structured criterion, and treating it as one is how
- * `findClosestPattern`'s last resort turns a whole criterion into
- * `foo.ts exists`.
+ * `findClosestPattern`'s old last resort, removed by #2040, turned a whole
+ * criterion into `foo.ts exists`.
  */
 function leadingFileToken(statement: string): string | null {
   const m = /^(\S*[./]\S*)\s/.exec(statement);
@@ -486,9 +454,8 @@ export type RewriteDecision =
  *
  *   1. A statement already in the structured grammar is never rewritten.
  *   2. A rewrite that would drop the file the criterion names is refused
- *      outright. `findClosestPattern`'s last resort collapses anything with a
- *      filename in it to `<file> exists`, which is an assertion that holds
- *      vacuously against a file that obviously exists.
+ *      outright. A heuristic that binds on a keyword can still propose a
+ *      rewrite about a different file than the one the criterion opens with.
  *   3. A rewrite that survives both carries the em-dash rationale across.
  *
  * One exported binding, so there is exactly one thing to mutate.
@@ -512,32 +479,10 @@ export function decideRewrite(
     };
   }
 
-  // #589: the last resort may only speak for a criterion that makes ONE
-  // claim. It takes a filename-like token from anywhere in a sentence and
-  // renders the whole criterion as `<that file> exists`, which can be about
-  // at most one thing — so a criterion that coordinates a second claim is
-  // guaranteed to come back as a statement about something else.
-  //
-  // Measured over the corpus `--fix` edits: two criteria went through it,
-  // SC-1940 (a hash is written AND the rule never resurfaces) and SC-1943 (a
-  // three-item subject of which the filename is one). Both are kept now.
-  //
-  // Scoped to the fallback deliberately. A heuristic that MATCHED the
-  // statement was chosen by what the statement says; the last resort was
-  // chosen by a filename being present, and that is the difference this
-  // guard is about.
-  if (closest.fallback) {
-    const claims = coordinatedClaims(statement);
-    if (claims.length > 0) {
-      return {
-        kind: "keep",
-        reason:
-          `rewriting as ${closest.patternName} would assert only that ${closest.rewrite}, ` +
-          `while the criterion coordinates a further claim (${claims[0]}) — ` +
-          `the file is mentioned, not what the criterion is about`,
-      };
-    }
-  }
+  // #589 had a guard here: the last resort could only speak for a criterion
+  // making one claim. #2040 removed the last resort, so every proposal that
+  // reaches this point was chosen by what the statement says, and the guard
+  // had nothing left to fence.
 
   const rationale = rationaleOf(statement);
   const rewritten = rationale ? `${closest.rewrite} — ${rationale}` : closest.rewrite;
@@ -602,30 +547,6 @@ const REWRITE_STOPWORDS = new Set([
 export function distinguishingTerms(statement: string): string[] {
   const words = statement.toLowerCase().match(/[a-z0-9]{4,}/g) ?? [];
   return [...new Set(words)].filter(w => !REWRITE_STOPWORDS.has(w));
-}
-
-/**
- * The further claims this criterion coordinates, if any (#589).
- *
- * Returns the clause after each `and`/`or`, so the refusal can name what the
- * rewrite would have dropped rather than merely reporting that something was
- * dropped. Empty for a criterion that makes one claim.
- *
- * One exported binding, so there is exactly one thing to mutate — and it is
- * the only thing that decides which statements the last resort may speak
- * for.
- */
-export function coordinatedClaims(statement: string): string[] {
-  const claims: string[] = [];
-  const coordinator = /\s+(?:and|or)\s+/gi;
-  let m: RegExpExecArray | null;
-  while ((m = coordinator.exec(statement)) !== null) {
-    const rest = statement.slice(m.index + m[0].length).trim();
-    // A trailing coordinator joins nothing. An empty string here would read
-    // as a second claim whose text is gone, and refuse a rewrite on it.
-    if (rest.length > 0) claims.push(rest);
-  }
-  return claims;
 }
 
 /**

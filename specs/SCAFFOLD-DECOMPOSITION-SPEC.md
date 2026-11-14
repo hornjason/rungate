@@ -673,7 +673,7 @@ leaves the file. A fix that stopped rewriting altogether would satisfy every
 "the line survived" case here, which is why each of them is paired with a case
 asserting that an unstructured line IS still rewritten.
 
-- [x] SC-1587: test/audit-specs-lossless.test.ts contains [--fix leaves a structured criterion byte-identical] — SC-1469's exact text, run through the real rewriter, beside a structured-but-still-unmatched line and an unstructured one that must still be rewritten
+- [x] SC-1587: test/audit-specs-lossless.test.ts contains [--fix leaves a structured criterion byte-identical] — SC-1469's exact text, run through the real rewriter, beside a structured-but-still-unmatched line, an unstructured one that only mentions a file and is kept (#2040), and a sentence that says the file should exist, which must still be rewritten
 - [x] SC-1588: test/audit-specs-lossless.test.ts contains [running --fix twice is a fixed point] — the issue's own reproduction: a rewriter that is not idempotent is editing something it has already decided about
 - [x] SC-1589: test/audit-specs-lossless.test.ts contains [the decision about one line, driven directly] — one exported binding, so there is exactly one thing to mutate
 - [x] SC-1590: test/audit-specs-lossless.test.ts contains [a rewrite that would drop the file the criterion names is refused] — rather than written and reported
@@ -775,12 +775,12 @@ stops rewriting anything. So every case asserting a criterion is KEPT sits
 beside one asserting that non-existence-verb statement is still rewritten,
 and SC-2024 asserts both directions in a single run.
 
-- [x] SC-2020: test/audit-specs-fallback-scope.test.ts contains [a filename a criterion mentions is not what the criterion is about] — both named criteria driven through the real decision, each asserted KEPT with a reason naming the coordinated claim the rewrite would drop, beside the single-claim control that must still be rewritten
-- [x] SC-2021: test/audit-specs-fallback-scope.test.ts contains [the rewritten line still carries the original beside it] — `--fix` executed over a fixture holding all three, so the decision is proved through the WRITE: the two named lines byte-identical and marked, the single-claim one rewritten with its original in a REVIEW comment
-- [x] SC-2022: test/audit-specs-fallback-scope.test.ts contains [the fallback rewrite population across specs/ is zero] — measured by running `--fix` over a copy of the real specs/ rather than over a fixture, with the classifier's own coverage asserted first and a second run proving the measurement can see a fallback rewrite when there is one
-- [x] SC-2023: test/audit-specs-fallback-scope.test.ts contains [the distinction answers both ways] — and the one input on the other side of the fallback precondition (#492): a coordinated statement the `file-exists` HEURISTIC binds is still rewritten, so the guard is proved scoped rather than global
-- [x] SC-2024: test/audit-specs-fallback-scope.test.ts contains [a mutant with the distinction removed rewrites both named criteria] — the mutant is proved functional on the control before any divergence is read, because a mutant that failed to load declines everything and reads exactly like the mutation being rejected on the merits
-- [x] SC-2025: test/audit-specs-fallback-scope.test.ts contains [the spec records the population counts and the property] — searched over the `#589` SLICE rather than the document, because a 1,200-line spec answers `rejected-constraints.md` from #586's section
+- [x] SC-2020: test/audit-specs-fallback-scope.test.ts contains [a filename a criterion mentions is not what the criterion is about] — both named criteria and the single-claim one driven through the real decision: no pattern is offered off a filename a sentence only mentions, so each is KEPT, beside a sentence that says the file should exist, which must still be rewritten (#2040)
+- [x] SC-2021: test/audit-specs-fallback-scope.test.ts contains [--fix leaves every criterion that only mentions a file byte-identical] — `--fix` executed over a fixture holding all three and a bound control, so the decision is proved through the WRITE: the three lines byte-identical and marked REVIEW unmatched, the bound one rewritten (#2040)
+- [x] SC-2022: test/audit-specs-fallback-scope.test.ts contains [no criterion across specs/ is rewritten to a file it only mentions] — measured by running `--fix` over a copy of the real specs/ rather than over a fixture, with the run's own coverage asserted first, SC-1940 and SC-1943 asserted reached and kept, and the classifier proved able to see such a rewrite when there is one (#2040)
+- [x] SC-2023: test/audit-specs-fallback-scope.test.ts contains [the distinction answers both ways] — a sentence that says a file should exist, coordinated or not, is bound by the `file-exists` heuristic, and each sentence that only mentions one is bound by nothing (#2040)
+- [x] SC-2024: test/audit-specs-fallback-scope.test.ts contains [a mutant with the fallback restored rewrites all three] — the removed last resort is put back at its one line in a mutant, which is proved functional on the bound control before any divergence is read, because a mutant that failed to load declines everything and reads exactly like the mutation being rejected on the merits (#2040)
+- [x] SC-2025: test/audit-specs-fallback-scope.test.ts contains [the spec records the population counts and the property] — searched over the `#589` SLICE rather than the document, because a 1,200-line spec answers `rejected-constraints.md` from #586's section; the slice also records #2040's removal and the property that replaced the fence
 
 ### What was broken to prove it (SC-2020..2025)
 
@@ -825,6 +825,26 @@ scoped to the last resort, and exactly one case is on the other side of that
 precondition — a coordinated statement the `file-exists` HEURISTIC binds.
 Without it the scoping would be unmeasured in both directions (#492), and a
 later simplification that dropped `closest.fallback` would be 0 red.
+
+### #2040 removed the last resort, and with it the fence
+
+Jason's call, 2026-11-14. On #2033's branch the last resort turned SC-2747,
+a criterion about what `scaffold` installs, into `AGENTS.md exists`. The
+fence above only refused sentences that coordinate a second claim; SC-2747
+made one claim, so it went through. The property that replaces the fence is
+simpler and has no exceptions: **a filename a criterion only mentions is
+never what it is rewritten to.** `findClosestPattern` now offers nothing when
+no heuristic matched what the statement says, so `coordinatedClaims` and
+`closest.fallback` are gone with it.
+
+What still rewrites to `<file> exists` is the `file-exists` heuristic, and
+only for a sentence that SAYS the file should exist — the same claim. The
+measured population of rewrites to a file a sentence only mentions was 0
+before the removal and stays 0; the single-claim sentence #589 let through,
+"the generator should emit a tidy CODE-MAP.md for every project", is now
+kept. SC-1587, SC-1998 and SC-2020..2025 were restated to say this, and
+SC-2024's mutant now restores the removed line rather than removing the
+fence. The record above is kept as the record.
 
 ## #442 — external adoption was built and had never fired
 

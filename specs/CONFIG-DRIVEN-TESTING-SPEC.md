@@ -1115,6 +1115,15 @@ the marker, and a negative control that an exactly-bound criterion reports
 `ambiguous: false`, because every pattern reporting `true` would satisfy the
 assertion while saying nothing.
 
+**#2040 removed the last resort (Jason's call, 2026-11-14).** It turned
+SC-2747, a criterion about what `scaffold` installs, into `AGENTS.md exists`
+on #2033's branch. A filename a criterion only mentions is no longer offered
+as a pattern, so there is no downgrade left to make survivable. SC-1998 now
+pins the property itself — such a criterion is kept, with a reason — and its
+vacuity control is a sentence that says the file should exist, which the
+`file-exists` heuristic still binds. The paragraphs above are the record of
+why the path existed, and are kept as that.
+
 ### Success Criteria
 
 - [x] SC-1993: test/audit-specs-rewrite-fidelity.test.ts contains [the criterion the scaffold rewrote is now kept, by name] — pinned to the exact string, and kept by the keyword scoping rather than by the fourth guard, which is why SC-1994 carries the other input
@@ -1122,7 +1131,7 @@ assertion while saying nothing.
 - [x] SC-1995: test/audit-specs-rewrite-fidelity.test.ts contains [distinguishing terms are the statement's own words, not the matched keyword] — counting the matched keyword as retained content is how a constant rewrite reads as faithful
 - [x] SC-1996: test/audit-specs-rewrite-fidelity.test.ts contains [an extractor that ignores its input cannot claim to be unambiguous] — two statements differing in every word must not produce one unambiguous rewrite
 - [x] SC-1997: test/audit-specs-rewrite-fidelity.test.ts contains [a keyword list means all of its phrases, not any one of them] — with the rule still firing on the statement it is actually for
-- [x] SC-1998: test/audit-specs-rewrite-fidelity.test.ts contains [the loose file fallback downgrades, and records that it did] — the two criteria it reached each carry `ambiguous: true`, so wherever the fallback rewrites, the original is written beside it; the negative control is a criterion the registry binds exactly, which must report `false`. **#589 closed the filed defect and the DECISION half moved with it**: those two are KEPT now, the vacuity control drives the single-claim criterion the fallback still acts on, and `test/audit-specs-fallback-scope.test.ts` owns the keeps
+- [x] SC-1998: test/audit-specs-rewrite-fidelity.test.ts contains [a criterion that only mentions a file is kept, and says why] — the two criteria the loose fallback once reached, and the single-claim one #589 still let through, are each offered no pattern and kept with the reason `no registry pattern was close enough`; the vacuity control is a sentence that says the file should exist, which must still be rewritten, and the negative control is a criterion the registry binds exactly, which must report `ambiguous: false`. #2040 removed the fallback (Jason's call, 2026-11-14)
 - [x] SC-1999: test/audit-specs-rewrite-fidelity.test.ts contains [a directory pattern is satisfied by its broader bare form, and not the reverse] — the `.gitignore` half, which was filed wrongly as non-idempotence; the reverse direction is pinned because widening this match is how `service-account*` comes back
 
 ### What was broken to prove it (SC-1993..SC-1999)
