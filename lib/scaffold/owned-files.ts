@@ -191,6 +191,16 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't edit the generated `closing-references` job",
   },
   {
+    // #2047, ADR-014 row 4. Hand-written and caller-owned while it ran this
+    // checkout's script; a consumer has no scripts/, so the generator writes
+    // it, for #631's reason above. It names no board (#2165).
+    path: ".github/workflows/board-ready.yml",
+    strategy: "job-preserving",
+    servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
+    customize: "Set `board.id` in `.claude/rungate/config.json` and the `RUNGATE_PROJECT_TOKEN` secret; add your own jobs alongside the generated `move-freed-issues-to-ready` job",
+    avoid: "Don't edit the generated `move-freed-issues-to-ready` job",
+  },
+  {
     // `regenerate` until #655, and the declaration was never consulted:
     // `generateAgentBriefsStep` called `writeFileSync` directly, so the row
     // described behaviour that a bare overwrite happened to coincide with.

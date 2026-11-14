@@ -58,11 +58,12 @@ const UNPINNED = "UNPINNED";
 // #1488 added the fourth for the same reason one workflow over — the
 // unmeasured classifier runs through `bunx` on `workflow_run: completed`.
 // #2046 and #2045 added adr-accepted.yml and closing-references.yml, which
-// run the published CLI.
+// run the published CLI, and #2047 added board-ready.yml for the same reason.
 const GENERATED = [
   "adr-accepted.yml",
   "ai-review-unmeasured.yml",
   "ai-review.yml",
+  "board-ready.yml",
   "closing-references.yml",
   "ci.yml",
   "gates.yml",

@@ -798,11 +798,16 @@ describe("#2044: every script a process workflow runs ships and is a rungate com
 
   test("the sweep reads a real population, and a comment is not a run", () => {
     // The control. A regex that matched nothing would pass the case below.
-    // closing-references.yml left this population with #2045: it is generated
-    // and calls the published CLI. board-ready.yml still runs its script
-    // until #2047 generates it too.
-    expect(read.flatMap(w => w.scripts)).toContain("scripts/board-ready.ts");
+    // The live population emptied with #2047: closing-references.yml (#2045)
+    // and board-ready.yml are generated and call the published CLI, and
+    // adr-accepted.yml and board-intake.yml run no script. So the matcher is
+    // proved on a run line here, and the four files are proved read.
+    expect(scriptsRun("        run: bun scripts/board-ready.ts --repo o/n")).toEqual(["scripts/board-ready.ts"]);
     expect(scriptsRun("  # bun scripts/board-ready.ts in a comment")).toEqual([]);
+    for (const name of PROCESS_WORKFLOWS) {
+      const text = readFileSync(join(ROOT, ".github", "workflows", `${name}.yml`), "utf-8");
+      expect(text, `${name}.yml read as empty`).toContain("jobs:");
+    }
   });
 
   test("every script a process workflow runs is in files[] and registered as a command", () => {
