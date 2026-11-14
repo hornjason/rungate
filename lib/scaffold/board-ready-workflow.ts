@@ -126,9 +126,28 @@ if [ -n "$WRITE" ]; then
   args+=(--write)
 fi
 echo "mode=$MODE, args=\${args[*]}"
-bunx rungate@${version} ${BOARD_READY_COMMAND} "\${args[@]}"
+# A tree with no board.id is UNMEASURED, an annotation and not a red run
+# (.claude/rules/config-access.md). Only that refusal is: every other exit stands.
+err="$RUNNER_TEMP/board-ready.stderr"
+code=0
+bunx rungate@${version} ${BOARD_READY_COMMAND} "\${args[@]}" 2>"$err" || code=$?
+cat "$err" >&2
+if [ "$code" -eq 2 ] && grep -q '^${NO_BOARD_REFUSAL}' "$err"; then
+  echo "::warning::UNMEASURED — no board.id in the rungate config, so there is no board to read. Set board.id and this runs."
+  exit 0
+fi
+exit "$code"
 `;
 }
+
+/**
+ * How `rungate board-ready` begins its one refusal for a tree with no board
+ * (#2165). The fill step turns exactly that refusal into an annotation, so a
+ * consumer who sets the token before `board.id` gets a warning on each issue
+ * event and not a red run. `test/board-ready-fanout.test.ts` holds this to
+ * the script's own text, so the two cannot drift apart.
+ */
+export const NO_BOARD_REFUSAL = "UNMEASURED: no board";
 
 export interface BoardReadyWorkflowOptions {
   /** The `runs-on:` value, already JSON-quoted by the caller. */

@@ -41,6 +41,7 @@ import { actionRef } from "../lib/workflow-actions";
 import { CLI_COMMANDS } from "../lib/cli-commands";
 import {
   BOARD_READY_COMMAND,
+  NO_BOARD_REFUSAL,
   buildBoardReadyGateScript,
   buildBoardReadyScript,
   buildBoardReadyWorkflow,
@@ -2395,5 +2396,60 @@ describe("#2047: board-ready.yml is generated and names no board", () => {
     expect(live).not.toContain("--project");
     // The generator takes no board input at all, so it cannot emit one.
     expect(buildBoardReadyWorkflow.length).toBe(1);
+  });
+});
+
+/**
+ * #2047, review round 1: a tree with no `board.id` gets an annotation, not a
+ * red run on every issue event. Only that one refusal is softened; every
+ * other exit of the command stands. The fill step's run body is EXECUTED
+ * against a stub `bunx`, not read.
+ */
+describe("#2047: no board.id is an annotation, and nothing else is", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "board-ready-fill-")));
+  const stubs = join(dir, "bin");
+  mkdirSync(stubs);
+  // The stub stands in for the published CLI: it prints STUB_ERR to stderr
+  // and exits STUB_CODE.
+  writeFileSync(join(stubs, "bunx"), '#!/bin/sh\nprintf "%s\\n" "$STUB_ERR" >&2\nexit "$STUB_CODE"\n', { mode: 0o755 });
+  const body = join(dir, "fill.sh");
+  writeFileSync(body, buildBoardReadyScript("9.9.9"));
+
+  function fill(code: number, err: string) {
+    const r = Bun.spawnSync(["bash", "-e", "-o", "pipefail", body], {
+      env: {
+        PATH: `${stubs}:${process.env.PATH}`,
+        RUNNER_TEMP: dir,
+        GITHUB_REPOSITORY: "o/n",
+        ACTOR: "someone",
+        MODE: "top-up",
+        ISSUE: "",
+        WRITE: "",
+        STUB_CODE: String(code),
+        STUB_ERR: err,
+      },
+    });
+    return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
+  }
+
+  test("the softened refusal is the command's own wording", () => {
+    // Held to the script, so a reworded refusal reddens here rather than
+    // turning every consumer's no-board run red.
+    expect(readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8")).toContain(`${NO_BOARD_REFUSAL} —`);
+  });
+
+  test("no board: exit 0 with an UNMEASURED warning, and the command's own line still shown", () => {
+    const r = fill(2, `${NO_BOARD_REFUSAL} — pass --project <id>, or set board.id in the rungate config under /x. Nothing was read.`);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("::warning::UNMEASURED — no board.id in the rungate config");
+    expect(r.err).toContain(NO_BOARD_REFUSAL);
+  });
+
+  test("any other refusal, failure or success keeps its exit", () => {
+    expect(fill(2, "UNMEASURED: --project-root needs a directory after it. Nothing was read.").code).toBe(2);
+    expect(fill(1, "TypeError: boom").code).toBe(1);
+    const ok = fill(0, "");
+    expect(ok.code).toBe(0);
+    expect(ok.out).not.toContain("::warning::");
   });
 });
