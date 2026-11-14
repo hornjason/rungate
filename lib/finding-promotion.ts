@@ -648,7 +648,10 @@ export function specWithCriterion(
     };
   }
   const sections = [...new Map(sectionOf.map(s => [s.section.line, s.section])).values()];
-  const label = (sec: Section) => (sec.path === "" ? "(before any heading)" : `"${sec.path}" (line ${sec.line})`);
+  // Every label is a string `--section` accepts. The headless section has no
+  // heading text or path, so it is named by its line, which is 0 (#2131).
+  const label = (sec: Section) =>
+    sec.path === "" ? `"line ${sec.line}" (before any heading)` : `"${sec.path}" (line ${sec.line})`;
   let candidates = sectionOf;
   if (!present && section !== null) {
     const asked = section.trim();
