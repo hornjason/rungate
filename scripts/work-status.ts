@@ -33,7 +33,7 @@ import {
   netGrowthCeiling,
   readNetGrowth,
 } from "../lib/issue-filing-gate";
-import { tryLoadRungateConfig } from "../lib/config-loader";
+import { loadCommittedConfig } from "../lib/config-loader";
 import { laneHealth, laneHealthLines, workVerdict } from "../lib/board-lane-health";
 import {
   declaredClosingIn,
@@ -837,7 +837,8 @@ if (focus.kind === "all") {
 // trailing day's counts that set it (ADR-016). Decided by the gate's own
 // `netGrowthCeiling`, so this line cannot report a cap the gate does not.
 bar("FILING CAP — what the trailing day's issues allow (ADR-016)");
-const filingAllowance = filingsPerRunFor(() => tryLoadRungateConfig(process.cwd()));
+// Committed config, as the gate reads it (#1964), so the two cannot disagree.
+const filingAllowance = filingsPerRunFor(() => loadCommittedConfig(process.cwd()));
 const filingCap = await netGrowthCeiling(filingAllowance, () => readNetGrowth(process.cwd(), Date.now()));
 console.log(
   `  ${netGrowthLine(filingCap, {

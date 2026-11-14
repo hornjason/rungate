@@ -348,6 +348,8 @@ function scaffoldOverride(dir: string): void {
  */
 function commitConfigTree(dir: string): void {
   const git = (...args: string[]) => {
+    // late-env-ok: the child is `git` committing a fixture, and it reads none
+    // of the RUNGATE_* variables this file writes for the gate under test.
     const r = spawnSync("git", ["-C", dir, "-c", "user.email=fg@example.invalid", "-c", "user.name=fg", ...args], {
       encoding: "utf-8",
     });
@@ -7451,6 +7453,8 @@ describe("#1964 / SC-2753: the filing cap is read from committed config, never t
     // A checkout with a direct-mode config on disk and no origin/main at all.
     const root = freshRun();
     writeFileSync(CONFIG(root), JSON.stringify({ project: "x", ship: DIRECT_SHIP, board: { queueLabel: QUEUE_LABEL } }));
+    // late-env-ok: the child is `git` deleting a ref, and it reads none of the
+    // RUNGATE_* variables this file writes for the gate under test.
     spawnSync("git", ["-C", root, "update-ref", "-d", "refs/remotes/origin/main"]);
     const r = await run(root, filing(QUEUE_LABEL));
     expect(r.rows[0].refusal, "an unreadable commit fell through to the working tree").toBe("OVER_CAP");
@@ -7468,6 +7472,26 @@ describe("#1964 / SC-2753: the filing cap is read from committed config, never t
     commitConfigTree(root);
     const r = await run(root, filing());
     expect(r.rows[0].refusal, "a committed monolith's direct mode was not read").toBeNull();
+  });
+
+  test("FG-287: EVERY reader of the cap reads committed config — the property across the sites, not one door", () => {
+    // Review of PR #2094: the gate was fixed and `scripts/github-op.ts`'s
+    // `issue-create` door still read the working tree, so an agent refused by
+    // one door could raise its own cap and file through the other. A
+    // behavioural case per door catches only the last door to regress, so
+    // this asserts the property over every call site instead.
+    const sites: string[] = [];
+    for (const dir of ["lib", "scripts"]) {
+      for (const file of readdirSync(join(import.meta.dir, "..", dir))) {
+        if (!file.endsWith(".ts")) continue;
+        const src = readFileSync(join(import.meta.dir, "..", dir, file), "utf-8");
+        const re = /filingsPerRunFor\(\s*\(\)\s*=>\s*([^\n]+)/g;
+        for (const m of src.matchAll(re)) sites.push(`${dir}/${file}: ${m[1]!.trim()}`);
+      }
+    }
+    expect(sites.length, "no filingsPerRunFor call site was found, so this measured nothing").toBeGreaterThanOrEqual(3);
+    const fromWorkingTree = sites.filter(s => !/committedConfig\(|loadCommittedConfig\(/.test(s));
+    expect(fromWorkingTree, "a cap reader that does not read the committed config reopens #1964").toEqual([]);
   });
 
   test("FG-286: readCommittedConfig names WHICH failure, and never reads a failure as absent", () => {
