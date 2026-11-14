@@ -35,6 +35,8 @@
  * a tidy-up.
  */
 
+import { readFences } from "./markdown-fence";
+
 /** The forms. The set is closed; adding one is an edit here and a file on disk. */
 export const ISSUE_FORMS = ["spec-work", "everyday-work"] as const;
 
@@ -150,12 +152,13 @@ export function headingOccurrencesOf(body: string, heading: string): number[] {
   const text = heading.replace(/^#+\s*/, "");
   const opens = new RegExp(`^#{1,6}\\s+${escapeRegExp(text)}\\s*$`);
   const out: number[] = [];
-  let fenced = false;
+  const lines = body.split("\n");
+  // `~~~` fences too, and a fence closes only on its own marker (#2130).
+  const { roles } = readFences(lines);
   let at = 0;
-  for (const line of body.split("\n")) {
-    if (/^\s*```/.test(line)) fenced = !fenced;
-    else if (!fenced && opens.test(line.trimEnd())) out.push(at);
-    at += line.length + 1;
+  for (let i = 0; i < lines.length; i++) {
+    if (roles[i] === "prose" && opens.test(lines[i]!.trimEnd())) out.push(at);
+    at += lines[i]!.length + 1;
   }
   return out;
 }

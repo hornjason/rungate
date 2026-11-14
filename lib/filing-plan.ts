@@ -51,6 +51,8 @@
  */
 import { spawnSync } from "child_process";
 
+import { closesFence, fenceOpening, type FenceOpening } from "./markdown-fence";
+
 /**
  * Where a reviewed plan lives.
  *
@@ -187,11 +189,10 @@ export function plannedTitles(content: string): PlannedTitle[] {
    * no Outcome column" are different states that must reset together, and two
    * flags that must agree are two places to forget one. */
   let table: { column: number | null } | null = null;
-  /** The opening run of a fence we are inside — `` ``` `` or `~~~` — or `null`. */
-  let fence: string | null = null;
+  /** The fence we are inside, or `null`. The grammar is `lib/markdown-fence.ts`'s (#2130). */
+  let fence: FenceOpening | null = null;
   /** Whether we are inside a `<!-- … -->` that spans lines. */
   let commented = false;
-  const opener = /^[ \t]*(`{3,}|~{3,})(.*)$/;
   for (let i = 0; i < lines.length; i++) {
     // Every region below also ENDS the table it interrupts, the same way a
     // line of prose does, so `column` is reset on every one of their lines.
@@ -206,18 +207,11 @@ export function plannedTitles(content: string): PlannedTitle[] {
     // That direction only DENIES, but it denies a plan a reviewer merged and
     // the `why` would not say so. Found by the AI review of this change.
     if (fence !== null) {
-      const c = indent(lines[i]) <= 3 ? opener.exec(lines[i]) : null;
       // Only the same marker, at least as long, AND nothing after it. A ```
       // inside a ~~~ block is content; so is ```js inside a ```md block,
-      // which is the differential a bare marker test would miss.
-      if (
-        c !== null &&
-        c[1][0] === fence[0] &&
-        c[1].length >= fence.length &&
-        c[2].trim() === ""
-      ) {
-        fence = null;
-      }
+      // which is the differential a bare marker test would miss. Four or
+      // more leading spaces is indented code here, so it never closes.
+      if (indent(lines[i]) <= 3 && closesFence(lines[i], fence)) fence = null;
       table = null;
       continue;
     }
@@ -237,13 +231,14 @@ export function plannedTitles(content: string): PlannedTitle[] {
     const text = line.text;
 
     const ind = indent(text);
-    const f = ind <= 3 ? opener.exec(text) : null;
+    const f = ind <= 3 ? fenceOpening(text) : null;
     // Any marker run OPENS, info string or not — including the spellings
     // CommonMark would reject as openers. That is deliberate: refusing to
     // open leaves what follows live, and a reading this function is unsure
-    // about must not be the one that authorises.
+    // about must not be the one that authorises. `fenceOpening` keeps that
+    // property for every caller, and says so.
     if (f !== null) {
-      fence = f[1];
+      fence = f;
       table = null;
       continue;
     }

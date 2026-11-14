@@ -43,6 +43,8 @@ import { existsSync, lstatSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
+import { readFences } from "./markdown-fence";
+
 /**
  * The token the template puts on every line a human must replace.
  *
@@ -151,15 +153,14 @@ export function parseSuccessDoc(text: string): SuccessDoc {
   const lines = text.split("\n");
 
   let current: SuccessClaim | null = null;
-  let fenced = false;
+  // A fence closes only on its own marker (#2130): a `~~~` line inside a
+  // ``` block used to toggle the block shut.
+  const { roles } = readFences(lines);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (/^\s*(```|~~~)/.test(line)) {
-      fenced = !fenced;
-      continue;
-    }
+    if (roles[i] === "fence") continue;
     if (line.includes(PLACEHOLDER_MARKER)) placeholderLines.push(i + 1);
-    if (fenced) continue;
+    if (roles[i] === "code") continue;
 
     let heading: RegExpExecArray | null = null;
     for (const form of CLAIM_FORMS) {

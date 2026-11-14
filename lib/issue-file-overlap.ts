@@ -34,6 +34,7 @@
  */
 
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf } from "./issue-shape";
+import { readFences } from "./markdown-fence";
 
 /** An issue reduced to the thing this file reasons about. */
 export interface IssueFiles {
@@ -89,16 +90,16 @@ function filesSectionLines(body: string): string[] {
   const at = headingOccurrencesOf(body, FILES_HEADING)[0];
   if (at === undefined) return [];
 
+  // Read over the whole body, so the heading line's own index is where the
+  // section starts; `~~~` fences too (#2130).
+  const lines = body.split("\n");
+  const { roles } = readFences(lines);
+  const headingLine = body.slice(0, at).split("\n").length - 1;
   const out: string[] = [];
-  let fenced = false;
-  for (const line of body.slice(at).split("\n").slice(1)) {
-    if (/^\s*```/.test(line)) {
-      fenced = !fenced;
-      continue;
-    }
-    if (fenced) continue;
-    if (/^#{1,6}\s+\S/.test(line)) break; // the next section
-    out.push(line);
+  for (let i = headingLine + 1; i < lines.length; i++) {
+    if (roles[i] !== "prose") continue;
+    if (/^#{1,6}\s+\S/.test(lines[i]!)) break; // the next section
+    out.push(lines[i]!);
   }
   return out;
 }

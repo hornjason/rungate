@@ -55,6 +55,7 @@
 import { NAMES_NONE, answerableIds, criterionAnswer, specCriteriaIn } from "./board-mirror";
 import { idBoundedPattern } from "./sc-ids";
 import { declaredClosingIn } from "./local-work";
+import { fencedBlocks } from "./markdown-fence";
 
 /**
  * The issues a pull request closes **in this repository**, from `gh`'s shape.
@@ -135,10 +136,11 @@ export interface InertClosingReference {
  */
 function maskedRanges(body: string): { start: number; end: number; reason: InertClosingReference["reason"] }[] {
   const out: { start: number; end: number; reason: InertClosingReference["reason"] }[] = [];
-  const fenced = /^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm;
-  for (const m of body.matchAll(fenced)) {
-    out.push({ start: m.index!, end: m.index! + m[0].length, reason: "fenced-block" });
-  }
+  // The shared reader (#2130). The regex this replaced required the close to
+  // repeat the opening run exactly, so a longer close was missed and the
+  // block ran on; and an unclosed fence, which GitHub renders as code to the
+  // end, read as live.
+  for (const b of fencedBlocks(body)) out.push({ ...b, reason: "fenced-block" });
   const inFence = (i: number) => out.some(r => i >= r.start && i < r.end);
   // Single-line code spans. `[^`\n]+` keeps a span from spilling across a line,
   // which is what an unmatched backtick in ordinary prose would otherwise do —
