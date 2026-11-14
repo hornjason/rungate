@@ -206,7 +206,12 @@ export function placedCriteria(specText: string): Map<number, { placed: number; 
   for (const row of parsePlacementRows(specText)) {
     const m = row.placement.match(PHASE_VALUE);
     if (m === null || row.ids.length === 0) continue;
-    out.set(Number(m[1]), { placed: row.ids.length, unticked: row.ids.filter(id => ticked.get(id) !== true).length });
+    // Summed, not set: a phase whose criteria sit in two rows is judged on both.
+    const prev = out.get(Number(m[1])) ?? { placed: 0, unticked: 0 };
+    out.set(Number(m[1]), {
+      placed: prev.placed + row.ids.length,
+      unticked: prev.unticked + row.ids.filter(id => ticked.get(id) !== true).length,
+    });
   }
   return out;
 }

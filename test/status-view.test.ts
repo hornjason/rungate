@@ -207,6 +207,17 @@ describe("#2147: a phase with no issues is judged by the criteria the spec place
     expect(lines[0].criteria).toBeUndefined();
   });
 
+  test("two placement rows for one phase are counted together, never the last one alone", () => {
+    // Review of #2149: a second "Phase 1" row overwrote the first, so three
+    // unticked criteria vanished behind two ticked ones and the phase read done.
+    const split = spec("x")
+      .replace("| **Phase 1** | SC-9901, SC-9902, SC-9903 |", "| **Phase 1** | SC-9904 |\n| **Phase 1** | SC-9901, SC-9902, SC-9903 |")
+      .replace("| **Phase 2** | SC-9904 |\n", "");
+    const line = phaseLines(ms, "Zqengine", split)[0];
+    expect(line.criteria).toEqual({ placed: 4, unticked: 1 });
+    expect(line.state).toBe("empty");
+  });
+
   test("a placed id the spec never states is unticked, not done", () => {
     const missing = spec("x").replace("- [x] SC-9903: three\n", "");
     expect(phaseLines(ms, "Zqengine", missing)[0].state).toBe("empty");
