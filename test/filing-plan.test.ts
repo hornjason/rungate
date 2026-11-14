@@ -381,6 +381,23 @@ describe("plannedFiling: every route to NOT exempt, against a mutant that always
   });
 });
 
+/**
+ * Publish `root`'s HEAD as the remote's `main` — #2095.
+ *
+ * `gitSource` reads the commit `git ls-remote origin refs/heads/main` names,
+ * never the local `origin/main` ref, so a fixture publishes by pushing to a
+ * bare repository that stands in for the remote.
+ */
+function publish(root: string): void {
+  const bare = `${root}.remote.git`;
+  const made = spawnSync("git", ["init", "-q", "--bare", bare], { encoding: "utf-8" });
+  if (made.status !== 0) throw new Error(`could not create the fixture remote: ${made.stderr}`);
+  for (const args of [["remote", "add", "origin", bare], ["push", "-q", "origin", "HEAD:refs/heads/main"]]) {
+    const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
+    if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
+  }
+}
+
 describe("gitSource reads the merged ref, not the working tree", () => {
   test("a plan committed on the ref is seen; the same plan uncommitted is not", () => {
     const root = mkdtempSync(join(tmpdir(), "rg-filing-plan-"));
@@ -397,8 +414,8 @@ describe("gitSource reads the merged ref, not the working tree", () => {
       git("add", "-A");
       git("commit", "-q", "-m", "the reviewed plan");
 
-      // `origin/main` is the ref the gate reads, so make one that exists.
-      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      // The remote's main is what the gate reads (#2095), so publish to one.
+      publish(root);
 
       const committed = plannedFiling(
         "plan-deps refuses a single-phase reading",
@@ -420,6 +437,7 @@ describe("gitSource reads the merged ref, not the working tree", () => {
       ).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(`${root}.remote.git`, { recursive: true, force: true });
     }
   });
 
@@ -447,7 +465,7 @@ describe("gitSource reads the merged ref, not the working tree", () => {
       writeFileSync(join(below, "keep.ts"), "export const x = 1;\n");
       git("add", "-A");
       git("commit", "-q", "-m", "the reviewed plan, and a subdirectory to run from");
-      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      publish(root);
 
       // The control first: from the top level it has always worked, so a
       // red below is about the subdirectory and not about the fixture.
@@ -469,6 +487,47 @@ describe("gitSource reads the merged ref, not the working tree", () => {
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(`${root}.remote.git`, { recursive: true, force: true });
+    }
+  });
+
+  test("#2095 CONTROL: a plan on a locally forged origin/main exempts nothing", () => {
+    // The plan route's half of the attack: author a plan, commit it, and move
+    // the local origin/main onto it with no push. The remote never saw it, so
+    // no reviewer did either.
+    const root = mkdtempSync(join(tmpdir(), "rg-filing-plan-forged-"));
+    try {
+      const git = (...args: string[]) => {
+        const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
+        if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
+        return r.stdout;
+      };
+      git("init", "-q", "-b", "main");
+      git("config", "user.email", "t@example.com");
+      git("config", "user.name", "t");
+      writeFileSync(join(root, "README.md"), "reviewed\n");
+      git("add", "-A");
+      git("commit", "-q", "-m", "what the remote has");
+      publish(root);
+
+      mkdirSync(join(root, PLAN_DIR), { recursive: true });
+      writeFileSync(join(root, PLAN_DIR, "ADR-009-plan.md"), PLAN);
+      git("add", "-A");
+      git("commit", "-q", "-m", "a plan nobody reviewed");
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      // The premise, measured: the local ref really carries the plan.
+      expect(git("ls-tree", "-r", "--name-only", "origin/main")).toContain("ADR-009-plan.md");
+
+      const forged = plannedFiling("plan-deps refuses a single-phase reading", gitSource(root));
+      expect(forged.planned, "a plan on a locally forged origin/main granted the exemption").toBe(false);
+
+      // The pair: pushed, the remote carries it and the exemption applies.
+      git("push", "-q", "origin", "HEAD:refs/heads/main");
+      const pushed = plannedFiling("plan-deps refuses a single-phase reading", gitSource(root));
+      expect(pushed.planned, "a plan the remote carries must still exempt").toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(`${root}.remote.git`, { recursive: true, force: true });
     }
   });
 
@@ -480,6 +539,7 @@ describe("gitSource reads the merged ref, not the working tree", () => {
       if (r.planned === false) expect(r.why).toMatch(/could not be listed/);
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(`${root}.remote.git`, { recursive: true, force: true });
     }
   });
 });
