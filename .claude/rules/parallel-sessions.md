@@ -31,10 +31,13 @@ whoever picks it up rebuilds finished work on a branch they cannot see.
 ## Reserve an SC block in the repository before you consume any id
 
 ```bash
-# 1. add your entry to specs/sc-reservations.json, on main, and push it
+# 1. add your entry to specs/sc-reservations.json in the PR that consumes the ids
 # 2. then allocate out of it — the owner is your branch by default
 bun scripts/create-sc.ts --spec specs/MY-SPEC.md --pattern file-exists --params '{...}'
 ```
+
+Not "on main first": `enforce_admins` makes that unfollowable (#1506, ADR-015).
+After merge the ids are in the taken set every allocator reads.
 
 `specs/sc-reservations.json` is the registry. `lib/create-sc.ts` reads it and
 treats every declared block as occupied: an owner with a block is handed the
