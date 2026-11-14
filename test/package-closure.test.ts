@@ -763,45 +763,44 @@ describe("#1174 CLOSURE-15: the instruction scanner is load-bearing", () => {
 });
 
 /**
- * Covers SC-2742 (SPEC-TO-BOARD-PIPELINE-SPEC.md), #2044.
+ * #2044, ADR-014 row 1: every script a process workflow runs ships and is a
+ * `rungate` command.
+ *
+ * This is the half of SC-2742 that can be true before any consumer workflow
+ * exists, so it does not claim the criterion: the other half, a consumer's
+ * workflow calling the CLI and never `bun scripts/…`, becomes measurable when
+ * the scaffold emits the four workflows, and #2047 carries it (review of
+ * #2142, which ticked it here and was right to be refused).
  *
  * ADR-014 decision 2: a consumer has `node_modules/rungate`, not `scripts/`,
- * so every script a process workflow runs must ship and be a `rungate`
- * command before a generator can emit a workflow that calls it. On main at
- * `812f7e04` two did neither: `scripts/board-ready.ts` and
- * `scripts/audit-closing-references.ts`.
+ * so every script a process workflow runs must ship and be a command before
+ * a generator can emit a workflow that calls it. On main at `812f7e04` two
+ * did neither: `scripts/board-ready.ts` and `scripts/audit-closing-references.ts`.
  */
-describe("SC-2742: every script a process workflow runs ships and is a rungate command", () => {
-  /** ADR-014's four, decision 6: the process workflows this criterion is about. */
+describe("#2044: every script a process workflow runs ships and is a rungate command", () => {
+  /** ADR-014's four, decision 6. */
   const PROCESS_WORKFLOWS = ["closing-references", "adr-accepted", "board-ready", "board-intake"];
   /** `bun scripts/x.ts`, the form this repository's copies use today. */
   const SCRIPT_RUN = /\bbun\s+(scripts\/[A-Za-z0-9._-]+\.ts)\b/g;
-  /** The CLI forms a generated workflow may use instead. */
-  const COMMAND_RUN = /(?:\b(?:bunx|npx|bun\s+x)\s+(?:--bun\s+)?rungate(?:@\S+)?|\bbin\/rungate(?:\.ts)?)\s+([a-z][a-z0-9-]*)/g;
 
-  /** What one workflow runs, comment lines excluded: a sentence about a run is not a run. */
-  function runs(yaml: string): { scripts: string[]; commands: string[] } {
+  /** The scripts one workflow runs, comment lines excluded: a sentence about a run is not a run. */
+  function scriptsRun(yaml: string): string[] {
     const code = yaml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
-    return {
-      scripts: [...code.matchAll(SCRIPT_RUN)].map(m => m[1]!),
-      commands: [...code.matchAll(COMMAND_RUN)].map(m => m[1]!),
-    };
+    return [...code.matchAll(SCRIPT_RUN)].map(m => m[1]!);
   }
 
   const published = publishedFiles(ROOT, readPackageFiles(ROOT));
-  const registered = new Map(Object.entries(CLI_COMMANDS).map(([name, c]) => [c.script, name]));
+  const registered = new Set(Object.values(CLI_COMMANDS).map(c => c.script));
   const read = PROCESS_WORKFLOWS.map(name => ({
     name,
-    ...runs(readFileSync(join(ROOT, ".github", "workflows", `${name}.yml`), "utf-8")),
+    scripts: scriptsRun(readFileSync(join(ROOT, ".github", "workflows", `${name}.yml`), "utf-8")),
   }));
 
-  test("the sweep reads a real population, and the runner forms it matches are real", () => {
-    // The control. A regex that matched nothing would pass both cases below.
+  test("the sweep reads a real population, and a comment is not a run", () => {
+    // The control. A regex that matched nothing would pass the case below.
     expect(read.flatMap(w => w.scripts)).toContain("scripts/board-ready.ts");
     expect(read.flatMap(w => w.scripts)).toContain("scripts/audit-closing-references.ts");
-    expect(runs("        run: bunx rungate board-ready --repo o/r").commands).toEqual(["board-ready"]);
-    expect(runs("          bun bin/rungate.ts plan-deps --write").commands).toEqual(["plan-deps"]);
-    expect(runs("  # bun scripts/board-ready.ts in a comment").scripts).toEqual([]);
+    expect(scriptsRun("  # bun scripts/board-ready.ts in a comment")).toEqual([]);
   });
 
   test("every script a process workflow runs is in files[] and registered as a command", () => {
@@ -817,10 +816,5 @@ describe("SC-2742: every script a process workflow runs ships and is a rungate c
       "a consumer's copy of this workflow could not run it: register the script in lib/cli-commands.ts " +
         "and add it to package.json files[] (ADR-014 decision 2)",
     ).toEqual([]);
-  });
-
-  test("every rungate command a process workflow calls is registered", () => {
-    const unknown = read.flatMap(w => w.commands.filter(c => !(c in CLI_COMMANDS)).map(c => `${w.name}.yml calls rungate ${c}`));
-    expect(unknown, "the CLI has no such command, so the step would exit non-zero").toEqual([]);
   });
 });
