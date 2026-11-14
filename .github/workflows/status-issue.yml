@@ -64,7 +64,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
-        run: bun scripts/status-view.ts --markdown --out "$RUNNER_TEMP/status.md" --repo "$GITHUB_REPOSITORY"
+        run: bun scripts/status-view.ts --markdown --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/status.md"
 
       - name: Write it into the pinned issue
         env:

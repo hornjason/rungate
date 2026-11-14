@@ -5,7 +5,7 @@
  *
  * One renderer, two outputs:
  *   bun scripts/status-view.ts                        terminal text (what `/board` prints)
- *   bun scripts/status-view.ts --markdown --out <f>   the pinned issue's body
+ *   bun scripts/status-view.ts --markdown > <f>       the pinned issue's body
  *   bun scripts/status-view.ts --publish <f> --repo owner/name
  *                                                     write <f> into the pinned issue
  *
@@ -648,11 +648,11 @@ export function main(argv: string[], root = process.cwd()): number {
     return r.ok ? 0 : REFUSAL_EXIT;
   }
   const view = gather(root, repo);
+  // Printed, never written to a path from argv: the caller redirects it.
+  // A write to an argv path is a site the spec-write sweep cannot follow
+  // (#1584), and a redirect in the workflow says where it goes in plain sight.
   if (argv.includes("--markdown")) {
-    const out = flag(argv, "--out");
-    const text = renderMarkdown(view);
-    if (out) writeFileSync(out, text);
-    else process.stdout.write(text);
+    process.stdout.write(renderMarkdown(view));
   } else {
     process.stdout.write(renderText(view));
   }

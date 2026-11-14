@@ -35,7 +35,7 @@ describe("#2097: the status workflow", () => {
     expect(reader(), "no step renders the view").toBeDefined();
     expect(writer(), "no step publishes it").toBeDefined();
     expect(steps.indexOf(reader())).toBeLessThan(steps.indexOf(writer()));
-    expect(runOf(reader())).toContain('--out "$RUNNER_TEMP/status.md"');
+    expect(runOf(reader())).toContain('> "$RUNNER_TEMP/status.md"');
     expect(runOf(writer())).toContain('--publish "$RUNNER_TEMP/status.md"');
   });
 
