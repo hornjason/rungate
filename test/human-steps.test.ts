@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -19,6 +19,7 @@ import {
   REQUIRE_CLOSING_REF_VARIABLE,
   githubSlugOf,
   humanSteps,
+  processChecksIn,
   readHumanSteps,
   timed,
   type HumanStepProbes,
@@ -257,6 +258,36 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
   });
 
   // Round 1 of PR #2162: the no-repository early return swallowed it.
+  // Round 2 of PR #2162: the gitlab case alone cannot tell "not GitHub" from
+  // "the remote was never read". A real github.com remote must come through.
+  test("a live read of a github.com origin resolves its slug through git config", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-github-"));
+    try {
+      spawnSync("git", ["init", "-q"], { cwd: root });
+      spawnSync("git", ["remote", "add", "origin", "git@github.com:Some-Owner/Some-Repo.git"], { cwd: root });
+      expect(LIVE_PROBES.slug(root)).toBe("some-owner/some-repo");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a stat error other than not-found is UNMEASURED, never read as an absent workflow", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-eacces-"));
+    const dir = join(root, ".github", "workflows");
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "closing-references.yml"), "jobs:\n  closing-references: {}\n");
+      chmodSync(dir, 0o000);
+      const { checks, unreadable } = processChecksIn(root);
+      if (process.getuid?.() === 0) return; // root reads through any mode; nothing to measure
+      expect(checks).toEqual([]);
+      expect(unreadable.join("\n")).toMatch(/closing-references\.yml could not be read/);
+    } finally {
+      chmodSync(dir, 0o755);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("an unreadable workflow is still reported when there is no GitHub origin", () => {
     const lines = humanSteps({ ...allSet, slug: null, unreadableWorkflows: [".github/workflows/closing-references.yml could not be read (EISDIR)"] });
     expect(lines[0]).toStartWith("UNMEASURED: human steps");
