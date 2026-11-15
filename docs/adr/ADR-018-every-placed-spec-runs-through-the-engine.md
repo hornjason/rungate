@@ -16,10 +16,12 @@ SC-2780) and the two placement moves in the convergence spec are drafts and
 need his yes. Merging this file with `status: accepted` is the yes. It
 closes #2238 and serves stage F of `project-state.json`.
 
-**Merge after #2239.** Every row lands in Engine Phase 9, where the only
-open engine issue already sits. `plan-deps` exits 1 on a family whose open
-issues sit in one phase, and `adr-accepted.yml` then skips the Criteria
-column. The dry run found this, and #2239 fixes it.
+**#2239 is in, so this can merge.** The five engine rows land in Engine
+Phase 9, where the only open engine issue already sits; the CRC-C3 row lands
+in Convergence Phase 0. `plan-deps` exited 1 on a family whose open issues
+sit in one phase, and `adr-accepted.yml` then skipped the Criteria column.
+The dry run found this. #2239 (merged as #2242, released in 0.8.22) makes
+one phase *nothing to sequence* and keeps the board steps running.
 
 ## Context
 
