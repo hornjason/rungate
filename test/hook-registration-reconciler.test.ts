@@ -659,7 +659,7 @@ describe("#479: the live reconciliation, over what the repo owns", () => {
     expect(
       wrong,
       "a hook described as NOT LIVE while user settings registers it is #1986's disagreement. " +
-        "Say it is registered live in ~/.claude/settings.json, and that the session-start reading reports a drift.",
+        "Say it is registered live in ~/.claude/settings.json.",
     ).toEqual([]);
   });
 
