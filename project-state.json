@@ -1810,13 +1810,15 @@
           "id": "F1",
           "what": "specs/CODE-REVIEW-CONVERGENCE-SPEC.md goes through the engine with no agent touching anything",
           "done": false,
-          "verify": "for r in milestones criterion-coverage blocked-by-edges criteria-field queue-label; do bun bin/rungate.ts board-conformance --produce --spec specs/CODE-REVIEW-CONVERGENCE-SPEC.md --prefix Convergence --repo hornjason/rungate --reading \"$r\" || exit 1; done"
+          "verify": "for r in milestones criterion-coverage blocked-by-edges criteria-field queue-label; do bun bin/rungate.ts board-conformance --produce --spec specs/CODE-REVIEW-CONVERGENCE-SPEC.md --prefix Convergence --repo hornjason/rungate --reading \"$r\" || exit 1; done",
+          "issue": 1722
         },
         {
           "id": "F2",
           "what": "`board-conformance` exits 0. THAT IS THE GOAL MET",
           "done": false,
-          "verify": "bun bin/rungate.ts board-conformance --repo hornjason/rungate"
+          "verify": "bun bin/rungate.ts board-conformance --repo hornjason/rungate",
+          "issue": 1722
         }
       ],
       "goal": "Convergence goes through the engine untouched",
