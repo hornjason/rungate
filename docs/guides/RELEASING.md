@@ -37,16 +37,17 @@ the wrapper when you copy a step.
 # 1. What the registry serves now = PUBLISHED below
 npm view rungate version
 
-# 2. Branch off main in a worktree (never the primary checkout), install, and
-#    run the pre-flight THERE: the red that costs a version number if found
-#    after tagging. It reads the LIVE board, and it must run on the tree being
-#    released; the primary checkout can be far behind it (#2207).
+# 2. Branch off main in a worktree (never the primary checkout), and install
 ( set -euo pipefail
   git -C ~/Projects/rungate fetch -q origin
   git -C ~/Projects/rungate worktree add -b rg/release-XYZ ~/Projects/rg-wt-rel-XYZ origin/main
-  cd ~/Projects/rg-wt-rel-XYZ
-  bun install --frozen-lockfile
-  <T> bun test test/stage-ladder.test.ts )
+  cd ~/Projects/rg-wt-rel-XYZ && bun install --frozen-lockfile )
+#    Then the pre-flight, IN that worktree: the red that costs a version
+#    number if found after tagging. It reads the LIVE board and must run on
+#    the tree being released; the primary checkout can be far behind (#2207).
+#    If it is red, nothing is tagged and nothing is spent: fix the board and
+#    re-run only this line. The worktree from the block above stays.
+(cd ~/Projects/rg-wt-rel-XYZ && <T> bun test test/stage-ladder.test.ts)
 
 # 3. In the worktree: bump, standing line, pins. Steps 3 to 6 each cd into
 #    it, because a cd inside one step's subshell does not carry to the next.
