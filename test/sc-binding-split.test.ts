@@ -342,7 +342,10 @@ const UNCLAIMED_RATCHET = 150;
 // (Jason's decision on #1887, 2026-11-15) and ticked against the
 // `#1887 / CRC-M17` describe in test/ai-review-finding-scope.test.ts. A
 // behaviour with no registered pattern is unbindable by design here.
-const CLAIMED_UNBINDABLE = 169;
+// 169 -> 171: SC-2622 and SC-2623 (#1720) ticked as behaviours with no
+// registered pattern, claimed by the `SC-2622:` and `SC-2623:` cases in
+// test/spec-requirements.test.ts.
+const CLAIMED_UNBINDABLE = 171;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

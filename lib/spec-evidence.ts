@@ -316,6 +316,17 @@ export function parseCriteria(content: string): ParsedCriterion[] {
 }
 
 /**
+ * A statement that OPENS with `SUPERSEDED` — a pointer to what replaced the
+ * criterion, or the record of a withdrawal (#1720). The same reading as
+ * `isSuperseded` in `lib/sc-cover.ts`, restated here because this module must
+ * stay import-free for its mutation battery; `test/spec-evidence.test.ts`
+ * holds the two in agreement on the inputs that separate them.
+ */
+export function supersededStatement(statement: string): boolean {
+  return /^SUPERSEDED\b/.test(statement.trim());
+}
+
+/**
  * Every way this spec's criteria fail the evidence rule.
  *
  * THE single decider. An empty array means every criterion either carries
@@ -335,6 +346,10 @@ export function evidenceViolations(
 
   for (const c of parseCriteria(content)) {
     const at = `${c.id} (line ${c.line})`;
+
+    // A ticked SUPERSEDED line claims nothing was proved, so it owes nothing.
+    // Ticked only: an unticked one is still a criterion somebody owes.
+    if (c.ticked && supersededStatement(c.text)) continue;
 
     if (!hasContent(c.needs)) {
       out.push({

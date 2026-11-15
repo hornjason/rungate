@@ -65,6 +65,14 @@ import { localCalendarDay } from "./local-calendar-day";
 /** What a generated spec must carry for `lib/spec-evidence.ts` to bind it. */
 export const EVIDENCE_FRONTMATTER_KEY = "evidence: required";
 
+/**
+ * SC-2623: which SUCCESS.md claim the spec serves. Emitted as a placeholder
+ * that `servesViolations` in `lib/spec-requirements.ts` refuses until it is a
+ * claim number, so a new spec answers "which goal does this serve" before it
+ * merges rather than never.
+ */
+export const SERVES_FRONTMATTER_PLACEHOLDER = "serves: TODO — the SUCCESS.md claim number(s) this spec serves";
+
 export interface SpecTemplateInput {
   title: string;
   /** One line saying what the spec governs. May be the `TODO —` placeholder. */
@@ -121,6 +129,7 @@ governs: ${input.governs}
 testable: true
 compliance: strict
 ${EVIDENCE_FRONTMATTER_KEY}
+${SERVES_FRONTMATTER_PLACEHOLDER}
 ---
 
 # ${input.title}
