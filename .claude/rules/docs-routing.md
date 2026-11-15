@@ -1,6 +1,6 @@
 ---
 description: Documentation routing and file creation conventions
-generated-sha: 2a45f9ad3a5d515a
+generated-sha: 51b367770741a8e6
 ---
 
 ## Documentation Routing
@@ -10,7 +10,7 @@ generated-sha: 2a45f9ad3a5d515a
 | Codebase structure (routes, components, modules, health) | `CODE-MAP.md` |
 | Current project state, priorities, and session history | `PROJECT-STATE.md` |
 | Specs — success criteria, constraints, requirements (35 files) | `specs/` |
-| ADRs — architecture decisions (18 files) | `docs/adr/` |
+| ADRs — architecture decisions (19 files) | `docs/adr/` |
 | Research — findings, evaluations, competitive analysis (29 files) | `docs/research/` |
 | Council — synthesis, design debates (10 files) | `docs/council/` |
 | Guides — setup, onboarding, reference (3 files) | `docs/guides/` |
