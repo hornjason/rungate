@@ -34,5 +34,12 @@
     "records that reading for the thirteen it cleared, PR by PR; this file cannot",
     "prove it about itself, so do not read the sentence above as proof."
   ],
-  "reservations": []
+  "reservations": [
+    {
+      "owner": "rg/2238-adr-018",
+      "from": 2776,
+      "to": 2779,
+      "note": "ADR-018 four engine criteria, drafted for Jason 2026-11-15"
+    }
+  ]
 }
