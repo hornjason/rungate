@@ -27,6 +27,8 @@ import {
   assertAdjudicationShape,
   assertAdjudicationsResolve,
   assertOneJudgementPerPair,
+  orphanedAdjudications,
+  renderOrphaned,
   censusRows,
   isAmbiguousId,
   issueNames,
@@ -315,7 +317,7 @@ describe("the ambiguity exclusions are the two documented ones", () => {
  * UNADJUDICATED while somebody's judgement sat in the file. The check needs
  * the spec set and the issue set, so it lives where both are: `censusRows`.
  */
-describe("#1643: a judgement naming a criterion or issue that does not exist is refused, by position and id", () => {
+describe("#1643: a judgement naming a criterion that does not exist is refused; one naming an issue that is not open is reported", () => {
   const fingerprint = criterionFingerprint("the gate refuses an unsigned payload.");
   const real: Adjudication = {
     criterion: "SC-9101",
@@ -335,11 +337,19 @@ describe("#1643: a judgement naming a criterion or issue that does not exist is 
     );
   });
 
-  test("an issue absent from the fetched set is refused the same way", () => {
+  test("an issue absent from the fetched set is ORPHANED and reported, and the census still runs", () => {
+    // Review of PR #2192: the census reads open issues only, so a judged issue
+    // closing is the ordinary lifecycle. A refusal there stopped every row.
     const offByOne = { ...real, issue: 43 };
-    expect(() => censusRows(spec(TICKED), issues, [offByOne])).toThrow(
-      /adjudication record 0 names issue #43, which is not among the 1 issue\(s\) fetched/,
-    );
+    const rows = censusRows(spec(TICKED), issues, [offByOne]);
+    expect(rows[0]!.standing[42]!.status, "the pair it was meant for still owes a judgement").toBe("none");
+    const orphans = orphanedAdjudications([offByOne], issues);
+    expect(orphans).toEqual([{ at: 0, record: offByOne }]);
+    expect(renderOrphaned(orphans)).toEqual([
+      "ORPHANED: adjudication record 0 (SC-9101, #43) names an issue that is not open: closed since, or mistyped. " +
+        "It applies to no row; fix its number, or remove it if the issue closed.",
+    ]);
+    expect(orphanedAdjudications([real], issues), "a record on an open issue is not orphaned").toEqual([]);
   });
 
   test("control: the identical record against a criterion and issue that exist is accepted and clears the debt", () => {
@@ -352,9 +362,9 @@ describe("#1643: a judgement naming a criterion or issue that does not exist is 
     expect(() => censusRows(spec(UNTICKED), [issue(42, "SC-9102")], [{ ...real, criterion: "SC-9102" }])).not.toThrow();
   });
 
-  test("the store this repository ships resolves against its own specs", () => {
-    // The live store must not carry a record the census would refuse on a
-    // criterion; the issue half is measured against the tracker at run time.
+  test("every criterion the shipped store names is stated by this repository's specs", () => {
+    // The criterion half only. Whether each issue is still open is a reading
+    // of the tracker, made at run time and reported as ORPHANED, not refused.
     const ROOT = join(import.meta.dir, "..");
     const records = readAdjudications(ROOT);
     expect(records.length, "the store read nothing, so this measured nothing").toBeGreaterThan(0);
@@ -362,7 +372,6 @@ describe("#1643: a judgement naming a criterion or issue that does not exist is 
       file: `specs/${f}`,
       content: readFileSync(join(ROOT, "specs", f), "utf-8"),
     }));
-    const everyIssue = records.map(r => issue(r.issue, ""));
-    expect(() => assertAdjudicationsResolve(records, specs, everyIssue)).not.toThrow();
+    expect(() => assertAdjudicationsResolve(records, specs)).not.toThrow();
   });
 });

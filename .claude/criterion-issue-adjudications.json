@@ -3,6 +3,15 @@
   "_signing": "`by` is the actor who read the issue and decided, never the person who would own the fix. `rayford` is an agent.",
   "adjudications": [
     {
+      "criterion": "CRC-B7",
+      "issue": 1567,
+      "verdict": "contradicts",
+      "by": "rayford",
+      "collected": "2026-10-28",
+      "note": "The issue states it directly: 'NOT verified: that CRC-B7's demotion behaves correctly end to end. Only that its blocker is gone. Nobody has run a finding through the live path and observed a demotion.' The criterion is ticked and says surviving findings are sorted and tagged.",
+      "fingerprint": "1a1529dc"
+    },
+    {
       "criterion": "CRC-M11",
       "issue": 1592,
       "verdict": "contradicts",

@@ -26,7 +26,9 @@ import { join } from "node:path";
 import {
   assertAdjudicationShape,
   censusRows,
+  orphanedAdjudications,
   renderCensus,
+  renderOrphaned,
   unadjudicated,
   type Adjudication,
   type IssueRef,
@@ -141,8 +143,11 @@ async function main(): Promise<number> {
     title: i.title,
     body: i.body,
   }));
-  const rows = censusRows(specs, issues, readAdjudications(root));
+  const adjudications = readAdjudications(root);
+  const rows = censusRows(specs, issues, adjudications);
   const owed = unadjudicated(rows);
+  // #1643: a judgement on an issue that is not open is reported beside the rows, never dropped.
+  const orphaned = orphanedAdjudications(adjudications, issues);
 
   if (asJson) {
     console.log(
@@ -153,6 +158,7 @@ async function main(): Promise<number> {
           issuesRead: issues.length,
           issuesDropped: page.droppedRows.length,
           rows,
+          orphaned,
         },
         null,
         2,
@@ -166,6 +172,7 @@ async function main(): Promise<number> {
       ),
     );
     console.log(`\n  ${owed.length} row(s) have no current adjudication.`);
+    for (const line of renderOrphaned(orphaned)) console.log(`  ${line}`);
   }
 
   return strict && owed.length > 0 ? EXIT_REFUSED : 0;
