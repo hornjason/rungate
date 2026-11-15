@@ -279,3 +279,13 @@ test("#2193: a null node blames the input that id came from — ITEM_ID on the r
     expect(msg).not.toContain("ITEM_ID");
   }
 });
+
+// Review round 5 of PR #2194: a backslash is the other character that matters inside a quoted phrase.
+test("#2193: a column holding a backslash is COLUMN_UNSEARCHABLE too, before any call", async () => {
+  for (const column of ["Won't Fix\\", "a\\b"]) {
+    const s = stub({ fields: [fieldsPage()] });
+    const r = await moveToColumn({ projectId: PROJECT, itemId: ITEM, column }, { graphql: s.graphql, sleep: async () => {}, log: () => {} });
+    expect(reason(r), column).toBe("COLUMN_UNSEARCHABLE");
+    expect(s.calls).toEqual([]);
+  }
+});

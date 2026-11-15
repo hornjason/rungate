@@ -181,10 +181,10 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
     // carried inside that phrase, so a column holding one could never be seen
     // in the index and every write would be misreported as lagging or
     // overwritten. Refused before anything is written (review of PR #2194).
-    if (column.includes('"')) {
+    if (/["\\]/.test(column)) {
       throw new Refused(
         "COLUMN_UNSEARCHABLE",
-        `The column name ${JSON.stringify(column)} contains a double quote, which the project search query status:"<column>" cannot carry, so whether the card renders could never be read. Nothing was written. Rename the column, or pass one without a double quote.`,
+        `The column name ${JSON.stringify(column)} contains a double quote or a backslash, which the project search query status:"<column>" cannot carry, so whether the card renders could never be read. Nothing was written. Rename the column, or pass one without either character.`,
       );
     }
 
