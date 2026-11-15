@@ -55,9 +55,15 @@ git tag -a vX.Y.Z -m "rungate X.Y.Z" && git push origin vX.Y.Z
 
 # 6. Wait for the run, then the registry (run it in the background).
 #    If the run fails, X.Y.Z is spent: read its log, fix, and cut the next
-#    version (see "A failed release costs a version number").
-#    If the first line prints nothing, the run has not registered yet; re-run it.
-run=$(gh run list -R hornjason/rungate --workflow release.yml --branch vX.Y.Z -L 1 --json databaseId -q '.[0].databaseId')
+#    version (see "A failed release costs a version number"). A run that has
+#    not REGISTERED yet is not a failure, and nothing is spent.
+run=""
+for i in $(seq 1 12); do
+  run=$(gh run list -R hornjason/rungate --workflow release.yml --branch vX.Y.Z -L 1 --json databaseId -q '.[0].databaseId // empty')
+  [ -n "$run" ] && break
+  sleep 5
+done
+[ -n "$run" ] || { echo "no release.yml run for vX.Y.Z after 60s — check the tag was pushed; nothing is spent"; exit 1; }
 gh run watch "$run" -R hornjason/rungate --exit-status || { echo "release.yml FAILED — X.Y.Z is spent"; exit 1; }
 for i in $(seq 1 20); do
   [ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ] && { echo PUBLISHED; break; }
