@@ -15,9 +15,12 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  AI_REVIEW_PR_IS_FORK_VAR,
   AI_REVIEW_THREADS_REFUSAL,
   aiReviewThreadsExitCode,
   postReviewThreads,
+  prIsForkReading,
+  threadsDetailLines,
   threadsLandedPhrase,
   type AiReviewThreadPoster,
 } from "../lib/ai-review-threads";
@@ -335,5 +338,142 @@ describe("postReviewThreads", () => {
     ).text();
     const declarations = src.match(/AI_REVIEW_THREADS_REFUSAL\s*=/g) ?? [];
     expect(declarations).toHaveLength(1);
+  });
+});
+
+/**
+ * #1992 finding 1: a 403 degrades only when the run IS a fork. The fork
+ * signal arrives as an environment variable (#2203 makes the workflow set
+ * it), read exactly, and an absent one keeps today's degrade so a new CLI
+ * under an old workflow behaves as it did.
+ */
+describe("#1992: a 403 on a same-repository run is FAILED", () => {
+  const forbidden = () => recorder(() => ({ ok: false, status: 403, message: "Resource not accessible by integration" }));
+
+  test("a 403 on a run that is NOT a fork is FAILED — the token lost write, the contributor did not", async () => {
+    const { post } = forbidden();
+    const r = await postReviewThreads(reading([finding]), post, undefined, false);
+    expect(r.outcome).toBe("FAILED");
+    expect(aiReviewThreadsExitCode(r)).not.toBe(0);
+    expect(r.detail.join(" ")).toContain("not a fork");
+  });
+
+  test("a 403 on a fork still degrades", async () => {
+    const { post } = forbidden();
+    const r = await postReviewThreads(reading([finding]), post, undefined, true);
+    expect(r.outcome).toBe("DEGRADED_NO_WRITE");
+    expect(aiReviewThreadsExitCode(r)).toBe(0);
+  });
+
+  test("an unknown fork status keeps today's degrade, and says it was not read", async () => {
+    const { post } = forbidden();
+    const r = await postReviewThreads(reading([finding]), post, undefined, null);
+    expect(r.outcome).toBe("DEGRADED_NO_WRITE");
+    expect(r.detail.join(" ")).toContain(AI_REVIEW_PR_IS_FORK_VAR);
+  });
+
+  // Read exactly, the way `.claude/rules/config-access.md` reads a switch: a
+  // loose reading of a variable that turns a refusal on is a refusal that
+  // turns itself on by accident.
+  test("the fork variable is read exactly: only 'true' and 'false' are readings", () => {
+    expect(prIsForkReading("true")).toBe(true);
+    expect(prIsForkReading("false")).toBe(false);
+    for (const raw of [undefined, "", "TRUE", "False", "1", "0", " true", "yes"]) {
+      expect(prIsForkReading(raw), JSON.stringify(raw)).toBeNull();
+    }
+  });
+
+  test("the variable's name is the one constant #2203's generator will emit", () => {
+    expect(AI_REVIEW_PR_IS_FORK_VAR).toBe("RUNGATE_PR_IS_FORK");
+  });
+});
+
+/**
+ * #1992 finding 2: the scope check reads a finding's NORMALISED path, so the
+ * request must carry that spelling too. Sending the raw one asks GitHub for a
+ * path it cannot resolve, the file-level retry is refused the same way, and
+ * the round ends FAILED over a finding that was correctly in the diff.
+ *
+ * The existing CONTROL above stays: a 422 that survives the demotion for a
+ * path genuinely in the diff is still a failure. Only the spelling changes.
+ */
+describe("#1992: a finding is sent in the spelling the scope check matched", () => {
+  for (const raw of ["./lib/github.ts", "lib/./github.ts", "/lib/github.ts", "lib//github.ts", "lib\\github.ts", "src/../lib/github.ts"]) {
+    test(`'${raw}' is sent as 'lib/github.ts'`, async () => {
+      const { sent, post } = recorder(() => ({ ok: true }));
+      const r = await postReviewThreads(withScope([{ ...carried, file: raw }], ["lib/github.ts"]), post);
+      expect(r.outcome).toBe("POSTED");
+      expect(sent).toEqual([{ path: "lib/github.ts", line: 259 }]);
+    });
+  }
+
+  // Case is kept: the API matches byte for byte, and the comparison form is
+  // lowercase. When the finding matched a changed file, that file's own
+  // spelling is what goes out.
+  test("the diff's own spelling is sent when a finding matched it in another case", async () => {
+    const { sent, post } = recorder(() => ({ ok: true }));
+    await postReviewThreads(withScope([{ file: "./lib/GitHub.ts", line: 3, summary: "s" }], ["lib/github.ts"]), post);
+    expect(sent).toEqual([{ path: "lib/github.ts", line: 3 }]);
+  });
+
+  test("with no changed-file list, the finding's own case survives the cleanup", async () => {
+    const { sent, post } = recorder(() => ({ ok: true }));
+    await postReviewThreads(reading([{ file: "./src/Thing.ts", line: 4, summary: "s" }]), post);
+    expect(sent).toEqual([{ path: "src/Thing.ts", line: 4 }]);
+  });
+
+  test("a ':line' suffix still supplies the line, and is not sent as part of the path", async () => {
+    const { sent, post } = recorder(() => ({ ok: true }));
+    await postReviewThreads(withScope([{ file: "./lib/github.ts:42", summary: "s" }], ["lib/github.ts"]), post);
+    expect(sent).toEqual([{ path: "lib/github.ts", line: 42 }]);
+  });
+});
+
+/**
+ * #1992 finding 4: detail lines carry text the producer does not control —
+ * an API error message, a path a finding named. Printed raw, a CR or LF in
+ * one starts a new line, and a new line beginning `::` is a workflow command
+ * (`escapeAnnotation`'s own docstring records `::stop-commands::` reached
+ * that way). Every line this command prints from a result goes through the
+ * one escaper.
+ */
+describe("#1992: no detail line reaches the workflow-command channel unescaped", () => {
+  const hostile = "benign\n::stop-commands::deadbeef\r\n::notice::all clear 100%";
+
+  test("threadsDetailLines escapes CR, LF and %", () => {
+    const lines = threadsDetailLines(
+      { outcome: "FAILED", attempted: 1, posted: 0, demoted: 0, detail: [hostile] },
+      "ai-review-threads",
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toMatch(/[\r\n]/);
+    expect(lines[0]).toStartWith("ai-review-threads: ");
+    expect(lines[0]).toContain("%0A::stop-commands::");
+    expect(lines[0]).toContain("100%25");
+  });
+
+  test("an API message carrying a newline cannot start its own line in what the command prints", async () => {
+    const { post } = recorder(() => ({ ok: false, status: 500, message: hostile }));
+    const r = await postReviewThreads(reading([finding]), post);
+    for (const line of threadsDetailLines(r, "ai-review-threads")) {
+      expect(line).not.toMatch(/[\r\n]/);
+    }
+  });
+
+  test("the command prints result detail only through threadsDetailLines", async () => {
+    const script = await Bun.file(new URL("../scripts/ai-review-threads.ts", import.meta.url)).text();
+    expect(script).toContain("threadsDetailLines(result");
+    expect(script, "a second, unescaped printer of result.detail").not.toContain("result.detail");
+  });
+
+  test("an argument error is escaped before it is interpolated into the warning", () => {
+    const r = Bun.spawnSync(["bun", "scripts/ai-review-threads.ts", "a\n::notice::forged", "b"], {
+      cwd: new URL("..", import.meta.url).pathname,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = new TextDecoder().decode(r.stdout);
+    expect(out, "the warning was never printed, so nothing was tested").toContain("::warning title=AI review threads::");
+    expect(out.split("\n").some(l => l.startsWith("::notice::forged"))).toBe(false);
   });
 });
