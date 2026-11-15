@@ -366,7 +366,7 @@ is built from this document.
 | **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753, SC-2762, SC-2763, SC-2764 |
 | **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
-| **Phase 9** | SC-2625, SC-2776, SC-2777, SC-2778, SC-2779 |
+| **Phase 9** | SC-2625, SC-2776, SC-2777, SC-2778, SC-2779, SC-2780 |
 
 ### Phase 0 — the transform refuses
 
@@ -467,7 +467,7 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       needs: test
       proved-by: test/work-status.test.ts, the SC-2764 describe (`-t "SC-2764"`) — 7 pass, 0 fail, 2026-11-13, on the PR that closes #2087. The line formats `netGrowthCeiling`'s own decision: the ceiling case names both counts, the growing case names the net and what lifts it, an UNMEASURED count never claims the ceiling, an unreadable cap config reads as UNMEASURED rather than as a setting, and the script is asserted to call the gate's decider rather than its own. Live: "Filing cap: 12 … opened 34 and closed 25 … (net +9)".
       fingerprint: 0c2047b9
-- [ ] SC-2776: every spec with a phase placement table is named in config — `board.engineSpec`, or an entry of `board.families` with its milestone prefix — and a push to main that changes `specs/` runs `plan-spec`, `plan-deps` and `board-mirror` for every named family with no command typed by hand; a family whose spec or prefix cannot be read turns the run red by name rather than being skipped
+- [ ] SC-2776: every spec with a phase placement table is named in config — `board.engineSpec`, or an entry of `board.families` with its milestone prefix — and a placed spec that config does not name is reported by name, never silently left out of the engine
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
 - [ ] SC-2777: every open issue in any configured family's phase milestone carries `board.queueLabel`, written by `board-mirror --queue-label` with no hand edit, so payload work and engine work sit in one queue
@@ -476,6 +476,9 @@ acceptance test, so it is also the honest answer to *when is the engine done*
 - [ ] SC-2778: a criterion its spec places outside every phase — Blocked, Not adopted — deliberate, or Not observable here — is named by `criterion-coverage` and `declared-work` as declared outside phases and leaves both readings' targets, one predicate deciding it for both; it is never counted as covered by an issue, and a placement value the engine does not know leaves both readings UNMEASURED
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-- [ ] SC-2779: an open issue with no milestone whose named criteria a configured family's spec places in a phase is moved into that phase's milestone by the run SC-2776 describes, into the lowest phase when it names several; an issue that already carries a milestone is never moved
+- [ ] SC-2779: an open issue with no milestone whose named criteria a configured family's spec places in a phase is moved into that phase's milestone by the run SC-2780 describes, into the lowest phase when it names several; an issue that already carries a milestone is never moved
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2780: a push to main that changes `specs/` runs `plan-spec`, `plan-deps` and `board-mirror` for every family config names, with no command typed by hand; a family whose spec or prefix cannot be read turns the run red by name rather than being skipped
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test

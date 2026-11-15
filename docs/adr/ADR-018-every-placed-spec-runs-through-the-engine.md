@@ -11,8 +11,8 @@ updated: 2026-11-15
 
 **Proposed, 2026-11-15.** Jason decided the three questions on 2026-11-15:
 every placed spec, one queue, and an issue plan the DA drafts and he
-approves. This draft is that plan. The four engine criteria (SC-2776 to
-SC-2779) and the two placement moves in the convergence spec are drafts and
+approves. This draft is that plan. The five engine criteria (SC-2776 to
+SC-2780) and the two placement moves in the convergence spec are drafts and
 need his yes. Merging this file with `status: accepted` is the yes. It
 closes #2238 and serves stage F of `project-state.json`.
 
@@ -146,9 +146,9 @@ with nobody touching it, and the readings show it.
 
 ## Decomposition
 
-The four engine criteria are written in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`
+The five engine criteria are written in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`
 and placed in Phase 9, *the payload ships*, the phase whose subject is
-stage F. The ids SC-2776 to SC-2779 are numbered above ADR-017's SC-2772
+stage F, one per row. The ids SC-2776 to SC-2780 are numbered above ADR-017's SC-2772
 to SC-2775 (#2219, not yet merged). They are written in the pull request
 that consumes them, as #1506 decided, and they are not reserved:
 `test/spec-to-board-pipeline.test.ts` refuses a reservation over ids the
@@ -162,5 +162,5 @@ engine phases empty (SC-2741).
 | SC-2777 | Every placed family's phase issues carry the queue label | scripts/board-mirror.ts, .github/workflows/phase-order.yml, test/board-mirror.test.ts, test/phase-order-workflow.test.ts | Engine Phase 9 — the payload ships | Config lists every placed spec with its milestone prefix |
 | SC-2778 | A criterion placed outside every phase reads as declared and not as missing | scripts/board-conformance.ts, scripts/board-snapshot.ts, lib/spec-placement.ts, test/board-conformance.test.ts, test/board-snapshot.test.ts | Engine Phase 9 — the payload ships | — |
 | SC-2779 | An unmilestoned issue moves into the phase milestone its criterion holds | lib/issue-repair.ts, scripts/plan-issues.ts, test/plan-issues.test.ts | Engine Phase 9 — the payload ships | — |
-| SC-2776 | A push to main that changes specs runs every placed family through the engine | lib/scaffold/specs-placed-workflow.ts, .github/workflows/specs-placed.yml, lib/scaffold/owned-files.ts, lib/scaffold/steps.ts, .claude/rules/harness-managed.md, test/specs-placed-workflow.test.ts | Engine Phase 9 — the payload ships | Config lists every placed spec with its milestone prefix, Every placed family's phase issues carry the queue label, An unmilestoned issue moves into the phase milestone its criterion holds |
+| SC-2780 | A push to main that changes specs runs every placed family through the engine | lib/scaffold/specs-placed-workflow.ts, .github/workflows/specs-placed.yml, lib/scaffold/owned-files.ts, lib/scaffold/steps.ts, .claude/rules/harness-managed.md, test/specs-placed-workflow.test.ts | Engine Phase 9 — the payload ships | Config lists every placed spec with its milestone prefix, Every placed family's phase issues carry the queue label, An unmilestoned issue moves into the phase milestone its criterion holds |
 | CRC-C3 | A review thread resolved with no stated reason is reported on its pull request | lib/ai-review-threads.ts, scripts/ai-review-threads.ts, test/ai-review-threads.test.ts, reference/clearing-a-false-positive.md | Convergence Phase 0 — three settings, no engineering | — |

@@ -33,7 +33,7 @@ code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
 <h2>The run</h2>
 <div class="card">
 <div class="step"><span class="tag ME">ME</span><div>#2239 ships first: <code>plan-deps</code> exits 0 when one phase holds every open issue, and the board steps in <code>adr-accepted.yml</code> run on <code>!cancelled()</code></div></div>
-<div class="step"><span class="tag YOU">YOU</span><div>Yes or no on the drafts: SC-2776..2779, Decision 4 (the run places unmilestoned issues), Decision 5 (placed outside phases = declared), E8 → Blocked, F1 → Not adopted</div></div>
+<div class="step"><span class="tag YOU">YOU</span><div>Yes or no on the drafts: SC-2776..2780, Decision 4 (the run places unmilestoned issues), Decision 5 (placed outside phases = declared), E8 → Blocked, F1 → Not adopted</div></div>
 <div class="step"><span class="tag YOU">YOU</span><div>Merge ADR-018 with <code>status: accepted</code></div></div>
 <div class="step"><span class="tag AUTO">AUTO</span><div><code>adr-accepted.yml</code>: plan-spec updates Engine Phase 9 → 6 issues, each labelled <code>engine</code> → 4 blocked-by edges → Criteria column → Ready top-up</div></div>
 <div class="step"><span class="tag ME">ME</span><div>DA records <code>issue: 1722</code> on stage items F1 and F2 (project-state.json, primary checkout) → declared-work −2</div></div>
@@ -49,7 +49,7 @@ code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
 <div class="card"><h3>SC-2777 · Engine Phase 9</h3>Every placed family's phase issues carry the queue label<div class="dim">scripts/board-mirror.ts · phase-order.yml · 2 tests · after the config row</div></div>
 <div class="card"><h3>SC-2778 · Engine Phase 9</h3>A criterion placed outside every phase reads as declared and not as missing<div class="dim">board-conformance · board-snapshot · spec-placement · 2 tests · root</div></div>
 <div class="card"><h3>SC-2779 · Engine Phase 9</h3>An unmilestoned issue moves into the phase milestone its criterion holds<div class="dim">lib/issue-repair.ts · scripts/plan-issues.ts · test · root</div></div>
-<div class="card"><h3>SC-2776 · Engine Phase 9</h3>A push to main that changes specs runs every placed family through the engine<div class="dim">emitter · specs-placed.yml · ownership × 2 · steps · test · after the other three</div></div>
+<div class="card"><h3>SC-2780 · Engine Phase 9</h3>A push to main that changes specs runs every placed family through the engine<div class="dim">emitter · specs-placed.yml · ownership × 2 · steps · test · after the other three</div></div>
 <div class="card"><h3>CRC-C3 · Convergence Phase 0</h3>A review thread resolved with no stated reason is reported on its pull request<div class="dim">lib + script ai-review-threads · test · reference doc · root</div></div>
 </div>
 
