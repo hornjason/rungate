@@ -110,8 +110,10 @@ with nobody touching it, and the readings show it.
    Engine Phase 1 and Convergence Phase 1 are unrelated milestones that
    share a numeral, so neither is "lower". An issue that already has a milestone is
    never moved, which keeps ADR-015's deliberate Phase 6 placements. The
-   first push to `specs/` after rows 2 and 5 ship places #1883, #1885,
-   #1495, #1571, #1816 and #1818.
+   first push to `specs/` after row 5 ships places #1883, #1885,
+   #1495, #1571, #1816 and #1818. Row 5 is blocked by rows 1, 2 and 4, so
+   the placement logic (row 4) and the family config it reads (row 1) are
+   in by then.
 5. **A criterion placed outside every phase is declared, not missing — DA's
    recommendation, for Jason.** criterion-coverage and declared-work stop
    counting the values Blocked, Not adopted — deliberate and Not observable
