@@ -1086,10 +1086,11 @@ describe("the refusals, and whether the API was reached", () => {
       });
     });
 
-    test("only the ENGINE issues are asked about", async () => {
-      // Not every open issue in the repository. The reading's denominator
-      // is the engine population, so a query over the rest is a cost with
-      // no reader — and on this tracker that is 70-odd issues against five.
+    test("only PHASE-FAMILY issues are asked about — the engine's and other families', never the rest", async () => {
+      // Not every open issue in the repository. B4 reads the engine family
+      // and E4 (#2223) reads every phase-milestone family, so issue 99 in
+      // another family is asked about once, in the same query; issue 98 sits
+      // in no family, has no reader, and is never asked about.
       await withSpec(SPEC, async (dir, at) => {
         writeBoardConfig(dir, BOARD);
         const { gh, askedFields } = spy(CONFORMANT_LIVE, {
@@ -1102,7 +1103,7 @@ describe("the refusals, and whether the API was reached", () => {
         });
         await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
         expect(askedFields).toHaveLength(1);
-        expect([...askedFields[0]!].sort((a, b) => a - b)).toEqual([10, 11]);
+        expect([...askedFields[0]!].sort((a, b) => a - b)).toEqual([10, 11, 99]);
       });
     });
 
@@ -1131,6 +1132,64 @@ describe("the refusals, and whether the API was reached", () => {
           r => r.name === "criteria-field",
         )!;
         expect(shortReading.status).toBe("short");
+      });
+    });
+  });
+
+  /**
+   * #2223 / E4: `familyIssues`, the producer half. Every OPEN issue in ANY
+   * phase-milestone family carries the Criteria column, not only the family
+   * named by `--prefix`. A producer that read only the engine family would
+   * emit issue 10 alone and the reading would be met on a board whose other
+   * family is blank.
+   */
+  describe("#2223 / E4: the Criteria column for every family", () => {
+    const OTHER_FAMILY = "Other Phase 0 — somebody else's spec";
+    const mixed = {
+      issues: [
+        iss({ number: 10, milestone: IN_PHASE_0 }),
+        iss({ number: 20, milestone: OTHER_FAMILY }),
+        iss({ number: 30, milestone: null }),
+        iss({ number: 40, milestone: OTHER_FAMILY, state: "CLOSED" }),
+      ],
+    };
+
+    test("every open family issue is emitted with its column; no-milestone and closed issues are not", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh, askedFields } = spy(CONFORMANT_LIVE, {
+          ...mixed,
+          fields: { 10: { kind: "value", value: "SC-9001" }, 20: { kind: "empty" } },
+        });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.familyIssues).toEqual([
+          { number: 10, family: "Fix", criteriaField: "SC-9001" },
+          { number: 20, family: "Other", criteriaField: null },
+        ]);
+        expect(askedFields.flat(), "the other family's issue was never asked about").toContain(20);
+        // And the reading it feeds goes SHORT on exactly that issue, while
+        // B4 (engine family only) stays met: two populations, two answers.
+        const board = readSnapshotText(JSON.stringify(snap)).board;
+        const byName = (n: string) => takeReadings(board).find(r => r.name === n)!;
+        expect(byName("criteria-field").status).toBe("met");
+        expect([byName("criteria-field-all").status, byName("criteria-field-all").why]).toEqual(["short", "1 of 2 — 1 short"]);
+      });
+    });
+
+    test("NO board configured omits familyIssues entirely", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        const { gh } = spy(CONFORMANT_LIVE, mixed);
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect("familyIssues" in snap, "a column nothing queried was emitted").toBe(false);
+      });
+    });
+
+    test("a FAILED project read omits familyIssues; it does not refuse the snapshot", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        const { gh } = spy(CONFORMANT_LIVE, { ...mixed, fieldsThrow: new Error("HTTP 502") });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect("familyIssues" in snap).toBe(false);
       });
     });
   });

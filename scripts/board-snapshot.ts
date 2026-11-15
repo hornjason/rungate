@@ -54,6 +54,7 @@ import {
 } from "../lib/live-issues";
 import {
   criterionCoverage,
+  familyOf,
   milestonePlan,
   placementCoverage,
   placementReading,
@@ -62,7 +63,7 @@ import {
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
 import { dependencyPlan } from "../lib/spec-deps";
-import type { DeclaredWork, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
+import type { DeclaredWork, FamilyIssue, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
 import { parseCriteria } from "../lib/spec-evidence";
 
 /**
@@ -243,6 +244,8 @@ export interface ProducedSnapshot {
   plannedEdges?: PlannedEdge[];
   /** SC-2752: unticked criteria in in-scope specs and open stage items. Absent when it could not be read. */
   declaredWork?: DeclaredWork[];
+  /** #2223 / E4: every open issue in any phase-milestone family, with the Criteria column. Absent when the column was not read. */
+  familyIssues?: FamilyIssue[];
 }
 
 /**
@@ -735,7 +738,13 @@ export async function main(
   // report `0 of N — N short` for a column nobody finished reading.
   const criteria = new Map<number, ProjectFieldReading>();
   const board = readBoardConfig(root);
-  if (board !== null && engine.length > 0) {
+  // #2223 / E4: every OPEN issue in ANY phase-milestone family, read in the
+  // same query as the engine's so one answer covers both populations.
+  const familyOpen = liveIssues.filter(i => i.state === "OPEN" && familyOf(i.milestone) !== null);
+  const fieldNumbers = [...new Set([...engine.map(i => i.number), ...familyOpen.map(i => i.number)])];
+  /** True only when `readFieldValues` answered; anything else is "not read". */
+  let columnQueried = false;
+  if (board !== null && fieldNumbers.length > 0) {
     try {
       const identity = await gh.readFieldIdentity(board.criteriaFieldId);
       if (identity.projectId !== board.projectId) {
@@ -750,12 +759,13 @@ export async function main(
       } else {
         for (const [number, reading] of await gh.readFieldValues(
           repo,
-          engine.map(i => i.number),
+          fieldNumbers,
           board.projectId,
           identity.name,
         )) {
           criteria.set(number, reading);
         }
+        columnQueried = true;
       }
     } catch (e) {
       console.error(
@@ -898,6 +908,19 @@ export async function main(
   // UNMEASURED rather than a stage-only count.
   const declared = placements.specPlacements === undefined ? {} : readDeclaredWork(root, placements.specPlacements);
 
+  // #2223 / E4. Emitted only when the column was actually queried: no board,
+  // a mismatched field, or a failed read all omit the key, and
+  // `criteria-field-all` is then UNMEASURED on its own.
+  const family = columnQueried
+    ? {
+        familyIssues: familyOpen.map(i => ({
+          number: i.number,
+          family: familyOf(i.milestone) as string,
+          ...criteriaKey(i.number),
+        })),
+      }
+    : {};
+
   const snapshot: ProducedSnapshot = {
     producedAt: new Date().toISOString(),
     spec: specArg,
@@ -911,6 +934,7 @@ export async function main(
     ...repoIssues,
     ...edges,
     ...declared,
+    ...family,
   };
 
   process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
