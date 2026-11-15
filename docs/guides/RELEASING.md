@@ -53,9 +53,16 @@ git commit -am "release: X.Y.Z" && git push -u origin rg/release-XYZ
 git tag -a vX.Y.Z -m "rungate X.Y.Z" && git push origin vX.Y.Z
 #    release.yml runs the full suite and a typecheck, then publishes
 
-# 6. Wait for the registry (run it in the background)
-gh run list -R hornjason/rungate --workflow release.yml -L 1
-until [ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ]; do sleep 30; done
+# 6. Wait for the run, then the registry (run it in the background).
+#    If the run fails, X.Y.Z is spent: read its log, fix, and cut the next
+#    version (see "A failed release costs a version number").
+#    If the first line prints nothing, the run has not registered yet; re-run it.
+run=$(gh run list -R hornjason/rungate --workflow release.yml --branch vX.Y.Z -L 1 --json databaseId -q '.[0].databaseId')
+gh run watch "$run" -R hornjason/rungate --exit-status || { echo "release.yml FAILED — X.Y.Z is spent"; exit 1; }
+for i in $(seq 1 20); do
+  [ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ] && { echo PUBLISHED; break; }
+  sleep 30
+done   # no PUBLISHED after 10 minutes: the run passed but npm is not serving it — stop and look
 
 # 7. Published half: set SUCCESS.md's line to published `rungate@X.Y.Z`,
 #    then commit and push
