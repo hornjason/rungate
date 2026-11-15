@@ -617,6 +617,22 @@ describe("#1887: the files restored from base are reported, not hidden", () => {
     expect(line).toBe(`${AI_REVIEW_RESTORED_LINE} 0 of 2 changed files`);
   });
 
+  test("an entry that cannot be classified is named, never counted as not restored", () => {
+    // git C-quotes a non-ASCII name; this is how `.claude/réglages.md` arrives.
+    const quoted = '".claude/r\\303\\251glages.md"';
+    const line = restoredFromBaseLine(scopeMeasured([quoted]));
+    expect(line, "an unreadable entry read as a clean zero").not.toBe(
+      `${AI_REVIEW_RESTORED_LINE} 0 of 1 changed files`,
+    );
+    expect(line).toContain("could not be read");
+    expect(line).toContain(JSON.stringify(quoted));
+    // And beside a real overlap, both facts are reported.
+    const mixed = restoredFromBaseLine(scopeMeasured(["CLAUDE.md", quoted, "lib/a.ts"]));
+    expect(mixed).toContain("1 of 3");
+    expect(mixed).toContain('"CLAUDE.md"');
+    expect(mixed).toContain("could not be read");
+  });
+
   test("with no changed-file list the overlap is UNMEASURED, not zero", () => {
     const line = restoredFromBaseLine(scopeNotSupplied());
     expect(line.startsWith(`${AI_REVIEW_RESTORED_LINE} UNMEASURED`)).toBe(true);
