@@ -578,3 +578,52 @@ describe("SC-2745: the board workflows are owned, and no generated workflow name
     expect(named, "a generated workflow names a board; read it from board.id instead").toEqual([]);
   });
 });
+
+/**
+ * #2185: an add that exits 0 but returns no item is retried, and the refusal
+ * counts the attempts it actually made. Found by review after #2180 merged:
+ * the loop broke on gh's exit code alone, so a `null` id ended it at once and
+ * the error still said "three attempts".
+ */
+describe("#2185: a null item is retried, and the attempts are counted", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "board-intake-null-")));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const stubs = join(dir, "bin");
+  mkdirSync(stubs);
+  writeFileSync(join(stubs, "bunx"), '#!/bin/sh\nprintf "PVT_fixture\\n"\nexit 0\n', { mode: 0o755 });
+  // Answers the nth call with the nth comma-separated value of GH_SEQ, always exit 0.
+  writeFileSync(
+    join(stubs, "gh"),
+    '#!/bin/sh\nn=$(cat "$COUNT" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$COUNT"\nprintf "%s" "$(printf "%s" "$GH_SEQ" | cut -d, -f"$n")"\nexit 0\n',
+    { mode: 0o755 },
+  );
+  writeFileSync(join(stubs, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const script = join(dir, "add.sh");
+  writeFileSync(script, buildBoardIntakeAddScript("9.9.9"));
+
+  function add(seq: string) {
+    const tag = Math.random().toString(36).slice(2);
+    const output = join(dir, `out-${tag}`);
+    const count = join(dir, `count-${tag}`);
+    writeFileSync(output, "");
+    const r = Bun.spawnSync(["bash", script], {
+      env: { PATH: `${stubs}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_OUTPUT: output, CONTENT_ID: "I_x", GH_TOKEN: "t", COUNT: count, GH_SEQ: seq },
+    });
+    return { code: r.exitCode, err: r.stderr.toString(), written: readFileSync(output, "utf8"), calls: Number(readFileSync(count, "utf8").trim()) };
+  }
+
+  test("null every time: three calls, exit 1, and the error says three", () => {
+    const r = add("null,null,null");
+    expect(r.calls, "a null item ended the loop before it retried").toBe(3);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("after 3 attempt(s)");
+    expect(r.written).toBe("");
+  });
+
+  test("null once, then an item: success on the second call", () => {
+    const r = add("null,PVTI_item");
+    expect(r.calls).toBe(2);
+    expect(r.code).toBe(0);
+    expect(r.written).toBe("itemId=PVTI_item\nprojectId=PVT_fixture\n");
+  });
+});

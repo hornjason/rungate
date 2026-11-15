@@ -88,19 +88,24 @@ fi
 if [ "\${code}" -ne 0 ]; then
   exit "\${code}"
 fi
+# Done only on a real id: an exit-0 reply carrying null is retried too (#2185).
 item=""
+tried=0
+: > "\${RUNNER_TEMP}/add.stderr"
 for attempt in 1 2 3; do
-  if item=$(gh api graphql -f project="\${project}" -f content="\${CONTENT_ID}" -f query='
+  tried=\${attempt}
+  item=$(gh api graphql -f project="\${project}" -f content="\${CONTENT_ID}" -f query='
     mutation($project: ID!, $content: ID!) {
       addProjectV2ItemById(input: { projectId: $project, contentId: $content }) { item { id } }
-    }' --jq '.data.addProjectV2ItemById.item.id' 2>"\${RUNNER_TEMP}/add.stderr"); then
+    }' --jq '.data.addProjectV2ItemById.item.id' 2>"\${RUNNER_TEMP}/add.stderr") || item=""
+  if [ -n "\${item}" ] && [ "\${item}" != "null" ]; then
     break
   fi
   item=""
   sleep $(( attempt * 2 ))
 done
-if [ -z "\${item}" ] || [ "\${item}" = "null" ]; then
-  echo "::error title=Board intake::addProjectV2ItemById gave no item after three attempts, so the item is NOT on the board. Last error: $(cat "\${RUNNER_TEMP}/add.stderr")" >&2
+if [ -z "\${item}" ]; then
+  echo "::error title=Board intake::addProjectV2ItemById gave no item after \${tried} attempt(s), so the item is NOT on the board. Last error: $(cat "\${RUNNER_TEMP}/add.stderr")" >&2
   exit 1
 fi
 echo "itemId=\${item}" >> "\${GITHUB_OUTPUT}"
