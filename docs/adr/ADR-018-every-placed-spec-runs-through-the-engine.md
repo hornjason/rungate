@@ -143,8 +143,11 @@ with nobody touching it, and the readings show it.
 
 The four engine criteria are written in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`
 and placed in Phase 9, *the payload ships*, the phase whose subject is
-stage F. The ids SC-2776 to SC-2779 are reserved in
-`specs/sc-reservations.json` by this branch. Every row lands in the active
+stage F. The ids SC-2776 to SC-2779 are numbered above ADR-017's SC-2772
+to SC-2775 (#2219, not yet merged). They are written in the pull request
+that consumes them, as #1506 decided, and they are not reserved:
+`test/spec-to-board-pipeline.test.ts` refuses a reservation over ids the
+spec already states. Every row lands in the active
 milestone except the CRC-C3 row, which waits in Convergence Phase 0 until the
 engine phases empty (SC-2741).
 
