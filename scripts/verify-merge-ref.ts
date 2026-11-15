@@ -326,33 +326,38 @@ export function remoteRepoReading(
         `Nothing was compared. Pass \`--remote\` naming the right one, or run from a checkout of \`${expected}\`.`,
     };
   }
-  // The host axis (#1911). Same owner/name on another host is another
-  // repository: a mirror, a GHE instance, a local copy.
+  const hostRefusal = remoteHostMismatch(url, expected, expectedHost);
+  return hostRefusal === null ? { ok: true, detail: "" } : { ok: false, detail: hostRefusal };
+}
+
+/**
+ * The host axis (#1911): the refusal when the remote is not on the pull
+ * request's host, or `null` when it is. Same `owner/name` on another host is
+ * another repository — a mirror, a GHE instance, a local copy.
+ *
+ * Three refusals, each with its own wording. An unread or unparseable host
+ * would ALSO fail the final comparison, so the wording is the only thing that
+ * tells the branches apart, and the tests assert it.
+ */
+export function remoteHostMismatch(url: string, expected: string, expectedHost: string | null | undefined): string | null {
   if (expectedHost === null || expectedHost === undefined) {
-    return {
-      ok: false,
-      detail:
-        `the API gave no URL for this pull request, so the host it lives on was not read and the remote ` +
-        `\`${url}\` was compared on its path alone. A host nobody read is not a host that matched.`,
-    };
+    return (
+      `the API gave no URL for this pull request, so the host it lives on was not read and the remote ` +
+      `\`${url}\` was compared on its path alone. A host nobody read is not a host that matched.`
+    );
   }
   const gotHost = remoteHostOf(url);
   if (gotHost === null) {
-    return {
-      ok: false,
-      detail: `the remote \`${url}\` has a host that does not parse, so it could not be compared with \`${hostLabel(expectedHost)}\`.`,
-    };
+    return `the remote \`${url}\` has a host that does not parse, so it could not be compared with \`${hostLabel(expectedHost)}\`.`;
   }
   if (gotHost !== expectedHost) {
-    return {
-      ok: false,
-      detail:
-        `the remote \`${url}\` is on ${hostLabel(gotHost)}, but the pull request is on ${hostLabel(expectedHost)}. ` +
-        `Same \`${expected}\` on another host is another repository. Nothing was compared. ` +
-        `Pass \`--remote\` naming \`${expected}\` on ${hostLabel(expectedHost)}.`,
-    };
+    return (
+      `the remote \`${url}\` is on ${hostLabel(gotHost)}, but the pull request is on ${hostLabel(expectedHost)}. ` +
+      `Same \`${expected}\` on another host is another repository. Nothing was compared. ` +
+      `Pass \`--remote\` naming \`${expected}\` on ${hostLabel(expectedHost)}.`
+    );
   }
-  return { ok: true, detail: "" };
+  return null;
 }
 
 /** How a host is named in a refusal; the empty host is said, not left blank. */

@@ -322,6 +322,10 @@ describe("the timeout bound is read, not coerced (#1912)", () => {
   });
 });
 
+/**
+ * Covers SC-2766 (PARALLEL-AGENT-COORDINATION-SPEC.md): a remote whose host or
+ * owner/name differs from the pull request's repository is UNMEASURED.
+ */
 describe("the remote is tied to the pull request's repository (#1909 review, #1911)", () => {
   const MINE = "hornjason/rungate";
   const GH = "github.com";
