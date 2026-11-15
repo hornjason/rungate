@@ -41,6 +41,22 @@
  * and records both answers. Change either hook and update that table and
  * `specs/HOOK-ARCHITECTURE-SPEC.md` § "The workflow-state.json write contract"
  * in the same commit.
+ *
+ * ## NOT LIVE in this repository's sessions — user scope since #1585
+ *
+ * This was `project` scope and registered in `.claude/settings.json`. Agent
+ * sessions run in worktrees and do not load project settings, so it never
+ * fired, while `GateResultProtection` fired on the same tool calls from user
+ * settings. What it guards is machine-wide — the matcher below has no project
+ * scoping, and `lib/bash-write-guard.ts` records that a live
+ * `workflow-state.json` is almost never inside the project root — so SC-518
+ * puts it in user settings. The repo no longer registers it (dual registration
+ * fires twice) and reports it UNMEASURED. Registration in
+ * `~/.claude/settings.json` is a human action and is still pending.
+ *
+ * A scaffolded consumer is unaffected: `deployHooksToConsumers` filters on
+ * `deployToConsumers`, not on scope, so the paragraph above about consumer
+ * trees still holds.
  */
 
 import { parseHookInput } from './lib/utils';

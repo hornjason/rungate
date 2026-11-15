@@ -73,6 +73,7 @@ interface HookEntry {
   command?: string;
   scope?: string;
   disabledReason?: string;
+  description?: string;
 }
 
 function entries(): HookEntry[] {
@@ -583,6 +584,75 @@ describe("#479: the live reconciliation, over what the repo owns", () => {
       dual.map(f => f.hook),
       "a user-scoped hook is still registered in .claude/settings.json; SC-518 says it fires twice",
     ).not.toContain("TopLevelCdGuard");
+  });
+
+  /**
+   * #1585 — the two more hooks #1579's audit found in the same position:
+   * declared `project`, registered in `.claude/settings.json`, and never loaded,
+   * because agent sessions run in worktrees and do not load project settings.
+   *
+   * Each guards machine state, so SC-518 puts it in user settings:
+   *
+   *  - `AgentBriefGuard` reads and writes `WORK_DIR`/`BASE_DIR`, which
+   *    `hooks/lib/paths.ts` resolves to `~/.rungate` and `~/.claude`. It is the
+   *    only mechanical enforcement of "never spawn Marcus, Quinn or Rook
+   *    directly", and it was dead in exactly the sessions where agents spawn
+   *    agents.
+   *  - `WorkflowStateGuard` matches `workflow-state.json` anywhere on the
+   *    machine (a case-folded `.includes()`, no project scoping), and
+   *    `lib/bash-write-guard.ts` records that a live one is almost never inside
+   *    the project root. `GateResultProtection` already guards the same file at
+   *    user scope — the live control beside the dead one.
+   *
+   * Three readings per hook, so no one-sided edit can satisfy the set: the
+   * reconciler reports it UNMEASURED (the scope flipped), it is not
+   * `dual-scope` (the project registration went with it), and the hook and its
+   * inventory entry both say NOT LIVE (a reader is told, in the hook, that the
+   * human half has not happened).
+   */
+  const RECLASSIFIED_1585 = ["AgentBriefGuard", "WorkflowStateGuard"] as const;
+
+  test("#1585: AgentBriefGuard and WorkflowStateGuard are UNMEASURED — they guard machine state", () => {
+    const unmeasured = new Set(
+      live()
+        .filter(f => f.kind === "unmeasured")
+        .map(f => f.hook),
+    );
+    expect(
+      RECLASSIFIED_1585.filter(h => !unmeasured.has(h)),
+      "these hooks do not read as UNMEASURED. Each guards home-rooted state that a worktree " +
+        "session never loads project settings for, so SC-518 puts it in user settings and the " +
+        'repo cannot honestly report its registration as satisfied. Set its scope to "user" in ' +
+        ".claude/rungate/hooks.json.",
+    ).toEqual([]);
+  });
+
+  test("#1585: neither is registered in two scopes, so neither can double-fire", () => {
+    const dual = live()
+      .filter(f => f.kind === "dual-scope")
+      .map(f => f.hook);
+    expect(
+      RECLASSIFIED_1585.filter(h => dual.includes(h)),
+      "a user-scoped hook is still registered in .claude/settings.json; SC-518 says it fires " +
+        "twice once a human adds the user registration. Remove the project registration.",
+    ).toEqual([]);
+  });
+
+  test("#1585: each says NOT LIVE in its own source and in its inventory entry", () => {
+    const missing: string[] = [];
+    for (const name of RECLASSIFIED_1585) {
+      const source = readFileSync(join(ROOT, "hooks", `${name}.hook.ts`), "utf-8");
+      if (!source.includes("NOT LIVE")) missing.push(`hooks/${name}.hook.ts`);
+      const entry = entries().find(h => h.name === name);
+      if (!(entry?.description ?? "").includes("NOT LIVE")) {
+        missing.push(`.claude/rungate/hooks.json "${name}" description`);
+      }
+    }
+    expect(
+      missing,
+      "a hook that reads as shipped while nothing loads it is the exact shape of #1578. " +
+        "State that live registration in ~/.claude/settings.json is a pending human action.",
+    ).toEqual([]);
   });
 });
 

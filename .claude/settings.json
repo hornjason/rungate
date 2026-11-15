@@ -20,24 +20,6 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun ${CLAUDE_PROJECT_DIR}/hooks/AgentBriefGuard.hook.ts"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun ${CLAUDE_PROJECT_DIR}/hooks/WorkflowStateGuard.hook.ts"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
