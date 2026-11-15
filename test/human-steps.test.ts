@@ -21,9 +21,13 @@ import {
   humanSteps,
   processChecksIn,
   readHumanSteps,
+  readOrigin,
+  sshHostName,
   timed,
   type HumanStepProbes,
   type HumanStepReadings,
+  type Run,
+  type RunResult,
 } from "../lib/scaffold/human-steps";
 
 const ROOT = join(import.meta.dir, "..");
@@ -31,7 +35,7 @@ const read = <T>(value: T) => ({ kind: "READ", value }) as const;
 const unmeasured = (why: string) => ({ kind: "UNMEASURED", why }) as const;
 
 const allSet: HumanStepReadings = {
-  slug: "o/n",
+  slug: read("o/n"),
   secretPresent: read(true),
   requireClosingRef: read("true"),
   protection: read({ branch: "main", contexts: ["test", "closing-references"], statusChecks: "required-checks" }),
@@ -109,7 +113,7 @@ describe("SC-2749: every human step still owed is one command", () => {
   });
 
   test("no GitHub repository at all is one UNMEASURED line, not a clean report", () => {
-    const lines = humanSteps({ ...allSet, slug: null });
+    const lines = humanSteps({ ...allSet, slug: read(null) });
     expect(lines).toHaveLength(1);
     expect(lines[0]).toStartWith("UNMEASURED: human steps");
   });
@@ -156,7 +160,7 @@ describe("SC-2749: a read that never answers is UNMEASURED, not a hung scaffold"
 
 describe("SC-2749: the readings come from the tree and the probes, and the scaffold prints them", () => {
   const probes = (over: Partial<HumanStepProbes> = {}): HumanStepProbes => ({
-    slug: () => "o/n",
+    slug: () => read("o/n"),
     secret: async () => read(false),
     variable: async () => read(null),
     protection: async slug => ({
@@ -221,27 +225,31 @@ describe("SC-2749: the readings come from the tree and the probes, and the scaff
 
 describe("#2161: a reading that cannot be taken is UNMEASURED, never read against the wrong forge or crashed on", () => {
   test("githubSlugOf accepts a github.com remote in every spelling, and nothing else", () => {
+    // An identity resolver, so the case reads the parser and not this
+    // machine's ssh or ~/.ssh/config (review of PR #2187).
+    const literal = (h: string) => read(h);
     for (const url of [
       "git@github.com:o/n.git",
       "https://github.com/o/n",
       "https://x:token@github.com/o/n.git",
       "ssh://git@github.com/o/n.git",
       "https://GitHub.com/O/N.git",
-    ]) expect(githubSlugOf(url), url).toBe("o/n");
+    ]) expect(githubSlugOf(url, literal), url).toEqual(read("o/n"));
     for (const url of [
       "git@gitlab.com:o/n.git",
       "https://gitlab.com/o/n",
       "https://github.com.evil.com/o/n",
       "/tmp/some/fixture.git",
       "",
-    ]) expect(githubSlugOf(url), url).toBeNull();
+    ]) expect(githubSlugOf(url, literal), url).toEqual(read(null));
   });
 
   test("a live read of a gitlab origin is the no-repository line and calls no GitHub probe", async () => {
     const root = mkdtempSync(join(tmpdir(), "rg-human-steps-gitlab-"));
     try {
       spawnSync("git", ["init", "-q"], { cwd: root });
-      spawnSync("git", ["remote", "add", "origin", "git@gitlab.com:org/proj.git"], { cwd: root });
+      // https, so the live read never asks ssh and does not depend on this machine's ssh.
+      spawnSync("git", ["remote", "add", "origin", "https://gitlab.com/org/proj.git"], { cwd: root });
       const called: string[] = [];
       const r = await readHumanSteps(root, {
         slug: LIVE_PROBES.slug,
@@ -249,7 +257,7 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
         variable: async () => (called.push("variable"), read("true")),
         protection: async slug => (called.push("protection"), unreadableFacts(slug, "")),
       });
-      expect(r.slug).toBeNull();
+      expect(r.slug).toEqual(read(null));
       expect(called, "a GitHub probe ran for a non-GitHub origin").toEqual([]);
       expect(humanSteps(r)[0]).toStartWith("UNMEASURED: human steps");
     } finally {
@@ -265,7 +273,7 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
     try {
       spawnSync("git", ["init", "-q"], { cwd: root });
       spawnSync("git", ["remote", "add", "origin", "git@github.com:Some-Owner/Some-Repo.git"], { cwd: root });
-      expect(LIVE_PROBES.slug(root)).toBe("some-owner/some-repo");
+      expect(LIVE_PROBES.slug(root)).toEqual(read("some-owner/some-repo"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -290,7 +298,7 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
   });
 
   test("an unreadable workflow is still reported when there is no GitHub origin", () => {
-    const lines = humanSteps({ ...allSet, slug: null, unreadableWorkflows: [".github/workflows/closing-references.yml could not be read (EISDIR)"] });
+    const lines = humanSteps({ ...allSet, slug: read(null), unreadableWorkflows: [".github/workflows/closing-references.yml could not be read (EISDIR)"] });
     expect(lines[0]).toStartWith("UNMEASURED: human steps");
     expect(lines.join("\n")).toContain("UNMEASURED: process checks — .github/workflows/closing-references.yml could not be read");
   });
@@ -301,7 +309,7 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
       // A directory where the workflow file belongs: existsSync is true and readFileSync throws.
       mkdirSync(join(root, ".github", "workflows", "closing-references.yml"), { recursive: true });
       const r = await readHumanSteps(root, {
-        slug: () => "o/n",
+        slug: () => read("o/n"),
         secret: async () => read(true),
         variable: async () => read("true"),
         protection: async slug => ({ ...unreadableFacts(slug, ""), unreadable: null, branch: "main", contexts: [], statusChecks: "unprotected" as const }),
@@ -313,5 +321,120 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("#2169: a failed git read is reported as one, and an SSH alias for github.com is followed", () => {
+  const ran = (over: Partial<RunResult>): Run => () => ({ status: 0, stdout: "", ...over });
+
+  test("readOrigin: git missing, a vanished root or a timeout is UNMEASURED naming why; only exit 1 means no origin", () => {
+    const spawnError = readOrigin("/r", ran({ status: null, error: new Error("spawnSync git ENOENT") }));
+    expect(spawnError).toEqual(unmeasured("git could not read it (spawnSync git ENOENT)"));
+    const killed = readOrigin("/r", ran({ status: null, signal: "SIGTERM" }));
+    expect(killed).toEqual(unmeasured("git was stopped by SIGTERM before it answered"));
+    expect(readOrigin("/r", ran({ status: 3 }))).toEqual(unmeasured("git exited 3"));
+    expect(readOrigin("/r", ran({ status: 1 })), "exit 1 is git saying no origin is configured").toEqual(read(""));
+    expect(readOrigin("/r", ran({ status: 0, stdout: "git@github.com:o/n.git\n" }))).toEqual(read("git@github.com:o/n.git\n"));
+  });
+
+  test("a live read whose git cannot run in the root is an UNMEASURED line naming the failure, not the no-repository line", async () => {
+    const gone = join(tmpdir(), `rg-human-steps-gone-${process.pid}-${Date.now()}`);
+    const r = await readHumanSteps(gone, { ...LIVE_PROBES, secret: async () => read(true), variable: async () => read("true") });
+    expect(r.slug.kind).toBe("UNMEASURED");
+    const line = humanSteps(r)[0];
+    expect(line).toStartWith("UNMEASURED: human steps — the origin remote could not be read (git could not read it (");
+    expect(line).not.toContain("names no GitHub repository");
+  });
+
+  test("a live read of a repository with no origin is still the no-repository line", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-no-origin-"));
+    try {
+      spawnSync("git", ["init", "-q"], { cwd: root });
+      const r = await readHumanSteps(root, { ...LIVE_PROBES, secret: async () => read(true), variable: async () => read("true") });
+      expect(r.slug).toEqual(read(null));
+      expect(humanSteps(r)[0]).toStartWith("UNMEASURED: human steps — the origin remote names no GitHub repository");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an scp-style or ssh:// alias that ssh resolves to github.com is a github.com repository", () => {
+    const work = (h: string) => read(h === "github.com-work" ? "github.com" : h);
+    expect(githubSlugOf("git@github.com-work:o/r.git", work)).toEqual(read("o/r"));
+    expect(githubSlugOf("ssh://git@github.com-work/o/r.git", work)).toEqual(read("o/r"));
+    expect(githubSlugOf("git@gh-443:o/r.git", () => read("ssh.github.com")), "GitHub's port-443 SSH host").toEqual(read("o/r"));
+    expect(githubSlugOf("git@github.com-work:o/r.git", () => read("gitlab.com")), "an alias for another forge").toEqual(read(null));
+  });
+
+  // Review of PR #2187: ssh missing or timed out says nothing about the host.
+  test("an alias ssh could not resolve is UNMEASURED naming why, never the no-repository line", () => {
+    const failed = githubSlugOf("git@github-work:o/n.git", () => unmeasured("ssh -G github-work could not run (ENOENT)"));
+    expect(failed).toEqual(unmeasured("its host github-work could not be resolved: ssh -G github-work could not run (ENOENT)"));
+    const line = humanSteps({ ...allSet, slug: failed })[0];
+    expect(line).toStartWith("UNMEASURED: human steps — the origin remote could not be read (its host github-work could not be resolved");
+    expect(line).not.toContain("names no GitHub repository");
+  });
+
+  test("an https host is a DNS name, never an alias: the resolver is not asked", () => {
+    const asked: string[] = [];
+    const yes = (h: string) => (asked.push(h), read("github.com"));
+    expect(githubSlugOf("https://github.com-work/o/r", yes)).toEqual(read(null));
+    expect(githubSlugOf("https://github.com.evil.com/o/n", yes)).toEqual(read(null));
+    expect(asked).toEqual([]);
+  });
+
+  test("a literal github.com is accepted without asking ssh, so a Host github.com rewrite cannot refuse it", () => {
+    const asked: string[] = [];
+    expect(githubSlugOf("git@github.com:o/n.git", h => (asked.push(h), read("ssh.github.com")))).toEqual(read("o/n"));
+    expect(asked).toEqual([]);
+  });
+
+  test("sshHostName reads the hostname line of ssh -G, never hands ssh an option, and a failed ssh is UNMEASURED", () => {
+    const calls: string[][] = [];
+    const run: Run = (cmd, args) => (calls.push([cmd, ...args]), { status: 0, stdout: "user git\nhostname github.com\nport 22\n" });
+    expect(sshHostName("github.com-work", run)).toEqual(read("github.com"));
+    expect(calls).toEqual([["ssh", "-G", "github.com-work"]]);
+    expect(sshHostName("-oProxyCommand=x", run), "an option names no host").toEqual(read(null));
+    expect(calls, "a host starting with - reached ssh").toHaveLength(1);
+    expect(sshHostName("h", () => ({ status: 255, stdout: "" }))).toEqual(unmeasured("ssh -G h exited 255"));
+    expect(sshHostName("h", () => ({ status: null, stdout: "", error: new Error("ENOENT") }))).toEqual(unmeasured("ssh -G h could not run (ENOENT)"));
+    expect(sshHostName("h", () => ({ status: null, stdout: "", signal: "SIGTERM" }))).toEqual(unmeasured("ssh -G h was stopped by SIGTERM"));
+    expect(sshHostName("h", () => ({ status: 0, stdout: "user git\n" }))).toEqual(unmeasured("ssh -G h printed no hostname line"));
+  });
+});
+
+// Review round 2 of PR #2187: ssh.github.com is one of GitHub's SSH hosts, so
+// spelled literally it must not depend on ssh, and its usual URL carries :443.
+describe("#2169: GitHub's port-443 SSH host spelled literally is GitHub without asking ssh", () => {
+  const refuse = (h: string) => (asked.push(h), unmeasured("ssh -G could not run (ENOENT)"));
+  let asked: string[] = [];
+
+  test("ssh://…ssh.github.com:443/o/n.git and git@ssh.github.com:o/n.git are o/n, and ssh is never asked", () => {
+    asked = [];
+    expect(githubSlugOf("ssh://git@ssh.github.com:443/o/n.git", refuse)).toEqual(read("o/n"));
+    expect(githubSlugOf("git@ssh.github.com:O/N.git", refuse)).toEqual(read("o/n"));
+    expect(asked, "a literal GitHub SSH host was sent to ssh").toEqual([]);
+  });
+
+  test("over https, ssh.github.com is not a git host and stays a literal compare", () => {
+    asked = [];
+    expect(githubSlugOf("https://ssh.github.com/o/n", refuse)).toEqual(read(null));
+    expect(asked).toEqual([]);
+  });
+
+  test("a port on a github.com URL does not shift the slug", () => {
+    expect(githubSlugOf("ssh://git@github.com:22/o/n.git", refuse)).toEqual(read("o/n"));
+    expect(githubSlugOf("https://github.com:443/o/n", refuse)).toEqual(read("o/n"));
+  });
+});
+
+// Review round 3 of PR #2187: OpenSSH matches `Host` case-sensitively
+// (OpenSSH 10.5: `Host GitHub-Perso` resolves `GitHub-Perso`, not `github-perso`).
+describe("#2169: an alias is resolved as written, because ssh's Host match is case-sensitive", () => {
+  test("git@GitHub-Perso:o/r.git asks ssh about GitHub-Perso, not github-perso", () => {
+    const asked: string[] = [];
+    const ssh = (h: string) => (asked.push(h), read(h === "GitHub-Perso" ? "github.com" : h.toLowerCase()));
+    expect(githubSlugOf("git@GitHub-Perso:o/r.git", ssh)).toEqual(read("o/r"));
+    expect(asked).toEqual(["GitHub-Perso"]);
   });
 });
