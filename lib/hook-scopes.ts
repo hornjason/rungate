@@ -463,10 +463,18 @@ function liveRegistrationLine(hook: string, loaded: ScopeReading[]): string[] {
   }
   if (user.commands.some(c => commandNamesHook(c, hook))) return [];
   const elsewhere = loaded.filter(r => (r.commands ?? []).some(c => commandNamesHook(c, hook))).map(r => r.scope);
+  // Registered in another scope a session loads (user-local-settings, say):
+  // the hook runs, and only the file the entry names is wrong. Saying "does
+  // not run here" then would be false (review of #2232, round 2).
+  if (elsewhere.length > 0) {
+    return [
+      `Hook registry DISAGREES: ${hook} is described as registered live in ~/.claude/settings.json, but ` +
+        `this machine registers it in ${elsewhere.join(", ")} instead — the entry names the wrong file (#2229)`,
+    ];
+  }
   return [
     `Hook registry DISAGREES: ${hook} is described as registered live in ~/.claude/settings.json, but ` +
-      `this machine's user settings do not register it` +
-      `${elsewhere.length > 0 ? ` (registered in ${elsewhere.join(", ")})` : ""}, so it does not run here — ` +
+      `this machine's user settings do not register it, so it does not run here — ` +
       `register it on this machine, or correct the entry if it is no longer meant to run (#2229)`,
   ];
 }

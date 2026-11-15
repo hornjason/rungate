@@ -105,6 +105,20 @@ describe("#2229: a registry entry's 'registered live' claim is checked too", () 
     expect(lines[0]).toContain("project-settings");
   });
 
+  test("#2229: registered in user-local-settings — the wrong file named, never 'does not run here'", () => {
+    // Review of #2232, round 2: a registration in ~/.claude/settings.local.json
+    // runs, so saying the hook does not run would be false.
+    const lines = liveClaimLines([LIVE], readings({ "user-local-settings": [CMD] }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("user-local-settings instead");
+    expect(lines[0]).not.toContain("does not run here");
+  });
+
+  test("#2229: registered nowhere a session loads — 'does not run here'", () => {
+    const lines = liveClaimLines([LIVE], readings({}));
+    expect(lines[0]).toContain("does not run here");
+  });
+
   test("#2229: user settings unreadable — UNMEASURED, not silence and not a verdict", () => {
     const lines = liveClaimLines([LIVE], readings({ "user-settings": null }));
     expect(lines).toHaveLength(1);
