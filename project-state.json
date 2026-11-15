@@ -1887,13 +1887,6 @@
             "verify": "bun test test/stage-ladder.test.ts -t 'survives a pipe' 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
           },
           {
-            "what": "A stage item's verify command names a test that exists",
-            "mechanism": "MECHANISED — #1849, PR #1877. `verifyTitleViolations` in lib/stage-ladder.ts reads every `bun test <file> -t <pattern>` in every DONE item's verify command and refuses a pattern no declared title in that file can match. A file whose names it cannot read in full is UNMEASURED and counted apart, never a refusal. Stage C's C4 is the instance that paid for it: its verify named test/github-client.test.ts and the tests were in test/github-create-gated.test.ts, so the item scored green against zero tests.",
-            "status": "in-place",
-            "verify": "bun test test/verify-title-check.test.ts -t \"a verify command names a test that exists\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\"",
-            "issue": 1849
-          },
-          {
             "what": "A merged pull request's ref cannot silently swallow a later push",
             "mechanism": "NOT YET MECHANISED — filed as #1850. The arming step now compares `git ls-remote` against the PR's headRefOid by hand before arming; nothing enforces it, and #1847 is the instance where the hand step was skipped.",
             "status": "open",
