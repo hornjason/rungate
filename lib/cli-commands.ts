@@ -282,6 +282,13 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Print the board's node id from config",
     usage: "rungate board-id [--project-root <dir>]   (UNMEASURED and exit 2 when the config names no board)",
   },
+  // #2193 (part 1 of #2183): the board-intake move step as a tested command.
+  // `board-intake.yml` switches to it in #2183, once a release carries it.
+  "board-intake-move": {
+    script: "scripts/board-intake-move.ts",
+    summary: "Move a board item to a column, verified in the item and in the board's search index",
+    usage: "rungate board-intake-move --project <node-id> --item <item-id> --column <name>   (exit 1 naming the cause on every refusal)",
+  },
   // #2100. The prose half of declared work: `board-conformance`'s
   // `declared-work` reading covers criteria and stage items. No
   // `projectRootFlag`: it reads `process.cwd()`, which the child inherits.
