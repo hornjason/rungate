@@ -84,13 +84,14 @@ bites rather than discovered by a consumer.
    modules are copied. Measured by name on this ADR's review, from each
    module's `import` lines (this replaces the audit's unnamed "four and
    four"): three import a node built-in directly (`child_process`, `fs`,
-   `crypto`), and three import another `lib/` module. In detail:
-   `security-verdict`, `scope-denylist` and `suite-measurement` import
-   nothing, and `plan-coverage` imports only `scope-denylist`, so those bundle
-   as they are. `worktree-repo`, `workflow-security` and `prior-branch` import
-   node built-ins, and `dev-liveness` reaches `child_process` through
-   `verified-push`; those four need a pure core split out first, and they are
-   the split row's files. The generator must keep the
+   `crypto`), and three import another `lib/` module. `prior-branch` is in
+   both groups. In detail: `security-verdict`, `scope-denylist` and
+   `suite-measurement` import nothing, and `plan-coverage` imports only
+   `scope-denylist`, so those bundle as they are. `worktree-repo` (`fs`,
+   `child_process`) and `workflow-security` (`crypto`) import node built-ins;
+   `prior-branch` imports `child_process` and `./github`; and `dev-liveness`
+   reaches `child_process` through `./verified-push`. Those four need a pure
+   core split out first, and they are the split row's files. The generator must keep the
    `meta` literal and the top-level `return`, which off-the-shelf bundlers
    reject. The parity tests that hold each copy to its original are retired
    with the copy.
