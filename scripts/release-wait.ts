@@ -21,6 +21,10 @@
  * | `NO_OUTCOME` | a run exists and its conclusion could not be read    | unknown |
  * | `NOT_SERVED` | the run succeeded and the registry does not serve it | unknown |
  *
+ * A sixth state is not a reading of the release at all: `UNMEASURED`, when
+ * `gh` or `npm` cannot be started. Nothing was read and nothing is spent, and
+ * it exits through `REFUSE_EXIT` like the rest rather than as a crash.
+ *
  * Only `SPENT` tells the operator to cut the next version, and only a
  * recorded conclusion produces it — never an exit code from `gh run watch`,
  * which also fails on a dropped connection. `NO_RUN` and `NO_OUTCOME` are kept
@@ -94,9 +98,22 @@ export function releaseReading(input: ReleaseInputs): { reading: Reading; detail
 
 // ── the I/O half ────────────────────────────────────────────
 
+/**
+ * A tool that could not be started at all — `gh` or `npm` not on PATH.
+ * `Bun.spawnSync` throws for that rather than returning a non-zero exit, and
+ * it is a different fact from the tool answering "no": nothing was read
+ * (review of #2202).
+ */
+class SpawnFailed extends Error {}
+
 function run(cmd: string[], timeoutMs: number): { out: string; ok: boolean } {
-  const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
-  return { out: new TextDecoder().decode(r.stdout).trim(), ok: r.exitCode === 0 };
+  let r: ReturnType<typeof Bun.spawnSync>;
+  try {
+    r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
+  } catch (e) {
+    throw new SpawnFailed(`could not run \`${cmd[0]}\` (${(e as Error).message})`);
+  }
+  return { out: new TextDecoder().decode(r.stdout ?? new Uint8Array()).trim(), ok: r.exitCode === 0 };
 }
 
 function arg(name: string, argv: string[]): string | undefined {
@@ -144,12 +161,45 @@ export function main(argv: string[]): number {
     return REFUSE_EXIT;
   }
 
-  const r = repo ? ["-R", repo] : [];
   const tag = `v${version}`;
+  let inputs: ReleaseInputs;
+  try {
+    inputs = measure({ version, tag, pkg, repo, workflow, runAttempts: runAttempts!, runIntervalMs: runIntervalMs!, registryAttempts: registryAttempts!, registryIntervalMs: registryIntervalMs! });
+  } catch (e) {
+    const why = e instanceof SpawnFailed ? e.message : `the measurement threw (${(e as Error).message})`;
+    console.error(`UNMEASURED: ${tag}: ${why}. Nothing was read, so nothing is known about the release, and nothing is spent.`);
+    return REFUSE_EXIT;
+  }
+
+  const verdict = releaseReading(inputs);
+  if (verdict.reading !== "PUBLISHED") {
+    console.error(`${verdict.reading}: ${tag}: ${verdict.detail}`);
+    return REFUSE_EXIT;
+  }
+  console.log(`PUBLISHED: ${pkg}@${version} (run ${inputs.runId})`);
+  return 0;
+}
+
+interface Plan {
+  version: string;
+  tag: string;
+  pkg: string;
+  repo?: string;
+  workflow: string;
+  runAttempts: number;
+  runIntervalMs: number;
+  registryAttempts: number;
+  registryIntervalMs: number;
+}
+
+/** The I/O: find the run, read its conclusion, then ask the registry. */
+function measure(p: Plan): ReleaseInputs {
+  const { version, tag, pkg, repo, workflow, runAttempts, runIntervalMs, registryAttempts, registryIntervalMs } = p;
+  const r = repo ? ["-R", repo] : [];
 
   let runId = "";
-  for (let i = 0; i < runAttempts! && !runId; i++) {
-    if (i > 0) sleep(runIntervalMs!);
+  for (let i = 0; i < runAttempts && !runId; i++) {
+    if (i > 0) sleep(runIntervalMs);
     const list = run(["gh", "run", "list", ...r, "--workflow", workflow, "--branch", tag, "-L", "1",
       "--json", "databaseId", "-q", ".[0].databaseId // empty"], 60_000);
     if (list.ok) runId = list.out;
@@ -164,21 +214,15 @@ export function main(argv: string[]): number {
     const view = run(["gh", "run", "view", runId, ...r, "--json", "conclusion", "-q", ".conclusion"], 60_000);
     conclusion = view.ok ? view.out : null;
     if (conclusion === "success") {
-      for (let i = 0; i < registryAttempts! && !served; i++) {
-        if (i > 0) sleep(registryIntervalMs!);
+      for (let i = 0; i < registryAttempts && !served; i++) {
+        if (i > 0) sleep(registryIntervalMs);
         const npm = run(["npm", "view", `${pkg}@${version}`, "version"], 60_000);
         served = npm.ok && npm.out === version;
       }
     }
   }
 
-  const verdict = releaseReading({ runId, conclusion, served });
-  if (verdict.reading !== "PUBLISHED") {
-    console.error(`${verdict.reading}: ${tag}: ${verdict.detail}`);
-    return REFUSE_EXIT;
-  }
-  console.log(`PUBLISHED: ${pkg}@${version} (run ${runId})`);
-  return 0;
+  return { runId, conclusion, served };
 }
 
 if (import.meta.main) process.exit(main(Bun.argv.slice(2)));

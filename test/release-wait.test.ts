@@ -248,6 +248,29 @@ describe("the script: each reading end to end", () => {
     }
   });
 
+  // A tool that cannot be started is not a refusal by that tool, and not a
+  // crash either (review of #2202). bun is spawned by its absolute path, and
+  // PATH holds only a directory with the fake npm in it, so `gh` is genuinely
+  // absent rather than stubbed to fail.
+  test("UNMEASURED: gh cannot be started, and the refusal says so instead of crashing", () => {
+    const npmOnly = join(dir, "npm-only");
+    mkdirSync(npmOnly, { recursive: true });
+    writeFileSync(join(npmOnly, "npm"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(npmOnly, "npm"), 0o755);
+    const spawn = (path: string) => {
+      const r = Bun.spawnSync([process.execPath, path, "--version", VERSION, ...FAST], {
+        cwd: work, env: { HOME: process.env.HOME ?? "", PATH: npmOnly }, stdout: "pipe", stderr: "pipe",
+      });
+      return { code: r.exitCode, err: new TextDecoder().decode(r.stderr) };
+    };
+    const real = spawn(SCRIPT);
+    expect(real.code, real.err).toBe(REFUSE_EXIT);
+    expect(real.err).toContain("UNMEASURED");
+    expect(real.err).toContain("could not run `gh`");
+    expect(real.err, "an uncaught throw, not a refusal").not.toContain("    at ");
+    expect(spawn(mutant).code, "the mutant refused too — the case did not observe the exit constant").toBe(0);
+  });
+
   test("refuses a malformed attempts or interval flag", () => {
     const r = bothHalves({}, ["--version", VERSION, "--run-attempts", "-1"]);
     expect(r.err).toContain("take a whole number");
