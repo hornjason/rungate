@@ -192,7 +192,7 @@ describe("#2100: every plan-file priority is placed at its real line, or the sou
     "{",
     '  "other": { "priorities": ["a decoy at depth 2"] },',
     '  "priorities": [',
-    '    "Say \\"hello\\" and C:\\\\path, then #10",',
+    '    "Say \\"hi (one escaped quote, so a walk that ignores escapes loses its place), C:\\\\path, then #10",',
     "    {",
     '      "what": "an object-valued priority"',
     "    },",
