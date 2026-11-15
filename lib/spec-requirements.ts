@@ -67,6 +67,12 @@ export interface SpecRequirementReading {
   declaredNone: boolean;
   /** Why it states none. A declaration with no reason is a mute. */
   reason: string | null;
+  /**
+   * SC-2623: the raw `serves:` value — which SUCCESS.md claim(s) this spec
+   * serves. `null` when the key is absent (opt-in, like `evidence: required`);
+   * `""` when the key is present and empty, which is refused, not skipped.
+   */
+  serves: string | null;
 }
 
 function frontmatterField(content: string, key: string): string | null {
@@ -85,7 +91,77 @@ export function readSpecRequirements(specsDir: string, rel: string): SpecRequire
     criteria: countCriteria(content),
     declaredNone: declared === "none",
     reason: reason && reason.length > 0 ? reason : null,
+    serves: servesField(content),
   };
+}
+
+/**
+ * The `serves:` value, keeping "present and empty" apart from "absent".
+ * `frontmatterField` needs one character after the colon, so an empty key
+ * would otherwise read as no key at all — an opt-in that silently opts out.
+ */
+function servesField(content: string): string | null {
+  const fm = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return null;
+  const m = fm[1].match(/^serves:[ \t]*(.*)$/m);
+  return m ? m[1].trim() : null;
+}
+
+/**
+ * SC-2623: the claim numbers SUCCESS.md states under "## Done, for the
+ * harness" — `1. **…**` lines, up to the next `## ` heading. The consumer
+ * section numbers its own list from 1 too, which is why the section bounds
+ * the read.
+ */
+export function successClaimNumbers(successMd: string): number[] {
+  const out: number[] = [];
+  let inSection = false;
+  for (const line of successMd.split("\n")) {
+    if (line.startsWith("## ")) {
+      inSection = /^## Done, for the harness\b/.test(line);
+      continue;
+    }
+    if (!inSection) continue;
+    const m = line.match(/^(\d+)\. \*\*/);
+    if (m) out.push(Number(m[1]));
+  }
+  return out;
+}
+
+/**
+ * SC-2623: refusals for a `serves:` declaration that does not name a real
+ * claim. A spec with no key is untouched. `claims` is `null` when SUCCESS.md
+ * could not be read, and then every declaration is UNMEASURED rather than
+ * accepted: an unread list of claims is not a list every number is in.
+ */
+export function servesViolations(readings: SpecRequirementReading[], claims: number[] | null): string[] {
+  const out: string[] = [];
+  for (const r of readings) {
+    if (r.serves === null) continue;
+    if (claims === null || claims.length === 0) {
+      out.push(
+        `${r.spec} declares "serves: ${r.serves}" and SUCCESS.md's claims could not be read, so the ` +
+          `declaration is UNMEASURED, not accepted.`,
+      );
+      continue;
+    }
+    const parts = r.serves.split(",").map(p => p.trim());
+    if (parts.length === 0 || parts.some(p => !/^\d+$/.test(p))) {
+      out.push(
+        `${r.spec} declares "serves: ${r.serves}", which is not a list of SUCCESS.md claim numbers. ` +
+          `Name the claim(s) it serves from "## Done, for the harness", e.g. "serves: 7".`,
+      );
+      continue;
+    }
+    const unknown = parts.map(Number).filter(n => !claims.includes(n));
+    if (unknown.length > 0) {
+      out.push(
+        `${r.spec} declares it serves claim ${unknown.join(", ")}, which SUCCESS.md's "Done, for the ` +
+          `harness" does not state (it states ${claims.join(", ")}).`,
+      );
+    }
+  }
+  return out;
 }
 
 /**

@@ -22,7 +22,9 @@ import {
   countCriteria,
   readSpecRequirements,
   requirementViolations,
+  servesViolations,
   specIsReferenced,
+  successClaimNumbers,
   testableViolations,
 } from "../lib/spec-requirements";
 import { collectSpecFiles } from "../lib/spec-files";
@@ -261,5 +263,82 @@ describe("#579: specs/PROJECT-STATE.md is a spec", () => {
     expect(contract, "the stale suite count is still the body").not.toContain("Suite: 984 tests");
     expect(contract, "the rendered status table is still the body").not.toContain("| Status | SC | What |");
     expect(contract, "the snapshot's priorities list is still the body").not.toContain("**Next priorities:**");
+  });
+});
+
+/**
+ * SC-2623 (#1720): a spec declares which of SUCCESS.md's standing claims it
+ * serves, so "which goal does this spec serve" is answerable from the
+ * frontmatter. Opt-in, like `evidence: required`: a spec with no `serves:`
+ * key is untouched, and one that declares is held to a claim that exists.
+ */
+describe("SC-2623: a spec says which SUCCESS.md claim it serves", () => {
+  const CLAIMS_MD = [
+    "# Success",
+    "## Done, for the harness",
+    "1. **Every gate can fail.**",
+    "2. **Numbers describe the committed tree.**",
+    "7. **The plan is on the tracker.**",
+    "## Done, for a consumer",
+    "1. **Not a harness claim, and not counted.**",
+  ].join("\n");
+
+  function servesOf(frontmatterLine: string | null): string[] {
+    const dir = specDir();
+    try {
+      const fm = ["doc-type: spec", "governs: something", "testable: true", frontmatterLine]
+        .filter((l): l is string => l !== null)
+        .join("\n");
+      writeSpec(dir, "S.md", fm, "- [ ] SC-9001: a thing");
+      return servesViolations([readSpecRequirements(dir, "S.md")], successClaimNumbers(CLAIMS_MD));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("SC-2623: the claims are the numbered ones under 'Done, for the harness', and no others", () => {
+    expect(successClaimNumbers(CLAIMS_MD)).toEqual([1, 2, 7]);
+  });
+
+  test("SC-2623: a declared claim that exists is clean, and an absent key is untouched", () => {
+    expect(servesOf("serves: 7")).toEqual([]);
+    expect(servesOf("serves: 1, 7")).toEqual([]);
+    expect(servesOf(null)).toEqual([]);
+  });
+
+  test("SC-2623: a claim SUCCESS.md does not state is refused, naming it", () => {
+    const v = servesOf("serves: 9");
+    expect(v).toHaveLength(1);
+    expect(v[0]).toContain("claim 9");
+  });
+
+  test("SC-2623: a placeholder, prose or an empty value is refused, never read as an answer", () => {
+    for (const line of ["serves: TODO — which claim", "serves: the engine one", "serves:"]) {
+      const v = servesOf(line);
+      expect(v, line).toHaveLength(1);
+      expect(v[0], line).toContain("not a list of SUCCESS.md claim numbers");
+    }
+  });
+
+  test("SC-2623: an unreadable claim list is UNMEASURED, not a pass", () => {
+    const dir = specDir();
+    try {
+      writeSpec(dir, "S.md", "doc-type: spec\ngoverns: x\ntestable: true\nserves: 7", "- [ ] SC-9001: a thing");
+      const v = servesViolations([readSpecRequirements(dir, "S.md")], null);
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain("UNMEASURED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("SC-2623: the live tree — the engine spec declares its claim, and every declaration names a real one", () => {
+    const claims = successClaimNumbers(readFileSync(join(REPO, "SUCCESS.md"), "utf-8"));
+    expect(claims.length, "SUCCESS.md's harness claims were not found").toBeGreaterThan(0);
+    const readings = collectSpecFiles(SPECS).map(s => readSpecRequirements(SPECS, s));
+    const v = servesViolations(readings, claims);
+    expect(v, v.join("\n")).toEqual([]);
+    const engine = readings.find(r => r.spec === "SPEC-TO-BOARD-PIPELINE-SPEC.md");
+    expect(engine?.serves, "the engine spec does not say which claim it serves").toBe("7");
   });
 });
