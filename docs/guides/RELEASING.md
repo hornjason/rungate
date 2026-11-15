@@ -42,8 +42,9 @@ npm view rungate version
   git -C ~/Projects/rungate fetch -q origin
   git -C ~/Projects/rungate worktree add -b rg/release-XYZ ~/Projects/rg-wt-rel-XYZ origin/main
   cd ~/Projects/rg-wt-rel-XYZ && bun install --frozen-lockfile )
-#    Then the pre-flight, IN that worktree: the red that costs a version
-#    number if found after tagging. It reads the LIVE board and must run on
+
+# 2b. The pre-flight, IN that worktree: the red that costs a version number
+#    if found after tagging. It reads the LIVE board and must run on
 #    the tree being released; the primary checkout can be far behind (#2207).
 #    If it is red, nothing is tagged and nothing is spent: fix the board and
 #    re-run only this line. The worktree from the block above stays.
@@ -181,7 +182,7 @@ have nothing to do with the version. Two reddened the 2026-11-04 attempt:
 |---|---|---|
 | `distribution-standing` | published half named the unpublished version | name what the registry serves |
 | `line-citation-ratchet` | the rendered `PROJECT-STATE.md` inherited a `path:NNN` citation from a session entry | drop the line number — the entry already named the symbol |
-| `stage-ladder` live plan row (v0.8.18, 2026-11-13) | the suite reads the **live board**. Criterion coverage was 47 of 49: #2047 had closed before its successors were placed in the engine milestone | fix the board, then cut the next version (0.8.19). Nothing in the tree was wrong, which is why step 2 runs this before the tag, in the release worktree |
+| `stage-ladder` live plan row (v0.8.18, 2026-11-13) | the suite reads the **live board**. Criterion coverage was 47 of 49: #2047 had closed before its successors were placed in the engine milestone | fix the board, then cut the next version (0.8.19). Nothing in the tree was wrong, which is why step 2b runs this before the tag, in the release worktree |
 
 Run these locally before tagging and the round trip is minutes rather than a
 failed job:
