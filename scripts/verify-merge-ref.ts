@@ -233,6 +233,28 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
 }
 
 /**
+ * The host a pull request lives on, read off its own `url` (#1911).
+ *
+ * `gh pr view` answers the head repository as `owner` and `name` and no host
+ * at all, so the URL is the expected side's only source for one. Three
+ * answers, kept apart:
+ *
+ * - a host, lowercased and without its port — `github.com`, a GHE instance;
+ * - `""`, a URL that parsed and has no host (`file:`). GitHub never returns
+ *   one; the end-to-end fixture does, because its forge is the filesystem;
+ * - `null`, no URL or one that does not parse. That is a host nobody READ,
+ *   and `remoteRepoReading` refuses it rather than treating it as hostless.
+ */
+export function prHostReading(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Is the remote this process is about to read the pull request's repository,
  * on BOTH axes: the same `owner/name`, on the same host?
  *
@@ -271,28 +293,6 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
  * motivated this. GitHub's own names are case-insensitive and the repository
  * was renamed once, so refusing on case would refuse a working remote.
  */
-/**
- * The host a pull request lives on, read off its own `url` (#1911).
- *
- * `gh pr view` answers the head repository as `owner` and `name` and no host
- * at all, so the URL is the expected side's only source for one. Three
- * answers, kept apart:
- *
- * - a host, lowercased and without its port — `github.com`, a GHE instance;
- * - `""`, a URL that parsed and has no host (`file:`). GitHub never returns
- *   one; the end-to-end fixture does, because its forge is the filesystem;
- * - `null`, no URL or one that does not parse. That is a host nobody READ,
- *   and `remoteRepoReading` refuses it rather than treating it as hostless.
- */
-export function prHostReading(url: string | null | undefined): string | null {
-  if (!url) return null;
-  try {
-    return new URL(url).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
 export function remoteRepoReading(
   url: string,
   expected: string,
