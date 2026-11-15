@@ -243,7 +243,10 @@ export function buildReport(root: string, sources: readonly SourceReading[], cit
   const unmeasured = sources.flatMap(s =>
     s.kind === "UNMEASURED" ? [`${s.source} — ${s.why}`] : s.kind === "READ" ? s.unreadable.map(u => `${s.source} — ${u}`) : [],
   );
-  if (cited.length > 0 && states.kind === "UNMEASURED") unmeasured.push(`issue-states — ${states.why}`);
+  // Whether or not anything cites an issue: an unreadable --issues-fixture is a
+  // bad input, and dropping it when nothing cites is a refusal swallowed (review
+  // round 2 of PR #2188). A live read only happens when something cites.
+  if (states.kind === "UNMEASURED") unmeasured.push(`issue-states — ${states.why}`);
   return {
     root,
     sources: sources.map(s =>

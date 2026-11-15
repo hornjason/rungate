@@ -222,3 +222,27 @@ describe("#2100: every plan-file priority is placed at its real line, or the sou
     expect(report.unaccounted.every(d => d.line > 0)).toBe(true);
   });
 });
+
+// Review round 2 of PR #2188.
+describe("#2100: a refusal is never swallowed, and the memory slug is Claude Code's, not this module's", () => {
+  test("an unreadable --issues-fixture refuses even when nothing in the tree cites an issue", () => {
+    const root = repo({ "README.md": "nothing cites anything here\n" });
+    const real = run(SCRIPT, ["--project-root", root, "--issues-fixture", join(SCRATCH, "no-such-fixture.json"), "--json"]);
+    expect(json(real.out).unmeasured.join("\n")).toMatch(/^issue-states — --issues-fixture .* could not be read/);
+    expect(real.code).toBe(2);
+    expect(run(MUTANT, ["--project-root", root, "--issues-fixture", join(SCRATCH, "no-such-fixture.json")]).code).toBe(0);
+  });
+
+  test("memoryDirFor matches project directories Claude Code actually created on 2026-11-14", () => {
+    // Literal pairs read off ~/.claude/projects on that date (a dot, an
+    // underscore and a leading underscore each become '-'), so a change to
+    // the slug rule cannot move the expected path along with it.
+    expect(memoryDirFor("/Users/jhorn/.claude", "/h")).toBe("/h/.claude/projects/-Users-jhorn--claude/memory");
+    expect(memoryDirFor("/Users/jhorn/Projects/_ape-dataverse-ro", "/h")).toBe(
+      "/h/.claude/projects/-Users-jhorn-Projects--ape-dataverse-ro/memory",
+    );
+    expect(memoryDirFor("/Users/jhorn/Projects/A10_Lightwell_Embedded", "/h")).toBe(
+      "/h/.claude/projects/-Users-jhorn-Projects-A10-Lightwell-Embedded/memory",
+    );
+  });
+});
