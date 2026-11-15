@@ -52,7 +52,8 @@ export type MoveRefusal =
   | "VALUES_TRUNCATED"
   | "INDEX_TRUNCATED"
   | "INDEX_LAGGING"
-  | "OVERWRITTEN";
+  | "OVERWRITTEN"
+  | "UNEXPECTED";
 
 export type MoveResult = { ok: true; attempt: number; message: string } | { ok: false; reason: MoveRefusal; message: string };
 
@@ -135,13 +136,19 @@ async function call(deps: MoveDeps, query: string, variables: Record<string, str
 }
 
 /** The connection under `node`, or a refusal naming the id that did not resolve. */
-function requireNode<T>(data: unknown, key: "fields" | "fieldValues" | "items", what: string, id: string): Page<T> {
+function requireNode<T>(
+  data: unknown,
+  key: "fields" | "fieldValues" | "items",
+  what: string,
+  id: string,
+  wrote: boolean,
+): Page<T> {
   const node = (data as { node?: Record<string, unknown> | null } | null | undefined)?.node;
   const page = node?.[key] as Page<T> | null | undefined;
   if (!page) {
     throw new Refused(
       "NULL_NODE",
-      `${what} is UNMEASURED and nothing was written: node(id: ${id}) came back null, so that id did not resolve — it is stale, it names an object this token cannot see, or PROJECT_ID is wrong. This is NOT a missing field, NOT an unset column and NOT an empty board.`,
+      `${what} is UNMEASURED and ${wrote ? "a write WAS sent before this read, so the board may already hold the new value" : "nothing was written"}: node(id: ${id}) came back null, so that id did not resolve — it is stale, it names an object this token cannot see, or PROJECT_ID is wrong. This is NOT a missing field, NOT an unset column and NOT an empty board.`,
     );
   }
   return page;
@@ -177,6 +184,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
       "fields",
       "the project's field list",
       projectId,
+      false,
     );
     const status = present(fields).find(f => f.name === "Status");
     const fieldId = status?.id ?? "";
@@ -205,6 +213,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
         "fieldValues",
         "the item's field values, read back after the write",
         itemId,
+        true,
       );
       current = present(values).find(v => v.field?.name === "Status")?.name ?? "";
       if (!current && truncated(values)) {
@@ -221,6 +230,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
         "items",
         `the search index for the '${column}' column`,
         projectId,
+        true,
       );
       const indexed = present(index).some(n => n.id === itemId);
       if (!indexed && truncated(index)) {
@@ -256,6 +266,12 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
     );
   } catch (e) {
     if (e instanceof Refused) return { ok: false, reason: e.reason, message: e.message };
-    throw e;
+    // Anything else is a response this module did not expect, or a fault in it:
+    // named, never a stack trace and never an answer (review of PR #2194).
+    return {
+      ok: false,
+      reason: "UNEXPECTED",
+      message: `An unexpected response or fault stopped the move, so the item's Status is UNKNOWN — a write may or may not have been sent. ${(e as Error)?.message ?? String(e)}`,
+    };
   }
 }

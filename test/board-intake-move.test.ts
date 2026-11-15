@@ -235,3 +235,21 @@ describe("#2193: inputs the index query and the client cannot take are refused b
     expect(r.stderr).not.toMatch(/^\s+at /m);
   });
 });
+
+// Review round 2 of PR #2194.
+describe("#2193: a refusal states the true write state, and an unexpected fault is named", () => {
+  test("NULL_NODE before the write says nothing was written; after the write, that one WAS sent", async () => {
+    const before = await move({ fields: [{ node: null }] });
+    expect(before.result.ok ? "" : before.result.message).toContain("nothing was written");
+    const after = await move({ fields: [fieldsPage()], write: [WROTE], values: [{ node: null }] });
+    const msg = after.result.ok ? "" : after.result.message;
+    expect(msg).toContain("a write WAS sent before this read");
+    expect(msg, "the read-back refusal claimed no write happened").not.toContain("nothing was written");
+  });
+
+  test("a malformed response is UNEXPECTED, naming the fault, never a thrown error", async () => {
+    const r = await move({ fields: [{ node: { fields: { pageInfo: { hasNextPage: false }, nodes: "not a list" } } }] });
+    expect(reason(r.result)).toBe("UNEXPECTED");
+    expect(r.result.ok ? "" : r.result.message).toContain("Status is UNKNOWN");
+  });
+});

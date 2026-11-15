@@ -53,14 +53,22 @@ export async function main(argv: readonly string[]): Promise<number> {
     console.error(`::error title=Board intake::no GitHub client, so nothing was read or written: ${(e as Error).message}`);
     return EXIT_REFUSED;
   }
-  const result = await moveToColumn(
-    { projectId: values.project!, itemId: values.item ?? "", column: values.column! },
-    {
-      graphql: (query, variables) => client.graphql(query, variables),
-      sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
-      log: line => console.log(line),
-    },
-  );
+  // The library names every fault it can; this is the last line, so nothing
+  // reaches the workflow log as a stack trace (review of PR #2194).
+  let result: Awaited<ReturnType<typeof moveToColumn>>;
+  try {
+    result = await moveToColumn(
+      { projectId: values.project!, itemId: values.item ?? "", column: values.column! },
+      {
+        graphql: (query, variables) => client.graphql(query, variables),
+        sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+        log: line => console.log(line),
+      },
+    );
+  } catch (e) {
+    console.error(`::error title=Board intake::the move stopped on an unexpected fault, so the item's Status is UNKNOWN: ${(e as Error)?.message ?? String(e)}`);
+    return EXIT_REFUSED;
+  }
   if (result.ok) {
     console.log(`::notice title=Board intake::${result.message}`);
     return 0;
