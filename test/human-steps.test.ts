@@ -427,3 +427,14 @@ describe("#2169: GitHub's port-443 SSH host spelled literally is GitHub without 
     expect(githubSlugOf("https://github.com:443/o/n", refuse)).toEqual(read("o/n"));
   });
 });
+
+// Review round 3 of PR #2187: OpenSSH matches `Host` case-sensitively
+// (OpenSSH 10.5: `Host GitHub-Perso` resolves `GitHub-Perso`, not `github-perso`).
+describe("#2169: an alias is resolved as written, because ssh's Host match is case-sensitive", () => {
+  test("git@GitHub-Perso:o/r.git asks ssh about GitHub-Perso, not github-perso", () => {
+    const asked: string[] = [];
+    const ssh = (h: string) => (asked.push(h), read(h === "GitHub-Perso" ? "github.com" : h.toLowerCase()));
+    expect(githubSlugOf("git@GitHub-Perso:o/r.git", ssh)).toEqual(read("o/r"));
+    expect(asked).toEqual(["GitHub-Perso"]);
+  });
+});

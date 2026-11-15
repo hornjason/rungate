@@ -204,10 +204,12 @@ export function githubSlugOf(
   // names (#2169). An https host is a DNS name, so it stays a literal compare
   // and a lookalike is still refused.
   if (!viaSsh) return none;
-  const resolved = resolveSshHost(literal);
+  // The host as written: OpenSSH matches `Host` patterns case-sensitively, so a
+  // lowercased `GitHub-Perso` misses its own stanza (review round 3 of PR #2187).
+  const resolved = resolveSshHost(host);
   // ssh missing or timed out says nothing about whether the host is GitHub
   // (review of PR #2187), so it is UNMEASURED, never "no GitHub repository".
-  if (resolved.kind === "UNMEASURED") return { kind: "UNMEASURED", why: `its host ${literal} could not be resolved: ${resolved.why}` };
+  if (resolved.kind === "UNMEASURED") return { kind: "UNMEASURED", why: `its host ${host} could not be resolved: ${resolved.why}` };
   const named = resolved.value?.toLowerCase();
   return { kind: "READ", value: named !== undefined && GITHUB_SSH_HOSTS.has(named) ? slug() : null };
 }
