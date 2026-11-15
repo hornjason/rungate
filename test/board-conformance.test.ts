@@ -354,7 +354,7 @@ describe("the command's shape", () => {
     // criterion is what is on the hook: SC-2752 is ticked only by a test that
     // exercises it (rule 6), which is the same obligation a ladder item's
     // verify command carries.
-    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2", "E3", "SC-2752"]);
+    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2", "E3", "E4", "SC-2752"]);
   });
 });
 
@@ -774,6 +774,7 @@ describe("each reading, planted short and planted complete", () => {
       [
         "blocked-by-edges",
         "criteria-field",
+        "criteria-field-all",
         "criteria-named",
         "criterion-coverage",
         "declared-work",
@@ -782,7 +783,7 @@ describe("each reading, planted short and planted complete", () => {
         "spec-placement",
       ],
     );
-    expect(conformant(readings), "eight of nine met read as conformant").toBe(false);
+    expect(conformant(readings), "nine of ten met read as conformant").toBe(false);
   });
 });
 

@@ -200,6 +200,31 @@ export interface BoardSnapshot {
    * UNMEASURED — same convention as {@link closedBlockers}.
    */
   declaredWork?: DeclaredWork[];
+
+  /**
+   * EVERY open issue in ANY phase-milestone family, with the board's Criteria
+   * column — #2223, stage item E4.
+   *
+   * Distinct from {@link issues}, which is the one family `--prefix` names
+   * (B4's population). E4 is "the board column reflects the bodies" for the
+   * rest of the specs too, and measuring it on `issues` would restate B4's
+   * done-condition (AGENTS.md rule 10).
+   *
+   * **Absent means the producer never read the column for them**, and
+   * `criteria-field-all` goes UNMEASURED. A row without `criteriaField` is a
+   * column that was not read for that issue, the same convention as
+   * {@link BoardIssue.criteriaField}.
+   */
+  familyIssues?: FamilyIssue[];
+}
+
+/** One open issue in some phase-milestone family — #2223 / E4. */
+export interface FamilyIssue {
+  number: number;
+  /** The milestone family: `Pipeline`, `Convergence`, or `""` for bare `Phase N` titles. */
+  family: string;
+  /** Absent: not read. `null`: read and empty. */
+  criteriaField?: string | null;
 }
 
 /** One piece of declared work — SC-2752. */
@@ -622,6 +647,37 @@ export const READINGS: readonly ReadingSpec[] = [
       b.repoIssues!
         .filter(i => i.names.length === 0 && !i.servesNone)
         .map(i => `#${i.number} — names no criterion and does not declare that it serves none`),
+  },
+  {
+    name: "criteria-field-all",
+    item: "E4",
+    what: "the board's Criteria column is populated for every open issue in every phase-milestone family, not only the engine's",
+    readsIssueRefs: false,
+    // The same two refusals as B4's `criteria-field`, over a different
+    // population. ANY row missing the key is unread, never short: dropping
+    // it from the denominator would make the reading easier the less of the
+    // board was looked at.
+    unreadable: b => {
+      if (b.familyIssues === undefined) {
+        return (
+          "the open issues of every milestone family were never read with their Criteria column — " +
+          "`issues` above is the engine family only, which is B4's population"
+        );
+      }
+      const unread = b.familyIssues.filter(i => !("criteriaField" in i)).map(i => `#${i.number}`);
+      return unread.length === 0
+        ? null
+        : `the Criteria column was not read for ${unread.length} of ${b.familyIssues.length} family issue(s) ` +
+            `(${unread.slice(0, 5).join(", ")}${unread.length > 5 ? ", …" : ""}) — that is not an empty column`;
+    },
+    measure: b => ({
+      measured: b.familyIssues!.filter(i => (i.criteriaField ?? "").trim() !== "").length,
+      target: b.familyIssues!.length,
+    }),
+    offenders: b =>
+      b.familyIssues!
+        .filter(i => (i.criteriaField ?? "").trim() === "")
+        .map(i => `#${i.number} (${i.family}) — the Criteria column is empty`),
   },
   {
     name: "dependency-edges",
@@ -1073,6 +1129,12 @@ export function readSnapshotText(text: string): SnapshotRead {
   const declaredRows = Array.isArray(raw.declaredWork) ? raw.declaredWork.map(normaliseDeclaredWork) : null;
   const declared =
     declaredRows !== null && declaredRows.every(w => w !== null) ? { declaredWork: declaredRows as DeclaredWork[] } : {};
+  // #2223 / E4. The declared-work rule, for the declared-work reason: one
+  // row this command cannot identify unreads the whole population, because
+  // dropping it would shorten the denominator `criteria-field-all` counts.
+  const familyRows = Array.isArray(raw.familyIssues) ? raw.familyIssues.map(normaliseFamilyIssue) : null;
+  const family =
+    familyRows !== null && familyRows.every(f => f !== null) ? { familyIssues: familyRows as FamilyIssue[] } : {};
 
   return {
     board: {
@@ -1086,9 +1148,21 @@ export function readSnapshotText(text: string): SnapshotRead {
       ...repoIssues,
       ...edges,
       ...declared,
+      ...family,
     },
     why: null,
   };
+}
+
+/** One family-issue row, or `null` for one this command cannot identify — #2223 / E4. */
+function normaliseFamilyIssue(raw: unknown): FamilyIssue | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.number !== "number" || !Number.isInteger(r.number) || typeof r.family !== "string") return null;
+  // Present-only, like `BoardIssue.criteriaField`: absence is "not read".
+  if (!("criteriaField" in r)) return { number: r.number, family: r.family };
+  if (r.criteriaField !== null && typeof r.criteriaField !== "string") return null;
+  return { number: r.number, family: r.family, criteriaField: r.criteriaField as string | null };
 }
 
 /** One declared-work row, or `null` for one this command cannot identify — SC-2752. */

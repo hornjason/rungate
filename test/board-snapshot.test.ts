@@ -1086,10 +1086,11 @@ describe("the refusals, and whether the API was reached", () => {
       });
     });
 
-    test("only the ENGINE issues are asked about", async () => {
-      // Not every open issue in the repository. The reading's denominator
-      // is the engine population, so a query over the rest is a cost with
-      // no reader — and on this tracker that is 70-odd issues against five.
+    test("only PHASE-FAMILY issues are asked about — the engine's and other families', never the rest", async () => {
+      // Not every open issue in the repository. B4 reads the engine family
+      // and E4 (#2223) reads every phase-milestone family, so issue 99 in
+      // another family is asked about once, in the same query; issue 98 sits
+      // in no family, has no reader, and is never asked about.
       await withSpec(SPEC, async (dir, at) => {
         writeBoardConfig(dir, BOARD);
         const { gh, askedFields } = spy(CONFORMANT_LIVE, {
@@ -1102,7 +1103,7 @@ describe("the refusals, and whether the API was reached", () => {
         });
         await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
         expect(askedFields).toHaveLength(1);
-        expect([...askedFields[0]!].sort((a, b) => a - b)).toEqual([10, 11]);
+        expect([...askedFields[0]!].sort((a, b) => a - b)).toEqual([10, 11, 99]);
       });
     });
 
