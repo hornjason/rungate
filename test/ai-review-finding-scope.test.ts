@@ -15,11 +15,16 @@ import {
   aiReviewRefusal,
   aiReviewScopeLine,
   argumentsBeyondTheContract,
+  AI_REVIEW_RESTORED_LINE,
   main,
   readAiReviewChangedFiles,
   readAiReviewFindings,
+  restoredFromBase,
+  restoredFromBaseLine,
+  scopeMeasured,
   scopeNotSupplied,
 } from "../lib/scaffold/ai-review-findings";
+import { AI_REVIEW_UNTRUSTED_PATHS } from "../lib/scaffold/ai-review-step";
 
 /**
  * Covers #1204 — a blocking finding may name a file the pull request never
@@ -559,5 +564,76 @@ describe("#1204: a blocking finding is adjudicated only where it can be located"
       mutant.readAiReviewFindings(located, mutantScope).outcome,
       "the mutant stopped blocking a located finding, so it is broken rather than mutated",
     ).toBe("BLOCKED");
+  });
+});
+
+/**
+ * #1887: the review restores `AI_REVIEW_UNTRUSTED_PATHS` from the base branch
+ * before the reviewer runs, so a change under any of them is reviewed against
+ * the base copy. That restore is correct and stays. What was wrong is the
+ * silence: the verdict for a change the reviewer never saw read exactly like
+ * one for a change it read in full. On #1882, three of four changed files
+ * were never reviewed, and nothing in the output said so.
+ *
+ * Report only, as the issue scopes it: the overlap is printed, including an
+ * explicit zero, and nothing new refuses.
+ */
+describe("#1887: the files restored from base are reported, not hidden", () => {
+  test("the overlap is the changed files under a restored path, matched as git spells them", () => {
+    const changed = [
+      ".claude/rules/self-referential-tests.md",
+      "REVIEW.md",
+      "lib/scaffold/ai-review-findings.ts",
+      // A PREFIX of a restored name is not under it.
+      ".claudeX/notes.md",
+      ".husky-not/pre-push",
+      // git on a Linux runner restores `CLAUDE.md` byte for byte; a lowercase
+      // `claude.md` is a different file and was NOT restored.
+      "claude.md",
+    ];
+    expect(restoredFromBase(changed)).toEqual([".claude/rules/self-referential-tests.md", "REVIEW.md"]);
+  });
+
+  test("its population IS the restore list: every entry is caught, and the default is that list", () => {
+    // One file under (or at) each restored path. If the reporter carried its
+    // own copy of the list and it drifted from the restore step's, an entry
+    // would go unreported here.
+    const onePerEntry = AI_REVIEW_UNTRUSTED_PATHS.map(p => `${p}/inner-file`);
+    expect(restoredFromBase(onePerEntry)).toEqual(onePerEntry);
+    expect(restoredFromBase(AI_REVIEW_UNTRUSTED_PATHS)).toEqual([...AI_REVIEW_UNTRUSTED_PATHS]);
+  });
+
+  test("a non-empty overlap names the files and the count", () => {
+    const line = restoredFromBaseLine(scopeMeasured([".claude/settings.json", "CLAUDE.md", "lib/a.ts"]));
+    expect(line.startsWith(AI_REVIEW_RESTORED_LINE)).toBe(true);
+    expect(line).toContain("2 of 3");
+    expect(line).toContain('".claude/settings.json"');
+    expect(line).toContain('"CLAUDE.md"');
+    expect(line).not.toContain("lib/a.ts");
+  });
+
+  test("an empty overlap is an explicit zero, not a missing line", () => {
+    const line = restoredFromBaseLine(scopeMeasured(["lib/a.ts", "test/a.test.ts"]));
+    expect(line).toBe(`${AI_REVIEW_RESTORED_LINE} 0 of 2 changed files`);
+  });
+
+  test("with no changed-file list the overlap is UNMEASURED, not zero", () => {
+    const line = restoredFromBaseLine(scopeNotSupplied());
+    expect(line.startsWith(`${AI_REVIEW_RESTORED_LINE} UNMEASURED`)).toBe(true);
+    expect(line).not.toContain(" 0 of ");
+  });
+
+  test("main() prints it on the run's output, after the scope line", () => {
+    const payloadPath = scratchFile(payloadOf("PASS", []), "json");
+    const listPath = scratchFile(".claude/settings.json\nlib/touched.ts\n");
+    const r = runMain([payloadPath, listPath]);
+    const lines = r.out.split("\n");
+    const at = lines.findIndex(l => l.startsWith(AI_REVIEW_RESTORED_LINE));
+    expect(at, `the restored-from-base line was not printed:\n${r.out}`).toBeGreaterThan(-1);
+    expect(lines[at]).toContain("1 of 2");
+    expect(lines[at]).toContain('".claude/settings.json"');
+    expect(at, "it must come after the scope line").toBeGreaterThan(
+      lines.findIndex(l => l.startsWith(AI_REVIEW_SCOPE_LINE)),
+    );
   });
 });
