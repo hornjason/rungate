@@ -260,7 +260,7 @@ test("#2193: a missing option on a found Status names Status's options as the co
   const r = await move({ fields: [fieldsPage({ hasNextPage: true, status })] });
   expect(reason(r.result)).toBe("NOT_RESOLVED");
   const msg = r.result.ok ? "" : r.result.message;
-  expect(msg).toContain("its options are returned in full");
+  expect(msg).toContain("its options were read in full");
   expect(msg, "it claimed the whole field list was read on a truncated page").not.toContain("whole field list was read");
 });
 
@@ -288,4 +288,29 @@ test("#2193: a column holding a backslash is COLUMN_UNSEARCHABLE too, before any
     expect(reason(r), column).toBe("COLUMN_UNSEARCHABLE");
     expect(s.calls).toEqual([]);
   }
+});
+
+// Carried from PR #2194's review rounds 6 and 7 (#2183).
+describe("#2183: a wrong-type id and a truncated field list are said as what they are", () => {
+  test("a node that resolves to the wrong type is WRONG_TYPE naming the type, not NULL_NODE", async () => {
+    const r = await move({ fields: [{ node: { id: "PVTI_x" } }] });
+    expect(reason(r.result)).toBe("WRONG_TYPE");
+    const msg = r.result.ok ? "" : r.result.message;
+    expect(msg).toContain("ProjectV2");
+    expect(msg, "a resolved node was described as null").not.toContain("came back null");
+  });
+
+  test("the read-back's wrong-type node names ProjectV2Item", async () => {
+    const r = await move({ fields: [fieldsPage()], write: [WROTE], values: [{ node: { id: PROJECT } }] });
+    expect(reason(r.result)).toBe("WRONG_TYPE");
+    expect(r.result.ok ? "" : r.result.message).toContain("ProjectV2Item");
+  });
+
+  test("NOT_RESOLVED on a found Status says the field list was longer than a page when it was", async () => {
+    const status = { id: "F_status", name: "Status", options: [{ id: "O_b", name: "Backlog" }] };
+    const long = await move({ fields: [fieldsPage({ hasNextPage: true, status })] });
+    expect(long.result.ok ? "" : long.result.message).toContain("the field list has more than one page");
+    const short = await move({ fields: [fieldsPage({ status })] });
+    expect(short.result.ok ? "" : short.result.message).not.toContain("more than one page");
+  });
 });

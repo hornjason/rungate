@@ -47,6 +47,7 @@ export type MoveRefusal =
   | "COLUMN_UNSEARCHABLE"
   | "API_FAILED"
   | "NULL_NODE"
+  | "WRONG_TYPE"
   | "FIELDS_TRUNCATED"
   | "NOT_RESOLVED"
   | "VALUES_TRUNCATED"
@@ -142,6 +143,8 @@ interface ReadSite {
   /** What the id names, and the input it came from, so the refusal blames the right one. */
   names: "the project" | "the item";
   input: "PROJECT_ID" | "ITEM_ID";
+  /** The type the query's inline fragment selects; any other type resolves with no connection. */
+  type: "ProjectV2" | "ProjectV2Item";
   wrote: boolean;
 }
 
@@ -153,6 +156,15 @@ interface ReadSite {
  */
 function requireNode<T>(data: unknown, key: "fields" | "fieldValues" | "items", site: ReadSite): Page<T> {
   const node = (data as { node?: Record<string, unknown> | null } | null | undefined)?.node;
+  // A node that RESOLVED but carries no connection is a different object
+  // type: the inline fragment did not apply. Said apart from a null node,
+  // which is an id that did not resolve (#2183, from PR #2194 round 6).
+  if (node !== null && node !== undefined && node[key] === undefined) {
+    throw new Refused(
+      "WRONG_TYPE",
+      `${site.what} is UNMEASURED and ${site.wrote ? "a write WAS sent before this read, so the board may already hold the new value" : "nothing was written"}: node(id: ${site.id}) resolved, but not to a ${site.type}, so ${site.input} names a different kind of object (an item id passed as the project, for example). This is NOT a stale id and NOT an empty board.`,
+    );
+  }
   const page = node?.[key] as Page<T> | null | undefined;
   if (!page) {
     throw new Refused(
@@ -191,7 +203,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
     const fields = requireNode<{ id?: string; name?: string; options?: Array<{ id: string; name: string }> }>(
       await call(deps, FIELDS_QUERY, { project: projectId }),
       "fields",
-      { what: "the project's field list", id: projectId, names: "the project", input: "PROJECT_ID", wrote: false },
+      { what: "the project's field list", id: projectId, names: "the project", input: "PROJECT_ID", type: "ProjectV2", wrote: false },
     );
     const status = present(fields).find(f => f.name === "Status");
     const fieldId = status?.id ?? "";
@@ -205,7 +217,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
     if (!fieldId || !optionId) {
       throw new Refused(
         "NOT_RESOLVED",
-        `Could not resolve the Status field or its '${column}' option on this project. ${fieldId ? "The Status field was found and its options are returned in full, so this is not a truncated page" : "The whole field list was read, so this is not a truncated page"}. The item WAS added; only the transition failed. Someone renamed the field or the column — update COLUMN in this workflow to match the board.`,
+        `Could not resolve the Status field or its '${column}' option on this project. ${fieldId ? `The Status field was found and its options were read in full${truncated(fields) ? " (the field list has more than one page, which does not affect its options)" : ""}, so this is not a truncated read` : "The whole field list was read, so this is not a truncated page"}. The item WAS added; only the transition failed. Someone renamed the field or the column — update COLUMN in this workflow to match the board.`,
       );
     }
 
@@ -218,7 +230,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
       const values = requireNode<{ name?: string; field?: { name?: string } }>(
         await call(deps, VALUES_QUERY, { item: itemId }),
         "fieldValues",
-        { what: "the item's field values, read back after the write", id: itemId, names: "the item", input: "ITEM_ID", wrote: true },
+        { what: "the item's field values, read back after the write", id: itemId, names: "the item", input: "ITEM_ID", type: "ProjectV2Item", wrote: true },
       );
       current = present(values).find(v => v.field?.name === "Status")?.name ?? "";
       if (!current && truncated(values)) {
@@ -233,7 +245,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
       const index = requireNode<{ id?: string }>(
         await call(deps, INDEX_QUERY, { project: projectId, q: `status:"${column}"` }),
         "items",
-        { what: `the search index for the '${column}' column`, id: projectId, names: "the project", input: "PROJECT_ID", wrote: true },
+        { what: `the search index for the '${column}' column`, id: projectId, names: "the project", input: "PROJECT_ID", type: "ProjectV2", wrote: true },
       );
       const indexed = present(index).some(n => n.id === itemId);
       if (!indexed && truncated(index)) {

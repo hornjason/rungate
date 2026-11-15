@@ -1346,7 +1346,18 @@ describe("board status sweep", () => {
     // read — an empty or missing file would make every `includes` below fail
     // rather than pass, but a TRUNCATED one would quietly shrink what the
     // claims are checked against. And the matcher must be able to say no.
-    expect(workflow.length, "board-intake.yml was not read").toBeGreaterThan(5000);
+    //
+    // "Read in full" is asserted by its END, not by a size floor. The floor
+    // (> 5000 bytes) was a proxy for it, and it broke when #2183 moved the
+    // move step's 260 lines of shell into `rungate board-intake-move` and the
+    // real file shrank to under 5 KB. A truncated read loses its last line;
+    // the last line is the move step's command.
+    const lastLine = (workflow.trimEnd().split("\n").pop() ?? "").trim();
+    expect(
+      lastLine.startsWith("bunx rungate@") && lastLine.includes(" board-intake-move "),
+      `board-intake.yml was not read to its end (last line: ${JSON.stringify(lastLine)}). ` +
+        "If a step was added after the move step, point this at the new last line.",
+    ).toBe(true);
     expect(
       workflow.includes("WHAT IT DELIBERATELY DOES NOT DO: set a field"),
       "control: the phrase the round-8 comment attributed to board-intake.yml " +
