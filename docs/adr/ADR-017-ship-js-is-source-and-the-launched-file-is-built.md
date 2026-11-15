@@ -113,14 +113,14 @@ bites rather than discovered by a consumer.
 
 ## Decomposition
 
-The Criterion cells are Jason's to write; each row needs its `SC-<N>` id
-written in `specs/HARNESS-STANDARD.md` (the spec governing the ship workflow)
-and reserved first. Until then `plan-issues --decompose` will refuse this
-table, which is the intended state of a proposed ADR missing its criteria.
+The criteria are in `specs/HARNESS-STANDARD.md` (the spec governing the ship
+workflow), worded as Jason approved them on 2026-11-15 and reserved in
+`specs/sc-reservations.json`. The Milestone cells are empty because that spec
+has no phase placement table, so these issues land unphased.
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
-| — | Generate a comment-stripped ship launch file under the Workflow tool cap | scripts/build-workflow-launch.ts, workflows/ship.run.js, test/workflow-launch-build.test.ts, package.json | — | — |
-| — | Point every documented ship scriptPath at the generated launch file | lib/ship-mode.ts, .claude/rules/ship-workflow.md, CLAUDE.md | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
-| — | Split pure cores out of the lib modules ship.js copies by hand | lib/worktree-repo.ts, lib/workflow-security.ts, lib/prior-branch.ts, lib/dev-liveness.ts, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
-| — | Bundle the pure lib cores into the generated ship launch file | scripts/build-workflow-launch.ts, workflows/ship.js, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap, Split pure cores out of the lib modules ship.js copies by hand |
+| SC-2772 | Generate a comment-stripped ship launch file under the Workflow tool cap | scripts/build-workflow-launch.ts, workflows/ship.run.js, test/workflow-launch-build.test.ts, package.json | — | — |
+| SC-2773 | Point every documented ship scriptPath at the generated launch file | lib/ship-mode.ts, .claude/rules/ship-workflow.md, CLAUDE.md | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
+| SC-2774 | Split pure cores out of the lib modules ship.js copies by hand | lib/worktree-repo.ts, lib/workflow-security.ts, lib/prior-branch.ts, lib/dev-liveness.ts, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
+| SC-2775 | Bundle the pure lib cores into the generated ship launch file | scripts/build-workflow-launch.ts, workflows/ship.js, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap, Split pure cores out of the lib modules ship.js copies by hand |

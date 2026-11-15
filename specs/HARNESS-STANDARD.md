@@ -12746,3 +12746,16 @@ None of the mutations is left in the tree; all were run and reverted, and
 `lib/scaffold/ai-review-step.ts`, `.github/workflows/ai-review.yml` and
 `test/ai-review-untrusted-restore.test.ts` were confirmed byte-identical to
 the measured source afterwards by SHA-256, never by `git checkout --`.
+
+## The file the Workflow tool launches is built from ship.js (ADR-017, #2213)
+
+`workflows/ship.js` passed the Workflow tool's 524,288-byte script cap at
+556,509 bytes, and the tool refuses anything larger. ADR-017 keeps
+`ship.js` as the source and launches a file generated from it. These four
+criteria are its decomposition rows, worded as Jason approved them on
+2026-11-15.
+
+- [ ] SC-2772: scripts/build-workflow-launch.ts contains [buildWorkflowLaunch] — the ship launch file is generated from `workflows/ship.js`, parses, keeps the `meta` literal and the top-level `return`, and is under the Workflow tool's 524,288-byte cap; a test builds it and fails if any of these is false
+- [ ] SC-2773: lib/ship-mode.ts contains [SHIP_LAUNCH_SCRIPT] — every documented ship `scriptPath` names the generated launch file; a test fails on any that still names `workflows/ship.js`
+- [ ] SC-2774: scripts/build-workflow-launch.ts contains [PURE_CORE_MODULES] — `worktree-repo`, `workflow-security`, `prior-branch` and `dev-liveness` each export a core that imports nothing; a test fails when a core gains an import
+- [ ] SC-2775: scripts/build-workflow-launch.ts contains [bundleLibCores] — `workflows/ship.js` carries no hand copy of `lib/`: each copied function is bundled from its module, and a test fails if an INLINED or Mirror-of block remains
