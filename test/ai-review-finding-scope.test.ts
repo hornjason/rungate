@@ -578,7 +578,7 @@ describe("#1204: a blocking finding is adjudicated only where it can be located"
  * Report only, as the issue scopes it: the overlap is printed, including an
  * explicit zero, and nothing new refuses.
  */
-describe("#1887: the files restored from base are reported, not hidden", () => {
+describe("#1887 / CRC-M17: the files restored from base are reported, not hidden", () => {
   test("the overlap is the changed files under a restored path, matched as git spells them", () => {
     const changed = [
       ".claude/rules/self-referential-tests.md",
