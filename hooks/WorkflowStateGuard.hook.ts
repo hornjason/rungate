@@ -52,7 +52,7 @@
  * `workflow-state.json` is almost never inside the project root — so SC-518
  * puts it in user settings. The repo no longer registers it (dual registration
  * fires twice) and reports it UNMEASURED. Registered live in ~/.claude/settings.json
- * (measured 2026-11-15, #2225); a removed registration is not yet reported (#2229).
+ * (measured 2026-11-15, #2225); the session-start reading reports it if that stops (#2229).
  *
  * A scaffolded consumer is unaffected: `deployHooksToConsumers` filters on
  * `deployToConsumers`, not on scope, so the paragraph above about consumer

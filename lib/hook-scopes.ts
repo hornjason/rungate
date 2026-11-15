@@ -387,6 +387,14 @@ export function unplacedHooks(input: {
 export const NOT_LIVE_CLAIM = /\bnot live\b/i;
 
 /**
+ * The reverse claim: a registry description saying its hook is registered in
+ * user settings (#2229). Checked against `user-settings` specifically, because
+ * that is the file the sentence names; a registration somewhere else does not
+ * make the sentence true.
+ */
+export const LIVE_CLAIM = /\bregistered live in ~\/\.claude\/settings\.json/i;
+
+/**
  * Registry entries whose NOT LIVE claim the machine's registration contradicts,
  * as lines a person reads at session start (#1986).
  *
@@ -396,8 +404,9 @@ export const NOT_LIVE_CLAIM = /\bnot live\b/i;
  * NOT LIVE claim disagree with itself. With that scope empty, `registered`
  * means a settings file a session loads names the hook — a disagreement;
  * `unmeasured` means a machine scope could not be read — said as UNMEASURED,
- * which is every CI runner; `unregistered` agrees with the claim, and is
- * silent.
+ * which is a machine with no user settings file (most CI runners);
+ * `unregistered` agrees with the claim, and is silent. Entries claiming the
+ * opposite, "registered live", are read by `liveRegistrationLine` (#2229).
  */
 export function liveClaimLines(
   entries: readonly { name?: unknown; description?: unknown }[],
@@ -410,7 +419,10 @@ export function liveClaimLines(
   const lines: string[] = [];
   for (const e of entries) {
     if (typeof e.name !== "string" || typeof e.description !== "string") continue;
-    if (!NOT_LIVE_CLAIM.test(e.description)) continue;
+    if (!NOT_LIVE_CLAIM.test(e.description)) {
+      if (LIVE_CLAIM.test(e.description)) lines.push(...liveRegistrationLine(e.name, loaded));
+      continue;
+    }
     const r = hookRegistration(e.name, loaded);
     if (r.verdict === "registered") {
       lines.push(
@@ -425,6 +437,46 @@ export function liveClaimLines(
     }
   }
   return lines;
+}
+
+/**
+ * #2229: an entry that claims user settings registers it. Silent when the
+ * `user-settings` scope names the hook. UNMEASURED when that scope could not
+ * be read, which is a machine with no `~/.claude/settings.json` (most CI
+ * runners). Otherwise a disagreement, naming where the hook IS registered, if
+ * anywhere.
+ *
+ * The claim is about the machine the registration was measured on, and the
+ * registry is shared. So on a machine whose user settings exist but never
+ * registered the hook (another contributor's laptop, a review sandbox), the
+ * reading is DISAGREES, and it is true FOR THAT MACHINE: the hook does not run
+ * there. The message says "on this machine" so it reads as that, and not as a
+ * claim that the entry is wrong everywhere (review of #2232).
+ */
+function liveRegistrationLine(hook: string, loaded: ScopeReading[]): string[] {
+  const user = loaded.find(r => r.scope === "user-settings");
+  if (user === undefined || user.commands === null) {
+    return [
+      `Hook registry UNMEASURED: ${hook} is described as registered live in ~/.claude/settings.json, and ` +
+        `user-settings could not be read to check that claim (#2229)`,
+    ];
+  }
+  if (user.commands.some(c => commandNamesHook(c, hook))) return [];
+  const elsewhere = loaded.filter(r => (r.commands ?? []).some(c => commandNamesHook(c, hook))).map(r => r.scope);
+  // Registered in another scope a session loads (user-local-settings, say):
+  // the hook runs, and only the file the entry names is wrong. Saying "does
+  // not run here" then would be false (review of #2232, round 2).
+  if (elsewhere.length > 0) {
+    return [
+      `Hook registry DISAGREES: ${hook} is described as registered live in ~/.claude/settings.json, but ` +
+        `this machine registers it in ${elsewhere.join(", ")} instead — the entry names the wrong file (#2229)`,
+    ];
+  }
+  return [
+    `Hook registry DISAGREES: ${hook} is described as registered live in ~/.claude/settings.json, but ` +
+      `this machine's user settings do not register it, so it does not run here — ` +
+      `register it on this machine, or correct the entry if it is no longer meant to run (#2229)`,
+  ];
 }
 
 /**
