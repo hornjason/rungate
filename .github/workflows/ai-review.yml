@@ -1,4 +1,4 @@
-# generated-sha: 9c57c5e1b66a6d99
+# generated-sha: 12b8f225c123aec9
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 #
 # THREE OUTCOMES, and only one of them is a review that found nothing.
@@ -4025,6 +4025,7 @@ jobs:
           AI_REVIEW_THREADS_SHA: ${{ github.event.pull_request.head.sha }}
           AI_REVIEW_THREADS_REPO: ${{ github.repository }}
           AI_REVIEW_THREADS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUNGATE_PR_IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
           AI_REVIEW_THREADS_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-threads.json
         run: |
           set -uo pipefail
@@ -4051,7 +4052,7 @@ jobs:
             --changed-files "${AI_REVIEW_CHANGED_FILES_PATH}" 2>&1)" || threads_code=$?
           printf '%s\n' "$threads_out"
 
-          if [ "$threads_code" -ne 0 ] && printf '%s' "$threads_out" | grep -qF 'unknown command "ai-review-threads"'; then
+          if [ "$threads_code" -ne 0 ] && printf '%s\n' "$threads_out" | grep -qxF 'rungate: unknown command "ai-review-threads"'; then
             echo "::warning title=AI review threads::UNMEASURED - rungate@0.8.21 does not carry the ai-review-threads command yet, so no review threads were posted. This workflow is ahead of the published package; it resolves itself on the next release."
             exit 0
           fi

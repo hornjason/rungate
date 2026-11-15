@@ -3199,6 +3199,13 @@ export const AI_REVIEW_THREADS_PR_VAR = "AI_REVIEW_THREADS_PR";
 export const AI_REVIEW_THREADS_REPO_VAR = "AI_REVIEW_THREADS_REPO";
 export const AI_REVIEW_THREADS_SHA_VAR = "AI_REVIEW_THREADS_SHA";
 export const AI_REVIEW_THREADS_TOKEN_VAR = "AI_REVIEW_THREADS_TOKEN";
+/**
+ * Whether this run is a fork, for the threads CLI's 403 decision (#1992,
+ * #2203). Spelt here rather than imported from `lib/ai-review-threads.ts`,
+ * which would pull that module's import tree into this deliberately
+ * import-light generator; `test/ai-review-threads.test.ts` binds the two.
+ */
+export const AI_REVIEW_FORK_VAR = "RUNGATE_PR_IS_FORK";
 
 /**
  * The script the threads step runs.
@@ -3244,11 +3251,15 @@ export const AI_REVIEW_THREADS_TOKEN_VAR = "AI_REVIEW_THREADS_TOKEN";
 export function buildThreadsScript(version: string): string {
   const poster =
     `bunx ${AI_REVIEW_ADJUDICATOR_PACKAGE}@${version} ${AI_REVIEW_THREADS_COMMAND}`;
-  // Matched with `grep -qF` inside SINGLE quotes, where a double quote is
-  // literal and needs no escaping. The quotes are part of the signal:
-  // `bin/rungate.ts` prints the name quoted, and an unquoted match would
-  // also hit a findings summary that happened to mention the command.
-  const skew = `unknown command "${AI_REVIEW_THREADS_COMMAND}"`;
+  // The WHOLE line `bin/rungate.ts` prints for an unknown command, matched
+  // with `grep -qxF` (#2203). A substring match let the command's own
+  // output satisfy it: a finding quoting the phrase turned a refusal into an
+  // UNMEASURED exit 0. Since 0.8.21 (#1992) every line the command prints
+  // from a finding is escaped and prefixed `ai-review-threads: `, so no
+  // finding text can BE this line. The exit code cannot separate the cases:
+  // the unknown-command path exits 1 like every refusal. Inside SINGLE
+  // quotes below, where the double quotes are literal.
+  const skew = `rungate: unknown command "${AI_REVIEW_THREADS_COMMAND}"`;
   return [
     `set -uo pipefail`,
     ``,
@@ -3274,7 +3285,7 @@ export function buildThreadsScript(version: string): string {
     `  --changed-files "\${${AI_REVIEW_CHANGED_FILES_PATH_VAR}}" 2>&1)" || threads_code=$?`,
     `printf '%s\\n' "$threads_out"`,
     ``,
-    `if [ "$threads_code" -ne 0 ] && printf '%s' "$threads_out" | grep -qF '${skew}'; then`,
+    `if [ "$threads_code" -ne 0 ] && printf '%s\\n' "$threads_out" | grep -qxF '${skew}'; then`,
     `  echo "::warning title=AI review threads::UNMEASURED - rungate@${version} does not carry the ${AI_REVIEW_THREADS_COMMAND} command yet, so no review threads were posted. This workflow is ahead of the published package; it resolves itself on the next release."`,
     `  exit 0`,
     `fi`,
@@ -11695,6 +11706,11 @@ export function buildReviewRunStep(
     `    ${AI_REVIEW_THREADS_SHA_VAR}: \${{ github.event.pull_request.head.sha }}`,
     `    ${AI_REVIEW_THREADS_REPO_VAR}: \${{ github.repository }}`,
     `    ${AI_REVIEW_THREADS_TOKEN_VAR}: \${{ secrets.GITHUB_TOKEN }}`,
+    // #1992/#2203: a 403 degrades only on a fork. GitHub evaluates this to
+    // the string "true" or "false", which is exactly what the CLI reads. On
+    // a merge_group run it reads "true", harmlessly: the script exits before
+    // posting when there is no pull request.
+    `    ${AI_REVIEW_FORK_VAR}: \${{ github.event.pull_request.head.repo.full_name != github.repository }}`,
     // AC-3. This step POSTS the threads, so it is the one that can create a
     // duplicate, and until now it was the only reader handed no suppression
     // gate — the adjudicator dropped a repeat from its annotation while this

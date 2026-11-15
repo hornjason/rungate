@@ -25,6 +25,14 @@ import {
   type AiReviewThreadPoster,
 } from "../lib/ai-review-threads";
 import type { AiReviewFindingsReading } from "../lib/scaffold/ai-review-findings";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import {
+  AI_REVIEW_FORK_VAR,
+  AI_REVIEW_THREADS_STEP_ID,
+  buildThreadsScript,
+} from "../lib/scaffold/ai-review-step";
 
 function reading(
   reported: unknown[] | null,
@@ -475,5 +483,97 @@ describe("#1992: no detail line reaches the workflow-command channel unescaped",
     const out = new TextDecoder().decode(r.stdout);
     expect(out, "the warning was never printed, so nothing was tested").toContain("::warning title=AI review threads::");
     expect(out.split("\n").some(l => l.startsWith("::notice::forged"))).toBe(false);
+  });
+});
+
+/**
+ * #2203, the generator halves of #1992. The threads step runs the PUBLISHED
+ * CLI, so these change the workflow shell, and each waited on 0.8.21 (#2206)
+ * publishing the CLI half.
+ */
+describe("#2203: the generated threads step", () => {
+  /**
+   * Runs the generated script under bash against a fake `bunx` that prints
+   * what the case wants and exits with its code — the real shell, the real
+   * branch, no stub of the decision.
+   */
+  function runThreads(out: string, code: number): { code: number | null; stdout: string } {
+    const dir = mkdtempSync(join(tmpdir(), "rg-threads-skew-"));
+    try {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(dir, "out.txt"), out);
+      writeFileSync(join(bin, "bunx"), `#!/bin/sh\ncat "${join(dir, "out.txt")}"\nexit ${code}\n`);
+      chmodSync(join(bin, "bunx"), 0o755);
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "{}");
+      const script = join(dir, "threads.sh");
+      writeFileSync(script, buildThreadsScript("0.8.21"));
+      const r = Bun.spawnSync(["bash", "-e", script], {
+        env: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          AI_REVIEW_THREADS_PR: "7",
+          AI_REVIEW_FINDINGS_PATH: findings,
+          AI_REVIEW_THREADS_REPO: "o/r",
+          AI_REVIEW_THREADS_SHA: "abc",
+          AI_REVIEW_THREADS_TOKEN: "t",
+          AI_REVIEW_CHANGED_FILES_PATH: join(dir, "changed.txt"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      return { code: r.exitCode, stdout: new TextDecoder().decode(r.stdout) };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const SKEW_LINE = 'rungate: unknown command "ai-review-threads"';
+  const SKEW_WARNING = "does not carry the ai-review-threads command yet";
+
+  test("version skew: the exact unknown-command line reads as UNMEASURED and exits 0", () => {
+    const r = runThreads(`rungate-version: 0.8.20 (resolved at runtime, not the pin)\n${SKEW_LINE}\n\nUsage: …\n`, 1);
+    expect(r.stdout).toContain(SKEW_WARNING);
+    expect(r.code).toBe(0);
+  });
+
+  // The forgery the substring grep allowed: the phrase inside a line the
+  // command printed. Exit 1 is a refusal from a CLI that HAS the command,
+  // and it must stay one.
+  test("the phrase mid-line in the command's own output is a refusal, not skew", () => {
+    const r = runThreads(`ai-review-threads: a finding quoting ${SKEW_LINE} in its text\n`, 1);
+    expect(r.stdout).not.toContain(SKEW_WARNING);
+    expect(r.code).toBe(1);
+  });
+
+  test("the bare phrase without the 'rungate: ' prefix is a refusal, not skew", () => {
+    const r = runThreads('unknown command "ai-review-threads"\n', 1);
+    expect(r.stdout).not.toContain(SKEW_WARNING);
+    expect(r.code).toBe(1);
+  });
+
+  test("CONTROL: a clean run exits 0 with no skew warning", () => {
+    const r = runThreads("ai-review-threads: POSTED — attempted 1, posted 1, demoted 0\n", 0);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toContain(SKEW_WARNING);
+  });
+
+  // Finding 1's generator half. The CLI reads the variable exactly (#2204);
+  // this is what makes it set.
+  test("the threads step sets the fork variable from the event", () => {
+    const yml = readFileSync(new URL("../.github/workflows/ai-review.yml", import.meta.url), "utf-8");
+    const at = yml.indexOf(`id: ${AI_REVIEW_THREADS_STEP_ID}`);
+    expect(at, "the threads step is not in the committed workflow").toBeGreaterThan(-1);
+    const step = yml.slice(at, yml.indexOf("run: |", at));
+    expect(step).toContain(
+      `${AI_REVIEW_FORK_VAR}: \${{ github.event.pull_request.head.repo.full_name != github.repository }}`,
+    );
+  });
+
+  // The generator keeps its own constant rather than importing the CLI
+  // module, which would pull a deep import tree into an import-light file.
+  // So the two spellings are bound here instead.
+  test("the generator's fork variable is the one the CLI reads", () => {
+    expect(AI_REVIEW_FORK_VAR).toBe(AI_REVIEW_PR_IS_FORK_VAR);
   });
 });
