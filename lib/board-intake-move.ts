@@ -198,7 +198,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
     if (!fieldId || !optionId) {
       throw new Refused(
         "NOT_RESOLVED",
-        `Could not resolve the Status field or its '${column}' option on this project. The whole field list was read, so this is not a truncated page. The item WAS added; only the transition failed. Someone renamed the field or the column — update COLUMN in this workflow to match the board.`,
+        `Could not resolve the Status field or its '${column}' option on this project. ${fieldId ? "The Status field was found and its options are returned in full, so this is not a truncated page" : "The whole field list was read, so this is not a truncated page"}. The item WAS added; only the transition failed. Someone renamed the field or the column — update COLUMN in this workflow to match the board.`,
       );
     }
 

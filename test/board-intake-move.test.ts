@@ -253,3 +253,13 @@ describe("#2193: a refusal states the true write state, and an unexpected fault 
     expect(r.result.ok ? "" : r.result.message).toContain("Status is UNKNOWN");
   });
 });
+
+// Review round 3 of PR #2194: say which reading was complete.
+test("#2193: a missing option on a found Status names Status's options as the complete reading, not the field list", async () => {
+  const status = { id: "F_status", name: "Status", options: [{ id: "O_b", name: "Backlog" }] };
+  const r = await move({ fields: [fieldsPage({ hasNextPage: true, status })] });
+  expect(reason(r.result)).toBe("NOT_RESOLVED");
+  const msg = r.result.ok ? "" : r.result.message;
+  expect(msg).toContain("its options are returned in full");
+  expect(msg, "it claimed the whole field list was read on a truncated page").not.toContain("whole field list was read");
+});
