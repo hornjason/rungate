@@ -1,7 +1,7 @@
 ---
 doc-type: guide
 status: active
-updated: 2026-11-04
+updated: 2026-11-14
 ---
 
 # Releasing rungate
@@ -11,25 +11,130 @@ already explains **why** each guard in the pipeline exists, at length. What was
 never written down is the **sequence** — and the sequence is what fails, because
 three of its steps are counter-intuitive and none of them is enforced.
 
-On 2026-11-04 a release was cut, failed, and had to be re-cut under a new
-version number. Every cause is below.
+On 2026-11-04 (v0.8.11) and again on 2026-11-13 (v0.8.18), a release was cut,
+failed, and had to be re-cut under a new version number. Every cause is below.
 
 ## The sequence
 
-```
-1. branch off main                      (NOT the primary checkout's main itself)
-2. bump package.json                    tree version -> the new number
-3. SUCCESS.md standing line             tree  -> the new number
-                                        published -> WHAT THE REGISTRY SERVES TODAY
-4. bun bin/rungate.ts scaffold . --fix  moves all six `bunx rungate@` pins
-5. commit, push the BRANCH
-6. tag that branch commit, push the tag → release.yml publishes
-7. wait for the registry to serve it
-8. open the PR, label it `ai-review-override`, and merge
+Do these in order. Every step below has failed at least once when it was
+skipped or reordered. `X.Y.Z` is the version you are cutting. `<T>` stands for
+`env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)"`. It is for
+the `bun` scripts, which read `GITHUB_TOKEN`, a variable a shell does not
+normally set; without it they come back UNMEASURED. Plain `gh` commands use
+gh's own login and need no prefix.
+
+Run one numbered step at a time. Any step with more than one command runs
+inside `( set -euo pipefail … )`. So a failure stops that step and nothing
+after it runs. An `exit` leaves only the subshell, never your terminal. Keep
+the wrapper when you copy a step.
+
+```bash
+# 0. File the release issue. The release PR must say `Fixes #N`, or
+#    closing-references refuses it. File from ~/Projects/rungate, without
+#    --repo. The body needs the sections the filing gate asks for and the line
+#    "This serves no criterion: a release." #2195 is a worked example.
+
+# 1. Pre-flight: the reds that cost a version number if found after tagging
+( set -euo pipefail
+  cd ~/Projects/rungate && <T> bun test test/stage-ladder.test.ts   # reads the LIVE board
+  npm view rungate version )          # what the registry serves now = PUBLISHED below
+
+# 2. Branch off main, in a worktree, never the primary checkout
+( set -euo pipefail
+  git -C ~/Projects/rungate fetch -q origin
+  git -C ~/Projects/rungate worktree add -b rg/release-XYZ ~/Projects/rg-wt-rel-XYZ origin/main )
+
+# 3. In the worktree: bump, standing line, pins
+#    package.json  "version": "X.Y.Z"
+#    SUCCESS.md    - **Distribution standing (<today>)** — tree `X.Y.Z`, published `rungate@<PUBLISHED>`.
+( set -euo pipefail
+  bun bin/rungate.ts scaffold . --fix   # moves every `bunx rungate@` pin
+  git status --short )                  # only package.json, SUCCESS.md, .github/workflows/*;
+                                        # `git checkout --` anything else (CODE-MAP.md churns)
+
+# 4. Census
+bun scripts/census-routing.ts         # then run the `bun test …` line it prints
+#    EXPECTED: test/distribution-standing.test.ts fails 2 cases ("no release
+#    tag for X.Y.Z"). They clear once the tag exists. ANY OTHER red: stop and
+#    fix it before tagging.
+
+# 5. Commit, push the branch, tag THAT commit, push the tag
+( set -euo pipefail
+  git commit -am "release: X.Y.Z"
+  git push -u origin rg/release-XYZ
+  git tag -a vX.Y.Z -m "rungate X.Y.Z"
+  git push origin vX.Y.Z )
+#    release.yml runs the full suite and a typecheck, then publishes
+
+# 6. Wait for the run, then the registry. It takes several minutes.
+#    Only a run whose recorded CONCLUSION is a failure spends X.Y.Z. In that
+#    case, read its log, fix, and cut the next version (see "A failed release
+#    costs a version number"). A run that has not registered, or a watch that
+#    broke off, says nothing about the release, and nothing is spent.
+( set -euo pipefail
+  run=""
+  for i in $(seq 1 12); do
+    run=$(gh run list -R hornjason/rungate --workflow release.yml --branch vX.Y.Z -L 1 --json databaseId -q '.[0].databaseId // empty')
+    [ -n "$run" ] && break
+    sleep 5
+  done
+  [ -n "$run" ] || { echo "no release.yml run for vX.Y.Z after 60s — check the tag was pushed; nothing is spent"; exit 1; }
+  gh run watch "$run" -R hornjason/rungate >/dev/null || true
+  conclusion=$(gh run view "$run" -R hornjason/rungate --json conclusion -q .conclusion) || conclusion=""
+  case "$conclusion" in
+    success) ;;
+    failure|cancelled|timed_out|startup_failure) echo "release.yml $conclusion — X.Y.Z is spent"; exit 1 ;;
+    *) echo "run $run has no outcome yet ('$conclusion') — nothing is known to be spent; re-run this step"; exit 1 ;;
+  esac
+  for i in $(seq 1 20); do
+    [ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ] && { echo PUBLISHED; exit 0; }
+    sleep 30
+  done
+  echo "run passed but npm is not serving X.Y.Z after 10 min — stop and look; do not do step 7"; exit 1 )
+
+# 7. Published half: set SUCCESS.md's line to published `rungate@X.Y.Z`,
+#    then commit and push
+
+# 8. Open the PR, labelled when you open it, closing the step-0 issue
+gh pr create -R hornjason/rungate --label ai-review-override \
+  --title "chore(release): X.Y.Z — <what it ships>" --body-file <file>
+#    The body says `Fixes #<step-0 issue>`. For each SC-N the issue cites, it
+#    also says "does not complete SC-N", one phrase per id.
+
+# 9. Merge BY HAND once `test` passes. Never --auto on this label.
+( set -euo pipefail
+  SHA=$(<T> bun scripts/verify-merge-ref.ts --pr <N>)
+  gh pr merge <N> -R hornjason/rungate --squash --match-head-commit "$SHA"
+  <T> bun scripts/verify-merge-ref.ts --pr <N> --after-merge
+  git -C ~/Projects/rungate worktree remove ~/Projects/rg-wt-rel-XYZ )
+
+# 10. Rebase every open PR onto main. See "Moving the pins" below. A
+#     generator PR that was waiting on this release: rebase it, run
+#     `scaffold . --fix` so its pin moves to X.Y.Z, and push.
 ```
 
-Steps 6 and 8 are in that order, not the other one. Step 8's label is not
-optional — see below.
+Steps 5 and 9 run in that order: the package publishes before the PR merges.
+Step 8's label is required (see below). Step 9 is a hand merge because the
+label waives the AI review, so auto-merge would land a diff nobody has read.
+
+## A command a generated workflow calls ships BEFORE the workflow that calls it
+
+Generated workflows run `bunx rungate@<package.json version>`
+(`harnessVersion()` in `lib/scaffold/steps.ts`). That fetches the
+**published** package. So if a generator change makes a workflow call a
+command npm does not serve yet, the workflow breaks the moment the change
+merges.
+
+Split the work into three pieces and order them with `blocked by` edges
+(AGENTS.md rule 4):
+
+1. the command PR. It merges, and nothing reaches consumers yet;
+2. the release that publishes it;
+3. the generator PR. Rebase it after the release so `scaffold . --fix` moves
+   its pin to a version that contains the command.
+
+`board-id` went #2173 → 0.8.19 → #2166. `board-intake-move` went #2193 →
+0.8.20 → #2183.
 
 ## The three that bite
 
@@ -86,6 +191,7 @@ have nothing to do with the version. Two reddened the 2026-11-04 attempt:
 |---|---|---|
 | `distribution-standing` | published half named the unpublished version | name what the registry serves |
 | `line-citation-ratchet` | the rendered `PROJECT-STATE.md` inherited a `path:NNN` citation from a session entry | drop the line number — the entry already named the symbol |
+| `stage-ladder` live plan row (v0.8.18, 2026-11-13) | the suite reads the **live board**. Criterion coverage was 47 of 49: #2047 had closed before its successors were placed in the engine milestone | fix the board, then cut the next version (0.8.19). Nothing in the tree was wrong, which is why step 1 runs this before the tag |
 
 Run these locally before tagging and the round trip is minutes rather than a
 failed job:
@@ -96,35 +202,29 @@ bun scripts/census-routing.ts    # the exact `bun test …` line for your diff
 
 ## Never hand-edit the version pins
 
-**Six** `bunx rungate@<version>` sites live in generated workflows, across
-**two** files — not one:
-
-| File | Pins |
-|---|---|
-| `.github/workflows/ai-review.yml` | 5 |
-| `.github/workflows/ai-review-unmeasured.yml` | 1 |
-
-Count it yourself rather than trusting this table; it is the claim in this
-guide most likely to go stale, and it already has once:
+The `bunx rungate@<version>` pins live in several generated workflows. On
+2026-11-04 that was six pins in two files. On 2026-11-14 it was fifteen pins in
+six files. Every new generated workflow adds more, so this guide gives no
+number. Count them:
 
 ```bash
 git grep -c 'bunx rungate@' origin/main -- .github/workflows/
 ```
 
-`scaffold . --fix` owns all six; `test/harness-fixed-point.test.ts` refuses a
+`scaffold . --fix` owns every pin. `test/harness-fixed-point.test.ts` refuses a
 generated file the generator would rewrite. Editing one by hand reddens the
 build and the remedy is to re-run the scaffold anyway.
 
 ## Moving the pins breaks every open pull request
 
-A release rewrites both files above. One of them is
+A release rewrites every file that command lists. One of them is
 `.github/workflows/ai-review.yml`, and that is the one with a consequence: the
 review action **refuses to run when a pull request's copy of its own workflow
 differs from the default branch's** — so after a release merges, every open
 pull request needs rebasing onto main before its reviewer will run again.
 
-`ai-review-unmeasured.yml` carries a pin too and has no such guard, so it
-moves quietly. Enumerate from the table, not from this paragraph's examples.
+The other pinned workflows have no such guard, so they change without
+breaking anything.
 
 This is expected and is not a fault in any of those pull requests. On
 2026-11-04 it took #1740, #1747 and #1607 out at once.
@@ -132,7 +232,7 @@ This is expected and is not a fault in any of those pull requests. On
 ## The release PR cannot pass `ai-review`, and that is why step 8 carries a label
 
 The same refusal lands on the release pull request **itself**, every time,
-without exception. Step 4 rewrites the pin inside `.github/workflows/ai-review.yml`,
+without exception. Step 3 rewrites the pin inside `.github/workflows/ai-review.yml`,
 so the release branch's copy of that file necessarily differs from main's, so
 the action declines before it starts. `ai-review` is a required check on main
 and it stays **red** until the label — no re-run and no rebase can clear it,
@@ -156,7 +256,7 @@ reviewers, `strict: false`. So:
 
 | Check | On a release PR | Why | Blocks the merge? |
 |---|---|---|---|
-| `ai-review` | **red until the label** — the step exits 1 | structural: step 4 rewrites the pin inside `ai-review.yml`, so the action declines | **yes** — required |
+| `ai-review` | **red until the label** — the step exits 1 | structural: step 3 rewrites the pin inside `ai-review.yml`, so the action declines | **yes** — required |
 | `review` | should **pass** | nothing in a release touches `claude-review.yml` | no — not a required check |
 
 **An earlier revision of this table called a red `review` normal on a release
