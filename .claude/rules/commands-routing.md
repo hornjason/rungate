@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 693811fb0673cc3c
+generated-sha: 345fb6b2ab571c1b
 ---
 
 ## Command Routing
@@ -25,6 +25,7 @@ Generated from the CLI's command registry. Run one as
 | `plan-deps` | Write a spec's phase order onto the tracker as blocked-by edges |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
 | `board-id` | Print the board's node id from config |
+| `unaccounted-work` | Report undone work declared in a repository's prose that no open issue covers |
 | `audit-closing-references` | Refuse a pull request whose closing reference GitHub will not act on, or that closes no issue |
 | `sync-spec-tests` | Regenerate the conformity suite from the specs |
 | `generate-code-map` | Regenerate CODE-MAP.md from the source tree |
