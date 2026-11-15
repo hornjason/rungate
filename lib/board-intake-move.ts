@@ -135,20 +135,29 @@ async function call(deps: MoveDeps, query: string, variables: Record<string, str
   );
 }
 
-/** The connection under `node`, or a refusal naming the id that did not resolve. */
-function requireNode<T>(
-  data: unknown,
-  key: "fields" | "fieldValues" | "items",
-  what: string,
-  id: string,
-  wrote: boolean,
-): Page<T> {
+/** Which id a read asked `node(id:)` about, and whether a write had been sent before it. */
+interface ReadSite {
+  what: string;
+  id: string;
+  /** What the id names, and the input it came from, so the refusal blames the right one. */
+  names: "the project" | "the item";
+  input: "PROJECT_ID" | "ITEM_ID";
+  wrote: boolean;
+}
+
+/**
+ * The connection under `node`, or a refusal naming the id that did not
+ * resolve. Every clause of the message is drawn from `site`, never written
+ * for one call site, so it is true at all three (review of PR #2194, which
+ * found a fixed clause wrong at a different site in rounds 2 and 4).
+ */
+function requireNode<T>(data: unknown, key: "fields" | "fieldValues" | "items", site: ReadSite): Page<T> {
   const node = (data as { node?: Record<string, unknown> | null } | null | undefined)?.node;
   const page = node?.[key] as Page<T> | null | undefined;
   if (!page) {
     throw new Refused(
       "NULL_NODE",
-      `${what} is UNMEASURED and ${wrote ? "a write WAS sent before this read, so the board may already hold the new value" : "nothing was written"}: node(id: ${id}) came back null, so that id did not resolve — it is stale, it names an object this token cannot see, or PROJECT_ID is wrong. This is NOT a missing field, NOT an unset column and NOT an empty board.`,
+      `${site.what} is UNMEASURED and ${site.wrote ? "a write WAS sent before this read, so the board may already hold the new value" : "nothing was written"}: node(id: ${site.id}) came back null, so ${site.names} did not resolve — the id is stale, names an object this token cannot see, or ${site.input} is wrong. This is NOT a missing field, NOT an unset column and NOT an empty board.`,
     );
   }
   return page;
@@ -182,9 +191,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
     const fields = requireNode<{ id?: string; name?: string; options?: Array<{ id: string; name: string }> }>(
       await call(deps, FIELDS_QUERY, { project: projectId }),
       "fields",
-      "the project's field list",
-      projectId,
-      false,
+      { what: "the project's field list", id: projectId, names: "the project", input: "PROJECT_ID", wrote: false },
     );
     const status = present(fields).find(f => f.name === "Status");
     const fieldId = status?.id ?? "";
@@ -211,9 +218,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
       const values = requireNode<{ name?: string; field?: { name?: string } }>(
         await call(deps, VALUES_QUERY, { item: itemId }),
         "fieldValues",
-        "the item's field values, read back after the write",
-        itemId,
-        true,
+        { what: "the item's field values, read back after the write", id: itemId, names: "the item", input: "ITEM_ID", wrote: true },
       );
       current = present(values).find(v => v.field?.name === "Status")?.name ?? "";
       if (!current && truncated(values)) {
@@ -228,9 +233,7 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
       const index = requireNode<{ id?: string }>(
         await call(deps, INDEX_QUERY, { project: projectId, q: `status:"${column}"` }),
         "items",
-        `the search index for the '${column}' column`,
-        projectId,
-        true,
+        { what: `the search index for the '${column}' column`, id: projectId, names: "the project", input: "PROJECT_ID", wrote: true },
       );
       const indexed = present(index).some(n => n.id === itemId);
       if (!indexed && truncated(index)) {

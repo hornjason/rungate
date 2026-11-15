@@ -263,3 +263,19 @@ test("#2193: a missing option on a found Status names Status's options as the co
   expect(msg).toContain("its options are returned in full");
   expect(msg, "it claimed the whole field list was read on a truncated page").not.toContain("whole field list was read");
 });
+
+// Review round 4 of PR #2194: every clause of the null-node refusal fits the id it was given.
+test("#2193: a null node blames the input that id came from — ITEM_ID on the read-back, PROJECT_ID on the project reads", async () => {
+  const item = await move({ fields: [fieldsPage()], write: [WROTE], values: [{ node: null }] });
+  const itemMsg = item.result.ok ? "" : item.result.message;
+  expect(itemMsg).toContain("the item did not resolve");
+  expect(itemMsg).toContain("ITEM_ID is wrong");
+  expect(itemMsg, "the read-back refusal blamed the project").not.toContain("PROJECT_ID");
+  for (const replies of [{ fields: [{ node: null }] }, { fields: [fieldsPage()], write: [WROTE], values: [valuesPage(COLUMN)], index: [{ node: null }] }]) {
+    const r = await move(replies);
+    const msg = r.result.ok ? "" : r.result.message;
+    expect(msg).toContain("the project did not resolve");
+    expect(msg).toContain("PROJECT_ID is wrong");
+    expect(msg).not.toContain("ITEM_ID");
+  }
+});
