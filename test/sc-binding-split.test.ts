@@ -338,7 +338,11 @@ const UNCLAIMED_RATCHET = 150;
 // are owned and name no board) has a registered pattern; the `SC-2742` describe
 // in test/package-closure.test.ts and the `SC-2745` describe in
 // test/board-intake.test.ts name them.
-const CLAIMED_UNBINDABLE = 168;
+// 168 -> 169: CRC-M17 rewritten to state its behaviour with no file or symbol
+// (Jason's decision on #1887, 2026-11-15) and ticked against the
+// `#1887 / CRC-M17` describe in test/ai-review-finding-scope.test.ts. A
+// behaviour with no registered pattern is unbindable by design here.
+const CLAIMED_UNBINDABLE = 169;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

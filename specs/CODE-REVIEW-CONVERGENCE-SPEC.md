@@ -1728,7 +1728,6 @@ instance of it.
 - **CRC-F6** Added 2026-11-12 (ADR-015, #1495, #1571). The waiver's auto-merge disarm has never succeeded (0 of 65 on #1571) and re-arming after a waiver is not caught; nothing yet reports either.
 - **CRC-M16** Added 2026-11-12 (ADR-015, #1816). `AI_REVIEW_ROUND_CAP` in `lib/ai-review-rounds.ts` counts the reviewer's rounds; nothing reads what the author does after the round-three step-back.
 - **CRC-N7** Added 2026-11-12 (ADR-015, #1818). The author-side half of the population rule: a class finding can be resolved by fixing the one named instance, which happened seven times on one pull request.
-- **CRC-M17** Added 2026-11-12 (ADR-015, #1887). Files restored from base are reviewed at their base version and a clean verdict over them reads like any other clean; no count is printed.
 - **CRC-M18** Added 2026-11-12 (ADR-015, #1934). CRC-M12 records `diff_truncated`, and every pull request over the budget — session records among them — is then never reviewed at all.
 
 ### Shipped since this audit was taken
@@ -2957,7 +2956,9 @@ Recorded because each one invalidates a naive reading of the criteria above.
       needs: measurement
 - [ ] CRC-N7: lib/scaffold/ai-review-findings.ts contains [populationDeclared] — a review finding tagged as a class cannot be resolved until the author states the population — N sites, M defective — and the search that found them
       needs: test
-- [ ] CRC-M17: lib/review-execution-reading.ts contains [baseOnlyFiles] — every AI review prints which changed files it saw only at their base version — count and list, explicit zero included
+- [x] CRC-M17: every AI review prints which changed files it saw only at their base version — count and list, explicit zero included (shipped, #2215, #2218)
       needs: test
+      proved-by: test/ai-review-finding-scope.test.ts (#1887 / CRC-M17) — 22 pass, 0 fail, 2026-11-15
+      fingerprint: 959482a1
 - [ ] CRC-M18: lib/review-execution-reading.ts contains [reviewCoverage] — a diff over the reviewer's budget is still reviewed, and the reading states coverage as n of m files read rather than a standing DIFF_TRUNCATED
       needs: measurement
