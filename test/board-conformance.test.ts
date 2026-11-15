@@ -181,6 +181,60 @@ const completeBoard = (): BoardSnapshot => ({
     { kind: "criterion", id: "SC-2618", source: "specs/A.md" },
     { kind: "stage-item", id: "E2", source: "project-state.json", issue: 2 },
   ],
+  // #2223 / E4: every open issue in ANY phase-milestone family. One is the
+  // engine's own and one is another family's, so a reading that only looked
+  // at `issues` (B4's population) cannot be told apart from this one by the
+  // complete board, and has to be by the break below.
+  familyIssues: [
+    { number: 1, family: "Pipeline", criteriaField: "SC-2618" },
+    { number: 7, family: "Convergence", criteriaField: "CRC-B7" },
+  ],
+});
+
+/**
+ * #2223 / E4: the Criteria column across every phase-milestone family.
+ *
+ * B4's `criteria-field` reads `issues`, the engine family. E4 asks the same
+ * question of every family, so the two must DISAGREE on a board where only
+ * another family's issue is blank. That disagreement is what makes E4 a
+ * second reading rather than B4 restated (AGENTS.md rule 10). A mutant that
+ * measured `issues` instead of `familyIssues` reads `met` in the first case.
+ */
+describe("#2223 / E4: criteria-field-all reads every family, not only the engine's", () => {
+  const reading = (name: string, b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === name)!, b);
+
+  test("another family's blank Criteria cell: B4 stays met, E4 is short and names it", () => {
+    const b = completeBoard();
+    b.familyIssues![1]!.criteriaField = null;
+    expect(reading("criteria-field", b).status, "B4 moved on a population it does not read").toBe("met");
+    const e4 = reading("criteria-field-all", b);
+    expect(e4.status).toBe("short");
+    expect(e4.item).toBe("E4");
+    expect(e4.offenders).toEqual(["#7 (Convergence) — the Criteria column is empty"]);
+  });
+
+  test("an absent population is UNMEASURED, not 0 of 0 and not met", () => {
+    const b = completeBoard();
+    delete b.familyIssues;
+    expect(reading("criteria-field-all", b).status).toBe("unmeasured");
+  });
+
+  test("one family issue whose column was never read makes the reading UNMEASURED", () => {
+    const b = completeBoard();
+    delete b.familyIssues![1]!.criteriaField;
+    expect(reading("criteria-field-all", b).status).toBe("unmeasured");
+  });
+
+  test("a snapshot carries the population through, and one malformed row unreads all of it", () => {
+    const ok = readSnapshotText(JSON.stringify(completeBoard()));
+    expect(ok.board?.familyIssues).toEqual(completeBoard().familyIssues);
+    // A dropped row shortens the denominator, so the reading would get
+    // EASIER: the declared-work rule, not the drop rule.
+    const bad = completeBoard() as unknown as { familyIssues: unknown[] };
+    bad.familyIssues[1] = { family: "Convergence", criteriaField: "CRC-B7" };
+    const read = readSnapshotText(JSON.stringify(bad));
+    expect(read.board !== null && "familyIssues" in read.board, "a row with no number was dropped silently").toBe(false);
+  });
 });
 
 /**
@@ -289,7 +343,7 @@ describe("the command's shape", () => {
     // is asserted as well as the names because `--list-readings` printing a
     // SUBSET would satisfy every `toContain` above — a list can only be
     // checked by its length and its membership together.
-    expect(READING_NAMES.length, "five engine, three repository-wide, and declared work").toBe(9);
+    expect(READING_NAMES.length, "five engine, four repository-wide, and declared work").toBe(10);
   });
 
   test("every reading names the ladder item that owns wiring its source", () => {
@@ -593,6 +647,11 @@ describe("each reading, planted short and planted complete", () => {
       reading: "declared-work",
       what: "an open stage item that names no open issue",
       break: b => void (b.declaredWork![1]!.issue = null),
+    },
+    {
+      reading: "criteria-field-all",
+      what: "another family's issue whose Criteria column is empty",
+      break: b => void (b.familyIssues![1]!.criteriaField = null),
     },
   ];
 
