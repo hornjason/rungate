@@ -40,14 +40,18 @@ What the audit (posted on #2213) found, with the commands beside each number:
   and nothing calls `toString()` on its code. Roughly 50–60% of comment bytes
   are instructions an editor needs; 30–40% are incident history; at least 7%
   restate `.claude/rules/` or `specs/` word for word.
-- **47.9 KB of non-comment code are hand copies of `lib/`.** 15 blocks say so
-  ("INLINED, not imported", "Mirror of"), 82.9 KB in all, 33.2 KB of it code.
-  The largest are copies of `security-verdict` (14.9 KB), `worktree-repo`
-  (11.7 KB), `scope-denylist`/`plan-coverage` (11.4 KB) and
-  `workflow-security` (10.0 KB). They exist because a workflow script cannot
-  import at **run** time (#69). Nothing stops it at **build** time.
+- **15 blocks are hand copies of `lib/`.** Each says so ("INLINED, not
+  imported", "Mirror of"). Together they are 82.9 KB. 47.9 KB of that is not
+  comment: 33.2 KB is code, and the rest is the strings and prompt text inside
+  them. The largest copies (block size, comments included) are of
+  `security-verdict` (14.9 KB), `worktree-repo` (11.7 KB),
+  `scope-denylist`/`plan-coverage` (11.4 KB) and `workflow-security` (10.0 KB).
+  `lib/prior-branch.ts` is copied inline as `priorWorkRefusal` while another
+  prompt imports the same module through `bun -e`: one module, both routes.
+  The copies exist because a workflow script cannot import at **run** time
+  (#69). Nothing stops it at **build** time.
 - **About 57% of the file exists because there is no build step:** 268 KB of
-  comments plus 47.9 KB of copied code.
+  comments plus the 47.9 KB of non-comment bytes in those copies.
 - **Chained workflows are not available.** The runtime allows one level of
   nesting. `ship.js` already calls `prove.js`, and `ship-and-heal.js` already
   calls `ship.js`.
@@ -76,9 +80,12 @@ bites rather than discovered by a consumer.
    `scriptPath` changes to the generated file, including the ship skill at
    `~/.claude/skills/ship/SKILL.md`, which lives outside this repository.
 2. **Then, the real fix: build-time bundling replaces the 15 hand copies —
-   Jason.** The generator compiles the pure `lib/` functions in. Four of the
-   copied modules import node built-ins and four import other `lib/` modules,
-   so each needs a pure core split out first. The generator must keep the
+   Jason.** The generator compiles the pure `lib/` functions in. The audit
+   found that, among the copied modules, four import node built-ins
+   (`child_process`, `fs`, `crypto`) and four import other `lib/` modules. A
+   module in either group needs a pure core split out first, and which modules
+   those are is the first thing the split issue measures; the audit counted
+   them but did not name them. The generator must keep the
    `meta` literal and the top-level `return`, which off-the-shelf bundlers
    reject. The parity tests that hold each copy to its original are retired
    with the copy.
@@ -110,6 +117,6 @@ table, which is the intended state of a proposed ADR missing its criteria.
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
 | — | Generate a comment-stripped ship launch file under the Workflow tool cap | scripts/build-workflow-launch.ts, workflows/ship.run.js, test/workflow-launch-build.test.ts, package.json | — | — |
-| — | Point every documented ship scriptPath at the generated launch file | .claude/rules/ship-workflow.md, lib/scaffold/ship-workflow-rule.ts, CLAUDE.md, docs/guides/RELEASING.md | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
-| — | Split pure cores out of the lib modules ship.js copies by hand | lib/security-verdict.ts, lib/worktree-repo.ts, lib/scope-denylist.ts, lib/plan-coverage.ts, lib/workflow-security.ts, lib/prior-branch.ts | — | — |
+| — | Point every documented ship scriptPath at the generated launch file | lib/ship-mode.ts, .claude/rules/ship-workflow.md, CLAUDE.md | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
+| — | Split pure cores out of the lib modules ship.js copies by hand | lib/security-verdict.ts, lib/worktree-repo.ts, lib/scope-denylist.ts, lib/plan-coverage.ts, lib/workflow-security.ts, lib/prior-branch.ts, test/workflow-launch-build.test.ts | — | — |
 | — | Bundle the pure lib cores into the generated ship launch file | scripts/build-workflow-launch.ts, workflows/ship.js, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap, Split pure cores out of the lib modules ship.js copies by hand |
