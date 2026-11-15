@@ -150,14 +150,27 @@ export function main(argv: string[]): number {
   }
 
   let pkg: string;
+  let pkgVersion: string;
   try {
-    pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8")).name;
+    const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8"));
+    pkg = manifest.name;
+    pkgVersion = manifest.version;
   } catch (e) {
-    console.error(`release-wait: could not read the package name from ./package.json (${(e as Error).message}). Run it from the release worktree.`);
+    console.error(`release-wait: could not read ./package.json (${(e as Error).message}). Run it from the release worktree.`);
     return REFUSE_EXIT;
   }
   if (!pkg) {
     console.error("release-wait: ./package.json has no name, so there is nothing to look up on the registry.");
+    return REFUSE_EXIT;
+  }
+  // A typo naming an older published release would read PUBLISHED off that
+  // release's run (review of #2202). Step 6 runs in the release worktree,
+  // where package.json already carries the version just tagged.
+  if (pkgVersion !== version) {
+    console.error(
+      `release-wait: --version ${version} is not package.json's version (${pkgVersion ?? "none"}). ` +
+        "Run it from the release worktree, with the version you just tagged. Nothing was read.",
+    );
     return REFUSE_EXIT;
   }
 

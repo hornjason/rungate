@@ -271,6 +271,19 @@ describe("the script: each reading end to end", () => {
     expect(spawn(mutant).code, "the mutant refused too — the case did not observe the exit constant").toBe(0);
   });
 
+  // A typo naming an OLDER published release would otherwise read PUBLISHED
+  // off that release's run and confirm a version nobody checked (review of
+  // #2202). The planted run and registry answer for 1.3.0, so only the
+  // package.json comparison can refuse it.
+  test("refuses a --version that is not package.json's version, before asking GitHub", () => {
+    const r = bothHalves(
+      { tag: "v1.3.0", runId: "7", conclusion: "success", npmSpec: "fakepkg@1.3.0", npmServes: "1.3.0" },
+      ["--version", "1.3.0", ...FAST],
+    );
+    expect(r.err).toContain("is not package.json's version (1.2.3)");
+    expect(r.err).not.toContain("PUBLISHED");
+  });
+
   test("refuses a malformed attempts or interval flag", () => {
     const r = bothHalves({}, ["--version", VERSION, "--run-attempts", "-1"]);
     expect(r.err).toContain("take a whole number");
