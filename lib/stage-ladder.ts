@@ -509,6 +509,48 @@ export function stageLadderViolations(raw: unknown): string[] {
     });
   });
 
+  out.push(...duplicateVerifyViolations(raw));
+  return out;
+}
+
+/**
+ * Two items proved by one command — #2236.
+ *
+ * They can never disagree, so the second is never checked as its own claim:
+ * whatever makes the first true makes the second true, which is the
+ * done-condition restated that AGENTS.md rule 10 forbids. On #2221, E4's first
+ * proof was B4's `criteria-field` reading copied byte for byte, and only
+ * review caught it.
+ *
+ * Across the WHOLE ladder, not within a stage, because that is where it
+ * happened. Compared after trimming, so a copied command with a stray newline
+ * is still the same command. A null verify is an item nobody has written a
+ * proof for yet, and two of those duplicate nothing.
+ */
+function duplicateVerifyViolations(raw: unknown[]): string[] {
+  const first = new Map<string, string>();
+  const out: string[] = [];
+  for (const s of raw) {
+    const items = (s as { items?: unknown })?.items;
+    if (!Array.isArray(items)) continue;
+    for (const it of items) {
+      const item = it as { id?: unknown; verify?: unknown } | null;
+      if (item === null || typeof item !== "object" || typeof item.verify !== "string") continue;
+      const cmd = item.verify.trim();
+      if (cmd === "") continue;
+      const id = String(item.id);
+      const earlier = first.get(cmd);
+      if (earlier === undefined) {
+        first.set(cmd, id);
+        continue;
+      }
+      out.push(
+        `"${earlier}" and "${id}" carry the same verify command, so they can never disagree and ` +
+          `"${id}" is never checked as its own claim — a done-condition restated (AGENTS.md rule 10). ` +
+          `Give "${id}" a command that reads what only it claims.`,
+      );
+    }
+  }
   return out;
 }
 

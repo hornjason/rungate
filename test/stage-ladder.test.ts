@@ -816,6 +816,44 @@ describe("the ladder refuses the things that went wrong in Stage A", () => {
     for (const scope of ITEM_SCOPES) expect(v).toContain(`"${scope}"`);
   });
 
+  // #2236: two items proved by one command can never disagree, so the second
+  // is never checked as its own claim. E4's first draft on #2221 was B4's
+  // `criteria-field` reading byte for byte; only review caught it. Planted
+  // across two STAGES, because that is where it happened.
+  test("#2236: two items carrying the same verify command are refused, naming both", () => {
+    const cmd = "bun bin/rungate.ts board-conformance --repo o/r --reading criteria-field";
+    const v = stageLadderViolations([
+      ok({ items: [{ id: "A1", what: "the column is filled", done: true, verify: cmd }] }),
+      ok({ id: "B", items: [{ id: "B1", what: "the column is filled everywhere", done: false, verify: cmd }] }),
+    ]).join("\n");
+    expect(v).toContain('"A1"');
+    expect(v).toContain('"B1"');
+    expect(v).toContain("same verify command");
+  });
+
+  test("#2236: surrounding whitespace does not make a copied command a different one", () => {
+    const v = stageLadderViolations([
+      ok({ items: [
+        { id: "A1", what: "one thing", done: true, verify: "test -f a" },
+        { id: "A2", what: "another thing", done: true, verify: "  test -f a\n" },
+      ] }),
+    ]).join("\n");
+    expect(v).toContain("same verify command");
+  });
+
+  test("#2236 CONTROL: distinct commands, and items with no command yet, are not refused", () => {
+    // Without this the two cases above pass against a rule that refuses any
+    // second item, or treats every pair of nulls as a duplicate.
+    expect(stageLadderViolations([
+      ok({ items: [
+        { id: "A1", what: "one thing", done: true, verify: "test -f a" },
+        { id: "A2", what: "another thing", done: true, verify: "test -f b" },
+        { id: "A3", what: "a third", done: false, verify: null },
+        { id: "A4", what: "a fourth", done: false, verify: null },
+      ] }),
+    ])).toEqual([]);
+  });
+
   test("a clean ladder produces no violations — the control", () => {
     // Without this, every case above is satisfied by a function that
     // returns a violation for everything.
