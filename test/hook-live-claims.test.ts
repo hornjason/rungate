@@ -115,6 +115,18 @@ describe("#1986: the live tree", () => {
     expect(entry!.description ?? "").not.toMatch(/not live/i);
   });
 
+  test("#2225: AgentBriefGuard's and WorkflowStateGuard's entries no longer say they are NOT LIVE", () => {
+    const registry = JSON.parse(readFileSync(join(ROOT, ".claude", "rungate", "hooks.json"), "utf-8"));
+    const hooks: Array<{ name: string; description?: string }> = Array.isArray(registry)
+      ? registry
+      : registry.hooks;
+    for (const name of ["AgentBriefGuard", "WorkflowStateGuard"]) {
+      const entry = hooks.find(h => h.name === name);
+      expect(entry, `${name} is missing from the registry`).toBeDefined();
+      expect(entry!.description ?? "", name).not.toMatch(/not live/i);
+    }
+  });
+
   test("#1986: the session-start hook reports the comparison", () => {
     const hook = readFileSync(join(ROOT, "hooks", "HookCurrency.hook.ts"), "utf-8");
     const at = hook.indexOf("liveClaimReport(");

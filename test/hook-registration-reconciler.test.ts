@@ -638,20 +638,27 @@ describe("#479: the live reconciliation, over what the repo owns", () => {
     ).toEqual([]);
   });
 
-  test("#1585: each says NOT LIVE in its own source and in its inventory entry", () => {
-    const missing: string[] = [];
+  // #2225: the human half happened. Jason registered both in
+  // ~/.claude/settings.json on 2026-11-15, and #1986's session-start reading
+  // reported every NOT LIVE claim as a disagreement from then on. This case
+  // was "each says NOT LIVE"; it now holds the opposite, in both places, so a
+  // one-sided edit cannot satisfy it.
+  test("#2225: each says it is registered live, in its own source and in its inventory entry", () => {
+    const wrong: string[] = [];
     for (const name of RECLASSIFIED_1585) {
       const source = readFileSync(join(ROOT, "hooks", `${name}.hook.ts`), "utf-8");
-      if (!source.includes("NOT LIVE")) missing.push(`hooks/${name}.hook.ts`);
-      const entry = entries().find(h => h.name === name);
-      if (!(entry?.description ?? "").includes("NOT LIVE")) {
-        missing.push(`.claude/rungate/hooks.json "${name}" description`);
+      if (/not live/i.test(source) || !source.includes("Registered live in ~/.claude/settings.json")) {
+        wrong.push(`hooks/${name}.hook.ts`);
+      }
+      const description = entries().find(h => h.name === name)?.description ?? "";
+      if (/not live/i.test(description) || !description.includes("Registered live in ~/.claude/settings.json")) {
+        wrong.push(`.claude/rungate/hooks.json "${name}" description`);
       }
     }
     expect(
-      missing,
-      "a hook that reads as shipped while nothing loads it is the exact shape of #1578. " +
-        "State that live registration in ~/.claude/settings.json is a pending human action.",
+      wrong,
+      "a hook described as NOT LIVE while user settings registers it is #1986's disagreement. " +
+        "Say it is registered live in ~/.claude/settings.json, and that the session-start reading reports a drift.",
     ).toEqual([]);
   });
 });
