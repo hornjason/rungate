@@ -9,10 +9,10 @@ updated: 2026-11-15
 
 ## Status
 
-**Proposed, 2026-11-15.** Jason decides; the DA drafted it from a read-only
-audit. Open: the criterion ids and their spec lines in the Decomposition table
-are his to write (the DA's standing instructions bar it from criterion text),
-and which of Decisions 1–3 he accepts.
+**Accepted, 2026-11-15.** The DA drafted it from a read-only audit. Jason
+approved the ADR, all three Decisions, on #2219 the same day. He also approved
+the four criteria (SC-2772..2775 in `specs/HARNESS-STANDARD.md`) as the DA
+drafted them. Nothing is open.
 
 ## Context
 
@@ -122,5 +122,5 @@ has no phase placement table, so these issues land unphased.
 |---|---|---|---|---|
 | SC-2772 | Generate a comment-stripped ship launch file under the Workflow tool cap | scripts/build-workflow-launch.ts, workflows/ship.run.js, test/workflow-launch-build.test.ts, package.json | — | — |
 | SC-2773 | Point every documented ship scriptPath at the generated launch file | lib/ship-mode.ts, .claude/rules/ship-workflow.md, CLAUDE.md | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
-| SC-2774 | Split pure cores out of the lib modules ship.js copies by hand | lib/worktree-repo.ts, lib/workflow-security.ts, lib/prior-branch.ts, lib/dev-liveness.ts, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
+| SC-2774 | Split pure cores out of the lib modules ship.js copies by hand | lib/worktree-repo.ts, lib/workflow-security.ts, lib/prior-branch.ts, lib/dev-liveness.ts, scripts/build-workflow-launch.ts, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
 | SC-2775 | Bundle the pure lib cores into the generated ship launch file | scripts/build-workflow-launch.ts, workflows/ship.js, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap, Split pure cores out of the lib modules ship.js copies by hand |
