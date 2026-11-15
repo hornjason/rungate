@@ -16,7 +16,7 @@
  * agreement across a generated grid rather than trusting the import.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { isReady, isUnblocked } from "../lib/board-mirror";
@@ -34,7 +34,7 @@ import {
 } from "../lib/board-ready-fanout";
 import { laneFor } from "../lib/board-flow";
 import { activeMilestone } from "../lib/board-ready-rule";
-import { readBoardInputs } from "../lib/config-readers";
+import { readBoardInputs, readExpediteLabel } from "../lib/config-readers";
 import { resolveApiBase } from "../lib/github-api-base";
 import { structuralCut } from "../lib/source-slice";
 import { actionRef } from "../lib/workflow-actions";
@@ -1957,9 +1957,11 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
     fake: FakeGitHub,
     args: readonly string[],
     cwd: string = ROOT,
+    // BR-84 runs a mutant copy of the script through the same harness.
+    script: string = join(ROOT, "scripts", "board-ready.ts"),
   ): Promise<{ code: number; out: string }> {
     const p = Bun.spawn(
-      ["bun", join(ROOT, "scripts", "board-ready.ts"), "--repo", "o/n", "--project", PROJECT, "--actor", "someone", ...args],
+      ["bun", script, "--repo", "o/n", "--project", PROJECT, "--actor", "someone", ...args],
       {
         cwd,
         stdout: "pipe",
@@ -2229,6 +2231,95 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
       expect(out, "the log must not claim a move the scope refused").not.toContain("#101 -> Ready");
       expect(fake.writes, out).toEqual([]);
     } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  // ── BR-82..BR-84: the expedite label survives argv → selection (#1973) ──
+  //
+  // BR-72..BR-81 run the script, and none of them hands it a labelled issue.
+  // So nothing observed `board.expediteLabel` travelling from the config the
+  // script reads, through its label pass, into `selectReady` — or the scope
+  // argument the script hands `workNextReading`. Those are the script's own
+  // wiring; `test/board-ready-rule.test.ts` covers the functions they feed.
+  //
+  // Depth 1 (`delivered: 0` reads as a throughput of zero, and `readyCap`
+  // floors at one), so exactly one card moves and the label decides which.
+  // The labelled card is the HIGHEST number of the three, so the ordinary
+  // order can never pick it: a green BR-82 is not the default order agreeing
+  // by accident, and BR-83 shows what the default order does pick.
+  const EXPEDITE = readExpediteLabel(ROOT);
+  if (EXPEDITE === null) throw new Error("board.expediteLabel is unset in this repository's config");
+
+  function expediteBoard(labelled: boolean): FakePlan {
+    const card = (number: number, labels: readonly string[] = []) => ({
+      itemId: `PVTI_${number}`,
+      number,
+      status: "Backlog",
+      blockedBy: 0,
+      assignees: 0,
+      milestone: FOCUS,
+      labels,
+    });
+    return plan({
+      delivered: 0,
+      items: [card(101), card(102), card(103, labelled ? [EXPEDITE!] : [])],
+      openIssues: [101, 102, 103],
+    });
+  }
+  const promoted = (itemId: string) => [{ itemId, optionId: READY_OPT, fieldId: FIELD, projectId: PROJECT }];
+
+  test("BR-82: the card carrying the expedite label is the one promoted, through the script", async () => {
+    const fake = startFakeGitHub(expediteBoard(true));
+    try {
+      const { code, out } = await run(fake, ["--top-up", "--write"]);
+      expect(code, out).toBe(0);
+      expect(fake.writes, out).toEqual(promoted("PVTI_103"));
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("BR-83: the same board without the label promotes in the ordinary order", async () => {
+    // ONE variable differs from BR-82: the label on #103. Same board, depth
+    // and invocation, so BR-82's write is the label's doing.
+    const fake = startFakeGitHub(expediteBoard(false));
+    try {
+      const { code, out } = await run(fake, ["--top-up", "--write"]);
+      expect(code, out).toBe(0);
+      expect(fake.writes, out).toEqual(promoted("PVTI_101"));
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("BR-84: the scope the script passes decides BR-82 — a mutant passing SLICE on a top-up honours nothing", async () => {
+    // The script's own wiring, mutated and observed. `--top-up` considers
+    // every open issue, so the script passes `COMPLETE`; a fan-out sees one
+    // close's dependents and passes `SLICE`, under which the label has no
+    // denominator and promotes nothing (round 2 of #1971). This copy passes
+    // `SLICE` unconditionally and is run on BR-82's exact board.
+    const src = readFileSync(join(ROOT, "scripts", "board-ready.ts"), "utf-8");
+    const site = 'topUp ? "COMPLETE" : "SLICE"';
+    expect(src.split(site).length - 1, "the scope argument moved; re-point this mutation at it").toBe(1);
+    // The mutant sits in a scratch tree whose `lib` is this repository's, so
+    // its `../lib/...` imports resolve. If they did not, it would die on module
+    // resolution, and a refusal reads like a run that chose not to write —
+    // which is why the assertions below need a WRITE, not an absence of one.
+    const tmp = realpathSync(mkdtempSync(join(tmpdir(), "board-ready-scope-mutant-")));
+    const fake = startFakeGitHub(expediteBoard(true));
+    try {
+      mkdirSync(join(tmp, "scripts"));
+      writeFileSync(join(tmp, "scripts", "board-ready.ts"), src.replace(site, '"SLICE"'));
+      symlinkSync(join(ROOT, "lib"), join(tmp, "lib"));
+      const { code, out } = await run(fake, ["--top-up", "--write"], ROOT, join(tmp, "scripts", "board-ready.ts"));
+      expect(code, `the mutant did not run to completion:\n${out}`).toBe(0);
+      expect(out, "the mutant never reached the label reading").toContain("only a slice of the candidates");
+      // It wrote — so it loaded, read the board and selected — and what it
+      // wrote is BR-83's card, not BR-82's.
+      expect(fake.writes, out).toEqual(promoted("PVTI_101"));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
       await fake.stop();
     }
   }, 60_000);
