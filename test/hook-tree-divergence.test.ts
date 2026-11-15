@@ -685,32 +685,51 @@ describe("#981: a string that MENTIONS a hook is not a registration of it", () =
   });
 });
 
-describe("#713 SC-3: AgentBriefGuard is wired, and the issue's premise was a one-scope read", () => {
-  test("it is registered at project scope, pointing at the rungate copy", () => {
-    // #713 says "wired nowhere". The control the issue never ran — *is it
-    // wired ANYWHERE?* — is this case. Asserted through the same binding the
-    // rest of the file uses, over the committed settings only, so it holds
-    // in CI and does not depend on this machine.
+/**
+ * #1585 moved AgentBriefGuard to USER scope, and both cases below were
+ * inverted with it rather than deleted.
+ *
+ * #713 said "wired nowhere", and this describe answered that the hook WAS
+ * wired, at project scope. Both statements were true of the files and false of
+ * the sessions: agent sessions run in worktrees and do not load project
+ * settings, so the project registration never fired where agents spawn
+ * agents. The hook reads and writes `~/.rungate` and `~/.claude`
+ * (`hooks/lib/paths.ts`), which is machine state, so SC-518 puts it in user
+ * settings — a file no PR carries. Live registration there is a human action
+ * and is still pending; the hook says NOT LIVE in its own source.
+ */
+describe("#713 SC-3 / #1585: AgentBriefGuard is user-scoped, so the repo must not register it", () => {
+  test("the repo's settings do NOT register it, and the handler it would run is there", () => {
+    // SC-518: the two scopes are not de-duplicated. A leftover project
+    // registration fires the hook twice in any session that loads project
+    // settings, once a human adds the user one. This is the one-sided edit
+    // most likely from someone flipping the scope back, so it is asserted here
+    // as well as by #479's reconciler (`dual-scope`). Read through the same
+    // binding the rest of the file uses, over committed settings only.
     const project = join(ROOT, ".claude", "settings.json");
     expect(existsSync(project)).toBe(true);
 
     const hits = settingsCommands([readFileSync(project, "utf-8")]).filter(c =>
       c.includes("AgentBriefGuard.hook.ts"),
     );
-    expect(hits.length, "AgentBriefGuard is not registered at project scope after all").toBe(1);
-    expect(registrationTree(hits[0])).toBe("rungate");
+    expect(
+      hits,
+      ".claude/settings.json still registers AgentBriefGuard while hooks.json declares user " +
+        "scope. SC-518 says that fires the hook twice; remove the project registration.",
+    ).toEqual([]);
 
-    // And it resolves to a file that is there — a registration naming a
-    // handler that does not exist is a command line failing on every spawn.
+    // The handler a user registration would name still exists — a hook moved
+    // to user scope is not a hook deleted.
     expect(existsSync(join(RUNGATE_HOOKS, "AgentBriefGuard.hook.ts"))).toBe(true);
   });
 
-  test("the inventory agrees it is project-scoped, which is why #479 already guards it", () => {
-    // The reason this file adds no registration check for it: the declaration
-    // says `scope: "project"`, so #479's live reconciliation reports
-    // `unregistered` the moment `.claude/settings.json` stops naming it. If
-    // this ever flips to `user`, that guard silently stops applying and the
-    // hook can go dark again — which is the failure this case watches for.
+  test("the inventory declares it user-scoped, so #479 reports it UNMEASURED rather than checked", () => {
+    // Before #1585 this asserted `project`, on the reasoning that #479's
+    // reconciliation then reports `unregistered` if `.claude/settings.json`
+    // stops naming it. That reconciliation was enforcing a registration no
+    // agent session loads. At user scope it reports UNMEASURED every run —
+    // out loud, in test/hook-registration-reconciler.test.ts — which is the
+    // strongest true claim the repo can make about a file it does not own.
     const decl = (
       JSON.parse(readFileSync(join(ROOT, ".claude", "rungate", "hooks.json"), "utf-8")) as {
         name?: string;
@@ -723,9 +742,10 @@ describe("#713 SC-3: AgentBriefGuard is wired, and the issue's premise was a one
     expect(decl!.enabled).toBe(true);
     expect(
       decl!.scope,
-      "AgentBriefGuard is no longer project-scoped, so #479's reconciliation no longer covers it " +
-        "and nothing checks that it is registered",
-    ).toBe("project");
+      "AgentBriefGuard is project-scoped again. Its state is home-rooted (~/.rungate, ~/.claude) " +
+        "and worktree sessions do not load project settings, so a project registration never " +
+        "runs where agents spawn agents (#1585). SC-518 puts it in user settings.",
+    ).toBe("user");
   });
 });
 

@@ -55,9 +55,9 @@
     "command": "bun ${RUNGATE_HOOKS_DIR}/AgentBriefGuard.hook.ts",
     "enabled": true,
     "deployToConsumers": true,
-    "scope": "project",
+    "scope": "user",
     "matcher": "Agent",
-    "description": "Validates agent brief templates and enforces ship-active marker"
+    "description": "Validates agent brief templates and enforces the ship-active marker — the only mechanical enforcement of \"never spawn Marcus, Quinn or Rook directly\". USER scope since #1585, correcting its `project` classification: it reads and writes WORK_DIR/BASE_DIR, which hooks/lib/paths.ts resolves to ~/.rungate and ~/.claude, so what it guards is machine state, and agent sessions run in worktrees that do not load project settings — it was registered, tested and dead in exactly the sessions where agents spawn agents (#1578's audit). The repo therefore reports it UNMEASURED and must NOT also register it in .claude/settings.json (SC-518: dual registration fires twice). LIVE REGISTRATION IN ~/.claude/settings.json IS A HUMAN ACTION AND IS STILL PENDING — this hook is NOT LIVE."
   },
   {
     "name": "AgentVerdictCapture",
@@ -199,9 +199,9 @@
     "command": "bun ${RUNGATE_HOOKS_DIR}/WorkflowStateGuard.hook.ts",
     "enabled": true,
     "deployToConsumers": true,
-    "scope": "project",
+    "scope": "user",
     "matcher": "Write|Edit",
-    "description": "Blocks direct Write/Edit of workflow-state.json"
+    "description": "Blocks direct Write/Edit of workflow-state.json. USER scope since #1585, correcting its `project` classification: its matcher is a case-folded `.includes()` with no project scoping, and lib/bash-write-guard.ts records that a live workflow-state.json is almost never inside the project root, so what it guards is machine-wide; agent sessions run in worktrees that do not load project settings, so the project registration never fired. GateResultProtection guards the same artifact at user scope and is the live control. A scaffolded consumer still receives this hook (deployToConsumers ignores scope). The repo reports it UNMEASURED and must NOT also register it in .claude/settings.json (SC-518: dual registration fires twice). LIVE REGISTRATION IN ~/.claude/settings.json IS A HUMAN ACTION AND IS STILL PENDING — this hook is NOT LIVE."
   },
   {
     "name": "ProjectStateSync",

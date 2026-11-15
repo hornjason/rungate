@@ -40,7 +40,7 @@ deployment path currently reaches zero hooks.
 
 | Hook | File | Lines | Governing SCs | Assessment |
 |------|------|-------|---------------|-----------|
-| AgentBriefGuard | AgentBriefGuard.hook.ts | 589 | SC-367, SC-370 | Deep logic in hook — extract to lib/ |
+| AgentBriefGuard | AgentBriefGuard.hook.ts | 42 | SC-367, SC-370 | Deep logic in hook — extract to lib/. **Declared at USER scope since #1585 — NOT LIVE.** It reads and writes `WORK_DIR`/`BASE_DIR` (`~/.rungate`, `~/.claude`), so it guards machine state; its `project` registration never loaded in the worktree sessions where agents spawn agents. The repo no longer registers it (SC-518) and reports it UNMEASURED. Registration in `~/.claude/settings.json` is a human action and is **still pending** |
 | GateEnforcement | GateEnforcement.hook.ts | 92 | SC-369, SC-370 | Thin trigger — signal shaping and the doc-hygiene sweep live in lib/gate-enforcement.ts |
 | AgentVerdictCapture | AgentVerdictCapture.hook.ts | 182 | SC-370, SC-371 | Acceptable |
 | HookCurrency | HookCurrency.hook.ts | 146 | SC-370, SC-371 | Acceptable — two readings, both thin triggers: `scripts/check-installed-hook-currency.ts` for `.git/hooks` (#879) and `lib/hook-tree-currency.ts` for how old the tree a Claude Code registration resolves to is (#1216). Its git runner is `spawnGitRunner`, which is `lib/git-isolation.ts` in both projections — the directories it reads are by definition unsupervised, and git executes its own config |
@@ -54,7 +54,7 @@ deployment path currently reaches zero hooks.
 | MergeGuard | MergeGuard.hook.ts | 58 | SC-370, SC-371 | Good |
 | TaskCompleted | TaskCompleted.hook.ts | 51 | SC-370, SC-372 | Good — logic in lib/task-completion-checks.ts |
 | SpecConformityTrigger | SpecConformityTrigger.hook.ts | 43 | SC-370, SC-371 | Good — thin trigger pattern |
-| WorkflowStateGuard | WorkflowStateGuard.hook.ts | 64 | SC-370, SC-371 | Ideal thin trigger |
+| WorkflowStateGuard | WorkflowStateGuard.hook.ts | 97 | SC-370, SC-371 | Ideal thin trigger. **Declared at USER scope since #1585 — NOT LIVE.** Its matcher has no project scoping and a live `workflow-state.json` is almost never inside the project root (`lib/bash-write-guard.ts`), so it guards machine-wide state; its `project` registration never fired while `GateResultProtection` fired on the same calls from user settings. The repo no longer registers it (SC-518) and reports it UNMEASURED. Consumers still receive it — deployment filters on `deployToConsumers`, not scope. Registration in `~/.claude/settings.json` is a human action and is **still pending** |
 | TestSuiteGuard | TestSuiteGuard.hook.ts | 45 | SC-473, SC-370, SC-625 | Ideal thin trigger — logic in lib/test-suite-lock.ts |
 | TestSuiteRelease | TestSuiteRelease.hook.ts | 42 | SC-370, SC-516, SC-517, SC-518, SC-625 | Ideal thin trigger — logic in lib/test-suite-lock.ts. **Registered nowhere (#910)** |
 | BashToolGuard | BashToolGuard.hook.ts | 82 | SC-457, SC-370 | Thin trigger — COMP-7 enforcement. Row added by #898's census, which is what first noticed it had none |
@@ -77,6 +77,22 @@ machine rather than a file move, and `HookIntegrity`, which hard-codes
 `~/.pai/hooks` and `~/.claude` and duplicates `HookCurrency.hook.ts` — the
 classification itself asks for those two to be reconciled rather than both
 shipped.
+
+**Correctly scoped and still inert (#1585).** When #1579 moved
+`TopLevelCdGuard` to user scope, its audit found five hooks still enabled at
+project scope. #1585 moved the two that guard machine state. The other three
+are correctly `project` and still never fire where the work happens, because
+agent sessions run in worktrees and do not load project settings. Correct
+classification does not make a hook run:
+
+| hook | why it still never fires |
+|---|---|
+| `BunTestPathGuard` | shipped 2026-10-24 for a failure an agent made in a worktree; agent sessions do not load project scope, so it has never fired |
+| `SpecSCGuard` | agent sessions are where specs get edited |
+| `HookCurrency` | inert in worktree sessions |
+
+Anything newly shipped at project scope lands in the same position for as
+long as agent sessions do not load project settings.
 
 ## Which hooks a consumer receives (#1047)
 
