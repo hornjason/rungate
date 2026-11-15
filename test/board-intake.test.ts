@@ -22,7 +22,7 @@
  * non-empty so stripping can never turn a check into a vacuous pass.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -32,6 +32,7 @@ import {
   buildBoardIntakeAddScript,
   buildBoardIntakeWorkflow,
 } from "../lib/scaffold/board-intake-workflow";
+import { OWNED_FILES } from "../lib/scaffold/owned-files";
 
 const WORKFLOW = join(import.meta.dir, "..", ".github", "workflows", "board-intake.yml");
 const source = readFileSync(WORKFLOW, "utf8");
@@ -546,5 +547,34 @@ describe("#2166: the add step's readings", () => {
     const r = add({ GH_TOKEN: "t", ID_OUT: "PVT_fixture", GH_OUT: "PVTI_item" });
     expect(r.code).toBe(0);
     expect(r.written).toBe("itemId=PVTI_item\nprojectId=PVT_fixture\n");
+  });
+});
+
+/**
+ * SC-2745: `rungate scaffold` emits board-ready.yml and board-intake.yml as
+ * owned workflows that read the board from project config, and no generated
+ * workflow carries a literal project id or URL. Read over EVERY workflow the
+ * scaffold manages, comments included, so a third generated file that pasted
+ * an id would fail here too.
+ */
+describe("SC-2745: the board workflows are owned, and no generated workflow names a board", () => {
+  const dir = join(import.meta.dir, "..", ".github", "workflows");
+  const managed = readdirSync(dir)
+    .filter(f => f.endsWith(".yml"))
+    .map(f => ({ f, text: readFileSync(join(dir, f), "utf8") }))
+    .filter(w => /^(?:# generated-sha: [0-9a-f]+\n)?# Managed by rungate/.test(w.text));
+
+  test("SC-2745: both board workflows are owned by the scaffold, and generated", () => {
+    const owned = OWNED_FILES.map(o => o.path);
+    for (const f of ["board-ready.yml", "board-intake.yml"]) {
+      expect(owned, `${f} is not in OWNED_FILES`).toContain(`.github/workflows/${f}`);
+      expect(managed.map(w => w.f), `${f} is not the generated copy`).toContain(f);
+    }
+  });
+
+  test("SC-2745: no generated workflow contains a project id or a project URL", () => {
+    expect(managed.length, "found no managed workflow — this row would pass vacuously").toBeGreaterThanOrEqual(7);
+    const named = managed.filter(w => /PVT_[A-Za-z0-9_-]+|github\.com\/(?:users|orgs)\/[^/\s]+\/projects\//.test(w.text)).map(w => w.f);
+    expect(named, "a generated workflow names a board; read it from board.id instead").toEqual([]);
   });
 });

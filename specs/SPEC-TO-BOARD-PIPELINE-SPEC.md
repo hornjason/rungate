@@ -181,7 +181,8 @@ workflows and none of ADR-013's four, two of the scripts they run ship in
 neither `files[]` nor the CLI, and nothing prints the steps only a person can
 take.
 
-- [ ] SC-2742: every script a process workflow runs ships in `package.json` `files[]` and runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`
+- [x] SC-2742: every script a process workflow runs ships in `package.json` `files[]` and runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`
+      proved-by: test/package-closure.test.ts "SC-2742: none runs bun scripts/, and every command it calls is registered" and "SC-2742: each of the four is the generated copy", 2026-11-14; a planted `bun scripts/` run line and an unregistered command each turn it red
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2743: `rungate scaffold` emits `.github/workflows/closing-references.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
       proved-by: test/closing-references-workflow.test.ts, the `SC-2743` describe, 0 fail; 2026-11-14, on the PR for #2045. The scaffold emits the workflow from `buildClosingReferencesWorkflow`, calling `bunx rungate@<pinned> audit-closing-references` on pull requests and the merge queue, recovering the pull request number from the queue ref and refusing UNMEASURED when none can be named, and this repository's copy is byte-identical to the scaffold's output.
@@ -189,7 +190,8 @@ take.
 - [x] SC-2744: `rungate scaffold` emits `.github/workflows/adr-accepted.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
       proved-by: test/adr-accepted-workflow.test.ts, the `SC-2744` describe, 0 fail; 2026-11-14, on the PR for #2046. The scaffold emits the workflow from `buildAdrAcceptedWorkflow` with the engine spec and milestone prefix read from config at scaffold time, calls `bunx rungate@<pinned>` for every step, refuses UNMEASURED naming any input it could not read, and this repository's copy is byte-identical to the scaffold's output.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2745: `rungate scaffold` emits `board-ready.yml` and `board-intake.yml` as owned workflows that read the board's identity from project config, and no generated workflow contains a literal project id or URL
+- [x] SC-2745: `rungate scaffold` emits `board-ready.yml` and `board-intake.yml` as owned workflows that read the board's identity from project config, and no generated workflow contains a literal project id or URL
+      proved-by: test/board-intake.test.ts "SC-2745: no generated workflow contains a project id or a project URL" and "SC-2745: both board workflows are owned by the scaffold, and generated", 2026-11-14; a planted PVT_ id in a generated workflow turns it red
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2746: `rungate scaffold` installs `.claude/commands/dry-run.md` and `docs/adr/TEMPLATE.md` as owned files
       proved-by: test/dry-run-command.test.ts, the `SC-2746` describe, 0 fail; 2026-11-14, on the PR for #2048. A consumer's scaffold writes both from `templates/process/`: the command calls `bunx rungate`, passes no `--write` and carries a provenance marker, so a hand edit is preserved and reported; the template is regenerated with no marker, because every ADR is copied from it. This repository's copies equal the rendered output, a directory where the command belongs is refused by name, and an installation missing a source refuses by name.

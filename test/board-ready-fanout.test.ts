@@ -15,7 +15,7 @@
  * (`.claude/rules/checks-must-be-able-to-fail.md`). BR-7 asserts the
  * agreement across a generated grid rather than trusting the import.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -2414,6 +2414,7 @@ describe("#2047: board-ready.yml is generated and names no board", () => {
  */
 describe("#2047: no board.id is an annotation, and nothing else is", () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "board-ready-fill-")));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const stubs = join(dir, "bin");
   mkdirSync(stubs);
   // The stub stands in for the published CLI: it prints STUB_ERR to stderr
