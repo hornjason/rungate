@@ -2107,6 +2107,25 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
     });
   });
 
+  // #2239: one phase became its own reading, NOTHING_TO_SEQUENCE, so
+  // plan-deps stops refusing it. The snapshot must not read that as MEASURED:
+  // an empty plannedEdges from one phase would let `dependency-edges` report
+  // 0 of 0 about a tracker that states no order at all. The key stays omitted,
+  // exactly as when one phase was UNMEASURED.
+  test("#2239: a single-phase tracker emits no plannedEdges — nothing to sequence is not a measured order", async () => {
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      const onePhase = [
+        iss({ number: 10, milestone: "Fix Phase 0 — the first one", body: "this one serves SC-9001" }),
+        iss({ number: 11, milestone: "Fix Phase 0 — the first one", body: "this one serves SC-9003" }),
+      ];
+      const { gh } = spy(CONFORMANT_LIVE, { issues: onePhase });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+      expect(snap.repoIssues?.map(i => i.number)).toEqual([10, 11]);
+      expect("plannedEdges" in snap, "a one-phase plan was emitted as a measured, empty order").toBe(false);
+    });
+  });
+
   test("SC-2752: the declared-work population is emitted, and the reader names what no open issue covers", async () => {
     await withSpecsDir(async (dir, at) => {
       writeBoardConfig(dir, BOARD);
