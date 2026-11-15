@@ -404,8 +404,9 @@ export const LIVE_CLAIM = /\bregistered live in ~\/\.claude\/settings\.json/i;
  * NOT LIVE claim disagree with itself. With that scope empty, `registered`
  * means a settings file a session loads names the hook — a disagreement;
  * `unmeasured` means a machine scope could not be read — said as UNMEASURED,
- * which is every CI runner; `unregistered` agrees with the claim, and is
- * silent.
+ * which is a machine with no user settings file (most CI runners);
+ * `unregistered` agrees with the claim, and is silent. Entries claiming the
+ * opposite, "registered live", are read by `liveRegistrationLine` (#2229).
  */
 export function liveClaimLines(
   entries: readonly { name?: unknown; description?: unknown }[],
@@ -440,9 +441,17 @@ export function liveClaimLines(
 
 /**
  * #2229: an entry that claims user settings registers it. Silent when the
- * `user-settings` scope names the hook; UNMEASURED when that scope could not
- * be read (every CI runner); otherwise a disagreement naming where the hook
- * IS registered, if anywhere.
+ * `user-settings` scope names the hook. UNMEASURED when that scope could not
+ * be read, which is a machine with no `~/.claude/settings.json` (most CI
+ * runners). Otherwise a disagreement, naming where the hook IS registered, if
+ * anywhere.
+ *
+ * The claim is about the machine the registration was measured on, and the
+ * registry is shared. So on a machine whose user settings exist but never
+ * registered the hook (another contributor's laptop, a review sandbox), the
+ * reading is DISAGREES, and it is true FOR THAT MACHINE: the hook does not run
+ * there. The message says "on this machine" so it reads as that, and not as a
+ * claim that the entry is wrong everywhere (review of #2232).
  */
 function liveRegistrationLine(hook: string, loaded: ScopeReading[]): string[] {
   const user = loaded.find(r => r.scope === "user-settings");
@@ -456,8 +465,9 @@ function liveRegistrationLine(hook: string, loaded: ScopeReading[]): string[] {
   const elsewhere = loaded.filter(r => (r.commands ?? []).some(c => commandNamesHook(c, hook))).map(r => r.scope);
   return [
     `Hook registry DISAGREES: ${hook} is described as registered live in ~/.claude/settings.json, but ` +
-      `user-settings does not register it${elsewhere.length > 0 ? ` (registered in ${elsewhere.join(", ")})` : ""} — ` +
-      `re-register it or correct the entry (#2229)`,
+      `this machine's user settings do not register it` +
+      `${elsewhere.length > 0 ? ` (registered in ${elsewhere.join(", ")})` : ""}, so it does not run here — ` +
+      `register it on this machine, or correct the entry if it is no longer meant to run (#2229)`,
   ];
 }
 
