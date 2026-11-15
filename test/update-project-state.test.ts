@@ -29,6 +29,7 @@ import { existsSync, readFileSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { spawnSync } from "child_process";
 import { makeProjectStateTempRoot, type ProjectStateTempRoot } from "./helpers/project-state-temp-root";
+import { RENDERED_PRIORITIES_MAX, boundedPriorities } from "../lib/project-state-shape";
 
 /** The real checkout. Read-only here: used to assert the script is shipped. */
 const REPO = join(import.meta.dir, "..");
@@ -108,6 +109,38 @@ describe("update-project-state", () => {
     expect(md).toContain("# Project State");
     expect(md).toContain("| ✅ | SC-9441 | Test SC |");
     expect(md).toContain("Do the thing");
+  });
+
+  /**
+   * #1946: one line per priority with SC-300's 200-line cap meant the next
+   * writer to record a priority had to delete one, under push-time pressure.
+   * The renderer bounds what it emits instead; the rest stay in the json.
+   */
+  test("#1946: more priorities than the bound render the first ones and say how many more the json holds", () => {
+    const many = Array.from({ length: RENDERED_PRIORITIES_MAX + 7 }, (_, i) => `priority number ${i + 1}`);
+    writeTestJson({ updated: "2026-01-01", priorities: many, phases: [], sessions: [] });
+    const md = run();
+    expect(md).toContain(`${RENDERED_PRIORITIES_MAX}. priority number ${RENDERED_PRIORITIES_MAX}\n`);
+    expect(md, "a priority past the bound was rendered").not.toContain(`priority number ${RENDERED_PRIORITIES_MAX + 1}\n`);
+    expect(md).toContain("…and 7 more in `project-state.json` `priorities`, not rendered here.");
+  });
+
+  test("#1946: adding a priority past the bound does not grow the document", () => {
+    const base = Array.from({ length: RENDERED_PRIORITIES_MAX + 1 }, (_, i) => `p${i + 1}`);
+    writeTestJson({ updated: "2026-01-01", priorities: base, phases: [], sessions: [] });
+    const before = run().split("\n").length;
+    writeTestJson({ updated: "2026-01-01", priorities: ["a new one", ...base], phases: [], sessions: [] });
+    expect(run().split("\n").length).toBe(before);
+  });
+
+  test("#1946: at or under the bound every priority renders and nothing says more", () => {
+    const exact = Array.from({ length: RENDERED_PRIORITIES_MAX }, (_, i) => `q${i + 1}`);
+    writeTestJson({ updated: "2026-01-01", priorities: exact, phases: [], sessions: [] });
+    const md = run();
+    expect(md).toContain(`${RENDERED_PRIORITIES_MAX}. q${RENDERED_PRIORITIES_MAX}\n`);
+    expect(md).not.toContain("more in `project-state.json`");
+    expect(boundedPriorities(exact)).toEqual({ shown: exact, omitted: 0 });
+    expect(boundedPriorities([...exact, "x"])).toEqual({ shown: exact, omitted: 1 });
   });
 
   test("phase emoji: all done = ✅", () => {

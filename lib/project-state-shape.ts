@@ -304,3 +304,21 @@ export function selectRecentSessions<T extends { date: string }>(
   );
   return { rendered: ranked.slice(0, limit).map(d => d.s), undated };
 }
+
+/**
+ * How many priorities `PROJECT-STATE.md` renders (#1946). The renderer emitted
+ * one line per priority under SC-300's 200-line cap, so the next writer to
+ * record a priority had to delete one to push, under pressure and with no rule
+ * about what was safe to delete. Now the document shows the first ones in the
+ * order `project-state.json` lists them and says how many more the json holds,
+ * so recording state no longer grows the document that reports it.
+ */
+export const RENDERED_PRIORITIES_MAX = 12;
+
+/** The priorities to render, and how many were left in the json. Pure. */
+export function boundedPriorities(
+  priorities: readonly string[],
+  max: number = RENDERED_PRIORITIES_MAX,
+): { shown: string[]; omitted: number } {
+  return { shown: priorities.slice(0, max), omitted: Math.max(0, priorities.length - max) };
+}
