@@ -44,7 +44,15 @@ export async function main(argv: readonly string[]): Promise<number> {
       return EXIT_REFUSED;
     }
   }
-  const client = createGitHubClient();
+  // A missing or refused credential is a refusal with its own message, not a
+  // stack trace (review of PR #2194).
+  let client: ReturnType<typeof createGitHubClient>;
+  try {
+    client = createGitHubClient();
+  } catch (e) {
+    console.error(`::error title=Board intake::no GitHub client, so nothing was read or written: ${(e as Error).message}`);
+    return EXIT_REFUSED;
+  }
   const result = await moveToColumn(
     { projectId: values.project!, itemId: values.item ?? "", column: values.column! },
     {

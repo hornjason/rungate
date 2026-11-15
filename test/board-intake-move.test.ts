@@ -213,3 +213,25 @@ describe("#2193: rungate board-intake-move", () => {
     expect(r.stderr).toContain("--project");
   });
 });
+
+// Review of PR #2194.
+describe("#2193: inputs the index query and the client cannot take are refused by name", () => {
+  test("a column holding a double quote: COLUMN_UNSEARCHABLE, before any call", async () => {
+    const s = stub({ fields: [fieldsPage()] });
+    const r = await moveToColumn(
+      { projectId: PROJECT, itemId: ITEM, column: 'Won\'t Fix"' },
+      { graphql: s.graphql, sleep: async () => {}, log: () => {} },
+    );
+    expect(reason(r)).toBe("COLUMN_UNSEARCHABLE");
+    expect(s.calls).toEqual([]);
+  });
+
+  test("no credential: an ::error naming the client, exit 1, never a stack trace", () => {
+    const SCRIPT = join(ROOT, "scripts", "board-intake-move.ts");
+    const env = { ...process.env, GH_TOKEN: "", GITHUB_TOKEN: "" };
+    const r = spawnSync("bun", [SCRIPT, "--project", PROJECT, "--item", ITEM, "--column", COLUMN], { encoding: "utf-8", timeout: 30_000, env });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("::error title=Board intake::no GitHub client");
+    expect(r.stderr).not.toMatch(/^\s+at /m);
+  });
+});

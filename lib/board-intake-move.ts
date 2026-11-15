@@ -44,6 +44,7 @@ export interface MoveInput {
 
 export type MoveRefusal =
   | "NO_ITEM"
+  | "COLUMN_UNSEARCHABLE"
   | "API_FAILED"
   | "NULL_NODE"
   | "FIELDS_TRUNCATED"
@@ -157,6 +158,17 @@ export async function moveToColumn(input: MoveInput, deps: MoveDeps): Promise<Mo
       throw new Refused(
         "NO_ITEM",
         "The add step produced no itemId, so there is nothing to move. The item was NOT added and its Status is UNSET — this is not a board that merely missed a transition.",
+      );
+    }
+
+    // The index is read with `status:"<column>"`, and a double quote cannot be
+    // carried inside that phrase, so a column holding one could never be seen
+    // in the index and every write would be misreported as lagging or
+    // overwritten. Refused before anything is written (review of PR #2194).
+    if (column.includes('"')) {
+      throw new Refused(
+        "COLUMN_UNSEARCHABLE",
+        `The column name ${JSON.stringify(column)} contains a double quote, which the project search query status:"<column>" cannot carry, so whether the card renders could never be read. Nothing was written. Rename the column, or pass one without a double quote.`,
       );
     }
 
