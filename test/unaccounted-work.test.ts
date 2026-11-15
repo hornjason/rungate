@@ -21,7 +21,7 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 
 import { CLI_COMMANDS } from "../lib/cli-commands";
-import { citationsIn, declarationsIn, memoryDirFor } from "../lib/unaccounted-work";
+import { arrayElementLines, citationsIn, declarationsIn, memoryDirFor } from "../lib/unaccounted-work";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "unaccounted-work.ts");
@@ -182,5 +182,43 @@ describe("#2100: what counts as a declaration and a citation", () => {
 
   test("the command is in the CLI registry", () => {
     expect(CLI_COMMANDS["unaccounted-work"]?.script).toBe("scripts/unaccounted-work.ts");
+  });
+});
+
+// Review of PR #2188: a text search placed an object-valued priority, and any
+// whose search slice cut an escape, at line 0, which looks like a location.
+describe("#2100: every plan-file priority is placed at its real line, or the source is UNMEASURED", () => {
+  const doc = [
+    "{",
+    '  "other": { "priorities": ["a decoy at depth 2"] },',
+    '  "priorities": [',
+    '    "Say \\"hello\\" and C:\\\\path, then #10",',
+    "    {",
+    '      "what": "an object-valued priority"',
+    "    },",
+    '    "last"',
+    "  ]",
+    "}",
+  ].join("\n");
+
+  test("a JSON-aware walk finds each element's line: escapes, objects and a decoy key do not move it", () => {
+    expect(JSON.parse(doc).priorities).toHaveLength(3);
+    expect(arrayElementLines(doc, "priorities")).toEqual([4, 5, 8]);
+  });
+
+  test("compact JSON puts every element on line 1, an empty array has none, and a missing array is null", () => {
+    expect(arrayElementLines('{"priorities":["a",{"b":1},"c"]}', "priorities")).toEqual([1, 1, 1]);
+    expect(arrayElementLines('{"priorities": []}', "priorities")).toEqual([]);
+    expect(arrayElementLines('{"other": {"priorities": ["x"]}}', "priorities")).toBeNull();
+  });
+
+  test("the command reports an object-valued and an escaped priority at their lines, never line 0", () => {
+    const root = repo({ "project-state.json": `${doc}\n` });
+    const report = json(run(SCRIPT, ["--project-root", root, "--issues-fixture", FIXTURE, "--json"]).out);
+    expect(where(report.unaccounted), "the #10 priority is covered; the other two are not").toEqual([
+      "project-state.json:5",
+      "project-state.json:8",
+    ]);
+    expect(report.unaccounted.every(d => d.line > 0)).toBe(true);
   });
 });

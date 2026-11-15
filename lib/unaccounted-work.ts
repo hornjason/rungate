@@ -119,13 +119,75 @@ export function planFileSource(root: string): SourceReading {
   }
   const priorities = (parsed as { priorities?: unknown })?.priorities;
   if (!Array.isArray(priorities)) return { source, kind: "ABSENT", why: `${PLAN_FILE} has no priorities array` };
-  const declarations = priorities.map((p): Declaration => {
+  // A JSON-aware walk rather than a text search: an object-valued priority
+  // never appears in the file as its compact stringification, and a search
+  // slice can cut an escape in half (review of PR #2188). A walk that cannot
+  // place every entry says so; it never prints line 0 as a location.
+  const lines = arrayElementLines(raw, "priorities");
+  if (lines === null || lines.length !== priorities.length) {
+    const found = lines === null ? "no top-level priorities array" : `${lines.length} element(s) for ${priorities.length}`;
+    return { source, kind: "UNMEASURED", why: `${PLAN_FILE}'s priorities could not be placed by line (${found})` };
+  }
+  const declarations = priorities.map((p, i): Declaration => {
     const text = typeof p === "string" ? p : JSON.stringify(p);
-    const at = raw.indexOf(JSON.stringify(text).slice(0, 60));
-    const line = at < 0 ? 0 : raw.slice(0, at).split("\n").length;
-    return { source, path: PLAN_FILE, line, text: clip(text), cites: citationsIn(text) };
+    return { source, path: PLAN_FILE, line: lines[i]!, text: clip(text), cites: citationsIn(text) };
   });
   return { source, kind: "READ", declarations, unreadable: [], files: 1 };
+}
+
+/**
+ * The line each element of the top-level array `key` starts on, from a walk
+ * that tracks strings, escapes and depth; `null` when there is no such array.
+ * A raw newline cannot occur inside a JSON string, so counting every `\n`
+ * counts lines.
+ */
+export function arrayElementLines(raw: string, key: string): number[] | null {
+  let depth = 0;
+  let line = 1;
+  let inString = false;
+  let stringStart = -1;
+  let lastKey: string | null = null;
+  let afterKeyColon = false;
+  let inArray = false;
+  let expectElement = false;
+  const lines: number[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]!;
+    if (c === "\n") line++;
+    if (inString) {
+      if (c === "\\") i++;
+      else if (c === '"') {
+        inString = false;
+        if (depth === 1 && !inArray) lastKey = raw.slice(stringStart + 1, i);
+      }
+      continue;
+    }
+    if (/\s/.test(c)) continue;
+    if (expectElement && c !== "]") {
+      lines.push(line);
+      expectElement = false;
+    }
+    if (c === '"') {
+      inString = true;
+      stringStart = i;
+    } else if (c === ":") {
+      afterKeyColon = depth === 1 && lastKey === key;
+      continue;
+    } else if (c === "{" || c === "[") {
+      depth++;
+      if (afterKeyColon && c === "[" && depth === 2) {
+        inArray = true;
+        expectElement = true;
+      }
+    } else if (c === "}" || c === "]") {
+      if (inArray && depth === 2 && c === "]") return lines;
+      depth--;
+    } else if (c === "," && inArray && depth === 2) {
+      expectElement = true;
+    }
+    afterKeyColon = false;
+  }
+  return null;
 }
 
 /** Where Claude Code keeps agent memory for a session launched in `root`. */
