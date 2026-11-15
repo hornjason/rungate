@@ -173,6 +173,7 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
       "adr-accepted.yml",
       "ai-review-unmeasured.yml",
       "ai-review.yml",
+      "board-intake.yml",
       "board-ready.yml",
       "ci.yml",
       "closing-references.yml",
@@ -192,8 +193,9 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
         "no longer cover it — say why here or give it back its pull_request trigger",
       // adr-accepted.yml since #2046: it runs on a push to main after a merge,
       // never on a pull request, so it is never a required check. board-ready.yml
-      // since #2047: it runs on issue events, never on a pull request.
-    ).toEqual(["adr-accepted.yml", "ai-review-unmeasured.yml", "board-ready.yml"]);
+      // since #2047: it runs on issue events, never on a pull request. board-intake.yml
+      // since #2166: pull_request_target reports no status a queue waits for.
+    ).toEqual(["adr-accepted.yml", "ai-review-unmeasured.yml", "board-intake.yml", "board-ready.yml"]);
 
     // The two bodies must actually differ, or this file is testing one thing
     // twice and the sharded/unsharded distinction is unmeasured.

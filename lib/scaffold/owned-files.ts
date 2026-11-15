@@ -201,6 +201,16 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't edit the generated `move-freed-issues-to-ready` job",
   },
   {
+    // #2166, ADR-014 row 4. Hand-written with this repository's project URL
+    // and id pasted in; the generator writes it with neither, for #631's
+    // reason above. The board is board.id, read by `rungate board-id`.
+    path: ".github/workflows/board-intake.yml",
+    strategy: "job-preserving",
+    servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
+    customize: "Set `board.id` in config and secret `RUNGATE_PROJECT_TOKEN`; add your own jobs alongside the generated `add-to-board` job",
+    avoid: "Don't edit the generated `add-to-board` job",
+  },
+  {
     // `regenerate` until #655, and the declaration was never consulted:
     // `generateAgentBriefsStep` called `writeFileSync` directly, so the row
     // described behaviour that a bare overwrite happened to coincide with.
