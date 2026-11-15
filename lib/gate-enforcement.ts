@@ -212,6 +212,25 @@ interface FileReading {
 const READABLE: FileReading = { failure: null, unmeasured: null };
 
 /**
+ * The directories a strike scan may read: every visible one, and no hidden one
+ * (#1987, SC-2771).
+ *
+ * A hidden directory under the run store is where runs are set aside, not run.
+ * `~/.rungate/.archive` is the one that exists. On 2026-11-15 it held 67
+ * workflow-state files within the two levels the scan below walks, and every
+ * one was counted as a live attempt. So a project whose failed runs had been
+ * archived stayed blocked by the strike rule, and the only workaround was to
+ * move the archive out of `~/.rungate` (DBD #1513).
+ *
+ * The rule is the hidden-directory convention, not the word: a directory named
+ * `archive` without the dot is a live run and is still read. One function and
+ * both scan levels call it, so there is one site to mutate.
+ */
+export function excludeArchivedRuns<T extends { readonly name: string }>(dirs: readonly T[]): T[] {
+  return dirs.filter(d => !d.name.startsWith('.'));
+}
+
+/**
  * Scan workflow-state.json files under workDir for active gate failures.
  * Returns the first failure found (scope > verify > ship priority).
  * Checks both direct children and nested subdirectories.
@@ -239,8 +258,9 @@ export function findWorkflowGateFailure(workDir: string): WorkflowScan {
   };
 
   try {
-    const dirs = readdirSync(workDir, { withFileTypes: true })
-      .filter(d => d.isDirectory());
+    const dirs = excludeArchivedRuns(
+      readdirSync(workDir, { withFileTypes: true }).filter(d => d.isDirectory()),
+    );
 
     for (const d of dirs) {
       // Level 1: direct children
@@ -248,8 +268,9 @@ export function findWorkflowGateFailure(workDir: string): WorkflowScan {
 
       // Level 2: nested subdirectories
       try {
-        const subDirs = readdirSync(`${workDir}/${d.name}`, { withFileTypes: true })
-          .filter(sd => sd.isDirectory());
+        const subDirs = excludeArchivedRuns(
+          readdirSync(`${workDir}/${d.name}`, { withFileTypes: true }).filter(sd => sd.isDirectory()),
+        );
         for (const sd of subDirs) {
           take(checkWorkflowFile(
             `${workDir}/${d.name}/${sd.name}/workflow-state.json`,

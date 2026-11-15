@@ -12,6 +12,7 @@ import { tmpdir } from 'os';
 import {
   buildGatePending,
   findWorkflowGateFailure,
+  excludeArchivedRuns,
   formatFailures,
   loadStrikeCount,
   makeEnforcementDecision,
@@ -223,6 +224,59 @@ describe('gate-enforcement', () => {
       mkdirSync(join(tempDir, 'some-slug'), { recursive: true });
       const result = measured(findWorkflowGateFailure(tempDir));
       expect(result).toBeNull();
+    });
+
+    /**
+     * #1987 / SC-2771: a run archived under `~/.rungate/.archive` never counts
+     * toward a gate's strike threshold.
+     *
+     * Measured on 2026-11-15: `~/.rungate/.archive` holds 67 workflow-state
+     * files within two levels, the depth this scan walks, and every one of them
+     * was read as a live run. A project whose failed runs were moved aside
+     * stayed blocked, and moving the archive out of `~/.rungate` was the only
+     * workaround (DBD #1513).
+     */
+    const failingState = (issue: number, slug: string) =>
+      JSON.stringify({
+        phase: 'BUILD',
+        issue,
+        slug,
+        gates: { scope: { result: 'FAIL', failures: [{ check: 'ac-count', detail: 'no ACs defined' }] } },
+      });
+
+    it('SC-2771: a failing run archived under .archive is not counted', () => {
+      mkdirSync(join(tempDir, '.archive', 'old-run'), { recursive: true });
+      writeFileSync(join(tempDir, '.archive', 'old-run', 'workflow-state.json'), failingState(7, 'old-run'));
+      // And at the first level, which the scan also reads.
+      writeFileSync(join(tempDir, '.archive', 'workflow-state.json'), failingState(8, '.archive'));
+      const scan = findWorkflowGateFailure(tempDir);
+      expect(scan.reading).toBe('MEASURED');
+      expect(measured(scan)).toBeNull();
+    });
+
+    it('SC-2771 control: the same failing run, live, is still counted', () => {
+      // One variable apart from the case above: the directory is not hidden.
+      // `archive` without the dot is deliberately a LIVE name, so a fix that
+      // matched the word rather than the hidden-directory convention reds here.
+      mkdirSync(join(tempDir, 'archive', 'old-run'), { recursive: true });
+      writeFileSync(join(tempDir, 'archive', 'old-run', 'workflow-state.json'), failingState(7, 'old-run'));
+      const result = measured(findWorkflowGateFailure(tempDir));
+      expect(result).not.toBeNull();
+      expect(result!.issue).toBe(7);
+    });
+
+    it('SC-2771: a hidden directory inside a slug is skipped at the second level too', () => {
+      mkdirSync(join(tempDir, 'some-slug', '.archive'), { recursive: true });
+      writeFileSync(join(tempDir, 'some-slug', '.archive', 'workflow-state.json'), failingState(9, 'some-slug'));
+      expect(measured(findWorkflowGateFailure(tempDir))).toBeNull();
+    });
+
+    it('excludeArchivedRuns keeps every visible directory and drops every hidden one', () => {
+      const dir = (name: string) => ({ name }) as { name: string };
+      expect(excludeArchivedRuns([dir('.archive'), dir('a-run'), dir('.trash'), dir('archive')]).map(d => d.name)).toEqual([
+        'a-run',
+        'archive',
+      ]);
     });
 
     it('returns null for DONE phase workflows', () => {
