@@ -164,20 +164,20 @@ properties and the marker already owns the second. Do not re-add it to buy
 the first; SC-2622 is what forbids symbol-satisfaction here.
 
 - [x] SC-2615: every criterion in every in-scope testable spec resolves to exactly one phase; a spec held back says so in its own frontmatter and is banked by path (SC-2734)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-conformance.test.ts, `-t "spec-placement names the UNPLANNED spec"` (1 pass) and the `SC-2734` describe (11 pass), and test/board-snapshot.test.ts, the `repository-wide populations (SC-2615, SC-2616)` describe (4 pass) — 0 fail, 2026-11-12, on the PR that closes #1717. Live: `board-conformance` reads `spec-placement` MET 95 of 95. Wording narrowed to the in-scope population by Jason on 2026-11-12, as ADR-013 decision 1 required of row 1 and row 1's PR (#2013) did not do.
       fingerprint: bf3d3ac3
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2616: an open issue naming no criterion is reported as a refusal naming the issue, never counted as covered, and a blank cell is distinguishable from a deliberate "serves none" — 25 of 71 open issues named nothing on 2026-10-30 and the two states rendered identically
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-conformance.test.ts, `-t "criteria-named names the ISSUE"` (1 pass), and test/board-snapshot.test.ts, the `repository-wide populations (SC-2615, SC-2616)` describe (4 pass) — 0 fail, 2026-11-12, on the PR that closes #1717. Live: `criteria-named` names each of its 41 offenders by number and does not count a declared `serves no criterion`. The 41 are repair work (#1954, stage item E2), not this criterion.
       fingerprint: 009abcd4
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2617: every issue whose work depends on another carries a `blocked by` edge on the tracker, so *what is next* is computed from the graph — 0 of 71 open issues carried one on 2026-10-30, which makes every ordering claim prose
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: measurement
       proved-by: the `dependency-edges` reading (board-conformance, item E3) reads MET 182 of 182 on the live tracker, 2026-11-13, after #2024 made the plan family-aware and `plan-deps --milestone-prefix Convergence --write` added the 11 missing edges. Its tests: test/plan-deps.test.ts, `-t "#2024"` (7 pass); test/board-snapshot.test.ts, the repository-wide populations describe (4 pass); test/board-conformance.test.ts, `-t dependency-edges` (1 pass). 0 fail. Ticked by `sync-sc-status --only SC-2617` (#2056).
       fingerprint: f2eb63de
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### Alignment before code, and a board that moves by itself
 
@@ -187,45 +187,45 @@ which 46 carried only a label, no workflow placed a plan on the board, and 14
 of the last 40 merged PRs closed no issue.
 
 - [x] SC-2734: `spec-placement` measures only the specs in scope — a spec held back declares so in its own frontmatter, and the deferred specs are banked by path with their criteria counts in a ratchet that refuses both a rise and a fall, so the reading cannot go green on a population shrunk by swapping members
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-conformance.test.ts, the `SC-2734` describe (`-t SC-2734`) — 11 pass, 0 fail, 2026-11-12, on the PR that closes #1995. A spec is held back by `board-scope: deferred` in its frontmatter (a body line does not count); `.claude/spec-deferral-ratchet.json` banks the 22 deferred specs by path and criteria count; a swap, a rise, a fall, a moved count, a path banked twice, or no bank read each turns `spec-placement` UNMEASURED; the live tree equals its bank and leaves exactly the engine and payload specs in scope.
       fingerprint: 2a46a701
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2735: the expedite label and the filing-override label are read from project config, and no label that decides Ready or filing is a constant in library code
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-ready-rule.test.ts and test/issue-filing-gate.test.ts, the two `SC-2735` describes — 8 pass, 0 fail, 2026-11-11, on the PR that closes #1996. Restoring either hardcoded label string turns 4 of the 8 red; the library-wide scan finds no quoted spelling of either configured label in lib, scripts, hooks or bin.
       fingerprint: 4c72c53e
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2736: AGENTS.md rule 9 states the four-step process — agree and file the same turn, an ADR for work bigger than one issue, the plan placed on merge, each PR closing its issue — and names the exempt work with the rule that decides it
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/rule-provenance.test.ts, the `SC-2736` describe — 12 pass, 0 fail, 2026-11-12, on the PR that closes #1997. Each step's anchor, the exempt work and the diff-not-branch decider are read between rule 9's number and rule 10's, so a phrase moved out of the rule reads as missing; no rule 11 exists, and the exempt files are stated DA-owned. Removing `Fixes #N`, the decider, or two of the four exempt kinds each turns one case red.
       fingerprint: 597a725e
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2737: a pull request that closes no issue, or whose issue names neither a criterion nor "serves no criterion", is refused when `RUNGATE_REQUIRE_CLOSING_REF` is `true`; only a PR whose changed files are all session-record files (`project-state.json`, `PROJECT-STATE.md`, `SUCCESS.md`) owes none, decided from the diff and never from the branch name; the check re-runs when the description is edited, and its refusal prints the one command that re-runs it
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/audit-closing-references.test.ts — 29 pass, 0 fail, 2026-11-11, merged in #2003 (closing #1998). Live: `RUNGATE_REQUIRE_CLOSING_REF` is `true` and `closing-references` is a required check on main, so the refusal is enforced rather than annotated.
       fingerprint: 80507bcd
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2738: merging an ADR whose status changes to accepted places its plan on the board with no command typed by hand — milestones, issues, blocked-by edges, board fields and a Ready top-up — and the filing refuses both a duplicate of a closed issue and a criterion id that exists in no spec
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/adr-accepted-workflow.test.ts (16 pass) and the `SC-2738` describe in test/issue-decomposition.test.ts (7 pass), 0 fail, 2026-11-12, on the PR that closes #1999. `.github/workflows/adr-accepted.yml` is parsed: it fires on a push to main touching docs/adr, runs plan-spec, plan-issues --decompose, plan-deps, board-mirror and board-ready --top-up in that order, each gated on the acceptance read, with the board token in the two board steps only. `plan-issues --accepted-since` lists exactly the ADR a real git history accepted and refuses a commit the clone lacks; `--decompose` files nothing for a title closed as completed by a trusted author, and refuses an id no spec states. Ten mutants, each caught. The first live run is the first ADR accepted after merge.
       fingerprint: ed91b4aa
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2739: an ADR written from the repository's ADR template carries a Decomposition table that `plan-issues --decompose` reads with no refusal
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/adr-template.test.ts, the `SC-2739` describe — 6 pass, 0 fail, 2026-11-11, on the PR that closes #2000. `docs/adr/TEMPLATE.md` filled the way an author fills it parses MEASURED through `parseDecompositionPlan`; unfilled it is refused. Renaming the Outcome header, adding a column, dropping the file limit or pre-filling the criterion each turns 1 to 4 of the cases red; `plannedTitles` reads the real template and yields no title.
       fingerprint: 43e595ed
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2740: one command shows a proposal as a dry run — the real planning tools without `--write`, what reaches Ready, the gaps found — and writes its visual next to the document
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/dry-run-command.test.ts, the `SC-2740` describe — 13 pass, 0 fail, 2026-11-12, on the PR that closes #2001. `.claude/commands/dry-run.md` is read from the repository: it names the three planning tools and work-status, What reaches Ready, Gaps found, Needs you and the `-flow.html` visual opened on macOS or Linux, forbids `--write`, and no command line in it passes one. Dropping `Gaps found`, or adding `--write` to the plan-deps line, each turns one case red.
       fingerprint: 39d73cf9
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2741: Ready holds only work from the active milestone, the lowest Pipeline phase with an open issue, plus `work-this-next`; label-only and payload work never enter while a Pipeline phase has an open issue, a card outside the active milestone is demoted, and adding or removing a milestone, or adding a label, triggers the refill — issues enter by filing, never by transfer (Jason, 2026-11-12, #1752)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: one test per clause, 2026-11-13, -t "SC-2741|#2037|#2007" — active milestone plus work-this-next: test/board-mirror.test.ts (9 pass) and test/active-milestone.test.ts (7 pass, both Ready writers read one population); label-only and payload kept out, and demotion outside the focus: test/board-ready-fanout.test.ts (8 pass); the refill triggers and issues entering by filing, never by transfer: test/board-ready-rule.test.ts (11 pass). 0 fail. Ticked by `sync-sc-status --only SC-2741` (#2054).
       fingerprint: 8017b213
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### The process reaches consumers through scaffold
 
@@ -236,45 +236,45 @@ neither `files[]` nor the CLI, and nothing prints the steps only a person can
 take.
 
 - [x] SC-2742: every script a process workflow runs ships in `package.json` `files[]` and runs as a `rungate` CLI command, so a consumer's workflow calls the CLI and never `bun scripts/…`
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/package-closure.test.ts "SC-2742: none runs bun scripts/, and every command it calls is registered" and "SC-2742: each of the four is the generated copy", 2026-11-14; a planted `bun scripts/` run line and an unregistered command each turn it red
       fingerprint: 46932693
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2743: `rungate scaffold` emits `.github/workflows/closing-references.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/closing-references-workflow.test.ts, the `SC-2743` describe, 0 fail; 2026-11-14, on the PR for #2045. The scaffold emits the workflow from `buildClosingReferencesWorkflow`, calling `bunx rungate@<pinned> audit-closing-references` on pull requests and the merge queue, recovering the pull request number from the queue ref and refusing UNMEASURED when none can be named, and this repository's copy is byte-identical to the scaffold's output.
       fingerprint: 39ec8d7d
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2744: `rungate scaffold` emits `.github/workflows/adr-accepted.yml` as an owned, regenerated workflow, and this repository's copy is the generated one
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/adr-accepted-workflow.test.ts, the `SC-2744` describe, 0 fail; 2026-11-14, on the PR for #2046. The scaffold emits the workflow from `buildAdrAcceptedWorkflow` with the engine spec and milestone prefix read from config at scaffold time, calls `bunx rungate@<pinned>` for every step, refuses UNMEASURED naming any input it could not read, and this repository's copy is byte-identical to the scaffold's output.
       fingerprint: 8ed52968
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2745: `rungate scaffold` emits `board-ready.yml` and `board-intake.yml` as owned workflows that read the board's identity from project config, and no generated workflow contains a literal project id or URL
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-intake.test.ts "SC-2745: no generated workflow contains a project id or a project URL" and "SC-2745: both board workflows are owned by the scaffold, and generated", 2026-11-14; a planted PVT_ id in a generated workflow turns it red
       fingerprint: 2f202756
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2746: `rungate scaffold` installs `.claude/commands/dry-run.md` and `docs/adr/TEMPLATE.md` as owned files
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/dry-run-command.test.ts, the `SC-2746` describe, 0 fail; 2026-11-14, on the PR for #2048. A consumer's scaffold writes both from `templates/process/`: the command calls `bunx rungate`, passes no `--write` and carries a provenance marker, so a hand edit is preserved and reported; the template is regenerated with no marker, because every ADR is copied from it. This repository's copies equal the rendered output, a directory where the command belongs is refused by name, and an installation missing a source refuses by name.
       fingerprint: 52f809d3
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2747: `rungate scaffold` installs the four-step process as an owned rules file, generated from the same single source that this repository's own rule 9 is checked against, so the consumer's copy and ours cannot drift
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/process-rules.test.ts — 7 pass, 0 fail; 2026-11-14, on the PR for #2049. `generateScopedRules` emits `.claude/rules/alignment-process.md` from `PROCESS_STEPS` in `lib/scaffold/process-rules.ts`, loaded at launch for a consumer; this repository's copy is byte-equal to the generator's output; and `ruleNineViolations` checks AGENTS.md's rule 9 against the same source, failing on a lost mechanism, a phrase under the wrong step, a dropped exemption, and an absent rule 9.
       fingerprint: 2782ff20
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2748: `rungate scaffold` writes `board.expediteLabel` and `board.filingOverrideLabel` when the config lacks them, or names each one that stays unset
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/scaffold-label-keys.test.ts — 10 pass, 0 fail (the `SC-2748` describe and the `#2050 review` describe); 2026-11-14, on the PR for #2050. Scaffold writes `board.expediteLabel` from `templates/board-defaults.json` on the new-config, existing-config and monolith-split paths, and names it UNSET on the monolith path and when the template is missing. It never writes `board.filingOverrideLabel` and names it UNSET with the line that sets it — Jason's call of 2026-11-14, because a defaulted waiver name would hand every consumer's agents the escape hatch from the FindingArbiter.
       fingerprint: 8339d73e
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2749: `rungate scaffold` ends by printing each human step still owed as one command — the project token secret, `RUNGATE_REQUIRE_CLOSING_REF`, and every process check that runs but is not required on the default branch — and prints `UNMEASURED` for any it could not read, never "done"
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/human-steps.test.ts — 8 pass, 0 fail; 2026-11-14, on the PR for #2051. `humanSteps` prints one OWED command each for an absent `RUNGATE_PROJECT_TOKEN`, a `RUNGATE_REQUIRE_CLOSING_REF` that is not the string `true`, and a process check this tree defines that the default branch does not require; an unreadable reading is `UNMEASURED` with its reason; the all-clear names what it measured and never says done. `scripts/scaffold-project.ts` prints the section on every run, executed in the last case.
       fingerprint: 29c768f6
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### Nothing in the engine is hand-run
 
@@ -284,38 +284,38 @@ human-authored artefacts in git; it does not belong in an agent's hands at
 run time. ADR-009 draws the boundary.
 
 - [x] SC-2618: one command reports the board's conformance and exits non-zero while any reading is short of its target, so a loop has a terminal condition that is not an agent's opinion
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-conformance.test.ts — 75 pass, 0 fail, 2026-11-07 (PR #1890). The terminal condition was already right before #1718 and the DIAGNOSIS was not: a bare run exited 1 while printing five UNMEASURED rows saying the reading's source was not wired yet — a claim that the tool was unfinished, emitted because nobody had passed a spec. A reader acts on the reason, not the exit code. The command now produces exactly two verdicts, exit 0 with `every reading is met` or non-zero naming how many are short, and it produced the SHORT one within minutes of this tick: merging #1718 closed the only issue naming SC-2618, SC-2619 and SC-2620 and took `criterion-coverage` to 23 of 26. That is the criterion working, not failing — the identical sequence is recorded in SC-2613's own proved-by against #1873 and merge `849ad16c`. What was broken: the two no-source cases run a staged copy of the command AND a staged copy with `REFUSE_EXIT = 0`, against ONE shared refusing producer, so the contrast is the exit constant rather than two different ways of failing; a bare `run(SCRIPT, [])` would reach the live API from inside the suite and report a pass.
       fingerprint: fd60ae07
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2619: every input that command reads comes from the repository or the live API, and a step that reads a file an agent assembled by hand is a refusal naming it — `criterion-inventory` needed a hand-built snapshot handed to it on 2026-10-30, so its numbers were reproducible by nobody else
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-snapshot.test.ts — 63 pass, 0 fail, 2026-11-07 (PR #1890), plus test/criterion-inventory.test.ts for the half this criterion names by hand. `criterion-inventory` already refused a hand-built snapshot, measured directly: a directory holding only issues.json and prs.json exits 1 saying there is no taken.json, so nothing says which tracker it came from. The half that was missing was the conformance command's own three inputs, which arrived only as command-line arguments. Spec now falls back to `board.engineSpec`, prefix to `board.milestonePrefix`, repository to GITHUB_REPOSITORY and then this project's origin through the existing `resolveRepoSlug` rather than a second reader. A GIVEN-AND-BLANK value still refuses and never spawns; only ABSENCE falls through, because a typed empty is a mistake to name and reaching past it to config would override a person with a file. Review round 1 of #1890 found that rule applied to two of the three inputs — an empty string survives `??` and `resolveRepoSlug` reads it as not-given, so a blank --repo took a live reading against whatever origin pointed at — and both the gate and its test now ENUMERATE the forwarded flags and derive their rows, so a fourth added without one is a visible omission rather than three hand-written conditions short by one. What was broken: each blank row runs against a project whose config COULD satisfy the blanked flag, so a pass cannot come from there being nothing to fall back to, and the control with real values runs.
       fingerprint: dd7b4c1d
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2620: the conformance command runs as a test on main, so a board that drifts reddens CI rather than waiting for somebody to look at it
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: Actions run 42462454243 on `a0201e21`, the push that merged #1898, plus test/board-conformance-job.test.ts — 15 pass, 0 fail, 2026-11-08. The criterion says "as a test" and this is a job rather than a case in the suite, deliberately: the `test` job is a required check, so a short board would have reddened every pull request, and a merge that legitimately closes the last issue for a criterion takes the board short for the minutes between the merge and the tick. #1892 settled that as report-only, which is what `.github/workflows/board-conformance.yml` does — no `pull_request` trigger, so nothing can make it required. **The first real run is the evidence, not the suite.** It fired on the push to `main`, resolved `secrets.RUNGATE_PROJECT_TOKEN` inside `run:`, read the live board, printed `SHORT criterion-coverage 25 of 26 — 1 short` and exited 1, with the failure annotation titled `Board conformance` and no `Board conformance UNMEASURED` warning anywhere in the run's annotations — so the reading was taken rather than skipped. The one short criterion it caught was this one: closing #1892 removed SC-2620's only open issue, which is the exact sequence SC-2613's `proved-by` records against #1873 and the exact failure #1892 was filed about. What was broken to prove the check can fail: `test/board-conformance-job.test.ts` executes the step's own `run:` body under `bash -e` and re-runs the short-board input against a mutant body whose `exit $status` is `exit 0` — real exits 1, mutant exits 0; separately, adding `continue-on-error: true` to the step turned exactly one case red.
       fingerprint: bd90b7bd
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2621: the project board's identifiers are read from project config, so a session told nothing can address the board, and an absent board config is UNMEASURED rather than an empty reading — the node id appeared in 0 repository locations on 2026-10-30 and lived only in agent prompts
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-status-sweep.test.ts, the `#1719 / SC-2621` describe — 3 pass, 0 fail — and test/work-status.test.ts, its `#1719 / SC-2621` case, 1 pass, 0 fail; 2026-11-14, on the PR for #1719. No board identifier is spelled in `lib/`, `scripts/`, `bin/`, `hooks/` or `gates/` code; both scripts that had one read `board.id` through `readBoardProjectId`, and run where no board is configured each refuses UNMEASURED naming `board.id`, before the credential. Scope, per ADR-014 decision 3: the scripts' own reads. `board-intake.yml`'s literal is #2047's.
       fingerprint: e091575d
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### The chain traces back to a goal
 
 - [x] SC-2622: no criterion in this section is satisfied by a symbol being present — each names a behaviour, and a mutant removing that behaviour turns its test red; 1131 of 1485 ticked criteria repo-wide were symbol-presence on 2026-10-30
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/spec-requirements.test.ts (SC-2622: a mutant without SC-2623's refusal answers empty where the real module refuses; the section has no symbol-presence line) — 19 pass, 0 fail, 2026-11-15
       fingerprint: 6372fd8e
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2623: a spec declares which of the project's standing success claims it serves, so *which goal does this spec serve* is answerable without reading the spec — the same traceability this document demands of issues, one level up
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/spec-requirements.test.ts (SC-2623: six cases, the live tree included; this spec declares serves: 7) — 19 pass, 0 fail, 2026-11-15
       fingerprint: e8cfb34b
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2624: SUPERSEDED — withdrawn, not replaced (Jason, 2026-11-15, #1721). `/goal` and the fleet goal file it reads live in PAI, outside this repository, so nothing here can build or test the behaviour; the engine's own goal is `project-state.json`'s `goal`, read by `stage-ladder`. Was: "`/goal` establishes a goal from measured evidence when none exists or the recorded one is past its own staleness bound, instead of reporting against it — the fleet goal file carried one five days stale and about another subject throughout the session that wrote this"
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
@@ -346,8 +346,8 @@ population, and a criterion that belongs to neither is how 25 of 71 open
 issues came to name nothing at all.
 
 - [ ] SC-2625: the engine is finished when `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` reaches the board through the pipeline with no agent editing any issue, milestone, edge or field by hand — the acceptance test is a payload shipping untouched, not a count of criteria ticked here, because every criterion in this document can be green on a tool nobody else can run; a run in which any hand edit occurs fails it and names the edit
-      needs: measurement
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: measurement
 
 ### Phase placement — every criterion has exactly one home
 
