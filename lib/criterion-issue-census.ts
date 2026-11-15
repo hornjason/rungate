@@ -233,6 +233,49 @@ export function assertOneJudgementPerPair(adjudications: readonly Adjudication[]
   }
 }
 
+/**
+ * Refuse a record naming a criterion no spec states, or an issue not among
+ * the issues fetched (#1643).
+ *
+ * The lookup in {@link censusRows} is a strict `===`, so a typo (`SC-9110`
+ * for `SC-9101`, an issue number off by one) or an issue that has since
+ * closed matches nothing, and the row reads UNADJUDICATED while a judgement
+ * sits in the file. Shape and duplicates are checked per record and per
+ * store; this needs the spec set and the issue set, so it runs where both
+ * are in hand. It asks whether a criterion EXISTS, not whether it is ticked:
+ * a judgement survives an untick and still applies when the tick returns.
+ */
+export function assertAdjudicationsResolve(
+  adjudications: readonly Adjudication[],
+  specs: readonly SpecRef[],
+  issues: readonly IssueRef[],
+): void {
+  const stated = new Set<string>();
+  for (const spec of specs) {
+    if (isTemplateSpec(spec.file)) continue;
+    for (const c of parseCriteria(spec.content)) stated.add(c.id);
+  }
+  const fetched = new Set(issues.map(i => i.number));
+  const problems: string[] = [];
+  adjudications.forEach((a, at) => {
+    if (!stated.has(a.criterion)) {
+      problems.push(`adjudication record ${at} names ${a.criterion}, which no spec states`);
+    }
+    if (!fetched.has(a.issue)) {
+      problems.push(
+        `adjudication record ${at} names issue #${a.issue}, which is not among the ${fetched.size} issue(s) fetched ` +
+          `(closed, mistyped, or in another repository)`,
+      );
+    }
+  });
+  if (problems.length > 0) {
+    throw new Error(
+      `${problems.join("; ")}. A judgement on a pair the census cannot see is never applied, so it would read as ` +
+        `nobody having judged. Fix the record, or remove it if its issue has closed.`,
+    );
+  }
+}
+
 /** Does this issue name this criterion, on a word boundary? */
 export function issueNames(issue: IssueRef, id: string): boolean {
   const pattern = oneScMentionPattern(id);
@@ -254,6 +297,7 @@ export function censusRows(
   adjudications: readonly Adjudication[],
 ): CensusRow[] {
   assertOneJudgementPerPair(adjudications);
+  assertAdjudicationsResolve(adjudications, specs, issues);
   const rows: CensusRow[] = [];
 
   for (const spec of specs) {

@@ -19,12 +19,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   assertAdjudicationShape,
+  assertAdjudicationsResolve,
   assertOneJudgementPerPair,
   censusRows,
   isAmbiguousId,
@@ -37,6 +38,7 @@ import {
 } from "../lib/criterion-issue-census";
 import { criterionFingerprint } from "../lib/spec-evidence";
 import { readAdjudications } from "../scripts/criterion-issue-census";
+import { collectSpecFiles } from "../lib/spec-files";
 
 const TICKED = "- [x] SC-9101: the gate refuses an unsigned payload.\n      needs: test\n";
 const UNTICKED = "- [ ] SC-9102: the gate also refuses an expired one.\n      needs: test\n";
@@ -303,5 +305,64 @@ describe("the ambiguity exclusions are the two documented ones", () => {
     expect(
       censusRows(spec(ambiguous.replace(/SC-A1/g, "SC-9101")), [issue(42, "SC-9101 is wrong")], []),
     ).toHaveLength(1);
+  });
+});
+
+/**
+ * #1643: the fifth instance of corruption-as-absence on this store. A record
+ * whose criterion no spec states, or whose issue is not among the issues
+ * fetched, matches nothing under the strict `===` lookup, so the row read
+ * UNADJUDICATED while somebody's judgement sat in the file. The check needs
+ * the spec set and the issue set, so it lives where both are: `censusRows`.
+ */
+describe("#1643: a judgement naming a criterion or issue that does not exist is refused, by position and id", () => {
+  const fingerprint = criterionFingerprint("the gate refuses an unsigned payload.");
+  const real: Adjudication = {
+    criterion: "SC-9101",
+    issue: 42,
+    verdict: "contradicts",
+    by: "jason",
+    collected: "2026-10-28",
+    note: "a judgement about a pair that exists",
+    fingerprint,
+  };
+  const issues = [issue(42, "SC-9101 is not true")];
+
+  test("a criterion no spec states is refused, naming the record's position and the id", () => {
+    const typo = { ...real, criterion: "SC-9110" };
+    expect(() => censusRows(spec(TICKED), issues, [real, typo])).toThrow(
+      /adjudication record 1 names SC-9110, which no spec states/,
+    );
+  });
+
+  test("an issue absent from the fetched set is refused the same way", () => {
+    const offByOne = { ...real, issue: 43 };
+    expect(() => censusRows(spec(TICKED), issues, [offByOne])).toThrow(
+      /adjudication record 0 names issue #43, which is not among the 1 issue\(s\) fetched/,
+    );
+  });
+
+  test("control: the identical record against a criterion and issue that exist is accepted and clears the debt", () => {
+    const rows = censusRows(spec(TICKED), issues, [real]);
+    expect(rows[0]!.standing[42]!.status).toBe("current");
+    expect(unadjudicated(rows)).toEqual([]);
+  });
+
+  test("an UNTICKED criterion a spec states still resolves: existence, not tick state, is the question", () => {
+    expect(() => censusRows(spec(UNTICKED), [issue(42, "SC-9102")], [{ ...real, criterion: "SC-9102" }])).not.toThrow();
+  });
+
+  test("the store this repository ships resolves against its own specs", () => {
+    // The live store must not carry a record the census would refuse on a
+    // criterion; the issue half is measured against the tracker at run time.
+    const ROOT = join(import.meta.dir, "..");
+    const records = readAdjudications(ROOT);
+    expect(records.length, "the store read nothing, so this measured nothing").toBeGreaterThan(0);
+    const specs = collectSpecFiles(join(ROOT, "specs")).map(f => ({
+      file: `specs/${f}`,
+      content: readFileSync(join(ROOT, "specs", f), "utf-8"),
+    }));
+    const everyIssue = records.map(r => issue(r.issue, ""));
+    expect(() => assertAdjudicationsResolve(records, specs, everyIssue)).not.toThrow();
   });
 });
