@@ -43,9 +43,13 @@ export const PROSE_MARKERS: readonly RegExp[] = [/\bTODO\b/, /\bFIXME\b/, /\bwe 
 /** The plan file a repository may carry. Read by its own source, so the tracked-file scan skips it. */
 export const PLAN_FILE = "project-state.json";
 
-/** `#N` standing alone: not `page#14`, not `&#15;`. */
+/**
+ * `#N` standing alone: not `page#14`, not `&#15;`. At most nine digits, so every
+ * value is a GraphQL `Int` (32-bit) and one hash-prefixed id cannot fail the batched
+ * issue-state query for every real citation (review round 3 of PR #2188).
+ */
 export function citationsIn(text: string): number[] {
-  return [...text.matchAll(/(?<![\w&/#])#(\d+)\b(?!;)/g)].map(m => Number(m[1]));
+  return [...text.matchAll(/(?<![\w&/#])#(\d{1,9})\b(?!;)/g)].map(m => Number(m[1]));
 }
 
 const clip = (s: string) => (s.length > 160 ? `${s.slice(0, 157)}...` : s);

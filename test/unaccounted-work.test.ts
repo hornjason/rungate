@@ -246,3 +246,10 @@ describe("#2100: a refusal is never swallowed, and the memory slug is Claude Cod
     );
   });
 });
+
+// Review round 3 of PR #2188: a long digit run after # is not an issue number.
+test("#2100: a #-prefixed digit run longer than nine digits is not a citation, so it cannot break the issue query", () => {
+  expect(citationsIn("see #123456789 and #12345678901234567 and #42")).toEqual([123456789, 42]);
+  expect(citationsIn("#999999999"), "nine digits is the largest citation").toEqual([999999999]);
+  expect(citationsIn("#1000000000"), "ten digits is not a citation").toEqual([]);
+});
