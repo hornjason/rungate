@@ -42,7 +42,7 @@
  * `specs/HOOK-ARCHITECTURE-SPEC.md` § "The workflow-state.json write contract"
  * in the same commit.
  *
- * ## NOT LIVE in this repository's sessions — user scope since #1585
+ * ## User scope since #1585
  *
  * This was `project` scope and registered in `.claude/settings.json`. Agent
  * sessions run in worktrees and do not load project settings, so it never
@@ -51,8 +51,8 @@
  * scoping, and `lib/bash-write-guard.ts` records that a live
  * `workflow-state.json` is almost never inside the project root — so SC-518
  * puts it in user settings. The repo no longer registers it (dual registration
- * fires twice) and reports it UNMEASURED. Registration in
- * `~/.claude/settings.json` is a human action and is still pending.
+ * fires twice) and reports it UNMEASURED. Registered live in ~/.claude/settings.json
+ * (measured 2026-11-15, #2225); a removed registration is not yet reported (#2229).
  *
  * A scaffolded consumer is unaffected: `deployHooksToConsumers` filters on
  * `deployToConsumers`, not on scope, so the paragraph above about consumer
