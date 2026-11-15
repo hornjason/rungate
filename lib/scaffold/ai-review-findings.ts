@@ -135,6 +135,7 @@ import {
   AI_REVIEW_VERDICT_KEY,
   SEVERITY_RANK,
   type Severity,
+  AI_REVIEW_UNTRUSTED_PATHS,
 } from "./ai-review-step";
 
 export {
@@ -2352,6 +2353,61 @@ export function aiReviewScopeLine(reading: AiReviewFindingsReading): string {
   );
 }
 
+/** The prefix of the line naming the changed files the reviewer read from base (#1887). */
+export const AI_REVIEW_RESTORED_LINE = "ai-review restored from base, not reviewed:";
+
+/**
+ * The changed files the review step restored from the base branch before the
+ * reviewer ran, so the verdict was reached over the BASE copy (#1887).
+ *
+ * The restore is correct and stays: it is what stops a pull request editing
+ * the instructions that judge it. What was wrong is that the verdict said
+ * nothing, so a review that never read three of four changed files (#1882)
+ * looked like a review that read all four.
+ *
+ * `restored` defaults to `AI_REVIEW_UNTRUSTED_PATHS`, the list the generated
+ * restore step is built from, so there is no second copy to drift. A path
+ * counts when it IS a restored entry or sits under one as a directory, which
+ * is how `git checkout <base> -- <path>` reaches it. The match is byte for
+ * byte on git's spelling: the runner's filesystem is case-sensitive, so
+ * `claude.md` is not `CLAUDE.md` and was not restored.
+ */
+export function restoredFromBase(
+  files: readonly string[],
+  restored: readonly string[] = AI_REVIEW_UNTRUSTED_PATHS,
+): string[] {
+  return files.filter(raw => {
+    const f = repoPathSpelling(raw);
+    return f !== null && restored.some(r => f === r || f.startsWith(`${r}/`));
+  });
+}
+
+/**
+ * The line `main` prints after the scope line: how many changed files were
+ * reviewed against the base copy, and which. Printed on every run, an empty
+ * overlap included as an explicit `0 of N` — "nothing was hidden" and "nobody
+ * looked" must not be the same bytes. With no readable changed-file list the
+ * overlap is UNMEASURED, never zero.
+ *
+ * A report only, as #1887 scopes it. Whether an unreviewed fraction should
+ * ever block is a separate decision, and nothing here refuses.
+ */
+export function restoredFromBaseLine(scope: AiReviewScopeReading): string {
+  if (scope.status !== "MEASURED") {
+    return (
+      `${AI_REVIEW_RESTORED_LINE} UNMEASURED — the changed-file list is ${scope.status}, so which ` +
+      `changed files were reviewed against the base copy cannot be said`
+    );
+  }
+  const hit = restoredFromBase(scope.files);
+  const of = `${hit.length} of ${scope.files.length} changed files`;
+  if (hit.length === 0) return `${AI_REVIEW_RESTORED_LINE} ${of}`;
+  return (
+    `${AI_REVIEW_RESTORED_LINE} ${of} — the reviewer read the base branch's copy of ` +
+    `${hit.map(p => JSON.stringify(p)).join(", ")}, not this pull request's`
+  );
+}
+
 // `parseFindingsArgv` and `AiReviewFindingsArgv` lived here and are gone.
 // The parser refused a SECOND POSITIONAL argument by design, which is
 // exactly the invocation CRC-B7 deploys, so the flag CLI and the
@@ -2547,6 +2603,9 @@ export function main(
   // on the command line reaches a stream GitHub parses workflow commands out
   // of, and this module escapes exactly once, at the point of emission.
   console.log(escapeAnnotation(aiReviewScopeLine(reading)));
+  // #1887: which changed files the reviewer saw only as the base copy. Same
+  // escaping, for the same reason: these are paths off the command line.
+  console.log(escapeAnnotation(restoredFromBaseLine(reading.scope)));
 
   // The ONE place a value reaches a workflow command. Everything upstream of
   // here — `renderFinding`, every `detail` sentence, `aiReviewRefusal` — builds
