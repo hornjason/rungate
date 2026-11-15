@@ -55,7 +55,7 @@ the wrapper when you copy a step.
                                         # `git checkout --` anything else (CODE-MAP.md churns)
 
 # 4. Census
-(cd ~/Projects/rg-wt-rel-XYZ && bun scripts/census-routing.ts)   # then run the `bun test …` line it prints
+(cd ~/Projects/rg-wt-rel-XYZ && bun scripts/census-routing.ts)   # prints a `bun test …` line; run it as (cd ~/Projects/rg-wt-rel-XYZ && <that line>)
 #    EXPECTED: test/distribution-standing.test.ts fails 2 cases ("no release
 #    tag for X.Y.Z"). They clear once the tag exists. ANY OTHER red: stop and
 #    fix it before tagging.
