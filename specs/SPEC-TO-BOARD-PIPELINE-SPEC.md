@@ -232,7 +232,7 @@ run time. ADR-009 draws the boundary.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2623: a spec declares which of the project's standing success claims it serves, so *which goal does this spec serve* is answerable without reading the spec — the same traceability this document demands of issues, one level up
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2624: `/goal` establishes a goal from measured evidence when none exists or the recorded one is past its own staleness bound, instead of reporting against it — the fleet goal file carried one five days stale and about another subject throughout the session that wrote this
+- [x] SC-2624: SUPERSEDED — withdrawn, not replaced (Jason, 2026-11-15, #1721). `/goal` and the fleet goal file it reads live in PAI, outside this repository, so nothing here can build or test the behaviour; the engine's own goal is `project-state.json`'s `goal`, read by `stage-ladder`. Was: "`/goal` establishes a goal from measured evidence when none exists or the recorded one is past its own staleness bound, instead of reporting against it — the fleet goal file carried one five days stale and about another subject throughout the session that wrote this"
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### What this does not govern
