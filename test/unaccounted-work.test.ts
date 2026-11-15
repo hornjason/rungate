@@ -253,3 +253,13 @@ test("#2100: a #-prefixed digit run longer than nine digits is not a citation, s
   expect(citationsIn("#999999999"), "nine digits is the largest citation").toEqual([999999999]);
   expect(citationsIn("#1000000000"), "ten digits is not a citation").toEqual([]);
 });
+
+// Review round 4 of PR #2188: a priorities key holding a non-array is present and unreadable.
+test("#2100: a plan file whose priorities is not an array is UNMEASURED, and one with no priorities key is ABSENT", () => {
+  const corrupt = repo({ "project-state.json": JSON.stringify({ priorities: { "ship the reader": true } }) });
+  const r = run(SCRIPT, ["--project-root", corrupt, "--issues-fixture", FIXTURE, "--json"]);
+  expect(json(r.out).sources.find(s => s.source === "plan-file")?.kind).toBe("UNMEASURED");
+  expect(r.code).toBe(2);
+  const none = repo({ "project-state.json": JSON.stringify({ updated: "x" }) });
+  expect(json(run(SCRIPT, ["--project-root", none, "--issues-fixture", FIXTURE, "--json"]).out).sources.find(s => s.source === "plan-file")?.kind).toBe("ABSENT");
+});

@@ -122,7 +122,10 @@ export function planFileSource(root: string): SourceReading {
     return { source, kind: "UNMEASURED", why: `${PLAN_FILE} could not be read (${(e as Error).message})` };
   }
   const priorities = (parsed as { priorities?: unknown })?.priorities;
-  if (!Array.isArray(priorities)) return { source, kind: "ABSENT", why: `${PLAN_FILE} has no priorities array` };
+  // No key is ABSENT; a key holding something else is a source present and
+  // unreadable, never zero (review round 4 of PR #2188).
+  if (priorities === undefined) return { source, kind: "ABSENT", why: `${PLAN_FILE} has no priorities` };
+  if (!Array.isArray(priorities)) return { source, kind: "UNMEASURED", why: `${PLAN_FILE}'s priorities is not an array` };
   // A JSON-aware walk rather than a text search: an object-valued priority
   // never appears in the file as its compact stringification, and a search
   // slice can cut an escape in half (review of PR #2188). A walk that cannot
