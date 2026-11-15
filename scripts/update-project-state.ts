@@ -13,7 +13,7 @@ import { execSync } from "child_process";
 
 /** How many sessions the handoff shows. One site, so the count can be mutated. */
 const RENDERED_SESSIONS = 3;
-import { missingStateVerdict, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
+import { boundedPriorities, missingStateVerdict, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
 import { localCalendarDay } from "../lib/local-calendar-day";
 import { openImprovements, stageLadderViolations, type Stage } from "../lib/stage-ladder";
 
@@ -215,7 +215,10 @@ function render(state: ProjectState): string {
   // Priorities
   if (state.priorities.length > 0) {
     lines.push("**Next priorities:**");
-    state.priorities.forEach((p, i) => lines.push(`${i + 1}. ${p}`));
+    // Bounded (#1946): the rest stay in the json, and the document says how many.
+    const { shown, omitted } = boundedPriorities(state.priorities);
+    shown.forEach((p, i) => lines.push(`${i + 1}. ${p}`));
+    if (omitted > 0) lines.push(`…and ${omitted} more in \`project-state.json\` \`priorities\`, not rendered here.`);
     lines.push("");
   }
 
