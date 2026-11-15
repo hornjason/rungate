@@ -389,10 +389,14 @@ export function criteriaNamedBy(
   issue: { readonly title: string; readonly body?: string | null },
   criterionIds: readonly string[],
 ): string[] {
-  const text = `${issue.title}\n${issue.body ?? ""}`;
-  return criterionIds.filter(
-    id => oneScMentionPattern(id).test(text) && !declaresOwnCriterion(text, id),
-  );
+  const lines = `${issue.title}\n${issue.body ?? ""}`.split("\n");
+  // Scored per mention, not per text (#1683): one checkbox stating an id must
+  // not suppress a line elsewhere that serves it. The id is named when ANY
+  // line mentioning it is not a checkbox stating it.
+  return criterionIds.filter(id => {
+    const mention = oneScMentionPattern(id);
+    return lines.some(line => mention.test(line) && !declaresOwnCriterion(line, id));
+  });
 }
 
 /**

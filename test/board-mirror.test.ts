@@ -195,6 +195,25 @@ describe("SC-2610: every spec contributes, not the one on the command line", () 
   });
 
   /**
+   * #1683: the checkbox was scored over the whole text, so ONE declaring line
+   * suppressed an id the issue also served under its Criteria heading. Seen 11
+   * times in 400 issues (#1217, #1200, #1161, #995, #971, #905). An id is
+   * dropped only when EVERY mention of it is a declaring checkbox.
+   */
+  test("#1683: a checkbox stating an id does not suppress a separate serving mention of the same id", () => {
+    const both = {
+      title: "x",
+      body: "## Criteria this serves\n\nSC-10\n\n## Checklist\n\n- [ ] SC-10 also verify the fixture\n",
+    };
+    expect(criteriaNamedBy(both, ["SC-10"]), "the served id was dropped by its own checklist line").toEqual(["SC-10"]);
+    // The title is a mention too.
+    expect(criteriaNamedBy({ title: "Fix SC-10's fixture", body: "- [ ] SC-10 done\n" }, ["SC-10"])).toEqual(["SC-10"]);
+    // #713's shape: every mention is a declaring checkbox, so the cell stays empty.
+    const states = { title: "x", body: "- [ ] SC-1 — a\n- [ ] SC-2 — b\n- [x] SC-1 — again\n" };
+    expect(criteriaNamedBy(states, ["SC-1", "SC-2"]), "#713's shape reached the column").toEqual([]);
+  });
+
+  /**
    * One spec stating the same id twice is not two specs stating it once.
    *
    * `parseCriteria` matches every `- [ ] ID:` line independently and does
