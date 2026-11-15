@@ -33,8 +33,8 @@ export const REQUIRE_CLOSING_REF_VARIABLE = "RUNGATE_REQUIRE_CLOSING_REF";
 export const PROCESS_CHECK_WORKFLOWS = ["closing-references.yml"] as const;
 
 export interface HumanStepReadings {
-  /** `owner/name`, or null when the origin remote names no GitHub repository. */
-  slug: string | null;
+  /** `owner/name`; null when the origin remote names no GitHub repository; UNMEASURED when it could not be read (#2169). */
+  slug: Reading<string | null>;
   secretPresent: Reading<boolean>;
   /** The variable's value, or null when it is not set. */
   requireClosingRef: Reading<string | null>;
@@ -49,20 +49,25 @@ export interface HumanStepReadings {
 /** One line per step owed or unread, then a line saying what was measured. Pure. */
 export function humanSteps(r: HumanStepReadings): string[] {
   const unreadWorkflows = r.unreadableWorkflows.map(why => `UNMEASURED: process checks — ${why}`);
-  if (r.slug === null) {
+  if (r.slug.kind === "UNMEASURED" || r.slug.value === null) {
+    const why =
+      r.slug.kind === "UNMEASURED"
+        ? `the origin remote could not be read (${r.slug.why})`
+        : "the origin remote names no GitHub repository";
     return [
-      "UNMEASURED: human steps — the origin remote names no GitHub repository, so the project token, " +
+      `UNMEASURED: human steps — ${why}, so the project token, ` +
         `${REQUIRE_CLOSING_REF_VARIABLE} and the required checks were not read.`,
       // Read from the tree, not from GitHub, so it is owed whatever the remote is.
       ...unreadWorkflows,
     ];
   }
+  const slug = r.slug.value;
   const out: string[] = [];
   const measured: string[] = [];
   if (r.secretPresent.kind === "UNMEASURED") out.push(`UNMEASURED: ${PROJECT_TOKEN_SECRET} — ${r.secretPresent.why}`);
   else if (!r.secretPresent.value) {
     out.push(
-      `OWED: gh secret set ${PROJECT_TOKEN_SECRET} -R ${r.slug}   # a token that can write the project board; every board step refuses without it`,
+      `OWED: gh secret set ${PROJECT_TOKEN_SECRET} -R ${slug}   # a token that can write the project board; every board step refuses without it`,
     );
   } else measured.push(`${PROJECT_TOKEN_SECRET} is set`);
 
@@ -70,7 +75,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
     out.push(`UNMEASURED: ${REQUIRE_CLOSING_REF_VARIABLE} — ${r.requireClosingRef.why}`);
   } else if (r.requireClosingRef.value !== "true") {
     out.push(
-      `OWED: gh variable set ${REQUIRE_CLOSING_REF_VARIABLE} -R ${r.slug} --body true   # closing-references refuses instead of warning`,
+      `OWED: gh variable set ${REQUIRE_CLOSING_REF_VARIABLE} -R ${slug} --body true   # closing-references refuses instead of warning`,
     );
   } else measured.push(`${REQUIRE_CLOSING_REF_VARIABLE} is true`);
 
@@ -85,7 +90,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
       if (missing.length > 0 && statusChecks === "required-checks") {
         for (const check of missing) {
           out.push(
-            `OWED: gh api -X POST repos/${r.slug}/branches/${branch}/protection/required_status_checks/contexts ` +
+            `OWED: gh api -X POST repos/${slug}/branches/${branch}/protection/required_status_checks/contexts ` +
               `-f 'contexts[]=${check}'   # ${check} runs on every pull request and blocks nothing until it is required`,
           );
         }
@@ -99,7 +104,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
           restrictions: null,
         };
         out.push(
-          `OWED: gh api -X PUT repos/${r.slug}/branches/${branch}/protection --input - <<<'${JSON.stringify(body)}'` +
+          `OWED: gh api -X PUT repos/${slug}/branches/${branch}/protection --input - <<<'${JSON.stringify(body)}'` +
             `   # ${branch} is unprotected; this protects it and requires ${missing.join(", ")}, nothing else`,
         );
       } else if (missing.length > 0) {
@@ -160,30 +165,74 @@ export function processChecksIn(root: string): { checks: string[]; unreadable: s
  * module can read. `parseRemoteSlug` deliberately ignores the host, because
  * repo identity is its question; which forge to ask is this one's.
  */
-export function githubSlugOf(url: string): string | null {
+export function githubSlugOf(url: string, resolveSshHost: (host: string) => string | null = sshHostName): string | null {
   const trimmed = url.trim();
   if (!trimmed) return null;
   let host: string | null = null;
+  let viaSsh = false;
   if (/^[a-z+]+:\/\//i.test(trimmed)) {
+    let parsed: URL;
     try {
-      host = new URL(trimmed).hostname;
+      parsed = new URL(trimmed);
     } catch {
       return null; // not a URL at all, so it names no GitHub repository
     }
+    host = parsed.hostname;
+    viaSsh = /^(?:ssh|git\+ssh|ssh\+git):$/i.test(parsed.protocol);
   } else {
     host = trimmed.match(/^(?:[^@/]+@)?([^:/]+):/)?.[1] ?? null;
+    viaSsh = host !== null;
   }
-  return host?.toLowerCase() === "github.com" ? parseRemoteSlug(trimmed) : null;
+  if (host === null) return null;
+  const literal = host.toLowerCase();
+  // Accepted before asking ssh, so a `Host github.com` block that rewrites
+  // HostName to ssh.github.com (GitHub's port-443 route) cannot refuse it.
+  if (literal === "github.com") return parseRemoteSlug(trimmed);
+  // An scp-style or ssh:// host may be an alias in ~/.ssh/config
+  // (`Host github.com-work` / `HostName github.com`), so ssh decides what it
+  // names (#2169). An https host is a DNS name, so it stays a literal compare
+  // and a lookalike is still refused.
+  if (!viaSsh) return null;
+  const resolved = resolveSshHost(literal)?.toLowerCase();
+  return resolved !== undefined && GITHUB_SSH_HOSTS.has(resolved) ? parseRemoteSlug(trimmed) : null;
 }
 
-/** The configured `origin` url of `root`, or "" when there is none. */
-function originUrl(root: string): string {
-  const r = spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd: root, encoding: "utf-8", timeout: 5000 });
-  return r.status === 0 ? r.stdout : "";
+/** The hosts GitHub serves git over SSH on: the usual one, and the port-443 one its docs give for blocked networks. */
+const GITHUB_SSH_HOSTS = new Set(["github.com", "ssh.github.com"]);
+
+/** What `spawnSync` reports, narrowed to what the reads below look at, so a failed read can be tested. */
+export type RunResult = { status: number | null; stdout: string; error?: Error; signal?: NodeJS.Signals | null };
+export type Run = (cmd: string, args: string[], cwd?: string) => RunResult;
+const runLive: Run = (cmd, args, cwd) => spawnSync(cmd, args, { cwd, encoding: "utf-8", timeout: 5000 });
+
+/**
+ * The host `ssh -G` resolves `host` to (its `hostname` line), or null when
+ * ssh cannot say. A host that could be read as an option never reaches ssh.
+ */
+export function sshHostName(host: string, run: Run = runLive): string | null {
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(host)) return null;
+  const r = run("ssh", ["-G", host]);
+  if (r.error || r.status !== 0) return null;
+  return r.stdout.match(/^hostname (\S+)$/m)?.[1] ?? null;
+}
+
+/**
+ * The configured `origin` url of `root` (#2169). `""` only when git ran and
+ * said none is configured: `git config --get` exits 1 for an absent key. Git
+ * missing, a root that does not exist, the timeout, or any other exit is a
+ * reading not taken, never "no repository".
+ */
+export function readOrigin(root: string, run: Run = runLive): Reading<string> {
+  const r = run("git", ["config", "--get", "remote.origin.url"], root);
+  if (r.error) return { kind: "UNMEASURED", why: `git could not read it (${r.error.message})` };
+  if (r.status === 0) return { kind: "READ", value: r.stdout };
+  if (r.status === 1) return { kind: "READ", value: "" };
+  const why = r.status === null ? `git was stopped${r.signal ? ` by ${r.signal}` : ""} before it answered` : `git exited ${r.status}`;
+  return { kind: "UNMEASURED", why };
 }
 
 export interface HumanStepProbes {
-  slug: (root: string) => string | null;
+  slug: (root: string) => Reading<string | null>;
   secret: (slug: string) => Promise<Reading<boolean>>;
   variable: (slug: string) => Promise<Reading<string | null>>;
   protection: ProtectionProbe;
@@ -207,7 +256,10 @@ const why = (e: unknown) => `${typeof status(e) === "number" ? `HTTP ${status(e)
 
 /** The live reads: two GETs here, three in the protection probe. No writes. */
 export const LIVE_PROBES: HumanStepProbes = {
-  slug: root => githubSlugOf(originUrl(root)),
+  slug: root => {
+    const origin = readOrigin(root);
+    return origin.kind === "READ" ? { kind: "READ", value: githubSlugOf(origin.value) } : origin;
+  },
   secret: async slug => {
     try {
       const { owner, repo } = parseOwnerRepo(slug);
@@ -239,11 +291,12 @@ export const LIVE_PROBES: HumanStepProbes = {
 
 /** Read everything {@link humanSteps} needs for `root`. */
 export async function readHumanSteps(root: string, probes: HumanStepProbes = LIVE_PROBES): Promise<HumanStepReadings> {
-  const slug = probes.slug(root);
+  const origin = probes.slug(root);
   const { checks: processChecks, unreadable: unreadableWorkflows } = processChecksIn(root);
+  const slug = origin.kind === "READ" ? origin.value : null;
   if (slug === null) {
     const none = { kind: "UNMEASURED", why: "no repository" } as const;
-    return { slug, secretPresent: none, requireClosingRef: none, protection: none, processChecks, unreadableWorkflows };
+    return { slug: origin, secretPresent: none, requireClosingRef: none, protection: none, processChecks, unreadableWorkflows };
   }
   const [secretPresent, requireClosingRef, facts] = await Promise.all([
     probes.secret(slug),
@@ -256,5 +309,5 @@ export async function readHumanSteps(root: string, probes: HumanStepProbes = LIV
       : facts.statusChecks === undefined
         ? { kind: "UNMEASURED", why: "the protection probe did not say whether the branch is protected" }
         : { kind: "READ", value: { branch: facts.branch, contexts: facts.contexts, statusChecks: facts.statusChecks } };
-  return { slug, secretPresent, requireClosingRef, protection, processChecks, unreadableWorkflows };
+  return { slug: origin, secretPresent, requireClosingRef, protection, processChecks, unreadableWorkflows };
 }
