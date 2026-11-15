@@ -387,6 +387,14 @@ export function unplacedHooks(input: {
 export const NOT_LIVE_CLAIM = /\bnot live\b/i;
 
 /**
+ * The reverse claim: a registry description saying its hook is registered in
+ * user settings (#2229). Checked against `user-settings` specifically, because
+ * that is the file the sentence names; a registration somewhere else does not
+ * make the sentence true.
+ */
+export const LIVE_CLAIM = /\bregistered live in ~\/\.claude\/settings\.json/i;
+
+/**
  * Registry entries whose NOT LIVE claim the machine's registration contradicts,
  * as lines a person reads at session start (#1986).
  *
@@ -410,7 +418,10 @@ export function liveClaimLines(
   const lines: string[] = [];
   for (const e of entries) {
     if (typeof e.name !== "string" || typeof e.description !== "string") continue;
-    if (!NOT_LIVE_CLAIM.test(e.description)) continue;
+    if (!NOT_LIVE_CLAIM.test(e.description)) {
+      if (LIVE_CLAIM.test(e.description)) lines.push(...liveRegistrationLine(e.name, loaded));
+      continue;
+    }
     const r = hookRegistration(e.name, loaded);
     if (r.verdict === "registered") {
       lines.push(
@@ -425,6 +436,29 @@ export function liveClaimLines(
     }
   }
   return lines;
+}
+
+/**
+ * #2229: an entry that claims user settings registers it. Silent when the
+ * `user-settings` scope names the hook; UNMEASURED when that scope could not
+ * be read (every CI runner); otherwise a disagreement naming where the hook
+ * IS registered, if anywhere.
+ */
+function liveRegistrationLine(hook: string, loaded: ScopeReading[]): string[] {
+  const user = loaded.find(r => r.scope === "user-settings");
+  if (user === undefined || user.commands === null) {
+    return [
+      `Hook registry UNMEASURED: ${hook} is described as registered live in ~/.claude/settings.json, and ` +
+        `user-settings could not be read to check that claim (#2229)`,
+    ];
+  }
+  if (user.commands.some(c => commandNamesHook(c, hook))) return [];
+  const elsewhere = loaded.filter(r => (r.commands ?? []).some(c => commandNamesHook(c, hook))).map(r => r.scope);
+  return [
+    `Hook registry DISAGREES: ${hook} is described as registered live in ~/.claude/settings.json, but ` +
+      `user-settings does not register it${elsewhere.length > 0 ? ` (registered in ${elsewhere.join(", ")})` : ""} — ` +
+      `re-register it or correct the entry (#2229)`,
+  ];
 }
 
 /**

@@ -23,7 +23,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-import { REGISTRATION_SCOPES, liveClaimLines, liveClaimReport, type ScopeReading } from "../lib/hook-scopes";
+import { LIVE_CLAIM, REGISTRATION_SCOPES, liveClaimLines, liveClaimReport, type ScopeReading } from "../lib/hook-scopes";
 
 const ROOT = join(import.meta.dir, "..");
 const CMD = "bun /h/hooks/PlantedGuard.hook.ts";
@@ -71,6 +71,56 @@ describe("#1986: a registry entry's NOT LIVE claim is checked against the regist
   test("#1986: an entry that claims nothing about liveness is never reported", () => {
     const plain = { name: "PlantedGuard", description: "Refuses things." };
     expect(liveClaimLines([plain], readings({ "user-settings": [CMD] }))).toEqual([]);
+  });
+});
+
+/**
+ * #2229: the reverse claim. An entry that says it is registered live in user
+ * settings read as live forever, whatever the machine held, because only NOT
+ * LIVE claims were compared. Checked against user-settings specifically:
+ * that is the file the claim names.
+ */
+describe("#2229: a registry entry's 'registered live' claim is checked too", () => {
+  const LIVE = {
+    name: "PlantedGuard",
+    description: "Refuses things. Registered live in ~/.claude/settings.json (measured 2026-11-15).",
+  };
+
+  test("#2229: claims registered live, user settings does not register it — a named disagreement", () => {
+    const lines = liveClaimLines([LIVE], readings({}));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/DISAGREES/);
+    expect(lines[0]).toContain("PlantedGuard");
+    expect(lines[0]).toContain("registered live");
+  });
+
+  test("#2229: the same entry with the user registration present — nothing to report", () => {
+    expect(liveClaimLines([LIVE], readings({ "user-settings": [CMD] }))).toEqual([]);
+  });
+
+  test("#2229: registered somewhere else, not in user settings — still a disagreement, naming where", () => {
+    const lines = liveClaimLines([LIVE], readings({ "project-settings": [CMD] }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/DISAGREES/);
+    expect(lines[0]).toContain("project-settings");
+  });
+
+  test("#2229: user settings unreadable — UNMEASURED, not silence and not a verdict", () => {
+    const lines = liveClaimLines([LIVE], readings({ "user-settings": null }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/UNMEASURED/);
+    expect(lines[0]).not.toMatch(/DISAGREES/);
+  });
+
+  test("#2229: the live tree's three user-scoped entries each make the claim the check reads", () => {
+    // The check is only as good as the spelling it matches; if an entry's
+    // wording drifts off LIVE_CLAIM, its registration is silently unchecked.
+    const registry = JSON.parse(readFileSync(join(ROOT, ".claude", "rungate", "hooks.json"), "utf-8"));
+    const hooks: Array<{ name: string; description?: string }> = Array.isArray(registry) ? registry : registry.hooks;
+    for (const name of ["TopLevelCdGuard", "AgentBriefGuard", "WorkflowStateGuard"]) {
+      const d = hooks.find(h => h.name === name)?.description ?? "";
+      expect(LIVE_CLAIM.test(d), `${name}'s entry does not make the claim the session-start check reads`).toBe(true);
+    }
   });
 });
 
