@@ -661,6 +661,25 @@ describe("#479: the live reconciliation, over what the repo owns", () => {
         "Say it is registered live in ~/.claude/settings.json, and that the session-start reading reports a drift.",
     ).toEqual([]);
   });
+
+  // Review of #2226: the first edit fixed each row's opening clause and left
+  // a trailing "still pending" in the same cell, and nothing read the spec.
+  // TopLevelCdGuard's row (#1986) carried the same leftover. The population
+  // is every user-scoped hook registered live, read from the spec table.
+  test("#2225: the spec's row for each live user-scoped hook says registered live and nothing pending", () => {
+    const spec = readFileSync(join(ROOT, "specs", "HOOK-ARCHITECTURE-SPEC.md"), "utf-8").split("\n");
+    const wrong: string[] = [];
+    for (const name of [...RECLASSIFIED_1585, "TopLevelCdGuard"]) {
+      const row = spec.find(l => l.startsWith(`| ${name} |`));
+      if (row === undefined) {
+        wrong.push(`${name}: no row`);
+        continue;
+      }
+      if (/not live|still pending|pending human/i.test(row)) wrong.push(`${name}: says not live or pending`);
+      if (!/registered live in ~\/\.claude\/settings\.json/i.test(row)) wrong.push(`${name}: does not say registered live`);
+    }
+    expect(wrong).toEqual([]);
+  });
 });
 
 describe("#479: an entry that is off records why", () => {
