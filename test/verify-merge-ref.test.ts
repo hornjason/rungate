@@ -414,10 +414,17 @@ describe("the remote is tied to the pull request's repository (#1909 review, #19
   test("an unknown expected repository is UNMEASURED, not a free pass", () => {
     expect(remoteRepoReading("https://github.com/hornjason/rungate.git", "", GH).ok).toBe(false);
   });
+  // Asserted on the wording only the unread-host branch prints. A null host
+  // also fails the mismatch comparison below it, so `ok: false` alone would
+  // stay green with that branch deleted — and the operator would read "the
+  // pull request is on null", which names a host nobody read as if it were one.
   test("an unknown expected HOST is UNMEASURED, not a free pass", () => {
-    const r = remoteRepoReading("https://github.com/hornjason/rungate.git", MINE, null);
-    expect(r.ok, "a pull request whose URL was not read cleared the host comparison").toBe(false);
-    expect(r.detail).toContain("host");
+    for (const unread of [null, undefined]) {
+      const r = remoteRepoReading("https://github.com/hornjason/rungate.git", MINE, unread);
+      expect(r.ok, "a pull request whose URL was not read cleared the host comparison").toBe(false);
+      expect(r.detail).toContain("gave no URL for this pull request");
+      expect(r.detail).not.toContain("null");
+    }
   });
   test("a remote whose host cannot be parsed is UNMEASURED", () => {
     expect(remoteRepoReading("https://[not-a-host/hornjason/rungate.git", MINE, GH).ok).toBe(false);
@@ -818,7 +825,7 @@ describe("the script refuses, and the refusal is what each case observed", () =>
     });
     const r = bothHalves(gh, ["--pr", "1", "--remote", remote]);
     expect(r.err).toContain("UNMEASURED");
-    expect(r.err).toContain("host");
+    expect(r.err, "refused, but not by the unread-host branch").toContain("gave no URL for this pull request");
   });
 
   // The wiring half of round 2's finding. `remoteRead: ls.ok` is one word
