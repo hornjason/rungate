@@ -174,6 +174,9 @@ export function githubSlugOf(
   if (!trimmed) return none;
   let host: string | null = null;
   let viaSsh = false;
+  // A URL's slug comes from its path, so a port (`ssh.github.com:443`) cannot
+  // be read as the owner; an scp-style remote has no port to confuse.
+  let slug: () => string | null = () => parseRemoteSlug(trimmed);
   if (/^[a-z+]+:\/\//i.test(trimmed)) {
     let parsed: URL;
     try {
@@ -183,15 +186,19 @@ export function githubSlugOf(
     }
     host = parsed.hostname;
     viaSsh = /^(?:ssh|git\+ssh|ssh\+git):$/i.test(parsed.protocol);
+    const parts = parsed.pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "").split("/").filter(Boolean);
+    slug = () => (parts.length === 2 ? `${parts[0]}/${parts[1]}`.toLowerCase() : null);
   } else {
     host = trimmed.match(/^(?:[^@/]+@)?([^:/]+):/)?.[1] ?? null;
     viaSsh = host !== null;
   }
   if (host === null) return none;
   const literal = host.toLowerCase();
-  // Accepted before asking ssh, so a `Host github.com` block that rewrites
-  // HostName to ssh.github.com (GitHub's port-443 route) cannot refuse it.
-  if (literal === "github.com") return { kind: "READ", value: parseRemoteSlug(trimmed) };
+  // A GitHub host spelled literally is accepted before asking ssh, so a
+  // `Host` block rewriting its HostName cannot refuse it, and a machine with
+  // no ssh can still read it. Over ssh that is both of GitHub's SSH hosts
+  // (review round 2 of PR #2187); over https it is github.com alone.
+  if (viaSsh ? GITHUB_SSH_HOSTS.has(literal) : literal === "github.com") return { kind: "READ", value: slug() };
   // An scp-style or ssh:// host may be an alias in ~/.ssh/config
   // (`Host github.com-work` / `HostName github.com`), so ssh decides what it
   // names (#2169). An https host is a DNS name, so it stays a literal compare
@@ -202,7 +209,7 @@ export function githubSlugOf(
   // (review of PR #2187), so it is UNMEASURED, never "no GitHub repository".
   if (resolved.kind === "UNMEASURED") return { kind: "UNMEASURED", why: `its host ${literal} could not be resolved: ${resolved.why}` };
   const named = resolved.value?.toLowerCase();
-  return { kind: "READ", value: named !== undefined && GITHUB_SSH_HOSTS.has(named) ? parseRemoteSlug(trimmed) : null };
+  return { kind: "READ", value: named !== undefined && GITHUB_SSH_HOSTS.has(named) ? slug() : null };
 }
 
 /** The hosts GitHub serves git over SSH on: the usual one, and the port-443 one its docs give for blocked networks. */

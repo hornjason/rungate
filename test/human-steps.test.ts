@@ -402,3 +402,28 @@ describe("#2169: a failed git read is reported as one, and an SSH alias for gith
     expect(sshHostName("h", () => ({ status: 0, stdout: "user git\n" }))).toEqual(unmeasured("ssh -G h printed no hostname line"));
   });
 });
+
+// Review round 2 of PR #2187: ssh.github.com is one of GitHub's SSH hosts, so
+// spelled literally it must not depend on ssh, and its usual URL carries :443.
+describe("#2169: GitHub's port-443 SSH host spelled literally is GitHub without asking ssh", () => {
+  const refuse = (h: string) => (asked.push(h), unmeasured("ssh -G could not run (ENOENT)"));
+  let asked: string[] = [];
+
+  test("ssh://…ssh.github.com:443/o/n.git and git@ssh.github.com:o/n.git are o/n, and ssh is never asked", () => {
+    asked = [];
+    expect(githubSlugOf("ssh://git@ssh.github.com:443/o/n.git", refuse)).toEqual(read("o/n"));
+    expect(githubSlugOf("git@ssh.github.com:O/N.git", refuse)).toEqual(read("o/n"));
+    expect(asked, "a literal GitHub SSH host was sent to ssh").toEqual([]);
+  });
+
+  test("over https, ssh.github.com is not a git host and stays a literal compare", () => {
+    asked = [];
+    expect(githubSlugOf("https://ssh.github.com/o/n", refuse)).toEqual(read(null));
+    expect(asked).toEqual([]);
+  });
+
+  test("a port on a github.com URL does not shift the slug", () => {
+    expect(githubSlugOf("ssh://git@github.com:22/o/n.git", refuse)).toEqual(read("o/n"));
+    expect(githubSlugOf("https://github.com:443/o/n", refuse)).toEqual(read("o/n"));
+  });
+});
