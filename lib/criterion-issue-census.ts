@@ -233,6 +233,67 @@ export function assertOneJudgementPerPair(adjudications: readonly Adjudication[]
   }
 }
 
+/**
+ * Refuse a record naming a criterion no spec states (#1643).
+ *
+ * The lookup in {@link censusRows} is a strict `===`, so a typo (`SC-9110`
+ * for `SC-9101`) matches nothing and the row reads UNADJUDICATED while a
+ * judgement sits in the file. Shape and duplicates are checked per record and
+ * per store; this needs the spec set, so it runs where the specs are in hand.
+ * It asks whether a criterion EXISTS, not whether it is ticked: a judgement
+ * survives an untick and still applies when the tick returns.
+ *
+ * The ISSUE half is {@link orphanedAdjudications}, and it reports rather than
+ * refuses: the census reads open issues only, so a judged issue closing is the
+ * ordinary lifecycle, and a refusal there would stop the whole census on it
+ * (review of PR #2192).
+ */
+export function assertAdjudicationsResolve(adjudications: readonly Adjudication[], specs: readonly SpecRef[]): void {
+  const stated = new Set<string>();
+  for (const spec of specs) {
+    if (isTemplateSpec(spec.file)) continue;
+    for (const c of parseCriteria(spec.content)) stated.add(c.id);
+  }
+  const problems = adjudications.flatMap((a, at) =>
+    stated.has(a.criterion) ? [] : [`adjudication record ${at} names ${a.criterion}, which no spec states`],
+  );
+  if (problems.length > 0) {
+    throw new Error(
+      `${problems.join("; ")}. A judgement on a criterion that does not exist is never applied, so it would read ` +
+        `as nobody having judged. Fix the record.`,
+    );
+  }
+}
+
+/** A judgement whose issue is not among the issues the census read. */
+export interface OrphanedAdjudication {
+  at: number;
+  record: Adjudication;
+}
+
+/**
+ * The judgements naming an issue not among `issues` (#1643): closed since, or
+ * mistyped. Each applies to no row, so the census still runs, and each is
+ * printed beside the rows so a mistyped number sits next to the UNADJUDICATED
+ * row it was meant for instead of vanishing.
+ */
+export function orphanedAdjudications(
+  adjudications: readonly Adjudication[],
+  issues: readonly IssueRef[],
+): OrphanedAdjudication[] {
+  const fetched = new Set(issues.map(i => i.number));
+  return adjudications.flatMap((record, at) => (fetched.has(record.issue) ? [] : [{ at, record }]));
+}
+
+/** One line per orphaned judgement, saying why it applies to nothing. */
+export function renderOrphaned(orphans: readonly OrphanedAdjudication[]): string[] {
+  return orphans.map(
+    ({ at, record }) =>
+      `ORPHANED: adjudication record ${at} (${record.criterion}, #${record.issue}) names an issue that is not ` +
+      `open: closed since, or mistyped. It applies to no row; fix its number, or remove it if the issue closed.`,
+  );
+}
+
 /** Does this issue name this criterion, on a word boundary? */
 export function issueNames(issue: IssueRef, id: string): boolean {
   const pattern = oneScMentionPattern(id);
@@ -254,6 +315,7 @@ export function censusRows(
   adjudications: readonly Adjudication[],
 ): CensusRow[] {
   assertOneJudgementPerPair(adjudications);
+  assertAdjudicationsResolve(adjudications, specs);
   const rows: CensusRow[] = [];
 
   for (const spec of specs) {

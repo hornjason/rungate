@@ -19,13 +19,16 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   assertAdjudicationShape,
+  assertAdjudicationsResolve,
   assertOneJudgementPerPair,
+  orphanedAdjudications,
+  renderOrphaned,
   censusRows,
   isAmbiguousId,
   issueNames,
@@ -37,6 +40,7 @@ import {
 } from "../lib/criterion-issue-census";
 import { criterionFingerprint } from "../lib/spec-evidence";
 import { readAdjudications } from "../scripts/criterion-issue-census";
+import { collectSpecFiles } from "../lib/spec-files";
 
 const TICKED = "- [x] SC-9101: the gate refuses an unsigned payload.\n      needs: test\n";
 const UNTICKED = "- [ ] SC-9102: the gate also refuses an expired one.\n      needs: test\n";
@@ -303,5 +307,71 @@ describe("the ambiguity exclusions are the two documented ones", () => {
     expect(
       censusRows(spec(ambiguous.replace(/SC-A1/g, "SC-9101")), [issue(42, "SC-9101 is wrong")], []),
     ).toHaveLength(1);
+  });
+});
+
+/**
+ * #1643: the fifth instance of corruption-as-absence on this store. A record
+ * whose criterion no spec states, or whose issue is not among the issues
+ * fetched, matches nothing under the strict `===` lookup, so the row read
+ * UNADJUDICATED while somebody's judgement sat in the file. The check needs
+ * the spec set and the issue set, so it lives where both are: `censusRows`.
+ */
+describe("#1643: a judgement naming a criterion that does not exist is refused; one naming an issue that is not open is reported", () => {
+  const fingerprint = criterionFingerprint("the gate refuses an unsigned payload.");
+  const real: Adjudication = {
+    criterion: "SC-9101",
+    issue: 42,
+    verdict: "contradicts",
+    by: "jason",
+    collected: "2026-10-28",
+    note: "a judgement about a pair that exists",
+    fingerprint,
+  };
+  const issues = [issue(42, "SC-9101 is not true")];
+
+  test("a criterion no spec states is refused, naming the record's position and the id", () => {
+    const typo = { ...real, criterion: "SC-9110" };
+    expect(() => censusRows(spec(TICKED), issues, [real, typo])).toThrow(
+      /adjudication record 1 names SC-9110, which no spec states/,
+    );
+  });
+
+  test("an issue absent from the fetched set is ORPHANED and reported, and the census still runs", () => {
+    // Review of PR #2192: the census reads open issues only, so a judged issue
+    // closing is the ordinary lifecycle. A refusal there stopped every row.
+    const offByOne = { ...real, issue: 43 };
+    const rows = censusRows(spec(TICKED), issues, [offByOne]);
+    expect(rows[0]!.standing[42]!.status, "the pair it was meant for still owes a judgement").toBe("none");
+    const orphans = orphanedAdjudications([offByOne], issues);
+    expect(orphans).toEqual([{ at: 0, record: offByOne }]);
+    expect(renderOrphaned(orphans)).toEqual([
+      "ORPHANED: adjudication record 0 (SC-9101, #43) names an issue that is not open: closed since, or mistyped. " +
+        "It applies to no row; fix its number, or remove it if the issue closed.",
+    ]);
+    expect(orphanedAdjudications([real], issues), "a record on an open issue is not orphaned").toEqual([]);
+  });
+
+  test("control: the identical record against a criterion and issue that exist is accepted and clears the debt", () => {
+    const rows = censusRows(spec(TICKED), issues, [real]);
+    expect(rows[0]!.standing[42]!.status).toBe("current");
+    expect(unadjudicated(rows)).toEqual([]);
+  });
+
+  test("an UNTICKED criterion a spec states still resolves: existence, not tick state, is the question", () => {
+    expect(() => censusRows(spec(UNTICKED), [issue(42, "SC-9102")], [{ ...real, criterion: "SC-9102" }])).not.toThrow();
+  });
+
+  test("every criterion the shipped store names is stated by this repository's specs", () => {
+    // The criterion half only. Whether each issue is still open is a reading
+    // of the tracker, made at run time and reported as ORPHANED, not refused.
+    const ROOT = join(import.meta.dir, "..");
+    const records = readAdjudications(ROOT);
+    expect(records.length, "the store read nothing, so this measured nothing").toBeGreaterThan(0);
+    const specs = collectSpecFiles(join(ROOT, "specs")).map(f => ({
+      file: `specs/${f}`,
+      content: readFileSync(join(ROOT, "specs", f), "utf-8"),
+    }));
+    expect(() => assertAdjudicationsResolve(records, specs)).not.toThrow();
   });
 });
