@@ -413,7 +413,9 @@ describe("update-project-state", () => {
 
   test("an IN-PLACE improvement is not rendered — this section is what is outstanding", () => {
     writeTestJson(
-      withStages([{ what: "already enforced", mechanism: "a test", status: "in-place", verify: "true" }]),
+      // Its own command, not item A1's `"true"`: the ladder refuses two proofs
+      // sharing one (#2236), and the render would then refuse the whole plan.
+      withStages([{ what: "already enforced", mechanism: "a test", status: "in-place", verify: "test -n enforced" }]),
     );
     const md = run();
 

@@ -158,7 +158,9 @@ describe("#1984: the report reads the plan from project-state.json", () => {
       items: [
         { id: "B1", what: "a reading with a command", done: false, verify: "bun test test/x.test.ts" },
         { id: "B2", what: "a reading nobody can run", done: false, verify: null },
-        { id: "B3", what: "a reading already true", done: true, verify: "true" },
+        // Its own command, not A1's: the ladder refuses two items proved by
+        // one command (#2236), and that refusal would replace this report.
+        { id: "B3", what: "a reading already true", done: true, verify: "test -n B3" },
       ],
       retro: null,
     },
