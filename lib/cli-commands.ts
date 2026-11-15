@@ -299,6 +299,16 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
       "rungate unaccounted-work [--project-root <dir>] [--repo <owner/name>] [--issues-fixture <file.json>] [--json]   " +
       "(exit 1 when work is unaccounted, 2 when a source could not be read)",
   },
+  // #2248: the command #2233 (fix-commits on push to main) and #2234
+  // (gate-refusals at the end of a ship run) call, per #1126's decision that
+  // each intake source runs on its own trigger.
+  intake: {
+    script: "scripts/intake.ts",
+    summary: "Run each intake source and print its reading — MEASURED with a count, or UNMEASURED naming why",
+    usage:
+      "rungate intake [--project-root <dir>] [--source <id>] [--json]   " +
+      "(advisory: an unreadable source prints UNMEASURED and exits 0; exit 2 on a bad argument)",
+  },
   // Reads a `gh pr view`-shaped payload on stdin, which the dispatcher passes
   // through (`stdio: "inherit"`), or `--fixture` offline.
   "audit-closing-references": {
