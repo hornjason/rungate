@@ -1156,7 +1156,15 @@ export function reviewThreadRequests(
   // posting less.
   const scope = reading.scope;
   let touched: ReadonlySet<string> | null = null;
+  // The diff's own spelling of each changed file, keyed by the comparison
+  // form. When a finding matches one, THAT spelling is sent: it is byte for
+  // byte what the API resolves against (#1992).
+  const diffSpelling = new Map<string, string>();
   if (scope?.status === "MEASURED") {
+    for (const entry of scope.files) {
+      const spelt = repoPathSpelling(entry);
+      if (spelt !== null) diffSpelling.set(spelt.toLowerCase(), spelt);
+    }
     // The same conversion `readPayload` makes, through the same function, so
     // the skip here and the demotion there cannot disagree about one finding.
     const { readable } = partitionChangedFiles(scope.files);
@@ -1176,15 +1184,16 @@ export function reviewThreadRequests(
     if (findingPathScope(finding, touched) === "PRE_EXISTING") continue;
 
     const raw = finding[f.file];
-    // The scope check above matched the NORMALISED spelling, so that is the
-    // one sent (#1992). Sending the raw one — `./lib/a.ts`, `lib//a.ts` —
-    // asks the API for a path it cannot resolve, the file-level retry is
-    // refused the same way, and the round ends FAILED over a finding that
-    // was correctly in the diff. `normaliseRepoPath` also drops a `:line`
-    // suffix; the number in it is still read below, because it is the only
-    // line the finding gave.
-    const path = normaliseRepoPath(raw);
-    if (path === null) continue;
+    // The scope check above matched the NORMALISED spelling; the raw one —
+    // `./lib/a.ts`, `lib//a.ts` — asks the API for a path it cannot resolve,
+    // the file-level retry is refused the same way, and the round ends
+    // FAILED over a finding that was correctly in the diff (#1992). So the
+    // diff's own spelling is sent when the finding matched one, and the
+    // finding's case-kept spelling otherwise. Both drop a `:line` suffix;
+    // the number in it is still read below, as the only line given.
+    const spelt = repoPathSpelling(raw);
+    if (spelt === null) continue;
+    const path = diffSpelling.get(spelt.toLowerCase()) ?? spelt;
     const suffixed = String(raw).trim().replace(/\\/g, "/").match(/^(.*?):(\d+)(?::\d+)?$/);
 
     const declared = finding[f.line];
@@ -2019,8 +2028,22 @@ function readPayload(
  * deliberately `null` rather than unescaped here: decoding octal escapes to
  * compare a path is a second parser, and the right repair is to produce the
  * list with `-z` or `core.quotePath=false` in the first place.
+ *
+ * It is `repoPathSpelling` lowercased: the two share every rule but case,
+ * because this one COMPARES and that one is SENT (#1992).
  */
 export function normaliseRepoPath(value: unknown): string | null {
+  return repoPathSpelling(value)?.toLowerCase() ?? null;
+}
+
+/**
+ * A path in the spelling the REST API can match: dot segments collapsed,
+ * leading slashes, backslashes and a `:line` suffix removed, CASE KEPT. The
+ * API matches the diff byte for byte, so the lowercased comparison form is
+ * the predicate and never the value (#1992). `null` exactly where
+ * `normaliseRepoPath` is `null`, because that one is this one lowercased.
+ */
+export function repoPathSpelling(value: unknown): string | null {
   if (typeof value !== "string") return null;
   let p = value.trim().replace(/\\/g, "/");
   // git's C-quoted spelling. Not comparable without a second unescaper.
@@ -2056,7 +2079,7 @@ export function normaliseRepoPath(value: unknown): string | null {
   p = out.join("/");
   if (p === "") return null;
 
-  return /^(?:[\w.@+-]+\/)*[\w.@+-]+$/.test(p) ? p.toLowerCase() : null;
+  return /^(?:[\w.@+-]+\/)*[\w.@+-]+$/.test(p) ? p : null;
 }
 
 /** What a changed-file list reduced to, split by whether it could be read. */

@@ -407,6 +407,21 @@ describe("#1992: a finding is sent in the spelling the scope check matched", () 
     });
   }
 
+  // Case is kept: the API matches byte for byte, and the comparison form is
+  // lowercase. When the finding matched a changed file, that file's own
+  // spelling is what goes out.
+  test("the diff's own spelling is sent when a finding matched it in another case", async () => {
+    const { sent, post } = recorder(() => ({ ok: true }));
+    await postReviewThreads(withScope([{ file: "./lib/GitHub.ts", line: 3, summary: "s" }], ["lib/github.ts"]), post);
+    expect(sent).toEqual([{ path: "lib/github.ts", line: 3 }]);
+  });
+
+  test("with no changed-file list, the finding's own case survives the cleanup", async () => {
+    const { sent, post } = recorder(() => ({ ok: true }));
+    await postReviewThreads(reading([{ file: "./src/Thing.ts", line: 4, summary: "s" }]), post);
+    expect(sent).toEqual([{ path: "src/Thing.ts", line: 4 }]);
+  });
+
   test("a ':line' suffix still supplies the line, and is not sent as part of the path", async () => {
     const { sent, post } = recorder(() => ({ ok: true }));
     await postReviewThreads(withScope([{ file: "./lib/github.ts:42", summary: "s" }], ["lib/github.ts"]), post);
