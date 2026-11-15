@@ -1748,8 +1748,8 @@
         {
           "id": "E4",
           "what": "`board-mirror --write` run, so the board column reflects the bodies",
-          "done": true,
-          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --repo hornjason/rungate --reading criteria-field"
+          "done": false,
+          "verify": null
         },
         {
           "id": "E5",
