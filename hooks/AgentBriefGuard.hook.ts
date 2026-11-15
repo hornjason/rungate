@@ -3,9 +3,9 @@
  * AgentBriefGuard — PreToolUse on Agent (SC-367, SC-370)
  * Validates briefs use templates + bypassPermissions. Delegates to lib/agent-brief-validation.ts
  *
- * NOT LIVE. USER scope since #1585: WORK_DIR/BASE_DIR are ~/.rungate and ~/.claude
- * (machine state), and the project registration never loaded in the worktree sessions
- * where agents spawn agents. Registration in ~/.claude/settings.json is a pending human action.
+ * USER scope since #1585: WORK_DIR/BASE_DIR are ~/.rungate and ~/.claude (machine state),
+ * and a project registration never loads in the worktree sessions where agents spawn agents.
+ * Registered live in ~/.claude/settings.json (measured 2026-11-15, #2225).
  */
 import { BASE_DIR, WORK_DIR } from './lib/paths';
 import { parseHookInput } from './lib/parseStdin';
