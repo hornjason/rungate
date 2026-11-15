@@ -44,53 +44,38 @@ the wrapper when you copy a step.
   git -C ~/Projects/rungate fetch -q origin
   git -C ~/Projects/rungate worktree add -b rg/release-XYZ ~/Projects/rg-wt-rel-XYZ origin/main )
 
-# 3. In the worktree: bump, standing line, pins
+# 3. In the worktree: bump, standing line, pins. Steps 3 to 6 each cd into
+#    it, because a cd inside one step's subshell does not carry to the next.
 #    package.json  "version": "X.Y.Z"
 #    SUCCESS.md    - **Distribution standing (<today>)** — tree `X.Y.Z`, published `rungate@<PUBLISHED>`.
 ( set -euo pipefail
+  cd ~/Projects/rg-wt-rel-XYZ
   bun bin/rungate.ts scaffold . --fix   # moves every `bunx rungate@` pin
   git status --short )                  # only package.json, SUCCESS.md, .github/workflows/*;
                                         # `git checkout --` anything else (CODE-MAP.md churns)
 
 # 4. Census
-bun scripts/census-routing.ts         # then run the `bun test …` line it prints
+(cd ~/Projects/rg-wt-rel-XYZ && bun scripts/census-routing.ts)   # then run the `bun test …` line it prints
 #    EXPECTED: test/distribution-standing.test.ts fails 2 cases ("no release
 #    tag for X.Y.Z"). They clear once the tag exists. ANY OTHER red: stop and
 #    fix it before tagging.
 
 # 5. Commit, push the branch, tag THAT commit, push the tag
 ( set -euo pipefail
+  cd ~/Projects/rg-wt-rel-XYZ
   git commit -am "release: X.Y.Z"
   git push -u origin rg/release-XYZ
   git tag -a vX.Y.Z -m "rungate X.Y.Z"
   git push origin vX.Y.Z )
 #    release.yml runs the full suite and a typecheck, then publishes
 
-# 6. Wait for the run, then the registry. It takes several minutes.
-#    Only a run whose recorded CONCLUSION is a failure spends X.Y.Z. In that
-#    case, read its log, fix, and cut the next version (see "A failed release
-#    costs a version number"). A run that has not registered, or a watch that
-#    broke off, says nothing about the release, and nothing is spent.
-( set -euo pipefail
-  run=""
-  for i in $(seq 1 12); do
-    run=$(gh run list -R hornjason/rungate --workflow release.yml --branch vX.Y.Z -L 1 --json databaseId -q '.[0].databaseId // empty')
-    [ -n "$run" ] && break
-    sleep 5
-  done
-  [ -n "$run" ] || { echo "no release.yml run for vX.Y.Z after 60s — check the tag was pushed; nothing is spent"; exit 1; }
-  gh run watch "$run" -R hornjason/rungate >/dev/null || true
-  conclusion=$(gh run view "$run" -R hornjason/rungate --json conclusion -q .conclusion) || conclusion=""
-  case "$conclusion" in
-    success) ;;
-    failure|cancelled|timed_out|startup_failure) echo "release.yml $conclusion — X.Y.Z is spent"; exit 1 ;;
-    *) echo "run $run has no outcome yet ('$conclusion') — nothing is known to be spent; re-run this step"; exit 1 ;;
-  esac
-  for i in $(seq 1 20); do
-    [ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ] && { echo PUBLISHED; exit 0; }
-    sleep 30
-  done
-  echo "run passed but npm is not serving X.Y.Z after 10 min — stop and look; do not do step 7"; exit 1 )
+# 6. Wait for the run, then the registry. It takes several minutes and prints
+#    one reading. Only SPENT means X.Y.Z is used up: read the run's log, fix,
+#    and cut the next version (see "A failed release costs a version number").
+#    NO_RUN, NO_OUTCOME and NOT_SERVED spend nothing: look, then re-run it.
+#    PUBLISHED is the only reading that goes on to step 7. The script and its
+#    tests: scripts/release-wait.ts, test/release-wait.test.ts.
+(cd ~/Projects/rg-wt-rel-XYZ && bun scripts/release-wait.ts --version X.Y.Z)
 
 # 7. Published half: set SUCCESS.md's line to published `rungate@X.Y.Z`,
 #    then commit and push
