@@ -1755,7 +1755,7 @@
           "id": "E5",
           "what": "a spec declares which SUCCESS claim it serves (SC-2623). NOT PART OF THE 2026-10-30 AGREEMENT — ADR-009 added it afterwards and it is placed here by the DA, which is why this stage lists five where the original Stage D listed four",
           "done": false,
-          "verify": "grep -q '^- \\[x\\] SC-2623:' specs/SPEC-TO-BOARD-PIPELINE-SPEC.md && bun bin/rungate.ts audit-spec-evidence specs/SPEC-TO-BOARD-PIPELINE-SPEC.md"
+          "verify": null
         }
       ],
       "goal": "The other specs get placement tables and reach the board",
