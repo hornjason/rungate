@@ -49,7 +49,7 @@ bun scripts/census-routing.ts         # then run the `bun test …` line it prin
 #    fix it before tagging.
 
 # 5. Commit, push the branch, tag THAT commit, push the tag
-git commit -am "release: X.Y.Z" && git push -u origin rg/release-XYZ
+git commit -am "release: X.Y.Z" && git push -u origin rg/release-XYZ && \
 git tag -a vX.Y.Z -m "rungate X.Y.Z" && git push origin vX.Y.Z
 #    release.yml runs the full suite and a typecheck, then publishes
 
@@ -68,7 +68,8 @@ gh run watch "$run" -R hornjason/rungate --exit-status || { echo "release.yml FA
 for i in $(seq 1 20); do
   [ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ] && { echo PUBLISHED; break; }
   sleep 30
-done   # no PUBLISHED after 10 minutes: the run passed but npm is not serving it — stop and look
+done
+[ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ] || { echo "run passed but npm is not serving X.Y.Z after 10 min — stop and look; do not do step 7"; exit 1; }
 
 # 7. Published half: set SUCCESS.md's line to published `rungate@X.Y.Z`,
 #    then commit and push
