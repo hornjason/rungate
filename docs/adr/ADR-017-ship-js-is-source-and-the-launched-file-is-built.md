@@ -80,10 +80,11 @@ bites rather than discovered by a consumer.
    `scriptPath` changes to the generated file, including the ship skill at
    `~/.claude/skills/ship/SKILL.md`, which lives outside this repository.
 2. **Then, the real fix: build-time bundling replaces the 15 hand copies —
-   Jason.** The generator compiles the pure `lib/` functions in. The audit
-   found that, among the copied modules, four import node built-ins
-   (`child_process`, `fs`, `crypto`) and four import other `lib/` modules.
-   Measured by name on this ADR's review, from each copied module's imports:
+   Jason.** The generator compiles the pure `lib/` functions in. Eight
+   modules are copied. Measured by name on this ADR's review, from each
+   module's `import` lines (this replaces the audit's unnamed "four and
+   four"): three import a node built-in directly (`child_process`, `fs`,
+   `crypto`), and three import another `lib/` module. In detail:
    `security-verdict`, `scope-denylist` and `suite-measurement` import
    nothing, and `plan-coverage` imports only `scope-denylist`, so those bundle
    as they are. `worktree-repo`, `workflow-security` and `prior-branch` import
