@@ -82,10 +82,14 @@ bites rather than discovered by a consumer.
 2. **Then, the real fix: build-time bundling replaces the 15 hand copies —
    Jason.** The generator compiles the pure `lib/` functions in. The audit
    found that, among the copied modules, four import node built-ins
-   (`child_process`, `fs`, `crypto`) and four import other `lib/` modules. A
-   module in either group needs a pure core split out first, and which modules
-   those are is the first thing the split issue measures; the audit counted
-   them but did not name them. The generator must keep the
+   (`child_process`, `fs`, `crypto`) and four import other `lib/` modules.
+   Measured by name on this ADR's review, from each copied module's imports:
+   `security-verdict`, `scope-denylist` and `suite-measurement` import
+   nothing, and `plan-coverage` imports only `scope-denylist`, so those bundle
+   as they are. `worktree-repo`, `workflow-security` and `prior-branch` import
+   node built-ins, and `dev-liveness` reaches `child_process` through
+   `verified-push`; those four need a pure core split out first, and they are
+   the split row's files. The generator must keep the
    `meta` literal and the top-level `return`, which off-the-shelf bundlers
    reject. The parity tests that hold each copy to its original are retired
    with the copy.
@@ -118,5 +122,5 @@ table, which is the intended state of a proposed ADR missing its criteria.
 |---|---|---|---|---|
 | — | Generate a comment-stripped ship launch file under the Workflow tool cap | scripts/build-workflow-launch.ts, workflows/ship.run.js, test/workflow-launch-build.test.ts, package.json | — | — |
 | — | Point every documented ship scriptPath at the generated launch file | lib/ship-mode.ts, .claude/rules/ship-workflow.md, CLAUDE.md | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
-| — | Split pure cores out of the lib modules ship.js copies by hand | lib/security-verdict.ts, lib/worktree-repo.ts, lib/scope-denylist.ts, lib/plan-coverage.ts, lib/workflow-security.ts, lib/prior-branch.ts, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
+| — | Split pure cores out of the lib modules ship.js copies by hand | lib/worktree-repo.ts, lib/workflow-security.ts, lib/prior-branch.ts, lib/dev-liveness.ts, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
 | — | Bundle the pure lib cores into the generated ship launch file | scripts/build-workflow-launch.ts, workflows/ship.js, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap, Split pure cores out of the lib modules ship.js copies by hand |
