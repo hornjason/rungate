@@ -34,15 +34,19 @@ the wrapper when you copy a step.
 #    --repo. The body needs the sections the filing gate asks for and the line
 #    "This serves no criterion: a release." #2195 is a worked example.
 
-# 1. Pre-flight: the reds that cost a version number if found after tagging
-( set -euo pipefail
-  cd ~/Projects/rungate && <T> bun test test/stage-ladder.test.ts   # reads the LIVE board
-  npm view rungate version )          # what the registry serves now = PUBLISHED below
+# 1. What the registry serves now = PUBLISHED below
+npm view rungate version
 
-# 2. Branch off main, in a worktree, never the primary checkout
+# 2. Branch off main in a worktree (never the primary checkout), install, and
+#    run the pre-flight THERE: the red that costs a version number if found
+#    after tagging. It reads the LIVE board, and it must run on the tree being
+#    released; the primary checkout can be far behind it (#2207).
 ( set -euo pipefail
   git -C ~/Projects/rungate fetch -q origin
-  git -C ~/Projects/rungate worktree add -b rg/release-XYZ ~/Projects/rg-wt-rel-XYZ origin/main )
+  git -C ~/Projects/rungate worktree add -b rg/release-XYZ ~/Projects/rg-wt-rel-XYZ origin/main
+  cd ~/Projects/rg-wt-rel-XYZ
+  bun install --frozen-lockfile
+  <T> bun test test/stage-ladder.test.ts )
 
 # 3. In the worktree: bump, standing line, pins. Steps 3 to 6 each cd into
 #    it, because a cd inside one step's subshell does not carry to the next.
@@ -176,7 +180,7 @@ have nothing to do with the version. Two reddened the 2026-11-04 attempt:
 |---|---|---|
 | `distribution-standing` | published half named the unpublished version | name what the registry serves |
 | `line-citation-ratchet` | the rendered `PROJECT-STATE.md` inherited a `path:NNN` citation from a session entry | drop the line number — the entry already named the symbol |
-| `stage-ladder` live plan row (v0.8.18, 2026-11-13) | the suite reads the **live board**. Criterion coverage was 47 of 49: #2047 had closed before its successors were placed in the engine milestone | fix the board, then cut the next version (0.8.19). Nothing in the tree was wrong, which is why step 1 runs this before the tag |
+| `stage-ladder` live plan row (v0.8.18, 2026-11-13) | the suite reads the **live board**. Criterion coverage was 47 of 49: #2047 had closed before its successors were placed in the engine milestone | fix the board, then cut the next version (0.8.19). Nothing in the tree was wrong, which is why step 2 runs this before the tag, in the release worktree |
 
 Run these locally before tagging and the round trip is minutes rather than a
 failed job:
