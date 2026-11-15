@@ -213,8 +213,54 @@ const COMPLETE_STAGES = 6;
  * no `pipefail` at all; on macOS it is bash in POSIX mode, which does. The
  * same string would have been fail-closed here and fail-open in CI.
  */
-const run = (cmd: string) =>
-  spawnSync("bash", ["-o", "pipefail", "-c", cmd], { cwd: ROOT, encoding: "utf-8" });
+const run = (cmd: string, timeoutMs?: number) =>
+  spawnSync("bash", ["-o", "pipefail", "-c", cmd], { cwd: ROOT, encoding: "utf-8", timeout: timeoutMs });
+
+/**
+ * #1975: the overall goal's command makes live GitHub calls. It ran under
+ * bun's default 5000 ms, and on PR #1974 it was killed at 5007.57 ms and
+ * reported `Exit null` with the same sentence as a command that ran and said
+ * nothing. A kill is not a verdict, and a reader had to go to the duration to
+ * tell the two apart. The spawn and the UNMEASURED message both read this one
+ * value, so they cannot disagree about what the budget was.
+ */
+const GOAL_VERDICT_BUDGET_MS = 30_000;
+
+type GoalRun =
+  | { kind: "MET" | "SHORT"; said: string }
+  | { kind: "UNMEASURED"; why: string; said: string }
+  | { kind: "NO_CREDENTIAL"; status: number | null; said: string }
+  | { kind: "NO_VERDICT"; why: string; said: string };
+
+/** Run the goal's command within `budgetMs` and say which of five things came back. */
+function runGoal(cmd: string, budgetMs: number = GOAL_VERDICT_BUDGET_MS): GoalRun {
+  const started = performance.now();
+  const r = run(cmd, budgetMs);
+  const elapsed = Math.round(performance.now() - started);
+  const said = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+  if (r.status === null && (r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    return {
+      kind: "UNMEASURED",
+      why:
+        `UNMEASURED: the goal's command did not finish within its ${budgetMs}ms budget and was killed ` +
+        `(${r.signal ?? "no signal"}) after ${elapsed}ms. A slow call is not a verdict; nothing about the board was read.`,
+      said,
+    };
+  }
+  // A tree with no credential has not FAILED this goal — it has not
+  // MEASURED it (`.claude/rules/config-access.md`).
+  if (said.includes("GITHUB_TOKEN environment variable is not set")) return { kind: "NO_CREDENTIAL", status: r.status, said };
+  // Exactly two outcomes count as a verdict, and the command spells both.
+  if (r.status === 0 && said.includes("every reading is met")) return { kind: "MET", said };
+  if (r.status !== 0 && /\d+ of \d+ reading\(s\) are not met/.test(said)) return { kind: "SHORT", said };
+  return {
+    kind: "NO_VERDICT",
+    why:
+      `the goal's command produced neither verdict. It must either exit 0 saying every reading is met, ` +
+      `or exit non-zero naming how many are short. Exit ${r.status}:\n${said}`,
+    said,
+  };
+}
 
 const retro = (over: Partial<Retro> = {}): Retro => ({
   wentWell: ["a thing"],
@@ -381,36 +427,62 @@ describe("the live plan", () => {
     // owns is the CODE: that the command can still take a reading at all.
     // That is the regression #1718 fixed and the one worth guarding here.
     expect(doc.goal.verify.length, "the overall goal has no verify command").toBeGreaterThan(0);
-    const r = run(doc.goal.verify);
-    const said = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    const g = runGoal(doc.goal.verify);
 
-    // A tree with no credential has not FAILED this goal — it has not
-    // MEASURED it, and those are different states
-    // (`.claude/rules/config-access.md`). The command names which, so this
-    // branch asserts the refusal is the credential one and not a crash
-    // wearing the same exit code.
-    if (said.includes("GITHUB_TOKEN environment variable is not set")) {
-      expect(r.status, "no credential, and the command still exited 0 — unmeasured read as a pass").not.toBe(0);
-      expect(said, "it reported a reading SHORT in a tree it could not reach the API from").not.toContain(
+    // #1975: killed at the budget is a reading not taken, said with the
+    // duration, and never the "produced neither verdict" failure below.
+    if (g.kind === "UNMEASURED") {
+      console.warn(g.why);
+      return;
+    }
+
+    // The command names the missing credential, so this branch asserts the
+    // refusal is the credential one and not a crash wearing the same exit code.
+    if (g.kind === "NO_CREDENTIAL") {
+      expect(g.status, "no credential, and the command still exited 0 — unmeasured read as a pass").not.toBe(0);
+      expect(g.said, "it reported a reading SHORT in a tree it could not reach the API from").not.toContain(
         "reading(s) are not met",
       );
       return;
     }
 
-    // Exactly two outcomes count as a verdict, and the command spells both.
     // Anything else — a crash, an unresolvable spec, a producer that could
     // not be started, the `UNMEASURED` the five readings used to print —
     // means it did not measure the board, which is the failure this owns.
-    const met = r.status === 0 && said.includes("every reading is met");
-    const short = r.status !== 0 && /\d+ of \d+ reading\(s\) are not met/.test(said);
-    expect(
-      met || short,
-      `the goal's command produced neither verdict. It must either exit 0 saying every reading is met, ` +
-        `or exit non-zero naming how many are short. Exit ${r.status}:\n${said}`,
-    ).toBe(true);
-    expect(said, "it took no reading at all — this is the state #1718 removed").not.toContain(
+    expect(g.kind === "MET" || g.kind === "SHORT", g.kind === "NO_VERDICT" ? g.why : g.kind).toBe(true);
+    expect(g.said, "it took no reading at all — this is the state #1718 removed").not.toContain(
       "has not wired this reading",
     );
+  }, GOAL_VERDICT_BUDGET_MS + 10_000);
+
+  // #1975: the fixtures the goal case cannot supply on demand.
+  describe("#1975: a goal command killed at its budget is UNMEASURED; one that ran and said nothing still fails", () => {
+    test("a command that sleeps past the budget is UNMEASURED naming the budget and the elapsed time", () => {
+      const g = runGoal("sleep 5", 300);
+      expect(g.kind, "a kill was read as something other than a reading not taken").toBe("UNMEASURED");
+      const why = g.kind === "UNMEASURED" ? g.why : "";
+      expect(why).toContain("within its 300ms budget");
+      expect(why).toMatch(/after \d{3,}ms/);
+      expect(why).not.toContain("produced neither verdict");
+    });
+
+    test("a command that exits 0 printing nothing is still the no-verdict failure, with its message", () => {
+      const g = runGoal("true", 5_000);
+      expect(g.kind).toBe("NO_VERDICT");
+      expect(g.kind === "NO_VERDICT" ? g.why : "").toStartWith("the goal's command produced neither verdict.");
+    });
+
+    test("both verdicts are still read as verdicts", () => {
+      expect(runGoal("echo 'every reading is met'", 5_000).kind).toBe("MET");
+      expect(runGoal("echo '2 of 5 reading(s) are not met'; exit 1", 5_000).kind).toBe("SHORT");
+      expect(runGoal("echo 'every reading is met'; exit 1", 5_000).kind, "met words on a non-zero exit").toBe("NO_VERDICT");
+    });
+
+    test("the budget is one constant, and the goal case's own timeout leaves room for it", () => {
+      const src = readFileSync(join(ROOT, "test", "stage-ladder.test.ts"), "utf-8");
+      expect(src.match(/GOAL_VERDICT_BUDGET_MS\s*=/g)?.length, "assigned once").toBe(1);
+      expect(src, "the goal case runs under a timeout above the spawn's budget").toContain("}, GOAL_VERDICT_BUDGET_MS + 10_000);");
+    });
   });
 
   test("every complete stage carries a retro, and the next one is agreed and unblocked", () => {
