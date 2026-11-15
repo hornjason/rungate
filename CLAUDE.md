@@ -55,5 +55,6 @@ If you skip any step, the session is invalid.
 - Issues and code both live on **hornjason/rungate** (this repo) — renamed from
   `hornjason/pai-harness` on 2026-10-28; GitHub redirects the old name, and the
   dated measurements in comments that name it are records, not stale references
+- **Releasing to npm:** follow `docs/guides/RELEASING.md` step by step, starting at step 0. Do not improvise the order; each step failed once when skipped
 - See `specs/INSTRUCTION-COMPLIANCE-SPEC.md` for compliance testing system
 - Agent briefs only load when `agentType` matches `.claude/agents/{name}.md` filename (SC-249)
