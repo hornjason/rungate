@@ -426,8 +426,12 @@ describe("the remote is tied to the pull request's repository (#1909 review, #19
       expect(r.detail).not.toContain("null");
     }
   });
+  // Same overlap as the unread host: an unparseable host also fails the
+  // mismatch comparison, so the wording is what tells the branches apart.
   test("a remote whose host cannot be parsed is UNMEASURED", () => {
-    expect(remoteRepoReading("https://[not-a-host/hornjason/rungate.git", MINE, GH).ok).toBe(false);
+    const r = remoteRepoReading("https://[not-a-host/hornjason/rungate.git", MINE, GH);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("has a host that does not parse");
   });
 });
 
