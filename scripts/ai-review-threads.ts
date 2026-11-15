@@ -32,13 +32,17 @@
  */
 import { createGitHubClient } from "../lib/github";
 import {
+  AI_REVIEW_PR_IS_FORK_VAR,
   aiReviewThreadsExitCode,
   postReviewThreads,
+  prIsForkReading,
+  threadsDetailLines,
   threadsLandedPhrase,
   type AiReviewThreadPoster,
   type AiReviewThreadResponse,
 } from "../lib/ai-review-threads";
 import {
+  escapeAnnotation,
   readAiReviewChangedFiles,
   readAiReviewFindingsFile,
 } from "../lib/scaffold/ai-review-findings";
@@ -113,7 +117,11 @@ if (!parsed.ok) {
   // UNMEASURED, not a refusal. A step invoked wrongly has not discovered that
   // a review produced no threads; it has not looked. Exiting non-zero here
   // would red the job for a reason that says nothing about the review.
-  console.log(`::warning title=AI review threads::${COMMAND}: ${parsed.error} — UNMEASURED, nothing was posted`);
+  // Escaped: the error quotes the positionals, which are this process's argv
+  // (#1992).
+  console.log(
+    `::warning title=AI review threads::${COMMAND}: ${escapeAnnotation(parsed.error)} — UNMEASURED, nothing was posted`,
+  );
   process.exit(0);
 }
 
@@ -180,8 +188,12 @@ const post: AiReviewThreadPoster = async request => {
 // every round would re-post every thread. `lineTextFor` comes off the SAME
 // reader the gate above was built from, so it is the same cache and the same
 // normalisation rather than a second one that happens to agree.
-const result = await postReviewThreads(reading, post, f => carryKey(f, lineTextFor(f)));
-for (const line of result.detail) console.log(`${COMMAND}: ${line}`);
+// #1992: whether this run is a fork, read exactly from the variable the
+// workflow sets (#2203). Unset reads null, which keeps the fork degrade — so
+// this CLI under a workflow that does not yet set it behaves as before.
+const fork = prIsForkReading(process.env[AI_REVIEW_PR_IS_FORK_VAR]);
+const result = await postReviewThreads(reading, post, f => carryKey(f, lineTextFor(f)), fork);
+for (const line of threadsDetailLines(result, COMMAND)) console.log(line);
 console.log(
   `${COMMAND}: ${result.outcome} — attempted ${result.attempted}, posted ${result.posted}, ` +
     `demoted ${result.demoted}`,

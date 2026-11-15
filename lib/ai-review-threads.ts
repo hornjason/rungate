@@ -24,7 +24,7 @@
  * two that only a live fork or a line outside a hunk would otherwise produce.
  */
 import type { ThreadReading } from "./ai-review-rounds";
-import { reviewThreadRequests, threadKeyFrom } from "./scaffold/ai-review-findings";
+import { escapeAnnotation, reviewThreadRequests, threadKeyFrom } from "./scaffold/ai-review-findings";
 import type { AiReviewFindingsReading, AiReviewThreadRequest } from "./scaffold/ai-review-findings";
 
 /**
@@ -254,6 +254,7 @@ export async function postReviewThreads(
   reading: AiReviewFindingsReading,
   post: AiReviewThreadPoster,
   keyFor?: (finding: Record<string, unknown>) => string | null,
+  fork?: boolean | null,
 ): Promise<AiReviewThreadsResult> {
   const detail: string[] = [];
 
@@ -306,10 +307,24 @@ export async function postReviewThreads(
       continue;
     }
     if (answer.status === FORBIDDEN) {
+      // #1992: the fork excuse holds only for a fork. A same-repository run
+      // whose token lost write is a broken producer, and degrading it would
+      // hide that behind a reason that does not apply.
+      if (fork === false) {
+        failed += 1;
+        detail.push(
+          `${where}: 403 — this token cannot write pull-request comments, and this run is not a fork ` +
+            `(${AI_REVIEW_PR_IS_FORK_VAR}=false), so the read-only-token excuse does not apply.`,
+        );
+        continue;
+      }
       forbidden += 1;
       detail.push(
         `${where}: 403 — this token cannot write pull-request comments. A pull_request run from a ` +
-          `fork is handed a read-only token whatever the workflow declares.`,
+          `fork is handed a read-only token whatever the workflow declares.` +
+          (fork === true
+            ? ""
+            : ` Whether this run is a fork was not read (${AI_REVIEW_PR_IS_FORK_VAR} unset), so it is treated as one.`),
       );
       continue;
     }
@@ -356,6 +371,35 @@ export function threadsLandedPhrase(result: AiReviewThreadsResult): string {
   return result.posted === 0
     ? "No review threads were created"
     : `Only ${result.posted} of ${result.attempted} review threads were created`;
+}
+
+/**
+ * The environment variable the workflow sets to say whether this run is a
+ * fork (#1992; the generator half is #2203). An environment variable and not
+ * a flag on purpose: a published CLI that does not know a flag refuses it,
+ * while an unknown variable is ignored, so the workflow can set it before or
+ * after this reader ships without reddening anything.
+ */
+export const AI_REVIEW_PR_IS_FORK_VAR = "RUNGATE_PR_IS_FORK";
+
+/**
+ * Read exactly: `"true"` and `"false"` are readings, anything else is unread
+ * (`null`). The same rule `.claude/rules/config-access.md` applies to a switch
+ * that turns a refusal on — a loose reading turns it on by accident.
+ */
+export function prIsForkReading(raw: string | undefined): boolean | null {
+  return raw === "true" ? true : raw === "false" ? false : null;
+}
+
+/**
+ * Every line this command prints from a result's detail, escaped (#1992).
+ * Detail carries text the producer does not control — an API error message,
+ * a path a finding named — and a CR or LF printed raw starts a new line that
+ * the Actions runner reads as a workflow command. `escapeAnnotation` is the
+ * one escaper, so this does not grow a second.
+ */
+export function threadsDetailLines(result: AiReviewThreadsResult, command: string): string[] {
+  return result.detail.map(line => `${command}: ${escapeAnnotation(line)}`);
 }
 
 /** The exit code a round's outcome earns. Only `FAILED` refuses. */

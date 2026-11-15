@@ -1176,13 +1176,16 @@ export function reviewThreadRequests(
     if (findingPathScope(finding, touched) === "PRE_EXISTING") continue;
 
     const raw = finding[f.file];
-    // Readability is asked of the normalised spelling; the answer is carried
-    // by the raw one. A `:line` suffix is the one edit applied to it, because
-    // `src/a.ts:88` is not a path the API can match and the number in it is
-    // the only line the finding gave.
-    if (normaliseRepoPath(raw) === null) continue;
+    // The scope check above matched the NORMALISED spelling, so that is the
+    // one sent (#1992). Sending the raw one — `./lib/a.ts`, `lib//a.ts` —
+    // asks the API for a path it cannot resolve, the file-level retry is
+    // refused the same way, and the round ends FAILED over a finding that
+    // was correctly in the diff. `normaliseRepoPath` also drops a `:line`
+    // suffix; the number in it is still read below, because it is the only
+    // line the finding gave.
+    const path = normaliseRepoPath(raw);
+    if (path === null) continue;
     const suffixed = String(raw).trim().replace(/\\/g, "/").match(/^(.*?):(\d+)(?::\d+)?$/);
-    const path = suffixed ? suffixed[1]! : String(raw).trim().replace(/\\/g, "/");
 
     const declared = finding[f.line];
     const line =
