@@ -282,6 +282,16 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Print the board's node id from config",
     usage: "rungate board-id [--project-root <dir>]   (UNMEASURED and exit 2 when the config names no board)",
   },
+  // #2100. The prose half of declared work: `board-conformance`'s
+  // `declared-work` reading covers criteria and stage items. No
+  // `projectRootFlag`: it reads `process.cwd()`, which the child inherits.
+  "unaccounted-work": {
+    script: "scripts/unaccounted-work.ts",
+    summary: "Report undone work declared in a repository's prose that no open issue covers",
+    usage:
+      "rungate unaccounted-work [--project-root <dir>] [--repo <owner/name>] [--issues-fixture <file.json>] [--json]   " +
+      "(exit 1 when work is unaccounted, 2 when a source could not be read)",
+  },
   // Reads a `gh pr view`-shaped payload on stdin, which the dispatcher passes
   // through (`stdio: "inherit"`), or `--fixture` offline.
   "audit-closing-references": {

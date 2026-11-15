@@ -1,0 +1,224 @@
+/**
+ * Undone work declared in a repository's prose that no open issue covers (#2100).
+ *
+ * #1953 (PR #2096) built the structured half: `board-conformance`'s
+ * `declared-work` reading covers unticked criteria and open stage items. This
+ * is the prose half: a TODO, a "we need to", a priority paragraph, a fact kept
+ * only in agent memory.
+ *
+ * RunGate ships to consumers, and a consumer repository has no stages and
+ * usually no plan file or agent memory. So sources are DISCOVERED from what the
+ * repository contains, never typed into a list. A source that is not there is
+ * ABSENT, a source that is there but cannot be read is UNMEASURED, and neither
+ * is ever reported as zero.
+ *
+ * A declaration is accounted for only when it cites an issue that is open now.
+ * It errs toward reporting too much: a false positive costs a glance, while a
+ * false negative is the defect itself and cannot be seen. So a citation whose
+ * state could not be read is not credited.
+ */
+import { spawnSync } from "child_process";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "fs";
+import { join } from "path";
+
+export type SourceName = "tracked-files" | "plan-file" | "agent-memory";
+
+export interface Declaration {
+  source: SourceName;
+  /** Relative to the root for repository sources; absolute for agent memory, which lives outside it. */
+  path: string;
+  line: number;
+  text: string;
+  cites: number[];
+}
+
+export type SourceReading =
+  | { source: SourceName; kind: "READ"; declarations: Declaration[]; unreadable: string[]; files: number }
+  | { source: SourceName; kind: "ABSENT"; why: string }
+  | { source: SourceName; kind: "UNMEASURED"; why: string };
+
+/** The phrases that declare undone work. Matched per line. */
+export const PROSE_MARKERS: readonly RegExp[] = [/\bTODO\b/, /\bFIXME\b/, /\bwe need to\b/i, /\bnot yet built\b/i];
+
+/** The plan file a repository may carry. Read by its own source, so the tracked-file scan skips it. */
+export const PLAN_FILE = "project-state.json";
+
+/** `#N` standing alone: not `page#14`, not `&#15;`. */
+export function citationsIn(text: string): number[] {
+  return [...text.matchAll(/(?<![\w&/#])#(\d+)\b(?!;)/g)].map(m => Number(m[1]));
+}
+
+const clip = (s: string) => (s.length > 160 ? `${s.slice(0, 157)}...` : s);
+
+/** Every line of `text` carrying a marker. */
+export function declarationsIn(text: string, path: string, source: SourceName): Declaration[] {
+  const out: Declaration[] = [];
+  text.split("\n").forEach((line, i) => {
+    if (PROSE_MARKERS.some(re => re.test(line))) {
+      out.push({ source, path, line: i + 1, text: clip(line.trim()), cites: citationsIn(line) });
+    }
+  });
+  return out;
+}
+
+const looksBinary = (b: Buffer) => b.subarray(0, 8000).includes(0);
+
+/** Read `abs`, or say why not; `null` text for a binary file, which holds no prose. */
+function readProse(abs: string): { text: string | null } | { why: string } {
+  try {
+    const buf = readFileSync(abs);
+    return { text: looksBinary(buf) ? null : buf.toString("utf-8") };
+  } catch (e) {
+    return { why: (e as Error).message };
+  }
+}
+
+/** Every file git tracks in `root`. A file list that cannot be read is UNMEASURED. */
+export function trackedFilesSource(root: string): SourceReading {
+  const source = "tracked-files";
+  const r = spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf-8", timeout: 30_000, maxBuffer: 256 * 1024 * 1024 });
+  if (r.error) return { source, kind: "UNMEASURED", why: `git ls-files could not run (${r.error.message})` };
+  if (r.status !== 0) return { source, kind: "UNMEASURED", why: `git ls-files exited ${r.status}: ${(r.stderr ?? "").trim()}` };
+  const files = r.stdout.split("\0").filter(Boolean);
+  const declarations: Declaration[] = [];
+  const unreadable: string[] = [];
+  for (const rel of files) {
+    if (rel === PLAN_FILE) continue;
+    const abs = join(root, rel);
+    let st;
+    try {
+      st = lstatSync(abs);
+    } catch (e) {
+      unreadable.push(`${rel} could not be read (${(e as Error).message})`);
+      continue;
+    }
+    // A symlink points at content tracked elsewhere, or outside; a directory is a submodule.
+    if (!st.isFile()) continue;
+    const read = readProse(abs);
+    if ("why" in read) unreadable.push(`${rel} could not be read (${read.why})`);
+    else if (read.text !== null) declarations.push(...declarationsIn(read.text, rel, source));
+  }
+  return { source, kind: "READ", declarations, unreadable, files: files.length };
+}
+
+/**
+ * The plan file's `priorities`. Each one states work, so each is a declaration,
+ * placed at the line where its text starts.
+ */
+export function planFileSource(root: string): SourceReading {
+  const source = "plan-file";
+  const abs = join(root, PLAN_FILE);
+  if (!existsSync(abs)) return { source, kind: "ABSENT", why: `no ${PLAN_FILE}` };
+  let raw: string;
+  let parsed: unknown;
+  try {
+    raw = readFileSync(abs, "utf-8");
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return { source, kind: "UNMEASURED", why: `${PLAN_FILE} could not be read (${(e as Error).message})` };
+  }
+  const priorities = (parsed as { priorities?: unknown })?.priorities;
+  if (!Array.isArray(priorities)) return { source, kind: "ABSENT", why: `${PLAN_FILE} has no priorities array` };
+  const declarations = priorities.map((p): Declaration => {
+    const text = typeof p === "string" ? p : JSON.stringify(p);
+    const at = raw.indexOf(JSON.stringify(text).slice(0, 60));
+    const line = at < 0 ? 0 : raw.slice(0, at).split("\n").length;
+    return { source, path: PLAN_FILE, line, text: clip(text), cites: citationsIn(text) };
+  });
+  return { source, kind: "READ", declarations, unreadable: [], files: 1 };
+}
+
+/** Where Claude Code keeps agent memory for a session launched in `root`. */
+export function memoryDirFor(root: string, home: string): string {
+  return join(home, ".claude", "projects", root.replace(/[^A-Za-z0-9]/g, "-"), "memory");
+}
+
+/** The markdown files in this root's agent memory, which live outside the repository. */
+export function agentMemorySource(root: string, home: string): SourceReading {
+  const source = "agent-memory";
+  const dir = memoryDirFor(root, home);
+  if (!existsSync(dir)) return { source, kind: "ABSENT", why: `no agent memory at ${dir}` };
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter(n => n.endsWith(".md") && n !== "MEMORY.md");
+  } catch (e) {
+    return { source, kind: "UNMEASURED", why: `${dir} could not be listed (${(e as Error).message})` };
+  }
+  const declarations: Declaration[] = [];
+  const unreadable: string[] = [];
+  for (const name of names) {
+    const abs = join(dir, name);
+    const read = readProse(abs);
+    if ("why" in read) unreadable.push(`${abs} could not be read (${read.why})`);
+    else if (read.text !== null) declarations.push(...declarationsIn(read.text, abs, source));
+  }
+  return { source, kind: "READ", declarations, unreadable, files: names.length };
+}
+
+/** Every source this command knows how to discover, in report order. */
+export function discoverSources(root: string, home: string): SourceReading[] {
+  return [trackedFilesSource(root), planFileSource(root), agentMemorySource(root, home)];
+}
+
+/** The open/closed state of each cited number, or why it could not be read. */
+export type IssueStates = { kind: "READ"; open: ReadonlySet<number> } | { kind: "UNMEASURED"; why: string };
+
+/** Accounted for only by an issue that is open now. An unread state credits nothing. */
+export function isAccounted(d: Declaration, states: IssueStates): boolean {
+  return states.kind === "READ" && d.cites.some(n => states.open.has(n));
+}
+
+export interface Report {
+  root: string;
+  sources: Array<{ source: SourceName; kind: SourceReading["kind"]; why?: string; files?: number; declarations?: number }>;
+  issueStates: { kind: IssueStates["kind"]; why?: string; cited: number; open?: number };
+  unaccounted: Declaration[];
+  unmeasured: string[];
+}
+
+export function buildReport(root: string, sources: readonly SourceReading[], cited: readonly number[], states: IssueStates): Report {
+  const all = sources.flatMap(s => (s.kind === "READ" ? s.declarations : []));
+  const unmeasured = sources.flatMap(s =>
+    s.kind === "UNMEASURED" ? [`${s.source} — ${s.why}`] : s.kind === "READ" ? s.unreadable.map(u => `${s.source} — ${u}`) : [],
+  );
+  if (cited.length > 0 && states.kind === "UNMEASURED") unmeasured.push(`issue-states — ${states.why}`);
+  return {
+    root,
+    sources: sources.map(s =>
+      s.kind === "READ"
+        ? { source: s.source, kind: s.kind, files: s.files, declarations: s.declarations.length }
+        : { source: s.source, kind: s.kind, why: s.why },
+    ),
+    issueStates:
+      states.kind === "READ"
+        ? { kind: "READ", cited: cited.length, open: cited.filter(n => states.open.has(n)).length }
+        : { kind: "UNMEASURED", why: states.why, cited: cited.length },
+    unaccounted: all.filter(d => !isAccounted(d, states)),
+    unmeasured,
+  };
+}
+
+/** The distinct numbers cited across every source. */
+export function citedNumbers(sources: readonly SourceReading[]): number[] {
+  const set = new Set(sources.flatMap(s => (s.kind === "READ" ? s.declarations.flatMap(d => d.cites) : [])));
+  return [...set].sort((a, b) => a - b);
+}
+
+export function renderReport(r: Report): string[] {
+  const lines = [`unaccounted-work: ${r.root}`];
+  for (const s of r.sources) {
+    lines.push(
+      s.kind === "READ"
+        ? `  ${s.source}: READ — ${s.files} file(s), ${s.declarations} declaration(s)`
+        : `  ${s.source}: ${s.kind} — ${s.why}`,
+    );
+  }
+  const st = r.issueStates;
+  lines.push(st.kind === "READ" ? `  issue-states: READ — ${st.cited} cited, ${st.open} open` : `  issue-states: UNMEASURED — ${st.why} (${st.cited} cited)`);
+  lines.push(`UNACCOUNTED (${r.unaccounted.length}) — declared undone, citing no open issue:`);
+  for (const d of r.unaccounted) {
+    lines.push(`  ${d.path}:${d.line}  ${d.text}${d.cites.length ? `   [cites ${d.cites.map(n => `#${n}`).join(", ")}]` : ""}`);
+  }
+  for (const u of r.unmeasured) lines.push(`UNMEASURED: ${u}`);
+  return lines;
+}
