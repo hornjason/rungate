@@ -269,10 +269,17 @@ function runGoal(cmd: string, budgetMs: number = GOAL_VERDICT_BUDGET_MS): GoalRu
   };
 }
 
+// Each retro's improvement gets a command of its own (#2236): the ladder
+// refuses two proofs sharing one command, so a fixture whose stages all
+// carried `verify: "true"` would be refused for that before reaching the
+// field a case means to break. Unique per call, and never A1's `"true"`.
+let fixtureMechanism = 0;
 const retro = (over: Partial<Retro> = {}): Retro => ({
   wentWell: ["a thing"],
   wentPoorly: ["another thing"],
-  improvements: [{ what: "do better", mechanism: "a test that refuses it", status: "in-place", verify: "true" }],
+  improvements: [
+    { what: "do better", mechanism: "a test that refuses it", status: "in-place", verify: `test -n mechanism-${++fixtureMechanism}` },
+  ],
   ...over,
 });
 
@@ -839,6 +846,28 @@ describe("the ladder refuses the things that went wrong in Stage A", () => {
       ] }),
     ]).join("\n");
     expect(v).toContain("same verify command");
+  });
+
+  // Review of #2243: a retro improvement's verify is the same kind of proof,
+  // and the live plan carried one twice — #1849's improvement, byte for byte
+  // in stage C's retro and stage G's (removed by #2245).
+  test("#2236: two retro improvements carrying the same verify command are refused, naming both", () => {
+    const imp = { what: "a check exists", mechanism: "a test", status: "in-place" as const, verify: "test -f mech" };
+    const v = stageLadderViolations([
+      ok({ retro: retro({ improvements: [imp] }) }),
+      ok({ id: "B", items: [{ id: "B1", what: "another", done: true, verify: "test -f b" }], retro: retro({ improvements: [imp] }) }),
+    ]).join("\n");
+    expect(v).toContain('"A retro improvement 1"');
+    expect(v).toContain('"B retro improvement 1"');
+    expect(v).toContain("same verify command");
+  });
+
+  test("#2236: an item and an improvement carrying the same verify command are refused too", () => {
+    const v = stageLadderViolations([
+      ok({ retro: retro({ improvements: [{ what: "a check exists", mechanism: "a test", status: "in-place", verify: "true" }] }) }),
+    ]).join("\n");
+    expect(v).toContain('"A1"');
+    expect(v).toContain('"A retro improvement 1"');
   });
 
   test("#2236 CONTROL: distinct commands, and items with no command yet, are not refused", () => {

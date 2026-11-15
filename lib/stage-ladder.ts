@@ -526,30 +526,50 @@ export function stageLadderViolations(raw: unknown): string[] {
  * happened. Compared after trimming, so a copied command with a stray newline
  * is still the same command. A null verify is an item nobody has written a
  * proof for yet, and two of those duplicate nothing.
+ *
+ * Retro improvements are in the same population (review of #2243): an
+ * improvement's verify proves a mechanism is in place, which is a claim of
+ * the same kind, and the live plan carried #1849's improvement in two retros
+ * with one command until #2245. An improvement is named by its stage and its
+ * 1-based position, `"C retro improvement 2"`, because it has no id.
  */
 function duplicateVerifyViolations(raw: unknown[]): string[] {
+  const proofs: { id: string; verify: unknown }[] = [];
+  for (const s of raw) {
+    const stage = s as { id?: unknown; items?: unknown; retro?: unknown } | null;
+    if (stage === null || typeof stage !== "object") continue;
+    if (Array.isArray(stage.items)) {
+      for (const it of stage.items) {
+        const item = it as { id?: unknown; verify?: unknown } | null;
+        if (item !== null && typeof item === "object") proofs.push({ id: String(item.id), verify: item.verify });
+      }
+    }
+    const improvements = (stage.retro as { improvements?: unknown } | null)?.improvements;
+    if (Array.isArray(improvements)) {
+      improvements.forEach((imp, k) => {
+        const i = imp as { verify?: unknown } | null;
+        if (i !== null && typeof i === "object") {
+          proofs.push({ id: `${String(stage.id)} retro improvement ${k + 1}`, verify: i.verify });
+        }
+      });
+    }
+  }
   const first = new Map<string, string>();
   const out: string[] = [];
-  for (const s of raw) {
-    const items = (s as { items?: unknown })?.items;
-    if (!Array.isArray(items)) continue;
-    for (const it of items) {
-      const item = it as { id?: unknown; verify?: unknown } | null;
-      if (item === null || typeof item !== "object" || typeof item.verify !== "string") continue;
-      const cmd = item.verify.trim();
-      if (cmd === "") continue;
-      const id = String(item.id);
-      const earlier = first.get(cmd);
-      if (earlier === undefined) {
-        first.set(cmd, id);
-        continue;
-      }
-      out.push(
-        `"${earlier}" and "${id}" carry the same verify command, so they can never disagree and ` +
-          `"${id}" is never checked as its own claim — a done-condition restated (AGENTS.md rule 10). ` +
-          `Give "${id}" a command that reads what only it claims.`,
-      );
+  for (const { id, verify } of proofs) {
+    if (typeof verify !== "string") continue;
+    const cmd = verify.trim();
+    if (cmd === "") continue;
+    const earlier = first.get(cmd);
+    if (earlier === undefined) {
+      first.set(cmd, id);
+      continue;
     }
+    out.push(
+      `"${earlier}" and "${id}" carry the same verify command, so they can never disagree and ` +
+        `"${id}" is never checked as its own claim — a done-condition restated (AGENTS.md rule 10). ` +
+        `Give "${id}" a command that reads what only it claims.`,
+    );
   }
   return out;
 }
