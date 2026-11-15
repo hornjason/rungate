@@ -1,0 +1,115 @@
+---
+doc-type: adr
+status: proposed
+created: 2026-11-15
+updated: 2026-11-15
+---
+
+# ADR-017 — ship.js is source, and the file the Workflow tool launches is built from it
+
+## Status
+
+**Proposed, 2026-11-15.** Jason decides; the DA drafted it from a read-only
+audit. Open: the criterion ids and their spec lines in the Decomposition table
+are his to write (the DA's standing instructions bar it from criterion text),
+and which of Decisions 1–3 he accepts.
+
+## Context
+
+Claude Code's Workflow tool refuses any script over **524,288 bytes**. The
+cap is written into the tool's own definition (`maxLength: 524288` on its
+script input), and DailyBriefDashboard #1513 hit it as a refusal before any
+agent ran. `workflows/ship.js` is **556,509 bytes** on `main` at `b5132b82`
+(#2213), so no consumer has been able to launch the ship workflow since
+**2026-11-07**, when #1873 crossed the line.
+
+Measured with TypeScript's own parser (`ts.createSourceFile`, comments taken
+from node trivia; the first measurement in #2213, by a hand-written lexer, was
+wrong and is corrected there):
+
+| part | bytes | share |
+|---|---|---|
+| comments | 267,909 | 48.1% |
+| code | 156,629 | 28.1% |
+| template-literal prompt text | 107,054 | 19.2% |
+| other strings | 24,917 | 4.5% |
+
+What the audit (posted on #2213) found, with the commands beside each number:
+
+- **Comments never reach a run.** No prompt sends an agent to read ship.js,
+  and nothing calls `toString()` on its code. Roughly 50–60% of comment bytes
+  are instructions an editor needs; 30–40% are incident history; at least 7%
+  restate `.claude/rules/` or `specs/` word for word.
+- **47.9 KB of non-comment code are hand copies of `lib/`.** 15 blocks say so
+  ("INLINED, not imported", "Mirror of"), 82.9 KB in all, 33.2 KB of it code.
+  The largest are copies of `security-verdict` (14.9 KB), `worktree-repo`
+  (11.7 KB), `scope-denylist`/`plan-coverage` (11.4 KB) and
+  `workflow-security` (10.0 KB). They exist because a workflow script cannot
+  import at **run** time (#69). Nothing stops it at **build** time.
+- **About 57% of the file exists because there is no build step:** 268 KB of
+  comments plus 47.9 KB of copied code.
+- **Chained workflows are not available.** The runtime allows one level of
+  nesting. `ship.js` already calls `prove.js`, and `ship-and-heal.js` already
+  calls `ship.js`.
+- **Stripping alone buys time, not a fix.** Non-comment code grew from 68 KB to
+  289 KB between 2026-10-01 and 2026-10-25, about 9 KB a day. It has been flat
+  since only because this repository stopped running ship.js
+  (direct-ship mode, 2026-10-19).
+- **Test coupling:** 151 test files read ship.js source. 82 cut it on
+  `──── X-START ────` markers (which are comments), 75 execute extracted
+  blocks, and about 30 match comment prose. Docs and code hold 120
+  `ship.js:NNN` line citations.
+
+## Decision
+
+`workflows/ship.js` stays the file people edit and tests read. The file the
+Workflow tool launches is **generated** from it: comments stripped, and the
+pure `lib/` functions the hand copies imitate compiled in. A test fails when
+the generated file is stale or over the cap, so the cap is enforced where it
+bites rather than discovered by a consumer.
+
+## Decisions
+
+1. **Now, to unblock consumers: a generated, comment-stripped launch file —
+   Jason.** About 289 KB today, parses with 0 errors, ~235 KB under the cap. No
+   existing test moves, because they keep reading `ship.js`. The documented
+   `scriptPath` changes to the generated file, including the ship skill at
+   `~/.claude/skills/ship/SKILL.md`, which lives outside this repository.
+2. **Then, the real fix: build-time bundling replaces the 15 hand copies —
+   Jason.** The generator compiles the pure `lib/` functions in. Four of the
+   copied modules import node built-ins and four import other `lib/` modules,
+   so each needs a pure core split out first. The generator must keep the
+   `meta` literal and the top-level `return`, which off-the-shelf bundlers
+   reject. The parity tests that hold each copy to its original are retired
+   with the copy.
+3. **Going forward, incident history goes in the pull request, not the code —
+   Jason.** A comment keeps the instruction and the issue number. The story
+   lives in the PR. This is a writing rule for new code, not a migration of
+   the existing 268 KB, which would cost the ~30 prose-matching tests and the
+   120 line citations.
+
+## Not decided here
+
+- **A thin orchestrator** that moves every decision out of the sandbox into
+  agent-run scripts. It removes the root cause, but each decision becomes an
+  agent round-trip and the agent's report becomes the verdict
+  (ship.js says it outright: "an agent that falsely reports ok:true makes
+  ship.js proceed"). Reserve it for logic that needs I/O anyway.
+- **Moving existing comment history to `reference/`** (the #1009 pattern). It's
+  not needed once Decision 1 lands, and it's costly per the coupling numbers.
+- Whether `ship.mode` returns to `harness` in this repository. Separate, and
+  Jason's.
+
+## Decomposition
+
+The Criterion cells are Jason's to write; each row needs its `SC-<N>` id
+written in `specs/HARNESS-STANDARD.md` (the spec governing the ship workflow)
+and reserved first. Until then `plan-issues --decompose` will refuse this
+table, which is the intended state of a proposed ADR missing its criteria.
+
+| Criterion | Outcome | Files | Milestone | Blocked by |
+|---|---|---|---|---|
+| — | Generate a comment-stripped ship launch file under the Workflow tool cap | scripts/build-workflow-launch.ts, workflows/ship.run.js, test/workflow-launch-build.test.ts, package.json | — | — |
+| — | Point every documented ship scriptPath at the generated launch file | .claude/rules/ship-workflow.md, lib/scaffold/ship-workflow-rule.ts, CLAUDE.md, docs/guides/RELEASING.md | — | Generate a comment-stripped ship launch file under the Workflow tool cap |
+| — | Split pure cores out of the lib modules ship.js copies by hand | lib/security-verdict.ts, lib/worktree-repo.ts, lib/scope-denylist.ts, lib/plan-coverage.ts, lib/workflow-security.ts, lib/prior-branch.ts | — | — |
+| — | Bundle the pure lib cores into the generated ship launch file | scripts/build-workflow-launch.ts, workflows/ship.js, test/workflow-launch-build.test.ts | — | Generate a comment-stripped ship launch file under the Workflow tool cap, Split pure cores out of the lib modules ship.js copies by hand |
