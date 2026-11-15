@@ -18,8 +18,10 @@ failed, and had to be re-cut under a new version number. Every cause is below.
 
 Do these in order. Every step below has failed at least once when it was
 skipped or reordered. `X.Y.Z` is the version you are cutting. `<T>` stands for
-`env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)"`. Without it,
-anything that reads GitHub comes back UNMEASURED.
+`env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)"`. It is for
+the `bun` scripts, which read `GITHUB_TOKEN`, a variable a shell does not
+normally set; without it they come back UNMEASURED. Plain `gh` commands use
+gh's own login and need no prefix.
 
 Run one numbered step at a time. Any step with more than one command runs
 inside `( set -euo pipefail … )`. So a failure stops that step and nothing
@@ -33,8 +35,9 @@ the wrapper when you copy a step.
 #    "This serves no criterion: a release." #2195 is a worked example.
 
 # 1. Pre-flight: the reds that cost a version number if found after tagging
-(cd ~/Projects/rungate && <T> bun test test/stage-ladder.test.ts)  # reads the LIVE board
-npm view rungate version              # what the registry serves now = PUBLISHED below
+( set -euo pipefail
+  cd ~/Projects/rungate && <T> bun test test/stage-ladder.test.ts   # reads the LIVE board
+  npm view rungate version )          # what the registry serves now = PUBLISHED below
 
 # 2. Branch off main, in a worktree, never the primary checkout
 ( set -euo pipefail
@@ -44,9 +47,10 @@ npm view rungate version              # what the registry serves now = PUBLISHED
 # 3. In the worktree: bump, standing line, pins
 #    package.json  "version": "X.Y.Z"
 #    SUCCESS.md    - **Distribution standing (<today>)** — tree `X.Y.Z`, published `rungate@<PUBLISHED>`.
-bun bin/rungate.ts scaffold . --fix   # moves every `bunx rungate@` pin
-git status --short                    # only package.json, SUCCESS.md, .github/workflows/*;
-                                      # `git checkout --` anything else (CODE-MAP.md churns)
+( set -euo pipefail
+  bun bin/rungate.ts scaffold . --fix   # moves every `bunx rungate@` pin
+  git status --short )                  # only package.json, SUCCESS.md, .github/workflows/*;
+                                        # `git checkout --` anything else (CODE-MAP.md churns)
 
 # 4. Census
 bun scripts/census-routing.ts         # then run the `bun test …` line it prints
