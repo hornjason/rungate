@@ -389,10 +389,17 @@ export function criteriaNamedBy(
   issue: { readonly title: string; readonly body?: string | null },
   criterionIds: readonly string[],
 ): string[] {
-  const text = `${issue.title}\n${issue.body ?? ""}`;
-  return criterionIds.filter(
-    id => oneScMentionPattern(id).test(text) && !declaresOwnCriterion(text, id),
-  );
+  const lines = `${issue.title}\n${issue.body ?? ""}`.split("\n");
+  // Scored per mention, not per text (#1683): one checkbox stating an id must
+  // not suppress a mention elsewhere that serves it. A declaring checkbox
+  // accounts for the one mention it opens with and no other, so a second
+  // mention on the same line still counts (review of PR #2190). The id is
+  // named when ANY mention is not the one a checkbox states.
+  return criterionIds.filter(id => {
+    const one = oneScMentionPattern(id);
+    const every = new RegExp(one.source, one.flags.includes("g") ? one.flags : `${one.flags}g`);
+    return lines.some(line => (line.match(every)?.length ?? 0) > (declaresOwnCriterion(line, id) ? 1 : 0));
+  });
 }
 
 /**
