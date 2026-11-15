@@ -42,6 +42,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { localCalendarDay } from "../lib/local-calendar-day.ts";
+import { isSuperseded } from "../lib/sc-cover.ts";
 
 import {
   ANNOTATION_KEYS,
@@ -50,6 +51,7 @@ import {
   evidenceViolations,
   parseCriteria,
   specDeclaresEvidence,
+  supersededStatement,
   type EvidenceViolation,
 } from "../lib/spec-evidence.ts";
 
@@ -244,6 +246,17 @@ describe("the decider can fail (mutation battery)", () => {
   );
 });
 
+describe("#1720: the SUPERSEDED exemption is narrow", () => {
+  // Only a statement that OPENS with the word. One that merely mentions it is
+  // an ordinary claim and owes what every ticked claim owes, in the real
+  // module, while the mutant's empty answer shows the refusal is live.
+  bothWays(
+    "#1720: a ticked criterion that mentions SUPERSEDED mid-sentence still owes needs and evidence",
+    "- [x] SC-2569: the old gate is SUPERSEDED by this one.\n",
+    ["NEEDS_MISSING", "TICKED_WITHOUT_EVIDENCE"],
+  );
+});
+
 describe("the controls — what must NOT fire", () => {
   test("SC-2568: a fully populated criterion produces zero violations", () => {
     const text = "the loader throws on malformed JSON.";
@@ -256,6 +269,31 @@ describe("the controls — what must NOT fire", () => {
       "the positive control is the one that separates a check from a refusal of everything. " +
         "Without it, every negative case above is satisfied by a decider that always refuses.",
     ).toEqual([]);
+  });
+
+  // #1720: a ticked criterion whose statement OPENS with SUPERSEDED is a
+  // pointer to what replaced it, or a record of a withdrawal (SC-2624, #2222),
+  // not a claim that something was proved. lib/sc-cover.ts already reads it
+  // that way; this module did not, so binding a spec that carries one refused it.
+  test("#1720: a ticked SUPERSEDED criterion owes no needs and no evidence", () => {
+    const content = `${BOUND}- [x] SC-2569: SUPERSEDED — withdrawn, not replaced (#1721). Was: "the goal is set from evidence"\n`;
+    expect(evidenceViolations(content, TODAY)).toEqual([]);
+  });
+
+  test("#1720: SUPERSEDED agrees with lib/sc-cover.ts's isSuperseded — one reading of the convention", () => {
+    // spec-evidence.ts must stay import-free (the mutant above loads from a
+    // temp dir), so it cannot call isSuperseded. The two are held together
+    // here instead, on the inputs that separate them.
+    const statements = [
+      "SUPERSEDED by SC-532/SC-534 (#137) — was x",
+      "SUPERSEDED — withdrawn, not replaced",
+      "  SUPERSEDED by SC-1",
+      "the gate is SUPERSEDED by nothing",
+      "SUPERSEDEDNESS is not a word",
+      "superseded by SC-1",
+      "",
+    ];
+    expect(statements.map(supersededStatement)).toEqual(statements.map(isSuperseded));
   });
 
   test("an unticked criterion that declares its needs is not yet owed evidence", () => {
