@@ -332,7 +332,13 @@ const UNCLAIMED_RATCHET = 150;
 // repository's copy is the generated one, which no registered pattern
 // expresses; the `SC-2743` describe in test/closing-references-workflow.test.ts
 // names it.
-const CLAIMED_UNBINDABLE = 166;
+// 166 -> 168: SC-2742 and SC-2745 ticked by `sync-sc-status --only` on the PR
+// for #2179, once #2166 generated the fourth process workflow. Neither claim
+// (process workflows call only registered CLI commands; the board workflows
+// are owned and name no board) has a registered pattern; the `SC-2742` describe
+// in test/package-closure.test.ts and the `SC-2745` describe in
+// test/board-intake.test.ts name them.
+const CLAIMED_UNBINDABLE = 168;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

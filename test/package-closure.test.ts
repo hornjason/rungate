@@ -825,3 +825,35 @@ describe("#2044: every script a process workflow runs ships and is a rungate com
     ).toEqual([]);
   });
 });
+
+/**
+ * SC-2742: the second half, measurable since #2166 generated the fourth
+ * process workflow. Every one of ADR-014's four is the scaffold's copy, none
+ * runs `bun scripts/…`, and every `rungate` command they call through `bunx`
+ * is registered — so a consumer's copy runs, from `node_modules/rungate`.
+ */
+describe("SC-2742: every process workflow calls the CLI and never bun scripts/", () => {
+  const PROCESS = ["closing-references", "adr-accepted", "board-ready", "board-intake"];
+  const BUNX = /\bbunx\s+rungate@\S+\s+([a-z][a-z-]*)/g;
+  const read = PROCESS.map(name => {
+    const text = readFileSync(join(ROOT, ".github", "workflows", `${name}.yml`), "utf-8");
+    const live = text.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+    return { name, text, live, commands: [...live.matchAll(BUNX)].map(m => m[1]!) };
+  });
+
+  test("SC-2742: each of the four is the generated copy, and calls the CLI at least once", () => {
+    for (const w of read) {
+      expect(w.text, `${w.name}.yml is not the scaffold's copy`).toMatch(/^(?:# generated-sha: [0-9a-f]+\n)?# Managed by rungate/);
+      expect(w.commands.length, `${w.name}.yml calls no rungate command — this row would pass vacuously`).toBeGreaterThan(0);
+    }
+  });
+
+  test("SC-2742: none runs bun scripts/, and every command it calls is registered", () => {
+    const wrong: string[] = [];
+    for (const w of read) {
+      if (/\bbun\s+scripts\//.test(w.live)) wrong.push(`${w.name}.yml runs bun scripts/…`);
+      for (const c of w.commands) if (!(c in CLI_COMMANDS)) wrong.push(`${w.name}.yml calls \`rungate ${c}\`, which CLI_COMMANDS does not register`);
+    }
+    expect(wrong, "a consumer's copy of this workflow could not run it (ADR-014 decision 2)").toEqual([]);
+  });
+});
