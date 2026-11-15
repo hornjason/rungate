@@ -388,6 +388,9 @@ function remoteHostOf(url: string): string | null {
       return null;
     }
   }
+  // A drive letter (`C:/…`, `C:\…`) is a path, as git itself treats it —
+  // otherwise the scp rule below reads `C` as a host (review of #2200).
+  if (/^[a-z]:[\\/]/i.test(url)) return "";
   const scp = url.match(/^(?:[^@/:]+@)?([^/:]+):/);
   if (scp) return scp[1].toLowerCase();
   return "";

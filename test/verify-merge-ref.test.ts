@@ -393,6 +393,9 @@ describe("the remote is tied to the pull request's repository (#1909 review, #19
     ["a mirror laying out owner/name the same way", "https://mirror.example.com/hornjason/rungate.git", GH, "mirror.example.com"],
     ["a GHE instance, scp-style", "git@ghe.example.com:hornjason/rungate.git", GH, "ghe.example.com"],
     ["a local mirror, when the pull request is on a real host", "/tmp/x/hornjason/rungate.git", GH, "(no host — a local path)"],
+    // A drive letter is a path, not an scp host — git special-cases it the
+    // same way (review of #2200). Without that, this read as "on c".
+    ["a Windows drive path", "C:/Users/x/hornjason/rungate.git", GH, "(no host — a local path)"],
     ["a real host, when the pull request has none", "https://github.com/hornjason/rungate.git", "", GH],
   ];
   for (const [why, url, want, got] of DIFFERENT_HOST) {
