@@ -81,9 +81,11 @@ const CREDENTIALED_ALLOWED = 0;
  * How long the whole loop below gets. Some of its verify commands read the
  * live GitHub API and they run one after another, so this is a sum.
  *
- * Measured 2026-11-02: the whole loop, 4.9s. An order of magnitude of
- * headroom — room for a slow API, and not enough for a hung command to
- * hold CI open.
+ * Measured 2026-11-02: the whole loop, 4.9s. Measured again 2026-11-15
+ * (#2227): 59s, because most done items now read the live board at about
+ * 5s each, so the 60s budget killed the case the moment E4 was recorded
+ * done. Raised to three times that sum: room for a slow API, and still a
+ * bound a hung command cannot hold CI open past.
  *
  * **No count of API-backed items is stated here, deliberately.** Two
  * revisions of this comment carried one and both were wrong: the first
@@ -95,7 +97,7 @@ const CREDENTIALED_ALLOWED = 0;
  * and that message says to raise this constant rather than untick a true
  * item.
  */
-const LIVE_VERIFY_BUDGET_MS = 60_000;
+const LIVE_VERIFY_BUDGET_MS = 180_000;
 
 /**
  * How many stages are finished. An EQUALITY, so it refuses a fall as well
