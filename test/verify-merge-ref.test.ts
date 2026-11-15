@@ -33,6 +33,7 @@ import {
   exitFor,
   mergeRefReading,
   remoteRepoReading,
+  prHostReading,
   timeoutReading,
   type Mode,
   type Reading,
@@ -321,83 +322,140 @@ describe("the timeout bound is read, not coerced (#1912)", () => {
   });
 });
 
-describe("the remote is tied to the pull request's repository (#1909 review)", () => {
+/**
+ * Covers SC-2766 (PARALLEL-AGENT-COORDINATION-SPEC.md): a remote whose host or
+ * owner/name differs from the pull request's repository is UNMEASURED.
+ */
+describe("the remote is tied to the pull request's repository (#1909 review, #1911)", () => {
   const MINE = "hornjason/rungate";
+  const GH = "github.com";
 
-  const SAME = [
-    "https://github.com/hornjason/rungate.git",
-    "https://github.com/hornjason/rungate",
-    "git@github.com:hornjason/rungate.git",
-    "ssh://git@github.com/hornjason/rungate.git",
-    "https://x-access-token:TOKEN@github.com/hornjason/rungate.git",
+  // [remote url, the host the pull request's URL names]. The host varies
+  // here as well as the path: #1911 was a table that held the host fixed
+  // while the defect sat on it.
+  const SAME: [string, string][] = [
+    ["https://github.com/hornjason/rungate.git", GH],
+    ["https://github.com/hornjason/rungate", GH],
+    ["git@github.com:hornjason/rungate.git", GH],
+    ["ssh://git@github.com/hornjason/rungate.git", GH],
+    ["https://x-access-token:TOKEN@github.com/hornjason/rungate.git", GH],
+    // A port is not identity: the host is compared, not host:port.
+    ["ssh://git@github.com:22/hornjason/rungate.git", GH],
+    // A host is case-insensitive.
+    ["https://GitHub.com/hornjason/rungate.git", GH],
+    // A GitHub Enterprise pull request and a remote on the same instance.
+    ["git@ghe.example.com:hornjason/rungate.git", "ghe.example.com"],
     // The repository was renamed from pai-harness on 2026-10-28 and a
     // long-lived checkout may still carry the old URL. GitHub redirects it,
     // so refusing it would refuse a working remote; case is GitHub's own.
-    "https://github.com/HornJason/RunGate.git",
-    // A local mirror laid out as owner/name. The comparison is the last two
-    // path segments, which is what makes one rule cover https, ssh, scp-style
-    // and a path — and what lets this file point `--remote` at a real bare
-    // repository instead of stubbing `git ls-remote`, which would be a second
-    // decider agreeing with the first.
-    "/tmp/x/hornjason/rungate.git",
+    ["https://github.com/HornJason/RunGate.git", GH],
+    // A local mirror laid out as owner/name, against a pull request whose URL
+    // has no host either. GitHub never returns such a URL, so in production a
+    // path always meets a real host and is refused (DIFFERENT, below). This is
+    // the premise the end-to-end fixture runs on: a real bare repository read
+    // by a real `git ls-remote`, not a stub agreeing with the script.
+    ["/tmp/x/hornjason/rungate.git", ""],
+    ["file:///tmp/x/hornjason/rungate.git", ""],
     // Review of #1909 round 5, and correct. The docstring said the comparison
     // is case-insensitive; the suffix strip was `/\.git\/*$/` with no `i`, and
     // `.toLowerCase()` ran afterwards on the already-sliced segments. So an
     // uppercase suffix survived the strip, became part of the final segment,
     // and `hornjason/rungate.git` never equals `hornjason/rungate` — the right
     // remote refused as somebody else's. Reproduced before fixing.
-    "https://github.com/hornjason/RunGate.GIT",
-    "git@github.com:HornJason/RunGate.Git",
+    ["https://github.com/hornjason/RunGate.GIT", GH],
+    ["git@github.com:HornJason/RunGate.Git", GH],
   ];
-  for (const url of SAME) {
-    test(`the same repository: ${url}`, () => {
-      expect(remoteRepoReading(url, MINE).ok, `refused a remote that IS the PR's repository`).toBe(true);
+  for (const [url, host] of SAME) {
+    test(`the same repository: ${url} (pull request on ${JSON.stringify(host)})`, () => {
+      const r = remoteRepoReading(url, MINE, host);
+      expect(r.ok, `refused a remote that IS the PR's repository: ${r.detail}`).toBe(true);
     });
   }
 
-  const DIFFERENT = [
+  // The path axis: right host, wrong owner/name.
+  const DIFFERENT_PATH = [
     ["another repository", "https://github.com/some/other-repo.git"],
     ["another owner, same name", "https://github.com/someoneelse/rungate.git"],
-    ["an ordinary working path", "/Users/x/Projects/rg-wt-1850"],
     ["an empty url", ""],
   ];
-  for (const [why, url] of DIFFERENT) {
+  for (const [why, url] of DIFFERENT_PATH) {
     test(`UNMEASURED on ${why}`, () => {
-      const r = remoteRepoReading(url, MINE);
+      const r = remoteRepoReading(url, MINE, GH);
       expect(r.ok, `accepted ${url} as ${MINE}`).toBe(false);
       expect(r.detail, "the refusal does not name what the remote actually is").toContain(url || "(empty)");
       expect(r.detail, "the refusal does not name the repository it expected").toContain(MINE);
     });
   }
 
-  // The control. If the expected repository cannot be read, a comparison
+  // The host axis: right owner/name, wrong host. Each of these passed before
+  // #1911 — the comparison read the last two path segments and nothing else.
+  const DIFFERENT_HOST: [string, string, string, string][] = [
+    ["a mirror laying out owner/name the same way", "https://mirror.example.com/hornjason/rungate.git", GH, "mirror.example.com"],
+    ["a GHE instance, scp-style", "git@ghe.example.com:hornjason/rungate.git", GH, "ghe.example.com"],
+    ["a local mirror, when the pull request is on a real host", "/tmp/x/hornjason/rungate.git", GH, "(no host — a local path)"],
+    // A drive letter is a path, not an scp host — git special-cases it the
+    // same way (review of #2200). Without that, this read as "on c".
+    ["a Windows drive path", "C:/Users/x/hornjason/rungate.git", GH, "(no host — a local path)"],
+    ["a real host, when the pull request has none", "https://github.com/hornjason/rungate.git", "", GH],
+  ];
+  for (const [why, url, want, got] of DIFFERENT_HOST) {
+    test(`UNMEASURED on ${why}`, () => {
+      const r = remoteRepoReading(url, MINE, want);
+      expect(r.ok, `accepted ${url} as ${MINE} on ${JSON.stringify(want)}`).toBe(false);
+      expect(r.detail, "the refusal does not name the host it got").toContain(got);
+      expect(r.detail, "the refusal does not name the host it wanted").toContain(want || "(no host — a local path)");
+    });
+  }
+
+  // An ordinary working path is wrong on both axes and must stay refused
+  // whichever host the pull request names.
+  for (const host of [GH, ""]) {
+    test(`UNMEASURED on an ordinary working path (pull request on ${JSON.stringify(host)})`, () => {
+      expect(remoteRepoReading("/Users/x/Projects/rg-wt-1850", MINE, host).ok).toBe(false);
+    });
+  }
+
+  // The controls. If either expected side cannot be read, a comparison
   // against it is not a pass — this is the shape that turns "I could not
   // look" into "nothing is wrong".
   test("an unknown expected repository is UNMEASURED, not a free pass", () => {
-    expect(remoteRepoReading("https://github.com/hornjason/rungate.git", "").ok).toBe(false);
+    expect(remoteRepoReading("https://github.com/hornjason/rungate.git", "", GH).ok).toBe(false);
   });
+  // Asserted on the wording only the unread-host branch prints. A null host
+  // also fails the mismatch comparison below it, so `ok: false` alone would
+  // stay green with that branch deleted — and the operator would read "the
+  // pull request is on null", which names a host nobody read as if it were one.
+  test("an unknown expected HOST is UNMEASURED, not a free pass", () => {
+    for (const unread of [null, undefined]) {
+      const r = remoteRepoReading("https://github.com/hornjason/rungate.git", MINE, unread);
+      expect(r.ok, "a pull request whose URL was not read cleared the host comparison").toBe(false);
+      expect(r.detail).toContain("gave no URL for this pull request");
+      expect(r.detail).not.toContain("null");
+    }
+  });
+  // Same overlap as the unread host: an unparseable host also fails the
+  // mismatch comparison, so the wording is what tells the branches apart.
+  test("a remote whose host cannot be parsed is UNMEASURED", () => {
+    const r = remoteRepoReading("https://[not-a-host/hornjason/rungate.git", MINE, GH);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("has a host that does not parse");
+  });
+});
 
-  /**
-   * KNOWN LIMITATION, asserted rather than described — #1911.
-   *
-   * Review of #1909 round 6: identity is host AND path, and `tail()` reads
-   * one axis, so a mirror or a GHE instance laying out `owner/name` the same
-   * way passes as "the same repository". Every row above holds the host
-   * fixed, which is the battery shape `.claude/rules/checks-must-be-able-to
-   * -fail.md` names last — one axis varied while the defect sits on the
-   * other — so the existing table could not have found this.
-   *
-   * It is a green assertion over defective behaviour and is NOT coverage.
-   * Its job is to go RED the day somebody closes #1911, so the docstring's
-   * scope sentence cannot quietly stop being true.
-   */
-  test("KNOWN LIMITATION (#1911): a different host passes — the host is not read", () => {
-    const elsewhere = remoteRepoReading("https://mirror.example.com/hornjason/rungate.git", MINE);
-    expect(
-      elsewhere.ok,
-      "a differing host is now refused — #1911 is closed, so delete this case and move the row " +
-        "into DIFFERENT, and rewrite the scope paragraph in `remoteRepoReading`'s docstring",
-    ).toBe(true);
+describe("prHostReading reads the host off the pull request's own URL (#1911)", () => {
+  test("a github.com pull request", () => {
+    expect(prHostReading("https://github.com/hornjason/rungate/pull/1911")).toBe("github.com");
+  });
+  test("a GHE pull request, with a port", () => {
+    expect(prHostReading("https://GHE.example.com:8443/o/n/pull/1")).toBe("ghe.example.com");
+  });
+  test("a hostless (file:) URL is the empty host, not an unread one", () => {
+    expect(prHostReading("file:///hornjason/rungate/pull/1")).toBe("");
+  });
+  test("an absent or unparseable URL is null — unread, which is not the same as hostless", () => {
+    expect(prHostReading(undefined)).toBeNull();
+    expect(prHostReading("")).toBeNull();
+    expect(prHostReading("not a url")).toBeNull();
   });
 });
 
@@ -416,6 +474,13 @@ let elsewhere = "";
  * stopped one step earlier by the repository guard — which is a different
  * reading and would make each of them green for the wrong reason. The case
  * that IS about the guard overrides the remote, not the payload.
+ *
+ * `url` defaults to a HOSTLESS pull request URL (#1911). The fixture's forge
+ * is this machine's filesystem: the remote is a local bare repository, whose
+ * host is empty, and the host comparison holds on both axes only when the
+ * pull request's URL has no host either. GitHub never returns one, so in
+ * production a local path always meets a real host and is refused — the case
+ * below that hands it `https://github.com/…` is that refusal, end to end.
  */
 function plantGh(at: string, payload: Record<string, unknown>): string {
   const bin = join(at, "bin");
@@ -424,6 +489,7 @@ function plantGh(at: string, payload: Record<string, unknown>): string {
   const full = {
     headRepositoryOwner: { login: "hornjason" },
     headRepository: { name: "rungate" },
+    url: "file:///hornjason/rungate/pull/1",
     ...payload,
   };
   writeFileSync(file, `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify(full)}\nJSON\n`);
@@ -740,6 +806,37 @@ describe("the script refuses, and the refusal is what each case observed", () =>
     const r = bothHalves(gh, ["--pr", "1", "--remote", elsewhere]);
     expect(r.err).toContain("UNMEASURED");
     expect(r.err, "the refusal does not name the repository the API reported").toContain("hornjason/rungate");
+  });
+
+  // The host axis, wired (#1911). `remote` is the right repository by path —
+  // every other case here clears against it — and the pull request says it
+  // lives on github.com. A local path is not github.com, whatever it holds.
+  test("UNMEASURED: the remote's host is not the pull request's host", () => {
+    const gh = plantGh(join(dir, "wronghost"), {
+      state: "OPEN",
+      headRefName: "rg/planted",
+      headRefOid: plantedHead(),
+      mergeCommit: null,
+      url: "https://github.com/hornjason/rungate/pull/1",
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", remote]);
+    expect(r.err).toContain("UNMEASURED");
+    expect(r.err, "the refusal does not name the host the pull request is on").toContain("github.com");
+  });
+
+  // And the unread side of the same comparison: a payload with no `url` is a
+  // pull request whose host nobody read, which must not clear as matching.
+  test("UNMEASURED: the API gave no URL for the pull request, so no host was read", () => {
+    const gh = plantGh(join(dir, "nourl"), {
+      state: "OPEN",
+      headRefName: "rg/planted",
+      headRefOid: plantedHead(),
+      mergeCommit: null,
+      url: null,
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", remote]);
+    expect(r.err).toContain("UNMEASURED");
+    expect(r.err, "refused, but not by the unread-host branch").toContain("gave no URL for this pull request");
   });
 
   // The wiring half of round 2's finding. `remoteRead: ls.ok` is one word
