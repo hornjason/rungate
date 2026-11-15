@@ -16,6 +16,11 @@ SC-2779) and the two placement moves in the convergence spec are drafts and
 need his yes. Merging this file with `status: accepted` is the yes. It
 closes #2238 and serves stage F of `project-state.json`.
 
+**Merge after #2239.** Every row lands in Engine Phase 9, where the only
+open engine issue already sits. `plan-deps` exits 1 on a family whose open
+issues sit in one phase, and `adr-accepted.yml` then skips the Criteria
+column. The dry run found this, and #2239 fixes it.
+
 ## Context
 
 Stage F is the last stage. Its two items are read by these commands, both
