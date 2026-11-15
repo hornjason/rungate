@@ -165,9 +165,13 @@ export function processChecksIn(root: string): { checks: string[]; unreadable: s
  * module can read. `parseRemoteSlug` deliberately ignores the host, because
  * repo identity is its question; which forge to ask is this one's.
  */
-export function githubSlugOf(url: string, resolveSshHost: (host: string) => string | null = sshHostName): string | null {
+export function githubSlugOf(
+  url: string,
+  resolveSshHost: (host: string) => Reading<string | null> = sshHostName,
+): Reading<string | null> {
+  const none = { kind: "READ", value: null } as const;
   const trimmed = url.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return none;
   let host: string | null = null;
   let viaSsh = false;
   if (/^[a-z+]+:\/\//i.test(trimmed)) {
@@ -175,7 +179,7 @@ export function githubSlugOf(url: string, resolveSshHost: (host: string) => stri
     try {
       parsed = new URL(trimmed);
     } catch {
-      return null; // not a URL at all, so it names no GitHub repository
+      return none; // not a URL at all, so it names no GitHub repository
     }
     host = parsed.hostname;
     viaSsh = /^(?:ssh|git\+ssh|ssh\+git):$/i.test(parsed.protocol);
@@ -183,18 +187,22 @@ export function githubSlugOf(url: string, resolveSshHost: (host: string) => stri
     host = trimmed.match(/^(?:[^@/]+@)?([^:/]+):/)?.[1] ?? null;
     viaSsh = host !== null;
   }
-  if (host === null) return null;
+  if (host === null) return none;
   const literal = host.toLowerCase();
   // Accepted before asking ssh, so a `Host github.com` block that rewrites
   // HostName to ssh.github.com (GitHub's port-443 route) cannot refuse it.
-  if (literal === "github.com") return parseRemoteSlug(trimmed);
+  if (literal === "github.com") return { kind: "READ", value: parseRemoteSlug(trimmed) };
   // An scp-style or ssh:// host may be an alias in ~/.ssh/config
   // (`Host github.com-work` / `HostName github.com`), so ssh decides what it
   // names (#2169). An https host is a DNS name, so it stays a literal compare
   // and a lookalike is still refused.
-  if (!viaSsh) return null;
-  const resolved = resolveSshHost(literal)?.toLowerCase();
-  return resolved !== undefined && GITHUB_SSH_HOSTS.has(resolved) ? parseRemoteSlug(trimmed) : null;
+  if (!viaSsh) return none;
+  const resolved = resolveSshHost(literal);
+  // ssh missing or timed out says nothing about whether the host is GitHub
+  // (review of PR #2187), so it is UNMEASURED, never "no GitHub repository".
+  if (resolved.kind === "UNMEASURED") return { kind: "UNMEASURED", why: `its host ${literal} could not be resolved: ${resolved.why}` };
+  const named = resolved.value?.toLowerCase();
+  return { kind: "READ", value: named !== undefined && GITHUB_SSH_HOSTS.has(named) ? parseRemoteSlug(trimmed) : null };
 }
 
 /** The hosts GitHub serves git over SSH on: the usual one, and the port-443 one its docs give for blocked networks. */
@@ -206,14 +214,20 @@ export type Run = (cmd: string, args: string[], cwd?: string) => RunResult;
 const runLive: Run = (cmd, args, cwd) => spawnSync(cmd, args, { cwd, encoding: "utf-8", timeout: 5000 });
 
 /**
- * The host `ssh -G` resolves `host` to (its `hostname` line), or null when
- * ssh cannot say. A host that could be read as an option never reaches ssh.
+ * The host `ssh -G` resolves `host` to (its `hostname` line). A host that could
+ * be read as an option never reaches ssh and names nothing. ssh missing, the
+ * timeout, a non-zero exit or no hostname line is a reading not taken.
  */
-export function sshHostName(host: string, run: Run = runLive): string | null {
-  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(host)) return null;
+export function sshHostName(host: string, run: Run = runLive): Reading<string | null> {
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(host)) return { kind: "READ", value: null };
   const r = run("ssh", ["-G", host]);
-  if (r.error || r.status !== 0) return null;
-  return r.stdout.match(/^hostname (\S+)$/m)?.[1] ?? null;
+  if (r.error) return { kind: "UNMEASURED", why: `ssh -G ${host} could not run (${r.error.message})` };
+  if (r.status !== 0) {
+    const how = r.status === null ? `was stopped${r.signal ? ` by ${r.signal}` : ""}` : `exited ${r.status}`;
+    return { kind: "UNMEASURED", why: `ssh -G ${host} ${how}` };
+  }
+  const name = r.stdout.match(/^hostname (\S+)$/m)?.[1];
+  return name ? { kind: "READ", value: name } : { kind: "UNMEASURED", why: `ssh -G ${host} printed no hostname line` };
 }
 
 /**
@@ -258,7 +272,7 @@ const why = (e: unknown) => `${typeof status(e) === "number" ? `HTTP ${status(e)
 export const LIVE_PROBES: HumanStepProbes = {
   slug: root => {
     const origin = readOrigin(root);
-    return origin.kind === "READ" ? { kind: "READ", value: githubSlugOf(origin.value) } : origin;
+    return origin.kind === "READ" ? githubSlugOf(origin.value) : origin;
   },
   secret: async slug => {
     try {

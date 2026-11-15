@@ -225,27 +225,31 @@ describe("SC-2749: the readings come from the tree and the probes, and the scaff
 
 describe("#2161: a reading that cannot be taken is UNMEASURED, never read against the wrong forge or crashed on", () => {
   test("githubSlugOf accepts a github.com remote in every spelling, and nothing else", () => {
+    // An identity resolver, so the case reads the parser and not this
+    // machine's ssh or ~/.ssh/config (review of PR #2187).
+    const literal = (h: string) => read(h);
     for (const url of [
       "git@github.com:o/n.git",
       "https://github.com/o/n",
       "https://x:token@github.com/o/n.git",
       "ssh://git@github.com/o/n.git",
       "https://GitHub.com/O/N.git",
-    ]) expect(githubSlugOf(url), url).toBe("o/n");
+    ]) expect(githubSlugOf(url, literal), url).toEqual(read("o/n"));
     for (const url of [
       "git@gitlab.com:o/n.git",
       "https://gitlab.com/o/n",
       "https://github.com.evil.com/o/n",
       "/tmp/some/fixture.git",
       "",
-    ]) expect(githubSlugOf(url), url).toBeNull();
+    ]) expect(githubSlugOf(url, literal), url).toEqual(read(null));
   });
 
   test("a live read of a gitlab origin is the no-repository line and calls no GitHub probe", async () => {
     const root = mkdtempSync(join(tmpdir(), "rg-human-steps-gitlab-"));
     try {
       spawnSync("git", ["init", "-q"], { cwd: root });
-      spawnSync("git", ["remote", "add", "origin", "git@gitlab.com:org/proj.git"], { cwd: root });
+      // https, so the live read never asks ssh and does not depend on this machine's ssh.
+      spawnSync("git", ["remote", "add", "origin", "https://gitlab.com/org/proj.git"], { cwd: root });
       const called: string[] = [];
       const r = await readHumanSteps(root, {
         slug: LIVE_PROBES.slug,
@@ -355,36 +359,46 @@ describe("#2169: a failed git read is reported as one, and an SSH alias for gith
   });
 
   test("an scp-style or ssh:// alias that ssh resolves to github.com is a github.com repository", () => {
-    const work = (h: string) => (h === "github.com-work" ? "github.com" : h);
-    expect(githubSlugOf("git@github.com-work:o/r.git", work)).toBe("o/r");
-    expect(githubSlugOf("ssh://git@github.com-work/o/r.git", work)).toBe("o/r");
-    expect(githubSlugOf("git@gh-443:o/r.git", () => "ssh.github.com"), "GitHub's port-443 SSH host").toBe("o/r");
-    expect(githubSlugOf("git@github.com-work:o/r.git", () => "gitlab.com"), "an alias for another forge").toBeNull();
-    expect(githubSlugOf("git@github.com-work:o/r.git", () => null), "ssh could not say").toBeNull();
+    const work = (h: string) => read(h === "github.com-work" ? "github.com" : h);
+    expect(githubSlugOf("git@github.com-work:o/r.git", work)).toEqual(read("o/r"));
+    expect(githubSlugOf("ssh://git@github.com-work/o/r.git", work)).toEqual(read("o/r"));
+    expect(githubSlugOf("git@gh-443:o/r.git", () => read("ssh.github.com")), "GitHub's port-443 SSH host").toEqual(read("o/r"));
+    expect(githubSlugOf("git@github.com-work:o/r.git", () => read("gitlab.com")), "an alias for another forge").toEqual(read(null));
+  });
+
+  // Review of PR #2187: ssh missing or timed out says nothing about the host.
+  test("an alias ssh could not resolve is UNMEASURED naming why, never the no-repository line", () => {
+    const failed = githubSlugOf("git@github-work:o/n.git", () => unmeasured("ssh -G github-work could not run (ENOENT)"));
+    expect(failed).toEqual(unmeasured("its host github-work could not be resolved: ssh -G github-work could not run (ENOENT)"));
+    const line = humanSteps({ ...allSet, slug: failed })[0];
+    expect(line).toStartWith("UNMEASURED: human steps — the origin remote could not be read (its host github-work could not be resolved");
+    expect(line).not.toContain("names no GitHub repository");
   });
 
   test("an https host is a DNS name, never an alias: the resolver is not asked", () => {
     const asked: string[] = [];
-    const yes = (h: string) => (asked.push(h), "github.com");
-    expect(githubSlugOf("https://github.com-work/o/r", yes)).toBeNull();
-    expect(githubSlugOf("https://github.com.evil.com/o/n", yes)).toBeNull();
+    const yes = (h: string) => (asked.push(h), read("github.com"));
+    expect(githubSlugOf("https://github.com-work/o/r", yes)).toEqual(read(null));
+    expect(githubSlugOf("https://github.com.evil.com/o/n", yes)).toEqual(read(null));
     expect(asked).toEqual([]);
   });
 
   test("a literal github.com is accepted without asking ssh, so a Host github.com rewrite cannot refuse it", () => {
     const asked: string[] = [];
-    expect(githubSlugOf("git@github.com:o/n.git", h => (asked.push(h), "ssh.github.com"))).toBe("o/n");
+    expect(githubSlugOf("git@github.com:o/n.git", h => (asked.push(h), read("ssh.github.com")))).toEqual(read("o/n"));
     expect(asked).toEqual([]);
   });
 
-  test("sshHostName reads the hostname line of ssh -G, and never hands ssh an option", () => {
+  test("sshHostName reads the hostname line of ssh -G, never hands ssh an option, and a failed ssh is UNMEASURED", () => {
     const calls: string[][] = [];
     const run: Run = (cmd, args) => (calls.push([cmd, ...args]), { status: 0, stdout: "user git\nhostname github.com\nport 22\n" });
-    expect(sshHostName("github.com-work", run)).toBe("github.com");
+    expect(sshHostName("github.com-work", run)).toEqual(read("github.com"));
     expect(calls).toEqual([["ssh", "-G", "github.com-work"]]);
-    expect(sshHostName("-oProxyCommand=x", run)).toBeNull();
+    expect(sshHostName("-oProxyCommand=x", run), "an option names no host").toEqual(read(null));
     expect(calls, "a host starting with - reached ssh").toHaveLength(1);
-    expect(sshHostName("h", () => ({ status: 255, stdout: "" }))).toBeNull();
-    expect(sshHostName("h", () => ({ status: null, stdout: "", error: new Error("ENOENT") }))).toBeNull();
+    expect(sshHostName("h", () => ({ status: 255, stdout: "" }))).toEqual(unmeasured("ssh -G h exited 255"));
+    expect(sshHostName("h", () => ({ status: null, stdout: "", error: new Error("ENOENT") }))).toEqual(unmeasured("ssh -G h could not run (ENOENT)"));
+    expect(sshHostName("h", () => ({ status: null, stdout: "", signal: "SIGTERM" }))).toEqual(unmeasured("ssh -G h was stopped by SIGTERM"));
+    expect(sshHostName("h", () => ({ status: 0, stdout: "user git\n" }))).toEqual(unmeasured("ssh -G h printed no hostname line"));
   });
 });
