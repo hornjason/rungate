@@ -21,6 +21,11 @@ skipped or reordered. `X.Y.Z` is the version you are cutting. `<T>` stands for
 `env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)"`. Without it,
 anything that reads GitHub comes back UNMEASURED.
 
+Run one numbered step at a time. Any step with more than one command runs
+inside `( set -euo pipefail … )`. So a failure stops that step and nothing
+after it runs. An `exit` leaves only the subshell, never your terminal. Keep
+the wrapper when you copy a step.
+
 ```bash
 # 0. File the release issue. The release PR must say `Fixes #N`, or
 #    closing-references refuses it. File from ~/Projects/rungate, without
@@ -32,8 +37,9 @@ anything that reads GitHub comes back UNMEASURED.
 npm view rungate version              # what the registry serves now = PUBLISHED below
 
 # 2. Branch off main, in a worktree, never the primary checkout
-git -C ~/Projects/rungate fetch -q origin
-git -C ~/Projects/rungate worktree add -b rg/release-XYZ ~/Projects/rg-wt-rel-XYZ origin/main
+( set -euo pipefail
+  git -C ~/Projects/rungate fetch -q origin
+  git -C ~/Projects/rungate worktree add -b rg/release-XYZ ~/Projects/rg-wt-rel-XYZ origin/main )
 
 # 3. In the worktree: bump, standing line, pins
 #    package.json  "version": "X.Y.Z"
@@ -49,27 +55,38 @@ bun scripts/census-routing.ts         # then run the `bun test …` line it prin
 #    fix it before tagging.
 
 # 5. Commit, push the branch, tag THAT commit, push the tag
-git commit -am "release: X.Y.Z" && git push -u origin rg/release-XYZ && \
-git tag -a vX.Y.Z -m "rungate X.Y.Z" && git push origin vX.Y.Z
+( set -euo pipefail
+  git commit -am "release: X.Y.Z"
+  git push -u origin rg/release-XYZ
+  git tag -a vX.Y.Z -m "rungate X.Y.Z"
+  git push origin vX.Y.Z )
 #    release.yml runs the full suite and a typecheck, then publishes
 
-# 6. Wait for the run, then the registry (run it in the background).
-#    If the run fails, X.Y.Z is spent: read its log, fix, and cut the next
-#    version (see "A failed release costs a version number"). A run that has
-#    not REGISTERED yet is not a failure, and nothing is spent.
-run=""
-for i in $(seq 1 12); do
-  run=$(gh run list -R hornjason/rungate --workflow release.yml --branch vX.Y.Z -L 1 --json databaseId -q '.[0].databaseId // empty')
-  [ -n "$run" ] && break
-  sleep 5
-done
-[ -n "$run" ] || { echo "no release.yml run for vX.Y.Z after 60s — check the tag was pushed; nothing is spent"; exit 1; }
-gh run watch "$run" -R hornjason/rungate --exit-status || { echo "release.yml FAILED — X.Y.Z is spent"; exit 1; }
-for i in $(seq 1 20); do
-  [ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ] && { echo PUBLISHED; break; }
-  sleep 30
-done
-[ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ] || { echo "run passed but npm is not serving X.Y.Z after 10 min — stop and look; do not do step 7"; exit 1; }
+# 6. Wait for the run, then the registry. It takes several minutes.
+#    Only a run whose recorded CONCLUSION is a failure spends X.Y.Z. In that
+#    case, read its log, fix, and cut the next version (see "A failed release
+#    costs a version number"). A run that has not registered, or a watch that
+#    broke off, says nothing about the release, and nothing is spent.
+( set -euo pipefail
+  run=""
+  for i in $(seq 1 12); do
+    run=$(gh run list -R hornjason/rungate --workflow release.yml --branch vX.Y.Z -L 1 --json databaseId -q '.[0].databaseId // empty')
+    [ -n "$run" ] && break
+    sleep 5
+  done
+  [ -n "$run" ] || { echo "no release.yml run for vX.Y.Z after 60s — check the tag was pushed; nothing is spent"; exit 1; }
+  gh run watch "$run" -R hornjason/rungate >/dev/null || true
+  conclusion=$(gh run view "$run" -R hornjason/rungate --json conclusion -q .conclusion) || conclusion=""
+  case "$conclusion" in
+    success) ;;
+    failure|cancelled|timed_out|startup_failure) echo "release.yml $conclusion — X.Y.Z is spent"; exit 1 ;;
+    *) echo "run $run has no outcome yet ('$conclusion') — nothing is known to be spent; re-run this step"; exit 1 ;;
+  esac
+  for i in $(seq 1 20); do
+    [ "$(npm view rungate@X.Y.Z version 2>/dev/null)" = "X.Y.Z" ] && { echo PUBLISHED; exit 0; }
+    sleep 30
+  done
+  echo "run passed but npm is not serving X.Y.Z after 10 min — stop and look; do not do step 7"; exit 1 )
 
 # 7. Published half: set SUCCESS.md's line to published `rungate@X.Y.Z`,
 #    then commit and push
@@ -81,10 +98,11 @@ gh pr create -R hornjason/rungate --label ai-review-override \
 #    also says "does not complete SC-N", one phrase per id.
 
 # 9. Merge BY HAND once `test` passes. Never --auto on this label.
-SHA=$(<T> bun scripts/verify-merge-ref.ts --pr <N>) \
-  && gh pr merge <N> -R hornjason/rungate --squash --match-head-commit "$SHA"
-<T> bun scripts/verify-merge-ref.ts --pr <N> --after-merge
-git -C ~/Projects/rungate worktree remove ~/Projects/rg-wt-rel-XYZ
+( set -euo pipefail
+  SHA=$(<T> bun scripts/verify-merge-ref.ts --pr <N>)
+  gh pr merge <N> -R hornjason/rungate --squash --match-head-commit "$SHA"
+  <T> bun scripts/verify-merge-ref.ts --pr <N> --after-merge
+  git -C ~/Projects/rungate worktree remove ~/Projects/rg-wt-rel-XYZ )
 
 # 10. Rebase every open PR onto main. See "Moving the pins" below. A
 #     generator PR that was waiting on this release: rebase it, run
