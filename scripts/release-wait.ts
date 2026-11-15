@@ -44,8 +44,14 @@ export const REFUSE_EXIT = 1;
 
 export type Reading = "PUBLISHED" | "SPENT" | "NO_RUN" | "NO_OUTCOME" | "NOT_SERVED";
 
-/** Conclusions GitHub records for a run that ran and did not succeed. */
-const FAILED_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure"]);
+/**
+ * Conclusions GitHub records for a run that FINISHED without publishing.
+ * `skipped` is one: every job's `if:` was false, the run is over, and nothing
+ * shipped (review of #2198, round 6). `action_required` and `neutral` are
+ * not: a run waiting on approval, or one whose meaning is unclear, is
+ * NO_OUTCOME.
+ */
+const FAILED_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure", "skipped"]);
 
 export interface ReleaseInputs {
   /** The run's id, absent when no run registered in time. */

@@ -28,7 +28,7 @@ describe("releaseReading: only a recorded failure spends the version", () => {
     expect(r.detail).toContain("Nothing is spent");
   });
 
-  for (const c of ["failure", "cancelled", "timed_out", "startup_failure"]) {
+  for (const c of ["failure", "cancelled", "timed_out", "startup_failure", "skipped"]) {
     test(`a run that concluded '${c}' is SPENT`, () => {
       const r = releaseReading({ runId: "42", conclusion: c });
       expect(r.reading).toBe("SPENT");
@@ -38,7 +38,7 @@ describe("releaseReading: only a recorded failure spends the version", () => {
 
   // The expensive mistake is reading "could not tell" as "failed". Each of
   // these is a run whose outcome nobody read, and none of them may spend.
-  for (const c of [null, undefined, "", "  ", "in_progress", "queued", "neutral", "skipped"]) {
+  for (const c of [null, undefined, "", "  ", "in_progress", "queued", "neutral", "action_required"]) {
     test(`a conclusion of ${JSON.stringify(c)} is NO_OUTCOME, never SPENT`, () => {
       const r = releaseReading({ runId: "42", conclusion: c });
       expect(r.reading).toBe("NO_OUTCOME");
