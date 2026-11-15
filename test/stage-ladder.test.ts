@@ -187,8 +187,13 @@ const LIVE_VERIFY_BUDGET_MS = 180_000;
  * the same day rather than assumed: ten engine issues were milestoned by hand
  * and `criteria-field` went from MET 21 of 21 to MET 31 of 31 with no hand
  * step. B4 was then ticked on that reading, and it was the stage's last item.
+ *
+ * **E completed on 2026-11-15, and this is 7** — A, B, C, D, E, G and H. E4
+ * was recorded on its own reading, `criteria-field-all` (#2224, 34 of 34),
+ * after review refused a draft that reused B4's; E5 on SC-2623's tests (#2231)
+ * once the engine spec was bound to evidence and declared `serves: 7` (#2235).
  */
-const COMPLETE_STAGES = 6;
+const COMPLETE_STAGES = 7;
 
 /**
  * Every verify command in the plan file runs through here.

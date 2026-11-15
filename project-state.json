@@ -1754,13 +1754,51 @@
         {
           "id": "E5",
           "what": "a spec declares which SUCCESS claim it serves (SC-2623). NOT PART OF THE 2026-10-30 AGREEMENT — ADR-009 added it afterwards and it is placed here by the DA, which is why this stage lists five where the original Stage D listed four",
-          "done": false,
-          "verify": null
+          "done": true,
+          "verify": "bun test test/spec-requirements.test.ts -t \"SC-2623\" 2>&1 | /usr/bin/grep -qE \"^ [1-9][0-9]* pass\""
         }
       ],
       "goal": "The other specs get placement tables and reach the board",
       "serves": 3,
-      "retro": null,
+      "retro": {
+        "wentWell": [
+          "E4 got a proof of its own rather than a borrowed one. Review of #2221 caught that the first draft was B4's `criteria-field` reading, which restates a done-condition (rule 10). #2224 built `criteria-field-all` across every phase-milestone family, which read 34 of 34 live. Both mutants were caught: the reading measuring the engine family only, and the producer reading the engine family only.",
+          "E5 bound the engine spec to evidence without a hand-typed fingerprint. `audit-spec-evidence --record-fingerprints` wrote all 47. The new `serves:` key refuses a placeholder, prose or an empty value, and an unreadable SUCCESS.md is UNMEASURED, not accepted. A mutant of `servesViolations` is executed in the suite, not described.",
+          "SC-2624 was withdrawn as a ticked SUPERSEDED line, not deleted. Binding the spec then exposed that `lib/spec-evidence.ts` read the convention differently from `lib/sc-cover.ts`. The two are now held in agreement by an asserted test instead of a docstring."
+        ],
+        "wentPoorly": [
+          "Two of the three proof commands the DA drafted, and Jason approved, could not prove their items. E4's was B4's reading. E5's ran `audit-spec-evidence <spec>`, which ignores the argument and does not gate an unbound spec. Review caught both before merge, but his approval was spent on drafts nobody had checked against the reading's item tag or the CLI's argument parsing.",
+          "Recording E4 timed out the stage-ladder live loop. It runs every done item's proof in sequence and was at 59s against a 60s budget, and a timeout reads exactly like a regression. The state change was held until #2228 raised the budget to 180s from a fresh measurement.",
+          "A capitalised 'Serves no criterion' on #2223 failed E2's live proof for minutes, because the phrase is matched case-sensitively. Every PR that ran stage-ladder in that window went red, #2219's shard among them."
+        ],
+        "improvements": [
+          {
+            "what": "Two stage items cannot be proved by one reading: B4 and E4 measure different populations, and a test shows them disagreeing",
+            "mechanism": "test/board-conformance.test.ts '#2223 / E4' blanks only another family's Criteria cell and asserts B4's criteria-field stays met while E4's criteria-field-all goes short, naming the issue. A reading that measured the engine family for both would fail it",
+            "status": "in-place",
+            "verify": "out=$(bun test test/board-conformance.test.ts -t \"B4 stays met, E4 is short\" 2>&1) && printf '%s' \"$out\" | grep -qE '^ [1-9][0-9]* pass'"
+          },
+          {
+            "what": "A withdrawn criterion has one reading across the modules that judge ticks",
+            "mechanism": "test/spec-evidence.test.ts asserts `supersededStatement` agrees with `isSuperseded` from lib/sc-cover.ts on the inputs that separate them. A mid-sentence SUPERSEDED is still owed evidence in the real module, and the mutant answers empty",
+            "status": "in-place",
+            "verify": "out=$(bun test test/spec-evidence.test.ts -t \"SUPERSEDED agrees with lib/sc-cover.ts\" 2>&1) && printf '%s' \"$out\" | grep -qE '^ [1-9][0-9]* pass'"
+          },
+          {
+            "what": "The live-plan budget is a measured sum with headroom, and its comment records the measurement",
+            "mechanism": "test/stage-ladder.test.ts's LIVE_VERIFY_BUDGET_MS is 180_000, three times the 59s measured on 2026-11-15 (#2227), and the measurement sits beside the 2026-11-02 one in its comment",
+            "status": "in-place",
+            "verify": "grep -q 'const LIVE_VERIFY_BUDGET_MS = 180_000;' test/stage-ladder.test.ts && grep -q 'Measured again 2026-11-15' test/stage-ladder.test.ts"
+          },
+          {
+            "what": "Nothing refuses two stage items carrying a byte-identical verify command, which is how E4's first draft restated B4",
+            "mechanism": "none yet. Review caught it once. A stage-ladder case asserting every item's verify string is unique would catch it mechanically",
+            "status": "open",
+            "verify": null,
+            "issue": 2236
+          }
+        ]
+      },
       "why": "Measured 2026-11-06 and kept here so it is not re-derived: this stage is NOT the fix for Ready being ordered by age. plan-spec can only place work that came from a criterion, and only 16 of 80 open issues name an SC id. Placement tables order the spec-derived fifth; the label rank in Stage H orders the rest. Also measured: 22 specs carry no table, but 7 of them have ZERO open criteria and HARNESS-STANDARD.md has 12 open out of 648 — so E1 is 15 specs and 194 open criteria, not 22 specs and 1,828. 2026-11-13: E1 is done. Its command takes the spec-placement reading, which counts every criterion in every testable spec sitting in a phase or its spec being named UNPLANNED, and reads MET 115 of 115. The 15-spec figure above is the 2026-11-06 scope, kept as the record."
     },
     {
