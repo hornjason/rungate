@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: ee6eb37eff1b7ba4
+generated-sha: fe73d69914104288
 ---
 
 ## Command Routing
@@ -27,6 +27,7 @@ Generated from the CLI's command registry. Run one as
 | `board-id` | Print the board's node id from config |
 | `board-intake-move` | Move a board item to a column, verified in the item and in the board's search index |
 | `unaccounted-work` | Report undone work declared in a repository's prose that no open issue covers |
+| `intake` | Run each intake source and print its reading — MEASURED with a count, or UNMEASURED naming why |
 | `audit-closing-references` | Refuse a pull request whose closing reference GitHub will not act on, or that closes no issue |
 | `sync-spec-tests` | Regenerate the conformity suite from the specs |
 | `generate-code-map` | Regenerate CODE-MAP.md from the source tree |
