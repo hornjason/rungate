@@ -1748,14 +1748,14 @@
         {
           "id": "E4",
           "what": "`board-mirror --write` run, so the board column reflects the bodies",
-          "done": false,
-          "verify": null
+          "done": true,
+          "verify": "bun bin/rungate.ts board-conformance --produce --spec specs/SPEC-TO-BOARD-PIPELINE-SPEC.md --repo hornjason/rungate --reading criteria-field"
         },
         {
           "id": "E5",
           "what": "a spec declares which SUCCESS claim it serves (SC-2623). NOT PART OF THE 2026-10-30 AGREEMENT — ADR-009 added it afterwards and it is placed here by the DA, which is why this stage lists five where the original Stage D listed four",
           "done": false,
-          "verify": null
+          "verify": "grep -q '^- \\[x\\] SC-2623:' specs/SPEC-TO-BOARD-PIPELINE-SPEC.md && bun bin/rungate.ts audit-spec-evidence specs/SPEC-TO-BOARD-PIPELINE-SPEC.md"
         }
       ],
       "goal": "The other specs get placement tables and reach the board",
@@ -1778,7 +1778,7 @@
           "id": "F2",
           "what": "`board-conformance` exits 0. THAT IS THE GOAL MET",
           "done": false,
-          "verify": null
+          "verify": "bun bin/rungate.ts board-conformance --repo hornjason/rungate"
         }
       ],
       "goal": "Convergence goes through the engine untouched",
