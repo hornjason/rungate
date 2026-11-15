@@ -606,9 +606,10 @@ describe("#479: the live reconciliation, over what the repo owns", () => {
    *
    * Three readings per hook, so no one-sided edit can satisfy the set: the
    * reconciler reports it UNMEASURED (the scope flipped), it is not
-   * `dual-scope` (the project registration went with it), and the hook and its
-   * inventory entry both say NOT LIVE (a reader is told, in the hook, that the
-   * human half has not happened).
+   * `dual-scope` (the project registration went with it), and the hook, its
+   * inventory entry and its spec row all say it is registered live. Under
+   * #1585 the third reading was "says NOT LIVE", because the human half had not
+   * happened; #2225 inverted it once Jason registered both on 2026-11-15.
    */
   const RECLASSIFIED_1585 = ["AgentBriefGuard", "WorkflowStateGuard"] as const;
 
