@@ -196,8 +196,14 @@ ${opts.setupBunEnv}
       # reads it as GITHUB_TOKEN, board-ready as BOARD_PROJECT_TOKEN. An absent
       # secret is the empty string with no error, so each command's own
       # UNMEASURED refusal is what reports it.
+      #
+      # \`!cancelled()\` (#2239): an \`if:\` with no status function means
+      # \`success() && …\`, so a refusal in any step above skipped both of these
+      # for every issue the merge had just created. Each reads the whole board
+      # and writes only what is missing, so it never depends on an earlier step
+      # succeeding. The run is still red when one of those failed.
       - name: Criteria column on the board
-        if: steps.accepted.outputs.any == 'true'
+        if: \${{ !cancelled() && steps.accepted.outputs.any == 'true' }}
         env:
           GITHUB_TOKEN: \${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: \${{ vars.RUNGATE_PROJECT_ID }}
@@ -209,7 +215,7 @@ ${opts.setupBunEnv}
           ${cli} board-mirror --project "$PROJECT_ID" --write
 
       - name: Top up Ready from the new issues
-        if: steps.accepted.outputs.any == 'true'
+        if: \${{ !cancelled() && steps.accepted.outputs.any == 'true' }}
         env:
           BOARD_PROJECT_TOKEN: \${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: \${{ vars.RUNGATE_PROJECT_ID }}

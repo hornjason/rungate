@@ -302,7 +302,6 @@ describe("lib/spec-deps: every route to fewer than two phases is UNMEASURED", ()
       {},
       "NONE carries a Phase milestone",
     ],
-    ["exactly one phase", [iss(10, 0), iss(11, 0)], {}, "one phase states no order"],
   ];
   for (const [name, issues, opts, reason] of cases) {
     test(`${name} is UNMEASURED, and says which`, () => {
@@ -312,6 +311,27 @@ describe("lib/spec-deps: every route to fewer than two phases is UNMEASURED", ()
       expect(plan.missing, "an edge was derived from a reading that could not be taken").toEqual([]);
     });
   }
+
+  // #2239 / SC-2738: one phase is the fourth route to fewer than two, and the
+  // only one where the read was sound. It is NOT unmeasured — every issue was
+  // read and placed — and it is NOT measured, because "missing: []" from one
+  // phase means nothing to sequence, never "already sequenced". A third
+  // reading, so neither the refusal nor the flattering sentence can claim it.
+  // Exiting 1 here skipped adr-accepted.yml's board steps the moment the
+  // engine reached its last phase (2026-11-15: only Engine Phase 9 open).
+  test("#2239: exactly one phase over a sound read is NOTHING_TO_SEQUENCE — no edge, no reason, never MEASURED", () => {
+    const plan = dependencyPlan([iss(10, 0), iss(11, 0)]);
+    expect(plan.reading).toBe("NOTHING_TO_SEQUENCE");
+    expect(plan.unmeasuredReasons).toEqual([]);
+    expect(plan.missing).toEqual([]);
+    expect(plan.phases).toEqual([0]);
+  });
+
+  test("#2239: one phase with a TRUNCATED blocker list is still UNMEASURED, not nothing to sequence", () => {
+    const plan = dependencyPlan([iss(10, 0), { ...iss(11, 0), blockedBy: [10], blockedByTruncated: true }]);
+    expect(plan.reading).toBe("UNMEASURED");
+    expect(plan.unmeasuredReasons.join(" ")).toContain("truncated");
+  });
 
   test("THE NEGATIVE CONTROL: two phases over a considered set reads MEASURED", () => {
     // Without this, every case above passes against a function that refuses
@@ -395,11 +415,47 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     expect(code).toBe(REFUSAL_EXIT);
   });
 
-  test("a SINGLE-PHASE read writes nothing and refuses", async () => {
+  // #2239 / SC-2738. Writes nothing, as before; what changed is the exit and
+  // the sentence. The sentence is asserted both ways, because exit 0 alone
+  // is also what the flattering "already carries the phase order" path
+  // returns — the sixth shape in checks-must-be-able-to-fail.md.
+  async function capture(argv: string[], gh: PlanDepsGitHub) {
+    const out: string[] = [];
+    const log = console.log;
+    const err = console.error;
+    console.log = (x: string) => void out.push(String(x));
+    console.error = (x: string) => void out.push(String(x));
+    let code;
+    try {
+      code = await planDepsMain(argv, gh);
+    } finally {
+      console.log = log;
+      console.error = err;
+    }
+    return { code, text: out.join("\n") };
+  }
+
+  for (const write of [true, false]) {
+    test(`#2239: a SINGLE-PHASE read writes nothing, says there is nothing to sequence, and exits 0 (${write ? "--write" : "dry run"})`, async () => {
+      const s = spy([iss(10, 0), iss(11, 0)]);
+      const argv = ["--repo", "o/r", "--milestone-prefix", "Convergence", ...(write ? ["--write"] : [])];
+      const got = await capture(argv, s.gh);
+      expect(s.calls).toEqual([]);
+      expect(got.text).toContain("nothing to sequence: every open issue sits in Phase 0");
+      expect(got.text, "one phase claimed the tracker already carries the order").not.toContain("already carries");
+      expect(got.text).not.toContain("UNMEASURED");
+      expect(got.code).toBe(0);
+    });
+  }
+
+  test("#2239: --json on a SINGLE-PHASE read reports the reading, writes nothing, and exits 0", async () => {
     const s = spy([iss(10, 0), iss(11, 0)]);
-    const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
+    const got = await capture(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
+    const json = JSON.parse(got.text);
+    expect(json.reading).toBe("NOTHING_TO_SEQUENCE");
+    expect(json.wrote).toBe("nothing-to-sequence");
     expect(s.calls).toEqual([]);
-    expect(code).toBe(REFUSAL_EXIT);
+    expect(got.code).toBe(0);
   });
 
   test("a FAILED write exits non-zero — the status is derived from what happened", async () => {

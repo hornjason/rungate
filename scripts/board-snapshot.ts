@@ -891,9 +891,13 @@ export async function main(
   // for a truncated `blockedBy` among other reasons, and a truncated read
   // produces exactly the false `missing` edges this reading would then count
   // as the tracker's failure.
+  //
+  // `!== "MEASURED"`, not `=== "UNMEASURED"` (#2239): a one-phase tracker is
+  // NOTHING_TO_SEQUENCE, and its empty plan is no order at all, so it omits
+  // the key too rather than reading as 0 of 0 derived edges.
   const plan = dependencyPlan(liveIssues);
   const edges =
-    plan.reading === "UNMEASURED"
+    plan.reading !== "MEASURED"
       ? {}
       : {
           plannedEdges: [

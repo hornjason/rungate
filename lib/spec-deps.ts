@@ -71,8 +71,17 @@ export interface DepEdge {
 }
 
 export interface DependencyPlan {
-  /** UNMEASURED FAILS. An empty edge list from an unread input is not a clean one. */
-  reading: "MEASURED" | "UNMEASURED";
+  /**
+   * UNMEASURED FAILS. An empty edge list from an unread input is not a clean one.
+   *
+   * NOTHING_TO_SEQUENCE (#2239) is a sound read in which every considered
+   * issue sits in ONE phase. It writes nothing and refuses nothing: one phase
+   * states no order, so "missing: []" here means nothing to sequence, and it
+   * must never be reported as MEASURED, whose empty plan reads as *already
+   * sequenced*. It was a refusal until 2026-11-15, when the engine reached its
+   * last phase and the refusal skipped adr-accepted.yml's board steps.
+   */
+  reading: "MEASURED" | "UNMEASURED" | "NOTHING_TO_SEQUENCE";
   unmeasuredReasons: string[];
   /** The phase numbers that carry at least one considered issue, ascending. */
   phases: number[];
@@ -123,6 +132,13 @@ export interface DependencyPlan {
  * input that reaches none of them. Row 5 is orthogonal — the phases can be
  * fine while the live edge list is short — so it is checked alongside rather
  * than inside the count.
+ *
+ * **Row 4 is not a refusal, and is not returned from here (#2239).** Rows 1-3
+ * are reads that could not be taken; row 4 is a read that was taken in full
+ * and found one phase. {@link dependencyPlan} names it as its own reading,
+ * `NOTHING_TO_SEQUENCE`, which is neither this list's refusal nor the
+ * flattering MEASURED. So the property is still the one above, stated
+ * exactly: fewer than two phases is never MEASURED.
  */
 export function degenerateReasons(r: {
   readonly read: number;
@@ -148,11 +164,6 @@ export function degenerateReasons(r: {
         `either plan-spec has not run here, or the milestone titles no longer match ` +
         `what phaseOf reads. An empty plan from this input means "nothing was read", ` +
         `not "the tracker already carries the phase order"`,
-    );
-  } else if (r.phases.length === 1) {
-    out.push(
-      `every issue read sits in Phase ${r.phases[0]} — one phase states no order, so an ` +
-        `empty plan here means "nothing to sequence" and not "already sequenced"`,
     );
   }
   if (r.truncated.length > 0) {
@@ -272,7 +283,8 @@ export function dependencyPlan(
   const openPhases = open.filter((p): p is number => p !== null);
 
   return {
-    reading: reasons.length > 0 ? "UNMEASURED" : "MEASURED",
+    // Row 4 of `degenerateReasons`' table, decided here and nowhere else.
+    reading: reasons.length > 0 ? "UNMEASURED" : phases.length === 1 ? "NOTHING_TO_SEQUENCE" : "MEASURED",
     unmeasuredReasons: reasons,
     phases,
     missing: derived.filter(e => !liveKeys.has(key(e))),

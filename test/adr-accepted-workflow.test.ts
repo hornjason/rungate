@@ -222,6 +222,41 @@ describe("SC-2744: scaffold emits adr-accepted.yml as an owned workflow", () => 
   });
 });
 
+/**
+ * #2239 / SC-2738: a refusal before the board steps cannot skip them.
+ *
+ * An `if:` with no status function carries an implicit `success()`, so on
+ * 2026-11-15 a `plan-deps` exit 1 — every engine issue in one phase — would
+ * have skipped the Criteria column and the Ready top-up for every issue the
+ * merge had just created. `phase-order.yml` already runs its writes on
+ * `!cancelled()` for the same reason. Both board steps are idempotent, read
+ * the whole board, and never depend on what an earlier step wrote.
+ *
+ * Quoted inside `${{ }}`: a bare YAML scalar starting with `!` is a tag.
+ */
+const BOARD_STEP_IF = "${{ !cancelled() && steps.accepted.outputs.any == 'true' }}";
+
+describe("#2239: the board steps run whether or not an earlier step refused", () => {
+  const doc = Bun.YAML.parse(generated()) as any;
+  const steps: any[] = doc.jobs[ADR_ACCEPTED_JOB].steps;
+  const runOf = (s: any) => String(s.run ?? "");
+
+  test("#2239: the Criteria column and the Ready top-up carry !cancelled() and the acceptance gate", () => {
+    const board = steps.filter(s => /board-mirror |board-ready /.test(runOf(s)));
+    expect(board.map(s => s.name)).toEqual(["Criteria column on the board", "Top up Ready from the new issues"]);
+    for (const s of board) expect(s.if, `${s.name} is skipped by an earlier refusal`).toBe(BOARD_STEP_IF);
+  });
+
+  test("#2239: the planning steps keep the implicit success() — a refused plan stops the next plan step", () => {
+    // The pair: without it the case above passes against a workflow that put
+    // `!cancelled()` on every step, where a refused plan-spec would hand
+    // plan-issues milestones that do not exist.
+    const plan = steps.filter(s => /plan-spec |plan-issues --decompose|plan-deps /.test(runOf(s)));
+    expect(plan).toHaveLength(3);
+    for (const s of plan) expect(s.if).toBe("steps.accepted.outputs.any == 'true'");
+  });
+});
+
 describe("SC-2738: the generated workflow runs the five steps in order", () => {
   const doc = Bun.YAML.parse(generated()) as any;
   const job = doc.jobs[ADR_ACCEPTED_JOB];
@@ -252,8 +287,10 @@ describe("SC-2738: the generated workflow runs the five steps in order", () => {
     expect(at.every(i => i >= 0), `every command is present: ${JSON.stringify(at)}`).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
     // Every step after the read is gated on it, so an edit to an accepted ADR
-    // runs nothing.
-    for (const i of at.slice(1)) expect(steps[i].if).toBe("steps.accepted.outputs.any == 'true'");
+    // runs nothing. The two board steps are ALSO not gated on the steps
+    // before them (#2239, below), so their condition carries `!cancelled()`.
+    for (const i of at.slice(1, 4)) expect(steps[i].if).toBe("steps.accepted.outputs.any == 'true'");
+    for (const i of at.slice(4)) expect(steps[i].if).toBe(BOARD_STEP_IF);
     expect(runOf(steps[at[5]])).toContain("--top-up");
     expect(runOf(steps[at[5]])).toContain("--write");
   });

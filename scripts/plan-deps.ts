@@ -284,7 +284,9 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
       ? "not-requested"
       : refuseWrite
         ? "refused"
-        : failures.length > 0
+        : plan.reading === "NOTHING_TO_SEQUENCE"
+          ? "nothing-to-sequence"
+          : failures.length > 0
           ? "partial"
           : "yes";
     console.log(JSON.stringify({ ...plan, results, wrote }, null, 2));
@@ -325,6 +327,18 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   console.log(`\n  Frontier: ${plan.frontier === null ? "nowhere — no open issue sits in a phase" : `Phase ${plan.frontier}`}`);
   if (plan.unphased.length > 0) {
     console.log(`  ${plan.unphased.length} issue(s) carry no Phase milestone and get no edge.`);
+  }
+
+  // #2239: one phase over a sound read. Never the "already carries" sentence
+  // below — an empty plan from one phase is not a sequenced tracker — and
+  // never a refusal, because nothing was left unread. `missing` is empty by
+  // construction, so there is no write to skip.
+  if (plan.reading === "NOTHING_TO_SEQUENCE") {
+    console.log(
+      `\nNothing written: nothing to sequence: every ${values["include-closed"] ? "" : "open "}issue ` +
+        `sits in Phase ${plan.phases[0]}. One phase states no order, so no edge is missing and none is derived.`,
+    );
+    return 0;
   }
 
   if (!values.write) {
