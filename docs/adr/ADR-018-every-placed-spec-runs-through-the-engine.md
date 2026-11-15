@@ -104,8 +104,11 @@ with nobody touching it, and the readings show it.
    recommendation, for Jason.** SC-2625 rules out a hand repair. The run in
    Decision 1 moves an open issue with no milestone into the phase that its
    named criterion holds in a listed spec. If the issue names criteria in
-   two phases, it goes to the lower one, because the issue cannot finish
-   before its earliest phase does. An issue that already has a milestone is
+   two phases of one family, it goes to the lower one, because the issue
+   cannot finish before its earliest phase does. If its criteria come from
+   two families' specs, it is reported by name and left unmilestoned:
+   Engine Phase 1 and Convergence Phase 1 are unrelated milestones that
+   share a numeral, so neither is "lower". An issue that already has a milestone is
    never moved, which keeps ADR-015's deliberate Phase 6 placements. The
    first push to `specs/` after rows 2 and 5 ship places #1883, #1885,
    #1495, #1571, #1816 and #1818.

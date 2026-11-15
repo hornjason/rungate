@@ -476,7 +476,7 @@ acceptance test, so it is also the honest answer to *when is the engine done*
 - [ ] SC-2778: a criterion its spec places outside every phase — Blocked, Not adopted — deliberate, or Not observable here — is named by `criterion-coverage` and `declared-work` as declared outside phases and leaves both readings' targets, one predicate deciding it for both; it is never counted as covered by an issue, and a placement value the engine does not know leaves both readings UNMEASURED
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-- [ ] SC-2779: an open issue with no milestone whose named criteria a configured family's spec places in a phase is moved into that phase's milestone by the run SC-2780 describes, into the lowest phase when it names several; an issue that already carries a milestone is never moved
+- [ ] SC-2779: an open issue with no milestone whose named criteria are placed in phases by ONE configured family's spec is moved by the run SC-2780 describes into that family's milestone for the lowest of those phases; an issue whose criteria are placed by two families' specs is reported by name and left unmilestoned, because phase numbers do not compare across specs, and an issue that already carries a milestone is never moved
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
 - [ ] SC-2780: a push to main that changes `specs/` runs `plan-spec`, `plan-deps` and `board-mirror` for every family config names, with no command typed by hand; a family whose spec or prefix cannot be read turns the run red by name rather than being skipped
