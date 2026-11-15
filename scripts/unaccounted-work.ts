@@ -22,7 +22,7 @@ import { homedir } from "os";
 import { resolve } from "path";
 
 import { createGitHubClient, parseOwnerRepo } from "../lib/github";
-import { buildReport, citedNumbers, discoverSources, renderReport, type IssueStates } from "../lib/unaccounted-work";
+import { buildReport, citedNumbers, discoverSources, openIssuesInPage, renderReport, type IssueStates } from "../lib/unaccounted-work";
 import { parseRemoteSlug } from "../lib/verified-push";
 
 /** The one exit for a reading not taken. Assigned once; the test mutates it. */
@@ -69,10 +69,7 @@ async function liveStates(repo: string, numbers: readonly number[]): Promise<Iss
         data = (e as { data?: unknown }).data;
         if (!data) throw e;
       }
-      for (const n of chunk) {
-        const node = data?.repository?.[`n${n}`];
-        if (node?.__typename === "Issue" && node.state === "OPEN") open.add(n);
-      }
+      for (const n of openIssuesInPage(data, chunk)) open.add(n);
     }
     return { kind: "READ", open };
   } catch (e) {

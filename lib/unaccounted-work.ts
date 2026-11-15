@@ -294,3 +294,21 @@ export function renderReport(r: Report): string[] {
   for (const u of r.unmeasured) lines.push(`UNMEASURED: ${u}`);
   return lines;
 }
+
+/**
+ * The open issues among `chunk` in one `repository { nN: issueOrPullRequest }`
+ * page. A page with no `repository` (a wrong or renamed name, or one this token
+ * cannot see) throws: it is a reading not taken, and reading it as "none open"
+ * would report every citation as unaccounted (review round 5 of PR #2188).
+ * A pull request, a missing number and a closed issue are not open.
+ */
+export function openIssuesInPage(data: unknown, chunk: readonly number[]): number[] {
+  const repository = (data as { repository?: Record<string, unknown> | null } | null | undefined)?.repository;
+  if (!repository) {
+    throw new Error("the response carried no repository (a wrong or renamed name, or one this token cannot see)");
+  }
+  return chunk.filter(n => {
+    const node = repository[`n${n}`] as { __typename?: string; state?: string } | null | undefined;
+    return node?.__typename === "Issue" && node.state === "OPEN";
+  });
+}

@@ -21,7 +21,7 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 
 import { CLI_COMMANDS } from "../lib/cli-commands";
-import { arrayElementLines, citationsIn, declarationsIn, memoryDirFor } from "../lib/unaccounted-work";
+import { arrayElementLines, citationsIn, declarationsIn, memoryDirFor, openIssuesInPage } from "../lib/unaccounted-work";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "unaccounted-work.ts");
@@ -262,4 +262,19 @@ test("#2100: a plan file whose priorities is not an array is UNMEASURED, and one
   expect(r.code).toBe(2);
   const none = repo({ "project-state.json": JSON.stringify({ updated: "x" }) });
   expect(json(run(SCRIPT, ["--project-root", none, "--issues-fixture", FIXTURE, "--json"]).out).sources.find(s => s.source === "plan-file")?.kind).toBe("ABSENT");
+});
+
+// Review round 5 of PR #2188: a page with no repository is not "none open".
+test("#2100: a GraphQL page with no repository is a refusal, and only an OPEN Issue counts as open", () => {
+  expect(() => openIssuesInPage({ repository: null }, [1])).toThrow(/carried no repository/);
+  expect(() => openIssuesInPage(undefined, [1])).toThrow(/carried no repository/);
+  const page = {
+    repository: {
+      n1: { __typename: "Issue", state: "OPEN" },
+      n2: { __typename: "PullRequest", state: "OPEN" },
+      n3: null,
+      n4: { __typename: "Issue", state: "CLOSED" },
+    },
+  };
+  expect(openIssuesInPage(page, [1, 2, 3, 4, 5])).toEqual([1]);
 });
