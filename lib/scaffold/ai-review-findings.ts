@@ -2401,10 +2401,20 @@ export function restoredFromBaseLine(scope: AiReviewScopeReading): string {
   }
   const hit = restoredFromBase(scope.files);
   const of = `${hit.length} of ${scope.files.length} changed files`;
-  if (hit.length === 0) return `${AI_REVIEW_RESTORED_LINE} ${of}`;
+  // An entry with no comparable spelling (git's C-quoted form for a non-ASCII
+  // name, or a path escaping the root) cannot be classified either way. It is
+  // NAMED rather than folded into "not restored": a restored `.claude/réglages.md`
+  // arrives C-quoted, and counting it clean is the silence #1887 is about.
+  const unread = scope.files.filter(f => repoPathSpelling(f) === null);
+  const unreadNote =
+    unread.length === 0
+      ? ""
+      : `; ${unread.length} could not be read as a repository path and may also have been ` +
+        `restored: ${unread.map(p => JSON.stringify(p)).join(", ")}`;
+  if (hit.length === 0) return `${AI_REVIEW_RESTORED_LINE} ${of}${unreadNote}`;
   return (
     `${AI_REVIEW_RESTORED_LINE} ${of} — the reviewer read the base branch's copy of ` +
-    `${hit.map(p => JSON.stringify(p)).join(", ")}, not this pull request's`
+    `${hit.map(p => JSON.stringify(p)).join(", ")}, not this pull request's${unreadNote}`
   );
 }
 
