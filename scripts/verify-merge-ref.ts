@@ -233,25 +233,25 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
 }
 
 /**
- * Does the remote this process is about to read carry the pull request's
- * `owner/name`? **It does not check the host, and that gap is open.**
+ * Is the remote this process is about to read the pull request's repository,
+ * on BOTH axes: the same `owner/name`, on the same host?
  *
- * ## The scope, before the mechanism
+ * ## The host axis (#1911)
  *
- * Review of #1909 round 6, and correct: an internal mirror or a GHE instance
- * laying out `owner/name` the same way passes here as "the same repository".
- * Identity is host AND path; this reads one axis. The reason is not an
- * oversight to be read past — `gh pr view` answers
- * `headRepositoryOwner.login` and `headRepository.name` and no host at all,
- * so a host comparison needs a second source for the expected side, and the
- * local bare repository this file's own fixture points `--remote` at has no
- * host to offer. Closing it is a redesign of both sides, which is #1911, not
- * a seventh guard in front of the same comparison.
+ * Review of #1909 round 6, and correct: identity is host AND path, and this
+ * used to read only the path, so an internal mirror or a GHE instance laying
+ * out `owner/name` the same way passed as "the same repository". `gh pr view`
+ * answers `owner` and `name` and no host, so the expected host is read off
+ * the pull request's own `url` (`prHostReading`); the remote's is parsed
+ * from the URL git will contact (`remoteHostOf`). A host nobody read is
+ * UNMEASURED, never a match.
  *
- * `test/verify-merge-ref.test.ts` asserts the gap rather than describing it:
- * a differing-host row is in the table as a KNOWN LIMITATION and goes red
- * when somebody closes it, which is the only form of this sentence that
- * cannot quietly stop being true.
+ * A local path has the empty host. It matches only a pull request whose URL
+ * has no host either, which GitHub never returns — so in production a local
+ * mirror is always refused, and the one place the two empties meet is
+ * `test/verify-merge-ref.test.ts`'s fixture, whose forge is the filesystem.
+ * That keeps the end-to-end cases on a real `git ls-remote` against a real
+ * repository instead of a stub agreeing with this function.
  *
  * Raised in review of #1909. `git ls-remote` queries whatever `origin`
  * resolves to in the working directory, and nothing tied that to the
@@ -271,7 +271,33 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
  * motivated this. GitHub's own names are case-insensitive and the repository
  * was renamed once, so refusing on case would refuse a working remote.
  */
-export function remoteRepoReading(url: string, expected: string): { ok: boolean; detail: string } {
+/**
+ * The host a pull request lives on, read off its own `url` (#1911).
+ *
+ * `gh pr view` answers the head repository as `owner` and `name` and no host
+ * at all, so the URL is the expected side's only source for one. Three
+ * answers, kept apart:
+ *
+ * - a host, lowercased and without its port — `github.com`, a GHE instance;
+ * - `""`, a URL that parsed and has no host (`file:`). GitHub never returns
+ *   one; the end-to-end fixture does, because its forge is the filesystem;
+ * - `null`, no URL or one that does not parse. That is a host nobody READ,
+ *   and `remoteRepoReading` refuses it rather than treating it as hostless.
+ */
+export function prHostReading(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+export function remoteRepoReading(
+  url: string,
+  expected: string,
+  expectedHost?: string | null,
+): { ok: boolean; detail: string } {
   const tail = (s: string) =>
     s
       // `i`, because the sentence above promises case-insensitivity and
@@ -300,7 +326,66 @@ export function remoteRepoReading(url: string, expected: string): { ok: boolean;
         `Nothing was compared. Pass \`--remote\` naming the right one, or run from a checkout of \`${expected}\`.`,
     };
   }
+  // The host axis (#1911). Same owner/name on another host is another
+  // repository: a mirror, a GHE instance, a local copy.
+  if (expectedHost === null || expectedHost === undefined) {
+    return {
+      ok: false,
+      detail:
+        `the API gave no URL for this pull request, so the host it lives on was not read and the remote ` +
+        `\`${url}\` was compared on its path alone. A host nobody read is not a host that matched.`,
+    };
+  }
+  const gotHost = remoteHostOf(url);
+  if (gotHost === null) {
+    return {
+      ok: false,
+      detail: `the remote \`${url}\` has a host that does not parse, so it could not be compared with \`${hostLabel(expectedHost)}\`.`,
+    };
+  }
+  if (gotHost !== expectedHost) {
+    return {
+      ok: false,
+      detail:
+        `the remote \`${url}\` is on ${hostLabel(gotHost)}, but the pull request is on ${hostLabel(expectedHost)}. ` +
+        `Same \`${expected}\` on another host is another repository. Nothing was compared. ` +
+        `Pass \`--remote\` naming \`${expected}\` on ${hostLabel(expectedHost)}.`,
+    };
+  }
   return { ok: true, detail: "" };
+}
+
+/** How a host is named in a refusal; the empty host is said, not left blank. */
+function hostLabel(host: string): string {
+  return host === "" ? "(no host — a local path)" : host;
+}
+
+/**
+ * The host a remote URL names, in the three spellings git accepts (#1911):
+ * `scheme://[user[:pass]@]host[:port]/path`, scp-style `[user@]host:path`
+ * (a colon before the first slash), and a path, whose host is `""`. A
+ * `file:` URL is a path. `null` is a URL that claims a host and does not
+ * parse — refused by the caller, never read as hostless.
+ *
+ * The URL is the one `git ls-remote --get-url` printed, so `insteadOf`
+ * rewrites are already applied: this reads the host git will actually
+ * contact. An SSH host alias from `~/.ssh/config` is NOT resolved, so a
+ * remote spelled with one reads as that alias and is refused; the refusal
+ * says how to pass the canonical URL instead. That is the direction this is
+ * allowed to be wrong in.
+ */
+function remoteHostOf(url: string): string | null {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+    try {
+      const u = new URL(url);
+      return u.protocol === "file:" ? "" : u.hostname.toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+  const scp = url.match(/^(?:[^@/:]+@)?([^/:]+):/);
+  if (scp) return scp[1].toLowerCase();
+  return "";
 }
 
 // ── the I/O half ────────────────────────────────────────────
@@ -450,7 +535,7 @@ export function main(argv: string[]): number {
   const view = run([
     "gh", "pr", "view", pr,
     ...(repo ? ["--repo", repo] : []),
-    "--json", "state,headRefName,headRefOid,mergeCommit,headRepository,headRepositoryOwner",
+    "--json", "state,headRefName,headRefOid,mergeCommit,headRepository,headRepositoryOwner,url",
   ], timeoutMs);
   if (!view.ok || view.out === "") {
     console.error(
@@ -467,6 +552,7 @@ export function main(argv: string[]): number {
     mergeCommit?: { oid?: string };
     headRepository?: { name?: string };
     headRepositoryOwner?: { login?: string };
+    url?: string | null;
   };
   try {
     pj = JSON.parse(view.out);
@@ -482,7 +568,7 @@ export function main(argv: string[]): number {
   const name = pj.headRepository?.name;
   const expected = owner && name ? `${owner}/${name}` : "";
   const url = run(["git", "ls-remote", "--get-url", remote], timeoutMs);
-  const sameRepo = remoteRepoReading(url.ok ? url.out : "", expected);
+  const sameRepo = remoteRepoReading(url.ok ? url.out : "", expected, prHostReading(pj.url));
   if (!sameRepo.ok) {
     console.error(`UNMEASURED: ${sameRepo.detail}` + (url.timedOut ? timeoutNote("git ls-remote --get-url", timeoutMs) : ""));
     return REFUSE_EXIT;
