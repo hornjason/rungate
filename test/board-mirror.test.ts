@@ -208,6 +208,12 @@ describe("SC-2610: every spec contributes, not the one on the command line", () 
     expect(criteriaNamedBy(both, ["SC-10"]), "the served id was dropped by its own checklist line").toEqual(["SC-10"]);
     // The title is a mention too.
     expect(criteriaNamedBy({ title: "Fix SC-10's fixture", body: "- [ ] SC-10 done\n" }, ["SC-10"])).toEqual(["SC-10"]);
+    // Per mention, not per line (review of PR #2190): the checkbox accounts
+    // for the id it opens with, and a second mention on that line serves.
+    expect(
+      criteriaNamedBy({ title: "x", body: "- [ ] SC-10 verify fix, cross-checked against SC-10 in the spec\n" }, ["SC-10"]),
+      "a second mention on a checkbox line was suppressed with the first",
+    ).toEqual(["SC-10"]);
     // #713's shape: every mention is a declaring checkbox, so the cell stays empty.
     const states = { title: "x", body: "- [ ] SC-1 — a\n- [ ] SC-2 — b\n- [x] SC-1 — again\n" };
     expect(criteriaNamedBy(states, ["SC-1", "SC-2"]), "#713's shape reached the column").toEqual([]);
