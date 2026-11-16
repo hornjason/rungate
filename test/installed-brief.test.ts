@@ -25,6 +25,12 @@ import { tmpdir } from "os";
 import { join, resolve } from "path";
 
 const ROOT = resolve(import.meta.dir, "..");
+/**
+ * Every child gets a timeout. `spawnSync` blocks the thread, so a test-runner
+ * timeout cannot fire while a wedged `npm`, `tar` or `bun` holds it; only the
+ * child's own timeout turns a hang into a failure (review, PR #2281).
+ */
+const CHILD_TIMEOUT_MS = 90_000;
 let scratch = "";
 let pkg = "";
 
@@ -48,7 +54,7 @@ function installedBrief(pkgDir: string): Reading {
       `console.log(JSON.stringify(await assembleBrief({ slug: "s", workDir: ${JSON.stringify(work)}, projectRoot: ${JSON.stringify(proj)} })));\n`,
   );
   // HOME is empty so the local override at ~/.claude/skills/ship cannot be what passes.
-  const r = spawnSync("bun", [runner], { cwd: run, env: { ...process.env, HOME: home }, encoding: "utf-8" });
+  const r = spawnSync("bun", [runner], { cwd: run, env: { ...process.env, HOME: home }, encoding: "utf-8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
   if (r.status !== 0) return { status: "UNMEASURED", reason: `assembleBrief did not run: ${(r.stderr || r.stdout).trim().slice(0, 400)}` };
   // The runner prints one JSON line last. Anything else on stdout (a warning, a
   // dependency's banner) must read as UNMEASURED naming it, not as a raw
@@ -67,13 +73,13 @@ function installedBrief(pkgDir: string): Reading {
 
 beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), "rungate-1194-"));
-  const packed = spawnSync("npm", ["pack", "--silent", "--pack-destination", scratch], { cwd: ROOT, encoding: "utf-8" });
+  const packed = spawnSync("npm", ["pack", "--silent", "--pack-destination", scratch], { cwd: ROOT, encoding: "utf-8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
   if (packed.status !== 0) throw new Error(`npm pack failed: ${packed.stderr}`);
   const tgz = readdirSync(scratch).find(f => f.endsWith(".tgz"));
   if (!tgz) throw new Error(`npm pack wrote no tarball into ${scratch}`);
   const unpacked = join(scratch, "unpacked");
   mkdirSync(unpacked);
-  const tar = spawnSync("tar", ["-xzf", join(scratch, tgz), "-C", unpacked], { encoding: "utf-8" });
+  const tar = spawnSync("tar", ["-xzf", join(scratch, tgz), "-C", unpacked], { encoding: "utf-8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
   if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
   pkg = join(unpacked, "package");
   // A cache of its own. With the shared one, this fresh resolution changed what
@@ -84,6 +90,8 @@ beforeAll(() => {
   const installed = spawnSync("bun", ["install", "--production", "--silent"], {
     cwd: pkg,
     encoding: "utf-8",
+    timeout: CHILD_TIMEOUT_MS,
+    killSignal: "SIGKILL",
     env: { ...process.env, BUN_INSTALL_CACHE_DIR: join(scratch, "bun-cache") },
   });
   if (installed.status !== 0) throw new Error(`bun install in the unpacked package failed: ${installed.stderr}`);
