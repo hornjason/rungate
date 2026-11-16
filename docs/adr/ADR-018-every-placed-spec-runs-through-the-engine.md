@@ -145,9 +145,11 @@ with nobody touching it, and the readings show it.
    is never planned, labelled or placed, even with a placement table. An
    ADR's decomposition table is unaffected: `adr-accepted.yml` places an
    accepted ADR's plan as before, because merging the ADR is the opt-in.
-   Why: on a consumer repo full of older specs, pulling in everything with
-   a table would file work that is already done. DailyBriefDashboard has
-   418 spec documents and 1,663 criteria, 1,600 of them ticked.
+   Why: a consumer's checkboxes do not say what is done. Measured
+   2026-11-16 on DailyBriefDashboard and pov-plugin, reading every line:
+   18 of 59 unticked criteria (31%; 41% on DailyBriefDashboard) were
+   already done, and nothing in either repo ever ticks one. Pulling a spec
+   in on its table alone would file finished work.
    `spec-placement` (SC-2615, SC-2734) asks the same question of the same
    population: only opted-in specs must carry a placement table.
 9. **One `board:` block, open to new keys — Jason, 2026-11-16.** Board
