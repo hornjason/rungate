@@ -108,7 +108,9 @@ describe("#1559: B3 builds prove-evidence.json from the reproducer's own report"
   });
 
   test("after-evidence missing its type, time or description is no after-evidence", () => {
-    for (const broken of [{ type: "video" }, { type: "none" }, { capturedAt: 7 }, { description: "" }]) {
+    // `screenshot`: the reproducer has no browser, so it cannot have taken one
+    // (review round 1 on PR #2253 — the prompt and this list now agree).
+    for (const broken of [{ type: "video" }, { type: "none" }, { type: "screenshot" }, { capturedAt: 7 }, { description: "" }]) {
       const built = buildProveEvidence(report({ afterEvidence: { ...AFTER, ...broken } }), CTX);
       expect(built.verdict, JSON.stringify(broken)).toBe("INCONCLUSIVE");
     }

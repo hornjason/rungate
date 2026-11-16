@@ -456,8 +456,13 @@ export function validateArtifactSchema(artifact: unknown, schema: ArtifactSchema
 }
 
 const PROVE_VERDICTS = ["PROVEN", "UNPROVEN", "INCONCLUSIVE"];
-/** The after-evidence types a reproducer may report. `none` is B3's to write, never the reproducer's. */
-const REPORTED_AFTER_TYPES = ["text", "screenshot", "api", "data"];
+/**
+ * The after-evidence types a reproducer may report, and the prompt's list
+ * exactly. `none` is B3's to write. `screenshot` is not the reproducer's to
+ * claim: it has Bash and Read only (gates/prompts/prove-reproducer.md), so a
+ * reported screenshot is a UI verification it could not have made.
+ */
+const REPORTED_AFTER_TYPES = ["text", "api", "data"];
 const AFTER_ENVIRONMENTS = ["local", "prod"];
 
 /** What B3 knows about the run that the reproducer does not get to say. */
