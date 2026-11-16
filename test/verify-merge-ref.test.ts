@@ -30,6 +30,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
   REFUSE_EXIT,
+  WAIVED_REVIEW_LABEL,
   exitFor,
   mergeRefReading,
   remoteRepoReading,
@@ -207,13 +208,18 @@ describe("mergeRefReading: the one decider (#1850)", () => {
  * here is the one that would catch that.
  */
 describe("the two runs exit on different answers (#1909 round 3)", () => {
-  const READINGS: Reading[] = ["CLEAR", "STALE_HEAD", "PUSHED_AFTER_MERGE", "MERGED_CLEAN", "UNMEASURED"];
+  const READINGS: Reading[] = ["CLEAR", "STALE_HEAD", "PUSHED_AFTER_MERGE", "MERGED_CLEAN", "WAIVED_REVIEW", "UNMEASURED"];
 
-  const EXPECTED: Record<Mode, Reading> = { arming: "CLEAR", "after-merge": "MERGED_CLEAN" };
+  const EXPECTED: Record<Mode, Reading[]> = {
+    arming: ["CLEAR"],
+    "after-merge": ["MERGED_CLEAN"],
+    // #1571 / CRC-F6: a person merging a waived review by hand still pins the head.
+    "by-hand": ["CLEAR", "WAIVED_REVIEW"],
+  };
 
   for (const mode of Object.keys(EXPECTED) as Mode[]) {
     for (const reading of READINGS) {
-      const zero = reading === EXPECTED[mode];
+      const zero = EXPECTED[mode].includes(reading);
       test(`${mode}: ${reading} exits ${zero ? 0 : REFUSE_EXIT}`, () => {
         expect(exitFor(reading, mode)).toBe(zero ? 0 : REFUSE_EXIT);
       });
@@ -232,6 +238,49 @@ describe("the two runs exit on different answers (#1909 round 3)", () => {
   test("#1847 refuses in BOTH modes — it is never a good answer", () => {
     expect(exitFor("PUSHED_AFTER_MERGE", "arming")).toBe(REFUSE_EXIT);
     expect(exitFor("PUSHED_AFTER_MERGE", "after-merge")).toBe(REFUSE_EXIT);
+  });
+
+  test("#1571: arming and by-hand disagree on exactly one reading — the waived review", () => {
+    const disagree = READINGS.filter((r) => exitFor(r, "arming") !== exitFor(r, "by-hand"));
+    expect(disagree, "`--by-hand` answers like arming, so it either arms a waived review or pins nothing").toEqual(["WAIVED_REVIEW"]);
+  });
+});
+
+/**
+ * #1571 / CRC-F6 (Jason's wording, 2026-11-16): a waived review cannot reach
+ * main unread. The Actions token cannot disable auto-merge (live test,
+ * 2026-11-16), so the refusal moves to arming time: a pull request labelled
+ * `ai-review-override` is never handed a SHA to arm. A person merging it by
+ * hand asks with `--by-hand` and gets the head to pin.
+ */
+describe("#1571 / CRC-F6: a waived review is refused at arming time", () => {
+  const base = { prState: "OPEN", prHead: OPEN_HEAD, remoteRead: true, remoteHead: OPEN_HEAD, branch: "rg/x" } as const;
+
+  test("OPEN, matching head, labelled: WAIVED_REVIEW, naming the label and the by-hand route", () => {
+    const v = mergeRefReading({ ...base, labels: ["bug", WAIVED_REVIEW_LABEL] });
+    expect(v.reading).toBe("WAIVED_REVIEW");
+    expect(v.detail).toContain(WAIVED_REVIEW_LABEL);
+    expect(v.detail).toContain("--by-hand");
+  });
+
+  test("labelled AND stale reads STALE_HEAD — --by-hand is never handed a head the branch moved past (review, #2286)", () => {
+    const v = mergeRefReading({ ...base, remoteHead: LATER, labels: [WAIVED_REVIEW_LABEL] });
+    expect(v.reading).toBe("STALE_HEAD");
+    expect(exitFor(v.reading, "by-hand")).toBe(REFUSE_EXIT);
+  });
+
+  test("CONTROL: the same pull request without the label is CLEAR", () => {
+    expect(mergeRefReading({ ...base, labels: ["bug"] }).reading).toBe("CLEAR");
+  });
+
+  test("MERGED and labelled is judged on what landed — a waiver says nothing about that", () => {
+    expect(mergeRefReading({ ...base, prState: "MERGED", mergeCommit: MERGE, labels: [WAIVED_REVIEW_LABEL] }).reading).toBe("MERGED_CLEAN");
+  });
+
+  test("the label literal agrees with the one the review workflow waives on", async () => {
+    // This script stays import-free for its mutant, so the value is bound here.
+    const { AI_REVIEW_OVERRIDE_LABEL } = await import("../lib/scaffold/ai-review-step");
+    expect(WAIVED_REVIEW_LABEL).toBe(AI_REVIEW_OVERRIDE_LABEL);
   });
 });
 
@@ -490,6 +539,7 @@ function plantGh(at: string, payload: Record<string, unknown>): string {
     headRepositoryOwner: { login: "hornjason" },
     headRepository: { name: "rungate" },
     url: "file:///hornjason/rungate/pull/1",
+    labels: [], // what `gh pr view --json labels` answers for none (#1571)
     ...payload,
   };
   writeFileSync(file, `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify(full)}\nJSON\n`);
@@ -612,6 +662,47 @@ describe("the script refuses, and the refusal is what each case observed", () =>
     expect(r.err).toContain("STALE_HEAD");
     expect(r.err, "the refusal does not name the head the API reported").toContain(OPEN_HEAD);
     expect(r.err, "the refusal does not name what the remote holds").toContain(plantedHead());
+  });
+
+  // #1571 / CRC-F6, end to end: `gh pr view --json labels` answers objects.
+  test("WAIVED_REVIEW: a labelled pull request is never handed a SHA to arm", () => {
+    const gh = plantGh(join(dir, "waived"), {
+      state: "OPEN", headRefName: "rg/planted", headRefOid: plantedHead(), mergeCommit: null,
+      labels: [{ name: "enhancement" }, { name: WAIVED_REVIEW_LABEL }],
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", remote]);
+    expect(r.err).toContain("WAIVED_REVIEW");
+    expect(r.out, "a refused arm printed a SHA anyway").toBe("");
+  });
+
+  test("--by-hand: the same pull request pins its head for a person to merge", () => {
+    const head = plantedHead();
+    const gh = plantGh(join(dir, "waived-by-hand"), {
+      state: "OPEN", headRefName: "rg/planted", headRefOid: head, mergeCommit: null,
+      labels: [{ name: WAIVED_REVIEW_LABEL }],
+    });
+    const r = runScript(SCRIPT, gh, ["--pr", "1", "--remote", remote, "--by-hand"]);
+    expect(r.code, `a hand merge of a waived review could not pin its head:\n${r.err}`).toBe(0);
+    expect(r.out).toBe(head);
+  });
+
+  test("--by-hand on a waived pull request whose branch moved refuses STALE_HEAD (review, #2286)", () => {
+    const gh = plantGh(join(dir, "waived-stale"), {
+      state: "OPEN", headRefName: "rg/planted", headRefOid: OPEN_HEAD, mergeCommit: null,
+      labels: [{ name: WAIVED_REVIEW_LABEL }],
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", remote, "--by-hand"]);
+    expect(r.err).toContain("STALE_HEAD");
+    expect(r.out, "a stale head was printed to pin").toBe("");
+  });
+
+  test("labels that were not read are UNMEASURED, not 'no waiver'", () => {
+    const gh = plantGh(join(dir, "no-labels"), {
+      state: "OPEN", headRefName: "rg/planted", headRefOid: plantedHead(), mergeCommit: null, labels: undefined,
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", remote]);
+    expect(r.err).toContain("UNMEASURED");
+    expect(r.err).toContain("labels");
   });
 
   // #1847, end to end.
