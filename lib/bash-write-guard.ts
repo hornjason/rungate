@@ -321,7 +321,7 @@ function scratchRoots(): string[] {
  * already matched, so the common command pays nothing for it.
  *
  * It does NOT close the case where the link is made by the SAME command —
- * see `exemptionIsVoid`, which is where that is handled, because the answer
+ * see `chainHolds` (#1367), which is where that is handled, because the answer
  * is a property of the command and not of the path.
  *
  * An UNEXPANDED expansion is refused. `/tmp/$X/workflow-state.json` is not a
@@ -347,7 +347,7 @@ function scratchRoots(): string[] {
  * into the run store: `/tmp/sym*` does not exist, the walk climbs past it to
  * `/tmp`, and the path is exempted — then the shell expands the glob and the
  * write goes through the link. Same escape as the symlink case with no `ln`
- * in the command for `exemptionIsVoid` to see.
+ * in the command for a reader of the command to see.
  *
  * Only the directory part is tested, and that is measured rather than
  * cautious. A glob in the BASENAME is already safe, because the directory
@@ -2096,12 +2096,11 @@ function readWord(s: string, i: number): [string, number] {
       continue;
     }
     // ANSI-C quoting, the FOURTH transform. `$'-s'` is the word `-s`, and
-    // reading the `$` as an ordinary character left the token `$-s`, which
-    // fails `isLinkFlag`'s `startsWith('-')` precondition before any flag
-    // letter is looked at. Handled here rather than in `isLinkFlag` because
-    // it is a QUOTING rule and this is the module's quote reader — and
-    // because doing it here also fixes `$'cp'`, where the thing hidden is
-    // the VERB and `isLinkFlag` is never consulted at all.
+    // reading the `$` as an ordinary character left the token `$-s`. It is
+    // a QUOTING rule and this is the module's quote reader, so every reader
+    // of a word gets it — `commandWord` for a hidden verb (`$'chmod'`), and
+    // since #1367 the chain property for a hidden path (`rmdir $'\x65sc'`).
+    // It was added for #1411's link-flag reader, which #1367 deleted.
     //
     // A `\'` inside the body is an escaped quote, so the closing quote is
     // found by walking rather than by `indexOf`.
