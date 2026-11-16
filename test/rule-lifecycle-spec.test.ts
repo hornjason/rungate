@@ -117,8 +117,12 @@ describe("RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC: document integrity", () => {
     // `test/rule-retirement.test.ts` against real git fixtures including a
     // real `--depth 1` clone, with its own eight-mutation battery recorded
     // in the spec.
+    //
+    // SC-1947 joins them (#2274): scaffold runs the doc-rule scan in report
+    // mode, driven end to end by `test/scaffold-extract-constraints.test.ts`
+    // with an eight-mutation battery recorded on its pull request.
     expect(checked.sort((a, b) => a - b)).toEqual([
-      1933, 1934, 1935, 1936, 1937, 1939, 1941, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447,
+      1933, 1934, 1935, 1936, 1937, 1939, 1941, 1947, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447,
     ]);
   });
 
@@ -173,6 +177,8 @@ describe("RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC: behaviour (unimplemented)", ()
   test.todo("SC-1944: CODE-MAP.md is excluded from constraint sources");
   test.todo("SC-1945: a consumer with zero mined rules is reported as such");
   test.todo("SC-1946: scaffolding the golden fixture twice is byte-identical");
-  test.todo("SC-1947: extraction runs as part of scaffold and re-scaffold");
+  // The extraction-runs-in-scaffold criterion is implemented and covered in
+  // `test/scaffold-extract-constraints.test.ts` (#2274). Its todo is deleted
+  // for the reason SC-1941's was: a todo outranks the real claim (#810).
   test.todo("SC-1948: hand-edited rule files are preserved and reported");
 });
