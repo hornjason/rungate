@@ -140,7 +140,11 @@ describe("#2274: scaffold and re-scaffold run it, and AGENTS.md is untouched by 
       expect(again.stdout).toContain(RULE);
       expect(readFileSync(join(dir, "AGENTS.md")).equals(before)).toBe(true);
       expect(before.toString()).not.toContain(RULE);
-      // The audit (no --fix) reports it too.
-      expect(scaffold().stdout).toContain(RULE);
+      // The audit (no --fix) reports it too — and NOT as a rehearsal line: the
+      // scan read the real tree, and --fix would apply nothing (review, #2278).
+      const audit = scaffold().stdout;
+      const line = audit.split("\n").find(l => l.includes(RULE)) ?? "";
+      expect(line).toContain("DOC-RULE:");
+      expect(line).not.toContain("REHEARSAL");
     }), 120_000);
 });

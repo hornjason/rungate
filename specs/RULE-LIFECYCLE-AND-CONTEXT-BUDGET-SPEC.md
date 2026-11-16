@@ -354,7 +354,7 @@ retire.
 
 - [ ] SC-1946: Running scaffold twice over the golden fixture produces byte-identical rules directories
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-1947: Constraint extraction runs as part of scaffold and re-scaffold, not only as a separate command
+- [x] SC-1947: Constraint extraction runs as part of scaffold and re-scaffold, not only as a separate command
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-1948: Hand-edited rule files are preserved across all of the above and reported, not silently regenerated
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->

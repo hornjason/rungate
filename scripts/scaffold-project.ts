@@ -115,8 +115,11 @@ if (fix) {
 // #2274 / SC-1947: the doc-rule scan, report mode only, in both branches.
 // Read from the real project in either mode — it writes nothing, so there is
 // nothing to rehearse — and after the write steps, so it reads the tree they
-// left. Its result never fails the run.
-await reportDocRules(projectPath, actions);
+// left. Its result never fails the run. Kept OUT of `actions`: the audit
+// branch marks every action line "[REHEARSAL — not applied]", and these lines
+// are neither rehearsed nor applied by --fix (review, PR #2278).
+const docRules: string[] = [];
+await reportDocRules(projectPath, docRules);
 
 // ── Report ─────────────────────────────────────────────────────
 
@@ -129,6 +132,9 @@ await reportDocRules(projectPath, actions);
 // N lines of a tool result each receive, and without this every one of them
 // was byte-identical to the line a run that really wrote the file prints.
 const refusals = reportScaffoldActions(actions, { rehearsed: !fix });
+
+console.log("\nRules your docs state (read from this tree; reported only, never written by scaffold):");
+for (const line of docRules) console.log(`  ${line}`);
 
 // #2051, SC-2749: what the scaffold cannot do. Read, never written, and
 // printed after the report so it is the last thing a reader sees. Each line is
