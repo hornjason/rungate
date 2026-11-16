@@ -1746,9 +1746,9 @@
           },
           {
             "what": "Nothing refuses two stage items carrying a byte-identical verify command, which is how E4's first draft restated B4",
-            "mechanism": "none yet. Review caught it once. A stage-ladder case asserting every item's verify string is unique would catch it mechanically",
-            "status": "open",
-            "verify": null,
+            "mechanism": "test/stage-ladder.test.ts refuses two stage items, or two retro improvements, carrying the same verify command, naming both, and treats surrounding whitespace as the same command (#2236, three cases). review caught E4's first draft restating B4 once; the ladder now catches it mechanically",
+            "status": "in-place",
+            "verify": "out=$(bun test test/stage-ladder.test.ts -t \"#2236\" 2>&1) && printf '%s' \"$out\" | grep -qE '^ [1-9][0-9]* pass'",
             "issue": 2236
           }
         ]
