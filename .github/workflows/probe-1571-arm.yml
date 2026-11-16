@@ -1,0 +1,25 @@
+# TEMPORARY — #1571 probe, never merged. Arms auto-merge on its own pull
+# request AS THE ACTIONS TOKEN, so ai-review's disarm step can be observed
+# against a bot-armed merge. The PR also carries a test that always fails, so
+# it can never merge.
+name: probe-1571-arm
+on:
+  pull_request:
+    types: [opened, synchronize]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  arm:
+    if: github.head_ref == 'rg/1571-disarm-probe'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Arm auto-merge as the Actions token
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          if gh pr merge "$PR" --repo "$REPO" --auto --squash 2>&1; then echo "ARM: command succeeded"; else echo "ARM: command FAILED (exit $?)"; fi
+          gh pr view "$PR" --repo "$REPO" --json autoMergeRequest -q '.autoMergeRequest // "null"'
