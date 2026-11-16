@@ -21,7 +21,7 @@ const at = (hms: string) => `2026-11-16T${hms}.000Z`;
 type Route = (url: URL) => { status: number; body: unknown } | undefined;
 const seen: string[] = [];
 
-function api(over: Partial<Record<"pr" | "runs" | "jobs1" | "jobs2" | "attempt1", unknown>> & { failPr?: boolean; paged?: boolean } = {}): Route {
+function api(over: Partial<Record<"pr" | "runs" | "jobs1" | "jobs2" | "attempt1", unknown>> & { failPr?: boolean; paged?: boolean; endless?: boolean } = {}): Route {
   return (url) => {
     const p = url.pathname;
     seen.push(`${p}${url.search}`);
@@ -39,6 +39,11 @@ function api(over: Partial<Record<"pr" | "runs" | "jobs1" | "jobs2" | "attempt1"
       return { status: 200, body: over.jobs1 ?? { total_count: 1, jobs: [{ name: "test", run_id: 7, run_attempt: 1, status: "completed", conclusion: "failure", started_at: at("10:01:10"), completed_at: at("10:03:10") }] } };
     }
     if (p === "/repos/o/r/actions/runs/7/attempts/2/jobs") {
+      if (over.endless) {
+        // A server that ignores `page`: a full page on every request.
+        const jobs = Array.from({ length: 100 }, (_, i) => ({ name: `shard-${i}`, run_id: 7, run_attempt: 2, status: "completed", conclusion: "success", started_at: at("10:11:10"), completed_at: at("10:12:10") }));
+        return { status: 200, body: { total_count: 100, jobs } };
+      }
       if (over.paged) {
         // 100 on the first page, one more on the second: the 101st is only
         // seen by a reader that asks for page 2.
@@ -74,7 +79,10 @@ async function run(args: string[], r: Route = api()) {
     stdout: "pipe",
     stderr: "pipe",
   });
+  // A hang is a failure, not a wait: kill the child so the case reports it.
+  const killer = setTimeout(() => p.kill(), 15_000);
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  clearTimeout(killer);
   return { stdout, stderr, code };
 }
 
@@ -104,6 +112,14 @@ describe("#2273: a merged pull request's breakdown, read from the API", () => {
     expect(r.stdout).toContain("ci / shard-99");
     expect(r.stdout).toContain("ci / the-101st");
   });
+
+  test("a server that never ends its pages is UNMEASURED naming the cap, not a hang", async () => {
+    const r = await run(["--pr", "42", "--repo", "o/r"], api({ endless: true }));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("UNMEASURED");
+    expect(r.stdout).toContain("pages");
+    expect(r.stdout).not.toContain("#42: MEASURED");
+  }, 20_000);
 
   test("--format markdown prints a table a workflow can append to the job summary", async () => {
     const r = await run(["--pr", "42", "--repo", "o/r", "--format", "markdown"]);

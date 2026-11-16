@@ -27,6 +27,12 @@ export const EXIT_USAGE = 2;
 
 const USAGE = "Usage: rungate ci-reading --pr <N> [--repo owner/name] [--format text|markdown]";
 const PER_PAGE = 100;
+/**
+ * The page walk's bound (review, PR #2277). A server that ignores `page` and
+ * answers a full page every time would otherwise loop forever, and a hang is
+ * not a reading. 50 pages is 5,000 rows: far past any real run's jobs.
+ */
+export const MAX_PAGES = 50;
 
 type Request = (route: string, params: Record<string, unknown>) => Promise<{ data: any }>;
 
@@ -76,13 +82,14 @@ async function get(request: Request, route: string, params: Record<string, unkno
 
 async function getAll(request: Request, route: string, params: Record<string, unknown>, key: string): Promise<any[]> {
   const out: any[] = [];
-  for (let page = 1; ; page++) {
+  for (let page = 1; page <= MAX_PAGES; page++) {
     const data = await get(request, route, { ...params, per_page: PER_PAGE, page });
     const rows = data?.[key];
     if (!Array.isArray(rows)) throw new ReadFailed(`GET ${route} page ${page}: the reply has no ${key} array`);
     out.push(...rows);
     if (rows.length < PER_PAGE) return out;
   }
+  throw new ReadFailed(`GET ${route} was still returning full pages after ${MAX_PAGES} pages; stopped rather than read forever`);
 }
 
 /** Read everything `ciReadingFor` needs. Throws `ReadFailed` naming the call. */
