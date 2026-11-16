@@ -121,8 +121,12 @@ describe("RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC: document integrity", () => {
     // SC-1947 joins them (#2274): scaffold runs the doc-rule scan in report
     // mode, driven end to end by `test/scaffold-extract-constraints.test.ts`
     // with an eight-mutation battery recorded on its pull request.
+    //
+    // SC-2769 joins them (#1553): a `## Project-owned` section carries
+    // forward through `decideRuleWrite`, driven by `test/marked-section.test.ts`
+    // with an eight-mutation battery recorded on its pull request.
     expect(checked.sort((a, b) => a - b)).toEqual([
-      1933, 1934, 1935, 1936, 1937, 1939, 1941, 1947, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447,
+      1933, 1934, 1935, 1936, 1937, 1939, 1941, 1947, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447, 2769,
     ]);
   });
 
