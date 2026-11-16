@@ -22,7 +22,17 @@
 
 import { describe, test, expect } from "bun:test";
 import { spawnSync } from "child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
 import {
@@ -4130,5 +4140,288 @@ describe("#1471 WITNESS: the bypass this reached, at the decision", () => {
       t.every(x => !x.includes('"')),
       `a target kept its quote: ${JSON.stringify(t)}`,
     ).toBe(true);
+  });
+});
+
+/**
+ * #1367: the scratch exemption holds only when the destination's chain is
+ * REAL — not when the command spells no verb on a list.
+ *
+ * `origin/main` voided the exemption by recognising link-making verbs: a
+ * regex over the raw text, an `ln` command-word test and a `cp`/`install`
+ * flag reader. A list of ways to make a link is wrong the moment somebody
+ * uses one that is not on it. The list is copied here ONLY so the witness
+ * rows can prove they walk past it; nothing in `lib/` reads it any more.
+ *
+ * The property that replaces it, in three parts:
+ *
+ *   1. every directory between the scratch root and the destination exists
+ *      now as a real directory, or a `mkdir` in this command makes it;
+ *   2. nothing that runs before the write names one of those directories,
+ *      or the destination itself — a `mkdir`'s own arguments excepted;
+ *   3. an existing destination is not a link of either kind, and no
+ *      existing directory in the chain is a symbolic link.
+ *
+ * Part 1 is the issue's. Parts 2 and 3 exist because part 1 alone, with the
+ * list deleted, re-opens three bypasses the list catches today — each has
+ * its own describe below, written before the rule that closes it.
+ */
+const OLD_LINK_CREATION = /\bln\s|\bsymlinkSync\b|\bos\.symlink\b|\bsymlink\s*\(/;
+const VICTIM_1367 = `${process.env.HOME}/.rungate/victim`;
+
+/** A fresh, real scratch directory; removed afterwards. */
+function scratch1367(fn: (base: string) => void): void {
+  const base = mkdtempSync(join(tmpdir(), "bw1367-"));
+  try {
+    fn(base);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
+describe("#1367 WITNESS: a link spelling the old list never named", () => {
+  // Every row makes `esc` with a spelling `OLD_LINK_CREATION`, the `ln`
+  // command word and the `cp -s`/`cp -l` flag reader all miss, then writes
+  // through it. `esc` does not exist and nothing `mkdir`s it, so the chain
+  // is not real — whichever verb made it.
+  const spellings: [string, (b: string) => string][] = [
+    ["pathlib's symlink_to", b => `python3 -c "import pathlib; pathlib.Path('${b}/esc').symlink_to('${VICTIM_1367}')"`],
+    ["ruby's File.symlink without parentheses", b => `ruby -e 'File.symlink "${VICTIM_1367}", "${b}/esc"'`],
+    ["cp -a of a link planted earlier (#1425)", b => `cp -a ${b}/planted ${b}/esc`],
+    ["cp -r of a link planted earlier", b => `cp -r ${b}/planted ${b}/esc`],
+    ["mv of a link planted earlier", b => `mv ${b}/planted ${b}/esc`],
+    ["rsync -a of a link planted earlier", b => `rsync -a ${b}/planted ${b}/esc`],
+    ["an archive that carries the link", b => `tar -xf ${b}.tar -C ${b}`],
+  ];
+
+  test.each(spellings)("%s: the old list does not name it", (_l, mk) => {
+    const cmd = `${mk("/tmp/bw1367")} && echo '{}' > /tmp/bw1367/esc/${STATE}`;
+    expect(OLD_LINK_CREATION.test(cmd), cmd).toBe(false);
+    expect(segments(cmd).some(s => commandWord(s) === "ln"), cmd).toBe(false);
+  });
+
+  test.each(spellings)("%s: refused", (_l, mk) => {
+    scratch1367(base => {
+      const cmd = `${mk(base)} && echo '{}' > ${base}/esc/${STATE}`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    });
+  });
+
+  test("the mv row is a real bypass, executed rather than described", () => {
+    // A harmless filename stands in for the gate artifact, which the live
+    // hook refuses — correctly — if this test names it.
+    scratch1367(base => {
+      mkdirSync(join(base, "victim"));
+      symlinkSync(join(base, "victim"), join(base, "planted"));
+      const r = spawnSync("/bin/bash", ["-c", `mv ${base}/planted ${base}/esc && echo x > ${base}/esc/SENTINEL`]);
+      expect(r.status).toBe(0);
+      expect(readFileSync(join(base, "victim", "SENTINEL"), "utf8")).toBe("x\n");
+    });
+  });
+
+  test("CONTROL: the documented `ln -s` shape is still refused", () => {
+    scratch1367(base => {
+      expect(decideBashWrite(`ln -s ${VICTIM_1367} ${base}/esc && echo '{}' > ${base}/esc/${STATE}`).blocked).toBe(true);
+    });
+  });
+});
+
+describe("#1367 CONTROL: a fixture whose directory is real stays exempt", () => {
+  // The load-bearing half: a property that refused every fixture would pass
+  // every witness above. `d` never exists beforehand in these rows.
+  const rows: [string, (b: string) => string][] = [
+    ["mkdir -p d && cp x d", b => `mkdir -p ${b}/d && cp ${b}/src.json ${b}/d/${STATE}`],
+    ["mkdir -p d && cp x into d/", b => `mkdir -p ${b}/d && cp ${b}/x/${STATE} ${b}/d/`],
+    ["mkdir -p d && a redirect", b => `mkdir -p ${b}/d/e && echo '{}' > ${b}/d/e/${STATE}`],
+    ["mkdir without -p, one level", b => `mkdir ${b}/d && echo '{}' > ${b}/d/${STATE}`],
+    ["mkdir -p with the path in a variable", b => `D=${b}/d; mkdir -p $D/e && echo '{}' > ${b}/d/e/${STATE}`],
+    [
+      "mkdirSync inside a bun -e body",
+      b => `bun -e 'const {mkdirSync, writeFileSync} = require("fs"); mkdirSync("${b}/d/e", {recursive: true}); writeFileSync("${b}/d/e/${STATE}", "{}")'`,
+    ],
+    [
+      "os.makedirs inside a python -c body",
+      b => `python3 -I -c "import os, json; os.makedirs('${b}/d', exist_ok=True); json.dump({}, open('${b}/d/${STATE}','w'))"`,
+    ],
+    ["a directory that already exists, no mkdir", b => `echo '{}' > ${b}/${STATE}`],
+    ["the write read back afterwards", b => `mkdir -p ${b}/d && echo '{}' > ${b}/d/${STATE} && cat ${b}/d/${STATE}`],
+    [
+      "the directory handed to a later step",
+      b => `mkdir -p ${b}/d && echo '{}' > ${b}/d/${STATE} && TEST_WORK_DIR=${b}/d bun test x 2>&1 | tail -20`,
+    ],
+    ["a hook copied into a fresh backup directory", b => `mkdir -p ${b}/bak && cp -p hooks/X.hook.ts ${b}/bak/`],
+  ];
+  test.each(rows)("%s", (_l, build) => {
+    scratch1367(base => {
+      const cmd = build(base);
+      const d = decideBashWrite(cmd);
+      expect(d.blocked, `refused: ${cmd} — ${d.reason}`).toBe(false);
+    });
+  });
+});
+
+describe("#1367 COST: refused, and the reason is the property", () => {
+  test("a directory nothing makes is refused — the write would fail anyway", () => {
+    scratch1367(base => {
+      expect(decideBashWrite(`echo '{}' > ${base}/nosuch/${STATE}`).blocked).toBe(true);
+    });
+  });
+
+  test("resetting the directory in the same command is refused — the corpus's one live cost", () => {
+    // `rm -rf d && mkdir -p d && …` and `ln -s V d && mkdir -p d && …` are
+    // the same shape with a different verb. Nothing that does not read the
+    // verb can tell them apart, so the reset pays for the link.
+    scratch1367(base => {
+      const cmd = `rm -rf ${base}/d && mkdir -p ${base}/d && cat > ${base}/d/${STATE} <<'EOF'\n{}\nEOF`;
+      expect(decideBashWrite(cmd).blocked).toBe(true);
+    });
+  });
+});
+
+describe("#1367 BYPASS 1: a link made before the mkdir that forgives it", () => {
+  // `mkdir -p` succeeds silently when its argument is already a link to a
+  // directory, so the forgiveness clause alone forgave the link.
+  const rows: [string, (b: string) => string][] = [
+    ["ln -s, then mkdir -p", b => `ln -s ${VICTIM_1367} ${b}/esc && mkdir -p ${b}/esc && echo '{}' > ${b}/esc/${STATE}`],
+    [
+      // The link target is built from the environment on purpose: a literal
+      // run-store path in a writing body is refused by #1371's live-tree
+      // reading, which would hold this row up for the wrong reason.
+      "pathlib, then os.makedirs, in one body",
+      b =>
+        `python3 -c "import os, pathlib; pathlib.Path('${b}/esc').symlink_to(os.environ['HOME'] + '/.rungate/victim'); ` +
+        `os.makedirs('${b}/esc', exist_ok=True); open('${b}/esc/${STATE}','w').write('{}')"`,
+    ],
+    ["ln -s through a variable", b => `E=${b}/esc; ln -s ${VICTIM_1367} $E && mkdir -p $E && echo '{}' > ${b}/esc/${STATE}`],
+    ["ln -s from the parent, relatively", b => `cd ${b} && ln -s ${VICTIM_1367} esc && mkdir -p ${b}/esc && echo '{}' > ${b}/esc/${STATE}`],
+    ["ln -s spelled in another case", b => `ln -s ${VICTIM_1367} ${b}/ESC && mkdir -p ${b}/esc && echo '{}' > ${b}/esc/${STATE}`],
+  ];
+  test.each(rows)("%s", (_l, build) => {
+    scratch1367(base => {
+      const cmd = build(base);
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    });
+  });
+
+  test("the link really survives mkdir -p, executed", () => {
+    scratch1367(base => {
+      mkdirSync(join(base, "victim"));
+      const r = spawnSync("/bin/bash", [
+        "-c",
+        `ln -s ${base}/victim ${base}/esc && mkdir -p ${base}/esc && echo x > ${base}/esc/SENTINEL`,
+      ]);
+      expect(r.status).toBe(0);
+      expect(readFileSync(join(base, "victim", "SENTINEL"), "utf8")).toBe("x\n");
+    });
+  });
+});
+
+describe("#1367 BYPASS 2: an existing directory removed and replaced in the same command", () => {
+  // The chain is real when the decision is taken, and is not by the time
+  // the write runs.
+  const rows: [string, (b: string) => string][] = [
+    ["rmdir, then ln -s", b => `rmdir ${b}/real && ln -s ${VICTIM_1367} ${b}/real && echo '{}' > ${b}/real/${STATE}`],
+    ["rm -rf, then mv a planted link", b => `rm -rf ${b}/real && mv ${b}/planted ${b}/real && echo '{}' > ${b}/real/${STATE}`],
+    ["rmdir and ln -s inside eval", b => `eval 'rmdir ${b}/real; ln -s ${VICTIM_1367} ${b}/real' && echo '{}' > ${b}/real/${STATE}`],
+    [
+      "rmdir and ln -s in a shell -c body",
+      b => `bash -c 'rmdir ${b}/real && ln -s ${VICTIM_1367} ${b}/real' && echo '{}' > ${b}/real/${STATE}`,
+    ],
+    ["the path built by a substitution", b => `rmdir "$(echo ${b}/real)" && ln -s ${VICTIM_1367} ${b}/real && echo '{}' > ${b}/real/${STATE}`],
+    ["concurrently, in a pipeline", b => `echo '{}' > ${b}/real/${STATE} | (rmdir ${b}/real; ln -s ${VICTIM_1367} ${b}/real)`],
+  ];
+  test.each(rows)("%s", (_l, build) => {
+    scratch1367(base => {
+      mkdirSync(join(base, "real"));
+      const cmd = build(base);
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    });
+  });
+
+  test("CONTROL: the same directory, untouched, stays exempt", () => {
+    scratch1367(base => {
+      mkdirSync(join(base, "real"));
+      expect(decideBashWrite(`echo '{}' > ${base}/real/${STATE} && ls ${base}/real`).blocked).toBe(false);
+    });
+  });
+});
+
+describe("#1367 BYPASS 3: a link at the destination file itself", () => {
+  // The chain property is about DIRECTORIES. A hard link at the file aims
+  // the write at the victim's inode with every directory real.
+  const rows: [string, (b: string) => string][] = [
+    ["cp -l, the same command", b => `cp -l ${VICTIM_1367}/${STATE} ${b}/${STATE} && echo '{}' > ${b}/${STATE}`],
+    ["link(1), which the old list never named", b => `link ${VICTIM_1367}/${STATE} ${b}/${STATE} && echo '{}' > ${b}/${STATE}`],
+  ];
+  test.each(rows)("%s", (_l, build) => {
+    scratch1367(base => {
+      const cmd = build(base);
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    });
+  });
+
+  test("a destination that is already a hard link is refused — the two-command form", () => {
+    scratch1367(base => {
+      writeFileSync(join(base, "other.json"), "{}");
+      linkSync(join(base, "other.json"), join(base, STATE));
+      expect(decideBashWrite(`echo '{}' > ${base}/${STATE}`).blocked).toBe(true);
+    });
+  });
+
+  test("a destination that is already a symbolic link is refused", () => {
+    scratch1367(base => {
+      writeFileSync(join(base, "other.json"), "{}");
+      symlinkSync(join(base, "other.json"), join(base, STATE));
+      expect(decideBashWrite(`echo '{}' > ${base}/${STATE}`).blocked).toBe(true);
+    });
+  });
+
+  test("CONTROL: an ordinary existing destination stays exempt", () => {
+    scratch1367(base => {
+      writeFileSync(join(base, STATE), "{}");
+      expect(decideBashWrite(`echo '{}' > ${base}/${STATE}`).blocked).toBe(false);
+    });
+  });
+});
+
+describe("#1367: an existing directory in the chain must not be a link", () => {
+  test("a symlink that points INTO scratch is refused — it can be re-aimed unseen", () => {
+    scratch1367(base => {
+      mkdirSync(join(base, "realdir"));
+      symlinkSync(join(base, "realdir"), join(base, "esc"));
+      expect(decideBashWrite(`echo '{}' > ${base}/esc/${STATE}`).blocked).toBe(true);
+      // The control: the same directory under its own name.
+      expect(decideBashWrite(`echo '{}' > ${base}/realdir/${STATE}`).blocked).toBe(false);
+    });
+  });
+});
+
+describe("#1367 KNOWN GAP: a program that computes the path at run time", () => {
+  // Pinned, not fixed. A program that decodes the directory's name at run
+  // time and re-links an EXISTING directory names nothing a reader of the
+  // command can see. The old list caught this only when the verb was one of
+  // its spellings — `os.symlink` here — and closing it without the list
+  // means refusing every interpreter body that writes, which costs the
+  // mkdirSync fixtures above. A directory that does NOT exist yet is still
+  // refused whatever the program does; that is part 1.
+  test("an existing directory re-linked from a decoded name is not seen", () => {
+    scratch1367(base => {
+      mkdirSync(join(base, "real"));
+      const encoded = Buffer.from(`${base}/real`).toString("base64");
+      const cmd =
+        `python3 -c "import os, base64; p = base64.b64decode('${encoded}').decode(); ` +
+        `os.rmdir(p); os.symlink('${VICTIM_1367}', p)" && echo '{}' > ${base}/real/${STATE}`;
+      expect(decideBashWrite(cmd).blocked).toBe(false);
+    });
+  });
+
+  test("the same program against a directory that does not exist is refused", () => {
+    scratch1367(base => {
+      const encoded = Buffer.from(`${base}/esc`).toString("base64");
+      const cmd =
+        `python3 -c "import os, base64; os.symlink('${VICTIM_1367}', base64.b64decode('${encoded}').decode())" ` +
+        `&& echo '{}' > ${base}/esc/${STATE}`;
+      expect(decideBashWrite(cmd).blocked).toBe(true);
+    });
   });
 });
