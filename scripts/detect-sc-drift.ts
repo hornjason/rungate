@@ -80,6 +80,21 @@ export function extractKeywords(statement: string): string[] {
 }
 
 /**
+ * The file a `<path> contains [...]` clause names — the one its keywords must
+ * be in (#2287). Null when the clause names no file directly before it.
+ *
+ * Every path in a statement is checked for EXISTENCE (drift), but only this
+ * one carries the keywords. Checking them in every path made a criterion
+ * whose prose mentions a second file read stale while the conformity matcher
+ * passed it: SC-2772 names `workflows/ship.js` as what its subject is built
+ * from, and `buildWorkflowLaunch` is not in ship.js.
+ */
+export function containsSubject(statement: string): string | null {
+  const m = statement.match(/((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))\s+contains \[/);
+  return m ? m[1] : null;
+}
+
+/**
  * Detect drift and staleness in SCs across all spec files.
  *
  * @param specsDir - Path to specs directory
@@ -129,8 +144,11 @@ export function detectDrift(specsDir: string, projectRoot: string): DriftResult 
       const statement = match[2].trim();
       checked++;
 
-      // Check for file path references
+      // Check for file path references. Keywords belong to the clause's own
+      // file when it names one; with no named file, every path is checked, as
+      // before, which only ever refuses more.
       const paths = extractFilePaths(statement);
+      const subject = containsSubject(statement);
       for (const path of paths) {
         const fullPath = join(projectRoot, path);
         if (!existsSync(fullPath)) {
@@ -140,7 +158,7 @@ export function detectDrift(specsDir: string, projectRoot: string): DriftResult 
           drifted.get(specFile)!.push({ scId, statement, path });
         } else {
           // File exists — check each required keyword separately.
-          const keywords = extractKeywords(statement);
+          const keywords = subject === null || subject === path ? extractKeywords(statement) : [];
           if (keywords.length) {
             const fileContent = readFileSync(fullPath, "utf-8");
             const missing = keywords.filter(k => !fileContent.includes(k));

@@ -228,3 +228,33 @@ describe("#141: a multi-keyword SC is only stale for the terms it is missing", (
     expect(result.stale.get("test-allthere.md")).toBeUndefined();
   });
 });
+
+describe("#2287: the keywords are looked for in the file the contains clause names, and no other", () => {
+  // SC-2772 reads "scripts/build-workflow-launch.ts contains [buildWorkflowLaunch]
+  // — … generated from `workflows/ship.js` …". The detector checked the keyword
+  // in EVERY path the sentence mentions, found it missing from ship.js, and
+  // refused the tick as stale while the conformity matcher had passed it.
+  test("a second path mentioned in the prose does not make the criterion stale", () => {
+    mkdirSync(join(TEMP_DIR, "scripts"), { recursive: true });
+    mkdirSync(join(TEMP_DIR, "workflows"), { recursive: true });
+    writeFileSync(join(TEMP_DIR, "scripts", "subject.ts"), "export function theKeyword() {}\n");
+    writeFileSync(join(TEMP_DIR, "workflows", "other.js"), "nothing relevant\n");
+    writeFileSync(
+      join(TEMP_SPECS, "test-subject.md"),
+      "# Subject\n\n- [ ] SC-502: scripts/subject.ts contains [theKeyword] — built from `workflows/other.js`, which must exist\n",
+    );
+    const result = detectDrift(TEMP_SPECS, TEMP_DIR);
+    expect(result.stale.get("test-subject.md")).toBeUndefined();
+    expect(result.drifted.get("test-subject.md")).toBeUndefined(); // other.js exists, so no drift either
+  });
+
+  test("CONTROL: the named file lacking the keyword is still stale, and only it is reported", () => {
+    writeFileSync(join(TEMP_DIR, "scripts", "subject-empty.ts"), "export const nothing = 0;\n");
+    writeFileSync(
+      join(TEMP_SPECS, "test-subject-empty.md"),
+      "# Subject\n\n- [ ] SC-503: scripts/subject-empty.ts contains [theKeyword] — built from `workflows/other.js`\n",
+    );
+    const stale = detectDrift(TEMP_SPECS, TEMP_DIR).stale.get("test-subject-empty.md")!;
+    expect(stale.map(s => s.path)).toEqual(["scripts/subject-empty.ts"]);
+  });
+});
