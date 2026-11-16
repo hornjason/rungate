@@ -263,6 +263,12 @@ describe("#1571 / CRC-F6: a waived review is refused at arming time", () => {
     expect(v.detail).toContain("--by-hand");
   });
 
+  test("labelled AND stale reads STALE_HEAD — --by-hand is never handed a head the branch moved past (review, #2286)", () => {
+    const v = mergeRefReading({ ...base, remoteHead: LATER, labels: [WAIVED_REVIEW_LABEL] });
+    expect(v.reading).toBe("STALE_HEAD");
+    expect(exitFor(v.reading, "by-hand")).toBe(REFUSE_EXIT);
+  });
+
   test("CONTROL: the same pull request without the label is CLEAR", () => {
     expect(mergeRefReading({ ...base, labels: ["bug"] }).reading).toBe("CLEAR");
   });
@@ -678,6 +684,16 @@ describe("the script refuses, and the refusal is what each case observed", () =>
     const r = runScript(SCRIPT, gh, ["--pr", "1", "--remote", remote, "--by-hand"]);
     expect(r.code, `a hand merge of a waived review could not pin its head:\n${r.err}`).toBe(0);
     expect(r.out).toBe(head);
+  });
+
+  test("--by-hand on a waived pull request whose branch moved refuses STALE_HEAD (review, #2286)", () => {
+    const gh = plantGh(join(dir, "waived-stale"), {
+      state: "OPEN", headRefName: "rg/planted", headRefOid: OPEN_HEAD, mergeCommit: null,
+      labels: [{ name: WAIVED_REVIEW_LABEL }],
+    });
+    const r = bothHalves(gh, ["--pr", "1", "--remote", remote, "--by-hand"]);
+    expect(r.err).toContain("STALE_HEAD");
+    expect(r.out, "a stale head was printed to pin").toBe("");
   });
 
   test("labels that were not read are UNMEASURED, not 'no waiver'", () => {

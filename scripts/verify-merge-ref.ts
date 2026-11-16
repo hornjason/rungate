@@ -243,20 +243,6 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
     };
   }
 
-  // #1571 / CRC-F6: a waived review cannot reach main unread. The Actions
-  // token cannot turn auto-merge off once it is on (live test, 2026-11-16), so
-  // the refusal is here, at arming time. After a merge the question is what
-  // landed, not who may land it, so only an OPEN pull request is asked.
-  if ((input.labels ?? []).includes(WAIVED_REVIEW_LABEL)) {
-    return {
-      reading: "WAIVED_REVIEW",
-      detail:
-        `the pull request carries '${WAIVED_REVIEW_LABEL}': its AI review was waived, so nothing automated has read it, ` +
-        `and auto-merge is never armed on it. A person reads the diff and merges by hand: ` +
-        `\`--by-hand\` prints the head to pin with \`gh pr merge --squash --match-head-commit\` (no \`--auto\`).`,
-    };
-  }
-
   if (remoteHead !== prHead) {
     // `--match-head-commit` would catch this one IF the value were read now.
     // It is read at arm time and auto-merge fires later, so the comparison
@@ -266,6 +252,22 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
       detail:
         `the API reports head ${prHead} but ${where} is at ${remoteHead}. Arming against ${prHead} merges a commit the ` +
         `branch has already moved past. Re-read the head, or push nothing further until this merges.`,
+    };
+  }
+
+  // #1571 / CRC-F6: a waived review cannot reach main unread. The Actions
+  // token cannot turn auto-merge off once it is on (live test, 2026-11-16), so
+  // the refusal is here, at arming time. After a merge the question is what
+  // landed, not who may land it, so only an OPEN pull request is asked. AFTER
+  // the staleness comparison, so `--by-hand` is never handed a head the branch
+  // has moved past (review, #2286).
+  if ((input.labels ?? []).includes(WAIVED_REVIEW_LABEL)) {
+    return {
+      reading: "WAIVED_REVIEW",
+      detail:
+        `the pull request carries '${WAIVED_REVIEW_LABEL}': its AI review was waived, so nothing automated has read it, ` +
+        `and auto-merge is never armed on it. A person reads the diff and merges by hand: ` +
+        `\`--by-hand\` prints the head to pin with \`gh pr merge --squash --match-head-commit\` (no \`--auto\`).`,
     };
   }
 
