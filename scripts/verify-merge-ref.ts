@@ -84,9 +84,24 @@
 
 export const REFUSE_EXIT = 1;
 
+/**
+ * The label that waives a pull request's AI review (#1571, CRC-F6).
+ *
+ * A literal rather than an import of `AI_REVIEW_OVERRIDE_LABEL`, because this
+ * file stays import-free for its mutant; `test/verify-merge-ref.test.ts`
+ * binds the two with an agreement assertion.
+ */
+export const WAIVED_REVIEW_LABEL = "ai-review-override";
+
 export type Reading =
   /** The branch holds exactly the head the pull request reports. Armable. */
   | "CLEAR"
+  /**
+   * OPEN and labelled `WAIVED_REVIEW_LABEL`: nothing automated has read it, so
+   * it is never armed. A person merges it by hand, pinned via `--by-hand`
+   * (#1571, CRC-F6).
+   */
+  | "WAIVED_REVIEW"
   /** The remote has moved past the head the API reported. */
   | "STALE_HEAD"
   /** Merged, and the branch carries commits the merge never saw. */
@@ -123,21 +138,32 @@ export interface RefInputs {
   mergeCommit?: string;
   /** The branch name, for the message. */
   branch?: string;
+  /**
+   * The pull request's label names. `main` refuses a reply that carries no
+   * label list at all, so absent here only ever means a pure caller that has
+   * none to give (#1571).
+   */
+  labels?: string[];
 }
 
-/** Which of the two questions is being asked. See the docblock. */
-export type Mode = "arming" | "after-merge";
+/**
+ * Which question is being asked. See the docblock. `by-hand` is arming's
+ * question asked by a person who will merge without `--auto`: the one route
+ * a waived review may take (#1571, CRC-F6).
+ */
+export type Mode = "arming" | "after-merge" | "by-hand";
 
 /**
  * The one place a reading becomes an exit code.
  *
- * Kept out of `main` so the two modes can be shown to DISAGREE rather than
- * asserted to: a flag both modes answer identically is decorative, and
- * `test/verify-merge-ref.test.ts` walks every reading against both.
+ * Kept out of `main` so the modes can be shown to DISAGREE rather than
+ * asserted to: a flag every mode answers identically is decorative, and
+ * `test/verify-merge-ref.test.ts` walks every reading against each.
  */
 export function exitFor(reading: Reading, mode: Mode): number {
-  const good: Reading = mode === "after-merge" ? "MERGED_CLEAN" : "CLEAR";
-  return reading === good ? 0 : REFUSE_EXIT;
+  const good: Reading[] =
+    mode === "after-merge" ? ["MERGED_CLEAN"] : mode === "by-hand" ? ["CLEAR", "WAIVED_REVIEW"] : ["CLEAR"];
+  return good.includes(reading) ? 0 : REFUSE_EXIT;
 }
 
 export interface RefVerdict {
@@ -226,6 +252,22 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
       detail:
         `the API reports head ${prHead} but ${where} is at ${remoteHead}. Arming against ${prHead} merges a commit the ` +
         `branch has already moved past. Re-read the head, or push nothing further until this merges.`,
+    };
+  }
+
+  // #1571 / CRC-F6: a waived review cannot reach main unread. The Actions
+  // token cannot turn auto-merge off once it is on (live test, 2026-11-16), so
+  // the refusal is here, at arming time. After a merge the question is what
+  // landed, not who may land it, so only an OPEN pull request is asked. AFTER
+  // the staleness comparison, so `--by-hand` is never handed a head the branch
+  // has moved past (review, #2286).
+  if ((input.labels ?? []).includes(WAIVED_REVIEW_LABEL)) {
+    return {
+      reading: "WAIVED_REVIEW",
+      detail:
+        `the pull request carries '${WAIVED_REVIEW_LABEL}': its AI review was waived, so nothing automated has read it, ` +
+        `and auto-merge is never armed on it. A person reads the diff and merges by hand: ` +
+        `\`--by-hand\` prints the head to pin with \`gh pr merge --squash --match-head-commit\` (no \`--auto\`).`,
     };
   }
 
@@ -524,7 +566,11 @@ function arg(name: string, argv: string[]): string | undefined {
 export function main(argv: string[]): number {
   const pr = arg("pr", argv);
   if (!pr) {
-    console.error("usage: verify-merge-ref.ts --pr <N> [--after-merge] [--repo owner/name] [--remote <name|path>]");
+    console.error("usage: verify-merge-ref.ts --pr <N> [--after-merge | --by-hand] [--repo owner/name] [--remote <name|path>]");
+    return REFUSE_EXIT;
+  }
+  if (argv.includes("--after-merge") && argv.includes("--by-hand")) {
+    console.error("UNMEASURED: --after-merge and --by-hand ask different questions; pass one.");
     return REFUSE_EXIT;
   }
   const repo = arg("repo", argv);
@@ -538,12 +584,12 @@ export function main(argv: string[]): number {
     return REFUSE_EXIT;
   }
   const timeoutMs = bound.ms;
-  const mode: Mode = argv.includes("--after-merge") ? "after-merge" : "arming";
+  const mode: Mode = argv.includes("--after-merge") ? "after-merge" : argv.includes("--by-hand") ? "by-hand" : "arming";
 
   const view = run([
     "gh", "pr", "view", pr,
     ...(repo ? ["--repo", repo] : []),
-    "--json", "state,headRefName,headRefOid,mergeCommit,headRepository,headRepositoryOwner,url",
+    "--json", "state,headRefName,headRefOid,mergeCommit,headRepository,headRepositoryOwner,url,labels",
   ], timeoutMs);
   if (!view.ok || view.out === "") {
     console.error(
@@ -561,6 +607,7 @@ export function main(argv: string[]): number {
     headRepository?: { name?: string };
     headRepositoryOwner?: { login?: string };
     url?: string | null;
+    labels?: Array<{ name?: string }>;
   };
   try {
     pj = JSON.parse(view.out);
@@ -568,6 +615,14 @@ export function main(argv: string[]): number {
     console.error(`UNMEASURED: \`gh pr view ${pr}\` returned something that is not JSON.`);
     return REFUSE_EXIT;
   }
+  // `gh` answers `[]` for a pull request with no labels. No list at all is a
+  // reply nobody read for the one fact that decides whether a waived review
+  // gets armed, so it refuses rather than reading as "not waived" (#1571).
+  if (!Array.isArray(pj.labels)) {
+    console.error(`UNMEASURED: \`gh pr view ${pr}\` returned no labels list, so whether its review was waived was not read.`);
+    return REFUSE_EXIT;
+  }
+  const labels = pj.labels.map((l) => l?.name ?? "");
 
   // Before reading the remote, establish it IS the pull request's remote.
   // Otherwise every comparison below is made confidently against the wrong
@@ -606,6 +661,7 @@ export function main(argv: string[]): number {
     remoteHead,
     mergeCommit: pj.mergeCommit?.oid,
     branch,
+    labels,
   });
 
   if (exitFor(verdict.reading, mode) !== 0) {

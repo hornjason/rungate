@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: fe73d69914104288
+generated-sha: 25df77368e8a7a4b
 ---
 
 ## Command Routing
@@ -25,6 +25,7 @@ Generated from the CLI's command registry. Run one as
 | `plan-deps` | Write a spec's phase order onto the tracker as blocked-by edges |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
 | `board-id` | Print the board's node id from config |
+| `ci-reading` | Print a merged pull request's CI breakdown — per-check time, queue, critical path, re-runs |
 | `board-intake-move` | Move a board item to a column, verified in the item and in the board's search index |
 | `unaccounted-work` | Report undone work declared in a repository's prose that no open issue covers |
 | `intake` | Run each intake source and print its reading — MEASURED with a count, or UNMEASURED naming why |

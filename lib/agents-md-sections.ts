@@ -119,6 +119,9 @@ export interface SectionReading {
   text: string;
   /** Its non-blank lines, heading included. The unit the loss check counts. */
   lines: string[];
+  /** Where the heading matched, as an offset into the content (#2285): the one
+   *  position, so a caller never re-finds the section by searching for its text. */
+  start: number;
 }
 
 export interface PreserveResult {
@@ -161,7 +164,7 @@ export function readPreservedSection(
   // The heading alone is not a section. One line means nothing survived the
   // last edit, and there is no content to promise anybody.
   if (lines.length < 2) return null;
-  return { text, lines };
+  return { text, lines, start };
 }
 
 /**

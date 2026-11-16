@@ -254,8 +254,8 @@ export const OWNED_FILES: OwnedFile[] = [
     path: ".claude/rules/*.md",
     strategy: "provenance",
     servedBy: "decideRuleWrite (lib/rule-provenance.ts) — a frontmatter `generated-sha:` key, because a markdown file has no line comments",
-    customize: "Edit freely — a hand-edited rule is preserved and reported (#370)",
-    avoid: "Don't expect edits to survive if you also delete the `generated-sha` marker",
+    customize: "Put edits under `## Project-owned`; it carries forward, the rest regenerates (#1553)",
+    avoid: "Don't edit outside it — the write is refused, naming the lines",
   },
   {
     path: "test/scaffold-conformity.test.ts",

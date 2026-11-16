@@ -542,10 +542,21 @@ export const AI_REVIEW_WAIVED_OUTPUT_VALUE = "true";
 export const AI_REVIEW_DISARM_STEP_ID = "ai-review-disarm";
 
 export const AI_REVIEW_DISARM_STEP_NAME =
-  "Disarm auto-merge when the review was waived";
+  "Refuse a waived review while auto-merge is armed";
 
-/** The annotation title for a disarm that happened, or had nothing to do. */
-export const AI_REVIEW_DISARM_TITLE = "AI review waiver disarmed auto-merge";
+/** The annotation title for a waived review with nothing armed: nothing to refuse. */
+export const AI_REVIEW_DISARM_TITLE = "AI review waiver: auto-merge not armed";
+
+/**
+ * The title for a waived review found with auto-merge ARMED (#1571, CRC-F6).
+ *
+ * Its own title, not `AI_REVIEW_DISARM_FAILED_TITLE`: this step no longer
+ * attempts a disarm, because the Actions token cannot disable auto-merge at all
+ * (live test, 2026-11-16; 0 of 65 attempts on #1571). So "armed" is a reading
+ * reported as itself, not a failed action. Distinct from every other title in
+ * this module and a substring of none.
+ */
+export const AI_REVIEW_WAIVER_ARMED_TITLE = "AI review waiver: AUTO-MERGE ARMED";
 
 /**
  * The title for a waiver this job could NOT decouple from the landing.
@@ -556,6 +567,19 @@ export const AI_REVIEW_DISARM_TITLE = "AI review waiver disarmed auto-merge";
  * one. Distinct from every other title in this module and a substring of none.
  */
 export const AI_REVIEW_DISARM_FAILED_TITLE = "AI review waiver NOT DISARMED";
+
+/**
+ * CRC-F6 (#1571): the title the waiver step reports each reading of
+ * auto-merge under. The step READS and never acts — the Actions token cannot
+ * disable auto-merge — so its whole effect is the check it leaves: green with
+ * `notArmed`, red with `armed` (through `AI_REVIEW_REQUIRED_EXIT`). A reading
+ * it could not take is `AI_REVIEW_DISARM_FAILED_TITLE`, as before. One table,
+ * read by `buildDisarmScript` and by its tests.
+ */
+export const waiverDisarmReading = {
+  notArmed: AI_REVIEW_DISARM_TITLE,
+  armed: AI_REVIEW_WAIVER_ARMED_TITLE,
+} as const;
 
 /** The disarm step's reading of `AI_REVIEW_WAIVED_OUTPUT`. */
 export const AI_REVIEW_DISARM_WAIVED_VAR = "AI_REVIEW_DISARM_WAIVED";
@@ -7117,7 +7141,15 @@ if [ "\${AI_REVIEW_ACTION_OUTCOME:-}" = success ]; then
     # the reader, which is exactly the state before this step existed — so a
     # consumer whose prepare step did not reach its output keeps the reading
     # it had rather than acquiring a refusal from this change.
-    adjudication=\$(cd "\$(dirname "\${${AI_REVIEW_FINDINGS_PATH_VAR}}")" && ${adjudicator} "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" "\${${AI_REVIEW_CHANGED_FILES_PATH_VAR}:-}" 2>&1) || adjudicated=\$?
+    #
+    # THE CHECKOUT ARRIVES BY NAME (#2261). The \`cd\` puts the adjudicator
+    # outside the checkout, so its working directory cannot tell it where the
+    # cited lines are, and with nothing named it read them from the payload's
+    # temp directory and suppressed nothing (#1872, #2257). Set on this one
+    # command, not exported. \`:-\` because the step runs under \`set -u\`; an
+    # empty value is the adjudicator's own fallback to its working directory,
+    # which it reports as unable to read any cited line.
+    adjudication=\$(cd "\$(dirname "\${${AI_REVIEW_FINDINGS_PATH_VAR}}")" && ${AI_REVIEW_CHECKOUT_ROOT_VAR}="\${GITHUB_WORKSPACE:-}" ${adjudicator} "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" "\${${AI_REVIEW_CHANGED_FILES_PATH_VAR}:-}" 2>&1) || adjudicated=\$?
     printf '%s\\n' "\${adjudication}"
 
     # DID IT RUN, asked before WHAT IT SAID. Without this line a registry that
@@ -9898,7 +9930,19 @@ function indented(lines: string[], indent: string): string {
  * and the two are indistinguishable afterwards.
  */
 /**
- * The bash that takes an exercised waiver off auto-merge (#1242).
+ * The bash that keeps an exercised waiver from landing unread (#1242, #1571).
+ *
+ * ## It reads, and never acts (#1571, CRC-F6)
+ *
+ * Until #1571 this step called `--disable-auto` and read the field back. It
+ * never once succeeded (0 of 65 attempts), and the live test of 2026-11-16
+ * showed why: the Actions token is not allowed to disable auto-merge at all.
+ * So the step now READS auto-merge and reports what it found under
+ * `waiverDisarmReading`: nothing armed is a notice and a green check; armed is
+ * `AI_REVIEW_WAIVER_ARMED_TITLE` and a red required check, which is what
+ * actually stops an armed waived review landing. Arming is refused earlier,
+ * at the arming command: `scripts/verify-merge-ref.ts` will not pin a pull
+ * request carrying the label.
  *
  * ## What it reads, and the one thing it refuses to read
  *
@@ -9909,13 +9953,11 @@ function indented(lines: string[], indent: string): string {
  * a pull request whose review ran perfectly well, and disarming those is the
  * "quietly disarm everything" the issue's second acceptance row forbids.
  *
- * ## It verifies, rather than trusting the exit code
+ * ## A reading it could not take is not "nothing armed"
  *
- * `AI_REVIEW_CLI` exits zero on a `--disable-auto` that changed nothing —
- * including the case the pull request merged between the read and the write,
- * which is precisely how #1236 got away. So the step reads
- * `AI_REVIEW_AUTO_MERGE_FIELD` before, acts only when it is armed, and reads
- * it again after. A non-`null` after-reading is a refusal.
+ * The read asks for a filter that is never empty, so silence is a client that
+ * did not answer, and it refuses under `AI_REVIEW_DISARM_FAILED_TITLE`, as
+ * does a read that failed outright.
  *
  * ## Every failure is a refusal, and that is the opposite of the ledger step
  *
@@ -9936,42 +9978,36 @@ function indented(lines: string[], indent: string): string {
  */
 export function buildDisarmScript(): string {
   /**
-   * What both notices say about how long this step's effect lasts.
+   * What every annotation says about how long this step's effect lasts.
    *
-   * It is a POINT IN TIME and the notice has to say so. This step disarms
-   * what was armed at the moment it read the pull request, and then the job
-   * ends: nothing here prevents auto-merge being re-armed a second later, and
-   * if no further push or label event follows, there is no next run of this
-   * workflow to disarm it again. The first draft promised *"this pull request
-   * is mergeable and will not merge itself"*, which is a guarantee about the
-   * future that this step cannot make — a check that cannot fail, written in
-   * prose, in the one sentence a maintainer actually reads.
+   * A POINT IN TIME, said so in the one sentence a maintainer reads. Since
+   * #1571 this step never changes auto-merge: the Actions token cannot
+   * disable it (0 of 65 attempts; the live test of 2026-11-16). Arming a
+   * waived review is refused earlier, by `verify-merge-ref`, so the claim
+   * here is only about the moment it read the pull request (CRC-F6).
    *
-   * One binding carried into both branches, for the reason
-   * `AI_REVIEW_STANDING_WAIVER_NOTE` gives: two hand-typed copies of a
-   * sentence about the limits of a protection is how one of them gets
-   * updated.
+   * One binding carried into every branch, for the reason
+   * `AI_REVIEW_STANDING_WAIVER_NOTE` gives.
    */
   const pointInTime =
-    `This is a reading and an action taken at one moment, not a lock: ` +
-    `auto-merge re-armed after this run stays armed until some later run of ` +
-    `this workflow reaches this step, and if nothing further is pushed and ` +
-    `no label changes there is no later run. What stops this pull request ` +
-    `landing unread is a person, not this step (#1242).`;
+    `This is a reading taken at one moment, as it stood when this step read it, ` +
+    `and this step never changes auto-merge: the Actions token cannot disable ` +
+    `it (#1571). Arming is refused earlier instead: verify-merge-ref will not ` +
+    `pin a pull request carrying '${AI_REVIEW_OVERRIDE_LABEL}', and a person ` +
+    `who arms it anyway, or re-arms it after this run, is choosing to merge it (CRC-F6).`;
 
   const notArmed =
     `The AI review on this pull request was WAIVED by the ` +
-    `'${AI_REVIEW_OVERRIDE_LABEL}' label, and auto-merge was not armed as it ` +
-    `stood when this step read it, so there was nothing to disarm. ` +
+    `'${AI_REVIEW_OVERRIDE_LABEL}' label, and auto-merge was not armed, so ` +
+    `nothing will land it unread. Read the diff, then merge by hand. ` +
     `${pointInTime}`;
 
-  const disarmed =
+  const armed =
     `The AI review on this pull request was WAIVED by the ` +
-    `'${AI_REVIEW_OVERRIDE_LABEL}' label, so auto-merge as it stood when ` +
-    `this step read it has been DISARMED. The waiver clears the required ` +
-    `check and does not also carry the landing with it, because the one ` +
-    `thing a waived review cannot supply is somebody having looked. Read the ` +
-    `diff, then merge by hand. ${pointInTime}`;
+    `'${AI_REVIEW_OVERRIDE_LABEL}' label, and auto-merge is ARMED, so it would ` +
+    `land on a review nobody read. This step cannot turn auto-merge off, so it ` +
+    `holds this required check red instead. Turn auto-merge off, re-run this ` +
+    `job, read the diff, and merge by hand. ${pointInTime}`;
 
   const readEmpty =
     `The AI review was WAIVED and the request for ` +
@@ -9981,14 +10017,6 @@ export function buildDisarmScript(): string {
     `did not answer, and treating it as 'nothing is armed' would substitute ` +
     `a default for a reading in the one branch where the default lets an ` +
     `armed pull request through. Refusing (#1242).`;
-
-  const verifyEmpty =
-    `The AI review was WAIVED, auto-merge WAS armed, the request to disable ` +
-    `it reported success, and the read-back came back EMPTY with a success ` +
-    `status. So this step has acted and cannot say whether the action took ` +
-    `effect — the worst of the three readings to guess at. An absent ` +
-    `auto-merge reads as the literal 'null'; silence does not. Refusing ` +
-    `(#1242).`;
 
   const noPr =
     `The AI review was WAIVED and this run carries no pull request number, ` +
@@ -10034,18 +10062,6 @@ export function buildDisarmScript(): string {
     `auto-merge is armed is UNMEASURED and a waived pull request may still ` +
     `merge itself. Refusing (#1242). The command reported:`;
 
-  const disarmFailed =
-    `The AI review was WAIVED, auto-merge IS armed, and the request to ` +
-    `disable it failed, so this pull request can still merge itself on a ` +
-    `review nobody read. Refusing (#1242). The command reported:`;
-
-  const stillArmed =
-    `The AI review was WAIVED and the request to disable auto-merge reported ` +
-    `success, and '${AI_REVIEW_AUTO_MERGE_FIELD}' is STILL not null when read ` +
-    `back. The disarm did not take effect, so this pull request can merge ` +
-    `itself on a review nobody read. Refusing rather than trusting the exit ` +
-    `code of a command that changed nothing (#1242). The field reads:`;
-
   const view =
     `"\${cli}" pr view "\${${AI_REVIEW_DISARM_PR_VAR}}" ` +
     `--repo "\${${AI_REVIEW_DISARM_REPO_VAR}}" ` +
@@ -10056,7 +10072,7 @@ export function buildDisarmScript(): string {
 
   return `# Generated by rungate — lib/scaffold/ai-review-step.ts. Do not edit.
 #
-# #1242. The waiver clears the red; it does not also land the pull request.
+# #1242, #1571. The waiver clears the red; it does not also land the pull request.
 set -uo pipefail
 
 ${AI_REVIEW_ANNOTATION_ESCAPE}
@@ -10146,34 +10162,16 @@ fi
 # The absent token is what the read emits when nothing is armed, and nothing
 # is the right thing to do about it.
 if [ "\${armed}" = "${AI_REVIEW_AUTO_MERGE_ABSENT_TOKEN}" ]; then
-  echo "::notice title=${AI_REVIEW_DISARM_TITLE}::${notArmed}"
+  echo "::notice title=${waiverDisarmReading.notArmed}::${notArmed}"
   exit 0
 fi
 
-if ! out=$("\${cli}" pr merge "\${${AI_REVIEW_DISARM_PR_VAR}}" --repo "\${${AI_REVIEW_DISARM_REPO_VAR}}" --disable-auto 2>&1); then
-  disarm_refuse "${disarmFailed} \${out}"
-fi
-
-# The read-back. The command above exits zero having changed nothing in at
-# least one real state — a pull request that merged between the two calls —
-# so its exit code is not the reading.
-if ! after=$(${view} 2>&1); then
-  disarm_refuse "${readFailed} \${after}"
-fi
-
-# Same split as the first reading, and this side is the worse one: by here the
-# disarm request has been ACCEPTED, so an unreadable field is a step that has
-# acted and cannot confirm the action. The \`&& [ -n "\${after}" ]\` this
-# replaces made exactly that state green.
-if [ -z "\${after}" ]; then
-  disarm_refuse "${verifyEmpty}"
-fi
-
-if [ "\${after}" != "${AI_REVIEW_AUTO_MERGE_ABSENT_TOKEN}" ]; then
-  disarm_refuse "${stillArmed} \${after}"
-fi
-
-echo "::notice title=${AI_REVIEW_DISARM_TITLE}::${disarmed}"
+# ARMED. Reported as itself and refused, never acted on. The Actions token
+# cannot disable auto-merge (#1571), so the only effect this step can have
+# is the check it leaves: red, so an armed waived review cannot land unread.
+# A person turns auto-merge off and re-runs this job (CRC-F6).
+echo "::error title=${waiverDisarmReading.armed}::$(escape_annotation "${armed}")" >&2
+exit ${AI_REVIEW_REQUIRED_EXIT}
 `;
 }
 

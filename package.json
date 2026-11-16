@@ -36,6 +36,7 @@
     "scripts/plan-issues.ts",
     "scripts/board-ready.ts",
     "scripts/board-id.ts",
+    "scripts/ci-reading.ts",
     "scripts/unaccounted-work.ts",
     "scripts/intake.ts",
     "scripts/board-intake-move.ts",

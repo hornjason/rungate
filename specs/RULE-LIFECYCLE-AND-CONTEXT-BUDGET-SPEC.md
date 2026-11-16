@@ -354,11 +354,11 @@ retire.
 
 - [ ] SC-1946: Running scaffold twice over the golden fixture produces byte-identical rules directories
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-1947: Constraint extraction runs as part of scaffold and re-scaffold, not only as a separate command
+- [x] SC-1947: Constraint extraction runs as part of scaffold and re-scaffold, not only as a separate command
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-1948: Hand-edited rule files are preserved across all of the above and reported, not silently regenerated
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2769: lib/scaffold/marked-section.ts contains [carryMarkedSection] — Every scaffold-owned file that allows hand edits carries a marked section for them; re-scaffold rewrites everything outside the marked section and carries the section forward verbatim, so a hand edit never freezes the rest of the file. First target: `.claude/rules/*.md`.
+- [x] SC-2769: lib/scaffold/marked-section.ts contains [carryMarkedSection] — Every scaffold-owned file that allows hand edits carries a marked section for them; re-scaffold rewrites everything outside the marked section and carries the section forward verbatim, so a hand edit never freezes the rest of the file. First target: `.claude/rules/*.md`.
 
 ## Proving it
 
