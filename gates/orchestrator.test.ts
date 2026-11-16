@@ -1,7 +1,10 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "fs";
 import { join } from "path";
+import { z } from "zod";
 import { gateSaltPath } from "../lib/paths";
+import { validateArtifactSchema } from "../lib/artifact-schema";
+import { ShipEvidenceSchema } from "./schema";
 import {
   writeGateResult,
   generateHmac,
@@ -429,6 +432,39 @@ describe("generateShipEvidence", () => {
     expect(evidence.capturedAt).toBeTruthy();
     expect(evidence.iterationCount).toBeGreaterThanOrEqual(1);
     expect(evidence.sizing.predicted).toBe("M");
+    // #2255 / SC-2770: the artifact meets its declared contract, not only the
+    // eight fields this case happens to name.
+    expect(validateArtifactSchema(evidence, ShipEvidenceSchema)).toEqual([]);
+  });
+
+  test("#2255 / SC-2770: a schema with one required field more than the writer emits refuses the artifact", () => {
+    writeFileSync(SF, JSON.stringify(makeState({ phase: "SHIP" }), null, 2));
+    const path = generateShipEvidence(SF, TMP_DIR, 432, "", 1, 0, 0);
+    expect(path).not.toBeNull();
+    const evidence = JSON.parse(readFileSync(path!, "utf-8"));
+    const stricter = ShipEvidenceSchema.extend({ reviewedBy: z.string() });
+    expect(validateArtifactSchema(evidence, stricter).join("\n")).toContain("reviewedBy");
+  });
+
+  test("#2255: an artifact the contract refuses is not written, and the field is named", () => {
+    // A verdict outside PASS|FAIL|SKIP is the live way the writer can emit
+    // what ShipEvidenceSchema refuses: `result: ac.verdict || "SKIP"`.
+    writeFileSync(SF, JSON.stringify(makeState({
+      phase: "SHIP",
+      acs: [{ id: "SC-1", statement: "s", verdict: "UNMEASURED", evidence: { content: "x" } }],
+    }), null, 2));
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (...a: unknown[]) => { errors.push(a.map(String).join(" ")); };
+    let path: string | null;
+    try {
+      path = generateShipEvidence(SF, TMP_DIR, 432, "", 1, 0, 0);
+    } finally {
+      console.error = original;
+    }
+    expect(path).toBeNull();
+    expect(existsSync(join(TMP_DIR, "ship-evidence.json"))).toBe(false);
+    expect(errors.join("\n")).toContain("gateOut.evidence.0.result");
   });
 });
 
