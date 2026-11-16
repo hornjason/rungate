@@ -62,6 +62,24 @@ describe("#2274: the report", () => {
     }, { "docs/many.md": Array.from({ length: DOC_RULES_SHOWN + 5 }, (_, i) => `- Never do thing number ${i} here.`).join("\n") + "\n" }));
 });
 
+describe("#2274: report mode writes nothing", () => {
+  test("an AGENTS.md the --apply path WOULD write into is byte-identical after the report", () =>
+    withFixture(async dir => {
+      // `applyToAgentsMd` inserts after a `## Hard Constraints` heading and a
+      // blank line, and does nothing without one — so only an AGENTS.md shaped
+      // like this can witness that the scan ran with apply off.
+      const path = join(dir, "AGENTS.md");
+      const before = readFileSync(path);
+      const actions: string[] = [];
+      await reportDocRules(dir, actions);
+      expect(actions.join("\n")).toContain(RULE);
+      expect(readFileSync(path).equals(before)).toBe(true);
+    }, {
+      "docs/guide.md": `# Guide\n\n- ${RULE}.\n`,
+      "AGENTS.md": "# P\n\n## Hard Constraints\n\n- Keep the build green at all times.\n",
+    }));
+});
+
 describe("#2274: text rungate wrote is not reported as the project's rules", () => {
   test("a generated file's rule is left out and counted; a seeded-once file's rule is the project's", () =>
     withFixture(async dir => {
