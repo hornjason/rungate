@@ -48,7 +48,11 @@ export interface JobShape {
 export type Reading = { status: "MEASURED"; ms: number } | { status: "UNMEASURED"; reason: string };
 
 export interface CheckReading {
+  /** The job's name, as a required check reports it. */
   name: string;
+  /** The workflow it ran in, or `run <id>` when the run is not in the input. */
+  workflow: string;
+  runId: number;
   /** The attempt that counted: the last one. */
   duration: Reading;
   /** Every attempt, in order. A re-run never overwrites the first. */
@@ -128,12 +132,24 @@ export function ciReadingFor(input: { pr: PullRequestShape; runs: WorkflowRunSha
     .sort((a, b) => a.id - b.id || a.run_attempt - b.run_attempt)
     .map(r => ({ runId: r.id, name: r.name, attempt: r.run_attempt, wait: between(r.created_at, r.run_started_at, `run ${r.id} attempt ${r.run_attempt} queue`) }));
 
-  const byName = new Map<string, JobShape[]>();
-  for (const j of jobs) byName.set(j.name, [...(byName.get(j.name) ?? []), j]);
-  const checks: CheckReading[] = [...byName.entries()].map(([name, attempts]) => {
+  // A check is a job within ONE workflow run: its attempts share the run id.
+  // Two workflows on the same push may each have a job named "build", and
+  // grouped by name alone one of them was dropped (review round 1, PR #2272).
+  const workflowOf = new Map(runs.map(r => [r.id, r.name]));
+  const byCheck = new Map<string, JobShape[]>();
+  for (const j of jobs) {
+    const key = `${j.run_id}\u0000${j.name}`;
+    byCheck.set(key, [...(byCheck.get(key) ?? []), j]);
+  }
+  const label = (j: JobShape) => `${workflowOf.get(j.run_id) ?? `run ${j.run_id}`} / ${j.name}`;
+  const checks: CheckReading[] = [...byCheck.values()].map(attempts => {
     const ordered = [...attempts].sort((a, b) => a.run_attempt - b.run_attempt);
     const read = ordered.map(j => ({ attempt: j.run_attempt, conclusion: j.conclusion, duration: jobDuration(j) }));
-    return { name, duration: read[read.length - 1]!.duration, attempts: read };
+    const first = ordered[0]!;
+    return {
+      name: first.name, workflow: workflowOf.get(first.run_id) ?? `run ${first.run_id}`, runId: first.run_id,
+      duration: read[read.length - 1]!.duration, attempts: read,
+    };
   });
 
   const maxAttempt = new Map<number, number>();
@@ -145,10 +161,10 @@ export function ciReadingFor(input: { pr: PullRequestShape; runs: WorkflowRunSha
   // in the critical path.
   const ran = jobs.filter(j => jobDuration(j).status === "MEASURED");
   const counted: Timed[] = [];
-  for (const [name, attempts] of byName) {
+  for (const attempts of byCheck.values()) {
     const last = [...attempts].sort((a, b) => a.run_attempt - b.run_attempt).pop()!;
     if (jobDuration(last).status === "MEASURED") {
-      counted.push({ name, start: Date.parse(last.started_at!), end: Date.parse(last.completed_at!) });
+      counted.push({ name: label(last), start: Date.parse(last.started_at!), end: Date.parse(last.completed_at!) });
     }
   }
 
