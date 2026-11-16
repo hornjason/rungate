@@ -4132,6 +4132,22 @@ describe("#1367 WITNESS: a link spelling the old list never named", () => {
     });
   });
 
+  test("part 1 alone: an unlisted verb at a path no word spells", () => {
+    // Every row above also NAMES `esc`, so part 2 refuses it too and a
+    // mutation of part 1 alone moves none of them. This one decodes the path
+    // at run time with a verb the old list never had, so the only thing that
+    // can see it is the property the issue asked for: `esc` does not exist
+    // and nothing `mkdir`s it.
+    inScratch(base => {
+      const encoded = Buffer.from(`${base}/esc`).toString("base64");
+      const cmd =
+        `python3 -c "import base64, pathlib; pathlib.Path(base64.b64decode('${encoded}').decode()).symlink_to('/usr')" ` +
+        `&& echo '{}' > ${base}/esc/${STATE}`;
+      expect(OLD_LINK_CREATION.test(cmd), cmd).toBe(false);
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    });
+  });
+
   test("CONTROL: the documented `ln -s` shape is still refused", () => {
     inScratch(base => {
       expect(decideBashWrite(`ln -s ${VICTIM_1367} ${base}/esc && echo '{}' > ${base}/esc/${STATE}`).blocked).toBe(true);
