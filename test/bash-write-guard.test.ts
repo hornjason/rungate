@@ -4340,21 +4340,77 @@ describe("#1367: an existing directory in the chain must not be a link", () => {
   });
 });
 
-describe("#1367 KNOWN GAP: a program that computes the path at run time", () => {
-  // Pinned, not fixed. A program that decodes the directory's name at run
-  // time and re-links an EXISTING directory names nothing a reader of the
-  // command can see. The old list caught this only when the verb was one of
-  // its spellings — `os.symlink` here — and closing it without the list
-  // means refusing every interpreter body that writes, which costs the
-  // mkdirSync fixtures above. A directory that does NOT exist yet is still
-  // refused whatever the program does; that is part 1.
-  test("an existing directory re-linked from a decoded name is not seen", () => {
+describe("#1367: a program that calls a link function names every path (Jason, option (b), 2026-11-16)", () => {
+  // Was a KNOWN GAP pinned as allowed: a program that decodes a directory's
+  // name at run time and re-links an EXISTING directory names nothing a
+  // reader can see. With the verb list deleted, that was a regression for
+  // the list's own spellings (`os.symlink`, `symlinkSync`, `symlink(`) —
+  // refused on main, allowed here. Jason chose a narrow fail-closed check:
+  // an interpreter body that calls a link function names every path, so a
+  // write after it or alongside it is not exempt. A body that only makes
+  // directories (the mkdirSync fixtures) calls none and is unaffected.
+  test("an existing directory re-linked from a decoded name is refused", () => {
     inScratch(base => {
       mkdirSync(join(base, "real"));
       const encoded = Buffer.from(`${base}/real`).toString("base64");
       const cmd =
         `python3 -c "import os, base64; p = base64.b64decode('${encoded}').decode(); ` +
         `os.rmdir(p); os.symlink('${VICTIM_1367}', p)" && echo '{}' > ${base}/real/${STATE}`;
+      expect(decideBashWrite(cmd).blocked).toBe(true);
+    });
+  });
+
+  // Every spelling, each re-linking (or hard-linking) with a name it computes.
+  const rows: [string, (b64: string) => string][] = [
+    ["node fs.symlinkSync", e => `node -e "const fs=require('fs');const p=Buffer.from('${e}','base64').toString();fs.rmdirSync(p);fs.symlinkSync('${VICTIM_1367}',p)"`],
+    ["node fs.promises.symlink(", e => `node -e "const fs=require('fs');const p=Buffer.from('${e}','base64').toString();fs.rmdirSync(p);fs.promises.symlink('${VICTIM_1367}',p)"`],
+    ["python pathlib symlink_to", e => `python3 -c "import base64, pathlib; p = pathlib.Path(base64.b64decode('${e}').decode()); p.rmdir(); p.symlink_to('${VICTIM_1367}')"`],
+    ["ruby File.symlink, no parentheses", e => `ruby -e "require 'base64'; p = Base64.decode64('${e}'); Dir.rmdir(p); File.symlink '${VICTIM_1367}', p"`],
+    ["perl symlink, no parentheses", e => `perl -e "use MIME::Base64; my \\$p = decode_base64('${e}'); rmdir \\$p; symlink '${VICTIM_1367}', \\$p"`],
+    ["python subprocess ln", e => `python3 -c "import base64, os, subprocess; p = base64.b64decode('${e}').decode(); os.rmdir(p); subprocess.run(['ln', '-s', '${VICTIM_1367}', p])"`],
+  ];
+  test.each(rows)("%s, re-linking an existing directory from a decoded name, is refused", (_l, body) => {
+    inScratch(base => {
+      mkdirSync(join(base, "real"));
+      const cmd = `${body(Buffer.from(`${base}/real`).toString("base64"))} && echo '{}' > ${base}/real/${STATE}`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    });
+  });
+
+  const hard: [string, (b64: string) => string][] = [
+    ["python os.link", e => `python3 -c "import base64, os; os.link('${VICTIM_1367}', base64.b64decode('${e}').decode())"`],
+    ["node fs.linkSync", e => `node -e "require('fs').linkSync('${VICTIM_1367}', Buffer.from('${e}','base64').toString())"`],
+    ["python pathlib hardlink_to", e => `python3 -c "import base64, pathlib; pathlib.Path(base64.b64decode('${e}').decode()).hardlink_to('${VICTIM_1367}')"`],
+  ];
+  test.each(hard)("%s, hard-linking the destination file from a decoded name, is refused", (_l, body) => {
+    inScratch(base => {
+      const cmd = `${body(Buffer.from(`${base}/${STATE}`).toString("base64"))} && echo '{}' > ${base}/${STATE}`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    });
+  });
+
+  test("the link call and the write in ONE body are refused", () => {
+    inScratch(base => {
+      mkdirSync(join(base, "real"));
+      const encoded = Buffer.from(`${base}/real`).toString("base64");
+      const cmd =
+        `python3 -c "import os, base64; p = base64.b64decode('${encoded}').decode(); os.rmdir(p); ` +
+        `os.symlink('${VICTIM_1367}', p); open('${base}/real/${STATE}', 'w').write('{}')"`;
+      expect(decideBashWrite(cmd).blocked).toBe(true);
+    });
+  });
+
+  test("CONTROL: a link call that runs AFTER the write does not touch it", () => {
+    inScratch(base => {
+      mkdirSync(join(base, "real"));
+      const cmd = `echo '{}' > ${base}/real/${STATE} && python3 -c "import os; os.symlink('/nonexistent-a', '/nonexistent-b')"`;
+      expect(decideBashWrite(cmd).blocked).toBe(false);
+    });
+  });
+
+  test("CONTROL: a body that only makes directories stays exempt", () => {
+    inScratch(base => {
+      const cmd = `node -e "require('fs').mkdirSync('${base}/made', { recursive: true })" && echo '{}' > ${base}/made/${STATE}`;
       expect(decideBashWrite(cmd).blocked).toBe(false);
     });
   });

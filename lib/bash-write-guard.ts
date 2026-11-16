@@ -497,15 +497,17 @@ function resolveThroughLinks(normalised: string): string | null {
  * environment, where a link can be made from it with the path never spelled
  * again, so it names the path where it is set.
  *
- * ## KNOWN GAP, pinned by a test
+ * ## A program that computes the path: `BODY_LINK_CALL`
  *
  * A program that computes a directory's name at run time — decoded,
  * assembled, read from a file — and re-links a directory that ALREADY
- * exists names nothing a reader of the command can see. The old list caught
- * that only when the verb was one of its spellings. Closing it without the
- * list means refusing every interpreter body that writes, which costs the
- * `mkdirSync` fixtures #1175 exists to allow. A directory that does not
- * exist yet is still refused, whatever the program does — that is part 1.
+ * exists names nothing a reader of the command can see. With the list gone
+ * that was a regression for the list's own spellings, so an interpreter body
+ * that calls a link function names everything (Jason's option (b), PR #2282).
+ * A body that only makes directories — the `mkdirSync` fixtures #1175 exists
+ * to allow — calls none and is unaffected. Outside interpreter bodies the
+ * shell's own words are read, and an expansion already names what it could
+ * produce.
  */
 
 /** Decides, for one destination path, whether the scratch exemption holds. */
@@ -743,13 +745,28 @@ function collectShell(text: string, depth: number, tag: (i: number) => { at: num
   });
 }
 
+/**
+ * A call that makes a link, in any interpreter body: `symlink` in every
+ * spelling (`os.symlink`, `fs.symlinkSync`, `fs.promises.symlink(`,
+ * `symlink_to`, ruby's `File.symlink a, b`, perl's `symlink $a, $b`), the
+ * hard-link calls (`os.link`, `linkSync`, `hardlink_to`, `link(`), and `ln`
+ * handed to a subprocess.
+ *
+ * Jason's option (b) on PR #2282, 2026-11-16. A program can compute a path at
+ * run time — decoded, assembled, read from a file — and link it, and then no
+ * word in the command spells the path. A body that calls one of these
+ * therefore NAMES EVERYTHING, like a body this module cannot read. That is
+ * the one place a verb list survives #1367: it closes the regression the
+ * deleted list's own spellings would otherwise have, and only ever refuses.
+ * A body that only makes directories calls none of these.
+ */
+export const BODY_LINK_CALL = /\bsymlink(?:Sync|_to|at)?\b|\bhardlink_to\b|\blink(?:Sync|at)?\s*\(|\bos\.link\b|\bFile\.link\b|\bln\b/;
+
 /** An interpreter body: its `mkdir` calls make, its other literals are mentions. */
 function collectBody(body: string, at: number, src: string, sink: Sink, makes: boolean): void {
   const lits = readLiterals(body);
-  if (!lits) {
-    sink.mentions.push({ text: NAMES_EVERYTHING, at, src });
-    return;
-  }
+  if (!lits || BODY_LINK_CALL.test(body)) sink.mentions.push({ text: NAMES_EVERYTHING, at, src });
+  if (!lits) return;
   const consumed = bodyMakes(body, lits, makes ? sink.made : new Set());
   for (const l of lits) if (!consumed.has(l.start)) sink.mentions.push({ text: l.value, at, src });
 }
