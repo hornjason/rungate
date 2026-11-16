@@ -100,6 +100,41 @@ describe("#2274: text rungate wrote is not reported as the project's rules", () 
     }));
 });
 
+describe("#2274: whose text a line is, decided once over every write strategy (review round 5, #2278)", () => {
+  // One row per WriteStrategy in lib/scaffold/owned-files.ts, plus the two
+  // non-owned cases. `textOwner` switches exhaustively over the strategy, so a
+  // strategy added later fails typecheck before it can fall into a default.
+  test("each strategy's lines land where the ownership table says", async () => {
+    const { textOwner } = await import("../lib/scaffold/steps");
+    const { stampProvenance } = await import("../lib/rule-provenance");
+    await withFixture(dir => {
+      const agents = "# P\n\n## Hard Constraints\n\n- Never push to main directly.\n\n## Rules\n\n- Always run the generated linter first.\n";
+      writeFileSync(join(dir, "AGENTS.md"), agents);
+      mkdirSync(join(dir, ".claude", "agents"), { recursive: true });
+      writeFileSync(join(dir, ".claude", "agents", "marcus.md"), "# Marcus\n\n## Generated\n\n- Never skip the generated step.\n\n## Project Constraints\n\n- Never touch the billing tables.\n");
+      mkdirSync(join(dir, ".claude", "rules"), { recursive: true });
+      writeFileSync(join(dir, ".claude", "rules", "untouched.md"), stampProvenance("# R\n\n- Never edit this.\n"));
+      writeFileSync(join(dir, ".claude", "rules", "edited.md"), stampProvenance("# R\n\n- Keep it.\n").replace("- Keep it.", "- Never deploy on Friday."));
+      const rows: Array<[string, "rungate" | "project"]> = [
+        ["docs/guide.md:3", "project"], //                      not owned
+        ["specs/SPEC-TEMPLATE.md:3", "rungate"], //             the starter spec template
+        ["docs/adr/TEMPLATE.md:3", "rungate"], //               regenerate
+        [".claude/rules/untouched.md:3", "rungate"], //         provenance, stamp matches
+        [".claude/rules/edited.md:3", "project"], //            provenance, hand-edited
+        ["AGENTS.md:5", "project"], //                          section-preserving, inside Hard Constraints
+        ["AGENTS.md:9", "rungate"], //                          section-preserving, a generated section
+        [".claude/agents/marcus.md:9", "project"], //           section-preserving, inside Project Constraints
+        [".claude/agents/marcus.md:5", "rungate"], //           section-preserving, a generated section
+        [".github/workflows/ci.yml:3", "project"], //           job-preserving: cannot tell, so reported
+        ["PROJECT-STATE.md:3", "project"], //                   create-only
+        ["specs\\SPEC-TEMPLATE.md:3", "rungate"], //            a Windows separator
+        [".claude/rules/missing.md:3", "project"], //           unreadable: reported, never hidden
+      ];
+      for (const [source, want] of rows) expect([source, textOwner(dir, source)]).toEqual([source, want]);
+    });
+  });
+});
+
 describe("#2274: a hand-edited provenance file is the project's (review round 4, #2278)", () => {
   test("an edited .claude/rules file's rule is reported; an untouched stamped one's is left out", () =>
     withFixture(async dir => {
