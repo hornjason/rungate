@@ -71,6 +71,18 @@ describe("#1553 / SC-2769: the pieces", () => {
     expect(PROJECT_OWNED_SECTION.heading.test("## Project-owned")).toBe(true);
   });
 
+  test("the split is anchored where the heading matched, not where its text first recurs (review, #2285)", () => {
+    // The section's exact text also appears earlier, mid-line, where the
+    // heading regex (line-anchored) does not match but a substring search does.
+    const decoy = `An example, inline: ${OURS} (end of example)`;
+    const existing = `${stampProvenance(V1)}${decoy}\n\n${OURS}\n`;
+    const s = splitMarked(existing);
+    expect(s?.section).toBe(OURS);
+    // the decoy line survives whole, and the real section is gone from outside
+    expect(s?.outside).toContain(decoy);
+    expect(s!.outside.split(OURS).length - 1).toBe(1);
+  });
+
   test("carryMarkedSection appends the section verbatim after the generated text", () => {
     expect(carryMarkedSection(V2, OURS)).toBe(`${V2}\n${OURS}\n`);
   });

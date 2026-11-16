@@ -43,7 +43,7 @@ export function normalizeTail(text: string): string {
 export function splitMarked(text: string): { outside: string; section: string } | null {
   const reading = readPreservedSection(text, PROJECT_OWNED_SECTION);
   if (reading === null) return null;
-  const start = text.indexOf(reading.text);
+  const start = reading.start; // where the heading matched — never re-found by content (#2285)
   const before = text.slice(0, start);
   const after = text.slice(start + reading.text.length).replace(/^\s+/, "");
   const outside = after === "" ? normalizeTail(before) : `${before}${after}`;
