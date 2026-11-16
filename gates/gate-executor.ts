@@ -471,6 +471,8 @@ export interface ProveEvidenceContext {
   commitSHA: string;
   capturedAt: string;
   beforeReading: BeforeStateReading;
+  /** Which writer this is. B3 by default; `workflows/prove.js` says `prove-workflow` (#2254). */
+  source?: string;
 }
 
 type AfterEvidence = {
@@ -565,7 +567,7 @@ export function buildProveEvidence(raw: Record<string, any>, ctx: ProveEvidenceC
     reproduced: raw?.reproduced === true,
     criteriaResults,
     evidence: Array.isArray(raw?.evidence) ? raw.evidence : [],
-    source: "B3-prove-reproducer",
+    source: ctx.source ?? "B3-prove-reproducer",
   };
 }
 
@@ -590,6 +592,7 @@ export function recordProveEvidence(
     beforeReading: BeforeStateReading;
     readCommit: () => string;
     schema?: ArtifactSchema;
+    source?: string;
   },
 ): ProveEvidenceRecord {
   try {
@@ -598,6 +601,7 @@ export function recordProveEvidence(
       commitSHA: opts.readCommit(),
       capturedAt: new Date().toISOString(),
       beforeReading: opts.beforeReading,
+      source: opts.source,
     });
     const violations = validateArtifactSchema(artifact, opts.schema ?? ProveEvidenceSchema);
     if (violations.length > 0) {

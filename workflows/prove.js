@@ -61,6 +61,12 @@ const DEPLOY_CHECK_SCHEMA = {
   required: ['deployed', 'commitSHA'],
 }
 
+// ──── PROVE-SCHEMAS-START ────
+// Extracted and executed by test/prove-workflow-evidence.test.ts (#2254). Every
+// criteria row carries its evidence, because ProveEvidenceSchema requires it,
+// and the reproducer reports the after-state it observed and where. The
+// environments and types are the contract's (gates/schema.ts) and the
+// reproducer prompt's: no screenshot, because the reproducer has no browser.
 const REPRODUCER_SCHEMA = {
   type: 'object',
   properties: {
@@ -74,12 +80,23 @@ const REPRODUCER_SCHEMA = {
           verdict: { type: 'string', enum: ['PASS', 'FAIL', 'SKIP'] },
           evidence: { type: 'string' },
         },
-        required: ['scId', 'verdict'],
+        required: ['scId', 'verdict', 'evidence'],
       },
     },
     reproduced: { type: 'boolean' },
     gaps: { type: 'array', items: { type: 'string' } },
     quinnNeeded: { type: 'array', items: { type: 'string' } },
+    afterEvidence: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['text', 'api', 'data'] },
+        path: { type: 'string' },
+        capturedAt: { type: 'string' },
+        environment: { type: 'string', enum: ['local', 'prod'] },
+        description: { type: 'string' },
+      },
+      required: ['type', 'capturedAt', 'environment', 'description'],
+    },
   },
   required: ['verdict', 'criteriaResults', 'reproduced'],
 }
@@ -98,11 +115,22 @@ const QUINN_SCHEMA = {
           verdict: { type: 'string', enum: ['PASS', 'FAIL', 'SKIP'] },
           evidence: { type: 'string' },
         },
-        required: ['scId', 'verdict'],
+        required: ['scId', 'verdict', 'evidence'],
       },
     },
   },
   required: ['verdict'],
+}
+// ──── PROVE-SCHEMAS-END ────
+
+const RECORD_SCHEMA = {
+  type: 'object',
+  properties: {
+    written: { type: 'boolean' },
+    verdict: { type: 'string', enum: ['PROVEN', 'UNPROVEN', 'INCONCLUSIVE'] },
+    reason: { type: 'string' },
+  },
+  required: ['written'],
 }
 
 // ── Args ─────────────────────────────────────────────────────
@@ -409,6 +437,9 @@ Output your verdict, criteriaResults, reproduced, gaps, and quinnNeeded (list of
 `, { label: 'b3-reproducer', phase: 'Validate', schema: REPRODUCER_SCHEMA })
 
 let allCriteriaResults = reproducerResult?.criteriaResults || []
+// #2254: the after-state the latest validation observed. Paired with the
+// criteria it came with, so a self-heal re-validation replaces both together.
+let latestAfterEvidence = reproducerResult?.afterEvidence
 let quinnResults = null
 
 // Spawn Quinn for UI ACs if needed
@@ -719,12 +750,16 @@ Run: git -C ${shellQuote(PROJECT_ROOT || '.')} rev-parse --short HEAD
 1. For CODE ACs: run evidence commands (grep, bun test, curl) against current code.
 2. For UI/OUTCOME ACs: output SKIP with reason "B3 limitation: no browser tools — requires Quinn".
 3. Focus on the previously failed criteria — verify the fix resolved them.
+4. Report afterEvidence as ${PROVE_PROMPT} specifies: the after-state you
+   observed in THIS re-validation, and where (local or prod). Leave it out if
+   you observed none — never carry over an earlier one.
 
-Output your verdict, criteriaResults, reproduced, gaps.
+Output your verdict, criteriaResults, reproduced, gaps, afterEvidence.
   `, { label: `self-heal-validate-${selfHealIteration}`, phase: 'Verdict', schema: REPRODUCER_SCHEMA })
 
   if (revalidateResult?.criteriaResults) {
     allCriteriaResults = revalidateResult.criteriaResults
+    latestAfterEvidence = revalidateResult.afterEvidence
   }
 
   const recomputed = computeVerdict(allCriteriaResults)
@@ -745,34 +780,78 @@ if (selfHealIteration >= MAX_SELF_HEAL_ATTEMPTS && verdict === 'UNPROVEN') {
 
 phase('Output')
 
-const proveEvidence = {
-  contractVersion: '1.0',
-  issueNumber: ISSUE,
-  verdict,
-  commitSHA: COMMIT_SHA,
-  capturedAt: 'AGENT_FILL_TIMESTAMP',
-  criteriaResults: allCriteriaResults,
-  reproduced: reproducerResult?.reproduced ?? false,
-  source: 'prove-workflow',
+// #2254: this used to hand an agent a JSON literal to save with the Write
+// tool. It carried the dead JSON schema's contractVersion and none of the
+// fields ProveEvidenceSchema requires, and nothing checked it. Now the run
+// writes a report and scripts/record-prove-evidence.ts builds, checks and
+// writes the artifact through the function B3 uses (#1559), reading the
+// before-state from this run's workflow-state.json itself.
+// ──── PROVE-REPORT-START ────
+// Extracted and executed by test/prove-workflow-evidence.test.ts (#2254).
+function proveReport({ issue, commitSHA, verdict, criteriaResults, reproduced, afterEvidence }) {
+  const report = {
+    issueNumber: issue,
+    commitSHA,
+    verdict,
+    criteriaResults,
+    reproduced: reproduced === true,
+  }
+  // Left out, never filled in, when the reproducer observed no after-state:
+  // the script records that as `none` and a PROVEN as INCONCLUSIVE.
+  if (afterEvidence !== undefined && afterEvidence !== null) report.afterEvidence = afterEvidence
+  return report
 }
+// ──── PROVE-REPORT-END ────
 
-// Write prove-evidence.json
-await agent(`
-mkdir -p ${WORK_DIR}
-Write this JSON to ${WORK_DIR}/prove-evidence.json using the Write tool.
-Replace the capturedAt value "AGENT_FILL_TIMESTAMP" with the current ISO timestamp (run: date -u +%Y-%m-%dT%H:%M:%SZ).
+const proveReportJson = JSON.stringify(proveReport({
+  issue: ISSUE,
+  commitSHA: COMMIT_SHA,
+  verdict,
+  criteriaResults: allCriteriaResults,
+  reproduced: reproducerResult?.reproduced,
+  afterEvidence: latestAfterEvidence,
+}), null, 2)
+const PROVE_REPORT_PATH = `${WORK_DIR}/prove-report.json`
 
-${JSON.stringify(proveEvidence, null, 2)}
-`, { label: 'write-evidence', phase: 'Output' })
+const recorded = await agent(`
+mkdir -p ${shellQuote(WORK_DIR)}
+Write this JSON to ${PROVE_REPORT_PATH} using the Write tool, exactly as given. Do not edit it.
 
-log('prove-evidence.json written')
+${proveReportJson}
+
+Then run exactly this and report the JSON line it prints:
+
+bun ${shellQuote(`${HARNESS_ROOT}/scripts/record-prove-evidence.ts`)} --work-dir ${shellQuote(WORK_DIR)} --report ${shellQuote(PROVE_REPORT_PATH)} --source prove-workflow
+
+It builds prove-evidence.json from the report, checks it against
+ProveEvidenceSchema, and writes it only if it passes. Exit 0 means it was
+written: report written: true and the verdict and reason it printed — the
+verdict may differ from the report's, and that is the point. A non-zero exit
+means nothing was written: report written: false with the reason it printed.
+Do NOT write prove-evidence.json yourself.
+`, { label: 'record-evidence', phase: 'Output', schema: RECORD_SCHEMA })
+
+// The artifact's verdict is the run's verdict from here on: a comment saying
+// PROVEN beside an artifact recording INCONCLUSIVE is two answers. And an
+// artifact that was not written is no proof at all.
+if (recorded?.written === true && ['PROVEN', 'UNPROVEN', 'INCONCLUSIVE'].includes(recorded.verdict)) {
+  if (recorded.verdict !== verdict) {
+    log(`prove-evidence.json records ${recorded.verdict}, not ${verdict}: ${recorded.reason || 'no reason printed'}`)
+  }
+  verdict = recorded.verdict
+  log('prove-evidence.json written')
+} else {
+  log(`prove-evidence.json NOT written — ${recorded?.reason || 'the record step reported nothing'}; verdict is INCONCLUSIVE`)
+  verdict = 'INCONCLUSIVE'
+}
+const reproduced = reproducerResult?.reproduced === true
 
 // Post proof comment to issue
 const proofComment = [
   '## Proof',
   '',
   `- **Fix:** commit ${COMMIT_SHA.slice(0, 8)}`,
-  `- **Reproduced:** ${proveEvidence.reproduced ? 'yes' : 'no'}`,
+  `- **Reproduced:** ${reproduced ? 'yes' : 'no'}`,
   ...allCriteriaResults.map(cr => `- **${cr.scId}:** ${cr.verdict}${cr.evidence ? ' — ' + cr.evidence.slice(0, 100) : ''}`),
   quinnResults ? `- **Quinn:** ${quinnResults.verdict}` : '',
   `- **Verdict:** ${verdict}`,
@@ -927,7 +1006,7 @@ return {
   verdict,
   commitSHA: COMMIT_SHA,
   criteriaResults: allCriteriaResults,
-  reproduced: proveEvidence.reproduced,
+  reproduced,
   quinnVerdict: quinnResults?.verdict || null,
   selfHealIterations: selfHealIteration,
   circuitBroken: selfHealIteration >= MAX_SELF_HEAL_ATTEMPTS && verdict === 'UNPROVEN',
