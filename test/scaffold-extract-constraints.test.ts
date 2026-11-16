@@ -100,6 +100,40 @@ describe("#2274: text rungate wrote is not reported as the project's rules", () 
     }));
 });
 
+describe("#2274: a hand-edited provenance file is the project's (review round 4, #2278)", () => {
+  test("an edited .claude/rules file's rule is reported; an untouched stamped one's is left out", () =>
+    withFixture(async dir => {
+      const { stampProvenance } = await import("../lib/rule-provenance");
+      const untouched = stampProvenance("# Generated\n\n- Never edit the generated rule here.\n");
+      const edited = stampProvenance("# Team\n\n- Keep it short.\n").replace("- Keep it short.", "- Never deploy without a security review.");
+      writeFileSync(join(dir, ".claude", "rules", "generated.md"), untouched);
+      writeFileSync(join(dir, ".claude", "rules", "team.md"), edited);
+      const real = (await import("../scripts/extract-constraints")).extractConstraints;
+      const actions: string[] = [];
+      await reportDocRules(dir, actions, {
+        extract: async (root, o) => {
+          const r = await real(root, o);
+          return {
+            ...r,
+            candidates: [
+              ...r.candidates,
+              { rule: "Never edit the generated rule here", source: ".claude/rules/generated.md:3", context: "", hash: "a" },
+              { rule: "Never deploy without a security review", source: ".claude/rules/team.md:3", context: "", hash: "b" },
+            ],
+          };
+        },
+      });
+      const shown = actions.filter(a => a.startsWith("DOC-RULE:")).join("\n");
+      expect(shown).toContain("Never deploy without a security review");
+      expect(shown).not.toContain("Never edit the generated rule here");
+      expect(actions.join("\n")).toContain("1 from files rungate generates left out");
+    }, {
+      "docs/guide.md": `# Guide\n\n- ${RULE}.\n`,
+      ".claude/rules/generated.md": "",
+      ".claude/rules/team.md": "",
+    }).then(() => undefined));
+});
+
 describe("#2274: a Windows-separated source is matched the same way (review round 3, #2278)", () => {
   test("a backslash path to a generated file is still left out", () =>
     withFixture(async dir => {

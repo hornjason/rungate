@@ -70,7 +70,7 @@ import {
 } from "../secret-patterns";
 import { healthPathIn } from "../liveness-contradiction";
 import { localCalendarDay } from "../local-calendar-day";
-import { decideRuleWrite } from "../rule-provenance";
+import { bodySha, declaredSha, decideRuleWrite } from "../rule-provenance";
 import { rowDriftClause, ruleRowDrift } from "../rule-row-drift";
 import { actionRef } from "../workflow-actions";
 import {
@@ -5941,6 +5941,18 @@ export async function reportDocRules(
     // NON_SPEC_FILES are written with `/` (review round 3, PR #2278).
     const file = c.source.replace(/:\d+$/, "").split("\\").join("/");
     const owned = ownedFileFor(file);
+    if (owned?.strategy === "provenance") {
+      // Rewritten only while untouched (#370): a file whose stamp no longer
+      // matches its body was hand-edited and is the project's text (review
+      // round 4, PR #2278). An unreadable file is left in, never dropped.
+      try {
+        const text = readFileSync(join(projectPath, file), "utf-8");
+        const declared = declaredSha(text);
+        return declared !== null && declared === bodySha(text);
+      } catch {
+        return false; // cannot read it, so cannot call it generated — it stays in the report
+      }
+    }
     return (owned !== null && owned.strategy !== "create-only") || NON_SPEC_FILES.some(n => file === `specs/${n}`);
   };
   const candidates = result.candidates.filter(c => !generated(c));
