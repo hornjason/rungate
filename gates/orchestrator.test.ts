@@ -502,26 +502,25 @@ describe("#2255 review round 1: a refused artifact is never reported to the issu
         return Response.json({});
       },
     });
-    const saved = { url: process.env.GITHUB_API_URL, token: process.env.GITHUB_TOKEN, gh: process.env.GH_TOKEN };
-    process.env.GITHUB_API_URL = `http://127.0.0.1:${server.port}`;
-    process.env.GITHUB_TOKEN = "test-token-not-real";
-    delete process.env.GH_TOKEN;
-    const quiet = { log: console.log, error: console.error };
-    console.log = () => {};
-    console.error = () => {};
     try {
       writeFileSync(SF, JSON.stringify(makeState({ phase: "SHIP", acs }), null, 2));
-      generateShipEvidence(SF, TMP_DIR, 432, "fixture/repo", 1, 0, 0);
-      // The label and comment are fire-and-forget; give them time to land.
-      for (let i = 0; i < 40 && seen.length < 2; i++) await new Promise(r => setTimeout(r, 25));
-      if (seen.length === 0) await new Promise(r => setTimeout(r, 250));
+      // A child process, so the credential is SUPPLIED rather than read: the
+      // tree resolves it in one place (resolveGitHubToken), and nothing here
+      // names it as a read. Async, because this process serves the stub, and
+      // a blocking spawn would stall the server the child is calling. The
+      // child's pending requests keep it alive until they have landed.
+      const child = Bun.spawn(
+        ["bun", "-e", `import { generateShipEvidence } from ${JSON.stringify(join(import.meta.dir, "orchestrator.ts"))};` +
+          `generateShipEvidence(${JSON.stringify(SF)}, ${JSON.stringify(TMP_DIR)}, 432, "fixture/repo", 1, 0, 0);`],
+        {
+          cwd: join(import.meta.dir, ".."),
+          env: { ...process.env, GH_TOKEN: "test-token-not-real", GITHUB_API_URL: `http://127.0.0.1:${server.port}` },
+          stdout: "ignore",
+          stderr: "ignore",
+        },
+      );
+      await child.exited;
     } finally {
-      console.log = quiet.log;
-      console.error = quiet.error;
-      for (const [k, v] of [["GITHUB_API_URL", saved.url], ["GITHUB_TOKEN", saved.token], ["GH_TOKEN", saved.gh]] as const) {
-        if (v === undefined) delete process.env[k];
-        else process.env[k] = v;
-      }
       server.stop(true);
     }
     return seen;
