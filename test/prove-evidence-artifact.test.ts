@@ -57,7 +57,8 @@ describe("#1559: B3 builds prove-evidence.json from the reproducer's own report"
   test("SC-2770: a report with after-evidence builds an artifact the zod contract accepts", () => {
     const built = buildProveEvidence(report(), CTX);
     expect(built.verdict).toBe("PROVEN");
-    expect(built.afterEvidence).toEqual(AFTER);
+    // #2262: attributed to the observer the caller names; B3 names none, so the reproducer.
+    expect(built.afterEvidence).toEqual({ ...AFTER, observedBy: "reproducer" });
     expect(ProveEvidenceSchema.safeParse(built).success).toBe(true);
     expect(validateArtifactSchema(built, ProveEvidenceSchema)).toEqual([]);
   });
