@@ -2,7 +2,8 @@
 /**
  * Build, check and write `prove-evidence.json` for `workflows/prove.js` (#2254).
  *
- *   bun scripts/record-prove-evidence.ts --work-dir <dir> --report <file> [--source <name>]
+ *   bun scripts/record-prove-evidence.ts --work-dir <dir> --report <file> \
+ *     --issue <n> --commit <sha> [--source <name>]
  *
  * `workflows/*.js` cannot import (#69), so prove.js crosses a subprocess
  * boundary to reach the one contract: it writes a report — `issueNumber`,
@@ -10,6 +11,10 @@
  * reproducer observed one, `afterEvidence` — and this builds the artifact
  * through `recordProveEvidence`, the function B3 uses (#1559). The before-state
  * is read from the run's own `workflow-state.json`, never from the report.
+ *
+ * `--issue` and `--commit` are what prove.js holds in-process. The report is
+ * transcribed by an agent, so a report naming a different issue or commit is
+ * refused rather than trusted for anything else (review round 3, PR #2256).
  *
  * Prints one JSON line: `{ written, verdict, reason? }`. Exit 0 means the
  * artifact was written; `verdict` is what it records, which may be a
@@ -22,7 +27,7 @@ import { readBeforeState, recordProveEvidence } from "../gates/gate-executor";
 
 export const EXIT_REFUSED = 2;
 
-const KNOWN_FLAGS = new Set(["--work-dir", "--report", "--source"]);
+const KNOWN_FLAGS = new Set(["--work-dir", "--report", "--issue", "--commit", "--source"]);
 
 type Outcome = { written: true; verdict: string; reason?: string } | { written: false; reason: string };
 
@@ -60,7 +65,11 @@ function main(): never {
   const args = parseArgs(process.argv.slice(2));
   const workDir = args["--work-dir"];
   const reportPath = args["--report"];
-  if (!workDir || !reportPath) refuse("usage: --work-dir <dir> --report <file> [--source <name>]");
+  const issueArg = args["--issue"];
+  const commitArg = args["--commit"];
+  if (!workDir || !reportPath || !issueArg || !commitArg) {
+    refuse("usage: --work-dir <dir> --report <file> --issue <n> --commit <sha> [--source <name>]");
+  }
 
   const report = readJson(reportPath, "report");
   if (report === null || typeof report !== "object" || Array.isArray(report)) {
@@ -72,6 +81,12 @@ function main(): never {
   }
   if (typeof r.commitSHA !== "string" || r.commitSHA.trim() === "") {
     refuse(`the report's commitSHA ${JSON.stringify(r.commitSHA)} is empty`);
+  }
+  if (String(r.issueNumber) !== issueArg) {
+    refuse(`the report's issueNumber ${JSON.stringify(r.issueNumber)} is not the run's --issue ${issueArg}`);
+  }
+  if (r.commitSHA !== commitArg) {
+    refuse(`the report's commitSHA ${JSON.stringify(r.commitSHA)} is not the run's --commit ${commitArg}`);
   }
 
   // A corrupt state is never a missing one: absent reads UNMEASURED,

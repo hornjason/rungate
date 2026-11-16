@@ -815,7 +815,7 @@ ${proveReportJson}
 
 Then run exactly this and report the JSON line it prints:
 
-bun ${shellQuote(`${HARNESS_ROOT}/scripts/record-prove-evidence.ts`)} --work-dir ${shellQuote(WORK_DIR)} --report ${shellQuote(PROVE_REPORT_PATH)} --source prove-workflow
+bun ${shellQuote(`${HARNESS_ROOT}/scripts/record-prove-evidence.ts`)} --work-dir ${shellQuote(WORK_DIR)} --report ${shellQuote(PROVE_REPORT_PATH)} --issue ${shellQuote(String(ISSUE))} --commit ${shellQuote(COMMIT_SHA)} --source prove-workflow
 
 It builds prove-evidence.json from the report, checks it against
 ProveEvidenceSchema, and writes it only if it passes. Exit 0 means it was

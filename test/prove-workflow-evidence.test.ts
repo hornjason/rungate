@@ -64,14 +64,19 @@ const report = (over: Record<string, unknown> = {}) => proveReport({
 function run(
   script: string,
   reportBody: unknown,
-  opts: { state?: string; extra?: string[] } = {},
+  opts: { state?: string; extra?: string[]; trusted?: string[] } = {},
 ) {
   const dir = mkdtempSync(join(scratch, "run-"));
   const reportPath = join(dir, "prove-report.json");
   writeFileSync(reportPath, typeof reportBody === "string" ? reportBody : JSON.stringify(reportBody));
   if (opts.state !== undefined) writeFileSync(join(dir, "workflow-state.json"), opts.state);
   const p = Bun.spawnSync(
-    ["bun", script, "--work-dir", dir, "--report", reportPath, "--source", "prove-workflow", ...(opts.extra ?? [])],
+    [
+      "bun", script, "--work-dir", dir, "--report", reportPath, "--source", "prove-workflow",
+      // What prove.js holds in-process, passed beside the agent-written report.
+      ...(opts.trusted ?? ["--issue", "2254", "--commit", COMMIT]),
+      ...(opts.extra ?? []),
+    ],
     { cwd: ROOT, stdout: "pipe", stderr: "pipe" },
   );
   const lastLine = p.stdout.toString().trim().split("\n").pop() ?? "";
@@ -173,7 +178,13 @@ describe("#2254: the before-state comes from the run's own workflow-state.json",
 });
 
 describe("#2254: refusals — nothing is written, and the reason is printed", () => {
-  const refusals: Array<[string, unknown, { state?: string; extra?: string[] }, string]> = [
+  const refusals: Array<[string, unknown, { state?: string; extra?: string[]; trusted?: string[] }, string]> = [
+    // Review round 3 on PR #2256: the report is transcribed by an agent; the
+    // issue and commit prove.js already holds are passed beside it, and a
+    // report that disagrees is not trusted for anything else either.
+    ["a report whose commit differs from the run's", report(), { trusted: ["--issue", "2254", "--commit", "d".repeat(40)] }, "commitSHA"],
+    ["a report whose issue differs from the run's", report(), { trusted: ["--issue", "9999", "--commit", COMMIT] }, "issueNumber"],
+    ["a run that does not pass its own issue and commit", report(), { trusted: [] }, "--issue"],
     ["a criteria row with no evidence", report({ criteriaResults: [{ scId: "SC-1", verdict: "PASS" }] }), {}, "criteriaResults.0.evidence"],
     ["a workflow-state.json present and unreadable", report(), { state: "{not json" }, "workflow-state.json"],
     ["a report that is not JSON", "{nope", {}, "report"],
@@ -260,6 +271,8 @@ describe("#2254: prove.js asks for what the contract needs, and no longer writes
 
   test("the artifact is written by the script, never by an agent's Write tool", () => {
     expect(PROVE_SOURCE).toContain("scripts/record-prove-evidence.ts");
+    // The run's own issue and commit go beside the report, never only inside it.
+    expect(PROVE_SOURCE).toContain("--issue ${shellQuote(String(ISSUE))} --commit ${shellQuote(COMMIT_SHA)}");
     // The key, not the word: the comment explaining its removal may name it.
     expect(PROVE_SOURCE).not.toMatch(/contractVersion\s*:/);
     // Review round 3 on PR #2256: a second, unused statement of the artifact's
