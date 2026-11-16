@@ -162,7 +162,7 @@ with nobody touching it, and the readings show it.
    line inside it, not a new top-level field. Today it holds `scope`
    (`active` or `deferred`) and `prefix`. A key the engine does not know is
    reported by name and otherwise ignored, so a typo never silently opts a
-   spec in. The legacy `board-scope: deferred` line on 21 specs means
+   spec in. The legacy `board-scope: deferred` line on 22 specs (the 22 `.claude/spec-deferral-ratchet.json` banks) means
    `scope: deferred`, so those files need no edit.
 
 ## Not decided here
