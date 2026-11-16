@@ -453,6 +453,18 @@ export function verifyFanoutViolations(label: string, val: unknown, tier: unknow
             `is an absence with extra steps (#126)`,
         ];
   }
+  // #2259: the agent ran and its reply could not be read. Before, that reply
+  // left no record, which the absence branch above refused, so the ship
+  // outcome is unchanged. What changes is that the refusal names the cause
+  // instead of failing on a missing `gameable` further down.
+  if ((val as { status?: unknown }).status === "UNMEASURED") {
+    const reason = (val as { reason?: unknown }).reason;
+    return [
+      `gates.verify.${label} is UNMEASURED — the agent ran and its reply could not be read` +
+        (typeof reason === "string" && reason.trim() !== "" ? `: ${reason}` : "") +
+        `. An unread reply is not an approval (#126, #2259).`,
+    ];
+  }
   return [];
 }
 

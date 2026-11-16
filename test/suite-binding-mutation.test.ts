@@ -1027,6 +1027,29 @@ describe("#126 binding: an unrun adversary is refused, and the mutant proves it"
     expect(() => buildMutantSource(renamed, FANOUT_SIGNATURE)).toThrow(/could not build the mutant/);
   });
 
+  test("#2259: an UNMEASURED adversary record is refused by name, not as a missing field", () => {
+    // liveAdversaryReading records an unreadable reply as UNMEASURED. Before
+    // #2259 that reply left no record, and the absence was refused; the ship
+    // outcome must stay a refusal, and the reason must be the one printed.
+    plantFanoutGap();
+    const path = join(WORK, "workflow-state.json");
+    const state = JSON.parse(readFileSync(path, "utf-8"));
+    state.gates.verify.adversary = {
+      ts: "2026-11-16T03:00:00.000Z",
+      status: "UNMEASURED",
+      reason: "report unreadable: the output holds no JSON object naming \"gameable\"",
+      source: "B1-adversary-verify-agent",
+    };
+    writeFileSync(path, JSON.stringify(state, null, 2));
+
+    const real = runCheck(GATE_SUITE, "b1-adversary-verify-structure");
+    expect(real.ran, `the real check never ran:\n${real.output}`).toBe(true);
+    expect(real.red, `an UNMEASURED adversary record was accepted:\n${real.output}`).toBe(true);
+    expect(real.output).toContain("UNMEASURED");
+    expect(real.output).toContain("report unreadable");
+    expect(real.output).not.toContain("adversary.gameable must be a number");
+  }, 240000);
+
   test("the binding is used by BOTH slots, not just the one the mutant drives", () => {
     // A fix applied to b1 alone would pass the pair above while leaving b2
     // exactly as it was. Asserted on the suite source because the two call
