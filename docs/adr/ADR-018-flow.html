@@ -18,7 +18,7 @@ code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
 .row b{font-weight:600}
 </style></head><body>
 <h1>ADR-018 — every opted-in spec runs through the engine</h1>
-<div class="sub">Dry run, 2026-11-16 (revised: opt-in) · <b>accepted</b> by Jason 2026-11-16, he merges · <code>docs/adr/ADR-018-every-placed-spec-runs-through-the-engine.md</code> · closes #2238 · stage F · <b class="warn">merge after #2239</b></div>
+<div class="sub">Dry run, 2026-11-16 (revised: opt-in) · <b>accepted</b> by Jason 2026-11-16, he merges · <code>docs/adr/ADR-018-every-placed-spec-runs-through-the-engine.md</code> · closes #2238 · stage F · <b>#2239 shipped (0.8.22)</b></div>
 <div class="legend"><span><i class="dot" style="background:var(--judge)"></i>judgement (Jason)</span><span><i class="dot" style="background:var(--auto)"></i>automatic</span><span><i class="dot" style="background:var(--hand)"></i>by hand</span></div>
 
 <h2>Stage F today, measured</h2>
@@ -32,7 +32,7 @@ code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
 
 <h2>The run</h2>
 <div class="card">
-<div class="step"><span class="tag ME">ME</span><div>#2239 ships first: <code>plan-deps</code> exits 0 when one phase holds every open issue, and the board steps in <code>adr-accepted.yml</code> run on <code>!cancelled()</code></div></div>
+<div class="step"><span class="tag ME">ME</span><div><b>Done:</b> #2239 shipped as #2242 in 0.8.22, so <code>plan-deps</code> exits 0 when one phase holds every open issue</div></div>
 <div class="step"><span class="tag YOU">YOU</span><div><b>Done 2026-11-16:</b> yes to all six &mdash; SC-2776..2780 as redrafted, Decisions 4 and 5, E8 &rarr; Blocked, F1 &rarr; Not adopted, and SC-2615/2734 reworded in SC-2776's PR</div></div>
 <div class="step"><span class="tag YOU">YOU</span><div>Merge ADR-018 (already <code>status: accepted</code>)</div></div>
 <div class="step"><span class="tag AUTO">AUTO</span><div><code>adr-accepted.yml</code>: plan-spec updates Engine Phase 9 → 6 issues, each labelled <code>engine</code> → 4 blocked-by edges → Criteria column → Ready top-up</div></div>

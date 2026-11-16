@@ -479,6 +479,6 @@ acceptance test, so it is also the honest answer to *when is the engine done*
 - [ ] SC-2779: an open issue with no milestone whose named criteria are placed in phases by ONE opted-in family's spec is moved by the run SC-2780 describes into that family's milestone for the lowest of those phases; an issue whose criteria are placed by two families' specs is reported by name and left unmilestoned, because phase numbers do not compare across specs, and an issue that already carries a milestone is never moved
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-- [ ] SC-2780: a push to main that changes `specs/` runs `plan-spec`, `plan-deps` and `board-mirror` for every opted-in family (SC-2776), with no command typed by hand; an opted-in spec whose `board:` block or placement table cannot be read turns the run red by name rather than being skipped
+- [ ] SC-2780: a push to main that changes `specs/` runs `plan-spec` and then `plan-deps` for each opted-in family (SC-2776), and `board-mirror` once after the families, with no command typed by hand; an opted-in spec whose `board:` block or placement table cannot be read turns the run red by name rather than being skipped
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
