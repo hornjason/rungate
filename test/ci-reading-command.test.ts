@@ -62,7 +62,7 @@ async function run(args: string[], r: Route = api()) {
   seen.length = 0;
   const p = Bun.spawn(["bun", SCRIPT, ...args], {
     cwd: ROOT,
-    env: { ...process.env, GH_TOKEN: "stub-token", GITHUB_API_URL: `http://127.0.0.1:${server.port}` },
+    env: { ...process.env, GITHUB_TOKEN: "stub-token", GH_TOKEN: "stub-token", GITHUB_API_URL: `http://127.0.0.1:${server.port}` },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -118,7 +118,7 @@ describe("#2273: what cannot be read prints UNMEASURED with its reason, and exit
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("UNMEASURED");
     expect(r.stdout).toContain("500");
-    expect(r.stdout).not.toContain("MEASURED\n");
+    expect(r.stdout).not.toContain("#42: MEASURED");
   });
 });
 

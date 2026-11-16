@@ -282,6 +282,14 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Print the board's node id from config",
     usage: "rungate board-id [--project-root <dir>]   (UNMEASURED and exit 2 when the config names no board)",
   },
+  // #2273, the command half of #1046: a merged PR's CI breakdown. Ships before
+  // #1046's generated job-summary step, which calls it through `bunx`. Reads
+  // the API only, so no `projectRootFlag`.
+  "ci-reading": {
+    script: "scripts/ci-reading.ts",
+    summary: "Print a merged pull request's CI breakdown — per-check time, queue, critical path, re-runs",
+    usage: "rungate ci-reading --pr <N> [--repo <owner/name>] [--format text|markdown]   (always exits 0; UNMEASURED names why)",
+  },
   // #2193 (part 1 of #2183): the board-intake move step as a tested command.
   // `board-intake.yml` switches to it in #2183, once a release carries it.
   "board-intake-move": {
