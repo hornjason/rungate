@@ -28,15 +28,31 @@ const ROOT = resolve(import.meta.dir, "..");
 /**
  * Every child gets a timeout. `spawnSync` blocks the thread, so a test-runner
  * timeout cannot fire while a wedged `npm`, `tar` or `bun` holds it; only the
- * child's own timeout turns a hang into a failure (review, PR #2281).
+ * child's own timeout turns a hang into a failure (review, PR #2281). The
+ * setup hook's own budget is the sum of its three, plus room, so a slow step
+ * fails with its own error rather than a generic hook timeout.
  */
-const CHILD_TIMEOUT_MS = 90_000;
+const CHILD_TIMEOUT_MS = 60_000;
+const SETUP_TIMEOUT_MS = 3 * CHILD_TIMEOUT_MS + 30_000;
 let scratch = "";
 let pkg = "";
 
 type Reading = { status: "MEASURED"; validated: boolean; brief: string } | { status: "UNMEASURED"; reason: string };
 
-/** Assemble a brief from the package installed at `pkgDir`, in a child process with an empty HOME. */
+/** A child's output, whatever `spawnSync` left: null when it was killed or never spawned. */
+const said = (r: { stdout: unknown; stderr: unknown; error?: Error }) =>
+  [r.error?.message, r.stderr, r.stdout].map(v => (v == null ? "" : String(v).trim())).filter(Boolean).join(" | ").slice(0, 400);
+
+/**
+ * Assemble a brief from the package installed at `pkgDir`, in an isolated child.
+ *
+ * Isolated by construction rather than leak by leak (review round 6, PR
+ * #2281): the child gets a MINIMAL environment — PATH to find `bun`, an empty
+ * HOME so the local override at ~/.claude/skills/ship cannot be what passes,
+ * and TMPDIR — never a copy of the parent's. Its answer goes to a result file
+ * it is handed, not to stdout, so nothing else it prints can be mistaken for
+ * the answer.
+ */
 function installedBrief(pkgDir: string): Reading {
   const run = mkdtempSync(join(scratch, "run-"));
   const work = join(run, "work");
@@ -47,26 +63,25 @@ function installedBrief(pkgDir: string): Reading {
     join(work, "workflow-state.json"),
     JSON.stringify({ issue: 1, issueGoal: "Make the thing work", acs: [{ id: "AC-1", statement: "the installed brief carries this AC", evidenceMethod: { type: "test", command: "bun test test/installed-marker.test.ts" } }] }),
   );
+  const result = join(run, "result.json");
   const runner = join(run, "assemble.ts");
   writeFileSync(
     runner,
-    `const { assembleBrief } = await import(${JSON.stringify(join(pkgDir, "gates", "brief-assembler.ts"))});\n` +
-      `console.log(JSON.stringify(await assembleBrief({ slug: "s", workDir: ${JSON.stringify(work)}, projectRoot: ${JSON.stringify(proj)} })));\n`,
+    `import { writeFileSync } from "fs";\n` +
+      `const { assembleBrief } = await import(${JSON.stringify(join(pkgDir, "gates", "brief-assembler.ts"))});\n` +
+      `writeFileSync(${JSON.stringify(result)}, JSON.stringify(await assembleBrief({ slug: "s", workDir: ${JSON.stringify(work)}, projectRoot: ${JSON.stringify(proj)} })));\n`,
   );
-  // HOME is empty so the local override at ~/.claude/skills/ship cannot be what passes.
-  const r = spawnSync("bun", [runner], { cwd: run, env: { ...process.env, HOME: home }, encoding: "utf-8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
-  if (r.status !== 0) return { status: "UNMEASURED", reason: `assembleBrief did not run: ${(r.stderr || r.stdout).trim().slice(0, 400)}` };
-  // The runner prints one JSON line last. Anything else on stdout (a warning, a
-  // dependency's banner) must read as UNMEASURED naming it, not as a raw
-  // SyntaxError out of the helper (review round 2, PR #2281).
+  const env = { PATH: process.env.PATH ?? "", HOME: home, TMPDIR: tmpdir() };
+  const r = spawnSync("bun", [runner], { cwd: run, env, encoding: "utf-8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
+  if (r.status !== 0) return { status: "UNMEASURED", reason: `assembleBrief did not run (exit ${r.status}): ${said(r)}` };
   let out: { validated?: unknown; briefPath?: unknown };
   try {
-    out = JSON.parse(r.stdout.trim().split("\n").pop() ?? "");
-  } catch {
-    return { status: "UNMEASURED", reason: `the runner's last stdout line is not JSON: ${r.stdout.trim().slice(-400)}` };
+    out = JSON.parse(readFileSync(result, "utf-8"));
+  } catch (e) {
+    return { status: "UNMEASURED", reason: `the runner wrote no readable result: ${(e as Error).message}; ${said(r)}` };
   }
   if (typeof out.validated !== "boolean" || typeof out.briefPath !== "string") {
-    return { status: "UNMEASURED", reason: `the runner printed no { validated, briefPath }: ${r.stdout.trim().slice(-400)}` };
+    return { status: "UNMEASURED", reason: `the result holds no { validated, briefPath }: ${JSON.stringify(out).slice(0, 300)}` };
   }
   return { status: "MEASURED", validated: out.validated, brief: readFileSync(out.briefPath, "utf-8") };
 }
@@ -74,13 +89,13 @@ function installedBrief(pkgDir: string): Reading {
 beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), "rungate-1194-"));
   const packed = spawnSync("npm", ["pack", "--silent", "--pack-destination", scratch], { cwd: ROOT, encoding: "utf-8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
-  if (packed.status !== 0) throw new Error(`npm pack failed: ${packed.stderr}`);
+  if (packed.status !== 0) throw new Error(`npm pack failed: ${said(packed)}`);
   const tgz = readdirSync(scratch).find(f => f.endsWith(".tgz"));
   if (!tgz) throw new Error(`npm pack wrote no tarball into ${scratch}`);
   const unpacked = join(scratch, "unpacked");
   mkdirSync(unpacked);
   const tar = spawnSync("tar", ["-xzf", join(scratch, tgz), "-C", unpacked], { encoding: "utf-8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
-  if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
+  if (tar.status !== 0) throw new Error(`tar failed: ${said(tar)}`);
   pkg = join(unpacked, "package");
   // A cache of its own. With the shared one, this fresh resolution changed what
   // Bun's auto-install later resolved for test/local-review-loop.test.ts's
@@ -94,8 +109,8 @@ beforeAll(() => {
     killSignal: "SIGKILL",
     env: { ...process.env, BUN_INSTALL_CACHE_DIR: join(scratch, "bun-cache") },
   });
-  if (installed.status !== 0) throw new Error(`bun install in the unpacked package failed: ${installed.stderr}`);
-}, 120_000);
+  if (installed.status !== 0) throw new Error(`bun install in the unpacked package failed: ${said(installed)}`);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   if (scratch) rmSync(scratch, { recursive: true, force: true });
