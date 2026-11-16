@@ -224,8 +224,19 @@ export function aiReviewSuppressionGate(inputs: SuppressionInputs): AiReviewSupp
       const a = anchorOnlyKey(k);
       if (a !== null) anchors.add(a);
     }
+    // #2257: how many findings cite a line, and how many of those lines could
+    // be read. Read from the SAME calls the keys are built from, not a second
+    // pass, so the count cannot disagree with what the keys saw.
+    let located = 0;
+    let readable = 0;
     const repeat = candidates.map(c => {
-      const key = carryKey(c, inputs.lineTextFor(c as ReviewFinding));
+      const cited = c as ReviewFinding;
+      const lineText = inputs.lineTextFor(cited);
+      if (typeof cited?.file === "string" && Number.isInteger(cited?.line) && (cited.line as number) >= 1) {
+        located++;
+        if (lineText !== undefined) readable++;
+      }
+      const key = carryKey(c, lineText);
       // Unkeyable CARRIES. It cannot be shown to be a repeat, and the
       // direction this is allowed to be wrong in is toward reporting.
       if (key === null) return null;
@@ -282,7 +293,20 @@ export function aiReviewSuppressionGate(inputs: SuppressionInputs): AiReviewSupp
       // this whole increment is a correction for.
       return null;
     });
-    return { repeat, unmeasured: null };
+    // #2257. A gate that could read no cited line built every key from a line
+    // NUMBER, which never equals a key an earlier round recorded from line
+    // TEXT. "Nothing to suppress" from that gate is a reading of nothing, and
+    // it printed the same words as a gate that read every line (#1872: 0 of
+    // 420 in CI). Byte-key matches above still stand; this says the anchor
+    // half was blind.
+    const unmeasured =
+      located > 0 && readable === 0 && prior.keys.length > 0
+        ? `no cited line could be read for any of this round's ${located} finding(s) that cite one, ` +
+          `so no key could match one an earlier round recorded from the line's text, and a ` +
+          `restated finding could not be recognised. The checkout the gate reads is probably not ` +
+          `the one under review (#2257).`
+        : null;
+    return { repeat, unmeasured };
   };
 }
 

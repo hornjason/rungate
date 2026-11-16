@@ -94,7 +94,7 @@
 import { aiReviewJuryGate } from "../lib/ai-review-jury";
 import { productionSuppression } from "../lib/ai-review-suppression";
 import { main } from "../lib/scaffold/ai-review-findings";
-import { AI_REVIEW_BALLOT_DIR_ENV, AI_REVIEW_THREADS_PATH_VAR } from "../lib/scaffold/ai-review-step";
+import { AI_REVIEW_BALLOT_DIR_ENV, AI_REVIEW_CHECKOUT_ROOT_VAR, AI_REVIEW_THREADS_PATH_VAR } from "../lib/scaffold/ai-review-step";
 
 const ballotDir = process.env[AI_REVIEW_BALLOT_DIR_ENV];
 const jury =
@@ -105,9 +105,13 @@ const jury =
 // Assembled in `lib/`, not here. This command and `ai-review-threads.ts` must
 // form the SAME gate from the same file, and two hand-written literals is how
 // `anchorOccurrences` reached one of them and not the other (#1861 round 4).
+// #2257: the checkout by name. The generated step runs this from the payload's
+// directory on purpose, so the working directory is not the checkout; it is
+// the fallback only for a step generated before the variable was set.
+const checkoutRoot = process.env[AI_REVIEW_CHECKOUT_ROOT_VAR];
 const { gate: suppress } = productionSuppression(
   process.env[AI_REVIEW_THREADS_PATH_VAR],
-  process.cwd(),
+  checkoutRoot !== undefined && checkoutRoot !== "" ? checkoutRoot : process.cwd(),
 );
 
 // One line, and `process.exit(main(` is load-bearing text: AC-4 in

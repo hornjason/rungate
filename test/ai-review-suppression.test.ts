@@ -103,6 +103,7 @@ import {
   AI_REVIEW_LEDGER_TEXT_FIELD,
   AI_REVIEW_RUN_STEP_NAME,
   AI_REVIEW_SNAPSHOT_ROUND_KEY,
+  AI_REVIEW_CHECKOUT_ROOT_VAR,
   AI_REVIEW_THREADS_PATH_VAR,
   AI_REVIEW_THREADS_STEP_NAME,
   AI_REVIEW_VERDICT_KEY,
@@ -749,11 +750,13 @@ describe("AS-5: without the checkout's line text the keys never meet", () => {
       undefined,
       gate({ threads, withLineText: false }),
     );
-    // Not a refusal — a MEASURED reading that found no repeat, which is the
-    // dangerous shape: it prints nothing and looks like a round with no
-    // repeats. This is what `suppressRepeats` did for the seven months it
-    // had no caller.
-    expect(reading.suppressionUnmeasured).toBeNull();
+    // This used to be a MEASURED reading that found no repeat — the dangerous
+    // shape this comment named: it printed nothing and looked like a round
+    // with no repeats. It is what `suppressRepeats` did for the seven months
+    // it had no caller, and what the adjudicator did in CI for nine releases
+    // (#1872: 0 of 420). Since #2257 the blind gate says it is blind, and
+    // still reports the finding.
+    expect(reading.suppressionUnmeasured).toContain("no cited line could be read");
     expect(reading.suppressedReported).toEqual([]);
     expect(reading.reported).toHaveLength(1);
   });
@@ -775,6 +778,13 @@ describe("AS-5: without the checkout's line text the keys never meet", () => {
     const reading = readAiReviewFindings(payload, undefined, gate({ threads, root: empty }));
     expect(reading.suppressedReported).toEqual([]);
     expect(reading.reported).toHaveLength(1);
+    // #2257: a root holding none of the cited files is the CI shape exactly.
+    expect(reading.suppressionUnmeasured).toContain("no cited line could be read");
+  });
+
+  test("#2257: a readable cited line keeps the reading MEASURED, so the warning is not unconditional", () => {
+    const reading = readAiReviewFindings(payload, undefined, gate({ threads }));
+    expect(reading.suppressionUnmeasured).toBeNull();
   });
 });
 
@@ -1085,6 +1095,53 @@ describe("AS-9: `rungate ai-review-findings` suppresses a repeat", () => {
 // is a reading and not a blind instrument). `scripts/print-review-repeat-pairs.ts`
 // prints both summaries of every collision, which is what turned the count of eight
 // into a judgement that all eight were restatements.
+
+// ── #2257: the checkout the adjudicator reads is the one it is told ─────────
+//
+// Covers CRC-N4. The generated step runs the adjudicator from the payload's
+// own directory, OUTSIDE the checkout, on purpose: `bunx` resolves
+// bunfig.toml, .npmrc and package.json by walking up from its working
+// directory. AS-9 runs it from INSIDE the checkout, which is why AS-9 stayed
+// green while CI suppressed 0 of 420 round-2+ findings as anchor repeats
+// (#1872's measurement): from the payload's directory no cited line could be
+// read, and nothing said so.
+describe("#2257: the adjudicator reads the checkout it is told, not the directory it runs in", () => {
+  function runOutsideCheckout(name: string, checkoutRoot: string | null) {
+    const root = checkout(`outside-${name}`);
+    const payloadDir = mkdtempSync(join(SCRATCH, `payload-${name}-`));
+    const payload = join(payloadDir, "findings.json");
+    // The same finding at the same line, worded differently: only the anchor
+    // rule can match it, and the anchor rule needs the cited line's text.
+    writeFileSync(payload, payloadOf("PASS", [advisory({ summary: "this name says nothing about what it holds" })]));
+    const threads = join(payloadDir, "threads.json");
+    writeFileSync(threads, raisedBefore());
+    const env: Record<string, string | undefined> = { ...process.env, [AI_REVIEW_THREADS_PATH_VAR]: threads };
+    delete env[AI_REVIEW_CHECKOUT_ROOT_VAR];
+    if (checkoutRoot === "the checkout") env[AI_REVIEW_CHECKOUT_ROOT_VAR] = root;
+    const r = spawnSync("bun", [join(ROOT, "bin", "rungate.ts"), "ai-review-findings", payload], {
+      cwd: payloadDir,
+      encoding: "utf-8",
+      env: env as Record<string, string>,
+    });
+    return `${r.stdout}${r.stderr}`;
+  }
+
+  test("run from the payload's directory with the checkout named, the reworded repeat is suppressed", () => {
+    const out = runOutsideCheckout("named", "the checkout");
+    expect(out).toContain(`${AI_REVIEW_OUTCOME_LINE} CLEAN`);
+    expect(out).toContain(AI_REVIEW_SUPPRESSED_TITLE);
+    expect(out).toContain("read as the same finding restated");
+  });
+
+  test("run from the payload's directory with no checkout named, it says it could read no cited line", () => {
+    // The CI state before #2257's generator change. Not a silent "nothing to
+    // suppress": the gate looked at nothing, and says so.
+    const out = runOutsideCheckout("unnamed", null);
+    expect(out).not.toContain("read as the same finding restated");
+    expect(out).toContain(AI_REVIEW_SUPPRESSED_UNMEASURED_TITLE);
+    expect(out).toContain("no cited line could be read");
+  });
+});
 
 describe("AS-11 (#1168): a prior finding re-raised in different words", () => {
   const REWORDED = advisory({
