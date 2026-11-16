@@ -175,6 +175,15 @@ describe("#2273: arguments", () => {
     expect(unknown.stderr + unknown.stdout).toContain("--write");
   });
 
+  test("a malformed --repo is a usage error, exit 2 naming --repo — not an UNMEASURED reading (#2279)", async () => {
+    for (const bad of ["notaslug", "a/b/c", "o/..", "o/r;x"]) {
+      const r = await run(["--pr", "42", "--repo", bad]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("--repo");
+      expect(r.stdout).not.toContain("UNMEASURED");
+    }
+  });
+
   test("the command is registered, and published", () => {
     expect(readFileSync(join(ROOT, "lib", "cli-commands.ts"), "utf-8")).toContain('script: "scripts/ci-reading.ts"');
     const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));

@@ -64,6 +64,13 @@ export function parseArgs(argv: readonly string[], env: Record<string, string | 
   }
   if (pr === undefined) return `--pr is required. ${USAGE}`;
   if (!repo) return `--repo is required (or set GITHUB_REPOSITORY). ${USAGE}`;
+  // A malformed slug is a malformed command line, not a reading that could not
+  // be taken (#2279): checked here through the one parser, so it exits 2.
+  try {
+    parseOwnerRepo(repo);
+  } catch (err) {
+    return `--repo: ${(err as Error).message}. ${USAGE}`;
+  }
   return { pr, repo, format };
 }
 
