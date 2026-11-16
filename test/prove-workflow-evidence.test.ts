@@ -40,9 +40,10 @@ function proveBlock<T>(name: string, returns: string): T {
   return new Function(`${PROVE_SOURCE.slice(start, end)}\nreturn ${returns};`)() as T;
 }
 
-const proveReport = proveBlock<(a: Record<string, unknown>) => Record<string, unknown>>(
-  "PROVE-REPORT", "proveReport",
-);
+const { proveReport, settleVerdict } = proveBlock<{
+  proveReport: (a: Record<string, unknown>) => Record<string, unknown>;
+  settleVerdict: (run: string, recorded: unknown) => string;
+}>("PROVE-REPORT", "{ proveReport, settleVerdict }");
 
 const COMMIT = "c".repeat(40);
 const AFTER = {
@@ -130,6 +131,29 @@ describe("#2254: a report built the way prove.js builds it", () => {
     expect(report({ reproduced: "yes" }).reproduced).toBe(false);
     expect(report({ reproduced: true }).reproduced).toBe(true);
   });
+});
+
+describe("#2254: the relayed record may only make prove.js's verdict stricter", () => {
+  // The record step's reply comes back through an agent, and the workflow
+  // sandbox cannot read the artifact to check it. Flagged by the commit
+  // security review: a misreported reply must not turn a verdict into PROVEN.
+  const cases: Array<[string, unknown, string]> = [
+    ["INCONCLUSIVE", { written: true, verdict: "PROVEN" }, "INCONCLUSIVE"],
+    ["UNPROVEN", { written: true, verdict: "PROVEN" }, "UNPROVEN"],
+    ["UNPROVEN", { written: false, reason: "x" }, "UNPROVEN"],
+    ["PROVEN", { written: true, verdict: "INCONCLUSIVE" }, "INCONCLUSIVE"],
+    ["PROVEN", { written: true, verdict: "UNPROVEN" }, "UNPROVEN"],
+    ["PROVEN", { written: false, reason: "refused" }, "INCONCLUSIVE"],
+    ["PROVEN", null, "INCONCLUSIVE"],
+    ["PROVEN", { written: true, verdict: "PASSED" }, "INCONCLUSIVE"],
+    ["PROVEN", { written: "true", verdict: "PROVEN" }, "INCONCLUSIVE"],
+    ["PROVEN", { written: true, verdict: "PROVEN" }, "PROVEN"],
+  ];
+  for (const [run, recorded, want] of cases) {
+    test(`${run} with ${JSON.stringify(recorded)} settles ${want}`, () => {
+      expect(settleVerdict(run, recorded)).toBe(want);
+    });
+  }
 });
 
 describe("#2254: the before-state comes from the run's own workflow-state.json", () => {

@@ -801,6 +801,18 @@ function proveReport({ issue, commitSHA, verdict, criteriaResults, reproduced, a
   if (afterEvidence !== undefined && afterEvidence !== null) report.afterEvidence = afterEvidence
   return report
 }
+
+// The record step's reply is relayed by an agent, and this sandbox has no
+// file access to check it against the artifact. So it may only make the
+// verdict stricter: it can turn PROVEN into INCONCLUSIVE, and nothing into
+// PROVEN. A PROVEN with no written record, or a reply this cannot read, is
+// INCONCLUSIVE — an artifact that was not written is no proof.
+function settleVerdict(runVerdict, recorded) {
+  if (runVerdict !== 'PROVEN') return runVerdict
+  if (!recorded || recorded.written !== true) return 'INCONCLUSIVE'
+  if (recorded.verdict === 'PROVEN' || recorded.verdict === 'UNPROVEN') return recorded.verdict
+  return 'INCONCLUSIVE'
+}
 // ──── PROVE-REPORT-END ────
 
 const proveReportJson = JSON.stringify(proveReport({
@@ -832,18 +844,15 @@ Do NOT write prove-evidence.json yourself.
 `, { label: 'record-evidence', phase: 'Output', schema: RECORD_SCHEMA })
 
 // The artifact's verdict is the run's verdict from here on: a comment saying
-// PROVEN beside an artifact recording INCONCLUSIVE is two answers. And an
-// artifact that was not written is no proof at all.
-if (recorded?.written === true && ['PROVEN', 'UNPROVEN', 'INCONCLUSIVE'].includes(recorded.verdict)) {
-  if (recorded.verdict !== verdict) {
-    log(`prove-evidence.json records ${recorded.verdict}, not ${verdict}: ${recorded.reason || 'no reason printed'}`)
-  }
-  verdict = recorded.verdict
-  log('prove-evidence.json written')
+// PROVEN beside an artifact recording INCONCLUSIVE is two answers.
+const settled = settleVerdict(verdict, recorded)
+if (recorded?.written === true) {
+  log(`prove-evidence.json written${recorded.reason ? ` — ${recorded.reason}` : ''}`)
 } else {
-  log(`prove-evidence.json NOT written — ${recorded?.reason || 'the record step reported nothing'}; verdict is INCONCLUSIVE`)
-  verdict = 'INCONCLUSIVE'
+  log(`prove-evidence.json NOT written — ${recorded?.reason || 'the record step reported nothing'}`)
 }
+if (settled !== verdict) log(`verdict ${verdict} → ${settled}`)
+verdict = settled
 const reproduced = reproducerResult?.reproduced === true
 
 // Post proof comment to issue
