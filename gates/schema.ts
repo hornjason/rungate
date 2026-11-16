@@ -1284,6 +1284,10 @@ export const ProveEvidenceSchema = z.object({
     capturedAt: z.string(),
     environment: z.enum(["local", "prod"]),
     description: z.string(),
+    // Who observed the after-state (#2262): `AFTER_OBSERVERS` in
+    // gates/gate-executor.ts, which decides the types each may report. Optional
+    // because a `none` record has no observer.
+    observedBy: z.enum(["reproducer", "quinn"]).optional(),
   }),
   comparisonSummary: z.string(),
   quinnVerdict: z.enum(["PASS", "FAIL", "SKIP"]).optional(),

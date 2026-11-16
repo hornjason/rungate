@@ -433,12 +433,24 @@ export { validateArtifactSchema, type ArtifactSchema };
 
 const PROVE_VERDICTS = ["PROVEN", "UNPROVEN", "INCONCLUSIVE"];
 /**
- * The after-evidence types a reproducer may report, and the prompt's list
- * exactly. `none` is B3's to write. `screenshot` is not the reproducer's to
- * claim: it has Bash and Read only (gates/prompts/prove-reproducer.md), so a
- * reported screenshot is a UI verification it could not have made.
+ * Who observed the after-state, and the after-evidence types each can report
+ * (#2262). `none` is B3's to write. The reproducer has Bash and Read only
+ * (gates/prompts/prove-reproducer.md), so a screenshot it reports is a UI
+ * check it could not have made. Quinn drives a browser against the prove
+ * container (workflows/prove.js), so a screenshot is what Quinn observes.
+ *
+ * The CALLER names the observer, never the report: an agent writing
+ * `observedBy: "quinn"` into its own afterEvidence is ignored. The spawn
+ * schemas in workflows/prove.js and `ProveEvidenceSchema`'s `observedBy` restate
+ * these lists, and test/prove-workflow-evidence.test.ts holds them equal.
  */
-const REPORTED_AFTER_TYPES = ["text", "api", "data"];
+export const AFTER_OBSERVERS = {
+  reproducer: ["text", "api", "data"],
+  quinn: ["text", "api", "data", "screenshot"],
+} as const;
+export type AfterObserver = keyof typeof AFTER_OBSERVERS;
+export const isAfterObserver = (v: unknown): v is AfterObserver =>
+  typeof v === "string" && Object.prototype.hasOwnProperty.call(AFTER_OBSERVERS, v);
 const AFTER_ENVIRONMENTS = ["local", "prod"];
 
 /** What B3 knows about the run that the reproducer does not get to say. */
@@ -449,24 +461,31 @@ export interface ProveEvidenceContext {
   beforeReading: BeforeStateReading;
   /** Which writer this is. B3 by default; `workflows/prove.js` says `prove-workflow` (#2254). */
   source?: string;
+  /** Who observed the after-state. The reproducer unless the caller says otherwise (#2262). */
+  afterObserver?: AfterObserver;
 }
 
 type AfterEvidence = {
   type: string; path: string | null; capturedAt: string; environment: string; description: string;
+  observedBy?: AfterObserver;
 };
 
-/** The reproducer's `afterEvidence`, or why there is none. Never repaired into shape. */
-function readReportedAfterEvidence(raw: unknown): { ok: true; value: AfterEvidence } | { ok: false; reason: string } {
-  if (raw === undefined || raw === null) return { ok: false, reason: "the reproducer reported no afterEvidence" };
+/** The reported `afterEvidence`, or why there is none. Never repaired into shape. */
+function readReportedAfterEvidence(raw: unknown, observer: AfterObserver): { ok: true; value: AfterEvidence } | { ok: false; reason: string } {
+  if (raw === undefined || raw === null) return { ok: false, reason: `the ${observer} reported no afterEvidence` };
   if (typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, reason: `afterEvidence is not an object: ${JSON.stringify(raw)}` };
   }
   const a = raw as Record<string, unknown>;
+  const types: readonly string[] = AFTER_OBSERVERS[observer];
   if (typeof a.environment !== "string" || !AFTER_ENVIRONMENTS.includes(a.environment)) {
     return { ok: false, reason: `afterEvidence.environment ${JSON.stringify(a.environment)} is not local or prod` };
   }
-  if (typeof a.type !== "string" || !REPORTED_AFTER_TYPES.includes(a.type)) {
-    return { ok: false, reason: `afterEvidence.type ${JSON.stringify(a.type)} is not one of ${REPORTED_AFTER_TYPES.join("|")}` };
+  if (typeof a.type !== "string" || !types.includes(a.type)) {
+    return { ok: false, reason: `afterEvidence.type ${JSON.stringify(a.type)} is not one the ${observer} can observe (${types.join("|")})` };
+  }
+  if (a.type === "screenshot" && (typeof a.path !== "string" || a.path.trim() === "")) {
+    return { ok: false, reason: `afterEvidence.path ${JSON.stringify(a.path)} is empty — a screenshot with no file is not evidence` };
   }
   if (typeof a.capturedAt !== "string" || a.capturedAt === "") {
     return { ok: false, reason: `afterEvidence.capturedAt ${JSON.stringify(a.capturedAt)} is not a time` };
@@ -479,6 +498,7 @@ function readReportedAfterEvidence(raw: unknown): { ok: true; value: AfterEviden
     value: {
       type: a.type, path: typeof a.path === "string" ? a.path : null,
       capturedAt: a.capturedAt, environment: a.environment, description: a.description,
+      observedBy: observer,
     },
   };
 }
@@ -504,7 +524,7 @@ function readReportedAfterEvidence(raw: unknown): { ok: true; value: AfterEviden
 export function buildProveEvidence(raw: Record<string, any>, ctx: ProveEvidenceContext) {
   const criteriaResults: any[] = Array.isArray(raw?.criteriaResults) ? raw.criteriaResults : [];
   const passed = criteriaResults.filter((r) => r?.verdict === "PASS").length;
-  const after = readReportedAfterEvidence(raw?.afterEvidence);
+  const after = readReportedAfterEvidence(raw?.afterEvidence, ctx.afterObserver ?? "reproducer");
 
   let verdict = typeof raw?.verdict === "string" && PROVE_VERDICTS.includes(raw.verdict) ? raw.verdict : "INCONCLUSIVE";
   let verdictDowngrade: { reported: unknown; reason: string } | undefined;
@@ -569,6 +589,7 @@ export function recordProveEvidence(
     readCommit: () => string;
     schema?: ArtifactSchema;
     source?: string;
+    afterObserver?: AfterObserver;
   },
 ): ProveEvidenceRecord {
   try {
@@ -578,6 +599,7 @@ export function recordProveEvidence(
       capturedAt: new Date().toISOString(),
       beforeReading: opts.beforeReading,
       source: opts.source,
+      afterObserver: opts.afterObserver,
     });
     const violations = validateArtifactSchema(artifact, opts.schema ?? ProveEvidenceSchema);
     if (violations.length > 0) {
