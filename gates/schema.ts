@@ -1252,9 +1252,26 @@ const BeforeEvidenceSchema = z.union([
   }),
 ]);
 
+/**
+ * One row of `prove-evidence.json`'s `criteriaResults` (#1559). The shape all
+ * three writers already emit — B3's reproducer, `gates/prove.test.ts` and
+ * `workflows/prove.js` — and the one the deleted
+ * `config/prove-evidence.schema.json` declared. SKIP is the reproducer's
+ * verdict for a UI criterion it has no browser to check.
+ */
+const CriterionResultSchema = z.object({
+  scId: z.string(),
+  verdict: z.enum(["PASS", "FAIL", "SKIP"]),
+  evidence: z.string(),
+});
+
 export const ProveEvidenceSchema = z.object({
   issueNumber: z.number(),
   verdict: z.enum(["PROVEN", "UNPROVEN", "INCONCLUSIVE"]),
+  // Required, but not `.min(1)`: an INCONCLUSIVE with no criteria is a record
+  // `gates/prove.test.ts` legitimately writes. That a PROVEN needs a PASS row
+  // is `buildProveEvidence`'s rule, because it is about two fields at once.
+  criteriaResults: z.array(CriterionResultSchema),
   commitSHA: z.string(),
   capturedAt: z.string(),
   beforeEvidence: BeforeEvidenceSchema,

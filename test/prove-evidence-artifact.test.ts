@@ -12,14 +12,21 @@
  * that as `afterEvidence`, and a PROVEN with no after-evidence is downgraded
  * to INCONCLUSIVE rather than written with an invented environment.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { z } from "zod";
 import {
   buildProveEvidence,
   readBeforeState,
+  recordProveEvidence,
   validateArtifactSchema,
 } from "../gates/gate-executor";
 import { ProveEvidenceSchema } from "../gates/schema";
+
+const scratch = mkdtempSync(join(tmpdir(), "prove-evidence-artifact-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 const CTX = {
   issueNumber: 1559,
@@ -114,6 +121,24 @@ describe("#1559: B3 builds prove-evidence.json from the reproducer's own report"
     expect(buildProveEvidence(report({ verdict: "INCONCLUSIVE" }), CTX).verdict).toBe("INCONCLUSIVE");
   });
 
+  test("PROVEN with no criterion verified is INCONCLUSIVE — an empty list, or only SKIPs", () => {
+    // Review round 1 on PR #2253: the zod contract did not declare
+    // criteriaResults, so a PROVEN with none was written as PROVEN.
+    for (const criteriaResults of [[], undefined, [{ scId: "SC-1", verdict: "SKIP", evidence: "no browser" }]]) {
+      const built = buildProveEvidence(report({ criteriaResults }), CTX);
+      expect(built.verdict, JSON.stringify(criteriaResults)).toBe("INCONCLUSIVE");
+      expect(built.verdictDowngrade?.reason).toContain("no criterion verified");
+      expect(validateArtifactSchema(built, ProveEvidenceSchema)).toEqual([]);
+    }
+  });
+
+  test("a criteriaResults row outside the contract's shape is named, never written through", () => {
+    const built = buildProveEvidence(report({ criteriaResults: [{ ac: "AC-1", status: "PROVEN" }] }), CTX);
+    const violations = validateArtifactSchema(built, ProveEvidenceSchema).join("\n");
+    expect(violations).toContain("criteriaResults.0.scId");
+    expect(violations).toContain("criteriaResults.0.verdict");
+  });
+
   test("a verdict outside the enum is INCONCLUSIVE, never written through", () => {
     const built = buildProveEvidence(report({ verdict: "PASSED" }), CTX);
     expect(built.verdict).toBe("INCONCLUSIVE");
@@ -123,6 +148,11 @@ describe("#1559: B3 builds prove-evidence.json from the reproducer's own report"
 });
 
 describe("#1559 / SC-2770: validateArtifactSchema refuses a required field the writer does not emit", () => {
+  test("criteriaResults is a required field of the contract", () => {
+    const { criteriaResults: _dropped, ...without } = buildProveEvidence(report(), CTX) as Record<string, unknown>;
+    expect(validateArtifactSchema(without, ProveEvidenceSchema).join("\n")).toContain("criteriaResults");
+  });
+
   test("a missing required field is named", () => {
     const built = buildProveEvidence(report(), CTX) as Record<string, unknown>;
     const { comparisonSummary: _dropped, ...withoutSummary } = built;
@@ -137,5 +167,46 @@ describe("#1559 / SC-2770: validateArtifactSchema refuses a required field the w
     const stricter = ProveEvidenceSchema.extend({ reviewedBy: z.string() });
     const violations = validateArtifactSchema(buildProveEvidence(report(), CTX), stricter);
     expect(violations.join("\n")).toContain("reviewedBy");
+  });
+});
+
+describe("#1559: recordProveEvidence writes only a valid artifact, and never crashes the gate", () => {
+  const BEFORE = readBeforeState({});
+  const opts = (dir: string, over: Record<string, unknown> = {}) => ({
+    issueNumber: 1559, workDir: dir, beforeReading: BEFORE, readCommit: () => "b".repeat(40), ...over,
+  });
+  const freshDir = (name: string) => mkdtempSync(join(scratch, `${name}-`));
+
+  test("a valid report is written, and the file on disk meets the contract", () => {
+    const dir = freshDir("valid");
+    const record = recordProveEvidence(report(), opts(dir));
+    expect(record.written).toBe(true);
+    const onDisk = JSON.parse(readFileSync(join(dir, "prove-evidence.json"), "utf-8"));
+    expect(validateArtifactSchema(onDisk, ProveEvidenceSchema)).toEqual([]);
+    expect(onDisk.commitSHA).toBe("b".repeat(40));
+  });
+
+  test("review round 1 on PR #2253: a failing git rev-parse is a reading, not a crash", () => {
+    const dir = freshDir("git-fails");
+    const record = recordProveEvidence(report(), opts(dir, {
+      readCommit: () => { throw new Error("fatal: not a git repository"); },
+    }));
+    expect(record).toEqual({ written: false, reason: expect.stringContaining("not a git repository") });
+    expect(existsSync(join(dir, "prove-evidence.json"))).toBe(false);
+  });
+
+  test("a work directory that does not exist is a reading, not a crash", () => {
+    const record = recordProveEvidence(report(), opts(join(scratch, "never-created", "deeper")));
+    expect(record.written).toBe(false);
+    if (!record.written) expect(record.reason).toContain("could not record it");
+  });
+
+  test("an artifact the schema refuses is not written, and the field is named", () => {
+    const dir = freshDir("refused");
+    const stricter = ProveEvidenceSchema.extend({ reviewedBy: z.string() });
+    const record = recordProveEvidence(report(), opts(dir, { schema: stricter }));
+    expect(record.written).toBe(false);
+    if (!record.written) expect(record.reason).toContain("reviewedBy");
+    expect(existsSync(join(dir, "prove-evidence.json"))).toBe(false);
   });
 });

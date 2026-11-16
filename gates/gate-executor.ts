@@ -533,6 +533,14 @@ export function buildProveEvidence(raw: Record<string, any>, ctx: ProveEvidenceC
   } else if (verdict === "PROVEN" && !after.ok) {
     verdict = "INCONCLUSIVE";
     verdictDowngrade = { reported: "PROVEN", reason: `PROVEN with no after-evidence: ${after.reason}` };
+  } else if (verdict === "PROVEN" && passed === 0) {
+    // A proof that verified no criterion is not a proof: an empty list, or
+    // nothing but SKIPs, is what a reproducer with no way to check says.
+    verdict = "INCONCLUSIVE";
+    verdictDowngrade = {
+      reported: "PROVEN",
+      reason: `PROVEN with no criterion verified: ${criteriaResults.length} criteriaResults row(s), none PASS`,
+    };
   }
 
   const afterEvidence: AfterEvidence = after.ok ? after.value : {
@@ -554,6 +562,47 @@ export function buildProveEvidence(raw: Record<string, any>, ctx: ProveEvidenceC
     evidence: Array.isArray(raw?.evidence) ? raw.evidence : [],
     source: "B3-prove-reproducer",
   };
+}
+
+export type ProveEvidenceRecord =
+  | { written: true; artifact: ReturnType<typeof buildProveEvidence> }
+  | { written: false; reason: string };
+
+/**
+ * Build, validate and write `prove-evidence.json`, and say what happened
+ * (#1559). Never throws.
+ *
+ * B3 has always degraded to a warning when it could not record the artifact
+ * (`prove.test.ts` writes its own), so a failing `git rev-parse` or a write
+ * into a missing directory must not crash the prove gate. Every outcome that
+ * is not a written file says why.
+ */
+export function recordProveEvidence(
+  raw: Record<string, any>,
+  opts: {
+    issueNumber: number;
+    workDir: string;
+    beforeReading: BeforeStateReading;
+    readCommit: () => string;
+    schema?: ArtifactSchema;
+  },
+): ProveEvidenceRecord {
+  try {
+    const artifact = buildProveEvidence(raw, {
+      issueNumber: opts.issueNumber,
+      commitSHA: opts.readCommit(),
+      capturedAt: new Date().toISOString(),
+      beforeReading: opts.beforeReading,
+    });
+    const violations = validateArtifactSchema(artifact, opts.schema ?? ProveEvidenceSchema);
+    if (violations.length > 0) {
+      return { written: false, reason: `it fails ProveEvidenceSchema (SC-2770): ${violations.join("; ")}` };
+    }
+    writeFileSync(join(opts.workDir, "prove-evidence.json"), JSON.stringify(artifact, null, 2));
+    return { written: true, artifact };
+  } catch (e: any) {
+    return { written: false, reason: `could not record it: ${String(e?.message ?? e).slice(0, 200)}` };
+  }
 }
 
 /** What a gate run does about the tests that existed when it last looked. */
@@ -1697,22 +1746,17 @@ async function runProveReproducer(state: Record<string, any>, issue: number, iss
     if (parsed && typeof parsed === "object") {
       // #1559: the artifact is built in one place and checked against its one
       // contract before it is written. An artifact the schema refuses is not
-      // written, and the fields are named.
-      const proveEvidence = buildProveEvidence(parsed, {
-        issueNumber: issue,
-        commitSHA: execSync("git rev-parse HEAD", { encoding: "utf-8", cwd: projectRoot || undefined }).trim(),
-        capturedAt: new Date().toISOString(),
-        beforeReading,
+      // written, and the fields are named; nothing here can crash the gate.
+      const record = recordProveEvidence(parsed, {
+        issueNumber: issue, workDir, beforeReading,
+        readCommit: () => execSync("git rev-parse HEAD", { encoding: "utf-8", cwd: projectRoot || undefined }).trim(),
       });
-      const violations = validateArtifactSchema(proveEvidence, ProveEvidenceSchema);
-      if (violations.length > 0) {
-        console.warn("WARN: B3 prove-evidence.json NOT written — it fails ProveEvidenceSchema (SC-2770):");
-        for (const v of violations) console.warn(`  - ${v}`);
+      if (!record.written) {
+        console.warn(`WARN: B3 prove-evidence.json NOT written — ${record.reason}; prove.test.ts will generate evidence`);
       } else {
-        writeFileSync(join(workDir, "prove-evidence.json"), JSON.stringify(proveEvidence, null, 2));
-        console.log(`B3: prove-evidence.json written — verdict: ${proveEvidence.verdict}`);
-        if (proveEvidence.verdictDowngrade) {
-          console.warn(`WARN: B3 reproducer reported ${JSON.stringify(proveEvidence.verdictDowngrade.reported)}, recorded INCONCLUSIVE — ${proveEvidence.verdictDowngrade.reason}`);
+        console.log(`B3: prove-evidence.json written — verdict: ${record.artifact.verdict}`);
+        if (record.artifact.verdictDowngrade) {
+          console.warn(`WARN: B3 reproducer reported ${JSON.stringify(record.artifact.verdictDowngrade.reported)}, recorded INCONCLUSIVE — ${record.artifact.verdictDowngrade.reason}`);
         }
       }
     }
