@@ -1,6 +1,6 @@
 ---
 description: Documentation routing and file creation conventions
-generated-sha: 905c94ca28e1a714
+generated-sha: 2a45f9ad3a5d515a
 ---
 
 ## Documentation Routing
@@ -11,7 +11,7 @@ generated-sha: 905c94ca28e1a714
 | Current project state, priorities, and session history | `PROJECT-STATE.md` |
 | Specs — success criteria, constraints, requirements (35 files) | `specs/` |
 | ADRs — architecture decisions (18 files) | `docs/adr/` |
-| Research — findings, evaluations, competitive analysis (28 files) | `docs/research/` |
+| Research — findings, evaluations, competitive analysis (29 files) | `docs/research/` |
 | Council — synthesis, design debates (10 files) | `docs/council/` |
 | Guides — setup, onboarding, reference (3 files) | `docs/guides/` |
 | Reference — historical and inactive docs (26 files) | `reference/` |

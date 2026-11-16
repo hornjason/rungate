@@ -1,8 +1,8 @@
 ---
 doc-type: code-map
 status: generated
-updated: 2026-11-11
-scanned-at-sha: e9fe9a7b
+updated: 2026-11-15
+scanned-at-sha: f2c362f7
 generator: rungate/scripts/generate-code-map.ts
 ---
 
@@ -49,7 +49,7 @@ row as orientation, not as a fact about your working tree.
 | prompts/ | md |
 | scripts/ | sh, ts |
 | specs/ | json, md |
-| templates/ | md |
+| templates/ | json, md |
 | test/ | example, json, jsonl, md, ts |
 | workflows/ | js |
 
