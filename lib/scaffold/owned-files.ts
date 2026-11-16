@@ -211,6 +211,16 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't edit the generated `add-to-board` job",
   },
   {
+    // #2233: fix-commit intake on push to main, with full history. Jason's
+    // #1126 decision put each intake source on its own trigger; a consumer has
+    // no scripts/, so the generator writes it and calls the published CLI.
+    path: ".github/workflows/intake.yml",
+    strategy: "job-preserving",
+    servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
+    customize: "Advisory — a reading never fails the run; add your own jobs alongside the generated `fix-commit-intake` job",
+    avoid: "Don't edit the generated `fix-commit-intake` job, and don't drop `fetch-depth: 0` — a shallow clone reads UNMEASURED",
+  },
+  {
     // `regenerate` until #655, and the declaration was never consulted:
     // `generateAgentBriefsStep` called `writeFileSync` directly, so the row
     // described behaviour that a bare overwrite happened to coincide with.
