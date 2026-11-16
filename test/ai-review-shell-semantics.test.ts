@@ -71,11 +71,12 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  AI_REVIEW_CHECKOUT_ROOT_VAR,
   AI_REVIEW_FINDINGS_COMMAND,
   AI_REVIEW_FINDINGS_PATH_VAR,
   AI_REVIEW_JOB,
@@ -461,5 +462,62 @@ describe("#1110: the verdict step under the shell GitHub actually supplies", () 
       "the two states were already distinguishable under the unfixed script, so AC-5 is " +
         "not measuring what #1110 says it measures",
     ).toBe(`${realShellOutage.stdout}|${realShellOutage.stderr}|${realShellOutage.status}`);
+  });
+});
+
+/**
+ * #2261: the adjudicator is told where the checkout is, and still starts
+ * outside it.
+ *
+ * #2257 taught `rungate ai-review-findings` to read cited lines from the
+ * directory `AI_REVIEW_CHECKOUT_ROOT` names, falling back to its working
+ * directory. The step runs it from the payload's directory on purpose (`bunx`
+ * resolves bunfig.toml and node_modules by walking up from there), so with
+ * nothing set it read cited lines from a temp directory, found none, and
+ * suppressed nothing: anchor 0 of 420 (#1872).
+ *
+ * The payload sits in its own subdirectory here, so "ran from the payload's
+ * directory" and "ran from where the step started" are different readings.
+ */
+describe("#2261: the adjudicator is told the checkout, and still runs from the payload's directory", () => {
+  function runWithWorkspace(workspace: string | undefined) {
+    const dir = scratchDir();
+    const sh = join(dir, "verdict.sh");
+    writeFileSync(sh, committedRunScript());
+    const payloadDir = join(dir, "payload.d");
+    mkdirSync(payloadDir);
+    const payload = join(payloadDir, "ai-review-findings.json");
+    writeFileSync(payload, JSON.stringify({ findings: [], verdict: "pass" }));
+    const stub =
+      `echo "seen-root=[\${${AI_REVIEW_CHECKOUT_ROOT_VAR}-UNSET}] seen-cwd=[$(pwd -P)]"\n` +
+      `echo "${AI_REVIEW_OUTCOME_LINE} CLEAN"\nexit 0`;
+    const env: Record<string, string> = {
+      PATH: plantBunx(dir, stub),
+      HOME: dir,
+      AI_REVIEW_MODE: "vertex",
+      AI_REVIEW_ACTION_OUTCOME: "success",
+      [AI_REVIEW_FINDINGS_PATH_VAR]: payload,
+    };
+    if (workspace !== undefined) env.GITHUB_WORKSPACE = workspace;
+    const r = spawnSync("bash", [...RUNNER_SHELL_FLAGS, sh], { encoding: "utf-8", cwd: dir, timeout: 60_000, env });
+    return { ...r, payloadDir: realpathSync(payloadDir), stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  }
+
+  test("the adjudicator sees the workspace as its checkout root", () => {
+    const workspace = scratchDir();
+    const r = runWithWorkspace(workspace);
+    expect(r.stdout, r.stderr).toContain(`seen-root=[${workspace}]`);
+    expect(r.status).toBe(0);
+  });
+
+  test("and it still starts in the payload's directory, never the checkout", () => {
+    const r = runWithWorkspace(scratchDir());
+    expect(r.stdout, r.stderr).toContain(`seen-cwd=[${r.payloadDir}]`);
+  });
+
+  test("with no workspace the step does not die on an unset variable: the root is empty, and the adjudicator falls back", () => {
+    const r = runWithWorkspace(undefined);
+    expect(r.stdout, r.stderr).toContain("seen-root=[]");
+    expect(r.stdout).toContain(`${AI_REVIEW_OUTCOME_LINE} CLEAN`);
   });
 });
