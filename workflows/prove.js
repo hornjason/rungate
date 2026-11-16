@@ -821,6 +821,11 @@ const proveReportJson = JSON.stringify(proveReport({
   commitSHA: COMMIT_SHA,
   verdict,
   criteriaResults: allCriteriaResults,
+  // From the FIRST spawn, deliberately, unlike the criteria and after-evidence:
+  // `reproduced` says whether the bug was reproduced in the BEFORE-state
+  // (prove-reproducer.md's verdict rules), and only that spawn looks at the
+  // before-state. A self-heal re-validation checks a fix's after-state, so its
+  // `reproduced` answers a question it was never asked.
   reproduced: reproducerResult?.reproduced,
   afterEvidence: latestAfterEvidence,
 }), null, 2)
@@ -854,7 +859,7 @@ if (recorded?.written === true) {
 }
 if (settled !== verdict) log(`verdict ${verdict} → ${settled}`)
 verdict = settled
-const reproduced = reproducerResult?.reproduced === true
+const reproduced = reproducerResult?.reproduced === true // before-state, first spawn only — see proveReport's call
 
 // Post proof comment to issue
 const proofComment = [
