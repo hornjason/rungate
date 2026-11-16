@@ -422,8 +422,10 @@ describe("generateShipEvidence", () => {
 
     const path = generateShipEvidence(SF, TMP_DIR, 432, "", 1, 0, 0);
 
-    expect(existsSync(path)).toBe(true);
-    const evidence = JSON.parse(readFileSync(path, "utf-8"));
+    // null means the contract refused the artifact (#2255).
+    expect(path).not.toBeNull();
+    expect(existsSync(path!)).toBe(true);
+    const evidence = JSON.parse(readFileSync(path!, "utf-8"));
     expect(evidence.contractVersion).toBe("1.0");
     expect(evidence.issueNumber).toBe(432);
     expect(evidence.gateOut.status).toBe("PASS");
