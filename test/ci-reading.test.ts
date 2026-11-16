@@ -139,6 +139,11 @@ describe("#2271: a re-run never overwrites the first attempt", () => {
     expect(t.duration).toEqual({ status: "MEASURED", ms: 240_000 });
   });
 
+  test("the failed first attempt is CI time the pull request spent: the spans start at it", () => {
+    expect(r.spans.openToFirstCheck).toEqual({ status: "MEASURED", ms: 70_000 });
+    expect(r.spans.firstToLastCheck).toEqual({ status: "MEASURED", ms: 840_000 });
+  });
+
   test("the re-run is counted, and each attempt's queue time is its own", () => {
     expect(r.reruns).toBe(1);
     expect(r.queue.map(q => [q.attempt, q.wait])).toEqual([
