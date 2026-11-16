@@ -465,7 +465,8 @@
     {
       "source": "~/.claude/skills/prove/prove-evidence.schema.json",
       "dest": "config/prove-evidence.schema.json",
-      "migrated": true
+      "migrated": false,
+      "note": "Removed 2026-11-15 (#1559): nothing read it, and the zod ProveEvidenceSchema in gates/schema.ts is the one contract for prove-evidence.json. Recover with git checkout c2769022 -- config/prove-evidence.schema.json."
     },
     {
       "source": "~/.claude/skills/prove/prove-smoke-test.sh",
