@@ -2630,43 +2630,16 @@ export function adversaryReportReading(
   acs: ReadonlyArray<{ id?: unknown; type?: unknown }>,
   schema: ArtifactSchema = AdversaryReportSchema,
 ): { fails: number; warns: number; results: GateResult[] } {
-  const unreadable = (detail: string) => ({
-    fails: 1, warns: 0,
-    results: [{ check: "B1-adversary: report unreadable", result: "FAIL" as const, detail }],
-  });
-  const jsonMatch = raw.match(/\{[\s\S]*"gameable"[\s\S]*\}/);
-  if (!jsonMatch) return unreadable("adversary-report.json holds no JSON object naming \"gameable\"");
-  let report: any;
-  try {
-    report = JSON.parse(jsonMatch[0]);
-  } catch (e: any) {
-    return unreadable(`adversary-report.json's JSON does not parse: ${e.message?.slice(0, 200)}`);
-  }
-  const violations = validateArtifactSchema(report, schema);
-  if (violations.length > 0) {
-    return {
-      fails: 1, warns: 0,
-      results: [{ check: "B1-adversary: report fails AdversaryReportSchema", result: "FAIL" as const, detail: violations.join("; ") }],
-    };
+  const parsed = parseAdversaryReport(raw, schema);
+  if (parsed.status !== "read") {
+    return { fails: 1, warns: 0, results: [{ check: `B1-adversary: ${parsed.check}`, result: "FAIL" as const, detail: parsed.detail }] };
   }
   let fails = 0;
   let warns = 0;
   const results: GateResult[] = [];
-  // Review round 1: a schema-valid report can still claim more gameable
-  // criteria than it explains, and `{gameable: 3, exploits: []}` read as
-  // clean. More exploits than the count is not a contradiction (two ways to
-  // game one criterion), so only the under-explained direction refuses.
-  if (report.gameable > report.exploits.length) {
-    fails++;
-    results.push({
-      check: "B1-adversary: report contradicts itself",
-      result: "FAIL" as const,
-      detail: `gameable ${report.gameable} but ${report.exploits.length} exploit(s) listed, so which criteria are gameable is unknown`,
-    });
-  }
   // Every listed exploit is read whatever `gameable` says: one dropped because
   // the count was 0 is the same silent pass in the other direction.
-  for (const exploit of report.exploits) {
+  for (const exploit of parsed.report.exploits) {
     const ac = acs.find(a => a.id === exploit.acId);
     if (ac?.type === "OUTCOME") {
       fails++;
@@ -2677,6 +2650,81 @@ export function adversaryReportReading(
     }
   }
   return { fails, warns, results };
+}
+
+type AdversaryReport = {
+  gameable: number;
+  approved: boolean;
+  exploits: Array<{ acId: string; exploit: string; recommendation: string }>;
+};
+
+/**
+ * THE ONE READ of a B1 adversary report (#2259), for the report on disk and
+ * for the live re-run at verify alike. Both used to spell their own regex and
+ * `JSON.parse` with no schema, and review round 1 found the second copy still
+ * swallowing a malformed reply after the first was fixed. Two readers of one
+ * shape are one guard with a dead twin; test/adversary-report-schema.test.ts
+ * asserts the extraction appears once in this file.
+ *
+ * Not "read" when the output holds no JSON naming `gameable`, when that JSON
+ * does not parse, when the schema refuses it, or when it claims more gameable
+ * criteria than it lists exploits for (`{gameable: 3, exploits: []}` is
+ * schema-valid and used to read as clean). More exploits than the count is
+ * not a contradiction: two ways to game one criterion.
+ */
+export function parseAdversaryReport(
+  raw: string,
+  schema: ArtifactSchema = AdversaryReportSchema,
+): { status: "read"; report: AdversaryReport } | { status: "not-read"; check: string; detail: string } {
+  const jsonMatch = raw.match(/\{[\s\S]*"gameable"[\s\S]*\}/);
+  if (!jsonMatch) {
+    return { status: "not-read", check: "report unreadable", detail: "the output holds no JSON object naming \"gameable\"" };
+  }
+  let report: any;
+  try {
+    report = JSON.parse(jsonMatch[0]);
+  } catch (e: any) {
+    return { status: "not-read", check: "report unreadable", detail: `the report's JSON does not parse: ${e.message?.slice(0, 200)}` };
+  }
+  const violations = validateArtifactSchema(report, schema);
+  if (violations.length > 0) {
+    return { status: "not-read", check: "report fails AdversaryReportSchema", detail: violations.join("; ") };
+  }
+  if (report.gameable > report.exploits.length) {
+    return {
+      status: "not-read",
+      check: "report contradicts itself",
+      detail: `gameable ${report.gameable} but ${report.exploits.length} exploit(s) listed, so which criteria are gameable is unknown`,
+    };
+  }
+  return { status: "read", report };
+}
+
+/**
+ * The live B1 re-run at verify, read (#2259 review round 1). Advisory, as it
+ * always was: every finding is a WARN. What changes is that a reply that could
+ * not be read is a WARN naming why, and `agentResult` records it as
+ * UNMEASURED, where it used to be `null` and the verify gate's record of the
+ * adversary was never written at all.
+ */
+export function liveAdversaryReading(
+  output: string,
+  ts: string,
+): { agentResult: Record<string, unknown>; warns: number; results: GateResult[] } {
+  const parsed = parseAdversaryReport(output);
+  if (parsed.status !== "read") {
+    return {
+      agentResult: { ts, status: "UNMEASURED", reason: `${parsed.check}: ${parsed.detail}`, source: "B1-adversary-verify-agent" },
+      warns: 1,
+      results: [{ check: `B1-adversary-verify: ${parsed.check}`, result: "WARN" as const, detail: parsed.detail }],
+    };
+  }
+  const { report } = parsed;
+  return {
+    agentResult: { ts, gameable: report.gameable, approved: report.approved, exploits: report.exploits, source: "B1-adversary-verify-agent" },
+    warns: report.exploits.length,
+    results: report.exploits.map(exploit => ({ check: `B1-adversary-verify: ${exploit.acId} gameable`, result: "WARN" as const, detail: exploit.exploit })),
+  };
 }
 
 function runB2EvidenceValidation(state: Record<string, any>): void {
@@ -2898,32 +2946,11 @@ function runB1AdversaryAtVerify(state: Record<string, any>, workDir: string, res
     console.warn(`WARN: B1 AC Adversary exited with error: ${e.message?.slice(0, 200)}`);
   }
 
-  const b1Json = b1Output.match(/\{[\s\S]*"gameable"[\s\S]*\}/);
-  if (b1Json) {
-    try {
-      const b1Report = JSON.parse(b1Json[0]);
-      agentResult = {
-        ts: new Date().toISOString(),
-        gameable: b1Report.gameable || 0,
-        approved: b1Report.approved ?? true,
-        exploits: b1Report.exploits || [],
-        source: "B1-adversary-verify-agent",
-      };
-      if (b1Report.gameable > 0) {
-        for (const exploit of b1Report.exploits || []) {
-          addedWarns++;
-          results.push({ check: `B1-adversary-verify: ${exploit.acId} gameable`, result: "WARN" as const, detail: exploit.exploit });
-        }
-        console.log(`B1: ${b1Report.gameable} gameable AC(s) found at verify — WARN`);
-      } else {
-        console.log(`B1: All ACs approved at verify — no exploits found`);
-      }
-    } catch {
-      console.warn("WARN: B1 AC Adversary JSON parse failed");
-    }
-  } else {
-    console.warn("WARN: B1 AC Adversary produced no parseable JSON");
-  }
+  const live = liveAdversaryReading(b1Output, new Date().toISOString());
+  agentResult = live.agentResult;
+  addedWarns += live.warns;
+  results.push(...live.results);
+  console.log(`B1: verify agent — ${live.warns} WARN${live.agentResult.status === "UNMEASURED" ? ` (UNMEASURED: ${live.agentResult.reason})` : ""}`);
 
   return { agentResult, warns: addedWarns };
 }

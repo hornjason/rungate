@@ -12,7 +12,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { adversaryReportReading } from "../gates/gate-executor";
+import { readFileSync } from "fs";
+import { join } from "path";
+import { adversaryReportReading, liveAdversaryReading } from "../gates/gate-executor";
 import { AdversaryReportSchema } from "../gates/schema";
 
 const ACS = [
@@ -101,5 +103,57 @@ describe("#2259: a report that cannot be read is a FAIL, never a pass", () => {
     const r = adversaryReportReading('{"gameable": 1, "approved": false, }', ACS);
     expect(r.fails).toBe(1);
     expect(r.results[0].check).toBe("B1-adversary: report unreadable");
+  });
+});
+
+describe("#2259 review round 1: the live B1 re-run at verify is read the same way", () => {
+  // It spelled its own regex and JSON.parse, so a reply with no JSON returned
+  // agentResult null and added nothing, and `"gameable": "2"` with no
+  // exploits read as clean. Still advisory: every finding is a WARN.
+  const TS = "2026-11-16T03:00:00.000Z";
+
+  test("a reply with no JSON is a WARN, and the recorded result says UNMEASURED and why", () => {
+    const r = liveAdversaryReading("claude: request timed out", TS);
+    expect(r.warns).toBe(1);
+    expect(r.results[0]).toEqual({ check: "B1-adversary-verify: report unreadable", result: "WARN", detail: expect.any(String) });
+    expect(r.agentResult.status).toBe("UNMEASURED");
+    expect(String(r.agentResult.reason)).toContain("report unreadable");
+  });
+
+  test("the named bug, gameable as a string, is refused by the schema, not read as clean", () => {
+    const r = liveAdversaryReading(JSON.stringify({ gameable: "2", approved: true, exploits: [] }), TS);
+    expect(r.results[0].check).toBe("B1-adversary-verify: report fails AdversaryReportSchema");
+    expect(r.results[0].detail).toContain("gameable");
+    expect(r.agentResult.status).toBe("UNMEASURED");
+  });
+
+  test("a count the exploits do not explain is a WARN naming both", () => {
+    const r = liveAdversaryReading(JSON.stringify({ gameable: 2, approved: false, exploits: [] }), TS);
+    expect(r.results[0].check).toBe("B1-adversary-verify: report contradicts itself");
+  });
+
+  test("a valid reply records the report, and each exploit is a WARN", () => {
+    const r = liveAdversaryReading(JSON.stringify({ gameable: 1, approved: false, exploits: [exploit("AC-1")] }), TS);
+    expect(r.warns).toBe(1);
+    expect(r.results.map(x => x.check)).toEqual(["B1-adversary-verify: AC-1 gameable"]);
+    expect(r.agentResult).toMatchObject({ ts: TS, gameable: 1, approved: false, source: "B1-adversary-verify-agent" });
+    expect(r.agentResult.status).toBeUndefined();
+  });
+
+  test("a clean reply records approval and adds nothing", () => {
+    const r = liveAdversaryReading(JSON.stringify({ gameable: 0, approved: true, exploits: [] }), TS);
+    expect(r.warns).toBe(0);
+    expect(r.results).toEqual([]);
+    expect(r.agentResult.approved).toBe(true);
+  });
+});
+
+describe("#2259: one read of the adversary report, not two", () => {
+  test("gates/gate-executor.ts extracts the report's JSON in exactly one place", () => {
+    // The shape review round 1 found: the on-disk read was fixed and a second
+    // copy of the same regex kept swallowing. Asserted across the file, so a
+    // third reader cannot reappear beside parseAdversaryReport.
+    const source = readFileSync(join(import.meta.dir, "..", "gates", "gate-executor.ts"), "utf-8");
+    expect(source.split('"gameable"[').length - 1).toBe(1);
   });
 });
