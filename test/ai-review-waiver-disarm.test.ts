@@ -136,7 +136,7 @@ import {
   AI_REVIEW_DISARM_PR_VAR,
   AI_REVIEW_DISARM_REPO_VAR,
   AI_REVIEW_DISARM_STEP_ID,
-  AI_REVIEW_DISARM_TITLE,
+  waiverDisarmReading,
   AI_REVIEW_DISARM_TOKEN_VAR,
   AI_REVIEW_DISARM_WAIVED_VAR,
   AI_REVIEW_DISARM_NEUTRALISED_VARS,
@@ -205,14 +205,7 @@ interface Run {
  * come back empty, which is what `AI_REVIEW_AUTO_MERGE_ABSENT_TOKEN`
  * documents and what `stubGh` now emulates rather than assumes.
  */
-type GhMode =
-  | "armed"
-  | "not-armed"
-  | "stubborn"
-  | "merge-fails"
-  | "view-fails"
-  | "view-empty"
-  | "verify-empty";
+type GhMode = "armed" | "not-armed" | "view-fails" | "view-empty";
 
 /** The JSON object `gh pr view` prints for an ARMED pull request. */
 const ARMED = `{"enabledAt":"2026-10-23T00:00:00Z"}`;
@@ -280,15 +273,9 @@ function stubGh(mode: GhMode): StubGh {
       if [ "$value" = "null" ]; then printf '\\n'; else printf '%s\\n' "$value"; fi ;;
   esac
   exit 0`;
-  const onMerge = mode === "merge-fails"
-    ? `echo "stub-gh: merge refused" >&2\n  exit 1`
-    : mode === "stubborn"
-      ? `exit 0`
-      // `verify-empty`: the disarm is accepted and the READ-BACK goes silent,
-      // so the step has acted and cannot confirm the action.
-      : mode === "verify-empty"
-        ? `printf '' > ${JSON.stringify(state)}\n  exit 0`
-        : `printf 'null\\n' > ${JSON.stringify(state)}\n  exit 0`;
+  // #1571: the step never asks to change auto-merge — the Actions token
+  // cannot — so a `pr merge` of any kind is a failure the call log also shows.
+  const onMerge = `echo "stub-gh: pr merge must never be called (#1571)" >&2\n  exit 1`;
 
   const bin = join(dir, AI_REVIEW_DISARM_CLI);
   // #1428: the stub records the `GH_*`/`GITHUB_*` environment it was handed.
@@ -442,7 +429,7 @@ function runDisarm(
 
 // ── AC-1: row 1 — waived, green, and no longer self-merging ──────────────
 
-describe("AC-1 (#1242): a waived review passes AND leaves auto-merge disarmed", () => {
+describe("AC-1 (#1242, #1571): a waived review passes, and an armed one is held red", () => {
   test("AC-1a: the report step waives, exits 0, and records that it did", () => {
     const r = runScript(buildReviewRunScript(FIXTURE_VERSION), rowOneEnv());
     expect(r.code, `the waiver stopped passing:\n${r.out}${r.err}`).toBe(0);
@@ -450,19 +437,24 @@ describe("AC-1 (#1242): a waived review passes AND leaves auto-merge disarmed", 
     expect(outputs(r.output)[AI_REVIEW_WAIVED_OUTPUT]).toBe(AI_REVIEW_WAIVED_OUTPUT_VALUE);
   });
 
-  test("AC-1b: the two steps chained — green check, and the field reads null", () => {
+  test("AC-1b (CRC-F6): chained — the waiver passes, and armed auto-merge holds the job red, untouched", () => {
     const report = runScript(buildReviewRunScript(FIXTURE_VERSION), rowOneEnv());
     const gh = stubGh("armed");
-    const disarm = runDisarm(outputs(report.output), gh);
+    const step = runDisarm(outputs(report.output), gh);
 
-    // The row, said in the issue's own terms.
-    expect(report.code, "`ai-review` was not green").toBe(0);
-    expect(disarm.code, `the disarm refused:\n${disarm.out}${disarm.err}`).toBe(0);
-    expect(disarm.out).toContain(`::notice title=${AI_REVIEW_DISARM_TITLE}`);
+    expect(report.code, "`ai-review`'s report step was not green").toBe(0);
+    expect(step.code, `an armed waived review was let through:\n${step.out}${step.err}`).toBe(AI_REVIEW_REQUIRED_EXIT);
+    // Under its OWN title — a reading reported as itself, not a failed action.
+    expect(step.err).toContain(`::error title=${waiverDisarmReading.armed}`);
+    expect(step.err).not.toContain(AI_REVIEW_DISARM_FAILED_TITLE);
+    expect(gh.calls(), "it read once and asked for nothing else").toEqual([expect.stringMatching(/^pr view /)]);
+  });
 
-    const merges = gh.calls().filter(c => c.startsWith("pr merge"));
-    expect(merges.length, `gh calls: ${JSON.stringify(gh.calls())}`).toBe(1);
-    expect(merges[0]).toContain("--disable-auto");
+  test("AC-1e (CRC-F6): the same chain with nothing armed is green, and says so", () => {
+    const report = runScript(buildReviewRunScript(FIXTURE_VERSION), rowOneEnv());
+    const step = runDisarm(outputs(report.output), stubGh("not-armed"));
+    expect(step.code, `${step.out}${step.err}`).toBe(0);
+    expect(step.out).toContain(`::notice title=${waiverDisarmReading.notArmed}`);
   });
 
   test("AC-1c: the mutant — a report step that records nothing leaves it armed", () => {
@@ -550,12 +542,12 @@ describe("AC-2 (#1242): a labelled pull request that was really reviewed is unto
       [AI_REVIEW_DISARM_CLI_PATH_VAR]: gh.bin,
     });
 
-    expect(r.code, `${r.out}${r.err}`).toBe(0);
     expect(
-      gh.calls().filter(c => c.startsWith("pr merge")).length,
-      "the label-reading mutant did NOT disarm an ordinary labelled pull request, so " +
+      r.code,
+      "the label-reading mutant did NOT hold an ordinary labelled pull request red, so " +
         "AC-2b is not distinguishing the two fixes",
-    ).toBe(1);
+    ).toBe(AI_REVIEW_REQUIRED_EXIT);
+    expect(gh.calls().filter(c => c.startsWith("pr view")).length).toBe(1);
   });
 });
 
@@ -660,126 +652,66 @@ describe("AC-4 (#1242): the committed workflow carries the step the runner execu
 
 // ── AC-5: the disarm reads the field back ────────────────────────────────
 
-describe("AC-5 (#1242): the disarm verifies, rather than trusting an exit code", () => {
+describe("AC-5 (#1571, CRC-F6): the step reads auto-merge and never acts on it", () => {
   const waived = { [AI_REVIEW_WAIVED_OUTPUT]: AI_REVIEW_WAIVED_OUTPUT_VALUE };
 
-  test("AC-5a: a disarm that reports success and changed nothing is refused", () => {
-    const gh = stubGh("stubborn");
-    const r = runDisarm(waived, gh);
-    expect(r.code, `a pull request left armed still passed:\n${r.out}${r.err}`).toBe(
-      AI_REVIEW_REQUIRED_EXIT,
-    );
-    expect(r.err).toContain(`::error title=${AI_REVIEW_DISARM_FAILED_TITLE}`);
-    expect(gh.calls().filter(c => c.startsWith("pr view")).length, "it read once, not twice").toBe(
-      2,
-    );
+  test("AC-5a: nothing in the step asks to change auto-merge", () => {
+    // The Actions token cannot disable auto-merge (0 of 65 attempts on #1571;
+    // the live test of 2026-11-16), so a call that tries is a step that reports
+    // a failed action instead of the reading.
+    const script = buildDisarmScript();
+    expect(script).not.toContain("--disable-auto");
+    expect(script).not.toMatch(/pr merge/);
   });
 
-  test("AC-5b: the mutant — without the read-back the stubborn case goes green", () => {
-    // `stubborn` exits 0 from `pr merge` and leaves the field armed, which is
-    // the real state where a pull request merged between the two calls. The
-    // exit code cannot tell it from a disarm that worked.
-    // Both post-merge guards go — the emptiness one and the still-armed one —
-    // so what is removed is the whole reading and not half of a conjunction
-    // the other half would hold up.
-    const mutant = buildDisarmScript()
-      .replace(/if \[ -z "\$\{after\}" \]; then\n(?:.*\n)*?fi\n\n/, "")
-      .replace(/if \[ "\$\{after\}" != "null" \]; then\n(?:.*\n)*?fi\n/, "");
-    expect(mutant, "no read-back check to remove").not.toBe(buildDisarmScript());
-    expect(mutant, "a post-merge guard survived the mutation").not.toContain(`"\${after}" !=`);
-    const r = runDisarm(waived, stubGh("stubborn"), mutant);
-    expect(r.code, "the mutant refused anyway, so AC-5a witnessed something else").toBe(0);
-  });
-
-  test("AC-5c: a `gh pr merge` that fails is refused", () => {
-    const r = runDisarm(waived, stubGh("merge-fails"));
-    expect(r.code).toBe(AI_REVIEW_REQUIRED_EXIT);
-    expect(r.err).toContain(`::error title=${AI_REVIEW_DISARM_FAILED_TITLE}`);
+  test("AC-5b: the mutant — an armed reading that exits 0 lets the waived review land", () => {
+    // The cheapest wrong fix for "say so under its own title": annotate, and
+    // pass. Built and run, so AC-1b is shown to be the exit, not the text.
+    const real = buildDisarmScript();
+    const tail = `\nexit ${AI_REVIEW_REQUIRED_EXIT}\n`;
+    expect(real.endsWith(tail), "the armed refusal is not the script's last line").toBe(true);
+    const mutant = real.slice(0, real.length - tail.length) + "\nexit 0\n";
+    const r = runDisarm(waived, stubGh("armed"), mutant);
+    expect(r.code, "the passing mutant refused anyway, so AC-1b witnessed something else").toBe(0);
+    expect(r.err).toContain(`::error title=${waiverDisarmReading.armed}`);
   });
 
   test("AC-5d: a `gh pr view` that fails is UNMEASURED, not nothing-to-do", () => {
     const r = runDisarm(waived, stubGh("view-fails"));
     expect(r.code).toBe(AI_REVIEW_REQUIRED_EXIT);
     expect(r.err).toContain(AI_REVIEW_AUTO_MERGE_FIELD);
+    expect(r.err).toContain(`::error title=${AI_REVIEW_DISARM_FAILED_TITLE}`);
   });
 
-  test("AC-5f: a SILENT pre-reading is UNMEASURED, not nothing-to-do (#1418 review)", () => {
-    // `null` and `` are different facts. `jq` prints the literal `null` for an
-    // absent `autoMergeRequest`, so an EMPTY reading is a client that exited
-    // zero without answering — and reading it as "nothing is armed" is the
-    // Silent Default Substitution this module's own header is about, in the
-    // one branch where the substituted default lets an armed pull request
-    // through.
+  test("AC-5f: a SILENT reading is UNMEASURED, not nothing-to-do (#1418 review)", () => {
+    // `null` and `` are different facts: the read asks for a filter that is
+    // never empty, so silence is a client that did not answer.
     const gh = stubGh("view-empty");
     const r = runDisarm(waived, gh);
-    expect(r.code, `a silent reading was taken as unarmed:\n${r.out}${r.err}`).toBe(
-      AI_REVIEW_REQUIRED_EXIT,
-    );
+    expect(r.code, `a silent reading was taken as unarmed:\n${r.out}${r.err}`).toBe(AI_REVIEW_REQUIRED_EXIT);
     expect(r.err).toContain(`::error title=${AI_REVIEW_DISARM_FAILED_TITLE}`);
-    expect(
-      gh.calls().filter(c => c.startsWith("pr merge")),
-      "it tried to disarm on a reading it did not have",
-    ).toEqual([]);
   });
 
-  test("AC-5g: a SILENT read-back is UNMEASURED, and the step HAS acted by then", () => {
-    // Worse than AC-5f: the disarm request was accepted, so this is the one
-    // state where the step cannot say whether the thing it just did took
-    // effect. `-n` on the after-reading had made this green.
-    const gh = stubGh("verify-empty");
-    const r = runDisarm(waived, gh);
-    expect(r.code, `a silent read-back passed:\n${r.out}${r.err}`).toBe(AI_REVIEW_REQUIRED_EXIT);
-    expect(gh.calls().filter(c => c.startsWith("pr merge")).length, "it never disarmed").toBe(1);
-  });
-
-  test("AC-5h: the mutant — an emptiness-tolerant reading passes both", () => {
-    // The shape this PR shipped with and the push review caught: `[ -z ]`
-    // folded into the not-armed arm, and `&& [ -n "${after}" ]` guarding the
-    // read-back. Rebuilt here, so AC-5f and AC-5g cannot both be true of a
-    // script that tolerates silence.
+  test("AC-5h: the mutant — an emptiness-tolerant reading passes AC-5f", () => {
+    // The shape #1418's push review caught: `[ -z ]` folded into the
+    // not-armed arm. Rebuilt, so AC-5f cannot be true of a script that
+    // tolerates silence. Counted by the refusal TEXT, which only the refusal emits.
+    const emptyRefusals = (s: string) => s.split("came back EMPTY").length - 1;
     const tolerant = buildDisarmScript()
       .replace(/if \[ -z "\$\{armed\}" \]; then\n(?:.*\n)*?fi\n\n/, "")
-      .replace(
-        `if [ "\${armed}" = "null" ]; then`,
-        `if [ "\${armed}" = "null" ] || [ -z "\${armed}" ]; then`,
-      )
-      .replace(/if \[ -z "\$\{after\}" \]; then\n(?:.*\n)*?fi\n\n/, "")
-      .replace(
-        `if [ "\${after}" != "null" ]; then`,
-        `if [ "\${after}" != "null" ] && [ -n "\${after}" ]; then`,
-      );
-    // The mutation is SPELLED, so assert it landed in full rather than
-    // trusting that four substitutions all matched: a mutant that failed to
-    // apply reads exactly like a guard that was never needed.
-    //
-    // Counted by the REFUSAL TEXT, not by the test expression: the
-    // reconstructed conditions legitimately contain `[ -z "${armed}" ]` as
-    // one arm of a disjunction, so a substring check on the expression
-    // reports a survivor that is not one. The message is emitted by the
-    // refusal and by nothing else.
-    const emptyRefusals = (s: string) => s.split("came back EMPTY").length - 1;
-    expect(emptyRefusals(buildDisarmScript()), "the population being removed").toBe(2);
-    expect(tolerant, "nothing was mutated").not.toBe(buildDisarmScript());
-    expect(emptyRefusals(tolerant), "an emptiness refusal survived").toBe(0);
+      .replace(`if [ "\${armed}" = "null" ]; then`, `if [ "\${armed}" = "null" ] || [ -z "\${armed}" ]; then`);
+    expect(emptyRefusals(buildDisarmScript()), "the population being removed").toBe(1);
+    expect(emptyRefusals(tolerant), "the emptiness refusal survived").toBe(0);
     expect(tolerant).toContain(`|| [ -z "\${armed}" ]`);
-    expect(tolerant).toContain(`&& [ -n "\${after}" ]`);
-    expect(runDisarm(waived, stubGh("view-empty"), tolerant).code, "AC-5f witnessed nothing").toBe(
-      0,
-    );
-    expect(
-      runDisarm(waived, stubGh("verify-empty"), tolerant).code,
-      "AC-5g witnessed nothing",
-    ).toBe(0);
+    expect(runDisarm(waived, stubGh("view-empty"), tolerant).code, "AC-5f witnessed nothing").toBe(0);
   });
 
   test("AC-5e: nothing armed is nothing to do, and says so", () => {
     const gh = stubGh("not-armed");
     const r = runDisarm(waived, gh);
     expect(r.code, `${r.out}${r.err}`).toBe(0);
-    expect(r.out).toContain(`::notice title=${AI_REVIEW_DISARM_TITLE}`);
-    expect(gh.calls().filter(c => c.startsWith("pr merge")), "it merged on an unarmed PR").toEqual(
-      [],
-    );
+    expect(r.out).toContain(`::notice title=${waiverDisarmReading.notArmed}`);
+    expect(gh.calls().filter(c => c.startsWith("pr merge"))).toEqual([]);
   });
 });
 
@@ -856,7 +788,9 @@ describe("AC-6 (#1242): a waiver it cannot decouple is red, never green", () => 
     // And the honest sentence is asserted positively, because `not.toContain`
     // alone is equally satisfied by a notice that says nothing at all.
     expect(script).toContain("as it stood when this step read it");
-    expect(script).toContain("re-armed after this run");
+    expect(script).toContain("re-arms it after this run");
+    // #1571: and it says the step never changes auto-merge, which is now true.
+    expect(script).toContain("never changes auto-merge");
   });
 
   test("AC-6e: the waived reading is an exact compare, not a prefix", () => {
@@ -948,11 +882,11 @@ function prePathHardeningMutant(): string {
   const stripped = real.slice(0, blockStart + 1) + real.slice(to);
 
   // Counted AFTER the resolution block is gone, so the number is the CALL
-  // SITES and not those plus the three readings of the same variable. Three
-  // is `pr view`, `pr merge`, `pr view` again.
+  // SITES and not those plus the three readings of the same variable. One:
+  // the `pr view` read — since #1571 the step never calls anything else.
   const calls = occurrences(stripped, callSite);
-  if (calls !== 3) {
-    throw new Error(`could not build the mutant: the CLI call site appears ${calls} times, want 3`);
+  if (calls !== 1) {
+    throw new Error(`could not build the mutant: the CLI call site appears ${calls} times, want 1`);
   }
   return stripped.split(callSite).join(AI_REVIEW_DISARM_CLI);
 }
@@ -965,7 +899,8 @@ describe("AC-7 (#1428): the disarm does not resolve its tool from the reviewer's
     const gh = stubGh("armed");
     const r = runDisarm(waived, { path: `${hostile.dir}:${gh.path}`, bin: gh.bin });
 
-    expect(r.code, `${r.out}${r.err}`).toBe(0);
+    // The pre-resolved stub says ARMED, so the real script refuses (#1571).
+    expect(r.code, `${r.out}${r.err}`).toBe(AI_REVIEW_REQUIRED_EXIT);
     expect(
       hostile.ran(),
       "the step executed a `gh` the reviewed content put on PATH",
@@ -973,8 +908,8 @@ describe("AC-7 (#1428): the disarm does not resolve its tool from the reviewer's
     // BOTH halves. "The plant did not run" is also what a step that found no
     // CLI at all would leave behind, and a repair that hardcodes PATH would
     // satisfy it while running some third binary. The pre-resolved stub
-    // having taken all three calls is the positive half.
-    expect(gh.calls().length, "the pre-resolved CLI was not the one driven").toBe(3);
+    // having taken the one read is the positive half.
+    expect(gh.calls().length, "the pre-resolved CLI was not the one driven").toBe(1);
   });
 
   test("AC-7b: the control — the pre-#1428 script DOES run the plant", () => {
@@ -990,13 +925,13 @@ describe("AC-7 (#1428): the disarm does not resolve its tool from the reviewer's
 
     expect(hostile.ran(), "the plant was never reached — AC-7a witnessed nothing").toBe(true);
     expect(gh.calls(), "the pre-#1428 script somehow used the pre-resolved path").toEqual([]);
-    // And it exits GREEN having disarmed nothing, which is the whole defect:
-    // a waived pull request left armed under a successful required check.
+    // And it exits GREEN on the plant's 'nothing armed', which is the whole
+    // defect: a waived, armed pull request under a successful required check.
     expect(r.code, "the pre-#1428 script refused, so the defect is not what AC-7a is about").toBe(0);
   });
 
   test("AC-7c: a `GH_HOST` the reviewer planted does not reach the CLI", () => {
-    const gh = stubGh("armed");
+    const gh = stubGh("not-armed");
     const r = runDisarm(waived, gh, undefined, {
       GH_HOST: "ghe.attacker.example",
       GH_CONFIG_DIR: "/tmp/planted-gh-config",
@@ -1029,7 +964,7 @@ describe("AC-7 (#1428): the disarm does not resolve its tool from the reviewer's
     // The set is data, so a name added to it with no `unset` behind it would
     // read as covered. This drives the real script with every one of them
     // planted and asserts the CLI saw none.
-    const gh = stubGh("armed");
+    const gh = stubGh("not-armed");
     const planted: Record<string, string> = {};
     for (const v of AI_REVIEW_DISARM_NEUTRALISED_VARS) planted[v] = `planted-${v}`;
     const r = runDisarm(waived, gh, undefined, planted);
