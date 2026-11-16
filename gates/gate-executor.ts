@@ -2652,16 +2652,28 @@ export function adversaryReportReading(
   let fails = 0;
   let warns = 0;
   const results: GateResult[] = [];
-  if (report.gameable > 0) {
-    for (const exploit of report.exploits) {
-      const ac = acs.find(a => a.id === exploit.acId);
-      if (ac?.type === "OUTCOME") {
-        fails++;
-        results.push({ check: `B1-adversary: ${exploit.acId} gameable (OUTCOME)`, result: "FAIL" as const, detail: exploit.exploit });
-      } else {
-        warns++;
-        results.push({ check: `B1-adversary: ${exploit.acId} gameable`, result: "WARN" as const, detail: exploit.exploit });
-      }
+  // Review round 1: a schema-valid report can still claim more gameable
+  // criteria than it explains, and `{gameable: 3, exploits: []}` read as
+  // clean. More exploits than the count is not a contradiction (two ways to
+  // game one criterion), so only the under-explained direction refuses.
+  if (report.gameable > report.exploits.length) {
+    fails++;
+    results.push({
+      check: "B1-adversary: report contradicts itself",
+      result: "FAIL" as const,
+      detail: `gameable ${report.gameable} but ${report.exploits.length} exploit(s) listed, so which criteria are gameable is unknown`,
+    });
+  }
+  // Every listed exploit is read whatever `gameable` says: one dropped because
+  // the count was 0 is the same silent pass in the other direction.
+  for (const exploit of report.exploits) {
+    const ac = acs.find(a => a.id === exploit.acId);
+    if (ac?.type === "OUTCOME") {
+      fails++;
+      results.push({ check: `B1-adversary: ${exploit.acId} gameable (OUTCOME)`, result: "FAIL" as const, detail: exploit.exploit });
+    } else {
+      warns++;
+      results.push({ check: `B1-adversary: ${exploit.acId} gameable`, result: "WARN" as const, detail: exploit.exploit });
     }
   }
   return { fails, warns, results };

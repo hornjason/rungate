@@ -69,6 +69,27 @@ describe("#2259 / SC-2770: a report the contract refuses is a FAIL naming the fi
   });
 });
 
+describe("#2259 review round 1: the counts must agree with the exploits listed", () => {
+  test("gameable 3 with no exploits is a FAIL naming both counts — not a clean report", () => {
+    const r = adversaryReportReading(JSON.stringify({ gameable: 3, approved: false, exploits: [] }), ACS);
+    expect(r.fails).toBe(1);
+    expect(r.results[0].check).toBe("B1-adversary: report contradicts itself");
+    expect(r.results[0].detail).toContain("gameable 3");
+    expect(r.results[0].detail).toContain("0 exploit(s)");
+  });
+
+  test("gameable 0 with an exploit listed still reports the exploit — nothing listed is dropped", () => {
+    const r = adversaryReportReading(JSON.stringify({ gameable: 0, approved: true, exploits: [exploit("AC-1")] }), ACS);
+    expect(r.results.map(x => `${x.result} ${x.check}`)).toEqual(["FAIL B1-adversary: AC-1 gameable (OUTCOME)"]);
+  });
+
+  test("more exploits than gameable is read, not refused — two ways to game one criterion", () => {
+    const r = adversaryReportReading(JSON.stringify({ gameable: 1, approved: false, exploits: [exploit("AC-2"), exploit("AC-2")] }), ACS);
+    expect(r.fails).toBe(0);
+    expect(r.warns).toBe(2);
+  });
+});
+
 describe("#2259: a report that cannot be read is a FAIL, never a pass", () => {
   test("no JSON at all", () => {
     const r = adversaryReportReading("the model timed out before answering", ACS);
