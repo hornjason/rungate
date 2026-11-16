@@ -10,7 +10,7 @@
 import { existsSync, statSync } from "fs";
 import { basename } from "path";
 import { detectProjectType } from "../lib/scanner";
-import { reportScaffoldActions } from "../lib/scaffold/steps";
+import { reportDocRules, reportScaffoldActions } from "../lib/scaffold/steps";
 import { runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
 import { humanSteps, readHumanSteps } from "../lib/scaffold/human-steps";
 import { cloneForRehearsal, discardRehearsal, rehearsalNotice } from "../lib/scaffold/rehearsal";
@@ -111,6 +111,12 @@ if (fix) {
     if (leaked) console.error(`WARNING: ${leaked}`);
   }
 }
+
+// #2274 / SC-1947: the doc-rule scan, report mode only, in both branches.
+// Read from the real project in either mode — it writes nothing, so there is
+// nothing to rehearse — and after the write steps, so it reads the tree they
+// left. Its result never fails the run.
+await reportDocRules(projectPath, actions);
 
 // ── Report ─────────────────────────────────────────────────────
 

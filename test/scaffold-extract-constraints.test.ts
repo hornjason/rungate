@@ -62,6 +62,26 @@ describe("#2274: the report", () => {
     }, { "docs/many.md": Array.from({ length: DOC_RULES_SHOWN + 5 }, (_, i) => `- Never do thing number ${i} here.`).join("\n") + "\n" }));
 });
 
+describe("#2274: text rungate wrote is not reported as the project's rules", () => {
+  test("a generated file's rule is left out and counted; a seeded-once file's rule is the project's", () =>
+    withFixture(async dir => {
+      const actions: string[] = [];
+      await reportDocRules(dir, actions);
+      const shown = actions.filter(a => a.startsWith("DOC-RULE:")).join("\n");
+      // AGENTS.md is section-preserving: outside Hard Constraints it is generated.
+      expect(shown).not.toContain("Always run the generated linter");
+      // specs/SPEC-TEMPLATE.md is the scaffold's starter template.
+      expect(shown).not.toContain("Never ship the template");
+      // PROJECT-STATE.md is create-only: seeded once, then the project's.
+      expect(shown).toContain("Never deploy on a Friday");
+      expect(actions.join("\n")).toContain("2 from files rungate generates left out");
+    }, {
+      "AGENTS.md": "# P\n\n## Rules\n\n- Always run the generated linter first.\n",
+      "specs/SPEC-TEMPLATE.md": "# T\n\n- Never ship the template as a spec.\n",
+      "PROJECT-STATE.md": "# State\n\n- Never deploy on a Friday afternoon.\n",
+    }));
+});
+
 describe("#2274: what could not be read is UNMEASURED, never 'no rules'", () => {
   test("a planned doc that cannot be read names the file and why", () =>
     withFixture(async dir => {
@@ -91,6 +111,10 @@ describe("#2274: scaffold and re-scaffold run it, and AGENTS.md is untouched by 
         spawnSync("bun", [join(ROOT, "scripts", "scaffold-project.ts"), dir, ...extra], { cwd: ROOT, encoding: "utf-8" });
       const first = scaffold("--fix");
       expect(first.stdout).toContain(RULE);
+      // A fresh tree's second scaffold re-detects the project type (content on
+      // the first run, infra once scaffold has added .github/) and rewrites
+      // AGENTS.md's identity line — unrelated to the scan. Settle it first.
+      scaffold("--fix");
       const before = readFileSync(join(dir, "AGENTS.md"));
       const again = scaffold("--fix");
       expect(again.status).toBe(0);
