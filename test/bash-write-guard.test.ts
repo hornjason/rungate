@@ -4126,6 +4126,9 @@ describe("#1367 WITNESS: a link spelling the old list never named", () => {
     inScratch(base => {
       mkdirSync(join(base, "victim"));
       symlinkSync(join(base, "victim"), join(base, "planted"));
+      // late-env-ok: the child is `mv` and `echo` under bash, which read no
+      // RUNGATE variable and no TMPDIR — both paths are absolute literals
+      // computed here and passed on the command line.
       const r = spawnSync("/bin/bash", ["-c", `mv ${base}/planted ${base}/esc && echo x > ${base}/esc/SENTINEL`]);
       expect(r.status).toBe(0);
       expect(readFileSync(join(base, "victim", "SENTINEL"), "utf8")).toBe("x\n");
@@ -4245,6 +4248,8 @@ describe("#1367 BYPASS 1: a link made before the mkdir that forgives it", () => 
   test("the link really survives mkdir -p, executed", () => {
     inScratch(base => {
       mkdirSync(join(base, "victim"));
+      // late-env-ok: the child is `ln`, `mkdir` and `echo` under bash, which
+      // read no RUNGATE variable and no TMPDIR — every path is an absolute literal.
       const r = spawnSync("/bin/bash", [
         "-c",
         `ln -s ${base}/victim ${base}/esc && mkdir -p ${base}/esc && echo x > ${base}/esc/SENTINEL`,
