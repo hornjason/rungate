@@ -1355,7 +1355,7 @@ describe("AC-5 (Increment 1c): the ledger snapshot is gone, writer and wiring to
     expect(r.carried, "deleting the snapshot stopped findings being carried").toHaveLength(1);
   });
 
-  test("AC-5: the adjudicator reads two AI_REVIEW_* variables, and the snapshot is not one", () => {
+  test("AC-5: the adjudicator reads three AI_REVIEW_* variables, and the snapshot is not one", () => {
     // The property the nine deleted cases lacked. They proved a producer; this
     // proves there is a consumer, by reading the consumer.
     const script = readFileSync(join(ROOT, "scripts", "ai-review-findings.ts"), "utf8");
@@ -1368,8 +1368,11 @@ describe("AC-5 (Increment 1c): the ledger snapshot is gone, writer and wiring to
     // These are the CONSTANT IDENTIFIERS as they are spelled in the
     // adjudicator's source, not the env names they resolve to; the
     // extractor reads source text, so that is what it can be wrong about.
-    expect(read, "the adjudicator no longer reads exactly these two AI_REVIEW_* variables")
-      .toEqual(["AI_REVIEW_BALLOT_DIR_ENV", "AI_REVIEW_THREADS_PATH_VAR"]);
+    // The third since #2257: the checkout the suppression gate reads cited
+    // lines from, because the generated step runs this from the payload's
+    // directory and the working directory is not the checkout.
+    expect(read, "the adjudicator no longer reads exactly these three AI_REVIEW_* variables")
+      .toEqual(["AI_REVIEW_BALLOT_DIR_ENV", "AI_REVIEW_CHECKOUT_ROOT_VAR", "AI_REVIEW_THREADS_PATH_VAR"]);
     expect(script, "the adjudicator imports the snapshot variable it never reads")
       .not.toContain(AI_REVIEW_LEDGER_SNAPSHOT_PATH_VAR);
   });
