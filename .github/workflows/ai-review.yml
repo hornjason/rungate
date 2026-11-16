@@ -5019,3 +5019,5 @@ jobs:
           fi
 
           echo "::notice title=AI review waiver disarmed auto-merge::The AI review on this pull request was WAIVED by the 'ai-review-override' label, so auto-merge as it stood when this step read it has been DISARMED. The waiver clears the required check and does not also carry the landing with it, because the one thing a waived review cannot supply is somebody having looked. Read the diff, then merge by hand. This is a reading and an action taken at one moment, not a lock: auto-merge re-armed after this run stays armed until some later run of this workflow reaches this step, and if nothing further is pushed and no label changes there is no later run. What stops this pull request landing unread is a person, not this step (#1242)."
+
+# PROBE #1571 — this comment makes the review action skip itself (workflow differs from main), so the label waives and the disarm step runs. Never merged.
