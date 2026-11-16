@@ -5937,7 +5937,9 @@ export async function reportDocRules(
   // as "your docs say" would be wrong on every fresh scaffold. Left out by the
   // two existing bindings for "the harness wrote this", and counted, not hidden.
   const generated = (c: { source: string }) => {
-    const file = c.source.replace(/:\d+$/, "");
+    // `relative()` uses the OS separator; the owned-file table and
+    // NON_SPEC_FILES are written with `/` (review round 3, PR #2278).
+    const file = c.source.replace(/:\d+$/, "").split("\\").join("/");
     const owned = ownedFileFor(file);
     return (owned !== null && owned.strategy !== "create-only") || NON_SPEC_FILES.some(n => file === `specs/${n}`);
   };

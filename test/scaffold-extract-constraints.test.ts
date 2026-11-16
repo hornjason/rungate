@@ -100,6 +100,22 @@ describe("#2274: text rungate wrote is not reported as the project's rules", () 
     }));
 });
 
+describe("#2274: a Windows-separated source is matched the same way (review round 3, #2278)", () => {
+  test("a backslash path to a generated file is still left out", () =>
+    withFixture(async dir => {
+      const real = (await import("../scripts/extract-constraints")).extractConstraints;
+      const actions: string[] = [];
+      await reportDocRules(dir, actions, {
+        extract: async (root, o) => {
+          const r = await real(root, o);
+          return { ...r, candidates: [...r.candidates, { rule: "Never ship the template as a spec", source: "specs\\SPEC-TEMPLATE.md:3", context: "", hash: "x" }] };
+        },
+      });
+      expect(actions.filter(a => a.startsWith("DOC-RULE:")).join("\n")).not.toContain("Never ship the template");
+      expect(actions.join("\n")).toContain("1 from files rungate generates left out");
+    }));
+});
+
 describe("#2274: what could not be read is UNMEASURED, never 'no rules'", () => {
   test("a planned doc that cannot be read names the file and why", () =>
     withFixture(async dir => {
