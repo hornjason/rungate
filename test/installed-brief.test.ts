@@ -39,7 +39,7 @@ function installedBrief(pkgDir: string): Reading {
   for (const d of [work, proj, home]) mkdirSync(d);
   writeFileSync(
     join(work, "workflow-state.json"),
-    JSON.stringify({ issue: 1, issueGoal: "Make the thing work", acs: [{ id: "AC-1", text: "it works", verify: "bun test" }] }),
+    JSON.stringify({ issue: 1, issueGoal: "Make the thing work", acs: [{ id: "AC-1", statement: "the installed brief carries this AC", evidenceMethod: { type: "test", command: "bun test test/installed-marker.test.ts" } }] }),
   );
   const runner = join(run, "assemble.ts");
   writeFileSync(
@@ -81,6 +81,10 @@ describe("#1194 / SC-2768: a brief assembled from the installed package", () => 
     if (r.status !== "MEASURED") return;
     expect(r.validated).toBe(true);
     expect(r.brief).toContain("Make the thing work");
+    // The AC and its verify command reach the brief — the policy patterns
+    // match static headings, so only these two prove AC data flowed (review, #2281).
+    expect(r.brief).toContain("the installed brief carries this AC");
+    expect(r.brief).toContain("bun test test/installed-marker.test.ts");
   }, 60_000);
 
   test("it is the PACKAGED policy file that decides: require a marker no brief has, and the same brief fails", () => {
