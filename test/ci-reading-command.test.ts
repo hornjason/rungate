@@ -21,7 +21,7 @@ const at = (hms: string) => `2026-11-16T${hms}.000Z`;
 type Route = (url: URL) => { status: number; body: unknown } | undefined;
 const seen: string[] = [];
 
-function api(over: Partial<Record<"pr" | "runs" | "jobs1" | "jobs2" | "attempt1", unknown>> & { failPr?: boolean } = {}): Route {
+function api(over: Partial<Record<"pr" | "runs" | "jobs1" | "jobs2" | "attempt1", unknown>> & { failPr?: boolean; paged?: boolean } = {}): Route {
   return (url) => {
     const p = url.pathname;
     seen.push(`${p}${url.search}`);
@@ -39,7 +39,15 @@ function api(over: Partial<Record<"pr" | "runs" | "jobs1" | "jobs2" | "attempt1"
       return { status: 200, body: over.jobs1 ?? { total_count: 1, jobs: [{ name: "test", run_id: 7, run_attempt: 1, status: "completed", conclusion: "failure", started_at: at("10:01:10"), completed_at: at("10:03:10") }] } };
     }
     if (p === "/repos/o/r/actions/runs/7/attempts/2/jobs") {
-      return { status: 200, body: over.jobs2 ?? { total_count: 1, jobs: [{ name: "test", run_id: 7, run_attempt: 2, status: "completed", conclusion: "success", started_at: at("10:11:10"), completed_at: at("10:15:10") }] } };
+      if (over.paged) {
+        // 100 on the first page, one more on the second: the 101st is only
+        // seen by a reader that asks for page 2.
+        const job = (name: string) => ({ name, run_id: 7, run_attempt: 2, status: "completed", conclusion: "success", started_at: at("10:11:10"), completed_at: at("10:12:10") });
+        const page = url.searchParams.get("page");
+        const jobs = page === "1" ? Array.from({ length: 100 }, (_, i) => job(`shard-${i}`)) : page === "2" ? [job("the-101st")] : [];
+        return { status: 200, body: { total_count: 101, jobs } };
+      }
+      return { status: 200, body: over.jobs2 ??{ total_count: 1, jobs: [{ name: "test", run_id: 7, run_attempt: 2, status: "completed", conclusion: "success", started_at: at("10:11:10"), completed_at: at("10:15:10") }] } };
     }
     return undefined;
   };
@@ -90,6 +98,13 @@ describe("#2273: a merged pull request's breakdown, read from the API", () => {
     expect(lookup).toContain(`head_sha=${SHA}`);
   });
 
+  test("a job list longer than one page is read to the end", async () => {
+    const r = await run(["--pr", "42", "--repo", "o/r"], api({ paged: true }));
+    expect(r.stdout).toContain("ci-reading #42: MEASURED");
+    expect(r.stdout).toContain("ci / shard-99");
+    expect(r.stdout).toContain("ci / the-101st");
+  });
+
   test("--format markdown prints a table a workflow can append to the job summary", async () => {
     const r = await run(["--pr", "42", "--repo", "o/r", "--format", "markdown"]);
     expect(r.code).toBe(0);
@@ -104,6 +119,9 @@ describe("#2273: what cannot be read prints UNMEASURED with its reason, and exit
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("UNMEASURED");
     expect(r.stdout).toContain("not merged");
+    // and no Actions call is spent on it
+    expect(seen.filter(s => s.includes("/actions/"))).toEqual([]);
+    expect(seen).toContain("/repos/o/r/pulls/42");
   });
 
   test("a run still in progress", async () => {
