@@ -186,6 +186,7 @@ function driveLoop(
       reason = read.reason ?? reason;
     } catch {
       /* left as the sentinels: a turn that printed nothing is a turn that failed to run */
+      console.error(`DIAG-2281 turn ${turn} exit ${r.status} stderr: ${(r.stderr ?? "").slice(0, 1500)} stdout: ${(r.stdout ?? "").slice(0, 300)}`);
     }
     turns.push({ turn, decision, exit: r.status ?? -1 });
     reasons.push(reason);
