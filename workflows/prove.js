@@ -13,30 +13,6 @@ export const meta = {
 
 // ── Structured output schemas ────────────────────────────────
 
-const PROVE_EVIDENCE_SCHEMA = {
-  type: 'object',
-  properties: {
-    issueNumber: { type: 'number' },
-    verdict: { type: 'string', enum: ['PROVEN', 'UNPROVEN', 'INCONCLUSIVE'] },
-    commitSHA: { type: 'string' },
-    capturedAt: { type: 'string' },
-    criteriaResults: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          scId: { type: 'string' },
-          verdict: { type: 'string', enum: ['PASS', 'FAIL', 'SKIP'] },
-          evidence: { type: 'string' },
-        },
-        required: ['scId', 'verdict'],
-      },
-    },
-    reproduced: { type: 'boolean' },
-  },
-  required: ['issueNumber', 'verdict', 'commitSHA', 'criteriaResults'],
-}
-
 const ISSUE_SCHEMA = {
   type: 'object',
   properties: {

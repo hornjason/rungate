@@ -262,6 +262,9 @@ describe("#2254: prove.js asks for what the contract needs, and no longer writes
     expect(PROVE_SOURCE).toContain("scripts/record-prove-evidence.ts");
     // The key, not the word: the comment explaining its removal may name it.
     expect(PROVE_SOURCE).not.toMatch(/contractVersion\s*:/);
+    // Review round 3 on PR #2256: a second, unused statement of the artifact's
+    // shape is a contract someone may edit instead of gates/schema.ts.
+    expect(PROVE_SOURCE).not.toMatch(/PROVE_EVIDENCE_SCHEMA\s*=/);
     expect(PROVE_SOURCE).not.toMatch(/Write this JSON to \$\{WORK_DIR\}\/prove-evidence\.json/);
   });
 });
