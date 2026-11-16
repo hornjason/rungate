@@ -662,7 +662,7 @@ function bodyMakes(body: string, lits: Array<{ value: string; start: number; end
     const rest = body.slice(end + 1);
     if (BODY_MKDIR.has(last)) {
       const args = rest.split(')')[0];
-      addMade(value, last === 'makedirs' || /\brecursive\b|\bparents\s*=\s*True\b/.test(args), made);
+      addMade(value, last === 'makedirs' || /\brecursive\s*:\s*true\b|\bparents\s*=\s*True\b/.test(args), made);
       consumed.add(start);
       continue;
     }

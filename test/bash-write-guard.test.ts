@@ -4190,6 +4190,16 @@ describe("#1367 CONTROL: a fixture whose directory is real stays exempt", () => 
 });
 
 describe("#1367 COST: refused, and the reason is the property", () => {
+  test("`recursive: false` makes only the last directory, so a missing parent is refused (review, #2282)", () => {
+    inScratch(base => {
+      const body = (flag: string) =>
+        `bun -e 'const {mkdirSync, writeFileSync} = require("fs"); mkdirSync("${base}/d/e", {recursive: ${flag}}); writeFileSync("${base}/d/e/${STATE}", "{}")'`;
+      expect(decideBashWrite(body("false")).blocked, body("false")).toBe(true);
+      // the same body with the value true still forgives every ancestor
+      expect(decideBashWrite(body("true")).blocked, body("true")).toBe(false);
+    });
+  });
+
   test("a directory nothing makes is refused — the write would fail anyway", () => {
     inScratch(base => {
       expect(decideBashWrite(`echo '{}' > ${base}/nosuch/${STATE}`).blocked).toBe(true);
