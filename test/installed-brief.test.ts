@@ -76,7 +76,16 @@ beforeAll(() => {
   const tar = spawnSync("tar", ["-xzf", join(scratch, tgz), "-C", unpacked], { encoding: "utf-8" });
   if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
   pkg = join(unpacked, "package");
-  const installed = spawnSync("bun", ["install", "--production", "--silent"], { cwd: pkg, encoding: "utf-8" });
+  // A cache of its own. With the shared one, this fresh resolution changed what
+  // Bun's auto-install later resolved for test/local-review-loop.test.ts's
+  // sandbox in the same CI shard — "ENOENT while resolving package 'zod'" on
+  // every loop turn (diagnosed on PR #2284). A consumer install should not
+  // reach into anyone else's cache anyway.
+  const installed = spawnSync("bun", ["install", "--production", "--silent"], {
+    cwd: pkg,
+    encoding: "utf-8",
+    env: { ...process.env, BUN_INSTALL_CACHE_DIR: join(scratch, "bun-cache") },
+  });
   if (installed.status !== 0) throw new Error(`bun install in the unpacked package failed: ${installed.stderr}`);
 }, 120_000);
 
