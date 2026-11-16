@@ -53,6 +53,7 @@
  * direction costs 197 lines of a rule nobody noticed was gone.
  */
 import { createHash } from "crypto";
+import { carryMarkedSection, normalizeTail, splitMarked, tailVariants } from "./scaffold/marked-section";
 
 export type RuleAction = "create" | "update" | "preserve";
 
@@ -116,6 +117,28 @@ export function stampProvenance(generated: string): string {
 }
 
 /**
+ * Does the harness's stamp still cover this file — is everything it stamped
+ * untouched since? The one reading of that question (#370, #1553):
+ *
+ * - `{ section: null }`: no `## Project-owned` section, and the body is what
+ *   was stamped;
+ * - `{ section }`: the text OUTSIDE the section is what was stamped, and the
+ *   section (with its offset) is the project's;
+ * - `null`: no stamp, or something the stamp covers was edited.
+ *
+ * `decideRuleWrite` decides writes from it and `textOwner`
+ * (`lib/scaffold/steps.ts`) decides whose a line is, so the two cannot
+ * disagree about the same file (review, PR #2285).
+ */
+export function stampCovers(text: string): { section: { start: number; text: string } | null } | null {
+  const stamp = declaredSha(text);
+  if (stamp === null) return null;
+  const marked = splitMarked(text);
+  if (marked === null) return stamp === bodySha(text) ? { section: null } : null;
+  return tailVariants(marked.outside).some(v => bodySha(v) === stamp) ? { section: { start: marked.start, text: marked.section } } : null;
+}
+
+/**
  * The single place that decides whether a generated rule file may be written.
  *
  * One exported predicate on purpose. A second site deciding the same thing
@@ -127,6 +150,35 @@ export function decideRuleWrite(existing: string | null, generated: string): Rul
   const content = stampProvenance(generated);
   if (existing === null) return { action: "create", reason: "no such file", content };
 
+  // #1553 / SC-2769: a file carrying a `## Project-owned` section. The stamp
+  // covers the text OUTSIDE the section, so a project's edits under it never
+  // read as a hand edit of the file; an edit anywhere else still refuses, and
+  // the refusal names the lines rather than freezing the file silently.
+  const covered = stampCovers(existing);
+  const marked = splitMarked(existing);
+  if (marked !== null) {
+    const stamp = declaredSha(existing);
+    if (covered?.section) {
+      return {
+        action: "update",
+        reason: "harness-written outside ## Project-owned and untouched since; the section is carried forward verbatim",
+        content: carryMarkedSection(stampProvenance(normalizeTail(generated)), marked.section),
+      };
+    }
+    const written = new Set(normalizeTail(generated).split("\n").map(l => l.trim()).filter(l => l !== ""));
+    const edited = ruleBody(marked.outside).split("\n").map(l => l.trim()).filter(l => l !== "" && !written.has(l));
+    const named =
+      edited.length === 0
+        ? "the text outside it no longer matches the harness's stamp"
+        : `lines outside it the generator does not write: ${edited.slice(0, 3).map(l => JSON.stringify(l)).join(", ")}${edited.length > 3 ? ` and ${edited.length - 3} more` : ""}`;
+    return {
+      action: "preserve",
+      reason:
+        `${stamp === null ? "hand-authored, with a ## Project-owned section and no harness stamp" : "edited outside ## Project-owned"} — ${named}. ` +
+        "Move the edit under ## Project-owned, or delete the file and re-run",
+    };
+  }
+
   if (bodySha(existing) === bodySha(generated)) {
     // Unchanged from what the generator would write. Writing is a no-op on
     // the body and stamps the marker, which is how a pre-provenance tree
@@ -134,15 +186,14 @@ export function decideRuleWrite(existing: string | null, generated: string): Rul
     return { action: "update", reason: "identical to generator output", content };
   }
 
-  const declared = declaredSha(existing);
-  if (declared !== null && declared === bodySha(existing)) {
+  if (covered !== null) {
     return { action: "update", reason: "harness-written and untouched since", content };
   }
 
   return {
     action: "preserve",
     reason:
-      declared === null
+      declaredSha(existing) === null
         ? "hand-authored — no harness provenance marker"
         : "hand-edited since the harness wrote it",
   };

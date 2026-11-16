@@ -70,7 +70,7 @@ import {
 } from "../secret-patterns";
 import { healthPathIn } from "../liveness-contradiction";
 import { localCalendarDay } from "../local-calendar-day";
-import { bodySha, declaredSha, decideRuleWrite } from "../rule-provenance";
+import { decideRuleWrite, stampCovers } from "../rule-provenance";
 import { rowDriftClause, ruleRowDrift } from "../rule-row-drift";
 import { actionRef } from "../workflow-actions";
 import {
@@ -5880,6 +5880,17 @@ export const REHEARSAL_MARKER = " [REHEARSAL — not applied]";
  * well, but after the per-line marking, not instead of it.
  */
 /**
+ * Is 1-based `line` inside a section that starts at `section.start`? The
+ * offset comes from where the reader matched the heading, never from
+ * searching for the section's text, which may recur earlier (review, #2285).
+ */
+function inSection(text: string, section: { start: number; text: string }, line: number): boolean {
+  const first = text.slice(0, section.start).split("\n").length;
+  const last = first + section.text.split("\n").length - 1;
+  return line >= first && line <= last;
+}
+
+/**
  * Whose text is the line a doc-rule candidate came from — rungate's (the
  * scaffold wrote it) or the project's? `source` is `path:line`, as
  * `extractConstraints` reports it (#2274).
@@ -5918,12 +5929,17 @@ export function textOwner(projectPath: string, source: string): "rungate" | "pro
       // and nothing here maps a line to a job. Not knowing is the project's.
       return "project";
     case "provenance": {
-      // Rewritten only while untouched (#370): a stamp that no longer matches
-      // its body means somebody edited it, and it is theirs now.
+      // Rewritten only while untouched (#370): a stamp that no longer covers
+      // its text means somebody edited it, and it is theirs now. A
+      // `## Project-owned` section is theirs either way (#1553). The same
+      // reading `decideRuleWrite` writes from, so the two cannot disagree.
       const text = read();
       if (text === null) return "project";
-      const declared = declaredSha(text);
-      return declared !== null && declared === bodySha(text) ? "rungate" : "project";
+      const covered = stampCovers(text);
+      if (covered === null) return "project";
+      if (covered.section === null) return "rungate";
+      if (Number.isNaN(line)) return "project";
+      return inSection(text, covered.section, line) ? "project" : "rungate";
     }
     case "section-preserving": {
       // Rungate's except the section that carries forward (#568), found by the
@@ -5932,10 +5948,7 @@ export function textOwner(projectPath: string, source: string): "rungate" | "pro
       if (text === null || !owned.sections || Number.isNaN(line)) return "project";
       const section = readPreservedSection(text, owned.sections);
       if (section === null) return "rungate";
-      const start = text.indexOf(section.text);
-      const first = text.slice(0, start).split("\n").length;
-      const last = first + section.text.split("\n").length - 1;
-      return line >= first && line <= last ? "project" : "rungate";
+      return inSection(text, section, line) ? "project" : "rungate";
     }
     default: {
       const unhandled: never = owned.strategy;

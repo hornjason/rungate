@@ -32,7 +32,7 @@ These files are managed by rungate. **Do not edit them directly.** What
 | `.claude/agents/*.md` | section-preserving | Everything but `## Project Constraints` is generated from `.claude/rungate/roles.json` and the templates; put rules mined from this repo's own history in that section and they carry forward | Don't hand-edit the generated sections — a re-scaffold rewrites them without reporting it |
 | `.claude/commands/dry-run.md` | provenance | Edit freely — a hand-edited command is preserved and reported | Don't delete its `generated-sha` marker, or edits stop surviving |
 | `docs/adr/TEMPLATE.md` | regenerate | Copy it to docs/adr/ADR-<n>-<slug>.md and edit the copy | Don't edit the template itself — a re-scaffold rewrites it |
-| `.claude/rules/*.md` | provenance | Edit freely — a hand-edited rule is preserved and reported (#370) | Don't expect edits to survive if you also delete the `generated-sha` marker |
+| `.claude/rules/*.md` | provenance | Put edits under `## Project-owned`; it carries forward, the rest regenerates (#1553) | Don't edit outside it — the write is refused, naming the lines |
 | `test/scaffold-conformity.test.ts` | regenerate | Runs automatically | Don't edit |
 | `CODE-MAP.md` | regenerate | Auto-generated from code scan | Don't edit |
 | `project-state.json` | create-only | DA-owned (#296) — seeded once, then yours | Don't expect re-scaffold to update it; an agent in a worktree must never write it |
