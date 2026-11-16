@@ -248,6 +248,19 @@ describe("#2287: the keywords are looked for in the file the contains clause nam
     expect(result.drifted.get("test-subject.md")).toBeUndefined(); // other.js exists, so no drift either
   });
 
+  test("each of several contains clauses is checked against its own file (review, #2291)", () => {
+    // SC-543's shape: `lib/a.ts contains [x] and workflows/b.js contains [y(z)]`.
+    // Binding only the FIRST clause left the second file checked for nothing.
+    writeFileSync(join(TEMP_DIR, "scripts", "first.ts"), "export const alpha = 1;\n");
+    writeFileSync(join(TEMP_DIR, "workflows", "second.js"), "nothing here\n");
+    writeFileSync(
+      join(TEMP_SPECS, "test-two-clauses.md"),
+      "# Two\n\n- [ ] SC-504: scripts/first.ts contains [alpha] and workflows/second.js contains [beta(gamma)]\n",
+    );
+    const stale = detectDrift(TEMP_SPECS, TEMP_DIR).stale.get("test-two-clauses.md")!;
+    expect(stale.map(s => [s.path, s.keyword])).toEqual([["workflows/second.js", "beta(gamma)"]]);
+  });
+
   test("CONTROL: the named file lacking the keyword is still stale, and only it is reported", () => {
     writeFileSync(join(TEMP_DIR, "scripts", "subject-empty.ts"), "export const nothing = 0;\n");
     writeFileSync(

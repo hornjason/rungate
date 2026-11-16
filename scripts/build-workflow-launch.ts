@@ -104,25 +104,49 @@ function commentRanges(text: string): Array<{ pos: number; end: number; multilin
 /**
  * The launch text for a workflow source, or a thrown refusal naming why.
  *
- * A line comment is removed and its line ending kept. A block comment becomes
- * a newline when it spans lines — it is a line terminator for automatic
- * semicolon insertion (`return /*\n*\/ x` returns undefined) — and a space when
- * it does not, so `a/* *\/b` never joins into one token.
+ * A comment alone on its line is removed with the line. A comment that ends a
+ * line is removed with the spaces before it, and the line ending stays. A
+ * block comment with code after it on the same line becomes a newline when it
+ * spans lines — a line terminator for automatic semicolon insertion
+ * (`return /*\n*\/ x` returns undefined) — and a space when it does not, so
+ * `a/* *\/b` never joins into one token. Nothing else is rewritten.
  */
 export function buildWorkflowLaunch(source: string, cap: number = WORKFLOW_SCRIPT_CAP): LaunchBuild {
   const before = parseErrors(source);
   if (before.length > 0) throw new Error(`the source does not parse: ${before[0]}`);
+  // Only the comment and the whitespace around it on its own line are ever
+  // touched — never a file-wide rewrite, which reached inside template
+  // literals and changed a prompt's trailing spaces and blank lines (review,
+  // #2291). A comment alone on its line takes the line with it; one that ends
+  // a line takes the spaces before it. Both spans are trivia, never literal text.
   let out = "";
   let at = 0;
   for (const c of commentRanges(source)) {
-    out += source.slice(at, c.pos);
-    const isBlock = source.startsWith("/*", c.pos);
-    out += isBlock ? (c.multiline ? "\n" : " ") : "";
-    at = c.end;
+    const lineStart = source.lastIndexOf("\n", c.pos - 1) + 1;
+    const nl = source.indexOf("\n", c.end);
+    const lineEnd = nl === -1 ? source.length : nl;
+    const endsLine = /^[ \t]*$/.test(source.slice(c.end, lineEnd));
+    const aloneOnLine = endsLine && lineStart >= at && /^[ \t]*$/.test(source.slice(lineStart, c.pos));
+    if (aloneOnLine) {
+      // The whole line goes. The line before still ends in its own newline,
+      // so a line terminator stays between the tokens on either side.
+      out += source.slice(at, lineStart);
+      at = nl === -1 ? source.length : nl + 1;
+    } else if (endsLine) {
+      // Code, then the comment, then the line ending: drop the comment and
+      // the spaces before it. The line ending stays.
+      let cut = c.pos;
+      while (cut > at && (source[cut - 1] === " " || source[cut - 1] === "\t")) cut--;
+      out += source.slice(at, cut);
+      at = c.end;
+    } else {
+      // A block comment with code after it on the same line: a newline if it
+      // spans lines (a line terminator for ASI), else a space (no token join).
+      out += source.slice(at, c.pos) + (c.multiline ? "\n" : " ");
+      at = c.end;
+    }
   }
   out += source.slice(at);
-  // Lines left holding only whitespace collapse; a run of blank lines becomes one.
-  out = out.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
 
   const meta = /^export const meta = \{/.exec(out);
   if (!meta) throw new Error("the launch text does not begin with `export const meta = {` — the Workflow tool requires it first");
@@ -132,8 +156,11 @@ export function buildWorkflowLaunch(source: string, cap: number = WORKFLOW_SCRIP
   const after = parseErrors(out);
   if (after.length > 0) throw new Error(`the launch text does not parse: ${after[0]}`);
   if (!hasTopLevelReturn(out)) throw new Error("the launch text has no top-level `return` — the run would produce nothing");
+  // The tool accepts a script of exactly `cap` (review, #2291). Its limit is
+  // in characters; counting UTF-8 bytes, which are never fewer, is the
+  // conservative reading.
   const bytes = Buffer.byteLength(out, "utf-8");
-  if (bytes >= cap) throw new Error(`the launch text is ${bytes} bytes, over the Workflow tool's ${cap}-byte cap`);
+  if (bytes > cap) throw new Error(`the launch text is ${bytes} bytes, over the Workflow tool's ${cap}-byte cap`);
   return { text: out, bytes };
 }
 

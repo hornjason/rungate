@@ -85,8 +85,21 @@ describe("#2287 / SC-2772: what the build must not get wrong", () => {
     expect(out).toContain("a +b");
   });
 
-  test("over the cap is a refusal, not a smaller file", () => {
-    expect(() => buildWorkflowLaunch(source, built.bytes)).toThrow(/over the Workflow tool's/);
+  test("over the cap is a refusal, not a smaller file — and exactly at the cap is accepted (review, #2291)", () => {
+    expect(() => buildWorkflowLaunch(source, built.bytes - 1)).toThrow(/over the Workflow tool's/);
+    expect(buildWorkflowLaunch(source, built.bytes).bytes).toBe(built.bytes);
+  });
+
+  test("text inside a template literal is never rewritten: trailing spaces and blank-line runs survive (review, #2291)", () => {
+    const literal = "const s = `line one   \nline two\t\n\n\n\nline three`;";
+    const out = buildWorkflowLaunch(wrap(`// a comment above\n${literal}`)).text;
+    expect(out).toContain(literal);
+    expect(tokenTexts(out)).toEqual(tokenTexts(wrap(literal)));
+  });
+
+  test("a comment on its own line is removed with its line; a trailing one takes its leading spaces", () => {
+    const out = buildWorkflowLaunch(wrap("const a = 1;\n    // own line\nconst b = 2;   // trailing\nconst c = 3;")).text;
+    expect(out).toContain("const a = 1;\nconst b = 2;\nconst c = 3;");
   });
 
   test("no top-level return is a refusal", () => {

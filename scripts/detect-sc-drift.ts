@@ -90,8 +90,33 @@ export function extractKeywords(statement: string): string[] {
  * from, and `buildWorkflowLaunch` is not in ship.js.
  */
 export function containsSubject(statement: string): string | null {
-  const m = statement.match(/((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))\s+contains \[/);
-  return m ? m[1] : null;
+  return containsClauses(statement).find(c => c.path !== null)?.path ?? null;
+}
+
+/**
+ * Every positive `contains [...]` clause in a statement, each with the file
+ * named directly before it, or `null` when none is (review, #2291). SC-543
+ * reads `lib/workflow-security.ts contains [...] and workflows/ship.js
+ * contains [isSafeBranchName(shipBranch)]`: binding only the first clause
+ * left ship.js checked for nothing.
+ */
+export function containsClauses(statement: string): Array<{ path: string | null; keywords: string[] }> {
+  const out: Array<{ path: string | null; keywords: string[] }> = [];
+  for (const m of statement.matchAll(/(?<!not )contains \[([^\]]+)\]/g)) {
+    const before = statement.slice(0, m.index).match(/((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))\s+$/);
+    out.push({ path: before ? before[1] : null, keywords: m[1].split(",").map(k => k.trim()).filter(Boolean) });
+  }
+  return out;
+}
+
+/**
+ * The keywords `path` must contain: those of every clause that names it, plus
+ * those of any clause that names no file (checked everywhere, as before —
+ * that only ever refuses more).
+ */
+export function keywordsFor(statement: string, path: string): string[] {
+  const clauses = containsClauses(statement);
+  return [...new Set(clauses.filter(c => c.path === path || c.path === null).flatMap(c => c.keywords))];
 }
 
 /**
@@ -144,11 +169,10 @@ export function detectDrift(specsDir: string, projectRoot: string): DriftResult 
       const statement = match[2].trim();
       checked++;
 
-      // Check for file path references. Keywords belong to the clause's own
-      // file when it names one; with no named file, every path is checked, as
-      // before, which only ever refuses more.
+      // Check for file path references. Each path is checked for the keywords
+      // of the clauses that name it (`keywordsFor`); a path only mentioned in
+      // prose is checked for existence alone.
       const paths = extractFilePaths(statement);
-      const subject = containsSubject(statement);
       for (const path of paths) {
         const fullPath = join(projectRoot, path);
         if (!existsSync(fullPath)) {
@@ -158,7 +182,7 @@ export function detectDrift(specsDir: string, projectRoot: string): DriftResult 
           drifted.get(specFile)!.push({ scId, statement, path });
         } else {
           // File exists — check each required keyword separately.
-          const keywords = subject === null || subject === path ? extractKeywords(statement) : [];
+          const keywords = keywordsFor(statement, path);
           if (keywords.length) {
             const fileContent = readFileSync(fullPath, "utf-8");
             const missing = keywords.filter(k => !fileContent.includes(k));

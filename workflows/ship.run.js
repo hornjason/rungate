@@ -16,6 +16,7 @@ export const meta = {
 }
 // GENERATED from workflows/ship.js by scripts/build-workflow-launch.ts (#2287). Do not edit: edit ship.js and rebuild.
 
+
 const GOAL_SCHEMA = {
   type: 'object',
   properties: {
@@ -42,10 +43,8 @@ const DISCOVERY_SCHEMA = {
           statement: { type: 'string' },
           threshold: { type: 'object', properties: { op: { type: 'string', enum: ['==', '>=', '<=', '>', '<', '!=', 'contains', 'exists'] }, value: {}, unit: { type: 'string' } }, required: ['op', 'value'] },
           evidenceMethod: { type: 'object', properties: { type: { type: 'string', enum: ['GREP_CHECK', 'FILE_EXISTS', 'CURL_CHECK', 'BUN_TEST', 'SCREENSHOT', 'PLAYWRIGHT', 'COMMAND', 'MANUAL', 'grep', 'command', 'api', 'screenshot', 'manual'] }, command: { type: 'string' } }, required: ['type'] },
-
           evidenceInterfaces: { type: 'array', items: { type: 'string' } },
           specElement: { type: 'string' },
-
           coversCriteria: { type: 'array', items: { type: 'string' } },
           contextFiles: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, lines: { type: 'string' }, reason: { type: 'string' } }, required: ['path', 'reason'] } },
         },
@@ -84,12 +83,10 @@ const GATE_RESULT_SCHEMA = {
   properties: {
     result: { type: 'string', enum: ['PASS', 'FAIL'] },
     failures: { type: 'array', items: { type: 'string' } },
-
     checksRun: { type: 'array', items: { type: 'string' } },
     failedChecks: { type: 'array', items: { type: 'string' } },
     category: { type: 'string', enum: ['STATE', 'CODE', 'DISCOVERY', 'ENVIRONMENT', 'NON_RETRYABLE'] },
     regressionTarget: { type: 'string', enum: ['BUILD', 'DISCOVERY'] },
-
     evidencePrevalidation: {
       type: 'object',
       properties: {
@@ -108,7 +105,6 @@ const BUILD_RESULT_SCHEMA = {
     success: { type: 'boolean' },
     branch: { type: 'string' },
     commitSha: { type: 'string' },
-
     filesChanged: {
       type: 'array',
       items: { type: 'string' },
@@ -121,12 +117,10 @@ const BUILD_RESULT_SCHEMA = {
       type: 'string',
       description: 'The absolute directory you worked in — your pwd. A path, never a URL.',
     },
-
     worktreeRepo: {
       type: 'string',
       description: 'Exactly what `git remote get-url origin` printed in worktreePath — "https://github.com/owner/name.git" or "git@github.com:owner/name". Never a filesystem path; worktreePath is the directory, this is the remote it points at.',
     },
-
     taskSource: { type: 'string', enum: ['brief', 'relayed-request', 'both'] },
   },
   required: ['success', 'taskSource'],
@@ -146,7 +140,6 @@ const M_DECOMPOSITION_SCHEMA = {
           size: { type: 'string', enum: ['XS', 'S'] },
           acs: { type: 'array', items: { type: 'string' }, maxItems: 5 },
           filesToModify: { type: 'array', items: { type: 'string' } },
-
           dependsOn: { type: 'array', items: { type: 'string' } },
           body: { type: 'string' },
         },
@@ -156,6 +149,7 @@ const M_DECOMPOSITION_SCHEMA = {
   },
   required: ['subIssues'],
 }
+
 
 let parsedArgs = args || {}
 if (typeof parsedArgs === 'string') {
@@ -167,15 +161,12 @@ if (!parsedArgs.issue || !parsedArgs.projectRoot) {
 }
 
 const ISSUE = parsedArgs.issue
-
 function deriveSlug(repo, issue) {
   const name = String(repo || '').split('/').filter(Boolean).pop() || ''
   if (!name) return null
-
   const safe = name.replace(/[^A-Za-z0-9._-]/g, '-')
   return `${safe}-${issue}`
 }
-
 const REPO = parsedArgs.repo
 if (!REPO && !parsedArgs.slug) {
   return {
@@ -196,7 +187,6 @@ const WORK_DIR = parsedArgs.workDir || `${HOME}/.rungate/${SLUG}`
 const DRY_RUN = parsedArgs.dryRun || false
 const SKIP_GRADE = parsedArgs.skipGrade || false
 const MAX_REGRESSIONS = 2
-
 const MAX_SECURITY_REREVIEWS = 2
 
 const SHELL_METACHARACTERS = /[;&|$`\n\r"'\\(){}[\]<>!~*?#]/
@@ -334,7 +324,6 @@ function validateEvidenceCommand(command) {
       return { safe: false, reason: `Dangerous pattern: ${pattern.source}` }
     }
   }
-
   return { safe: true }
 }
 
@@ -351,6 +340,7 @@ function buildSafeSSHCommand(host, command) {
 function shellQuote(word) {
   return `'${String(word).replace(/'/g, "'\\''")}'`
 }
+
 
 function suiteOutputPath(workDir) {
   return `${workDir}/suite-output.txt`
@@ -403,7 +393,6 @@ function gitDerivedStaging(dir) {
   const d = shellQuote(dir)
   return [
     `if [ -z "$(git -C ${d} status --porcelain)" ]; then`,
-
     `  echo "RUNGATE_NO_CHANGES: git reports no modifications in" ${d} "— nothing to commit"; exit 1;`,
     `fi`,
     `git -C ${d} add -A`,
@@ -420,6 +409,7 @@ function safeSSHCommand(host, remoteCmd) {
   }
 }
 
+
 for (const [name, refusal] of [
   ['repo', REPO === undefined && parsedArgs.slug ? null : repoSlugRefusal('repo', REPO)],
   ['issueRepo', repoSlugRefusal('issueRepo', ISSUE_REPO)],
@@ -427,7 +417,6 @@ for (const [name, refusal] of [
   ['harnessRoot', rootPathRefusal('harnessRoot', HARNESS_ROOT)],
 ]) {
   if (!refusal) continue
-
   return { status: 'ARGS_ERROR', message: `${refusal} (argument: ${name})` }
 }
 
@@ -435,7 +424,6 @@ const TIMING_ARTIFACT = `${WORK_DIR}/agent-timings.jsonl`
 const TIMING_SCRIPT = `${HARNESS_ROOT}/scripts/record-agent-timings.ts`
 
 function timingInstruction(label, phaseName) {
-
   const where = typeof phaseName === 'string' && phaseName
     ? ` --phase ${shellQuote(phaseName)}`
     : ''
@@ -451,7 +439,6 @@ function timingInstruction(label, phaseName) {
     `Both are required, neither is part of the task, and neither replaces reporting.\n` +
     `A start with no end is reported as UNTERMINATED, not dropped — skipping the end\n` +
     `marks this call unmeasured rather than fast.\n` +
-
     `If you are BLOCKED and have to WAIT before retrying — a full-suite budget or any\n` +
     `other shared limit — record the wait so it is not charged to your work time:\n` +
     `  ${cmd('queued')} --waited-ms <milliseconds you actually waited>\n` +
@@ -466,14 +453,12 @@ async function timedAgent(prompt, opts = {}) {
   const label = opts.label
   if (typeof opts.role === 'string' && opts.role.trim()) SPAWNED_ROLES.add(opts.role.trim())
   if (!label) {
-
     log('WARN: an agent call reached timedAgent with no label — this call is UNTIMED (#227)')
     const untimed = await agent(prompt, opts)
     noteWorktrees(untimed)
     return untimed
   }
   const reply = await agent(`${prompt}\n\n${timingInstruction(label, opts.phase)}`, opts)
-
   noteWorktrees(reply)
   return reply
 }
@@ -530,19 +515,14 @@ const RESUME_REPLAYS_NOTE =
 
 async function terminalFailure(status, extra = {}) {
   const kept = await preserveSeenWorktrees(String(status || 'FAILED'), 'terminal-preserve')
-
   const restored = await restorePrimaryCheckout(String(status || 'FAILED'))
   return {
     status,
     ...extra,
-
     reason: terminalReason(status, extra),
-
     ...(kept.detail ? { preservedDetail: kept.detail.trim(), preserved: kept.preserved } : {}),
-
     runBranchReading: restored.reading,
     runBranchRestore: restored.restoreOutcome,
-
     retryGuidance: RESUME_REPLAYS_NOTE,
     workDir: WORK_DIR,
   }
@@ -551,12 +531,10 @@ async function terminalFailure(status, extra = {}) {
 function runBranchRestoreShell(opts) {
   const withDelete = !!(opts && opts.withDelete)
   if (!primaryBranchBefore) {
-
     return `   echo "RESTORE: NOT_READ"\n` +
       `   echo "AFTER: $(git -C ${shellQuote(PROJECT_ROOT)} branch --show-current)"\n`
   }
   const runRef = runRefName(ISSUE)
-
   return `   before=${shellQuote(primaryBranchBefore)}
    run_ref=${shellQuote(runRef)}
    current=$(git -C ${shellQuote(PROJECT_ROOT)} branch --show-current)
@@ -618,13 +596,11 @@ function readRunBranchRestore(reply, opts) {
   }
 
   if (!withDelete) {
-
     lines.push(`Run branch: ${runRefName(ISSUE)} kept — this run did not ship, so its branch ` +
       'holds unmerged work and no delete was attempted (#640)')
   } else if (r.runBranchDeleted === true) {
     lines.push(`Run branch: ${clean(r.runBranchDetail) || 'deleted'}`)
   } else if (r.runBranchDetail) {
-
     lines.push(`RUN_BRANCH_KEPT: ${clean(r.runBranchDetail)}`)
   } else if (primaryBranchBefore) {
     lines.push(`RUN_BRANCH_UNMEASURED: the restore step did not say whether ${runRefName(ISSUE)} was removed (#640)`)
@@ -656,7 +632,6 @@ driftReading and its refusal line as driftRefusal — null when it printed none.
     for (const line of read.lines) log(line)
     return read
   } catch (err) {
-
     const detail = String(err && err.message || err).replace(/[\r\n]+/g, ' ').slice(0, 300)
     log(`RUN_BRANCH_UNMEASURED: the restore step itself failed (${detail}) — ` +
       'where the shared checkout ended up is unknown (#640)')
@@ -724,7 +699,6 @@ function redactRemote(remote) {
 function looksLikeFilesystemPath(reported) {
   const s = String(reported).trim()
   if (s.startsWith('/') || s.startsWith('~/') || s.startsWith('\\\\')) return true
-
   const drive = s.charCodeAt(0) | 32
   return drive >= 97 && drive <= 122 && s[1] === ':' && (s[2] === '\\' || s[2] === '/')
 }
@@ -740,7 +714,6 @@ function worktreeIdentity(worktreePath, expectedRepo, reported) {
   if (!expected) {
     return {
       verdict: 'unreported', actual: null, expected: null,
-
       refusal: `${where} could not be checked — the run did not state a repository to compare against (repo was ${JSON.stringify(expectedRepo === undefined || expectedRepo === null ? null : redactRemote(String(expectedRepo)))}), so a worktree in any repository would pass (#218)`,
     }
   }
@@ -772,7 +745,6 @@ function worktreeIdentityViolations(reports, expectedRepo, opts = {}) {
     if (!path && !opts.requirePath) continue
     const got = worktreeIdentity(path, expectedRepo, r && r.worktreeRepo)
     if (got.refusal) { out.push(got.refusal); continue }
-
     if (path && typeof opts.allowPath === 'function' && !opts.allowPath(path)) {
       out.push(`${path} is not this run's project root nor one of its agent worktrees, so it is not a directory this run may act in (#1098)`)
     }
@@ -852,7 +824,6 @@ async function briefedAgent(prompt, opts = {}) {
       if (roleConfig?.isolation) opts.isolation = roleConfig.isolation
       else opts.isolation = 'worktree'
     }
-
     if (!('model' in opts) && roleConfig?.model) opts.model = roleConfig.model
     if (opts.isolation === 'worktree') opts.cwd = PROJECT_ROOT
 
@@ -861,7 +832,6 @@ async function briefedAgent(prompt, opts = {}) {
     let fullPrompt = ''
 
     if (taskContextExcerpts && taskContextExcerpts.length > 0) {
-
       fullPrompt += `MANDATORY FIRST STEP:\n1. Read ${briefPath} — your identity, rules, and workflow\n\n`
       fullPrompt += `## Injected Context (DO NOT re-read these files — content is here)\n\n`
       for (const excerpt of taskContextExcerpts) {
@@ -871,7 +841,6 @@ async function briefedAgent(prompt, opts = {}) {
         fullPrompt += `### ${section}${source ? ' (from ' + source + ')' : ''}\n${content}\n\n`
       }
     } else {
-
       const readSteps = [`1. Read ${briefPath} — your identity, rules, and workflow`]
 
       if (taskContextFiles && taskContextFiles.length > 0) {
@@ -896,7 +865,6 @@ async function briefedAgent(prompt, opts = {}) {
     }
 
     const reinforcement = await loadReinforcementRules(role, briefPath)
-
     const allRules = [...reinforcement]
     if (allRules.length) {
       fullPrompt += `CRITICAL PROCESS RULES (follow in every task):\n${allRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n\n`
@@ -916,7 +884,6 @@ async function briefedAgent(prompt, opts = {}) {
 }
 
 function acDiscoveryViolations(acs) {
-
   if (!Array.isArray(acs)) {
     return ['the acceptance criteria are not a list, so none of them could be checked — ' +
       'an unreadable list is not an empty one (#269)']
@@ -943,11 +910,9 @@ function acDiscoveryViolations(acs) {
       out.push(`${id}: not an acceptance criterion — the discovery output is the wrong shape here`)
       continue
     }
-
     if (typeof ac.id !== 'string') {
       out.push(`${id}: id is not a string — a criterion a refusal cannot name`)
     }
-
     if (ac.type === undefined) {
       out.push(`${id}: missing type (CODE or OUTCOME)`)
     } else if (ac.type !== 'CODE' && ac.type !== 'OUTCOME') {
@@ -996,6 +961,7 @@ function acDiscoveryViolations(acs) {
   return out
 }
 
+
 function scIdOf(line) {
   const m = typeof line === 'string' ? line.match(/\bSC-\d+\b/) : null
   return m ? m[0] : null
@@ -1005,7 +971,6 @@ function criterionIds(successCriteria) {
   if (!Array.isArray(successCriteria)) return []
   return successCriteria.map((line, i) => ({
     id: scIdOf(line) || `C-${i + 1}`,
-
     alias: `C-${i + 1}`,
     text: String(line == null ? '' : line),
   }))
@@ -1017,7 +982,6 @@ function acCoversIds(ac) {
   const out = []
   for (const raw of ac.coversCriteria) {
     if (typeof raw !== 'string') continue
-
     for (const part of raw.split(',')) {
       const token = part.trim().match(/\b(?:SC|C)-\d+\b/)
       if (token) out.push(token[0])
@@ -1052,14 +1016,12 @@ function coverageViolations(successCriteria, acs, deferrals) {
   for (const d of deferralList) {
     if (!d || typeof d !== 'object') continue
     for (const id of acCoversIds({ coversCriteria: [d.specElement] })) {
-
       if (typeof d.reason === 'string' && d.reason.trim().length > 0) deferred.add(id)
     }
   }
 
   const violations = []
   for (const c of criteria) {
-
     if (covered.has(c.id) || covered.has(c.alias)) continue
     if (deferred.has(c.id) || deferred.has(c.alias)) continue
     violations.push(
@@ -1095,7 +1057,6 @@ function coverageRecord(successCriteria, acs, deferrals) {
   return {
     criteriaCount: criteria.length,
     acCount: acList.length,
-
     covered: [...new Set(acList.flatMap(acCoversIds))],
     deferrals: Array.isArray(deferrals) ? deferrals : [],
     uncovered: coverageViolations(successCriteria, acs, deferrals),
@@ -1185,7 +1146,6 @@ function acPayloadRecords(acs) {
     statement: ac.statement,
     threshold: ac.threshold,
     evidenceMethod: ac.evidenceMethod,
-
     specElement: ac.specElement,
     coversCriteria: ac.coversCriteria || [],
     contextFiles: ac.contextFiles || [],
@@ -1243,11 +1203,9 @@ function retireSupersededRefusals(entries, report) {
 
 function recordRefusal(kind, phaseName, detail, check) {
   const entry = {
-
     kind: typeof kind === 'string' && kind ? kind : 'REFUSAL',
     phase: typeof phaseName === 'string' && phaseName ? phaseName : 'unknown',
     detail: typeof detail === 'string' && detail ? detail : 'no detail recorded',
-
     ...(typeof check === 'string' && check ? { check } : {}),
   }
   refusals.push(entry)
@@ -1262,7 +1220,6 @@ function recordGateRefusal(phaseName, gateName, result) {
     }
     return []
   }
-
   if (!result) {
     return [recordRefusal('GATE_FAIL', phaseName, `${tag} produced no result — the step reported nothing`)]
   }
@@ -1272,7 +1229,6 @@ function recordGateRefusal(phaseName, gateName, result) {
   if (lines.length === 0) {
     return [recordRefusal('GATE_FAIL', phaseName, `${tag} ${result.result || 'did not report a result'} with no failures listed`)]
   }
-
   const reported = Array.isArray(result.failedChecks)
     ? result.failedChecks.filter(c => typeof c === 'string' && c)
     : []
@@ -1319,9 +1275,7 @@ function observedDraft(pr) {
 async function shipFailed(phaseName, immediateReason, extra = {}) {
   if (immediateReason) recordRefusal('REFUSAL', phaseName, immediateReason)
   const kept = await preserveSeenWorktrees(phaseName, 'ship-failed-preserve')
-
   const restored = await restorePrimaryCheckout(phaseName)
-
   if (observedDraft(openedPr) === false) {
     log(`WARN: this run refused and PR #${openedPr.prNumber} is NOT a draft — it is mergeable and carries code this run did not stand behind`)
   }
@@ -1331,12 +1285,9 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
   return {
     status: 'SHIP_FAILED',
     reason: summary.reason,
-
     retryGuidance: RESUME_REPLAYS_NOTE,
-
     immediateReason: immediateReason || null,
     failures: summary.failures,
-
     pr: hasPr
       ? {
           number,
@@ -1346,9 +1297,7 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
         }
       : { number: null, readiness: 'NO_PR', reason: 'no PR was opened or updated by this run', draft: null },
     issue: ISSUE, slug: SLUG, workDir: WORK_DIR,
-
     ...(kept.detail ? { preservedDetail: kept.detail.trim(), preserved: kept.preserved } : {}),
-
     runBranchReading: restored.reading,
     runBranchRestore: restored.restoreOutcome,
     ...extra,
@@ -1359,17 +1308,15 @@ let openedPr = null
 
 let runWorktrees = []
 
+
 async function runGateWithHeal(gateName, phaseName, healContext, gateOpts = {}) {
   const gateCwd = gateOpts.cwd || PROJECT_ROOT
   const cwdFlag = gateCwd !== PROJECT_ROOT ? `--cwd ${shellQuote(gateCwd)} ` : ''
   const evidenceEnv = gateCwd !== PROJECT_ROOT ? `EVIDENCE_CWD=${shellQuote(gateCwd)} ` : ''
-
   const worktreesFlag = runWorktrees.length > 0
     ? ` --worktrees ${shellQuote(JSON.stringify(runWorktrees))}`
     : ''
-
   const gateExit = result => {
-
     const retired = retireSupersededRefusals(refusals, result)
     if (retired.length > 0) {
       log(`${gateName} gate re-ran and resolved ${retired.length} earlier refusal(s): ` +
@@ -1430,10 +1377,10 @@ This validates via Zod at write time — you get immediate error feedback. Repor
   }
 }
 
+
 phase('Goal')
 
 function launchBaseCheckShell() {
-
   return `   pwd
    bun ${shellQuote(`${HARNESS_ROOT}/scripts/check-launch-base.ts`)} --project-root ${shellQuote(PROJECT_ROOT)} --harness-root ${shellQuote(HARNESS_ROOT)}
    echo "EXIT: $?"
@@ -1470,7 +1417,6 @@ function readLaunchBase(reply) {
   }
 
   if (reading === 'SAME_CHECKOUT') {
-
     if (exitCode !== null && exitCode !== 0) {
       return {
         reading: 'UNMEASURED',
@@ -1527,7 +1473,6 @@ log(`Ship #${ISSUE}: reading issue`)
 
 let goalData = parsedArgs.goalData || null
 if (!goalData) {
-
   goalData = await timedAgent(`
 Run this exact command and parse the JSON output:
 gh issue view ${ISSUE} --repo ${ISSUE_REPO} --json title,body,labels
@@ -1548,7 +1493,6 @@ log(`Goal: "${goalData.issueTitle}" — ${goalData.successCriteria.length} SCs`)
 const remoteHosts = parsedArgs.remoteHosts || {}
 const preflightResults = parsedArgs.preflightResults || null
 if (preflightResults) {
-
   for (const [name, result] of Object.entries(preflightResults)) {
     if (result.reachable) {
       log(`PRE-FLIGHT: ${name} (${result.host || name}) — ✅ reachable`)
@@ -1558,7 +1502,6 @@ if (preflightResults) {
     }
   }
 } else if (Object.keys(remoteHosts).length > 0) {
-
   const hostChecks = Object.entries(remoteHosts)
     .filter(([, config]) => config.host)
     .map(([name, config]) => {
@@ -1598,13 +1541,11 @@ Return a JSON object with a "hosts" array, one entry per host:
 }
 
 if (parsedArgs.preloadedContexts) {
-
   for (const [role, data] of Object.entries(parsedArgs.preloadedContexts)) {
     CONTEXT_CACHE[role] = data.paths || []
     REINFORCEMENT_CACHE[role] = data.rules || []
   }
 } else {
-
   const roleBriefs = ['discovery', 'marcus'].map(role => {
     const rc = ROLES[role]
     return { role, path: rc?.brief ? `${PROJECT_ROOT}/${rc.brief}` : `${PROJECT_ROOT}/.claude/agents/${role}.md` }
@@ -1642,6 +1583,7 @@ For reinforcement: read the YAML frontmatter, find the "tiers.reinforcement" arr
   }
 }
 
+
 let discovery = null
 let setupResult = null
 let regressionCount = 0
@@ -1655,7 +1597,6 @@ const DENYLIST_MARKERS = [
   /\bnot\s+in\s+scope\b/i,
   /\balready\s+filed\b/i,
 ]
-
 const DENYLIST_PATH = /\b([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.(?:ts|tsx|js|jsx|md|json|ya?ml|sh))\b/g
 
 function pathsNamedIn(text) {
@@ -1728,14 +1669,12 @@ function denylistViolations(claimants, denied) {
 }
 
 function applyScopeDenylist(disc, say, goalText) {
-
   const denied = deniedFiles(goalText || '', disc?.scopeOut || [])
   if (denied.length === 0) return { denied, refusal: null }
 
   const beforeStrip = [...(disc.filesToModify || [])]
   const contradiction = scopeContradiction(beforeStrip, denied)
   if (contradiction) {
-
     say(`SCOPE DENY-LIST: CONTRADICTION — ${contradiction}`)
     return { denied, refusal: contradiction }
   }
@@ -1817,14 +1756,11 @@ function planCoverageRefusal(r) {
 let acDeferrals = []
 let acCoverage = null
 let discoveryRefusal = null
-
 let discoveryFailureReason = null
 
 async function runDiscovery(context) {
   phase('Discovery')
-
   CACHED_CEREMONY = null
-
   acDeferrals = []
   acCoverage = null
   discoveryRefusal = null
@@ -1900,23 +1836,19 @@ Project root: ${PROJECT_ROOT}
 
   for (const ac of discovery.acs) {
     if (ac.threshold && typeof ac.threshold.value === 'boolean') ac.threshold.value = String(ac.threshold.value)
-
     if (ac.evidenceMethod?.command) {
       let cmd = ac.evidenceMethod.command
       cmd = cmd.replace(new RegExp(PROJECT_ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/', 'g'), '')
       cmd = cmd.replace(new RegExp('^cd\\s+' + PROJECT_ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*&&\\s*', ''), '')
-
       const verdict = validateEvidenceCommand(cmd)
       if (!verdict.safe) {
         log(`REJECTED evidence command for ${ac.id}: ${verdict.reason} — downgraded to MANUAL`)
         ac.evidenceMethod.type = 'MANUAL'
         delete ac.evidenceMethod.command
       } else if (recordEvidenceRewrite(ac.evidenceMethod, 'discovery-path-normalize', cmd)) {
-
         log(`Normalized evidence path for ${ac.id}: stripped absolute paths — authored "${ac.evidenceMethod.authoredCommand}", now "${cmd}"`)
       }
     }
-
     if (ac.contextFiles) {
       ac.contextFiles = ac.contextFiles.filter(cf => {
         if (cf.path?.startsWith(PROJECT_ROOT + '/')) {
@@ -1936,12 +1868,10 @@ Project root: ${PROJECT_ROOT}
   const scopeGuard = applyScopeDenylist(discovery, log, goalData?.issueGoal)
   if (scopeGuard.refusal) {
     log(`DISCOVERY REFUSED: ${scopeGuard.refusal}`)
-
     discoveryFailureReason = scopeGuard.refusal
     return false
   }
   for (const p of unresolvedProhibitions(goalData?.issueGoal || '')) {
-
     log(`SCOPE DENY-LIST: UNENFORCEABLE — "${p.text.slice(0, 160)}" names ${p.issues.join(', ')} but no file path, so nothing can be denied. Name the files to make it mechanical.`)
   }
 
@@ -1954,10 +1884,8 @@ Project root: ${PROJECT_ROOT}
     for (const ac of toUpgrade) {
       const cmd = ac.evidenceMethod.command
       ac.evidenceMethod.type = 'COMMAND'
-
       if (!cmd.includes('grep -c')) {
         recordEvidenceRewrite(ac.evidenceMethod, 'evidence-type-ratio', `${cmd} | wc -l | tr -d ' '`)
-
         if (ac.threshold?.op === 'contains') {
           ac.threshold.op = '>='
           ac.threshold.value = 1
@@ -1966,6 +1894,7 @@ Project root: ${PROJECT_ROOT}
       log(`Upgraded ${ac.id} evidence from GREP_CHECK to COMMAND (evidence-type-ratio enforcement)`)
     }
   }
+
 
   const MAX_ACS_PER_ISSUE = 6
   if (discovery.acs.length > MAX_ACS_PER_ISSUE) {
@@ -2070,14 +1999,11 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
     if (decomposeResult?.phase1AcIds?.length > 0) {
       const keepIds = new Set(decomposeResult.phase1AcIds)
       const originalAcs = [...discovery.acs]
-
       const filtered = originalAcs.filter(ac => keepIds.has(ac.id) || keepIds.has(ac.specElement) || (ac.specElement && ac.specElement.split(',').some(s => keepIds.has(s.trim()))))
       if (filtered.length === 0) {
-
         log(`WARN: decompose filter matched 0 ACs (keepIds=${[...keepIds].join(',')} vs acIds=${originalAcs.map(a=>a.id+'/'+a.specElement).join(',')}). Keeping the ${MAX_ACS_PER_ISSUE} that prove the most.`)
         discovery.acs = prioritiseAcs(originalAcs, MAX_ACS_PER_ISSUE)
       } else {
-
         discovery.acs = prioritiseAcs(filtered, MAX_ACS_PER_ISSUE)
       }
       acDeferrals = originalAcs
@@ -2088,7 +2014,6 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
           subIssue: (decomposeResult.subIssues || [])
             .find(s => (s.acIds || []).includes(ac.id) || (s.acIds || []).includes(ac.specElement))?.number,
         }))
-
       const splitViolations = decompositionRefusal(
         originalAcs,
         decomposeResult.phase1AcIds,
@@ -2214,11 +2139,9 @@ null in all four: it means git could not answer, not that the branch is current.
     type: 'object',
     properties: {
       acCount: { type: 'number' },
-
       configResolved: { type: 'boolean' },
       config: { type: 'object', properties: { pages: { type: 'object' }, apiUrl: { type: 'string' }, uiUrl: { type: 'string' }, container: { type: 'object', properties: { port: { type: 'number' }, rebuildCommand: { type: 'string' }, healthPath: { type: 'string' }, hosts: { type: 'array', items: { type: 'string' } } } }, test: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } } }, roles: { type: 'object' } } },
       priorBranch: { type: 'object', properties: { branch: { type: 'string' }, refName: { type: 'string' }, commitCount: { type: ['number', 'null'] }, behindCount: { type: ['number', 'null'] }, isBehind: { type: ['boolean', 'null'] }, isMerged: { type: ['boolean', 'null'] } } },
-
       harnessReading: { type: 'string', enum: ['MEASURED', 'UNMEASURED'] },
       harnessSha: { type: ['string', 'null'] },
       harnessWarning: { type: ['string', 'null'] },
@@ -2247,14 +2170,11 @@ console.log('ACs written: ' + s.acs.length);
   if (harnessReading !== 'MEASURED') {
     log('HARNESS_UNMEASURED: setup did not report which harness is grading this run (#602)')
   } else if (!harnessSha) {
-
     log('HARNESS_UNMEASURED: setup reported MEASURED with no usable SHA (#602)')
   } else {
     log(`Harness: ${harnessSha}`)
   }
-
   if (setupResult?.harnessWarning) {
-
     log(String(setupResult.harnessWarning).replace(/[\r\n]+/g, ' ').slice(0, 500))
   } else if (harnessReading === 'MEASURED' && !('harnessWarning' in (setupResult || {}))) {
     log('HARNESS_UNMEASURED: setup reported MEASURED but returned no divergence reading (#602)')
@@ -2265,7 +2185,6 @@ console.log('ACs written: ' + s.acs.length);
 }
 
 if (!await runDiscovery(null)) {
-
   return discoveryRefusal || await terminalFailure('DISCOVERY_FAILED', { reason: discoveryFailureReason })
 }
 
@@ -2318,7 +2237,6 @@ function localEnvClause(field, url, configKey) {
       `environments.local.${field} = "SKIP" with skipReason "no ${configKey} in the resolved config". ` +
       `Do not go looking for one.`
   }
-
   return `curl ${shellQuote(url)} and write environments.local.${field} = PASS or FAIL from what it answered. ` +
     `SKIP is NOT available for this project — the URL is resolved above, so a check you could not ` +
     `complete is a FAIL, not a skip.`
@@ -2463,9 +2381,7 @@ not real serialises the run for nothing.
   `, { label: 'to-issues', phase: 'Discovery', schema: M_DECOMPOSITION_SCHEMA })
 
   if (decompResult?.subIssues?.length >= 2) {
-
     const planViolations = denylistViolations(decompResult.subIssues, scopeDenied)
-
     const allFiles = new Set()
     let hasOverlap = false
     for (const sub of decompResult.subIssues) {
@@ -2475,7 +2391,6 @@ not real serialises the run for nothing.
       }
       if (hasOverlap) break
     }
-
     const coverageRefusal = planCoverageRefusal(planCoverage(discovery.filesToModify, decompResult.subIssues))
     if (planViolations.length > 0) {
       log(`SCOPE DENY-LIST: to-issues planned work on out-of-scope files — falling back to single-agent implement.\n${planViolations.join('\n')}`)
@@ -2490,6 +2405,7 @@ not real serialises the run for nothing.
   }
 }
 
+
 phase('Scope')
 const skipScope = discovery.ceremonyTier === 'LIGHT'
 
@@ -2500,10 +2416,8 @@ function scopeVerdictFor(ran, result) {
 }
 
 function dryRunEvidenceQuality(reading, scopeVerdict, failures) {
-
   const named = (Array.isArray(failures) ? failures.map(String) : []).filter(l =>
     l.includes('evidencePrevalidation') || l.includes('evidence pre-validation'))
-
   if (named.length > 0) return { status: 'FAIL', blockers: named }
 
   const unmeasured = reason => ({ status: 'UNMEASURED', blockers: [], reason })
@@ -2661,9 +2575,7 @@ whether this run may push onto the branch at all.
     log(`Prior branch merged: ${priorBranchResult.branch} (${priorBranchResult.refName})`)
   }
 } else if (priorBranchResult.branch) {
-
   if (!priorBranchResult.refName) priorBranchResult.refName = priorBranchResult.branch
-
   if (priorBranchResult.behindCount === undefined) priorBranchResult.behindCount = null
   if (priorBranchResult.isBehind === undefined) priorBranchResult.isBehind = null
   if (priorBranchResult.isMerged === undefined) priorBranchResult.isMerged = null
@@ -2709,7 +2621,6 @@ function priorWorkRefusal(issueNumber, priorBranch, existingPR) {
 }
 
 function lookupTargets(issue, issueRepo) {
-
   const digits = typeof issue === 'string' && /^\d+$/.test(issue.trim())
   const n = typeof issue === 'number' ? issue : digits ? Number(issue.trim()) : NaN
   if (!Number.isSafeInteger(n) || n < 0) {
@@ -2785,7 +2696,10 @@ if (priorWorkStop) {
   }
 }
 
+
+
 phase('Implement')
+
 
 async function runCeremonyOnce() {
   if (CACHED_CEREMONY) {
@@ -2912,7 +2826,6 @@ function implementRefusal(buildResult, label) {
   if (!buildResult || !buildResult.success) return null
   const files = Array.isArray(buildResult.filesChanged) ? buildResult.filesChanged : []
   if (files.length > 0) return null
-
   const said = (buildResult.testOutput && String(buildResult.testOutput).trim())
     || (Array.isArray(buildResult.findings) && buildResult.findings.length
       ? buildResult.findings.join('; ')
@@ -2984,7 +2897,6 @@ function reportedPathRefusal(buildResult, label) {
   for (let i = 0; i < files.length; i++) {
     const el = files[i]
     if (typeof el !== 'string' || el.trim() === '') continue
-
     if (filesChangedShapeRule(el)) continue
     const key = claimKey(wt, el)
     if (!key) continue
@@ -3078,37 +2990,31 @@ what it said rather than omitting the field.
     log(`IMPLEMENT FAILED: ${why.join(', ')}`)
     return { success: false, buildResult: { ...(buildResult || {}), success: false, findings: why } }
   }
-
   const emptyRefusal = implementRefusal(buildResult, 'marcus')
   if (emptyRefusal) {
     log(`IMPLEMENT FAILED: ${emptyRefusal}`)
     return { success: false, buildResult: { ...buildResult, success: false, findings: [emptyRefusal] } }
   }
-
   const shapeRefusal = filesChangedShapeRefusal(buildResult, 'marcus')
   if (shapeRefusal) {
     log(`IMPLEMENT FAILED: ${shapeRefusal}`)
     return { success: false, buildResult: { ...buildResult, success: false, findings: [shapeRefusal] } }
   }
-
   const pathRefusalFound = reportedPathRefusal(buildResult, 'marcus')
   if (pathRefusalFound) {
     log(`IMPLEMENT FAILED: ${pathRefusalFound}`)
     return { success: false, buildResult: { ...buildResult, success: false, findings: [pathRefusalFound] } }
   }
-
   const sourceRefusal = taskSourceRefusal(buildResult, 'marcus')
   if (sourceRefusal) {
     log(`IMPLEMENT FAILED: ${sourceRefusal}`)
     return { success: false, buildResult: { ...buildResult, success: false, findings: [sourceRefusal] } }
   }
   log(`IMPLEMENT SUCCESS — ${(buildResult.filesChanged || []).length} files changed`)
-
   return {
     success: true,
     buildResult: {
       ...buildResult,
-
       agentResults: [{
         worktreePath: buildResult.worktreePath || '',
         worktreeRepo: buildResult.worktreeRepo || '',
@@ -3119,6 +3025,7 @@ what it said rather than omitting the field.
 }
 
 const DEFAULT_BRANCHES = new Set(['main', 'master'])
+
 
 function runRefName(issue) {
   return `rungate/run-${issue}`
@@ -3143,7 +3050,6 @@ function waveNeedsIntegration(waveIndex, totalWaves) {
 }
 
 function waveCommitFailure(reply, waveIndex, runRef) {
-
   const landedOn = reply && typeof reply.branch === 'string' ? reply.branch.trim() : ''
 
   if (!reply || reply.committed !== true) {
@@ -3234,11 +3140,9 @@ Do not create, delete or push any other ref, and do not switch again.
     type: 'object',
     properties: {
       branch: { type: 'string' },
-
       branchBefore: { type: 'string' },
       leftoverReading: { type: 'string' },
       leftoverNotice: { type: ['string', 'null'] },
-
       priorTip: { type: 'string' },
       headAfter: { type: 'string' },
     },
@@ -3257,7 +3161,6 @@ Do not create, delete or push any other ref, and do not switch again.
   log(`RUN_BRANCH_START: ${startReading} (${runRefName(ISSUE)})`)
   const startRefusal = runBranchStartRefusal(startReading, runRefName(ISSUE))
   if (startRefusal) log(`RUN_BRANCH_START ${startReading}: ${startRefusal}`)
-
   const reportedBefore = reply && typeof reply.branchBefore === 'string' ? reply.branchBefore.trim() : ''
   const looksLikeRef = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$/.test(reportedBefore)
   if (reportedBefore && !looksLikeRef) {
@@ -3273,7 +3176,6 @@ Do not create, delete or push any other ref, and do not switch again.
     log('RUN_BRANCH_UNMEASURED: the shared checkout\'s starting branch was not reported, ' +
       'so nothing at the end of this run can say whether it was put back (#640)')
   }
-
   if (reply?.leftoverNotice) {
     log(String(reply.leftoverNotice).replace(/[\r\n]+/g, ' ').slice(0, 500))
   } else if (reply?.leftoverReading && reply.leftoverReading !== 'ABSENT') {
@@ -3284,7 +3186,6 @@ Do not create, delete or push any other ref, and do not switch again.
 }
 
 async function integrateWave(accepted, waveIndex, totalWaves, runRef) {
-
   const rows = accepted.filter(r => r && r.buildResult).map(claimedWorktreeRow)
   if (rows.length === 0) {
     return { ok: true, integrated: 0, reason: 'no accepted output in this wave' }
@@ -3306,7 +3207,6 @@ async function integrateWave(accepted, waveIndex, totalWaves, runRef) {
     return { ok: false, integrated: 0, detail: collected.detail || 'collect failed' }
   }
   if (collected.collected === 0) {
-
     return { ok: true, integrated: 0, reason: 'every accepted worktree was the project root' }
   }
 
@@ -3358,7 +3258,6 @@ function claimKey(worktreePath, p) {
 
   const absolute = s.startsWith('/')
   const segments = s.split('/').filter(seg => seg !== '' && seg !== '.')
-
   return (absolute ? '/' : '') + segments.join('/')
 }
 
@@ -3419,7 +3318,6 @@ function auditWorktreeClaims(results) {
     for (const raw of (Array.isArray(r.filesChanged) ? r.filesChanged : [])) {
       const key = claimKey(wt, raw)
       if (!key) continue
-
       const refusal = pathRefusal(key)
       if (refusal) {
         violations.push({
@@ -3430,7 +3328,6 @@ function auditWorktreeClaims(results) {
         })
         continue
       }
-
       if (DA_OWNED_FILES.has(key)) {
         violations.push({
           worktreePath: wt, path: key, claimant: null,
@@ -3441,7 +3338,6 @@ function auditWorktreeClaims(results) {
       if (CO_OWNED_FILES.has(key)) {
         const writers = coOwnedWriters[key] || [wt]
         if (writers.length === 1) {
-
           kept.push(key)
           continue
         }
@@ -3451,13 +3347,11 @@ function auditWorktreeClaims(results) {
         })
         continue
       }
-
       if (unconstrained) {
         kept.push(key)
         continue
       }
       const owners = claimants[key] || []
-
       const claimant = owners.length === 1 ? owners[0] : null
 
       if (owners.length > 1) {
@@ -3471,7 +3365,6 @@ function auditWorktreeClaims(results) {
         kept.push(key)
         continue
       }
-
       violations.push({
         worktreePath: wt, path: key, claimant,
         detail: claimant
@@ -3492,14 +3385,11 @@ function claimedWorktreeRow(settled) {
   const built = (settled && settled.buildResult) || {}
   return {
     worktreePath: built.worktreePath || '',
-
     worktreeRepo: built.worktreeRepo || '',
     filesChanged: built.filesChanged || [],
-
     claimedFiles: (settled && settled.subIssue && settled.subIssue.filesToModify) || [],
   }
 }
-
 function waveKey(title) {
   return String(title ?? '').trim().toLowerCase()
 }
@@ -3582,7 +3472,6 @@ async function runDecomposedShip(subIssues) {
   }
 
   if (!hasOverlap && subIssues.length > 1) {
-
     log(`Sub-issues have independent filesToModify — dispatching ${subIssues.length} concurrently`)
     const batchIssues = subIssues.map((sub, i) => ({
       number: ISSUE * 1000 + i + 1,
@@ -3633,7 +3522,6 @@ directory (#218) — not the repo named in your brief, the one your checkout has
         log(`Sub-issue FAILED: ${subIssue.title}`)
         return { subIssue, buildResult, ok: false }
       }
-
       const subRefusal = implementRefusal(buildResult, `marcus-sub-${subIssue.number}`)
       if (subRefusal) {
         log(`Sub-issue FAILED: ${subIssue.title} — ${subRefusal}`)
@@ -3643,7 +3531,6 @@ directory (#218) — not the repo named in your brief, the one your checkout has
           ok: false,
         }
       }
-
       const subShapeRefusal = filesChangedShapeRefusal(buildResult, `marcus-sub-${subIssue.number}`)
       if (subShapeRefusal) {
         log(`Sub-issue FAILED: ${subIssue.title} — ${subShapeRefusal}`)
@@ -3653,7 +3540,6 @@ directory (#218) — not the repo named in your brief, the one your checkout has
           ok: false,
         }
       }
-
       const subPathRefusal = reportedPathRefusal(buildResult, `marcus-sub-${subIssue.number}`)
       if (subPathRefusal) {
         log(`Sub-issue FAILED: ${subIssue.title} — ${subPathRefusal}`)
@@ -3663,7 +3549,6 @@ directory (#218) — not the repo named in your brief, the one your checkout has
           ok: false,
         }
       }
-
       const subSourceRefusal = taskSourceRefusal(buildResult, `marcus-sub-${subIssue.number}`)
       if (subSourceRefusal) {
         log(`Sub-issue FAILED: ${subIssue.title} — ${subSourceRefusal}`)
@@ -3680,7 +3565,6 @@ directory (#218) — not the repo named in your brief, the one your checkout has
     const plan = dependencyWaves(subIssues)
     log(wavePlanSummary(plan, subIssues.length))
     if (plan.refusal) {
-
       return {
         success: false,
         completed: [],
@@ -3712,7 +3596,6 @@ directory (#218) — not the repo named in your brief, the one your checkout has
     for (let w = 0; w < plan.waves.length; w++) {
       const wave = plan.waves[w]
       if (waveFailed) {
-
         for (const i of wave) {
           settled.push({
             subIssue: batchIssues[i],
@@ -3723,11 +3606,9 @@ directory (#218) — not the repo named in your brief, the one your checkout has
         continue
       }
       if (w > 0) log(plan.reasons[w - 1])
-
       if (w > 0 && runRef) {
         const reread = await establishRunRef()
         if (reread.refusal) {
-
           waveFailed = true
           log(`Wave ${w + 1} was not dispatched: ${reread.refusal}`)
           for (const i of wave) {
@@ -3750,10 +3631,8 @@ directory (#218) — not the repo named in your brief, the one your checkout has
           log(`Run ref re-established as ${reread.branch} before wave ${w + 1} — the shared ` +
             `checkout had moved off ${runRef} (#652)`)
         }
-
         runRef = reread.branch
       }
-
       const waveBase = await measureLaunchBase('Implement', `launch-base-wave-${w + 1}`)
       if (waveBase.refusal) {
         waveFailed = true
@@ -3775,7 +3654,6 @@ directory (#218) — not the repo named in your brief, the one your checkout has
         }
         continue
       }
-
       const waveResults = await parallel(wave.map(i => () => shipSubIssue(batchIssues[i])))
       for (let k = 0; k < wave.length; k++) {
         const r = waveResults[k]
@@ -3783,10 +3661,8 @@ directory (#218) — not the repo named in your brief, the one your checkout has
       }
       if (waveResults.some(r => !r || !r.ok)) {
         waveFailed = true
-
         continue
       }
-
       if (!waveNeedsIntegration(w, plan.waves.length)) continue
       const integrated = await integrateWave(waveResults, w, plan.waves.length, runRef)
       if (!integrated.ok) {
@@ -3826,7 +3702,6 @@ directory (#218) — not the repo named in your brief, the one your checkout has
           success: false,
           filesChanged: allFilesChanged,
           worktreePath: completed[completed.length - 1]?.buildResult?.worktreePath || PROJECT_ROOT,
-
           agentResults: completed.map(claimedWorktreeRow),
         }
       }
@@ -3841,12 +3716,10 @@ directory (#218) — not the repo named in your brief, the one your checkout has
         success: true,
         filesChanged: allFilesChanged,
         worktreePath: completed[completed.length - 1]?.buildResult?.worktreePath || PROJECT_ROOT,
-
         agentResults: completed.map(claimedWorktreeRow),
       }
     }
   } else {
-
     log(`Sub-issues have overlapping files — shipping sequentially through single agent`)
     const allAcs = subIssues.flatMap(s => s.acs)
     const allFiles = [...new Set(subIssues.flatMap(s => s.filesToModify))]
@@ -3873,7 +3746,6 @@ if (preCollectIdentity.length > 0) {
   for (const r of preCollectIdentity) log(`COLLECT REFUSED: ${r}`)
   return await terminalFailure('WORKTREE_REPO_MISMATCH', {
     reason: preCollectIdentity.join('; '),
-
     agentResults: (implementResult.buildResult?.agentResults || []).map(r => ({
       ...r,
       ...(r && r.worktreeRepo ? { worktreeRepo: redactRemote(r.worktreeRepo) } : {}),
@@ -3908,7 +3780,6 @@ const marcusWorktreePath = implementResult.buildResult?.worktreePath || PROJECT_
 
 if (!collectDestination(marcusWorktreePath)) {
   log(`IMPLEMENT REFUSED: ${marcusWorktreePath} is not this run's project root nor one of its agent worktrees`)
-
   return await shipFailed('Implement',
     'the implement step reported a worktree this run will not commit from: ' +
     `${String(marcusWorktreePath).slice(0, 200)} is neither this run's project root nor one of ` +
@@ -3917,9 +3788,10 @@ if (!collectDestination(marcusWorktreePath)) {
     symlinkHint(marcusWorktreePath))
 }
 
+
+
 phase('Validate')
 let quinnLocalResult = { result: 'PASS' }
-
 let quinnLocalRan = false
 
 const CONTAINER_HOST = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/
@@ -3967,7 +3839,6 @@ function containerProbeTarget(container) {
         'an absolute path, so nothing was probed. This is UNMEASURED, not DOWN',
     }
   }
-
   if (healthPath.length > 200 || CONTAINER_HEALTH_PATH_UNSAFE.test(healthPath)) {
     return {
       kind: 'unmeasured',
@@ -4001,7 +3872,6 @@ function prodQuinnRecord(containerRan, containerResult, probeKind) {
         : '',
     }
   }
-
   if (probeKind === 'unmeasured') {
     return {
       quinn: 'FAIL',
@@ -4117,6 +3987,7 @@ Report what you fixed.
   log('Quinn local: SKIPPED (LIGHT tier)')
 }
 
+
 phase('Commit')
 log('Committing code')
 
@@ -4208,7 +4079,6 @@ an empty array.
             required: ['worktreePath', 'status'],
           },
         },
-
         overlapLines: { type: 'array', items: { type: 'string' } },
       },
       required: ['entries'],
@@ -4235,7 +4105,6 @@ an empty array.
 }
 
 async function collectAgentWork(results, intoDir, phaseName, label) {
-
   if (!Array.isArray(results)) {
     return {
       ok: false,
@@ -4244,7 +4113,6 @@ async function collectAgentWork(results, intoDir, phaseName, label) {
       detail: `refusing to collect: the caller passed no list of agent results (got ${results === null ? 'null' : typeof results}) — a caller that cannot say what to collect is a failure, not an empty success (#162)`,
     }
   }
-
   const refuse = async (detail, refusedPaths = []) => {
     const kept = await preserveRefusedWork(results, phaseName, `${label}-preserve`, refusedPaths)
     return { ok: false, collected: 0, staged: false, detail: `${detail}${kept.detail}` }
@@ -4258,7 +4126,6 @@ async function collectAgentWork(results, intoDir, phaseName, label) {
       audit.violations.map(v => v.path),
     )
   }
-
   const list = results
   const worktrees = [...new Set(list.map(r => r.worktreePath).filter(Boolean))]
   const elsewhere = worktrees.filter(w => w !== intoDir)
@@ -4270,9 +4137,7 @@ async function collectAgentWork(results, intoDir, phaseName, label) {
   }
 
   log(`Collecting work from ${elsewhere.length} worktree(s) into ${dest} (#81, #155)`)
-
   const groupsJson = JSON.stringify(audit.candidates)
-
   const out = await timedAgent(`
 Run exactly this and report the result:
 
@@ -4298,20 +4163,17 @@ its "COLLECTED <n>" stdout line, or 0 if there is none. Put stderr in detail.
   })
 
   if (!out || out.ok !== true || !(out.collected > 0)) {
-
     return refuse(out?.detail || 'no usable result from the collect step')
   }
   return { ok: true, collected: out.collected, staged: true }
 }
 
 if (distinctWorktrees.length > 1) {
-
   const collectInto = collectTarget(distinctWorktrees, marcusWorktreePath)
   const collected = await collectAgentWork(agentResults, collectInto, 'Commit', 'collect-worktrees')
   if (!collected.ok) {
     return shipFailed('Commit', `Could not collect parallel worktree output (#81): ${collected.detail}`)
   }
-
   commitDir = collectInto
   alreadyStaged = true
   log(`Collected and staged ${collected.collected} files into ${collectInto}`)
@@ -4331,15 +4193,12 @@ function reusablePriorBranch(prior) {
   if (!prior || !prior.branch) return null
 
   const refusals = []
-
   const nominated = String(prior.branch).trim()
   if (!isSafeBranchName(nominated)) refusals.push('it is not a usable branch name')
-
   if (/^(?:refs|heads|remotes|tags|origin)\//i.test(nominated)) {
     refusals.push('it is a fully-qualified ref rather than a branch name, and `HEAD:refs/heads/x` ' +
       'reaches the same place by a different spelling')
   }
-
   const bare = bareBranchName(nominated).toLowerCase()
   const before = primaryBranchBefore ? bareBranchName(primaryBranchBefore).toLowerCase() : ''
   if (DEFAULT_BRANCHES.has(bare) || (before && bare === before)) {
@@ -4354,7 +4213,6 @@ function reusablePriorBranch(prior) {
   }
 
   if (refusals.length === 0) return nominated
-
   log(`Not pushing onto prior branch ${nominated.slice(0, 80)}: ${refusals.join('; ')}. Pushing HEAD instead.`)
   return null
 }
@@ -4366,9 +4224,7 @@ log(`Marcus reported ${(implementResult.buildResult?.filesChanged || []).length}
 const gitAddForCommit = alreadyStaged
   ? `git -C ${shellQuote(commitDir)} diff --cached --quiet && echo "NOTHING_STAGED" || true`
   : gitDerivedStaging(commitDir)
-
 const quinnLocalVerdict = quinnVerdictFor(quinnLocalRan, quinnLocalResult)
-
 const commitSubjectPath = `${WORK_DIR}/commit-subject.txt`
 const commitResult = await timedAgent(`
 Do ALL of these steps in order. Do NOT run tests — the test suite was already validated.
@@ -4432,7 +4288,6 @@ Report: branch name, commit SHA, pushed (true/false), stateRecorded (true/false)
 }})
 
 if (!commitResult?.commitSha) {
-
   return await terminalFailure('COMMIT_FAILED', {
     reason: commitResult
       ? 'the commit step replied but reported no commit SHA, so nothing can confirm the work was committed'
@@ -4467,6 +4322,7 @@ if (shipBranch === 'main' || shipBranch === 'master') {
   return await terminalFailure('COMMIT_FAILED', { reason: 'work is on the default branch', issue: ISSUE, slug: SLUG })
 }
 log(`Work branch: ${shipBranch}`)
+
 
 phase('Verify')
 
@@ -4506,23 +4362,18 @@ if (verifyResult?.result === 'FAIL') {
     log(`Verify CODE regression #${regressionCount} — re-implementing failed ACs`)
     const reimpl = await runImplement()
     if (reimpl.success) {
-
       const gathered = await collectAgentWork(
         reimpl.buildResult?.agentResults, commitDir, 'Verify', 'collect-verify-regression')
       if (!gathered.ok) {
-
         log(`Verify regression work could not be collected (#155) — verify stays FAIL: ${gathered.detail}`)
       } else {
-
       const reimplGitAdd = gathered.staged ? `git -C ${shellQuote(commitDir)} diff --cached --quiet; true` : gitDerivedStaging(commitDir)
-
       const DELETION_VERDICT_SCHEMA = {
         type: 'object',
         properties: {
           commitSha: { type: 'string' },
           parentSha: { type: 'string' },
           stateRecorded: { type: 'boolean' },
-
           deletionVerdict: { type: 'string', enum: ['CLEAN', 'DELETED', 'UNMEASURED'] },
           deletion: {
             type: 'object',
@@ -4537,7 +4388,6 @@ if (verifyResult?.result === 'FAIL') {
                   properties: { file: { type: 'string' }, name: { type: 'string' } }
                 }
               },
-
               reason: { type: ['string', 'null'] },
               waived: {
                 type: 'array',
@@ -4546,14 +4396,12 @@ if (verifyResult?.result === 'FAIL') {
                   properties: {
                     file: { type: 'string' },
                     name: { type: 'string' },
-
                     ledgerReading: { type: 'string', enum: ['green', 'red', 'unjudged'] },
                     acceptedReason: { type: 'string' }
                   }
                 }
               },
               unusedWaivers: { type: 'array', items: { type: 'string' } },
-
               renamed: {
                 type: 'array',
                 items: {
@@ -4565,7 +4413,6 @@ if (verifyResult?.result === 'FAIL') {
                   }
                 }
               },
-
               signature: { type: 'string' }
             }
           }
@@ -4574,7 +4421,6 @@ if (verifyResult?.result === 'FAIL') {
       }
 
       const DELETION_VERDICTS = ['CLEAN', 'DELETED', 'UNMEASURED']
-
       const DELETION_WAIVER_SEPARATOR = ' :: '
 
       function deletionSignatureFold(s) {
@@ -4631,7 +4477,6 @@ if (verifyResult?.result === 'FAIL') {
         }
         const expected = recomputeDeletionSignature(a)
         if (typeof a.signature !== 'string' || a.signature === '') {
-
           return unmeasured(
             `UNMEASURED deletion — the reading carried no signature, so nothing could be compared ` +
             `against what the script computed. The verdict reached this run through an agent ` +
@@ -4657,7 +4502,6 @@ if (verifyResult?.result === 'FAIL') {
         const unused = Array.isArray(a.unusedWaivers) ? a.unusedWaivers : []
         const renamed = Array.isArray(a.renamed) ? a.renamed : []
         const named = list => list.map(c => `${c.file}${DELETION_WAIVER_SEPARATOR}${c.name}`).join('; ')
-
         if (renamed.length > 0) {
           lines.push(
             `DELETION_RENAMED: ${renamed.length} case(s) changed title and nothing else — ` +
@@ -4665,7 +4509,6 @@ if (verifyResult?.result === 'FAIL') {
             `. Their bodies are byte-identical after comments and whitespace, so no coverage left ` +
             `with them and nothing needs restoring (#880)`)
         }
-
         if (unused.length > 0) {
           lines.push(
             `DELETION_STALE_WAIVER: ${unused.join(', ')} matched no deleted case. Either the ` +
@@ -4680,7 +4523,6 @@ if (verifyResult?.result === 'FAIL') {
             `${a.verdict === 'UNMEASURED' && a.reason ? ` — ${a.reason}` : ''} (#659)`)
           return { verdict: a.verdict, lines }
         }
-
         if (waived.length === 0) {
           lines.push('DELETION_CLEAN: no test case that passed at the previous build commit is gone (#659)')
           return { verdict: 'CLEAN', lines }
@@ -4699,7 +4541,6 @@ if (verifyResult?.result === 'FAIL') {
         }
         return { verdict: 'CLEAN', lines }
       }
-
       const reCommit = await timedAgent(`
 Do NOT run tests — they were already validated.
 prevBuild=$(git -C ${shellQuote(commitDir)} rev-parse HEAD)   # this is parentSha, and the buildCommit the gate graded
@@ -4756,13 +4597,10 @@ a reading of what you already committed, and repairing the reading is the
 defect it exists to catch (#659). Report what it printed.
       `, { label: 'recommit-verify', phase: 'Verify', schema: DELETION_VERDICT_SCHEMA })
       if (!reCommit || !reCommit.commitSha || reCommit.commitSha === reCommit.parentSha) {
-
         log(`Verify regression produced no commit (#155) — HEAD is still ${reCommit?.parentSha || 'unknown'}`)
       }
-
       const reVerifyStateRefusal = commitStateRefusal(reCommit)
       if (reVerifyStateRefusal) log(`${reVerifyStateRefusal} — buildCommit still names the pre-regression commit (#169)`)
-
       const deletionReadingOfRound = deletionVerdictReading(reCommit)
       const deletionVerdict = deletionReadingOfRound.verdict
       for (const line of deletionReadingOfRound.lines) log(line)
@@ -4775,7 +4613,6 @@ defect it exists to catch (#659). Report what it printed.
           : `Verify gate passed after BUILD regression fix, but the round's deletions are ${deletionVerdict} — ` +
             'a gate that passes because its test is gone is not a gate that passed (#659)')
       }
-
       if (deletionVerdict !== 'CLEAN') {
         return await terminalFailure('VERIFY_FAILED', {
           reason: `the verify BUILD regression round's deletions are ${deletionVerdict}, so the ` +
@@ -4786,10 +4623,8 @@ defect it exists to catch (#659). Report what it printed.
           verifyResult: retryVerify || verifyResult,
         })
       }
-
       }
     } else {
-
       const why = (reimpl?.buildResult?.findings || []).join('; ')
         || (reimpl?.buildResult?.testOutput && String(reimpl.buildResult.testOutput).trim())
         || 'the remediation agent reported failure with no detail'
@@ -4802,6 +4637,7 @@ defect it exists to catch (#659). Report what it printed.
     }
   }
 }
+
 
 function rookReviewSha(value) {
   if (typeof value !== 'string') return null
@@ -5006,6 +4842,7 @@ function securityRefusalName(held, roundsSpent) {
     : 'SECURITY_REVIEW_DID_NOT_PASS'
 }
 
+
 function suiteSha(value) {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
@@ -5017,7 +4854,6 @@ function describeSuiteShaValue(v) {
   if (v === null) return 'null'
   if (Array.isArray(v)) return `an array of ${v.length}`
   if (typeof v === 'object') return 'an object'
-
   return JSON.stringify(v) ?? String(v)
 }
 
@@ -5067,7 +4903,6 @@ function rookScopeCommand(projectRoot, harnessRoot, sha, outPath, base) {
       `rookScopeCommand: "${String(sha).slice(0, 80)}" is not a commit SHA — ` +
       `refusing to build a scope command the review cannot be pinned to`)
   }
-
   let pinnedBase = null
   if (base !== undefined && base !== null && base !== '') {
     pinnedBase = rookReviewSha(base)
@@ -5077,7 +4912,6 @@ function rookScopeCommand(projectRoot, harnessRoot, sha, outPath, base) {
         `refusing to build a re-review scope command against a base it cannot pin`)
     }
   }
-
   const q = w => `'${String(w).replace(/'/g, "'\\''")}'`
   return `bun --cwd ${q(projectRoot)} ${q(`${harnessRoot}/scripts/rook-review-scope.ts`)} ` +
     `--project ${q(projectRoot)} --sha ${pinned}` +
@@ -5104,7 +4938,6 @@ function rookGateVerdict(scope, rook) {
   } else if (!Array.isArray(scope.files)) {
     failures.push(`the review scope is not a list of files (got ${describe(scope.files)}) — refusing to treat an unreadable scope as a reviewed one`)
   } else if (scope.files.filter(f => typeof f === 'string' && f.trim() !== '').length === 0) {
-
     failures.push('the review scope is empty — the security review read zero files, so its verdict says nothing about this change (#129)')
   }
 
@@ -5132,19 +4965,16 @@ const reviewSha = rookReviewSha(commitResult.commitSha)
 let securityVerdict = { spawned: false, verdict: 'FAIL', failures: ['the security review did not run'] }
 
 const containerConfig = projectConfig.container || null
-
 const containerProbe = containerProbeTarget(containerConfig)
 
 async function runContainerVerify() {
 if (discovery.ceremonyTier !== 'LIGHT' && containerConfig) {
   const rebuildCmd = containerConfig.rebuildCommand
-
   const containerHosts = (containerConfig.hosts || []).filter(h => typeof h === 'string' && CONTAINER_HOST.test(h))
   const containerPort = containerProbe.kind === 'probe' ? containerProbe.port : null
   const containerHealthPath = containerProbe.kind === 'probe' ? containerProbe.healthPath : '/'
 
   if (rebuildCmd) {
-
     const REBUILD_REFUSE_EXIT = 1
     const rebuildRunner =
       'const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));' +
@@ -5168,7 +4998,6 @@ Report the full output.
   }
 
   if (containerProbe.kind === 'probe') {
-
     const hostChecks = containerHosts.map((h, i) => `${i + 1}. curl -s -o /dev/null -w "%{http_code}" ${shellQuote(`http://${h}:${containerPort}${containerHealthPath}`)} 2>/dev/null\n   - host${i} = true if 200, false otherwise`).join('\n')
     const hostSchema = {}
     containerHosts.forEach((h, i) => { hostSchema['host' + i] = { type: 'boolean' } })
@@ -5184,7 +5013,6 @@ ${hostChecks}
 
     const hostIdx = containerHosts.findIndex((h, i) => envCheck && envCheck['host' + i])
     const testHost = hostIdx >= 0 ? containerHosts[hostIdx] : null
-
     log(`Container env: ${containerHosts.map((h, i) => `${h}=${envCheck?.['host' + i]}`).join(', ')}, using=${testHost || 'NONE'}, probed=${containerProbe.safeUrl}`)
 
     if (testHost) {
@@ -5219,13 +5047,11 @@ by scripts/resolve-config.ts at setup. Do NOT read the project's own config file
 ### ACs to Verify
 ${discovery.acs.map(ac => `- ${ac.id}: ${ac.statement}`).join('\n')}
       `, { label: 'quinn-container', phase: 'Verify', role: 'quinn', schema: GATE_RESULT_SCHEMA })
-
       quinnContainerRan = true
     } else {
       log('WARN: No test container available — skipping container Quinn')
     }
   } else {
-
     log(`WARN: container verify did not probe — ${containerProbe.detail}`)
   }
 } else if (discovery.ceremonyTier !== 'LIGHT') {
@@ -5237,7 +5063,6 @@ async function runRookReview(opts) {
 const roundNumber = (opts && opts.round) || 0
 const reviewTarget = (opts && opts.sha) || reviewSha
 const reviewBase = (opts && opts.base) || null
-
 if (!reviewTarget) {
   log('SECURITY: no commit SHA to pin the review to — the review cannot be scoped, and the run is blocked (#129)')
   securityVerdict = rookGateVerdict(null, null)
@@ -5384,7 +5209,6 @@ the failure this step exists to catch (#169).
 }})
 
 const headSha = currencyProbe?.headSha
-
 let testedSha = currencyProbe?.testedSha
 const suiteResult = currencyProbe?.suiteResult
 const suiteMeasuredSha = currencyProbe?.suiteMeasuredSha
@@ -5409,7 +5233,6 @@ while (!reviewCurrency.current) {
 
   const reReviewScopeKind = reReviewScope(securityVerdict)
   const reviewedBase = reReviewBaseFor(securityVerdict, testedSha)
-
   if (reReviewScopeKind === REVIEW_SCOPE_DIFF && !reviewedBase) break
 
   reReviewRounds++
@@ -5441,7 +5264,6 @@ while (!reviewCurrency.current) {
   if (securityVerdict.cleared) {
     log(`SECURITY: round ${reReviewRounds} read all of ${securityVerdict.cleared.clearedBySha} and cleared ${securityVerdict.cleared.priorFailures.length} earlier finding(s) about ${securityVerdict.cleared.priorSha || 'an unrecorded commit'}`)
   }
-
   testedSha = (reReviewed && reReviewed.testedSha) || reReviewTarget
   reviewCurrency = reviewIsCurrent(testedSha, headSha)
 }
@@ -5449,7 +5271,6 @@ while (!reviewCurrency.current) {
 if (securityVerdict.verdict !== 'PASS') {
   for (const f of securityVerdict.failures) log(`SECURITY BLOCK: ${f}`)
   log(`SECURITY: the run is blocked and no PR will be opened (spawned=${securityVerdict.spawned})`)
-
   return shipFailed('Security', `${securityRefusalName(securityVerdict, reReviewRounds)}: ${securityVerdict.failures.join('; ')}`,
     { security: securityVerdict })
 }
@@ -5464,7 +5285,6 @@ if (!reviewCurrency.current) {
   log(`SECURITY: the run is blocked and no PR will be opened (spawned=${securityVerdict.spawned})`)
   return shipFailed('Security', reason, { security: securityVerdict })
 }
-
 log(`Security review PASSED, and is current at ${headSha}`)
 
 const suiteCurrencyVerdict = suiteCurrency(suiteMeasuredSha, headSha)
@@ -5540,12 +5360,10 @@ Find the workflow transcript directory and run grading + efficiency analysis + w
           total: { type: 'number' },
           followed: { type: 'number' },
           flagged: { type: 'array', items: { type: 'string' } },
-
           violationIds: { type: 'array', items: { type: 'string' } }
         },
         required: ['role', 'total', 'followed', 'violationIds']
       }},
-
       rawGradeOutput: { type: 'string' },
       efficiency: { type: 'object', properties: {
         fileEfficiency: { type: 'string' },
@@ -5558,9 +5376,7 @@ Find the workflow transcript directory and run grading + efficiency analysis + w
         type: 'object',
         properties: {
           agent: { type: 'string' },
-
           seconds: { type: 'number' },
-
           queuedSeconds: { type: 'number' },
           workSeconds: { type: 'number' },
           unterminated: { type: 'boolean' },
@@ -5582,7 +5398,6 @@ Find the workflow transcript directory and run grading + efficiency analysis + w
   }
   if (gradeResult?.timing?.length) {
     for (const t of gradeResult.timing) {
-
       const queued = typeof t.queuedSeconds === 'number' && t.queuedSeconds > 0
         ? ` (queued ${t.queuedSeconds}s, work ${typeof t.workSeconds === 'number' ? t.workSeconds : '?'}s)`
         : ''
@@ -5619,10 +5434,8 @@ Find the workflow transcript directory and run grading + efficiency analysis + w
               TIER_PROMOTION_RECOMMENDED: { type: 'array', items: PERSIST_RECEIPT_OCCURRENCE },
               REINFORCEMENT_ALREADY_PRESENT: { type: 'array', items: PERSIST_RECEIPT_OCCURRENCE },
               NO_SUITABLE_SECTION: { type: 'array', items: PERSIST_RECEIPT_OCCURRENCE },
-
               NO_BRIEF_REGISTERED: { type: 'array', items: PERSIST_RECEIPT_OCCURRENCE },
               OUTCOMES_UNACCOUNTED: { type: 'array', items: PERSIST_RECEIPT_OCCURRENCE },
-
               COMP_HAS_NO_SECTION_MAPPING: { type: 'array', items: PERSIST_RECEIPT_OCCURRENCE }
             }
           },
@@ -5631,7 +5444,6 @@ Find the workflow transcript directory and run grading + efficiency analysis + w
           unmeasuredReasons: { type: 'array', items: { type: 'string' } }
         }
       },
-
       receiptSignature: { type: 'string' },
       error: { type: 'string' }
     },
@@ -5672,14 +5484,12 @@ Find the workflow transcript directory and run grading + efficiency analysis + w
     const readable =
       `v1:${hillClimb.reading}:${counts}:u${unclassified}` +
       `:a${applied}:p${r.persisted ? 1 : 0}:g${r.graded}`
-
     const verified = Array.isArray(r.verified) ? r.verified : []
     const reasons = Array.isArray(hillClimb.unmeasuredReasons) ? hillClimb.unmeasuredReasons : []
     return `${readable}:h${persistSignatureFold([...verified, '\u0000', ...reasons].join('\u0001'))}`
   }
 
   function persistReceiptLines(persistResult) {
-
     if (!persistResult || !persistResult.ok) {
       return [`WARN: compliance persistence FAILED — trends, hill-climb and re-grading did not run for this issue: ${(persistResult && persistResult.error) || 'no receipt returned'}`]
     }
@@ -5696,11 +5506,9 @@ Find the workflow transcript directory and run grading + efficiency analysis + w
       `hill-climb reinforcements=${persistResult.hillClimbApplied ?? 0}` +
       (named.length ? `, not applied: ${named.join(', ')}` : ''),
     )
-
     if (!hillClimb) {
       lines.push('UNMEASURED hill-climb — the receipt carried no hillClimb reading at all, so which of the five outcomes each role reached is unknown for this run (#646)')
     } else if (!PERSIST_READINGS.includes(hillClimb.reading)) {
-
       lines.push(
         `UNMEASURED hill-climb — the receipt's reading is ${JSON.stringify(hillClimb.reading)}, ` +
         `which is neither MEASURED nor UNMEASURED. The script emits only those two, so this is the ` +
@@ -5710,11 +5518,9 @@ Find the workflow transcript directory and run grading + efficiency analysis + w
     } else if (hillClimb.reading === 'UNMEASURED') {
       lines.push(`UNMEASURED hill-climb — ${(hillClimb.unmeasuredReasons || []).join('; ')}`)
     }
-
     const expectedSignature = recomputeReceiptSignature(persistResult)
     const carriedSignature = persistResult.receiptSignature
     if (typeof carriedSignature !== 'string' || carriedSignature === '') {
-
       lines.push(
         `UNMEASURED relay — the receipt carried no receiptSignature, so nothing could be compared ` +
         `against what the script computed. The fields above reached the operator through an agent ` +
@@ -5794,7 +5600,6 @@ function gradeSummaryDisagreements(gradeResult) {
   }
   const out = []
   for (const id of BLOCKING_GRADE_VIOLATIONS) {
-
     const token = new RegExp(`(^|[^A-Za-z0-9_-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_-]|$)`)
     if (token.test(raw) && !claimed.has(id)) {
       out.push(`the grading script's output names ${id} and the summary does not — the two disagree, and the summary is not the authority`)
@@ -5806,7 +5611,6 @@ function gradeSummaryDisagreements(gradeResult) {
 function blockingGradeViolations(grades) {
   const found = []
   for (const g of Array.isArray(grades) ? grades : []) {
-
     const ids = Array.isArray(g?.violationIds) ? g.violationIds.map(x => String(x).trim()) : []
     const flagged = Array.isArray(g?.flagged) ? g.flagged : []
     const fromProse = flagged.map(entry => String(entry).split(':')[0].trim())
@@ -5815,7 +5619,6 @@ function blockingGradeViolations(grades) {
       const id = entry
       if (BLOCKING_GRADE_VIOLATIONS.includes(id) && !seen.has(id)) {
         seen.add(id)
-
         const label = typeof g?.label === 'string' && g.label.trim() ? g.label.trim() : ''
         const who = label && label !== g?.role ? `${g.role} (${label})` : (g?.role || 'unknown')
         found.push(`${who}: ${entry}`)
@@ -5826,15 +5629,12 @@ function blockingGradeViolations(grades) {
 }
 
 if (SKIP_GRADE) {
-
   log('GRADE BLOCK: skipped (skipGrade=true) — NO blocking-grade check ran for this run')
 } else if (!gradeResult || !Array.isArray(gradeResult.grades)) {
-
   const reason = 'BLOCKING_GRADE_MISSING: grading was not skipped but returned no grades array — the run cannot show its compliance evidence'
   log(`GRADE BLOCK: ${reason}`)
   return shipFailed('Grade', reason, { grades: [] })
 } else {
-
   const unmeasured = unmeasuredGradeViolations(gradeResult, SPAWNED_ROLES)
   if (unmeasured.length > 0) {
     for (const u of unmeasured) log(`GRADE BLOCK: ${u}`)
@@ -5859,6 +5659,7 @@ if (SKIP_GRADE) {
       { grades: gradeResult.grades })
   }
 }
+
 
 phase('Ship')
 
@@ -5976,7 +5777,6 @@ bun -e "import {writeWorkflowState} from '${HARNESS_ROOT}/gates/orchestrator.ts'
 - branch-merged: set code-pushed="PASS" if branch is pushed. ${prStep?.ok ? `PR #${prStep.prNumber} is open for Jason to review` : 'NO PR was opened for this run'} — branch-merged may WARN, that's OK.
 - Any missing environments fields: add with SKIP + skipReason.
 - code-committed: should already be PASS from commit phase.`,
-
   { cwd: commitDir })
 
 log(`Ship: ${shipResult?.result || 'UNKNOWN'}`)
@@ -5987,7 +5787,6 @@ if (shipResult?.result !== 'PASS') {
     log(`Ship BUILD regression #${regressionCount} — re-implementing`)
     const reimpl = await runImplement()
     if (reimpl.success) {
-
       const gathered = await collectAgentWork(
         reimpl.buildResult?.agentResults, commitDir, 'Ship', 'collect-ship-regression')
       if (!gathered.ok) {
@@ -5995,7 +5794,6 @@ if (shipResult?.result !== 'PASS') {
         return shipFailed('Ship', `BUILD regression work could not be collected: ${gathered.detail}`)
       }
       const reimplShipGitAdd = gathered.staged ? `git -C ${shellQuote(commitDir)} diff --cached --quiet; true` : gitDerivedStaging(commitDir)
-
       const quinnShipVerdictValue = quinnShipVerdict(quinnContainerRan, quinnContainerResult, quinnLocalVerdict)
       const reCommit = await timedAgent(`
 Do NOT run tests — they were already validated.
@@ -6027,13 +5825,11 @@ workflow-state.json by hand, and do NOT report true if the command failed.
       if (!reCommit || !reCommit.commitSha || reCommit.commitSha === reCommit.parentSha) {
         log(`Ship regression produced no commit (#155) — HEAD is still ${reCommit?.parentSha || 'unknown'}`)
       }
-
       const reShipStateRefusal = commitStateRefusal(reCommit)
       if (reShipStateRefusal) {
         log(`${reShipStateRefusal} — buildCommit still names the pre-regression commit (#169)`)
         return shipFailed('Ship', reShipStateRefusal)
       }
-
       const shipRoundCurrency = reviewIsCurrent(testedSha, reCommit?.commitSha)
       if (!shipRoundCurrency.current) {
         const shipRoundReason = `SECURITY_REVIEW_STALE: ${shipRoundCurrency.reason}`
@@ -6042,7 +5838,6 @@ workflow-state.json by hand, and do NOT report true if the command failed.
         return shipFailed('Ship', shipRoundReason, { security: securityVerdict })
       }
       log(`Security review is still current after the ship round, at ${reCommit?.commitSha}`)
-
       const shipRoundSuite = suiteCurrency(suiteMeasuredSha, reCommit?.commitSha)
       if (shipRoundSuite.state === 'STALE') {
         const shipRoundSuiteReason = `SUITE_MEASUREMENT_STALE: ${shipRoundSuite.reason}`
@@ -6051,10 +5846,8 @@ workflow-state.json by hand, and do NOT report true if the command failed.
         return shipFailed('Ship', shipRoundSuiteReason,
           { suite: { result: suiteResult ?? null, measuredSha: suiteMeasuredSha ?? null, headSha: reCommit?.commitSha ?? null, currency: shipRoundSuite.state } })
       }
-
       suiteReading = suiteReadingFor(suiteResult, shipRoundSuite.state)
       log(`Suite reading after the ship round: ${suiteReading}`)
-
       const retryShip = await runGateWithHeal('ship', 'Ship', 'Fix remaining ship gate failures.', { cwd: commitDir })
       if (retryShip?.result === 'PASS') {
         log('Ship passed after BUILD regression fix')
@@ -6062,7 +5855,6 @@ workflow-state.json by hand, and do NOT report true if the command failed.
         return shipFailed('Ship', 'the ship gate still failed after a BUILD regression fix')
       }
     } else {
-
       const shipWhy = (reimpl?.buildResult?.findings || []).join('; ')
         || (reimpl?.buildResult?.testOutput && String(reimpl.buildResult.testOutput).trim())
         || 'the remediation agent reported failure with no detail'
@@ -6072,6 +5864,7 @@ workflow-state.json by hand, and do NOT report true if the command failed.
     return shipFailed('Ship', 'the ship gate did not pass and no BUILD regression path was available')
   }
 }
+
 
 phase('Prove')
 
@@ -6155,7 +5948,6 @@ const SHIP_STATUS_BY_PROVE_VERDICT = {
   UNPROVEN: 'SHIP_PASSED_PROVE_FAILED',
   SKIP: 'SHIPPED_UNPROVEN',
 }
-
 const SHIP_STATUS_UNMEASURED = 'SHIPPED_UNPROVEN'
 
 const SHIP_STATUS_BY_SUITE_READING = {
@@ -6163,7 +5955,6 @@ const SHIP_STATUS_BY_SUITE_READING = {
   FAIL: 'SHIP_PASSED_SUITE_FAILED',
   UNMEASURED: 'SHIP_PASSED_SUITE_UNMEASURED',
 }
-
 const SHIP_STATUS_SUITE_UNREADABLE = 'SHIP_PASSED_SUITE_UNMEASURED'
 
 const SHIP_STATUS_STRENGTH = [
@@ -6175,7 +5966,6 @@ const SHIP_STATUS_STRENGTH = [
 ]
 
 function shipStatusFor(proveVerdict, suiteReading) {
-
   const provePick = Object.prototype.hasOwnProperty.call(SHIP_STATUS_BY_PROVE_VERDICT, proveVerdict)
     ? SHIP_STATUS_BY_PROVE_VERDICT[proveVerdict]
     : null
@@ -6197,13 +5987,10 @@ function shipStatusFor(proveVerdict, suiteReading) {
 
 function workflowProbeCommand(quotedDir) {
   return [
-
     `if [ ! -d ${quotedDir} ] || [ ! -x ${quotedDir} ] || [ ! -r ${quotedDir} ]; then echo WORKFLOW_PROBE_FAILED; exit 1; fi`,
-
     `if [ -e ${quotedDir}/.github ] && [ ! -x ${quotedDir}/.github ]; then echo WORKFLOW_PROBE_FAILED; exit 1; fi`,
     `if [ ! -e ${quotedDir}/.github/workflows ]; then`,
     `  workflows=0`,
-
     `elif ! found=$(find -L ${quotedDir}/.github/workflows -maxdepth 1 \\( -type f -o -type l \\) \\( -name '*.yml' -o -name '*.yaml' \\)); then`,
     `  echo WORKFLOW_PROBE_FAILED; exit 1`,
     `elif [ -z "$found" ]; then`,
@@ -6221,7 +6008,6 @@ function ciBlocksReadiness(ci) {
   if (!ci || typeof ci !== 'object') {
     return 'CI was not read for this run, and an unread CI is not a passing one'
   }
-
   if (ci.workflowCount === 0) {
     if (ci.workflowProbe !== 'OK') {
       return `the CI step reported no workflow files, but the probe did not report OK (workflowProbe was ${JSON.stringify(ci.workflowProbe ?? null)}) — "this project has no CI" and "the workflow count could not be taken" cannot be told apart, and only one of them earns an undraft`
@@ -6233,7 +6019,6 @@ function ciBlocksReadiness(ci) {
   }
   if (ci.verdict === 'PASS') return null
   if (ci.verdict === 'FAIL') return `CI failed on the pushed commit — ${ci.reason || 'no detail'}`
-
   return `CI has not reported a pass on the pushed commit — ${ci.reason || `verdict was ${JSON.stringify(ci.verdict ?? null)}`}`
 }
 
@@ -6266,7 +6051,6 @@ function prReadiness(status, pr, ci) {
         : `terminal status ${String(status)} ranks below ${SHIP_STATUS_READY_THRESHOLD}`,
     }
   }
-
   const ciReason = ciBlocksReadiness(ci)
   if (ciReason) return { action: 'LEAVE_DRAFT', number, reason: ciReason }
 
@@ -6317,14 +6101,12 @@ rather than guessing it.
     sha: { type: 'string' },
     reason: { type: 'string' },
     workflowCount: { type: 'number' },
-
     workflowProbe: { type: 'string', enum: ['OK', 'FAILED'] },
     failed: { type: 'array', items: { type: 'string' } },
     pending: { type: 'array', items: { type: 'string' } },
   },
   required: ['verdict'],
 } }) : null
-
 if (ciStep) {
   log(`CI: ${ciStep.verdict} on ${ciStep.sha || '<no commit reported>'}${ciStep.reason ? ` — ${ciStep.reason}` : ''}`)
 }
@@ -6390,15 +6172,12 @@ return {
   issue: ISSUE, slug: SLUG,
   sizing: discovery.sizing, ceremonyTier: discovery.ceremonyTier,
   proveVerdict,
-
   suiteReading,
   suiteMeasuredSha: suiteMeasuredSha ?? null,
-
   pr: {
     number: prState.number,
     readiness: prState.action,
     reason: prState.reason,
-
     draft: prMarkedReady ? false : observedDraft(prStep),
   },
   regressions: regressionCount,
