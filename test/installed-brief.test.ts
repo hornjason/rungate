@@ -50,7 +50,18 @@ function installedBrief(pkgDir: string): Reading {
   // HOME is empty so the local override at ~/.claude/skills/ship cannot be what passes.
   const r = spawnSync("bun", [runner], { cwd: run, env: { ...process.env, HOME: home }, encoding: "utf-8" });
   if (r.status !== 0) return { status: "UNMEASURED", reason: `assembleBrief did not run: ${(r.stderr || r.stdout).trim().slice(0, 400)}` };
-  const out = JSON.parse(r.stdout.trim().split("\n").pop()!);
+  // The runner prints one JSON line last. Anything else on stdout (a warning, a
+  // dependency's banner) must read as UNMEASURED naming it, not as a raw
+  // SyntaxError out of the helper (review round 2, PR #2281).
+  let out: { validated?: unknown; briefPath?: unknown };
+  try {
+    out = JSON.parse(r.stdout.trim().split("\n").pop() ?? "");
+  } catch {
+    return { status: "UNMEASURED", reason: `the runner's last stdout line is not JSON: ${r.stdout.trim().slice(-400)}` };
+  }
+  if (typeof out.validated !== "boolean" || typeof out.briefPath !== "string") {
+    return { status: "UNMEASURED", reason: `the runner printed no { validated, briefPath }: ${r.stdout.trim().slice(-400)}` };
+  }
   return { status: "MEASURED", validated: out.validated, brief: readFileSync(out.briefPath, "utf-8") };
 }
 
