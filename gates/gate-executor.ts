@@ -2872,9 +2872,70 @@ export function fanoutSkipReason(
   return null;
 }
 
+/** One row of the B2 validator's reply, the shape gates/prompts/evidence-validator.md asks for. */
+export type B2Verdict = { acId: string; verdict: "PASS" | "FAIL"; rawOutput?: unknown; [field: string]: unknown };
+
+/**
+ * The B2 validator's reply, or why it could not be read (#2265). The one
+ * place its JSON is extracted: two copies are two readers that can disagree,
+ * which is what #2264's first review round found for B1.
+ */
+export function parseB2Reply(raw: string): { status: "read"; verdicts: B2Verdict[] } | { status: "not-read"; detail: string } {
+  const json = raw.match(/\{[\s\S]*"verdicts"[\s\S]*\}/);
+  if (!json) return { status: "not-read", detail: 'the reply holds no JSON object naming "verdicts"' };
+  let reply: any;
+  try {
+    reply = JSON.parse(json[0]);
+  } catch (e: any) {
+    return { status: "not-read", detail: `the reply's JSON does not parse: ${String(e?.message ?? e).slice(0, 200)}` };
+  }
+  if (!Array.isArray(reply?.verdicts)) {
+    return { status: "not-read", detail: `verdicts is ${JSON.stringify(reply?.verdicts) ?? "absent"}, not a list` };
+  }
+  const bad = reply.verdicts.findIndex((v: any) =>
+    v === null || typeof v !== "object" || typeof v.acId !== "string" || v.acId.trim() === "" ||
+    (v.verdict !== "PASS" && v.verdict !== "FAIL"));
+  if (bad >= 0) {
+    return {
+      status: "not-read",
+      detail: `verdicts[${bad}] has no acId, or a verdict that is not PASS or FAIL: ${String(JSON.stringify(reply.verdicts[bad])).slice(0, 200)}`,
+    };
+  }
+  return { status: "read", verdicts: reply.verdicts as B2Verdict[] };
+}
+
+/**
+ * The B2 validator's reply as verify-gate results and the reading verify
+ * records (#2265). Advisory, as it always was: every result is a WARN. A
+ * reply that could not be read is one WARN naming why, and the record says
+ * UNMEASURED. Before, it was nothing: no result, and no record, so the run
+ * looked like one whose every criterion's evidence was sound.
+ */
+export function b2ReplyReading(
+  output: string,
+  ts: string,
+): { agentResult: Record<string, unknown>; warns: number; results: GateResult[] } {
+  const parsed = parseB2Reply(output);
+  if (parsed.status !== "read") {
+    return {
+      agentResult: { ts, status: "UNMEASURED", reason: `reply unreadable: ${parsed.detail}`, source: "B2-evidence-validator-agent" },
+      warns: 1,
+      results: [{ check: "B2-validator: reply unreadable", result: "WARN" as const, detail: parsed.detail }],
+    };
+  }
+  const fails = parsed.verdicts.filter(v => v.verdict === "FAIL");
+  return {
+    agentResult: { ts, verdicts: parsed.verdicts, source: "B2-evidence-validator-agent" },
+    warns: fails.length,
+    results: fails.map(v => ({
+      check: `B2-validator: ${v.acId} evidence gap`,
+      result: "WARN" as const,
+      detail: typeof v.rawOutput === "string" && v.rawOutput !== "" ? v.rawOutput : "threshold not met",
+    })),
+  };
+}
+
 function runB2EvidenceValidatorAgent(state: Record<string, any>, workDir: string, results: GateResult[], harnessRoot: string): { agentResult: any; warns: number } {
-  let addedWarns = 0;
-  let agentResult: any = null;
   const tier = state.sizing?.ceremonyTier || "STANDARD";
   // Recorded rather than returned empty (#126): the consumer allows a LIGHT
   // absence, but an artefact that SAYS why is one a reader does not have to
@@ -2914,33 +2975,16 @@ function runB2EvidenceValidatorAgent(state: Record<string, any>, workDir: string
     console.warn(`WARN: B2 Evidence Validator exited with error: ${e.message?.slice(0, 200)}`);
   }
 
-  const b2Json = b2Output.match(/\{[\s\S]*"verdicts"[\s\S]*\}/);
-  if (b2Json) {
-    try {
-      const b2Report = JSON.parse(b2Json[0]);
-      agentResult = {
-        ts: new Date().toISOString(),
-        verdicts: b2Report.verdicts || [],
-        source: "B2-evidence-validator-agent",
-      };
-      const b2Fails = (b2Report.verdicts || []).filter((v: any) => v.verdict === "FAIL");
-      if (b2Fails.length > 0) {
-        for (const v of b2Fails) {
-          addedWarns++;
-          results.push({ check: `B2-validator: ${v.acId} evidence gap`, result: "WARN" as const, detail: v.rawOutput || "threshold not met" });
-        }
-        console.log(`B2: ${b2Fails.length} evidence gap(s) found — WARN`);
-      } else {
-        console.log(`B2: All evidence validated — ${(b2Report.verdicts || []).length} ACs checked`);
-      }
-    } catch {
-      console.warn("WARN: B2 Evidence Validator JSON parse failed");
-    }
+  const reading = b2ReplyReading(b2Output, new Date().toISOString());
+  results.push(...reading.results);
+  if (reading.agentResult.status === "UNMEASURED") {
+    console.warn(`WARN: B2 Evidence Validator reply UNMEASURED — ${reading.agentResult.reason}`);
+  } else if (reading.warns > 0) {
+    console.log(`B2: ${reading.warns} evidence gap(s) found — WARN`);
   } else {
-    console.warn("WARN: B2 Evidence Validator produced no parseable JSON");
+    console.log(`B2: All evidence validated — ${(reading.agentResult.verdicts as unknown[]).length} ACs checked`);
   }
-
-  return { agentResult, warns: addedWarns };
+  return { agentResult: reading.agentResult, warns: reading.warns };
 }
 
 function runB1AdversaryAtVerify(state: Record<string, any>, workDir: string, results: GateResult[], harnessRoot: string): { agentResult: any; warns: number } {
