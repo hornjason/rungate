@@ -288,7 +288,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   "ci-reading": {
     script: "scripts/ci-reading.ts",
     summary: "Print a merged pull request's CI breakdown — per-check time, queue, critical path, re-runs",
-    usage: "rungate ci-reading --pr <N> [--repo <owner/name>] [--format text|markdown]   (always exits 0; UNMEASURED names why)",
+    usage: "rungate ci-reading --pr <N> [--repo <owner/name>] [--format text|markdown]   (a reading always exits 0, UNMEASURED naming why; a bad command line exits 2)",
   },
   // #2193 (part 1 of #2183): the board-intake move step as a tested command.
   // `board-intake.yml` switches to it in #2183, once a release carries it.
