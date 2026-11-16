@@ -248,10 +248,14 @@ describe("#713 BashWriteGuard: protects gate artifacts and hook files", () => {
     // a real subprocess — because the hook has its own refuse-on-throw
     // fallback keyed on the protected names, and a module that allows while
     // its hook refuses would be invisible to `bash-write-guard.test.ts`.
+    //
+    // #1367: the fixture makes its directory first. The exemption now holds
+    // only when every directory between the scratch root and the destination
+    // is real, and a write into one nobody made would fail anyway.
     expect(
       runHook(
         "BashWriteGuard.hook.ts",
-        cmd(`python3 -c "open('/tmp/probe/.gate-salt','w').write('x')"`),
+        cmd(`mkdir -p /tmp/probe && python3 -c "open('/tmp/probe/.gate-salt','w').write('x')"`),
       ).stdout.trim(),
     ).toBe("");
   });
