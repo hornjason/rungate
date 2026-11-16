@@ -167,6 +167,14 @@ with nobody touching it, and the readings show it.
 
 ## Not decided here
 
+- **Two workflows can write the board on one push.** Once SC-2780 builds
+  `specs-placed.yml`, a merge that adds an accepted ADR and edits `specs/`
+  fires it and `adr-accepted.yml` together. SC-2780's pull request must stop
+  them writing the board at the same time, for example with one shared
+  concurrency group. Recorded here so that row's review checks it. This pull
+  request triggers only `adr-accepted.yml`, because `specs-placed.yml` does
+  not exist yet.
+
 - **How a consumer with many existing specs chooses which to opt in.**
   Jason adopted the strategy on 2026-11-16, after a read-only measurement
   of DailyBriefDashboard and pov-plugin: existing specs stay off the board;
@@ -205,7 +213,7 @@ engine phases empty (SC-2741).
 |---|---|---|---|---|
 | SC-2776 | A spec is consumed only when its frontmatter opts it in | lib/spec-placement.ts, scripts/board-conformance.ts, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, specs/CODE-REVIEW-CONVERGENCE-SPEC.md, test/board-families.test.ts, test/board-conformance.test.ts | Engine Phase 9 — the payload ships | — |
 | SC-2777 | Every opted-in family's phase issues carry the queue label | scripts/board-mirror.ts, .github/workflows/phase-order.yml, test/board-mirror.test.ts, test/phase-order-workflow.test.ts | Engine Phase 9 — the payload ships | A spec is consumed only when its frontmatter opts it in |
-| SC-2778 | A criterion placed outside every phase reads as declared and not as missing | scripts/board-conformance.ts, scripts/board-snapshot.ts, lib/spec-placement.ts, test/board-conformance.test.ts, test/board-snapshot.test.ts | Engine Phase 9 — the payload ships | — |
+| SC-2778 | A criterion placed outside every phase reads as declared and not as missing | scripts/board-conformance.ts, scripts/board-snapshot.ts, lib/spec-placement.ts, test/board-conformance.test.ts, test/board-snapshot.test.ts | Engine Phase 9 — the payload ships | A spec is consumed only when its frontmatter opts it in |
 | SC-2779 | An unmilestoned issue moves into the phase milestone its criterion holds | lib/issue-repair.ts, scripts/plan-issues.ts, test/plan-issues.test.ts | Engine Phase 9 — the payload ships | A spec is consumed only when its frontmatter opts it in |
 | SC-2780 | A push to main that changes specs runs every opted-in family through the engine | lib/scaffold/specs-placed-workflow.ts, .github/workflows/specs-placed.yml, lib/scaffold/owned-files.ts, lib/scaffold/steps.ts, .claude/rules/harness-managed.md, test/specs-placed-workflow.test.ts | Engine Phase 9 — the payload ships | A spec is consumed only when its frontmatter opts it in, Every opted-in family's phase issues carry the queue label, An unmilestoned issue moves into the phase milestone its criterion holds |
 | CRC-C3 | A review thread resolved with no stated reason is reported on its pull request | lib/ai-review-threads.ts, scripts/ai-review-threads.ts, test/ai-review-threads.test.ts, reference/clearing-a-false-positive.md | Convergence Phase 0 — three settings, no engineering | — |
