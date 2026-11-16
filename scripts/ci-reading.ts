@@ -148,7 +148,9 @@ export function renderText(reading: CiReading): string {
   return lines.join("\n");
 }
 
-const cell = (s: string) => s.replace(/\|/g, "\\|");
+// A table cell is one line: a newline in a job name (review round 2, PR #2277)
+// would end the row and spill the rest of the table out as free text.
+const cell = (s: string) => s.replace(/\s*[\r\n]+\s*/g, " ").replace(/\|/g, "\\|");
 
 export function renderMarkdown(reading: CiReading): string {
   if (reading.status === "UNMEASURED") return `### CI reading — #${reading.pr}\n\nUNMEASURED — ${cell(reading.reason)}`;

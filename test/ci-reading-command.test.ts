@@ -129,6 +129,15 @@ describe("#2273: a merged pull request's breakdown, read from the API", () => {
   });
 });
 
+describe("#2273: a job name cannot break the markdown table", () => {
+  test("a newline or a pipe in a job name stays inside its cell", async () => {
+    const odd = { total_count: 1, jobs: [{ name: "test\r\nshard | 2", run_id: 7, run_attempt: 2, status: "completed", conclusion: "success", started_at: at("10:11:10"), completed_at: at("10:15:10") }] };
+    const r = await run(["--pr", "42", "--repo", "o/r", "--format", "markdown"], api({ jobs2: odd }));
+    const row = r.stdout.split("\n").find(l => l.startsWith("| ci / test") && l.includes("shard"));
+    expect(row).toBe("| ci / test shard \\| 2 | 4m 0s | 1 |");
+  });
+});
+
 describe("#2273: what cannot be read prints UNMEASURED with its reason, and exits 0", () => {
   test("an unmerged pull request", async () => {
     const r = await run(["--pr", "42", "--repo", "o/r"], api({ pr: { number: 42, created_at: at("10:00:00"), merged_at: null, head: { sha: SHA } } }));
