@@ -1822,6 +1822,20 @@ export const AI_REVIEW_LEDGER_SNAPSHOT_BASENAME = "ai-review-ledger-snapshot.txt
  */
 export const AI_REVIEW_THREADS_PATH_VAR = "AI_REVIEW_THREADS_PATH";
 
+/**
+ * The checkout the adjudicator reads cited lines from (#2257).
+ *
+ * The adjudicator runs from the payload's own directory, outside the
+ * checkout, because `bunx` resolves bunfig.toml, .npmrc and package.json by
+ * walking up from its working directory, so the PR under review must not be
+ * the tree it starts in. That made `process.cwd()` the payload directory,
+ * the suppression gate could read no cited line, and the anchor rule matched
+ * 0 of 420 round-2+ findings in CI (#1872). The root has to arrive by name.
+ * `scripts/ai-review-findings.ts` falls back to its working directory when
+ * this is unset, which is what a step generated before it was set does.
+ */
+export const AI_REVIEW_CHECKOUT_ROOT_VAR = "AI_REVIEW_CHECKOUT_ROOT";
+
 /** The basename inside the findings directory. One spelling. */
 export const AI_REVIEW_THREADS_BASENAME = "ai-review-threads.json";
 
