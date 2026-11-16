@@ -38,7 +38,7 @@ import {
   measureEvidencePrevalidation,
   type EvidencePrevalidationReading,
 } from "../lib/evidence-prevalidator";
-import { EvidencePrevalidationSchema, type PrevalidationSource } from "./schema";
+import { EvidencePrevalidationSchema, ProveEvidenceSchema, type PrevalidationSource } from "./schema";
 import { scanGaps, type GapScanResult } from "../lib/gap-scanner";
 import { deepMerge } from "../lib/deep-merge";
 import { livenessPlan, probeTarget } from "../lib/dev-liveness";
@@ -424,6 +424,190 @@ export function comparisonSummaryFor(
     return `no before/after comparison: /goal declared beforeState.type "none" at ${reading.capturedAt}; ${counts}`;
   }
   return `compared against the ${reading.type} before-state captured at ${reading.capturedAt}; ${counts}`;
+}
+
+/**
+ * Anything with zod's `safeParse` shape. Structural, so this file keeps no
+ * direct zod import and a test can hand it a stricter copy of a schema.
+ */
+export interface ArtifactSchema {
+  safeParse(value: unknown): {
+    success: boolean;
+    error?: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> };
+  };
+}
+
+/**
+ * Check a gate artifact against its declared schema, before it is written
+ * (#1559, SC-2770).
+ *
+ * Returns one `path: message` line per violation, `[]` when it validates.
+ * `config/prove-evidence.schema.json` declared a contract nothing read, so
+ * writer and contract drifted apart: B3's artifact failed both the JSON
+ * schema and the zod one, and no check said so. A refusal that names no
+ * issue is still a refusal — an empty list there would read as a pass.
+ */
+export function validateArtifactSchema(artifact: unknown, schema: ArtifactSchema): string[] {
+  const result = schema.safeParse(artifact);
+  if (result.success) return [];
+  const issues = result.error?.issues ?? [];
+  if (issues.length === 0) return ["(root): the schema refused the artifact without naming a field"];
+  return issues.map((i) => `${i.path.length > 0 ? i.path.map(String).join(".") : "(root)"}: ${i.message}`);
+}
+
+const PROVE_VERDICTS = ["PROVEN", "UNPROVEN", "INCONCLUSIVE"];
+/**
+ * The after-evidence types a reproducer may report, and the prompt's list
+ * exactly. `none` is B3's to write. `screenshot` is not the reproducer's to
+ * claim: it has Bash and Read only (gates/prompts/prove-reproducer.md), so a
+ * reported screenshot is a UI verification it could not have made.
+ */
+const REPORTED_AFTER_TYPES = ["text", "api", "data"];
+const AFTER_ENVIRONMENTS = ["local", "prod"];
+
+/** What B3 knows about the run that the reproducer does not get to say. */
+export interface ProveEvidenceContext {
+  issueNumber: number;
+  commitSHA: string;
+  capturedAt: string;
+  beforeReading: BeforeStateReading;
+}
+
+type AfterEvidence = {
+  type: string; path: string | null; capturedAt: string; environment: string; description: string;
+};
+
+/** The reproducer's `afterEvidence`, or why there is none. Never repaired into shape. */
+function readReportedAfterEvidence(raw: unknown): { ok: true; value: AfterEvidence } | { ok: false; reason: string } {
+  if (raw === undefined || raw === null) return { ok: false, reason: "the reproducer reported no afterEvidence" };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, reason: `afterEvidence is not an object: ${JSON.stringify(raw)}` };
+  }
+  const a = raw as Record<string, unknown>;
+  if (typeof a.environment !== "string" || !AFTER_ENVIRONMENTS.includes(a.environment)) {
+    return { ok: false, reason: `afterEvidence.environment ${JSON.stringify(a.environment)} is not local or prod` };
+  }
+  if (typeof a.type !== "string" || !REPORTED_AFTER_TYPES.includes(a.type)) {
+    return { ok: false, reason: `afterEvidence.type ${JSON.stringify(a.type)} is not one of ${REPORTED_AFTER_TYPES.join("|")}` };
+  }
+  if (typeof a.capturedAt !== "string" || a.capturedAt === "") {
+    return { ok: false, reason: `afterEvidence.capturedAt ${JSON.stringify(a.capturedAt)} is not a time` };
+  }
+  if (typeof a.description !== "string" || a.description.trim() === "") {
+    return { ok: false, reason: "afterEvidence.description is empty — it must say what the after-state showed" };
+  }
+  return {
+    ok: true,
+    value: {
+      type: a.type, path: typeof a.path === "string" ? a.path : null,
+      capturedAt: a.capturedAt, environment: a.environment, description: a.description,
+    },
+  };
+}
+
+/**
+ * Build `prove-evidence.json` from the reproducer's report (#1559, Jason's
+ * option (a) of 2026-11-15).
+ *
+ * B3 used to write `{issueNumber, verdict, commitSHA, capturedAt,
+ * criteriaResults, reproduced, evidence, source}`, which lacks the
+ * `beforeEvidence`, `afterEvidence` and `comparisonSummary` that
+ * `ProveEvidenceSchema` requires. The before-evidence and the comparison are
+ * B3's own readings (#1540), so a reproducer cannot overwrite them. The
+ * after-evidence is the reproducer's report of the environment it tested and
+ * what it saw. When that report is missing or malformed, the record is
+ * `type: "none"` and a PROVEN becomes INCONCLUSIVE, because a proof with no
+ * observed after-state is not a proof.
+ *
+ * The `none` record says `environment: "local"` because the schema requires
+ * a value. `local` is the one that satisfies no STANDARD+ prod requirement
+ * (gates/prove.test.ts), so a missing after-evidence can never pass that check.
+ */
+export function buildProveEvidence(raw: Record<string, any>, ctx: ProveEvidenceContext) {
+  const criteriaResults: any[] = Array.isArray(raw?.criteriaResults) ? raw.criteriaResults : [];
+  const passed = criteriaResults.filter((r) => r?.verdict === "PASS").length;
+  const after = readReportedAfterEvidence(raw?.afterEvidence);
+
+  let verdict = typeof raw?.verdict === "string" && PROVE_VERDICTS.includes(raw.verdict) ? raw.verdict : "INCONCLUSIVE";
+  let verdictDowngrade: { reported: unknown; reason: string } | undefined;
+  if (verdict !== raw?.verdict) {
+    verdictDowngrade = {
+      reported: raw?.verdict,
+      reason: `verdict ${JSON.stringify(raw?.verdict)} is not one of ${PROVE_VERDICTS.join("|")}`,
+    };
+  } else if (verdict === "PROVEN" && !after.ok) {
+    verdict = "INCONCLUSIVE";
+    verdictDowngrade = { reported: "PROVEN", reason: `PROVEN with no after-evidence: ${after.reason}` };
+  } else if (verdict === "PROVEN" && passed === 0) {
+    // A proof that verified no criterion is not a proof: an empty list, or
+    // nothing but SKIPs, is what a reproducer with no way to check says.
+    verdict = "INCONCLUSIVE";
+    verdictDowngrade = {
+      reported: "PROVEN",
+      reason: `PROVEN with no criterion verified: ${criteriaResults.length} criteriaResults row(s), none PASS`,
+    };
+  }
+
+  const afterEvidence: AfterEvidence = after.ok ? after.value : {
+    type: "none", path: null, capturedAt: ctx.capturedAt, environment: "local",
+    description: `no after-evidence: ${after.reason}`,
+  };
+
+  return {
+    issueNumber: ctx.issueNumber,
+    verdict,
+    ...(verdictDowngrade ? { verdictDowngrade } : {}),
+    commitSHA: ctx.commitSHA,
+    capturedAt: ctx.capturedAt,
+    beforeEvidence: beforeEvidenceFor(ctx.beforeReading),
+    afterEvidence,
+    comparisonSummary: comparisonSummaryFor(ctx.beforeReading, passed, criteriaResults.length),
+    reproduced: raw?.reproduced === true,
+    criteriaResults,
+    evidence: Array.isArray(raw?.evidence) ? raw.evidence : [],
+    source: "B3-prove-reproducer",
+  };
+}
+
+export type ProveEvidenceRecord =
+  | { written: true; artifact: ReturnType<typeof buildProveEvidence> }
+  | { written: false; reason: string };
+
+/**
+ * Build, validate and write `prove-evidence.json`, and say what happened
+ * (#1559). Never throws.
+ *
+ * B3 has always degraded to a warning when it could not record the artifact
+ * (`prove.test.ts` writes its own), so a failing `git rev-parse` or a write
+ * into a missing directory must not crash the prove gate. Every outcome that
+ * is not a written file says why.
+ */
+export function recordProveEvidence(
+  raw: Record<string, any>,
+  opts: {
+    issueNumber: number;
+    workDir: string;
+    beforeReading: BeforeStateReading;
+    readCommit: () => string;
+    schema?: ArtifactSchema;
+  },
+): ProveEvidenceRecord {
+  try {
+    const artifact = buildProveEvidence(raw, {
+      issueNumber: opts.issueNumber,
+      commitSHA: opts.readCommit(),
+      capturedAt: new Date().toISOString(),
+      beforeReading: opts.beforeReading,
+    });
+    const violations = validateArtifactSchema(artifact, opts.schema ?? ProveEvidenceSchema);
+    if (violations.length > 0) {
+      return { written: false, reason: `it fails ProveEvidenceSchema (SC-2770): ${violations.join("; ")}` };
+    }
+    writeFileSync(join(opts.workDir, "prove-evidence.json"), JSON.stringify(artifact, null, 2));
+    return { written: true, artifact };
+  } catch (e: any) {
+    return { written: false, reason: `could not record it: ${String(e?.message ?? e).slice(0, 200)}` };
+  }
 }
 
 /** What a gate run does about the tests that existed when it last looked. */
@@ -1554,25 +1738,32 @@ async function runProveReproducer(state: Record<string, any>, issue: number, iss
     }
 
     const jsonMatch = reproducerOutput.match(/\{[\s\S]*"verdict"[\s\S]*\}/);
+    let parsed: Record<string, any> | null = null;
     if (jsonMatch) {
       try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        const proveEvidence = {
-          issueNumber: issue, verdict: parsed.verdict || "INCONCLUSIVE",
-          commitSHA: execSync("git rev-parse HEAD", { encoding: "utf-8", cwd: projectRoot || undefined }).trim(),
-          capturedAt: new Date().toISOString(),
-          criteriaResults: parsed.criteriaResults || [],
-          reproduced: parsed.reproduced ?? false,
-          evidence: parsed.evidence || [],
-          source: "B3-prove-reproducer",
-        };
-        writeFileSync(join(workDir, "prove-evidence.json"), JSON.stringify(proveEvidence, null, 2));
-        console.log(`B3: prove-evidence.json written — verdict: ${proveEvidence.verdict}`);
+        parsed = JSON.parse(jsonMatch[0]);
       } catch {
         console.warn("WARN: B3 reproducer JSON parse failed");
       }
     } else {
       console.warn("WARN: B3 reproducer produced no parseable JSON — prove.test.ts will generate evidence");
+    }
+    if (parsed && typeof parsed === "object") {
+      // #1559: the artifact is built in one place and checked against its one
+      // contract before it is written. An artifact the schema refuses is not
+      // written, and the fields are named; nothing here can crash the gate.
+      const record = recordProveEvidence(parsed, {
+        issueNumber: issue, workDir, beforeReading,
+        readCommit: () => execSync("git rev-parse HEAD", { encoding: "utf-8", cwd: projectRoot || undefined }).trim(),
+      });
+      if (!record.written) {
+        console.warn(`WARN: B3 prove-evidence.json NOT written — ${record.reason}; prove.test.ts will generate evidence`);
+      } else {
+        console.log(`B3: prove-evidence.json written — verdict: ${record.artifact.verdict}`);
+        if (record.artifact.verdictDowngrade) {
+          console.warn(`WARN: B3 reproducer reported ${JSON.stringify(record.artifact.verdictDowngrade.reported)}, recorded INCONCLUSIVE — ${record.artifact.verdictDowngrade.reason}`);
+        }
+      }
     }
   }
 }

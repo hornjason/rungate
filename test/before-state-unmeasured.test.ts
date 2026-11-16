@@ -202,6 +202,9 @@ describe("#1540: every arm is declared, and the artefacts still validate", () =>
     },
     comparisonSummary: "x",
     reproduced: true,
+    // Required since #1559. Every writer emits it, gates/prove.test.ts since
+    // 2026-09-17, so no artefact this case stands for lacks it.
+    criteriaResults: [{ scId: "AC-1", verdict: "PASS", evidence: "AC-1: PASS" }],
   });
 
   test("all three readings produce a beforeEvidence ProveEvidenceSchema accepts", () => {

@@ -6,7 +6,7 @@
     "gates/gate-executor.ts::acInputFile | workDir: parameter (nested)",
     "gates/gate-executor.ts::b1InputPath | workDir: parameter (nested)",
     "gates/gate-executor.ts::b2InputPath | workDir: parameter (nested)",
-    "gates/gate-executor.ts::join(workDir, \"prove-evidence.json\") | workDir: parameter",
+    "gates/gate-executor.ts::join(opts.workDir, \"prove-evidence.json\") | opts: parameter",
     "gates/gate-executor.ts::proveInputPath | workDir: parameter (nested)",
     "gates/gate-executor.ts::sf | sf: destructured",
     "gates/gate-executor.ts::sf | sf: destructured",
