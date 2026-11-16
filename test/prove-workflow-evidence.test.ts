@@ -245,9 +245,15 @@ describe("#2254: prove.js asks for what the contract needs, and no longer writes
     // Review round 1 on PR #2256: the self-heal re-validation is a separate
     // agent with no context from the first spawn, and was told to report
     // afterEvidence "as the prompt specifies" without being told to read it.
-    const spawns = [...PROVE_SOURCE.matchAll(/await agent\(`([\s\S]*?)`,\s*\{([^}]*schema: REPRODUCER_SCHEMA[^}]*)\}/g)];
-    expect(spawns.length, "the REPRODUCER_SCHEMA spawns this case reads").toBeGreaterThanOrEqual(2);
-    for (const [, prompt, opts] of spawns) {
+    // Split on each spawn rather than one regex over the file: a label like
+    // `self-heal-validate-${selfHealIteration}` puts a `}` inside the options.
+    const spawns = PROVE_SOURCE.split("agent(`").slice(1).map((chunk) => {
+      const close = chunk.indexOf("`, {");
+      return { prompt: chunk.slice(0, close), opts: chunk.slice(close, chunk.indexOf("})", close)) };
+    }).filter((s) => s.opts.includes("schema: REPRODUCER_SCHEMA"));
+    // Both are named, so a spawn that stops matching is red, not silently skipped.
+    expect(spawns.map((s) => /label: [`']([a-z0-9-]+)/.exec(s.opts)?.[1])).toEqual(["b3-reproducer", "self-heal-validate-"]);
+    for (const { prompt, opts } of spawns) {
       expect(prompt, `the spawn with ${opts.trim()}`).toContain("Read ${PROVE_PROMPT}");
     }
   });
