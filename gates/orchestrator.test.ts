@@ -1,7 +1,10 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "fs";
 import { join } from "path";
+import { z } from "zod";
 import { gateSaltPath } from "../lib/paths";
+import { validateArtifactSchema } from "../lib/artifact-schema";
+import { ShipEvidenceSchema } from "./schema";
 import {
   writeGateResult,
   generateHmac,
@@ -419,8 +422,10 @@ describe("generateShipEvidence", () => {
 
     const path = generateShipEvidence(SF, TMP_DIR, 432, "", 1, 0, 0);
 
-    expect(existsSync(path)).toBe(true);
-    const evidence = JSON.parse(readFileSync(path, "utf-8"));
+    // null means the contract refused the artifact (#2255).
+    expect(path).not.toBeNull();
+    expect(existsSync(path!)).toBe(true);
+    const evidence = JSON.parse(readFileSync(path!, "utf-8"));
     expect(evidence.contractVersion).toBe("1.0");
     expect(evidence.issueNumber).toBe(432);
     expect(evidence.gateOut.status).toBe("PASS");
@@ -429,6 +434,107 @@ describe("generateShipEvidence", () => {
     expect(evidence.capturedAt).toBeTruthy();
     expect(evidence.iterationCount).toBeGreaterThanOrEqual(1);
     expect(evidence.sizing.predicted).toBe("M");
+    // #2255 / SC-2770: the artifact meets its declared contract, not only the
+    // eight fields this case happens to name.
+    expect(validateArtifactSchema(evidence, ShipEvidenceSchema)).toEqual([]);
+  });
+
+  test("#2255 / SC-2770: a schema with one required field more than the writer emits refuses the artifact", () => {
+    writeFileSync(SF, JSON.stringify(makeState({ phase: "SHIP" }), null, 2));
+    const path = generateShipEvidence(SF, TMP_DIR, 432, "", 1, 0, 0);
+    expect(path).not.toBeNull();
+    const evidence = JSON.parse(readFileSync(path!, "utf-8"));
+    const stricter = ShipEvidenceSchema.extend({ reviewedBy: z.string() });
+    expect(validateArtifactSchema(evidence, stricter).join("\n")).toContain("reviewedBy");
+  });
+
+  test("#2255: an artifact the contract refuses is not written, and the field is named", () => {
+    // A verdict outside PASS|FAIL|SKIP is the live way the writer can emit
+    // what ShipEvidenceSchema refuses: `result: ac.verdict || "SKIP"`.
+    writeFileSync(SF, JSON.stringify(makeState({
+      phase: "SHIP",
+      acs: [{ id: "SC-1", statement: "s", verdict: "UNMEASURED", evidence: { content: "x" } }],
+    }), null, 2));
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (...a: unknown[]) => { errors.push(a.map(String).join(" ")); };
+    let path: string | null;
+    try {
+      path = generateShipEvidence(SF, TMP_DIR, 432, "", 1, 0, 0);
+    } finally {
+      console.error = original;
+    }
+    expect(path).toBeNull();
+    expect(existsSync(join(TMP_DIR, "ship-evidence.json"))).toBe(false);
+    expect(errors.join("\n")).toContain("gateOut.evidence.0.result");
+  });
+
+  test("#2255 review round 1: an OUTCOME criterion still PENDING at ship is written — a legitimate ship-time state", () => {
+    // gates/workflow.test.ts: "OUTCOME ACs may be PENDING at ship time — they
+    // require Quinn/prove for verification", and enrichment writes the literal
+    // "PENDING". The contract refused it, so validation would have dropped the
+    // evidence on every normal run with an OUTCOME criterion outstanding.
+    writeFileSync(SF, JSON.stringify(makeState({
+      phase: "SHIP",
+      acs: [{ id: "SC-1", statement: "s", type: "OUTCOME", verdict: "PENDING", evidence: null }],
+    }), null, 2));
+    const path = generateShipEvidence(SF, TMP_DIR, 432, "", 1, 0, 0);
+    expect(path).not.toBeNull();
+    const evidence = JSON.parse(readFileSync(path!, "utf-8"));
+    expect(evidence.gateOut.evidence[0].result).toBe("PENDING");
+    expect(validateArtifactSchema(evidence, ShipEvidenceSchema)).toEqual([]);
+  });
+});
+
+describe("#2255 review round 1: a refused artifact is never reported to the issue as shipped", () => {
+  // A loopback stub stands in for the GitHub API (lib/github.ts allows exactly
+  // GitHub or loopback). `fixture/repo` makes verifiedPush refuse rather than
+  // push from this checkout (#430). The control case is what keeps the
+  // refusal's "no requests" from being vacuous: the same stub, a valid
+  // artifact, and the label and comment arrive.
+  async function requestsDuring(acs: Array<Record<string, unknown>>): Promise<string[]> {
+    const seen: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req) {
+        seen.push(`${req.method} ${new URL(req.url).pathname}`);
+        return Response.json({});
+      },
+    });
+    try {
+      writeFileSync(SF, JSON.stringify(makeState({ phase: "SHIP", acs }), null, 2));
+      // A child process, so the credential is SUPPLIED rather than read: the
+      // tree resolves it in one place (resolveGitHubToken), and nothing here
+      // names it as a read. Async, because this process serves the stub, and
+      // a blocking spawn would stall the server the child is calling. The
+      // child's pending requests keep it alive until they have landed.
+      const child = Bun.spawn(
+        ["bun", "-e", `import { generateShipEvidence } from ${JSON.stringify(join(import.meta.dir, "orchestrator.ts"))};` +
+          `generateShipEvidence(${JSON.stringify(SF)}, ${JSON.stringify(TMP_DIR)}, 432, "fixture/repo", 1, 0, 0);`],
+        {
+          cwd: join(import.meta.dir, ".."),
+          env: { ...process.env, GH_TOKEN: "test-token-not-real", GITHUB_API_URL: `http://127.0.0.1:${server.port}` },
+          stdout: "ignore",
+          stderr: "ignore",
+        },
+      );
+      await child.exited;
+    } finally {
+      server.stop(true);
+    }
+    return seen;
+  }
+
+  test("control: a valid artifact labels the issue shipped and posts the comment", async () => {
+    const seen = await requestsDuring([{ id: "SC-1", statement: "s", verdict: "PASS", evidence: { content: "ok" } }]);
+    expect(seen.some(r => r.endsWith("/issues/432/labels"))).toBe(true);
+    expect(seen.some(r => r.endsWith("/issues/432/comments"))).toBe(true);
+  });
+
+  test("a refused artifact sends nothing: no shipped label, no Ship Complete comment", async () => {
+    const seen = await requestsDuring([{ id: "SC-1", statement: "s", verdict: "UNMEASURED", evidence: { content: "x" } }]);
+    expect(seen).toEqual([]);
   });
 });
 

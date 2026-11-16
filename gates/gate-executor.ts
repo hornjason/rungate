@@ -426,34 +426,10 @@ export function comparisonSummaryFor(
   return `compared against the ${reading.type} before-state captured at ${reading.capturedAt}; ${counts}`;
 }
 
-/**
- * Anything with zod's `safeParse` shape. Structural, so this file keeps no
- * direct zod import and a test can hand it a stricter copy of a schema.
- */
-export interface ArtifactSchema {
-  safeParse(value: unknown): {
-    success: boolean;
-    error?: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> };
-  };
-}
-
-/**
- * Check a gate artifact against its declared schema, before it is written
- * (#1559, SC-2770).
- *
- * Returns one `path: message` line per violation, `[]` when it validates.
- * `config/prove-evidence.schema.json` declared a contract nothing read, so
- * writer and contract drifted apart: B3's artifact failed both the JSON
- * schema and the zod one, and no check said so. A refusal that names no
- * issue is still a refusal — an empty list there would read as a pass.
- */
-export function validateArtifactSchema(artifact: unknown, schema: ArtifactSchema): string[] {
-  const result = schema.safeParse(artifact);
-  if (result.success) return [];
-  const issues = result.error?.issues ?? [];
-  if (issues.length === 0) return ["(root): the schema refused the artifact without naming a field"];
-  return issues.map((i) => `${i.path.length > 0 ? i.path.map(String).join(".") : "(root)"}: ${i.message}`);
-}
+// The validator moved to lib/ in #2255 so gates/orchestrator.ts can use it
+// without importing this file back; re-exported so it has one definition.
+import { validateArtifactSchema, type ArtifactSchema } from "../lib/artifact-schema";
+export { validateArtifactSchema, type ArtifactSchema };
 
 const PROVE_VERDICTS = ["PROVEN", "UNPROVEN", "INCONCLUSIVE"];
 /**
@@ -3393,7 +3369,7 @@ export async function executeGate(input: GateExecutorInput): Promise<GateExecuto
     const hash = generateHmac(sf, slug, issue, state.projectRoot);
     console.log(`HMAC: ${hash}`);
     const evidencePath = generateShipEvidence(sf, workDir, issue, issueRepo, passes, fails, warns);
-    console.log(`Ship evidence: ${evidencePath}`);
+    console.log(evidencePath ? `Ship evidence: ${evidencePath}` : "Ship evidence: NOT written — see the fields named above (#2255)");
   }
 
   // Verify-specific: convergence

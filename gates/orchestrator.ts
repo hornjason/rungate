@@ -2,7 +2,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, statSync
 import { join, dirname } from "path";
 import { createHash, createHmac, randomBytes } from "crypto";
 import { execSync } from "child_process";
-import { WorkflowStateSchema, ACSchema, AfkBatchPlanSchema, REJECTED_SKIP_REASONS } from "./schema";
+import { WorkflowStateSchema, ACSchema, AfkBatchPlanSchema, REJECTED_SKIP_REASONS, ShipEvidenceSchema } from "./schema";
+import { validateArtifactSchema } from "../lib/artifact-schema";
 import { ZodError } from "zod";
 import { createGitHubClient, addLabels, addComment, type GitHubClient } from "../lib/github";
 import { computeACHash } from "../lib/workflow-security";
@@ -384,7 +385,7 @@ export function generateShipEvidence(
   passes: number,
   fails: number,
   warns: number,
-): string {
+): string | null {
   const state = readState(sf);
   const sha = gitSha();
   const ts = isoNow();
@@ -483,12 +484,31 @@ export function generateShipEvidence(
     ...(pushOutcome ? { push: pushOutcome, pushLeftWorkLocal: leftWorkLocal(pushOutcome) } : {}),
   };
 
+  // #2255 / SC-2770: checked against its one contract before it is written,
+  // as prove-evidence.json is (#1559). An artifact the schema refuses is not
+  // written, and the fields are named. The gate's verdict is untouched: by
+  // here the ship gate has already passed and the push has happened, and the
+  // missing artifact is the visible consequence.
   const evidencePath = join(workDir, "ship-evidence.json");
-  writeFileSync(evidencePath, JSON.stringify(evidence, null, 2));
+  const violations = validateArtifactSchema(evidence, ShipEvidenceSchema);
+  if (violations.length > 0) {
+    console.error("ship gate: ship-evidence.json NOT written — it fails ShipEvidenceSchema (SC-2770):");
+    for (const v of violations) console.error(`  - ${v}`);
+  } else {
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2));
+  }
 
   // GitHub: add shipped label + post comment via Octokit (best-effort, fire-and-forget)
   // Uses POST additive label strategy (D-5) — never PUT/replace
-  if (issueRepo && issue > 0) {
+  //
+  // Not when the contract refused the artifact (#2255): labelling the issue
+  // shipped and posting "Ship Complete" beside a refusal is a public success
+  // report the run's own record contradicts, and a label is harder to take
+  // back than to withhold.
+  if (violations.length > 0 && issueRepo && issue > 0) {
+    console.error(`ship gate: #${issue} NOT labelled shipped and no Ship Complete comment posted — the evidence was not recorded`);
+  }
+  if (violations.length === 0 && issueRepo && issue > 0) {
     try {
       const github = createGitHubClient();
       addLabels(github, issueRepo, issue, ["shipped"]).catch(() => {});
@@ -512,7 +532,7 @@ export function generateShipEvidence(
     } catch {}
   }
 
-  return evidencePath;
+  return violations.length > 0 ? null : evidencePath;
 }
 
 const GATE_PENDING_PATH = join(
