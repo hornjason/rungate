@@ -1,5 +1,5 @@
 import { execSync, execFileSync } from "child_process";
-import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, readdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { splitGateRuns } from "../lib/gate-run-split";
 import { gateSaltPath, workDir as slugWorkDir } from "../lib/paths";
@@ -470,6 +470,14 @@ type AfterEvidence = {
   observedBy?: AfterObserver;
 };
 
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false; // absent or unreadable: either way nobody can open it
+  }
+}
+
 /** The reported `afterEvidence`, or why there is none. Never repaired into shape. */
 function readReportedAfterEvidence(raw: unknown, observer: AfterObserver): { ok: true; value: AfterEvidence } | { ok: false; reason: string } {
   if (raw === undefined || raw === null) return { ok: false, reason: `the ${observer} reported no afterEvidence` };
@@ -486,6 +494,11 @@ function readReportedAfterEvidence(raw: unknown, observer: AfterObserver): { ok:
   }
   if (a.type === "screenshot" && (typeof a.path !== "string" || a.path.trim() === "")) {
     return { ok: false, reason: `afterEvidence.path ${JSON.stringify(a.path)} is empty — a screenshot with no file is not evidence` };
+  }
+  // Review round 1, PR #2266: a path is a claim. The file has to be there,
+  // or a screenshot nobody took records as proof.
+  if (a.type === "screenshot" && !isFile(a.path as string)) {
+    return { ok: false, reason: `afterEvidence.path ${JSON.stringify(a.path)} is not a file — a screenshot nobody can open is not evidence` };
   }
   if (typeof a.capturedAt !== "string" || a.capturedAt === "") {
     return { ok: false, reason: `afterEvidence.capturedAt ${JSON.stringify(a.capturedAt)} is not a time` };

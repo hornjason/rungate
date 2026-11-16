@@ -287,9 +287,12 @@ describe("#2254: prove.js asks for what the contract needs, and no longer writes
 
 // ── #2262: Quinn's after-evidence, and the field table ──────────────────────
 
+// A real file: a screenshot is evidence only when the file it names exists (review round 1, PR #2266).
+const SHOT = join(scratch, "SC-1-banner-visible.png");
+writeFileSync(SHOT, "\x89PNG fixture");
 const QUINN_AFTER = {
   type: "screenshot",
-  path: "/tmp/prove-shots/SC-1-banner-visible.png",
+  path: SHOT,
   capturedAt: "2026-11-16T02:00:00.000Z",
   environment: "prod",
   description: "the prove container's dashboard shows the restored banner for a new user",
@@ -325,6 +328,15 @@ describe("#2262: Quinn's after-evidence reaches the record, attributed to Quinn"
     const r = run(SCRIPT, quinnReport({ afterEvidence: { ...QUINN_AFTER, path: null } }), AS_QUINN);
     expect(r.printed.verdict).toBe("INCONCLUSIVE");
     expect(r.printed.reason).toContain("afterEvidence.path");
+  });
+
+  test("review round 1: a screenshot naming a file that was never written is not evidence", () => {
+    const r = run(SCRIPT, quinnReport({ afterEvidence: { ...QUINN_AFTER, path: join(scratch, "never-taken.png") } }), AS_QUINN);
+    expect(r.printed.verdict).toBe("INCONCLUSIVE");
+    expect(r.printed.reason).toContain("is not a file");
+    // A directory is not a screenshot either.
+    const d = run(SCRIPT, quinnReport({ afterEvidence: { ...QUINN_AFTER, path: scratch } }), AS_QUINN);
+    expect(d.printed.reason).toContain("is not a file");
   });
 
   describe("the fold prove.js runs on Quinn's reply, executed", () => {
@@ -447,7 +459,7 @@ const FIELDS: Record<string, Row> = {
     source: "the report; required for a screenshot, optional otherwise",
     absent: { body: withAfter(without(QUINN_AFTER, "path")), opts: AS_QUINN, then: noAfter("afterEvidence.path") },
     malformed: { body: withAfter({ ...AFTER, path: 42 }), then: recorded((a) => expect(a.afterEvidence.path).toBeNull()) },
-    disagreeing: OBSERVED_ONLY,
+    disagreeing: { body: withAfter({ ...QUINN_AFTER, path: join(scratch, "never-taken.png") }), opts: AS_QUINN, then: noAfter("is not a file") },
   },
   "afterEvidence.capturedAt": {
     source: "the report",
