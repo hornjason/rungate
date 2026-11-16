@@ -35,6 +35,21 @@ describe("#1553 / SC-2769: a hand edit inside ## Project-owned is never touched"
     expect(again.content).toBe(d.content);
   });
 
+  test("a generated body ending in blank lines is adopted too — trailing blank lines are not an edit (review, #2285)", () => {
+    const tailed = `${V1}\n`; // the body ends "\n\n", and the stamp covers both
+    const created = decideRuleWrite(null, tailed);
+    expect(created.action).toBe("create");
+    for (const join of ["", "\n"]) {
+      const existing = `${created.content}${join}${OURS}\n`;
+      const d = decideRuleWrite(existing, tailed);
+      expect([join, d.action]).toEqual([join, "update"]);
+      expect(d.content).toContain(OURS);
+    }
+    // and a real edit outside, with the same tail, is still refused
+    const edited = `${created.content!.replace("- Generated line two.", "- Edited.")}${OURS}\n`;
+    expect(decideRuleWrite(edited, tailed).action).toBe("preserve");
+  });
+
   test("a section placed mid-file is carried too, and lands at the end", () => {
     const stamped = stampProvenance(V1);
     const at = stamped.indexOf("## The rule");

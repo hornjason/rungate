@@ -53,7 +53,7 @@
  * direction costs 197 lines of a rule nobody noticed was gone.
  */
 import { createHash } from "crypto";
-import { carryMarkedSection, normalizeTail, splitMarked } from "./scaffold/marked-section";
+import { carryMarkedSection, normalizeTail, splitMarked, tailVariants } from "./scaffold/marked-section";
 
 export type RuleAction = "create" | "update" | "preserve";
 
@@ -135,7 +135,7 @@ export function decideRuleWrite(existing: string | null, generated: string): Rul
   const marked = splitMarked(existing);
   if (marked !== null) {
     const stamp = declaredSha(existing);
-    if (stamp !== null && stamp === bodySha(marked.outside)) {
+    if (stamp !== null && tailVariants(marked.outside).some(v => bodySha(v) === stamp)) {
       return {
         action: "update",
         reason: "harness-written outside ## Project-owned and untouched since; the section is carried forward verbatim",

@@ -33,6 +33,20 @@ export function normalizeTail(text: string): string {
 }
 
 /**
+ * The same text with zero to three trailing blank lines (review, PR #2285).
+ *
+ * A stamp is taken over a body AS WRITTEN, and a generated body may end in
+ * more than one newline; taking the section out cannot know how many there
+ * were. Trailing blank lines are the one thing that may differ, and they can
+ * carry no edit, so the stamp is compared against each — never against any
+ * other variation, which would let a real edit through.
+ */
+export function tailVariants(text: string): string[] {
+  const base = text.replace(/\s+$/, "");
+  return [`${base}\n`, `${base}\n\n`, `${base}\n\n\n`, `${base}\n\n\n\n`];
+}
+
+/**
  * The file with its `## Project-owned` section taken out, and the section.
  * Null when the file has no section, or only the heading (nothing to carry).
  *
