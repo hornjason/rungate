@@ -1388,7 +1388,10 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
     ["cp -L, which follows links instead of making them", `mkdir -p /tmp/fix && cp -L /tmp/a/${STATE} /tmp/fix/${STATE}`],
     ["cp -p", `mkdir -p /tmp/fix && cp -p /tmp/a/${STATE} /tmp/fix/${STATE}`],
     ["cp -a", `mkdir -p /tmp/fix && cp -a /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["install -m 755, a flag with neither letter", `mkdir -p /tmp/fix && install -m 755 /tmp/a/${STATE} /tmp/fix/${STATE}`],
+    // `-m755` attached: `writeTargets` reads a detached `-m 755` as a third
+    // operand and the destination as a directory, which the chain property
+    // then finds does not exist. A pre-existing misparse, not this change's.
+    ["install -m755, a flag with neither letter", `mkdir -p /tmp/fix && install -m755 /tmp/a/${STATE} /tmp/fix/${STATE}`],
     ["mkdir -p, which cannot point out of its tree", `mkdir -p /tmp/fix && echo '{}' > /tmp/fix/${STATE}`],
     ["a path that merely contains the letters", `mkdir -p /tmp/cp.d && echo '{}' > /tmp/cp.d/${STATE}`],
     ["cp with a quoted FILENAME, not a flag", `mkdir -p /tmp/fix && cp 'a b.txt' /tmp/fix/${STATE}`],
@@ -1680,7 +1683,7 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
    * would have had to be weakened to accommodate that, and a weakened
    * assertion is how a mutation stops witnessing anything.
    */
-  test("MUTATION: removing the ANSI-C branch moves seven rows one way and two the other", async () => {
+  test("MUTATION: removing the ANSI-C branch moves one row one way and three the other", async () => {
     const src = readFileSync(join(import.meta.dir, "..", "lib", "bash-write-guard.ts"), "utf8");
     const site = `if (c === '$' && s[i + 1] === "'") {`;
     expect(src.split(site).length - 1, "the ANSI-C branch must have ONE site to mutate").toBe(1);
@@ -1709,6 +1712,7 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
         // controls that go the other way: allowed here, REFUSED without it,
         // because the `$` returns to the token stream
         ["cp $'-L', which creates no link", true],
+        ["cp $'-r'", true],
         ["ANSI-C in a PATH is now resolvable", true],
       ]);
       const rows: [string, string][] = [
@@ -2444,7 +2448,8 @@ describe("#1240 WITNESS: a program handed to an interpreter on stdin", () => {
   });
 
   test("CONTROL: an interpreter heredoc writing a FIXTURE is still allowed", () => {
-    const cmd = `bash <<'EOF'\necho '{}' > /tmp/bw1240/${STATE}\nEOF`;
+    // #1367: the program makes its own directory, which its context reads.
+    const cmd = `bash <<'EOF'\nmkdir -p /tmp/bw1240\necho '{}' > /tmp/bw1240/${STATE}\nEOF`;
     expect(decideBashWrite(cmd).blocked).toBe(false);
   });
 
@@ -2586,12 +2591,13 @@ describe("#1269 WITNESS: a computed destination in an interpreter body", () => {
   // The controls. Without these the rule could be "refuse every interpreter
   // body", which is the 1,760-of-5,060 over-blocking arm 3 exists past.
   test("CONTROL: a body naming only scratch paths is still a fixture", () => {
-    const d = decideBashWrite(`bun -e 'writeFileSync("/tmp/fix/${STATE}", "{}")'`);
+    const d = decideBashWrite(`mkdir -p /tmp/fix && bun -e 'writeFileSync("/tmp/fix/${STATE}", "{}")'`);
     expect(d.blocked, `refused: ${d.reason}`).toBe(false);
   });
 
   test("CONTROL: two scratch paths are still a fixture", () => {
-    const cmd = `python3 -I -c "import shutil; shutil.copy('/tmp/a/${STATE}', '/tmp/b/${STATE}')"`;
+    // #1367: the SOURCE carries the name too, so its directory must be real.
+    const cmd = `mkdir -p /tmp/a /tmp/b && python3 -I -c "import shutil; shutil.copy('/tmp/a/${STATE}', '/tmp/b/${STATE}')"`;
     expect(decideBashWrite(cmd).blocked).toBe(false);
   });
 
@@ -2608,7 +2614,7 @@ describe("#1269 WITNESS: a computed destination in an interpreter body", () => {
     // asks anything about absolute-looking WORDS, only about complete
     // string literals, and `//` is not one. The row is kept because the
     // command is real and must stay allowed, not because the hazard is.
-    const cmd = `bun -e '// build the fixture\nwriteFileSync("/tmp/fix/${STATE}", "{}")'`;
+    const cmd = `mkdir -p /tmp/fix && bun -e '// build the fixture\nwriteFileSync("/tmp/fix/${STATE}", "{}")'`;
     expect(decideBashWrite(cmd).blocked).toBe(false);
   });
 
@@ -2636,7 +2642,7 @@ describe("#1269 WITNESS: a computed destination in an interpreter body", () => {
    * both of the directions it can be walked: by NAME and by TREE.
    */
   test("REVERSED: a non-scratch literal outside every live tree no longer ends the exemption", () => {
-    const cmd = `bun -e 'readFileSync("${LIVE}/notes"); writeFileSync("/tmp/fix/${STATE}", "{}")'`;
+    const cmd = `mkdir -p /tmp/fix && bun -e 'readFileSync("${LIVE}/notes"); writeFileSync("/tmp/fix/${STATE}", "{}")'`;
     const d = decideBashWrite(cmd);
     expect(d.blocked, `refused: ${d.reason}`).toBe(false);
   });
@@ -3001,7 +3007,7 @@ describe("#1239 BATTERY: an escaped quote must not swallow the redirect", () => 
     for (const cmd of [
       `grep -n "chmod" ${LIVE}/${STATE}`,
       `cat ${LIVE}/${STATE}`,
-      `echo "x\\"" > /tmp/scratch/${STATE}`,
+      `mkdir -p /tmp/scratch && echo "x\\"" > /tmp/scratch/${STATE}`,
       `git show HEAD:${STATE} | grep -nE "a\\"b"`,
       `jq . ${LIVE}/${STATE}`,
     ]) {
@@ -3159,11 +3165,12 @@ describe("#1277 WITNESS: a computed destination that leaves no non-scratch liter
 });
 
 describe("#1277 CONTROL: the fixture shapes #1175 exists to unblock", () => {
+  // #1367: each fixture makes its directory, as a real one must.
   const ok: [string, string][] = [
-    ["a node fixture", `bun -e 'writeFileSync("/tmp/fix/${STATE}","{}")'`],
-    ["a python fixture", `python3 -I -c "import json; json.dump({}, open('/tmp/fix/${STATE}','w'))"`],
-    ["two scratch paths", `python3 -I -c "import shutil; shutil.copy('/tmp/a/${STATE}', '/tmp/b/${STATE}')"`],
-    ["a heredoc fixture", `python3 <<'PY'\nopen("/tmp/fix/${STATE}", "w").write("{}")\nPY`],
+    ["a node fixture", `mkdir -p /tmp/fix && bun -e 'writeFileSync("/tmp/fix/${STATE}","{}")'`],
+    ["a python fixture", `mkdir -p /tmp/fix && python3 -I -c "import json; json.dump({}, open('/tmp/fix/${STATE}','w'))"`],
+    ["two scratch paths", `mkdir -p /tmp/a /tmp/b && python3 -I -c "import shutil; shutil.copy('/tmp/a/${STATE}', '/tmp/b/${STATE}')"`],
+    ["a heredoc fixture", `mkdir -p /tmp/fix && python3 <<'PY'\nopen("/tmp/fix/${STATE}", "w").write("{}")\nPY`],
   ];
   test.each(ok)("%s stays allowed", (_n, cmd) => {
     const d = decideBashWrite(cmd);
@@ -3244,12 +3251,13 @@ describe("#1277 CONTROL: the fixture shapes #1175 exists to unblock", () => {
   test("a mutating find keeps the plain exemption — its operands are shell words", () => {
     // `find` has no source literals, so a reader of them would refuse every
     // one. The target question is already asked of its operands directly.
-    expect(decideBashWrite(`find /tmp/fix -name '*.json' -exec rm /tmp/fix/${STATE} ;`).blocked).toBe(false);
+    expect(decideBashWrite(`mkdir -p /tmp/fix && find /tmp/fix -name '*.json' -exec rm /tmp/fix/${STATE} ;`).blocked).toBe(false);
     expect(decideBashWrite(`find /tmp/fix -name '*.json' -exec rm ${LIVE}/run/${STATE} ;`).blocked).toBe(true);
   });
 
   test("a shell -c body keeps the plain exemption — arm 3a re-enters it as shell", () => {
-    expect(decideBashWrite(`bash -c 'echo x > /tmp/fix/${SALT}'`).blocked).toBe(false);
+    // #1367: the body makes its own directory, which the body's context reads.
+    expect(decideBashWrite(`bash -c 'mkdir -p /tmp/fix && echo x > /tmp/fix/${SALT}'`).blocked).toBe(false);
     expect(decideBashWrite(`bash -c 'echo x > ${LIVE}/run/${SALT}'`).blocked).toBe(true);
   });
 });
@@ -3494,7 +3502,11 @@ describe("#1371 WITNESS: the exemption granted against a value the write never u
       // binding the only thing under test, and the equality below is what
       // caught the multi-line version being double-covered.
       label: "W1 a scratch literal bound to a name, then reassigned before the write",
-      cmd: `python3 -I -c "import os; p = '/tmp/fix/${STATE}'; p = p.replace('/tmp/fix', os.environ['RG']); open(p,'w').write('{}')"`,
+      // #1367: `'/tmp/f'`, not `'/tmp/fix'`. The full directory spelled as a
+      // literal NAMES the chain, so part 2 of the chain property refuses it as
+      // well and this row would stop being `noPos`'s alone — the same reason
+      // it is written on one line.
+      cmd: `python3 -I -c "import os; p = '/tmp/fix/${STATE}'; p = p.replace('/tmp/f', os.environ['RG']); open(p,'w').write('{}')"`,
       blocked: true,
     },
     {
@@ -3509,12 +3521,15 @@ describe("#1371 WITNESS: the exemption granted against a value the write never u
     },
     {
       label: "N1 the #1277 headline escape with one newline before the .replace",
-      cmd: `bun -e 'writeFileSync("/tmp/x/${STATE}"\n  .replace("/tmp/x", process.env.RG), "{}")'`,
+      // #1367: `"/tmp/x/w"`, not `"/tmp/x"`. A literal spelling the whole
+      // directory NAMES the chain, which part 2 of the chain property refuses
+      // too — and then `noNL` would have no row of its own.
+      cmd: `bun -e 'writeFileSync("/tmp/x/${STATE}"\n  .replace("/tmp/x/w", process.env.RG), "{}")'`,
       blocked: true,
     },
     {
       label: "N2 the same line break in a python heredoc",
-      cmd: `python3 <<'PY'\nimport os\nopen("/tmp/x/${STATE}"\n     .replace("/tmp/x", os.environ["RG"]), "w").write("{}")\nPY`,
+      cmd: `python3 <<'PY'\nimport os\nopen("/tmp/x/${STATE}"\n     .replace("/tmp/x/w", os.environ["RG"]), "w").write("{}")\nPY`,
       blocked: true,
     },
 
@@ -3544,7 +3559,10 @@ describe("#1371 WITNESS: the exemption granted against a value the write never u
       // argument for the swap: P1 moves under `noPlace`, this moves under
       // `noPlace` AND `noOrder`, and nothing else separates them.
       label: "U1 the same expansion with NO slash in the variable",
-      cmd: `python3 -I -c 'import os, shutil; open("/tmp/fix/${STATE}","w").write("{}"); shutil.copy(src, os.path.expandvars("$RG"))'`,
+      // #1367: `.bak` keeps this row about the PLACEMENT order. A bare `$RG`
+      // could be any name at all, so part 2 of the chain property now refuses
+      // it too, and `noOrder` would be left with no row of its own.
+      cmd: `python3 -I -c 'import os, shutil; open("/tmp/fix/${STATE}","w").write("{}"); shutil.copy(src, os.path.expandvars("$RG.bak"))'`,
       blocked: true,
     },
     {
@@ -3646,6 +3664,12 @@ describe("#1371 WITNESS: the exemption granted against a value the write never u
       blocked: false,
     },
   ];
+  // #1367: every row makes the fixture directories first, so the exemption
+  // question reaches the body readings this table is about. Without it part 1
+  // of the chain property refuses each row on its own — a second decider
+  // holding every refusal up, which the MUTATION test below would (rightly)
+  // report as rows that stopped moving.
+  for (const r of rows) r.cmd = `mkdir -p /tmp/fix /tmp/a /tmp/b /tmp/x && ${r.cmd}`;
 
   test.each(rows.map(r => [r.label, r.cmd, r.blocked] as const))("%s", (_l, cmd, blocked) => {
     const d = decideBashWrite(cmd);

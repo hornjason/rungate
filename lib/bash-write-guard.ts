@@ -484,14 +484,18 @@ function resolveThroughLinks(normalised: string): string | null {
  * NAMING, which costs an exemption and never opens one.
  *
  * "Before" is by position when the steps are sequential. A background `&`,
- * or a pipeline beside a grouping bracket, hides the order, and then every
- * other step counts.
+ * a `coproc`, a subshell, a brace group or a substitution hides the order,
+ * and then every other step counts. A word naming the scratch ROOT counts as
+ * naming the chain, because a link put INTO the root takes its source's
+ * basename. `~` and `$HOME` read the command's own `HOME` first; any other
+ * tilde form could be anything.
  *
  * A plain `D=/tmp/x` sets a shell variable and touches nothing: its uses are
  * substituted and read where they occur, which is what lets `mkdir -p $D`
- * forgive. An EXPORTED value — `export D=…`, a `D=… cmd` prefix, `set -a` —
- * reaches a process's environment, where a link can be made from it with the
- * path never spelled again, so it names the path where it is set.
+ * forgive. An EXPORTED value — `export D=…`, a `D=… cmd` prefix, `set -a`,
+ * or a name the environment already exports — reaches a process's
+ * environment, where a link can be made from it with the path never spelled
+ * again, so it names the path where it is set.
  *
  * ## KNOWN GAP, pinned by a test
  *
@@ -520,7 +524,7 @@ interface Mention {
 
 /** Which top-level steps run before, or alongside, which. */
 interface StepOrder {
-  /** False when a background `&`, or a pipeline beside a bracket, hides the order. */
+  /** False when a background `&`, a `coproc`, or a bracket hides the order. */
   ordered: boolean;
   /** Pipeline membership per step: equal numbers run concurrently. */
   group: number[];
@@ -558,18 +562,26 @@ function verbName(token: string): string {
 }
 
 /**
- * `$NAME`, `${NAME}`, `$HOME` and a leading `~`, from what the command
- * assigned EARLIER. Anything else is left as written, so it stays unresolved
- * and forgives nothing.
+ * `$NAME`, `${NAME}` and a leading `~`, from what the command assigned
+ * EARLIER — its own `HOME` before the environment's, for `~` as well as
+ * `$HOME` (#1367 review). Anything else is left as written, so it stays
+ * unresolved and forgives nothing.
+ *
+ * A tilde other than `~` or `~/…` — `~+`, `~-`, `~user` — expands to a
+ * directory this module cannot see, so it becomes `$?`, which reads as
+ * "could be anything" everywhere downstream and cannot be assigned to.
  */
+const ANYTHING = '$?';
+
 function substitute(word: string, vars: Map<string, string | null>): string {
-  const home = process.env.HOME || '';
-  const w = home ? word.replace(/^~(?=\/|$)/, home) : word;
+  const home = vars.has('HOME') ? vars.get('HOME') : process.env.HOME || null;
+  let w = word;
+  const tilde = /^~([^/]*)/.exec(w);
+  if (tilde) w = (tilde[1] === '' && typeof home === 'string' && home ? home : ANYTHING) + w.slice(tilde[0].length);
   return w.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, a, b) => {
     const name = a ?? b;
-    if (name === 'HOME' && home) return home;
-    const v = vars.get(name);
-    return typeof v === 'string' ? v : m;
+    const v = vars.has(name) ? vars.get(name) : name === 'HOME' ? home : undefined;
+    return typeof v === 'string' && v ? v : m;
   });
 }
 
@@ -709,6 +721,7 @@ function collectShell(text: string, depth: number, tag: (i: number) => { at: num
         sink.plain.push({ name: w.slice(0, w.indexOf('=')), mention: { text: value, at, src } });
         assign(w, vars);
       }
+      nested(); // `x="$(…)"` runs the substitution, whatever it assigns
       return;
     }
     if (word === 'set' && words.some(w => /^-[A-Za-z]*a/.test(w) || w === 'allexport')) sink.allexport = true;
@@ -751,25 +764,34 @@ function chainContext(cmd: string, outer?: Outer): ChainContext {
   });
   // An exported value reaches a process's environment, so it names the path
   // where it is set. `export D` and `D=… cmd` both spell the name as a word.
+  // A name the environment ALREADY exports stays exported when the command
+  // reassigns it (#1367 review): `HOME=…` reaches every child process.
   const exported = (name: string): boolean =>
-    sink.allexport || sink.mentions.some(m => m.text === name || m.text.startsWith(`${name}=`));
+    sink.allexport ||
+    process.env[name] !== undefined ||
+    sink.mentions.some(m => m.text === name || m.text.startsWith(`${name}=`));
   for (const { name, mention } of sink.plain) if (exported(name)) sink.mentions.push(mention);
   return { made: sink.made, mentions: sink.mentions, order: stepOrder(cmd) };
 }
 
-/** Which steps of `cmd` run before, or alongside, which — read off its separators. */
+/**
+ * Which steps of `cmd` run before, or alongside, which — read off its
+ * separators. Position is order only for plain sequential steps: a
+ * background `&`, a `coproc`, a subshell, a brace group, a command or
+ * process substitution can each run a step out of its written place, so any
+ * of them makes every other step count (#1367 review).
+ */
 function stepOrder(cmd: string): StepOrder {
   const parts = splitSegments(cmd);
-  const background = parts.some(p => p.sep === '&');
-  const piped = parts.some(p => p.sep === '|');
-  const bracketed = /[(){}]/.test(stripQuoted(cmd));
+  const background = parts.some(p => p.sep === '&' || commandWord(p.text) === 'coproc');
+  const bracketed = /[()]|(?:^|[\s;&|])\{(?=\s|$)/m.test(stripQuoted(cmd));
   const group: number[] = [];
   let g = 0;
   parts.forEach((p, i) => {
     group[i] = g;
     if (p.sep !== '|' && p.sep !== 'redir') g++;
   });
-  return { ordered: !background && !(piped && bracketed), group };
+  return { ordered: !background && !bracketed, group };
 }
 
 /** Can the step at `from` run before, or alongside, the write at `at`? */
@@ -830,9 +852,15 @@ function chainHolds(path: string, ctx: ChainContext, own: Own, at: number): bool
   const dest = lstatOrNull(normalised);
   if (dest && (dest.isSymbolicLink() || (!dest.isDirectory() && dest.nlink > 1))) return false;
   // PART 2: nothing before the write names the chain or the destination.
-  const named = [...dirs, normalised].map(p => ({ key: chainKey(p), base: fold(basename(p)) }));
+  // The ROOT is named too (#1367 review): `ln -s V /tmp/` and `ln -s V -t
+  // /tmp` call the link after V's basename, so a step that puts anything
+  // INTO the root plants a name only its source spells. A chain directory's
+  // other parents are chain directories, and are already named.
+  const named = [root, ...dirs, normalised].map(p => ({ key: chainKey(p), base: fold(basename(p)) }));
   for (const m of ctx.mentions) {
-    if (m.src === own.src && (!own.only || own.only.has(m.text))) continue;
+    // The word being judged is never a mention of itself — a copy's SOURCE
+    // literal is judged too, by every path word that carries the name.
+    if (m.src === own.src && (!own.only || own.only.has(m.text) || m.text === path)) continue;
     if (!runsBefore(m.at, at, ctx.order)) continue;
     if (mentionNames(m.text, named)) return false;
   }
@@ -926,7 +954,10 @@ function outerFor(ctx: ChainContext, src: string, at: number): Outer {
  */
 function nestedCommands(view: string): string[] {
   const out: string[] = [];
-  for (const m of view.matchAll(/'([^']*)'|"([^"]*)"/g)) out.push(m[1] ?? m[2] ?? '');
+  // A substitution inside a quoted span is read by the walk below. Left in
+  // the span, `segments` cuts it at its own `;` and the fragment `$(date`
+  // reads as a word that could be anything (#1367), so it is blanked here.
+  for (const m of view.matchAll(/'([^']*)'|"([^"]*)"/g)) out.push(blankSubstitutions(m[1] ?? m[2] ?? ''));
   // Backticks are the OTHER substitution syntax and were missing entirely
   // from #1429's first reading. They do not nest in bash, so a flat match is
   // the whole grammar here.
@@ -942,6 +973,22 @@ function nestedCommands(view: string): string[] {
     out.push(body.endsWith(')') ? body.slice(0, -1) : body); // unterminated keeps all of it
   }
   return out.filter(s => /\s/.test(s));
+}
+
+/** `text` with every `$( … )` and backtick span replaced by `$?` (#1367). */
+function blankSubstitutions(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '$' && text[i + 1] === '(') {
+      out += ANYTHING;
+      i = endOfSubstitution(text, i) - 1;
+    } else if (text[i] === '`') {
+      out += ANYTHING;
+      const close = text.indexOf('`', i + 1);
+      i = close === -1 ? text.length : close;
+    } else out += text[i];
+  }
+  return out;
 }
 
 
