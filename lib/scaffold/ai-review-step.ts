@@ -7117,7 +7117,15 @@ if [ "\${AI_REVIEW_ACTION_OUTCOME:-}" = success ]; then
     # the reader, which is exactly the state before this step existed — so a
     # consumer whose prepare step did not reach its output keeps the reading
     # it had rather than acquiring a refusal from this change.
-    adjudication=\$(cd "\$(dirname "\${${AI_REVIEW_FINDINGS_PATH_VAR}}")" && ${adjudicator} "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" "\${${AI_REVIEW_CHANGED_FILES_PATH_VAR}:-}" 2>&1) || adjudicated=\$?
+    #
+    # THE CHECKOUT ARRIVES BY NAME (#2261). The \`cd\` puts the adjudicator
+    # outside the checkout, so its working directory cannot tell it where the
+    # cited lines are, and with nothing named it read them from the payload's
+    # temp directory and suppressed nothing (#1872, #2257). Set on this one
+    # command, not exported. \`:-\` because the step runs under \`set -u\`; an
+    # empty value is the adjudicator's own fallback to its working directory,
+    # which it reports as unable to read any cited line.
+    adjudication=\$(cd "\$(dirname "\${${AI_REVIEW_FINDINGS_PATH_VAR}}")" && ${AI_REVIEW_CHECKOUT_ROOT_VAR}="\${GITHUB_WORKSPACE:-}" ${adjudicator} "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" "\${${AI_REVIEW_CHANGED_FILES_PATH_VAR}:-}" 2>&1) || adjudicated=\$?
     printf '%s\\n' "\${adjudication}"
 
     # DID IT RUN, asked before WHAT IT SAID. Without this line a registry that
