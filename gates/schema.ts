@@ -1193,7 +1193,10 @@ export const ShipEvidenceSchema = z.object({
     status: z.enum(["PASS", "FAIL"]),
     evidence: z.array(z.object({
       criterion: z.string(),
-      result: z.enum(["PASS", "FAIL", "SKIP"]),
+      // PENDING is a legitimate ship-time state (#2255): an OUTCOME criterion
+      // waits for Quinn or /prove, and the verify gate passes it through
+      // (checkVerifyPendingACs). The writer copies the criterion's verdict.
+      result: z.enum(["PASS", "FAIL", "SKIP", "PENDING"]),
       detail: z.any().optional(),
     })),
   }),

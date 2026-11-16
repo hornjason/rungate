@@ -468,6 +468,75 @@ describe("generateShipEvidence", () => {
     expect(existsSync(join(TMP_DIR, "ship-evidence.json"))).toBe(false);
     expect(errors.join("\n")).toContain("gateOut.evidence.0.result");
   });
+
+  test("#2255 review round 1: an OUTCOME criterion still PENDING at ship is written — a legitimate ship-time state", () => {
+    // gates/workflow.test.ts: "OUTCOME ACs may be PENDING at ship time — they
+    // require Quinn/prove for verification", and enrichment writes the literal
+    // "PENDING". The contract refused it, so validation would have dropped the
+    // evidence on every normal run with an OUTCOME criterion outstanding.
+    writeFileSync(SF, JSON.stringify(makeState({
+      phase: "SHIP",
+      acs: [{ id: "SC-1", statement: "s", type: "OUTCOME", verdict: "PENDING", evidence: null }],
+    }), null, 2));
+    const path = generateShipEvidence(SF, TMP_DIR, 432, "", 1, 0, 0);
+    expect(path).not.toBeNull();
+    const evidence = JSON.parse(readFileSync(path!, "utf-8"));
+    expect(evidence.gateOut.evidence[0].result).toBe("PENDING");
+    expect(validateArtifactSchema(evidence, ShipEvidenceSchema)).toEqual([]);
+  });
+});
+
+describe("#2255 review round 1: a refused artifact is never reported to the issue as shipped", () => {
+  // A loopback stub stands in for the GitHub API (lib/github.ts allows exactly
+  // GitHub or loopback). `fixture/repo` makes verifiedPush refuse rather than
+  // push from this checkout (#430). The control case is what keeps the
+  // refusal's "no requests" from being vacuous: the same stub, a valid
+  // artifact, and the label and comment arrive.
+  async function requestsDuring(acs: Array<Record<string, unknown>>): Promise<string[]> {
+    const seen: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req) {
+        seen.push(`${req.method} ${new URL(req.url).pathname}`);
+        return Response.json({});
+      },
+    });
+    const saved = { url: process.env.GITHUB_API_URL, token: process.env.GITHUB_TOKEN, gh: process.env.GH_TOKEN };
+    process.env.GITHUB_API_URL = `http://127.0.0.1:${server.port}`;
+    process.env.GITHUB_TOKEN = "test-token-not-real";
+    delete process.env.GH_TOKEN;
+    const quiet = { log: console.log, error: console.error };
+    console.log = () => {};
+    console.error = () => {};
+    try {
+      writeFileSync(SF, JSON.stringify(makeState({ phase: "SHIP", acs }), null, 2));
+      generateShipEvidence(SF, TMP_DIR, 432, "fixture/repo", 1, 0, 0);
+      // The label and comment are fire-and-forget; give them time to land.
+      for (let i = 0; i < 40 && seen.length < 2; i++) await new Promise(r => setTimeout(r, 25));
+      if (seen.length === 0) await new Promise(r => setTimeout(r, 250));
+    } finally {
+      console.log = quiet.log;
+      console.error = quiet.error;
+      for (const [k, v] of [["GITHUB_API_URL", saved.url], ["GITHUB_TOKEN", saved.token], ["GH_TOKEN", saved.gh]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      server.stop(true);
+    }
+    return seen;
+  }
+
+  test("control: a valid artifact labels the issue shipped and posts the comment", async () => {
+    const seen = await requestsDuring([{ id: "SC-1", statement: "s", verdict: "PASS", evidence: { content: "ok" } }]);
+    expect(seen.some(r => r.endsWith("/issues/432/labels"))).toBe(true);
+    expect(seen.some(r => r.endsWith("/issues/432/comments"))).toBe(true);
+  });
+
+  test("a refused artifact sends nothing: no shipped label, no Ship Complete comment", async () => {
+    const seen = await requestsDuring([{ id: "SC-1", statement: "s", verdict: "UNMEASURED", evidence: { content: "x" } }]);
+    expect(seen).toEqual([]);
+  });
 });
 
 // ═══ writeGateSummary ══════════════════════════════════════════════════

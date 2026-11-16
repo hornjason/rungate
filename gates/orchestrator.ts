@@ -500,7 +500,15 @@ export function generateShipEvidence(
 
   // GitHub: add shipped label + post comment via Octokit (best-effort, fire-and-forget)
   // Uses POST additive label strategy (D-5) — never PUT/replace
-  if (issueRepo && issue > 0) {
+  //
+  // Not when the contract refused the artifact (#2255): labelling the issue
+  // shipped and posting "Ship Complete" beside a refusal is a public success
+  // report the run's own record contradicts, and a label is harder to take
+  // back than to withhold.
+  if (violations.length > 0 && issueRepo && issue > 0) {
+    console.error(`ship gate: #${issue} NOT labelled shipped and no Ship Complete comment posted — the evidence was not recorded`);
+  }
+  if (violations.length === 0 && issueRepo && issue > 0) {
     try {
       const github = createGitHubClient();
       addLabels(github, issueRepo, issue, ["shipped"]).catch(() => {});
