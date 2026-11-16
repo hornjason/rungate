@@ -53,15 +53,16 @@ export function tailVariants(text: string): string[] {
  * `outside` is what the harness wrote, if nobody touched it: the section and
  * the blank lines around it are removed so the result compares equal to the
  * text the stamp was taken over, wherever in the file the section sat.
+ * `start` is the section's offset in `text`, for a caller mapping lines.
  */
-export function splitMarked(text: string): { outside: string; section: string } | null {
+export function splitMarked(text: string): { outside: string; section: string; start: number } | null {
   const reading = readPreservedSection(text, PROJECT_OWNED_SECTION);
   if (reading === null) return null;
   const start = reading.start; // where the heading matched — never re-found by content (#2285)
   const before = text.slice(0, start);
   const after = text.slice(start + reading.text.length).replace(/^\s+/, "");
   const outside = after === "" ? normalizeTail(before) : `${before}${after}`;
-  return { outside, section: reading.text };
+  return { outside, section: reading.text, start };
 }
 
 /**

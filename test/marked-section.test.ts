@@ -10,7 +10,8 @@
  * no generator change at all (baseline recorded on #1553).
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join, resolve } from "path";
 
 import { carryMarkedSection, splitMarked, PROJECT_OWNED_SECTION } from "../lib/scaffold/marked-section";
@@ -109,6 +110,47 @@ describe("#1553 / SC-2769: the pieces", () => {
     const d = decideRuleWrite(`${real}\n${OURS}\n`, generated);
     expect(d.action).toBe("update");
     expect(d.content).toContain(OURS);
+  });
+
+  test("textOwner agrees with the write decider: an adopted section is the project's, the rest stays rungate's (review, #2285)", async () => {
+    // Before: `textOwner` hashed the whole body, section included, so a file
+    // that adopted the section read as hand-edited throughout, and every
+    // generated line flooded the doc-rule report as the project's.
+    const { textOwner } = await import("../lib/scaffold/steps");
+    const dir = mkdtempSync(join(tmpdir(), "rungate-1553-owner-"));
+    try {
+      mkdirSync(join(dir, ".claude", "rules"), { recursive: true });
+      const adopted = `${stampProvenance(V1)}\n${OURS}\n`;
+      expect(decideRuleWrite(adopted, V1).action).toBe("update"); // the decider adopts it
+      writeFileSync(join(dir, ".claude", "rules", "adopted.md"), adopted);
+      const lines = adopted.split("\n");
+      const at = (s: string) => `.claude/rules/adopted.md:${lines.findIndex(l => l.includes(s)) + 1}`;
+      expect(textOwner(dir, at("Generated line two."))).toBe("rungate");
+      expect(textOwner(dir, at("Never deploy on a Friday"))).toBe("project");
+      // and an edit outside the section still makes the whole file the project's
+      writeFileSync(join(dir, ".claude", "rules", "edited.md"), adopted.replace("- Generated line two.", "- Edited by hand."));
+      expect(textOwner(dir, ".claude/rules/edited.md:9")).toBe("project");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("textOwner places a carried-forward section where its heading matched, not where its text first recurs (review, #2285)", async () => {
+    const { textOwner } = await import("../lib/scaffold/steps");
+    const dir = mkdtempSync(join(tmpdir(), "rungate-1553-owner-"));
+    try {
+      mkdirSync(join(dir, ".claude", "agents"), { recursive: true });
+      const section = "## Project Constraints\n\n- Never touch the billing tables.";
+      // the section's text recurs earlier, mid-line: a substring search lands there
+      const brief = `# Marcus\n\nQuoted, inline: ${section}\n\n## Generated\n\n- Never skip the generated step.\n\n${section}\n`;
+      writeFileSync(join(dir, ".claude", "agents", "marcus.md"), brief);
+      const lines = brief.split("\n");
+      const real = lines.lastIndexOf("- Never touch the billing tables.") + 1;
+      expect(textOwner(dir, `.claude/agents/marcus.md:${real}`)).toBe("project");
+      expect(textOwner(dir, ".claude/agents/marcus.md:5")).toBe("rungate"); // the decoy's tail line
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("no template writes the heading, so it costs nothing until a project uses it", () => {
