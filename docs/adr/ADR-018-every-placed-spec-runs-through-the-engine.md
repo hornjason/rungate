@@ -2,16 +2,19 @@
 doc-type: adr
 status: proposed
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-16
 ---
 
-# ADR-018 — every placed spec runs through the engine
+# ADR-018 — every opted-in spec runs through the engine
 
 ## Status
 
-**Proposed, 2026-11-15.** Jason decided the three questions on 2026-11-15:
-every placed spec, one queue, and an issue plan the DA drafts and he
-approves. This draft is that plan. The five engine criteria (SC-2776 to
+**Proposed, 2026-11-15; revised 2026-11-16.** Jason decided the three
+questions on 2026-11-15: placed specs go through the engine, one queue, and
+an issue plan the DA drafts and he approves. On 2026-11-16 he narrowed the
+first: **a spec is consumed only when its own frontmatter opts it in**,
+and a placement table alone pulls nothing (Decisions 1, 8 and 9). This
+draft is that plan. The five engine criteria (SC-2776 to
 SC-2780) and the two placement moves in the convergence spec are drafts and
 need his yes. Merging this file with `status: accepted` is the yes. It
 closes #2238 and serves stage F of `project-state.json`.
@@ -75,9 +78,11 @@ fail the test this stage exists to pass.
 
 ## Decision
 
-Config lists every spec that carries a placement table. A push to main that
-changes `specs/` runs `plan-spec`, `plan-deps` and `board-mirror` for every
-listed family. The same run gives each family's phase issues the queue label,
+A spec opts itself in. Its frontmatter carries a `board:` block with
+`scope: active` and the `prefix` its milestones use, and it has a placement
+table. A spec with no `board:` block is not pulled in, whatever else it
+carries. A push to main that changes `specs/` runs `plan-spec`, `plan-deps`
+and `board-mirror` for every opted-in family. The same run gives each family's phase issues the queue label,
 and moves an unmilestoned issue into the phase its criterion holds. The
 coverage readings count a criterion its spec places outside every phase as
 declared, named apart, not as missing. Then the convergence family converges
@@ -85,16 +90,18 @@ with nobody touching it, and the readings show it.
 
 ## Decisions
 
-1. **Every placed spec — Jason, 2026-11-15.** `board.families` in
-   `.claude/rungate/config.json` lists `{ prefix, spec }` for every family
-   other than the engine's. The engine keeps `board.engineSpec` and
-   `board.milestonePrefix`, so nothing reading them today changes. A
-   generated workflow, `specs-placed.yml`, runs on a push to main that
-   touches `specs/**`. For each family it runs `plan-spec --write` and then
+1. **Every opted-in spec — Jason, 2026-11-15, narrowed 2026-11-16.** The
+   families are read from the specs themselves: a spec whose frontmatter
+   says `board: { scope: active, prefix: <Name> }` and which carries a
+   placement table. There is no list in config. The engine spec declares
+   its block too, and `board.engineSpec` and `board.milestonePrefix` stay,
+   so nothing reading them today changes; a disagreement between the two is
+   reported by name. A generated workflow, `specs-placed.yml`, runs on a
+   push to main that touches `specs/**`. For each family it runs `plan-spec --write` and then
    `plan-deps --write`. Once, after the families, it runs `board-mirror`,
    which writes the Criteria column. `adr-accepted.yml` keeps placing ADR
    plans and is unchanged.
-2. **One queue — Jason, 2026-11-15.** Every open issue in any listed
+2. **One queue — Jason, 2026-11-15.** Every open issue in any opted-in
    family's phase milestone carries `board.queueLabel` (`engine`).
    `board-mirror --queue-label` and `phase-order.yml` label every family,
    not only the engine's. Ready's selection rule (SC-2741) is untouched: the
@@ -134,8 +141,30 @@ with nobody touching it, and the readings show it.
    audit section, so the audit's buckets do not move. **If Jason says no,**
    F1 needs a row here instead: an issue to settle the contest. That issue
    is a decision with no files, and rule 2 cannot file one.
+8. **Opt-in by default — Jason, 2026-11-16.** A spec with no `board:` block
+   is never planned, labelled or placed, even with a placement table. An
+   ADR's decomposition table is unaffected: `adr-accepted.yml` places an
+   accepted ADR's plan as before, because merging the ADR is the opt-in.
+   Why: on a consumer repo full of older specs, pulling in everything with
+   a table would file work that is already done. DailyBriefDashboard has
+   418 spec documents and 1,663 criteria, 1,600 of them ticked.
+   `spec-placement` (SC-2615, SC-2734) asks the same question of the same
+   population: only opted-in specs must carry a placement table.
+9. **One `board:` block, open to new keys — Jason, 2026-11-16.** Board
+   settings sit under one frontmatter key so that a later setting is a new
+   line inside it, not a new top-level field. Today it holds `scope`
+   (`active` or `deferred`) and `prefix`. A key the engine does not know is
+   reported by name and otherwise ignored, so a typo never silently opts a
+   spec in. The legacy `board-scope: deferred` line on 21 specs means
+   `scope: deferred`, so those files need no edit.
 
 ## Not decided here
+
+- **How a consumer with many existing specs chooses which to opt in.**
+  Opt-in by default means nothing is pulled until someone chooses. How
+  that choice is made, and how a stale checkbox (done but never ticked) is
+  caught before a spec is opted in, is being measured on DailyBriefDashboard
+  and pov-plugin. It comes back as its own issue.
 
 - **An issue filed between two pushes to `specs/` waits for the next push**
   before it is placed. Adding `issues: opened` to the trigger is a separate
@@ -165,9 +194,9 @@ engine phases empty (SC-2741).
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
-| SC-2776 | Config lists every placed spec with its milestone prefix | lib/config-readers.ts, .claude/rungate/config.json, test/board-families.test.ts | Engine Phase 9 — the payload ships | — |
-| SC-2777 | Every placed family's phase issues carry the queue label | scripts/board-mirror.ts, .github/workflows/phase-order.yml, test/board-mirror.test.ts, test/phase-order-workflow.test.ts | Engine Phase 9 — the payload ships | Config lists every placed spec with its milestone prefix |
+| SC-2776 | A spec is consumed only when its frontmatter opts it in | lib/spec-placement.ts, scripts/board-conformance.ts, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, specs/CODE-REVIEW-CONVERGENCE-SPEC.md, test/board-families.test.ts, test/board-conformance.test.ts | Engine Phase 9 — the payload ships | — |
+| SC-2777 | Every opted-in family's phase issues carry the queue label | scripts/board-mirror.ts, .github/workflows/phase-order.yml, test/board-mirror.test.ts, test/phase-order-workflow.test.ts | Engine Phase 9 — the payload ships | A spec is consumed only when its frontmatter opts it in |
 | SC-2778 | A criterion placed outside every phase reads as declared and not as missing | scripts/board-conformance.ts, scripts/board-snapshot.ts, lib/spec-placement.ts, test/board-conformance.test.ts, test/board-snapshot.test.ts | Engine Phase 9 — the payload ships | — |
 | SC-2779 | An unmilestoned issue moves into the phase milestone its criterion holds | lib/issue-repair.ts, scripts/plan-issues.ts, test/plan-issues.test.ts | Engine Phase 9 — the payload ships | — |
-| SC-2780 | A push to main that changes specs runs every placed family through the engine | lib/scaffold/specs-placed-workflow.ts, .github/workflows/specs-placed.yml, lib/scaffold/owned-files.ts, lib/scaffold/steps.ts, .claude/rules/harness-managed.md, test/specs-placed-workflow.test.ts | Engine Phase 9 — the payload ships | Config lists every placed spec with its milestone prefix, Every placed family's phase issues carry the queue label, An unmilestoned issue moves into the phase milestone its criterion holds |
+| SC-2780 | A push to main that changes specs runs every opted-in family through the engine | lib/scaffold/specs-placed-workflow.ts, .github/workflows/specs-placed.yml, lib/scaffold/owned-files.ts, lib/scaffold/steps.ts, .claude/rules/harness-managed.md, test/specs-placed-workflow.test.ts | Engine Phase 9 — the payload ships | A spec is consumed only when its frontmatter opts it in, Every opted-in family's phase issues carry the queue label, An unmilestoned issue moves into the phase milestone its criterion holds |
 | CRC-C3 | A review thread resolved with no stated reason is reported on its pull request | lib/ai-review-threads.ts, scripts/ai-review-threads.ts, test/ai-review-threads.test.ts, reference/clearing-a-false-positive.md | Convergence Phase 0 — three settings, no engineering | — |
