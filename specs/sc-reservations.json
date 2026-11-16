@@ -34,7 +34,5 @@
     "records that reading for the thirteen it cleared, PR by PR; this file cannot",
     "prove it about itself, so do not read the sentence above as proof."
   ],
-  "reservations": [
-    { "owner": "rg/2213-adr-ship-build", "from": 2772, "to": 2775, "note": "ADR-017's four criteria, approved by Jason 2026-11-15" }
-  ]
+  "reservations": []
 }
