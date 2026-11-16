@@ -3,7 +3,7 @@
  * Build, check and write `prove-evidence.json` for `workflows/prove.js` (#2254).
  *
  *   bun scripts/record-prove-evidence.ts --work-dir <dir> --report <file> \
- *     --issue <n> --commit <sha> [--source <name>]
+ *     --issue <n> --commit <sha> [--source <name>] [--after-observer reproducer|quinn]
  *
  * `workflows/*.js` cannot import (#69), so prove.js crosses a subprocess
  * boundary to reach the one contract: it writes a report — `issueNumber`,
@@ -15,6 +15,9 @@
  * `--issue` and `--commit` are what prove.js holds in-process. The report is
  * transcribed by an agent, so a report naming a different issue or commit is
  * refused rather than trusted for anything else (review round 3, PR #2256).
+ * `--after-observer` is the same kind of fact: who observed the after-state,
+ * which decides whether a screenshot is evidence (#2262). Absent means the
+ * reproducer, the observer that can report the least.
  *
  * Prints one JSON line: `{ written, verdict, reason? }`. Exit 0 means the
  * artifact was written; `verdict` is what it records, which may be a
@@ -23,11 +26,11 @@
  */
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { readBeforeState, recordProveEvidence } from "../gates/gate-executor";
+import { AFTER_OBSERVERS, isAfterObserver, readBeforeState, recordProveEvidence } from "../gates/gate-executor";
 
 export const EXIT_REFUSED = 2;
 
-const KNOWN_FLAGS = new Set(["--work-dir", "--report", "--issue", "--commit", "--source"]);
+const KNOWN_FLAGS = new Set(["--work-dir", "--report", "--issue", "--commit", "--source", "--after-observer"]);
 
 type Outcome = { written: true; verdict: string; reason?: string } | { written: false; reason: string };
 
@@ -68,7 +71,11 @@ function main(): never {
   const issueArg = args["--issue"];
   const commitArg = args["--commit"];
   if (!workDir || !reportPath || !issueArg || !commitArg) {
-    refuse("usage: --work-dir <dir> --report <file> --issue <n> --commit <sha> [--source <name>]");
+    refuse("usage: --work-dir <dir> --report <file> --issue <n> --commit <sha> [--source <name>] [--after-observer reproducer|quinn]");
+  }
+  const afterObserver = args["--after-observer"] ?? "reproducer";
+  if (!isAfterObserver(afterObserver)) {
+    refuse(`--after-observer ${JSON.stringify(afterObserver)} is not one of ${Object.keys(AFTER_OBSERVERS).join("|")}`);
   }
 
   const report = readJson(reportPath, "report");
@@ -103,6 +110,7 @@ function main(): never {
     beforeReading: readBeforeState(state as Record<string, unknown>),
     readCommit: () => r.commitSHA as string,
     source: args["--source"] ?? "prove-workflow",
+    afterObserver,
   });
   if (!record.written) refuse(record.reason);
   const downgrade = record.artifact.verdictDowngrade;

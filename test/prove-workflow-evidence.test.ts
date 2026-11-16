@@ -17,7 +17,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { z } from "zod";
-import { validateArtifactSchema } from "../gates/gate-executor";
+import { AFTER_OBSERVERS, validateArtifactSchema } from "../gates/gate-executor";
 import { ProveEvidenceSchema } from "../gates/schema";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -40,10 +40,12 @@ function proveBlock<T>(name: string, returns: string): T {
   return new Function(`${PROVE_SOURCE.slice(start, end)}\nreturn ${returns};`)() as T;
 }
 
-const { proveReport, settleVerdict } = proveBlock<{
+type LatestAfter = { evidence: unknown; observer: string };
+const { proveReport, settleVerdict, foldQuinnAfterEvidence } = proveBlock<{
   proveReport: (a: Record<string, unknown>) => Record<string, unknown>;
   settleVerdict: (run: string, recorded: unknown) => string;
-}>("PROVE-REPORT", "{ proveReport, settleVerdict }");
+  foldQuinnAfterEvidence: (latest: LatestAfter, reply: unknown) => LatestAfter;
+}>("PROVE-REPORT", "{ proveReport, settleVerdict, foldQuinnAfterEvidence }");
 
 const COMMIT = "c".repeat(40);
 const AFTER = {
@@ -64,7 +66,7 @@ const report = (over: Record<string, unknown> = {}) => proveReport({
 function run(
   script: string,
   reportBody: unknown,
-  opts: { state?: string; extra?: string[]; trusted?: string[] } = {},
+  opts: { state?: string; extra?: string[]; trusted?: string[]; source?: string | null } = {},
 ) {
   const dir = mkdtempSync(join(scratch, "run-"));
   const reportPath = join(dir, "prove-report.json");
@@ -72,7 +74,8 @@ function run(
   if (opts.state !== undefined) writeFileSync(join(dir, "workflow-state.json"), opts.state);
   const p = Bun.spawnSync(
     [
-      "bun", script, "--work-dir", dir, "--report", reportPath, "--source", "prove-workflow",
+      "bun", script, "--work-dir", dir, "--report", reportPath,
+      ...(opts.source === null ? [] : ["--source", opts.source ?? "prove-workflow"]),
       // What prove.js holds in-process, passed beside the agent-written report.
       ...(opts.trusted ?? ["--issue", "2254", "--commit", COMMIT]),
       ...(opts.extra ?? []),
@@ -104,7 +107,7 @@ describe("#2254: a report built the way prove.js builds it", () => {
     expect(validateArtifactSchema(r.artifact, ProveEvidenceSchema)).toEqual([]);
     expect(r.artifact.source).toBe("prove-workflow");
     expect(r.artifact.commitSHA).toBe(COMMIT);
-    expect(r.artifact.afterEvidence).toEqual(AFTER);
+    expect(r.artifact.afterEvidence).toEqual({ ...AFTER, observedBy: "reproducer" });
     // The dead JSON schema's field, which nothing reads.
     expect("contractVersion" in r.artifact).toBe(false);
   });
@@ -280,4 +283,277 @@ describe("#2254: prove.js asks for what the contract needs, and no longer writes
     expect(PROVE_SOURCE).not.toMatch(/PROVE_EVIDENCE_SCHEMA\s*=/);
     expect(PROVE_SOURCE).not.toMatch(/Write this JSON to \$\{WORK_DIR\}\/prove-evidence\.json/);
   });
+});
+
+// ── #2262: Quinn's after-evidence, and the field table ──────────────────────
+
+// A real file: a screenshot is evidence only when the file it names exists (review round 1, PR #2266).
+const SHOT = join(scratch, "SC-1-banner-visible.png");
+writeFileSync(SHOT, "\x89PNG fixture");
+const QUINN_AFTER = {
+  type: "screenshot",
+  path: SHOT,
+  capturedAt: "2026-11-16T02:00:00.000Z",
+  environment: "prod",
+  description: "the prove container's dashboard shows the restored banner for a new user",
+};
+const QUINN_ROW = { scId: "SC-1", verdict: "PASS", evidence: "browser_verify_text_visible('Welcome back') passed" };
+const quinnReport = (over: Record<string, unknown> = {}) => report({ criteriaResults: [QUINN_ROW], afterEvidence: QUINN_AFTER, ...over });
+const AS_QUINN = { extra: ["--after-observer", "quinn"] };
+
+describe("#2262: Quinn's after-evidence reaches the record, attributed to Quinn", () => {
+  test("SC-2770: a UI-only run Quinn proved with a prod screenshot records PROVEN, the screenshot, and Quinn", () => {
+    const r = run(SCRIPT, quinnReport(), AS_QUINN);
+    expect(r.stderr).toBe("");
+    expect(r.printed).toEqual({ written: true, verdict: "PROVEN" });
+    expect(r.artifact.afterEvidence).toEqual({ ...QUINN_AFTER, observedBy: "quinn" });
+    expect(validateArtifactSchema(r.artifact, ProveEvidenceSchema)).toEqual([]);
+  });
+
+  test("the reproducer still cannot report a screenshot — no browser, so it is not after-evidence", () => {
+    const r = run(SCRIPT, quinnReport());
+    expect(r.code).toBe(0);
+    expect(r.printed.verdict).toBe("INCONCLUSIVE");
+    expect(r.printed.reason).toContain("screenshot");
+    expect(r.artifact.afterEvidence.type).toBe("none");
+  });
+
+  test("an agent writing observedBy: quinn into its own after-evidence is not believed", () => {
+    const r = run(SCRIPT, quinnReport({ afterEvidence: { ...QUINN_AFTER, observedBy: "quinn" } }));
+    expect(r.printed.verdict).toBe("INCONCLUSIVE");
+    expect(r.artifact.afterEvidence.type).toBe("none");
+  });
+
+  test("a screenshot with no file is not evidence, from Quinn either", () => {
+    const r = run(SCRIPT, quinnReport({ afterEvidence: { ...QUINN_AFTER, path: null } }), AS_QUINN);
+    expect(r.printed.verdict).toBe("INCONCLUSIVE");
+    expect(r.printed.reason).toContain("afterEvidence.path");
+  });
+
+  test("review round 1: a screenshot naming a file that was never written is not evidence", () => {
+    const r = run(SCRIPT, quinnReport({ afterEvidence: { ...QUINN_AFTER, path: join(scratch, "never-taken.png") } }), AS_QUINN);
+    expect(r.printed.verdict).toBe("INCONCLUSIVE");
+    expect(r.printed.reason).toContain("is not a file");
+    // A directory is not a screenshot either.
+    const d = run(SCRIPT, quinnReport({ afterEvidence: { ...QUINN_AFTER, path: scratch } }), AS_QUINN);
+    expect(d.printed.reason).toContain("is not a file");
+  });
+
+  describe("the fold prove.js runs on Quinn's reply, executed", () => {
+    const fromB3: LatestAfter = { evidence: AFTER, observer: "reproducer" };
+    test("Quinn's after-evidence replaces the reproducer's, and the observer travels with it", () => {
+      expect(foldQuinnAfterEvidence(fromB3, { verdict: "PASS", afterEvidence: QUINN_AFTER }))
+        .toEqual({ evidence: QUINN_AFTER, observer: "quinn" });
+    });
+    test("a Quinn reply with none keeps the reproducer's, still attributed to the reproducer", () => {
+      expect(foldQuinnAfterEvidence(fromB3, { verdict: "PASS" })).toEqual(fromB3);
+      expect(foldQuinnAfterEvidence(fromB3, null)).toEqual(fromB3);
+    });
+  });
+
+  describe("prove.js is wired to it", () => {
+    const schemas = proveBlock<{ REPRODUCER_SCHEMA: any; QUINN_SCHEMA: any }>(
+      "PROVE-SCHEMAS", "{ REPRODUCER_SCHEMA, QUINN_SCHEMA }",
+    );
+    test("each spawn's schema asks for exactly the types its observer may report — one list, three statements", () => {
+      expect(schemas.REPRODUCER_SCHEMA.properties.afterEvidence.properties.type.enum).toEqual([...AFTER_OBSERVERS.reproducer]);
+      expect(schemas.QUINN_SCHEMA.properties.afterEvidence.properties.type.enum).toEqual([...AFTER_OBSERVERS.quinn]);
+      const observedBy = (ProveEvidenceSchema.shape.afterEvidence.shape as any).observedBy.unwrap().options;
+      expect(observedBy).toEqual(Object.keys(AFTER_OBSERVERS));
+    });
+    test("Quinn's reply is folded, the self-heal re-validation resets to the reproducer, and the record names the observer", () => {
+      expect(PROVE_SOURCE).toContain("latestAfter = foldQuinnAfterEvidence(latestAfter, quinnResults)");
+      expect(PROVE_SOURCE).toContain("latestAfter = { evidence: revalidateResult.afterEvidence, observer: 'reproducer' }");
+      expect(PROVE_SOURCE).toContain("--after-observer ${shellQuote(latestAfter.observer)}");
+      expect(PROVE_SOURCE).toContain("afterEvidence: latestAfter.evidence");
+    });
+  });
+});
+
+/**
+ * #2262: every field of the written artifact, where it comes from, and what
+ * happens when the report leaves it out, gets it wrong, or disagrees with what
+ * the run knows. PR #2256's review rounds found these one field per round; the
+ * table asks the question for every field at once. A cell is a case run
+ * through the script, or the reason no such case exists.
+ *
+ * beforeEvidence is one row: B3 builds it whole from workflow-state.json
+ * (#1540), so nothing a report says reaches its fields.
+ */
+type Run = ReturnType<typeof run>;
+type Cell = string | { body?: (base: Record<string, any>) => unknown; opts?: Parameters<typeof run>[2]; then: (r: Run) => void };
+type Row = { source: string; absent: Cell; malformed: Cell; disagreeing: Cell };
+
+const without = (o: Record<string, any>, k: string) => { const { [k]: _gone, ...rest } = o; return rest; };
+const withAfter = (a: Record<string, any>) => (b: Record<string, any>) => ({ ...b, afterEvidence: a });
+const refused = (named: string) => (r: Run) => {
+  expect(r.code).not.toBe(0);
+  expect(r.printed.written).toBe(false);
+  expect(r.printed.reason).toContain(named);
+  expect(r.artifact).toBeNull();
+};
+const noAfter = (named: string) => (r: Run) => {
+  expect(r.code).toBe(0);
+  expect(r.artifact.afterEvidence.type).toBe("none");
+  expect(r.artifact.afterEvidence.description).toContain(named);
+  expect(r.printed.verdict).toBe("INCONCLUSIVE");
+};
+const recorded = (check: (a: Record<string, any>) => void) => (r: Run) => {
+  expect(r.code).toBe(0);
+  check(r.artifact);
+};
+const BUILT = "nothing reports it — the builder writes it from its own decision";
+const NOT_WRITTEN = "this writer never writes it; the schema leaves it optional for other writers";
+const OBSERVED_ONLY = "only the observer saw it — nothing else in the run states one to compare";
+
+const FIELDS: Record<string, Row> = {
+  issueNumber: {
+    source: "the run's --issue, checked against the report",
+    absent: { body: (b) => without(b, "issueNumber"), then: refused("issueNumber") },
+    malformed: { body: (b) => ({ ...b, issueNumber: "2254" }), then: refused("issueNumber") },
+    disagreeing: { opts: { trusted: ["--issue", "9999", "--commit", COMMIT] }, then: refused("issueNumber") },
+  },
+  commitSHA: {
+    source: "the run's --commit, checked against the report",
+    absent: { body: (b) => without(b, "commitSHA"), then: refused("commitSHA") },
+    malformed: { body: (b) => ({ ...b, commitSHA: "" }), then: refused("commitSHA") },
+    disagreeing: { opts: { trusted: ["--issue", "2254", "--commit", "d".repeat(40)] }, then: refused("commitSHA") },
+  },
+  verdict: {
+    source: "the report, made only stricter by the builder",
+    absent: { body: (b) => without(b, "verdict"), then: (r) => { expect(r.printed.verdict).toBe("INCONCLUSIVE"); expect(r.printed.reason).toContain("is not one of"); } },
+    malformed: { body: (b) => ({ ...b, verdict: "PASSED" }), then: (r) => { expect(r.printed.verdict).toBe("INCONCLUSIVE"); expect(r.printed.reason).toContain("is not one of"); } },
+    disagreeing: { body: (b) => ({ ...b, criteriaResults: [{ scId: "SC-1", verdict: "SKIP", evidence: "no browser" }] }), then: (r) => { expect(r.printed.verdict).toBe("INCONCLUSIVE"); expect(r.printed.reason).toContain("no criterion verified"); } },
+  },
+  verdictDowngrade: {
+    source: "the builder, present only when it changed the reported verdict",
+    absent: { then: recorded((a) => expect("verdictDowngrade" in a).toBe(false)) },
+    malformed: BUILT,
+    disagreeing: { body: (b) => ({ ...b, verdictDowngrade: { reported: "X", reason: "planted" } }), then: recorded((a) => expect("verdictDowngrade" in a).toBe(false)) },
+  },
+  capturedAt: {
+    source: "the builder's clock",
+    absent: BUILT,
+    malformed: BUILT,
+    disagreeing: { body: (b) => ({ ...b, capturedAt: "1999-01-01T00:00:00.000Z" }), then: recorded((a) => expect(a.capturedAt).not.toBe("1999-01-01T00:00:00.000Z")) },
+  },
+  beforeEvidence: {
+    source: "the run's own workflow-state.json, never the report",
+    absent: { then: recorded((a) => expect(a.beforeEvidence.status).toBe("UNMEASURED")) },
+    malformed: { opts: { state: "{not json" }, then: refused("workflow-state.json") },
+    disagreeing: { body: (b) => ({ ...b, beforeEvidence: { status: "CAPTURED" } }), then: recorded((a) => expect(a.beforeEvidence.status).toBe("UNMEASURED")) },
+  },
+  afterEvidence: {
+    source: "the report, as seen by the observer --after-observer names",
+    absent: { body: (b) => without(b, "afterEvidence"), then: noAfter("reported no afterEvidence") },
+    malformed: { body: (b) => ({ ...b, afterEvidence: "it looked fine" }), then: noAfter("not an object") },
+    disagreeing: { body: withAfter(QUINN_AFTER), then: noAfter("screenshot") },
+  },
+  "afterEvidence.type": {
+    source: "the report, limited to the types its observer can see",
+    absent: { body: withAfter(without(AFTER, "type")), then: noAfter("afterEvidence.type") },
+    malformed: { body: withAfter({ ...AFTER, type: "video" }), then: noAfter("afterEvidence.type") },
+    disagreeing: { body: withAfter(QUINN_AFTER), opts: { extra: ["--after-observer", "reproducer"] }, then: noAfter("reproducer") },
+  },
+  "afterEvidence.path": {
+    source: "the report; required for a screenshot, optional otherwise",
+    absent: { body: withAfter(without(QUINN_AFTER, "path")), opts: AS_QUINN, then: noAfter("afterEvidence.path") },
+    malformed: { body: withAfter({ ...AFTER, path: 42 }), then: recorded((a) => expect(a.afterEvidence.path).toBeNull()) },
+    disagreeing: { body: withAfter({ ...QUINN_AFTER, path: join(scratch, "never-taken.png") }), opts: AS_QUINN, then: noAfter("is not a file") },
+  },
+  "afterEvidence.capturedAt": {
+    source: "the report",
+    absent: { body: withAfter(without(AFTER, "capturedAt")), then: noAfter("afterEvidence.capturedAt") },
+    malformed: { body: withAfter({ ...AFTER, capturedAt: 0 }), then: noAfter("afterEvidence.capturedAt") },
+    disagreeing: OBSERVED_ONLY,
+  },
+  "afterEvidence.environment": {
+    source: "the report; whether STANDARD+ needs prod is gates/prove.test.ts's check",
+    absent: { body: withAfter(without(AFTER, "environment")), then: noAfter("afterEvidence.environment") },
+    malformed: { body: withAfter({ ...AFTER, environment: "staging" }), then: noAfter("afterEvidence.environment") },
+    disagreeing: OBSERVED_ONLY,
+  },
+  "afterEvidence.description": {
+    source: "the report",
+    absent: { body: withAfter(without(AFTER, "description")), then: noAfter("afterEvidence.description") },
+    malformed: { body: withAfter({ ...AFTER, description: "   " }), then: noAfter("afterEvidence.description") },
+    disagreeing: OBSERVED_ONLY,
+  },
+  "afterEvidence.observedBy": {
+    source: "--after-observer, never the report",
+    absent: { then: recorded((a) => expect(a.afterEvidence.observedBy).toBe("reproducer")) },
+    malformed: { opts: { extra: ["--after-observer", "rook"] }, then: refused("--after-observer") },
+    disagreeing: { body: withAfter({ ...AFTER, observedBy: "quinn" }), then: recorded((a) => expect(a.afterEvidence.observedBy).toBe("reproducer")) },
+  },
+  comparisonSummary: {
+    source: "the builder, from the before-state reading and the criteria counts",
+    absent: BUILT,
+    malformed: BUILT,
+    disagreeing: { body: (b) => ({ ...b, comparisonSummary: "all good" }), then: recorded((a) => { expect(a.comparisonSummary).not.toBe("all good"); expect(a.comparisonSummary).toContain("1/1 criteria passed"); }) },
+  },
+  reproduced: {
+    source: "the report — the first reproducer spawn's, see proveReport's call",
+    absent: { body: (b) => without(b, "reproduced"), then: recorded((a) => expect(a.reproduced).toBe(false)) },
+    malformed: { body: (b) => ({ ...b, reproduced: "yes" }), then: recorded((a) => expect(a.reproduced).toBe(false)) },
+    disagreeing: "only the first spawn looks at the before-state, so nothing else in the run answers it",
+  },
+  criteriaResults: {
+    source: "the report — Quinn's rows have replaced the reproducer's SKIPs before it is built",
+    absent: { body: (b) => without(b, "criteriaResults"), then: (r) => { expect(r.artifact.criteriaResults).toEqual([]); expect(r.printed.reason).toContain("no criterion verified"); } },
+    malformed: { body: (b) => ({ ...b, criteriaResults: [{ scId: "SC-1", verdict: "PASS" }] }), then: refused("criteriaResults.0.evidence") },
+    disagreeing: "the rows are the observers' own verdicts; nothing else in the run states a verdict per criterion",
+  },
+  evidence: {
+    source: "the report, kept only as a list",
+    absent: { then: recorded((a) => expect(a.evidence).toEqual([])) },
+    malformed: { body: (b) => ({ ...b, evidence: "see logs" }), then: recorded((a) => expect(a.evidence).toEqual([])) },
+    disagreeing: "free-form supporting evidence; nothing else in the run states any to compare",
+  },
+  source: {
+    source: "--source, never the report",
+    absent: { opts: { source: null }, then: recorded((a) => expect(a.source).toBe("prove-workflow")) },
+    malformed: { opts: { source: null, extra: ["--source"] }, then: refused("--source needs a value") },
+    disagreeing: { body: (b) => ({ ...b, source: "B3-prove-reproducer" }), then: recorded((a) => expect(a.source).toBe("prove-workflow")) },
+  },
+  quinnVerdict: {
+    source: "not this writer's",
+    absent: NOT_WRITTEN,
+    malformed: NOT_WRITTEN,
+    disagreeing: { body: (b) => ({ ...b, quinnVerdict: "PASS" }), then: recorded((a) => expect("quinnVerdict" in a).toBe(false)) },
+  },
+  gaps: {
+    source: "not this writer's",
+    absent: NOT_WRITTEN,
+    malformed: NOT_WRITTEN,
+    disagreeing: { body: (b) => ({ ...b, gaps: [{ ac: "SC-1", status: "open", detail: "planted" }] }), then: recorded((a) => expect("gaps" in a).toBe(false)) },
+  },
+};
+
+describe("#2262: every field of prove-evidence.json — its source, and what happens when it is absent, malformed or disagrees", () => {
+  test("a row for every key the artifact carries and every key the contract names; a field added without a row is red", () => {
+    // Downgraded and observed by Quinn, so the optional keys are present too.
+    const full = run(SCRIPT, quinnReport({ criteriaResults: [{ scId: "SC-1", verdict: "SKIP", evidence: "no browser" }] }), AS_QUINN).artifact;
+    const keys = new Set<string>([
+      ...Object.keys(full),
+      ...Object.keys(full.afterEvidence).map((k) => `afterEvidence.${k}`),
+      ...Object.keys(ProveEvidenceSchema.shape),
+      ...Object.keys(ProveEvidenceSchema.shape.afterEvidence.shape).map((k) => `afterEvidence.${k}`),
+    ]);
+    expect("verdictDowngrade" in full && "observedBy" in full.afterEvidence).toBe(true);
+    expect(Object.keys(FIELDS).sort()).toEqual([...keys].sort());
+  });
+
+  for (const [field, row] of Object.entries(FIELDS)) {
+    for (const kind of ["absent", "malformed", "disagreeing"] as const) {
+      const cell = row[kind];
+      if (typeof cell === "string") {
+        test(`${field} ${kind}: no such case — ${cell}`, () => expect(cell.length).toBeGreaterThan(20));
+        continue;
+      }
+      test(`${field} ${kind} (${row.source})`, () => {
+        const base = report() as Record<string, any>;
+        cell.then(run(SCRIPT, cell.body ? cell.body(base) : base, cell.opts));
+      });
+    }
+  }
 });

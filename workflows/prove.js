@@ -43,6 +43,9 @@ const DEPLOY_CHECK_SCHEMA = {
 // and the reproducer reports the after-state it observed and where. The
 // environments and types are the contract's (gates/schema.ts) and the
 // reproducer prompt's: no screenshot, because the reproducer has no browser.
+// Quinn has one, so Quinn may report a screenshot (#2262). Each type list is
+// AFTER_OBSERVERS in gates/gate-executor.ts, restated because this file
+// cannot import (#69); the test holds them equal.
 const REPRODUCER_SCHEMA = {
   type: 'object',
   properties: {
@@ -93,6 +96,17 @@ const QUINN_SCHEMA = {
         },
         required: ['scId', 'verdict', 'evidence'],
       },
+    },
+    afterEvidence: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['text', 'api', 'data', 'screenshot'] },
+        path: { type: 'string' },
+        capturedAt: { type: 'string' },
+        environment: { type: 'string', enum: ['local', 'prod'] },
+        description: { type: 'string' },
+      },
+      required: ['type', 'capturedAt', 'environment', 'description'],
     },
   },
   required: ['verdict'],
@@ -415,7 +429,8 @@ Output your verdict, criteriaResults, reproduced, gaps, and quinnNeeded (list of
 let allCriteriaResults = reproducerResult?.criteriaResults || []
 // #2254: the after-state the latest validation observed. Paired with the
 // criteria it came with, so a self-heal re-validation replaces both together.
-let latestAfterEvidence = reproducerResult?.afterEvidence
+// #2262: and with who observed it, which decides whether a screenshot counts.
+let latestAfter = { evidence: reproducerResult?.afterEvidence, observer: 'reproducer' }
 let quinnResults = null
 
 // Spawn Quinn for UI ACs if needed
@@ -511,7 +526,17 @@ ${quinnACs}
 
 IMPORTANT: Test on the PROVE CONTAINER (config-driven URL above), NOT dev server.
 ${reproSteps ? 'Follow the reproduction steps from the issue body EXACTLY.' : ''}
-Report verdict and criteriaResults.
+
+## afterEvidence — the after-state you observed
+Report ONE afterEvidence object for the fixed state you saw:
+- type: screenshot (path: the absolute file under ${SCREENSHOT_DIR}), or text, api, data
+- capturedAt: when you observed it, as an ISO time
+- environment: prod for the prove container above, local for anything else
+- description: what the page showed, in one sentence
+Leave it out if you observed no after-state. It is what the run records as
+proof, so a screenshot you did not take is a false proof.
+
+Report verdict, criteriaResults and afterEvidence.
   `, { label: 'quinn-prove', phase: 'Validate', schema: QUINN_SCHEMA })
 
   // Merge Quinn results into allCriteriaResults (replace SKIPs from B3)
@@ -530,6 +555,7 @@ Report verdict and criteriaResults.
       }
     }
   }
+  latestAfter = foldQuinnAfterEvidence(latestAfter, quinnResults)
   log(`Quinn: ${quinnResults?.verdict || 'no result'}`)
 }
 
@@ -736,7 +762,7 @@ Output your verdict, criteriaResults, reproduced, gaps, afterEvidence.
 
   if (revalidateResult?.criteriaResults) {
     allCriteriaResults = revalidateResult.criteriaResults
-    latestAfterEvidence = revalidateResult.afterEvidence
+    latestAfter = { evidence: revalidateResult.afterEvidence, observer: 'reproducer' }
   }
 
   const recomputed = computeVerdict(allCriteriaResults)
@@ -790,6 +816,16 @@ function settleVerdict(runVerdict, recorded) {
   if (recorded.verdict === 'PROVEN' || recorded.verdict === 'UNPROVEN') return recorded.verdict
   return 'INCONCLUSIVE'
 }
+
+// #2262: Quinn's after-evidence replaces the reproducer's when Quinn reported
+// one. For a UI criterion the reproducer can only SKIP, so Quinn's browser
+// check is the run's after-state. The observer travels with the evidence, and
+// the record step passes it beside the report, because the script never takes
+// the observer from the report.
+function foldQuinnAfterEvidence(latest, reply) {
+  if (!reply || reply.afterEvidence === undefined || reply.afterEvidence === null) return latest
+  return { evidence: reply.afterEvidence, observer: 'quinn' }
+}
 // ──── PROVE-REPORT-END ────
 
 const proveReportJson = JSON.stringify(proveReport({
@@ -803,7 +839,7 @@ const proveReportJson = JSON.stringify(proveReport({
   // before-state. A self-heal re-validation checks a fix's after-state, so its
   // `reproduced` answers a question it was never asked.
   reproduced: reproducerResult?.reproduced,
-  afterEvidence: latestAfterEvidence,
+  afterEvidence: latestAfter.evidence,
 }), null, 2)
 const PROVE_REPORT_PATH = `${WORK_DIR}/prove-report.json`
 
@@ -815,7 +851,7 @@ ${proveReportJson}
 
 Then run exactly this and report the JSON line it prints:
 
-bun ${shellQuote(`${HARNESS_ROOT}/scripts/record-prove-evidence.ts`)} --work-dir ${shellQuote(WORK_DIR)} --report ${shellQuote(PROVE_REPORT_PATH)} --issue ${shellQuote(String(ISSUE))} --commit ${shellQuote(COMMIT_SHA)} --source prove-workflow
+bun ${shellQuote(`${HARNESS_ROOT}/scripts/record-prove-evidence.ts`)} --work-dir ${shellQuote(WORK_DIR)} --report ${shellQuote(PROVE_REPORT_PATH)} --issue ${shellQuote(String(ISSUE))} --commit ${shellQuote(COMMIT_SHA)} --source prove-workflow --after-observer ${shellQuote(latestAfter.observer)}
 
 It builds prove-evidence.json from the report, checks it against
 ProveEvidenceSchema, and writes it only if it passes. Exit 0 means it was
