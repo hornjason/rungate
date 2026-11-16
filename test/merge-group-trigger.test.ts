@@ -178,6 +178,7 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
       "ci.yml",
       "closing-references.yml",
       "gates.yml",
+      "intake.yml",
     ]);
 
     // The split, stated by name in BOTH directions (#1488). The queue cases
@@ -194,8 +195,9 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
       // adr-accepted.yml since #2046: it runs on a push to main after a merge,
       // never on a pull request, so it is never a required check. board-ready.yml
       // since #2047: it runs on issue events, never on a pull request. board-intake.yml
-      // since #2166: pull_request_target reports no status a queue waits for.
-    ).toEqual(["adr-accepted.yml", "ai-review-unmeasured.yml", "board-intake.yml", "board-ready.yml"]);
+      // since #2166: pull_request_target reports no status a queue waits for. intake.yml
+      // since #2233: it runs on a push to main, never on a pull request.
+    ).toEqual(["adr-accepted.yml", "ai-review-unmeasured.yml", "board-intake.yml", "board-ready.yml", "intake.yml"]);
 
     // The two bodies must actually differ, or this file is testing one thing
     // twice and the sharded/unsharded distinction is unmeasured.

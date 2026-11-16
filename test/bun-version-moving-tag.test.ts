@@ -59,6 +59,7 @@ const UNPINNED = "UNPINNED";
 // unmeasured classifier runs through `bunx` on `workflow_run: completed`.
 // #2046 and #2045 added adr-accepted.yml and closing-references.yml, which
 // run the published CLI, and #2047 and #2166 added board-ready.yml and board-intake.yml for the same reason.
+// #2233 added intake.yml, which runs the published `intake` on a push to main.
 const GENERATED = [
   "adr-accepted.yml",
   "ai-review-unmeasured.yml",
@@ -68,6 +69,7 @@ const GENERATED = [
   "closing-references.yml",
   "ci.yml",
   "gates.yml",
+  "intake.yml",
 ] as const;
 
 interface SetupBunStep {
