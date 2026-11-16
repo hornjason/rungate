@@ -67,7 +67,7 @@ describe("#2271: the reading of a merged pull request", () => {
   });
 
   test("the critical path is the longest chain — not the sum of parallel checks, not the longest single check", () => {
-    expect(r.criticalPath.checks).toEqual(["ai-review", "gates"]);
+    expect(r.criticalPath.checks).toEqual(["ci / ai-review", "ci / gates"]);
     expect(r.criticalPath.duration).toEqual({ status: "MEASURED", ms: 540_000 });
   });
 
@@ -93,7 +93,7 @@ describe("#2271: refusals", () => {
     }));
     const slow = check(r, "slow").duration;
     expect(slow.status === "UNMEASURED" && slow.reason).toContain("completed_at");
-    expect(r.criticalPath.checks).not.toContain("slow");
+    expect(r.criticalPath.checks).not.toContain("ci / slow");
     expect(r.spans.firstToLastCheck).toEqual({ status: "MEASURED", ms: 560_000 });
   });
 
@@ -150,6 +150,37 @@ describe("#2271: a re-run never overwrites the first attempt", () => {
       [1, { status: "MEASURED", ms: 0 }],
       [2, { status: "MEASURED", ms: 5_000 }],
     ]);
+  });
+});
+
+describe("#2271 review round 1: a check is a job within one workflow run, not a job name", () => {
+  // Two workflows on the same push, each with a job named "build". Grouped by
+  // name alone they were one check with two "attempts", and one was dropped.
+  const r = measured(ciReadingFor({
+    pr: PR,
+    runs: [run({ id: 100, name: "ci" }), run({ id: 200, name: "security" })],
+    jobs: [
+      job("build", "10:01:10", "10:03:10", { run_id: 100 }),
+      job("build", "10:01:10", "10:06:10", { run_id: 200 }),
+    ],
+  }));
+
+  test("both are checks, each with its own duration and its workflow named", () => {
+    expect(r.checks.map(c => [c.workflow, c.name, c.duration])).toEqual([
+      ["ci", "build", { status: "MEASURED", ms: 120_000 }],
+      ["security", "build", { status: "MEASURED", ms: 300_000 }],
+    ]);
+    expect(r.checks.every(c => c.attempts.length === 1)).toBe(true);
+  });
+
+  test("the critical path sees both, and names which build it went through", () => {
+    expect(r.criticalPath.checks).toEqual(["security / build"]);
+    expect(r.criticalPath.duration).toEqual({ status: "MEASURED", ms: 300_000 });
+  });
+
+  test("a job whose run is not in the runs list is still read, under its run id", () => {
+    const orphan = measured(ciReadingFor({ pr: PR, runs: [run()], jobs: [...JOBS, job("lint", "10:02:00", "10:03:00", { run_id: 999 })] }));
+    expect(orphan.checks.find(c => c.name === "lint")?.workflow).toBe("run 999");
   });
 });
 
