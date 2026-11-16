@@ -68,6 +68,21 @@ const STATE = "workflow-" + "state.json";
  */
 const LIVE = "/opt/bwprobe";
 
+/**
+ * A fresh, real directory under the platform temp root, removed afterwards
+ * (#1367). The scratch exemption now holds only for a destination whose
+ * directories are REAL, so a fixture row makes the directory it writes into
+ * rather than naming one that happens not to exist.
+ */
+function inScratch(fn: (root: string) => void): void {
+  const root = mkdtempSync(join(tmpdir(), "bw-"));
+  try {
+    fn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("#1120 WITNESS: a write to a protected artifact is refused", () => {
   const cases: [string, string][] = [
     ["a bare redirect — the control that proves the guard is wired", `echo x > ${LIVE}/${SALT}`],
@@ -650,7 +665,6 @@ describe("#1176: the mechanisms, asserted directly", () => {
  * reading rather than arguing with it.
  */
 describe("#1175 WITNESS: the same write is a fixture here and an artifact there", () => {
-  const SCRATCH = tmpdir();
   const pairs: [string, (root: string) => string][] = [
     ["a redirect", root => `echo '{}' > ${root}/p/${STATE}`],
     ["a heredoc", root => `cat > ${root}/p/${STATE} <<'EOF'\n{"phase":"BUILD"}\nEOF`],
@@ -664,9 +678,15 @@ describe("#1175 WITNESS: the same write is a fixture here and an artifact there"
     ["chmod on a hook", root => `chmod 777 ${root}/p/Foo.hook.ts`],
   ];
 
+  // #1367: the exemption holds only for a directory that is REAL, so the
+  // fixture's directory is made first — a write into a directory nothing
+  // made would fail, and is refused.
   test.each(pairs)("%s under a scratch root is a fixture", (_label, build) => {
-    const d = decideBashWrite(build(SCRATCH));
-    expect(d.blocked, `refused: ${d.reason}`).toBe(false);
+    inScratch(root => {
+      mkdirSync(join(root, "p"));
+      const d = decideBashWrite(build(root));
+      expect(d.blocked, `refused: ${d.reason}`).toBe(false);
+    });
   });
 
   test.each(pairs)("%s under a live root is still refused", (_label, build) => {
@@ -674,8 +694,8 @@ describe("#1175 WITNESS: the same write is a fixture here and an artifact there"
   });
 
   test("the literal /tmp spelling is scratch as well as the resolved one", () => {
-    expect(decideBashWrite(`echo '{}' > /tmp/p/${STATE}`).blocked).toBe(false);
-    expect(decideBashWrite(`echo '{}' > /private/tmp/p/${STATE}`).blocked).toBe(false);
+    expect(decideBashWrite(`mkdir -p /tmp/p && echo '{}' > /tmp/p/${STATE}`).blocked).toBe(false);
+    expect(decideBashWrite(`mkdir -p /private/tmp/p && echo '{}' > /private/tmp/p/${STATE}`).blocked).toBe(false);
   });
 });
 
@@ -872,7 +892,7 @@ describe("#1175 review: the six spellings of an escape", () => {
   test("refusing `$` costs the fixtures nothing", () => {
     // The negative control for the widening: a plain fixture must still clear,
     // or the refusal above is just the guard turning itself off.
-    expect(decideBashWrite(`echo x > /tmp/p/${STATE}`).blocked).toBe(false);
+    expect(decideBashWrite(`mkdir -p /tmp/p && echo x > /tmp/p/${STATE}`).blocked).toBe(false);
   });
 });
 
@@ -908,13 +928,13 @@ describe("#1175 review: a link made by the same command voids the exemption", ()
     }
   });
 
-  test("CONTROL: mkdir -p does not void it, which is why `ln` and not creation", () => {
-    // A directory cannot point out of its tree. If this went red the voiding
-    // would be matching path creation in general, and every fixture would
-    // return to being refused.
+  test("CONTROL: mkdir -p is what makes a fixture's directory real (#1367)", () => {
+    // A directory cannot point out of its tree. If this went red the chain
+    // property would be refusing path creation in general, and every fixture
+    // would return to being refused.
     expect(decideBashWrite(`mkdir -p /tmp/p && echo x > /tmp/p/${STATE}`).blocked).toBe(false);
-    expect(decideBashWrite(`bun run learn.ts > /tmp/p/${STATE}`).blocked).toBe(false);
-    expect(decideBashWrite(`echo kiln > /tmp/p/${STATE}`).blocked).toBe(false);
+    expect(decideBashWrite(`mkdir -p /tmp/p && bun run learn.ts > /tmp/p/${STATE}`).blocked).toBe(false);
+    expect(decideBashWrite(`mkdir -p /tmp/p && echo kiln > /tmp/p/${STATE}`).blocked).toBe(false);
   });
 });
 
@@ -943,10 +963,11 @@ describe("#1175 review: the hook arm keeps the exemption — REFUSED suggestion"
     expect(decideBashWrite(cmd).blocked).toBe(true);
   });
 
+  // #1367: each fixture makes its directory, as a real one must.
   const FIXTURES = [
-    `cp -p /Users/x/hooks/Guard.hook.ts /tmp/cmp/old-guard.hook.ts`,
-    `echo x > /tmp/bwprobe/hooks/X.hook.ts`,
-    `chmod 777 /tmp/bwprobe/X.hook.ts`,
+    `mkdir -p /tmp/cmp && cp -p /Users/x/hooks/Guard.hook.ts /tmp/cmp/old-guard.hook.ts`,
+    `mkdir -p /tmp/bwprobe/hooks && echo x > /tmp/bwprobe/hooks/X.hook.ts`,
+    `mkdir -p /tmp/bwprobe && chmod 777 /tmp/bwprobe/X.hook.ts`,
   ];
   test.each(FIXTURES)("a hook INSIDE one is the false positive #1175 removes: %s", cmd => {
     const d = decideBashWrite(cmd);
@@ -1106,9 +1127,10 @@ describe("#1175 review round 2: PROTECTED_HOOKS keeps the exemption, for a measu
    * These rows are the ones the restriction would change, and they are the
    * bug #1175 exists to fix.
    */
+  // #1367: each fixture makes its directory, as a real one must.
   const fixtures = [
-    `cp -p /Users/x/hooks/Guard.hook.ts /tmp/cmp/old-guard.hook.ts`,
-    `rm -f /tmp/713-battery/pai-wrongfix/X.hook.ts`,
+    `mkdir -p /tmp/cmp && cp -p /Users/x/hooks/Guard.hook.ts /tmp/cmp/old-guard.hook.ts`,
+    `mkdir -p /tmp/713-battery/pai-wrongfix && rm -f /tmp/713-battery/pai-wrongfix/X.hook.ts`,
     `cp /Users/jhorn/.pai/hooks/DocHygiene.hook.ts /tmp/DocHygiene.hook.ts.bak-299`,
   ];
   test.each(fixtures)("a hook in an unwired scratch tree is a fixture: %s", cmd => {
@@ -1173,8 +1195,14 @@ describe("#1175 review round 2: the expansion predicate stays narrow", () => {
     // back to refused — a glob cleanup — and 975 corpus commands match it
     // against 211 for the narrow one. The extra breadth buys only cases that
     // were already blocked.
-    const glob = `rm -f /tmp/713-battery/pai-wrongfix/*.hook.ts && rmdir /tmp/713-battery/pai-wrongfix`;
-    expect(decideBashWrite(glob).blocked).toBe(false);
+    // #1367: the directory is made real first. The corpus command ran when
+    // it existed; with it absent the chain property refuses it, which the
+    // #1367 sweep reports as a disk-state cost rather than a live one.
+    inScratch(root => {
+      mkdirSync(join(root, "pai-wrongfix"));
+      const glob = `rm -f ${root}/pai-wrongfix/*.hook.ts && rmdir ${root}/pai-wrongfix`;
+      expect(decideBashWrite(glob).blocked).toBe(false);
+    });
     expect(/[$`*?~\\]|\$\(|\{/.test("/tmp/713-battery/pai-wrongfix/*.hook.ts")).toBe(true); // the wide one fires
     expect(/[$`]/.test("/tmp/713-battery/pai-wrongfix/*.hook.ts")).toBe(false); // the shipped one does not
     // and the leak the narrow one exists for is still closed
@@ -1211,8 +1239,8 @@ describe("#1175 review round 3: the verb is resolved, not pattern-matched", () =
     // If these go red the voiding has become a substring match and every
     // fixture whose path happens to contain `ln` is refused.
     for (const cmd of [
-      `echo kiln > /tmp/p/${STATE}`,
-      `bun run learn.ts > /tmp/p/${STATE}`,
+      `mkdir -p /tmp/p && echo kiln > /tmp/p/${STATE}`,
+      `mkdir -p /tmp/p && bun run learn.ts > /tmp/p/${STATE}`,
       `mkdir -p /tmp/p && echo x > /tmp/p/${STATE}`,
     ]) {
       const d = decideBashWrite(cmd);
@@ -4169,15 +4197,6 @@ describe("#1471 WITNESS: the bypass this reached, at the decision", () => {
 const OLD_LINK_CREATION = /\bln\s|\bsymlinkSync\b|\bos\.symlink\b|\bsymlink\s*\(/;
 const VICTIM_1367 = `${process.env.HOME}/.rungate/victim`;
 
-/** A fresh, real scratch directory; removed afterwards. */
-function scratch1367(fn: (base: string) => void): void {
-  const base = mkdtempSync(join(tmpdir(), "bw1367-"));
-  try {
-    fn(base);
-  } finally {
-    rmSync(base, { recursive: true, force: true });
-  }
-}
 
 describe("#1367 WITNESS: a link spelling the old list never named", () => {
   // Every row makes `esc` with a spelling `OLD_LINK_CREATION`, the `ln`
@@ -4201,7 +4220,7 @@ describe("#1367 WITNESS: a link spelling the old list never named", () => {
   });
 
   test.each(spellings)("%s: refused", (_l, mk) => {
-    scratch1367(base => {
+    inScratch(base => {
       const cmd = `${mk(base)} && echo '{}' > ${base}/esc/${STATE}`;
       expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
     });
@@ -4210,7 +4229,7 @@ describe("#1367 WITNESS: a link spelling the old list never named", () => {
   test("the mv row is a real bypass, executed rather than described", () => {
     // A harmless filename stands in for the gate artifact, which the live
     // hook refuses — correctly — if this test names it.
-    scratch1367(base => {
+    inScratch(base => {
       mkdirSync(join(base, "victim"));
       symlinkSync(join(base, "victim"), join(base, "planted"));
       const r = spawnSync("/bin/bash", ["-c", `mv ${base}/planted ${base}/esc && echo x > ${base}/esc/SENTINEL`]);
@@ -4220,7 +4239,7 @@ describe("#1367 WITNESS: a link spelling the old list never named", () => {
   });
 
   test("CONTROL: the documented `ln -s` shape is still refused", () => {
-    scratch1367(base => {
+    inScratch(base => {
       expect(decideBashWrite(`ln -s ${VICTIM_1367} ${base}/esc && echo '{}' > ${base}/esc/${STATE}`).blocked).toBe(true);
     });
   });
@@ -4252,7 +4271,7 @@ describe("#1367 CONTROL: a fixture whose directory is real stays exempt", () => 
     ["a hook copied into a fresh backup directory", b => `mkdir -p ${b}/bak && cp -p hooks/X.hook.ts ${b}/bak/`],
   ];
   test.each(rows)("%s", (_l, build) => {
-    scratch1367(base => {
+    inScratch(base => {
       const cmd = build(base);
       const d = decideBashWrite(cmd);
       expect(d.blocked, `refused: ${cmd} — ${d.reason}`).toBe(false);
@@ -4262,7 +4281,7 @@ describe("#1367 CONTROL: a fixture whose directory is real stays exempt", () => 
 
 describe("#1367 COST: refused, and the reason is the property", () => {
   test("a directory nothing makes is refused — the write would fail anyway", () => {
-    scratch1367(base => {
+    inScratch(base => {
       expect(decideBashWrite(`echo '{}' > ${base}/nosuch/${STATE}`).blocked).toBe(true);
     });
   });
@@ -4271,7 +4290,7 @@ describe("#1367 COST: refused, and the reason is the property", () => {
     // `rm -rf d && mkdir -p d && …` and `ln -s V d && mkdir -p d && …` are
     // the same shape with a different verb. Nothing that does not read the
     // verb can tell them apart, so the reset pays for the link.
-    scratch1367(base => {
+    inScratch(base => {
       const cmd = `rm -rf ${base}/d && mkdir -p ${base}/d && cat > ${base}/d/${STATE} <<'EOF'\n{}\nEOF`;
       expect(decideBashWrite(cmd).blocked).toBe(true);
     });
@@ -4297,14 +4316,14 @@ describe("#1367 BYPASS 1: a link made before the mkdir that forgives it", () => 
     ["ln -s spelled in another case", b => `ln -s ${VICTIM_1367} ${b}/ESC && mkdir -p ${b}/esc && echo '{}' > ${b}/esc/${STATE}`],
   ];
   test.each(rows)("%s", (_l, build) => {
-    scratch1367(base => {
+    inScratch(base => {
       const cmd = build(base);
       expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
     });
   });
 
   test("the link really survives mkdir -p, executed", () => {
-    scratch1367(base => {
+    inScratch(base => {
       mkdirSync(join(base, "victim"));
       const r = spawnSync("/bin/bash", [
         "-c",
@@ -4331,7 +4350,7 @@ describe("#1367 BYPASS 2: an existing directory removed and replaced in the same
     ["concurrently, in a pipeline", b => `echo '{}' > ${b}/real/${STATE} | (rmdir ${b}/real; ln -s ${VICTIM_1367} ${b}/real)`],
   ];
   test.each(rows)("%s", (_l, build) => {
-    scratch1367(base => {
+    inScratch(base => {
       mkdirSync(join(base, "real"));
       const cmd = build(base);
       expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
@@ -4339,7 +4358,7 @@ describe("#1367 BYPASS 2: an existing directory removed and replaced in the same
   });
 
   test("CONTROL: the same directory, untouched, stays exempt", () => {
-    scratch1367(base => {
+    inScratch(base => {
       mkdirSync(join(base, "real"));
       expect(decideBashWrite(`echo '{}' > ${base}/real/${STATE} && ls ${base}/real`).blocked).toBe(false);
     });
@@ -4354,14 +4373,14 @@ describe("#1367 BYPASS 3: a link at the destination file itself", () => {
     ["link(1), which the old list never named", b => `link ${VICTIM_1367}/${STATE} ${b}/${STATE} && echo '{}' > ${b}/${STATE}`],
   ];
   test.each(rows)("%s", (_l, build) => {
-    scratch1367(base => {
+    inScratch(base => {
       const cmd = build(base);
       expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
     });
   });
 
   test("a destination that is already a hard link is refused — the two-command form", () => {
-    scratch1367(base => {
+    inScratch(base => {
       writeFileSync(join(base, "other.json"), "{}");
       linkSync(join(base, "other.json"), join(base, STATE));
       expect(decideBashWrite(`echo '{}' > ${base}/${STATE}`).blocked).toBe(true);
@@ -4369,7 +4388,7 @@ describe("#1367 BYPASS 3: a link at the destination file itself", () => {
   });
 
   test("a destination that is already a symbolic link is refused", () => {
-    scratch1367(base => {
+    inScratch(base => {
       writeFileSync(join(base, "other.json"), "{}");
       symlinkSync(join(base, "other.json"), join(base, STATE));
       expect(decideBashWrite(`echo '{}' > ${base}/${STATE}`).blocked).toBe(true);
@@ -4377,7 +4396,7 @@ describe("#1367 BYPASS 3: a link at the destination file itself", () => {
   });
 
   test("CONTROL: an ordinary existing destination stays exempt", () => {
-    scratch1367(base => {
+    inScratch(base => {
       writeFileSync(join(base, STATE), "{}");
       expect(decideBashWrite(`echo '{}' > ${base}/${STATE}`).blocked).toBe(false);
     });
@@ -4386,7 +4405,7 @@ describe("#1367 BYPASS 3: a link at the destination file itself", () => {
 
 describe("#1367: an existing directory in the chain must not be a link", () => {
   test("a symlink that points INTO scratch is refused — it can be re-aimed unseen", () => {
-    scratch1367(base => {
+    inScratch(base => {
       mkdirSync(join(base, "realdir"));
       symlinkSync(join(base, "realdir"), join(base, "esc"));
       expect(decideBashWrite(`echo '{}' > ${base}/esc/${STATE}`).blocked).toBe(true);
@@ -4405,7 +4424,7 @@ describe("#1367 KNOWN GAP: a program that computes the path at run time", () => 
   // mkdirSync fixtures above. A directory that does NOT exist yet is still
   // refused whatever the program does; that is part 1.
   test("an existing directory re-linked from a decoded name is not seen", () => {
-    scratch1367(base => {
+    inScratch(base => {
       mkdirSync(join(base, "real"));
       const encoded = Buffer.from(`${base}/real`).toString("base64");
       const cmd =
@@ -4416,7 +4435,7 @@ describe("#1367 KNOWN GAP: a program that computes the path at run time", () => 
   });
 
   test("the same program against a directory that does not exist is refused", () => {
-    scratch1367(base => {
+    inScratch(base => {
       const encoded = Buffer.from(`${base}/esc`).toString("base64");
       const cmd =
         `python3 -c "import os, base64; os.symlink('${VICTIM_1367}', base64.b64decode('${encoded}').decode())" ` +
