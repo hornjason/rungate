@@ -750,9 +750,10 @@ Run: git -C ${shellQuote(PROJECT_ROOT || '.')} rev-parse --short HEAD
 1. For CODE ACs: run evidence commands (grep, bun test, curl) against current code.
 2. For UI/OUTCOME ACs: output SKIP with reason "B3 limitation: no browser tools — requires Quinn".
 3. Focus on the previously failed criteria — verify the fix resolved them.
-4. Report afterEvidence as ${PROVE_PROMPT} specifies: the after-state you
-   observed in THIS re-validation, and where (local or prod). Leave it out if
-   you observed none — never carry over an earlier one.
+4. Read ${PROVE_PROMPT} for the afterEvidence format, then report
+   afterEvidence: the after-state you observed in THIS re-validation, and
+   where (local or prod). Leave it out if you observed none — never carry over
+   an earlier one. A PROVEN without it is recorded as INCONCLUSIVE.
 
 Output your verdict, criteriaResults, reproduced, gaps, afterEvidence.
   `, { label: `self-heal-validate-${selfHealIteration}`, phase: 'Verdict', schema: REPRODUCER_SCHEMA })

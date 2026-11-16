@@ -241,6 +241,17 @@ describe("#2254: prove.js asks for what the contract needs, and no longer writes
     expect(schemas.QUINN_SCHEMA.properties.criteriaResults.items.required).toContain("evidence");
   });
 
+  test("every reproducer spawn is told to read the prompt that defines afterEvidence", () => {
+    // Review round 1 on PR #2256: the self-heal re-validation is a separate
+    // agent with no context from the first spawn, and was told to report
+    // afterEvidence "as the prompt specifies" without being told to read it.
+    const spawns = [...PROVE_SOURCE.matchAll(/await agent\(`([\s\S]*?)`,\s*\{([^}]*schema: REPRODUCER_SCHEMA[^}]*)\}/g)];
+    expect(spawns.length, "the REPRODUCER_SCHEMA spawns this case reads").toBeGreaterThanOrEqual(2);
+    for (const [, prompt, opts] of spawns) {
+      expect(prompt, `the spawn with ${opts.trim()}`).toContain("Read ${PROVE_PROMPT}");
+    }
+  });
+
   test("the artifact is written by the script, never by an agent's Write tool", () => {
     expect(PROVE_SOURCE).toContain("scripts/record-prove-evidence.ts");
     // The key, not the word: the comment explaining its removal may name it.
