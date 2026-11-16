@@ -15,7 +15,7 @@ import { tmpdir } from "os";
 import { join, resolve } from "path";
 
 import { carryMarkedSection, splitMarked, PROJECT_OWNED_SECTION } from "../lib/scaffold/marked-section";
-import { bodySha, declaredSha, decideRuleWrite, stampProvenance } from "../lib/rule-provenance";
+import { bodySha, declaredSha, decideRuleWrite, stampCovers, stampProvenance } from "../lib/rule-provenance";
 
 const ROOT = resolve(import.meta.dir, "..");
 const V1 = "---\ndescription: A generated rule for the marked-section cases\n---\n\n## The rule\n\n- Generated line one.\n- Generated line two.\n";
@@ -76,6 +76,32 @@ describe("#1553 / SC-2769: an edit outside the section refuses, names the line, 
     expect(d.action).toBe("preserve");
     expect(d.content).toBeUndefined();
   });
+});
+
+describe("#1553 / SC-2769: stampCovers, the one reading, over every placement and tail (review round 3, #2285)", () => {
+  // Rounds 1-2 each found a call site re-deriving "is this still what was
+  // stamped" its own way. This asserts the property once, across the matrix,
+  // on the one decider every caller now goes through.
+  const placements = ["no section", "section at the end", "section mid-file"] as const;
+  const place = (stamped: string, where: (typeof placements)[number]) => {
+    if (where === "no section") return stamped;
+    if (where === "section at the end") return `${stamped}${OURS}\n`;
+    const at = stamped.indexOf("## The rule");
+    return `${stamped.slice(0, at)}${OURS}\n\n${stamped.slice(at)}`;
+  };
+  for (const where of placements) {
+    for (const blanks of [0, 1, 2, 3]) {
+      test(`${where}, ${blanks} trailing blank line(s): untouched is covered, one edited generated line is not`, () => {
+        const stamped = stampProvenance(`${V1}${"\n".repeat(blanks)}`);
+        const untouched = place(stamped, where);
+        const covered = stampCovers(untouched);
+        expect(covered).not.toBeNull();
+        expect(covered!.section?.text ?? null).toBe(where === "no section" ? null : OURS);
+        if (covered!.section) expect(untouched.slice(covered!.section.start).startsWith(OURS)).toBe(true);
+        expect(stampCovers(untouched.replace("- Generated line two.", "- Edited by hand."))).toBeNull();
+      });
+    }
+  }
 });
 
 describe("#1553 / SC-2769: the pieces", () => {
