@@ -2489,7 +2489,7 @@ function spawnB1AdversaryAtScope(state: Record<string, any>, workDir: string, ha
   writeFileSync(acInputFile, JSON.stringify(state.acs || [], null, 2));
   const { spawn } = require("child_process");
   const child = spawn("sh", ["-c",
-    `claude -p "$(cat '${acInputFile}')" --model haiku --system-prompt-file "${promptPath}" --output-format json --allowedTools "" --max-turns 3 > "${reportPath}.tmp" 2>/dev/null && mv "${reportPath}.tmp" "${reportPath}"`
+    `claude -p "$(cat '${acInputFile}')" --model haiku --system-prompt-file "${promptPath}" --output-format text --allowedTools "" --max-turns 3 > "${reportPath}.tmp" 2>/dev/null && mv "${reportPath}.tmp" "${reportPath}"`
   ], { detached: true, stdio: "ignore", cwd: harnessRoot });
   child.unref();
   console.log("B1: AC Adversary spawned in background — verify gate will check result");

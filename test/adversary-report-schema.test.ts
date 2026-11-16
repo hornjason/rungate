@@ -157,3 +157,28 @@ describe("#2259: one read of the adversary report, not two", () => {
     expect(source.split('"gameable"[').length - 1).toBe(1);
   });
 });
+
+describe("#2259 review round 3: the scope spawn writes what the reader reads", () => {
+  // spawnB1AdversaryAtScope ran `claude -p --output-format json`, which wraps
+  // the model's answer in the CLI's envelope with the report as an escaped
+  // string in `result`. The old reader could never read that file and only
+  // warned, so the scope-time adversary was dead; with this issue's FAIL on an
+  // unreadable report, every clean run would have failed verify instead.
+  test("every model call in the gate executor prints bare text, which is what every reader extracts JSON from", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "gates", "gate-executor.ts"), "utf-8");
+    const calls = [...source.matchAll(/claude -p[^`]*?--output-format (\w+)/g)].map(m => m[1]);
+    expect(calls.length, "the model calls this case reads").toBeGreaterThanOrEqual(4);
+    expect(calls.filter(f => f !== "text"), "a model call prints a format no reader parses").toEqual([]);
+  });
+
+  test("the CLI's JSON envelope is refused as unreadable, never passed", () => {
+    const envelope = JSON.stringify({
+      type: "result", subtype: "success", is_error: false,
+      result: JSON.stringify({ gameable: 0, approved: true, exploits: [] }),
+      session_id: "s",
+    });
+    const r = adversaryReportReading(envelope, ACS);
+    expect(r.fails).toBe(1);
+    expect(r.results[0].result).toBe("FAIL");
+  });
+});
