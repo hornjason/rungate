@@ -46,10 +46,10 @@ code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
 <h2>Issues the merge files</h2>
 <div class="grid">
 <div class="card"><h3>SC-2776 · Engine Phase 9</h3>A spec is consumed only when its frontmatter opts it in<div class="dim">board: { scope: active, prefix } · lib/spec-placement.ts · board-conformance · 2 spec frontmatters · test/board-families.test.ts · root</div></div>
-<div class="card"><h3>SC-2777 · Engine Phase 9</h3>Every opted-in family's phase issues carry the queue label<div class="dim">scripts/board-mirror.ts · phase-order.yml · 2 tests · after the config row</div></div>
-<div class="card"><h3>SC-2778 · Engine Phase 9</h3>A criterion placed outside every phase reads as declared and not as missing<div class="dim">board-conformance · board-snapshot · spec-placement · 2 tests · root</div></div>
-<div class="card"><h3>SC-2779 · Engine Phase 9</h3>An unmilestoned issue moves into the phase milestone its criterion holds<div class="dim">lib/issue-repair.ts · scripts/plan-issues.ts · test · root</div></div>
-<div class="card"><h3>SC-2780 · Engine Phase 9</h3>A push to main that changes specs runs every opted-in family through the engine<div class="dim">emitter · specs-placed.yml · ownership × 2 · steps · test · after the other three</div></div>
+<div class="card"><h3>SC-2777 · Engine Phase 9</h3>Every opted-in family's phase issues carry the queue label<div class="dim">scripts/board-mirror.ts · phase-order.yml · 2 tests · after the opt-in row (SC-2776)</div></div>
+<div class="card"><h3>SC-2778 · Engine Phase 9</h3>A criterion placed outside every phase reads as declared and not as missing<div class="dim">board-conformance · board-snapshot · spec-placement · 2 tests · after the opt-in row (SC-2776)</div></div>
+<div class="card"><h3>SC-2779 · Engine Phase 9</h3>An unmilestoned issue moves into the phase milestone its criterion holds<div class="dim">lib/issue-repair.ts · scripts/plan-issues.ts · test · after the opt-in row (SC-2776)</div></div>
+<div class="card"><h3>SC-2780 · Engine Phase 9</h3>A push to main that changes specs runs every opted-in family through the engine<div class="dim">emitter · specs-placed.yml · ownership × 2 · steps · test · after SC-2776, SC-2777 and SC-2779</div></div>
 <div class="card"><h3>CRC-C3 · Convergence Phase 0</h3>A review thread resolved with no stated reason is reported on its pull request<div class="dim">lib + script ai-review-threads · test · reference doc · root</div></div>
 </div>
 
@@ -65,8 +65,8 @@ code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
 
 <h2>What reaches Ready (SIMULATED)</h2>
 <div class="card">Active milestone: <b>Engine Phase 9 — the payload ships</b><br>
-Pulled first: #1722 (today) + the three root rows (config, declared placements, issue placement)<br>
-Next as slots open: queue label → specs-placed workflow<br>
+Pulled first: #1722 (today) + the one root row (frontmatter opt-in)<br>
+Next as slots open: queue label, declared placements, issue placement (all three once opt-in closes) → specs-placed workflow<br>
 Kept out: the CRC-C3 row and every Convergence issue until no engine phase has an open issue (SC-2741)<br>
 Expedite: none<br>
 <span class="dim">Today's START HERE: #1722 only.</span></div>
