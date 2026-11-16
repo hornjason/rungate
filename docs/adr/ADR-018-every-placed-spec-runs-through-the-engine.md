@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-15
 updated: 2026-11-16
 ---
@@ -9,14 +9,16 @@ updated: 2026-11-16
 
 ## Status
 
-**Proposed, 2026-11-15; revised 2026-11-16.** Jason decided the three
+**Accepted, 2026-11-16.** Jason approved the plan and the five engine
+criteria as redrafted, Decisions 4 to 9, and the two convergence placement
+moves, on #2240 on 2026-11-16, after the consumer onboarding measurement.
+Nothing is open.
+
+**History.** Proposed 2026-11-15, revised 2026-11-16. Jason decided the three
 questions on 2026-11-15: placed specs go through the engine, one queue, and
 an issue plan the DA drafts and he approves. On 2026-11-16 he narrowed the
 first: **a spec is consumed only when its own frontmatter opts it in**,
-and a placement table alone pulls nothing (Decisions 1, 8 and 9). This
-draft is that plan. The five engine criteria (SC-2776 to
-SC-2780) and the two placement moves in the convergence spec are drafts and
-need his yes. Merging this file with `status: accepted` is the yes. It
+and a placement table alone pulls nothing (Decisions 1, 8 and 9). It
 closes #2238 and serves stage F of `project-state.json`.
 
 **#2239 is in, so this can merge.** The five engine rows land in Engine
@@ -109,8 +111,8 @@ with nobody touching it, and the readings show it.
 3. **The issue plan is drafted and approved — Jason, 2026-11-15.** The
    table below. Five rows build the engine automation, and one row is the
    only Phase 0 convergence work that remains.
-4. **An unmilestoned issue is placed by the run, never by hand — DA's
-   recommendation, for Jason.** SC-2625 rules out a hand repair. The run in
+4. **An unmilestoned issue is placed by the run, never by hand — Jason,
+   2026-11-16, on the DA's recommendation.** SC-2625 rules out a hand repair. The run in
    Decision 1 moves an open issue with no milestone into the phase that its
    named criterion holds in a listed spec. If the issue names criteria in
    two phases of one family, it goes to the lower one, because the issue
@@ -123,19 +125,19 @@ with nobody touching it, and the readings show it.
    #1495, #1571, #1816 and #1818. Row 5 is blocked by rows 1, 2 and 4, so
    the placement logic (row 4) and the family config it reads (row 1) are
    in by then.
-5. **A criterion placed outside every phase is declared, not missing — DA's
-   recommendation, for Jason.** criterion-coverage and declared-work stop
+5. **A criterion placed outside every phase is declared, not missing — Jason,
+   2026-11-16, on the DA's recommendation.** criterion-coverage and declared-work stop
    counting the values Blocked, Not adopted — deliberate and Not observable
    here as missing. They are named apart in a line of their own, and they
    are never counted as covered by an issue. One predicate decides this for
    both readings, so the two cannot disagree. A placement value the engine
    does not know leaves both readings UNMEASURED. The alternative is nine
    issues for work the spec says cannot start, which rule 7 warns against.
-6. **CRC-E8 moves to "Blocked — needs a second person" — a correction, for
-   Jason.** The spec's own Phase 0 prose already says this. Only the table
+6. **CRC-E8 moves to "Blocked — needs a second person" — Jason,
+   2026-11-16, a correction.** The spec's own Phase 0 prose already says this. Only the table
    still disagrees.
-7. **CRC-F1 moves to "Not adopted — deliberate" — DA's recommendation, for
-   Jason.** "PROTECT-1 wins" is the standing the spec records, and the spec
+7. **CRC-F1 moves to "Not adopted — deliberate" — Jason, 2026-11-16, on
+   the DA's recommendation.** "PROTECT-1 wins" is the standing the spec records, and the spec
    names the conditions for revisiting it: merge queues become available, or
    open pull requests stay at two or fewer. It stays in the *Contested*
    audit section, so the audit's buckets do not move. **If Jason says no,**
@@ -151,7 +153,10 @@ with nobody touching it, and the readings show it.
    already done, and nothing in either repo ever ticks one. Pulling a spec
    in on its table alone would file finished work.
    `spec-placement` (SC-2615, SC-2734) asks the same question of the same
-   population: only opted-in specs must carry a placement table.
+   population: only opted-in specs must carry a placement table. Jason
+   approved rewording both so "in scope" means opted in. The rewording lands
+   in SC-2776's pull request, the change that makes it true, so neither
+   ticked criterion ever claims what is not yet built.
 9. **One `board:` block, open to new keys — Jason, 2026-11-16.** Board
    settings sit under one frontmatter key so that a later setting is a new
    line inside it, not a new top-level field. Today it holds `scope`
@@ -163,10 +168,12 @@ with nobody touching it, and the readings show it.
 ## Not decided here
 
 - **How a consumer with many existing specs chooses which to opt in.**
-  Opt-in by default means nothing is pulled until someone chooses. How
-  that choice is made, and how a stale checkbox (done but never ticked) is
-  caught before a spec is opted in, is being measured on DailyBriefDashboard
-  and pov-plugin. It comes back as its own issue.
+  Jason adopted the strategy on 2026-11-16, after a read-only measurement
+  of DailyBriefDashboard and pov-plugin: existing specs stay off the board;
+  a report flags criteria that look done; the maintainer confirms and ticks
+  with evidence before anything is filed; templates and generated copies
+  are refused; untracked specs read as not tracked. It is #2275, blocked by
+  this ADR's SC-2776 row, not a row here.
 
 - **An issue filed between two pushes to `specs/` waits for the next push**
   before it is placed. Adding `issues: opened` to the trigger is a separate
