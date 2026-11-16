@@ -1,7 +1,8 @@
 import { test, expect, describe } from "bun:test";
 import { readFileSync, existsSync, writeFileSync } from "fs";
 import { execSync } from "child_process";
-import { beforeEvidenceFor, comparisonSummaryFor, readBeforeState } from "./gate-executor";
+import { beforeEvidenceFor, comparisonSummaryFor, readBeforeState, validateArtifactSchema } from "./gate-executor";
+import { ProveEvidenceSchema } from "./schema";
 
 const TEST_DIR = process.env.TEST_WORK_DIR || "";
 const PROJECT_ROOT = process.env.PROJECT_ROOT || process.cwd();
@@ -145,6 +146,10 @@ describe("prove: run evidence commands from workflow-state", () => {
       criteriaResults,
     };
 
+    // #2254 / SC-2770: checked against the one contract before it is written,
+    // as B3's and prove.js's are. A required field this writer stops emitting
+    // fails here, with the field named, instead of in whatever reads it next.
+    expect(validateArtifactSchema(evidence, ProveEvidenceSchema)).toEqual([]);
     writeFileSync(`${TEST_DIR}/prove-evidence.json`, JSON.stringify(evidence, null, 2));
     expect(verdict).toBe("PROVEN");
   });

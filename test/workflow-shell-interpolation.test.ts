@@ -238,8 +238,15 @@ const CLASSIFIED: Record<string, string> = {
     "in when the project configured none",
   "workflows/prove.js:quinnResults":
     "prose into a prompt: `.verdict`, rendered as one bullet of the proof comment",
-  "workflows/prove.js:proveEvidence":
-    "structured, not text: `JSON.stringify(proveEvidence, null, 2)`, written as the evidence file",
+  "workflows/prove.js:proveReportJson":
+    "structured, not text: `JSON.stringify(proveReport(...), null, 2)`, written as the report " +
+    "file scripts/record-prove-evidence.ts reads and checks against ProveEvidenceSchema (#2254)",
+  "workflows/prove.js:recorded":
+    "prose into a log line, not a prompt: `recorded.reason`, the record script's printed reason " +
+    "relayed by an agent, which reaches no command and no other agent (#2254)",
+  "workflows/prove.js:reproduced":
+    "structured, not text: `reproduced ? 'yes' : 'no'` picks between two literal words, so the " +
+    "value itself never reaches the string",
   "workflows/prove.js:screenshotUploadResult":
     "prose into a prompt: markdown image links, concatenated under an '## Evidence Screenshots' " +
     "heading. Also a concatenation rather than a template",
