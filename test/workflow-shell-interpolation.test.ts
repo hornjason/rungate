@@ -48,6 +48,7 @@ import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 
 import { remedyMessage } from "../lib/check-remedy";
+import { buildWorkflowLaunch } from "../scripts/build-workflow-launch";
 import { agentDerivedNames, bareAgentInterpolations } from "../lib/workflow-taint";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -396,9 +397,15 @@ function genericNames(): Set<string> {
 describe("#2287: only generated launch files leave the census, and each names its source", () => {
   test("every skipped file is a build output whose source is in the census", () => {
     const skipped = readdirSync(WORKFLOW_DIR).filter(f => f.endsWith(".js") && isGeneratedLaunch(f));
+    expect(skipped.length, "no generated launch file found — this case would assert nothing").toBeGreaterThan(0);
     for (const f of skipped) {
       const source = /GENERATED from workflows\/([\w.-]+\.js)/.exec(sourceOf(f))?.[1];
       expect([f, source && WORKFLOW_FILES.includes(source)]).toEqual([f, true]);
+      // The notice alone is a claim. A hand-written file carrying it would
+      // leave the census unscanned, so a skip holds only for the exact bytes
+      // the build produces from the source it names (review, #2291).
+      const rebuilt = buildWorkflowLaunch(sourceOf(source!)).text;
+      expect(sourceOf(f) === rebuilt, `${f} carries the generated notice but is not the build of ${source}`).toBe(true);
     }
     expect(WORKFLOW_FILES).toContain("ship.js");
   });

@@ -106,6 +106,15 @@ describe("#2287 / SC-2772: what the build must not get wrong", () => {
     expect(() => buildWorkflowLaunch("export const meta = {\n  name: 'x',\n};\nconst a = 1;\n")).toThrow(/no top-level `return`/);
   });
 
+  test("a source that does not parse is a refusal — and the parse reading sees the error at all (review, #2291)", () => {
+    // `parseErrors` reads `parseDiagnostics`, which is not public TypeScript
+    // API. If an upgrade stops filling it, the reading goes empty for broken
+    // input and the refusal passes everything; this case is what goes red.
+    const broken = wrap("const a = ;");
+    expect(parseErrors(broken).length, "parseErrors reads nothing from a broken source — the parse guard is blind").toBeGreaterThan(0);
+    expect(() => buildWorkflowLaunch(broken)).toThrow(/the source does not parse/);
+  });
+
   test("a source that does not begin with meta is a refusal", () => {
     expect(() => buildWorkflowLaunch("const a = 1;\nexport const meta = {\n  name: 'x',\n};\nreturn 1;\n")).toThrow(/does not begin with/);
   });
