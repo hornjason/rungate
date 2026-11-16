@@ -345,7 +345,11 @@ const UNCLAIMED_RATCHET = 150;
 // 169 -> 171: SC-2622 and SC-2623 (#1720) ticked as behaviours with no
 // registered pattern, claimed by the `SC-2622:` and `SC-2623:` cases in
 // test/spec-requirements.test.ts.
-const CLAIMED_UNBINDABLE = 171;
+// 171 -> 172: SC-1947 (#2274) ticked by hand, as SC-1939 and SC-1941 beside it
+// were: a behaviour with no registered pattern, claimed by the `#2274 / SC-1947`
+// header of test/scaffold-extract-constraints.test.ts once the todo that
+// outranked it was deleted from test/rule-lifecycle-spec.test.ts.
+const CLAIMED_UNBINDABLE = 172;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

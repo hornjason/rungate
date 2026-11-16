@@ -70,7 +70,7 @@ import {
 } from "../secret-patterns";
 import { healthPathIn } from "../liveness-contradiction";
 import { localCalendarDay } from "../local-calendar-day";
-import { decideRuleWrite } from "../rule-provenance";
+import { bodySha, declaredSha, decideRuleWrite } from "../rule-provenance";
 import { rowDriftClause, ruleRowDrift } from "../rule-row-drift";
 import { actionRef } from "../workflow-actions";
 import {
@@ -86,7 +86,7 @@ import { referencedPaths } from "../agents-md-refs";
 import { scanDocsDirectory } from "../doc-routing";
 import { inferredTestCommand, testCommandDecision } from "../test-command";
 import { declaredBunVersion, setupBunEnv, setupBunWith } from "../bun-version";
-import { codeMapUnreferenced, unlistedSpecs } from "../spec-listing";
+import { NON_SPEC_FILES, codeMapUnreferenced, unlistedSpecs } from "../spec-listing";
 import { censusReport, stampWorkflow, workflowBody, workflowCensus } from "./workflow-census";
 import {
   readSuccessDoc,
@@ -102,7 +102,7 @@ import {
   ownedFileFor,
   type WriteStrategy,
 } from "./owned-files";
-import type { SectionSpec } from "../agents-md-sections";
+import { readPreservedSection, type SectionSpec } from "../agents-md-sections";
 import { executedHookPath, hookRegistrationPath } from "../hook-trees";
 
 /**
@@ -5879,6 +5879,143 @@ export const REHEARSAL_MARKER = " [REHEARSAL — not applied]";
  * precisely the position the issue is about. The `Total:` line is marked as
  * well, but after the per-line marking, not instead of it.
  */
+/**
+ * Whose text is the line a doc-rule candidate came from — rungate's (the
+ * scaffold wrote it) or the project's? `source` is `path:line`, as
+ * `extractConstraints` reports it (#2274).
+ *
+ * ONE decision over the whole ownership model, re-derived in review round 5
+ * of PR #2278 after rounds 3 and 4 each patched one more file shape onto a
+ * boolean. It switches over every `WriteStrategy`, and the `never` default
+ * makes a strategy added later a type error rather than a silent fall-through.
+ *
+ * When it cannot tell, the line is the PROJECT'S. A rungate line wrongly
+ * reported is visible noise; a project's rule wrongly hidden is silent loss,
+ * which is the direction this repository refuses to be wrong in.
+ */
+export function textOwner(projectPath: string, source: string): "rungate" | "project" {
+  const m = /^(.*):(\d+)$/.exec(source);
+  // `relative()` uses the OS separator; the table and NON_SPEC_FILES use `/`.
+  const file = (m ? m[1] : source).split("\\").join("/");
+  const line = m ? Number(m[2]) : NaN;
+  if (NON_SPEC_FILES.some(n => file === `specs/${n}`)) return "rungate"; // the starter spec template
+  const owned = ownedFileFor(file);
+  if (owned === null) return "project";
+  const read = (): string | null => {
+    try {
+      return readFileSync(join(projectPath, file), "utf-8");
+    } catch {
+      return null; // unreadable — the caller below treats that as the project's
+    }
+  };
+  switch (owned.strategy) {
+    case "regenerate":
+      return "rungate";
+    case "create-only":
+      return "project";
+    case "job-preserving":
+      // A workflow's named jobs are rungate's and the rest is the project's,
+      // and nothing here maps a line to a job. Not knowing is the project's.
+      return "project";
+    case "provenance": {
+      // Rewritten only while untouched (#370): a stamp that no longer matches
+      // its body means somebody edited it, and it is theirs now.
+      const text = read();
+      if (text === null) return "project";
+      const declared = declaredSha(text);
+      return declared !== null && declared === bodySha(text) ? "rungate" : "project";
+    }
+    case "section-preserving": {
+      // Rungate's except the section that carries forward (#568), found by the
+      // one reader that decides what that section is.
+      const text = read();
+      if (text === null || !owned.sections || Number.isNaN(line)) return "project";
+      const section = readPreservedSection(text, owned.sections);
+      if (section === null) return "rungate";
+      const start = text.indexOf(section.text);
+      const first = text.slice(0, start).split("\n").length;
+      const last = first + section.text.split("\n").length - 1;
+      return line >= first && line <= last ? "project" : "rungate";
+    }
+    default: {
+      const unhandled: never = owned.strategy;
+      return unhandled;
+    }
+  }
+}
+
+/** How many candidate rules the scaffold report lists before it says "and N more". */
+export const DOC_RULES_SHOWN = 10;
+
+const clip = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/**
+ * #2274 / SC-1947: the doc-rule scan, in report mode, on every scaffold and
+ * re-scaffold (Jason, #1126, 2026-11-16).
+ *
+ * **Reports, never writes.** `extractConstraints` runs with `apply: false`;
+ * writing a candidate into `AGENTS.md` stays `extract-constraints --apply`,
+ * run on purpose (#2240: nothing is consumed blindly). The lines carry the
+ * `DOC-RULE` prefix, which no write verb shares, so `writtenPath` and
+ * `postScaffoldCommit` never read one as a file the run wrote.
+ *
+ * **Never fails scaffold, never reads as "no rules" when it could not look.**
+ * A scan that throws, or that could not read a planned doc, is UNMEASURED
+ * naming why. The list is bounded at `DOC_RULES_SHOWN`: this repository's own
+ * docs yield over a thousand candidates, and a report that long is one nobody
+ * reads; the count and the command that lists every one are always printed.
+ *
+ * `plan` and `extract` are seams. The unread branch is unreachable through a
+ * plan the walk just took (`extractConstraints` says why), and a throw is
+ * unreachable from any fixture.
+ */
+export async function reportDocRules(
+  projectPath: string,
+  actions: string[],
+  opts: {
+    plan?: import("../doc-scan-targets").DocScanPlan;
+    extract?: (root: string, o: { apply: false; plan?: import("../doc-scan-targets").DocScanPlan }) =>
+      Promise<import("../../scripts/extract-constraints").ExtractResult>;
+  } = {},
+): Promise<void> {
+  const extract = opts.extract ?? (async (root, o) => (await import("../../scripts/extract-constraints")).extractConstraints(root, o));
+  let result: import("../../scripts/extract-constraints").ExtractResult;
+  try {
+    result = await extract(projectPath, { apply: false, plan: opts.plan });
+  } catch (err) {
+    actions.push(`DOC-RULES: UNMEASURED — the doc-rule scan could not run: ${(err as Error)?.message ?? String(err)}. Nothing was written.`);
+    return;
+  }
+  const { coverage, deduped, unreadConstraints, scan } = result;
+  // Routed directories missing from disk are not reported here: the routing
+  // validator already WARNs each one in this same report.
+  if (coverage.unread.length > 0) {
+    const named = coverage.unread.map(u => `${u.file} (${u.reason})`).join(", ");
+    actions.push(`DOC-RULES: UNMEASURED — ${coverage.unread.length} of ${coverage.planned} planned docs could not be read: ${named}. Any count below covers the ${coverage.read} that could.`);
+  }
+  if (coverage.planned === 0) {
+    actions.push(`DOC-RULES: no docs to scan — ${scan.reason}.`);
+    return;
+  }
+  // Text the scaffold itself writes is rungate's, not the project's. Reporting
+  // it as "your docs say" would be wrong on every fresh scaffold, so it is
+  // left out — and counted, not hidden. `textOwner` decides, line by line.
+  const candidates = result.candidates.filter(c => textOwner(projectPath, c.source) === "project");
+  const leftOut = result.candidates.length - candidates.length;
+  const already = unreadConstraints
+    ? `how many are already in ## Hard Constraints is UNMEASURED (${clip(unreadConstraints, 80)})`
+    : `${deduped.existingConstraints} more already in ## Hard Constraints`;
+  actions.push(
+    `DOC-RULES: ${candidates.length} candidate rule${candidates.length === 1 ? "" : "s"} in ${coverage.read} docs, not in ## Hard Constraints; ${already}` +
+      `${leftOut > 0 ? `; ${leftOut} from files rungate generates left out` : ""}. ` +
+      "Reported only, nothing written — `rungate extract-constraints . --apply` writes them.",
+  );
+  for (const c of candidates.slice(0, DOC_RULES_SHOWN)) actions.push(`DOC-RULE: "${clip(c.rule)}" — ${c.source}`);
+  if (candidates.length > DOC_RULES_SHOWN) {
+    actions.push(`DOC-RULES: … and ${candidates.length - DOC_RULES_SHOWN} more — \`rungate extract-constraints .\` lists every one.`);
+  }
+}
+
 export function reportScaffoldActions(actions: string[], mode: { rehearsed: boolean }): number {
   const qualify = (line: string) => (mode.rehearsed ? `${line}${REHEARSAL_MARKER}` : line);
   console.log("\n=== Scaffold Report ===");
