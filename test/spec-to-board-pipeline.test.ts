@@ -204,8 +204,16 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
       ids.filter((id, i) => ids.indexOf(id) !== i),
       "an id is stated twice in this spec, so two criteria share it",
     ).toEqual([]);
-    expect(reservationFaults(used, scBlocks, mainBase()), "the live store disagrees with this spec's ids")
-      .toEqual([]);
+    // With no origin/main to read the strict reading applies, and the failure
+    // says so: "could not compare" and "a real collision" must not read alike.
+    const liveBase = mainBase();
+    expect(
+      reservationFaults(used, scBlocks, liveBase),
+      liveBase === null
+        ? "origin/main could not be read, so every foreign block was read strictly, an in-flight one included; " +
+            "fetch origin/main and re-run before treating this as a collision"
+        : "the live store disagrees with this spec's ids",
+    ).toEqual([]);
 
     // **There is deliberately no "which arm did the live store take" line
     // here.** The first version of this case had one, and round 1 of this
@@ -282,9 +290,15 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
 
     // The live case reads its base from origin/main. A reader that always
     // answered null would refuse every in-flight block with no case failing.
-    const base = mainBase();
-    expect(base, "origin/main's spec or store could not be read").not.toBeNull();
-    expect(base!.used, "origin/main's copy of this spec was read as stating none of its ids").toContain(2615);
+    // Only where origin/main resolves: CI's fetch of it is best-effort, and a
+    // checkout with no such ref has nothing for the reader to read.
+    const hasMain =
+      spawnSync("git", ["-C", ROOT, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"], { encoding: "utf-8" }).status === 0;
+    if (hasMain) {
+      const base = mainBase();
+      expect(base, "origin/main resolves and its spec or store could not be read").not.toBeNull();
+      expect(base!.used, "origin/main's copy of this spec was read as stating none of its ids").toContain(2615);
+    }
 
     // No base to read: the strict reading above, so the in-flight block is refused.
     expect(reservationFaults(inTree, [adr], null).join(" | "), "an unreadable origin/main exempted a block").toContain(
