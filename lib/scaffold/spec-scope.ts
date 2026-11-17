@@ -119,7 +119,10 @@ export function bankWithNewDeferrals(
  * each one, and name every file written. A re-scaffold over specs that all
  * declare a scope writes nothing and reports nothing.
  */
-export function deferUndeclaredSpecs(root: string, actions: string[]): void {
+/** The writer the step writes through: `writeSpec`, or a stand-in in a test. */
+export type ScopeWriter = (path: string, content: string) => { written: boolean; refusal?: string | null };
+
+export function deferUndeclaredSpecs(root: string, actions: string[], writer?: ScopeWriter): void {
   if (!existsSync(join(root, "specs"))) return;
   const plan = planDeferredScopes(root);
   if ("refusal" in plan) {
@@ -137,12 +140,26 @@ export function deferUndeclaredSpecs(root: string, actions: string[]): void {
     actions.push(`REFUSED: spec board scopes (${banked.why}) — nothing was written`);
     return;
   }
+  // Spelled `writeSpec(bankPath, …)` so write accountability (#624) resolves
+  // the bank write to the bank, as create-sc's does.
+  const write: ScopeWriter = writer ?? ((p, c) => (p === bankPath ? writeSpec(bankPath, c) : writeSpec(p, c)));
 
   // All or nothing: a spec written without its bank row reddens SC-2734, so a
   // failed write puts back every spec already written.
   const written: ScopeWrite[] = [];
   const undo = (why: string) => {
-    const stuck = written.filter(w => !writeSpec(join(root, w.path), w.before).written).map(w => w.path);
+    // A restore can fail for the same reason the write did (a full disk, a
+    // read-only tree). It is caught and counted, never thrown, so the run ends
+    // in a refusal naming every spec left deferred without a bank row
+    // (review of #2335).
+    const putBack = (w: ScopeWrite) => {
+      try {
+        return write(join(root, w.path), w.before).written;
+      } catch {
+        return false;
+      }
+    };
+    const stuck = written.filter(w => !putBack(w)).map(w => w.path);
     actions.push(
       stuck.length === 0
         ? `REFUSED: spec board scopes (${why}) — nothing was written`
@@ -155,11 +172,11 @@ export function deferUndeclaredSpecs(root: string, actions: string[]): void {
   try {
     mkdirSync(dirname(bankPath), { recursive: true });
     for (const w of plan.writes) {
-      const r = writeSpec(join(root, w.path), w.after);
+      const r = write(join(root, w.path), w.after);
       if (!r.written) return undo(`${w.path} was not written: ${r.refusal ?? "no reason given"}`);
       written.push(w);
     }
-    const bankWrite = writeSpec(bankPath, banked.text);
+    const bankWrite = write(bankPath, banked.text);
     if (!bankWrite.written) return undo(`the deferral bank was not written: ${bankWrite.refusal ?? "no reason given"}`);
   } catch (e) {
     return undo(`a write threw: ${(e as Error).message}`);

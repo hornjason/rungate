@@ -137,6 +137,28 @@ describe("#2307: every spec declares a board scope after one scaffold", () => {
     }
   });
 
+  test("a write that keeps failing, restores included, ends in a refusal naming the stuck spec, never a throw", () => {
+    const root = tree();
+    try {
+      const actions: string[] = [];
+      let calls = 0;
+      // The first spec lands; every later write throws, the restore among them.
+      const flaky = (path: string, content: string) => {
+        calls++;
+        if (calls > 1) throw new Error("ENOSPC: no space left on device");
+        writeFileSync(path, content);
+        return { written: true };
+      };
+      expect(() => deferUndeclaredSpecs(root, actions, flaky)).not.toThrow();
+      const refusal = actions.find(a => a.startsWith("REFUSED: spec board scopes (a write threw: ENOSPC"));
+      expect(refusal, actions.join("\n")).toBeDefined();
+      expect(refusal).toContain("specs/UNDECLARED-SPEC.md could not be put back");
+      expect(actions.some(a => a.startsWith("UPDATED:")), "a refused run reported a write").toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("withDeferredScope keeps the file's line endings and refuses a file with no frontmatter", () => {
     expect(withDeferredScope("---\r\ndoc-type: spec\r\n---\r\nbody\r\n")).toBe(`---\r\ndoc-type: spec\r\n${DEFERRED_LINE}\r\n---\r\nbody\r\n`);
     expect(withDeferredScope("# no frontmatter\n")).toBeNull();

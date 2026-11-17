@@ -450,7 +450,8 @@ describe("scaffold-project: spec frontmatter injection", () => {
   test("does not modify spec files that already have complete frontmatter", () => {
     tmpDir = createTempDir();
     mkdirSync(join(tmpDir, "specs"), { recursive: true });
-    const existing = "---\ndoc-type: spec\ntestable: true\ncreated: 2026-01-01\ngoverns: test\n---\n# Already Good";
+    // Complete includes a board scope since #2307: scaffold writes one into a spec that declares none.
+    const existing = "---\ndoc-type: spec\ntestable: true\ncreated: 2026-01-01\ngoverns: test\nboard: { scope: deferred }\n---\n# Already Good";
     writeFileSync(join(tmpDir, "specs", "good-spec.md"), existing);
     runScaffold(tmpDir, { fix: true });
 
