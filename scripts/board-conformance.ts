@@ -267,6 +267,12 @@ export interface DeclaredWork {
   outside?: string;
   /** A criterion placed under a value the engine does not know — `declared-work` goes UNMEASURED (SC-2778). */
   unknownPlacement?: string;
+  /**
+   * The ADR whose acceptance this change introduces and whose Decomposition
+   * row names this criterion (#2323). Its issue is filed when that ADR merges,
+   * so until then it is planned, named apart, and never unaccounted.
+   */
+  planned?: string;
 }
 
 /**
@@ -283,7 +289,9 @@ export function declaredWorkUnaccounted(b: BoardSnapshot): DeclaredWork[] {
   const named = new Set((b.repoIssues ?? []).flatMap(i => i.names));
   // SC-2778: a criterion the spec parks outside every phase is declared, not
   // owed — asking for its issue asks for work the spec says cannot start.
-  return (b.declaredWork ?? []).filter(w => w.outside === undefined).filter(w =>
+  // #2323: a criterion an unmerged ADR plans has no issue YET, because the
+  // merge is what files it — owed, but not by anybody who could have filed it.
+  return (b.declaredWork ?? []).filter(w => w.outside === undefined && w.planned === undefined).filter(w =>
     w.kind === "criterion" ? !named.has(w.id) : !(typeof w.issue === "number" && open.has(w.issue)),
   );
 }
@@ -468,6 +476,12 @@ export interface Reading {
    * built elsewhere (a test, a formatter caller) need not invent an empty list.
    */
   declared?: string[];
+  /**
+   * Rows left out of BOTH sides because an ADR this change accepts plans them,
+   * and its merge files their issues (#2323). Named apart like {@link declared},
+   * under their own heading so a planned criterion never reads as parked.
+   */
+  planned?: string[];
 }
 
 interface ReadingSpec {
@@ -515,6 +529,8 @@ interface ReadingSpec {
   offenders?: (board: BoardSnapshot) => string[];
   /** The rows declared outside every phase, named — see {@link Reading.declared}. */
   declared?: (board: BoardSnapshot) => string[];
+  /** The rows an unmerged ADR plans, named — see {@link Reading.planned}. */
+  planned?: (board: BoardSnapshot) => string[];
 }
 
 /** The issue numbers actually on the board, for resolving a reference. */
@@ -891,11 +907,13 @@ export const READINGS: readonly ReadingSpec[] = [
             unknown.map(w => `${w.id} (${w.source}) is placed ${JSON.stringify(w.unknownPlacement)}`).join("; ");
     },
     measure: b => {
-      const total = b.declaredWork!.filter(w => w.outside === undefined).length;
+      const total = b.declaredWork!.filter(w => w.outside === undefined && w.planned === undefined).length;
       return { measured: total - declaredWorkUnaccounted(b).length, target: total };
     },
     offenders: b => declaredWorkUnaccounted(b).map(w => `${w.id} (${w.source}) names no open issue`),
     declared: b => b.declaredWork!.filter(w => w.outside !== undefined).map(w => `${w.id} (${w.source}) — ${w.outside}`),
+    planned: b =>
+      b.declaredWork!.filter(w => w.outside === undefined && w.planned !== undefined).map(w => `${w.id} (${w.source}) — ${w.planned}`),
   },
 ];
 
@@ -921,16 +939,17 @@ export function takeReading(spec: ReadingSpec, board: BoardSnapshot | null): Rea
     // board to hand it. `main` can no longer reach this arm at all (#1718:
     // every source either produces a board or returns a reason), so the one
     // way here is an API caller passing null, and that is what it now says.
-    return { ...base, status: "unmeasured", measured: 0, target: 0, why: "no board snapshot was passed to this reading, so nothing was measured — that is a caller with no board, not a board with nothing on it", offenders: [], declared: [] };
+    return { ...base, status: "unmeasured", measured: 0, target: 0, why: "no board snapshot was passed to this reading, so nothing was measured — that is a caller with no board, not a board with nothing on it", offenders: [], declared: [], planned: [] };
   }
   const why = spec.unreadable?.(board) ?? null;
-  if (why !== null) return { ...base, status: "unmeasured", measured: 0, target: 0, why, offenders: [], declared: [] };
+  if (why !== null) return { ...base, status: "unmeasured", measured: 0, target: 0, why, offenders: [], declared: [], planned: [] };
   const { measured, target } = spec.measure(board);
   const declared = spec.declared?.(board) ?? [];
+  const planned = spec.planned?.(board) ?? [];
   if (target === 0) {
-    return { ...base, status: "unmeasured", measured, target, why: "the board carries nothing for this reading to count, so 0 of 0 is not a pass", offenders: [], declared };
+    return { ...base, status: "unmeasured", measured, target, why: "the board carries nothing for this reading to count, so 0 of 0 is not a pass", offenders: [], declared, planned };
   }
-  if (measured >= target) return { ...base, status: "met", measured, target, why: `${measured} of ${target}`, offenders: [], declared };
+  if (measured >= target) return { ...base, status: "met", measured, target, why: `${measured} of ${target}`, offenders: [], declared, planned };
   // Named only here. A met reading never pays for the list, and an
   // UNMEASURED one must not print rows — it did not read the population it
   // would be naming them out of.
@@ -942,6 +961,7 @@ export function takeReading(spec: ReadingSpec, board: BoardSnapshot | null): Rea
     why: `${measured} of ${target} — ${target - measured} short`,
     offenders: spec.offenders?.(board) ?? [],
     declared,
+    planned,
   };
 }
 
@@ -968,7 +988,10 @@ export function formatReading(r: Reading): string {
   // denominator silently reads the same as one nobody wrote down.
   const named = r.declared ?? [];
   const declared = named.length === 0 ? "" : `\n             declared outside phases (${named.length}): ${named.join(", ")}`;
-  const head = `${mark} ${r.name.padEnd(20)} ${r.why}\n             ${r.what}  [${r.item}]${declared}`;
+  // #2323: work an unmerged ADR plans, whose issues its merge files.
+  const plans = r.planned ?? [];
+  const planned = plans.length === 0 ? "" : `\n             planned by an ADR this change accepts (${plans.length}): ${plans.join(", ")}`;
+  const head = `${mark} ${r.name.padEnd(20)} ${r.why}\n             ${r.what}  [${r.item}]${declared}${planned}`;
   if (r.offenders.length === 0) return head;
   const shown = r.offenders.slice(0, OFFENDERS_SHOWN).map(o => `\n               ${o}`).join("");
   const rest = r.offenders.length > OFFENDERS_SHOWN
@@ -1368,7 +1391,15 @@ function normaliseDeclaredWork(raw: unknown): DeclaredWork | null {
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== "string" || r.id === "" || typeof r.source !== "string") return null;
-  if (r.kind === "criterion") return { kind: "criterion", id: r.id, source: r.source, ...placementAnnotation(r) };
+  if (r.kind === "criterion") {
+    return {
+      kind: "criterion",
+      id: r.id,
+      source: r.source,
+      ...placementAnnotation(r),
+      ...(typeof r.planned === "string" && r.planned !== "" ? { planned: r.planned } : {}),
+    };
+  }
   if (r.kind !== "stage-item") return null;
   if (r.issue === null || r.issue === undefined) return { kind: "stage-item", id: r.id, source: r.source, issue: null };
   return typeof r.issue === "number" && Number.isInteger(r.issue)
