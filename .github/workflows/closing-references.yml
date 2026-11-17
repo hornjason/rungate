@@ -1,4 +1,4 @@
-# generated-sha: b78cfa13b30f8257
+# generated-sha: 356e6507a609a187
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 #
 # A closing keyword GitHub cannot see, and a pull request that closes no issue
@@ -74,4 +74,4 @@ jobs:
           gh api graphql -f query="$QUERY" \
             -f owner="${GITHUB_REPOSITORY%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$number" \
             --jq '.data.repository.pullRequest | {number, body, files: .files.nodes, closingIssuesReferences: .closingIssuesReferences.nodes, closingIssuesTotal: .closingIssuesReferences.totalCount, commits: [.commits.nodes[].commit | {sha: .oid, message}], commitsTotal: .commits.totalCount}' \
-            | bunx rungate@0.8.25 audit-closing-references --repo "$GITHUB_REPOSITORY"
+            | bunx rungate@0.8.26 audit-closing-references --repo "$GITHUB_REPOSITORY"
