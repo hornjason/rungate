@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-17
 updated: 2026-11-17
 ---
@@ -9,9 +9,10 @@ updated: 2026-11-17
 
 ## Status
 
-**Proposed, 2026-11-17.** Jason asked for this on 2026-11-17, after the Ready
+**Accepted, 2026-11-17.** Jason asked for this on 2026-11-17, after the Ready
 lane showed #1722 as startable while the work it depends on was still open.
-Open: Decisions 1 to 4, and the SC-2779 rewording.
+He reviewed the dry run (`docs/adr/ADR-019-flow.html`) and agreed to Decisions
+1 to 4 and the SC-2779 rewording the same day.
 
 ## Context
 
@@ -56,7 +57,7 @@ next push to `specs/`, and nobody touches an issue.
 
 ## Decisions
 
-1. **SC-2625 moves to a new Phase 10 — proposed by the DA.** The placement
+1. **SC-2625 moves to a new Phase 10 — proposed by the DA, agreed by Jason 2026-11-17.** The placement
    table changes by one row:
 
    ```diff
@@ -76,7 +77,7 @@ next push to `specs/`, and nobody touches an issue.
    engine (was: Engine Phase 9 — the payload ships, #20)` and `CREATE Engine
    Phase 10 — the payload ships`; 2 milestone changes, nothing else.
 2. **The table edit lands in #2305's pull request, not this one — proposed by
-   the DA.** #2305 builds `specs-placed.yml`, the run that applies a
+   the DA, agreed by Jason 2026-11-17.** #2305 builds `specs-placed.yml`, the run that applies a
    placement change on a push to `specs/`. Landing the edit in that pull
    request means the merge that creates the run also triggers it. One
    automatic run then renames the milestone, creates Phase 10, moves #1722
@@ -89,7 +90,7 @@ next push to `specs/`, and nobody touches an issue.
    #2305's review should check that its run places issues (#2304's rule)
    *before* it runs `plan-deps`, so the links follow the new milestones in
    the same run.
-3. **ADR-018 Decision 4 is narrowed — proposed by the DA.** It was "an issue
+3. **ADR-018 Decision 4 is narrowed — proposed by the DA, agreed by Jason 2026-11-17.** It was "an issue
    that already has a milestone is never moved". It becomes: an issue whose
    named criteria all sit in ONE phase of ONE family moves to that phase's
    milestone, even if it already has a different milestone of that family.
@@ -101,14 +102,14 @@ next push to `specs/`, and nobody touches an issue.
    under the old rule. This lands in SC-2779's issue (#2304). That issue is not
    built yet, and its files (`lib/issue-repair.ts`, `scripts/plan-issues.ts`,
    `test/plan-issues.test.ts`) do not change.
-4. **Two issues move on that first run — for Jason to confirm.**
+4. **Two issues move on that first run — agreed by Jason 2026-11-17.**
    - #1722 moves Phase 9 → Phase 10. That is the point of this ADR.
    - #1764 moves Convergence Phase 3 → Phase 2, because it names only CRC-B4.
      If #1764 belongs in Phase 3 on purpose, the answer is to place what it
      serves in Phase 3, or have it name a Phase 3 criterion. A milestone that
      disagrees with the spec is the drift this ADR removes.
 
-## SC-2779, reworded — for Jason to approve
+## SC-2779, reworded — approved by Jason 2026-11-17
 
 This is ADR-018 Decision 8's pattern. The rewording lands in #2304's pull
 request, with the code that makes it true, so the criterion never claims what is
