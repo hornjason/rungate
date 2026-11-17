@@ -806,6 +806,63 @@ export function placementCount(specText: string): { deferred: boolean; criteria:
 }
 
 /**
+ * The deferral bank after a writer that is not a promotion appends to a spec.
+ *
+ * `create-sc` is the other writer of criteria. It appended to a deferred spec
+ * and left `.claude/spec-deferral-ratchet.json` at the old count, so the next
+ * pull request's SC-2734 and stage item E1 went red until someone edited the
+ * bank by hand. The rule is `bankWithPromotion`'s: the bank moves only from
+ * the count the spec stated before the append. `text: null` means there is
+ * nothing to write, because the spec is not deferred or its count did not
+ * change. A deferred spec with no readable bank refuses, never passes.
+ */
+export function bankAfterAppend(
+  bankText: string | null,
+  specPath: string,
+  before: string,
+  after: string,
+): { ok: true; text: string | null } | { ok: false; refusal: PromotionRefusal; why: string } {
+  const was = placementCount(before);
+  const now = placementCount(after);
+  if (!was.deferred || now.criteria === was.criteria) return { ok: true, text: null };
+  if (bankText === null) {
+    return { ok: false, refusal: "BANK_DRIFT", why: `${specPath} is deferred and the deferral bank could not be read` };
+  }
+  return bankWithPromotion(bankText, specPath, was.criteria, now.criteria);
+}
+
+/** The writer `writeSpecWithBank` writes through: `writeSpec`, or a stand-in in a test. */
+export type SpecWriter = (path: string, content: string) => { written: boolean; refusal?: string | null };
+
+/**
+ * Write the spec and then the bank, both or neither (review of #2298).
+ *
+ * A bank write that fails after the spec write landed would leave the bank one
+ * behind, and `create-sc` cannot repair that on a retry the way
+ * `bankForRetry` does for a promotion: it mints a fresh id every run, so a
+ * bank one behind looks exactly like somebody else's unbanked criterion. So
+ * the spec is put back. `restored: false` is the one state left that needs a
+ * person, and it says so.
+ */
+export function writeSpecWithBank(
+  write: SpecWriter,
+  spec: { path: string; before: string; after: string },
+  bank: { path: string; text: string | null },
+): { ok: true } | { ok: false; why: string; restored: boolean } {
+  const specWrite = write(spec.path, spec.after);
+  if (!specWrite.written) return { ok: false, why: `the spec was not written (${specWrite.refusal ?? "no reason given"})`, restored: true };
+  if (bank.text === null) return { ok: true };
+  const bankWrite = write(bank.path, bank.text);
+  if (bankWrite.written) return { ok: true };
+  const undo = write(spec.path, spec.before);
+  return {
+    ok: false,
+    why: `the deferral bank could not be written (${bankWrite.refusal ?? "no reason given"})`,
+    restored: undo.written,
+  };
+}
+
+/**
  * ## Declining — the router's other outcome
  *
  * `NAMES_NONE` has been readable since SC-2609 and writable by nothing.

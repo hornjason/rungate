@@ -48,6 +48,7 @@ import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 
 import { remedyMessage } from "../lib/check-remedy";
+import { buildWorkflowLaunch } from "../scripts/build-workflow-launch";
 import { agentDerivedNames, bareAgentInterpolations } from "../lib/workflow-taint";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -289,8 +290,18 @@ const CLASSIFIED: Record<string, string> = {
     "prose into a prompt: the council's final positions, quoted into the synthesis",
 };
 
+/**
+ * A generated launch file (#2287, ADR-017): built from its source with only
+ * comments removed, and proved token-for-token identical to it by
+ * `test/workflow-launch-build.test.ts`. Classifying the source classifies it;
+ * scanning it as well would demand every classification twice under a second
+ * file name and double every site count. Recognised by the notice the build
+ * writes, never by name alone, so a hand-written file cannot slip out.
+ */
+const GENERATED_LAUNCH = "// GENERATED from workflows/";
+const isGeneratedLaunch = (f: string) => readFileSync(join(WORKFLOW_DIR, f), "utf-8").includes(`\n${GENERATED_LAUNCH}`);
 const WORKFLOW_FILES = readdirSync(WORKFLOW_DIR)
-  .filter(f => f.endsWith(".js"))
+  .filter(f => f.endsWith(".js") && !isGeneratedLaunch(f))
   .sort();
 const sourceOf = (f: string) => readFileSync(join(WORKFLOW_DIR, f), "utf-8");
 
@@ -382,6 +393,23 @@ function genericNames(): Set<string> {
       .map(([name]) => name),
   );
 }
+
+describe("#2287: only generated launch files leave the census, and each names its source", () => {
+  test("every skipped file is a build output whose source is in the census", () => {
+    const skipped = readdirSync(WORKFLOW_DIR).filter(f => f.endsWith(".js") && isGeneratedLaunch(f));
+    expect(skipped.length, "no generated launch file found — this case would assert nothing").toBeGreaterThan(0);
+    for (const f of skipped) {
+      const source = /GENERATED from workflows\/([\w.-]+\.js)/.exec(sourceOf(f))?.[1];
+      expect([f, source && WORKFLOW_FILES.includes(source)]).toEqual([f, true]);
+      // The notice alone is a claim. A hand-written file carrying it would
+      // leave the census unscanned, so a skip holds only for the exact bytes
+      // the build produces from the source it names (review, #2291).
+      const rebuilt = buildWorkflowLaunch(sourceOf(source!)).text;
+      expect(sourceOf(f) === rebuilt, `${f} carries the generated notice but is not the build of ${source}`).toBe(true);
+    }
+    expect(WORKFLOW_FILES).toContain("ship.js");
+  });
+});
 
 describe("#1103: every agent-derived interpolation in a workflow prompt is classified", () => {
   test("the derivation still finds agent-derived bindings at all", () => {

@@ -152,6 +152,8 @@ async function runBlock(block: string, scope: Record<string, unknown> = {}): Pro
     // is about what the decision block decides.
     preserveSeenWorktrees: async () => ({ preserved: [], detail: '' }),
     restorePrimaryCheckout: async () => ({ reading: 'UNCHANGED', restoreOutcome: 'ALREADY_ON_START', lines: [] }),
+    // #2234: the funnels take the advisory intake reading on the way out.
+    gateRefusalIntake: async () => ({ reading: 'UNMEASURED', line: 'stubbed' }),
     ...merged,
   };
   const sandbox = new Proxy(full, {

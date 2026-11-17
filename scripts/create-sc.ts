@@ -26,7 +26,8 @@ import { describeReading } from "../lib/sc-id-cross-tree";
 import { currentScOwner } from "../lib/sc-reservations";
 import { skipLine } from "../lib/derived-spec";
 import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
-import { join } from "path";
+import { join, relative, resolve, sep } from "path";
+import { bankAfterAppend, writeSpecWithBank } from "../lib/finding-promotion";
 
 /** Same resolution sync-sc-status uses, so both halves read one tree. */
 const ROOT = join(import.meta.dir, "..");
@@ -127,8 +128,39 @@ try {
 
     // Append SC line to the end of the file
     const newContent = content.trimEnd() + "\n" + scLine + "\n";
-    writeSpec(specPath, newContent);
+    // A deferred spec's criteria count is banked, and SC-2734 refuses a bank
+    // that disagrees with it. Decided BEFORE the spec is written, so a refusal
+    // writes neither file. The path is a literal so the spec-write sweep
+    // (#1584) can see this write targets the bank and not a spec.
+    const bankPath = join(ROOT, ".claude/spec-deferral-ratchet.json");
+    const specKey = relative(ROOT, resolve(specPath)).split(sep).join("/");
+    const banked = bankAfterAppend(existsSync(bankPath) ? readFileSync(bankPath, "utf-8") : null, specKey, content, newContent);
+    if (!banked.ok) {
+      console.error(`ERROR: ${banked.refusal}: ${banked.why}`);
+      process.exit(1);
+    }
+    // Both through `writeSpec`, as finding-promotion does: the one write path
+    // the spec-write sweep (#1552) allows for a path matching /spec/i. Both
+    // or neither: a failed bank write puts the spec back.
+    // The bank write is spelled `writeSpec(bankPath, …)` so write
+    // accountability (#624) resolves it to the bank, as it does
+    // finding-promotion's, rather than reading an opaque `writeSpec(p)`.
+    const wrote = writeSpecWithBank(
+      (p, c) => (p === bankPath ? writeSpec(bankPath, c) : writeSpec(p, c)),
+      { path: specPath, before: content, after: newContent },
+      { path: bankPath, text: banked.text },
+    );
+    if (!wrote.ok) {
+      console.error(
+        wrote.restored
+          ? `ERROR: ${wrote.why}. Nothing was changed: ${specPath} is as it was.`
+          : `ERROR: ${wrote.why}, and ${specPath} could not be put back: it states SC-${scNumber} and the bank does not. ` +
+              `Remove that line, or move ${specKey}'s count in .claude/spec-deferral-ratchet.json by one.`,
+      );
+      process.exit(1);
+    }
     console.log(`Appended to ${specPath}: ${scLine}`);
+    if (banked.text !== null) console.log(`  deferral bank: ${specKey} moved with it (.claude/spec-deferral-ratchet.json)`);
     // What the number is a floor over, stated rather than implied. A clone on
     // another machine is outside anything this process can reach, and an
     // allocator that printed only the number would be claiming a guarantee it
