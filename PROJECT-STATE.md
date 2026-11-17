@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 97 (2026-11-17)** — Specs now opt into the engine from their own frontmatter, and ship launches from a file built under the Workflow tool's cap. Jason agreed ADR-019 so the acceptance test is ordered by its own phase instead of a hand link, and the next PR in flight makes the goal command, board-conformance, exit 0.
+**Session 97 (2026-11-17)** — Specs now opt into the engine from their own frontmatter, and ship launches from a file built under the Workflow tool's cap. Jason agreed ADR-019 so the acceptance test is ordered by its own phase instead of a hand link, and the goal command, board-conformance, now exits 0 on main.
 
-Suite: 16 PRs merged (#2283 to #2308); release 0.8.25 published.
+Suite: 18 PRs merged (#2283 to #2313); release 0.8.25 published.
 Issues opened: #2287, #2288, #2289, #2290, #2292, #2296, #2297, #2300, #2301, #2302, #2303, #2304, #2305, #2306, #2307, #2309
-Issues closed: #1194, #1367, #1553, #1571, #2213, #2234, #2238, #2261, #2274, #2279, #2287, #2288, #2292, #2296, #2297, #2301
+Issues closed: #1194, #1367, #1553, #1571, #2213, #2234, #2238, #2261, #2274, #2279, #2287, #2288, #2292, #2296, #2297, #2301, #2302, #2303
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
