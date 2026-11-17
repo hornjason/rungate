@@ -33,6 +33,7 @@ import {
   REFUSAL_EXIT,
   main as boardSnapshotMain,
   readDeclaredWork,
+  plannedByUnmergedAdr,
   type BoardSnapshotGitHub,
   type GitSpawn,
   type ProducedSnapshot,
@@ -2427,3 +2428,106 @@ describe("SC-2778: one predicate annotates both readings' rows", () => {
   });
 });
 
+
+/**
+ * #2323 / SC-2752: `plannedByUnmergedAdr`, measured against a real git
+ * repository with an `origin/main`, so `newlyAccepted` reads the ADR at both
+ * ends exactly as the producer will.
+ */
+describe("#2323 / SC-2752: a criterion an ADR this change accepts plans is planned", () => {
+  const adr = (status: string) =>
+    [
+      "---",
+      "doc-type: adr",
+      `status: ${status}`,
+      "---",
+      "",
+      "# ADR-099 — a plan",
+      "",
+      "| Criterion | Outcome | Files | Milestone | Blocked by |",
+      "|---|---|---|---|---|",
+      "| SC-9601 | A planned criterion gets its issue on merge | lib/a.ts | — | — |",
+      "",
+    ].join("\n");
+  const PATH = "docs/adr/ADR-099-a-plan.md";
+  /** A repository whose origin/main holds `atMain` (or no ADR), with `inTree` in the working tree. */
+  const repo = (atMain: string | null, inTree: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "planned-adr-"));
+    // late-env-ok: git reads no GITHUB_REPOSITORY, the only variable this file sets late
+    const g = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+    g("init", "-q", "-b", "main");
+    g("config", "user.email", "t@t");
+    g("config", "user.name", "t");
+    mkdirSync(join(dir, "docs", "adr"), { recursive: true });
+    writeFileSync(join(dir, "README.md"), "x\n");
+    if (atMain !== null) writeFileSync(join(dir, PATH), atMain);
+    g("add", "-A");
+    g("commit", "-q", "-m", "main");
+    g("update-ref", "refs/remotes/origin/main", "HEAD");
+    writeFileSync(join(dir, PATH), inTree);
+    return dir;
+  };
+  const planned = (dir: string) => [...plannedByUnmergedAdr(dir, LIVE_GIT(dir)).entries()];
+
+  test("#2323: an ADR accepted in this tree and absent at origin/main plans its rows' criteria", () => {
+    const dir = repo(null, adr("accepted"));
+    try {
+      expect(planned(dir)).toStrictEqual([["SC-9601", PATH]]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2323: proposed at origin/main and accepted in this tree is this change's acceptance too", () => {
+    const dir = repo(adr("proposed"), adr("accepted"));
+    try {
+      expect(planned(dir)).toStrictEqual([["SC-9601", PATH]]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2323: already accepted at origin/main is not this change's plan — a missing issue there is a real gap", () => {
+    const dir = repo(adr("accepted"), adr("accepted"));
+    try {
+      expect(planned(dir)).toStrictEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2323: still proposed in this tree plans nothing — nothing would be filed on merge", () => {
+    const dir = repo(null, adr("proposed"));
+    try {
+      expect(planned(dir)).toStrictEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2323: no origin/main to read exempts nothing — the fail-closed direction", () => {
+    const dir = repo(null, adr("accepted"));
+    try {
+      // late-env-ok: git reads no GITHUB_REPOSITORY, the only variable this file sets late
+      spawnSync("git", ["-C", dir, "update-ref", "-d", "refs/remotes/origin/main"]);
+      expect(planned(dir)).toStrictEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2323: readDeclaredWork marks only the planned criterion", () => {
+    const dir = mkdtempSync(join(tmpdir(), "planned-declared-"));
+    try {
+      mkdirSync(join(dir, "specs"));
+      writeFileSync(join(dir, "specs/E.md"), "- [ ] SC-9601: planned\n- [ ] SC-9602: not planned\n");
+      const rows = [{ path: "specs/E.md", state: "UNPLANNED" as const, board: { scope: "active", settings: { prefix: "E" }, problems: [] } }];
+      expect(readDeclaredWork(dir, rows, new Map([["SC-9601", PATH]])).declaredWork).toStrictEqual([
+        { kind: "criterion", id: "SC-9601", source: "specs/E.md", planned: PATH },
+        { kind: "criterion", id: "SC-9602", source: "specs/E.md" },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -33,7 +33,7 @@
  * true by taking it.
  */
 import { spawnSync } from "child_process";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { isAbsolute, join, relative } from "path";
 import { parseArgs } from "util";
 import { describeSpecSource, resolveSpecSource, type GitRunner } from "../lib/spec-source";
@@ -69,6 +69,7 @@ import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from ".
 import { dependencyPlan } from "../lib/spec-deps";
 import type { DeclaredWork, FamilyIssue, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
 import { parseCriteria } from "../lib/spec-evidence";
+import { hasDecompositionTable, newlyAccepted, parseDecompositionPlan } from "../lib/issue-decomposition";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -274,6 +275,8 @@ export interface ProducedSnapshot {
 export function readDeclaredWork(
   root: string,
   specs: readonly { path: string; state: SpecPlacementRow["state"]; deferred?: boolean; board?: { scope: string } }[],
+  /** Criteria an ADR this change accepts plans, from {@link plannedByUnmergedAdr} — #2323. */
+  planned: ReadonlyMap<string, string> = new Map(),
 ): { declaredWork?: DeclaredWork[] } {
   const work: DeclaredWork[] = [];
   for (const s of specs) {
@@ -292,7 +295,10 @@ export function readDeclaredWork(
     // the two readings agree on every criterion the spec parks.
     const placed = placementsById(content);
     for (const c of parseCriteria(content)) {
-      if (!c.ticked) work.push({ kind: "criterion", id: c.id, source: s.path, ...outsidePhases(placed.get(c.id)) });
+      if (!c.ticked) {
+        const adr = planned.get(c.id);
+        work.push({ kind: "criterion", id: c.id, source: s.path, ...outsidePhases(placed.get(c.id)), ...(adr === undefined ? {} : { planned: adr }) });
+      }
     }
   }
   const statePath = join(root, "project-state.json");
@@ -327,6 +333,58 @@ export function readDeclaredWork(
     }
   }
   return { declaredWork: work };
+}
+
+/** The ref an ADR's acceptance is read against: the main every reading here is about. */
+export const PLANNED_ADR_REF = "origin/main";
+
+/**
+ * Criteria planned by an ADR whose acceptance this tree introduces — #2323.
+ *
+ * An ADR that adds criteria to an opted-in spec states them before their
+ * issues exist, because merging the ADR is what files them (AGENTS.md rule 9
+ * step 3, `adr-accepted.yml`). On its own pull request `declared-work` would
+ * read each as "names no open issue", and the live stage ladder would refuse
+ * the merge that is the only way to file them.
+ *
+ * So a criterion a Decomposition row names is planned when that ADR is
+ * accepted in this tree and was not accepted at {@link PLANNED_ADR_REF}:
+ * `newlyAccepted`, the same decider `plan-issues --accepted-since` uses.
+ * An ADR already accepted on main is not this change's plan, and its missing
+ * issue is a real gap: `adr-accepted.yml` did not place it.
+ *
+ * Fails closed: a ref that does not resolve, a git that does not run, or an
+ * answer this cannot read exempts NOTHING, so every criterion reads as missing.
+ * Returns criterion id → the ADR's repo-relative path.
+ */
+export function plannedByUnmergedAdr(root: string, git: GitRunner): Map<string, string> {
+  const dir = join(root, "docs", "adr");
+  if (!existsSync(dir)) return new Map();
+  const planned = new Map<string, string>();
+  for (const name of readdirSync(dir).filter(n => /^ADR-\d+.*\.md$/.test(n)).sort()) {
+    const rel = `docs/adr/${name}`;
+    const text = readFileSync(join(dir, name), "utf-8");
+    if (!hasDecompositionTable(text)) continue;
+    const at = git(["cat-file", "-e", `${PLANNED_ADR_REF}:${rel}`]);
+    if (at.code === null) return new Map();
+    let before: string | null = null;
+    if (at.ok) {
+      const shown = git(["show", `${PLANNED_ADR_REF}:${rel}`]);
+      if (!shown.ok) return new Map();
+      before = shown.stdout;
+    } else if (!/does not exist|exists on disk, but not in/.test(at.stderr)) {
+      // THE ONE fail-closed decider for the ref. A ref that does not resolve
+      // says "invalid object name", which is not "the path is absent at the
+      // ref", so an unreadable origin/main exempts nothing. A separate
+      // rev-parse probe would be a second decider for the same question.
+      return new Map();
+    }
+    if (!newlyAccepted(before, text)) continue;
+    const plan = parseDecompositionPlan(text);
+    if (plan.reading !== "MEASURED") continue;
+    for (const row of plan.rows) if (!planned.has(row.criterion)) planned.set(row.criterion, rel);
+  }
+  return planned;
 }
 
 /** The path the deferral bank lives at, relative to the project root — SC-2734. */
@@ -969,7 +1027,10 @@ export async function main(
   // readings cannot disagree about which specs are in scope. A sweep that
   // could not enumerate `specs/` emits no rows, and `declared-work` is then
   // UNMEASURED rather than a stage-only count.
-  const declared = placements.specPlacements === undefined ? {} : readDeclaredWork(root, placements.specPlacements);
+  const declared =
+    placements.specPlacements === undefined
+      ? {}
+      : readDeclaredWork(root, placements.specPlacements, plannedByUnmergedAdr(root, git(root)));
 
   // #2223 / E4. Emitted only when the column was actually queried: no board,
   // a mismatched field, or a failed read all omit the key, and
