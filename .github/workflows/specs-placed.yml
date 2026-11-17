@@ -1,4 +1,4 @@
-# generated-sha: 0fcd29e5b7afd6be
+# generated-sha: 6449281ea4571509
 # Managed by rungate — do not edit. Opt a spec in with
 # board: { scope: active, prefix: <Name> } in its frontmatter and give it a
 # placement table; nothing here names a spec.
@@ -74,7 +74,7 @@ jobs:
       - id: families
         name: Which specs are on the board?
         run: |
-          bunx rungate@0.8.25 plan-issues --families > families.tsv
+          bunx rungate@0.8.26 plan-issues --families > families.tsv
           echo "Opted-in families:"
           cat families.tsv
           if [ -s families.tsv ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
@@ -89,7 +89,7 @@ jobs:
           while IFS=$'\t' read -r prefix spec <&3; do
             [ -n "$prefix" ] || continue
             echo "== $prefix ($spec)"
-            if ! bunx rungate@0.8.25 plan-spec "$spec" --repo "$GITHUB_REPOSITORY" --prefix "$prefix" --write; then
+            if ! bunx rungate@0.8.26 plan-spec "$spec" --repo "$GITHUB_REPOSITORY" --prefix "$prefix" --write; then
               refused="$refused [$prefix]"
             fi
           done 3< families.tsv
@@ -102,7 +102,7 @@ jobs:
         if: steps.families.outputs.any == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bunx rungate@0.8.25 plan-issues --place --repo "$GITHUB_REPOSITORY" --write
+        run: bunx rungate@0.8.26 plan-issues --place --repo "$GITHUB_REPOSITORY" --write
 
       # `!cancelled()`: each of these reads the whole tracker and writes only
       # what is missing, so it never depends on an earlier step succeeding
@@ -117,7 +117,7 @@ jobs:
           while IFS=$'\t' read -r prefix spec <&3; do
             [ -n "$prefix" ] || continue
             echo "== $prefix ($spec)"
-            if ! bunx rungate@0.8.25 plan-deps --repo "$GITHUB_REPOSITORY" --milestone-prefix "$prefix" --write; then
+            if ! bunx rungate@0.8.26 plan-deps --repo "$GITHUB_REPOSITORY" --milestone-prefix "$prefix" --write; then
               refused="$refused [$prefix]"
             fi
           done 3< families.tsv
@@ -130,7 +130,7 @@ jobs:
         if: ${{ !cancelled() && steps.families.outputs.any == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bunx rungate@0.8.25 board-mirror --queue-label --repo "$GITHUB_REPOSITORY" --write
+        run: bunx rungate@0.8.26 board-mirror --queue-label --repo "$GITHUB_REPOSITORY" --write
 
       - name: Criteria column on the board
         if: ${{ !cancelled() && steps.families.outputs.any == 'true' }}
@@ -142,4 +142,4 @@ jobs:
             echo "::error::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to write."
             exit 1
           fi
-          bunx rungate@0.8.25 board-mirror --project "$PROJECT_ID" --write
+          bunx rungate@0.8.26 board-mirror --project "$PROJECT_ID" --write
