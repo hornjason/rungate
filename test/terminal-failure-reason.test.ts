@@ -134,7 +134,7 @@ describe("#524: the terminal funnel always has a reason to give", () => {
 
     const fn = new Function(
       "preserveSeenWorktrees", "WORK_DIR", "terminalReason", "restorePrimaryCheckout",
-      "RESUME_REPLAYS_NOTE",
+      "RESUME_REPLAYS_NOTE", "gateRefusalIntake",
       `${SHIP.slice(start, close)}; return terminalFailure;`,
     )(
       async () => ({ preserved: [], detail: "" }),
@@ -150,6 +150,8 @@ describe("#524: the terminal funnel always has a reason to give", () => {
       // taken from ship.js rather than copied here — a copy would be a second
       // declaring position for a string #889 asserts has exactly one.
       noteValue(),
+      // #2234: the funnel takes the advisory intake reading on the way out.
+      async () => ({ reading: "UNMEASURED", line: "stubbed" }),
     ) as (s: string, e?: unknown) => Promise<Record<string, unknown>>;
 
     expect((await fn("COMMIT_FAILED")).reason).toContain(SENTINEL);

@@ -469,8 +469,8 @@ async function gateRefusalIntake(status) {
   let reply
   try {
     reply = await timedAgent(`
-This ship run is ending at ${String(status)}. Take the gate-refusals intake
-reading. Run exactly this one command, unchanged:
+This ship run is ending. Take the gate-refusals intake reading. Run exactly
+this one command, unchanged:
 
 bun --cwd ${shellQuote(HARNESS_ROOT)} bin/rungate.ts intake --project-root ${shellQuote(PROJECT_ROOT)} --source gate-refusals
 
@@ -484,7 +484,7 @@ did print in line. Run nothing else, and do not re-run it.
     } })
   } catch (e) {
     const failed = { reading: 'UNMEASURED', line: `the intake step did not run: ${e && e.message ? e.message : String(e)}` }
-    log(`Intake (gate-refusals): ${failed.reading} — ${failed.line}`)
+    log(`Intake (gate-refusals) at ${String(status)}: ${failed.reading} — ${failed.line}`)
     return failed
   }
   const line = reply && typeof reply.line === 'string' ? reply.line.trim() : ''
@@ -492,7 +492,7 @@ did print in line. Run nothing else, and do not re-run it.
   const result = m
     ? { reading: m[1], line }
     : { reading: 'UNMEASURED', line: line ? `no reading in the reply: ${line}` : 'the intake step reported nothing' }
-  log(`Intake (gate-refusals): ${result.line}`)
+  log(`Intake (gate-refusals) at ${String(status)}: ${result.line}`)
   return result
 }
 
