@@ -419,6 +419,11 @@ function phaseBlock(f: Fmt, p: PhaseLine, issues: Reading<PhaseIssue[]>, markdow
       out.push(f.sub(depth + 1, `${f.link(`#${i.number}`, i.url)} ${f.text(i.title)}${note ? ` — ${f.text(note)}` : ""}`));
     }
     if (mine.length > LIST_LIMIT) out.push(f.sub(depth + 1, `… and ${mine.length - LIST_LIMIT} more`));
+    // A milestone's open count includes pull requests, and the issue read
+    // returns issues only, so the difference is said rather than left as a
+    // phase that reads open with too little under it (review of #2334).
+    const prs = p.open - mine.length;
+    if (prs > 0) out.push(f.sub(depth + 1, `and ${prs} open pull request(s), which the milestone counts`));
   }
   return out;
 }

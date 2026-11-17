@@ -505,7 +505,7 @@ describe("#2330: any repository that uses rungate can read its own board", () =>
   const MILESTONES = [
     { title: "Zqci Phase 1 — first", open: 0, closed: 3, url: "m1" },
     { title: "Zqrefresh Phase 1 — gather", open: 2, closed: 1, url: "m2" },
-    { title: "Zqrefresh Phase 2 — show", open: 1, closed: 0, url: "m3" },
+    { title: "Zqrefresh Phase 2 — show", open: 2, closed: 0, url: "m3" },
     { title: "Zqold Phase 1 — retired", open: 0, closed: 4, url: "m4" },
   ];
   const PHASE_ISSUES = [
@@ -544,6 +544,9 @@ describe("#2330: any repository that uses rungate can read its own board", () =>
       expect(text).toContain("#32 (i32) draw the page — blocked by #31 and more");
       const md = renderMarkdown(v);
       expect(md).toContain("[#31](i31) join the rows — blocked by #30");
+      // Phase 2's milestone counts two open items and the issue read returns one: the other is a pull request.
+      expect(text).toContain("and 1 open pull request(s), which the milestone counts");
+      expect(text.split("open pull request(s)").length - 1, "only the phase with a gap says so").toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
