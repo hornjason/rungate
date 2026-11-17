@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-17
 updated: 2026-11-17
 ---
@@ -9,7 +9,9 @@ updated: 2026-11-17
 
 ## Status
 
-**Proposed, 2026-11-17.** Jason asked for this on 2026-11-17 and chose the
+**Accepted, 2026-11-17.** Jason accepted it on 2026-11-17, after confirming that a
+consumer issue is triaged when it is opened and the daily run only catches
+what an event missed. He asked for this on 2026-11-17 and chose the
 shape: triage by a tool, a sweep on a schedule, and a board reading that goes
 short when a consumer issue has no verdict. He also asked that the filing cap
 stop limiting work while nobody is swarming. Decisions 4 and 5 are open until
