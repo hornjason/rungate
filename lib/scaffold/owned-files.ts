@@ -153,8 +153,8 @@ export const OWNED_FILES: OwnedFile[] = [
     path: ".github/workflows/ai-review.yml",
     strategy: "job-preserving",
     servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
-    customize: "Set `ci.vertex` in `.claude/rungate/config.json` to authenticate on Vertex with Workload Identity Federation; add your own jobs alongside the generated `ai-review` job",
-    avoid: "Don't edit the generated `ai-review` job",
+    customize: "Set `ci.vertex` in `.claude/rungate/config.json` to authenticate on Vertex with Workload Identity Federation; add your own triggers or jobs alongside the generated `ai-review` job",
+    avoid: "Don't edit the generated `ai-review` job, or the trigger types under `on.pull_request` — they are the harness's and are rewritten on every scaffold (#2292)",
   },
   {
     // #1488. The `workflow_run: completed` half of the AI review: it runs
@@ -187,8 +187,8 @@ export const OWNED_FILES: OwnedFile[] = [
     path: ".github/workflows/closing-references.yml",
     strategy: "job-preserving",
     servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
-    customize: "Variable `RUNGATE_REQUIRE_CLOSING_REF=true` refuses rather than warns; add your own jobs alongside the generated `closing-references` job",
-    avoid: "Don't edit the generated `closing-references` job",
+    customize: "Variable `RUNGATE_REQUIRE_CLOSING_REF=true` refuses rather than warns; add your own triggers or jobs alongside the generated `closing-references` job",
+    avoid: "Don't edit the generated `closing-references` job, or the trigger types under `on.pull_request` — they are the harness's and are rewritten on every scaffold (#2292)",
   },
   {
     // #2047, ADR-014 row 4. Hand-written and caller-owned while it ran this

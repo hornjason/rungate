@@ -2908,6 +2908,16 @@ function revocationActions(label: string, revoked: readonly RevokedSubKey[]): st
     const topLevel = r.section.split(".")[0];
     const keep =
       `Name \`${topLevel}\` in \`ci.workflowOverrides\` to keep it, and re-scaffold.`;
+    // #2292: an authored path brought to the generator's value is not a
+    // withdrawal, and calling it one would tell the consumer something was
+    // taken away when something was written.
+    if (r.reason === "asserted") {
+      return (
+        `REWRITTEN: ${label} now declares \`${r.section}: ${r.key}\` as this version of the ` +
+        `generator writes it — the harness authors that path, so a stale or hand-set value ` +
+        `there is replaced on every scaffold. ${keep}`
+      );
+    }
     return r.reason === "authored"
       ? `REVOKED: ${label} no longer declares \`${r.section}: ${r.key}\` — the harness ` +
           `authors that path and this version of the generator does not emit it, so the ` +
@@ -4380,6 +4390,8 @@ ${setupBunEnv("        ")}
       : `permissions:\n  contents: read\n  # Mint the OIDC token Workload Identity Federation exchanges (#631).\n  id-token: write\n  # Count this pull request's previous AI Review runs — the round budget (#1168).\n  actions: read\n${ledgerPermission}`;
 
   const aiReviewYml = `# Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
+# The trigger types under on.pull_request are the harness's and are rewritten
+# on every scaffold; add your own triggers or jobs alongside (#2292).
 #
 ${buildOutcomesHeader(vertex)}#
 # This job is deliberately unconditional. A job skipped by a condition reports

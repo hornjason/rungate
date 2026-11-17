@@ -303,7 +303,7 @@ function revokedSubKeys(
  * `permissions.id-token` withdrawable in a workflow whose generator never
  * emits it under any config — a consumer's own grant removed by a feature
  * that was not reasoning about their file. That risk is handled structurally
- * here instead: `withdrawAuthoredPaths` withdraws a leaf only where the
+ * here instead: `applyAuthoredPaths` touches a leaf only where the
  * generated file still emits the PARENT sub-key, so a generator silent about
  * `pull_request` makes no claim on the consumer's copy of it. The emission
  * gate is the scope, and it is tighter than a filename would be because it
@@ -312,8 +312,39 @@ function revokedSubKeys(
  * Narrow on purpose. `on.push.branches` is deliberately absent: a `push`
  * filter asks which branches earn a run on their own, which is a different
  * question, and #1136 left it alone for that reason.
+ *
+ * ## Both directions (#2292)
+ *
+ * #1148 built the channel for a REMOVAL and nothing for a CHANGE. #1207 added
+ * `types:` to `on.pull_request` in the generated ai-review.yml so the
+ * `ai-review-override` label re-runs the check; a consumer scaffolded before
+ * it kept a bare `pull_request:` through every re-scaffold, reported
+ * `unchanged`, and the waiver could never fire there. So each path now names
+ * its claim (`AuthoredClaim`): an asserted leaf the generator emits is
+ * written at the generator's value, replacing the consumer's, and the
+ * replacement is recorded so the write can name it.
  */
-export const HARNESS_AUTHORED_PATHS: ReadonlySet<string> = new Set(["on.pull_request.branches"]);
+export const HARNESS_AUTHORED_PATHS: ReadonlyMap<string, AuthoredClaim> = new Map([
+  ["on.pull_request.branches", "withdrawn-when-absent"],
+  ["on.pull_request.types", "asserted-when-emitted"],
+]);
+
+/**
+ * What the harness claims about one authored path. One claim per path, and
+ * the two do not combine (#2292).
+ *
+ * - `withdrawn-when-absent` (#1148): the claim is that the leaf must NOT be
+ *   there. Where the generator emits the parent without it, the consumer's
+ *   copy goes. Where the generator emits it, the consumer's value stands —
+ *   a branch list is the local knob #839 keeps, and asserting it would be
+ *   that issue's data loss one level down.
+ * - `asserted-when-emitted` (#2292): the claim is the VALUE. Where the
+ *   generator emits the leaf, the consumer's copy is written at the
+ *   generator's value. Where it does not, the consumer's stands: ci.yml and
+ *   gates.yml emit a bare `pull_request:`, and a consumer who added activity
+ *   types to their own CI there has made no mistake the harness may undo.
+ */
+export type AuthoredClaim = "withdrawn-when-absent" | "asserted-when-emitted";
 
 /**
  * A sub-block split into the comments introducing it and the key line onward.
@@ -337,23 +368,29 @@ function splitBlockIntro(lines: string[]): [string[], string[]] {
 }
 
 /**
- * The consumer's section with every authored leaf the generator has stopped
- * emitting taken out, and the record of what went (#1148).
+ * The consumer's section with every authored path brought to what the
+ * generator says: an asserted leaf it emits written at its value (#2292),
+ * and a withdrawn leaf it has stopped emitting taken out (#1148). Returns the
+ * record of both.
  *
  * Reads both sides through the same `parseSubKeys` the rest of the merge uses
  * — applied twice, because the binding takes a key line followed by its body
  * and a sub-block is that shape once `splitBlockIntro` has taken the
  * introducing comments off it. One parser, so the thing removed and the thing
  * reported removed cannot be two different readings (#834).
+ *
+ * A leaf whose VALUE already matches is left as the consumer has it, comments
+ * included: the claim is on the value, and rewriting a comment block nobody
+ * needs changed is a diff with nothing in it.
  */
-function withdrawAuthoredPaths(
+function applyAuthoredPaths(
   section: string,
   before: Section,
   generated: Section,
 ): { section: Section; withdrawn: RevokedSubKey[] } {
   // The same scalar guard `mergeTopLevelSection` opens with: `on: [push]` has
-  // no sub-keys to withdraw and no way to express the removal if it did.
-  if (!/^[A-Za-z_][A-Za-z0-9_.\-]*:\s*(#.*)?$/.test(before.lines[0])) {
+  // no sub-keys to reach and no way to express the change if it did.
+  if (!SECTION_KEY_LINE.test(before.lines[0])) {
     return { section: before, withdrawn: [] };
   }
   const parsed = parseSubKeys(before.lines);
@@ -366,29 +403,52 @@ function withdrawAuthoredPaths(
     // no statement about the consumer's copy of it.
     if (gen === undefined) return block;
     const [intro, fromKey] = splitBlockIntro(block.lines);
+    const genFromKey = splitBlockIntro(gen.lines)[1];
+    // The same guard one level down: `pull_request: {}` carries its value on
+    // the key line, and a leaf put under it would not parse.
+    if (!SUB_KEY_LINE.test(fromKey[0] ?? "") || !SUB_KEY_LINE.test(genFromKey[0] ?? "")) return block;
     const consumerLeaves = parseSubKeys(fromKey);
-    const emitted = new Set(parseSubKeys(splitBlockIntro(gen.lines)[1]).blocks.map(s => s.key));
+    const genLeaves = parseSubKeys(genFromKey).blocks;
+    const emitted = new Set(genLeaves.map(s => s.key));
+    const path = (leaf: string) => `${section}.${block.key}.${leaf}`;
+
     const gone = consumerLeaves.blocks.filter(
-      leaf => HARNESS_AUTHORED_PATHS.has(`${section}.${block.key}.${leaf.key}`) && !emitted.has(leaf.key),
+      leaf => HARNESS_AUTHORED_PATHS.get(path(leaf.key)) === "withdrawn-when-absent" && !emitted.has(leaf.key),
     );
-    if (gone.length === 0) return block;
-    for (const leaf of gone) {
-      withdrawn.push({
-        section: `${section}.${block.key}`,
-        key: leaf.key,
-        lines: leaf.lines,
-        reason: "authored",
-      });
+    // The generator's leaf, at the consumer's indent for this trigger.
+    const shift = indentOf(fromKey[0]) - indentOf(genFromKey[0]);
+    const asserted = new Map<string, string[]>();
+    for (const g of genLeaves) {
+      if (HARNESS_AUTHORED_PATHS.get(path(g.key)) !== "asserted-when-emitted") continue;
+      const value = reindent(splitTrailingBlanks(g.lines)[0], shift);
+      const mine = consumerLeaves.blocks.find(l => l.key === g.key);
+      if (mine !== undefined && sameValue(mine.lines, value)) continue;
+      asserted.set(g.key, value);
     }
+    if (gone.length === 0 && asserted.size === 0) return block;
+
+    for (const leaf of gone) {
+      withdrawn.push({ section: `${section}.${block.key}`, key: leaf.key, lines: leaf.lines, reason: "authored" });
+    }
+    for (const key of asserted.keys()) {
+      const mine = consumerLeaves.blocks.find(l => l.key === key);
+      withdrawn.push({ section: `${section}.${block.key}`, key, lines: mine?.lines ?? [], reason: "asserted" });
+    }
+
     const dropped = new Set(gone.map(l => l.key));
-    return {
-      ...block,
-      lines: [
-        ...intro,
-        ...consumerLeaves.head,
-        ...consumerLeaves.blocks.filter(l => !dropped.has(l.key)).flatMap(l => l.lines),
-      ],
-    };
+    const body = [
+      ...consumerLeaves.head,
+      ...consumerLeaves.blocks
+        .filter(l => !dropped.has(l.key))
+        .flatMap(l => {
+          const value = asserted.get(l.key);
+          return value === undefined ? l.lines : [...value, ...splitTrailingBlanks(l.lines)[1]];
+        }),
+    ];
+    const have = new Set(consumerLeaves.blocks.map(l => l.key));
+    const added = [...asserted].filter(([key]) => !have.has(key)).flatMap(([, value]) => value);
+    const [kept, trailing] = splitTrailingBlanks(body);
+    return { ...block, lines: [...intro, ...kept, ...added, ...trailing] };
   });
 
   if (withdrawn.length === 0) return { section: before, withdrawn: [] };
@@ -396,6 +456,28 @@ function withdrawAuthoredPaths(
     section: { ...before, lines: [...parsed.head, ...blocks.flatMap(b => b.lines)] },
     withdrawn,
   };
+}
+
+/** A top-level key line with nothing after the colon but a comment. */
+const SECTION_KEY_LINE = /^[A-Za-z_][A-Za-z0-9_.\-]*:\s*(#.*)?$/;
+/** The same, at any indent: a sub-key that opens a mapping rather than holding a value. */
+const SUB_KEY_LINE = /^\s*[A-Za-z0-9_.\-]+:\s*(#.*)?$/;
+
+const indentOf = (line: string): number => line.length - line.trimStart().length;
+
+/** Lines moved right (or left) by `shift` columns; blank lines stay blank. */
+function reindent(lines: string[], shift: number): string[] {
+  if (shift === 0) return lines;
+  return lines.map(l =>
+    l.trim() === "" ? l : shift > 0 ? " ".repeat(shift) + l : l.slice(Math.min(-shift, indentOf(l))),
+  );
+}
+
+/** Two leaves hold the same value when their non-comment lines agree. */
+function sameValue(a: string[], b: string[]): boolean {
+  const value = (lines: string[]) =>
+    lines.filter(l => l.trim() !== "" && !l.trimStart().startsWith("#")).map(l => l.trimEnd()).join("\n");
+  return value(a) === value(b);
 }
 
 /**
@@ -487,8 +569,12 @@ export interface RevokedSubKey {
    * names as its own. Reporting the second with the first's sentence sends a
    * consumer to a config key that has nothing to do with what was removed —
    * correct-but-misdescribed, which is the expensive kind of accurate.
+   *
+   * `asserted` is the third (#2292): nothing was withdrawn — the generator's
+   * value for an authored path REPLACED the consumer's, or was added where
+   * the consumer had none. `lines` holds what it replaced, possibly nothing.
    */
-  reason: "computed" | "authored";
+  reason: "computed" | "authored" | "asserted";
 }
 
 /**
@@ -930,7 +1016,7 @@ export function mergeManagedWorkflowRecording(
       // named this top-level key in `ci.workflowOverrides` has taken the whole
       // block back, and reaching into it is the deletion-without-a-route that
       // #839's hatch exists to make impossible.
-      const authored = withdrawAuthoredPaths(section.key, consumer, gen);
+      const authored = applyAuthoredPaths(section.key, consumer, gen);
       revoked.push(...authored.withdrawn);
       const withdrawn = revokedSubKeys(section.key, authored.section, gen, computed);
       revoked.push(...withdrawn);
