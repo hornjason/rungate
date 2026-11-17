@@ -1024,7 +1024,7 @@ describe("#364 SC-832: the pipeline cannot report a release it did not make", ()
     // this assertion cannot see.
     const steps = readFileSync(join(ROOT, "lib", "scaffold", "steps.ts"), "utf-8");
     expect(steps).toContain(
-      `[["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml], ["adr-accepted.yml", adrAcceptedYml], ["closing-references.yml", closingReferencesYml], ["board-ready.yml", boardReadyYml], ["board-intake.yml", boardIntakeYml], ["intake.yml", intakeYml]] as const`,
+      `[["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml], ["adr-accepted.yml", adrAcceptedYml], ["closing-references.yml", closingReferencesYml], ["board-ready.yml", boardReadyYml], ["board-intake.yml", boardIntakeYml], ["intake.yml", intakeYml], ["specs-placed.yml", specsPlacedYml]] as const`,
     );
     expect(steps, "the scaffold writes release.yml — it is no longer caller-owned")
       .not.toContain("release.yml");

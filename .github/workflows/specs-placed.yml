@@ -1,0 +1,145 @@
+# generated-sha: 753c84e4f83ecd19
+# Managed by rungate — do not edit. Opt a spec in with
+# board: { scope: active, prefix: <Name> } in its frontmatter and give it a
+# placement table; nothing here names a spec.
+#
+# SC-2780 (ADR-018 Decision 1): a push to main that changes specs/ runs every
+# opted-in family through the engine, with no command typed by hand.
+#
+#   plan-issues --families   which specs are on the board, read at run time
+#   plan-spec                each family's milestones
+#   plan-issues --place      each open issue into the phase its criteria hold
+#   plan-deps                each family's phase-order links, after the moves
+#   board-mirror             the queue label, then the Criteria column
+#
+# Every command is idempotent, so a re-run writes only what is missing.
+#
+# CREDENTIALS, SPLIT BY STEP. Issue, milestone, label and link writes use the
+# job's own GITHUB_TOKEN. RUNGATE_PROJECT_TOKEN reaches only the board step.
+name: Specs changed — run every opted-in family through the engine
+
+on:
+  push:
+    branches: [main]
+    paths: ["specs/**"]
+
+permissions:
+  contents: read
+  # Milestones, issues, labels and blocked-by links.
+  issues: write
+  # The wait step lists adr-accepted.yml's runs.
+  actions: read
+
+# Its own group, never adr-accepted's: a shared group cancels the run pending
+# behind the running one, and a cancelled adr-accepted run is a plan that is
+# never placed. The wait step below keeps the two from writing at once.
+concurrency:
+  group: specs-placed
+  cancel-in-progress: false
+
+jobs:
+  run-the-engine:
+    runs-on: "ubuntu-24.04"
+    steps:
+      - name: Wait for an earlier ADR placement to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mine=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
+          for poll in $(seq 1 90); do
+            earlier=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/adr-accepted.yml/runs?per_page=100" --jq ".workflow_runs[] | select(.status != \"completed\" and .created_at < \"$mine\") | .id" | paste -sd ' ' -)
+            if [ -z "$earlier" ]; then
+              echo "No earlier adr-accepted.yml run is unfinished; going ahead."
+              exit 0
+            fi
+            echo "Waiting for adr-accepted.yml run(s) $earlier to finish (poll $poll of 90)."
+            sleep 20
+          done
+          echo "::error::adr-accepted.yml run(s) $earlier are still unfinished after $((90 * 20 / 60)) minutes, so this run wrote nothing rather than write the board beside them. Re-run it once they finish."
+          exit 1
+
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          # Pinned by .bun-version — the project's single declaration (#622).
+          # setup-bun reads that file, so there is no version spelled here to drift from it.
+          bun-version-file: ".bun-version"
+        env:
+          # A per-runner install path, so runners sharing a HOME cannot rewrite
+          # each other's bun mid-exec ("Text file busy").
+          HOME: ${{ runner.tool_cache }}/bun-home
+          USERPROFILE: ${{ runner.tool_cache }}/bun-home
+      # No token: the package is fetched before any step that holds one.
+      - id: families
+        name: Which specs are on the board?
+        run: |
+          bunx rungate@0.8.26 plan-issues --families > families.tsv
+          echo "Opted-in families:"
+          cat families.tsv
+          if [ -s families.tsv ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Milestones from each family's placement table
+        if: steps.families.outputs.any == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          refused=""
+          while IFS=$'\t' read -r prefix spec <&3; do
+            [ -n "$prefix" ] || continue
+            echo "== $prefix ($spec)"
+            if ! bunx rungate@0.8.26 plan-spec "$spec" --repo "$GITHUB_REPOSITORY" --prefix "$prefix" --write; then
+              refused="$refused [$prefix]"
+            fi
+          done 3< families.tsv
+          if [ -n "$refused" ]; then
+            echo "::error::plan-spec refused for$refused. Every other family was still run."
+            exit 1
+          fi
+
+      - name: Each open issue into the phase its criteria hold
+        if: steps.families.outputs.any == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bunx rungate@0.8.26 plan-issues --place --repo "$GITHUB_REPOSITORY" --write
+
+      # `!cancelled()`: each of these reads the whole tracker and writes only
+      # what is missing, so it never depends on an earlier step succeeding
+      # (#2239). The run is still red when one of those failed.
+      - name: Phase-order links for each family
+        if: ${{ !cancelled() && steps.families.outputs.any == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          refused=""
+          while IFS=$'\t' read -r prefix spec <&3; do
+            [ -n "$prefix" ] || continue
+            echo "== $prefix ($spec)"
+            if ! bunx rungate@0.8.26 plan-deps --repo "$GITHUB_REPOSITORY" --milestone-prefix "$prefix" --write; then
+              refused="$refused [$prefix]"
+            fi
+          done 3< families.tsv
+          if [ -n "$refused" ]; then
+            echo "::error::plan-deps refused for$refused. Every other family was still run."
+            exit 1
+          fi
+
+      - name: Queue label on every opted-in family's phase issue
+        if: ${{ !cancelled() && steps.families.outputs.any == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bunx rungate@0.8.26 board-mirror --queue-label --repo "$GITHUB_REPOSITORY" --write
+
+      - name: Criteria column on the board
+        if: ${{ !cancelled() && steps.families.outputs.any == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
+        run: |
+          if [ -z "$PROJECT_ID" ]; then
+            echo "::error::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to write."
+            exit 1
+          fi
+          bunx rungate@0.8.26 board-mirror --project "$PROJECT_ID" --write
