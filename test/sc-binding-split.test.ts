@@ -357,7 +357,11 @@ const UNCLAIMED_RATCHET = 150;
 // criterion placed outside every phase reads as declared, a behaviour no
 // registered pattern expresses; the `SC-2778` describes in
 // test/board-conformance.test.ts and test/board-snapshot.test.ts name it.
-const CLAIMED_UNBINDABLE = 174;
+// 174 -> 175: SC-2779 (#2304) ticked by `sync-sc-status --only SC-2779`: an
+// issue moves into the phase milestone its criteria hold, a behaviour no
+// registered pattern expresses; the two `SC-2779` describes in
+// test/plan-issues.test.ts name it.
+const CLAIMED_UNBINDABLE = 175;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
