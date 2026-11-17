@@ -13,6 +13,10 @@
       "criteria": 31
     },
     {
+      "path": "specs/BOOTSTRAP-DATA-FLOW-SPEC.md",
+      "criteria": 0
+    },
+    {
       "path": "specs/BOOTSTRAP-TEST-PLAN.md",
       "criteria": 14
     },
@@ -43,6 +47,14 @@
     {
       "path": "specs/HARNESS-GATES.md",
       "criteria": 33
+    },
+    {
+      "path": "specs/HARNESS-SKILL-CHAIN.md",
+      "criteria": 0
+    },
+    {
+      "path": "specs/HARNESS-SKILL-CONTRACT.md",
+      "criteria": 0
     },
     {
       "path": "specs/HARNESS-STANDARD.md",
@@ -85,8 +97,32 @@
       "criteria": 22
     },
     {
+      "path": "specs/bootstrap-data-flow/INDEX.md",
+      "criteria": 0
+    },
+    {
+      "path": "specs/bootstrap-data-flow/cli-commands-for-file-creation.md",
+      "criteria": 0
+    },
+    {
+      "path": "specs/bootstrap-data-flow/consumer-requirements.md",
+      "criteria": 0
+    },
+    {
+      "path": "specs/bootstrap-data-flow/problem-statement.md",
+      "criteria": 0
+    },
+    {
+      "path": "specs/bootstrap-data-flow/rca-protocol.md",
+      "criteria": 0
+    },
+    {
       "path": "specs/bootstrap-data-flow/success-criteria.md",
       "criteria": 260
+    },
+    {
+      "path": "specs/harness-automation-matrix.md",
+      "criteria": 0
     }
   ]
 }
