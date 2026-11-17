@@ -1455,9 +1455,11 @@ describe("SC-2777: the queue label reaches every opted-in family's phase issues"
         "specs/IN.md": spec("board:\n  scope: active\n  prefix: Convergence\n"),
         "specs/OFF.md": spec(""),
         "specs/HELD.md": spec("board-scope: deferred\n"),
+        // A held-back spec that names a prefix is still out of the queue.
+        "specs/PARKED.md": spec("board:\n  scope: deferred\n  prefix: Parked\n"),
         "specs/ENGINE.md": spec("board:\n  scope: active\n  prefix: Engine\n"),
       },
-      dir => expect(queueFamilies(dir)).toEqual({ families: ["Convergence", "Engine"], unmeasured: null }),
+      dir => expect(queueFamilies(dir)).toStrictEqual({ families: ["Convergence", "Engine"], unmeasured: null }),
     );
   });
 
