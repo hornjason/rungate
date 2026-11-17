@@ -252,7 +252,8 @@
         "STAGE E3 REPAIRED. dependency-edges went 144 of 145 when ADR-018 placed #2306 in Convergence Phase 0 and nothing linked #1168 to it; plan-deps --milestone-prefix Convergence --write added the one edge. SC-2780 (#2305) automates that run on a push to specs/.",
         "ADR-019 DRAFTED AND AGREED. #1722, the acceptance test, sat in Engine Phase 9 beside the work it waits on, and nothing orders issues inside one phase, so Ready showed it as startable. Jason agreed: SC-2625 moves to its own Phase 10 (the table edit lands in #2305), and a milestoned issue whose criteria all sit in one other phase of its family moves there (#2304, SC-2779 reworded). PR #2310 waits on his merge. Two links the DA added to #1722 by hand were removed at his request.",
         "IN FLIGHT: #2311 (#2303) makes a criterion its spec parks outside every phase read as declared, not missing; from its branch board-conformance exits 0 with all ten readings met, stage item F2's proof. #2302 (the queue label on every opted-in family) is built and queued behind it.",
-        "F2 DONE. With #2311 (#2303) merged, `bun bin/rungate.ts board-conformance --repo hornjason/rungate` exits 0 on main: all ten readings MET, declared-work 49 of 49 with the 11 parked convergence criteria named apart. F1 (the convergence family's own five readings) is still open, measured on main at ae5ca490: milestones 14 of 47, criterion-coverage 52 of 55, queue-label 1 of 33. #2302 merged as #2313; its label reaches the convergence issues on the next phase-order run, which a milestone change fires. The milestones need #2304 (PR #2315) and #2305."
+        "F2 DONE. With #2311 (#2303) merged, `bun bin/rungate.ts board-conformance --repo hornjason/rungate` exits 0 on main: all ten readings MET, declared-work 49 of 49 with the 11 parked convergence criteria named apart. F1 (the convergence family's own five readings) is still open, measured on main at ae5ca490: milestones 14 of 47, criterion-coverage 52 of 55, queue-label 1 of 33. #2302 merged as #2313; its label reaches the convergence issues on the next phase-order run, which a milestone change fires. The milestones need #2304 (PR #2315) and #2305.",
+        "F1 DONE, STAGE F COMPLETE. #2315 (#2304) moves an issue into the phase milestone its criteria hold. #2310 (ADR-019) moved SC-2625 to its own Phase 10. Release 0.8.26 (#2320) shipped `plan-issues --place` and `--families`. #2322 (#2305) runs them on every push to specs/. That workflow's first run on main (run 44150949024) did the placement, and F1's verify exited 0: milestones 47 of 47, criterion-coverage 55 of 55, blocked-by-edges, criteria-field and queue-label 38 of 38. board-conformance reads all ten readings MET on main. Stages A to H are all done, each with a retro. Still open: #1722 (SC-2625, the acceptance test, Engine Phase 10) is the one Ready item. #2324 (#2323) merged, so an ADR's new criteria read as planned on its own PR. ADR-020 (#2321) waits on Jason's merge."
       ]
     },
     {
@@ -1258,8 +1259,8 @@
   "session": {
     "number": 97,
     "date": "2026-11-17",
-    "suite": "18 PRs merged (#2283 to #2313); release 0.8.25 published.",
-    "summary": "Specs now opt into the engine from their own frontmatter, and ship launches from a file built under the Workflow tool's cap. Jason agreed ADR-019 so the acceptance test is ordered by its own phase instead of a hand link, and the goal command, board-conformance, now exits 0 on main.",
+    "suite": "24 PRs merged (#2283 to #2324); releases 0.8.25 and 0.8.26 published.",
+    "summary": "Specs now opt into the engine from their own frontmatter, and ship launches from a file built under the Workflow tool's cap. Jason agreed ADR-019, so the acceptance test is ordered by its own phase instead of a hand link. board-conformance exits 0 on main, and a push to specs/ now runs the engine itself, which completed stage F.",
     "issues_created": [
       2287,
       2288,
@@ -1276,7 +1277,10 @@
       2305,
       2306,
       2307,
-      2309
+      2309,
+      2316,
+      2319,
+      2323
     ],
     "issues_closed": [
       1194,
@@ -1296,7 +1300,12 @@
       2297,
       2301,
       2302,
-      2303
+      2303,
+      2304,
+      2305,
+      2309,
+      2316,
+      2323
     ]
   },
   "stages": [
@@ -1779,7 +1788,7 @@
         {
           "id": "F1",
           "what": "specs/CODE-REVIEW-CONVERGENCE-SPEC.md goes through the engine with no agent touching anything",
-          "done": false,
+          "done": true,
           "verify": "for r in milestones criterion-coverage blocked-by-edges criteria-field queue-label; do bun bin/rungate.ts board-conformance --produce --spec specs/CODE-REVIEW-CONVERGENCE-SPEC.md --prefix Convergence --repo hornjason/rungate --reading \"$r\" || exit 1; done",
           "issue": 1722
         },
@@ -1793,7 +1802,47 @@
       ],
       "goal": "Convergence goes through the engine untouched",
       "serves": 3,
-      "retro": null
+      "retro": {
+        "wentWell": [
+          "F1 moved because the engine ran, not because anyone typed a command. The first specs-placed.yml run on main after #2322 merged (run 44150949024, 2026-11-17) created and renamed the phase milestones and moved and labelled the issues. F1's verify then exited 0: milestones 47 of 47, criterion-coverage 55 of 55, and blocked-by-edges, criteria-field and queue-label 38 of 38.",
+          "Placement has one decider. `issuePlacement` (SC-2779, #2315) moves an issue into the phase milestone its criteria hold, and leaves or refuses the ambiguous cases by name. The run calls it through `plan-issues --place`, so the board followed ADR-019's move of SC-2625 to Phase 10 with no hand edit.",
+          "Review caught a real defect in the run's wait before merge: an earlier unfinished ADR run could fall off the first page of runs, and the wait would go ahead beside it. The fix has a case whose stub serves page two only to a query that paginates. Each of the fix's two mutations fails its own case."
+        ],
+        "wentPoorly": [
+          "Every ADR that adds criteria turned its own PR's live stage ladder red. declared-work read the new criteria as missing before the merge that files their issues. Found on ADR-020; ADR-018 got through only because F2 was not done yet. PR #2324 (#2323) repaired it the same day.",
+          "Two consumer filings, #2317 and #2318, named no criterion. That turned E2's live proof red on every PR, and the release pre-flight with it, until the DA added serves-no-criterion lines by hand. ADR-020 (#2321) proposes a triage step so this is not done by hand.",
+          "Filing dropped to a cap of 1 because the launch checkout was behind origin/main. The filing gate reads its policy from that tree.",
+          "Adding one generated workflow put the instruction surface 301 bytes over budget, and three guidance strings in the owned-files table were cut to fit."
+        ],
+        "improvements": [
+          {
+            "what": "A push that changes specs/ runs the engine for every opted-in family, so no agent types the placement commands",
+            "mechanism": ".github/workflows/specs-placed.yml, generated by scaffold from lib/scaffold/specs-placed-workflow.ts. test/specs-placed-workflow.test.ts runs its run: scripts against stub gh and bunx",
+            "status": "in-place",
+            "verify": "out=$(bun test test/specs-placed-workflow.test.ts 2>&1) && printf '%s' \"$out\" | grep -qE '^ [1-9][0-9]* pass'"
+          },
+          {
+            "what": "The engine run never writes beside an unfinished ADR placement, however many newer runs exist",
+            "mechanism": "buildWaitScript reads every page of adr-accepted.yml runs, and a list it cannot read fails the step. The 'past the first page' case serves page two only to a paginating query",
+            "status": "in-place",
+            "verify": "out=$(bun test test/specs-placed-workflow.test.ts -t \"past the first page\" 2>&1) && printf '%s' \"$out\" | grep -qE '^ [1-9][0-9]* pass'"
+          },
+          {
+            "what": "An ADR that adds criteria does not turn its own pull request's live stage ladder red",
+            "mechanism": "plannedByUnmergedAdr in scripts/board-snapshot.ts reads a criterion that an unmerged ADR's Decomposition plans as planned, named apart and never missing (#2324). The '#2323' describes in test/board-snapshot.test.ts run it against a real git repository with an origin/main ref",
+            "status": "in-place",
+            "verify": "out=$(bun test test/board-snapshot.test.ts -t \"#2323\" 2>&1) && printf '%s' \"$out\" | grep -qE '^ [1-9][0-9]* pass'",
+            "issue": 2323
+          },
+          {
+            "what": "A consumer's issue gets a triage verdict, so one with no criterion answer cannot sit unnoticed and redden every PR",
+            "mechanism": "ADR-020 (PR #2321) proposes consumer-triage, consumer-intake.yml and a consumer-intake reading. It waits on Jason's merge",
+            "status": "open",
+            "verify": null,
+            "issue": 2319
+          }
+        ]
+      }
     },
     {
       "id": "G",

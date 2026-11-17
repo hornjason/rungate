@@ -192,8 +192,14 @@ const LIVE_VERIFY_BUDGET_MS = 180_000;
  * was recorded on its own reading, `criteria-field-all` (#2224, 34 of 34),
  * after review refused a draft that reused B4's; E5 on SC-2623's tests (#2231)
  * once the engine spec was bound to evidence and declared `serves: 7` (#2235).
+ *
+ * **F completed on 2026-11-17, and this is 8** — every stage. F2 was recorded
+ * when `board-conformance` first exited 0 on main (#2314). F1, the convergence
+ * family's own five readings, followed the first `specs-placed.yml` run on main
+ * after #2322: that run placed the milestones, issues and labels itself, and
+ * the five read 47 of 47, 55 of 55 and 38 of 38 (#2325).
  */
-const COMPLETE_STAGES = 7;
+const COMPLETE_STAGES = 8;
 
 /**
  * Every verify command in the plan file runs through here.
@@ -519,6 +525,15 @@ describe("the live plan", () => {
     }
 
     const next = nextStage(stages);
+    // Every stage complete is a reading of its own, said here rather than
+    // reached by deleting the assertion below (#2325, stage F, 2026-11-17).
+    // `nextStage`'s bare null IS that reading, so it is asserted; a null while
+    // any stage is still open falls to the branch below and fails there.
+    if (complete.length === stages.length) {
+      expect(stages.length, "no stages at all would read as every stage complete").toBeGreaterThan(0);
+      expect(next, "every stage is complete, so nextStage must say so with a bare null").toBeNull();
+      return;
+    }
     // Assert on `next`, NOT on `next?.stage`. `nextStage` returns a BARE
     // `null` once every stage is done and no retro is owed — not
     // `{stage: null}` — so `next?.stage` is `undefined` there, and
