@@ -94,9 +94,14 @@ next push to `specs/`, and nobody touches an issue.
    that already has a milestone is never moved". It becomes: an issue whose
    named criteria all sit in ONE phase of ONE family moves to that phase's
    milestone, even if it already has a different milestone of that family.
-   - An issue naming criteria in two phases is never moved.
+   - An issue that already has a milestone and names criteria in two phases
+     is never moved.
+   - An issue with no milestone whose criteria span two phases of one family
+     still goes to the lowest of them, as ADR-018 Decision 4 already says.
    - An issue whose criteria come from two families is never moved.
-   - An issue in another family's milestone, or none, is handled as before.
+   - An issue in another family's milestone is handled as before.
+
+   The SC-2779 wording below is the authority, and these bullets restate it.
 
    The four issues that name criteria in two placements stay put, as they did
    under the old rule. This lands in SC-2779's issue (#2304). That issue is not
