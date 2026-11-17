@@ -166,7 +166,7 @@ it to 29. "States a behaviour" and "is eval-verified" are different
 properties and the marker already owns the second. Do not re-add it to buy
 the first; SC-2622 is what forbids symbol-satisfaction here.
 
-- [x] SC-2615: every criterion in every in-scope testable spec resolves to exactly one phase; a spec held back says so in its own frontmatter and is banked by path (SC-2734)
+- [x] SC-2615: every criterion in every opted-in spec (a `board:` block with `scope: active`, SC-2776) resolves to exactly one phase; a spec held back says so in its own frontmatter and is banked by path (SC-2734)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-conformance.test.ts, `-t "spec-placement names the UNPLANNED spec"` (1 pass) and the `SC-2734` describe (11 pass), and test/board-snapshot.test.ts, the `repository-wide populations (SC-2615, SC-2616)` describe (4 pass) — 0 fail, 2026-11-12, on the PR that closes #1717. Live: `board-conformance` reads `spec-placement` MET 95 of 95. Wording narrowed to the in-scope population by Jason on 2026-11-12, as ADR-013 decision 1 required of row 1 and row 1's PR (#2013) did not do.
@@ -189,7 +189,7 @@ criterion below. Measured 2026-11-11: Ready topped up from 49 candidates of
 which 46 carried only a label, no workflow placed a plan on the board, and 14
 of the last 40 merged PRs closed no issue.
 
-- [x] SC-2734: `spec-placement` measures only the specs in scope — a spec held back declares so in its own frontmatter, and the deferred specs are banked by path with their criteria counts in a ratchet that refuses both a rise and a fall, so the reading cannot go green on a population shrunk by swapping members
+- [x] SC-2734: `spec-placement` measures only the opted-in specs (SC-2776) — a spec held back declares `scope: deferred` (or the legacy `board-scope: deferred`) in its own frontmatter, and the deferred specs are banked by path with their criteria counts in a ratchet that refuses both a rise and a fall, so the reading cannot go green on a population shrunk by swapping members
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/board-conformance.test.ts, the `SC-2734` describe (`-t SC-2734`) — 11 pass, 0 fail, 2026-11-12, on the PR that closes #1995. A spec is held back by `board-scope: deferred` in its frontmatter (a body line does not count); `.claude/spec-deferral-ratchet.json` banks the 22 deferred specs by path and criteria count; a swap, a rise, a fall, a moved count, a path banked twice, or no bank read each turns `spec-placement` UNMEASURED; the live tree equals its bank and leaves exactly the engine and payload specs in scope.
@@ -470,9 +470,10 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       needs: test
       proved-by: test/work-status.test.ts, the SC-2764 describe (`-t "SC-2764"`) — 7 pass, 0 fail, 2026-11-13, on the PR that closes #2087. The line formats `netGrowthCeiling`'s own decision: the ceiling case names both counts, the growing case names the net and what lifts it, an UNMEASURED count never claims the ceiling, an unreadable cap config reads as UNMEASURED rather than as a setting, and the script is asserted to call the gate's decider rather than its own. Live: "Filing cap: 12 … opened 34 and closed 25 … (net +9)".
       fingerprint: 0c2047b9
-- [ ] SC-2776: a spec is consumed by the engine only when its own frontmatter opts it in — a `board:` block with `scope: active` and the `prefix` its milestones use — and it carries a phase placement table; a spec with no `board:` block, or with `scope: deferred` (the legacy `board-scope: deferred` reads the same), is never planned, labelled or placed and is not asked for a placement table; an active spec with no placement table or no prefix, an unknown `scope` value, or a key the engine does not know is reported by name, never guessed; and the engine spec's block agrees with `board.engineSpec` and `board.milestonePrefix` or the disagreement is reported by name
+- [x] SC-2776: a spec is consumed by the engine only when its own frontmatter opts it in — a `board:` block with `scope: active` and the `prefix` its milestones use — and it carries a phase placement table; a spec with no `board:` block, or with `scope: deferred` (the legacy `board-scope: deferred` reads the same), is never planned, labelled or placed and is not asked for a placement table; an active spec with no placement table or no prefix, an unknown `scope` value, or a key the engine does not know is reported by name, never guessed; and the engine spec's block agrees with `board.engineSpec` and `board.milestonePrefix` or the disagreement is reported by name
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/board-families.test.ts, `-t SC-2776` (12 pass) — the frontmatter reading `boardDeclaration` in lib/spec-placement.ts, and this tree opting in exactly the engine and payload specs with the engine's block equal to config — and test/board-conformance.test.ts, the `SC-2776` describe (10 pass): `spec-placement` measures only opted-in specs and refuses, by name, a declaration it cannot read or an engine block that disagrees with `board.engineSpec` / `board.milestonePrefix` — 0 fail, 2026-11-17, on the PR that closes #2301. The consumers that plan, label and place by this reading are SC-2777 to SC-2780
 - [ ] SC-2777: every open issue in any opted-in family's phase milestone carries `board.queueLabel`, written by `board-mirror --queue-label` with no hand edit, so payload work and engine work sit in one queue
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
