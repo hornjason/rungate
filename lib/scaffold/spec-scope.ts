@@ -1,0 +1,170 @@
+/**
+ * #2307: every spec declares a board scope, so none drops out of the measure.
+ *
+ * Since ADR-018 (SC-2776) a spec counts only when its frontmatter opts in with
+ * a `board:` block. A spec with no block is neither measured nor banked, so a
+ * spec that never had one, or lost it, leaves the engine's view without a
+ * word. Jason's call of 2026-11-17 on #2301: scaffold writes the frontmatter,
+ * so the readings are accurate.
+ *
+ * **Deferred is the only value written.** ADR-018 Decision 8 makes opt-in a
+ * person's choice, because a consumer's checkboxes do not say what is done.
+ * Deferred says "known, held back", which is true of every spec nobody has
+ * opted in, and it keeps the spec visible: `board-conformance` banks it.
+ *
+ * Three things are never written: a spec that already declares a scope
+ * (active, deferred, or a declaration the engine cannot read, which
+ * `board-conformance` already names), the spec template, and a spec a
+ * generator owns. The last is `writeSpec`'s refusal (#1552), asked before any
+ * work is planned.
+ *
+ * **The bank moves in the same run.** SC-2734 refuses a deferred spec the
+ * deferral bank does not hold at its criteria count, so a scaffold that wrote
+ * the line without the bank would turn the next pull request red on a file
+ * its author never opened. Specs and bank are written all or nothing.
+ */
+import { existsSync, mkdirSync, readFileSync } from "fs";
+import { dirname, join } from "path";
+import { specFilesIn } from "../board-mirror";
+import { isTemplateSpec } from "../sc-ids";
+import { boardDeclaration, placementReading } from "../spec-placement";
+import { maySpecBeWritten, writeSpec } from "../write-spec";
+
+/** The one line this step writes. */
+export const DEFERRED_LINE = "board: { scope: deferred }";
+
+/** The spec with {@link DEFERRED_LINE} as its frontmatter's last key, or null when it has no frontmatter to add it to. */
+export function withDeferredScope(content: string): string | null {
+  const m = /^---(\r?\n)([\s\S]*?)(\r?\n)---(?=\r?\n|$)/.exec(content);
+  if (m === null) return null;
+  const [whole, nl, body, close] = m;
+  return `---${nl}${body}${close}${DEFERRED_LINE}${close}---${content.slice(whole.length)}`;
+}
+
+export interface ScopeWrite {
+  path: string;
+  before: string;
+  after: string;
+  criteria: number;
+}
+
+/**
+ * What a scaffold would write: each undeclared spec with the line added, and
+ * the specs it leaves alone with the reason. Reads only.
+ */
+export function planDeferredScopes(root: string): { refusal: string } | { writes: ScopeWrite[]; skipped: string[] } {
+  const sweep = specFilesIn(root);
+  if (sweep.reading === "UNMEASURED") return { refusal: `the specs/ listing failed: ${sweep.reasons.join("; ")}` };
+  const writes: ScopeWrite[] = [];
+  const skipped: string[] = [];
+  for (const path of sweep.paths) {
+    if (isTemplateSpec(path)) continue;
+    const before = readFileSync(join(root, path), "utf-8");
+    if (boardDeclaration(before).scope !== "undeclared") continue;
+    if (!maySpecBeWritten(before).allowed) continue;
+    const after = withDeferredScope(before);
+    if (after === null) {
+      skipped.push(`${path} has no frontmatter, so no board scope was added; the engine ignores it until it declares one`);
+      continue;
+    }
+    // The line must read back as deferred. A frontmatter the parser refuses
+    // would read the new line as `invalid`, which is a different problem from
+    // the one this step exists for and is not this step's to paper over.
+    if (boardDeclaration(after).scope !== "deferred") {
+      skipped.push(`${path}: its frontmatter cannot be read, so a board scope added to it would not read as deferred`);
+      continue;
+    }
+    writes.push({ path, before, after, criteria: placementReading(after).criteria.length });
+  }
+  return { writes, skipped };
+}
+
+/**
+ * The deferral bank with each newly deferred spec added at its count.
+ *
+ * An absent bank is created: a consumer that has never deferred a spec has
+ * none. A bank that is present and unreadable refuses, and so does one that
+ * already holds a spec this step is about to defer. That row belongs to a spec
+ * the engine does not read as deferred, which is drift somebody has to look
+ * at, and overwriting it would hide it.
+ */
+export function bankWithNewDeferrals(
+  bankText: string | null,
+  rows: readonly { path: string; criteria: number }[],
+): { ok: true; text: string } | { ok: false; why: string } {
+  let bank: { deferred?: unknown } = { deferred: [] };
+  if (bankText !== null) {
+    try {
+      bank = JSON.parse(bankText);
+    } catch (e) {
+      return { ok: false, why: `the deferral bank is not JSON (${(e as Error).message})` };
+    }
+    if (typeof bank !== "object" || bank === null || !Array.isArray(bank.deferred)) {
+      return { ok: false, why: "the deferral bank has no `deferred` list" };
+    }
+  }
+  const held = bank.deferred as { path: string; criteria: number }[];
+  const clash = rows.filter(r => held.some(d => d.path === r.path)).map(r => r.path);
+  if (clash.length > 0) {
+    return { ok: false, why: `the deferral bank already holds ${clash.join(", ")}, which declare no scope; reconcile it first` };
+  }
+  const deferred = [...held, ...rows.map(r => ({ path: r.path, criteria: r.criteria }))].sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  );
+  return { ok: true, text: `${JSON.stringify({ ...bank, deferred }, null, 2)}\n` };
+}
+
+/**
+ * The scaffold step: add {@link DEFERRED_LINE} to every undeclared spec, bank
+ * each one, and name every file written. A re-scaffold over specs that all
+ * declare a scope writes nothing and reports nothing.
+ */
+export function deferUndeclaredSpecs(root: string, actions: string[]): void {
+  if (!existsSync(join(root, "specs"))) return;
+  const plan = planDeferredScopes(root);
+  if ("refusal" in plan) {
+    actions.push(`REFUSED: spec board scopes (${plan.refusal}) — nothing was written`);
+    return;
+  }
+  for (const s of plan.skipped) actions.push(`SKIP: ${s}`);
+  if (plan.writes.length === 0) return;
+
+  // A literal path, so the spec-write sweep (#1584) resolves this write to
+  // the bank rather than reading an opaque target.
+  const bankPath = join(root, ".claude/spec-deferral-ratchet.json");
+  const banked = bankWithNewDeferrals(existsSync(bankPath) ? readFileSync(bankPath, "utf-8") : null, plan.writes);
+  if (!banked.ok) {
+    actions.push(`REFUSED: spec board scopes (${banked.why}) — nothing was written`);
+    return;
+  }
+
+  // All or nothing: a spec written without its bank row reddens SC-2734, so a
+  // failed write puts back every spec already written.
+  const written: ScopeWrite[] = [];
+  const undo = (why: string) => {
+    const stuck = written.filter(w => !writeSpec(join(root, w.path), w.before).written).map(w => w.path);
+    actions.push(
+      stuck.length === 0
+        ? `REFUSED: spec board scopes (${why}) — nothing was written`
+        : `REFUSED: spec board scopes (${why}), and ${stuck.join(", ")} could not be put back: each declares a deferred scope the bank does not hold`,
+    );
+  };
+  // A throw is a failed write too: one that escaped would leave the specs
+  // already written with no bank row, which is the state this step exists
+  // to prevent.
+  try {
+    mkdirSync(dirname(bankPath), { recursive: true });
+    for (const w of plan.writes) {
+      const r = writeSpec(join(root, w.path), w.after);
+      if (!r.written) return undo(`${w.path} was not written: ${r.refusal ?? "no reason given"}`);
+      written.push(w);
+    }
+    const bankWrite = writeSpec(bankPath, banked.text);
+    if (!bankWrite.written) return undo(`the deferral bank was not written: ${bankWrite.refusal ?? "no reason given"}`);
+  } catch (e) {
+    return undo(`a write threw: ${(e as Error).message}`);
+  }
+
+  for (const w of plan.writes) actions.push(`UPDATED: ${w.path} (${DEFERRED_LINE} — it declared no scope)`);
+  actions.push(`UPDATED: .claude/spec-deferral-ratchet.json (${plan.writes.length} spec(s) banked as deferred)`);
+}
