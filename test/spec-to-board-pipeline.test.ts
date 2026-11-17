@@ -244,7 +244,7 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
   });
 
   test("#2327: a branch that writes new ids can reserve them, read against origin/main", () => {
-    // ADR-020 (#2321) wrote SC-2782..2785 by hand and could not reserve them:
+    // ADR-020 (#2321) wrote four criterion ids by hand and could not reserve them:
     // a block from the branch that adds the ids covers them by definition, so
     // with no base the reading above refuses it and the only accepted state is
     // no block at all. With origin/main as the base, what each block COVERS is
