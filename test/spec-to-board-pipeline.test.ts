@@ -14,6 +14,7 @@
  * simply found nothing.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "child_process";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { PHASE_VALUE, parsePhaseHeadings, parsePlacementRows } from "../lib/spec-placement";
@@ -47,12 +48,29 @@ type Block = { owner: string; from: number; to: number; namespace?: string };
  *
  * Takes the blocks rather than reading them, so both arms can be planted.
  * SC-namespace blocks only — an `FG-2600..2629` block claims different ids.
+ *
+ * #2327: `base` is origin/main's ids and blocks. With it, a foreign block
+ * faults only on what THIS tree changed: a block it adds over an id origin/main
+ * already states (reserving a spent id), or ids it adds inside a block
+ * origin/main already holds (writing into someone else's live reservation).
+ * A block and the ids it covers arriving together is a reservation in flight,
+ * and once both are on main it is the same reservation merged. With `base`
+ * null — origin/main unreadable — every foreign block over any id faults, the
+ * strict reading.
  */
-function reservationFaults(used: number[], scBlocks: Block[]): string[] {
+function reservationFaults(used: number[], scBlocks: Block[], base: { used: number[]; blocks: Block[] } | null = null): string[] {
   const faults: string[] = [];
+  const key = (b: Block) => `${b.namespace ?? "SC"}:${b.owner}:${b.from}-${b.to}`;
+  const heldOnMain = new Set((base?.blocks ?? []).map(key));
   for (const b of scBlocks) {
     if (b.owner === OWNER) continue;
-    const squatted = used.filter(n => n >= b.from && n <= b.to);
+    const covered = used.filter(n => n >= b.from && n <= b.to);
+    const squatted =
+      base === null
+        ? covered
+        : heldOnMain.has(key(b))
+          ? covered.filter(n => !base.used.includes(n))
+          : covered.filter(n => base.used.includes(n));
     if (squatted.length > 0) {
       faults.push(
         `${b.owner} reserves ${b.from}-${b.to}, which covers ${squatted.join(", ")} — ` +
@@ -68,6 +86,29 @@ function reservationFaults(used: number[], scBlocks: Block[]): string[] {
     }
   }
   return faults;
+}
+
+/**
+ * origin/main's ids for this spec and its SC blocks — #2327. `null` when
+ * either file cannot be read there or an id there does not parse, so the
+ * reading falls back to the strict one rather than exempting anything.
+ */
+function mainBase(): { used: number[]; blocks: Block[] } | null {
+  const show = (path: string) => spawnSync("git", ["-C", ROOT, "show", `origin/main:${path}`], { encoding: "utf-8" });
+  const spec = show(PATH);
+  const store = show("specs/sc-reservations.json");
+  if (spec.status !== 0 || store.status !== 0) return null;
+  const ids = parseCriteria(spec.stdout).map(c => /^SC-(\d+)$/.exec(c.id));
+  if (ids.length === 0 || ids.some(m => m === null)) return null;
+  let parsed: { reservations?: unknown };
+  try {
+    parsed = JSON.parse(store.stdout) as { reservations?: unknown };
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed.reservations)) return null;
+  const blocks = (parsed.reservations as Block[]).filter(r => (r.namespace ?? "SC") === "SC");
+  return { used: ids.map(m => Number(m![1])), blocks };
 }
 
 /** The spec this suite is about, named where a scanner can see the claim. */
@@ -153,7 +194,7 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
         "than examined by it, so a criterion outside the reservation could pass unseen",
     ).toEqual([]);
     const used = ids.map(id => Number(/^SC-(\d+)$/.exec(id)![1]));
-    expect(reservationFaults(used, scBlocks), "the live store disagrees with this spec's ids")
+    expect(reservationFaults(used, scBlocks, mainBase()), "the live store disagrees with this spec's ids")
       .toEqual([]);
 
     // **There is deliberately no "which arm did the live store take" line
@@ -200,6 +241,45 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
       reservationFaults(used, [{ owner: "rg/someone-else", from: 2700, to: 2729 }]),
       "a foreign block over ids this spec never consumed was reported as a collision",
     ).toEqual([]);
+  });
+
+  test("#2327: a branch that writes new ids can reserve them, read against origin/main", () => {
+    // ADR-020 (#2321) wrote SC-2782..2785 by hand and could not reserve them:
+    // a block from the branch that adds the ids covers them by definition, so
+    // with no base the reading above refuses it and the only accepted state is
+    // no block at all. With origin/main as the base, what each block COVERS is
+    // read against what was already there.
+    const onMain = [2600, 2610];
+    const inTree = [2600, 2610, 2782, 2785];
+    const adr = { owner: "rg/adr-branch", from: 2782, to: 2785 };
+    const live = { owner: "rg/other-branch", from: 2780, to: 2789 };
+
+    // In flight: the block and the ids it covers both arrive in this tree.
+    expect(reservationFaults(inTree, [adr], { used: onMain, blocks: [] }), "an in-flight block was refused").toEqual([]);
+    // Merged together: both are on origin/main, and the tree adds nothing.
+    expect(reservationFaults(inTree, [adr], { used: inTree, blocks: [adr] }), "a merged block was refused").toEqual([]);
+
+    // This tree adds a block over an id origin/main already states: a spent id.
+    expect(
+      reservationFaults(inTree, [{ owner: "rg/late", from: 2600, to: 2605 }], { used: onMain, blocks: [] }).join(" | "),
+      "a new block over an id origin/main already states was not reported",
+    ).toContain("rg/late reserves 2600-2605, which covers 2600");
+    // This tree writes ids into a block origin/main already holds for someone else.
+    expect(
+      reservationFaults(inTree, [live], { used: onMain, blocks: [live] }).join(" | "),
+      "ids written into another branch's live reservation were not reported",
+    ).toContain("rg/other-branch reserves 2780-2789, which covers 2782, 2785");
+
+    // The live case reads its base from origin/main. A reader that always
+    // answered null would refuse every in-flight block with no case failing.
+    const base = mainBase();
+    expect(base, "origin/main's spec or store could not be read").not.toBeNull();
+    expect(base!.used, "origin/main's copy of this spec was read as stating none of its ids").toContain(2615);
+
+    // No base to read: the strict reading above, so the in-flight block is refused.
+    expect(reservationFaults(inTree, [adr], null).join(" | "), "an unreadable origin/main exempted a block").toContain(
+      "rg/adr-branch reserves 2782-2785",
+    );
   });
 
   test("it is listed in the spec routing table", () => {
