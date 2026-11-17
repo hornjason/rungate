@@ -364,7 +364,11 @@ const UNCLAIMED_RATCHET = 150;
 // issue moves into the phase milestone its criteria hold, a behaviour no
 // registered pattern expresses; the two `SC-2779` describes in
 // test/plan-issues.test.ts name it.
-const CLAIMED_UNBINDABLE = 176;
+// 176 -> 177: SC-2780 (#2305) ticked by `sync-sc-status --only SC-2780`: a
+// push that changes specs/ runs every opted-in family through the engine, a
+// generated workflow no registered pattern expresses; the `SC-2780`
+// describes in test/specs-placed-workflow.test.ts name it.
+const CLAIMED_UNBINDABLE = 177;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
