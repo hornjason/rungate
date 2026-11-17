@@ -402,7 +402,12 @@ export function boardDeclaration(content: string): BoardDeclaration {
   if (fm === null) {
     // A block the parser refuses — a column-0 `#` comment is the live one —
     // still cannot opt in if no line of it so much as starts a board key.
-    const raw = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)?.[1] ?? "";
+    // With no closing fence at all, everything after the opening one is the
+    // block as far as anyone can tell, so that is what gets scanned — the
+    // fenced regex alone would hand back "" and read the most broken input
+    // as undeclared (review of #2308).
+    const fenced = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
+    const raw = fenced?.[1] ?? content.replace(/^---\r?\n/, "");
     if (!/^board(?:-scope)?[ \t]*:/m.test(raw)) return none();
     return {
       ...none(),

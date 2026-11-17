@@ -149,6 +149,11 @@ describe("SC-2776: a spec opts itself in through one board: block in its own fro
     expect(refused.scope).toBe("invalid");
     // ...and one that starts no board key is simply undeclared.
     expect(boardDeclaration("---\ndoc-type: spec\n# a column-0 comment\n---\n").scope).toBe("undeclared");
+    // Review of #2308: a block with NO closing fence is the same refusal, not
+    // a silent opt-out — and with no board key in it, still undeclared.
+    const unterminated = boardDeclaration("---\ndoc-type: spec\nboard:\n  scope: active\n  prefix: X\n\n# body\n");
+    expect(unterminated.scope).toBe("invalid");
+    expect(boardDeclaration("---\ndoc-type: spec\n\n# body, and no closing fence\n").scope).toBe("undeclared");
   });
 
   test("SC-2776: a key added to BOARD_KEYS is read with no other change — the table is the one place", () => {
