@@ -42,7 +42,7 @@
 <body>
 <main>
   <h1>ADR-020 — an issue a consumer files gets a verdict</h1>
-  <p class="sub">Proposed 2026-11-17 · issue #2319 · dry-run against main c1bc9556</p>
+  <p class="sub">Accepted by Jason 2026-11-17, he merges · issue #2319 · dry-run against main c1bc9556</p>
   <div class="legend"><span class="l-hand">a person does it</span><span class="l-auto">a workflow does it</span><span class="l-judge">Jason decides</span></div>
 
   <h2>Today vs after</h2>
@@ -60,7 +60,7 @@
     <div class="panel">
       <h3 class="good">After</h3>
       <ul>
-        <li>Every consumer issue gets one verdict from a tool, the day it is filed.</li>
+        <li>Every consumer issue gets one verdict from a tool when it is opened or labelled. An outside reporter's label, which GitHub drops, is put back first.</li>
         <li>A daily sweep catches anything an event missed.</li>
         <li>The board's <code>consumer-intake</code> reading goes short, naming the issue, after two days with no verdict.</li>
         <li>In direct-ship mode the cap is 36 every day (Decision 4).</li>
@@ -78,8 +78,8 @@
 
   <h2>The run</h2>
   <ol class="timeline">
-    <li class="judge"><span class="tag t-judge">YOU</span>Decisions 4 and 5 answered 2026-11-17 (36 in direct mode; Engine Phase 9). Merge ADR-020 after #2305's first run.</li>
-    <li><span class="tag t-auto">AUTO</span><code>adr-accepted.yml</code> files 4 issues and 2 order links. It must run after #2305's first run has renamed Engine Phase 9; today the milestone title does not exist yet, so the dry run refuses until then.</li>
+    <li class="judge"><span class="tag t-judge">YOU</span>Accepted 2026-11-17, Decisions 4 and 5 answered (36 in direct mode; Engine Phase 9). Merge ADR-020.</li>
+    <li><span class="tag t-auto">AUTO</span><code>adr-accepted.yml</code> files 4 issues and 2 order links into Engine Phase 9, which #2305's first run has already renamed.</li>
     <li class="hand"><span class="tag t-hand">ME</span>SC-2782 (triage command) and SC-2785 (cap), in parallel. Neither is blocked.</li>
     <li class="hand"><span class="tag t-hand">ME</span>Release 0.8.27, so the published CLI has <code>consumer-triage</code>.</li>
     <li class="hand"><span class="tag t-hand">ME</span>SC-2783 (board reading) and SC-2784 (the workflow), both blocked by SC-2782.</li>
@@ -98,7 +98,8 @@
   <div class="panel q">
     <p><b>Decision 4 — the cap.</b> 36 in direct-ship mode, whatever the day's net growth; 12 stays as the harness-mode fallback.</p>
     <p><b>Decision 5 — placement.</b> Engine Phase 9: Ready draws this work next, and the acceptance test (#1722) waits on it.</p>
-    <p><b>Still yours:</b> the merge, after #2305's first run has renamed Engine Phase 9.</p>
+    <p><b>Decision 2 — outside reporters.</b> A newly opened issue from an author who is not an owner, member or collaborator gets <code>from-consumer</code> before triage, because GitHub drops the label such an author sets.</p>
+    <p><b>Still yours:</b> the merge.</p>
   </div>
 </main>
 </body>

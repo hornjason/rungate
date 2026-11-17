@@ -14,10 +14,9 @@ consumer issue is triaged when it is opened and the daily run only catches
 what an event missed. He asked for this on 2026-11-17 and chose the
 shape: triage by a tool, a sweep on a schedule, and a board reading that goes
 short when a consumer issue has no verdict. He also asked that the filing cap
-stop limiting work while nobody is swarming. Decisions 4 and 5 are open until
-he answers them.
-He answered both on 2026-11-17: the 36 ceiling in direct-ship mode, and
-Engine Phase 9. What remains is his merge, after #2305's first run.
+stop limiting work while nobody is swarming. He answered Decisions 4 and 5
+the same day: the 36 ceiling in direct-ship mode, and Engine Phase 9. #2305's
+first run has since renamed Engine Phase 9, so what remains is his merge.
 
 ## Context
 
