@@ -34,7 +34,7 @@
  */
 import { spawnSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
-import { isAbsolute, join } from "path";
+import { isAbsolute, join, relative } from "path";
 import { parseArgs } from "util";
 import { describeSpecSource, resolveSpecSource, type GitRunner } from "../lib/spec-source";
 import { openFrontier, phaseOf } from "../lib/board-mirror";
@@ -59,6 +59,7 @@ import {
   placementCoverage,
   placementReading,
   type CriterionCoverage,
+  type SpecPlacement,
 } from "../lib/spec-placement";
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
@@ -240,6 +241,8 @@ export interface ProducedSnapshot {
   specPlacements?: SpecPlacementRow[];
   /** SC-2734: the bank in `.claude/spec-deferral-ratchet.json`. Absent when it could not be read. */
   specDeferrals?: SpecDeferral[];
+  /** SC-2776: `board.engineSpec` and `board.milestonePrefix` as the config holds them. */
+  engineConfig?: { spec: string | null; prefix: string | null };
   repoIssues?: RepoIssueCriteria[];
   plannedEdges?: PlannedEdge[];
   /** SC-2752: unticked criteria in in-scope specs and open stage items. Absent when it could not be read. */
@@ -323,6 +326,27 @@ export const DEFERRAL_BANK = ".claude/spec-deferral-ratchet.json";
  * file is absent or is not `{ "deferred": [{ path, criteria }] }`, and says
  * which on stderr, because a corrupt bank is never a missing one.
  */
+/**
+ * One sweep row as the snapshot carries it — SC-2615, SC-2734, SC-2776.
+ *
+ * Present-only flags, so a row from a spec that declares nothing is the
+ * same bytes it always was. What the spec's `board:` block could not say
+ * travels with the row, because `board-conformance` names it by path and
+ * cannot re-read the file (it stays import-free).
+ */
+export function placementRow(s: SpecPlacement): SpecPlacementRow {
+  return {
+    path: s.path,
+    state: s.state,
+    criteria: s.criteria,
+    placed: s.placed,
+    ...(s.deferred ? { deferred: true } : {}),
+    ...(s.board.scope === "active" ? { active: true } : {}),
+    ...(s.board.prefix !== null ? { prefix: s.board.prefix } : {}),
+    ...(s.board.problems.length > 0 ? { boardProblems: [...s.board.problems] } : {}),
+  };
+}
+
 export function readDeferralBank(root: string): { specDeferrals?: SpecDeferral[] } {
   const path = join(root, DEFERRAL_BANK);
   if (!existsSync(path)) {
@@ -832,14 +856,22 @@ export async function main(
     coverage.specs.length === 0 && coverage.reading === "UNMEASURED"
       ? {}
       : {
-          specPlacements: coverage.specs.map(s => ({
-            path: s.path,
-            state: s.state,
-            criteria: s.criteria,
-            placed: s.placed,
-            ...(s.deferred ? { deferred: true } : {}),
-          })),
+          specPlacements: coverage.specs.map(placementRow),
         };
+
+  // SC-2776. What the config says the engine is, carried as DATA so
+  // `board-conformance` (import-free) can hold the engine spec's own
+  // `board:` block to it. Spelled the way the sweep spells paths, so
+  // `./specs/X.md` and `specs/X.md` are one spec.
+  const engineConfig = {
+    engineConfig: {
+      spec:
+        configured.engineSpec === null
+          ? null
+          : relative(root, isAbsolute(configured.engineSpec) ? configured.engineSpec : join(root, configured.engineSpec)),
+      prefix: configured.milestonePrefix,
+    },
+  };
 
   // SC-2734. The bank the deferred specs are compared against. An absent or
   // malformed file omits the key, and the reading goes UNMEASURED as soon as
@@ -935,6 +967,7 @@ export async function main(
     criteria: criterionCoverage(content, snapshotIssues, columnRead),
     ...placements,
     ...deferrals,
+    ...engineConfig,
     ...repoIssues,
     ...edges,
     ...declared,

@@ -34,6 +34,7 @@
  * 7's opened-to-closed ratio. {@link uncoveredByMilestone} reports the input
  * to that decision and stops there.
  */
+import { parseFrontmatter } from "./frontmatter";
 import { PHASE_TOKEN, readMilestoneTitle } from "./milestone-title";
 import { oneScMentionPattern } from "./sc-ids";
 import { parseCriteria } from "./spec-evidence";
@@ -241,21 +242,169 @@ export interface SpecPlacement {
   /** How many criteria the spec states, and how many the table places. */
   criteria: number;
   placed: number;
-  /** The spec declares `board-scope: deferred` in its frontmatter — SC-2734. */
+  /** The spec declares `scope: deferred` (or the legacy `board-scope: deferred`) — SC-2734. */
   deferred: boolean;
+  /** What the spec's own frontmatter says about the board — SC-2776. */
+  board: BoardDeclaration;
 }
 
 /**
- * Whether a spec holds itself back from the board — SC-2734.
+ * Whether a spec is on the board, read from its own frontmatter — SC-2776.
  *
- * Read from the FRONTMATTER only: a body line spelling the same words is
- * prose about the convention, not a declaration, and reading it would let a
- * spec defer itself by quoting this rule.
+ * - `active`: a `board:` block with `scope: active`. The only value the
+ *   engine consumes.
+ * - `deferred`: `scope: deferred`, or the legacy `board-scope: deferred`
+ *   line, which reads the same (ADR-018 Decision 9).
+ * - `undeclared`: no `board:` block and no legacy line. Never planned,
+ *   labelled or placed, whatever else the spec carries — a placement table
+ *   alone pulls nothing in (ADR-018 Decision 8).
+ * - `invalid`: a declaration the engine could not read. `problems` says why,
+ *   and the spec is consumed no more than an undeclared one.
+ */
+export type BoardScope = "active" | "deferred" | "undeclared" | "invalid";
+
+export interface BoardDeclaration {
+  scope: BoardScope;
+  /** The milestone family the spec's phases are named in, or null when it declares none. */
+  prefix: string | null;
+  /**
+   * Everything about the declaration that is reported by name — an unknown
+   * key or scope value, an active spec with no prefix, a line the engine
+   * cannot read. Empty exactly when there is nothing to report.
+   */
+  problems: string[];
+}
+
+/** The keys the engine reads inside `board:`. A new setting is a new line here (ADR-018 Decision 9). */
+export const BOARD_KEYS = ["scope", "prefix"] as const;
+
+/** The values `scope` takes. Closed: anything else is reported, never guessed. */
+export const BOARD_SCOPES = ["active", "deferred"] as const;
+
+/**
+ * A YAML scalar, with one pair of matching quotes removed. An unpaired or
+ * mismatched quote is returned as written, so it cannot equal a known value.
+ */
+function scalar(raw: string): string {
+  const v = raw.trim();
+  const m = /^(["'])(.*)\1$/.exec(v);
+  return m ? m[2]! : v;
+}
+
+/** `k: v` pairs from a block's indented lines or a one-line `{ k: v, … }`. */
+function boardPairs(inline: string, block: readonly string[]): { pairs: [string, string][]; problems: string[] } {
+  const pairs: [string, string][] = [];
+  const problems: string[] = [];
+  const pair = (text: string, where: string) => {
+    const m = /^([A-Za-z_][A-Za-z0-9_-]*):(.*)$/.exec(text.trim());
+    if (m === null) problems.push(`\`board:\` has ${where} \`${text.trim()}\`, which is not a \`key: value\` line`);
+    else pairs.push([m[1]!, m[2]!]);
+  };
+  if (inline !== "") {
+    const flow = /^\{(.*)\}$/.exec(inline);
+    if (flow === null) {
+      problems.push(`\`board:\` holds the value \`${inline}\` — it must be a block of keys (${BOARD_KEYS.join(", ")})`);
+      return { pairs, problems };
+    }
+    for (const part of flow[1]!.split(",")) if (part.trim() !== "") pair(part, "the entry");
+  }
+  const lines = block.filter(l => l.trim() !== "" && !l.trim().startsWith("#"));
+  const indent = lines[0]?.match(/^\s*/)?.[0] ?? "";
+  for (const line of lines) {
+    // A deeper line is a nested value, and no key the engine reads has one.
+    if (!line.startsWith(indent) || /^\s/.test(line.slice(indent.length))) {
+      problems.push(`\`board:\` has the line \`${line.trim()}\` nested under another key, and no board key takes a nested value`);
+    } else pair(line, "the line");
+  }
+  return { pairs, problems };
+}
+
+/**
+ * What a spec's frontmatter says about the board — SC-2776.
+ *
+ * Read from the FRONTMATTER only, through `parseFrontmatter`: a body line
+ * spelling the same words is prose about the convention, not a declaration,
+ * and reading it would let a spec opt itself in, or hold itself back, by
+ * quoting this rule.
+ *
+ * **Reported, never guessed.** An unknown key is named and otherwise
+ * ignored, so a typo — `scpoe: active` — leaves the spec with no scope and
+ * opts nothing in. An unknown scope value is named and opts nothing in. An
+ * active spec with no prefix stays active, so the reading can name it,
+ * and the prefix is not invented from the filename: `CODE-REVIEW-CONVERGENCE-SPEC.md`
+ * would derive *Code Review Convergence*, which is not what its milestones
+ * are called (see {@link milestonePlan}).
+ */
+export function boardDeclaration(content: string): BoardDeclaration {
+  if (!/^---\r?\n/.test(content)) return { scope: "undeclared", prefix: null, problems: [] };
+  const fm = parseFrontmatter(content);
+  if (fm === null) {
+    // A block the parser refuses — a column-0 `#` comment is the live one —
+    // still cannot opt in if no line of it so much as starts a board key.
+    const raw = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)?.[1] ?? "";
+    if (!/^board(?:-scope)?[ \t]*:/m.test(raw)) return { scope: "undeclared", prefix: null, problems: [] };
+    return {
+      scope: "invalid",
+      prefix: null,
+      problems: ["the frontmatter has a line no key owns, so whether it opts this spec in cannot be read"],
+    };
+  }
+  const blocks = fm.entries.filter(e => e.key === "board");
+  const legacy = fm.entries.filter(e => e.key === "board-scope");
+  if (blocks.length === 0 && legacy.length === 0) return { scope: "undeclared", prefix: null, problems: [] };
+
+  const problems: string[] = [];
+  // A declaration made twice, or two that disagree, is one the engine cannot
+  // read: picking either is the guess this function exists not to make.
+  let contested = false;
+  const twice = (what: string) => {
+    problems.push(`${what} is declared more than once`);
+    contested = true;
+  };
+  if (blocks.length > 1) twice("`board:`");
+  if (legacy.length > 1) twice("`board-scope:`");
+
+  let scope: string | null = null;
+  let prefix: string | null = null;
+  if (blocks[0] !== undefined) {
+    const read = boardPairs(blocks[0].inline, blocks[0].block);
+    problems.push(...read.problems);
+    const seen = new Set<string>();
+    for (const [key, raw] of read.pairs) {
+      if (seen.has(key)) twice(`\`board.${key}\``);
+      seen.add(key);
+      if (key === "scope") scope = scalar(raw);
+      else if (key === "prefix") prefix = scalar(raw) === "" ? null : scalar(raw);
+      else problems.push(`\`board.${key}\` is not a key the engine knows (it reads ${BOARD_KEYS.join(", ")})`);
+    }
+    if (scope === null) problems.push("the `board:` block declares no `scope`");
+  }
+  if (legacy[0] !== undefined) {
+    if (scalar(legacy[0].inline) !== "deferred") {
+      problems.push(`\`board-scope: ${legacy[0].inline}\` — the legacy line takes only \`deferred\``);
+      contested = true;
+    } else if (scope !== null && scope !== "deferred") {
+      problems.push(`\`board.scope: ${scope}\` and the legacy \`board-scope: deferred\` disagree`);
+      contested = true;
+    } else scope = "deferred";
+  }
+  if (scope !== null && !(BOARD_SCOPES as readonly string[]).includes(scope)) {
+    problems.push(`\`board.scope: ${scope}\` is not a scope the engine knows (${BOARD_SCOPES.join(" or ")})`);
+  }
+  if (scope === "active" && prefix === null) {
+    problems.push("the spec is active and declares no `prefix`, so no milestone can be named for its phases");
+  }
+
+  const read: BoardScope = !contested && (scope === "active" || scope === "deferred") ? scope : "invalid";
+  return { scope: read, prefix, problems };
+}
+
+/**
+ * Whether a spec holds itself back from the board — SC-2734, read through
+ * {@link boardDeclaration} so the deferral and the opt-in are one reading.
  */
 export function declaresDeferred(content: string): boolean {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
-  if (m === null) return false;
-  return /^board-scope:[ \t]*(["']?)deferred\1[ \t]*\r?$/m.test(m[1]!);
+  return boardDeclaration(content).scope === "deferred";
 }
 
 export interface PlacementCoverage {
@@ -321,11 +470,20 @@ export function placementCoverage(
     try {
       content = readSpec(root, path);
     } catch (e) {
-      specs.push({ path, state: "UNREADABLE", reasons: [(e as Error).message], criteria: 0, placed: 0, deferred: false });
+      specs.push({
+        path,
+        state: "UNREADABLE",
+        reasons: [(e as Error).message],
+        criteria: 0,
+        placed: 0,
+        deferred: false,
+        board: { scope: "undeclared", prefix: null, problems: [] },
+      });
       reasons.push(`could not read ${path}: ${(e as Error).message}`);
       continue;
     }
     const r = placementReading(content);
+    const board = boardDeclaration(content);
     const placed = r.criteria.length - r.unplaced.length;
     const state: PlacementState =
       r.criteria.length === 0 ? "NO_CRITERIA" : r.reading === "MEASURED" ? "PLANNED" : "UNPLANNED";
@@ -335,7 +493,8 @@ export function placementCoverage(
       reasons: state === "PLANNED" ? [] : r.unmeasuredReasons,
       criteria: r.criteria.length,
       placed,
-      deferred: declaresDeferred(content),
+      deferred: board.scope === "deferred",
+      board,
     });
   }
 

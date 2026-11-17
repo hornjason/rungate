@@ -8,7 +8,10 @@ status: active
 owner: jason
 created: 2026-10-22
 source: https://claude.dev/blog/solving-code-review-at-anthropic/
-updated: 2026-11-08
+board:
+  scope: active
+  prefix: Convergence
+updated: 2026-11-17
 ---
 
 # Code Review Convergence

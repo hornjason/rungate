@@ -7,7 +7,10 @@ serves: 7
 governs: THE ENGINE that turns a spec into board state — not the specs it ships. Payload: CODE-REVIEW-CONVERGENCE-SPEC.md
 created: 2026-10-29
 status: active
-updated: 2026-11-12
+board:
+  scope: active
+  prefix: Engine
+updated: 2026-11-17
 ---
 
 # The spec-to-board pipeline
