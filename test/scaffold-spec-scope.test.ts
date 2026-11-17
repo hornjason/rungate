@@ -21,6 +21,10 @@ const FILES: Record<string, string> = {
   "specs/ACTIVE-SPEC.md": spec("board: { scope: active, prefix: Zqactive }\n", "- [ ] SC-9304: opted in"),
   "specs/GENERATED-SPEC.md": spec("generated-by: scripts/some-generator.ts\n", "- [ ] SC-9305: produced"),
   "specs/SPEC-TEMPLATE.md": spec("", "- [ ] SC-9306: a placeholder"),
+  // The sweep drops only the top-level template by path; a template elsewhere reaches this step.
+  "specs/nested/AREA-SPEC-TEMPLATE.md": spec("", "- [ ] SC-9307: another placeholder"),
+  // A column-0 comment the frontmatter parser refuses, so an added line would read as invalid.
+  "specs/COMMENTED-SPEC.md": spec("# a column-0 comment\n", "States none."),
   "specs/nested/EMPTY-SPEC.md": spec("", "States none."),
 };
 
@@ -49,12 +53,21 @@ describe("#2307: every spec declares a board scope after one scaffold", () => {
         expect(readAt(root, rel)).toContain(`${DEFERRED_LINE}\n---`);
         expect(boardDeclaration(readAt(root, rel)).scope, rel).toBe("deferred");
       }
-      for (const rel of ["specs/DEFERRED-SPEC.md", "specs/ACTIVE-SPEC.md", "specs/GENERATED-SPEC.md", "specs/SPEC-TEMPLATE.md"]) {
+      for (const rel of [
+        "specs/DEFERRED-SPEC.md",
+        "specs/ACTIVE-SPEC.md",
+        "specs/GENERATED-SPEC.md",
+        "specs/SPEC-TEMPLATE.md",
+        "specs/nested/AREA-SPEC-TEMPLATE.md",
+        "specs/COMMENTED-SPEC.md",
+      ]) {
         expect(readAt(root, rel), `${rel} was rewritten`).toBe(FILES[rel]);
       }
       expect(actions).toContain(`UPDATED: specs/UNDECLARED-SPEC.md (${DEFERRED_LINE} — it declared no scope)`);
       expect(actions).toContain(`UPDATED: specs/nested/EMPTY-SPEC.md (${DEFERRED_LINE} — it declared no scope)`);
       expect(actions).toContain(`UPDATED: ${BANK} (2 spec(s) banked as deferred)`);
+      // Left alone and said so, every run: the engine still cannot read this spec's scope.
+      expect(actions.some(a => a.startsWith("SKIP: specs/COMMENTED-SPEC.md: its frontmatter cannot be read"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -81,7 +94,7 @@ describe("#2307: every spec declares a board scope after one scaffold", () => {
       const snapshot = Object.keys(FILES).map(rel => readAt(root, rel)).concat(readAt(root, BANK));
       const again: string[] = [];
       deferUndeclaredSpecs(root, again);
-      expect(again).toEqual([]);
+      expect(again.filter(a => !a.startsWith("SKIP: specs/COMMENTED-SPEC.md"))).toEqual([]);
       expect(Object.keys(FILES).map(rel => readAt(root, rel)).concat(readAt(root, BANK))).toEqual(snapshot);
     } finally {
       rmSync(root, { recursive: true, force: true });
