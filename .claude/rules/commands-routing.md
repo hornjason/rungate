@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 09208cdd4416c258
+generated-sha: 56f1650a75de0aa0
 ---
 
 ## Command Routing
@@ -23,13 +23,13 @@ Generated from the CLI's command registry. Run one as
 | `board-conformance` | Whether the board says what the spec says, reading by reading |
 | `plan-issues` | Apply an approved issue plan: --decompose files issues, --repair links and demotes them |
 | `board-scope` | Spec criteria and opt-in, with looks-done hints |
-| `board` | Where the plan stands: phases, open issues, blockers |
+| `board` | Each phase's open issues and blockers |
 | `plan-deps` | Write a spec's phase order onto the tracker as blocked-by edges |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
 | `board-id` | Print the board's node id from config |
 | `ci-reading` | Print a merged pull request's CI breakdown — per-check time, queue, critical path, re-runs |
 | `board-intake-move` | Move a board item to a column, verified in the item and in the board's search index |
-| `unaccounted-work` | Report undone work declared in a repository's prose that no open issue covers |
+| `unaccounted-work` | Undone work declared in prose that no open issue covers |
 | `intake` | Run each intake source and print its reading, MEASURED or UNMEASURED |
 | `audit-closing-references` | Refuse a pull request whose closing reference GitHub will not act on, or that closes no issue |
 | `sync-spec-tests` | Regenerate the conformity suite from the specs |
