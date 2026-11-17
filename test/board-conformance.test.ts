@@ -950,6 +950,9 @@ describe("every field the snapshot declares is read by something", () => {
     { field: "BoardIssue.labels", effect: "reading", apply: b => void (b.issues[1]!.labels = ["bug"]) },
     { field: "BoardCriterion.satisfiedByIssue", effect: "reading", apply: b => void (b.criteria[0]!.satisfiedByIssue = null) },
     { field: "BoardCriterion.recordedTrue", effect: "reading", apply: b => void (b.criteria[2]!.recordedTrue = false) },
+    // SC-2778: a parked criterion leaves the denominator; an unknown placement unmeasures the reading.
+    { field: "BoardCriterion.outside", effect: "reading", apply: b => void (b.criteria[0]!.outside = "Blocked — needs a second person") },
+    { field: "BoardCriterion.unknownPlacement", effect: "reading", apply: b => void (b.criteria[0]!.unknownPlacement = "Parked") },
     { field: "BoardPhase.criteria", effect: "reading", apply: b => void (b.phases[1]!.criteria = [...b.phases[1]!.criteria, "SC-9999"]) },
     { field: "BoardPhase.milestoneState", effect: "reading", apply: b => void (b.phases[1]!.milestoneState = "create") },
   ];
@@ -2133,3 +2136,110 @@ describe("SC-2776: spec-placement measures only opted-in specs and names every d
     }
   });
 });
+
+/**
+ * SC-2778: a criterion its spec places outside every phase — Blocked, Not
+ * adopted — deliberate, or Not observable here — is named by
+ * `criterion-coverage` and `declared-work` as declared outside phases and
+ * leaves both readings' targets. It is never counted as covered by an issue,
+ * and a placement value the engine does not know leaves both readings
+ * UNMEASURED (ADR-018 Decision 5). The rows arrive annotated by ONE predicate,
+ * `outsidePhases` in lib/spec-placement.ts (test/board-snapshot.test.ts).
+ */
+describe("SC-2778: a criterion placed outside every phase is declared, not missing", () => {
+  const reading = (b: BoardSnapshot, name: string) => takeReadings(b).find(r => r.name === name)!;
+  const BLOCKED = "Blocked — needs a second person";
+
+  test("SC-2778: criterion-coverage leaves a declared criterion out of both sides and names it apart", () => {
+    const b = completeBoard();
+    b.criteria.push({ id: "CRC-E5", satisfiedByIssue: null, outside: BLOCKED });
+    const r = reading(b, "criterion-coverage");
+    expect(r.status).toBe("met");
+    expect(r.target).toBe(3);
+    expect(r.declared).toEqual([`CRC-E5 — ${BLOCKED}`]);
+  });
+
+  test("SC-2778: the same criterion with no placement is missing — the control", () => {
+    const b = completeBoard();
+    b.criteria.push({ id: "CRC-E5", satisfiedByIssue: null });
+    const r = reading(b, "criterion-coverage");
+    expect(r.status).toBe("short");
+    expect(r.target).toBe(4);
+    expect(r.declared).toEqual([]);
+  });
+
+  test("SC-2778: a declared criterion an issue names is never counted as covered", () => {
+    const b = completeBoard();
+    b.criteria.push({ id: "CRC-F1", satisfiedByIssue: 1, outside: "Not adopted — deliberate" });
+    const r = reading(b, "criterion-coverage");
+    // Out of both sides: not a fourth covered criterion on the strength of #1.
+    expect([r.status, r.measured, r.target]).toEqual(["met", 3, 3]);
+  });
+
+  test("SC-2778: a placement value the engine does not know leaves criterion-coverage UNMEASURED, by name", () => {
+    const b = completeBoard();
+    b.criteria.push({ id: "CRC-X1", satisfiedByIssue: null, unknownPlacement: "Parked" });
+    const r = reading(b, "criterion-coverage");
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("CRC-X1 is placed \"Parked\"");
+  });
+
+  test("SC-2778: declared-work leaves a declared criterion out, names it apart, and never asks for an issue", () => {
+    const b = completeBoard();
+    b.declaredWork!.push({ kind: "criterion", id: "CRC-H1", source: "specs/CRC.md", outside: "Not observable here" });
+    const r = reading(b, "declared-work");
+    expect([r.status, r.target]).toEqual(["met", 2]);
+    expect(r.declared).toEqual(["CRC-H1 (specs/CRC.md) — Not observable here"]);
+  });
+
+  test("SC-2778: the same declared-work row with no placement is unaccounted — the control", () => {
+    const b = completeBoard();
+    b.declaredWork!.push({ kind: "criterion", id: "CRC-H1", source: "specs/CRC.md" });
+    const r = reading(b, "declared-work");
+    expect(r.status).toBe("short");
+    expect(r.offenders).toEqual(["CRC-H1 (specs/CRC.md) names no open issue"]);
+  });
+
+  test("SC-2778: a placement value the engine does not know leaves declared-work UNMEASURED, by name", () => {
+    const b = completeBoard();
+    b.declaredWork!.push({ kind: "criterion", id: "CRC-X1", source: "specs/CRC.md", unknownPlacement: "Parked" });
+    const r = reading(b, "declared-work");
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("CRC-X1 (specs/CRC.md) is placed \"Parked\"");
+  });
+
+  // Carried from PR #2308 round 7: a spec whose declaration the engine cannot
+  // read leaves declared-work's population unknown, so it refuses by name
+  // instead of measuring a population with that spec silently missing.
+  test("SC-2778: a spec whose board: declaration cannot be read leaves declared-work UNMEASURED, by name", () => {
+    const b = completeBoard();
+    b.specPlacements!.push({
+      path: "specs/TYPO.md",
+      state: "UNPLANNED",
+      criteria: 2,
+      placed: 0,
+      board: { scope: "invalid", settings: { scope: "activ" }, problems: ["`board.scope: activ` is not a value the engine knows (active or deferred)"] },
+    });
+    const r = reading(b, "declared-work");
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/TYPO.md: `board.scope: activ`");
+  });
+
+  test("SC-2778: the declared line prints on a MET reading — named apart, not only when short", () => {
+    const b = completeBoard();
+    b.criteria.push({ id: "CRC-E5", satisfiedByIssue: null, outside: BLOCKED });
+    const text = formatReading(reading(b, "criterion-coverage"));
+    expect(text).toContain("MET");
+    expect(text).toContain(`declared outside phases (1): CRC-E5 — ${BLOCKED}`);
+  });
+
+  test("SC-2778: the annotations cross the snapshot boundary", () => {
+    const b = completeBoard();
+    b.criteria.push({ id: "CRC-E5", satisfiedByIssue: null, outside: BLOCKED });
+    b.declaredWork!.push({ kind: "criterion", id: "CRC-X1", source: "specs/CRC.md", unknownPlacement: "Parked" });
+    const read = readSnapshotText(JSON.stringify(b)).board!;
+    expect(read.criteria.find(x => x.id === "CRC-E5")?.outside).toBe(BLOCKED);
+    expect(read.declaredWork!.find(w => w.id === "CRC-X1")?.unknownPlacement).toBe("Parked");
+  });
+});
+

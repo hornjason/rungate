@@ -2356,3 +2356,66 @@ describe("SC-2776: readEngineConfig — an unfound config is omitted, never read
     });
   });
 });
+
+/**
+ * SC-2778: ONE predicate, `outsidePhases`, decides where a criterion sits for
+ * both readings' producers — `criterionCoverage` (criterion-coverage) and
+ * `readDeclaredWork` (declared-work) — so the two cannot disagree.
+ */
+describe("SC-2778: one predicate annotates both readings' rows", () => {
+  const SPEC_WITH_TABLE = [
+    "---", "doc-type: spec", "board:", "  scope: active", "  prefix: Fix", "---", "",
+    "### Phase placement", "",
+    "| Placement | Criteria |", "|---|---|",
+    "| Phase 1 | SC-9401 |",
+    "| Blocked — needs a second person | SC-9402 |",
+    "| Not adopted — deliberate | SC-9403 |",
+    "| Not observable here | SC-9404 |",
+    "| Done | SC-9405 |",
+    "| Parked | SC-9406 |",
+    "",
+    "- [ ] SC-9401: in a phase", "- [ ] SC-9402: blocked", "- [ ] SC-9403: not adopted",
+    "- [ ] SC-9404: not observable", "- [x] SC-9405: done", "- [ ] SC-9406: a placement nobody knows",
+    "- [ ] SC-9407: placed nowhere", "",
+  ].join("\n");
+
+  test("SC-2778: outsidePhases names the three declared placements, refuses an unknown one, and passes the rest", async () => {
+    const { outsidePhases } = await import("../lib/spec-placement");
+    expect(outsidePhases("Phase 3")).toBeNull();
+    expect(outsidePhases("Done")).toBeNull();
+    expect(outsidePhases(undefined)).toBeNull();
+    expect(outsidePhases("Blocked — needs a second person")).toEqual({ outside: "Blocked — needs a second person" });
+    expect(outsidePhases("Not adopted — deliberate")).toEqual({ outside: "Not adopted — deliberate" });
+    expect(outsidePhases("Not observable here")).toEqual({ outside: "Not observable here" });
+    expect(outsidePhases("Parked")).toEqual({ unknownPlacement: "Parked" });
+  });
+
+  test("SC-2778: criterionCoverage annotates each criterion from the spec's own table", async () => {
+    const { criterionCoverage } = await import("../lib/spec-placement");
+    const rows = criterionCoverage(SPEC_WITH_TABLE, [{ number: 1, criteriaField: "SC-9403" }], true);
+    const by = new Map(rows.map(r => [r.id, r]));
+    expect(by.get("SC-9401")).toEqual({ id: "SC-9401", satisfiedByIssue: null, recordedTrue: false });
+    expect(by.get("SC-9402")?.outside).toBe("Blocked — needs a second person");
+    expect(by.get("SC-9403")?.outside).toBe("Not adopted — deliberate");
+    expect(by.get("SC-9406")?.unknownPlacement).toBe("Parked");
+    expect(by.get("SC-9407")?.outside).toBeUndefined();
+  });
+
+  test("SC-2778: readDeclaredWork annotates each unticked criterion the same way", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sc2778-declared-"));
+    try {
+      mkdirSync(join(dir, "specs"));
+      writeFileSync(join(dir, "specs", "T.md"), SPEC_WITH_TABLE);
+      const rows = [{ path: "specs/T.md", state: "UNPLANNED" as const, board: { scope: "active", settings: { prefix: "Fix" }, problems: [] } }];
+      const work = readDeclaredWork(dir, rows).declaredWork!;
+      const by = new Map(work.map(w => [w.id, w]));
+      expect([...by.keys()]).toEqual(["SC-9401", "SC-9402", "SC-9403", "SC-9404", "SC-9406", "SC-9407"]);
+      expect(by.get("SC-9401")).toEqual({ kind: "criterion", id: "SC-9401", source: "specs/T.md" });
+      expect(by.get("SC-9404")?.outside).toBe("Not observable here");
+      expect(by.get("SC-9406")?.unknownPlacement).toBe("Parked");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

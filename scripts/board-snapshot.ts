@@ -57,7 +57,9 @@ import {
   criterionCoverage,
   familyOf,
   milestonePlan,
+  outsidePhases,
   placementCoverage,
+  placementsById,
   placementReading,
   type CriterionCoverage,
   type SpecPlacement,
@@ -286,7 +288,12 @@ export function readDeclaredWork(
       // Named as UNMEASURED by the omitted key, never read as an empty spec.
       return {};
     }
-    for (const c of parseCriteria(content)) if (!c.ticked) work.push({ kind: "criterion", id: c.id, source: s.path });
+    // SC-2778: the same predicate criterion-coverage's rows go through, so
+    // the two readings agree on every criterion the spec parks.
+    const placed = placementsById(content);
+    for (const c of parseCriteria(content)) {
+      if (!c.ticked) work.push({ kind: "criterion", id: c.id, source: s.path, ...outsidePhases(placed.get(c.id)) });
+    }
   }
   const statePath = join(root, "project-state.json");
   if (existsSync(statePath)) {
