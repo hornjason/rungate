@@ -40,6 +40,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs
 import { tmpdir } from "os";
 import { join } from "path";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
+import { nextCursor } from "../lib/graphql-cursor";
 import { readMilestoneTitle } from "../lib/milestone-title";
 import { parseCriteria } from "../lib/spec-evidence";
 import { PHASE_VALUE, parsePlacementRows } from "../lib/spec-placement";
@@ -717,8 +718,12 @@ function readPhaseIssues(gh: Gh, repo: string): Reading<PhaseIssue[]> {
         moreBlockers: n.blockedBy?.pageInfo?.hasNextPage === true,
       });
     }
-    if (!conn.pageInfo.hasNextPage) return read(out);
-    cursor = conn.pageInfo.endCursor;
+    // The one decider of "is there another page" (SC-2721), so an empty or
+    // missing cursor on a page that says more exist is UNMEASURED, not the end.
+    const next = nextCursor(conn.pageInfo);
+    if (next.kind === "done") return read(out);
+    if (next.kind === "unreadable") return unmeasured(`the open issues could not be paged: ${next.why}`);
+    cursor = next.cursor;
   }
   return unmeasured("the open issues kept paging past 5,000");
 }
