@@ -1321,7 +1321,6 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
   return {
     status: 'SHIP_FAILED',
     reason: summary.reason,
-    intake,
     retryGuidance: RESUME_REPLAYS_NOTE,
     immediateReason: immediateReason || null,
     failures: summary.failures,
@@ -1338,6 +1337,7 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
     runBranchReading: restored.reading,
     runBranchRestore: restored.restoreOutcome,
     ...extra,
+    intake,
   }
 }
 

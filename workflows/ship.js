@@ -2462,7 +2462,6 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
   return {
     status: 'SHIP_FAILED',
     reason: summary.reason,
-    intake, // advisory (#2234)
     // The same note the other funnel carries, from the same binding (#889).
     // SHIP_FAILED is the status most likely to be retried — the work exists
     // and only the ship step refused — so a note on the other funnel alone
@@ -2497,6 +2496,8 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
     runBranchReading: restored.reading,
     runBranchRestore: restored.restoreOutcome,
     ...extra,
+    // Advisory, after the spread so a caller cannot shadow it (#2234).
+    intake,
   }
 }
 

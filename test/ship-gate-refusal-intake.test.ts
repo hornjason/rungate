@@ -126,6 +126,20 @@ describe("#2234: every terminal exit takes the reading, and nothing decides a st
     expect(SHIP.slice(last - 80, last)).toContain("const intake = await gateRefusalIntake(terminalStatus)");
   });
 
+  test("both funnels put the reading after `...extra`, so a caller's extra cannot shadow it (review, #2295)", () => {
+    for (const signature of [
+      "async function terminalFailure(status, extra = {}) {",
+      "async function shipFailed(phaseName, immediateReason, extra = {}) {",
+    ]) {
+      const fn = body(signature);
+      const spread = fn.lastIndexOf("...extra,");
+      const field = fn.lastIndexOf("\n    intake,");
+      expect(spread, `${signature} no longer spreads extra`).toBeGreaterThan(-1);
+      expect(field, `${signature} returns no intake field`).toBeGreaterThan(-1);
+      expect(field > spread, `${signature} lists intake before ...extra, so extra.intake would replace the reading`).toBe(true);
+    }
+  });
+
   test("the reading is returned, and read by nothing", () => {
     // The one way the advisory reading could reach a verdict is for some code
     // to read it. Outside its own block, nothing does.
