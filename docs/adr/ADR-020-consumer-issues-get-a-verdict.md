@@ -114,8 +114,10 @@ none. In direct-ship mode the filing cap is the ceiling every day.
 ## Decomposition
 
 The criteria are written in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, placed in
-Phase 9 (Decision 5), with ids reserved in `specs/sc-reservations.json` for
-this branch. `consumer-intake.yml` calls `consumer-triage` through the
+Phase 9 (Decision 5). Their ids hold no block in `specs/sc-reservations.json`:
+`test/spec-to-board-pipeline.test.ts` admits no block for ids this spec has
+written, so until this merges nothing stops a concurrent allocator taking
+them, and after it `lib/create-sc.ts`'s taken set holds them. `consumer-intake.yml` calls `consumer-triage` through the
 published CLI, so a release falls between the first row and the third
 (`docs/guides/RELEASING.md`, "A command a generated workflow calls ships
 BEFORE the workflow that calls it").

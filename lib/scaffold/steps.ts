@@ -49,6 +49,7 @@ import {
   buildAiReviewUnmeasuredWorkflow,
 } from "./ai-review-unmeasured-workflow";
 import { buildAdrAcceptedWorkflow } from "./adr-accepted-workflow";
+import { buildSpecsPlacedWorkflow } from "./specs-placed-workflow";
 import { buildClosingReferencesWorkflow } from "./closing-references-workflow";
 import { buildIntakeWorkflow } from "./intake-workflow";
 import { buildBoardReadyWorkflow } from "./board-ready-workflow";
@@ -4504,6 +4505,18 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     milestonePrefix: boardInputs.milestonePrefix,
   });
 
+  // SC-2780, ADR-018 Decision 1: a push to main that changes specs/ runs
+  // every opted-in family through the engine. The families are read at run
+  // time by the published CLI, so nothing here names a spec.
+  const specsPlacedYml = buildSpecsPlacedWorkflow({
+    runsOn,
+    checkout: actionRef("actions/checkout"),
+    setupBun: actionRef("oven-sh/setup-bun"),
+    setupBunWith: bunStep,
+    setupBunEnv: setupBunEnv("        "),
+    version: harnessVersion(),
+  });
+
   // #2045, ADR-014 row 2: the closing-references check, generated so a
   // consumer gets ADR-013 rule 9 step 4 and this repository's copy is the
   // generated one. It calls the published CLI, at the generating version.
@@ -4567,7 +4580,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
   // lib/conformity.ts reads back, and the two are held together by
   // test/ai-review-workflow.test.ts AC-1, which looks for the constant's
   // filename in what this loop actually wrote.
-  for (const [name, content] of [["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml], ["adr-accepted.yml", adrAcceptedYml], ["closing-references.yml", closingReferencesYml], ["board-ready.yml", boardReadyYml], ["board-intake.yml", boardIntakeYml], ["intake.yml", intakeYml]] as const) {
+  for (const [name, content] of [["ci.yml", ciYml], ["gates.yml", gatesYml], ["ai-review.yml", aiReviewYml], ["ai-review-unmeasured.yml", aiReviewUnmeasuredYml], ["adr-accepted.yml", adrAcceptedYml], ["closing-references.yml", closingReferencesYml], ["board-ready.yml", boardReadyYml], ["board-intake.yml", boardIntakeYml], ["intake.yml", intakeYml], ["specs-placed.yml", specsPlacedYml]] as const) {
     const label = `.github/workflows/${name}`;
     try {
       // Keyed by FILE, and the lookup is here because this loop is the only
