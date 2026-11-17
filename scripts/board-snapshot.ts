@@ -41,6 +41,7 @@ import { openFrontier, phaseOf } from "../lib/board-mirror";
 import { withoutAmbientGitOverrides } from "../lib/git-isolation";
 import { createGitHubClient, listMilestones } from "../lib/github";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
+import { resolveConfig } from "../lib/config-loader";
 import { resolveRepoSlug } from "../lib/branch-cleanup";
 import {
   inMilestoneFamily,
@@ -349,6 +350,32 @@ export function placementRow(s: SpecPlacement): SpecPlacementRow {
     ...(s.board.scope !== "undeclared"
       ? { board: { scope: s.board.scope, settings: { ...s.board.settings }, problems: [...s.board.problems] } }
       : {}),
+  };
+}
+
+/**
+ * What the config says the engine is — SC-2776 — carried as DATA so
+ * `board-conformance` (import-free) can hold the engine spec's own `board:`
+ * block to it. Paths are spelled the way the sweep spells them, so
+ * `./specs/X.md` and `specs/X.md` are one spec.
+ *
+ * **A config nobody could find omits the key.** `readBoardInputs` returns the
+ * same two `null`s for an absent config and for one that sets neither key,
+ * and `null` here means "nothing to disagree with", so a run from the wrong
+ * directory would read as agreement. `resolveConfig` separates the two, as
+ * `enginePrefixReading` does for #1965 (review of #2308).
+ */
+export function readEngineConfig(root: string): { engineConfig?: { spec: string | null; prefix: string | null } } {
+  if (resolveConfig(root).status === "absent") return {};
+  const configured = readBoardInputs(root);
+  return {
+    engineConfig: {
+      spec:
+        configured.engineSpec === null
+          ? null
+          : relative(root, isAbsolute(configured.engineSpec) ? configured.engineSpec : join(root, configured.engineSpec)),
+      prefix: configured.milestonePrefix,
+    },
   };
 }
 
@@ -864,19 +891,7 @@ export async function main(
           specPlacements: coverage.specs.map(placementRow),
         };
 
-  // SC-2776. What the config says the engine is, carried as DATA so
-  // `board-conformance` (import-free) can hold the engine spec's own
-  // `board:` block to it. Spelled the way the sweep spells paths, so
-  // `./specs/X.md` and `specs/X.md` are one spec.
-  const engineConfig = {
-    engineConfig: {
-      spec:
-        configured.engineSpec === null
-          ? null
-          : relative(root, isAbsolute(configured.engineSpec) ? configured.engineSpec : join(root, configured.engineSpec)),
-      prefix: configured.milestonePrefix,
-    },
-  };
+  const engineConfig = readEngineConfig(root);
 
   // SC-2734. The bank the deferred specs are compared against. An absent or
   // malformed file omits the key, and the reading goes UNMEASURED as soon as

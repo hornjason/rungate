@@ -2318,3 +2318,41 @@ describe("SC-2752 / #1953: readDeclaredWork — unticked criteria and open stage
     });
   });
 });
+
+/**
+ * SC-2776: the engine config the snapshot carries, and the one case that must
+ * omit it. An absent config and a config setting neither key both read as
+ * two `null`s through `readBoardInputs`; only the second is "nothing to
+ * disagree with" (review of #2308).
+ */
+describe("SC-2776: readEngineConfig — an unfound config is omitted, never read as agreement", () => {
+  const inDir = <T>(fn: (dir: string) => T): T => {
+    const dir = mkdtempSync(join(tmpdir(), "sc2776-engine-config-"));
+    try {
+      return fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("SC-2776: no config at all omits the key, so the reading goes UNMEASURED", async () => {
+    const { readEngineConfig } = await import("../scripts/board-snapshot.ts");
+    inDir(dir => expect(readEngineConfig(dir)).toEqual({}));
+  });
+
+  test("SC-2776: a config that sets neither key is read, and has nothing to disagree with", async () => {
+    const { readEngineConfig } = await import("../scripts/board-snapshot.ts");
+    inDir(dir => {
+      writeBoardConfig(dir, BOARD);
+      expect(readEngineConfig(dir)).toEqual({ engineConfig: { spec: null, prefix: null } });
+    });
+  });
+
+  test("SC-2776: a configured engine spec is spelled the way the sweep spells paths", async () => {
+    const { readEngineConfig } = await import("../scripts/board-snapshot.ts");
+    inDir(dir => {
+      writeBoardConfig(dir, { ...BOARD, engineSpec: "./specs/E.md", milestonePrefix: "Engine" });
+      expect(readEngineConfig(dir)).toEqual({ engineConfig: { spec: "specs/E.md", prefix: "Engine" } });
+    });
+  });
+});
