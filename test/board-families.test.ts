@@ -127,6 +127,11 @@ describe("SC-2776: a spec opts itself in through one board: block in its own fro
       expect(repeated.scope, flow).toBe("invalid");
       expect(repeated.problems.join("\n"), flow).toContain("`board.scope` is declared more than once");
     }
+    // Round 8: the block form's top level reads bare keys only, so a quoted
+    // repeat (which YAML would silently resolve to the last) is refused.
+    const quotedBlock = boardDeclaration(spec(`board:\n  scope: active\n  "scope": deferred\n  prefix: Engine\n`));
+    expect(quotedBlock.scope).toBe("invalid");
+    expect(quotedBlock.problems.join("\n")).toContain("reads only bare `key:` names");
     // ...and a comma, colon or brace inside a quoted value or a trailing
     // comment is not a second key.
     const quoted = boardDeclaration(spec(`board: { scope: active, prefix: "A, scope: B }" }  # a } here\n`));

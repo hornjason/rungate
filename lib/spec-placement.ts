@@ -371,9 +371,18 @@ function repeatedKeys(e: { inline: string; block: string[] }): string[] | null {
       return null;
     }
   }
-  const keys = e.block.map(l => /^([ \t]+)([A-Za-z_][\w-]*)[ \t]*:/.exec(l)).filter(m => m !== null);
-  const top = keys[0]?.[1];
-  names.push(...keys.filter(m => m[1] === top).map(m => m[2]!));
+  // The block form's top level is read as bare `key:` names ONLY. A line
+  // there spelled any other way — a quoted key, a `? ` complex key, a `<<:`
+  // merge — is refused rather than parsed, so no YAML spelling of a repeat
+  // can slip past (review of #2308). Deeper lines are nested values.
+  const lines = e.block.filter(l => l.trim() !== "" && !l.trim().startsWith("#"));
+  const top = lines[0]?.match(/^[ \t]*/)?.[0];
+  for (const l of lines) {
+    if (l.match(/^[ \t]*/)?.[0] !== top) continue;
+    const m = /^[ \t]+([A-Za-z_][\w-]*)[ \t]*:/.exec(l);
+    if (m === null) return null;
+    names.push(m[1]!);
+  }
   return [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
 }
 
@@ -442,7 +451,10 @@ export function boardDeclaration(content: string): BoardDeclaration {
     } else {
       const repeats = repeatedKeys(block);
       if (repeats === null) {
-        problems.push("the one-line `board: { … }` could not be re-read to check for a key written twice");
+        problems.push(
+          "`board:` could not be checked for a key written twice — at its top level the engine reads only " +
+            "bare `key:` names, so a quoted, complex or merge key is refused",
+        );
         contested = true;
       } else for (const k of repeats) twice(`\`board.${k}\``);
       for (const [key, v] of Object.entries(read.value as Record<string, unknown>)) {
