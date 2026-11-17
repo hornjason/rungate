@@ -68,6 +68,7 @@ import { join } from "path";
 import {
   DEFAULT_SHIP_MODE,
   SHIP_MODES,
+  SHIP_LAUNCH_SCRIPT,
   ShipModeError,
   resolveShipPolicy,
   shipWorkflowRule,
@@ -83,6 +84,24 @@ const REPO = join(import.meta.dir, "..");
 
 /** The body-sha the pre-#911 generator emitted. Not computed here. */
 const PRE_911_BODY_SHA = "b4eaa1a38ec2127a";
+
+/** The body that sha covers, byte for byte: what a consumer scaffolded before #911 holds. */
+const PRE_911_BODY = `---
+description: All implementation work must go through the ship workflow — never spawn agents directly
+---
+
+## Ship Workflow Required
+
+When shipping an issue or implementing code changes, use the ship workflow:
+
+\`\`\`
+Skill("ship")  →  Workflow({ scriptPath: "workflows/ship.js" })
+\`\`\`
+
+**NEVER spawn Marcus, Quinn, or Rook directly with the Agent tool.** The ship workflow captures transcripts, runs compliance grading, and enforces gates. Spawning agents directly bypasses all measurement.
+
+If Skill("harness") or Skill("goal") fails, fall back to Skill("ship") with the issue number.
+`;
 
 const DIRECT = {
   ship: { mode: "direct", since: "2026-10-19", reason: "stabilising RunGate and clearing backlogs" },
@@ -107,13 +126,21 @@ function ruleFor(config: Record<string, unknown> | null): string {
 }
 
 describe("#911 AC-1: an absent ship block is byte-identical to the pre-#911 generator", () => {
-  test("the harness body-sha is the one two shipped consumers already declare", () => {
-    expect(bodySha(shipWorkflowRule({ mode: "harness" }))).toBe(PRE_911_BODY_SHA);
+  // #2288 changed one thing in the harness body: the launch path, because
+  // `workflows/ship.js` is over the Workflow tool's script cap. These two
+  // cases pin "the pre-#911 body with only that path changed", so any other
+  // drift is still caught.
+  const currentHarnessBody = () => PRE_911_BODY.replace('scriptPath: "workflows/ship.js"', `scriptPath: "${SHIP_LAUNCH_SCRIPT}"`);
+
+  test("the harness body is the pre-#911 one with only the launch path changed (#2288)", () => {
+    expect(bodySha(PRE_911_BODY)).toBe(PRE_911_BODY_SHA);
+    expect(currentHarnessBody()).not.toBe(PRE_911_BODY);
+    expect(shipWorkflowRule({ mode: "harness" })).toBe(currentHarnessBody());
   });
 
   test("absent config, absent ship block and an explicit harness mode all render that same body", () => {
     for (const config of [null, {}, { project: "x" }, { ship: { mode: "harness" } }]) {
-      expect(bodySha(ruleFor(config))).toBe(PRE_911_BODY_SHA);
+      expect(bodySha(ruleFor(config))).toBe(bodySha(currentHarnessBody()));
     }
   });
 
@@ -392,12 +419,14 @@ If Skill("harness") or Skill("goal") fails, fall back to Skill("ship") with the 
     }
   });
 
-  test("the same existing consumer with no ship block keeps the file it already had", () => {
+  test("the same existing consumer with no ship block gets the launch path and nothing else (#2288)", () => {
     const { root, rulePath } = existingConsumer(undefined);
     try {
       const before = readFileSync(rulePath, "utf-8");
       generateAgentsMdContent(root, "code", []);
-      expect(readFileSync(rulePath, "utf-8")).toBe(before);
+      const after = readFileSync(rulePath, "utf-8");
+      expect(ruleBody(after)).toBe(ruleBody(before).replace('scriptPath: "workflows/ship.js"', `scriptPath: "${SHIP_LAUNCH_SCRIPT}"`));
+      expect(declaredSha(after)).toBe(bodySha(after));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

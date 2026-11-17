@@ -129,7 +129,8 @@ log(`Shipping #${ISSUE} through harness`)
 let shipResult = null
 try {
   shipResult = await workflow(
-    { scriptPath: HARNESS_ROOT + '/workflows/ship.js' },
+    // The generated launch file: ship.js itself is over the script cap (ADR-017, #2288).
+    { scriptPath: HARNESS_ROOT + '/workflows/ship.run.js' },
     { ...parsedArgs }
   )
 } catch (nestingError) {

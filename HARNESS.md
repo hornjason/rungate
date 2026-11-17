@@ -15,7 +15,7 @@ Agent entry point for the PAI ship/prove/council execution engine. This repo own
 - **Input:** GitHub issue number, rungate.json config
 - **Output:** SHIP_PASSED or SHIP_FAILED with gate evidence chain
 - **Phases:** SCOPE → BUILD → VERIFY → CLOSE
-- **Invocation:** `Workflow({scriptPath: "<HARNESS_ROOT>/workflows/ship.js"})`
+- **Invocation:** `Workflow({scriptPath: "<HARNESS_ROOT>/workflows/ship.run.js"})`
 
 ### `workflows/prove.js`
 - **Input:** GitHub issue number, ship evidence chain

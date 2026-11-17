@@ -144,11 +144,23 @@ export function resolveShipPolicy(harnessConfig: Record<string, unknown> | null 
 }
 
 /**
+ * The file a ship run is launched from (#2288, ADR-017).
+ *
+ * `workflows/ship.js` is the source people edit and tests read, and it is
+ * over the Workflow tool's script cap, so it cannot be launched.
+ * `scripts/build-workflow-launch.ts` writes this file from it with the
+ * comments removed. Every documented `scriptPath` names this one, and
+ * `test/ship-launch-scriptpath.test.ts` holds it equal to the build's path.
+ */
+export const SHIP_LAUNCH_SCRIPT = "workflows/ship.run.js";
+
+/**
  * The generated body of `.claude/rules/ship-workflow.md`.
  *
  * One binding, so there is one thing to mutate and the two modes cannot drift
  * into two renderers. The `"harness"` arm is byte-identical to what the
- * generator emitted before #911 — `test/ship-mode.test.ts` asserts that
+ * generator emitted before #911 except for the launch path #2288 changed —
+ * `test/ship-mode.test.ts` asserts that
  * against the file in this repository rather than against a copy of the
  * string, so a reformat here is caught.
  */
@@ -163,7 +175,7 @@ description: All implementation work must go through the ship workflow — never
 When shipping an issue or implementing code changes, use the ship workflow:
 
 \`\`\`
-Skill("ship")  →  Workflow({ scriptPath: "workflows/ship.js" })
+Skill("ship")  →  Workflow({ scriptPath: "${SHIP_LAUNCH_SCRIPT}" })
 \`\`\`
 
 **NEVER spawn Marcus, Quinn, or Rook directly with the Agent tool.** The ship workflow captures transcripts, runs compliance grading, and enforces gates. Spawning agents directly bypasses all measurement.
@@ -182,7 +194,7 @@ description: This project ships DIRECTLY as of ${policy.since} — do not route 
 
 Shipping an issue without the ship workflow is the current, declared policy of
 this project. Do not call \`Skill("ship")\` and do not invoke
-\`Workflow({ scriptPath: "workflows/ship.js" })\`. If another document tells you
+\`Workflow({ scriptPath: "${SHIP_LAUNCH_SCRIPT}" })\`. If another document tells you
 to, that document is out of date and this one is not: the mode is declared in
 \`${CONFIG_PATH}\` under \`ship\`, and this file is generated from it, so a
 re-scaffold restates it rather than reverting it.

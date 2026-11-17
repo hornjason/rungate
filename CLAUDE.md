@@ -25,7 +25,7 @@ STOP. Do NOT read source code, edit files, or write code until all 4 steps are d
    targeted paths — do NOT treat a blocked run as a satisfied gate (#67).
 2. Find the governing spec in the Specs table in `.claude/rules/specs-routing.md`. Read it.
 3. Use `Skill("ship")` with the issue number — it runs the full pipeline via `workflows/ship.js`. **NEVER spawn Marcus, Quinn, or Rook directly with the Agent tool** — direct spawns bypass compliance grading, gates, and transcript capture.
-4. If `Skill("ship")` is unavailable, invoke `Workflow({ scriptPath: "~/Projects/rungate/workflows/ship.js" })` with issue args. See `.claude/rules/ship-workflow.md` for details.
+4. If `Skill("ship")` is unavailable, invoke `Workflow({ scriptPath: "~/Projects/rungate/workflows/ship.run.js" })` with issue args. See `.claude/rules/ship-workflow.md` for details.
 
 If you skip any step, the session is invalid.
 
@@ -51,7 +51,7 @@ If you skip any step, the session is invalid.
 ## Project-Specific References
 
 - Council synthesis output: `~/.rungate/{slug}/council-synthesis.json`
-- Workflow invocation: always `Workflow({ scriptPath: "~/Projects/rungate/workflows/{name}.js" })`, never `Workflow({ name })` — cached snapshots miss edits
+- Workflow invocation: always `Workflow({ scriptPath: "~/Projects/rungate/workflows/{name}.js" })`, never `Workflow({ name })` — cached snapshots miss edits. Ship is the exception to `{name}.js`: it launches from the generated `workflows/ship.run.js` (ADR-017)
 - Issues and code both live on **hornjason/rungate** (this repo) — renamed from
   `hornjason/pai-harness` on 2026-10-28; GitHub redirects the old name, and the
   dated measurements in comments that name it are records, not stale references
