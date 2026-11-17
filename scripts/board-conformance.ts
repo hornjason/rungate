@@ -204,7 +204,8 @@ export interface BoardSnapshot {
    * Work the repository DECLARES, and what each piece points at — SC-2752.
    *
    * Every unticked criterion in an in-scope spec (one that states criteria
-   * and is not deferred), and every open stage item in `project-state.json`.
+   * and opts in with `board: { scope: active }`, SC-2776 — the population
+   * `spec-placement` measures), and every open stage item in `project-state.json`.
    * A commitment written into a file is indistinguishable from one never
    * made until something reads the file and asks for its tracker object;
    * thirteen were found by hand on 2026-11-09 (#1938-#1946, #1948-#1951).
