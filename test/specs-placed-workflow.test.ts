@@ -279,3 +279,36 @@ describe("SC-2780: it never writes while an earlier ADR placement is running", (
     expect(DOC.permissions).toEqual({ contents: "read", issues: "write", actions: "read" });
   });
 });
+
+describe("a repository with no board: the Criteria step warns and passes instead of failing every specs push", () => {
+  const step = STEPS.find(s => s.name === "Criteria column on the board");
+  const run = runOf(step);
+  const noBoard = 'case "$*" in *board-id*) echo "UNMEASURED: no board — set board.id in the rungate config under /x. Nothing was printed." >&2; exit 2;; esac; exit 0';
+
+  test("no variable and no board.id: a warning naming UNMEASURED, exit 0, and nothing written", () => {
+    expect(run, "the Criteria step is missing").not.toBe("");
+    const r = execute(run, { bunx: noBoard });
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain("::warning title=Criteria column::UNMEASURED — no board is configured");
+    expect(r.calls.map(c => c.replace(/^bunx rungate@\S+ /, ""))).toStrictEqual(["board-id"]);
+  });
+
+  test("no variable, board.id set: the board-id answer is the board written", () => {
+    const r = execute(run, { bunx: 'case "$*" in *board-id*) echo PVT_from_config;; esac; exit 0' });
+    expect(r.code, r.out).toBe(0);
+    expect(r.calls.map(c => c.replace(/^bunx rungate@\S+ /, ""))).toStrictEqual(["board-id", "board-mirror --project PVT_from_config --write"]);
+  });
+
+  test("the variable set: it wins, and board-id is never asked", () => {
+    const r = execute(`PROJECT_ID=PVT_from_var\n${run}`, { bunx: noBoard });
+    expect(r.code, r.out).toBe(0);
+    expect(r.calls.map(c => c.replace(/^bunx rungate@\S+ /, ""))).toStrictEqual(["board-mirror --project PVT_from_var --write"]);
+  });
+
+  test("board-id refusing for any other reason stays red: only the no-board wording is a warning", () => {
+    const r = execute(run, { bunx: 'case "$*" in *board-id*) echo "UNMEASURED: unknown argument \\"--x\\"." >&2; exit 2;; esac; exit 0' });
+    expect(r.code).toBe(2);
+    expect(r.out).not.toContain("::warning");
+    expect(r.calls.map(c => c.replace(/^bunx rungate@\S+ /, ""))).toStrictEqual(["board-id"]);
+  });
+});

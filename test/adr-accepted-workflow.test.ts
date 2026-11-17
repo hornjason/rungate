@@ -402,3 +402,39 @@ describe("SC-2738: an engine input that would read as something else is never wr
     expect(r.output).toBe("any=true\n");
   });
 });
+
+describe("a repository with no board: both board steps warn and pass instead of failing every accepted ADR", () => {
+  const doc = Bun.YAML.parse(generated()) as any;
+  const steps: any[] = doc.jobs[ADR_ACCEPTED_JOB].steps;
+  const runIn = (script: string, bunx: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-adr-accepted-board-"));
+    try {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "bunx"), `#!/usr/bin/env bash\necho "$*" >> "${join(dir, "calls.log")}"\n${bunx}\n`, { mode: 0o755 });
+      const r = spawnSync("bash", ["-e", "-c", script], { cwd: dir, encoding: "utf-8", env: { PATH: `${bin}:/usr/bin:/bin`, GITHUB_REPOSITORY: "o/r", ACTOR: "someone" } });
+      const calls = existsSync(join(dir, "calls.log")) ? readFileSync(join(dir, "calls.log"), "utf-8").trim().split("\n") : [];
+      return { code: r.status, out: `${r.stdout}${r.stderr}`, calls: calls.map(c => c.replace(/^rungate@\S+ /, "")) };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const noBoard = 'case "$*" in *board-id*) echo "UNMEASURED: no board — set board.id in the rungate config under /x. Nothing was printed." >&2; exit 2;; esac; exit 0';
+
+  for (const [name, title, write] of [
+    ["Criteria column on the board", "Criteria column", "board-mirror --project PVT_cfg --write"],
+    ["Top up Ready from the new issues", "Ready top-up", "board-ready --repo o/r --project PVT_cfg --actor someone --top-up --write"],
+  ] as const) {
+    test(`${name}: no board configured is a warning and exit 0; a configured board is written`, () => {
+      const run = String(steps.find(s => s.name === name)?.run ?? "");
+      expect(run, `${name} is missing`).not.toBe("");
+      const none = runIn(run, noBoard);
+      expect(none.code, none.out).toBe(0);
+      expect(none.out).toContain(`::warning title=${title}::UNMEASURED — no board is configured`);
+      expect(none.calls).toStrictEqual(["board-id"]);
+      const some = runIn(run, 'case "$*" in *board-id*) echo PVT_cfg;; esac; exit 0');
+      expect(some.code, some.out).toBe(0);
+      expect(some.calls).toStrictEqual(["board-id", write]);
+    });
+  }
+});
