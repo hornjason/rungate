@@ -631,6 +631,25 @@ interface Action {
   note: string;
 }
 
+/**
+ * Why a spec's placement table cannot place anything — #2072, and SC-2779.
+ *
+ * THE one decider, read by `--milestone-prefix` and `--place` alike, so the
+ * two cannot disagree about whether a table is usable (review of #2315). The
+ * three readings `plan-spec` and `board-snapshot` already refuse: a doubled id
+ * goes to whichever row comes last, an unknown one reads as two families at
+ * once, and an unrecognised value is neither a phase nor a known non-phase.
+ * `unplaced` is left out on purpose: a criterion in no row has no phase, and
+ * each caller already skips, refuses or leaves an issue naming one.
+ */
+export function unsoundPlacement(placement: ReturnType<typeof placementReading>): string[] {
+  return [
+    ...placement.doubled.map(d => `${d.id} is placed twice: ${d.placements.join(" and ")}`),
+    ...placement.unknown.map(id => `${id} is placed but stated nowhere in the spec`),
+    ...placement.unrecognised.map(p => `"${p}" is neither a phase nor a known non-phase placement`),
+  ];
+}
+
 /** What `--place` needs from the tracker. Injected so a test never shells out. */
 export interface PlaceGitHub {
   /** Every milestone, open or closed — the same paginated read `--repair` uses. */
@@ -684,12 +703,7 @@ export function placingFamilies(
     byPrefix.set(prefix, spec.path);
     const text = read(root, spec.path);
     const placement = placementReading(text);
-    const unsound = [
-      ...placement.unmeasuredReasons,
-      ...placement.doubled.map(d => `${d.id} is placed twice: ${d.placements.join(" and ")}`),
-      ...placement.unknown.map(id => `${id} is placed but stated nowhere in the spec`),
-      ...placement.unrecognised.map(p => `"${p}" is neither a phase nor a known non-phase placement`),
-    ];
+    const unsound = [...placement.unmeasuredReasons, ...unsoundPlacement(placement)];
     if (unsound.length > 0) {
       refusals.push(`${spec.path} (${prefix}): its placement table cannot place an issue — ${unsound.join("; ")}`);
       continue;
@@ -704,13 +718,31 @@ export function placingFamilies(
 
 /** `--place`: the run SC-2780 calls, after `plan-spec` and before `plan-deps`. */
 async function place(gh4: PlaceGitHub, root: string, repo: string, write: boolean, json: boolean): Promise<number> {
-  const read = placingFamilies(root, await gh4.milestones(repo));
+  // Both tracker reads refuse the way `decompose` does (review of #2315): a
+  // rate limit or a network blip is an unreadable tracker, reported as such.
+  const unreadable = (e: unknown): number => {
+    console.error(`plan-issues --place: UNMEASURED — could not read the tracker, so nothing was placed:`);
+    console.error(`  - ${(e as Error).message}`);
+    return REFUSAL_EXIT;
+  };
+  let live: LiveMilestone[];
+  try {
+    live = await gh4.milestones(repo);
+  } catch (e) {
+    return unreadable(e);
+  }
+  const read = placingFamilies(root, live);
   if (read.refusals.length > 0) {
     console.error(`plan-issues --place: UNMEASURED — the opted-in families could not be read, so nothing was placed:`);
     for (const r of read.refusals) console.error(`  - ${r}`);
     return REFUSAL_EXIT;
   }
-  const issues = (await gh4.openIssues(repo)).sort((a, b) => a.number - b.number);
+  let issues: Awaited<ReturnType<PlaceGitHub["openIssues"]>>;
+  try {
+    issues = (await gh4.openIssues(repo)).sort((a, b) => a.number - b.number);
+  } catch (e) {
+    return unreadable(e);
+  }
   const moves: { issue: number; move: IssueMove }[] = issues.map(i => ({ issue: i.number, move: issuePlacement(i, read.families) }));
   const refused = moves.filter(m => m.move.kind === "refuse");
   const count = (k: IssueMove["kind"]) => moves.filter(m => m.move.kind === k).length;
@@ -881,16 +913,8 @@ export async function main(
       for (const r of placement.unmeasuredReasons) console.error(`  - ${r}`);
       return REFUSAL_EXIT;
     }
-    // #2072: the three readings plan-spec and board-snapshot already refuse.
-    // A doubled id would go to whichever phase row comes last, and an
-    // unknown one reads as two families at once. `unplaced` is left out on
-    // purpose: a criterion in no row has no phase, and `rowPlacement`
-    // already skips or refuses a row naming one.
-    const unsound = [
-      ...placement.doubled.map(d => `${d.id} is placed twice: ${d.placements.join(" and ")}`),
-      ...placement.unknown.map(id => `${id} is placed but stated nowhere in the spec`),
-      ...placement.unrecognised.map(p => `"${p}" is neither a phase nor a known non-phase placement`),
-    ];
+    // #2072: the one decider `--place` reads too.
+    const unsound = unsoundPlacement(placement);
     if (unsound.length > 0) {
       console.error(`plan-issues: ${values.spec}'s placement table is unsound, so no row can be placed from it:`);
       for (const u of unsound) console.error(`  - ${u}`);

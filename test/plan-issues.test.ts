@@ -19,7 +19,7 @@
  * A test asserting only the SET of calls is green against that ordering bug.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -733,14 +733,24 @@ describe("SC-2779: plan-issues --place reads every opted-in spec and writes only
     { number: 34, title: "in place", body: "Serves YY-1.", milestone: "Other Phase 6 — elsewhere" },
   ];
 
-  async function run(extra: string[], opts: { tree?: Record<string, string>; issues?: typeof ISSUES } = {}) {
+  async function run(
+    extra: string[],
+    opts: { tree?: Record<string, string>; issues?: typeof ISSUES; failing?: "milestones" | "openIssues" } = {},
+  ) {
     const dir = mkdtempSync(join(tmpdir(), "rg-plan-issues-2779-"));
     const out: string[] = [];
     const calls: string[] = [];
     let issueReads = 0;
     const gh: PlaceGitHub = {
-      milestones: async () => LIVE_MILESTONES,
-      openIssues: async () => (issueReads++, opts.issues ?? ISSUES),
+      milestones: async () => {
+        if (opts.failing === "milestones") throw new Error("HTTP 502 from the milestones read");
+        return LIVE_MILESTONES;
+      },
+      openIssues: async () => {
+        issueReads++;
+        if (opts.failing === "openIssues") throw new Error("HTTP 502 from the issues read");
+        return opts.issues ?? ISSUES;
+      },
       setMilestone: async (_r, n, title) => void calls.push(`place#${n}:${title}`),
     };
     const log = console.log;
@@ -804,6 +814,26 @@ describe("SC-2779: plan-issues --place reads every opted-in spec and writes only
       expect(r.issueReads, `${name}: issues were read after the families were known unreadable`).toBe(0);
       expect(r.out, name).toContain(says);
     }
+  });
+
+  test("a tracker read that fails is UNMEASURED, by name, and nothing is written", async () => {
+    // Review of #2315: a rate limit or network blip threw a stack out of main().
+    for (const failing of ["milestones", "openIssues"] as const) {
+      const r = await run(["--write"], { failing });
+      expect(r.code, failing).toBe(REFUSAL_EXIT);
+      expect(r.calls, failing).toStrictEqual([]);
+      expect(r.out, failing).toContain("UNMEASURED — could not read the tracker");
+      expect(r.out, failing).toContain("HTTP 502");
+    }
+  });
+
+  test("one decider says whether a placement table is sound, for --place and --milestone-prefix alike", () => {
+    // Review of #2315: two inline copies would drift, and each flag's own
+    // tests would stay green. The refusal text is spelled once, and both
+    // flags reach it through the one function.
+    const src = readFileSync(join(import.meta.dir, "..", "scripts", "plan-issues.ts"), "utf-8");
+    expect(src.split("is placed twice").length - 1).toBe(1);
+    expect(src.split("unsoundPlacement(").length - 1, "the definition and its two callers").toBe(3);
   });
 
   test("--place with another plan's flags is refused by name", async () => {
