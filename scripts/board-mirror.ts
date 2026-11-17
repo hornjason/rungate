@@ -78,15 +78,15 @@ import { placementCoverage } from "../lib/spec-placement";
 export const REFUSAL_EXIT = 1;
 
 /**
- * Which open issues in the engine's milestone family lack the queue label —
- * #2062, SC-2609.
+ * Which open issues in any queued milestone family lack the queue label —
+ * #2062, SC-2609, widened to every opted-in family by SC-2777.
  *
  * `plan-issues --decompose` labels what it creates, and nothing labelled an
  * issue somebody milestoned by hand: on 2026-11-12 six such issues took the
  * `queue-label` reading (B6) from 12 of 12 to 6 of 12 (#2020). That reading
- * counts open issues whose milestone is in the engine family, so this picks
+ * counts open issues whose milestone is in a queued family, so this picks
  * its population with the same {@link inMilestoneFamily} rather than a test
- * of its own — two deciders of "engine issue" would disagree on some title,
+ * of its own — two deciders of "queued issue" would disagree on some title,
  * and the repair would leave the reading short while reporting nothing to do.
  *
  * A cut label list is `unreadable`, not missing: the label may be on the page
@@ -169,9 +169,9 @@ export function queueFamilies(root: string): { families: string[]; unmeasured: s
  * milestoned by a tool (whose `GITHUB_TOKEN` write fires no event) is repaired
  * by the next run.
  *
- * Refuses, writing nothing, when the engine family or the queue label is not
- * configured — a tree that never named a queue has no queue, not an empty one
- * — or when any candidate's label list was cut.
+ * Refuses, writing nothing, when no family can be read ({@link queueFamilies})
+ * or the queue label is not configured — a tree that never named a queue has
+ * no queue, not an empty one — or when any candidate's label list was cut.
  */
 export async function queueLabelRun(opts: {
   repo: string;
@@ -465,7 +465,9 @@ const USAGE = `rungate board-mirror --project <node-id> [--spec <spec.md>] [--fi
        rungate board-mirror --queue-label --repo <owner/name> [--write]
 
   --queue-label  instead of the board, add board.queueLabel to every open
-             issue in the engine's milestone family that lacks it (#2062).
+             issue in an opted-in family's phase milestone that lacks it:
+             every spec with board: { scope: active, prefix }, plus
+             board.milestonePrefix (#2062, SC-2777).
              Needs --repo, and refuses --project: it is an issue write made
              with the repository's own token, never the board token.
 
