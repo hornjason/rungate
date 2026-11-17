@@ -353,7 +353,11 @@ const UNCLAIMED_RATCHET = 150;
 // spec opts into the engine through its own `board:` frontmatter, a behaviour
 // no registered pattern expresses; the `SC-2776` describes in
 // test/board-families.test.ts and test/board-conformance.test.ts name it.
-const CLAIMED_UNBINDABLE = 173;
+// 173 -> 174: SC-2778 (#2303) ticked by `sync-sc-status --only SC-2778`: a
+// criterion placed outside every phase reads as declared, a behaviour no
+// registered pattern expresses; the `SC-2778` describes in
+// test/board-conformance.test.ts and test/board-snapshot.test.ts name it.
+const CLAIMED_UNBINDABLE = 174;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

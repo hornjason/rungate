@@ -80,6 +80,14 @@ export interface BoardCriterion {
   satisfiedByIssue: number | null;
   /** Already true in the tree and needing no issue. */
   recordedTrue?: boolean;
+  /**
+   * The spec places it outside every phase — Blocked, Not adopted —
+   * deliberate, or Not observable here — as written (SC-2778). Named apart and
+   * out of both sides of `criterion-coverage`; never covered by an issue.
+   */
+  outside?: string;
+  /** Placed under a value the engine does not know — the reading goes UNMEASURED (SC-2778). */
+  unknownPlacement?: string;
 }
 
 /**
@@ -255,6 +263,10 @@ export interface DeclaredWork {
    * {@link BoardSnapshot.repoIssues} — the one decider of what an issue names.
    */
   issue?: number | null;
+  /** A criterion its spec places outside every phase, as written — SC-2778. Never unaccounted. */
+  outside?: string;
+  /** A criterion placed under a value the engine does not know — `declared-work` goes UNMEASURED (SC-2778). */
+  unknownPlacement?: string;
 }
 
 /**
@@ -269,7 +281,9 @@ export interface DeclaredWork {
 export function declaredWorkUnaccounted(b: BoardSnapshot): DeclaredWork[] {
   const open = new Set((b.repoIssues ?? []).map(i => i.number));
   const named = new Set((b.repoIssues ?? []).flatMap(i => i.names));
-  return (b.declaredWork ?? []).filter(w =>
+  // SC-2778: a criterion the spec parks outside every phase is declared, not
+  // owed — asking for its issue asks for work the spec says cannot start.
+  return (b.declaredWork ?? []).filter(w => w.outside === undefined).filter(w =>
     w.kind === "criterion" ? !named.has(w.id) : !(typeof w.issue === "number" && open.has(w.issue)),
   );
 }
@@ -363,11 +377,7 @@ export function boardDeclarationProblems(
   rows: readonly SpecPlacementRow[],
   engine: BoardSnapshot["engineConfig"],
 ): string[] {
-  const out: string[] = [];
-  for (const r of rows) {
-    for (const p of r.board?.problems ?? []) out.push(`${r.path}: ${p}`);
-    if (optedIn(r) && r.deferred === true) out.push(`${r.path} is read as both active and deferred`);
-  }
+  const out = rowDeclarationProblems(rows);
   if (engine === undefined) {
     out.push("board.engineSpec and board.milestonePrefix were never read, so whether the engine spec opts itself in is unknown");
     return out;
@@ -382,6 +392,21 @@ export function boardDeclarationProblems(
     out.push(
       `${engine.spec} declares board.prefix ${declared === undefined ? "(none)" : JSON.stringify(declared)} and board.milestonePrefix is ${JSON.stringify(engine.prefix)}`,
     );
+  }
+  return out;
+}
+
+/**
+ * What each spec's own `board:` declaration could not say, by name — the half
+ * of {@link boardDeclarationProblems} that needs no config. `declared-work`
+ * refuses on it too (SC-2778): a spec whose declaration is unreadable has an
+ * unknown membership, so the population it would be counted in is unknown.
+ */
+export function rowDeclarationProblems(rows: readonly SpecPlacementRow[]): string[] {
+  const out: string[] = [];
+  for (const r of rows) {
+    for (const p of r.board?.problems ?? []) out.push(`${r.path}: ${p}`);
+    if (optedIn(r) && r.deferred === true) out.push(`${r.path} is read as both active and deferred`);
   }
   return out;
 }
@@ -434,6 +459,15 @@ export interface Reading {
    * reading cannot pay for a list nobody reads.
    */
   offenders: string[];
+  /**
+   * Rows the reading leaves out of BOTH sides because the spec declares them
+   * outside every phase — SC-2778. Named on every reading that took a
+   * measurement, met or short, in a line of their own (ADR-018 Decision 5):
+   * a criterion that silently left the denominator is indistinguishable from
+   * one nobody wrote down. Always set by `takeReading`; optional so a Reading
+   * built elsewhere (a test, a formatter caller) need not invent an empty list.
+   */
+  declared?: string[];
 }
 
 interface ReadingSpec {
@@ -479,6 +513,8 @@ interface ReadingSpec {
    * ones have populations in the dozens, where a ratio is unactionable.
    */
   offenders?: (board: BoardSnapshot) => string[];
+  /** The rows declared outside every phase, named — see {@link Reading.declared}. */
+  declared?: (board: BoardSnapshot) => string[];
 }
 
 /** The issue numbers actually on the board, for resolving a reference. */
@@ -551,15 +587,29 @@ export const READINGS: readonly ReadingSpec[] = [
     // reference, a typo or a renumbered issue is a pointer to nothing, and
     // counting it is the same defect one level deeper: coverage asserted
     // against data the reading never looked at.
+    // SC-2778. A placement value the engine does not know is refused by
+    // name: counting the criterion as missing or as declared would each be a
+    // guess about what the spec meant.
+    unreadable: b => {
+      const unknown = b.criteria.filter(c => c.unknownPlacement !== undefined);
+      return unknown.length === 0
+        ? null
+        : `the spec places criteria under values the engine does not know: ` +
+            unknown.map(c => `${c.id} is placed ${JSON.stringify(c.unknownPlacement)}`).join("; ");
+    },
+    // A criterion declared outside every phase leaves BOTH sides — so an
+    // issue that happens to name it is never counted as covering it.
     measure: b => {
       const present = onBoard(b);
+      const counted = b.criteria.filter(c => c.outside === undefined);
       return {
-        measured: b.criteria.filter(
+        measured: counted.filter(
           c => (typeof c.satisfiedByIssue === "number" && present.has(c.satisfiedByIssue)) || c.recordedTrue === true,
         ).length,
-        target: b.criteria.length,
+        target: counted.length,
       };
     },
+    declared: b => b.criteria.filter(c => c.outside !== undefined).map(c => `${c.id} — ${c.outside}`),
   },
   {
     name: "blocked-by-edges",
@@ -820,18 +870,32 @@ export const READINGS: readonly ReadingSpec[] = [
     // Both halves of the question must have been read. Declared work with no
     // issue set to resolve it against would blame every row on a lookup that
     // never happened; an issue set with no declared work has nothing to ask.
-    unreadable: b =>
-      b.declaredWork === undefined
-        ? "declared work was never read — no unticked criteria and no stage items reached the snapshot, " +
-          "which is not the same as a repository that declares none"
-        : b.repoIssues === undefined
-          ? "open issues were never read, so whether any of them accounts for the declared work is unknown"
-          : null,
+    unreadable: b => {
+      if (b.declaredWork === undefined) {
+        return "declared work was never read — no unticked criteria and no stage items reached the snapshot, " +
+          "which is not the same as a repository that declares none";
+      }
+      if (b.repoIssues === undefined) {
+        return "open issues were never read, so whether any of them accounts for the declared work is unknown";
+      }
+      // SC-2778, and PR #2308's round 7: the population is the opted-in
+      // specs, so a spec whose declaration cannot be read makes it unknown.
+      const declarations = rowDeclarationProblems(b.specPlacements ?? []);
+      if (declarations.length > 0) {
+        return `a spec's board: declaration cannot be read, so which specs declare work is unknown: ${declarations.join("; ")}`;
+      }
+      const unknown = b.declaredWork.filter(w => w.unknownPlacement !== undefined);
+      return unknown.length === 0
+        ? null
+        : `criteria are placed under values the engine does not know: ` +
+            unknown.map(w => `${w.id} (${w.source}) is placed ${JSON.stringify(w.unknownPlacement)}`).join("; ");
+    },
     measure: b => {
-      const total = b.declaredWork!.length;
+      const total = b.declaredWork!.filter(w => w.outside === undefined).length;
       return { measured: total - declaredWorkUnaccounted(b).length, target: total };
     },
     offenders: b => declaredWorkUnaccounted(b).map(w => `${w.id} (${w.source}) names no open issue`),
+    declared: b => b.declaredWork!.filter(w => w.outside !== undefined).map(w => `${w.id} (${w.source}) — ${w.outside}`),
   },
 ];
 
@@ -857,15 +921,16 @@ export function takeReading(spec: ReadingSpec, board: BoardSnapshot | null): Rea
     // board to hand it. `main` can no longer reach this arm at all (#1718:
     // every source either produces a board or returns a reason), so the one
     // way here is an API caller passing null, and that is what it now says.
-    return { ...base, status: "unmeasured", measured: 0, target: 0, why: "no board snapshot was passed to this reading, so nothing was measured — that is a caller with no board, not a board with nothing on it", offenders: [] };
+    return { ...base, status: "unmeasured", measured: 0, target: 0, why: "no board snapshot was passed to this reading, so nothing was measured — that is a caller with no board, not a board with nothing on it", offenders: [], declared: [] };
   }
   const why = spec.unreadable?.(board) ?? null;
-  if (why !== null) return { ...base, status: "unmeasured", measured: 0, target: 0, why, offenders: [] };
+  if (why !== null) return { ...base, status: "unmeasured", measured: 0, target: 0, why, offenders: [], declared: [] };
   const { measured, target } = spec.measure(board);
+  const declared = spec.declared?.(board) ?? [];
   if (target === 0) {
-    return { ...base, status: "unmeasured", measured, target, why: "the board carries nothing for this reading to count, so 0 of 0 is not a pass", offenders: [] };
+    return { ...base, status: "unmeasured", measured, target, why: "the board carries nothing for this reading to count, so 0 of 0 is not a pass", offenders: [], declared };
   }
-  if (measured >= target) return { ...base, status: "met", measured, target, why: `${measured} of ${target}`, offenders: [] };
+  if (measured >= target) return { ...base, status: "met", measured, target, why: `${measured} of ${target}`, offenders: [], declared };
   // Named only here. A met reading never pays for the list, and an
   // UNMEASURED one must not print rows — it did not read the population it
   // would be naming them out of.
@@ -876,6 +941,7 @@ export function takeReading(spec: ReadingSpec, board: BoardSnapshot | null): Rea
     target,
     why: `${measured} of ${target} — ${target - measured} short`,
     offenders: spec.offenders?.(board) ?? [],
+    declared,
   };
 }
 
@@ -898,7 +964,11 @@ export const OFFENDERS_SHOWN = 10;
 
 export function formatReading(r: Reading): string {
   const mark = r.status === "met" ? "MET        " : r.status === "short" ? "SHORT      " : "UNMEASURED ";
-  const head = `${mark} ${r.name.padEnd(20)} ${r.why}\n             ${r.what}  [${r.item}]`;
+  // SC-2778: named apart on a met reading too — a row that left the
+  // denominator silently reads the same as one nobody wrote down.
+  const named = r.declared ?? [];
+  const declared = named.length === 0 ? "" : `\n             declared outside phases (${named.length}): ${named.join(", ")}`;
+  const head = `${mark} ${r.name.padEnd(20)} ${r.why}\n             ${r.what}  [${r.item}]${declared}`;
   if (r.offenders.length === 0) return head;
   const shown = r.offenders.slice(0, OFFENDERS_SHOWN).map(o => `\n               ${o}`).join("");
   const rest = r.offenders.length > OFFENDERS_SHOWN
@@ -951,7 +1021,22 @@ const normaliseCriterion = (v: unknown): BoardCriterion | null => {
     id: c.id,
     satisfiedByIssue: typeof c.satisfiedByIssue === "number" ? c.satisfiedByIssue : null,
     recordedTrue: c.recordedTrue === true,
+    ...placementAnnotation(c),
   };
+};
+
+/**
+ * SC-2778's two row annotations, carried across the snapshot boundary
+ * present-only. A non-string value is kept as an unknown placement rather
+ * than dropped: dropping `outside` would count a parked criterion as missing,
+ * and dropping `unknownPlacement` would measure what the engine cannot read.
+ */
+const placementAnnotation = (r: { outside?: unknown; unknownPlacement?: unknown }): { outside?: string; unknownPlacement?: string } => {
+  if (r.unknownPlacement !== undefined) {
+    return { unknownPlacement: typeof r.unknownPlacement === "string" ? r.unknownPlacement : JSON.stringify(r.unknownPlacement) };
+  }
+  if (r.outside === undefined) return {};
+  return typeof r.outside === "string" ? { outside: r.outside } : { unknownPlacement: JSON.stringify(r.outside) };
 };
 
 /**
@@ -1283,7 +1368,7 @@ function normaliseDeclaredWork(raw: unknown): DeclaredWork | null {
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== "string" || r.id === "" || typeof r.source !== "string") return null;
-  if (r.kind === "criterion") return { kind: "criterion", id: r.id, source: r.source };
+  if (r.kind === "criterion") return { kind: "criterion", id: r.id, source: r.source, ...placementAnnotation(r) };
   if (r.kind !== "stage-item") return null;
   if (r.issue === null || r.issue === undefined) return { kind: "stage-item", id: r.id, source: r.source, issue: null };
   return typeof r.issue === "number" && Number.isInteger(r.issue)
