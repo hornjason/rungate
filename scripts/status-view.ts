@@ -53,6 +53,13 @@ export const LIST_LIMIT = 10;
 export const NEEDS_DECISION = "needs-decision";
 /** Every refusal exits through this. */
 export const REFUSAL_EXIT = 1;
+/** Where "How this view is made" points: the published package, which every repository using it can open. */
+export const PACKAGE_PAGE = "https://www.npmjs.com/package/rungate";
+/**
+ * This package's own CLI. Not `<root>/bin/rungate.ts`: in a consumer the
+ * package is in node_modules and the root has no bin/ (#2330).
+ */
+const CLI_ENTRY = join(import.meta.dir, "..", "bin", "rungate.ts");
 
 export type Reading<T> = { kind: "READ"; value: T } | { kind: "UNMEASURED"; why: string };
 
@@ -81,11 +88,25 @@ export interface PhaseLine {
   criteria?: { placed: number; unticked: number };
 }
 
+/** A family other than the focus family: its totals, and every phase in it (#2330). */
 export interface FamilyLine {
   family: string;
-  phases: number;
   open: number;
   closed: number;
+  phases: PhaseLine[];
+}
+
+/** One open issue in a phase, with what still blocks it and who has it (#2330). */
+export interface PhaseIssue {
+  number: number;
+  title: string;
+  url: string;
+  milestone: string;
+  assignees: string[];
+  /** Open blockers only: a closed blocker no longer holds anything back. */
+  blockers: number[];
+  /** The blocked-by list was longer than one page, so `blockers` may be short. */
+  moreBlockers: boolean;
 }
 
 export interface WorkLine {
@@ -111,10 +132,17 @@ export interface StatusView {
   stages: Reading<StageLine[]>;
   phases: Reading<PhaseLine[]>;
   otherFamilies: Reading<FamilyLine[]>;
+  /** Every open issue that sits in a milestone, for listing under its phase (#2330). */
+  phaseIssues: Reading<PhaseIssue[]>;
   inProgress: Reading<WorkLine[]>;
   ready: Reading<WorkLine[]>;
   decisions: Reading<WorkLine[]>;
   unphased: Reading<WorkLine[]>;
+  /**
+   * What `unphased` holds: queued issues with no milestone when a queue label
+   * is configured, or every open issue with no milestone when none is (#2330).
+   */
+  unphasedScope: "queued" | "all";
   health: Reading<HealthLine[]>;
   /** A link whose address could not be read carries `url: null` and why, rendered as UNMEASURED. */
   links: { label: string; url: string | null; why?: string }[];
@@ -257,19 +285,32 @@ export function phaseLines(milestones: readonly Milestone[], family: string, spe
   });
 }
 
-/** One summary line per family other than the focus family. */
+/**
+ * Every family other than the focus family, with its phases (#2330).
+ *
+ * A consumer's own work is usually NOT the focus family: the focus is the
+ * family Ready orders by, and on 2026-11-17 the one consumer had it set to a
+ * family whose phases were all closed. Shown as a count, its open family read
+ * `3 phase(s), 0 of 22 done` and named none of the 22 issues. The renderer
+ * collapses a family only when nothing in it is open.
+ */
 export function otherFamilyLines(milestones: readonly Milestone[], family: string): FamilyLine[] {
-  const by = new Map<string, FamilyLine>();
+  const names = new Set<string>();
   for (const m of milestones) {
     const f = readMilestoneTitle(m.title)?.family ?? null;
-    if (f === null || f === "" || f === family) continue;
-    const row = by.get(f) ?? { family: f, phases: 0, open: 0, closed: 0 };
-    row.phases += 1;
-    row.open += m.open;
-    row.closed += m.closed;
-    by.set(f, row);
+    if (f !== null && f !== "" && f !== family) names.add(f);
   }
-  return [...by.values()].sort((a, b) => a.family.localeCompare(b.family));
+  return [...names]
+    .sort((a, b) => a.localeCompare(b))
+    .map(f => {
+      const phases = phaseLines(milestones, f, null);
+      return {
+        family: f,
+        open: phases.reduce((n, p) => n + p.open, 0),
+        closed: phases.reduce((n, p) => n + p.closed, 0),
+        phases,
+      };
+    });
 }
 
 /**
@@ -302,6 +343,15 @@ function term(s: string): string {
   return s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
 }
 
+/** The note after an open issue in a phase: its open blockers, then who has it. */
+function issueNote(i: PhaseIssue): string {
+  const notes: string[] = [];
+  if (i.blockers.length > 0) notes.push(`blocked by ${i.blockers.map(n => `#${n}`).join(", ")}${i.moreBlockers ? " and more" : ""}`);
+  else if (i.moreBlockers) notes.push("blocked by more than one page of issues");
+  if (i.assignees.length > 0) notes.push(i.assignees.join(", "));
+  return notes.join("; ");
+}
+
 const STAGE_MARK = { done: "✓", next: "●", later: "○" } as const;
 const PHASE_MARK = { done: "✓", current: "●", later: "○", empty: "–" } as const;
 
@@ -310,6 +360,8 @@ type Fmt = {
   heading: (s: string) => string;
   link: (label: string, url: string) => string;
   item: (s: string) => string;
+  /** A list item nested `depth` levels under an item. */
+  sub: (depth: number, s: string) => string;
 };
 
 const MARKDOWN: Fmt = {
@@ -317,6 +369,7 @@ const MARKDOWN: Fmt = {
   heading: s => `### ${s}`,
   link: (label, url) => `[${plain(label)}](${url})`,
   item: s => `- ${s}`,
+  sub: (depth, s) => `${"  ".repeat(depth)}- ${s}`,
 };
 
 const TEXT: Fmt = {
@@ -324,6 +377,7 @@ const TEXT: Fmt = {
   heading: s => `\n${s}\n${"─".repeat(s.length)}`,
   link: (label, url) => `${term(label)} (${url})`,
   item: s => `  ${s}`,
+  sub: (depth, s) => `${"    ".repeat(depth)}  ${s}`,
 };
 
 function section<T>(f: Fmt, title: string, r: Reading<T>, body: (v: T) => string[]): string[] {
@@ -342,6 +396,36 @@ function workList(f: Fmt, lines: WorkLine[], empty: string, more?: string): stri
     shown.push(f.item(`… and ${lines.length - LIST_LIMIT} more${more ? ` (${more})` : ""}`));
   }
   return shown;
+}
+
+/** A phase's line, its meaning, and the open issues in it, at list depth `depth`. */
+function phaseBlock(f: Fmt, p: PhaseLine, issues: Reading<PhaseIssue[]>, markdown: boolean, depth: number): string[] {
+  const total = p.open + p.closed;
+  const c = p.criteria;
+  const why =
+    c === undefined
+      ? ""
+      : c.unticked === 0
+        ? `; its ${c.placed} criteria are ticked`
+        : `; ${c.unticked} of its ${c.placed} criteria unticked`;
+  const progress = total === 0 ? `no issues${why}` : `${p.closed} of ${total} done`;
+  const line = `${PHASE_MARK[p.state]} ${f.link(p.title, p.url)} — ${progress}`;
+  const out = [depth === 0 ? f.item(line) : f.sub(depth, line)];
+  if (p.meaning) out.push(`${markdown ? "  ".repeat(depth + 1) : "    ".repeat(depth) + "      "}${f.text(p.meaning)}`);
+  if (issues.kind === "READ" && p.open > 0) {
+    const mine = issues.value.filter(i => i.milestone === p.title);
+    for (const i of mine.slice(0, LIST_LIMIT)) {
+      const note = issueNote(i);
+      out.push(f.sub(depth + 1, `${f.link(`#${i.number}`, i.url)} ${f.text(i.title)}${note ? ` — ${f.text(note)}` : ""}`));
+    }
+    if (mine.length > LIST_LIMIT) out.push(f.sub(depth + 1, `… and ${mine.length - LIST_LIMIT} more`));
+  }
+  return out;
+}
+
+/** One line when the open issues could not be read, so a phase without them is not read as a phase without issues. */
+function issuesUnread(f: Fmt, issues: Reading<PhaseIssue[]>): string[] {
+  return issues.kind === "UNMEASURED" ? [f.item(`open issues per phase: UNMEASURED — ${f.text(issues.why)}`)] : [];
 }
 
 function render(v: StatusView, f: Fmt, markdown: boolean): string {
@@ -373,26 +457,24 @@ function render(v: StatusView, f: Fmt, markdown: boolean): string {
     ...section(f, phaseTitle, v.phases, phases =>
       phases.length === 0
         ? [f.item(`no milestone is in the ${f.text(v.family ?? "")} family`)]
-        : phases.flatMap(p => {
-            const total = p.open + p.closed;
-            const c = p.criteria;
-            const why =
-              c === undefined
-                ? ""
-                : c.unticked === 0
-                  ? `; its ${c.placed} criteria are ticked`
-                  : `; ${c.unticked} of its ${c.placed} criteria unticked`;
-            const progress = total === 0 ? `no issues${why}` : `${p.closed} of ${total} done`;
-            const head = f.item(`${PHASE_MARK[p.state]} ${f.link(p.title, p.url)} — ${progress}`);
-            return p.meaning ? [head, `${markdown ? "  " : "      "}${f.text(p.meaning)}`] : [head];
-          }),
+        : [...issuesUnread(f, v.phaseIssues), ...phases.flatMap(p => phaseBlock(f, p, v.phaseIssues, markdown, 0))],
     ),
   );
   out.push(
     ...section(f, "Other work", v.otherFamilies, fams =>
       fams.length === 0
         ? [f.item("no other milestone family")]
-        : fams.map(x => f.item(`${f.text(x.family)}: ${x.phases} phase(s), ${x.closed} of ${x.open + x.closed} done`)),
+        : [
+            ...(fams.some(x => x.open > 0) ? issuesUnread(f, v.phaseIssues) : []),
+            ...fams.flatMap(x =>
+              x.open === 0
+                ? [f.item(`✓ ${f.text(x.family)}: done — ${x.phases.length} phase(s), ${x.closed} closed`)]
+                : [
+                    f.item(`${f.text(x.family)}: ${x.closed} of ${x.open + x.closed} done`),
+                    ...x.phases.flatMap(p => phaseBlock(f, p, v.phaseIssues, markdown, 1)),
+                  ],
+            ),
+          ],
     ),
   );
 
@@ -401,7 +483,11 @@ function render(v: StatusView, f: Fmt, markdown: boolean): string {
   out.push(...section(f, "Needs a decision", v.decisions, w => workList(f, w, "nothing is waiting on a decision")));
   out.push(
     ...section(f, "Unphased", v.unphased, w =>
-      workList(f, w, "every queued issue has a phase", "queued issues with no milestone"),
+      v.unphasedScope === "queued"
+        ? workList(f, w, "every queued issue has a phase", "queued issues with no milestone")
+        : w.length === 0
+          ? [f.item("every open issue has a milestone")]
+          : [f.item(`${w.length} open issue(s) have no milestone; the oldest is ${f.link(`#${w[0].number}`, w[0].url)} ${f.text(w[0].title)}`)],
     ),
   );
   out.push(
@@ -521,12 +607,19 @@ export function gather(
           ...items.value.filter(i => own(i) && i.assignees.length > 0).map(i => toLine(i, i.assignees.join(", "))),
         ]);
 
+  // With no queue label there is no work queue to check, but an issue with no
+  // milestone is still outside every phase: count them, oldest first (#2330).
   const unphased: Reading<WorkLine[]> =
-    queueLabel === null
-      ? unmeasured("board.queueLabel is not set, so there is no work queue to check")
-      : items.kind === "UNMEASURED"
-        ? unmeasured(items.why)
-        : read(items.value.filter(i => own(i) && i.labels.includes(queueLabel) && i.milestone === null).map(i => toLine(i)));
+    items.kind === "UNMEASURED"
+      ? unmeasured(items.why)
+      : read(
+          items.value
+            .filter(i => own(i) && i.milestone === null && (queueLabel === null || i.labels.includes(queueLabel)))
+            .sort((a, b) => (queueLabel === null ? a.number - b.number : 0))
+            .map(i => toLine(i)),
+        );
+
+  const phaseIssues = readPhaseIssues(gh, repo);
 
   const decisions = readDecisions(gh, repo, items);
   const ready = readReady(gh, root, items);
@@ -555,7 +648,10 @@ export function gather(
       url: `https://github.com/${repo}/issues?q=${encodeURIComponent(`is:open label:${queueLabel}`)}`,
     });
   }
-  links.push({ label: "How this view is made", url: `https://github.com/${repo}/blob/main/scripts/status-view.ts` });
+  // The package, not a path in `repo`: in a consumer, scripts/status-view.ts
+  // is in node_modules, and a link built from the repository named a file the
+  // consumer does not have (#2330).
+  links.push({ label: "How this view is made", url: PACKAGE_PAGE });
 
   return {
     repo,
@@ -566,13 +662,40 @@ export function gather(
     stages: plan.stages,
     phases,
     otherFamilies,
+    phaseIssues,
     inProgress,
     ready,
     decisions,
     unphased,
+    unphasedScope: queueLabel === null ? "all" : "queued",
     health: healthReading,
     links,
   };
+}
+
+/**
+ * Every open issue in a milestone, with its open blockers and assignees
+ * (#2330). One paged GraphQL read rather than a blocked-by call per issue:
+ * the workflow runs this on every issue event.
+ */
+const PHASE_ISSUES_QUERY =
+  "query($owner:String!,$name:String!,$endCursor:String){repository(owner:$owner,name:$name){" +
+  "issues(first:100,after:$endCursor,states:OPEN){pageInfo{hasNextPage endCursor} nodes{number title url " +
+  "milestone{title} assignees(first:10){nodes{login}} blockedBy(first:50){pageInfo{hasNextPage} nodes{number state}}}}}}";
+const PHASE_ISSUES_JQ =
+  ".data.repository.issues.nodes[] | select(.milestone != null) | {number, title, url, milestone: .milestone.title, " +
+  'assignees: [.assignees.nodes[].login], blockers: [.blockedBy.nodes[] | select(.state == "OPEN") | .number], ' +
+  "moreBlockers: .blockedBy.pageInfo.hasNextPage}";
+
+function readPhaseIssues(gh: Gh, repo: string): Reading<PhaseIssue[]> {
+  const [owner, name] = repo.split("/");
+  const r = gh(["api", "graphql", "--paginate", "-f", `query=${PHASE_ISSUES_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "--jq", PHASE_ISSUES_JQ]);
+  if (!r.ok) return unmeasured(r.why);
+  try {
+    return read(r.out.split("\n").filter(l => l.trim() !== "").map(l => JSON.parse(l) as PhaseIssue));
+  } catch (e) {
+    return unmeasured(`gh returned a line that is not JSON (${(e as Error).message})`);
+  }
 }
 
 /**
@@ -642,7 +765,7 @@ function readHealth(root: string): Reading<HealthLine[]> {
   const dir = mkdtempSync(join(tmpdir(), "status-view-"));
   try {
     const out = join(dir, "readings.json");
-    const r = spawnSync("bun", [join(root, "bin", "rungate.ts"), "board-conformance", "--emit-readings", out], {
+    const r = spawnSync("bun", [CLI_ENTRY, "board-conformance", "--emit-readings", out], {
       cwd: root,
       encoding: "utf-8",
       maxBuffer: 64 * 1024 * 1024,
@@ -744,10 +867,28 @@ function flag(argv: string[], name: string): string | null {
   return i === -1 ? null : (argv[i + 1] ?? "");
 }
 
+/** `owner/name` from a git remote URL in any spelling git writes, or null for one that names no repository. */
+export function repoFromRemote(url: string): string | null {
+  const m = /^(?:[a-z+]+:\/\/(?:[^@/]+@)?[^/]+\/|[^@/\s]+@[^:/\s]+:)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url.trim());
+  return m === null ? null : `${m[1]}/${m[2]}`;
+}
+
+/**
+ * Which repository to read: `--repo`, then `GITHUB_REPOSITORY`, then the
+ * checkout's `origin` remote (#2330), so `rungate board` run in a consumer
+ * reads that consumer with no flag. Null when none of the three names one.
+ */
+export function resolveRepo(argv: string[], env: Record<string, string | undefined>, root: string): string | null {
+  const named = flag(argv, "--repo") ?? env.GITHUB_REPOSITORY;
+  if (named !== undefined) return named;
+  const origin = spawnSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf-8" });
+  return origin.status === 0 ? repoFromRemote(origin.stdout) : null;
+}
+
 export function main(argv: string[], root = process.cwd()): number {
-  const repo = flag(argv, "--repo") ?? process.env.GITHUB_REPOSITORY ?? null;
+  const repo = resolveRepo(argv, process.env, root);
   if (repo === null || !/^[^/\s]+\/[^/\s]+$/.test(repo)) {
-    console.error("status-view: name the repository with --repo owner/name (or GITHUB_REPOSITORY).");
+    console.error("status-view: name the repository with --repo owner/name (or GITHUB_REPOSITORY), or run it in a checkout whose origin remote is the repository.");
     return REFUSAL_EXIT;
   }
   const toPublish = flag(argv, "--publish");

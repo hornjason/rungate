@@ -7,7 +7,8 @@
  * family, and the pinned issue never counting as covering a criterion.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { spawnSync } from "child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { NAMES_NONE, criteriaNamedBy } from "../lib/board-mirror";
@@ -25,6 +26,8 @@ import {
   publish,
   renderMarkdown,
   renderText,
+  repoFromRemote,
+  resolveRepo,
   trustedAuthor,
   viewTitle,
 } from "../scripts/status-view";
@@ -50,11 +53,13 @@ function view(over: Partial<StatusView> = {}): StatusView {
       { number: 1, title: "Zqengine Phase 1 — a", meaning: "First.", open: 0, closed: 4, url: "u1", state: "done" },
       { number: 2, title: "Zqengine Phase 2 — b", meaning: null, open: 3, closed: 1, url: "u2", state: "current" },
     ]),
-    otherFamilies: read([{ family: "Payload", phases: 2, open: 5, closed: 1 }]),
+    otherFamilies: read([{ family: "Payload", open: 5, closed: 1, phases: [] }]),
+    phaseIssues: read([]),
     inProgress: read([{ number: 7, title: "doing it", url: "i7", note: "someone" }]),
     ready: read([{ number: 8, title: "next up", url: "i8" }]),
     decisions: read([]),
     unphased: read([]),
+    unphasedScope: "queued",
     health: read([
       { name: "milestones", status: "met", measured: 3, target: 3 },
       { name: "criterion-coverage", status: "short", measured: 2, target: 3 },
@@ -147,7 +152,8 @@ describe("#2097: phases come from the focus family's milestones and the spec's o
     const md = renderMarkdown(view({ phases: read(lines) }));
     expect(md).toContain("– [Zqengine Phase 4 — empty](u4) — no issues");
     expect(md).not.toContain("0 of 0");
-    expect(otherFamilyLines(ms, "Zqengine")).toEqual([{ family: "Payload", phases: 1, open: 1, closed: 0 }]);
+    const others = otherFamilyLines(ms, "Zqengine");
+    expect(others.map(o => [o.family, o.open, o.closed, o.phases.map(p => p.title)])).toEqual([["Payload", 1, 0, ["Payload Phase 1 — other"]]]);
   });
 });
 
@@ -489,5 +495,139 @@ describe("#2097 review round 2", () => {
     expect(src, "the board's address is built from config, which cannot tell a user from an organisation").not.toContain(
       "github.com/users/",
     );
+  });
+});
+
+describe("#2330: any repository that uses rungate can read its own board", () => {
+  // The consumer as measured on 2026-11-17: no board.id, an engine family whose
+  // phases are all closed, one opted-in family with open issues and blocked-by
+  // links, and no goal in project-state.json.
+  const MILESTONES = [
+    { title: "Zqci Phase 1 — first", open: 0, closed: 3, url: "m1" },
+    { title: "Zqrefresh Phase 1 — gather", open: 2, closed: 1, url: "m2" },
+    { title: "Zqrefresh Phase 2 — show", open: 1, closed: 0, url: "m3" },
+    { title: "Zqold Phase 1 — retired", open: 0, closed: 4, url: "m4" },
+  ];
+  const PHASE_ISSUES = [
+    { number: 30, title: "read the source", url: "i30", milestone: "Zqrefresh Phase 1 — gather", assignees: ["alice"], blockers: [], moreBlockers: false },
+    { number: 31, title: "join the rows", url: "i31", milestone: "Zqrefresh Phase 1 — gather", assignees: [], blockers: [30], moreBlockers: false },
+    { number: 32, title: "draw the page", url: "i32", milestone: "Zqrefresh Phase 2 — show", assignees: [], blockers: [31], moreBlockers: true },
+  ];
+  const OPEN_ITEMS = [
+    ...PHASE_ISSUES.map(i => ({ number: i.number, title: i.title, url: i.url, pr: false, assignees: i.assignees, labels: [], milestone: i.milestone })),
+    { number: 12, title: "an old stray", url: "i12", pr: false, assignees: [], labels: [], milestone: null },
+    { number: 40, title: "a newer stray", url: "i40", pr: false, assignees: [], labels: [], milestone: null },
+  ];
+  const consumerGh = (args: string[]) => {
+    const lines = (rows: unknown[]) => ({ ok: true as const, out: rows.map(r => JSON.stringify(r)).join("\n") });
+    if (args.includes("graphql") && args.some(a => a.includes("blockedBy"))) return lines(PHASE_ISSUES);
+    const path = args.find(a => a.startsWith("repos/")) ?? "";
+    if (path.startsWith("repos/o/r/milestones")) return lines(MILESTONES);
+    if (path.startsWith("repos/o/r/issues?")) return lines(OPEN_ITEMS);
+    return { ok: true as const, out: "" };
+  };
+  const consumerTree = () => {
+    const dir = mkdtempSync(join(tmpdir(), "status-view-consumer-"));
+    mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+    writeFileSync(join(dir, ".claude", "rungate", "config.json"), JSON.stringify({ board: { milestonePrefix: "Zqci" } }));
+    return dir;
+  };
+
+  test("every family's phases are listed, each open issue with its open blockers and assignee", () => {
+    const dir = consumerTree();
+    try {
+      const v = gather(dir, "o/r", consumerGh, new Date("2026-11-17T00:00:00Z"), () => gone("not run in this case"));
+      const text = renderText(v);
+      expect(text).toContain("Zqrefresh Phase 1 — gather (m2) — 1 of 3 done");
+      expect(text).toContain("#30 (i30) read the source — alice");
+      expect(text).toContain("#31 (i31) join the rows — blocked by #30");
+      expect(text).toContain("#32 (i32) draw the page — blocked by #31 and more");
+      const md = renderMarkdown(v);
+      expect(md).toContain("[#31](i31) join the rows — blocked by #30");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a family with no open issue is one done line; a family with open issues is not collapsed", () => {
+    const dir = consumerTree();
+    try {
+      const text = renderText(gather(dir, "o/r", consumerGh, new Date("2026-11-17T00:00:00Z"), () => gone("not run")));
+      expect(text).toContain("✓ Zqold: done — 1 phase(s), 4 closed");
+      expect(text).not.toContain("Zqold Phase 1");
+      // The control: the open family is expanded, never summarised as a count.
+      expect(text).not.toContain("Zqrefresh: 2 phase(s)");
+      expect(text).toContain("Zqrefresh Phase 2 — show (m3)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no queue label, issues with no milestone are a count and the oldest", () => {
+    const dir = consumerTree();
+    try {
+      const text = renderText(gather(dir, "o/r", consumerGh, new Date("2026-11-17T00:00:00Z"), () => gone("not run")));
+      expect(text).toContain("2 open issue(s) have no milestone; the oldest is #12 (i12) an old stray");
+      expect(text).not.toContain("board.queueLabel is not set");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no board, the board-only lines say UNMEASURED and nothing names rungate's own repository", () => {
+    const dir = consumerTree();
+    try {
+      const v = gather(dir, "o/r", consumerGh, new Date("2026-11-17T00:00:00Z"), () => gone("not run"));
+      expect(v.ready.kind).toBe("UNMEASURED");
+      for (const out of [renderText(v), renderMarkdown(v)]) {
+        expect(out).not.toContain("hornjason");
+        expect(out).not.toContain("github.com/o/r/blob/");
+      }
+      expect(v.links.find(l => l.label === "How this view is made")?.url).toBe("https://www.npmjs.com/package/rungate");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("health runs this package's own CLI, so a consumer without bin/rungate.ts is not a missing module", () => {
+    const dir = consumerTree();
+    try {
+      const v = gather(dir, "o/r", consumerGh, new Date("2026-11-17T00:00:00Z"));
+      expect(v.health.kind).toBe("UNMEASURED");
+      expect(v.health.kind === "UNMEASURED" && v.health.why).not.toContain("Module not found");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("repoFromRemote reads owner/name from every remote spelling git writes, and nothing else", () => {
+    for (const [url, want] of [
+      ["https://github.com/acme/widgets.git", "acme/widgets"],
+      ["https://github.com/acme/widgets", "acme/widgets"],
+      ["https://github.com/acme/widgets/", "acme/widgets"],
+      ["git@github.com:acme/widgets.git", "acme/widgets"],
+      ["ssh://git@github.com/acme/widgets.git", "acme/widgets"],
+      ["https://ghe.example.com/acme/widgets.git", "acme/widgets"],
+      ["/Users/me/src/widgets", null],
+      ["", null],
+    ] as const) {
+      expect(repoFromRemote(url), url).toBe(want);
+    }
+  });
+
+  test("the repository comes from --repo, then GITHUB_REPOSITORY, then the checkout's origin remote", () => {
+    const dir = mkdtempSync(join(tmpdir(), "status-view-origin-"));
+    try {
+      spawnSync("git", ["init", "-q", dir]);
+      spawnSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:acme/widgets.git"]);
+      expect(resolveRepo([], {}, dir)).toBe("acme/widgets");
+      expect(resolveRepo([], { GITHUB_REPOSITORY: "ci/repo" }, dir)).toBe("ci/repo");
+      expect(resolveRepo(["--repo", "flag/repo"], { GITHUB_REPOSITORY: "ci/repo" }, dir)).toBe("flag/repo");
+      // No remote and no flag: null, so main refuses rather than guessing.
+      spawnSync("git", ["-C", dir, "remote", "remove", "origin"]);
+      expect(resolveRepo([], {}, dir)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
