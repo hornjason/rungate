@@ -1159,6 +1159,9 @@ export const KNOWN_UNDECLARED_WRITES: Record<string, string> = {
   "scripts/create-sc.ts → .claude/spec-deferral-ratchet.json":
     "the deferral bank moves with the criterion create-sc appends to a deferred spec (#2297), the same rule as " +
     "finding-promotion's entry above; the caller commits both in one pull request",
+  "lib/scaffold/spec-scope.ts → .claude/spec-deferral-ratchet.json":
+    "scaffold banks each spec it marks deferred in the same run (#2307), naming both files in an UPDATED line, " +
+    "so `scaffold --commit` stages them together and an uncommitted run leaves both in the operator's diff",
 };
 
 /**

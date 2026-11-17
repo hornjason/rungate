@@ -17,7 +17,9 @@ import { readHardConstraints, type SectionReading } from "../../lib/agents-md-se
 // Re-hashed again 2026-10-17 (#579): the stub now declares `criteria: none`
 // with a reason, so DRIFT-4 can tell a redirect from a spec that simply
 // never wrote its requirements down. Frontmatter only; the body is unchanged.
-const SPEC_HASHES: Record<string, string> = { bootstrap: "fbc463eb76b115c1", testPlan: "7f28706ac35e58e4" };
+// Re-hashed 2026-11-17 (#2307): scaffold wrote `board: { scope: deferred }`
+// into its frontmatter, as into every spec that declared no scope.
+const SPEC_HASHES: Record<string, string> = { bootstrap: "dc7513263a01b59c", testPlan: "7f28706ac35e58e4" };
 
 /** Throws if either bootstrap spec changed without its hash being updated. */
 export function checkSpecDrift(): void {
