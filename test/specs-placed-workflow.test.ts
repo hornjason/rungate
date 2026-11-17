@@ -212,8 +212,31 @@ describe("SC-2780: it never writes while an earlier ADR placement is running", (
   });
 
   test("the query waits only on runs created BEFORE this one, so the two workflows cannot wait on each other", () => {
-    expect(wait).toContain('.created_at < \\"$mine\\"');
-    expect(wait).toContain('.status != \\"completed\\"');
+    // The stub runs the step's own --jq expression through jq over a runs
+    // list, so the filter is executed, not read. A later unfinished run and an
+    // earlier finished one must not hold it; an earlier unfinished one must.
+    const runs = (list: { id: number; status: string; created_at: string }[]) => JSON.stringify({ workflow_runs: list });
+    const jqGh = [
+      'expr=""; for a in "$@"; do [ "$prev" = "--jq" ] && expr="$a"; prev="$a"; done',
+      'case "$*" in',
+      '  *"actions/runs/77"*) echo "2026-11-17T12:00:00Z";;',
+      '  *) jq -r "$expr" < runs.json;;',
+      "esac",
+    ].join("\n");
+    expect(spawnSync("jq", ["--version"]).status, "jq must be on PATH: without it this case measures nothing").toBe(0);
+    const later = execute(wait, { gh: jqGh, sleep: "exit 0" }, {
+      "runs.json": runs([
+        { id: 1, status: "in_progress", created_at: "2026-11-17T12:05:00Z" },
+        { id: 2, status: "completed", created_at: "2026-11-17T11:00:00Z" },
+      ]),
+    });
+    expect(later.code, later.out).toBe(0);
+    expect(later.calls.filter(c => c.startsWith("sleep"))).toStrictEqual([]);
+    const earlier = execute(wait, { gh: jqGh, sleep: "exit 0" }, {
+      "runs.json": runs([{ id: 9, status: "queued", created_at: "2026-11-17T11:59:00Z" }]),
+    });
+    expect(earlier.code).not.toBe(0);
+    expect(earlier.out).toContain("run(s) 9");
   });
 
   test("its own concurrency group, never adr-accepted's, and permission to list runs", () => {
