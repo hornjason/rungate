@@ -96,13 +96,13 @@ export function outsidePhases(placement: string | undefined): { outside: string 
 
 /**
  * Each criterion's placement value, read from the spec's own table. A
- * criterion placed twice is an unknown placement naming both values: the
+ * criterion placed more than once is an unknown placement naming both values: the
  * table contradicts itself, and picking one is a guess (SC-2778).
  */
 export function placementsById(content: string): Map<string, string> {
   const where = new Map<string, string[]>();
   for (const r of parsePlacementRows(content)) for (const id of r.ids) where.set(id, [...(where.get(id) ?? []), r.placement]);
-  return new Map([...where].map(([id, p]) => [id, p.length === 1 ? p[0]! : `placed twice: ${p.join(" and ")}`]));
+  return new Map([...where].map(([id, p]) => [id, p.length === 1 ? p[0]! : `placed ${p.length} times: ${p.join(" and ")}`]));
 }
 
 /** `Phase 0`, `Phase 11`. The capture is the number. */

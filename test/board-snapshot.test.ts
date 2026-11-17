@@ -2390,6 +2390,14 @@ describe("SC-2778: one predicate annotates both readings' rows", () => {
     expect(outsidePhases("Parked")).toEqual({ unknownPlacement: "Parked" });
   });
 
+  test("SC-2778: a criterion placed more than once is an unknown placement naming every value and the count", async () => {
+    const { placementsById, outsidePhases } = await import("../lib/spec-placement");
+    const table = "### Phase placement\n\n| Placement | Criteria |\n|---|---|\n| Phase 1 | SC-9501 |\n| Phase 2 | SC-9501 |\n| Blocked | SC-9501 |\n";
+    const value = placementsById(table).get("SC-9501");
+    expect(value).toBe("placed 3 times: Phase 1 and Phase 2 and Blocked");
+    expect(outsidePhases(value)).toEqual({ unknownPlacement: "placed 3 times: Phase 1 and Phase 2 and Blocked" });
+  });
+
   test("SC-2778: criterionCoverage annotates each criterion from the spec's own table", async () => {
     const { criterionCoverage } = await import("../lib/spec-placement");
     const rows = criterionCoverage(SPEC_WITH_TABLE, [{ number: 1, criteriaField: "SC-9403" }], true);
