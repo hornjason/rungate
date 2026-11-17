@@ -72,6 +72,7 @@
     "sync-scs": "bun scripts/sync-sc-status.ts",
     "typecheck": "bun scripts/typecheck.ts",
     "verify-merge": "bun scripts/verify-merge-content.ts",
+    "build:launch": "bun scripts/build-workflow-launch.ts",
     "test:structure": "bun test test/structure.test.ts",
     "test:external-deps": "bun test test/external-deps.test.ts"
   },

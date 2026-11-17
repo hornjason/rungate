@@ -80,6 +80,46 @@ export function extractKeywords(statement: string): string[] {
 }
 
 /**
+ * The file a `<path> contains [...]` clause names — the one its keywords must
+ * be in (#2287). Null when the clause names no file directly before it.
+ *
+ * Every path in a statement is checked for EXISTENCE (drift), but only this
+ * one carries the keywords. Checking them in every path made a criterion
+ * whose prose mentions a second file read stale while the conformity matcher
+ * passed it: SC-2772 names `workflows/ship.js` as what its subject is built
+ * from, and `buildWorkflowLaunch` is not in ship.js.
+ */
+export function containsSubject(statement: string): string | null {
+  return containsClauses(statement).find(c => c.path !== null)?.path ?? null;
+}
+
+/**
+ * Every positive `contains [...]` clause in a statement, each with the file
+ * named directly before it, or `null` when none is (review, #2291). SC-543
+ * reads `lib/workflow-security.ts contains [...] and workflows/ship.js
+ * contains [isSafeBranchName(shipBranch)]`: binding only the first clause
+ * left ship.js checked for nothing.
+ */
+export function containsClauses(statement: string): Array<{ path: string | null; keywords: string[] }> {
+  const out: Array<{ path: string | null; keywords: string[] }> = [];
+  for (const m of statement.matchAll(/(?<!not )contains \[([^\]]+)\]/g)) {
+    const before = statement.slice(0, m.index).match(/((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))\s+$/);
+    out.push({ path: before ? before[1] : null, keywords: m[1].split(",").map(k => k.trim()).filter(Boolean) });
+  }
+  return out;
+}
+
+/**
+ * The keywords `path` must contain: those of every clause that names it, plus
+ * those of any clause that names no file (checked everywhere, as before —
+ * that only ever refuses more).
+ */
+export function keywordsFor(statement: string, path: string): string[] {
+  const clauses = containsClauses(statement);
+  return [...new Set(clauses.filter(c => c.path === path || c.path === null).flatMap(c => c.keywords))];
+}
+
+/**
  * Detect drift and staleness in SCs across all spec files.
  *
  * @param specsDir - Path to specs directory
@@ -129,7 +169,9 @@ export function detectDrift(specsDir: string, projectRoot: string): DriftResult 
       const statement = match[2].trim();
       checked++;
 
-      // Check for file path references
+      // Check for file path references. Each path is checked for the keywords
+      // of the clauses that name it (`keywordsFor`); a path only mentioned in
+      // prose is checked for existence alone.
       const paths = extractFilePaths(statement);
       for (const path of paths) {
         const fullPath = join(projectRoot, path);
@@ -140,7 +182,7 @@ export function detectDrift(specsDir: string, projectRoot: string): DriftResult 
           drifted.get(specFile)!.push({ scId, statement, path });
         } else {
           // File exists — check each required keyword separately.
-          const keywords = extractKeywords(statement);
+          const keywords = keywordsFor(statement, path);
           if (keywords.length) {
             const fileContent = readFileSync(fullPath, "utf-8");
             const missing = keywords.filter(k => !fileContent.includes(k));

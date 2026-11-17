@@ -1149,6 +1149,9 @@ export const KNOWN_UNDECLARED_WRITES: Record<string, string> = {
   "lib/scaffold/steps.ts → package.json": "scaffold adds scripts",
   "scripts/sync-spec-tests.ts → test/spec-compliance-auto.test.ts": "generated test file, regenerated on demand",
   "scripts/generate-spec-template-patterns.ts → specs/SPEC-TEMPLATE.md": "generated spec template",
+  "scripts/build-workflow-launch.ts → workflows":
+    "the generated ship launch file (#2287, ADR-017): whoever edits workflows/ship.js rebuilds and commits " +
+    "workflows/ship.run.js in the same pull request, and test/workflow-launch-build.test.ts refuses a stale one",
   "scripts/typecheck.ts → .claude": "the typecheck baseline ratchet",
   "scripts/finding-promotion.ts → .claude/spec-deferral-ratchet.json":
     "the deferral bank moves with the criterion it counts (#2066); the promotion's caller commits both in one pull " +
