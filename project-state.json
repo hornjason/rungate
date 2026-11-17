@@ -251,7 +251,8 @@
         "SMALLER: create-sc moves a deferred spec's deferral bank with the criterion it appends (#2298); re-scaffold writes the current ai-review trigger types into an older workflow and names the rewrite (#2293, SC-2781); ci-reading exits 2 on a malformed --repo (#2283); scaffold runs the doc-rule scan in report mode (#2278); a brief assembled from the installed package (#2281); a rule file's ## Project-owned section carries forward (#2285); the bash-write-guard scratch exemption checks the destination (#2282).",
         "STAGE E3 REPAIRED. dependency-edges went 144 of 145 when ADR-018 placed #2306 in Convergence Phase 0 and nothing linked #1168 to it; plan-deps --milestone-prefix Convergence --write added the one edge. SC-2780 (#2305) automates that run on a push to specs/.",
         "ADR-019 DRAFTED AND AGREED. #1722, the acceptance test, sat in Engine Phase 9 beside the work it waits on, and nothing orders issues inside one phase, so Ready showed it as startable. Jason agreed: SC-2625 moves to its own Phase 10 (the table edit lands in #2305), and a milestoned issue whose criteria all sit in one other phase of its family moves there (#2304, SC-2779 reworded). PR #2310 waits on his merge. Two links the DA added to #1722 by hand were removed at his request.",
-        "IN FLIGHT: #2311 (#2303) makes a criterion its spec parks outside every phase read as declared, not missing; from its branch board-conformance exits 0 with all ten readings met, stage item F2's proof. #2302 (the queue label on every opted-in family) is built and queued behind it."
+        "IN FLIGHT: #2311 (#2303) makes a criterion its spec parks outside every phase read as declared, not missing; from its branch board-conformance exits 0 with all ten readings met, stage item F2's proof. #2302 (the queue label on every opted-in family) is built and queued behind it.",
+        "F2 DONE. With #2311 (#2303) merged, `bun bin/rungate.ts board-conformance --repo hornjason/rungate` exits 0 on main: all ten readings MET, declared-work 49 of 49 with the 11 parked convergence criteria named apart. F1 (the convergence family's own five readings) is still open: milestones 14 of 47 and queue-label 1 of 33 need #2302 (PR #2313), #2304 and #2305."
       ]
     },
     {
@@ -1783,7 +1784,7 @@
         {
           "id": "F2",
           "what": "`board-conformance` exits 0. THAT IS THE GOAL MET",
-          "done": false,
+          "done": true,
           "verify": "bun bin/rungate.ts board-conformance --repo hornjason/rungate",
           "issue": 1722
         }
