@@ -14,7 +14,7 @@
  *
  * Thin CLI consumer — all logic lives in lib/create-sc.ts.
  */
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, writeFileSync } from "fs";
 import {
   allocateScNumber,
   generateSCText,
@@ -26,7 +26,8 @@ import { describeReading } from "../lib/sc-id-cross-tree";
 import { currentScOwner } from "../lib/sc-reservations";
 import { skipLine } from "../lib/derived-spec";
 import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
-import { join } from "path";
+import { join, relative, resolve, sep } from "path";
+import { bankAfterAppend } from "../lib/finding-promotion";
 
 /** Same resolution sync-sc-status uses, so both halves read one tree. */
 const ROOT = join(import.meta.dir, "..");
@@ -127,8 +128,23 @@ try {
 
     // Append SC line to the end of the file
     const newContent = content.trimEnd() + "\n" + scLine + "\n";
+    // A deferred spec's criteria count is banked, and SC-2734 refuses a bank
+    // that disagrees with it. Decided BEFORE the spec is written, so a refusal
+    // writes neither file. The path is a literal so the spec-write sweep
+    // (#1584) can see this write targets the bank and not a spec.
+    const bankPath = join(ROOT, ".claude/spec-deferral-ratchet.json");
+    const specKey = relative(ROOT, resolve(specPath)).split(sep).join("/");
+    const banked = bankAfterAppend(existsSync(bankPath) ? readFileSync(bankPath, "utf-8") : null, specKey, content, newContent);
+    if (!banked.ok) {
+      console.error(`ERROR: ${banked.refusal}: ${banked.why}`);
+      process.exit(1);
+    }
     writeSpec(specPath, newContent);
     console.log(`Appended to ${specPath}: ${scLine}`);
+    if (banked.text !== null) {
+      writeFileSync(bankPath, banked.text);
+      console.log(`  deferral bank: ${specKey} moved with it (.claude/spec-deferral-ratchet.json)`);
+    }
     // What the number is a floor over, stated rather than implied. A clone on
     // another machine is outside anything this process can reach, and an
     // allocator that printed only the number would be claiming a guarantee it

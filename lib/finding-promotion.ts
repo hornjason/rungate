@@ -806,6 +806,32 @@ export function placementCount(specText: string): { deferred: boolean; criteria:
 }
 
 /**
+ * The deferral bank after a writer that is not a promotion appends to a spec.
+ *
+ * `create-sc` is the other writer of criteria. It appended to a deferred spec
+ * and left `.claude/spec-deferral-ratchet.json` at the old count, so the next
+ * pull request's SC-2734 and stage item E1 went red until someone edited the
+ * bank by hand. The rule is `bankWithPromotion`'s: the bank moves only from
+ * the count the spec stated before the append. `text: null` means there is
+ * nothing to write, because the spec is not deferred or its count did not
+ * change. A deferred spec with no readable bank refuses, never passes.
+ */
+export function bankAfterAppend(
+  bankText: string | null,
+  specPath: string,
+  before: string,
+  after: string,
+): { ok: true; text: string | null } | { ok: false; refusal: PromotionRefusal; why: string } {
+  const was = placementCount(before);
+  const now = placementCount(after);
+  if (!was.deferred || now.criteria === was.criteria) return { ok: true, text: null };
+  if (bankText === null) {
+    return { ok: false, refusal: "BANK_DRIFT", why: `${specPath} is deferred and the deferral bank could not be read` };
+  }
+  return bankWithPromotion(bankText, specPath, was.criteria, now.criteria);
+}
+
+/**
  * ## Declining — the router's other outcome
  *
  * `NAMES_NONE` has been readable since SC-2609 and writable by nothing.
