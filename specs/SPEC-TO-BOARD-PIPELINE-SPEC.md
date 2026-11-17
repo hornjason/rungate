@@ -369,7 +369,7 @@ is built from this document.
 | **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753, SC-2762, SC-2763, SC-2764 |
 | **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
-| **Phase 9** | SC-2776, SC-2777, SC-2778, SC-2779, SC-2780 |
+| **Phase 9** | SC-2776, SC-2777, SC-2778, SC-2779, SC-2780, SC-2782, SC-2783, SC-2784, SC-2785 |
 | **Phase 10** | SC-2625 |
 
 ### Phase 0 — the transform refuses
@@ -504,3 +504,15 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       needs: test
       proved-by: test/specs-placed-workflow.test.ts (16 pass, 0 fail, 2026-11-17, on the PR that closes #2305). `rungate scaffold` writes `.github/workflows/specs-placed.yml` into a throwaway consumer, and its `run:` scripts are executed with `gh` and `bunx` stubbed: it fires on a push to main touching `specs/**`; it reads the opted-in families at run time with `plan-issues --families`, and a refusal there fails the step naming the spec; `plan-spec` and `plan-deps` run once per family, one family's refusal does not stop the next, and the step exits red naming it; `plan-issues --place` runs between them; `board-mirror` writes the queue label and then the board once, after the families; every command is registered and called through the published CLI, pinned at 0.8.26. The first step waits for any earlier unfinished `adr-accepted.yml` run, its run filter executed through jq, and the workflow keeps a concurrency group of its own. This repository's committed copy is the generated one
       fingerprint: 463ef7d8
+- [ ] SC-2782: an open issue labelled `from-consumer` that carries no triage verdict is given exactly one by `rungate consumer-triage --write`, from one decider and with no hand edit: DUPLICATE of an open issue the FindingArbiter's duplicate test matches, PLACED by SC-2779's decider, OVERLAPS an open issue or pull request whose declared or changed files or named criteria it shares (joining that issue's milestone), or ACTIVE in the lowest engine phase with an open issue; each verdict is recorded as a marker comment
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2783: `board-conformance` reads `consumer-intake`: every open `from-consumer` issue older than two days carries a verdict marker or a milestone, and one with neither makes the reading SHORT, naming the issue; a tracker it cannot read leaves the reading UNMEASURED
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2784: a generated `consumer-intake.yml` runs `consumer-triage --write` through the published CLI when an issue is opened or labelled `from-consumer`, and on a daily schedule, so an issue whose event was missed is triaged within a day; a newly opened issue whose author is not an owner, member or collaborator is given `from-consumer` first, because GitHub drops the labels such an author sets
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2785: in `ship.mode: direct` every run's filing cap is `NET_GROWTH_CEILING` whatever the trailing day's net growth, the net-growth fallback applies only in harness mode, and a refusal still prints the day's opened and closed counts
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-020 — consumer issues get a verdict</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e6e8ee; --dim:#8b93a7;
+          --hand:#f0a35e; --auto:#5fb3a1; --judge:#9b8cff; --warn:#e5676b; --ok:#6cc070; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width:1080px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:32px 0 12px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  .sub { color:var(--dim); margin:0 0 20px; }
+  .legend { display:flex; gap:16px; flex-wrap:wrap; font-size:13px; color:var(--dim); }
+  .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px; }
+  .l-hand::before { background:var(--hand); } .l-auto::before { background:var(--auto); } .l-judge::before { background:var(--judge); }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:760px) { .cols { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; }
+  .panel h3 { margin:0 0 10px; font-size:15px; }
+  .bad { color:var(--warn); } .good { color:var(--ok); }
+  ol.timeline { list-style:none; padding:0; margin:0; }
+  ol.timeline li { position:relative; padding:10px 12px 10px 18px; margin:0 0 8px; background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--auto); border-radius:6px; }
+  ol.timeline li.hand { border-left-color:var(--hand); } ol.timeline li.judge { border-left-color:var(--judge); }
+  .tag { font-size:11px; font-weight:600; padding:1px 6px; border-radius:3px; margin-right:8px; color:#0f1115; }
+  .t-hand { background:var(--hand); } .t-auto { background:var(--auto); } .t-judge { background:var(--judge); }
+  .verdicts { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+  @media (max-width:760px) { .verdicts { grid-template-columns:1fr 1fr; } }
+  .v { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px; }
+  .v b { display:block; margin-bottom:4px; color:var(--auto); }
+  .cards { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+  @media (max-width:760px) { .cards { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .card .id { color:var(--dim); font-size:12px; } .card .t { font-weight:600; margin:2px 0 8px; }
+  .card code, li code, p code { background:#0b0d11; border:1px solid var(--line); padding:0 4px; border-radius:3px; font-size:12.5px; }
+  .card .files { font-size:12.5px; color:var(--dim); }
+  .card .blk { font-size:12.5px; margin-top:8px; color:var(--hand); }
+  .q { border-left:4px solid var(--judge); }
+</style>
+</head>
+<body>
+<main>
+  <h1>ADR-020 — an issue a consumer files gets a verdict</h1>
+  <p class="sub">Accepted by Jason 2026-11-17, he merges · issue #2319 · dry-run against main c1bc9556</p>
+  <div class="legend"><span class="l-hand">a person does it</span><span class="l-auto">a workflow does it</span><span class="l-judge">Jason decides</span></div>
+
+  <h2>Today vs after</h2>
+  <div class="cols">
+    <div class="panel">
+      <h3 class="bad">Today</h3>
+      <ul>
+        <li>Nothing reads the <code>from-consumer</code> label.</li>
+        <li>#2317 and #2318 have no milestone, so Ready never draws them.</li>
+        <li><code>--place</code> skips them: they name no criterion.</li>
+        <li>They arrive without the criterion answer, so every PR's CI went red until the DA edited both by hand.</li>
+        <li>The filing cap was 12 that day, and all 12 were spent.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3 class="good">After</h3>
+      <ul>
+        <li>Every consumer issue gets one verdict from a tool when it is opened or labelled. An outside reporter's label, which GitHub drops, is put back first.</li>
+        <li>A daily sweep catches anything an event missed.</li>
+        <li>The board's <code>consumer-intake</code> reading goes short, naming the issue, after two days with no verdict.</li>
+        <li>In direct-ship mode the cap is 36 every day (Decision 4).</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>The four verdicts — first that fits wins</h2>
+  <div class="verdicts">
+    <div class="v"><b>DUPLICATE #N</b>The FindingArbiter's duplicate test matches an open issue. A comment names it; closing stays a person's call.</div>
+    <div class="v"><b>PLACED</b>It names a placed criterion. It moves through the SC-2779 decider into that phase.</div>
+    <div class="v"><b>OVERLAPS #N</b>Its files or criteria meet open work. It joins that issue's milestone; a comment names the overlap.</div>
+    <div class="v"><b>ACTIVE</b>None of the above. It joins the active engine phase, so Ready draws it next in order.</div>
+  </div>
+
+  <h2>The run</h2>
+  <ol class="timeline">
+    <li class="judge"><span class="tag t-judge">YOU</span>Accepted 2026-11-17, Decisions 4 and 5 answered (36 in direct mode; Engine Phase 9). Merge ADR-020.</li>
+    <li><span class="tag t-auto">AUTO</span><code>adr-accepted.yml</code> files 4 issues and 2 order links into Engine Phase 9, which #2305's first run has already renamed.</li>
+    <li class="hand"><span class="tag t-hand">ME</span>SC-2782 (triage command) and SC-2785 (cap), in parallel. Neither is blocked.</li>
+    <li class="hand"><span class="tag t-hand">ME</span>Release 0.8.27, so the published CLI has <code>consumer-triage</code>.</li>
+    <li class="hand"><span class="tag t-hand">ME</span>SC-2783 (board reading) and SC-2784 (the workflow), both blocked by SC-2782.</li>
+    <li><span class="tag t-auto">AUTO</span>Every consumer issue from then on: triaged when filed, swept daily, and short on the board if it is missed.</li>
+  </ol>
+
+  <h2>Issues the merge files</h2>
+  <div class="cards">
+    <div class="card"><div class="id">SC-2782 · Engine Phase 9</div><div class="t">A consumer's issue gets a triage verdict from one decider</div><div class="files">lib/consumer-triage.ts, scripts/consumer-triage.ts, lib/cli-commands.ts, test/consumer-triage.test.ts, package.json</div></div>
+    <div class="card"><div class="id">SC-2785 · Engine Phase 9</div><div class="t">In direct-ship mode the filing cap is the ceiling whatever the day's growth</div><div class="files">lib/issue-filing-gate.ts, test/issue-filing-gate.test.ts</div></div>
+    <div class="card"><div class="id">SC-2783 · Engine Phase 9</div><div class="t">The board reads a consumer issue with no verdict after two days as short</div><div class="files">scripts/board-snapshot.ts, scripts/board-conformance.ts, test/board-conformance.test.ts, test/board-snapshot.test.ts</div><div class="blk">blocked by SC-2782</div></div>
+    <div class="card"><div class="id">SC-2784 · Engine Phase 9</div><div class="t">A consumer's issue is triaged when it is filed and swept every day</div><div class="files">lib/scaffold/consumer-intake-workflow.ts, .github/workflows/consumer-intake.yml, lib/scaffold/owned-files.ts, lib/scaffold/steps.ts, .claude/rules/harness-managed.md, test/release-guard.test.ts, test/consumer-intake-workflow.test.ts</div><div class="blk">blocked by SC-2782, and by a release</div></div>
+  </div>
+
+  <h2>Decided 2026-11-17</h2>
+  <div class="panel q">
+    <p><b>Decision 4 — the cap.</b> 36 in direct-ship mode, whatever the day's net growth; 12 stays as the harness-mode fallback.</p>
+    <p><b>Decision 5 — placement.</b> Engine Phase 9: Ready draws this work next, and the acceptance test (#1722) waits on it.</p>
+    <p><b>Decision 2 — outside reporters.</b> A newly opened issue from an author who is not an owner, member or collaborator gets <code>from-consumer</code> before triage, because GitHub drops the label such an author sets.</p>
+    <p><b>Still yours:</b> the merge.</p>
+  </div>
+</main>
+</body>
+</html>
