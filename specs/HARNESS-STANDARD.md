@@ -12641,7 +12641,7 @@ criteria are its decomposition rows, worded as Jason approved them on
 2026-11-15.
 
 - [x] SC-2772: scripts/build-workflow-launch.ts contains [buildWorkflowLaunch] — the ship launch file is generated from `workflows/ship.js`, parses, keeps the `meta` literal and the top-level `return`, and is under the Workflow tool's 524,288-byte cap; a test builds it and fails if any of these is false
-- [ ] SC-2773: lib/ship-mode.ts contains [SHIP_LAUNCH_SCRIPT] — every ship `scriptPath` documented in this repository names the generated launch file; a test fails on any that still names `workflows/ship.js` (the ship skill outside the repository is changed by hand, Jason's call 2026-11-15)
+- [x] SC-2773: lib/ship-mode.ts contains [SHIP_LAUNCH_SCRIPT] — every ship `scriptPath` documented in this repository names the generated launch file; a test fails on any that still names `workflows/ship.js` (the ship skill outside the repository is changed by hand, Jason's call 2026-11-15)
 - [ ] SC-2774: scripts/build-workflow-launch.ts contains [PURE_CORE_MODULES] — `worktree-repo`, `workflow-security`, `prior-branch` and `dev-liveness` each export a core that imports nothing; a test fails when a core gains an import
 - [ ] SC-2775: scripts/build-workflow-launch.ts contains [bundleLibCores] — `workflows/ship.js` carries no hand copy of `lib/`: each copied function is bundled from its module, and a test fails if an INLINED or Mirror-of block remains
 
