@@ -349,7 +349,11 @@ const UNCLAIMED_RATCHET = 150;
 // were: a behaviour with no registered pattern, claimed by the `#2274 / SC-1947`
 // header of test/scaffold-extract-constraints.test.ts once the todo that
 // outranked it was deleted from test/rule-lifecycle-spec.test.ts.
-const CLAIMED_UNBINDABLE = 172;
+// 172 -> 173: SC-2776 (#2301) ticked by `sync-sc-status --only SC-2776`: a
+// spec opts into the engine through its own `board:` frontmatter, a behaviour
+// no registered pattern expresses; the `SC-2776` describes in
+// test/board-families.test.ts and test/board-conformance.test.ts name it.
+const CLAIMED_UNBINDABLE = 173;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
