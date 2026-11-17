@@ -48,7 +48,6 @@ import { tmpdir } from "os";
 import { join } from "path";
 import {
   HARNESS_AUTHORED_PATHS,
-  HARNESS_WITHDRAWN_PATHS,
   mergeManagedWorkflowRecording,
 } from "../lib/scaffold/managed-workflow";
 import { writeManagedFile } from "../lib/scaffold/steps";
@@ -234,7 +233,7 @@ describe("AC-3 (#1148): nothing is withdrawn unless the generator emits the pare
         "filter asks which branches earn a run ON THEIR OWN, a different question",
     ).toBe(false);
     expect(
-      [...HARNESS_AUTHORED_PATHS],
+      [...HARNESS_AUTHORED_PATHS.keys()],
       "the claim set is empty, so every withdrawal case above is vacuous",
     ).toContain("on.pull_request.branches");
   });
@@ -419,12 +418,22 @@ describe("#2292 / SC-2781: re-scaffold writes the current value of an authored p
     expect(revoked).toEqual([]);
   });
 
-  test("the claim sets: `types` is authored, and only `branches` is withdrawn when absent", () => {
-    expect([...HARNESS_AUTHORED_PATHS]).toContain("on.pull_request.types");
-    expect([...HARNESS_WITHDRAWN_PATHS]).toEqual(["on.pull_request.branches"]);
-    for (const p of HARNESS_WITHDRAWN_PATHS) {
-      expect(HARNESS_AUTHORED_PATHS.has(p), `${p} is withdrawn but not authored — a withdrawal with no claim`).toBe(true);
-    }
+  test("one claim per path: `types` is asserted where emitted, `branches` withdrawn where absent", () => {
+    expect(Object.fromEntries(HARNESS_AUTHORED_PATHS)).toEqual({
+      "on.pull_request.branches": "withdrawn-when-absent",
+      "on.pull_request.types": "asserted-when-emitted",
+    });
+  });
+
+  test("a generator that emits `branches` does not overwrite the consumer's branch list (#839)", () => {
+    // `branches` is withdraw-only. Asserting it where emitted would replace a
+    // consumer's branch list with the generator's — #839's data loss.
+    const generated = GENERATED.replace("  pull_request:\n", '  pull_request:\n    branches:\n      - "main"\n');
+    const consumer = CONSUMER.replace('  pull_request:\n    branches:\n      - "main"\n', '  pull_request:\n    branches:\n      - "release"\n');
+    expect(consumer, "the fixture did not take the consumer's branch").toContain('- "release"');
+    const { content, revoked } = merge(consumer, generated);
+    expect(onBlock(content)).toContain('- "release"');
+    expect(revoked).toEqual([]);
   });
 
   test("naming `on` in `ci.workflowOverrides` keeps the consumer's trigger as it is", () => {

@@ -319,24 +319,32 @@ function revokedSubKeys(
  * `types:` to `on.pull_request` in the generated ai-review.yml so the
  * `ai-review-override` label re-runs the check; a consumer scaffolded before
  * it kept a bare `pull_request:` through every re-scaffold, reported
- * `unchanged`, and the waiver could never fire there. So an authored leaf the
- * generator emits is now written at the generator's value, replacing the
- * consumer's, and the replacement is recorded so the write can name it.
+ * `unchanged`, and the waiver could never fire there. So each path now names
+ * its claim (`AuthoredClaim`): an asserted leaf the generator emits is
+ * written at the generator's value, replacing the consumer's, and the
+ * replacement is recorded so the write can name it.
  */
-export const HARNESS_AUTHORED_PATHS: ReadonlySet<string> = new Set(["on.pull_request.branches", "on.pull_request.types"]);
+export const HARNESS_AUTHORED_PATHS: ReadonlyMap<string, AuthoredClaim> = new Map([
+  ["on.pull_request.branches", "withdrawn-when-absent"],
+  ["on.pull_request.types", "asserted-when-emitted"],
+]);
 
 /**
- * The authored paths that are also WITHDRAWN where the generator emits the
- * parent without them (#1148). Always a subset of `HARNESS_AUTHORED_PATHS`.
+ * What the harness claims about one authored path. One claim per path, and
+ * the two do not combine (#2292).
  *
- * An authored path the generator EMITS is written at the generator's value
- * (#2292). Withdrawal is the stronger claim — that the leaf must not be there
- * at all — and only `branches` makes it, because #1136 removed that filter
- * on purpose. `types` does not: ci.yml and gates.yml emit a bare
- * `pull_request:`, and a consumer who added activity types to their own CI
- * there has made no mistake the harness is entitled to undo.
+ * - `withdrawn-when-absent` (#1148): the claim is that the leaf must NOT be
+ *   there. Where the generator emits the parent without it, the consumer's
+ *   copy goes. Where the generator emits it, the consumer's value stands —
+ *   a branch list is the local knob #839 keeps, and asserting it would be
+ *   that issue's data loss one level down.
+ * - `asserted-when-emitted` (#2292): the claim is the VALUE. Where the
+ *   generator emits the leaf, the consumer's copy is written at the
+ *   generator's value. Where it does not, the consumer's stands: ci.yml and
+ *   gates.yml emit a bare `pull_request:`, and a consumer who added activity
+ *   types to their own CI there has made no mistake the harness may undo.
  */
-export const HARNESS_WITHDRAWN_PATHS: ReadonlySet<string> = new Set(["on.pull_request.branches"]);
+export type AuthoredClaim = "withdrawn-when-absent" | "asserted-when-emitted";
 
 /**
  * A sub-block split into the comments introducing it and the key line onward.
@@ -361,8 +369,8 @@ function splitBlockIntro(lines: string[]): [string[], string[]] {
 
 /**
  * The consumer's section with every authored path brought to what the
- * generator says: a leaf it emits written at its value (#2292), and a
- * withdrawable leaf it has stopped emitting taken out (#1148). Returns the
+ * generator says: an asserted leaf it emits written at its value (#2292),
+ * and a withdrawn leaf it has stopped emitting taken out (#1148). Returns the
  * record of both.
  *
  * Reads both sides through the same `parseSubKeys` the rest of the merge uses
@@ -404,12 +412,14 @@ function applyAuthoredPaths(
     const emitted = new Set(genLeaves.map(s => s.key));
     const path = (leaf: string) => `${section}.${block.key}.${leaf}`;
 
-    const gone = consumerLeaves.blocks.filter(leaf => HARNESS_WITHDRAWN_PATHS.has(path(leaf.key)) && !emitted.has(leaf.key));
+    const gone = consumerLeaves.blocks.filter(
+      leaf => HARNESS_AUTHORED_PATHS.get(path(leaf.key)) === "withdrawn-when-absent" && !emitted.has(leaf.key),
+    );
     // The generator's leaf, at the consumer's indent for this trigger.
     const shift = indentOf(fromKey[0]) - indentOf(genFromKey[0]);
     const asserted = new Map<string, string[]>();
     for (const g of genLeaves) {
-      if (!HARNESS_AUTHORED_PATHS.has(path(g.key))) continue;
+      if (HARNESS_AUTHORED_PATHS.get(path(g.key)) !== "asserted-when-emitted") continue;
       const value = reindent(splitTrailingBlanks(g.lines)[0], shift);
       const mine = consumerLeaves.blocks.find(l => l.key === g.key);
       if (mine !== undefined && sameValue(mine.lines, value)) continue;
