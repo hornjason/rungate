@@ -78,7 +78,7 @@
 
   <h2>The run</h2>
   <ol class="timeline">
-    <li class="judge"><span class="tag t-judge">YOU</span>Answer Decisions 4 (the cap) and 5 (Phase 9, or a stage G), then merge ADR-020.</li>
+    <li class="judge"><span class="tag t-judge">YOU</span>Decisions 4 and 5 answered 2026-11-17 (36 in direct mode; Engine Phase 9). Merge ADR-020 after #2305's first run.</li>
     <li><span class="tag t-auto">AUTO</span><code>adr-accepted.yml</code> files 4 issues and 2 order links. It must run after #2305's first run has renamed Engine Phase 9; today the milestone title does not exist yet, so the dry run refuses until then.</li>
     <li class="hand"><span class="tag t-hand">ME</span>SC-2782 (triage command) and SC-2785 (cap), in parallel. Neither is blocked.</li>
     <li class="hand"><span class="tag t-hand">ME</span>Release 0.8.27, so the published CLI has <code>consumer-triage</code>.</li>
@@ -94,10 +94,11 @@
     <div class="card"><div class="id">SC-2784 · Engine Phase 9</div><div class="t">A consumer's issue is triaged when it is filed and swept every day</div><div class="files">lib/scaffold/consumer-intake-workflow.ts, .github/workflows/consumer-intake.yml, lib/scaffold/owned-files.ts, lib/scaffold/steps.ts, .claude/rules/harness-managed.md, test/release-guard.test.ts, test/consumer-intake-workflow.test.ts</div><div class="blk">blocked by SC-2782, and by a release</div></div>
   </div>
 
-  <h2>Needs Jason</h2>
+  <h2>Decided 2026-11-17</h2>
   <div class="panel q">
-    <p><b>Decision 4 — the cap.</b> In direct-ship mode, every run gets 36 regardless of the day's net growth. The 12 fallback remains in harness (swarm) mode. Yes / no.</p>
-    <p><b>Decision 5 — placement.</b> Put the four criteria in Engine Phase 9, so Ready draws them next and the acceptance test (#1722) waits on them? Or create a stage G after F? Phase 9 / stage G.</p>
+    <p><b>Decision 4 — the cap.</b> 36 in direct-ship mode, whatever the day's net growth; 12 stays as the harness-mode fallback.</p>
+    <p><b>Decision 5 — placement.</b> Engine Phase 9: Ready draws this work next, and the acceptance test (#1722) waits on it.</p>
+    <p><b>Still yours:</b> the merge, after #2305's first run has renamed Engine Phase 9.</p>
   </div>
 </main>
 </body>

@@ -14,6 +14,8 @@ shape: triage by a tool, a sweep on a schedule, and a board reading that goes
 short when a consumer issue has no verdict. He also asked that the filing cap
 stop limiting work while nobody is swarming. Decisions 4 and 5 are open until
 he answers them.
+He answered both on 2026-11-17: the 36 ceiling in direct-ship mode, and
+Engine Phase 9. What remains is his merge, after #2305's first run.
 
 ## Context
 
@@ -83,18 +85,17 @@ none. In direct-ship mode the filing cap is the ceiling every day.
    reading SHORT, naming it. The reading joins the goal command, so
    `board-conformance` and `/board` both show it.
 4. **In direct-ship mode the filing cap is the ceiling every day — proposed by
-   the DA; Jason's call.** In `ship.mode: direct`, every run gets
-   `NET_GROWTH_CEILING` (36). The net-growth fallback to 12 then applies only
-   in harness mode, where swarms run and where #1595 filed 57 in a day. The
-   net-growth reading is still printed on every refusal. **If Jason says no**,
-   the cap stays as ADR-016 left it, and this row is dropped.
-5. **Placement in Engine Phase 9 — proposed by the DA; Jason's call.** The four
-   criteria go in Phase 9 beside ADR-018's, so Ready draws this work next.
-   Phase 10, the acceptance test (#1722), waits on them by the phase rule.
-   Stage item F1 does not: its readings are about the convergence family and
-   are met by #2305's first run. **The alternative** is a stage G in
-   `project-state.json` after stage F, so the acceptance test is not delayed.
-   That is a change to the plan, so it is his.
+   the DA, agreed by Jason 2026-11-17.** In `ship.mode: direct`, every run
+   gets `NET_GROWTH_CEILING` (36). The net-growth fallback to 12 then applies
+   only in harness mode, where swarms run and where #1595 filed 57 in a day.
+   The net-growth reading is still printed on every refusal.
+5. **Placement in Engine Phase 9 — proposed by the DA, agreed by Jason
+   2026-11-17.** The four criteria go in Phase 9 beside ADR-018's, so Ready
+   draws this work next. Phase 10, the acceptance test (#1722), waits on them
+   by the phase rule. Stage item F1 does not: its readings are about the
+   convergence family and are met by #2305's first run. The alternative, a
+   stage G after stage F, was declined: it would leave consumer work waiting
+   behind the acceptance test.
 
 ## Not decided here
 
