@@ -239,6 +239,40 @@ describe("SC-2780: it never writes while an earlier ADR placement is running", (
     expect(earlier.out).toContain("run(s) 9");
   });
 
+  test("an earlier unfinished run past the first page of runs still holds it", () => {
+    // The list endpoint is newest-first, 100 a page. The stub serves page 2
+    // only when the step asks for every page, so a single-page query never
+    // sees run 9 and goes ahead beside it (review thread on #2322).
+    const page = (list: { id: number; status: string; created_at: string }[]) => JSON.stringify({ workflow_runs: list });
+    const newer = Array.from({ length: 100 }, (_, i) => ({
+      id: 1000 + i,
+      status: "completed",
+      created_at: `2026-11-17T11:${String(59 - (i % 60)).padStart(2, "0")}:30Z`,
+    }));
+    const pagedGh = [
+      'expr=""; pag=0; for a in "$@"; do [ "$prev" = "--jq" ] && expr="$a"; [ "$a" = "--paginate" ] && pag=1; prev="$a"; done',
+      'case "$*" in',
+      '  *"actions/runs/77"*) echo "2026-11-17T12:00:00Z";;',
+      '  *) jq -r "$expr" < page1.json; if [ $pag -eq 1 ]; then jq -r "$expr" < page2.json; fi;;',
+      "esac",
+    ].join("\n");
+    const files = {
+      "page1.json": page(newer),
+      "page2.json": page([{ id: 9, status: "queued", created_at: "2026-11-17T10:00:00Z" }]),
+    };
+    const r = execute(wait, { gh: pagedGh, sleep: "exit 0" }, files);
+    expect(r.code, r.out).not.toBe(0);
+    expect(r.out).toContain("Waiting for adr-accepted.yml run(s) 9 to finish");
+    expect(r.out).not.toContain("going ahead");
+  });
+
+  test("a runs list it cannot read is red, never a go-ahead", () => {
+    const failing = ['case "$*" in', '  *"actions/runs/77"*) echo "2026-11-17T12:00:00Z";;', "  *) exit 1;;", "esac"].join("\n");
+    const r = execute(wait, { gh: failing, sleep: "exit 0" });
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain("going ahead");
+  });
+
   test("its own concurrency group, never adr-accepted's, and permission to list runs", () => {
     expect(DOC.concurrency).toEqual({ group: SPECS_PLACED_GROUP, "cancel-in-progress": false });
     expect(SPECS_PLACED_GROUP).not.toBe("adr-accepted");

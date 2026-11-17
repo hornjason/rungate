@@ -88,12 +88,15 @@ export interface SpecsPlacedWorkflowOptions {
  * The wait step's script. The GitHub API lists the ADR workflow's runs; any
  * not yet `completed` and created before this run is waited for. Runs created
  * AFTER this one are not, so the two workflows can never wait on each other.
+ * Every page is read: the list is newest-first, so an earlier run still going
+ * falls off page one once 100 newer runs exist. A list it cannot read fails
+ * the step, through `pipefail`, rather than reading as "none unfinished".
  */
 export function buildWaitScript(): string {
   return `set -euo pipefail
 mine=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
 for poll in $(seq 1 ${WAIT_POLLS}); do
-  earlier=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${ADR_ACCEPTED_WORKFLOW_FILE}/runs?per_page=100" --jq "[.workflow_runs[] | select(.status != \\"completed\\" and .created_at < \\"$mine\\") | .id] | map(tostring) | join(\\" \\")")
+  earlier=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/${ADR_ACCEPTED_WORKFLOW_FILE}/runs?per_page=100" --jq ".workflow_runs[] | select(.status != \\"completed\\" and .created_at < \\"$mine\\") | .id" | paste -sd ' ' -)
   if [ -z "$earlier" ]; then
     echo "No earlier ${ADR_ACCEPTED_WORKFLOW_FILE} run is unfinished; going ahead."
     exit 0
