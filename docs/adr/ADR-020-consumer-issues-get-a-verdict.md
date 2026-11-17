@@ -81,6 +81,16 @@ none. In direct-ship mode the filing cap is the ceiling every day.
    on `issues: opened` and `labeled` carrying `from-consumer`, and on a daily
    schedule. The schedule catches anything an event missed. It uses the job's
    `GITHUB_TOKEN`, so its milestone writes fire no further event.
+   **An outside reporter's label is put back first — Jason, 2026-11-17.**
+   GitHub silently drops the labels on a new issue whose author has no push
+   access. So the scaffolded `reporting-upstream.md` rule's `--label
+   from-consumer` never arrives from a real outside consumer, and a trigger
+   keyed on the label alone would miss every one of their reports, the daily
+   run included. The workflow therefore also acts on a newly opened issue
+   whose author association is not `OWNER`, `MEMBER` or `COLLABORATOR`. It
+   adds `from-consumer` to that issue, and the triage and the reading then
+   see it like any other. The repository's own sessions file with the
+   owner's token, which is why every report so far carried the label.
 3. **The board shows what was missed — Jason, 2026-11-17.** A new reading,
    `consumer-intake`, counts open `from-consumer` issues older than two days.
    Each must carry a verdict marker or a milestone. One with neither makes the

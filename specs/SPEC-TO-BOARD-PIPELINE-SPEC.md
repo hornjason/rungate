@@ -510,7 +510,7 @@ acceptance test, so it is also the honest answer to *when is the engine done*
 - [ ] SC-2783: `board-conformance` reads `consumer-intake`: every open `from-consumer` issue older than two days carries a verdict marker or a milestone, and one with neither makes the reading SHORT, naming the issue; a tracker it cannot read leaves the reading UNMEASURED
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-- [ ] SC-2784: a generated `consumer-intake.yml` runs `consumer-triage --write` through the published CLI when an issue is opened or labelled `from-consumer`, and on a daily schedule, so an issue whose event was missed is triaged within a day
+- [ ] SC-2784: a generated `consumer-intake.yml` runs `consumer-triage --write` through the published CLI when an issue is opened or labelled `from-consumer`, and on a daily schedule, so an issue whose event was missed is triaged within a day; a newly opened issue whose author is not an owner, member or collaborator is given `from-consumer` first, because GitHub drops the labels such an author sets
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
 - [ ] SC-2785: in `ship.mode: direct` every run's filing cap is `NET_GROWTH_CEILING` whatever the trailing day's net growth, the net-growth fallback applies only in harness mode, and a refusal still prints the day's opened and closed counts
