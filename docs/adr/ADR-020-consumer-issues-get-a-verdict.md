@@ -88,8 +88,8 @@ none. In direct-ship mode the filing cap is the ceiling every day.
    run included. The workflow therefore also acts on a newly opened issue
    whose author association is not `OWNER`, `MEMBER` or `COLLABORATOR`. It
    adds `from-consumer` to that issue, and the triage and the reading then
-   see it like any other. The repository's own sessions file with the
-   owner's token, which is why every report so far carried the label.
+   see it like any other. Every report so far carried the label only because
+   this repository's own sessions filed them with the owner's token.
 3. **The board shows what was missed — Jason, 2026-11-17.** A new reading,
    `consumer-intake`, counts open `from-consumer` issues older than two days.
    Each must carry a verdict marker or a milestone. One with neither makes the
