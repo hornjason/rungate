@@ -142,8 +142,11 @@ try {
     // Both through `writeSpec`, as finding-promotion does: the one write path
     // the spec-write sweep (#1552) allows for a path matching /spec/i. Both
     // or neither: a failed bank write puts the spec back.
+    // The bank write is spelled `writeSpec(bankPath, …)` so write
+    // accountability (#624) resolves it to the bank, as it does
+    // finding-promotion's, rather than reading an opaque `writeSpec(p)`.
     const wrote = writeSpecWithBank(
-      (p, c) => writeSpec(p, c),
+      (p, c) => (p === bankPath ? writeSpec(bankPath, c) : writeSpec(p, c)),
       { path: specPath, before: content, after: newContent },
       { path: bankPath, text: banked.text },
     );
