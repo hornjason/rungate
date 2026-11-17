@@ -1,4 +1,4 @@
-# generated-sha: 6449281ea4571509
+# generated-sha: 753c84e4f83ecd19
 # Managed by rungate — do not edit. Opt a spec in with
 # board: { scope: active, prefix: <Name> } in its frontmatter and give it a
 # placement table; nothing here names a spec.
@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           mine=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
           for poll in $(seq 1 90); do
-            earlier=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/adr-accepted.yml/runs?per_page=100" --jq "[.workflow_runs[] | select(.status != \"completed\" and .created_at < \"$mine\") | .id] | map(tostring) | join(\" \")")
+            earlier=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/adr-accepted.yml/runs?per_page=100" --jq ".workflow_runs[] | select(.status != \"completed\" and .created_at < \"$mine\") | .id" | paste -sd ' ' -)
             if [ -z "$earlier" ]; then
               echo "No earlier adr-accepted.yml run is unfinished; going ahead."
               exit 0
