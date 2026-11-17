@@ -2243,3 +2243,73 @@ describe("SC-2778: a criterion placed outside every phase is declared, not missi
   });
 });
 
+
+/**
+ * #2323 / SC-2752: a criterion an ADR this change accepts plans is planned,
+ * named apart, and never unaccounted. The merge files its issue, so before
+ * the merge nobody could have filed it.
+ */
+describe("#2323 / SC-2752: declared-work reads a criterion an unmerged ADR plans as planned", () => {
+  const reading = (b: BoardSnapshot) => takeReadings(b).find(r => r.name === "declared-work")!;
+  const ADR = "docs/adr/ADR-099-a-plan.md";
+
+  test("#2323: a planned criterion leaves both sides and is named apart, under its own heading", () => {
+    const b = completeBoard();
+    b.declaredWork!.push({ kind: "criterion", id: "SC-9601", source: "specs/E.md", planned: ADR });
+    const r = reading(b);
+    expect([r.status, r.target]).toEqual(["met", 2]);
+    expect(r.planned).toEqual([`SC-9601 (specs/E.md) — ${ADR}`]);
+    expect(r.declared).toEqual([]);
+    const text = formatReading(r);
+    expect(text).toContain(`planned by an ADR this change accepts (1): SC-9601 (specs/E.md) — ${ADR}`);
+    expect(text).not.toContain("declared outside phases");
+  });
+
+  test("#2323: the same criterion with no plan names no open issue — the control", () => {
+    const b = completeBoard();
+    b.declaredWork!.push({ kind: "criterion", id: "SC-9601", source: "specs/E.md" });
+    const r = reading(b);
+    expect(r.status).toBe("short");
+    expect(r.offenders).toEqual(["SC-9601 (specs/E.md) names no open issue"]);
+    expect(r.planned).toEqual([]);
+  });
+
+  test("#2323: the snapshot reader carries the mark, and an absent key is not planned", () => {
+    const b = completeBoard();
+    b.declaredWork!.push({ kind: "criterion", id: "SC-9601", source: "specs/E.md", planned: ADR });
+    b.declaredWork!.push({ kind: "criterion", id: "SC-9602", source: "specs/E.md" });
+    const read = readSnapshotText(JSON.stringify(b));
+    expect("board" in read).toBe(true);
+    const rows = (read as { board: BoardSnapshot }).board.declaredWork!.filter(w => w.id.startsWith("SC-96"));
+    expect(rows).toStrictEqual([
+      { kind: "criterion", id: "SC-9601", source: "specs/E.md", planned: ADR },
+      { kind: "criterion", id: "SC-9602", source: "specs/E.md" },
+    ]);
+  });
+
+  test("#2323: a planned mark that is present and unreadable unreads the population — UNMEASURED, never 'not planned'", () => {
+    // Dropping the mark would put the row back among the ones that need an
+    // issue: the SC-2752 rule for a row this command cannot identify.
+    for (const bad of ["", 7, null, ["x"]]) {
+      const b = completeBoard();
+      b.declaredWork!.push({ kind: "criterion", id: "SC-9602", source: "specs/E.md", planned: bad } as never);
+      const read = readSnapshotText(JSON.stringify(b));
+      expect("board" in read, `planned: ${JSON.stringify(bad)}`).toBe(true);
+      const board = (read as { board: BoardSnapshot }).board;
+      expect(board.declaredWork, `planned: ${JSON.stringify(bad)}`).toBeUndefined();
+      expect(reading(board).status, `planned: ${JSON.stringify(bad)}`).toBe("unmeasured");
+    }
+  });
+
+  test("#2323: a criterion both declared outside phases and planned is named on both lines", () => {
+    const b = completeBoard();
+    b.declaredWork!.push({ kind: "criterion", id: "SC-9603", source: "specs/E.md", outside: "Blocked", planned: ADR });
+    const r = reading(b);
+    expect([r.status, r.target]).toEqual(["met", 2]);
+    expect(r.declared).toEqual(["SC-9603 (specs/E.md) — Blocked"]);
+    expect(r.planned).toEqual([`SC-9603 (specs/E.md) — ${ADR}`]);
+    const text = formatReading(r);
+    expect(text).toContain("declared outside phases (1): SC-9603");
+    expect(text).toContain("planned by an ADR this change accepts (1): SC-9603");
+  });
+});
