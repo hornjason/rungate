@@ -788,11 +788,14 @@ export type NetGrowthBasis =
  * row cannot describe a different decision from the one enforced.
  *
  * - Not the direct-ship allowance (`allowance.direct` false): the cap
- *   stands, records nothing, and **the count is never read**.
- * - Count unreadable, or the reader throws: the cap stands, and the reading
- *   is recorded as UNMEASURED. Never the ceiling — the fail-closed direction.
- * - opened − closed ≤ 0: `NET_GROWTH_CEILING`.
- * - opened − closed > 0: the cap stands.
+ *   stands, records nothing, and **the count is never read**. Harness mode
+ *   keeps its ship-mode cap (SC-2785).
+ * - The direct-ship allowance: `NET_GROWTH_CEILING`, **whatever the count
+ *   says** (ADR-020 Decision 4, SC-2785, Jason 2026-11-17). On 2026-11-17 the
+ *   count fell back to 12 while consumer reports pushed opened above closed,
+ *   and a release issue waited four hours behind it. The count is still read,
+ *   so the refusal prints the day's opened and closed numbers; an unread count
+ *   is recorded as UNMEASURED and changes nothing.
  *
  * **It takes a THUNK, and that is what keeps eligibility to one site.** With
  * a value, the caller has to decide whether to read before calling, and that
@@ -815,11 +818,10 @@ export async function netGrowthCeiling(
   const growth = await Promise.resolve()
     .then(read)
     .catch((e: unknown) => unmeasuredGrowth(`the trailing day's issues could not be read (${errorText(e)})`));
-  if (growth.reading !== "MEASURED") return { cap: allowance.cap, basis: growth };
-  const ceiling = growth.opened - growth.closed <= 0;
+  if (growth.reading !== "MEASURED") return { cap: NET_GROWTH_CEILING, basis: growth };
   return {
-    cap: ceiling ? NET_GROWTH_CEILING : allowance.cap,
-    basis: { reading: "MEASURED", opened: growth.opened, closed: growth.closed, ceiling },
+    cap: NET_GROWTH_CEILING,
+    basis: { reading: "MEASURED", opened: growth.opened, closed: growth.closed, ceiling: true },
   };
 }
 
@@ -962,18 +964,16 @@ export function netGrowthSentence(basis: NetGrowthBasis | null | undefined): str
   // none, and that row is a refusal with nothing to say about the ceiling.
   if (basis === null || basis === undefined) return null;
   const window = `${RUN_WINDOW_MS / 3_600_000}h`;
+  const direct = `in direct-ship mode the cap is the ceiling of ${NET_GROWTH_CEILING} whatever the day's growth (ADR-020).`;
   if (basis.reading === "UNMEASURED") {
-    return (
-      `Whether the repository closed as many issues as it opened in the last ${window} is UNMEASURED ` +
-      `(${basis.why}), so the net-growth ceiling of ${NET_GROWTH_CEILING} does not apply and the cap is ` +
-      "the ship-mode one (ADR-016)."
-    );
+    return `Whether the repository closed as many issues as it opened in the last ${window} is UNMEASURED (${basis.why}); ${direct}`;
   }
   const counts = `The repository opened ${basis.opened} and closed ${basis.closed} issue(s) in the last ${window}`;
+  // `ceiling: false` is a row written before ADR-020, when a growing backlog
+  // fell back to the ship-mode cap. It is rendered as what it was.
   return basis.ceiling
-    ? `${counts}, so the net-growth ceiling of ${NET_GROWTH_CEILING} applies (ADR-016).`
-    : `${counts}: opening outran closing, so the net-growth ceiling of ${NET_GROWTH_CEILING} does not ` +
-        "apply and the cap is the ship-mode one (ADR-016).";
+    ? `${counts}; ${direct}`
+    : `${counts}: opening outran closing, so the cap was the ship-mode one (ADR-016, before ADR-020).`;
 }
 
 /**
