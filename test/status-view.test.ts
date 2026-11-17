@@ -520,7 +520,17 @@ describe("#2330: any repository that uses rungate can read its own board", () =>
   ];
   const consumerGh = (args: string[]) => {
     const lines = (rows: unknown[]) => ({ ok: true as const, out: rows.map(r => JSON.stringify(r)).join("\n") });
-    if (args.includes("graphql") && args.some(a => a.includes("blockedBy"))) return lines(PHASE_ISSUES);
+    if (args.includes("graphql") && args.some(a => a.includes("blockedBy"))) {
+      // Two pages, so an issue the loop only reaches by following the cursor is in the fixture (#32).
+      const second = args.includes("after=c1");
+      const node = (i: (typeof PHASE_ISSUES)[number]) => ({
+        number: i.number, title: i.title, url: i.url, milestone: { title: i.milestone },
+        assignees: { nodes: i.assignees.map(login => ({ login })) },
+        blockedBy: { pageInfo: { hasNextPage: i.moreBlockers }, nodes: [...i.blockers.map(n => ({ number: n, state: "OPEN" })), { number: 9, state: "CLOSED" }] },
+      });
+      const nodes = second ? PHASE_ISSUES.slice(2).map(node) : [...PHASE_ISSUES.slice(0, 2).map(node), { number: 50, title: "no phase", url: "i50", milestone: null }];
+      return { ok: true as const, out: JSON.stringify({ data: { repository: { issues: { pageInfo: { hasNextPage: !second, endCursor: "c1" }, nodes } } } }) };
+    }
     const path = args.find(a => a.startsWith("repos/")) ?? "";
     if (path.startsWith("repos/o/r/milestones")) return lines(MILESTONES);
     if (path.startsWith("repos/o/r/issues?")) return lines(OPEN_ITEMS);

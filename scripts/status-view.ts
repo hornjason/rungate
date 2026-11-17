@@ -684,23 +684,43 @@ export function gather(
  * the workflow runs this on every issue event.
  */
 const PHASE_ISSUES_QUERY =
-  "query($owner:String!,$name:String!,$endCursor:String){repository(owner:$owner,name:$name){" +
-  "issues(first:100,after:$endCursor,states:OPEN){pageInfo{hasNextPage endCursor} nodes{number title url " +
+  "query($owner:String!,$name:String!,$after:String){repository(owner:$owner,name:$name){" +
+  "issues(first:100,after:$after,states:OPEN){pageInfo{hasNextPage endCursor} nodes{number title url " +
   "milestone{title} assignees(first:10){nodes{login}} blockedBy(first:50){pageInfo{hasNextPage} nodes{number state}}}}}}";
-const PHASE_ISSUES_JQ =
-  ".data.repository.issues.nodes[] | select(.milestone != null) | {number, title, url, milestone: .milestone.title, " +
-  'assignees: [.assignees.nodes[].login], blockers: [.blockedBy.nodes[] | select(.state == "OPEN") | .number], ' +
-  "moreBlockers: .blockedBy.pageInfo.hasNextPage}";
 
+/**
+ * Paged by hand, as `readReady` and `lib/live-issues.ts` do, rather than
+ * with `gh --paginate`: the query nests a second paged connection
+ * (`blockedBy`) in every node, and a hand loop follows the outer cursor by
+ * name instead of trusting gh to find the right `pageInfo` (review of #2334).
+ */
 function readPhaseIssues(gh: Gh, repo: string): Reading<PhaseIssue[]> {
   const [owner, name] = repo.split("/");
-  const r = gh(["api", "graphql", "--paginate", "-f", `query=${PHASE_ISSUES_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "--jq", PHASE_ISSUES_JQ]);
-  if (!r.ok) return unmeasured(r.why);
-  try {
-    return read(r.out.split("\n").filter(l => l.trim() !== "").map(l => JSON.parse(l) as PhaseIssue));
-  } catch (e) {
-    return unmeasured(`gh returned a line that is not JSON (${(e as Error).message})`);
+  const out: PhaseIssue[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < 50; page++) {
+    const args = ["api", "graphql", "-f", `query=${PHASE_ISSUES_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`];
+    if (cursor !== null) args.push("-f", `after=${cursor}`);
+    const r = ghJson<{ data?: { repository?: { issues?: { pageInfo: { hasNextPage: boolean; endCursor: string }; nodes: any[] } } } }>(gh, args);
+    if (r.kind === "UNMEASURED") return unmeasured(r.why);
+    const conn = r.value.data?.repository?.issues;
+    if (!conn) return unmeasured("the open issues could not be read: the reply carried no issues connection");
+    for (const n of conn.nodes) {
+      if (!n?.milestone?.title) continue;
+      out.push({
+        number: n.number,
+        title: n.title,
+        url: n.url,
+        milestone: n.milestone.title,
+        assignees: (n.assignees?.nodes ?? []).map((a: { login: string }) => a.login),
+        blockers: (n.blockedBy?.nodes ?? []).filter((b: { state: string }) => b.state === "OPEN").map((b: { number: number }) => b.number),
+        moreBlockers: n.blockedBy?.pageInfo?.hasNextPage === true,
+      });
+    }
+    if (!conn.pageInfo.hasNextPage) return read(out);
+    cursor = conn.pageInfo.endCursor;
   }
+  return unmeasured("the open issues kept paging past 5,000");
 }
 
 /**
