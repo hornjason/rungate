@@ -293,6 +293,10 @@ describe("SC-1525: the CLI asks the allocator the whole question", () => {
     // scored 0 red until the probe existed.
     const spec = join(ROOT, "specs", "CONFIG-DRIVEN-TESTING-SPEC.md");
     const before = readFileSync(spec, "utf-8");
+    // The spec is deferred, so create-sc moves the deferral bank with it; the
+    // bank is restored with the spec, or this case leaves the tree red.
+    const bankFile = join(ROOT, ".claude", "spec-deferral-ratchet.json");
+    const bankBefore = readFileSync(bankFile, "utf-8");
     const specOnly = nextSCNumber("", registry);
     const probeFile = join(ROOT, "test", "zz-399-cli-probe.ts");
     // Above the WHOLE namespace, not just this tree's spec registry (#503).
@@ -371,6 +375,7 @@ describe("SC-1525: the CLI asks the allocator the whole question", () => {
     } finally {
       rmSync(probeFile, { force: true });
       writeFileSync(spec, before);
+      writeFileSync(bankFile, bankBefore);
     }
   }, 120_000);
 });

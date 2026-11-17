@@ -14,7 +14,7 @@
  *
  * Thin CLI consumer — all logic lives in lib/create-sc.ts.
  */
-import { readFileSync, existsSync, writeFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import {
   allocateScNumber,
   generateSCText,
@@ -142,7 +142,16 @@ try {
     writeSpec(specPath, newContent);
     console.log(`Appended to ${specPath}: ${scLine}`);
     if (banked.text !== null) {
-      writeFileSync(bankPath, banked.text);
+      // Through `writeSpec`, as finding-promotion does: the one write path the
+      // spec-write sweep (#1552) allows for a path matching /spec/i.
+      const bankWrite = writeSpec(bankPath, banked.text);
+      if (!bankWrite.written) {
+        console.error(
+          `ERROR: ${specPath} now states SC-${scNumber}, and .claude/spec-deferral-ratchet.json could not be written ` +
+            `(${bankWrite.refusal ?? "no reason given"}). Move ${specKey}'s count there by one.`,
+        );
+        process.exit(1);
+      }
       console.log(`  deferral bank: ${specKey} moved with it (.claude/spec-deferral-ratchet.json)`);
     }
     // What the number is a floor over, stated rather than implied. A clone on

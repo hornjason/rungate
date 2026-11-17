@@ -1156,6 +1156,9 @@ export const KNOWN_UNDECLARED_WRITES: Record<string, string> = {
   "scripts/finding-promotion.ts → .claude/spec-deferral-ratchet.json":
     "the deferral bank moves with the criterion it counts (#2066); the promotion's caller commits both in one pull " +
     "request, exactly as it commits the spec line the same run writes",
+  "scripts/create-sc.ts → .claude/spec-deferral-ratchet.json":
+    "the deferral bank moves with the criterion create-sc appends to a deferred spec, the same rule as " +
+    "finding-promotion's entry above; the caller commits both in one pull request",
 };
 
 /**
