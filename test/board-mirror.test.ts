@@ -390,8 +390,16 @@ describe("SC-2610: every spec contributes, not the one on the command line", () 
     const body = src.slice(from, to);
     // The premise: the slice really is the sweep, and it really does hold the
     // branches. Without this the assertion below passes on an empty string.
-    expect(body).toContain("readDir(dir)");
-    expect(body.split("return unmeasuredSweep(").length - 1).toBe(3);
+    // The directory listing moved to `specFilesIn` (#2275), whose refusal
+    // carries no paths at all, so its two branches are one here.
+    expect(body).toContain("specFilesIn(root, readDir)");
+    expect(body.split("return unmeasuredSweep(").length - 1).toBe(2);
+    const lister = src.slice(src.indexOf("export function specFilesIn("), from);
+    expect(lister, "the listing the sweep calls was not found").toContain("readDir(dir)");
+    expect(
+      lister.match(/reading: "UNMEASURED", paths/g),
+      "specFilesIn returns paths beside an UNMEASURED reading",
+    ).toBeNull();
     expect(
       body.split('"UNMEASURED"').length - 1,
       "a branch of specCriteriaIn spells the reading itself, so it can return one with data in it",

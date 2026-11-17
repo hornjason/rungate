@@ -19,7 +19,7 @@
 import { readFileSync } from "fs";
 import { join, relative } from "path";
 import { parseArgs } from "util";
-import { specPathSweep } from "../lib/board-mirror";
+import { specFilesIn } from "../lib/board-mirror";
 import { readDerivedDeclaration } from "../lib/derived-spec";
 import { isTemplateSpec } from "../lib/sc-ids";
 import { parseCriteria } from "../lib/spec-evidence";
@@ -65,8 +65,10 @@ export function boardScope(root: string, only?: string): { specs: SpecScope[] } 
     const refused = optInRefusal(only, content);
     if (refused !== null) return { refusal: refused };
   }
-  const sweep = specPathSweep(root);
-  if (sweep.reading === "UNMEASURED") return { refusal: `UNMEASURED: the specs/ sweep failed: ${sweep.unmeasuredReasons.join("; ")}` };
+  // The file list, not the id sweep: a tree where no spec states a criterion
+  // yet is exactly what a report made before onboarding must still list.
+  const sweep = specFilesIn(root);
+  if (sweep.reading === "UNMEASURED") return { refusal: `UNMEASURED: the specs/ listing failed: ${sweep.reasons.join("; ")}` };
   if (only !== undefined && !sweep.paths.includes(only)) return { refusal: `${only} is not a spec the sweep reads under specs/` };
 
   const texts = new Map(sweep.paths.map(p => [p, readFileSync(join(root, p), "utf-8")]));

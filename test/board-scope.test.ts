@@ -124,6 +124,24 @@ describe("#2275: board-scope reports each spec before it is opted in", () => {
     }
   });
 
+  test("#2275: a tree where no spec states a criterion yet is still listed, not refused", () => {
+    // The id sweep refuses that tree for board-mirror's reasons (no cell can
+    // be filled); a report made before onboarding must not inherit it.
+    const root = mkdtempSync(join(tmpdir(), "board-scope-empty-"));
+    try {
+      mkdirSync(join(root, "specs"), { recursive: true });
+      writeFileSync(join(root, "specs/FIRST-SPEC.md"), spec("", "No criteria yet."));
+      const all = run(root);
+      expect(all.code, all.out).toBe(0);
+      expect(all.out).toContain("not tracked: 0 spec(s), 0 criteria the board does not show");
+      const one = run(root, "--spec", "specs/FIRST-SPEC.md");
+      expect(one.code, one.out).toBe(0);
+      expect(one.out).toContain("specs/FIRST-SPEC.md — NOT TRACKED (undeclared): 0 criteria");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("#2275: the hint decider, one case per outcome", () => {
     const declaredBy = new Map([
       ["SC-9201", ["specs/A.md"]],
