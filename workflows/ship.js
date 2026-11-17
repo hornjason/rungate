@@ -882,6 +882,54 @@ async function timedAgent(prompt, opts = {}) {
 }
 // ──── AGENT-TIMING-END ────
 
+// ──── GATE-REFUSAL-INTAKE-START ────
+/**
+ * The `gate-refusals` intake reading, taken as the run ends (#2234).
+ *
+ * Jason decided on #1126 (2026-11-15) that each intake source runs on its own
+ * trigger. This one reads the local run store, which exists only on the
+ * machine that ran the harness, so it runs here, after this run's gates have
+ * written their refusals, and not in CI.
+ *
+ * ADVISORY. The reading is logged and returned in its own `intake` field,
+ * and nothing reads that field to decide a status. A command that fails, a
+ * reply naming no reading, and an agent that throws all come back UNMEASURED
+ * with the reason, and the run ends exactly as it would have without it.
+ */
+const GATE_REFUSAL_INTAKE_LINE = /^gate-refusals: (MEASURED|UNMEASURED)\b/
+
+async function gateRefusalIntake(status) {
+  let reply
+  try {
+    reply = await timedAgent(`
+This ship run is ending at ${String(status)}. Take the gate-refusals intake
+reading. Run exactly this one command, unchanged:
+
+bun --cwd ${shellQuote(HARNESS_ROOT)} bin/rungate.ts intake --project-root ${shellQuote(PROJECT_ROOT)} --source gate-refusals
+
+It exits 0 on every reading. Copy the one line it prints that starts with
+"gate-refusals:" into line, verbatim. If it printed no such line, put what it
+did print in line. Run nothing else, and do not re-run it.
+`, { label: 'gate-refusal-intake', schema: {
+      type: 'object',
+      properties: { line: { type: 'string' } },
+      required: ['line'],
+    } })
+  } catch (e) {
+    const failed = { reading: 'UNMEASURED', line: `the intake step did not run: ${e && e.message ? e.message : String(e)}` }
+    log(`Intake (gate-refusals): ${failed.reading} — ${failed.line}`)
+    return failed
+  }
+  const line = reply && typeof reply.line === 'string' ? reply.line.trim() : ''
+  const m = GATE_REFUSAL_INTAKE_LINE.exec(line)
+  const result = m
+    ? { reading: m[1], line }
+    : { reading: 'UNMEASURED', line: line ? `no reading in the reply: ${line}` : 'the intake step reported nothing' }
+  log(`Intake (gate-refusals): ${result.line}`)
+  return result
+}
+// ──── GATE-REFUSAL-INTAKE-END ────
+
 // ──── WORKTREE-REGISTRY-START ────
 /**
  * Every worktree any agent has reported working in (#232).
@@ -1048,6 +1096,7 @@ async function terminalFailure(status, extra = {}) {
   // After preservation, never before: the restore moves the shared checkout,
   // and the work has to have a ref of its own before anything moves.
   const restored = await restorePrimaryCheckout(String(status || 'FAILED'))
+  const intake = await gateRefusalIntake(status)
   return {
     status,
     ...extra,
@@ -1067,6 +1116,8 @@ async function terminalFailure(status, extra = {}) {
     // different questions — why the run stopped, and what a retry will see —
     // and #524 put the first one there.
     retryGuidance: RESUME_REPLAYS_NOTE,
+    // Advisory, after the spread so a caller cannot shadow it (#2234).
+    intake,
     workDir: WORK_DIR,
   }
 }
@@ -2398,6 +2449,7 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
   // After preservation, never before: the restore moves the shared checkout,
   // and the work has to have a ref of its own before anything moves.
   const restored = await restorePrimaryCheckout(phaseName)
+  const intake = await gateRefusalIntake('SHIP_FAILED')
   // The one combination nobody should have to infer from a JSON field: this
   // run will not ship and there is a mergeable PR on the branch. Said out
   // loud, at the moment it becomes true.
@@ -2410,6 +2462,7 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
   return {
     status: 'SHIP_FAILED',
     reason: summary.reason,
+    intake, // advisory (#2234)
     // The same note the other funnel carries, from the same binding (#889).
     // SHIP_FAILED is the status most likely to be retried — the work exists
     // and only the ship step refused — so a note on the other funnel alone
@@ -10673,8 +10726,10 @@ this whole mechanism exists to prevent.
   }
 }
 
+const intake = await gateRefusalIntake(terminalStatus)
 return {
   status: terminalStatus,
+  intake, // advisory (#2234): read by nothing that decides the status
   issue: ISSUE, slug: SLUG,
   sizing: discovery.sizing, ceremonyTier: discovery.ceremonyTier,
   proveVerdict,

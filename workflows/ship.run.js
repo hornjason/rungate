@@ -463,6 +463,39 @@ async function timedAgent(prompt, opts = {}) {
   return reply
 }
 
+const GATE_REFUSAL_INTAKE_LINE = /^gate-refusals: (MEASURED|UNMEASURED)\b/
+
+async function gateRefusalIntake(status) {
+  let reply
+  try {
+    reply = await timedAgent(`
+This ship run is ending at ${String(status)}. Take the gate-refusals intake
+reading. Run exactly this one command, unchanged:
+
+bun --cwd ${shellQuote(HARNESS_ROOT)} bin/rungate.ts intake --project-root ${shellQuote(PROJECT_ROOT)} --source gate-refusals
+
+It exits 0 on every reading. Copy the one line it prints that starts with
+"gate-refusals:" into line, verbatim. If it printed no such line, put what it
+did print in line. Run nothing else, and do not re-run it.
+`, { label: 'gate-refusal-intake', schema: {
+      type: 'object',
+      properties: { line: { type: 'string' } },
+      required: ['line'],
+    } })
+  } catch (e) {
+    const failed = { reading: 'UNMEASURED', line: `the intake step did not run: ${e && e.message ? e.message : String(e)}` }
+    log(`Intake (gate-refusals): ${failed.reading} — ${failed.line}`)
+    return failed
+  }
+  const line = reply && typeof reply.line === 'string' ? reply.line.trim() : ''
+  const m = GATE_REFUSAL_INTAKE_LINE.exec(line)
+  const result = m
+    ? { reading: m[1], line }
+    : { reading: 'UNMEASURED', line: line ? `no reading in the reply: ${line}` : 'the intake step reported nothing' }
+  log(`Intake (gate-refusals): ${result.line}`)
+  return result
+}
+
 const WORKTREES_SEEN = new Set()
 
 let primaryBranchBefore = ''
@@ -516,6 +549,7 @@ const RESUME_REPLAYS_NOTE =
 async function terminalFailure(status, extra = {}) {
   const kept = await preserveSeenWorktrees(String(status || 'FAILED'), 'terminal-preserve')
   const restored = await restorePrimaryCheckout(String(status || 'FAILED'))
+  const intake = await gateRefusalIntake(status)
   return {
     status,
     ...extra,
@@ -524,6 +558,7 @@ async function terminalFailure(status, extra = {}) {
     runBranchReading: restored.reading,
     runBranchRestore: restored.restoreOutcome,
     retryGuidance: RESUME_REPLAYS_NOTE,
+    intake,
     workDir: WORK_DIR,
   }
 }
@@ -1276,6 +1311,7 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
   if (immediateReason) recordRefusal('REFUSAL', phaseName, immediateReason)
   const kept = await preserveSeenWorktrees(phaseName, 'ship-failed-preserve')
   const restored = await restorePrimaryCheckout(phaseName)
+  const intake = await gateRefusalIntake('SHIP_FAILED')
   if (observedDraft(openedPr) === false) {
     log(`WARN: this run refused and PR #${openedPr.prNumber} is NOT a draft — it is mergeable and carries code this run did not stand behind`)
   }
@@ -1285,6 +1321,7 @@ async function shipFailed(phaseName, immediateReason, extra = {}) {
   return {
     status: 'SHIP_FAILED',
     reason: summary.reason,
+    intake,
     retryGuidance: RESUME_REPLAYS_NOTE,
     immediateReason: immediateReason || null,
     failures: summary.failures,
@@ -6167,8 +6204,10 @@ this whole mechanism exists to prevent.
   }
 }
 
+const intake = await gateRefusalIntake(terminalStatus)
 return {
   status: terminalStatus,
+  intake,
   issue: ISSUE, slug: SLUG,
   sizing: discovery.sizing, ceremonyTier: discovery.ceremonyTier,
   proveVerdict,
