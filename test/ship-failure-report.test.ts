@@ -121,6 +121,8 @@ function loadLedger(block: string, logs: string[] = []): Ledger {
     // rather than omitted — an absent binding is a ReferenceError inside the
     // funnel, which would red every case here for a reason unrelated to it.
     "var restorePrimaryCheckout = async () => ({ reading: 'UNCHANGED', restoreOutcome: 'ALREADY_ON_START', lines: [] });\n" +
+    // #2234: the funnels take the advisory intake reading on the way out.
+    "var gateRefusalIntake = async () => ({ reading: 'UNMEASURED', line: 'stubbed' });\n" +
     // #889: the funnel returns the retry note, so the binding has to be here.
     // ship.js's own declaration, not a copy — see NOTE_DECLARATION above.
     `${NOTE_DECLARATION}\n`;
