@@ -14,7 +14,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { bankAfterAppend } from "../lib/finding-promotion";
+import { bankAfterAppend, writeSpecWithBank } from "../lib/finding-promotion";
 
 const ROOT = join(import.meta.dir, "..");
 const BANK = join(ROOT, ".claude", "spec-deferral-ratchet.json");
@@ -71,6 +71,41 @@ describe("bankAfterAppend: the bank after a criterion is appended", () => {
   test("a deferred spec missing from the bank, or with no bank at all, refuses", () => {
     expect(bankAfterAppend(bank("specs/ELSEWHERE.md", 2), "specs/FIX.md", before, after).ok).toBe(false);
     expect(bankAfterAppend(null, "specs/FIX.md", before, after).ok).toBe(false);
+  });
+});
+
+describe("writeSpecWithBank: the spec and the bank land together or not at all (review, #2298)", () => {
+  /** An in-memory writer that fails on the paths it is told to. */
+  function writer(failOn: string[] = []) {
+    const files = new Map<string, string>();
+    const write = (p: string, c: string) => {
+      if (failOn.includes(p)) return { written: false, refusal: `${p} refused` };
+      files.set(p, c);
+      return { written: true };
+    };
+    return { files, write };
+  }
+  const spec = { path: "spec.md", before: "old", after: "new" };
+
+  test("both written when both succeed", () => {
+    const w = writer();
+    expect(writeSpecWithBank(w.write, spec, { path: "bank.json", text: "{}" })).toEqual({ ok: true });
+    expect(w.files.get("spec.md")).toBe("new");
+    expect(w.files.get("bank.json")).toBe("{}");
+  });
+
+  test("a failed bank write puts the spec back", () => {
+    const w = writer(["bank.json"]);
+    const r = writeSpecWithBank(w.write, spec, { path: "bank.json", text: "{}" });
+    expect(r.ok).toBe(false);
+    expect((r as { restored: boolean }).restored).toBe(true);
+    expect(w.files.get("spec.md"), "the spec kept the line the bank does not count").toBe("old");
+  });
+
+  test("no bank to move writes only the spec", () => {
+    const w = writer(["bank.json"]);
+    expect(writeSpecWithBank(w.write, spec, { path: "bank.json", text: null })).toEqual({ ok: true });
+    expect(w.files.get("spec.md")).toBe("new");
   });
 });
 

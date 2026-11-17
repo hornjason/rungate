@@ -831,6 +831,37 @@ export function bankAfterAppend(
   return bankWithPromotion(bankText, specPath, was.criteria, now.criteria);
 }
 
+/** The writer `writeSpecWithBank` writes through: `writeSpec`, or a stand-in in a test. */
+export type SpecWriter = (path: string, content: string) => { written: boolean; refusal?: string | null };
+
+/**
+ * Write the spec and then the bank, both or neither (review of #2298).
+ *
+ * A bank write that fails after the spec write landed would leave the bank one
+ * behind, and `create-sc` cannot repair that on a retry the way
+ * `bankForRetry` does for a promotion: it mints a fresh id every run, so a
+ * bank one behind looks exactly like somebody else's unbanked criterion. So
+ * the spec is put back. `restored: false` is the one state left that needs a
+ * person, and it says so.
+ */
+export function writeSpecWithBank(
+  write: SpecWriter,
+  spec: { path: string; before: string; after: string },
+  bank: { path: string; text: string | null },
+): { ok: true } | { ok: false; why: string; restored: boolean } {
+  const specWrite = write(spec.path, spec.after);
+  if (!specWrite.written) return { ok: false, why: `the spec was not written (${specWrite.refusal ?? "no reason given"})`, restored: true };
+  if (bank.text === null) return { ok: true };
+  const bankWrite = write(bank.path, bank.text);
+  if (bankWrite.written) return { ok: true };
+  const undo = write(spec.path, spec.before);
+  return {
+    ok: false,
+    why: `the deferral bank could not be written (${bankWrite.refusal ?? "no reason given"})`,
+    restored: undo.written,
+  };
+}
+
 /**
  * ## Declining — the router's other outcome
  *
