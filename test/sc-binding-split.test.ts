@@ -368,7 +368,11 @@ const UNCLAIMED_RATCHET = 150;
 // push that changes specs/ runs every opted-in family through the engine, a
 // generated workflow no registered pattern expresses; the `SC-2780`
 // describes in test/specs-placed-workflow.test.ts name it.
-const CLAIMED_UNBINDABLE = 177;
+// 177 -> 178: SC-2785 (#2343) ticked by `sync-sc-status --only SC-2785`: in
+// direct-ship mode the filing cap is the ceiling whatever the day's growth, a
+// behaviour no registered pattern expresses; the FG-266..FG-278 describe in
+// test/issue-filing-gate.test.ts names it.
+const CLAIMED_UNBINDABLE = 178;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
