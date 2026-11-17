@@ -31,7 +31,9 @@
  * `AGENTS.md` rule 7 asks us to watch.
  */
 
+import { criterionAnswer } from "./board-mirror";
 import { headingOccurrencesOf } from "./issue-shape";
+import { PHASE_VALUE, phaseInFamily } from "./spec-placement";
 import type { MilestoneAction } from "./spec-placement";
 
 /** The section a repaired body carries. One spelling, by fiat. */
@@ -303,4 +305,126 @@ export function rowPlacement(
     };
   }
   return { kind: "place", milestone: target.existing.title, phase: target.phase };
+}
+
+/** One opted-in family, as the placing run reads it — SC-2779. */
+export interface PlacingFamily {
+  /** The `board: { prefix }` its spec declares. */
+  prefix: string;
+  /** Every criterion the family's spec states, placed in a phase or not. */
+  stated: readonly string[];
+  /** Each placed criterion's value in the spec's table (`placementsById`). */
+  placements: ReadonlyMap<string, string>;
+  /** The live milestone for each phase the table places. A phase with none is absent. */
+  milestones: ReadonlyMap<number, string>;
+}
+
+/**
+ * What the placing run does with one open issue — SC-2779.
+ *
+ * - `move`: into `milestone`, the family's milestone for the phase.
+ * - `stay`: it already sits there.
+ * - `left`: the rule leaves it where it is, and the run says why by name.
+ * - `none`: it names no criterion an opted-in spec states; nothing to say.
+ * - `refuse`: the phase it belongs in has no milestone. The run writes nothing,
+ *   because `plan-spec` makes milestones and this never does.
+ */
+export type IssueMove =
+  | { kind: "move"; milestone: string; why: string }
+  | { kind: "stay"; why: string }
+  | { kind: "left"; why: string }
+  | { kind: "none" }
+  | { kind: "refuse"; why: string };
+
+/**
+ * Which milestone an open issue belongs in, read from the opted-in specs —
+ * SC-2779, ADR-018 Decision 4 as ADR-019 Decision 3 narrowed it.
+ *
+ * THE one decider. `plan-issues --place` asks it about every open issue, and
+ * nothing else moves an issue between phases.
+ *
+ * - Criteria in ONE phase of ONE family: the issue moves to that phase's
+ *   milestone, whether it has no milestone or a different one of that family.
+ * - No milestone, criteria in several phases of one family: the lowest, since
+ *   the issue cannot finish before its earliest phase does.
+ * - A milestone, criteria in several phases: never moved.
+ * - Criteria from two families: left where it is and named, because phase
+ *   numbers do not compare across specs.
+ * - A milestone that is not one of the family's phases: never moved.
+ *
+ * Two readings this adds, both in the direction of not moving anything:
+ *
+ * - **"Serves no criterion" is believed.** The same {@link criterionAnswer}
+ *   the `needs-criterion` label reads. An issue saying it serves none names
+ *   criteria only in passing: on 2026-11-17 #2307 cited SC-2734 and SC-2776
+ *   that way, and reading them as served would have moved it into the
+ *   finished Engine Phase 6, where the phase order then holds every later
+ *   phase behind it.
+ * - **A criterion placed outside every phase stops the move.** `Done`,
+ *   `Blocked` and the other non-phase values, or no placement at all, mean
+ *   the issue does not sit wholly in a phase, so no phase is named for it.
+ *
+ * Only criteria an opted-in spec states are read. An id from a spec that is
+ * not on the board has no phase, so it cannot place the issue or contradict
+ * a placement (the reading ADR-019 measured its 39 issues with).
+ */
+export function issuePlacement(
+  issue: { readonly title: string; readonly body?: string | null; readonly milestone: string | null },
+  families: readonly PlacingFamily[],
+): IssueMove {
+  const answers = families
+    .map(f => ({ f, answer: criterionAnswer(issue, f.stated) }))
+    .filter(a => a.answer.names.length > 0);
+  if (answers.length === 0) return { kind: "none" };
+  if (answers.some(a => a.answer.servesNone)) {
+    return {
+      kind: "left",
+      why: `says it serves no criterion, so the ids it mentions (${answers.flatMap(a => a.answer.names).join(", ")}) do not place it`,
+    };
+  }
+  if (answers.length > 1) {
+    return {
+      kind: "left",
+      why:
+        `names ${answers.map(a => `${a.f.prefix}'s ${a.answer.names.join(", ")}`).join(" and ")} — ` +
+        "phase numbers do not compare across specs",
+    };
+  }
+  const { f, answer } = answers[0]!;
+  const unphased = answer.names.filter(id => !PHASE_VALUE.test(f.placements.get(id) ?? ""));
+  if (unphased.length > 0) {
+    return {
+      kind: "left",
+      why:
+        `${unphased.map(id => `${id} is ${f.placements.has(id) ? `placed ${f.placements.get(id)}` : "placed nowhere"}`).join(", ")} ` +
+        `in ${f.prefix}'s table, so the issue does not sit wholly in a phase`,
+    };
+  }
+  const current = issue.milestone === null ? null : phaseInFamily(issue.milestone, f.prefix);
+  if (issue.milestone !== null && current === null) {
+    return { kind: "left", why: `is in "${issue.milestone}", which is not a ${f.prefix} phase — that is never moved` };
+  }
+  const phases = [...new Set(answer.names.map(id => Number(f.placements.get(id)!.match(PHASE_VALUE)![1])))].sort((a, b) => a - b);
+  if (phases.length > 1 && issue.milestone !== null) {
+    return {
+      kind: "left",
+      why: `names criteria in ${phases.map(p => `Phase ${p}`).join(" and ")} and already has a milestone — that is never moved`,
+    };
+  }
+  const target = phases[0]!;
+  if (current === target) return { kind: "stay", why: `already in "${issue.milestone}"` };
+  const milestone = f.milestones.get(target);
+  if (milestone === undefined) {
+    return {
+      kind: "refuse",
+      why: `belongs in ${f.prefix} Phase ${target}, which has no milestone — run plan-spec first; this never creates one`,
+    };
+  }
+  return {
+    kind: "move",
+    milestone,
+    why:
+      `${issue.milestone === null ? "no milestone" : `"${issue.milestone}"`} → "${milestone}" ` +
+      `(${answer.names.join(", ")}${phases.length > 1 ? `; the lowest of ${phases.map(p => `Phase ${p}`).join(", ")}` : ""})`,
+  };
 }

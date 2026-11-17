@@ -36,11 +36,12 @@ import {
   CRITERIA_HEADING,
   alreadyAnnotated,
   annotatedBody,
+  issuePlacement,
   multiplyAnnotated,
   parseRepairPlan,
   rowPlacement,
 } from "../lib/issue-repair";
-import type { RepairRow } from "../lib/issue-repair";
+import type { IssueMove, PlacingFamily, RepairRow } from "../lib/issue-repair";
 import {
   closedIssueCounts,
   hasDecompositionTable,
@@ -49,9 +50,9 @@ import {
   planDecomposition,
 } from "../lib/issue-decomposition";
 import { readQueueLabel } from "../lib/config-readers";
-import { answerableIds, specCriteriaIn } from "../lib/board-mirror";
-import { milestonePlan, placementReading } from "../lib/spec-placement";
-import { readMilestonePrefix } from "../lib/live-issues";
+import { answerableIds, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
+import { milestonePlan, placementCoverage, placementReading, placementsById } from "../lib/spec-placement";
+import { readLiveIssues, readMilestonePrefix } from "../lib/live-issues";
 import type { LiveMilestone, MilestoneAction } from "../lib/spec-placement";
 
 /**
@@ -199,6 +200,25 @@ const USAGE = `rungate plan-issues (--repair | --decompose) <plan.md> --repo <ow
   --repo       owner/name. Defaults to $GITHUB_REPOSITORY.
   --write      apply it. Without this nothing is mutated.
   --json       the whole reading.
+
+rungate plan-issues --place --repo <owner/name> [--write] [--json] [--project-root <dir>]
+
+  Move each open issue into the phase milestone its criteria hold, read from
+  every spec that opts in with board: { scope: active, prefix } (SC-2779).
+  Criteria in one phase of one family: moved there, from no milestone or from
+  another of that family's phases. No milestone and several phases: the
+  lowest. Left where it is, and named: criteria from two families, a
+  milestone plus several phases, a milestone outside the family, a criterion
+  placed outside every phase, or an issue that says it serves no criterion.
+  A phase with no milestone, or a spec the run cannot read, refuses the run
+  before anything is written; plan-spec makes milestones, this never does.
+
+rungate plan-issues --families [--project-root <dir>]
+
+  Print each opted-in family as <prefix><TAB><spec path>, one per line and
+  nothing else on stdout — the list a workflow loops plan-spec and plan-deps
+  over. The same reading --place takes, so the two never disagree; it refuses
+  on the same unreadable specs. Reads no tracker.
 
 rungate plan-issues --accepted-since <commit> [--project-root <dir>]
 
@@ -618,10 +638,174 @@ interface Action {
   note: string;
 }
 
+/**
+ * Why a spec's placement table cannot place anything — #2072, and SC-2779.
+ *
+ * THE one decider, read by `--milestone-prefix` and `--place` alike, so the
+ * two cannot disagree about whether a table is usable (review of #2315). The
+ * three readings `plan-spec` and `board-snapshot` already refuse: a doubled id
+ * goes to whichever row comes last, an unknown one reads as two families at
+ * once, and an unrecognised value is neither a phase nor a known non-phase.
+ * `unplaced` is left out on purpose: a criterion in no row has no phase, and
+ * each caller already skips, refuses or leaves an issue naming one.
+ */
+export function unsoundPlacement(placement: ReturnType<typeof placementReading>): string[] {
+  return [
+    ...placement.doubled.map(d => `${d.id} is placed twice: ${d.placements.join(" and ")}`),
+    ...placement.unknown.map(id => `${id} is placed but stated nowhere in the spec`),
+    ...placement.unrecognised.map(p => `"${p}" is neither a phase nor a known non-phase placement`),
+  ];
+}
+
+/** What `--place` needs from the tracker. Injected so a test never shells out. */
+export interface PlaceGitHub {
+  /** Every milestone, open or closed — the same paginated read `--repair` uses. */
+  milestones: (repo: string) => Promise<LiveMilestone[]>;
+  /** Every OPEN issue, through the one reader the board readings use. */
+  openIssues: (repo: string) => Promise<{ number: number; title: string; body: string | null; milestone: string | null }[]>;
+  setMilestone: (repo: string, number: number, title: string) => Promise<void>;
+}
+
+const LIVE_PLACE: PlaceGitHub = {
+  milestones: LIVE_GITHUB.milestones,
+  openIssues: async repo => (await readLiveIssues(repo, false)).filter(i => i.state === "OPEN"),
+  setMilestone: LIVE_GITHUB.setMilestone,
+};
+
+/**
+ * Every opted-in family, with the milestone each placed phase has — SC-2779.
+ *
+ * The families are the specs whose frontmatter says
+ * `board: { scope: active, prefix }` (SC-2776); there is no list in config.
+ * Anything that would make the list partial refuses the whole run, by name: a
+ * sweep that could not be read, a `board:` block the engine could not read
+ * (that spec may be a family), a family's placement table that is missing or
+ * unsound, or two specs claiming one prefix. A partial list is worse than
+ * none, because the two-family rule is exactly the one that needs every
+ * family in view.
+ */
+export function placingFamilies(
+  root: string,
+  live: readonly LiveMilestone[],
+): { families: PlacingFamily[]; paths: string[]; specs: string[]; refusals: string[] } {
+  const read = (base: string, path: string) => readFileSync(join(base, path), "utf-8");
+  const sweep = placementCoverage(root, specPathSweep, read);
+  if (sweep.reading === "UNMEASURED") return { families: [], paths: [], specs: [], refusals: sweep.unmeasuredReasons };
+  const refusals: string[] = [];
+  const families: PlacingFamily[] = [];
+  const paths: string[] = [];
+  const specs: string[] = [];
+  const byPrefix = new Map<string, string>();
+  for (const spec of sweep.specs) {
+    if (spec.board.problems.length > 0) {
+      refusals.push(`${spec.path}: its board: declaration cannot be read — ${spec.board.problems.join("; ")}`);
+      continue;
+    }
+    const prefix = spec.board.settings.prefix;
+    if (spec.board.scope !== "active" || prefix === undefined) continue;
+    const other = byPrefix.get(prefix);
+    if (other !== undefined) {
+      refusals.push(`${spec.path} and ${other} both declare prefix ${prefix}, so its milestones belong to neither`);
+      continue;
+    }
+    byPrefix.set(prefix, spec.path);
+    const text = read(root, spec.path);
+    const placement = placementReading(text);
+    const unsound = [...placement.unmeasuredReasons, ...unsoundPlacement(placement)];
+    if (unsound.length > 0) {
+      refusals.push(`${spec.path} (${prefix}): its placement table cannot place an issue — ${unsound.join("; ")}`);
+      continue;
+    }
+    const milestones = new Map<number, string>();
+    for (const a of milestonePlan(text, [...live], prefix).actions) if (a.existing) milestones.set(a.phase, a.existing.title);
+    families.push({ prefix, stated: placement.criteria, placements: placementsById(text), milestones });
+    paths.push(`${prefix}: ${spec.path}`);
+    specs.push(spec.path);
+  }
+  return refusals.length > 0 ? { families: [], paths: [], specs: [], refusals } : { families, paths, specs, refusals: [] };
+}
+
+/** `--place`: the run SC-2780 calls, after `plan-spec` and before `plan-deps`. */
+async function place(gh4: PlaceGitHub, root: string, repo: string, write: boolean, json: boolean): Promise<number> {
+  // Both tracker reads refuse the way `decompose` does (review of #2315): a
+  // rate limit or a network blip is an unreadable tracker, reported as such.
+  const unreadable = (e: unknown): number => {
+    console.error(`plan-issues --place: UNMEASURED — could not read the tracker, so nothing was placed:`);
+    console.error(`  - ${(e as Error).message}`);
+    return REFUSAL_EXIT;
+  };
+  let live: LiveMilestone[];
+  try {
+    live = await gh4.milestones(repo);
+  } catch (e) {
+    return unreadable(e);
+  }
+  const read = placingFamilies(root, live);
+  if (read.refusals.length > 0) {
+    console.error(`plan-issues --place: UNMEASURED — the opted-in families could not be read, so nothing was placed:`);
+    for (const r of read.refusals) console.error(`  - ${r}`);
+    return REFUSAL_EXIT;
+  }
+  let issues: Awaited<ReturnType<PlaceGitHub["openIssues"]>>;
+  try {
+    issues = (await gh4.openIssues(repo)).sort((a, b) => a.number - b.number);
+  } catch (e) {
+    return unreadable(e);
+  }
+  const moves: { issue: number; move: IssueMove }[] = issues.map(i => ({ issue: i.number, move: issuePlacement(i, read.families) }));
+  const refused = moves.filter(m => m.move.kind === "refuse");
+  const count = (k: IssueMove["kind"]) => moves.filter(m => m.move.kind === k).length;
+  const results: string[] = [];
+  if (write && refused.length === 0) {
+    for (const m of moves) {
+      if (m.move.kind !== "move") continue;
+      try {
+        await gh4.setMilestone(repo, m.issue, m.move.milestone);
+        results.push(`placed    #${m.issue}  in "${m.move.milestone}"`);
+      } catch (e) {
+        results.push(`FAILED    #${m.issue}: ${(e as Error).message}`);
+      }
+    }
+  }
+  const failed = results.filter(r => r.startsWith("FAILED"));
+  const blocked = refused.length > 0;
+  if (json) {
+    const wrote = !write ? "not-requested" : blocked ? "refused" : failed.length > 0 ? "partial" : "yes";
+    console.log(JSON.stringify({ families: read.paths, moves, results, wrote }, null, 2));
+    return blocked || failed.length > 0 ? REFUSAL_EXIT : 0;
+  }
+  console.log(`plan-issues --place — ${read.families.length} opted-in famil${read.families.length === 1 ? "y" : "ies"}, ${issues.length} open issue(s)`);
+  for (const p of read.paths) console.log(`  ${p}`);
+  if (read.families.length === 0) console.log(`  No spec opts in with board: { scope: active, prefix }, so no issue has a phase.`);
+  const mark = { move: "MOVE    ", stay: "", left: "LEFT    ", none: "", refuse: "REFUSED " } as const;
+  console.log(`\nACTIONS`);
+  for (const m of moves) if (mark[m.move.kind] !== "") console.log(`  ${mark[m.move.kind]}  #${m.issue}  ${"why" in m.move ? m.move.why : ""}`);
+  console.log(
+    `\n  ${count("move")} to move, ${count("stay")} already placed, ${count("left")} left where they are, ` +
+      `${count("none")} name no opted-in criterion, ${count("refuse")} refused`,
+  );
+  if (blocked) {
+    console.error(`\nplan-issues --place: ${refused.length} issue(s) belong in a phase with no milestone, so nothing was written.`);
+    return REFUSAL_EXIT;
+  }
+  if (!write) {
+    console.log(`\nNothing written. Re-run with --write to apply.`);
+    return 0;
+  }
+  console.log(`\nWRITING`);
+  for (const r of results) console.log(`  ${r}`);
+  if (failed.length > 0) {
+    console.error(`\nplan-issues --place: ${failed.length} move(s) FAILED.`);
+    return REFUSAL_EXIT;
+  }
+  return 0;
+}
+
 export async function main(
   argv: string[],
   gh2: PlanIssuesGitHub = LIVE_GITHUB,
   gh3: DecomposeGitHub = LIVE_DECOMPOSE,
+  gh4: PlaceGitHub = LIVE_PLACE,
 ): Promise<number> {
   let parsed;
   try {
@@ -637,6 +821,8 @@ export async function main(
         "accepted-since": { type: "string" },
         "milestone-prefix": { type: "string" },
         spec: { type: "string" },
+        place: { type: "boolean", default: false },
+        families: { type: "boolean", default: false },
       },
       allowPositionals: true,
     });
@@ -645,6 +831,35 @@ export async function main(
     return REFUSAL_EXIT;
   }
   const { values } = parsed;
+  if (values.families) {
+    // A listing, not a plan: alone, so nothing it prints is mistaken for a write.
+    if (values.place || values.repair || values.decompose || values["accepted-since"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined || values.write || values.json) {
+      console.error(`plan-issues: --families lists the opted-in families and applies nothing — pass it alone, with --project-root at most\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+    // No milestones: which specs are families does not depend on the tracker.
+    const read = placingFamilies(values["project-root"] ?? process.cwd(), []);
+    if (read.refusals.length > 0) {
+      console.error(`plan-issues --families: UNMEASURED — the opted-in families could not be read:`);
+      for (const r of read.refusals) console.error(`  - ${r}`);
+      return REFUSAL_EXIT;
+    }
+    for (const [i, fam] of read.families.entries()) console.log(`${fam.prefix}\t${read.specs[i]}`);
+    return 0;
+  }
+  if (values.place) {
+    // A third plan, read from the specs rather than from a file: one at a time.
+    if (values.repair || values.decompose || values["accepted-since"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined) {
+      console.error(`plan-issues: --place reads every opted-in spec itself — pass it with --repo, --write, --json and --project-root only\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+    const placeRepo = values.repo ?? process.env.GITHUB_REPOSITORY;
+    if (!placeRepo) {
+      console.error(`plan-issues: --repo is required (or set GITHUB_REPOSITORY)\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+    return await place(gh4, values["project-root"] ?? process.cwd(), placeRepo, values.write, values.json);
+  }
   if (values["accepted-since"] !== undefined) {
     if (values.repair || values.decompose) {
       console.error(`plan-issues: --accepted-since lists plans; it applies none — pass it alone\n\n${USAGE}`);
@@ -724,16 +939,8 @@ export async function main(
       for (const r of placement.unmeasuredReasons) console.error(`  - ${r}`);
       return REFUSAL_EXIT;
     }
-    // #2072: the three readings plan-spec and board-snapshot already refuse.
-    // A doubled id would go to whichever phase row comes last, and an
-    // unknown one reads as two families at once. `unplaced` is left out on
-    // purpose: a criterion in no row has no phase, and `rowPlacement`
-    // already skips or refuses a row naming one.
-    const unsound = [
-      ...placement.doubled.map(d => `${d.id} is placed twice: ${d.placements.join(" and ")}`),
-      ...placement.unknown.map(id => `${id} is placed but stated nowhere in the spec`),
-      ...placement.unrecognised.map(p => `"${p}" is neither a phase nor a known non-phase placement`),
-    ];
+    // #2072: the one decider `--place` reads too.
+    const unsound = unsoundPlacement(placement);
     if (unsound.length > 0) {
       console.error(`plan-issues: ${values.spec}'s placement table is unsound, so no row can be placed from it:`);
       for (const u of unsound) console.error(`  - ${u}`);
