@@ -252,6 +252,14 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Spec criteria and opt-in, with looks-done hints",
     usage: "rungate board-scope [--spec <path>] [--json]",
   },
+  // #2330. The pinned "where we are" view as a command a consumer can run:
+  // every family's phases with their open issues and blockers. Reads the
+  // working directory and its origin remote, so it takes no root flag.
+  board: {
+    script: "scripts/status-view.ts",
+    summary: "Where the plan stands: phases, open issues, blockers",
+    usage: "rungate board [--repo <owner/name>] [--markdown]   (repository defaults to GITHUB_REPOSITORY, then the origin remote)",
+  },
   // Step 5 of ADR-003. `plan-spec` turns the placement table into milestones;
   // this turns the ORDER of those milestones into `blocked by` edges, which is
   // AGENTS.md rule 4 — ordering is data, not prose.
