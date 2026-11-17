@@ -63,9 +63,13 @@ function reservationFaults(used: number[], scBlocks: Block[], base: { used: numb
   // An owner's reservation, whatever its range: a resized block is still held.
   const key = (b: Block) => `${b.namespace ?? "SC"}:${b.owner}`;
   const heldOnMain = new Set((base?.blocks ?? []).map(key));
+  const inside = (n: number, r: Block) => n >= r.from && n <= r.to;
   for (const b of scBlocks) {
     if (b.owner === OWNER) continue;
-    const covered = used.filter(n => n >= b.from && n <= b.to);
+    // A held reservation covers main's range as well as this tree's copy of
+    // it, so a block widened on main after this branch forked still counts.
+    const ranges = [b, ...(base?.blocks ?? []).filter(m => key(m) === key(b))];
+    const covered = used.filter(n => ranges.some(r => inside(n, r)));
     const squatted =
       base === null
         ? covered
@@ -296,7 +300,7 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
     expect(
       reservationFaults([...inTree, 2795], [live], { used: onMain, blocks: [resizedOnMain] }).join(" | "),
       "an id written into another branch's reservation went unseen because its range differs from main's",
-    ).toContain("rg/other-branch reserves 2780-2789, which covers 2782, 2785");
+    ).toContain("rg/other-branch reserves 2780-2789, which covers 2782, 2785, 2795");
 
     // The live case reads its base from origin/main. A reader that always
     // answered null would refuse every in-flight block with no case failing.
