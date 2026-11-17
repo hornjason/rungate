@@ -144,7 +144,12 @@ jobs:
             exit 1
           fi
 
-      - name: Queue label on every engine-phase issue
+      # SC-2777: one run over EVERY family in the queue. It names no family
+      # here: board-mirror reads them from the specs that opt in (a `board:`
+      # block with `scope: active` and a `prefix`, SC-2776) plus
+      # `board.milestonePrefix`, so payload work and engine work sit in one
+      # queue and a newly opted-in spec needs no edit to this file.
+      - name: Queue label on every opted-in family's phase issue
         if: ${{ !cancelled() }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

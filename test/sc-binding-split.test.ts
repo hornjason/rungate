@@ -357,7 +357,10 @@ const UNCLAIMED_RATCHET = 150;
 // criterion placed outside every phase reads as declared, a behaviour no
 // registered pattern expresses; the `SC-2778` describes in
 // test/board-conformance.test.ts and test/board-snapshot.test.ts name it.
-const CLAIMED_UNBINDABLE = 174;
+// 174 -> 175: SC-2777 (#2302) ticked by `sync-sc-status --only SC-2777`: the
+// queue label reaches every opted-in family, a behaviour no registered pattern
+// expresses; the `SC-2777` describe in test/board-mirror.test.ts names it.
+const CLAIMED_UNBINDABLE = 175;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
