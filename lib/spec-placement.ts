@@ -58,6 +58,53 @@ export const NON_PHASE_PLACEMENTS = [
   "Not observable here",
 ] as const;
 
+/**
+ * The non-phase placements under which a criterion is DECLARED — SC-2778.
+ *
+ * A criterion placed here is named apart by `criterion-coverage` and
+ * `declared-work` and leaves both targets: the spec has said it cannot start
+ * (or was deliberately not adopted, or cannot be observed here), so counting
+ * it as missing asks for an issue the spec says must not exist, and counting
+ * it as covered would credit work nobody can do (ADR-018 Decision 5). `Done`
+ * is not here: a done criterion is ticked, and both readings already handle
+ * a ticked one.
+ */
+export const DECLARED_OUTSIDE_PHASES = [
+  "Blocked",
+  "Not adopted — deliberate",
+  "Not observable here",
+] as const satisfies readonly (typeof NON_PHASE_PLACEMENTS)[number][];
+
+/**
+ * Where one placement value puts a criterion, for both readings — SC-2778.
+ *
+ * THE one predicate. `criterionCoverage` and `readDeclaredWork` both annotate
+ * their rows with it, so the two readings cannot disagree about a criterion.
+ *
+ * - `{ outside }`: one of {@link DECLARED_OUTSIDE_PHASES}, the value as written.
+ * - `{ unknownPlacement }`: neither a phase nor a known non-phase value. Both
+ *   readings go UNMEASURED on it, by name, rather than guessing.
+ * - `null`: a phase, `Done`, or no placement at all — counted as before. A
+ *   criterion placed nowhere is `spec-placement`'s UNPLANNED, not this.
+ */
+export function outsidePhases(placement: string | undefined): { outside: string } | { unknownPlacement: string } | null {
+  if (placement === undefined || PHASE_VALUE.test(placement)) return null;
+  if (DECLARED_OUTSIDE_PHASES.some(v => placement.startsWith(v))) return { outside: placement };
+  if (NON_PHASE_PLACEMENTS.some(v => placement.startsWith(v))) return null;
+  return { unknownPlacement: placement };
+}
+
+/**
+ * Each criterion's placement value, read from the spec's own table. A
+ * criterion placed more than once is an unknown placement naming both values: the
+ * table contradicts itself, and picking one is a guess (SC-2778).
+ */
+export function placementsById(content: string): Map<string, string> {
+  const where = new Map<string, string[]>();
+  for (const r of parsePlacementRows(content)) for (const id of r.ids) where.set(id, [...(where.get(id) ?? []), r.placement]);
+  return new Map([...where].map(([id, p]) => [id, p.length === 1 ? p[0]! : `placed ${p.length} times: ${p.join(" and ")}`]));
+}
+
 /** `Phase 0`, `Phase 11`. The capture is the number. */
 export const PHASE_VALUE = new RegExp(`^${PHASE_TOKEN}$`);
 
@@ -627,6 +674,10 @@ export interface CriterionCoverage {
   satisfiedByIssue: number | null;
   /** The spec's own checkbox is ticked — already true, needing only a binding. */
   recordedTrue: boolean;
+  /** Placed under one of {@link DECLARED_OUTSIDE_PHASES} — SC-2778. Present only when it is. */
+  outside?: string;
+  /** Placed under a value the engine does not know — SC-2778. Present only when it is. */
+  unknownPlacement?: string;
 }
 
 /**
@@ -672,11 +723,12 @@ export function criterionCoverage(
   // Ascending, so "the lowest number wins" is the first write rather than a
   // comparison every later issue has to remember to make.
   const ordered = [...issues].sort((a, b) => a.number - b.number);
+  const placed = placementsById(content);
   return parseCriteria(content).map(c => {
     const naming = ordered.find(
       i => typeof i.criteriaField === "string" && oneScMentionPattern(c.id).test(i.criteriaField),
     );
-    return { id: c.id, satisfiedByIssue: naming?.number ?? null, recordedTrue: c.ticked };
+    return { id: c.id, satisfiedByIssue: naming?.number ?? null, recordedTrue: c.ticked, ...outsidePhases(placed.get(c.id)) };
   });
 }
 
