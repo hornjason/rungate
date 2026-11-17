@@ -60,7 +60,8 @@ type Block = { owner: string; from: number; to: number; namespace?: string };
  */
 function reservationFaults(used: number[], scBlocks: Block[], base: { used: number[]; blocks: Block[] } | null = null): string[] {
   const faults: string[] = [];
-  const key = (b: Block) => `${b.namespace ?? "SC"}:${b.owner}:${b.from}-${b.to}`;
+  // An owner's reservation, whatever its range: a resized block is still held.
+  const key = (b: Block) => `${b.namespace ?? "SC"}:${b.owner}`;
   const heldOnMain = new Set((base?.blocks ?? []).map(key));
   for (const b of scBlocks) {
     if (b.owner === OWNER) continue;
@@ -286,6 +287,15 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
     expect(
       reservationFaults(inTree, [live], { used: onMain, blocks: [live] }).join(" | "),
       "ids written into another branch's live reservation were not reported",
+    ).toContain("rg/other-branch reserves 2780-2789, which covers 2782, 2785");
+
+    // An owner's reservation is the same reservation when its range moved:
+    // a block resized on main, or a branch behind main's edit to it, still
+    // holds new ids written inside it (review of #2328).
+    const resizedOnMain = { owner: "rg/other-branch", from: 2780, to: 2799 };
+    expect(
+      reservationFaults([...inTree, 2795], [live], { used: onMain, blocks: [resizedOnMain] }).join(" | "),
+      "an id written into another branch's reservation went unseen because its range differs from main's",
     ).toContain("rg/other-branch reserves 2780-2789, which covers 2782, 2785");
 
     // The live case reads its base from origin/main. A reader that always
