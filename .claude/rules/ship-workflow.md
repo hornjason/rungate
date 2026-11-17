@@ -1,6 +1,6 @@
 ---
 description: This project ships DIRECTLY as of 2026-10-19 — do not route work through the ship workflow
-generated-sha: 6f9e7b6a130c2178
+generated-sha: b2e59c22f7ee2a0b
 ---
 ## Direct-ship mode, since 2026-10-19
 
@@ -8,7 +8,7 @@ generated-sha: 6f9e7b6a130c2178
 
 Shipping an issue without the ship workflow is the current, declared policy of
 this project. Do not call `Skill("ship")` and do not invoke
-`Workflow({ scriptPath: "workflows/ship.js" })`. If another document tells you
+`Workflow({ scriptPath: "workflows/ship.run.js" })`. If another document tells you
 to, that document is out of date and this one is not: the mode is declared in
 `.claude/rungate/config.json` under `ship`, and this file is generated from it, so a
 re-scaffold restates it rather than reverting it.
