@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 97 (2026-11-17)** — Specs now opt into the engine from their own frontmatter, and ship launches from a file built under the Workflow tool's cap. Jason agreed ADR-019 so the acceptance test is ordered by its own phase instead of a hand link, and the next PR in flight makes the goal command, board-conformance, exit 0.
+**Session 97 (2026-11-17)** — Specs now opt into the engine from their own frontmatter, and ship launches from a file built under the Workflow tool's cap. Jason agreed ADR-019 so the acceptance test is ordered by its own phase instead of a hand link, and the goal command, board-conformance, now exits 0 on main.
 
-Suite: 16 PRs merged (#2283 to #2308); release 0.8.25 published.
+Suite: 18 PRs merged (#2283 to #2313); release 0.8.25 published.
 Issues opened: #2287, #2288, #2289, #2290, #2292, #2296, #2297, #2300, #2301, #2302, #2303, #2304, #2305, #2306, #2307, #2309
-Issues closed: #1194, #1367, #1553, #1571, #2213, #2234, #2238, #2261, #2274, #2279, #2287, #2288, #2292, #2296, #2297, #2301
+Issues closed: #1194, #1367, #1553, #1571, #2213, #2234, #2238, #2261, #2274, #2279, #2287, #2288, #2292, #2296, #2297, #2301, #2302, #2303
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -108,6 +108,7 @@ Suite: 25/25 SCs done.
 - STAGE E3 REPAIRED. dependency-edges went 144 of 145 when ADR-018 placed #2306 in Convergence Phase 0 and nothing linked #1168 to it; plan-deps --milestone-prefix Convergence --write added the one edge. SC-2780 (#2305) automates that run on a push to specs/.
 - ADR-019 DRAFTED AND AGREED. #1722, the acceptance test, sat in Engine Phase 9 beside the work it waits on, and nothing orders issues inside one phase, so Ready showed it as startable. Jason agreed: SC-2625 moves to its own Phase 10 (the table edit lands in #2305), and a milestoned issue whose criteria all sit in one other phase of its family moves there (#2304, SC-2779 reworded). PR #2310 waits on his merge. Two links the DA added to #1722 by hand were removed at his request.
 - IN FLIGHT: #2311 (#2303) makes a criterion its spec parks outside every phase read as declared, not missing; from its branch board-conformance exits 0 with all ten readings met, stage item F2's proof. #2302 (the queue label on every opted-in family) is built and queued behind it.
+- F2 DONE. With #2311 (#2303) merged, `bun bin/rungate.ts board-conformance --repo hornjason/rungate` exits 0 on main: all ten readings MET, declared-work 49 of 49 with the 11 parked convergence criteria named apart. F1 (the convergence family's own five readings) is still open, measured on main at ae5ca490: milestones 14 of 47, criterion-coverage 52 of 55, queue-label 1 of 33. #2302 merged as #2313; its label reaches the convergence issues on the next phase-order run, which a milestone change fires. The milestones need #2304 (PR #2315) and #2305.
 
 **Session 2026-11-16 session 96 (a merged pull request's CI time, read and printed; evidence files read against one contract each; releases 0.8.22 to 0.8.24):**
 - MERGED: 16 PRs from #2243 to #2277. Releases 0.8.22 (plan-deps no longer fails an ADR merge at the last engine phase), 0.8.23 (rungate intake reaches consumers) and 0.8.24 (the ai-review adjudicator reads the checkout it is told, #2257).
