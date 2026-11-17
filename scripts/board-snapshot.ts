@@ -360,7 +360,6 @@ export const PLANNED_ADR_REF = "origin/main";
 export function plannedByUnmergedAdr(root: string, git: GitRunner): Map<string, string> {
   const dir = join(root, "docs", "adr");
   if (!existsSync(dir)) return new Map();
-  if (!git(["rev-parse", "--verify", "--quiet", `${PLANNED_ADR_REF}^{commit}`]).ok) return new Map();
   const planned = new Map<string, string>();
   for (const name of readdirSync(dir).filter(n => /^ADR-\d+.*\.md$/.test(n)).sort()) {
     const rel = `docs/adr/${name}`;
@@ -374,7 +373,10 @@ export function plannedByUnmergedAdr(root: string, git: GitRunner): Map<string, 
       if (!shown.ok) return new Map();
       before = shown.stdout;
     } else if (!/does not exist|exists on disk, but not in/.test(at.stderr)) {
-      // A failure that is not "the path is absent at the ref" is not an answer.
+      // THE ONE fail-closed decider for the ref. A ref that does not resolve
+      // says "invalid object name", which is not "the path is absent at the
+      // ref", so an unreadable origin/main exempts nothing. A separate
+      // rev-parse probe would be a second decider for the same question.
       return new Map();
     }
     if (!newlyAccepted(before, text)) continue;
