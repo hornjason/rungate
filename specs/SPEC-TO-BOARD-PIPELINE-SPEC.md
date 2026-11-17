@@ -478,6 +478,8 @@ acceptance test, so it is also the honest answer to *when is the engine done*
 - [x] SC-2777: every open issue in any opted-in family's phase milestone carries `board.queueLabel`, written by `board-mirror --queue-label` with no hand edit, so payload work and engine work sit in one queue
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/board-mirror.test.ts, the `SC-2777` describe (6 pass): `board-mirror --queue-label` repairs every family the queue holds and only those, the families are the opted-in specs' prefixes (SC-2776) plus `board.milestonePrefix`, a held-back spec naming a prefix stays out, a sweep that cannot be read or no family at all refuses, one run labels a payload issue and an engine issue alike, and this tree's queue is Convergence and Engine. test/phase-order-workflow.test.ts, `-t SC-2777` (1 pass): the workflow's label step names no family, so no narrowing can hide there. 0 fail, 2026-11-17, on the PR that closes #2302
+      fingerprint: e911e362
 - [ ] SC-2778: a criterion its spec places outside every phase — Blocked, Not adopted — deliberate, or Not observable here — is named by `criterion-coverage` and `declared-work` as declared outside phases and leaves both readings' targets, one predicate deciding it for both; it is never counted as covered by an issue, and a placement value the engine does not know leaves both readings UNMEASURED
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
