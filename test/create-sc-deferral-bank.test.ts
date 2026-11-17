@@ -102,6 +102,22 @@ describe("writeSpecWithBank: the spec and the bank land together or not at all (
     expect(w.files.get("spec.md"), "the spec kept the line the bank does not count").toBe("old");
   });
 
+  test("a failed bank write whose restore also fails says so: restored is false (review, #2298)", () => {
+    // The one state that needs a person. Simulated by refusing the restore,
+    // which is the second write to the spec path.
+    let specWrites = 0;
+    const files = new Map<string, string>();
+    const write = (p: string, c: string) => {
+      if (p === "bank.json") return { written: false, refusal: "bank refused" };
+      if (p === "spec.md" && ++specWrites > 1) return { written: false, refusal: "restore refused" };
+      files.set(p, c);
+      return { written: true };
+    };
+    const r = writeSpecWithBank(write, spec, { path: "bank.json", text: "{}" });
+    expect(r).toEqual({ ok: false, why: "the deferral bank could not be written (bank refused)", restored: false });
+    expect(files.get("spec.md"), "the spec holds the new line the bank does not count").toBe("new");
+  });
+
   test("no bank to move writes only the spec", () => {
     const w = writer(["bank.json"]);
     expect(writeSpecWithBank(w.write, spec, { path: "bank.json", text: null })).toEqual({ ok: true });
