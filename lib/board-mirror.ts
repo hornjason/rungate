@@ -170,9 +170,17 @@ function unmeasuredSweep(reasons: string[]): SpecSweep {
   return { reading: "UNMEASURED", specs: [], ids: [], collisions: [], unmeasuredReasons: reasons };
 }
 
-export function specCriteriaIn(root: string, readDir: SpecDirReader = readSpecDir): SpecSweep {
+/**
+ * Which files under `<root>/specs` are specs — the ONE answer, shared by
+ * {@link specCriteriaIn} and `rungate board-scope` (#2275). It refuses only on
+ * what stops it locating a file; whether any spec states a criterion is the
+ * id sweep's question, not this one's.
+ */
+export function specFilesIn(
+  root: string,
+  readDir: SpecDirReader = readSpecDir,
+): { reading: "MEASURED"; paths: string[] } | { reading: "UNMEASURED"; reasons: string[] } {
   const dir = join(root, "specs");
-  let files: string[];
   try {
     const entries = readDir(dir).filter(e => e.isFile() && e.name.endsWith(".md"));
     // `parentPath` is the ONLY field that can be trusted to name a nested
@@ -189,23 +197,34 @@ export function specCriteriaIn(root: string, readDir: SpecDirReader = readSpecDi
     // not a sweep with fewer specs in it.
     const unlocatable = unlocatableEntries(entries);
     if (unlocatable.length > 0) {
-      return unmeasuredSweep([
-        `this runtime does not report Dirent.parentPath, so ${unlocatable.length} spec file(s) ` +
-          `under ${dir} cannot be located — a nested spec would be read as a top-level one. ` +
-          `Nothing was read: ${unlocatable.map(e => e.name).sort().join(", ")}`,
-      ]);
+      return {
+        reading: "UNMEASURED",
+        reasons: [
+          `this runtime does not report Dirent.parentPath, so ${unlocatable.length} spec file(s) ` +
+            `under ${dir} cannot be located — a nested spec would be read as a top-level one. ` +
+            `Nothing was read: ${unlocatable.map(e => e.name).sort().join(", ")}`,
+        ],
+      };
     }
     // `as string` rather than a second `typeof e.parentPath === "string"`:
     // the refusal above already decided that question for every entry here,
     // and a second decider answering it again is one no behavioural test can
     // tell apart from the first.
-    files = entries
+    const paths = entries
       .map(e => relative(root, join(e.parentPath as string, e.name)).split(sep).join("/"))
       .filter(p => !(NOT_A_SPEC as readonly string[]).includes(p))
       .sort();
+    return { reading: "MEASURED", paths };
   } catch (e) {
-    return unmeasuredSweep([`could not read ${dir}: ${(e as Error).message}`]);
+    return { reading: "UNMEASURED", reasons: [`could not read ${dir}: ${(e as Error).message}`] };
   }
+}
+
+export function specCriteriaIn(root: string, readDir: SpecDirReader = readSpecDir): SpecSweep {
+  const dir = join(root, "specs");
+  const listed = specFilesIn(root, readDir);
+  if ("reasons" in listed) return unmeasuredSweep(listed.reasons);
+  const files = listed.paths;
 
   const specs: SpecCriteria[] = [];
   const reasons: string[] = [];

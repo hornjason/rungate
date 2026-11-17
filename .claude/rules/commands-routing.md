@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 25df77368e8a7a4b
+generated-sha: 165f46ca809f08c5
 ---
 
 ## Command Routing
@@ -20,15 +20,16 @@ Generated from the CLI's command registry. Run one as
 | `plan-spec` | Derive a repository's milestones from a spec's Phase placement table |
 | `criterion-inventory` | Trace every criterion to the tests, issues and pull requests that name it |
 | `board-mirror` | Show every spec's criteria, and what is ready to pick up, on the project board |
-| `board-conformance` | Does the board say what the spec says — every reading, and whether any is short of target |
-| `plan-issues` | Apply an approved issue plan — --decompose creates issues from criteria (step 4), --repair links and demotes existing ones |
+| `board-conformance` | Whether the board says what the spec says, reading by reading |
+| `plan-issues` | Apply an approved issue plan: --decompose files issues, --repair links and demotes them |
+| `board-scope` | Spec criteria and opt-in, with looks-done hints |
 | `plan-deps` | Write a spec's phase order onto the tracker as blocked-by edges |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
 | `board-id` | Print the board's node id from config |
 | `ci-reading` | Print a merged pull request's CI breakdown — per-check time, queue, critical path, re-runs |
 | `board-intake-move` | Move a board item to a column, verified in the item and in the board's search index |
 | `unaccounted-work` | Report undone work declared in a repository's prose that no open issue covers |
-| `intake` | Run each intake source and print its reading — MEASURED with a count, or UNMEASURED naming why |
+| `intake` | Run each intake source and print its reading, MEASURED or UNMEASURED |
 | `audit-closing-references` | Refuse a pull request whose closing reference GitHub will not act on, or that closes no issue |
 | `sync-spec-tests` | Regenerate the conformity suite from the specs |
 | `generate-code-map` | Regenerate CODE-MAP.md from the source tree |

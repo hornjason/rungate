@@ -227,7 +227,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   // argument it would read as a positional.
   "board-conformance": {
     script: "scripts/board-conformance.ts",
-    summary: "Does the board say what the spec says — every reading, and whether any is short of target",
+    summary: "Whether the board says what the spec says, reading by reading",
     usage: "rungate board-conformance [--reading <name>] [--snapshot <path>] [--list-readings]",
   },
   // Step 4 of ADR-003, in reverse. The issue template's own footer says a
@@ -239,10 +239,18 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   "plan-issues": {
     script: "scripts/plan-issues.ts",
     summary:
-      "Apply an approved issue plan — --decompose creates issues from criteria (step 4), --repair links and demotes existing ones",
+      "Apply an approved issue plan: --decompose files issues, --repair links and demotes them",
     usage:
       "rungate plan-issues (--repair | --decompose) <plan.md> --repo <owner/name> [--write] [--json]",
     projectRootFlag: true,
+  },
+  // #2275, onboarding existing specs. Read-only: what each spec holds, its
+  // `board:` setting, and a looks-done hint per unticked criterion. It never
+  // ticks. Reads the working directory, so it takes no root flag.
+  "board-scope": {
+    script: "scripts/board-scope.ts",
+    summary: "Spec criteria and opt-in, with looks-done hints",
+    usage: "rungate board-scope [--spec <path>] [--json]",
   },
   // Step 5 of ADR-003. `plan-spec` turns the placement table into milestones;
   // this turns the ORDER of those milestones into `blocked by` edges, which is
@@ -312,7 +320,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   // each intake source runs on its own trigger.
   intake: {
     script: "scripts/intake.ts",
-    summary: "Run each intake source and print its reading — MEASURED with a count, or UNMEASURED naming why",
+    summary: "Run each intake source and print its reading, MEASURED or UNMEASURED",
     usage:
       "rungate intake [--project-root <dir>] [--source <id>] [--json]   " +
       "(advisory: an unreadable source prints UNMEASURED and exits 0; exit 2 on a bad argument)",

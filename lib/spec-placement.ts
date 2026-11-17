@@ -927,3 +927,40 @@ export function uncoveredByMilestone(
     uncovered: a.criteria.filter(id => !names(id)),
   }));
 }
+
+/**
+ * Whether a spec's criteria reach the board — #2275. Only an active `board:`
+ * scope opts a spec in (SC-2776); deferred and undeclared are both outside,
+ * and `rungate board-scope` names them as NOT TRACKED so "not on the board"
+ * never reads as "done".
+ */
+export function tracksOnBoard(board: BoardDeclaration): boolean {
+  return board.scope === "active";
+}
+
+/** The looks-done hint for one unticked criterion — see {@link onboardingHint}. */
+export type OnboardingHint =
+  | { kind: "looks-done" }
+  | { kind: "ambiguous"; others: string[] }
+  | { kind: "cannot-tell"; why: string };
+
+/**
+ * A HINT, never a tick, for one unticked criterion of `specPath` — #2275.
+ *
+ * `claimed` is the credit rule's own answer (`claimedScKeys` in
+ * scripts/sync-sc-status.ts, read through the caller), so what counts as a
+ * test claiming an id is decided in one place. An id that another spec also
+ * states is ambiguous and is never matched, even when a test claims it: the
+ * claim may be about the other spec's criterion.
+ */
+export function onboardingHint(
+  id: string,
+  specPath: string,
+  claimed: (id: string) => boolean,
+  declaredBy: ReadonlyMap<string, readonly string[]>,
+): OnboardingHint {
+  const others = (declaredBy.get(id) ?? []).filter(p => p !== specPath);
+  if (others.length > 0) return { kind: "ambiguous", others };
+  if (claimed(id)) return { kind: "looks-done" };
+  return { kind: "cannot-tell", why: "no test claims it in a declaring position" };
+}
