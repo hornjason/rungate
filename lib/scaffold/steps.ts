@@ -4390,6 +4390,8 @@ ${setupBunEnv("        ")}
       : `permissions:\n  contents: read\n  # Mint the OIDC token Workload Identity Federation exchanges (#631).\n  id-token: write\n  # Count this pull request's previous AI Review runs — the round budget (#1168).\n  actions: read\n${ledgerPermission}`;
 
   const aiReviewYml = `# Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
+# The trigger types under on.pull_request are the harness's and are rewritten
+# on every scaffold; add your own triggers or jobs alongside (#2292).
 #
 ${buildOutcomesHeader(vertex)}#
 # This job is deliberately unconditional. A job skipped by a condition reports

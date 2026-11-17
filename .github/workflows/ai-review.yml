@@ -1,5 +1,7 @@
-# generated-sha: 3d9cef89d6468404
+# generated-sha: 750df2f7b9f6115e
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
+# The trigger types under on.pull_request are the harness's and are rewritten
+# on every scaffold; add your own triggers or jobs alongside (#2292).
 #
 # THREE OUTCOMES, and only one of them is a review that found nothing.
 #
