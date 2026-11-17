@@ -833,7 +833,7 @@ export async function main(
   const { values } = parsed;
   if (values.families) {
     // A listing, not a plan: alone, so nothing it prints is mistaken for a write.
-    if (values.place || values.repair || values.decompose || values["accepted-since"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined || values.write) {
+    if (values.place || values.repair || values.decompose || values["accepted-since"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined || values.write || values.json) {
       console.error(`plan-issues: --families lists the opted-in families and applies nothing — pass it alone, with --project-root at most\n\n${USAGE}`);
       return REFUSAL_EXIT;
     }

@@ -867,6 +867,31 @@ describe("SC-2779: plan-issues --place reads every opted-in spec and writes only
     expect(listed.stdout).toStrictEqual(["Fam\tspecs/FAM.md", "Other\tspecs/OTHER.md"]);
   });
 
+  test("--families with any other flag is refused, printing no family", async () => {
+    // Review of #2315: --json was accepted and ignored, so a script asking for
+    // JSON got tab-separated lines with nothing saying so.
+    for (const extra of [["--json"], ["--write"], ["--place"]]) {
+      const dir = mkdtempSync(join(tmpdir(), "rg-plan-issues-2779-famflags-"));
+      const out: string[] = [];
+      const log = console.log;
+      const error = console.error;
+      console.log = (...a: unknown[]) => void out.push(`OUT ${a.join(" ")}`);
+      console.error = (...a: unknown[]) => void out.push(a.join(" "));
+      try {
+        mkdirSync(join(dir, "specs"));
+        for (const [path, text] of Object.entries(TREE)) writeFileSync(join(dir, path), text);
+        const code = await planIssuesMain(["--families", "--project-root", dir, ...extra]);
+        expect(code, extra.join(" ")).toBe(REFUSAL_EXIT);
+        expect(out.filter(l => l.startsWith("OUT ")), extra.join(" ")).toStrictEqual([]);
+        expect(out.join("\n"), extra.join(" ")).toContain("pass it alone");
+      } finally {
+        console.log = log;
+        console.error = error;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("--families refuses, printing no family, when a spec cannot be read", async () => {
     const listed = await runFamilies({ ...TREE, "specs/ODD.md": front("board:\n  scope: someday\n") + OTHER_SPEC.replaceAll("YY-1", "WW-1") });
     expect(listed.code).toBe(REFUSAL_EXIT);
