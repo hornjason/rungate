@@ -256,8 +256,9 @@ export interface ProducedSnapshot {
  *
  * Every unticked criterion in an in-scope spec, then every open stage item
  * in `project-state.json`. In scope is the same population `spec-placement`
- * counts: a spec that states criteria (`PLANNED` or `UNPLANNED`) and is not
- * deferred. The criteria are read through `parseCriteria`, the one reader of
+ * counts: a spec that states criteria (`PLANNED` or `UNPLANNED`) and opts in
+ * with `board: { scope: active }` (SC-2776). A spec that declares nothing is
+ * never planned, so its unticked criteria are not work anybody declared. The criteria are read through `parseCriteria`, the one reader of
  * a spec's checkbox lines, so "unticked" has one answer in the tree.
  *
  * A consumer repository has no `project-state.json`: an absent file declares
@@ -269,12 +270,14 @@ export interface ProducedSnapshot {
  */
 export function readDeclaredWork(
   root: string,
-  specs: readonly { path: string; state: SpecPlacementRow["state"]; deferred?: boolean }[],
+  specs: readonly { path: string; state: SpecPlacementRow["state"]; deferred?: boolean; board?: { scope: string } }[],
 ): { declaredWork?: DeclaredWork[] } {
   const work: DeclaredWork[] = [];
   for (const s of specs) {
-    if (s.deferred === true || s.state === "NO_CRITERIA") continue;
+    // UNREADABLE first: a spec nobody could read has no declaration to be
+    // read either, and skipping it as "not opted in" would shorten the list.
     if (s.state === "UNREADABLE") return {};
+    if (s.board?.scope !== "active" || s.state === "NO_CRITERIA") continue;
     let content: string;
     try {
       content = readFileSync(join(root, s.path), "utf-8");

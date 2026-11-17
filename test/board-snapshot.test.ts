@@ -2071,7 +2071,11 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
   const withSpecsDir = async <T>(fn: (dir: string, specPath: string) => Promise<T>): Promise<T> =>
     withSpec(SPEC, async (dir, at) => {
       mkdirSync(join(dir, "specs"), { recursive: true });
-      writeFileSync(join(dir, "specs", "FIXTURE-SPEC.md"), SPEC);
+      // SC-2776: the sweep's copy opts itself in, as an engine family must,
+      // or every repository-wide population would leave it out.
+      const optedIn = SPEC.replace("governs: a fixture\n", "governs: a fixture\nboard:\n  scope: active\n  prefix: Fix\n");
+      expect(optedIn, "the fixture's frontmatter moved, so the opt-in was never written").not.toBe(SPEC);
+      writeFileSync(join(dir, "specs", "FIXTURE-SPEC.md"), optedIn);
       return fn(dir, at);
     });
 
@@ -2245,9 +2249,13 @@ describe("SC-2752 / #1953: readDeclaredWork — unticked criteria and open stage
   const SPECS = {
     "specs/A.md": "- [ ] SC-9101: open\n- [x] SC-9102: done\n",
     "specs/D.md": "- [ ] SC-9201: deferred, so out of scope\n",
+    "specs/OFF.md": "- [ ] SC-9301: no board: block, so out of scope\n",
   };
+  // SC-2776: in scope means opted in. OFF.md declares nothing, so its unticked
+  // criterion is no more declared work than D.md's (review of #2308).
   const ROWS = [
-    { path: "specs/A.md", state: "UNPLANNED" as const },
+    { path: "specs/A.md", state: "UNPLANNED" as const, board: { scope: "active", settings: { prefix: "A" }, problems: [] } },
+    { path: "specs/OFF.md", state: "UNPLANNED" as const },
     { path: "specs/D.md", state: "PLANNED" as const, deferred: true },
     { path: "specs/EMPTY.md", state: "NO_CRITERIA" as const },
   ];
