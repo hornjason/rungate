@@ -21,7 +21,7 @@ code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
 pre{background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12.5px;overflow:auto;white-space:pre-wrap}
 </style></head><body>
 <h1>ADR-019 — the acceptance test sits in its own phase, and milestones follow the spec</h1>
-<div class="sub">Dry run, 2026-11-17 · <b>proposed</b> · Jason decides and merges · <code>docs/adr/ADR-019-the-acceptance-test-sits-in-its-own-phase.md</code> · no new issues, no new criteria</div>
+<div class="sub">Dry run, 2026-11-17 · <b>accepted</b> by Jason 2026-11-17, he merges · closes #2309 · <code>docs/adr/ADR-019-the-acceptance-test-sits-in-its-own-phase.md</code> · no new issues, no new criteria</div>
 <div class="legend"><span><i class="dot" style="background:var(--judge)"></i>judgement (Jason)</span><span><i class="dot" style="background:var(--auto)"></i>automatic</span><span><i class="dot" style="background:var(--hand)"></i>by hand</span></div>
 
 <h2>Today vs after</h2>
@@ -42,9 +42,9 @@ pre{background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:10
 </div>
 
 <h2>The run</h2>
-<div class="step"><span class="tag YOU">YOU</span><div>Decide Decisions 1–4 and the SC-2779 wording; merge ADR-019 → docs only</div></div>
+<div class="step"><span class="tag YOU">YOU</span><div><b>Done 2026-11-17:</b> agreed to Decisions 1–4 and the SC-2779 wording; merges ADR-019 → docs only</div></div>
 <div class="step"><span class="tag AUTO">AUTO</span><div><code>adr-accepted.yml</code> lists it and places nothing (no Decomposition table) → board unchanged, nothing goes red</div></div>
-<div class="step"><span class="tag ME">ME</span><div>Record the approved SC-2779 wording on #2304 and the table edit on #2305 → two comments, no tracker writes</div></div>
+<div class="step"><span class="tag ME">ME</span><div><b>Done 2026-11-17:</b> recorded the approved SC-2779 wording on #2304 and the table edit on #2305 → two comments, no tracker writes</div></div>
 <div class="step"><span class="tag ME">ME</span><div>#2304's PR: the placing rule also moves an issue whose criteria all sit in another phase of its family; SC-2779 reworded → code + test</div></div>
 <div class="step"><span class="tag ME">ME</span><div>#2305's PR: builds <code>specs-placed.yml</code> and carries the placement-table edit → 7 files</div></div>
 <div class="step"><span class="tag AUTO">AUTO</span><div>That merge pushes <code>specs/</code> and triggers the new run: rename Phase 9, create Phase 10, move #1722 (and #1764), then <code>plan-deps</code> links #1722 to #2301–#2305</div></div>
@@ -69,13 +69,13 @@ would move: 2
   #1764 Convergence Phase 3 → Phase 2 (CRC-B4)</pre></div>
 </div>
 
-<h2>Needs Jason</h2>
+<h2>Decided by Jason, 2026-11-17</h2>
 <div class="grid">
 <div class="card"><h3>1 · SC-2625 to its own Phase 10</h3><span class="dim">The acceptance test runs last, ordered by the engine's own phase rule.</span></div>
 <div class="card"><h3>2 · Table edit rides in #2305</h3><span class="dim">So the merge that creates the run also triggers it; landing it in the ADR would red B1 until then.</span></div>
 <div class="card"><h3>3 · Narrow ADR-018 Decision 4</h3><span class="dim">A milestoned issue moves when ALL its criteria sit in one other phase of its family. Split issues never move.</span></div>
-<div class="card"><h3>4 · #1764 moves too</h3><span class="dim">Phase 3 → 2 (names only CRC-B4). Or tell me it belongs in 3, and its placement changes instead.</span></div>
-<div class="card"><h3>SC-2779 wording</h3><span class="dim">Reworded in the ADR; lands in #2304's PR with the code.</span></div>
+<div class="card"><h3>4 · #1764 moves too</h3><span class="dim">Phase 3 → 2 (names only CRC-B4). Agreed.</span></div>
+<div class="card"><h3>SC-2779 wording</h3><span class="dim">Approved; lands in #2304's PR with the code.</span></div>
 </div>
 
 <h2>Gaps</h2>
