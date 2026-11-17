@@ -769,6 +769,27 @@ describe("SC-2779: plan-issues --place reads every opted-in spec and writes only
     }
   }
 
+  /** `--families`, with stdout kept apart: it is the only thing the run reads. */
+  async function runFamilies(tree: Record<string, string>) {
+    const dir = mkdtempSync(join(tmpdir(), "rg-plan-issues-2779-fam-"));
+    const stdout: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = (...a: unknown[]) => void stdout.push(a.join(" "));
+    console.error = (...a: unknown[]) => void err.push(a.join(" "));
+    try {
+      mkdirSync(join(dir, "specs"));
+      for (const [path, text] of Object.entries(tree)) writeFileSync(join(dir, path), text);
+      const code = await planIssuesMain(["--families", "--project-root", dir]);
+      return { code, stdout, out: [...stdout, ...err].join("\n") };
+    } finally {
+      console.log = log;
+      console.error = error;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   test("--write moves exactly the issues the rule moves, and nothing else", async () => {
     const r = await run(["--write"]);
     expect(r.code, r.out).toBe(0);
@@ -799,6 +820,9 @@ describe("SC-2779: plan-issues --place reads every opted-in spec and writes only
     expect(r.code).toBe(REFUSAL_EXIT);
     expect(r.calls, "a write went out from a run that refused").toStrictEqual([]);
     expect(r.out).toContain("Fam Phase 7");
+    // Review of #2315: the tally accounts for every open issue the header counts.
+    expect(r.out).toContain("6 open issue(s)");
+    expect(r.out).toMatch(/2 to move, 1 already placed, 1 left where they are, 1 name no opted-in criterion, 1 refused/);
   });
 
   test("a family whose table or board: block cannot be read refuses before any issue is read", async () => {
@@ -834,6 +858,20 @@ describe("SC-2779: plan-issues --place reads every opted-in spec and writes only
     const src = readFileSync(join(import.meta.dir, "..", "scripts", "plan-issues.ts"), "utf-8");
     expect(src.split("is placed twice").length - 1).toBe(1);
     expect(src.split("unsoundPlacement(").length - 1, "the definition and its two callers").toBe(3);
+  });
+
+  test("--families prints each opted-in family and its spec, for the run to loop over", async () => {
+    // The same reading --place takes; a held-back spec is not listed.
+    const listed = await runFamilies(TREE);
+    expect(listed.code, listed.out).toBe(0);
+    expect(listed.stdout).toStrictEqual(["Fam\tspecs/FAM.md", "Other\tspecs/OTHER.md"]);
+  });
+
+  test("--families refuses, printing no family, when a spec cannot be read", async () => {
+    const listed = await runFamilies({ ...TREE, "specs/ODD.md": front("board:\n  scope: someday\n") + OTHER_SPEC.replaceAll("YY-1", "WW-1") });
+    expect(listed.code).toBe(REFUSAL_EXIT);
+    expect(listed.stdout).toStrictEqual([]);
+    expect(listed.out).toContain("specs/ODD.md");
   });
 
   test("--place with another plan's flags is refused by name", async () => {

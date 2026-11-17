@@ -213,6 +213,13 @@ rungate plan-issues --place --repo <owner/name> [--write] [--json] [--project-ro
   A phase with no milestone, or a spec the run cannot read, refuses the run
   before anything is written; plan-spec makes milestones, this never does.
 
+rungate plan-issues --families [--project-root <dir>]
+
+  Print each opted-in family as <prefix><TAB><spec path>, one per line and
+  nothing else on stdout — the list a workflow loops plan-spec and plan-deps
+  over. The same reading --place takes, so the two never disagree; it refuses
+  on the same unreadable specs. Reads no tracker.
+
 rungate plan-issues --accepted-since <commit> [--project-root <dir>]
 
   Print each docs/adr/*.md that is accepted now and was not at <commit>, and
@@ -680,13 +687,14 @@ const LIVE_PLACE: PlaceGitHub = {
 export function placingFamilies(
   root: string,
   live: readonly LiveMilestone[],
-): { families: PlacingFamily[]; paths: string[]; refusals: string[] } {
+): { families: PlacingFamily[]; paths: string[]; specs: string[]; refusals: string[] } {
   const read = (base: string, path: string) => readFileSync(join(base, path), "utf-8");
   const sweep = placementCoverage(root, specPathSweep, read);
-  if (sweep.reading === "UNMEASURED") return { families: [], paths: [], refusals: sweep.unmeasuredReasons };
+  if (sweep.reading === "UNMEASURED") return { families: [], paths: [], specs: [], refusals: sweep.unmeasuredReasons };
   const refusals: string[] = [];
   const families: PlacingFamily[] = [];
   const paths: string[] = [];
+  const specs: string[] = [];
   const byPrefix = new Map<string, string>();
   for (const spec of sweep.specs) {
     if (spec.board.problems.length > 0) {
@@ -712,8 +720,9 @@ export function placingFamilies(
     for (const a of milestonePlan(text, [...live], prefix).actions) if (a.existing) milestones.set(a.phase, a.existing.title);
     families.push({ prefix, stated: placement.criteria, placements: placementsById(text), milestones });
     paths.push(`${prefix}: ${spec.path}`);
+    specs.push(spec.path);
   }
-  return refusals.length > 0 ? { families: [], paths: [], refusals } : { families, paths, refusals: [] };
+  return refusals.length > 0 ? { families: [], paths: [], specs: [], refusals } : { families, paths, specs, refusals: [] };
 }
 
 /** `--place`: the run SC-2780 calls, after `plan-spec` and before `plan-deps`. */
@@ -773,7 +782,7 @@ async function place(gh4: PlaceGitHub, root: string, repo: string, write: boolea
   for (const m of moves) if (mark[m.move.kind] !== "") console.log(`  ${mark[m.move.kind]}  #${m.issue}  ${"why" in m.move ? m.move.why : ""}`);
   console.log(
     `\n  ${count("move")} to move, ${count("stay")} already placed, ${count("left")} left where they are, ` +
-      `${count("none")} name no opted-in criterion`,
+      `${count("none")} name no opted-in criterion, ${count("refuse")} refused`,
   );
   if (blocked) {
     console.error(`\nplan-issues --place: ${refused.length} issue(s) belong in a phase with no milestone, so nothing was written.`);
@@ -813,6 +822,7 @@ export async function main(
         "milestone-prefix": { type: "string" },
         spec: { type: "string" },
         place: { type: "boolean", default: false },
+        families: { type: "boolean", default: false },
       },
       allowPositionals: true,
     });
@@ -821,6 +831,22 @@ export async function main(
     return REFUSAL_EXIT;
   }
   const { values } = parsed;
+  if (values.families) {
+    // A listing, not a plan: alone, so nothing it prints is mistaken for a write.
+    if (values.place || values.repair || values.decompose || values["accepted-since"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined || values.write) {
+      console.error(`plan-issues: --families lists the opted-in families and applies nothing — pass it alone, with --project-root at most\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+    // No milestones: which specs are families does not depend on the tracker.
+    const read = placingFamilies(values["project-root"] ?? process.cwd(), []);
+    if (read.refusals.length > 0) {
+      console.error(`plan-issues --families: UNMEASURED — the opted-in families could not be read:`);
+      for (const r of read.refusals) console.error(`  - ${r}`);
+      return REFUSAL_EXIT;
+    }
+    for (const [i, fam] of read.families.entries()) console.log(`${fam.prefix}\t${read.specs[i]}`);
+    return 0;
+  }
   if (values.place) {
     // A third plan, read from the specs rather than from a file: one at a time.
     if (values.repair || values.decompose || values["accepted-since"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined) {
