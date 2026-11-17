@@ -66,6 +66,7 @@ import {
   parseRepo,
   queueLabelRepairs,
   queueLabelRun,
+  queueFamilies,
   readyPopulation,
   scopeDemotions,
   splitReadyChanges,
@@ -1262,7 +1263,7 @@ describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase 
         row(6, "Pipeline Phase 7 — nothing is hand-run", [], { state: "CLOSED" }),
         row(7, "Issue intake"),
       ],
-      "Pipeline",
+      ["Pipeline"],
       "engine",
     );
     expect(r).toEqual({ add: [1], unreadable: [] });
@@ -1274,7 +1275,7 @@ describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase 
         row(8, "Pipeline Phase 6", ["a"], { labelsTruncated: true }),
         row(9, "Pipeline Phase 6", ["engine"], { labelsTruncated: true }),
       ],
-      "Pipeline",
+      ["Pipeline"],
       "engine",
     );
     expect(r).toEqual({ add: [], unreadable: [8] });
@@ -1312,8 +1313,8 @@ describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase 
     const gh = fakeGh([node(11, "Pipeline Phase 6"), node(12, "Pipeline Phase 6", ["engine"]), node(13, "Convergence Phase 2")]);
     const code = await queueLabelRun({
       repo: "o/r",
-      prefix: "Pipeline",
-      prefixUnmeasured: null,
+      families: ["Pipeline"],
+      familiesUnmeasured: null,
       queueLabel: "engine",
       write: true,
       exec: gh.exec,
@@ -1328,8 +1329,8 @@ describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase 
     const lines: string[] = [];
     const code = await queueLabelRun({
       repo: "o/r",
-      prefix: "Pipeline",
-      prefixUnmeasured: null,
+      families: ["Pipeline"],
+      familiesUnmeasured: null,
       queueLabel: "engine",
       write: false,
       exec: gh.exec,
@@ -1342,8 +1343,8 @@ describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase 
 
   test("SC-2609: no engine family, or no queue label, refuses and edits nothing", async () => {
     for (const cfg of [
-      { prefix: null, prefixUnmeasured: "UNMEASURED: no rungate config", queueLabel: "engine" },
-      { prefix: "Pipeline", prefixUnmeasured: null, queueLabel: null },
+      { families: [], familiesUnmeasured: "UNMEASURED: no rungate config", queueLabel: "engine" },
+      { families: ["Pipeline"], familiesUnmeasured: null, queueLabel: null },
     ]) {
       const gh = fakeGh([node(11, "Pipeline Phase 6")]);
       const code = await queueLabelRun({ repo: "o/r", ...cfg, write: true, exec: gh.exec, log: quiet });
@@ -1364,8 +1365,8 @@ describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase 
     const lines: string[] = [];
     const code = await queueLabelRun({
       repo: "o/r",
-      prefix: "Pipeline",
-      prefixUnmeasured: null,
+      families: ["Pipeline"],
+      familiesUnmeasured: null,
       queueLabel: "engine",
       write: true,
       exec,
@@ -1386,8 +1387,8 @@ describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase 
     const gh = fakeGh([node(11, "Pipeline Phase 6"), node(14, "Pipeline Phase 6", ["x"], true)]);
     const code = await queueLabelRun({
       repo: "o/r",
-      prefix: "Pipeline",
-      prefixUnmeasured: null,
+      families: ["Pipeline"],
+      familiesUnmeasured: null,
       queueLabel: "engine",
       write: true,
       exec: gh.exec,
@@ -1405,3 +1406,117 @@ describe("#2062 / SC-2609: board-mirror --queue-label labels every engine-phase 
     expect(await boardMirrorMain(["--queue-label", "--repo", "o/r", "--project", "PVT_x"])).toBe(REFUSAL_EXIT);
   });
 });
+
+/**
+ * SC-2777: every open issue in any opted-in family's phase milestone carries
+ * `board.queueLabel`, written by `board-mirror --queue-label` with no hand
+ * edit, so payload work and engine work sit in one queue. The families are read
+ * from the specs that opt in (SC-2776), plus the configured engine family.
+ */
+describe("SC-2777: the queue label reaches every opted-in family's phase issues", () => {
+  // Each spec states its own criterion: the sweep refuses one id stated by two specs.
+  let next = 9501;
+  const spec = (frontmatter: string) => `---\ndoc-type: spec\n${frontmatter}---\n# X\n\n- [ ] SC-${next++}: a criterion\n`;
+  const tree = <T>(files: Record<string, string>, fn: (dir: string) => T): T => {
+    const dir = mkdtempSync(join(tmpdir(), "sc2777-families-"));
+    try {
+      for (const [path, content] of Object.entries(files)) {
+        mkdirSync(join(dir, path, ".."), { recursive: true });
+        writeFileSync(join(dir, path), content);
+      }
+      return fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const config = (milestonePrefix?: string) =>
+    JSON.stringify({ project: "fixture", board: milestonePrefix === undefined ? {} : { milestonePrefix } });
+
+  test("SC-2777: a repair covers every family the queue holds, and only those", () => {
+    const row = (number: number, milestone: string | null, labels: string[] = []) => ({ number, state: "OPEN", milestone, labels });
+    const r = queueLabelRepairs(
+      [
+        row(1, "Engine Phase 9 — every opted-in spec runs through the engine"),
+        row(2, "Convergence Phase 1 — stop the repeats"),
+        row(3, "Convergence Phase 2 — the second", ["engine"]),
+        row(4, "Other Phase 1 — not opted in"),
+        row(5, "Convergences Phase 1"),
+      ],
+      ["Convergence", "Engine"],
+      "engine",
+    );
+    expect(r).toEqual({ add: [1, 2], unreadable: [] });
+  });
+
+  test("SC-2777: the families are the opted-in specs' prefixes plus the configured engine family", () => {
+    tree(
+      {
+        ".claude/rungate/config.json": config("Engine"),
+        "specs/IN.md": spec("board:\n  scope: active\n  prefix: Convergence\n"),
+        "specs/OFF.md": spec(""),
+        "specs/HELD.md": spec("board-scope: deferred\n"),
+        "specs/ENGINE.md": spec("board:\n  scope: active\n  prefix: Engine\n"),
+      },
+      dir => expect(queueFamilies(dir)).toEqual({ families: ["Convergence", "Engine"], unmeasured: null }),
+    );
+  });
+
+  test("SC-2777: with no spec opted in, the configured engine family is labelled as before", () => {
+    tree({ ".claude/rungate/config.json": config("Engine"), "specs/OFF.md": spec("") }, dir =>
+      expect(queueFamilies(dir)).toEqual({ families: ["Engine"], unmeasured: null }),
+    );
+  });
+
+  test("SC-2777: no family at all, or a sweep that cannot be read, refuses — never an empty queue", () => {
+    tree({ ".claude/rungate/config.json": config(), "specs/OFF.md": spec("") }, dir => {
+      const r = queueFamilies(dir);
+      expect(r.families).toEqual([]);
+      expect(r.unmeasured).toContain("no spec opts into the engine");
+    });
+    tree({ ".claude/rungate/config.json": config("Engine") }, dir => {
+      const r = queueFamilies(dir);
+      expect(r.families).toEqual([]);
+      expect(r.unmeasured).toContain("specs/ sweep could not be read");
+    });
+  });
+
+  test("SC-2777: one --queue-label run labels a payload issue and an engine issue alike", async () => {
+    const edits: string[][] = [];
+    const nodes = [
+      { n: 31, m: "Engine Phase 9" },
+      { n: 32, m: "Convergence Phase 1" },
+      { n: 33, m: "Unrelated Phase 1" },
+    ].map(({ n, m }) => ({
+      number: n,
+      state: "OPEN",
+      title: `#${n}`,
+      body: null,
+      milestone: { title: m },
+      labels: { pageInfo: { hasNextPage: false }, nodes: [] },
+      blockedBy: { pageInfo: { hasNextPage: false }, nodes: [] },
+    }));
+    const exec = (args: readonly string[]): string => {
+      if (args[0] === "api") {
+        return JSON.stringify({ data: { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: "" }, nodes } } } });
+      }
+      edits.push([...args]);
+      return "";
+    };
+    const code = await queueLabelRun({
+      repo: "o/r",
+      families: ["Convergence", "Engine"],
+      familiesUnmeasured: null,
+      queueLabel: "engine",
+      write: true,
+      exec,
+      log: () => {},
+    });
+    expect(code).toBe(0);
+    expect(edits.map(e => e[2]).sort()).toEqual(["31", "32"]);
+  });
+
+  test("SC-2777: this tree's queue holds the engine and the convergence payload", () => {
+    expect(queueFamilies(join(import.meta.dir, ".."))).toEqual({ families: ["Convergence", "Engine"], unmeasured: null });
+  });
+});
+

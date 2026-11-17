@@ -66,7 +66,9 @@ import {
   isReady,
   mirrorRows,
   specCriteriaIn,
+  specPathSweep,
 } from "../lib/board-mirror";
+import { placementCoverage } from "../lib/spec-placement";
 
 /**
  * THE one non-zero exit, so `test/board-mirror.test.ts` can build a mutant
@@ -92,18 +94,63 @@ export const REFUSAL_EXIT = 1;
  */
 export function queueLabelRepairs(
   issues: readonly Pick<LiveIssue, "number" | "state" | "milestone" | "labels" | "labelsTruncated">[],
-  prefix: string,
+  families: readonly string[],
   queueLabel: string,
 ): { add: number[]; unreadable: number[] } {
   const add: number[] = [];
   const unreadable: number[] = [];
   for (const i of issues) {
-    if (i.state !== "OPEN" || !inMilestoneFamily(i.milestone, prefix)) continue;
+    // SC-2777: any family the queue holds, through the same inMilestoneFamily
+    // the readings use, so "in a family" has one answer.
+    if (i.state !== "OPEN" || !families.some(f => inMilestoneFamily(i.milestone, f))) continue;
     if (i.labels.includes(queueLabel)) continue;
     if (i.labelsTruncated === true) unreadable.push(i.number);
     else add.push(i.number);
   }
   return { add, unreadable };
+}
+
+/**
+ * The milestone families whose phase issues belong in the one queue — SC-2777.
+ *
+ * Every spec that opts itself in (`board: { scope: active, prefix }`, SC-2776)
+ * names its family; there is no list in config (ADR-018 Decision 1). The
+ * configured engine family, `board.milestonePrefix`, is included as well, so a
+ * tree whose specs have not opted in yet labels exactly what it labelled
+ * before. The spec-placement reading holds the engine spec's own block to
+ * that config, so the two do not drift apart unseen.
+ *
+ * A sweep that could not be read is UNMEASURED, not "no families": labelling
+ * from a partial list would leave an opted-in family out of the queue with
+ * nothing saying so. No family at all is refused the same way.
+ */
+export function queueFamilies(root: string): { families: string[]; unmeasured: string | null } {
+  const sweep = placementCoverage(root, specPathSweep, (base, path) => readFileSync(join(base, path), "utf-8"));
+  if (sweep.reading === "UNMEASURED") {
+    return {
+      families: [],
+      unmeasured:
+        `board-mirror: UNMEASURED — the specs/ sweep could not be read, so which families opt in is unknown: ` +
+        `${sweep.unmeasuredReasons.join("; ")}. Nothing written.`,
+    };
+  }
+  const families = new Set<string>();
+  for (const s of sweep.specs) {
+    const prefix = s.board.settings.prefix;
+    if (s.board.scope === "active" && prefix !== undefined) families.add(prefix);
+  }
+  const engine = enginePrefixReading(root);
+  if (engine.prefix !== null) families.add(engine.prefix);
+  if (families.size === 0) {
+    return {
+      families: [],
+      unmeasured:
+        engine.unmeasured ??
+        "board-mirror: UNMEASURED — no spec opts into the engine (board: { scope: active, prefix }) and " +
+          "board.milestonePrefix is not set, so there is no family to label. Nothing written.",
+    };
+  }
+  return { families: [...families].sort(), unmeasured: null };
 }
 
 /**
@@ -128,8 +175,9 @@ export function queueLabelRepairs(
  */
 export async function queueLabelRun(opts: {
   repo: string;
-  prefix: string | null;
-  prefixUnmeasured: string | null;
+  /** Every family the queue holds — {@link queueFamilies}. Empty refuses. */
+  families: readonly string[];
+  familiesUnmeasured: string | null;
   queueLabel: string | null;
   write: boolean;
   exec?: GraphQlExec;
@@ -137,11 +185,8 @@ export async function queueLabelRun(opts: {
 }): Promise<number> {
   const log = opts.log ?? ((line: string) => console.log(line));
   const exec = opts.exec ?? ghWithoutGhToken;
-  if (opts.prefix === null) {
-    log(
-      opts.prefixUnmeasured ??
-        "board-mirror: UNMEASURED — board.milestonePrefix is not set, so there is no engine family to label. Nothing written.",
-    );
+  if (opts.families.length === 0) {
+    log(opts.familiesUnmeasured ?? "board-mirror: UNMEASURED — there is no milestone family to label. Nothing written.");
     return REFUSAL_EXIT;
   }
   if (opts.queueLabel === null) {
@@ -149,7 +194,7 @@ export async function queueLabelRun(opts: {
     return REFUSAL_EXIT;
   }
   const issues = await readLiveIssues(opts.repo, false, exec);
-  const { add, unreadable } = queueLabelRepairs(issues, opts.prefix, opts.queueLabel);
+  const { add, unreadable } = queueLabelRepairs(issues, opts.families, opts.queueLabel);
   if (unreadable.length > 0) {
     log(
       `board-mirror: UNMEASURED — the label list was cut for ${unreadable.map(n => `#${n}`).join(", ")}, so ` +
@@ -158,7 +203,10 @@ export async function queueLabelRun(opts: {
     return REFUSAL_EXIT;
   }
   if (add.length === 0) {
-    log(`board-mirror: every open "${opts.prefix} Phase" issue carries "${opts.queueLabel}" — nothing to add.`);
+    log(
+      `board-mirror: every open issue in ${opts.families.map(f => `"${f} Phase"`).join(", ")} carries ` +
+        `"${opts.queueLabel}" — nothing to add.`,
+    );
     return 0;
   }
   // Every repair is attempted, and the run ends red naming each that failed
@@ -539,11 +587,11 @@ export async function main(argv: string[]): Promise<number> {
       return REFUSAL_EXIT;
     }
     const labelRoot = values["project-root"] ?? process.cwd();
-    const engine = enginePrefixReading(labelRoot);
+    const read = queueFamilies(labelRoot);
     return queueLabelRun({
       repo: values.repo,
-      prefix: engine.prefix,
-      prefixUnmeasured: engine.unmeasured,
+      families: read.families,
+      familiesUnmeasured: read.unmeasured,
       queueLabel: readQueueLabel(labelRoot),
       write: values.write,
     });

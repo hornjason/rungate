@@ -108,6 +108,18 @@ describe("#2062 / SC-2609: a hand-milestoned engine issue gets its queue label a
     expect(label[0].env.GITHUB_TOKEN).toBe("${{ secrets.GITHUB_TOKEN }}");
   });
 
+  // SC-2777: the label step is one run over every opted-in family. It passes
+  // no family, so board-mirror reads them from the specs (queueFamilies, tested
+  // in test/board-mirror.test.ts); a --milestone-prefix here would narrow the
+  // queue back to one family with every check still green.
+  test("SC-2777: the queue-label step names no family, so every opted-in family is labelled", () => {
+    const label = mirrorSteps().filter(s => runOf(s).includes("--queue-label"));
+    expect(label).toHaveLength(1);
+    expect(runOf(label[0])).not.toContain("--milestone-prefix");
+    expect(runOf(label[0])).not.toContain("--prefix");
+    expect(label[0].name).toBe("Queue label on every opted-in family's phase issue");
+  });
+
   test("SC-2609: one step writes the Criteria column with the same command adr-accepted.yml runs", () => {
     const cells = mirrorSteps().filter(s => runOf(s).includes('--project "$PROJECT_ID"'));
     expect(cells, "exactly one Criteria step").toHaveLength(1);
