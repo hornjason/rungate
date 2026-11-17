@@ -117,6 +117,21 @@ describe("SC-2776: a spec opts itself in through one board: block in its own fro
     expect(twice.scope).toBe("invalid");
     expect(twice.problems.join("\n")).toContain("`board.scope` is declared more than once");
 
+    // Review of #2308: the one-line form hid the same repeat, because only the
+    // indented lines were scanned. A quoted key is the same key.
+    for (const flow of [
+      "board: { scope: deferred, prefix: Engine, scope: active }\n",
+      `board: { "scope": deferred, scope: active, prefix: Engine }\n`,
+    ]) {
+      const repeated = boardDeclaration(spec(flow));
+      expect(repeated.scope, flow).toBe("invalid");
+      expect(repeated.problems.join("\n"), flow).toContain("`board.scope` is declared more than once");
+    }
+    // ...and a comma, colon or brace inside a quoted value or a trailing
+    // comment is not a second key.
+    const quoted = boardDeclaration(spec(`board: { scope: active, prefix: "A, scope: B }" }  # a } here\n`));
+    expect([quoted.scope, quoted.settings.prefix, quoted.problems]).toEqual(["active", "A, scope: B }", []]);
+
     const legacyOther = boardDeclaration(spec("board-scope: in\n"));
     expect(legacyOther.scope).toBe("invalid");
     expect(legacyOther.problems.join("\n")).toContain("takes only `deferred`");

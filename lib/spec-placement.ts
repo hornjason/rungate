@@ -320,13 +320,60 @@ function yamlValue(e: { key: string; inline: string; block: string[] }): { value
 }
 
 /**
- * Keys written twice at the top of a block-form `board:`. YAML keeps the last
- * silently, which is the guess this reading must not make.
+ * The index of the `}` closing the flow mapping that opens `text`, or -1.
+ * Quoted text is skipped (with YAML's `\"` and `''` escapes), so a brace
+ * inside a value or a trailing comment cannot end the mapping early.
  */
-function repeatedKeys(block: readonly string[]): string[] {
-  const keys = block.map(l => /^([ \t]+)([A-Za-z_][\w-]*)[ \t]*:/.exec(l)).filter(m => m !== null);
+function closingBrace(text: string): number {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === "\\") i++;
+    } else if (c === "'") {
+      for (i++; i < text.length; i++) {
+        if (text[i] !== "'") continue;
+        if (text[i + 1] === "'") i++;
+        else break;
+      }
+    } else if (c === "{" || c === "[") depth++;
+    else if ((c === "}" || c === "]") && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Keys written twice at the top of `board:`, in either form. YAML keeps the
+ * last silently, which is the guess this reading must not make.
+ *
+ * The block form is read line by line at the first key's indent. The one-line
+ * form is re-read by the YAML parser as a SEQUENCE — `{ a: 1, a: 2 }` becomes
+ * `[ a: 1, a: 2 ]`, which YAML parses as one single-pair mapping per entry —
+ * so every pair survives, duplicates included, with YAML's own quoting and
+ * nesting rules. `null` means the one-line form could not be re-read, which
+ * the caller reports rather than taking as "no repeats".
+ */
+function repeatedKeys(e: { inline: string; block: string[] }): string[] | null {
+  const names: string[] = [];
+  if (e.inline.startsWith("{")) {
+    const close = closingBrace(e.inline);
+    if (close < 0) return null;
+    try {
+      const pairs = (Bun.YAML.parse(`x: [${e.inline.slice(1, close)}]`) as { x: unknown }).x;
+      if (!Array.isArray(pairs)) return null;
+      for (const p of pairs) {
+        if (typeof p !== "object" || p === null || Array.isArray(p)) return null;
+        names.push(...Object.keys(p));
+      }
+    } catch {
+      // Refused as a sequence while it parsed as a mapping: the pairs cannot
+      // be counted, so the caller reports it instead of reading "no repeats".
+      return null;
+    }
+  }
+  const keys = e.block.map(l => /^([ \t]+)([A-Za-z_][\w-]*)[ \t]*:/.exec(l)).filter(m => m !== null);
   const top = keys[0]?.[1];
-  const names = keys.filter(m => m[1] === top).map(m => m[2]!);
+  names.push(...keys.filter(m => m[1] === top).map(m => m[2]!));
   return [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
 }
 
@@ -388,7 +435,11 @@ export function boardDeclaration(content: string): BoardDeclaration {
     else if (typeof read.value !== "object" || read.value === null || Array.isArray(read.value)) {
       problems.push(`\`board:\` must be a block of keys (${keys}), not ${JSON.stringify(read.value)}`);
     } else {
-      for (const k of repeatedKeys(block.block)) twice(`\`board.${k}\``);
+      const repeats = repeatedKeys(block);
+      if (repeats === null) {
+        problems.push("the one-line `board: { … }` could not be re-read to check for a key written twice");
+        contested = true;
+      } else for (const k of repeats) twice(`\`board.${k}\``);
       for (const [key, v] of Object.entries(read.value as Record<string, unknown>)) {
         const known = BOARD_KEYS[key];
         if (known === undefined) {
