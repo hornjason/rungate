@@ -625,6 +625,8 @@ describe("#2330: any repository that uses rungate can read its own board", () =>
       spawnSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:acme/widgets.git"]);
       expect(resolveRepo([], {}, dir)).toBe("acme/widgets");
       expect(resolveRepo([], { GITHUB_REPOSITORY: "ci/repo" }, dir)).toBe("ci/repo");
+      expect(resolveRepo([], { GITHUB_REPOSITORY: "" }, dir), "an empty variable names nothing").toBe("acme/widgets");
+      expect(resolveRepo(["--repo", ""], {}, dir), "an empty flag is refused, not guessed past").toBe("");
       expect(resolveRepo(["--repo", "flag/repo"], { GITHUB_REPOSITORY: "ci/repo" }, dir)).toBe("flag/repo");
       // No remote and no flag: null, so main refuses rather than guessing.
       spawnSync("git", ["-C", dir, "remote", "remove", "origin"]);

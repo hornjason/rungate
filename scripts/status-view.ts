@@ -884,8 +884,12 @@ export function repoFromRemote(url: string): string | null {
  * reads that consumer with no flag. Null when none of the three names one.
  */
 export function resolveRepo(argv: string[], env: Record<string, string | undefined>, root: string): string | null {
-  const named = flag(argv, "--repo") ?? env.GITHUB_REPOSITORY;
-  if (named !== undefined) return named;
+  // An explicit `--repo` is used as given, even empty, so a bad flag is
+  // refused rather than guessed past. An empty GITHUB_REPOSITORY names
+  // nothing and falls through to the remote (review of #2334).
+  const flagged = flag(argv, "--repo");
+  if (flagged !== null) return flagged;
+  if (env.GITHUB_REPOSITORY !== undefined && env.GITHUB_REPOSITORY !== "") return env.GITHUB_REPOSITORY;
   const origin = spawnSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf-8" });
   return origin.status === 0 ? repoFromRemote(origin.stdout) : null;
 }
