@@ -221,6 +221,16 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't edit the generated `fix-commit-intake` job, and don't drop `fetch-depth: 0` — a shallow clone reads UNMEASURED",
   },
   {
+    // SC-2780, ADR-018 Decision 1: a push that changes specs/ runs every
+    // opted-in family through the engine. A consumer has no scripts/, so the
+    // generator writes it and calls the published CLI.
+    path: ".github/workflows/specs-placed.yml",
+    strategy: "job-preserving",
+    servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
+    customize: "Opt a spec in with `board: { scope: active, prefix }` in its frontmatter; add your own jobs alongside the generated `run-the-engine` job",
+    avoid: "Don't edit the generated `run-the-engine` job, and don't put it in adr-accepted.yml's concurrency group — a shared group cancels the pending ADR run",
+  },
+  {
     // `regenerate` until #655, and the declaration was never consulted:
     // `generateAgentBriefsStep` called `writeFileSync` directly, so the row
     // described behaviour that a bare overwrite happened to coincide with.

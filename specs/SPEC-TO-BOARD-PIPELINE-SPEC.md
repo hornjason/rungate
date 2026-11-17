@@ -369,7 +369,8 @@ is built from this document.
 | **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753, SC-2762, SC-2763, SC-2764 |
 | **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
-| **Phase 9** | SC-2625, SC-2776, SC-2777, SC-2778, SC-2779, SC-2780 |
+| **Phase 9** | SC-2776, SC-2777, SC-2778, SC-2779, SC-2780 |
+| **Phase 10** | SC-2625 |
 
 ### Phase 0 — the transform refuses
 
@@ -425,7 +426,15 @@ The defect this document fixes for issues, applied to specs. An issue that
 names no criterion and a spec that names no goal are the same failure at two
 heights, and only the first one has a tool.
 
-### Phase 9 — the payload ships
+### Phase 9 — every opted-in spec runs through the engine
+
+A spec opts itself in from its own frontmatter, and a push that changes
+`specs/` runs every opted-in family through the engine: milestones, issues
+placed in the phase their criteria hold, the phase order, one queue, and the
+board (ADR-018). This is the building work the acceptance test below waits
+on, so it is a phase of its own and the test sits after it (ADR-019).
+
+### Phase 10 — the payload ships
 
 Strictly last, and the only phase whose subject is not this document. Every
 phase above can be green on an engine nobody but its author can run; this one
