@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADR-018 — every opted-in spec runs through the engine</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#2a2f3a;--txt:#e6e8ee;--dim:#8b93a7;--hand:#f2a65a;--auto:#5ab0f2;--judge:#c792ea;--ok:#7bd88f;--warn:#ff6b6b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 -apple-system,system-ui,sans-serif;padding:28px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:28px 0 10px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+.sub{color:var(--dim);margin-bottom:18px}.legend span{display:inline-block;margin-right:16px;font-size:13px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h3{margin:0 0 6px;font-size:15px}.big{font-size:30px;font-weight:700}.ok{color:var(--ok)}.warn{color:var(--warn)}.dim{color:var(--dim)}
+.step{display:flex;gap:12px;align-items:flex-start;margin:8px 0}.tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;min-width:52px;text-align:center}
+.YOU{background:var(--judge);color:#111}.ME{background:#3a4152}.AUTO{background:var(--auto);color:#111}.HAND{background:var(--hand);color:#111}
+code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
+.bar{height:12px;border-radius:6px;background:#222733;overflow:hidden;margin:6px 0}.bar>i{display:block;height:100%}
+.row{display:grid;grid-template-columns:150px 1fr 1fr;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.row b{font-weight:600}
+</style></head><body>
+<h1>ADR-018 — every opted-in spec runs through the engine</h1>
+<div class="sub">Dry run, 2026-11-16 (revised: opt-in) · <b>accepted</b> by Jason 2026-11-16, he merges · <code>docs/adr/ADR-018-every-placed-spec-runs-through-the-engine.md</code> · closes #2238 · stage F · <b>#2239 shipped (0.8.22)</b></div>
+<div class="legend"><span><i class="dot" style="background:var(--judge)"></i>judgement (Jason)</span><span><i class="dot" style="background:var(--auto)"></i>automatic</span><span><i class="dot" style="background:var(--hand)"></i>by hand</span></div>
+
+<h2>Stage F today, measured</h2>
+<div class="grid">
+<div class="card"><h3>milestones (F1)</h3><div class="big warn">17 / 49</div><div class="bar"><i style="width:35%;background:var(--warn)"></i></div><div class="dim">Convergence Phases 1, 5, 6 list moved criteria; <code>plan-spec</code> never runs for this spec</div></div>
+<div class="card"><h3>criterion-coverage (F1)</h3><div class="big warn">50 / 66</div><div class="bar"><i style="width:76%;background:var(--warn)"></i></div><div class="dim">9 placed outside phases · 4 on unmilestoned issues · 3 Phase 0 with no issue</div></div>
+<div class="card"><h3>queue-label (F1)</h3><div class="big warn">0 / 32</div><div class="bar"><i style="width:0%;background:var(--warn)"></i></div><div class="dim">the label is added to the engine family only</div></div>
+<div class="card"><h3>declared-work (F2)</h3><div class="big warn">44 / 58</div><div class="bar"><i style="width:76%;background:var(--warn)"></i></div><div class="dim">the same 12 criteria, plus stage items F1 and F2 with no issue</div></div>
+<div class="card"><h3>blocked-by-edges · criteria-field (F1)</h3><div class="big ok">32 / 32</div><div class="bar"><i style="width:100%;background:var(--ok)"></i></div><div class="dim">already met</div></div>
+</div>
+
+<h2>The run</h2>
+<div class="card">
+<div class="step"><span class="tag ME">ME</span><div><b>Done:</b> #2239 shipped as #2242 in 0.8.22, so <code>plan-deps</code> exits 0 when one phase holds every open issue</div></div>
+<div class="step"><span class="tag YOU">YOU</span><div><b>Done 2026-11-16:</b> yes to all six &mdash; SC-2776..2780 as redrafted, Decisions 4 and 5, E8 &rarr; Blocked, F1 &rarr; Not adopted, and SC-2615/2734 reworded in SC-2776's PR</div></div>
+<div class="step"><span class="tag YOU">YOU</span><div>Merge ADR-018 (already <code>status: accepted</code>)</div></div>
+<div class="step"><span class="tag AUTO">AUTO</span><div><code>adr-accepted.yml</code>: plan-spec updates Engine Phase 9 → 6 issues, each labelled <code>engine</code> → 6 blocked-by edges → Criteria column → Ready top-up</div></div>
+<div class="step"><span class="tag ME">ME</span><div>DA records <code>issue: 1722</code> on stage items F1 and F2 (project-state.json, primary checkout) → declared-work −2</div></div>
+<div class="step"><span class="tag ME">ME</span><div>Rows ship in order: frontmatter opt-in → queue label, declared placements, issue placement → the <code>specs-placed.yml</code> workflow</div></div>
+<div class="step"><span class="tag AUTO">AUTO</span><div>Next push touching <code>specs/</code>: plan-spec, plan-deps and placement for Engine and Convergence → #4, #8, #9 updated, #3 updated (Phase 0 = C3) · #1883, #1885, #1495, #1571, #1816, #1818 milestoned · 32+ issues labelled · Criteria column</div></div>
+<div class="step"><span class="tag ME">ME</span><div>CRC-C3 row ships once the engine phases are empty (Ready pulls Convergence Phase 0)</div></div>
+<div class="step"><span class="tag AUTO">AUTO</span><div>F1's five readings met · F2 exits 0 · #1722 closes · stage F gets its retro</div></div>
+</div>
+
+<h2>Issues the merge files</h2>
+<div class="grid">
+<div class="card"><h3>SC-2776 · Engine Phase 9</h3>A spec is consumed only when its frontmatter opts it in<div class="dim">board: { scope: active, prefix } · lib/spec-placement.ts · board-conformance · 2 spec frontmatters · test/board-families.test.ts · root</div></div>
+<div class="card"><h3>SC-2777 · Engine Phase 9</h3>Every opted-in family's phase issues carry the queue label<div class="dim">scripts/board-mirror.ts · phase-order.yml · 2 tests · after the opt-in row (SC-2776)</div></div>
+<div class="card"><h3>SC-2778 · Engine Phase 9</h3>A criterion placed outside every phase reads as declared and not as missing<div class="dim">board-conformance · board-snapshot · spec-placement · 2 tests · after the opt-in row (SC-2776)</div></div>
+<div class="card"><h3>SC-2779 · Engine Phase 9</h3>An unmilestoned issue moves into the phase milestone its criterion holds<div class="dim">lib/issue-repair.ts · scripts/plan-issues.ts · test · after the opt-in row (SC-2776)</div></div>
+<div class="card"><h3>SC-2780 · Engine Phase 9</h3>A push to main that changes specs runs every opted-in family through the engine<div class="dim">emitter · specs-placed.yml · ownership × 2 · steps · test · after SC-2776, SC-2777 and SC-2779</div></div>
+<div class="card"><h3>CRC-C3 · Convergence Phase 0</h3>A review thread resolved with no stated reason is reported on its pull request<div class="dim">lib + script ai-review-threads · test · reference doc · root</div></div>
+</div>
+
+<h2>Today vs after</h2>
+<div class="card">
+<div class="row"><b class="dim">Spec</b><b class="dim">Today</b><b class="dim">After</b></div>
+<div class="row"><b>Engine spec</b><span>plan-spec on ADR merge only</span><span>also on every push to <code>specs/</code></span></div>
+<div class="row"><b>Convergence spec</b><span>no plan-spec, ever · no queue label</span><span>plan-spec, plan-deps, label, placement on every push to <code>specs/</code></span></div>
+<div class="row"><b>Unmilestoned issue</b><span>a hand edit or a typed <code>--repair --write</code> (fails SC-2625)</span><span>placed by the run into its criterion's phase</span></div>
+<div class="row"><b>Blocked / Not observable / Not adopted</b><span>counted as missing, needs an issue that cannot start</span><span>named apart as declared, out of the target</span></div>
+<div class="row"><b>CRC-E8, CRC-F1</b><span>Phase 0 (prose says withdrawn / PROTECT-1 wins)</span><span>Blocked / Not adopted — deliberate</span></div>
+</div>
+
+<h2>What reaches Ready (SIMULATED)</h2>
+<div class="card">Active milestone: <b>Engine Phase 9 — the payload ships</b><br>
+Pulled first: #1722 (today) + the one root row (frontmatter opt-in)<br>
+Next as slots open: queue label, declared placements, issue placement (all three once opt-in closes) → specs-placed workflow<br>
+Kept out: the CRC-C3 row and every Convergence issue until no engine phase has an open issue (SC-2741)<br>
+Expedite: none<br>
+<span class="dim">Today's START HERE: #1722 only.</span></div>
+</body></html>

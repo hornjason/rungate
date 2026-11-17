@@ -1838,7 +1838,9 @@ So Phase 0 is **one setting applied, one CONTESTED, one withdrawn**:
 
 CRC-F1 (`strict: true`), CRC-C3 (`required_conversation_resolution`), CRC-E8
 (`required_pull_request_reviews` with `dismiss_stale_reviews`). Minutes, by
-the owner. They are first because two further criteria — CRC-E6 and CRC-M9 —
+the owner. **The placement table below follows this**: CRC-C3 is the only
+one it places in Phase 0, CRC-E8 sits under *Blocked — needs a second
+person*, and CRC-F1 under *Not adopted — deliberate*. They are first because two further criteria — CRC-E6 and CRC-M9 —
 are **vacuous rather than unbuilt** until they land: there is no approval to
 count, so nothing can be built that counts one.
 
@@ -2002,7 +2004,7 @@ CRC-E8's withdrawal from Phase 0 already records once.
 
 | Placement | Criteria | What the value means |
 |---|---|---|
-| **Phase 0** | CRC-C3, CRC-E8, CRC-F1 | settings, no engineering — and two of the three do not survive contact: E8 is withdrawn, F1 is contested |
+| **Phase 0** | CRC-C3 | settings, no engineering — the one of the original three that survived contact. E8 is withdrawn and F1 is contested, so both are placed outside every phase, below |
 | **Phase 1** | CRC-B7, CRC-N2, CRC-N3, CRC-N4, CRC-N7 | stop the repeats |
 | **Phase 2** | CRC-B3, CRC-B4, CRC-B6, CRC-N6 | stop the false findings |
 | **Phase 3** | CRC-A4, CRC-A7, CRC-B1, CRC-B2, CRC-B9 | what the reviewer is told |
@@ -2010,9 +2012,9 @@ CRC-E8's withdrawal from Phase 0 already records once.
 | **Phase 5** | CRC-E3, CRC-E9, CRC-M1, CRC-M2, CRC-M3, CRC-M4, CRC-M5, CRC-M6, CRC-M7, CRC-M10, CRC-M11, CRC-M12, CRC-M13, CRC-M14, CRC-M16, CRC-M17, CRC-M18 | the instruments |
 | **Phase 6** | CRC-C1, CRC-C2, CRC-F2, CRC-F3, CRC-F4, CRC-F5, CRC-H2, CRC-M15, CRC-N5, CRC-F6 | release and detection — nothing here moves rounds-to-pass |
 | **Done** | CRC-A5, CRC-A6, CRC-B5, CRC-C4, CRC-E1, CRC-E2, CRC-E4, CRC-N1 | ticked and bound. Not *no work ever again* — CRC-B7 and CRC-M11 are also ticked and are **not** here, because an open issue contradicts each |
-| **Blocked — needs a second person** | CRC-E5, CRC-E6, CRC-E7, CRC-M9 | one account plus `enforce_admins: true` means an approval cannot exist, so E6 and M9 are **vacuous rather than unbuilt** — there is nothing to count. The blocker is CRC-E8's withdrawal and it is named in Phase 0 |
+| **Blocked — needs a second person** | CRC-E5, CRC-E6, CRC-E7, CRC-E8, CRC-M9 | one account plus `enforce_admins: true` means an approval cannot exist, so E6 and M9 are **vacuous rather than unbuilt** — there is nothing to count. The blocker is CRC-E8's withdrawal, which Phase 0 records. E8 itself sits here because requiring an approval it cannot get would deadlock the repository |
 | **Not observable here** | CRC-H1, CRC-H3, CRC-H4, CRC-H5 | statements about human judgement. *A mechanism exists; this repository cannot observe it* above says why: nothing distinguishes them being honoured from them being ignored |
-| **Not adopted — deliberate** | CRC-M8 | *Deliberately not adopted* above holds exactly this one. Its order is inverted **on purpose** — `MISSED` and `FIRED` are weighted equally because nobody absorbs the noise here — and the deviations table gives the revisit condition: *a human is reading the findings again, or the cost of a false block falls*. **The first draft of this table put it in Phase 5**, which read as *pending work, blocked on the instruments*, and invented a second revisit condition the document does not hold. That is the two-spellings failure arriving inside the table built to end it; the reviewer caught it on #1647 |
+| **Not adopted — deliberate** | CRC-M8, CRC-F1 | **CRC-F1:** *Contested* above records the standing as "PROTECT-1 wins", and Phase 0 gives the conditions for revisiting it: merge queues become available, or open pull requests stay at two or fewer. It stays in the *Contested* audit section, because the repository still gives both instructions. **CRC-M8:** *Deliberately not adopted* above holds exactly this one. Its order is inverted **on purpose** — `MISSED` and `FIRED` are weighted equally because nobody absorbs the noise here — and the deviations table gives the revisit condition: *a human is reading the findings again, or the cost of a false block falls*. **The first draft of this table put it in Phase 5**, which read as *pending work, blocked on the instruments*, and invented a second revisit condition the document does not hold. That is the two-spellings failure arriving inside the table built to end it; the reviewer caught it on #1647 |
 
 **This table is the placement, and the phase sections above are its
 reasons.** Two spellings of one fact drift apart — this document says so
