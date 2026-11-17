@@ -1,4 +1,4 @@
-# generated-sha: cc9e2b13e312799e
+# generated-sha: 74dd8508e892963d
 # Managed by rungate — do not edit. Set board.engineSpec and board.milestonePrefix
 # in .claude/rungate/config.json and re-run `rungate scaffold`.
 #
@@ -70,7 +70,7 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
         run: |
-          bunx rungate@0.8.24 plan-issues --accepted-since "$BEFORE" > accepted.txt
+          bunx rungate@0.8.25 plan-issues --accepted-since "$BEFORE" > accepted.txt
           echo "Accepted by this push:"
           cat accepted.txt
           if [ ! -s accepted.txt ]; then
@@ -83,7 +83,7 @@ jobs:
         if: steps.accepted.outputs.any == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bunx rungate@0.8.24 plan-spec "$SPEC" --repo "$GITHUB_REPOSITORY" --prefix "$PREFIX" --write
+        run: bunx rungate@0.8.25 plan-spec "$SPEC" --repo "$GITHUB_REPOSITORY" --prefix "$PREFIX" --write
 
       # One ADR at a time; `bash -e` stops at the first refusal, so a plan the
       # filing tool refuses is a red run naming the ADR.
@@ -94,14 +94,14 @@ jobs:
         run: |
           while IFS= read -r adr; do
             echo "== $adr"
-            bunx rungate@0.8.24 plan-issues --decompose "$adr" --repo "$GITHUB_REPOSITORY" --write
+            bunx rungate@0.8.25 plan-issues --decompose "$adr" --repo "$GITHUB_REPOSITORY" --write
           done < accepted.txt
 
       - name: Phase-order links between milestones
         if: steps.accepted.outputs.any == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bunx rungate@0.8.24 plan-deps --repo "$GITHUB_REPOSITORY" --milestone-prefix "$PREFIX" --write
+        run: bunx rungate@0.8.25 plan-deps --repo "$GITHUB_REPOSITORY" --milestone-prefix "$PREFIX" --write
 
       # The board steps. THE SECRET IS `RUNGATE_PROJECT_TOKEN`: board-mirror
       # reads it as GITHUB_TOKEN, board-ready as BOARD_PROJECT_TOKEN. An absent
@@ -123,7 +123,7 @@ jobs:
             echo "::error::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to write."
             exit 1
           fi
-          bunx rungate@0.8.24 board-mirror --project "$PROJECT_ID" --write
+          bunx rungate@0.8.25 board-mirror --project "$PROJECT_ID" --write
 
       - name: Top up Ready from the new issues
         if: ${{ !cancelled() && steps.accepted.outputs.any == 'true' }}
@@ -131,4 +131,4 @@ jobs:
           BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           ACTOR: ${{ github.actor }}
-        run: bunx rungate@0.8.24 board-ready --repo "$GITHUB_REPOSITORY" --project "$PROJECT_ID" --actor "$ACTOR" --top-up --write
+        run: bunx rungate@0.8.25 board-ready --repo "$GITHUB_REPOSITORY" --project "$PROJECT_ID" --actor "$ACTOR" --top-up --write
