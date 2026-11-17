@@ -1,5 +1,5 @@
 /**
- * Covers SC-2608 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ * Covers SC-2608, SC-2779 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
  *
  * `lib/issue-repair.ts` and `scripts/plan-issues.ts --repair` (#1647).
  *
@@ -27,11 +27,13 @@ import {
   alreadyAnnotated,
   annotatedBody,
   headingOccurrences,
+  issuePlacement,
   multiplyAnnotated,
   parseRepairPlan,
 } from "../lib/issue-repair";
+import type { PlacingFamily } from "../lib/issue-repair";
 import { REFUSAL_EXIT, main as planIssuesMain } from "../scripts/plan-issues";
-import type { IssueState, PlanIssuesGitHub } from "../scripts/plan-issues";
+import type { IssueState, PlaceGitHub, PlanIssuesGitHub } from "../scripts/plan-issues";
 
 /** A plan document: a header, then the rows given. */
 function plan(rows: string[]): string {
@@ -600,5 +602,216 @@ describe("#2042: --repair places a milestone from the Phase column, per family",
     expect(r.code, r.out).toBe(0);
     expect(s.calls).toEqual([]);
     expect(r.out).toContain("Fam Phase 6 — the one");
+  });
+});
+
+/**
+ * SC-2779: an open issue moves into the phase milestone its criteria hold,
+ * read from every opted-in spec (ADR-018 Decision 4, narrowed by ADR-019
+ * Decision 3). `issuePlacement` in lib/issue-repair.ts is the one decider;
+ * `plan-issues --place` is the run that applies it.
+ */
+describe("SC-2779: an issue moves into the phase milestone its criteria hold", () => {
+  const FAM: PlacingFamily = {
+    prefix: "Fam",
+    stated: ["ZZ-1", "ZZ-2", "ZZ-3", "ZZ-4"],
+    placements: new Map([
+      ["ZZ-2", "Phase 5"],
+      ["ZZ-1", "Phase 6"],
+      ["ZZ-3", "Phase 7"],
+      ["ZZ-4", "Blocked — needs a second person"],
+    ]),
+    milestones: new Map([
+      [5, "Fam Phase 5 — earlier"],
+      [6, "Fam Phase 6 — the one"],
+    ]),
+  };
+  const OTHER: PlacingFamily = {
+    prefix: "Other",
+    stated: ["YY-1"],
+    placements: new Map([["YY-1", "Phase 6"]]),
+    milestones: new Map([[6, "Other Phase 6 — elsewhere"]]),
+  };
+  const at = (body: string, milestone: string | null = null) => issuePlacement({ title: "t", body, milestone }, [FAM, OTHER]);
+
+  test("no milestone, criteria in one phase: moved into that phase's milestone", () => {
+    expect(at("Serves ZZ-1.")).toEqual(expect.objectContaining({ kind: "move", milestone: "Fam Phase 6 — the one" }));
+  });
+
+  test("a different milestone of the same family: moved, the narrowing ADR-019 Decision 3 made", () => {
+    expect(at("Serves ZZ-2.", "Fam Phase 6 — the one")).toEqual(
+      expect.objectContaining({ kind: "move", milestone: "Fam Phase 5 — earlier" }),
+    );
+  });
+
+  test("already in the phase its criteria hold: stays", () => {
+    expect(at("Serves ZZ-1.", "Fam Phase 6 — the one").kind).toBe("stay");
+  });
+
+  test("no milestone, criteria in two phases of one family: the LOWEST", () => {
+    expect(at("Serves ZZ-1 and ZZ-2.")).toEqual(expect.objectContaining({ kind: "move", milestone: "Fam Phase 5 — earlier" }));
+  });
+
+  test("a milestone, criteria in two phases: never moved, and said why", () => {
+    const m = at("Serves ZZ-1 and ZZ-2.", "Fam Phase 6 — the one");
+    expect(m.kind).toBe("left");
+    expect("why" in m && m.why).toContain("Phase 5 and Phase 6");
+  });
+
+  test("criteria from two families: left where it is, with or without a milestone", () => {
+    for (const milestone of [null, "Fam Phase 6 — the one"]) {
+      const m = at("Serves ZZ-1 and YY-1.", milestone);
+      expect(m.kind, String(milestone)).toBe("left");
+      expect("why" in m && m.why, String(milestone)).toContain("do not compare across specs");
+    }
+  });
+
+  test("a milestone that is not one of the family's phases: never moved", () => {
+    for (const milestone of ["Other Phase 6 — elsewhere", "Machinery"]) {
+      const m = at("Serves ZZ-1.", milestone);
+      expect(m.kind, milestone).toBe("left");
+      expect("why" in m && m.why, milestone).toContain(`"${milestone}"`);
+    }
+  });
+
+  test("an issue that says it serves no criterion is not placed by the ids it mentions", () => {
+    // #2307 on 2026-11-17: cited two engine criteria in passing, said it serves
+    // none, and would otherwise have gone into a finished phase.
+    const m = at("Unlike ZZ-1, this serves no criterion.");
+    expect(m.kind).toBe("left");
+    expect("why" in m && m.why).toContain("serves no criterion");
+  });
+
+  test("a criterion placed outside every phase stops the move, named", () => {
+    for (const body of ["Serves ZZ-1 and ZZ-4.", "Serves ZZ-4."]) {
+      const m = at(body);
+      expect(m.kind, body).toBe("left");
+      expect("why" in m && m.why, body).toContain("ZZ-4 is placed Blocked");
+    }
+  });
+
+  test("an id no opted-in spec states neither places nor blocks the move", () => {
+    expect(at("Serves ZZ-1, and see QQ-9.")).toEqual(expect.objectContaining({ kind: "move", milestone: "Fam Phase 6 — the one" }));
+    expect(at("Only QQ-9.").kind).toBe("none");
+  });
+
+  test("the phase it belongs in has no milestone: a refusal, never a created milestone", () => {
+    const m = at("Serves ZZ-3.");
+    expect(m.kind).toBe("refuse");
+    expect("why" in m && m.why).toContain("Fam Phase 7");
+  });
+});
+
+describe("SC-2779: plan-issues --place reads every opted-in spec and writes only the moves", () => {
+  const front = (board: string) => `---\ndoc-type: spec\n${board}---\n\n`;
+  const OTHER_SPEC = [
+    "# Other",
+    "",
+    "### Phase 6 — elsewhere",
+    "",
+    "- [ ] YY-1: lib/y.ts contains [y] — other",
+    "",
+    "### Phase placement",
+    "",
+    "| Placement | Criteria | What |",
+    "|---|---|---|",
+    "| **Phase 6** | YY-1 | elsewhere |",
+    "",
+  ].join("\n");
+  /** A spec that names a prefix but is held back: not a family, so its ids place nothing. */
+  const PARKED_SPEC = OTHER_SPEC.replaceAll("YY-1", "XX-1").replace("# Other", "# Parked");
+  const TREE: Record<string, string> = {
+    "specs/FAM.md": front("board:\n  scope: active\n  prefix: Fam\n") + FAMILY_SPEC,
+    "specs/OTHER.md": front("board:\n  scope: active\n  prefix: Other\n") + OTHER_SPEC,
+    "specs/PARKED.md": front("board:\n  scope: deferred\n  prefix: Parked\n") + PARKED_SPEC,
+  };
+  const ISSUES = [
+    { number: 30, title: "moves", body: "Serves ZZ-1.", milestone: null },
+    { number: 31, title: "moves within its family", body: "Serves ZZ-2.", milestone: "Fam Phase 6 — the one" },
+    { number: 32, title: "two families", body: "ZZ-1 and YY-1.", milestone: null },
+    { number: 33, title: "held-back spec only", body: "Serves XX-1.", milestone: null },
+    { number: 34, title: "in place", body: "Serves YY-1.", milestone: "Other Phase 6 — elsewhere" },
+  ];
+
+  async function run(extra: string[], opts: { tree?: Record<string, string>; issues?: typeof ISSUES } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), "rg-plan-issues-2779-"));
+    const out: string[] = [];
+    const calls: string[] = [];
+    let issueReads = 0;
+    const gh: PlaceGitHub = {
+      milestones: async () => LIVE_MILESTONES,
+      openIssues: async () => (issueReads++, opts.issues ?? ISSUES),
+      setMilestone: async (_r, n, title) => void calls.push(`place#${n}:${title}`),
+    };
+    const log = console.log;
+    const err = console.error;
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void out.push(a.join(" "));
+    try {
+      mkdirSync(join(dir, "specs"));
+      for (const [path, text] of Object.entries(opts.tree ?? TREE)) writeFileSync(join(dir, path), text);
+      const code = await planIssuesMain(["--place", "--repo", "o/r", "--project-root", dir, ...extra], undefined, undefined, gh);
+      return { code, out: out.join("\n"), calls, issueReads };
+    } finally {
+      console.log = log;
+      console.error = err;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("--write moves exactly the issues the rule moves, and nothing else", async () => {
+    const r = await run(["--write"]);
+    expect(r.code, r.out).toBe(0);
+    expect(r.calls).toStrictEqual(["place#30:Fam Phase 6 — the one", "place#31:Fam Phase 5 — earlier"]);
+    expect(r.out).toMatch(/LEFT +#32 .*do not compare across specs/);
+  });
+
+  test("a held-back spec is not a family, even naming a prefix", async () => {
+    // #33 names only XX-1, which PARKED states. Were PARKED a family, #33
+    // would belong in Parked Phase 6, which has no milestone, and the run
+    // would refuse.
+    const r = await run([]);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).not.toContain("#33");
+    expect(r.out).not.toContain("Parked");
+  });
+
+  test("without --write the moves are printed and nothing is called", async () => {
+    const r = await run([]);
+    expect(r.code, r.out).toBe(0);
+    expect(r.calls).toStrictEqual([]);
+    expect(r.out).toMatch(/MOVE +#30 .*Fam Phase 6 — the one/);
+    expect(r.out).toContain("Nothing written");
+  });
+
+  test("an issue whose phase has no milestone refuses the run before anything is written", async () => {
+    const r = await run(["--write"], { issues: [...ISSUES, { number: 35, title: "unbuilt", body: "Serves ZZ-3.", milestone: null }] });
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(r.calls, "a write went out from a run that refused").toStrictEqual([]);
+    expect(r.out).toContain("Fam Phase 7");
+  });
+
+  test("a family whose table or board: block cannot be read refuses before any issue is read", async () => {
+    for (const [name, tree, says] of [
+      ["unsound table", { ...TREE, "specs/FAM.md": TREE["specs/FAM.md"]!.replace("| **Phase 7** | ZZ-3 |", "| **Phase 7** | ZZ-3, ZZ-1 |") }, "ZZ-1 is placed twice"],
+      ["no table", { ...TREE, "specs/OTHER.md": TREE["specs/OTHER.md"]!.replace("### Phase placement", "### Elsewhere") }, "specs/OTHER.md"],
+      ["unreadable board block", { ...TREE, "specs/ODD.md": front("board:\n  scope: someday\n") + OTHER_SPEC.replaceAll("YY-1", "WW-1") }, "specs/ODD.md"],
+      ["one prefix twice", { ...TREE, "specs/TWIN.md": front("board:\n  scope: active\n  prefix: Fam\n") + OTHER_SPEC.replaceAll("YY-1", "VV-1") }, "both declare prefix Fam"],
+    ] as const) {
+      const r = await run(["--write"], { tree });
+      expect(r.code, `${name}\n${r.out}`).toBe(REFUSAL_EXIT);
+      expect(r.calls, name).toStrictEqual([]);
+      expect(r.issueReads, `${name}: issues were read after the families were known unreadable`).toBe(0);
+      expect(r.out, name).toContain(says);
+    }
+  });
+
+  test("--place with another plan's flags is refused by name", async () => {
+    for (const extra of [["--repair", "PLAN.md"], ["--milestone-prefix", "Fam"], ["--spec", "specs/FAM.md"]]) {
+      const r = await run(extra);
+      expect(r.code, extra.join(" ")).toBe(REFUSAL_EXIT);
+      expect(r.issueReads, extra.join(" ")).toBe(0);
+      expect(r.out, extra.join(" ")).toContain("--place reads every opted-in spec itself");
+    }
   });
 });
