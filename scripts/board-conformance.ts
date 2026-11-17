@@ -291,19 +291,29 @@ export interface SpecPlacementRow {
   /** The spec declares `scope: deferred` (or the legacy `board-scope: deferred`) — SC-2734. */
   deferred?: boolean;
   /**
-   * The spec opts itself in with `board: { scope: active }` — SC-2776. Only
-   * these specs are measured: a spec with no block is never consumed,
-   * whatever else it carries (ADR-018 Decision 8).
+   * What the spec's own `board:` frontmatter declares — SC-2776. Absent for
+   * a spec that declares nothing, which is never measured, whatever else it
+   * carries (ADR-018 Decision 8).
+   *
+   * Carried WHOLE from `boardDeclaration` in `lib/spec-placement.ts`, where
+   * the keys the engine knows are listed once: a new setting passes through
+   * here without this file naming it.
    */
-  active?: boolean;
-  /** The `board.prefix` the spec declares — SC-2776. */
-  prefix?: string;
-  /**
-   * What the spec's `board:` declaration could not say — an unknown key or
-   * scope, an active spec with no prefix — each reported by name (SC-2776).
-   */
-  boardProblems?: string[];
+  board?: RowBoard;
 }
+
+/** A spec's `board:` declaration as the snapshot carries it — SC-2776. */
+export interface RowBoard {
+  /** `active` is the only scope measured. */
+  scope: string;
+  /** Every setting the block declares, as text — `settings.prefix`, and any key added later. */
+  settings: Record<string, string>;
+  /** What stops the declaration being read as written, each reported by name. */
+  problems: string[];
+}
+
+/** The spec opts itself in — SC-2776. THE one test of membership, for every reader here. */
+const optedIn = (s: SpecPlacementRow): boolean => s.board?.scope === "active";
 
 /** One entry in the deferral bank, `.claude/spec-deferral-ratchet.json` — SC-2734. */
 export interface SpecDeferral {
@@ -342,8 +352,8 @@ export function deferralDifferences(rows: readonly SpecPlacementRow[], bank: rea
  * Every `board:` declaration the reading cannot take as written, by name — SC-2776.
  *
  * Three kinds, each one sentence naming the spec:
- * - what the producer reported about a spec's own block (an unknown key or
- *   scope value, an active spec with no prefix);
+ * - what the producer reported about a spec's own block (an unknown scope
+ *   value, an active spec with no prefix, a block that is not YAML);
  * - a row both active and deferred, which no single block can say;
  * - the engine spec's block disagreeing with `board.engineSpec` or
  *   `board.milestonePrefix`, or the config never read at all.
@@ -354,8 +364,8 @@ export function boardDeclarationProblems(
 ): string[] {
   const out: string[] = [];
   for (const r of rows) {
-    for (const p of r.boardProblems ?? []) out.push(`${r.path}: ${p}`);
-    if (r.active === true && r.deferred === true) out.push(`${r.path} is read as both active and deferred`);
+    for (const p of r.board?.problems ?? []) out.push(`${r.path}: ${p}`);
+    if (optedIn(r) && r.deferred === true) out.push(`${r.path} is read as both active and deferred`);
   }
   if (engine === undefined) {
     out.push("board.engineSpec and board.milestonePrefix were never read, so whether the engine spec opts itself in is unknown");
@@ -364,11 +374,12 @@ export function boardDeclarationProblems(
   if (engine.spec === null) return out;
   const row = rows.find(r => r.path === engine.spec);
   if (row === undefined) out.push(`board.engineSpec names ${engine.spec}, which the specs/ sweep did not find`);
-  else if (row.active !== true) {
+  else if (!optedIn(row)) {
     out.push(`${engine.spec} is board.engineSpec and its frontmatter does not opt it in — it needs a board: block with scope: active`);
-  } else if (engine.prefix !== null && row.prefix !== engine.prefix) {
+  } else if (engine.prefix !== null && row.board?.settings.prefix !== engine.prefix) {
+    const declared = row.board?.settings.prefix;
     out.push(
-      `${engine.spec} declares board.prefix ${row.prefix === undefined ? "(none)" : JSON.stringify(row.prefix)} and board.milestonePrefix is ${JSON.stringify(engine.prefix)}`,
+      `${engine.spec} declares board.prefix ${declared === undefined ? "(none)" : JSON.stringify(declared)} and board.milestonePrefix is ${JSON.stringify(engine.prefix)}`,
     );
   }
   return out;
@@ -675,7 +686,7 @@ export const READINGS: readonly ReadingSpec[] = [
     // SC-2776: only the specs that opt themselves in. A spec with no
     // `board:` block is out of both sides, whatever table it carries.
     measure: b => {
-      const specs = b.specPlacements!.filter(s => s.state !== "NO_CRITERIA" && s.active === true);
+      const specs = b.specPlacements!.filter(s => s.state !== "NO_CRITERIA" && optedIn(s));
       return {
         measured: specs.reduce((n, s) => n + s.placed, 0),
         target: specs.reduce((n, s) => n + s.criteria, 0),
@@ -683,7 +694,7 @@ export const READINGS: readonly ReadingSpec[] = [
     },
     offenders: b =>
       b.specPlacements!
-        .filter(s => s.state === "UNPLANNED" && s.active === true)
+        .filter(s => s.state === "UNPLANNED" && optedIn(s))
         .map(s => `${s.path} — ${s.criteria - s.placed} of ${s.criteria} criteria in no phase`),
   },
   {
@@ -984,17 +995,32 @@ const normaliseSpecPlacement = (v: unknown): SpecPlacementRow | null => {
   // A row claiming more placed than stated would let one spec carry another
   // spec's shortfall, and the sum is the whole reading.
   if (criteria < 0 || placed < 0 || placed > criteria) return null;
-  const problems = Array.isArray(s.boardProblems) ? s.boardProblems.filter((p): p is string => typeof p === "string") : [];
   return {
     path: s.path,
     state,
     criteria,
     placed,
     ...(s.deferred === true ? { deferred: true } : {}),
-    ...(s.active === true ? { active: true } : {}),
-    ...(typeof s.prefix === "string" ? { prefix: s.prefix } : {}),
-    ...(problems.length > 0 ? { boardProblems: problems } : {}),
+    ...("board" in s ? { board: normaliseRowBoard(s.board) } : {}),
   };
+};
+
+/**
+ * A row's `board` declaration — SC-2776. Generic over the settings, so no key
+ * is named here. A declaration that is PRESENT and malformed is kept as a
+ * problem rather than dropped: dropping it would turn an opted-in spec into an
+ * undeclared one, which leaves the measure, so the reading would get easier.
+ */
+const normaliseRowBoard = (v: unknown): RowBoard => {
+  const b = (typeof v === "object" && v !== null ? v : {}) as Partial<Record<keyof RowBoard, unknown>>;
+  const settings = typeof b.settings === "object" && b.settings !== null && !Array.isArray(b.settings)
+    ? Object.fromEntries(Object.entries(b.settings).filter((e): e is [string, string] => typeof e[1] === "string"))
+    : null;
+  const problems = Array.isArray(b.problems) ? b.problems.filter((p): p is string => typeof p === "string") : null;
+  if (typeof b.scope !== "string" || settings === null || problems === null) {
+    return { scope: "invalid", settings: {}, problems: ["the snapshot carries a board declaration this command cannot read"] };
+  }
+  return { scope: b.scope, settings, problems };
 };
 
 const normaliseDeferral = (v: unknown): SpecDeferral | null => {

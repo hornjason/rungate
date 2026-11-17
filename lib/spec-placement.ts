@@ -265,58 +265,69 @@ export type BoardScope = "active" | "deferred" | "undeclared" | "invalid";
 
 export interface BoardDeclaration {
   scope: BoardScope;
-  /** The milestone family the spec's phases are named in, or null when it declares none. */
-  prefix: string | null;
   /**
-   * Everything about the declaration that is reported by name — an unknown
-   * key or scope value, an active spec with no prefix, a line the engine
-   * cannot read. Empty exactly when there is nothing to report.
+   * Every key in {@link BOARD_KEYS} the block sets, as text — `prefix` is
+   * `settings.prefix`. Carried whole, so the snapshot and
+   * `board-conformance` pass a new setting through without naming it.
+   */
+  settings: Record<string, string>;
+  /**
+   * What stops the engine reading the declaration as written — an unknown
+   * scope value, an active spec with no prefix, a block that is not YAML, a
+   * declaration made twice. `spec-placement` refuses on any of these, by name.
    */
   problems: string[];
+  /**
+   * Keys {@link BOARD_KEYS} does not hold. Reported by name and otherwise
+   * ignored (ADR-018 Decision 9): they never block a reading, and
+   * `test/board-families.test.ts` fails the pull request that adds one to a
+   * spec in this tree, which is where a teammate hears about a typo.
+   */
+  unknownKeys: string[];
 }
-
-/** The keys the engine reads inside `board:`. A new setting is a new line here (ADR-018 Decision 9). */
-export const BOARD_KEYS = ["scope", "prefix"] as const;
-
-/** The values `scope` takes. Closed: anything else is reported, never guessed. */
-export const BOARD_SCOPES = ["active", "deferred"] as const;
 
 /**
- * A YAML scalar, with one pair of matching quotes removed. An unpaired or
- * mismatched quote is returned as written, so it cannot equal a known value.
+ * The keys the engine reads inside `board:` — ADR-018 Decision 9.
+ *
+ * **THE one place a board setting is added.** The sweep, the snapshot and
+ * `board-conformance` carry {@link BoardDeclaration} whole, so none of them
+ * names a key; only the code that acts on a setting has to know it exists.
+ * `values` closes a key to a set, reported by name when anything else is
+ * written; a key without it takes any single value.
+ *
+ * The list lives in code, not config, on purpose: a key with no code behind it
+ * does nothing, and a config that could name one would promise a setting the
+ * engine silently ignores.
  */
-function scalar(raw: string): string {
-  const v = raw.trim();
-  const m = /^(["'])(.*)\1$/.exec(v);
-  return m ? m[2]! : v;
+export const BOARD_KEYS: Readonly<Record<string, { what: string; values?: readonly string[] }>> = {
+  scope: { what: "whether the engine consumes this spec", values: ["active", "deferred"] },
+  prefix: { what: "the milestone family the spec's phases are named in" },
+};
+
+/**
+ * One frontmatter entry's value, parsed as YAML — only that entry, never the
+ * whole block. Whole-block YAML is not available here: the engine spec's own
+ * `governs:` line carries a `: ` inside a plain scalar, which YAML refuses.
+ */
+function yamlValue(e: { key: string; inline: string; block: string[] }): { value: unknown } | { error: string } {
+  const text = [`${e.key}:${e.inline === "" ? "" : ` ${e.inline}`}`, ...e.block].join("\n");
+  try {
+    const doc = Bun.YAML.parse(text) as Record<string, unknown> | null;
+    return { value: doc?.[e.key] ?? null };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 }
 
-/** `k: v` pairs from a block's indented lines or a one-line `{ k: v, … }`. */
-function boardPairs(inline: string, block: readonly string[]): { pairs: [string, string][]; problems: string[] } {
-  const pairs: [string, string][] = [];
-  const problems: string[] = [];
-  const pair = (text: string, where: string) => {
-    const m = /^([A-Za-z_][A-Za-z0-9_-]*):(.*)$/.exec(text.trim());
-    if (m === null) problems.push(`\`board:\` has ${where} \`${text.trim()}\`, which is not a \`key: value\` line`);
-    else pairs.push([m[1]!, m[2]!]);
-  };
-  if (inline !== "") {
-    const flow = /^\{(.*)\}$/.exec(inline);
-    if (flow === null) {
-      problems.push(`\`board:\` holds the value \`${inline}\` — it must be a block of keys (${BOARD_KEYS.join(", ")})`);
-      return { pairs, problems };
-    }
-    for (const part of flow[1]!.split(",")) if (part.trim() !== "") pair(part, "the entry");
-  }
-  const lines = block.filter(l => l.trim() !== "" && !l.trim().startsWith("#"));
-  const indent = lines[0]?.match(/^\s*/)?.[0] ?? "";
-  for (const line of lines) {
-    // A deeper line is a nested value, and no key the engine reads has one.
-    if (!line.startsWith(indent) || /^\s/.test(line.slice(indent.length))) {
-      problems.push(`\`board:\` has the line \`${line.trim()}\` nested under another key, and no board key takes a nested value`);
-    } else pair(line, "the line");
-  }
-  return { pairs, problems };
+/**
+ * Keys written twice at the top of a block-form `board:`. YAML keeps the last
+ * silently, which is the guess this reading must not make.
+ */
+function repeatedKeys(block: readonly string[]): string[] {
+  const keys = block.map(l => /^([ \t]+)([A-Za-z_][\w-]*)[ \t]*:/.exec(l)).filter(m => m !== null);
+  const top = keys[0]?.[1];
+  const names = keys.filter(m => m[1] === top).map(m => m[2]!);
+  return [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
 }
 
 /**
@@ -325,7 +336,9 @@ function boardPairs(inline: string, block: readonly string[]): { pairs: [string,
  * Read from the FRONTMATTER only, through `parseFrontmatter`: a body line
  * spelling the same words is prose about the convention, not a declaration,
  * and reading it would let a spec opt itself in, or hold itself back, by
- * quoting this rule.
+ * quoting this rule. The `board:` entry itself is parsed by Bun's YAML
+ * parser, so quoting, commas, comments and the one-line `{ … }` form mean
+ * what YAML says they mean.
  *
  * **Reported, never guessed.** An unknown key is named and otherwise
  * ignored, so a typo — `scpoe: active` — leaves the spec with no scope and
@@ -336,24 +349,27 @@ function boardPairs(inline: string, block: readonly string[]): { pairs: [string,
  * are called (see {@link milestonePlan}).
  */
 export function boardDeclaration(content: string): BoardDeclaration {
-  if (!/^---\r?\n/.test(content)) return { scope: "undeclared", prefix: null, problems: [] };
+  const none = (): BoardDeclaration => ({ scope: "undeclared", settings: {}, problems: [], unknownKeys: [] });
+  if (!/^---\r?\n/.test(content)) return none();
   const fm = parseFrontmatter(content);
   if (fm === null) {
     // A block the parser refuses — a column-0 `#` comment is the live one —
     // still cannot opt in if no line of it so much as starts a board key.
     const raw = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)?.[1] ?? "";
-    if (!/^board(?:-scope)?[ \t]*:/m.test(raw)) return { scope: "undeclared", prefix: null, problems: [] };
+    if (!/^board(?:-scope)?[ \t]*:/m.test(raw)) return none();
     return {
+      ...none(),
       scope: "invalid",
-      prefix: null,
       problems: ["the frontmatter has a line no key owns, so whether it opts this spec in cannot be read"],
     };
   }
   const blocks = fm.entries.filter(e => e.key === "board");
   const legacy = fm.entries.filter(e => e.key === "board-scope");
-  if (blocks.length === 0 && legacy.length === 0) return { scope: "undeclared", prefix: null, problems: [] };
+  if (blocks.length === 0 && legacy.length === 0) return none();
 
+  const settings: Record<string, string> = {};
   const problems: string[] = [];
+  const unknownKeys: string[] = [];
   // A declaration made twice, or two that disagree, is one the engine cannot
   // read: picking either is the guess this function exists not to make.
   let contested = false;
@@ -364,39 +380,53 @@ export function boardDeclaration(content: string): BoardDeclaration {
   if (blocks.length > 1) twice("`board:`");
   if (legacy.length > 1) twice("`board-scope:`");
 
-  let scope: string | null = null;
-  let prefix: string | null = null;
-  if (blocks[0] !== undefined) {
-    const read = boardPairs(blocks[0].inline, blocks[0].block);
-    problems.push(...read.problems);
-    const seen = new Set<string>();
-    for (const [key, raw] of read.pairs) {
-      if (seen.has(key)) twice(`\`board.${key}\``);
-      seen.add(key);
-      if (key === "scope") scope = scalar(raw);
-      else if (key === "prefix") prefix = scalar(raw) === "" ? null : scalar(raw);
-      else problems.push(`\`board.${key}\` is not a key the engine knows (it reads ${BOARD_KEYS.join(", ")})`);
+  const block = blocks[0];
+  if (block !== undefined) {
+    const read = yamlValue(block);
+    const keys = Object.keys(BOARD_KEYS).join(", ");
+    if ("error" in read) problems.push(`the \`board:\` block is not valid YAML (${read.error})`);
+    else if (typeof read.value !== "object" || read.value === null || Array.isArray(read.value)) {
+      problems.push(`\`board:\` must be a block of keys (${keys}), not ${JSON.stringify(read.value)}`);
+    } else {
+      for (const k of repeatedKeys(block.block)) twice(`\`board.${k}\``);
+      for (const [key, v] of Object.entries(read.value as Record<string, unknown>)) {
+        const known = BOARD_KEYS[key];
+        if (known === undefined) {
+          unknownKeys.push(key);
+          continue;
+        }
+        if (v !== null && typeof v === "object") {
+          problems.push(`\`board.${key}\` takes a single value, not ${JSON.stringify(v)}`);
+          continue;
+        }
+        const text = v === null ? "" : String(v);
+        if (known.values !== undefined && !known.values.includes(text)) {
+          problems.push(`\`board.${key}: ${text}\` is not a value the engine knows (${known.values.join(" or ")})`);
+        }
+        if (text !== "") settings[key] = text;
+      }
+      if (!("scope" in (read.value as object))) problems.push("the `board:` block declares no `scope`");
     }
-    if (scope === null) problems.push("the `board:` block declares no `scope`");
   }
-  if (legacy[0] !== undefined) {
-    if (scalar(legacy[0].inline) !== "deferred") {
-      problems.push(`\`board-scope: ${legacy[0].inline}\` — the legacy line takes only \`deferred\``);
+
+  let scope = settings.scope;
+  const old = legacy[0];
+  if (old !== undefined) {
+    const read = yamlValue(old);
+    if ("error" in read || read.value !== "deferred") {
+      problems.push(`\`board-scope: ${old.inline}\` — the legacy line takes only \`deferred\``);
       contested = true;
-    } else if (scope !== null && scope !== "deferred") {
+    } else if (scope !== undefined && scope !== "deferred") {
       problems.push(`\`board.scope: ${scope}\` and the legacy \`board-scope: deferred\` disagree`);
       contested = true;
     } else scope = "deferred";
   }
-  if (scope !== null && !(BOARD_SCOPES as readonly string[]).includes(scope)) {
-    problems.push(`\`board.scope: ${scope}\` is not a scope the engine knows (${BOARD_SCOPES.join(" or ")})`);
-  }
-  if (scope === "active" && prefix === null) {
+  if (scope === "active" && settings.prefix === undefined) {
     problems.push("the spec is active and declares no `prefix`, so no milestone can be named for its phases");
   }
 
   const read: BoardScope = !contested && (scope === "active" || scope === "deferred") ? scope : "invalid";
-  return { scope: read, prefix, problems };
+  return { scope: read, settings, problems, unknownKeys };
 }
 
 /**
@@ -477,7 +507,7 @@ export function placementCoverage(
         criteria: 0,
         placed: 0,
         deferred: false,
-        board: { scope: "undeclared", prefix: null, problems: [] },
+        board: { scope: "undeclared", settings: {}, problems: [], unknownKeys: [] },
       });
       reasons.push(`could not read ${path}: ${(e as Error).message}`);
       continue;

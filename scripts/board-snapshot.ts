@@ -329,10 +329,10 @@ export const DEFERRAL_BANK = ".claude/spec-deferral-ratchet.json";
 /**
  * One sweep row as the snapshot carries it — SC-2615, SC-2734, SC-2776.
  *
- * Present-only flags, so a row from a spec that declares nothing is the
- * same bytes it always was. What the spec's `board:` block could not say
- * travels with the row, because `board-conformance` names it by path and
- * cannot re-read the file (it stays import-free).
+ * Present-only, so a row from a spec that declares nothing is the same
+ * bytes it always was. The `board:` declaration travels with the row because
+ * `board-conformance` names it by path and cannot re-read the file (it stays
+ * import-free).
  */
 export function placementRow(s: SpecPlacement): SpecPlacementRow {
   return {
@@ -341,9 +341,11 @@ export function placementRow(s: SpecPlacement): SpecPlacementRow {
     criteria: s.criteria,
     placed: s.placed,
     ...(s.deferred ? { deferred: true } : {}),
-    ...(s.board.scope === "active" ? { active: true } : {}),
-    ...(s.board.prefix !== null ? { prefix: s.board.prefix } : {}),
-    ...(s.board.problems.length > 0 ? { boardProblems: [...s.board.problems] } : {}),
+    // Whole, so a setting added to BOARD_KEYS reaches the reading untouched.
+    // Unknown keys stay behind: they never block a reading (ADR-018 Decision 9).
+    ...(s.board.scope !== "undeclared"
+      ? { board: { scope: s.board.scope, settings: { ...s.board.settings }, problems: [...s.board.problems] } }
+      : {}),
   };
 }
 
