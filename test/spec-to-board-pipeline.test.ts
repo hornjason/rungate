@@ -194,6 +194,16 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
         "than examined by it, so a criterion outside the reservation could pass unseen",
     ).toEqual([]);
     const used = ids.map(id => Number(/^SC-(\d+)$/.exec(id)![1]));
+    // The collision that does harm is one id meaning two criteria. It is
+    // asserted directly, so it is caught whether or not a block was declared
+    // and whatever origin/main holds (review of #2328). A block left covering
+    // an id somebody else took is stale, not a collision: `lib/create-sc.ts`
+    // hands out `lowestFreeInBlock(block, taken)`, so a taken id is never
+    // handed out again from inside a block.
+    expect(
+      ids.filter((id, i) => ids.indexOf(id) !== i),
+      "an id is stated twice in this spec, so two criteria share it",
+    ).toEqual([]);
     expect(reservationFaults(used, scBlocks, mainBase()), "the live store disagrees with this spec's ids")
       .toEqual([]);
 
