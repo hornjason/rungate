@@ -123,6 +123,9 @@ const refuses = (args: string[], why: string) => {
   ).toBe(0);
 };
 
+/** SC-2776: a spec's `board:` declaration opting it in, as the producer carries it. */
+const activeBoard = (prefix: string) => ({ scope: "active", settings: { scope: "active", prefix }, problems: [] as string[] });
+
 /** A board where every reading is met, which each case then breaks one of. */
 const completeBoard = (): BoardSnapshot => ({
   issues: [
@@ -153,9 +156,11 @@ const completeBoard = (): BoardSnapshot => ({
   queueLabel: "engine",
   // The three REPOSITORY-WIDE populations — SC-2615, SC-2616, SC-2617.
   // PRESENT for the same reason as the two above.
+  // SC-2776: only a spec that opts itself in is measured, so the two
+  // planned specs say so; an undeclared one would be out of both sides.
   specPlacements: [
-    { path: "specs/A.md", state: "PLANNED", criteria: 2, placed: 2 },
-    { path: "specs/B.md", state: "PLANNED", criteria: 1, placed: 1 },
+    { path: "specs/A.md", state: "PLANNED", criteria: 2, placed: 2, board: activeBoard("Fix") },
+    { path: "specs/B.md", state: "PLANNED", criteria: 1, placed: 1, board: activeBoard("Other") },
     // A NO_CRITERIA spec belongs in the COMPLETE board on purpose. It
     // contributes to neither side of `spec-placement`, and a fixture
     // without one could not tell that from a reading that counts it in the
@@ -165,6 +170,9 @@ const completeBoard = (): BoardSnapshot => ({
   ],
   // SC-2734: no spec here is deferred, so the bank is present and empty.
   specDeferrals: [],
+  // SC-2776: the config was read, and its engine spec opts itself in with
+  // the prefix the config names. Absent would be UNMEASURED.
+  engineConfig: { spec: "specs/A.md", prefix: "Fix" },
   // One issue that NAMES, one that DECLARES it serves none. Both are
   // conformant and they are conformant for different reasons, so a reading
   // that credited only one of the two spellings would show up here rather
@@ -1640,8 +1648,8 @@ describe("the offender lines are read, not just counted", () => {
     // line actionable rather than a second ratio.
     const board = completeBoard();
     board.specPlacements = [
-      { path: "specs/A.md", state: "PLANNED", criteria: 4, placed: 4 },
-      { path: "specs/B.md", state: "UNPLANNED", criteria: 7, placed: 2 },
+      { path: "specs/A.md", state: "PLANNED", criteria: 4, placed: 4, board: activeBoard("Fix") },
+      { path: "specs/B.md", state: "UNPLANNED", criteria: 7, placed: 2, board: activeBoard("Other") },
     ];
     const r = readingNamed(board, "spec-placement");
 
@@ -1879,11 +1887,12 @@ describe("SC-2734: deferred specs leave the meter only through a ratchet that re
   ): BoardSnapshot => {
     const b = completeBoard();
     b.specPlacements = [
-      { path: "specs/IN.md", state: "PLANNED", criteria: 4, placed: 4 },
+      { path: "specs/IN.md", state: "PLANNED", criteria: 4, placed: 4, board: activeBoard("Fix") },
       ...deferred.map(d => ({ path: d.path, state: "UNPLANNED" as const, criteria: d.criteria, placed: 0, deferred: true })),
     ];
     if (bank !== undefined) b.specDeferrals = bank;
     else delete b.specDeferrals;
+    b.engineConfig = { spec: "specs/IN.md", prefix: "Fix" };
     return b;
   };
 
@@ -1894,9 +1903,9 @@ describe("SC-2734: deferred specs leave the meter only through a ratchet that re
     expect(r.offenders).toEqual([]);
   });
 
-  test("SC-2734: the same spec NOT declared deferred is counted and named — the control", () => {
+  test("SC-2734: the same spec NOT declared deferred, and opted in, is counted and named — the control", () => {
     const b = withDeferral([], []);
-    b.specPlacements!.push({ path: "specs/OUT.md", state: "UNPLANNED", criteria: 7, placed: 0 });
+    b.specPlacements!.push({ path: "specs/OUT.md", state: "UNPLANNED", criteria: 7, placed: 0, board: activeBoard("Out") });
     const r = reading(b);
     expect(r.status).toBe("short");
     expect(r.target).toBe(11);
@@ -1993,7 +2002,134 @@ describe("SC-2734: deferred specs leave the meter only through a ratchet that re
       { path: string; criteria: number }[]).map(d => `${d.path}=${d.criteria}`).sort();
     expect(live.length, "no spec declares itself deferred, so the comparison measured nothing").toBeGreaterThan(0);
     expect(live).toEqual(bank);
-    const inScope = cov.specs.filter(s => !s.deferred && s.criteria > 0).map(s => s.path).sort();
+    const inScope = cov.specs.filter(s => s.board.scope === "active" && s.criteria > 0).map(s => s.path).sort();
     expect(inScope).toEqual(["specs/CODE-REVIEW-CONVERGENCE-SPEC.md", "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md"]);
+  });
+});
+
+/**
+ * SC-2776: `spec-placement` measures only the specs whose own frontmatter
+ * opts them in — a `board:` block with `scope: active` and a prefix. A spec
+ * with no block is out of both sides whatever table it carries; a block the
+ * engine cannot read is reported by name; and the engine spec's block must
+ * agree with `board.engineSpec` and `board.milestonePrefix`, or the
+ * disagreement is reported by name (ADR-018 Decisions 1, 8 and 9).
+ *
+ * The frontmatter reading itself is `test/board-families.test.ts`.
+ */
+describe("SC-2776: spec-placement measures only opted-in specs and names every declaration it cannot read", () => {
+  const reading = (b: BoardSnapshot) => takeReadings(b).find(r => r.name === "spec-placement")!;
+
+  test("SC-2776: a spec with no board: block is out of both sides, even with criteria in no phase", () => {
+    const b = completeBoard();
+    b.specPlacements!.push({ path: "specs/OLD.md", state: "UNPLANNED", criteria: 9, placed: 0 });
+    const r = reading(b);
+    expect(r.status).toBe("met");
+    expect(r.target).toBe(3);
+  });
+
+  test("SC-2776: the same spec opted in is counted and named — the control", () => {
+    const b = completeBoard();
+    b.specPlacements!.push({ path: "specs/OLD.md", state: "UNPLANNED", criteria: 9, placed: 0, board: activeBoard("Old") });
+    // An undeclared UNPLANNED spec beside it: a short reading must not name
+    // a spec it does not measure.
+    b.specPlacements!.push({ path: "specs/NOT-IN.md", state: "UNPLANNED", criteria: 5, placed: 0 });
+    const r = reading(b);
+    expect(r.status).toBe("short");
+    expect(r.target).toBe(12);
+    expect(r.offenders).toEqual(["specs/OLD.md — 9 of 9 criteria in no phase"]);
+  });
+
+  test("SC-2776: a declaration the producer could not read refuses, naming the spec and the problem", () => {
+    const b = completeBoard();
+    b.specPlacements!.push({
+      path: "specs/TYPO.md",
+      state: "PLANNED",
+      criteria: 2,
+      placed: 2,
+      board: { scope: "invalid", settings: { scope: "activ" }, problems: ["`board.scope: activ` is not a value the engine knows (active or deferred)"] },
+    });
+    const r = reading(b);
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/TYPO.md: `board.scope: activ` is not a value the engine knows");
+  });
+
+  test("SC-2776: a row read as both active and deferred refuses by name", () => {
+    const b = completeBoard();
+    b.specPlacements!.push({ path: "specs/BOTH.md", state: "PLANNED", criteria: 1, placed: 1, deferred: true, board: activeBoard("B") });
+    b.specDeferrals = [{ path: "specs/BOTH.md", criteria: 1 }];
+    const r = reading(b);
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/BOTH.md is read as both active and deferred");
+  });
+
+  test("SC-2776: an engine config nobody read is UNMEASURED, not agreement", () => {
+    const b = completeBoard();
+    delete b.engineConfig;
+    const r = reading(b);
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("board.engineSpec and board.milestonePrefix were never read");
+  });
+
+  test("SC-2776: the engine spec not opted in refuses, naming it", () => {
+    const b = completeBoard();
+    b.engineConfig = { spec: "specs/EMPTY.md", prefix: "Fix" };
+    const r = reading(b);
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("specs/EMPTY.md is board.engineSpec and its frontmatter does not opt it in");
+  });
+
+  test("SC-2776: the engine spec's prefix disagreeing with board.milestonePrefix refuses, naming both", () => {
+    const b = completeBoard();
+    b.engineConfig = { spec: "specs/A.md", prefix: "Engine" };
+    const r = reading(b);
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain('specs/A.md declares board.prefix "Fix" and board.milestonePrefix is "Engine"');
+  });
+
+  test("SC-2776: board.engineSpec naming a spec the sweep never found refuses", () => {
+    const b = completeBoard();
+    b.engineConfig = { spec: "specs/GONE.md", prefix: "Fix" };
+    expect(reading(b).why).toContain("board.engineSpec names specs/GONE.md, which the specs/ sweep did not find");
+  });
+
+  test("SC-2776: a config that names no engine spec has nothing to disagree with", () => {
+    const b = completeBoard();
+    b.engineConfig = { spec: null, prefix: null };
+    expect(reading(b).status).toBe("met");
+  });
+
+  test("SC-2776: a board declaration present in the snapshot and malformed refuses, never reads as undeclared", () => {
+    // Dropping it would turn an opted-in spec into an undeclared one, which
+    // leaves the measure — the reading would get easier, not stricter.
+    const dir = mkdtempSync(join(tmpdir(), "sc2776-malformed-"));
+    try {
+      const b = completeBoard() as unknown as { specPlacements: Record<string, unknown>[] };
+      b.specPlacements[0]!.board = "active";
+      const at = join(dir, "snap.json");
+      writeFileSync(at, JSON.stringify(b));
+      const real = run(SCRIPT, ["--snapshot", at, "--reading", "spec-placement"]);
+      expect(real.out + real.err).toContain("specs/A.md: the snapshot carries a board declaration this command cannot read");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("SC-2776: the snapshot boundary carries the declaration and the engine config through", async () => {
+    const { boardDeclarationProblems } = await import("../scripts/board-conformance.ts");
+    // The one function both the reading and this case consult, so a mutation
+    // of it is visible here and in every case above.
+    expect(boardDeclarationProblems(completeBoard().specPlacements!, completeBoard().engineConfig)).toEqual([]);
+    const dir = mkdtempSync(join(tmpdir(), "sc2776-boundary-"));
+    try {
+      const b = completeBoard();
+      b.engineConfig = { spec: "specs/A.md", prefix: "Engine" };
+      const at = join(dir, "snap.json");
+      writeFileSync(at, JSON.stringify(b));
+      const real = run(SCRIPT, ["--snapshot", at, "--reading", "spec-placement"]);
+      expect(real.out + real.err).toContain('declares board.prefix "Fix" and board.milestonePrefix is "Engine"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

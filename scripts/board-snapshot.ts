@@ -34,13 +34,14 @@
  */
 import { spawnSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
-import { isAbsolute, join } from "path";
+import { isAbsolute, join, relative } from "path";
 import { parseArgs } from "util";
 import { describeSpecSource, resolveSpecSource, type GitRunner } from "../lib/spec-source";
 import { openFrontier, phaseOf } from "../lib/board-mirror";
 import { withoutAmbientGitOverrides } from "../lib/git-isolation";
 import { createGitHubClient, listMilestones } from "../lib/github";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
+import { resolveConfig } from "../lib/config-loader";
 import { resolveRepoSlug } from "../lib/branch-cleanup";
 import {
   inMilestoneFamily,
@@ -59,6 +60,7 @@ import {
   placementCoverage,
   placementReading,
   type CriterionCoverage,
+  type SpecPlacement,
 } from "../lib/spec-placement";
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
@@ -240,6 +242,8 @@ export interface ProducedSnapshot {
   specPlacements?: SpecPlacementRow[];
   /** SC-2734: the bank in `.claude/spec-deferral-ratchet.json`. Absent when it could not be read. */
   specDeferrals?: SpecDeferral[];
+  /** SC-2776: `board.engineSpec` and `board.milestonePrefix` as the config holds them. */
+  engineConfig?: { spec: string | null; prefix: string | null };
   repoIssues?: RepoIssueCriteria[];
   plannedEdges?: PlannedEdge[];
   /** SC-2752: unticked criteria in in-scope specs and open stage items. Absent when it could not be read. */
@@ -253,8 +257,9 @@ export interface ProducedSnapshot {
  *
  * Every unticked criterion in an in-scope spec, then every open stage item
  * in `project-state.json`. In scope is the same population `spec-placement`
- * counts: a spec that states criteria (`PLANNED` or `UNPLANNED`) and is not
- * deferred. The criteria are read through `parseCriteria`, the one reader of
+ * counts: a spec that states criteria (`PLANNED` or `UNPLANNED`) and opts in
+ * with `board: { scope: active }` (SC-2776). A spec that declares nothing is
+ * never planned, so its unticked criteria are not work anybody declared. The criteria are read through `parseCriteria`, the one reader of
  * a spec's checkbox lines, so "unticked" has one answer in the tree.
  *
  * A consumer repository has no `project-state.json`: an absent file declares
@@ -266,12 +271,14 @@ export interface ProducedSnapshot {
  */
 export function readDeclaredWork(
   root: string,
-  specs: readonly { path: string; state: SpecPlacementRow["state"]; deferred?: boolean }[],
+  specs: readonly { path: string; state: SpecPlacementRow["state"]; deferred?: boolean; board?: { scope: string } }[],
 ): { declaredWork?: DeclaredWork[] } {
   const work: DeclaredWork[] = [];
   for (const s of specs) {
-    if (s.deferred === true || s.state === "NO_CRITERIA") continue;
+    // UNREADABLE first: a spec nobody could read has no declaration to be
+    // read either, and skipping it as "not opted in" would shorten the list.
     if (s.state === "UNREADABLE") return {};
+    if (s.board?.scope !== "active" || s.state === "NO_CRITERIA") continue;
     let content: string;
     try {
       content = readFileSync(join(root, s.path), "utf-8");
@@ -323,6 +330,55 @@ export const DEFERRAL_BANK = ".claude/spec-deferral-ratchet.json";
  * file is absent or is not `{ "deferred": [{ path, criteria }] }`, and says
  * which on stderr, because a corrupt bank is never a missing one.
  */
+/**
+ * One sweep row as the snapshot carries it — SC-2615, SC-2734, SC-2776.
+ *
+ * Present-only, so a row from a spec that declares nothing is the same
+ * bytes it always was. The `board:` declaration travels with the row because
+ * `board-conformance` names it by path and cannot re-read the file (it stays
+ * import-free).
+ */
+export function placementRow(s: SpecPlacement): SpecPlacementRow {
+  return {
+    path: s.path,
+    state: s.state,
+    criteria: s.criteria,
+    placed: s.placed,
+    ...(s.deferred ? { deferred: true } : {}),
+    // Whole, so a setting added to BOARD_KEYS reaches the reading untouched.
+    // Unknown keys stay behind: they never block a reading (ADR-018 Decision 9).
+    ...(s.board.scope !== "undeclared"
+      ? { board: { scope: s.board.scope, settings: { ...s.board.settings }, problems: [...s.board.problems] } }
+      : {}),
+  };
+}
+
+/**
+ * What the config says the engine is — SC-2776 — carried as DATA so
+ * `board-conformance` (import-free) can hold the engine spec's own `board:`
+ * block to it. Paths are spelled the way the sweep spells them, so
+ * `./specs/X.md` and `specs/X.md` are one spec.
+ *
+ * **A config nobody could find omits the key.** `readBoardInputs` returns the
+ * same two `null`s for an absent config and for one that sets neither key,
+ * and `null` here means "nothing to disagree with", so a run from the wrong
+ * directory would read as agreement. `resolveConfig` separates the two, as
+ * `enginePrefixReading` does for #1965 (review of #2308).
+ */
+export function readEngineConfig(root: string): { engineConfig?: { spec: string | null; prefix: string | null } } {
+  if (resolveConfig(root).status === "absent") return {};
+  const configured = readBoardInputs(root);
+  return {
+    engineConfig: {
+      spec:
+        configured.engineSpec === null
+          ? null
+          : relative(root, isAbsolute(configured.engineSpec) ? configured.engineSpec : join(root, configured.engineSpec)),
+      prefix: configured.milestonePrefix,
+    },
+  };
+}
+
 export function readDeferralBank(root: string): { specDeferrals?: SpecDeferral[] } {
   const path = join(root, DEFERRAL_BANK);
   if (!existsSync(path)) {
@@ -832,14 +888,10 @@ export async function main(
     coverage.specs.length === 0 && coverage.reading === "UNMEASURED"
       ? {}
       : {
-          specPlacements: coverage.specs.map(s => ({
-            path: s.path,
-            state: s.state,
-            criteria: s.criteria,
-            placed: s.placed,
-            ...(s.deferred ? { deferred: true } : {}),
-          })),
+          specPlacements: coverage.specs.map(placementRow),
         };
+
+  const engineConfig = readEngineConfig(root);
 
   // SC-2734. The bank the deferred specs are compared against. An absent or
   // malformed file omits the key, and the reading goes UNMEASURED as soon as
@@ -935,6 +987,7 @@ export async function main(
     criteria: criterionCoverage(content, snapshotIssues, columnRead),
     ...placements,
     ...deferrals,
+    ...engineConfig,
     ...repoIssues,
     ...edges,
     ...declared,

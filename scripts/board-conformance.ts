@@ -160,6 +160,19 @@ export interface BoardSnapshot {
   specDeferrals?: SpecDeferral[];
 
   /**
+   * `board.engineSpec` and `board.milestonePrefix` as the config holds
+   * them — SC-2776. The engine spec's own `board:` block must agree with
+   * both, or the disagreement is reported by name.
+   *
+   * **Absent means the producer never read the config**, and
+   * `spec-placement` goes UNMEASURED: whether the engine spec opts itself
+   * in is then unknown, which is not the same as known to agree. `null` in
+   * either field is a config that sets nothing there, so there is nothing
+   * for the block to disagree with.
+   */
+  engineConfig?: { spec: string | null; prefix: string | null };
+
+  /**
    * EVERY open issue in the repository and what it says it serves — SC-2616.
    *
    * Distinct from {@link issues}, which is the engine milestone's issues. 25
@@ -191,7 +204,8 @@ export interface BoardSnapshot {
    * Work the repository DECLARES, and what each piece points at — SC-2752.
    *
    * Every unticked criterion in an in-scope spec (one that states criteria
-   * and is not deferred), and every open stage item in `project-state.json`.
+   * and opts in with `board: { scope: active }`, SC-2776 — the population
+   * `spec-placement` measures), and every open stage item in `project-state.json`.
    * A commitment written into a file is indistinguishable from one never
    * made until something reads the file and asks for its tracker object;
    * thirteen were found by hand on 2026-11-09 (#1938-#1946, #1948-#1951).
@@ -275,9 +289,32 @@ export interface SpecPlacementRow {
   /** How many criteria the spec states, and how many its table places. */
   criteria: number;
   placed: number;
-  /** The spec declares `board-scope: deferred` in its frontmatter — SC-2734. */
+  /** The spec declares `scope: deferred` (or the legacy `board-scope: deferred`) — SC-2734. */
   deferred?: boolean;
+  /**
+   * What the spec's own `board:` frontmatter declares — SC-2776. Absent for
+   * a spec that declares nothing, which is never measured, whatever else it
+   * carries (ADR-018 Decision 8).
+   *
+   * Carried WHOLE from `boardDeclaration` in `lib/spec-placement.ts`, where
+   * the keys the engine knows are listed once: a new setting passes through
+   * here without this file naming it.
+   */
+  board?: RowBoard;
 }
+
+/** A spec's `board:` declaration as the snapshot carries it — SC-2776. */
+export interface RowBoard {
+  /** `active` is the only scope measured. */
+  scope: string;
+  /** Every setting the block declares, as text — `settings.prefix`, and any key added later. */
+  settings: Record<string, string>;
+  /** What stops the declaration being read as written, each reported by name. */
+  problems: string[];
+}
+
+/** The spec opts itself in — SC-2776. THE one test of membership, for every reader here. */
+const optedIn = (s: SpecPlacementRow): boolean => s.board?.scope === "active";
 
 /** One entry in the deferral bank, `.claude/spec-deferral-ratchet.json` — SC-2734. */
 export interface SpecDeferral {
@@ -309,6 +346,43 @@ export function deferralDifferences(rows: readonly SpecPlacementRow[], bank: rea
     else if (banked.get(path) !== n) out.push(`${path} states ${n} criteria and the bank holds ${banked.get(path)}`);
   }
   for (const path of banked.keys()) if (!live.has(path)) out.push(`${path} is in the bank and no longer deferred`);
+  return out;
+}
+
+/**
+ * Every `board:` declaration the reading cannot take as written, by name — SC-2776.
+ *
+ * Three kinds, each one sentence naming the spec:
+ * - what the producer reported about a spec's own block (an unknown scope
+ *   value, an active spec with no prefix, a block that is not YAML);
+ * - a row both active and deferred, which no single block can say;
+ * - the engine spec's block disagreeing with `board.engineSpec` or
+ *   `board.milestonePrefix`, or the config never read at all.
+ */
+export function boardDeclarationProblems(
+  rows: readonly SpecPlacementRow[],
+  engine: BoardSnapshot["engineConfig"],
+): string[] {
+  const out: string[] = [];
+  for (const r of rows) {
+    for (const p of r.board?.problems ?? []) out.push(`${r.path}: ${p}`);
+    if (optedIn(r) && r.deferred === true) out.push(`${r.path} is read as both active and deferred`);
+  }
+  if (engine === undefined) {
+    out.push("board.engineSpec and board.milestonePrefix were never read, so whether the engine spec opts itself in is unknown");
+    return out;
+  }
+  if (engine.spec === null) return out;
+  const row = rows.find(r => r.path === engine.spec);
+  if (row === undefined) out.push(`board.engineSpec names ${engine.spec}, which the specs/ sweep did not find`);
+  else if (!optedIn(row)) {
+    out.push(`${engine.spec} is board.engineSpec and its frontmatter does not opt it in — it needs a board: block with scope: active`);
+  } else if (engine.prefix !== null && row.board?.settings.prefix !== engine.prefix) {
+    const declared = row.board?.settings.prefix;
+    out.push(
+      `${engine.spec} declares board.prefix ${declared === undefined ? "(none)" : JSON.stringify(declared)} and board.milestonePrefix is ${JSON.stringify(engine.prefix)}`,
+    );
+  }
   return out;
 }
 
@@ -571,7 +645,7 @@ export const READINGS: readonly ReadingSpec[] = [
   {
     name: "spec-placement",
     item: "E1",
-    what: "every criterion in every testable spec sits in a phase, or its spec is named UNPLANNED",
+    what: "every criterion in every opted-in spec sits in a phase, or its spec is named UNPLANNED",
     readsIssueRefs: false,
     // Counted in CRITERIA, not specs — the same choice B1 makes and for the
     // same reason. A spec stating fourteen unplaced criteria and one stating
@@ -604,12 +678,16 @@ export const READINGS: readonly ReadingSpec[] = [
           "was not read, so the population being measured is not one anybody banked";
       }
       const diff = deferralDifferences(b.specPlacements, b.specDeferrals ?? []);
-      return diff.length === 0
-        ? null
-        : `the deferred specs disagree with .claude/spec-deferral-ratchet.json: ${diff.join("; ")}`;
+      if (diff.length > 0) return `the deferred specs disagree with .claude/spec-deferral-ratchet.json: ${diff.join("; ")}`;
+      // SC-2776. A declaration the engine could not read leaves the spec's
+      // membership unknown, so the population is not one anybody declared.
+      const declared = boardDeclarationProblems(b.specPlacements, b.engineConfig);
+      return declared.length === 0 ? null : `the specs' board: declarations cannot be read as written: ${declared.join("; ")}`;
     },
+    // SC-2776: only the specs that opt themselves in. A spec with no
+    // `board:` block is out of both sides, whatever table it carries.
     measure: b => {
-      const specs = b.specPlacements!.filter(s => s.state !== "NO_CRITERIA" && s.deferred !== true);
+      const specs = b.specPlacements!.filter(s => s.state !== "NO_CRITERIA" && optedIn(s));
       return {
         measured: specs.reduce((n, s) => n + s.placed, 0),
         target: specs.reduce((n, s) => n + s.criteria, 0),
@@ -617,7 +695,7 @@ export const READINGS: readonly ReadingSpec[] = [
     },
     offenders: b =>
       b.specPlacements!
-        .filter(s => s.state === "UNPLANNED" && s.deferred !== true)
+        .filter(s => s.state === "UNPLANNED" && optedIn(s))
         .map(s => `${s.path} — ${s.criteria - s.placed} of ${s.criteria} criteria in no phase`),
   },
   {
@@ -918,7 +996,32 @@ const normaliseSpecPlacement = (v: unknown): SpecPlacementRow | null => {
   // A row claiming more placed than stated would let one spec carry another
   // spec's shortfall, and the sum is the whole reading.
   if (criteria < 0 || placed < 0 || placed > criteria) return null;
-  return { path: s.path, state, criteria, placed, ...(s.deferred === true ? { deferred: true } : {}) };
+  return {
+    path: s.path,
+    state,
+    criteria,
+    placed,
+    ...(s.deferred === true ? { deferred: true } : {}),
+    ...("board" in s ? { board: normaliseRowBoard(s.board) } : {}),
+  };
+};
+
+/**
+ * A row's `board` declaration — SC-2776. Generic over the settings, so no key
+ * is named here. A declaration that is PRESENT and malformed is kept as a
+ * problem rather than dropped: dropping it would turn an opted-in spec into an
+ * undeclared one, which leaves the measure, so the reading would get easier.
+ */
+const normaliseRowBoard = (v: unknown): RowBoard => {
+  const b = (typeof v === "object" && v !== null ? v : {}) as Partial<Record<keyof RowBoard, unknown>>;
+  const settings = typeof b.settings === "object" && b.settings !== null && !Array.isArray(b.settings)
+    ? Object.fromEntries(Object.entries(b.settings).filter((e): e is [string, string] => typeof e[1] === "string"))
+    : null;
+  const problems = Array.isArray(b.problems) ? b.problems.filter((p): p is string => typeof p === "string") : null;
+  if (typeof b.scope !== "string" || settings === null || problems === null) {
+    return { scope: "invalid", settings: {}, problems: ["the snapshot carries a board declaration this command cannot read"] };
+  }
+  return { scope: b.scope, settings, problems };
 };
 
 const normaliseDeferral = (v: unknown): SpecDeferral | null => {
@@ -1114,6 +1217,15 @@ export function readSnapshotText(text: string): SnapshotRead {
   const deferrals = Array.isArray(raw.specDeferrals)
     ? { specDeferrals: raw.specDeferrals.map(normaliseDeferral).filter((d): d is SpecDeferral => d !== null) }
     : {};
+  // SC-2776. Present-only, like the populations: absence is "never read".
+  // A field that is neither a string nor null makes the whole object unread
+  // rather than guessing which half to keep.
+  const ec = raw.engineConfig as { spec?: unknown; prefix?: unknown } | undefined;
+  const textOrNull = (v: unknown): v is string | null => v === null || typeof v === "string";
+  const engine =
+    typeof ec === "object" && ec !== null && textOrNull(ec.spec) && textOrNull(ec.prefix)
+      ? { engineConfig: { spec: ec.spec, prefix: ec.prefix } }
+      : {};
   const repoIssues = Array.isArray(raw.repoIssues)
     ? { repoIssues: raw.repoIssues.map(normaliseRepoIssue).filter((i): i is RepoIssueCriteria => i !== null) }
     : {};
@@ -1145,6 +1257,7 @@ export function readSnapshotText(text: string): SnapshotRead {
       ...queue,
       ...placements,
       ...deferrals,
+      ...engine,
       ...repoIssues,
       ...edges,
       ...declared,
