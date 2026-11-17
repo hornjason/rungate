@@ -2908,6 +2908,16 @@ function revocationActions(label: string, revoked: readonly RevokedSubKey[]): st
     const topLevel = r.section.split(".")[0];
     const keep =
       `Name \`${topLevel}\` in \`ci.workflowOverrides\` to keep it, and re-scaffold.`;
+    // #2292: an authored path brought to the generator's value is not a
+    // withdrawal, and calling it one would tell the consumer something was
+    // taken away when something was written.
+    if (r.reason === "asserted") {
+      return (
+        `REWRITTEN: ${label} now declares \`${r.section}: ${r.key}\` as this version of the ` +
+        `generator writes it — the harness authors that path, so a stale or hand-set value ` +
+        `there is replaced on every scaffold. ${keep}`
+      );
+    }
     return r.reason === "authored"
       ? `REVOKED: ${label} no longer declares \`${r.section}: ${r.key}\` — the harness ` +
           `authors that path and this version of the generator does not emit it, so the ` +

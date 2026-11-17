@@ -48,6 +48,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import {
   HARNESS_AUTHORED_PATHS,
+  HARNESS_WITHDRAWN_PATHS,
   mergeManagedWorkflowRecording,
 } from "../lib/scaffold/managed-workflow";
 import { writeManagedFile } from "../lib/scaffold/steps";
@@ -195,7 +196,7 @@ describe("AC-2 (#1148): only the named path is withdrawn", () => {
 
   test("a sibling sub-key the harness does not claim is preserved", () => {
     const block = onBlock(merge(WITH_EXTRAS, GENERATED).content);
-    expect(block, "`types:` is the consumer's and nothing claims it").toContain("types:");
+    expect(block, "`types:` is withdrawn by nothing, and this generator does not emit it, so the consumer's stands (#2292)").toContain("types:");
     expect(block, "the claimed path was not withdrawn").not.toMatch(/pull_request:[\s\S]*branches:/);
   });
 
@@ -263,8 +264,9 @@ describe("AC-5 (#1148): a hand-edited `on:` block becomes VERIFIED after one re-
     // as worded cannot catch it, because a fresh hand-edit reads UNPROVEN.
     const dir = mkdtempSync(join(tmpdir(), "authored-paths-"));
     const file = join(dir, "ci.yml");
-    // A filter under a trigger NOTHING claims, so this case measures the
-    // marker and not the withdrawal above.
+    // A leaf this generator neither emits nor withdraws, so this case
+    // measures the marker and not the merge (#2292 asserts `types` only
+    // where the generator emits it).
     const handEdited = CONSUMER.replace(
       "  pull_request:\n    branches:\n      - \"main\"\n",
       "  pull_request:\n    types:\n      - ready_for_review\n",
@@ -334,5 +336,124 @@ describe("AC-6 (#1148): the write is not refused over lines the merge removed", 
       actions.filter(a => a.startsWith("REVOKED:")),
       "the withdrawal is re-reported every run for a filter that is already gone",
     ).toEqual([]);
+  });
+});
+
+// ── #2292 / SC-2781: an authored path the generator emits is written ─────
+
+/**
+ * #2292 / SC-2781: the other half of an authored path. #1148 gave the harness
+ * a channel to take a leaf OUT of a consumer's trigger; it had none to put
+ * the current value IN. #1207 added `types:` to `on.pull_request` in the
+ * generated `ai-review.yml`, and a consumer whose copy predates it kept a bare
+ * `pull_request:` through every re-scaffold, reported `unchanged`, so the
+ * `ai-review-override` waiver could never re-run the check (asaCommandCenter,
+ * 2026-11-16).
+ */
+describe("#2292 / SC-2781: re-scaffold writes the current value of an authored path", () => {
+  const committed = (name: string) =>
+    readFileSync(join(import.meta.dir, "..", ".github", "workflows", name), "utf-8");
+
+  /** The committed file with its `pull_request.types` leaf taken out: a pre-#1207 consumer. */
+  function withoutTypes(text: string): string {
+    const out = text.replace(/(\n  pull_request:\n)(?:    #.*\n)*    types: \[[^\]]*\]\n/, "$1");
+    expect(out, "no `types:` leaf under `pull_request:` to remove — this case no longer builds a consumer").not.toBe(text);
+    return out;
+  }
+
+  const TYPES: Record<string, string> = {
+    "ai-review.yml": "types: [opened, synchronize, reopened, labeled, unlabeled]",
+    "closing-references.yml": "types: [opened, synchronize, reopened, edited]",
+  };
+
+  for (const [name, line] of Object.entries(TYPES)) {
+    test(`${name}: a consumer with a bare \`pull_request:\` gains the generated \`types:\``, () => {
+      const generated = committed(name);
+      expect(generated, `${name} no longer emits ${line}; update this case`).toContain(line);
+      const { content, revoked } = merge(withoutTypes(generated), generated);
+      expect(
+        onBlock(content),
+        `${name} kept the bare trigger, so the generated activity types never reach a consumer that has the file`,
+      ).toMatch(new RegExp(`pull_request:\\n(?:\\s*#.*\\n)*\\s*${line.replace(/[[\]]/g, "\\$&")}`));
+      expect(
+        revoked.map(r => `${r.section}.${r.key}:${r.reason}`),
+        "the rewrite is not recorded, so the scaffold cannot name it",
+      ).toEqual(["on.pull_request.types:asserted"]);
+    });
+  }
+
+  test("a consumer's different `types:` value is replaced, and the lines it replaced are recorded", () => {
+    const generated = committed("ai-review.yml");
+    const consumer = generated.replace(TYPES["ai-review.yml"], "types: [opened]");
+    const { content, revoked } = merge(consumer, generated);
+    expect(onBlock(content)).toContain(TYPES["ai-review.yml"]);
+    expect(onBlock(content), "the consumer's old value is still in the trigger beside the new one").not.toContain(
+      "types: [opened]\n",
+    );
+    expect(revoked.length).toBe(1);
+    expect(
+      revoked[0].lines.join("\n"),
+      "the record does not carry the lines it replaced, so the write would refuse over them",
+    ).toContain("types: [opened]");
+  });
+
+  test("a consumer already on the current value is left byte-identical, with nothing recorded", () => {
+    for (const name of Object.keys(TYPES)) {
+      const generated = committed(name);
+      const { content, revoked } = merge(generated, generated);
+      expect(revoked, `${name}: an up-to-date file reports a rewrite`).toEqual([]);
+      expect(content === generated, `${name}: an up-to-date file was changed`).toBe(true);
+    }
+  });
+
+  test("a generator that emits the parent bare does not take a consumer's `types:` away", () => {
+    // Only `branches` is withdrawn where the generator stops emitting it
+    // (#1148). `types` is asserted where the generator emits it, and a
+    // generator silent about it — ci.yml, gates.yml — leaves the consumer's.
+    const consumer = CONSUMER.replace(
+      "  pull_request:\n    branches:\n      - \"main\"\n",
+      "  pull_request:\n    types: [opened, ready_for_review]\n",
+    );
+    const { content, revoked } = merge(consumer, GENERATED);
+    expect(onBlock(content)).toContain("types: [opened, ready_for_review]");
+    expect(revoked).toEqual([]);
+  });
+
+  test("the claim sets: `types` is authored, and only `branches` is withdrawn when absent", () => {
+    expect([...HARNESS_AUTHORED_PATHS]).toContain("on.pull_request.types");
+    expect([...HARNESS_WITHDRAWN_PATHS]).toEqual(["on.pull_request.branches"]);
+    for (const p of HARNESS_WITHDRAWN_PATHS) {
+      expect(HARNESS_AUTHORED_PATHS.has(p), `${p} is withdrawn but not authored — a withdrawal with no claim`).toBe(true);
+    }
+  });
+
+  test("naming `on` in `ci.workflowOverrides` keeps the consumer's trigger as it is", () => {
+    const generated = committed("ai-review.yml");
+    const consumer = withoutTypes(generated);
+    const { content, revoked } = merge(consumer, generated, ["on"]);
+    expect(revoked).toEqual([]);
+    expect(onBlock(content)).not.toContain("types:");
+  });
+
+  test("the write lands the rewrite and names it — never `unchanged`", () => {
+    const dir = mkdtempSync(join(tmpdir(), "authored-assert-"));
+    const file = join(dir, "ai-review.yml");
+    const generated = committed("ai-review.yml");
+    writeFileSync(file, withoutTypes(generated));
+    const actions: string[] = [];
+    writeManagedFile(file, generated, "ai-review.yml", actions, {}, PROV);
+
+    expect(onBlock(readFileSync(file, "utf-8")), `the file on disk has no types — actions: ${actions.join(" | ")}`).toContain(
+      TYPES["ai-review.yml"],
+    );
+    expect(actions.filter(a => a.startsWith("SKIP:")), "a stale file was reported unchanged (#2292)").toEqual([]);
+    const named = actions.find(a => a.startsWith("REWRITTEN:"));
+    expect(named, `no rewrite was named — actions were: ${actions.join(" | ")}`).toBeDefined();
+    expect(named).toContain("on.pull_request: types");
+    expect(named, "the report does not name the escape hatch").toContain("ci.workflowOverrides");
+
+    const again: string[] = [];
+    writeManagedFile(file, generated, "ai-review.yml", again, {}, PROV);
+    expect(again.filter(a => a.startsWith("REWRITTEN:")), "the rewrite is re-reported on a file already current").toEqual([]);
   });
 });
