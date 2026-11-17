@@ -26,6 +26,7 @@
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { specFilesIn } from "../board-mirror";
+import { readBoardInputs } from "../config-readers";
 import { isTemplateSpec } from "../sc-ids";
 import { boardDeclaration, placementReading } from "../spec-placement";
 import { maySpecBeWritten, writeSpec } from "../write-spec";
@@ -57,11 +58,24 @@ export function planDeferredScopes(root: string): { refusal: string } | { writes
   if (sweep.reading === "UNMEASURED") return { refusal: `the specs/ listing failed: ${sweep.reasons.join("; ")}` };
   const writes: ScopeWrite[] = [];
   const skipped: string[] = [];
+  // The configured engine spec is never deferred. Deferring it would take the
+  // engine family out of every reading, which is the opposite of what this
+  // step is for. It is named with the block that opts it in, and opting in
+  // stays a person's choice (ADR-018 Decision 8). Raised by the consumer that
+  // hit it, before #2335 merged.
+  const { engineSpec, milestonePrefix } = readBoardInputs(root);
   for (const path of sweep.paths) {
     if (isTemplateSpec(path)) continue;
     const before = readFileSync(join(root, path), "utf-8");
     if (boardDeclaration(before).scope !== "undeclared") continue;
     if (!maySpecBeWritten(before).allowed) continue;
+    if (engineSpec !== null && path === engineSpec.replace(/^\.\//, "")) {
+      skipped.push(
+        `${path} is the configured engine spec (board.engineSpec) and declares no board scope, so it was not deferred; ` +
+          `add board: { scope: active, prefix: ${milestonePrefix ?? "<board.milestonePrefix>"} } to its frontmatter to opt it in`,
+      );
+      continue;
+    }
     const after = withDeferredScope(before);
     if (after === null) {
       skipped.push(`${path} has no frontmatter, so no board scope was added; the engine ignores it until it declares one`);

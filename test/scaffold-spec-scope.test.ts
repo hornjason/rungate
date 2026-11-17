@@ -159,6 +159,26 @@ describe("#2307: every spec declares a board scope after one scaffold", () => {
     }
   });
 
+  test("the configured engine spec is never deferred: it is named, with the block that opts it in", () => {
+    const root = tree();
+    try {
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(join(root, ".claude", "rungate", "config.json"), JSON.stringify({ board: { engineSpec: "specs/UNDECLARED-SPEC.md", milestonePrefix: "Zqeng" } }));
+      const actions: string[] = [];
+      deferUndeclaredSpecs(root, actions);
+      expect(readAt(root, "specs/UNDECLARED-SPEC.md"), "the engine spec was deferred").toBe(FILES["specs/UNDECLARED-SPEC.md"]);
+      expect(actions).toContain(
+        "SKIP: specs/UNDECLARED-SPEC.md is the configured engine spec (board.engineSpec) and declares no board scope, so it was not deferred; " +
+          "add board: { scope: active, prefix: Zqeng } to its frontmatter to opt it in",
+      );
+      // The control: every other undeclared spec is still deferred and banked.
+      expect(boardDeclaration(readAt(root, "specs/nested/EMPTY-SPEC.md")).scope).toBe("deferred");
+      expect(JSON.parse(readAt(root, BANK)).deferred.map((d: { path: string }) => d.path)).not.toContain("specs/UNDECLARED-SPEC.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("withDeferredScope keeps the file's line endings and refuses a file with no frontmatter", () => {
     expect(withDeferredScope("---\r\ndoc-type: spec\r\n---\r\nbody\r\n")).toBe(`---\r\ndoc-type: spec\r\n${DEFERRED_LINE}\r\n---\r\nbody\r\n`);
     expect(withDeferredScope("# no frontmatter\n")).toBeNull();
