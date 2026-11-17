@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADR-019 — the acceptance test sits in its own phase</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#2a2f3a;--txt:#e6e8ee;--dim:#8b93a7;--hand:#f2a65a;--auto:#5ab0f2;--judge:#c792ea;--ok:#7bd88f;--warn:#ff6b6b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 -apple-system,system-ui,sans-serif;padding:28px;max-width:1200px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:28px 0 10px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+.sub{color:var(--dim);margin-bottom:18px}.legend span{display:inline-block;margin-right:16px;font-size:13px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h3{margin:0 0 6px;font-size:15px}.ok{color:var(--ok)}.warn{color:var(--warn)}.dim{color:var(--dim)}
+.step{display:flex;gap:12px;align-items:flex-start;margin:8px 0}.tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;min-width:52px;text-align:center}
+.YOU{background:var(--judge);color:#111}.ME{background:#3a4152}.AUTO{background:var(--auto);color:#111}.HAND{background:var(--hand);color:#111}
+code{background:#222733;padding:1px 5px;border-radius:4px;font-size:13px}
+.phase{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0;background:var(--card)}
+.phase b{display:block;margin-bottom:6px}.chip{display:inline-block;background:#222733;border-radius:6px;padding:2px 8px;margin:2px 4px 2px 0;font-size:13px}
+.chip.acc{background:#3b2a12;color:var(--hand)}.chip.mv{outline:1px dashed var(--ok)}
+.arrow{color:var(--ok);font-size:13px;margin:4px 0 4px 18px}.noarrow{color:var(--warn);font-size:13px;margin:4px 0 4px 18px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}@media(max-width:800px){.cols{grid-template-columns:1fr}}
+pre{background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12.5px;overflow:auto;white-space:pre-wrap}
+</style></head><body>
+<h1>ADR-019 — the acceptance test sits in its own phase, and milestones follow the spec</h1>
+<div class="sub">Dry run, 2026-11-17 · <b>proposed</b> · Jason decides and merges · <code>docs/adr/ADR-019-the-acceptance-test-sits-in-its-own-phase.md</code> · no new issues, no new criteria</div>
+<div class="legend"><span><i class="dot" style="background:var(--judge)"></i>judgement (Jason)</span><span><i class="dot" style="background:var(--auto)"></i>automatic</span><span><i class="dot" style="background:var(--hand)"></i>by hand</span></div>
+
+<h2>Today vs after</h2>
+<div class="cols">
+<div>
+<div class="dim" style="margin-bottom:6px"><b class="warn">Today</b> — one phase, no order inside it</div>
+<div class="phase"><b>Engine Phase 9 — the payload ships</b>
+<span class="chip">#2301 opt-in</span><span class="chip">#2302 queue label</span><span class="chip">#2303 parked criteria</span><span class="chip">#2304 placing rule</span><span class="chip">#2305 push runs engine</span><span class="chip acc">#1722 acceptance test</span></div>
+<div class="noarrow">✗ plan-deps: "every open issue sits in Phase 9. One phase states no order" → #1722 shows in Ready</div>
+</div>
+<div>
+<div class="dim" style="margin-bottom:6px"><b class="ok">After</b> — the acceptance test is its own, last phase</div>
+<div class="phase"><b>Engine Phase 9 — every opted-in spec runs through the engine</b>
+<span class="chip">#2301</span><span class="chip">#2302</span><span class="chip">#2303</span><span class="chip">#2304</span><span class="chip">#2305</span><span class="chip dim">+ any later Phase 9 issue</span></div>
+<div class="arrow">▼ plan-deps derives: every Phase 10 issue waits on every Phase 9 issue</div>
+<div class="phase"><b>Engine Phase 10 — the payload ships</b><span class="chip acc mv">#1722 acceptance test (moved by the run)</span></div>
+</div>
+</div>
+
+<h2>The run</h2>
+<div class="step"><span class="tag YOU">YOU</span><div>Decide Decisions 1–4 and the SC-2779 wording; merge ADR-019 → docs only</div></div>
+<div class="step"><span class="tag AUTO">AUTO</span><div><code>adr-accepted.yml</code> lists it and places nothing (no Decomposition table) → board unchanged, nothing goes red</div></div>
+<div class="step"><span class="tag ME">ME</span><div>Record the approved SC-2779 wording on #2304 and the table edit on #2305 → two comments, no tracker writes</div></div>
+<div class="step"><span class="tag ME">ME</span><div>#2304's PR: the placing rule also moves an issue whose criteria all sit in another phase of its family; SC-2779 reworded → code + test</div></div>
+<div class="step"><span class="tag ME">ME</span><div>#2305's PR: builds <code>specs-placed.yml</code> and carries the placement-table edit → 7 files</div></div>
+<div class="step"><span class="tag AUTO">AUTO</span><div>That merge pushes <code>specs/</code> and triggers the new run: rename Phase 9, create Phase 10, move #1722 (and #1764), then <code>plan-deps</code> links #1722 to #2301–#2305</div></div>
+<div class="step"><span class="tag AUTO">AUTO</span><div>Ready stops showing #1722 until Phase 9 empties; then it is the only thing left</div></div>
+
+<h2>Real tool output (read-only)</h2>
+<div class="grid">
+<div class="card"><h3>plan-spec on the edited table</h3><pre>RENAME  Engine Phase 9 — every opted-in spec runs through the engine  (5 criteria)
+          was: Engine Phase 9 — the payload ships  (#20)
+CREATE  Engine Phase 10 — the payload ships  (1 criteria)
+Nothing written. 2 milestone change(s).</pre></div>
+<div class="card"><h3>adr-accepted lister, ADR flipped to accepted</h3><pre>ADR-019 … was accepted, and carries no Decomposition
+table — nothing to place.   (exit 0)</pre></div>
+<div class="card"><h3>plan-deps today (Engine)</h3><pre>0 missing · Frontier: Phase 9
+nothing to sequence: every open issue sits in Phase 9.
+One phase states no order, so no edge is missing and
+none is derived.</pre></div>
+<div class="card"><h3>who the narrowed rule moves (edited table)</h3><pre>39 issues in a family milestone
+33 agree · 4 span two placements (never move)
+would move: 2
+  #1722 Engine Phase 9 → Phase 10   (SC-2625)
+  #1764 Convergence Phase 3 → Phase 2 (CRC-B4)</pre></div>
+</div>
+
+<h2>Needs Jason</h2>
+<div class="grid">
+<div class="card"><h3>1 · SC-2625 to its own Phase 10</h3><span class="dim">The acceptance test runs last, ordered by the engine's own phase rule.</span></div>
+<div class="card"><h3>2 · Table edit rides in #2305</h3><span class="dim">So the merge that creates the run also triggers it; landing it in the ADR would red B1 until then.</span></div>
+<div class="card"><h3>3 · Narrow ADR-018 Decision 4</h3><span class="dim">A milestoned issue moves when ALL its criteria sit in one other phase of its family. Split issues never move.</span></div>
+<div class="card"><h3>4 · #1764 moves too</h3><span class="dim">Phase 3 → 2 (names only CRC-B4). Or tell me it belongs in 3, and its placement changes instead.</span></div>
+<div class="card"><h3>SC-2779 wording</h3><span class="dim">Reworded in the ADR; lands in #2304's PR with the code.</span></div>
+</div>
+
+<h2>Gaps</h2>
+<div class="card"><span class="warn">✗</span> Until #2304 and #2305 ship, #1722 stays in Phase 9 and Ready can still show it.<br>
+<span class="warn">✗</span> The general class (a dependency only prose states, inside one phase) stays invisible to <code>dependency-edges</code>. One instance known; nobody has looked for more.<br>
+<span class="dim">SIMULATED: the AUTO step after #2305 — the run does not exist yet, so its moves and links are predicted from the rule and the measurement above.</span></div>
+</body></html>
