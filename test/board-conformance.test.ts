@@ -2028,6 +2028,9 @@ describe("SC-2776: spec-placement measures only opted-in specs and names every d
   test("SC-2776: the same spec opted in is counted and named — the control", () => {
     const b = completeBoard();
     b.specPlacements!.push({ path: "specs/OLD.md", state: "UNPLANNED", criteria: 9, placed: 0, active: true, prefix: "Old" });
+    // An undeclared UNPLANNED spec beside it: a short reading must not name
+    // a spec it does not measure.
+    b.specPlacements!.push({ path: "specs/NOT-IN.md", state: "UNPLANNED", criteria: 5, placed: 0 });
     const r = reading(b);
     expect(r.status).toBe("short");
     expect(r.target).toBe(12);
