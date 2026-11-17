@@ -912,8 +912,9 @@ export const READINGS: readonly ReadingSpec[] = [
     },
     offenders: b => declaredWorkUnaccounted(b).map(w => `${w.id} (${w.source}) names no open issue`),
     declared: b => b.declaredWork!.filter(w => w.outside !== undefined).map(w => `${w.id} (${w.source}) — ${w.outside}`),
-    planned: b =>
-      b.declaredWork!.filter(w => w.outside === undefined && w.planned !== undefined).map(w => `${w.id} (${w.source}) — ${w.planned}`),
+    // Every planned row, parked or not: an ADR about to file an issue for a
+    // criterion the spec parks is worth seeing on both lines.
+    planned: b => b.declaredWork!.filter(w => w.planned !== undefined).map(w => `${w.id} (${w.source}) — ${w.planned}`),
   },
 ];
 
@@ -1392,12 +1393,15 @@ function normaliseDeclaredWork(raw: unknown): DeclaredWork | null {
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== "string" || r.id === "" || typeof r.source !== "string") return null;
   if (r.kind === "criterion") {
+    // #2323: absent is "not planned"; present and not a path is a row this
+    // command cannot identify, and dropping the mark would count it missing.
+    if ("planned" in r && (typeof r.planned !== "string" || r.planned === "")) return null;
     return {
       kind: "criterion",
       id: r.id,
       source: r.source,
       ...placementAnnotation(r),
-      ...(typeof r.planned === "string" && r.planned !== "" ? { planned: r.planned } : {}),
+      ...(typeof r.planned === "string" ? { planned: r.planned } : {}),
     };
   }
   if (r.kind !== "stage-item") return null;

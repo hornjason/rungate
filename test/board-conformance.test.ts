@@ -2274,10 +2274,10 @@ describe("#2323 / SC-2752: declared-work reads a criterion an unmerged ADR plans
     expect(r.planned).toEqual([]);
   });
 
-  test("#2323: the snapshot reader carries the mark, and drops an empty one", () => {
+  test("#2323: the snapshot reader carries the mark, and an absent key is not planned", () => {
     const b = completeBoard();
     b.declaredWork!.push({ kind: "criterion", id: "SC-9601", source: "specs/E.md", planned: ADR });
-    b.declaredWork!.push({ kind: "criterion", id: "SC-9602", source: "specs/E.md", planned: "" } as never);
+    b.declaredWork!.push({ kind: "criterion", id: "SC-9602", source: "specs/E.md" });
     const read = readSnapshotText(JSON.stringify(b));
     expect("board" in read).toBe(true);
     const rows = (read as { board: BoardSnapshot }).board.declaredWork!.filter(w => w.id.startsWith("SC-96"));
@@ -2285,5 +2285,31 @@ describe("#2323 / SC-2752: declared-work reads a criterion an unmerged ADR plans
       { kind: "criterion", id: "SC-9601", source: "specs/E.md", planned: ADR },
       { kind: "criterion", id: "SC-9602", source: "specs/E.md" },
     ]);
+  });
+
+  test("#2323: a planned mark that is present and unreadable unreads the population — UNMEASURED, never 'not planned'", () => {
+    // Dropping the mark would put the row back among the ones that need an
+    // issue: the SC-2752 rule for a row this command cannot identify.
+    for (const bad of ["", 7, null, ["x"]]) {
+      const b = completeBoard();
+      b.declaredWork!.push({ kind: "criterion", id: "SC-9602", source: "specs/E.md", planned: bad } as never);
+      const read = readSnapshotText(JSON.stringify(b));
+      expect("board" in read, `planned: ${JSON.stringify(bad)}`).toBe(true);
+      const board = (read as { board: BoardSnapshot }).board;
+      expect(board.declaredWork, `planned: ${JSON.stringify(bad)}`).toBeUndefined();
+      expect(reading(board).status, `planned: ${JSON.stringify(bad)}`).toBe("unmeasured");
+    }
+  });
+
+  test("#2323: a criterion both declared outside phases and planned is named on both lines", () => {
+    const b = completeBoard();
+    b.declaredWork!.push({ kind: "criterion", id: "SC-9603", source: "specs/E.md", outside: "Blocked", planned: ADR });
+    const r = reading(b);
+    expect([r.status, r.target]).toEqual(["met", 2]);
+    expect(r.declared).toEqual(["SC-9603 (specs/E.md) — Blocked"]);
+    expect(r.planned).toEqual([`SC-9603 (specs/E.md) — ${ADR}`]);
+    const text = formatReading(r);
+    expect(text).toContain("declared outside phases (1): SC-9603");
+    expect(text).toContain("planned by an ADR this change accepts (1): SC-9603");
   });
 });

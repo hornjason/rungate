@@ -2453,6 +2453,7 @@ describe("#2323 / SC-2752: a criterion an ADR this change accepts plans is plann
   /** A repository whose origin/main holds `atMain` (or no ADR), with `inTree` in the working tree. */
   const repo = (atMain: string | null, inTree: string) => {
     const dir = mkdtempSync(join(tmpdir(), "planned-adr-"));
+    // late-env-ok: git reads no GITHUB_REPOSITORY, the only variable this file sets late
     const g = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
     g("init", "-q", "-b", "main");
     g("config", "user.email", "t@t");
@@ -2507,6 +2508,7 @@ describe("#2323 / SC-2752: a criterion an ADR this change accepts plans is plann
   test("#2323: no origin/main to read exempts nothing — the fail-closed direction", () => {
     const dir = repo(null, adr("accepted"));
     try {
+      // late-env-ok: git reads no GITHUB_REPOSITORY, the only variable this file sets late
       spawnSync("git", ["-C", dir, "update-ref", "-d", "refs/remotes/origin/main"]);
       expect(planned(dir)).toStrictEqual([]);
     } finally {
