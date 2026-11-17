@@ -33,6 +33,10 @@ import { createGitHubClient } from "../lib/github";
 import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
 import type { DepEdge, DepIssue } from "../lib/spec-deps";
 import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues, readMilestonePrefix } from "../lib/live-issues";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
+import { specFilesIn } from "../lib/board-mirror";
+import { phaseOrderFor } from "../lib/spec-placement";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-deps.test.ts` can build a
@@ -226,6 +230,38 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   }
 
   const prefix = prefixRead.prefix;
+
+  // `board: { phaseOrder: false }`: the family's spec opts out of phase-order
+  // links. Read before the network, like the prefix, so a setting that cannot
+  // be read is refused without a tracker call, and an opt-out writes nothing
+  // at all. Absent specs/ is a tree where nothing can opt out, so it is on.
+  const root = values["project-root"] ?? process.cwd();
+  if (existsSync(join(root, "specs"))) {
+    const sweep = specFilesIn(root);
+    if (sweep.reading === "UNMEASURED") {
+      return refuse(values.json, `UNMEASURED — the specs could not be listed to read board.phaseOrder: ${sweep.reasons.join("; ")}`);
+    }
+    const order = phaseOrderFor(
+      sweep.paths.map(p => ({ path: p, text: readFileSync(join(root, p), "utf-8") })),
+      prefix,
+    );
+    if (order.kind === "unreadable") return refuse(values.json, `UNMEASURED — ${order.why}`);
+    if (order.kind === "off") {
+      const why = `${prefix}: ${order.spec} declares board.phaseOrder: false, so no phase-order links are written; real blocked-by links are untouched`;
+      if (values.json) {
+        console.log(
+          JSON.stringify(
+            { reading: "PHASE_ORDER_OFF", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, results: [], wrote: "phase-order-off", why },
+            null,
+            2,
+          ),
+        );
+      } else {
+        console.log(`plan-deps: ${why}`);
+      }
+      return 0;
+    }
+  }
 
   // Only now does anything touch the network. `createClient` is inside the
   // same `try` as the read: repairing only the call a finding named would

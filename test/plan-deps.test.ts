@@ -1128,3 +1128,102 @@ describe("the shape the live convergence board has", () => {
     }
   });
 });
+
+/**
+ * `board: { phaseOrder: false }`: a family whose spec opts out gets no
+ * phase-order links. Jason's call of 2026-11-17, a stopgap ahead of #2331:
+ * there, phases set priority and only real blocked-by links hold work back.
+ */
+describe("phaseOrder: false — a family that opts out of phase-order links", () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("fs") as typeof import("fs");
+  const { tmpdir } = require("os") as typeof import("os");
+  const spec = (board: string) => `---\ndoc-type: spec\nboard: ${board}\n---\n\n# A spec\n\n- [ ] SC-9401: one\n`;
+  const tree = (specs: Record<string, string>) => {
+    const root = mkdtempSync(join(tmpdir(), "plan-deps-phase-order-"));
+    mkdirSync(join(root, "specs"), { recursive: true });
+    for (const [name, text] of Object.entries(specs)) writeFileSync(join(root, "specs", name), text);
+    return root;
+  };
+  const spy = () => {
+    const calls: string[] = [];
+    let read = 0;
+    const gh: PlanDepsGitHub = {
+      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+      readIssues: async () => {
+        read++;
+        return [iss(10, 0), iss(20, 1)];
+      },
+      addBlockers: async (_repo, blocked, blockers) => void calls.push(`#${blocked} +${[...blockers].join(",")}`),
+    };
+    return { gh, calls, reads: () => read };
+  };
+  async function run(argv: string[], gh: PlanDepsGitHub) {
+    const out: string[] = [];
+    const [log, err] = [console.log, console.error];
+    console.log = (x: string) => void out.push(String(x));
+    console.error = (x: string) => void out.push(String(x));
+    try {
+      return { code: await planDepsMain(argv, gh), text: out.join("\n") };
+    } finally {
+      [console.log, console.error] = [log, err];
+    }
+  }
+
+  test("the family's spec says phaseOrder: false — nothing is written, one line says why, exit 0", async () => {
+    const root = tree({ "C-SPEC.md": spec("{ scope: active, prefix: Convergence, phaseOrder: false }") });
+    try {
+      const s = spy();
+      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
+      expect(got.code, got.text).toBe(0);
+      expect(s.calls).toEqual([]);
+      expect(got.text).toContain("Convergence: specs/C-SPEC.md declares board.phaseOrder: false, so no phase-order links are written");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the control: the same family with the key absent, or true, writes the phase order as before", async () => {
+    for (const board of ["{ scope: active, prefix: Convergence }", "{ scope: active, prefix: Convergence, phaseOrder: true }"]) {
+      const root = tree({ "C-SPEC.md": spec(board) });
+      try {
+        const s = spy();
+        const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
+        expect(got.code, got.text).toBe(0);
+        expect(s.calls, board).toEqual(["#20 +10"]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("another family's opt-out changes nothing for this one", async () => {
+    const root = tree({
+      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
+      "R-SPEC.md": spec("{ scope: active, prefix: Refresh, phaseOrder: false }"),
+    });
+    try {
+      const s = spy();
+      await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
+      expect(s.calls).toEqual(["#20 +10"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("two specs of one family that disagree refuse, before anything is read or written", async () => {
+    const root = tree({
+      "A-SPEC.md": spec("{ scope: active, prefix: Convergence, phaseOrder: false }"),
+      "B-SPEC.md": spec("{ scope: active, prefix: Convergence, phaseOrder: true }"),
+    });
+    try {
+      const s = spy();
+      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
+      expect(got.code).toBe(REFUSAL_EXIT);
+      expect(got.text).toContain("specs/A-SPEC.md says false and specs/B-SPEC.md says true");
+      expect(s.calls).toEqual([]);
+      expect(s.reads(), "the tracker was read for a family whose setting cannot be read").toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
