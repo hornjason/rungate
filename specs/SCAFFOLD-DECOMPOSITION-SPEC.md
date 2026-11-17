@@ -1411,4 +1411,4 @@ The floor is now measured on the machine asking the question — a bare `bun
 start, and a reading below one did not time a scaffold. A faster runner
 moves both numbers together, which is the same argument that produced
 `BUDGET_MULTIPLE` one issue earlier.
-- [ ] SC-2781: lib/scaffold/managed-workflow.ts contains [HARNESS_AUTHORED_PATHS] — re-scaffold over an older generated workflow writes the current value of every path the harness authors, `on.pull_request.types` included; it never reports such a file unchanged while the fresh render differs (#2292, worded by Jason 2026-11-16)
+- [x] SC-2781: lib/scaffold/managed-workflow.ts contains [HARNESS_AUTHORED_PATHS] — re-scaffold over an older generated workflow writes the current value of every path the harness authors, `on.pull_request.types` included; it never reports such a file unchanged while the fresh render differs (#2292, worded by Jason 2026-11-16)
