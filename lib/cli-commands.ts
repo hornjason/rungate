@@ -244,6 +244,14 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
       "rungate plan-issues (--repair | --decompose) <plan.md> --repo <owner/name> [--write] [--json]",
     projectRootFlag: true,
   },
+  // #2275, onboarding existing specs. Read-only: what each spec holds, its
+  // `board:` setting, and a looks-done hint per unticked criterion. It never
+  // ticks. Reads the working directory, so it takes no root flag.
+  "board-scope": {
+    script: "scripts/board-scope.ts",
+    summary: "Report each spec's criteria and opt-in, with looks-done hints",
+    usage: "rungate board-scope [--spec <path>] [--json]",
+  },
   // Step 5 of ADR-003. `plan-spec` turns the placement table into milestones;
   // this turns the ORDER of those milestones into `blocked by` edges, which is
   // AGENTS.md rule 4 — ordering is data, not prose.

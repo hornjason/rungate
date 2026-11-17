@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 25df77368e8a7a4b
+generated-sha: a3bc1aaa74c1fcfa
 ---
 
 ## Command Routing
@@ -22,6 +22,7 @@ Generated from the CLI's command registry. Run one as
 | `board-mirror` | Show every spec's criteria, and what is ready to pick up, on the project board |
 | `board-conformance` | Does the board say what the spec says — every reading, and whether any is short of target |
 | `plan-issues` | Apply an approved issue plan — --decompose creates issues from criteria (step 4), --repair links and demotes existing ones |
+| `board-scope` | Report each spec's criteria and opt-in, with looks-done hints |
 | `plan-deps` | Write a spec's phase order onto the tracker as blocked-by edges |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
 | `board-id` | Print the board's node id from config |

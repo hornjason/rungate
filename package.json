@@ -32,6 +32,7 @@
     "scripts/board-mirror.ts",
     "scripts/board-conformance.ts",
     "scripts/board-snapshot.ts",
+    "scripts/board-scope.ts",
     "scripts/plan-deps.ts",
     "scripts/plan-issues.ts",
     "scripts/board-ready.ts",
