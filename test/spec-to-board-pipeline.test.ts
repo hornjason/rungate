@@ -53,6 +53,8 @@ type Block = { owner: string; from: number; to: number; namespace?: string };
  * faults only on what THIS tree changed: a block it adds over an id origin/main
  * already states (reserving a spent id), or ids it adds inside a block
  * origin/main already holds (writing into someone else's live reservation).
+ * A held block this tree widens over an id main already states is the first
+ * of those, and is read the same way (#2332).
  * A block and the ids it covers arriving together is a reservation in flight,
  * and once both are on main it is the same reservation merged. With `base`
  * null — origin/main unreadable — every foreign block over any id faults, the
@@ -68,13 +70,18 @@ function reservationFaults(used: number[], scBlocks: Block[], base: { used: numb
     if (b.owner === OWNER) continue;
     // A held reservation covers main's range as well as this tree's copy of
     // it, so a block widened on main after this branch forked still counts.
-    const ranges = [b, ...(base?.blocks ?? []).filter(m => key(m) === key(b))];
+    const onMain = (base?.blocks ?? []).filter(m => key(m) === key(b));
+    const ranges = [b, ...onMain];
     const covered = used.filter(n => ranges.some(r => inside(n, r)));
+    // #2332: a held block this tree WIDENS onto an id main already states is
+    // the same spent-id reservation as a new block over it, so the ids the
+    // tree's range adds beyond main's range are read the way a new block is.
+    const widened = (n: number) => inside(n, b) && !onMain.some(r => inside(n, r));
     const squatted =
       base === null
         ? covered
         : heldOnMain.has(key(b))
-          ? covered.filter(n => !base.used.includes(n))
+          ? covered.filter(n => !base.used.includes(n) || widened(n))
           : covered.filter(n => base.used.includes(n));
     if (squatted.length > 0) {
       faults.push(
@@ -318,6 +325,21 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
     expect(reservationFaults(inTree, [adr], null).join(" | "), "an unreadable origin/main exempted a block").toContain(
       "rg/adr-branch reserves 2782-2785",
     );
+  });
+
+  test("#2332: a held block widened in this tree onto an id origin/main already states is reported", () => {
+    // Found in round 6 of #2328's review. A block origin/main holds was
+    // checked only for ids NEW in this tree, so widening it over a spent id
+    // went unreported, though a brand-new block over the same id is.
+    const onMain = { used: [100, 110], blocks: [{ owner: "rg/x", from: 100, to: 105 }] };
+    expect(
+      reservationFaults([100, 110], [{ owner: "rg/x", from: 100, to: 115 }], onMain).join(" | "),
+      "a held block widened over an id main already states was not reported",
+    ).toContain("rg/x reserves 100-115, which covers 110");
+    // The control: the same tree without the widening is clean.
+    expect(reservationFaults([100, 110], [{ owner: "rg/x", from: 100, to: 105 }], onMain), "an unchanged held block was reported").toEqual([]);
+    // Widening onto ids nobody states is room, not a fault.
+    expect(reservationFaults([100], [{ owner: "rg/x", from: 100, to: 115 }], { used: [100], blocks: onMain.blocks })).toEqual([]);
   });
 
   test("it is listed in the spec routing table", () => {
