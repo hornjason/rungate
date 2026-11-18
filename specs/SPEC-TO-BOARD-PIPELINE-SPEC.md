@@ -230,6 +230,7 @@ of the last 40 merged PRs closed no issue.
       proved-by: one test per clause, 2026-11-13, -t "SC-2741|#2037|#2007" — active milestone plus work-this-next: test/board-mirror.test.ts (9 pass) and test/active-milestone.test.ts (7 pass, both Ready writers read one population); label-only and payload kept out, and demotion outside the focus: test/board-ready-fanout.test.ts (8 pass); the refill triggers and issues entering by filing, never by transfer: test/board-ready-rule.test.ts (11 pass). 0 fail. Ticked by `sync-sc-status --only SC-2741` (#2054).
       fingerprint: 8017b213
 - [ ] SC-2786: `board-ready` never puts an issue in Ready that names a file an in-progress issue names, an open pull request changes, or an issue it picked earlier in the same fill names; the skipped issue stays first in line for the next fill (Jason, 2026-11-18, ADR-021)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### The process reaches consumers through scaffold
 
