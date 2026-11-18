@@ -107,7 +107,7 @@
  * measured before and after, and a single new entry reverts the write.
  */
 import { spawnSync } from "child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import {
   DIRECTORY_CONFIG_FILES,
@@ -436,4 +436,57 @@ export function ensureConfigTrackable(
     `UPDATED: .gitignore (the rungate config was ignored — ${before.ignored.join(", ")} — ` +
       `and is now committable; commit it, or the next branch switch deletes it)`,
   );
+}
+
+/**
+ * The concrete files a set of owned-file rows names on disk. A row is a path,
+ * or a `<dir>/*<ext>` class (`.claude/agents/*.md`), expanded to the files of
+ * that directory with that extension. Absent files are left out: an ignore
+ * rule only matters for a file that was written.
+ */
+function ownedPathsOnDisk(root: string, rows: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const row of rows) {
+    const star = row.lastIndexOf("/*");
+    if (star === -1) {
+      if (existsSync(join(root, row))) out.push(row);
+      continue;
+    }
+    const dir = row.slice(0, star);
+    const ext = row.slice(star + 2);
+    let names: string[];
+    try {
+      names = readdirSync(join(root, dir));
+    } catch {
+      continue; // the directory was not written, so nothing in it can be ignored
+    }
+    for (const n of names.sort()) if (n.endsWith(ext)) out.push(`${dir}/${n}`);
+  }
+  return out;
+}
+
+/**
+ * #2347: name every owned file this scaffold left in a path the project's
+ * ignore rules match. Such a file is written, never committed, and so never
+ * ships, which on one consumer was the `/dry-run` command (`.claude/*`
+ * ignored, agents and rules negated, commands not). It only reports: whether
+ * scaffold should also make the path trackable is a decision recorded on
+ * #2347, not taken here. A tree that is not a repository has no ignore rules
+ * and gets no line; a git that cannot answer gets an UNMEASURED line, never
+ * a clean silence.
+ */
+export function reportIgnoredOwnedFiles(root: string, actions: string[], rows: readonly string[]): void {
+  const inside = git(root, ["rev-parse", "--is-inside-work-tree"]);
+  if (inside.status !== 0 || inside.stdout.trim() !== "true") return;
+  const reading = matchedByIgnoreRules(root, ownedPathsOnDisk(root, rows));
+  if (reading.failure !== null) {
+    actions.push(`UNMEASURED: whether any file scaffold owns is ignored could not be read — ${reading.failure}`);
+    return;
+  }
+  for (const path of reading.ignored) {
+    actions.push(
+      `IGNORED: ${path} is written by scaffold, but this project's ignore rules match it, so it will not be ` +
+        `committed and will not ship; \`git check-ignore -v ${path}\` names the rule, and a \`!\` line after it un-ignores the path`,
+    );
+  }
 }
