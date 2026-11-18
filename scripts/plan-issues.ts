@@ -672,7 +672,7 @@ export interface PlaceGitHub {
 /** Each blocker's database id, read once per run however many issues it blocks (#2345). */
 const BLOCKER_IDS = new Map<string, number>();
 
-const LIVE_PLACE: PlaceGitHub = {
+export const LIVE_PLACE: PlaceGitHub = {
   milestones: LIVE_GITHUB.milestones,
   openIssues: async repo => (await readLiveIssues(repo, false)).filter(i => i.state === "OPEN"),
   setMilestone: LIVE_GITHUB.setMilestone,
