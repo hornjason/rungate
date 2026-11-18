@@ -14,6 +14,7 @@ import { join } from "path";
 
 import {
   buildWorkflowLaunch,
+  bundleLibCores,
   coreClosure,
   GENERATED_NOTICE,
   PURE_CORE_MODULES,
@@ -202,5 +203,141 @@ describe("#2289 / SC-2774: each copied module exports a core that imports nothin
     expect(coreClosure(destructured, ["local"]).imports).toEqual([]);
     // A property name that happens to match an import is not a use of it.
     expect(coreClosure('import { x } from "y";\nexport function f(o: { x: number }) { return o.x; }', ["f"]).imports).toEqual([]);
+  });
+});
+
+/**
+ * #2398 / SC-2775 wave 1: the reader resolves names through TypeScript's
+ * checker, and the bundler emits each module's core as one block of
+ * JavaScript. No copy in ship.js is replaced yet.
+ */
+describe("#2398: cores are read by the checker and bundled", () => {
+  const ROOT = join(import.meta.dir, "..");
+  const read = (p: string) => readFileSync(join(ROOT, p), "utf-8");
+
+  test("a core exported only by export * is reported as reaching that module, not as missing", () => {
+    const c = coreClosure('export * from "./star";\nexport function own() { return 1; }', ["fromStar"]);
+    expect(c.missing).toEqual([]);
+    expect(c.imports).toEqual(["fromStar (possibly re-exported by export * from ./star)"]);
+  });
+
+  test("review of #2399: a default export that is not a named declaration is refused, and export * as ns names its module", () => {
+    expect(coreClosure("export default function() { return 1; }", ["default"]).imports).toEqual([
+      "default (not a named top-level declaration, so it cannot be bundled)",
+    ]);
+    expect(coreClosure('import { x } from "y";\nexport default x + 1;', ["default"]).imports).toEqual([
+      "default (not a named top-level declaration, so it cannot be bundled)",
+    ]);
+    expect(() => bundleLibCores({ "lib/a.ts": ["default"] }, () => "export default class { }")).toThrow("cannot be bundled");
+    // `export * as ns` exports ns, and only ns.
+    const star = 'export * as ns from "./star";\nexport function own() { return 1; }';
+    expect(coreClosure(star, ["ns"]).imports).toEqual(["ns (re-exported from ./star)"]);
+    expect(coreClosure(star, ["fromStar"]).missing).toEqual(["fromStar"]);
+    // A NAMED default function is a declaration and bundles.
+    expect(coreClosure("export default function named() { return 1; }", ["default"]).imports).toEqual([]);
+  });
+
+  test("review of #2399: a parameter or local named require is not the module loader", () => {
+    const src = [
+      "export function viaParam(require: (id: string) => unknown) { return require(\"x\"); }",
+      "export function viaLocal() { const require = (id: string) => id; return require(\"y\"); }",
+      "export function global() { return require(\"z\"); }",
+    ].join("\n");
+    expect(coreClosure(src, ["viaParam", "viaLocal"]).imports).toEqual([]);
+    expect(coreClosure(src, ["global"]).imports).toEqual(["require() of z (via global)"]);
+  });
+
+  test("review of #2399: a core exported from a destructured binding is named as asked, not by pattern order", () => {
+    expect(coreClosure("const obj = { a: 1, b: 2 };\nconst { b, a } = obj;\nexport { a };", ["a"]).declarations).toEqual(["a", "obj"]);
+  });
+
+  test("review of #2399: a core exported under an alias whose local cannot be placed is refused, not dropped", () => {
+    expect(coreClosure("if (true) { function g() { return 1; } }\nexport { g as core };", ["core"]).imports).toEqual([
+      "core (not a named top-level declaration, so it cannot be bundled)",
+    ]);
+  });
+
+  test("review of #2399 round 4: a top-level statement that uses a reached binding is refused, not dropped", () => {
+    // An enum compiles to `var Color;` plus an initializer statement; emitting
+    // the declaration alone would bundle an undefined Color.
+    const enumSrc = "enum Color { Red, Blue }\nexport function pick() { return Color.Red; }";
+    expect(coreClosure(enumSrc, ["pick"]).imports).toEqual([
+      "Color (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    expect(() => bundleLibCores({ "lib/a.ts": ["pick"] }, () => enumSrc)).toThrow("Color (used by top-level code that runs at load");
+    // A namespace is the same shape.
+    expect(coreClosure("namespace N { export const x = 1; }\nexport function f() { return N.x; }", ["f"]).imports).toEqual([
+      "N (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    // So is a plain write after the declaration.
+    expect(coreClosure("const T: Record<string, number> = {};\nT.x = 1;\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    // An unreached declaration's initializer runs at load too (review of #2399, round 6).
+    expect(coreClosure("const T: Record<string, number> = {};\nconst _ = (T.x = 1);\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    expect(coreClosure("const T: Record<string, number> = {};\nclass K { static s = (T.x = 1); }\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    // A function that top-level code names may run at load, so its body is load-time code (review of #2399, round 8).
+    expect(coreClosure("const T: Record<string, number> = {};\nfunction later() { T.x = 1; }\nlater();\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    expect(coreClosure("const T: Record<string, number> = {};\nfunction a() { b(); }\nfunction b() { T.x = 1; }\n[1].forEach(a);\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    // A function no core reaches runs nothing at load, so its body is not a use.
+    expect(coreClosure("const T: Record<string, number> = {};\nfunction later() { T.x = 1; }\nexport function get() { return T.x; }", ["get"]).imports).toEqual([]);
+    // A statement that touches only what no core reaches is left behind, as before.
+    expect(coreClosure("const other: number[] = [];\nother.push(1);\nexport function f() { return 1; }", ["f"]).imports).toEqual([]);
+    // A local that shadows a reached name inside such a statement is not a use of it.
+    expect(coreClosure("const T = 1;\n[2].forEach(T => T);\nexport function f() { return T; }", ["f"]).imports).toEqual([]);
+  });
+
+  test("a local that shadows an import is not a use of it — the checker reads scope", () => {
+    const src = 'import { existsSync } from "fs";\nexport function f(existsSync: (p: string) => boolean) { return existsSync("x"); }';
+    expect(coreClosure(src, ["f"]).imports).toEqual([]);
+  });
+
+  test("the four modules bundle into JavaScript that parses, runs with no module loading, and defines every core", () => {
+    const bundle = bundleLibCores(PURE_CORE_MODULES, read);
+    const cores = Object.values(PURE_CORE_MODULES).flat();
+    expect(parseErrors(bundle.text), "the bundle does not parse").toEqual([]);
+    for (const name of cores) expect(bundle.defined, `${name} is not defined by the bundle`).toContain(name);
+    // Evaluated in a bare function: no import, no require, one scope. A
+    // top-level initializer that needed a module would throw here.
+    const scope = new Function(`${bundle.text}\nreturn { ${cores.join(", ")} };`)() as Record<string, unknown>;
+    for (const name of cores) expect(typeof scope[name], `${name} is not a function in the bundle`).toBe("function");
+    // It still leaves room in the launch file.
+    expect(Buffer.byteLength(built.text) + Buffer.byteLength(bundle.text)).toBeLessThan(WORKFLOW_SCRIPT_CAP);
+  });
+
+  test("a bundled core still behaves like its module: shellQuote quotes, isSafeBranchName refuses a traversal", () => {
+    const bundle = bundleLibCores(PURE_CORE_MODULES, read);
+    const f = new Function(`${bundle.text}\nreturn { shellQuote, isSafeBranchName };`)() as {
+      shellQuote: (w: unknown) => string;
+      isSafeBranchName: (n: unknown) => boolean;
+    };
+    expect(f.shellQuote("a b")).toBe("'a b'");
+    expect(f.isSafeBranchName("rg/ok-1")).toBe(true);
+    expect(f.isSafeBranchName("../escape")).toBe(false);
+  });
+
+  test("a core that reaches an import is refused by the bundler, naming the module and the import", () => {
+    const files: Record<string, string> = {
+      "lib/a.ts": 'import { existsSync } from "fs";\nexport function a() { return existsSync("x"); }',
+    };
+    expect(() => bundleLibCores({ "lib/a.ts": ["a"] }, p => files[p]!)).toThrow("lib/a.ts cannot be bundled: its core reaches existsSync (from fs, via a)");
+  });
+
+  test("two modules defining one name are refused: the launch file has one scope", () => {
+    const files: Record<string, string> = {
+      "lib/a.ts": "function helper() { return 1; }\nexport function a() { return helper(); }",
+      "lib/b.ts": "function helper() { return 2; }\nexport function b() { return helper(); }",
+    };
+    expect(() => bundleLibCores({ "lib/a.ts": ["a"], "lib/b.ts": ["b"] }, p => files[p]!)).toThrow(
+      "helper is defined by both lib/a.ts and lib/b.ts",
+    );
   });
 });
