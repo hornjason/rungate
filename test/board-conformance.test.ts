@@ -129,7 +129,7 @@ const activeBoard = (prefix: string) => ({ scope: "active", settings: { scope: "
 /** A board where every reading is met, which each case then breaks one of. */
 const completeBoard = (): BoardSnapshot => ({
   issues: [
-    { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+    { number: 1, blockedBy: [], criteriaField: "SC-2618", labels: ["engine"] },
     { number: 2, blockedBy: [1], criteriaField: "SC-2619", labels: ["engine", "bug"] },
   ],
   criteria: [
@@ -291,6 +291,29 @@ describe("SC-2783: consumer-intake reads an unanswered consumer issue as short",
  * the open issues, as `consumer-intake`'s is: "no open issue is missing a
  * link planning declared for it", asked of a population that was read.
  */
+/**
+ * #2433, ADR-021 decision 4: `blocked-by-edges` is "every link on an engine
+ * issue resolves". It also required every issue outside the lowest phase to
+ * carry an edge: phase order written as links. Once #2433 took those links
+ * off, two Convergence issues with nothing blocking them read short, and stage
+ * item F1 failed on main.
+ */
+describe("#2433: blocked-by-edges asks only that every link resolves", () => {
+  const reading = (b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === "blocked-by-edges")!, b);
+
+  test("an engine issue with no links at all is met: nothing blocks it, so it can start", () => {
+    const b = completeBoard();
+    for (const i of b.issues) i.blockedBy = [];
+    expect(reading(b).status).toBe("met");
+  });
+
+  test("a link naming nothing is still short", () => {
+    const b = completeBoard();
+    b.issues[0]!.blockedBy = [9999];
+    expect(reading(b).status).toBe("short");
+  });
+});
+
 describe("#2432: dependency-edges counts open issues, so nothing declared is met", () => {
   const reading = (b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === "dependency-edges")!, b);
 
@@ -392,7 +415,7 @@ describe("a finished blocker is not a missing one", () => {
   const withClosedBlocker = (): BoardSnapshot => ({
     ...completeBoard(),
     issues: [
-      { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+      { number: 1, blockedBy: [], criteriaField: "SC-2618", labels: ["engine"] },
       { number: 2, blockedBy: [9], criteriaField: "SC-2619", labels: ["engine"] },
     ],
     closedBlockers: [9],
@@ -699,7 +722,7 @@ describe("the refusals, each proved against the mutant", () => {
       reading: string;
       to: "SHORT      " | "UNMEASURED ";
     }[] = [
-      { row: "issues", at: 1, field: "blockedBy", reading: "blocked-by-edges", to: "SHORT      " },
+      { row: "issues", at: 1, field: "blockedBy", reading: "blocked-by-edges", to: "UNMEASURED " },
       { row: "issues", at: 1, field: "labels", reading: "queue-label", to: "SHORT      " },
       { row: "issues", at: 1, field: "criteriaField", reading: "criteria-field", to: "UNMEASURED " },
       { row: "phases", at: 1, field: "milestoneState", reading: "milestones", to: "SHORT      " },
@@ -756,7 +779,7 @@ describe("each reading, planted short and planted complete", () => {
   const breaks: { reading: string; what: string; break: (b: BoardSnapshot) => void }[] = [
     { reading: "milestones", what: "a phase whose milestone the board does not carry", break: b => void (b.phases[1]!.milestoneState = "create") },
     { reading: "criterion-coverage", what: "a criterion naming no issue and not recorded true", break: b => void (b.criteria[2]!.recordedTrue = false) },
-    { reading: "blocked-by-edges", what: "an issue that is neither a declared root nor blocked", break: b => void (b.issues[1]!.blockedBy = []) },
+    { reading: "blocked-by-edges", what: "a link on an engine issue that resolves to nothing", break: b => void (b.issues[1]!.blockedBy = [9999]) },
     { reading: "criteria-field", what: "an issue whose Criteria column is blank", break: b => void (b.issues[0]!.criteriaField = "  ") },
     { reading: "queue-label", what: "an issue missing the engine label", break: b => void (b.issues[1]!.labels = ["bug"]) },
     // The three repository-wide readings, broken in their own populations —
@@ -858,7 +881,6 @@ describe("each reading, planted short and planted complete", () => {
     }
     for (const i of dangling.issues) {
       i.blockedBy = [9999];
-      delete i.rootReady; // or a declared root satisfies it without the edge
     }
     // `dependency-edges` resolves against `repoIssues`, not against the
     // engine population, so its references have to be made stale in their
@@ -876,8 +898,7 @@ describe("each reading, planted short and planted complete", () => {
     // constant, which is the only way that shape gets found.
     const mixed = completeBoard();
     for (const i of mixed.issues) {
-      i.blockedBy = [...i.blockedBy, 9999];
-      delete i.rootReady;
+      i.blockedBy = [...i.blockedBy!, 9999];
     }
     mixed.issues[0]!.blockedBy = [mixed.issues[1]!.number, 9999];
     const mixedEdges = takeReading(READINGS.find(r => r.name === "blocked-by-edges")!, mixed);
@@ -1080,8 +1101,7 @@ describe("every field the snapshot declares is read by something", () => {
     { field: "BoardCriterion.id", effect: "unreadable", apply: b => void (b.criteria[1]!.id = b.criteria[0]!.id) },
     { field: "BoardPhase.phase", effect: "unreadable", apply: b => void (b.phases[1]!.phase = b.phases[0]!.phase) },
 
-    { field: "BoardIssue.blockedBy", effect: "reading", apply: b => void (b.issues[1]!.blockedBy = []) },
-    { field: "BoardIssue.rootReady", effect: "reading", apply: b => void (b.issues[0]!.rootReady = false) },
+    { field: "BoardIssue.blockedBy", effect: "reading", apply: b => void (b.issues[1]!.blockedBy = [9999]) },
     { field: "BoardIssue.criteriaField", effect: "reading", apply: b => void (b.issues[0]!.criteriaField = "  ") },
     { field: "BoardIssue.labels", effect: "reading", apply: b => void (b.issues[1]!.labels = ["bug"]) },
     { field: "BoardCriterion.satisfiedByIssue", effect: "reading", apply: b => void (b.criteria[0]!.satisfiedByIssue = null) },
@@ -1208,7 +1228,7 @@ describe("a repeat inside a LIST, not just a repeated row", () => {
   const lists: { field: string; apply: (b: BoardSnapshot) => void }[] = [
     { field: "phases[].criteria (within one phase)", apply: b => void (b.phases[0]!.criteria = [...b.phases[0]!.criteria, b.phases[0]!.criteria[0]!]) },
     { field: "phases[].criteria (across two phases)", apply: b => void (b.phases[1]!.criteria = [...b.phases[1]!.criteria, b.phases[0]!.criteria[0]!]) },
-    { field: "issues[].blockedBy", apply: b => void (b.issues[1]!.blockedBy = [...b.issues[1]!.blockedBy, b.issues[1]!.blockedBy[0]!]) },
+    { field: "issues[].blockedBy", apply: b => void (b.issues[1]!.blockedBy = [...b.issues[1]!.blockedBy!, b.issues[1]!.blockedBy![0]!]) },
     { field: "issues[].labels", apply: b => void (b.issues[1]!.labels = [...b.issues[1]!.labels, b.issues[1]!.labels[0]!]) },
   ];
 
@@ -1549,7 +1569,7 @@ describe("a field the producer did not read is not a field that is empty (B4)", 
   test("every issue omits it: UNMEASURED, not 0 of N", () => {
     const r = criteriaField(
       withIssues([
-        { number: 1, blockedBy: [], rootReady: true, labels: ["engine"] },
+        { number: 1, blockedBy: [], labels: ["engine"] },
         { number: 2, blockedBy: [1], labels: ["engine"] },
       ]),
     );
@@ -1564,7 +1584,7 @@ describe("a field the producer did not read is not a field that is empty (B4)", 
     // thing this command can say.
     const r = criteriaField(
       withIssues([
-        { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+        { number: 1, blockedBy: [], criteriaField: "SC-2618", labels: ["engine"] },
         { number: 2, blockedBy: [1], labels: ["engine"] },
       ]),
     );
@@ -1574,7 +1594,7 @@ describe("a field the producer did not read is not a field that is empty (B4)", 
   test("read and empty is SHORT, because that is a measurement", () => {
     const r = criteriaField(
       withIssues([
-        { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+        { number: 1, blockedBy: [], criteriaField: "SC-2618", labels: ["engine"] },
         { number: 2, blockedBy: [1], criteriaField: null, labels: ["engine"] },
       ]),
     );
@@ -1585,7 +1605,7 @@ describe("a field the producer did not read is not a field that is empty (B4)", 
   test('a read-but-blank string is SHORT too, not met', () => {
     const r = criteriaField(
       withIssues([
-        { number: 1, blockedBy: [], rootReady: true, criteriaField: "   ", labels: ["engine"] },
+        { number: 1, blockedBy: [], criteriaField: "   ", labels: ["engine"] },
         { number: 2, blockedBy: [1], criteriaField: "SC-2619", labels: ["engine"] },
       ]),
     );
@@ -1603,7 +1623,7 @@ describe("a field the producer did not read is not a field that is empty (B4)", 
     // whole command UNMEASURED the moment one column went unread, which is
     // the same defect pointed the other way.
     const half = withIssues([
-      { number: 1, blockedBy: [], rootReady: true, criteriaField: "SC-2618", labels: ["engine"] },
+      { number: 1, blockedBy: [], criteriaField: "SC-2618", labels: ["engine"] },
       { number: 2, blockedBy: [1], labels: ["engine"] },
     ]);
     const queue = takeReadings(half).find(r => r.name === "queue-label")!;
@@ -1928,7 +1948,7 @@ describe("#1889: --emit-readings is the machine-readable seam", () => {
     // board. Moving the write below the `outstanding.length > 0` refusal
     // turns this red.
     const short = completeBoard();
-    short.issues = [{ number: 1, blockedBy: [], rootReady: false, criteriaField: "", labels: ["engine"] }];
+    short.issues = [{ number: 1, blockedBy: [], criteriaField: "", labels: ["engine"] }];
     const out = emitTo("short");
     const r = run(SCRIPT, [`--snapshot=${plant("emit-short", short)}`, `--emit-readings=${out}`]);
     expect(r.code, "a short board should still refuse on the verdict").toBe(REFUSE_EXIT);

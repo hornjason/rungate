@@ -53,9 +53,9 @@ export const REFUSE_EXIT = 1;
 export interface BoardIssue {
   number: number;
   /** Issue numbers this one is blocked by, as GitHub's own edges. */
-  blockedBy: number[];
+  /** Absent when the links were not read for this issue — never an empty list in disguise. */
+  blockedBy?: number[];
   /** Set when the issue is deliberately a root — nothing blocks it. */
-  rootReady?: boolean;
   /**
    * The board's Criteria column for this issue — a mirror of the body.
    *
@@ -670,7 +670,7 @@ export const READINGS: readonly ReadingSpec[] = [
   {
     name: "blocked-by-edges",
     item: "B3",
-    what: "every engine issue is a declared root or carries a blocked-by edge, so what is next is computed",
+    what: "every blocked-by link on an engine issue resolves to an open or a finished issue, so what is next is computed",
     readsIssueRefs: true,
     // EVERY edge has to resolve, and `some` is not that.
     //
@@ -681,25 +681,35 @@ export const READINGS: readonly ReadingSpec[] = [
     // is why this is `every` and not `some` — round 7 caught the two
     // disagreeing, with this comment already asserting `every`.
     //
-    // `length > 0` first, because `[].every(...)` is true and an issue with
-    // no edges at all would otherwise pass as a computed one. `rootReady`
-    // is how an issue says it has no blockers on purpose.
+    // An issue with NO links passes (#2433, ADR-021 decision 4: "every link
+    // on an engine issue resolves"). Until ADR-021 this also required every
+    // issue outside the lowest phase to carry an edge — phase order written
+    // as links, so a phase was a gate. Phase is a sort order now, and an
+    // issue nothing blocks is startable, not a hole in the graph.
     // An absent `closedBlockers` is NOT an empty one. A snapshot written
     // before #1704 read open issues only, so it cannot tell a finished
     // blocker from a typo — and treating its silence as "there are none"
     // is exactly the reading that broke. The denominator is unchanged by
     // either answer, so this is a statement about whether anybody looked.
-    unreadable: b =>
-      b.closedBlockers !== undefined || b.issues.length === 0
+    // An issue whose links were not read is not an issue with no links:
+    // now that "no links" passes, an omitted `blockedBy` read as `[]` would
+    // be the flattering reading, so it is UNMEASURED by name.
+    unreadable: b => {
+      const unread = b.issues.filter(i => i.blockedBy === undefined).map(i => `#${i.number}`);
+      if (unread.length > 0) {
+        return `the blocked-by links were not read for ${unread.length} issue(s) (${unread.slice(0, 5).join(", ")}) — that is not an issue with no links`;
+      }
+      return b.closedBlockers !== undefined || b.issues.length === 0
         ? null
         : `closed issues were never read, so an edge to a FINISHED blocker is indistinguishable ` +
           `from an edge to one that never existed — both absent from the ${b.issues.length} open ` +
-          `issue(s) on this board`,
+          `issue(s) on this board`;
+    },
     measure: b => {
       const present = resolvableBlocker(b);
       return {
         measured: b.issues.filter(
-          i => i.rootReady === true || (i.blockedBy.length > 0 && i.blockedBy.every(n => present.has(n))),
+          i => i.blockedBy!.every(n => present.has(n)),
         ).length,
         target: b.issues.length,
       };
@@ -1106,8 +1116,8 @@ const normaliseIssue = (v: unknown): BoardIssue | null => {
   if (typeof i.number !== "number") return null;
   return {
     number: i.number,
-    blockedBy: asList<number>(i.blockedBy).filter(n => typeof n === "number"),
-    rootReady: i.rootReady === true,
+    // Key presence, as criteriaField: an omitted list is UNREAD, not empty (#2433).
+    ...("blockedBy" in (v as object) ? { blockedBy: asList<number>(i.blockedBy).filter(n => typeof n === "number") } : {}),
     // Key PRESENCE, not value. `asText(undefined)` is `null`, which would
     // erase the distinction this field exists to carry — an omitted column
     // and a column read as empty would arrive here identical.

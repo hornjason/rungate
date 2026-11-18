@@ -220,13 +220,6 @@ export interface SnapshotIssue {
   number: number;
   /** The issue numbers that already block this one, live. */
   blockedBy: number[];
-  /**
-   * True when the issue sits in the lowest phase that carries any engine
-   * issue. Derived from the milestone order, not declared: the first phase
-   * has nothing before it to be blocked by, so an edge there would be a
-   * fiction.
-   */
-  rootReady: boolean;
   /** Every label on the issue, read rather than assumed empty. */
   labels: string[];
   /**
@@ -969,7 +962,6 @@ export async function main(
   const snapshotIssues = engine.map(i => ({
     number: i.number,
     blockedBy: [...i.blockedBy],
-    rootReady: frontier !== null && phaseOf(i.milestone) === frontier,
     labels: [...i.labels],
     ...criteriaKey(i.number),
   }));
