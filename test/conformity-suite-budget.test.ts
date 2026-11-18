@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { CONFORMITY_TEST_BUDGET_MS } from "../lib/conformity";
 import { FALLOW_BUDGET_MS } from "../lib/fallow-availability";
+import { GATE_TEST_TIMEOUT_MS } from "../lib/gate-timeouts";
 import { perTestTimeoutDeclarations } from "../lib/per-test-timeouts";
 import { generateConformityTest } from "../lib/scaffold/steps";
 
@@ -89,6 +90,9 @@ describe("#2384: the generated conformity suite gives its checks a budget", () =
     // 30.9s is the slowest reading in the issue; a budget under it repeats
     // the consumer's red run.
     expect(CONFORMITY_TEST_BUDGET_MS).toBeGreaterThan(30_900);
+    // These checks start no subprocess, so they get less than the gate suite,
+    // whose checks run a real compiler.
+    expect(CONFORMITY_TEST_BUDGET_MS).toBeLessThan(GATE_TEST_TIMEOUT_MS);
   });
 
   test("each check the consumer saw killed runs under the file-wide budget", () => {
