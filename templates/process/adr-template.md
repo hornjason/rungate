@@ -57,7 +57,10 @@ the whole plan if any row breaks a rule, so check each one:
 - **Milestone**: the exact title of a milestone that exists, or `—` for
   none.
 - **Blocked by**: `#<issue>`, or another row's Outcome word for word, or `—`.
-  A cycle is refused.
+  A cycle is refused, and so is a `#<issue>` this repository does not hold.
+- **Blocks** (optional sixth column): existing issues, `#<issue>` only, that
+  wait on this row once it exists. To use it, add `| Blocks |` to the header;
+  every row then has six cells. An unknown or closed issue is refused.
 
 Keep the table outside code fences and comments. The filing tool reads only
 live table rows.
