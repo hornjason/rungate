@@ -82,6 +82,28 @@ describe("#2275: board-scope reports each spec before it is opted in", () => {
     }
   });
 
+  // #2333: a `generated-by:` copy repeats its source's ids. It is not a
+  // second author, so the source keeps its hint at both deciders — the
+  // who-states-this-id map AND the claim-credit rule. An authored duplicate
+  // (SC-9102) is still ambiguous.
+  test("#2333: a generated copy restating a claimed id leaves the source 'looks done'; an authored duplicate stays ambiguous", () => {
+    const root = fixture();
+    try {
+      writeFileSync(
+        join(root, "specs/MIRROR-SPEC.md"),
+        spec("generated-by: scripts/some-generator.ts\n", "- [ ] SC-9101: the first thing is true"),
+      );
+      const r = run(root, "--spec", "specs/UNTRACKED-SPEC.md");
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain("SC-9101  looks done: a test claims it");
+      expect(r.out).not.toContain("SC-9101  ambiguous");
+      expect(r.out).not.toContain("SC-9101  cannot tell");
+      expect(r.out).toContain("SC-9102  ambiguous: also stated by specs/TRACKED-SPEC.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("#2275: a spec with criteria and no board: block is not tracked, a population of its own", () => {
     const root = fixture();
     try {
