@@ -1523,18 +1523,23 @@ fourth turns on a setting, and both can change.
 
 ### Blocked on an owner decision, not on engineering
 
-Two criteria are satisfiable by **repository configuration** and cost no
-engineering. They are listed apart because "nobody has built it" and
+One criterion is satisfiable by **repository configuration** and costs no
+engineering. It is listed apart because "nobody has built it" and
 "somebody has to decide" are different debts, and the second does not get
 smaller by working on it.
 
-Both are also unobservable from inside this tree for the same reason CRC-C2
-is — they are GitHub state, not tree state. Binding either of them needs a
-check that reads the API, which is a design decision in its own right.
+It is also unobservable from inside this tree for the same reason CRC-C2
+is — it is GitHub state, not tree state. Binding it needs a check that reads
+the API, which is a design decision in its own right.
+
+CRC-C3 was the second row until #2306 ticked it from a test: each review round
+now reports a thread resolved with no reason, and `PROTECT-2` binds the
+setting. Its row recorded the history of `required_conversation_resolution`,
+which Phase 0 below keeps: the 2026-10-23 application, the regression found on
+2026-11-07, and the four draws that measured the setting's effect.
 
 | Criterion | The setting | What it closes |
 |---|---|---|
-| CRC-C3 — a false positive clears by closing the thread with a reason | `required_conversation_resolution`, **`true` today and NOT continuously true since 2026-10-23** — applied 2026-10-23, read `true` 2026-10-25, read **`false`** on 2026-11-07, re-applied the same day (#1650). Phase 0 below records the regression, its mechanism, and the three different day-counts this incident has — the setting was off for **at most 11 days** and that is an upper bound rather than a measurement. Separately and earlier, this row read `currently false` until 2026-10-25 and was stale then too. | The native mechanism for "a finding blocks merge until it is dispositioned", which is also half of CRC-B8. **It is in force and, since 2026-10-26, it has something to act on:** the generated workflow's `ai-review-threads` step opens a review thread per finding, and #1614 carries four. This cell read "nothing to act on" until then, and until 2026-11-07 it went on to say the reading was still missing — *no pull request has yet been observed blocked by an unresolved thread with every other required context green*. That sentence was already false when it was written and stayed in the row for twelve days — a count about this row's staleness, not about the setting's outage, which the Phase 0 table below keeps apart: Phase 0's row in *Readings taken* records **four draws** (#1616, #1622, #1627, #1858), each one exactly that observation. The setting's effect is measured, not inferred. What is genuinely missing is a check that would have caught the regression while it was live — `readFindingDisposition` is newer than the incident and has no live history at all. |
 | CRC-E8 — an approval covers one specific commit | `required_pull_request_reviews` with `dismiss_stale_reviews`. | Nothing today: with no required reviews there is no approval to carry or dismiss. `gh pr merge --match-head-commit` is a convention agents follow by hand. |
 
 ### Contested — this repository gives two opposite instructions
