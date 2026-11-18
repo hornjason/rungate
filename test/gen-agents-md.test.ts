@@ -374,7 +374,7 @@ describe("#2318: the rule's command passes the filing gate as written", () => {
    * the gate keys only on repository paths and shaped identifiers. So each
    * thing the rule says is not enough is run, and refused.
    */
-  test("#2318 AC-2 CONTROL: a symptom naming only a command, or nothing, is refused, as the rule warns", async () => {
+  test("#2318 AC-2 CONTROL: a symptom naming only a command, or no path or function at all, is refused, as the rule warns", async () => {
     const [attempt] = filingAttempts('gh issue create --repo hornjason/rungate --title "x" --body-file /tmp/body.md');
     for (const symptom of ["the generated rule is wrong", "`bunx rungate scaffold .` skips the gates job, 2 of 2 runs"]) {
       const v = await adjudicateFiling(attempt, async () => measuredCorpus([]), () => filledBody(symptom), undefined, {
@@ -406,9 +406,11 @@ describe("#2318: the rule's command passes the filing gate as written", () => {
     for (const token of Object.keys(COMMENT_EXEMPTIONS)) {
       // Named AND glossed (review of #2424): a token with no meaning beside
       // it leaves a consumer guessing which one applies.
-      expect(body, `the rule does not name and explain \`${token}\`, which the gate accepts`).toMatch(
-        new RegExp("`" + token + "`: \\S"),
-      );
+      // A string search, not a regex: a future token with a metacharacter in
+      // it must not change what this matches (review of #2426).
+      const at = body.indexOf("`" + token + "`: ");
+      const gloss = at === -1 ? "" : body.slice(at + token.length + 4, at + token.length + 5);
+      expect(gloss.trim(), `the rule does not name and explain \`${token}\`, which the gate accepts`).not.toBe("");
     }
     expect(body, "the rule does not say the claim comes from this project's SUCCESS.md (#2317)").toContain(
       "this project's `SUCCESS.md`",
