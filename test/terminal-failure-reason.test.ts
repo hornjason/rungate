@@ -26,8 +26,11 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 import { runWorkflow } from "../lib/workflow-test-harness";
+import { shipPrelude } from "../scripts/build-workflow-launch";
 
 const SHIP = readFileSync(join(import.meta.dir, "..", "workflows", "ship.js"), "utf-8");
+// The lib code ship.run.js bundles, which ship.js calls and no longer defines (#2405).
+const SHIP_PRELUDE = shipPrelude();
 
 /** A marked block of ship.js, by its START/END fence. */
 function block(name: string): string {
@@ -202,7 +205,7 @@ describe("#524: the exits that carried no reason now carry a specific one", () =
       const before = merged[label];
       merged[label] = before ? (s: any) => fn(before(s)) : fn;
     }
-    return runWorkflow(SHIP, {
+    return runWorkflow(SHIP, { prelude: SHIP_PRELUDE,
       args: { issue: 1, projectRoot: "/tmp/p", repo: "o/r", harnessRoot: "/tmp/h" },
       overrides: merged,
     });

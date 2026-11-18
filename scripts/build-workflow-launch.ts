@@ -143,6 +143,20 @@ export function buildWorkflowLaunch(source: string, cap: number = WORKFLOW_SCRIP
   return { text: out, bytes };
 }
 
+/**
+ * The bundled lib region of a launch file: the code ship.js calls and no
+ * longer defines, for the workflow test harness to run ahead of it (#2405).
+ * Refuses when the region is absent, so a harness run never silently loses it.
+ */
+export function shipPrelude(launchText: string = readFileSync(SHIP_LAUNCH, "utf-8")): string {
+  const start = launchText.indexOf(BUNDLE_START);
+  const end = launchText.indexOf(BUNDLE_END);
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error("the launch file carries no bundled lib region, so ship.js cannot run outside it — rebuild workflows/ship.run.js");
+  }
+  return launchText.slice(start + BUNDLE_START.length, end);
+}
+
 /** Marks the bundled lib region in the launch file (#2400). Added after comments are stripped, so it survives. */
 export const BUNDLE_START = "// ---- bundled from lib/ by scripts/build-workflow-launch.ts: begin ----";
 export const BUNDLE_END = "// ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----";

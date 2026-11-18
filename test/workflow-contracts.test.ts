@@ -43,8 +43,11 @@ import {
   workflowBody,
   type HarnessCall,
 } from "../lib/workflow-test-harness";
+import { shipPrelude } from "../scripts/build-workflow-launch";
 
 const SHIP = readFileSync(join(import.meta.dir, "..", "workflows", "ship.js"), "utf-8");
+// The lib code ship.run.js bundles, which ship.js calls and no longer defines (#2405).
+const SHIP_PRELUDE = shipPrelude();
 
 const ARGS = {
   issue: 61,
@@ -103,7 +106,7 @@ const labelsOf = (calls: HarnessCall[]) =>
 
 describe("#61 SC-1: the whole workflow executes with no agents", () => {
   test("SC-1748: ship.js runs end to end in well under a second and returns a terminal status", async () => {
-    const run = await runWorkflow(SHIP, { args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
+    const run = await runWorkflow(SHIP, { prelude: SHIP_PRELUDE, args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
 
     // The error is surfaced rather than converted to a verdict. A harness
     // reporting "the workflow did not complete" is indistinguishable from one
@@ -128,7 +131,7 @@ describe("#61 SC-1: the whole workflow executes with no agents", () => {
     // The overrides travel with it: without them the run refuses at the
     // launch-base check after two agent calls and never reaches the cap, so
     // the cap case would pass over a script that stopped for another reason.
-    const capped = await runWorkflow(SHIP, {
+    const capped = await runWorkflow(SHIP, { prelude: SHIP_PRELUDE,
       args: { ...ARGS },
       overrides: COHERENT("STANDARD", { home: "/" }),
       maxCalls: 3,
@@ -154,7 +157,7 @@ describe("#61 SC-1: the whole workflow executes with no agents", () => {
 describe("#61 SC-2: all three ceremony tiers are driven and observed", () => {
   test("SC-1750: each declared tier produces a different run - and a UI project floors LIGHT to STANDARD", async () => {
     const run = (tier: string, pages: Record<string, string>) =>
-      runWorkflow(SHIP, { args: { ...ARGS, dryRun: true }, overrides: COHERENT(tier, pages) });
+      runWorkflow(SHIP, { prelude: SHIP_PRELUDE, args: { ...ARGS, dryRun: true }, overrides: COHERENT(tier, pages) });
 
     const [light, standard, thorough, flooredIn] = await Promise.all([
       run("LIGHT", {}),
@@ -181,11 +184,11 @@ describe("#61 SC-2: all three ceremony tiers are driven and observed", () => {
   });
 
   test("SC-1751: a dry run stops after scope and a full run reaches Implement", async () => {
-    const dry = await runWorkflow(SHIP, {
+    const dry = await runWorkflow(SHIP, { prelude: SHIP_PRELUDE,
       args: { ...ARGS, dryRun: true },
       overrides: COHERENT("STANDARD", { home: "/" }),
     });
-    const full = await runWorkflow(SHIP, {
+    const full = await runWorkflow(SHIP, { prelude: SHIP_PRELUDE,
       args: { ...ARGS },
       overrides: COHERENT("STANDARD", { home: "/" }),
     });
@@ -209,7 +212,7 @@ describe("#61 SC-2: all three ceremony tiers are driven and observed", () => {
 
 describe("#61 SC-2': a call site with no schema is reported - never defaulted", () => {
   test("SC-1752: ship.js's unschemaed call sites are named", async () => {
-    const run = await runWorkflow(SHIP, { args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
+    const run = await runWorkflow(SHIP, { prelude: SHIP_PRELUDE, args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
 
     // A mock that returns `{}` for a schemaless call is a mock testing
     // itself: the script reads a field, gets `undefined`, and takes a branch
@@ -244,7 +247,7 @@ describe("#61 SC-2': a call site with no schema is reported - never defaulted", 
 
 describe("#61 SC-3: phase boundary violations are caught", () => {
   test("SC-1753: ship.js's real run has no backwards phase - and declaring ahead is not a violation", async () => {
-    const run = await runWorkflow(SHIP, { args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
+    const run = await runWorkflow(SHIP, { prelude: SHIP_PRELUDE, args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
     expect(phaseOrderViolations(run.calls)).toEqual([]);
     expect(agentPhaseViolations(run.calls)).toEqual([]);
 
@@ -331,14 +334,14 @@ describe("#61 SC-3: phase boundary violations are caught", () => {
     const mutated = SHIP.replace("phase('Scope')", "phase('Prove')");
     expect(mutated, "the planted edit did not apply").not.toBe(SHIP);
 
-    const run = await runWorkflow(mutated, { args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
+    const run = await runWorkflow(mutated, { prelude: SHIP_PRELUDE, args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
     const violations = phaseOrderViolations(run.calls);
     expect(violations.length, "a backwards phase in the real script was not caught").toBeGreaterThan(0);
     expect(violations.join("\n")).toContain("Implement");
 
     // The control. The unedited script through the same code path is clean,
     // so the row above is the mutation and not the harness.
-    const clean = await runWorkflow(SHIP, { args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
+    const clean = await runWorkflow(SHIP, { prelude: SHIP_PRELUDE, args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) });
     expect(phaseOrderViolations(clean.calls)).toEqual([]);
   });
 });
@@ -357,7 +360,7 @@ describe("#61 SC-5: pass^k, over the thing this repo controls", () => {
     const k = 5;
     const runs = await Promise.all(
       Array.from({ length: k }, () =>
-        runWorkflow(SHIP, { args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) }),
+        runWorkflow(SHIP, { prelude: SHIP_PRELUDE, args: { ...ARGS }, overrides: COHERENT("STANDARD", { home: "/" }) }),
       ),
     );
 
@@ -378,7 +381,22 @@ describe("#61 SC-5: pass^k, over the thing this repo controls", () => {
 
     // And the instrument can report a difference, or the row above means
     // nothing. Two runs that genuinely differ must produce two graphs.
-    const light = await runWorkflow(SHIP, { args: { ...ARGS }, overrides: COHERENT("LIGHT", {}) });
+    const light = await runWorkflow(SHIP, { prelude: SHIP_PRELUDE, args: { ...ARGS }, overrides: COHERENT("LIGHT", {}) });
     expect(callGraph(light.calls)).not.toBe(graphs[0]);
+  });
+});
+
+describe("#2405: the harness runs ship.js with the code ship.run.js bundles from lib", () => {
+  const mini = "export const meta = {\n  name: 'mini',\n}\nreturn suiteCurrency('3192a75', '3192a75c4f1e2b8d9a0c5e6f7081a2b3c4d5e6f7')";
+
+  test("a workflow calling a bundled function gets its reading with the prelude", async () => {
+    const run = await runWorkflow(mini, { prelude: SHIP_PRELUDE });
+    expect(run.error).toBeNull();
+    expect((run.result as { state: string }).state).toBe("CURRENT");
+  });
+
+  test("and throws without it, because ship.js alone no longer defines the function", async () => {
+    const run = await runWorkflow(mini);
+    expect(run.error?.message).toContain("suiteCurrency is not defined");
   });
 });
