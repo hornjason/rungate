@@ -21,6 +21,17 @@
  * A search whose tree is in neither place is UNJUDGED — named, and outside the
  * denominator. A missing checkout must never read as a rate of zero.
  *
+ * ## UNRECORDED is not undeclared
+ *
+ * Measured on PRs 2400-2448: 31 findings in 27 ledgers, and not one carried
+ * either field. The ledger step (`buildPersistScript` in
+ * `lib/scaffold/ai-review-step.ts`) projects each finding onto severity,
+ * file, line, summary and failure_scenario, so the class size the reviewer
+ * wrote never reaches the ledger. Read as "undeclared", that is a 0% rate the
+ * reviewer did not earn. So a finding carrying NEITHER key is UNRECORDED and
+ * leaves the denominator; a writer that keeps the fields writes `null` for
+ * one the reviewer left out, and `null` is read as absent — undeclared.
+ *
  * ## What is UNMEASURED
  *
  * A window in which no ledger could be read. A ledger that cannot be read is
@@ -42,8 +53,11 @@ import { AI_REVIEW_FINDING_FIELDS } from "./scaffold/ai-review-step";
 /** A file's lines at a commit, or `null` when that tree is not available. */
 export type LinesAt = (commit: string, file: string) => readonly string[] | null;
 
-/** The adjudicator's five verdicts, plus UNJUDGED: a search with no tree to run over. */
-export type PopulationRateKind = PopulationVerdict["kind"] | "unjudged";
+/**
+ * The adjudicator's five verdicts, plus UNJUDGED (a search with no tree to run
+ * over) and UNRECORDED (a finding the ledger kept no class-size field for).
+ */
+export type PopulationRateKind = PopulationVerdict["kind"] | "unjudged" | "unrecorded";
 
 export interface PopulationRateRow {
   /** UNMEASURED when no ledger in the window could be read. */
@@ -60,14 +74,14 @@ export interface PopulationRateRow {
   counts: Record<PopulationRateKind, number>;
   /** Where each searched finding's file was read from. */
   treeAt: { merge: number; head: number; none: number };
-  /** `findings` minus the unjudged: the denominator. */
+  /** `findings` minus the unjudged and the unrecorded: the denominator. */
   judged: number;
   /** `measured / judged`, or `null` when nothing could be judged. */
   rate: number | null;
 }
 
 function emptyCounts(): Record<PopulationRateKind, number> {
-  return { measured: 0, contradicted: 0, unbacked: 0, undeclared: 0, unmeasured: 0, unjudged: 0 };
+  return { measured: 0, contradicted: 0, unbacked: 0, undeclared: 0, unmeasured: 0, unjudged: 0, unrecorded: 0 };
 }
 
 /** The reading over a window of ledgers. `linesAt` is `null` when no checkout was given. */
@@ -97,8 +111,13 @@ export function populationRate(entries: readonly CrcEntry[], linesAt: LinesAt | 
       rounds++;
       for (const item of round.findings) {
         findings++;
+        if (!(f.population in item) && !(f.populationSearch in item)) {
+          counts.unrecorded++;
+          continue;
+        }
         const file = item[f.file];
-        const search = item[f.populationSearch];
+        // `null` is the writer's spelling of "the reviewer gave none".
+        const search = item[f.populationSearch] === null ? undefined : item[f.populationSearch];
         let lines: readonly string[] | null = null;
         // Read a tree only for a search that can run: an absent or unusable
         // search is decided without one, and reading for it would count a
@@ -122,7 +141,7 @@ export function populationRate(entries: readonly CrcEntry[], linesAt: LinesAt | 
     }
   }
 
-  const judged = findings - counts.unjudged;
+  const judged = findings - counts.unjudged - counts.unrecorded;
   return {
     status: prs === 0 ? "UNMEASURED" : "MEASURED",
     prs,
@@ -145,10 +164,17 @@ export function renderPopulationRate(row: PopulationRateRow): string[] {
     `  ledgers read: ${row.prs}, rounds with a review: ${row.rounds}, findings: ${row.findings}`,
     `  measured ${c.measured}, contradicted ${c.contradicted}, unbacked ${c.unbacked}, ` +
       `undeclared ${c.undeclared}, unmeasured ${c.unmeasured}` +
-      (c.unjudged > 0 ? `; ${c.unjudged} could not be judged — no tree to search` : ""),
+      (c.unjudged > 0 ? `; ${c.unjudged} could not be judged — no tree to search` : "") +
+      (c.unrecorded > 0 ? `; ${c.unrecorded} not recorded — the ledger kept no class size for them` : ""),
     `  searched files read at: merge commit ${row.treeAt.merge}, head commit ${row.treeAt.head}, nowhere ${row.treeAt.none}`,
     row.rate === null
-      ? `  rate: none — ${row.status === "UNMEASURED" ? "no ledger could be read" : "no finding could be judged"}`
+      ? `  rate: none — ${
+          row.status === "UNMEASURED"
+            ? "no ledger could be read"
+            : row.findings > 0 && c.unrecorded === row.findings
+              ? "the ledger records no class size for any finding in this window"
+              : "no finding could be judged"
+        }`
       : `  rate: ${c.measured} of ${row.judged} judged finding(s) counted their class by a search that ran ` +
         `(${(row.rate * 100).toFixed(1)}%)`,
   ];

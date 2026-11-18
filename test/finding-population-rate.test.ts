@@ -62,8 +62,8 @@ const entry = (number: number, body: string | null): CrcEntry => ({ number, pass
 const FIVE = [
   finding({ population: 3, populationSearch: ["needle"] }), // measured, 3
   finding({ population: 5, populationSearch: ["needle"] }), // contradicted: declared 5, search 3
-  finding({ population: 2 }), // unbacked
-  finding({}), // undeclared
+  finding({ population: 2, populationSearch: null }), // unbacked
+  finding({ population: null, populationSearch: null }), // undeclared: recorded, and the reviewer gave none
   finding({ populationSearch: ["zz-nothing-matches"] }), // unmeasured: matches no line
 ];
 
@@ -74,7 +74,15 @@ describe("#2437: CRC-N3's rate — how many findings count their class by a sear
     const row = populationRate([entry(1, ledgerBody([round(1, FIVE)]))], atMerge);
     expect(row.status).toBe("MEASURED");
     expect(row.findings).toBe(5);
-    expect(row.counts).toEqual({ measured: 1, contradicted: 1, unbacked: 1, undeclared: 1, unmeasured: 1, unjudged: 0 });
+    expect(row.counts).toEqual({
+      measured: 1,
+      contradicted: 1,
+      unbacked: 1,
+      undeclared: 1,
+      unmeasured: 1,
+      unjudged: 0,
+      unrecorded: 0,
+    });
     expect(row.treeAt).toEqual({ merge: 3, head: 0, none: 0 });
     expect(row.judged).toBe(5);
     expect(row.rate).toBeCloseTo(1 / 5, 10);
@@ -113,6 +121,23 @@ describe("#2437: CRC-N3's rate — how many findings count their class by a sear
     expect(row.counts.unjudged).toBe(3);
     expect(row.judged).toBe(7);
     expect(row.rate, "unjudged findings were counted in the denominator").toBeCloseTo(1 / 7, 10);
+  });
+
+  test("a finding the ledger kept no class-size field for is UNRECORDED, not undeclared, and leaves the denominator", () => {
+    // The shape every ledger had on PRs 2400-2448: the writer projected the
+    // finding onto five fields, so neither key exists. Read as undeclared it
+    // is a 0% rate the reviewer did not earn.
+    const stripped = finding({});
+    const all = populationRate([entry(1, ledgerBody([round(1, [stripped, stripped])]))], atMerge);
+    expect(all.counts.unrecorded).toBe(2);
+    expect(all.counts.undeclared, "a field the ledger never kept was read as one the reviewer left out").toBe(0);
+    expect(all.judged).toBe(0);
+    expect(all.rate, "an unrecorded window produced a rate").toBeNull();
+    expect(renderPopulationRate(all).join("\n")).toContain("records no class size");
+
+    const mixed = populationRate([entry(1, ledgerBody([round(1, [...FIVE, stripped])]))], atMerge);
+    expect(mixed.judged).toBe(5);
+    expect(mixed.rate).toBeCloseTo(1 / 5, 10);
   });
 
   test("a ledger it cannot read is named and UNMEASURED, never a rate of zero", () => {
