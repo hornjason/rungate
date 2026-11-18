@@ -128,7 +128,7 @@ interface RepoRailsFinding {
   line: number;
   severity: string;
   rule: string;
-  category: string;
+  category?: string;
   leverage?: string;
   message: string;
   fix?: string;
@@ -136,8 +136,53 @@ interface RepoRailsFinding {
 
 interface RepoRailsOutput {
   quality: number;
-  level: string;
+  level?: string;
   files: Record<string, { findings: RepoRailsFinding[] }>;
+}
+
+/**
+ * One RepoRails reply as a reading, or null when it is not one (#2401).
+ *
+ * A reply that parses is not therefore a reading. On 2026-11-18 the server
+ * refused every anonymous check with `{"error":"server_refused",...}`, which
+ * parses, and the caller crashed reading its `files`. This checks every field
+ * `runTemplateCompliance` reads, in one place, so a reply is a reading only
+ * when all of them have their declared type (review of #2402). `level` and
+ * `leverage` are read nowhere, so they decide nothing. Anything else gives the
+ * file no RepoRails reading, which `scoredBy` reports as not read.
+ */
+export function repoRailsReading(stdout: string): RepoRailsOutput | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  return isRepoRailsOutput(parsed) ? parsed : null;
+}
+
+const isObject = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+const optionalString = (x: unknown) => x === undefined || typeof x === "string";
+
+/** Every field the consumer reads: `quality` is summed, each finding's fields are copied into the report. */
+function isRepoRailsOutput(x: unknown): x is RepoRailsOutput {
+  if (!isObject(x) || typeof x.quality !== "number" || !Number.isFinite(x.quality) || !isObject(x.files)) return false;
+  return Object.values(x.files).every(
+    entry => isObject(entry) && Array.isArray(entry.findings) && entry.findings.every(isRepoRailsFinding),
+  );
+}
+
+function isRepoRailsFinding(x: unknown): x is RepoRailsFinding {
+  return (
+    isObject(x) &&
+    typeof x.line === "number" &&
+    Number.isFinite(x.line) &&
+    typeof x.severity === "string" &&
+    typeof x.rule === "string" &&
+    typeof x.message === "string" &&
+    optionalString(x.category) &&
+    optionalString(x.fix)
+  );
 }
 
 /**
@@ -156,8 +201,7 @@ async function runRepoRailsOne(path: string): Promise<RepoRailsOutput | null> {
     try {
       const stdout = (await new Response(proc.stdout).text()).trim();
       await proc.exited;
-      if (!stdout) return null;
-      return JSON.parse(stdout) as RepoRailsOutput;
+      return repoRailsReading(stdout);
     } finally {
       clearTimeout(timer);
     }
