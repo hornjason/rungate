@@ -196,5 +196,14 @@ describe("#1722: reading one issue's writes", () => {
     );
     expect("why" in unknown && unknown.why).toContain("SomethingNewEvent");
     expect("why" in boardWritesOf(null)).toBe(true);
+    const noNumber = boardWritesOf(
+      node({
+        timelineItems: {
+          pageInfo: { hasNextPage: false },
+          nodes: [{ __typename: "BlockedByAddedEvent", createdAt: "t", actor: null, blockingIssue: null }],
+        },
+      }),
+    );
+    expect("why" in noNumber && noNumber.why).toContain("does not say what it wrote");
   });
 });

@@ -121,34 +121,58 @@ function actorOf(n: Node): { actor: string | null; actorType: string | null } {
   return { actor: a.login, actorType: typeof a.__typename === "string" ? a.__typename : null };
 }
 
-function numberOf(v: unknown): string {
+function numberOf(v: unknown): string | null {
   const n = (v as { number?: unknown } | null | undefined)?.number;
-  return typeof n === "number" ? `#${n}` : "#?";
+  return typeof n === "number" ? `#${n}` : null;
+}
+
+function textOf(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
+}
+
+/** A description, or `null` when the field that says what was written is missing. */
+function described(kind: string, detail: string | null): [string, string] | null {
+  return detail === null ? null : [kind, detail];
 }
 
 /**
  * Every timeline event type the reader asks for, and how each is described.
  * `scripts/hand-edits.ts` builds its `itemTypes` list from these keys, so a
  * type the query asks for and this table cannot describe is impossible.
+ *
+ * A description is `null` when the event does not say what it wrote — a
+ * blocked-by link with no issue number, a label with no name. That is
+ * refused rather than written as a placeholder, like every other missing
+ * field here. Project status alone may be empty: an item moved to no status
+ * is a real state, and it is written as `(none)`.
  */
-export const BOARD_WRITE_EVENTS: Readonly<Record<string, { item: string; describe: (n: Node) => [string, string] }>> = {
-  MilestonedEvent: { item: "MILESTONED_EVENT", describe: n => ["milestoned", String(n.milestoneTitle ?? "")] },
-  DemilestonedEvent: { item: "DEMILESTONED_EVENT", describe: n => ["demilestoned", String(n.milestoneTitle ?? "")] },
-  LabeledEvent: { item: "LABELED_EVENT", describe: n => ["labeled", String((n.label as Node | null)?.name ?? "")] },
-  UnlabeledEvent: { item: "UNLABELED_EVENT", describe: n => ["unlabeled", String((n.label as Node | null)?.name ?? "")] },
-  BlockedByAddedEvent: { item: "BLOCKED_BY_ADDED_EVENT", describe: n => ["blocked-by added", numberOf(n.blockingIssue)] },
-  BlockedByRemovedEvent: { item: "BLOCKED_BY_REMOVED_EVENT", describe: n => ["blocked-by removed", numberOf(n.blockingIssue)] },
-  BlockingAddedEvent: { item: "BLOCKING_ADDED_EVENT", describe: n => ["blocking added", numberOf(n.blockedIssue)] },
-  BlockingRemovedEvent: { item: "BLOCKING_REMOVED_EVENT", describe: n => ["blocking removed", numberOf(n.blockedIssue)] },
+export const BOARD_WRITE_EVENTS: Readonly<
+  Record<string, { item: string; describe: (n: Node) => [string, string] | null }>
+> = {
+  MilestonedEvent: { item: "MILESTONED_EVENT", describe: n => described("milestoned", textOf(n.milestoneTitle)) },
+  DemilestonedEvent: { item: "DEMILESTONED_EVENT", describe: n => described("demilestoned", textOf(n.milestoneTitle)) },
+  LabeledEvent: { item: "LABELED_EVENT", describe: n => described("labeled", textOf((n.label as Node | null)?.name)) },
+  UnlabeledEvent: { item: "UNLABELED_EVENT", describe: n => described("unlabeled", textOf((n.label as Node | null)?.name)) },
+  BlockedByAddedEvent: { item: "BLOCKED_BY_ADDED_EVENT", describe: n => described("blocked-by added", numberOf(n.blockingIssue)) },
+  BlockedByRemovedEvent: {
+    item: "BLOCKED_BY_REMOVED_EVENT",
+    describe: n => described("blocked-by removed", numberOf(n.blockingIssue)),
+  },
+  BlockingAddedEvent: { item: "BLOCKING_ADDED_EVENT", describe: n => described("blocking added", numberOf(n.blockedIssue)) },
+  BlockingRemovedEvent: { item: "BLOCKING_REMOVED_EVENT", describe: n => described("blocking removed", numberOf(n.blockedIssue)) },
   RenamedTitleEvent: {
     item: "RENAMED_TITLE_EVENT",
-    describe: n => ["renamed", `${JSON.stringify(n.previousTitle ?? "")} → ${JSON.stringify(n.currentTitle ?? "")}`],
+    describe: n => {
+      const from = textOf(n.previousTitle);
+      const to = textOf(n.currentTitle);
+      return from === null || to === null ? null : ["renamed", `${JSON.stringify(from)} → ${JSON.stringify(to)}`];
+    },
   },
   AddedToProjectV2Event: { item: "ADDED_TO_PROJECT_V2_EVENT", describe: () => ["added to project", ""] },
   RemovedFromProjectV2Event: { item: "REMOVED_FROM_PROJECT_V2_EVENT", describe: () => ["removed from project", ""] },
   ProjectV2ItemStatusChangedEvent: {
     item: "PROJECT_V2_ITEM_STATUS_CHANGED_EVENT",
-    describe: n => ["project status", String(n.status ?? "")],
+    describe: n => ["project status", textOf(n.status) || "(none)"],
   },
 };
 
@@ -180,7 +204,9 @@ export function boardWritesOf(raw: unknown): { writes: BoardWrite[] } | { why: s
     const known = BOARD_WRITE_EVENTS[type];
     if (!known) return { why: `#${issue}'s timeline holds ${type}, which this reading does not describe` };
     if (typeof e.createdAt !== "string") return { why: `#${issue}'s ${type} has no time` };
-    const [kind, detail] = known.describe(e);
+    const said = known.describe(e);
+    if (said === null) return { why: `#${issue}'s ${type} does not say what it wrote` };
+    const [kind, detail] = said;
     writes.push({ issue, kind, detail, ...actorOf(e), at: e.createdAt });
   }
   for (const e of edits.nodes as Node[]) {

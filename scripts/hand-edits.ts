@@ -26,7 +26,7 @@ import { readPipelineAccount } from "../lib/config-readers";
 import { createGitHubClient } from "../lib/github";
 import { nextCursor } from "../lib/graphql-cursor";
 import { BOARD_WRITE_EVENTS, boardWritesOf, handEditVerdict, windowOpens, type BoardWrite } from "../lib/hand-edits";
-import { inMilestoneFamily } from "../lib/live-issues";
+import { inMilestoneFamily, readMilestonePrefix } from "../lib/live-issues";
 
 /** Every refusal exits through this, once. */
 export const HAND_EDITS_REFUSAL_EXIT = 1;
@@ -105,7 +105,7 @@ async function readFamily(
     if (next.kind === "unreadable") return { why: next.why };
     after = next.cursor;
   }
-  if (titles.size === 0) return { why: `no milestone is in the "${prefix} Phase N" family` };
+  if (titles.size === 0) return { why: `no milestone belongs to the ${prefix} family` };
   return { titles, issues };
 }
 
@@ -148,6 +148,7 @@ async function movedSince(
   since: string,
 ): Promise<{ issues: Set<number> } | { why: string }> {
   const moved = new Set<number>();
+  let last: string | null = null;
   for (let page = 1; ; page++) {
     const events = await src.repoEvents(page);
     if (!Array.isArray(events)) return { why: "the repository's issue events could not be read" };
@@ -155,6 +156,14 @@ async function movedSince(
     for (const e of events as Node[]) {
       const at = typeof e.created_at === "string" ? e.created_at : null;
       if (at === null) return { why: "a repository issue event carried no time" };
+      // The early stop below is only sound newest-first. MEASURED on
+      // 2026-11-18: GET /repos/{owner}/{repo}/issues/events returns newest
+      // first. Checked on every event rather than trusted, so a feed in any
+      // other order refuses instead of ending the read on page 1.
+      if (last !== null && at > last) {
+        return { why: `the repository's issue events are not newest-first (${at} follows ${last}), so where the window starts cannot be found` };
+      }
+      last = at;
       if (at < since) {
         older = true;
         continue;
@@ -234,7 +243,8 @@ export async function main(
     options: { prefix: { type: "string" }, repo: { type: "string" } },
     strict: true,
   });
-  const prefix = values.prefix?.trim() ?? "";
+  const given = readMilestonePrefix(values.prefix);
+  const prefix = given.kind === "given" ? given.prefix : "";
   const repo = values.repo?.trim() ?? "";
   if (prefix === "" || repo === "") {
     return {
