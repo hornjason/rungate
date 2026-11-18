@@ -146,7 +146,7 @@ interface RepoRailsOutput {
  * A reply that parses is not therefore a reading. On 2026-11-18 the server
  * refused every anonymous check with `{"error":"server_refused",...}`, which
  * parses, and the caller crashed reading its `files`. Only a `files` object
- * whose every entry carries a `findings` array is read; anything else gives
+ * whose every entry carries a `findings` array of objects is read; anything else gives
  * the file no RepoRails reading, which `scoredBy` reports as not read.
  */
 export function repoRailsReading(stdout: string): RepoRailsOutput | null {
@@ -160,7 +160,11 @@ export function repoRailsReading(stdout: string): RepoRailsOutput | null {
   const files = (parsed as { files?: unknown }).files;
   if (typeof files !== "object" || files === null || Array.isArray(files)) return null;
   for (const entry of Object.values(files)) {
-    if (typeof entry !== "object" || entry === null || !Array.isArray((entry as { findings?: unknown }).findings)) return null;
+    if (typeof entry !== "object" || entry === null) return null;
+    const findings = (entry as { findings?: unknown }).findings;
+    // Each finding is read field by field downstream, so a null one is the
+    // same crash one level deeper (review of #2402).
+    if (!Array.isArray(findings) || !findings.every(x => typeof x === "object" && x !== null)) return null;
   }
   return parsed as RepoRailsOutput;
 }

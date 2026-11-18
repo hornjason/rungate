@@ -221,6 +221,11 @@ describe("#2401: a RepoRails reply is a reading only when it has the reading's s
     expect(repoRailsReading(JSON.stringify({ quality: 1, level: "L1", files: { "AGENTS.md": {} } }))).toBeNull();
   });
 
+  test("review of #2402: a findings array holding something that is not a finding is no reading", () => {
+    expect(repoRailsReading(JSON.stringify({ quality: 1, level: "L1", files: { "a.md": { findings: [null] } } }))).toBeNull();
+    expect(repoRailsReading(JSON.stringify({ quality: 1, level: "L1", files: { "a.md": { findings: ["x"] } } }))).toBeNull();
+  });
+
   test("empty or unparseable output is no reading", () => {
     expect(repoRailsReading("")).toBeNull();
     expect(repoRailsReading("not json")).toBeNull();
