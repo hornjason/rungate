@@ -1360,7 +1360,8 @@ describe("#2413: a family whose milestones hold no open issue reads nothing to o
     expect(payload.reading).toBe("NOTHING_TO_ORDER");
     expect(payload.wrote).toBe("nothing-to-order");
     expect(payload.milestones).toEqual(["CI Phase 1 — lint", "CI Phase 2 — test", "CI Phase 3 — deploy"]);
-    expect(payload.missing).toEqual([]);
+    // Every key the other readings carry, so a consumer can read any unconditionally (review of #2414).
+    expect(payload).toMatchObject({ unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, results: [] });
   });
 
   test("no milestone starts with the prefix: still the typo refusal", async () => {

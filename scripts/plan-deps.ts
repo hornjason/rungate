@@ -341,7 +341,14 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
         // exactly one phase (lib/spec-deps.ts), and here no issue was
         // considered at all (review of #2414).
         const wrote = values.write ? "nothing-to-order" : "not-requested";
-        console.log(JSON.stringify({ reading: "NOTHING_TO_ORDER", prefix, milestones: family, missing: [], results: [], wrote }, null, 2));
+        // Every key the other readings carry, empty, as PHASE_ORDER_OFF does (review of #2414).
+        console.log(
+          JSON.stringify(
+            { reading: "NOTHING_TO_ORDER", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, results: [], wrote, prefix, milestones: family },
+            null,
+            2,
+          ),
+        );
         return 0;
       }
       console.log(
