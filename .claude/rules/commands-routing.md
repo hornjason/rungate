@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: ccbf0a1827e2b2ed
+generated-sha: fbcad119a1b36df7
 ---
 
 ## Command Routing
@@ -16,6 +16,7 @@ Generated from the CLI's command registry. Run one as
 | `create-sc` | Generate a matchable success-criterion line from a registered pattern |
 | `convert-spec` | Convert an existing document into a testable spec |
 | `audit-specs` | Report which success criteria are matched, unmatched or uncovered |
+| `sync-sc-status` | Tick each criterion a passing test claims, in this project's specs |
 | `audit-spec-evidence` | Refuse a ticked criterion that does not name what proved it |
 | `plan-spec` | Derive a repository's milestones from a spec's Phase placement table |
 | `criterion-inventory` | Trace every criterion to the tests, issues and pull requests that name it |

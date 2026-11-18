@@ -124,6 +124,17 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Report which success criteria are matched, unmatched or uncovered",
     usage: "rungate audit-specs",
   },
+  // #2360: a consumer ticks its own criteria from its own test claims. The
+  // script was in `files[]` and reachable from nothing, and it read
+  // `join(import.meta.dir, "..")` — run from node_modules it ticked nothing
+  // of the consumer's and reported on rungate's specs. `projectRootFlag` is
+  // load-bearing, as on `audit-spec-evidence`.
+  "sync-sc-status": {
+    script: "scripts/sync-sc-status.ts",
+    summary: "Tick each criterion a passing test claims, in this project's specs",
+    usage: "rungate sync-sc-status [--dry-run] [--report] [--only <SC-id,…>] [--project-root <dir>]",
+    projectRootFlag: true,
+  },
   // Registered because `create-spec` SHIPS and stamps every generated spec
   // with `evidence: required`, and this is the only thing that enforces that
   // key (#1639). Without the entry the published package emitted a document
