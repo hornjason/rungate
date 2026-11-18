@@ -181,6 +181,25 @@ describe("#2307: every spec declares a board scope after one scaffold", () => {
     }
   });
 
+  test("a spec that says it is generated only in prose is named with that prose, never with a made-up generator", () => {
+    const root = tree();
+    const rel = "specs/PROSE-GENERATED-SPEC.md";
+    const text = "---\ndoc-type: spec\ntestable: true\n---\n\n<!-- generated file, do not edit -->\n\n# A spec\n\nStates none.\n";
+    try {
+      writeFileSync(join(root, rel), text);
+      const actions: string[] = [];
+      deferUndeclaredSpecs(root, actions);
+      expect(readAt(root, rel), "a prose-declared generated spec was rewritten").toBe(text);
+      expect(actions).toContain(
+        `SKIP: ${rel} reads as generated from prose only (<!-- generated file, do not edit -->) and declares no board scope, so it was not deferred; ` +
+          "add generated-by: <generator> to its frontmatter and the scope where that generator writes it",
+      );
+      expect(actions.some(a => a.includes("its generator")), "a skip line named no generator").toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("withDeferredScope keeps the file's line endings and refuses a file with no frontmatter", () => {
     expect(withDeferredScope("---\r\ndoc-type: spec\r\n---\r\nbody\r\n")).toBe(`---\r\ndoc-type: spec\r\n${DEFERRED_LINE}\r\n---\r\nbody\r\n`);
     expect(withDeferredScope("# no frontmatter\n")).toBeNull();
