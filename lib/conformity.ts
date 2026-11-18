@@ -80,6 +80,35 @@ import {
 import { workflowOverrides } from "./scaffold/managed-workflow";
 import { workflowDrift } from "./scaffold/workflow-drift";
 
+/**
+ * The per-test budget for every check the generated conformity suite
+ * registers (#2384). The generated `test/scaffold-conformity.test.ts` passes
+ * it to `setDefaultTimeout` before it registers anything.
+ *
+ * Several checks here walk the whole tree. A consumer's runner took longer
+ * than bun's 5000ms default on four of them: HYGIENE-3 took 19915.54ms,
+ * CONFIG-1 took 30.9s, and the closing `writeFindingsReport` hook took
+ * 7526.04ms. The consumer cannot fix that, because the file is regenerated.
+ * A timeout carries no message (#804), so it reads as a failed check when
+ * only the clock ran out.
+ *
+ * It is declared once, for the whole file, rather than on the three checks
+ * that were seen to time out. `lib/gate-timeouts.ts` gives the reason: a
+ * budget written on named tests covers those tests, and the next scan added
+ * gets nothing. A check that sets its own budget keeps it; the fallow checks
+ * pass `FALLOW_BUDGET_MS`.
+ *
+ * Why 60s. The slowest reading was 30.9s, so this gives about twice that. It
+ * is half of `GATE_TEST_TIMEOUT_MS`, which covers checks that start a real
+ * compiler. These checks start nothing.
+ *
+ * Measured on bun 1.3.14: a synchronous test cannot be interrupted, and it is
+ * marked timed out only after it finishes. So this number decides the
+ * verdict. It does not change how long a scan runs.
+ * `test/conformity-suite-budget.test.ts` runs the generated line to prove it.
+ */
+export const CONFORMITY_TEST_BUDGET_MS = 60_000;
+
 // ── Shared utilities ────────────────────────────────────────
 
 export function parseFrontmatter(content: string): Record<string, string> | null {
