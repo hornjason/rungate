@@ -282,6 +282,61 @@ describe("SC-2783: consumer-intake reads an unanswered consumer issue as short",
  * second reading rather than B4 restated (AGENTS.md rule 10). A mutant that
  * measured `issues` instead of `familyIssues` reads `met` in the first case.
  */
+/**
+ * #2432, ADR-021 decision 4: `dependency-edges` is MET when `plan-deps` would
+ * add nothing. Since the plan became what accepted ADRs declare, a tracker
+ * where no declared link sits between two open issues is the ordinary case,
+ * and it read 0 of 0. The frame calls that UNMEASURED, so stage items E3 and
+ * F2 failed on main the moment #2432's own issue closed. The denominator is
+ * the open issues, as `consumer-intake`'s is: "no open issue is missing a
+ * link planning declared for it", asked of a population that was read.
+ */
+describe("#2432: dependency-edges counts open issues, so nothing declared is met", () => {
+  const reading = (b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === "dependency-edges")!, b);
+
+  test("nothing declared between open issues is MET, over every open issue", () => {
+    const b = completeBoard();
+    b.plannedEdges = [];
+    const r = reading(b);
+    expect(r.status).toBe("met");
+    expect(r.target).toBe(b.repoIssues!.length);
+  });
+
+  test("a declared link the tracker lacks is short, and names the issue that waits", () => {
+    const b = completeBoard();
+    b.plannedEdges = [{ blocked: 2, blocker: 1, present: false }];
+    const r = reading(b);
+    expect(r.status).toBe("short");
+    expect(r.measured).toBe(b.repoIssues!.length - 1);
+    expect(r.offenders.join("\n")).toContain("#2 blocked by #1");
+  });
+
+  test("two missing links on one issue count that issue once", () => {
+    const b = completeBoard();
+    b.plannedEdges = [
+      { blocked: 2, blocker: 1, present: false },
+      { blocked: 2, blocker: 30, present: false },
+    ];
+    expect(reading(b).measured).toBe(b.repoIssues!.length - 1);
+    expect(reading(b).offenders).toHaveLength(2);
+  });
+
+  test("a declared link whose waiting issue is not among the open issues read is UNMEASURED, never dropped", () => {
+    const b = completeBoard();
+    b.plannedEdges = [{ blocked: 9999, blocker: 1, present: true }];
+    const r = reading(b);
+    expect(r.status).toBe("unmeasured");
+    expect(r.why).toContain("#9999");
+  });
+
+  test("no open issues read at all is still UNMEASURED: 0 of 0 is not a pass", () => {
+    const b = completeBoard();
+    b.plannedEdges = [];
+    b.repoIssues = [];
+    expect(reading(b).status).toBe("unmeasured");
+  });
+});
+
 describe("#2223 / E4: criteria-field-all reads every family, not only the engine's", () => {
   const reading = (name: string, b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === name)!, b);
 
