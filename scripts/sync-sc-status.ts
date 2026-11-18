@@ -212,7 +212,13 @@ export function readScRegistry(specsDir?: string, opts: { authoredOnly?: boolean
   return buildScRegistry(opts.authoredOnly === true ? authoredSpecs(specs) : specs);
 }
 
-export function findUncheckedSCs(specsDir?: string): UncheckedSC[] {
+/**
+ * `authoredOnly` (#2333): leave generated copies out. The credit list and the
+ * registry beside it must agree on who the authors are — filtering only the
+ * registry made a copy's id unambiguous while the copy still sat in the credit
+ * list, so a claim was credited to both and `--only` refused the source.
+ */
+export function findUncheckedSCs(specsDir?: string, opts: { authoredOnly?: boolean } = {}): UncheckedSC[] {
   const dir = specsDir || SPECS_DIR;
   const unchecked: UncheckedSC[] = [];
   if (!existsSync(dir)) return unchecked;
@@ -220,6 +226,7 @@ export function findUncheckedSCs(specsDir?: string): UncheckedSC[] {
   for (const file of new Bun.Glob("**/*.md").scanSync({ cwd: dir, absolute: false })) {
     if (isTemplateSpec(file)) continue;
     const content = readFileSync(join(dir, file), "utf-8");
+    if (opts.authoredOnly === true && authoredSpecs([{ content }]).length === 0) continue;
     // #330: was `/^- \[ \] (SC-\d+):/`, the fourth copy of this pattern in the
     // tree and the second that could not see an anti-criterion. One owner now.
     for (const match of content.matchAll(scDeclarationPattern())) {
@@ -975,7 +982,10 @@ if (isDirectExecution) {
   }
 
   // Step 1: Detect duplicate SC IDs across specs
-  const duplicates = findDuplicateSCIds(unchecked);
+  // #2333: the credit half reads authors only — a generated copy restating
+  // an id is neither a duplicate to renumber nor a second spec to credit.
+  const authoredUnchecked = findUncheckedSCs(undefined, { authoredOnly: true });
+  const duplicates = findDuplicateSCIds(authoredUnchecked);
   if (duplicates.size > 0) {
     console.log(`\n⚠️  Duplicate SC IDs found across specs:`);
     for (const [id, specs] of duplicates) {
@@ -989,7 +999,7 @@ if (isDirectExecution) {
   // credit ticked the id in every spec declaring it.
   // #2333: the credit rule's registry leaves generated copies out.
   const registry = readScRegistry(undefined, { authoredOnly: true });
-  const testFileMap = findTestFilesForSCs(unchecked, registry);
+  const testFileMap = findTestFilesForSCs(authoredUnchecked, registry);
   const testedKeys = new Set(
     [...testFileMap.values()].flat().map(c => scopedKey(c.specFile, c.id)),
   );

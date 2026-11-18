@@ -455,3 +455,41 @@ describe("#2360: --project-root points the run at the consumer's tree", () => {
     }
   });
 });
+
+// #2333, review of #2372: the flip path's credit list must leave generated
+// copies out as well as its registry. With only the registry filtered, the
+// copy stopped making the id ambiguous and still sat in the credit list, so
+// the claim was credited to BOTH files and `--only` refused the source.
+describe("#2333: a generated copy restating an id does not block the source's tick", () => {
+  const PKG = join(import.meta.dir, "..");
+  test("--only flips the authored source when a generated-by: copy states the same id", () => {
+    const consumer = mkdtempSync(join(tmpdir(), "rg-2333-mirror-"));
+    try {
+      mkdirSync(join(consumer, "specs"), { recursive: true });
+      mkdirSync(join(consumer, "test"), { recursive: true });
+      const line = "- [ ] SC-9471: the demo works\n";
+      const source = "---\ndoc-type: spec\ntestable: true\n---\n\n# Demo\n\n" + line;
+      writeFileSync(join(consumer, "specs", "DEMO-SPEC.md"), source);
+      writeFileSync(
+        join(consumer, "specs", "MIRROR-SPEC.md"),
+        "---\ndoc-type: spec\ntestable: true\ngenerated-by: scripts/some-generator.ts\n---\n\n# Mirror\n\n" + line,
+      );
+      writeFileSync(
+        join(consumer, "test", "demo.test.ts"),
+        'import { test, expect } from "bun:test";\n// covers SC-9471\ntest("demo", () => expect(1).toBe(1));\n',
+      );
+      const r = spawnSync(
+        "bun",
+        [join(PKG, "scripts", "sync-sc-status.ts"), "--project-root", consumer, "--only", "SC-9471", "--dry-run"],
+        { cwd: consumer, encoding: "utf-8", timeout: 120_000 },
+      );
+      const out = r.stdout + r.stderr;
+      expect(out, "the copy was credited, or flagged for renumbering, as a second author").not.toContain("MIRROR-SPEC.md");
+      expect(out).not.toContain("nothing was flipped");
+      expect(r.status, out).toBe(0);
+      expect(readFileSync(join(consumer, "specs", "DEMO-SPEC.md"), "utf-8"), "a dry run wrote the spec").toBe(source);
+    } finally {
+      rmSync(consumer, { recursive: true, force: true });
+    }
+  });
+});
