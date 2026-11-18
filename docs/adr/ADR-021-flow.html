@@ -55,6 +55,7 @@
     <li style="--c:var(--judge)"><span class="tag">YOU</span>Glance at the removal list. Anything you want kept goes into an ADR table instead.</li>
     <li style="--c:var(--auto)"><span class="tag">AUTO</span>The next push to <code>specs/</code> runs the removal through <code>specs-placed.yml</code>: 182 phase-order links and the 11 stale ones around #1764 off; the 2 hand-written dependencies stay.</li>
     <li style="--c:var(--hand)"><span class="tag">ME</span>Build "Ready never holds two issues naming the same file".</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build "Ready ranks the earliest-due milestone first", then write the steering section in HOW-WORK-FLOWS.md.</li>
   </ol>
 
   <h2>The five issues it files</h2>
@@ -82,7 +83,7 @@
           <li>Convergence: 37 open, 0 can start</li>
           <li>182 phase-order links, plus 90 the planner no longer derives: 77 to closed issues, 11 stale phase order holding #1764 and 3 others, 2 real hand-written</li>
           <li>Two issues on one file can both be pulled</li></ul></div>
-    <div class="box"><h3>After all four rows <span class="sim">SIMULATED</span></h3>
+    <div class="box"><h3>After all five rows <span class="sim">SIMULATED</span></h3>
       <div class="big ok">≈35</div><div>issues startable: Phase 10's open work + 31 Convergence</div>
       <ul><li>Ranked: work-this-next → milestone due date → engine → lowest phase → unblocks the most → number</li>
           <li>Links come only from planning (ADR Blocked by / Blocks) or by hand; 2 hand-written stay, 77 dead ones left</li>
