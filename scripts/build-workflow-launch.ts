@@ -129,7 +129,10 @@ export function buildWorkflowLaunch(source: string, cap: number = WORKFLOW_SCRIP
     if (both.length > 0) {
       throw new Error(`${both.join(", ")} is defined by both workflows/ship.js and the lib bundle; delete the copy from ship.js`);
     }
-    out = out.replace(`${GENERATED_NOTICE}\n`, `${GENERATED_NOTICE}\n${BUNDLE_START}\n${stripComments(bundle.text).trim()}\n${BUNDLE_END}\n`);
+    // A function, never a string: a string replacement reads $`, $' and $& as
+    // patterns, and lib code holding one spliced the file into itself (#2417).
+    const region = `${GENERATED_NOTICE}\n${BUNDLE_START}\n${stripComments(bundle.text).trim()}\n${BUNDLE_END}\n`;
+    out = out.replace(`${GENERATED_NOTICE}\n`, () => region);
   }
 
   const after = parseErrors(out);
@@ -618,7 +621,7 @@ function libModuleOf(from: string, spec: string): string | null {
   return posix.normalize(posix.join(posix.dirname(from), spec)).replace(/\.(js|ts)$/, "") + ".ts";
 }
 
-/** What `workflows/ship.run.js` carries from lib/ (#2400 wave 2a, #2404 wave 2b, #2408 wave 2c, #2410 wave 3a). Later waves add the rest of PURE_CORE_MODULES. */
+/** What `workflows/ship.run.js` carries from lib/ (#2400 wave 2a, #2404 wave 2b, #2408 wave 2c, #2410 wave 3a, #2417 wave 3b). Later waves add the rest of PURE_CORE_MODULES. */
 export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
   "lib/suite-measurement.ts": ["suiteCurrency"],
   "lib/scope-denylist.ts": [
@@ -633,6 +636,7 @@ export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
     "rookGateVerdict",
   ],
   "lib/prior-branch.ts": ["priorWorkRefusal"],
+  "lib/dev-liveness.ts": ["containerProbeTarget", "CONTAINER_HOST"],
 };
 
 /** The bundle the launch file is built with, read from this checkout's lib/. */

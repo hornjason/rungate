@@ -2168,7 +2168,8 @@ function runFanout(opts: { rook?: unknown; scope?: unknown } = {}) {
   // above are extracted: a stub deciding differently where to probe would
   // let this harness agree with something that does not run.
   const block =
-    sliceBlock("// ──── CONTAINER-PROBE-START ────", "// ──── CONTAINER-PROBE-END ────") +
+    // The probe is bundled from lib/dev-liveness.ts since #2417.
+    shipPrelude() + "\n" +
     sliceBlock(FANOUT_START, FANOUT_END);
   const labels: string[] = [];
   const prompts: string[] = [];

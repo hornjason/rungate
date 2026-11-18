@@ -87,7 +87,8 @@ function invokeFanout(b: Bindings): Promise<void> {
   // would let this harness agree with something that does not run, which is
   // the same argument the `shellQuote` extraction above makes.
   const block =
-    sliceBlock("// ──── CONTAINER-PROBE-START ────", "// ──── CONTAINER-PROBE-END ────") +
+    // The probe is bundled from lib/dev-liveness.ts since #2417.
+    shipPrelude() + "\n" +
     sliceBlock(BLOCK_START, BLOCK_END);
   const factory = new Function(
     "log",

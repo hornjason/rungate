@@ -2,6 +2,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 import { loadRungateConfig } from "../../lib/config-loader";
+import { shipPrelude } from "../../scripts/build-workflow-launch";
 
 /**
  * #274 — the consumer fixture, and the `workflows/ship.js` sites it drives.
@@ -236,7 +237,7 @@ const RECORDER_COMMANDS = markerRegion(shipSource, "RECORDER-COMMAND");
  * with something that does not run, which is the reason the two regions above
  * are extracted too.
  */
-const CONTAINER_PROBE = markerRegion(shipSource, "CONTAINER-PROBE");
+const CONTAINER_PROBE = shipPrelude(); // bundled from lib/dev-liveness.ts since #2417
 
 // ── the consumer fixture, read from disk ─────────────────────
 
