@@ -1294,3 +1294,89 @@ describe("phaseOrder: false — a family that opts out of phase-order links", ()
     }
   });
 });
+
+/**
+ * #2413 — a finished family is not a misspelled prefix.
+ *
+ * asaCommandCenter's specs-placed.yml run 44314945951 (rungate 0.8.31): the
+ * CI family's milestones CI Phase 1-3 exist and every issue in them is
+ * closed. plan-deps reads open issues only, matched none, refused UNMEASURED
+ * as "a prefix matching nothing", and the workflow went red on every push to
+ * specs/. The milestones are the tie-breaker: a family whose milestones exist
+ * has nothing left to order; a prefix no milestone carries is still the typo
+ * the refusal was written for; and a milestone list that cannot be read
+ * decides nothing.
+ */
+describe("#2413: a family whose milestones hold no open issue reads nothing to order", () => {
+  const OTHER: DepIssue[] = [
+    { number: 50, state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
+    { number: 51, state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
+  ];
+  const TITLES = ["CI Phase 1 — lint", "CI Phase 2 — test", "CI Phase 3 — deploy", "Pipeline Phase 0 — a"];
+
+  function spy(readMilestoneTitles?: PlanDepsGitHub["readMilestoneTitles"]) {
+    const calls: string[] = [];
+    const gh: PlanDepsGitHub = {
+      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+      readIssues: async () => OTHER,
+      addBlockers: async (_repo, blocked, blockers) => void calls.push(`#${blocked} +${[...blockers].join(",")}`),
+      ...(readMilestoneTitles ? { readMilestoneTitles } : {}),
+    };
+    return { gh, calls };
+  }
+
+  async function run(argv: string[], gh: PlanDepsGitHub) {
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void err.push(a.join(" "));
+    try {
+      const code = await planDepsMain(argv, gh);
+      return { code, stdout: out.join("\n"), stderr: err.join("\n") };
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+  }
+
+  test("the family's milestones exist and hold no open issue: exit 0, nothing written, and it says why", async () => {
+    const s = spy(async () => TITLES);
+    const r = await run(["--repo", "o/r", "--write", "--milestone-prefix", "CI"], s.gh);
+    expect(r.code).toBe(0);
+    expect(s.calls).toEqual([]);
+    expect(r.stdout).toContain("nothing to order");
+    expect(r.stdout).toContain('3 milestone(s) start with "CI"');
+    expect(r.stderr, "a finished family was reported as UNMEASURED").not.toContain("UNMEASURED");
+  });
+
+  test("--json carries the same reading, and it parses", async () => {
+    const s = spy(async () => TITLES);
+    const r = await run(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "CI"], s.gh);
+    expect(r.code).toBe(0);
+    const payload = JSON.parse(r.stdout);
+    expect(payload.reading).toBe("NOTHING_TO_SEQUENCE");
+    expect(payload.wrote).toBe("nothing-to-sequence");
+    expect(payload.missing).toEqual([]);
+  });
+
+  test("no milestone starts with the prefix: still the typo refusal", async () => {
+    const s = spy(async () => TITLES);
+    const r = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Nope"], s.gh);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(s.calls).toEqual([]);
+    expect(r.stderr).toContain("That is a prefix matching nothing");
+  });
+
+  test("a milestone list that cannot be read refuses, and never reads as nothing to order", async () => {
+    const s = spy(async () => {
+      throw new Error("HTTP 502");
+    });
+    const r = await run(["--repo", "o/r", "--write", "--milestone-prefix", "CI"], s.gh);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(r.stderr).toContain("UNMEASURED");
+    expect(r.stderr).toContain("HTTP 502");
+    expect(r.stdout).not.toContain("nothing to order");
+  });
+});
