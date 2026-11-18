@@ -1925,7 +1925,7 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
   const READY_OPT = "OPT_ready";
   const BACKLOG_OPT = "OPT_backlog";
   const FIELD = "PVTSSF_status";
-  // The focus every end-to-end case sits in (SC-2741). The script reads the
+  // The focus every end-to-end case sits in (#2037). The script reads the
   // engine prefix from this repository's own config, so the family is READ
   // from that config here too, never typed: a literal went stale the day the
   // milestones were renamed from Pipeline to Engine (#2124).
@@ -2186,33 +2186,36 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
     }
   }, 60_000);
 
-  test("SC-2741: an unblocked incumbent outside the active milestone is demoted, end to end", async () => {
-    // BR-76's board with ONE variable moved: the incumbent's milestone is a
-    // payload phase while engine work is open elsewhere. #1764 is this card.
+  test("#2430: a payload-phase incumbent keeps its slot and an unplaced one is demoted, end to end", async () => {
+    // BR-76's board. Before #2430 the payload incumbent (#1764 was this card)
+    // was demoted because engine work was open elsewhere; ADR-021 makes phase
+    // an order, not a gate, so only the card no milestone places goes back.
     const fake = startFakeGitHub(
       plan({
         items: [
           { itemId: "PVTI_b", number: 202, status: "Ready", blockedBy: 0, assignees: 0, milestone: "Convergence Phase 3" },
+          { itemId: "PVTI_d", number: 404, status: "Ready", blockedBy: 0, assignees: 0, milestone: null },
           { itemId: "PVTI_c", number: 303, status: "In progress", blockedBy: 0, assignees: 1, milestone: FOCUS },
         ],
-        openIssues: [202, 303],
+        openIssues: [202, 303, 404],
       }),
     );
     try {
       const { code, out } = await run(fake, ["--closed-issue", "9", "--write"]);
       expect(code, out).toBe(0);
-      expect(out, "the run must say what the focus is").toContain(`Focus: ${FOCUS}`);
+      expect(out, "the run still says what the focus is").toContain(`Focus: ${FOCUS}`);
       expect(fake.writes, out).toEqual([
-        { itemId: "PVTI_b", optionId: BACKLOG_OPT, fieldId: FIELD, projectId: PROJECT },
+        { itemId: "PVTI_d", optionId: BACKLOG_OPT, fieldId: FIELD, projectId: PROJECT },
       ]);
     } finally {
       await fake.stop();
     }
   }, 60_000);
 
-  test("SC-2741: an eligible card outside the active milestone is not promoted, end to end", async () => {
-    // BR-73's board with the focus held by a claimed card: #101 is eligible,
-    // sits in a later phase, and must wait.
+  test("#2430: an eligible card in a later phase is promoted, end to end", async () => {
+    // BR-73's board with the focus held by a claimed card: #101 is eligible
+    // and sits in a later phase. Before #2430 it waited; now it is placed
+    // work, and the claimed card in the focus does not hold it back.
     const fake = startFakeGitHub(
       plan({
         items: [
@@ -2225,11 +2228,10 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
     try {
       const { code, out } = await run(fake, ["--top-up", "--write"]);
       expect(code, out).toBe(0);
-      expect(out).toContain("1 eligible issue(s) wait outside the active milestone");
-      // ai-review round 1 of #2006: the per-candidate log ran BEFORE the scope
-      // and announced a move the run then did not make.
-      expect(out, "the log must not claim a move the scope refused").not.toContain("#101 -> Ready");
-      expect(fake.writes, out).toEqual([]);
+      expect(out, "a later phase is not a reason to wait").not.toContain("wait because no phase milestone places them");
+      expect(fake.writes, out).toEqual([
+        { itemId: "PVTI_a", optionId: READY_OPT, fieldId: FIELD, projectId: PROJECT },
+      ]);
     } finally {
       await fake.stop();
     }
@@ -2366,72 +2368,77 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
 });
 
 /**
- * SC-2741: a card outside the active milestone is demoted (ADR-013 row 8).
+ * #2430: an incumbent no phase places is demoted; a placed one keeps its slot.
  *
- * Measured before the change: `incumbentDecisions` demoted an incumbent only
- * when it was blocked, so a card dragged into Ready by hand — or #1764, a
- * Convergence payload issue that entered under the old label-and-phase
- * ordering — held its slot forever. Each case is one variable away from a
- * control that stays put.
+ * ADR-013 row 8 demoted any card outside the active milestone, so a payload
+ * card (#1764 was one) lost its slot while engine work was open. ADR-021
+ * decision 1 (Jason, 2026-11-18): phases order work; they do not gate it. Now
+ * only a card in no phase milestone is demoted, unless it carries the
+ * expedite label, and a blocked card still goes back for its blocker. Each
+ * case is one variable away from a control.
  */
-describe("SC-2741: Ready's incumbents are held to the active milestone", () => {
+describe("#2430: Ready's incumbents are held to a placed phase", () => {
   const scope = (title: string | null) => ({
     active: activeMilestone(title === null ? [] : [{ milestone: title }], "Zqengine"),
     expediteLabel: "zq-expedite-fixture",
   });
 
-  test("SC-2741: an unblocked card in a payload milestone is demoted", () => {
+  test("#2430: an unblocked card in a payload milestone stays while engine work is open", () => {
     const [d] = incumbentDecisions(
       [inc({ number: 1764, milestone: "Payload Phase 3" })],
       "Ready",
       scope("Zqengine Phase 6"),
     );
-    expect(d.demote, "a payload card must not hold a slot while engine work is open").toBe(true);
-    if (d.demote) {
-      expect(d.why).toContain("active milestone");
-      expect(d.to, "the destination is laneFor's backwards lane").toBe(
-        laneFor({ kind: "issue_blocked_in_ready" }).lane!,
-      );
-    }
+    expect(d.demote, "a payload phase is placed work; the phase is an order, not a gate").toBe(false);
   });
 
-  test("SC-2741 CONTROL: the same card inside the active milestone stays", () => {
+  test("#2430: an unblocked card in a later engine phase stays", () => {
     const [d] = incumbentDecisions(
-      [inc({ number: 1717, milestone: "Zqengine Phase 6" })],
+      [inc({ number: 1717, milestone: "Zqengine Phase 9" })],
       "Ready",
       scope("Zqengine Phase 6"),
     );
     expect(d.demote).toBe(false);
   });
 
-  test("SC-2741: a label-only card in Ready is demoted", () => {
+  test("#2430: a label-only card in Ready is demoted, to laneFor's backwards lane, saying why", () => {
     const [d] = incumbentDecisions(
       [inc({ number: 9, milestone: null, labels: ["engine"] })],
       "Ready",
       scope("Zqengine Phase 6"),
     );
     expect(d.demote, "label-only work never holds a Ready slot").toBe(true);
+    if (d.demote) {
+      expect(d.why).toContain("no milestone");
+      expect(d.to, "the destination is laneFor's backwards lane").toBe(
+        laneFor({ kind: "issue_blocked_in_ready" }).lane!,
+      );
+    }
   });
 
-  test("SC-2741: a card carrying the expedite label stays wherever it comes from", () => {
+  test("#2430: a card carrying the expedite label stays wherever it comes from", () => {
     const [d] = incumbentDecisions(
       [inc({ number: 9, milestone: null, labels: ["zq-expedite-fixture"] })],
       "Ready",
       scope("Zqengine Phase 6"),
     );
-    expect(d.demote, "the expedite lane is the one way in from outside the focus").toBe(false);
+    expect(d.demote, "the expedite lane is the one way in for unplaced work").toBe(false);
   });
 
-  test("SC-2741: with no focus at all, nothing but expedite work stays", () => {
+  test("#2430: with no focus at all, placed and expedite work stay and unplaced work goes", () => {
     const out = incumbentDecisions(
-      [inc({ number: 1, milestone: "Zqengine Phase 6" }), inc({ number: 2, labels: ["zq-expedite-fixture"] })],
+      [
+        inc({ number: 1, milestone: "Zqengine Phase 6" }),
+        inc({ number: 2, labels: ["zq-expedite-fixture"] }),
+        inc({ number: 3, milestone: null }),
+      ],
       "Ready",
       scope(null),
     );
-    expect(out.map(d => d.demote)).toEqual([true, false]);
+    expect(out.map(d => d.demote), "the decision no longer reads the focus").toEqual([false, false, true]);
   });
 
-  test("SC-2741: a blocked card out of scope is demoted ONCE, for the blocker", () => {
+  test("#2430: a blocked card is demoted ONCE, for the blocker, whatever its phase", () => {
     const [d] = incumbentDecisions(
       [inc({ number: 3, milestone: "Payload Phase 3", blockedByOpen: 1 })],
       "Ready",

@@ -1663,23 +1663,24 @@ describe("#1962: the promotion reaches the writer, not only the report", () => {
 });
 
 /**
- * SC-2741: Ready refills only from the active milestone (ADR-013 row 8).
+ * #2037 / #2430: the focus Ready REPORTS, and the placed phases it DRAWS from.
  *
- * Kanban pull, Jason's call of 2026-11-11: one active focus, an ordered
- * backlog, a WIP cap, an expedite lane. The active milestone is the lowest
- * engine phase with an open issue — `openFrontier`, reused rather than
- * re-decided — and the payload waits until no engine phase has one. A
- * label never places an issue any more: `LABEL_RANK` is deleted, so
- * label-only work enters Ready only through the expedite label.
+ * Until #2430 (ADR-013 row 8) Ready refilled only from the active milestone,
+ * the lowest engine phase with an open issue, and the payload waited until no
+ * engine phase had one. ADR-021 decision 1 (Jason, 2026-11-18): phases order
+ * work; they do not gate it. Ready now draws from EVERY placed phase that
+ * nothing open blocks, the engine still ranks first (`readyOrderFor`), and
+ * the active milestone survives only as the focus the reports print and
+ * consumer-triage files into.
  *
- * Measured before the change, 2026-11-11: Ready held #1764 (a Convergence
- * payload issue) beside #1717 (Pipeline Phase 6), and 50 of 59 candidates
- * were placed by label alone.
+ * Measured before #2430, 2026-11-18: 31 of 37 open Convergence issues had no
+ * blocker anyone wrote, and 0 could start. A label still never places an
+ * issue: label-only work enters Ready only through the expedite label.
  */
-describe("SC-2741: Ready refills only from the active milestone", () => {
+describe("#2037 / #2430: the reported focus, and the placed phases Ready draws from", () => {
   const open = (...milestones: (string | null)[]) => milestones.map(milestone => ({ milestone }));
 
-  test("SC-2741: the active milestone is the LOWEST engine phase with an open issue", () => {
+  test("#2037: the active milestone is the LOWEST engine phase with an open issue", () => {
     const a = activeMilestone(
       open(`${ENGINE} Phase 7`, `${ENGINE} Phase 6`, `${PAYLOAD} Phase 3`, null),
       ENGINE,
@@ -1690,7 +1691,7 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
     expect(a.why).toContain("Phase 6");
   });
 
-  test("SC-2741: the payload waits for the car, then becomes the focus", () => {
+  test("#2037: the payload waits for the car, then becomes the focus", () => {
     const a = activeMilestone(open(`${PAYLOAD} Phase 4`, `${PAYLOAD} Phase 3`, null), ENGINE);
     expect(a.title, "no engine phase has an open issue, so the payload's lowest phase is next").toBe(
       `${PAYLOAD} Phase 3`,
@@ -1698,7 +1699,7 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
     expect(a.why, "the report must say WHY the payload is the focus").toContain(ENGINE);
   });
 
-  test("SC-2741: nothing in any phase means no focus — Ready stays empty", () => {
+  test("#2037: nothing in any phase means no focus — Ready stays empty", () => {
     const a = activeMilestone(open(null, null), ENGINE);
     expect(a.title).toBeNull();
     const scoped = scopedCandidates([item(1, null, ["engine"]), item(2, null)], a, NO_WORK_NEXT);
@@ -1706,14 +1707,14 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
     expect(scoped.outOfScope.map(i => i.number)).toEqual([1, 2]);
   });
 
-  test("SC-2741: reopening an issue in a finished phase moves the focus back to it", () => {
+  test("#2037: reopening an issue in a finished phase moves the focus back to it", () => {
     const before = activeMilestone(open(`${ENGINE} Phase 6`), ENGINE);
     const after = activeMilestone(open(`${ENGINE} Phase 6`, `${ENGINE} Phase 2`), ENGINE);
     expect(before.title).toBe(`${ENGINE} Phase 6`);
     expect(after.title, "reopened work is unfinished work in an earlier phase").toBe(`${ENGINE} Phase 2`);
   });
 
-  test("SC-2741: only the active milestone and honoured expedite cards are in scope", () => {
+  test("#2430: every placed phase and honoured expedite cards are in scope; unplaced and label-only wait", () => {
     const active = activeMilestone(open(`${ENGINE} Phase 6`, `${ENGINE} Phase 7`), ENGINE);
     const cards = [
       item(10, null, ["engine"]),
@@ -1723,21 +1724,41 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
       item(14, null, ["zq-expedite-fixture"]),
     ];
     const plain = scopedCandidates(cards, active, NO_WORK_NEXT);
-    expect(plain.inScope.map(i => i.number)).toEqual([12]);
-    expect(plain.outOfScope.map(i => i.number)).toEqual([10, 11, 13, 14]);
+    expect(plain.inScope.map(i => i.number), "a later phase and a payload phase are placed work too").toEqual([
+      11, 12, 13,
+    ]);
+    expect(plain.outOfScope.map(i => i.number), "only work no phase milestone places waits").toEqual([10, 14]);
     // The expedite lane, one variable apart: the same cards with #14 honoured.
     const expedited = scopedCandidates(cards, active, new Set([14]));
     expect(expedited.inScope.map(i => i.number), "an honoured expedite card enters from anywhere").toEqual([
-      12, 14,
+      11, 12, 13, 14,
     ]);
   });
 
-  test("SC-2741: a null engine prefix is ONE family, so the lowest phase overall leads", () => {
+  test("#2430: payload work is in scope while engine work is open, and the engine still ranks first", () => {
+    const active = activeMilestone(open(`${ENGINE} Phase 6`, `${PAYLOAD} Phase 3`), ENGINE);
+    const cards = [item(21, 3, [], PAYLOAD), item(22, 6)];
+    const scoped = scopedCandidates(cards, active, NO_WORK_NEXT);
+    expect(scoped.inScope.map(i => i.number), "the payload no longer waits for the car").toEqual([21, 22]);
+    const ranked = [...scoped.inScope].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number);
+    expect(ranked, "phase orders work: engine before payload, whatever the phase numbers").toEqual([22, 21]);
+  });
+
+  test("#2430 CONTROL: with no focus at all, a placed card is still in scope", () => {
+    const none = activeMilestone(open(null), ENGINE);
+    expect(none.title).toBeNull();
+    const scoped = scopedCandidates([item(31, 6), item(32, null)], none, NO_WORK_NEXT);
+    expect(scoped.inScope.map(i => i.number), "the decision no longer reads the focus").toEqual([31]);
+    expect(scoped.outOfScope.map(i => i.number)).toEqual([32]);
+  });
+
+
+  test("#2037: a null engine prefix is ONE family, so the lowest phase overall leads", () => {
     const a = activeMilestone(open(`${PAYLOAD} Phase 3`, `${ENGINE} Phase 6`), null);
     expect(a.title).toBe(`${PAYLOAD} Phase 3`);
   });
 
-  test("SC-2741: the frontier is openFrontier's, not a second decider", () => {
+  test("#2037: the frontier is openFrontier's, not a second decider", () => {
     const src = readFileSync(join(import.meta.dir, "..", "lib", "board-ready-rule.ts"), "utf-8");
     const body = structuralCut(src, "export function activeMilestone(", { endAnchor: "\n}\n" });
     expect(body, "activeMilestone must delegate to openFrontier in lib/board-mirror.ts").toContain(
@@ -1746,7 +1767,7 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
     expect(body, "a Math.min here would be a second frontier decider").not.toContain("Math.min");
   });
 
-  test("SC-2741: no label ranks an issue — LABEL_RANK and the LABEL tier are gone", async () => {
+  test("#2037: no label ranks an issue — LABEL_RANK and the LABEL tier are gone", async () => {
     const rule = (await import("../lib/board-ready-rule")) as Record<string, unknown>;
     expect("LABEL_RANK" in rule, "LABEL_RANK is deleted by ADR-013 decision 8").toBe(false);
     const p = placementOf(item(5, null, ["engine"]), ENGINE, NO_WORK_NEXT);
@@ -1758,7 +1779,7 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
     });
   });
 
-  test("SC-2741: every Ready writer and the report apply the same scope", () => {
+  test("#2037: every Ready writer and the report apply the same scope", () => {
     const root = join(import.meta.dir, "..");
     for (const f of ["scripts/board-ready.ts", "scripts/board-mirror.ts", "scripts/work-status.ts"]) {
       const code = readFileSync(join(root, f), "utf-8");
@@ -1767,7 +1788,7 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
     }
   });
 
-  test("SC-2741: adding or removing a milestone, or adding a label, triggers the refill", () => {
+  test("#2037: adding or removing a milestone, or adding a label, triggers the refill", () => {
     const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "board-ready.yml"), "utf-8");
     const types = /issues:\s*\n\s*types:\s*\[([^\]]*)\]/.exec(yml)?.[1] ?? "";
     expect(types, "the trigger list must be readable, or this row witnesses nothing").not.toBe("");
@@ -1778,7 +1799,7 @@ describe("SC-2741: Ready refills only from the active milestone", () => {
     }
   });
 
-  test("SC-2741: issues enter by filing, never by transfer — board-intake runs on opened, not transferred", () => {
+  test("#2037: issues enter by filing, never by transfer — board-intake runs on opened, not transferred", () => {
     // Jason, 2026-11-12, #1752: an issue reaches the board by being filed.
     // `transferred` stays off the trigger by decision, and because GitHub does
     // not say which side receives it — on the source it would add an issue

@@ -224,11 +224,9 @@ of the last 40 merged PRs closed no issue.
       needs: test
       proved-by: test/dry-run-command.test.ts, the `SC-2740` describe — 13 pass, 0 fail, 2026-11-12, on the PR that closes #2001. `.claude/commands/dry-run.md` is read from the repository: it names the three planning tools and work-status, What reaches Ready, Gaps found, Needs you and the `-flow.html` visual opened on macOS or Linux, forbids `--write`, and no command line in it passes one. Dropping `Gaps found`, or adding `--write` to the plan-deps line, each turns one case red.
       fingerprint: 39d73cf9
-- [x] SC-2741: Ready holds only work from the active milestone, the lowest Pipeline phase with an open issue, plus `work-this-next`; label-only and payload work never enter while a Pipeline phase has an open issue, a card outside the active milestone is demoted, and adding or removing a milestone, or adding a label, triggers the refill — issues enter by filing, never by transfer (Jason, 2026-11-12, #1752)
+- [ ] SC-2741: Ready holds work from every placed phase that nothing open blocks, up to its depth cap, plus `work-this-next`, which always ranks first. The rest rank by their milestone's due date, earliest first and undated last, then engine before payload, then lowest phase, then how many open issues each unblocks, then number. A phase never holds back an issue nothing blocks, and adding or removing a milestone, changing a milestone's due date, or adding a label triggers the refill (Jason, 2026-11-18, ADR-021; reworded from the one-milestone rule of 2026-11-12, #1752)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-      proved-by: one test per clause, 2026-11-13, -t "SC-2741|#2037|#2007" — active milestone plus work-this-next: test/board-mirror.test.ts (9 pass) and test/active-milestone.test.ts (7 pass, both Ready writers read one population); label-only and payload kept out, and demotion outside the focus: test/board-ready-fanout.test.ts (8 pass); the refill triggers and issues entering by filing, never by transfer: test/board-ready-rule.test.ts (11 pass). 0 fail. Ticked by `sync-sc-status --only SC-2741` (#2054).
-      fingerprint: 8017b213
 - [ ] SC-2786: `board-ready` never puts an issue in Ready that names a file an in-progress issue names, an open pull request changes, or an issue it picked earlier in the same fill names; the skipped issue stays first in line for the next fill (Jason, 2026-11-18, ADR-021)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test

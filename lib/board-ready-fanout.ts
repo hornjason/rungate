@@ -258,15 +258,17 @@ export function incumbentDecisions(
       };
     }
     if (c.blockedByOpen === 0) {
-      // **Unblocked, so the focus decides** (SC-2741). A blocked card is
-      // demoted for its blocker below, once, with that reason; this branch is
-      // for the card that meets every entry condition except being in the
-      // active milestone — a card dragged in by hand, or one promoted under
-      // the label-and-phase ordering this replaced. Without it, it holds its
-      // slot forever, because no other rule ever re-asks.
+      // **Unblocked, so placement decides** (SC-2741, #2430). A blocked card
+      // is demoted for its blocker below, once, with that reason; this branch
+      // is for the card that meets every entry condition except sitting in a
+      // phase milestone — a card dragged in by hand with no milestone, or one
+      // carrying only a label. Since ADR-021 any placed phase may hold Ready
+      // work, so a later phase or a payload phase is no longer a reason to
+      // demote. Without this branch an unplaced card holds its slot forever,
+      // because no other rule ever re-asks.
       const expedited = scope.expediteLabel !== null && c.labels.includes(scope.expediteLabel);
       if (inReadyScope(c, scope.active, expedited)) {
-        return { number: c.number, demote: false, why: "still unblocked and inside the active milestone" };
+        return { number: c.number, demote: false, why: "still unblocked and in a placed phase" };
       }
       if (backwards.lane === null) {
         return {
@@ -280,8 +282,8 @@ export function incumbentDecisions(
         demote: true,
         to: backwards.lane,
         why:
-          `${c.milestone === null ? "it has no milestone" : `it sits in ${c.milestone}`}, outside the ` +
-          `active milestone — ${scope.active.why}`,
+          `${c.milestone === null ? "it has no milestone" : `it sits in ${c.milestone}`}, which is no ` +
+          "phase, so nothing places it in Ready (a milestone, or the expedite label, would)",
       };
     }
     // The lane itself is UNMEASURED if the one rule for moving backwards has

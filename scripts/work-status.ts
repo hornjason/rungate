@@ -817,7 +817,7 @@ const active = activeMilestone(
 const scoped = scopedCandidates(candidateRankables, active, workNext.honoured);
 console.log(`\n  Focus: ${active.why}`);
 console.log(
-  `  in the focus ${scoped.inScope.length}, waiting outside it ${scoped.outOfScope.length} — of ${pickable.length}`,
+  `  in a placed phase ${scoped.inScope.length}, waiting unplaced ${scoped.outOfScope.length} — of ${pickable.length}`,
 );
 
 const census = placementCensus(candidateRankables, enginePrefix, workNext.honoured);
@@ -838,7 +838,7 @@ if (census.unplaced > 0) {
 }
 if (scoped.inScope.length > 0) {
   const top = [...scoped.inScope].sort(readyOrderFor(enginePrefix, workNext.honoured)).slice(0, 5);
-  console.log("\n  next out of the backlog, from the focus, in plan order:");
+  console.log("\n  next out of the backlog, from every placed phase, in plan order:");
   for (const r of top) {
     const title = pickable.find((i: any) => i.number === r.number)?.title ?? "";
     console.log(

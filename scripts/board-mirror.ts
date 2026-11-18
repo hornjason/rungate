@@ -377,7 +377,7 @@ export function splitReadyChanges<
 ): {
   readyWritable: T[];
   heldByCap: T[];
-  /** Eligible promotions outside the active milestone — waiting, not held by the cap. */
+  /** Eligible promotions no phase milestone places — waiting, not held by the cap (#2430). */
   outOfScope: T[];
   selection: ReturnType<typeof selectReady>;
   /**
@@ -894,11 +894,11 @@ export async function main(argv: string[]): Promise<number> {
     if (fieldChanges.length === 0) console.log(`  every cell already agrees with its issue body`);
     if (values.ready) {
       console.log(
-        `\n  Ready lane — unblocked, unclaimed, and in the active milestone (SC-2741)`,
+        `\n  Ready lane — unblocked, unclaimed, and in a placed phase (SC-2741)`,
       );
       console.log(`    Focus: ${active.why}`);
       if (outOfScope.length > 0) {
-        console.log(`    ${outOfScope.length} eligible issue(s) wait outside the active milestone`);
+        console.log(`    ${outOfScope.length} eligible issue(s) wait because no phase milestone places them`);
       }
       console.log(`    depth: ${cap ?? "UNMEASURED"}. ${selection.why}`);
       // Under `--ready` only (#1962, round 2): this run did attempt a Ready

@@ -848,7 +848,7 @@ async function main(): Promise<number> {
   console.log(`  Focus: ${active.why}`);
   const scoped = scopedCandidates(eligible, active, workNext.honoured);
   if (scoped.outOfScope.length > 0) {
-    console.log(`  ${scoped.outOfScope.length} eligible issue(s) wait outside the active milestone.`);
+    console.log(`  ${scoped.outOfScope.length} eligible issue(s) wait because no phase milestone places them.`);
   }
   const selection = selectReady(scoped.inScope, occ, engine.prefix, workNext.honoured);
   console.log(

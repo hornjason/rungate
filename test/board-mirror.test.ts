@@ -990,7 +990,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
     expect(selection.why).toContain("UNMEASURED");
   });
 
-  test("SC-2741: only the active milestone is promoted, and a phase-less issue waits", () => {
+  test("#2430: a placed card is promoted, and a phase-less issue waits", () => {
     const { readyWritable } = splitReadyChanges(
       [c(4, null, "Ready"), c(9, 2, "Ready")],
       1,
@@ -1001,7 +1001,7 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
     );
     expect(
       readyWritable.map(x => x.item.number),
-      "the focus is Phase 2, so the phase-less issue waits outside it",
+      "the phase-less issue has no milestone placing it, so it waits",
     ).toEqual([9]);
   });
 
@@ -1020,7 +1020,9 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
     ).toEqual([1, 2]);
   });
 
-  test("SC-2741: an eligible card outside the focus waits — it is not held by the cap", () => {
+  // #2430: a later phase is no longer outside anything (ADR-021). Only the
+  // label-only card waits, and it is reported as waiting, not as held.
+  test("#2430: a card in a later phase is promoted; only an unplaced card waits, and it is not held by the cap", () => {
     const { readyWritable, heldByCap, outOfScope } = splitReadyChanges(
       [c(1, 0, "Ready"), c(2, 7, "Ready"), c(3, null, "Ready", "Backlog", ["engine"])],
       5,
@@ -1029,9 +1031,9 @@ describe("SC-2722: the hand-run writer fills to the same depth as the workflow",
       null,
       FOCUS0,
     );
-    expect(readyWritable.map(x => x.item.number)).toEqual([1]);
+    expect(readyWritable.map(x => x.item.number), "phase 7 is placed work, ranked after phase 0").toEqual([1, 2]);
     expect(heldByCap, "a waiting card reported as held by the cap is a lie about the lane").toEqual([]);
-    expect(outOfScope.map(x => x.item.number)).toEqual([2, 3]);
+    expect(outOfScope.map(x => x.item.number)).toEqual([3]);
   });
 
   // ROUND 2, finding 3 — the HIGH one. `occupied` is counted before the
@@ -1181,8 +1183,9 @@ describe("SC-2722: a repository argument is owner/name or it is refused", () => 
 });
 
 /**
- * #2007 / SC-2741: a card already in Ready that has fallen outside the active
- * milestone is demoted by this writer too.
+ * #2007: a card already in Ready that nothing places any more is demoted by
+ * this writer too. Since #2430 (ADR-021) that means a card in no phase
+ * milestone; a later phase is placed work and keeps its slot.
  *
  * `isReady` computes `to = Ready` for an unblocked, unclaimed incumbent, so the
  * change was filtered out as "no change" and the card held its slot forever,
@@ -1190,7 +1193,7 @@ describe("SC-2722: a repository argument is owner/name or it is refused", () => 
  * `incumbentDecisions`. `scopeDemotions` asks that same decider, so the two
  * writers cannot disagree about incumbents.
  */
-describe("#2007 / SC-2741: board-mirror demotes a Ready incumbent outside the active milestone", () => {
+describe("#2007 / #2430: board-mirror demotes a Ready incumbent no phase places", () => {
   const FOCUS6 = activeMilestone([{ milestone: "Zqengine Phase 6" }], "Zqengine");
   const card = (number: number, milestone: string | null, status = READY, labels: string[] = [], blockedByOpen = 0) => ({
     number,
@@ -1201,9 +1204,13 @@ describe("#2007 / SC-2741: board-mirror demotes a Ready incumbent outside the ac
     labels,
   });
 
-  test("#2007: an unblocked, unclaimed Ready card in a later phase is demoted to Backlog", () => {
-    const out = scopeDemotions([card(1, "Zqengine Phase 7")], FOCUS6, "work-this-next");
-    expect(out.map(d => [d.item.number, d.to])).toEqual([[1, BACKLOG]]);
+  test("#2430: an unblocked, unclaimed Ready card in a later phase keeps its slot", () => {
+    expect(scopeDemotions([card(1, "Zqengine Phase 7")], FOCUS6, "work-this-next")).toEqual([]);
+  });
+
+  test("#2430: an unblocked, unclaimed Ready card with only a label is demoted to Backlog", () => {
+    const out = scopeDemotions([card(7, null, READY, ["engine"])], FOCUS6, "work-this-next");
+    expect(out.map(d => [d.item.number, d.to])).toEqual([[7, BACKLOG]]);
   });
 
   test("#2007: a Ready card with no milestone is demoted too", () => {
@@ -1214,8 +1221,8 @@ describe("#2007 / SC-2741: board-mirror demotes a Ready incumbent outside the ac
     expect(scopeDemotions([card(3, "Zqengine Phase 6")], FOCUS6, null)).toEqual([]);
   });
 
-  test("#2007: the expedite label keeps an out-of-scope card in Ready", () => {
-    expect(scopeDemotions([card(4, "Zqengine Phase 7", READY, ["work-this-next"])], FOCUS6, "work-this-next")).toEqual([]);
+  test("#2007: the expedite label keeps an unplaced card in Ready", () => {
+    expect(scopeDemotions([card(4, null, READY, ["work-this-next"])], FOCUS6, "work-this-next")).toEqual([]);
   });
 
   test("#2007: a card whose blocker count could not be read is left alone, not demoted", () => {
