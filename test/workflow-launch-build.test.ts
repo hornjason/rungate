@@ -251,6 +251,28 @@ describe("#2398: cores are read by the checker and bundled", () => {
     expect(coreClosure("const obj = { a: 1, b: 2 };\nconst { b, a } = obj;\nexport { a };", ["a"]).declarations).toEqual(["a", "obj"]);
   });
 
+  test("review of #2399 round 4: a top-level statement that uses a reached binding is refused, not dropped", () => {
+    // An enum compiles to `var Color;` plus an initializer statement; emitting
+    // the declaration alone would bundle an undefined Color.
+    const enumSrc = "enum Color { Red, Blue }\nexport function pick() { return Color.Red; }";
+    expect(coreClosure(enumSrc, ["pick"]).imports).toEqual([
+      "Color (used by a top-level statement that declares nothing, so the bundle cannot carry it)",
+    ]);
+    expect(() => bundleLibCores({ "lib/a.ts": ["pick"] }, () => enumSrc)).toThrow("Color (used by a top-level statement that declares nothing");
+    // A namespace is the same shape.
+    expect(coreClosure("namespace N { export const x = 1; }\nexport function f() { return N.x; }", ["f"]).imports).toEqual([
+      "N (used by a top-level statement that declares nothing, so the bundle cannot carry it)",
+    ]);
+    // So is a plain write after the declaration.
+    expect(coreClosure("const T: Record<string, number> = {};\nT.x = 1;\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by a top-level statement that declares nothing, so the bundle cannot carry it)",
+    ]);
+    // A statement that touches only what no core reaches is left behind, as before.
+    expect(coreClosure("const other: number[] = [];\nother.push(1);\nexport function f() { return 1; }", ["f"]).imports).toEqual([]);
+    // A local that shadows a reached name inside such a statement is not a use of it.
+    expect(coreClosure("const T = 1;\n[2].forEach(T => T);\nexport function f() { return T; }", ["f"]).imports).toEqual([]);
+  });
+
   test("a local that shadows an import is not a use of it — the checker reads scope", () => {
     const src = 'import { existsSync } from "fs";\nexport function f(existsSync: (p: string) => boolean) { return existsSync("x"); }';
     expect(coreClosure(src, ["f"]).imports).toEqual([]);

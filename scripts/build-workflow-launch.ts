@@ -374,6 +374,31 @@ function readCore(source: string, core: readonly string[]): CoreReading {
     };
     visit(node);
   }
+  // A top-level statement that declares nothing still runs when the module
+  // loads. An enum or a namespace compiles to `var X;` plus one, and so does
+  // `T.x = 1`: each sets a binding the core reads. The bundle carries
+  // declarations only, so one that uses a reached binding is refused rather
+  // than dropped (review of #2399, round 4). Fail closed: no statement shape
+  // is listed as safe here, only the declarations the bundler emits or skips.
+  for (const stmt of sf.statements) {
+    if (
+      ts.isFunctionDeclaration(stmt) ||
+      ts.isClassDeclaration(stmt) ||
+      ts.isVariableStatement(stmt) ||
+      ts.isImportDeclaration(stmt) ||
+      ts.isExportDeclaration(stmt)
+    ) {
+      continue;
+    }
+    const uses = (n: ts.Node): void => {
+      if (ts.isIdentifier(n)) {
+        const top = topLevelNode(checker.getSymbolAtLocation(n)?.declarations?.[0], sf);
+        if (top && reached.has(top)) note(`${n.text} (used by a top-level statement that declares nothing, so the bundle cannot carry it)`);
+      }
+      ts.forEachChild(n, uses);
+    };
+    uses(stmt);
+  }
   const nodes = [...reached.keys()]
     .sort((a, b) => a.getStart(sf) - b.getStart(sf))
     .map(node => ({ node, names: boundNames(node) }));
