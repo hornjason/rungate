@@ -387,9 +387,12 @@ describe("#223 SC-871: ship.js consults it before it implements", () => {
     ).toContain("priorWorkRefusal(ISSUE, priorBranchResult, existingPrResult)");
   });
 
-  test("priorWorkRefusal has exactly one definition in ship.js", () => {
+  test("priorWorkRefusal has exactly one definition in the launched file", () => {
+    // Since #2410 the definition is bundled from lib/prior-branch.ts into
+    // ship.run.js, the file a run launches, and ship.js carries none.
+    const launched = readFileSync(join(import.meta.dir, "..", "workflows", "ship.run.js"), "utf-8");
     expect(
-      (shipSource.match(/function priorWorkRefusal\b/g) ?? []).length,
+      (launched.match(/function priorWorkRefusal\b/g) ?? []).length,
       "there is no single binding to mutate",
     ).toBe(1);
   });

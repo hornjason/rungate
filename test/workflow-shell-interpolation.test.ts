@@ -194,8 +194,6 @@ const CLASSIFIED: Record<string, string> = {
     "structured, not text: `JSON.stringify(reading.verdict)` inside a refusal sentence",
   "workflows/ship.js:reply×2":
     "structured, not text: `JSON.stringify(reply.outcome)` inside a refusal sentence",
-  "workflows/ship.js:existingPR":
-    "structured, not text: `JSON.stringify(existingPR)` inside a refusal sentence",
   "workflows/ship.js:results":
     "structured, not text: `typeof results`, which is one of eight words",
   "workflows/ship.js:status×2":
