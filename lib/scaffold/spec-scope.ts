@@ -149,7 +149,17 @@ export function bankWithNewDeferrals(
  * declare a scope writes nothing and reports nothing.
  */
 /** The writer the step writes through: `writeSpec`, or a stand-in in a test. */
-export type ScopeWriter = (path: string, content: string) => { written: boolean; refusal?: string | null };
+/**
+ * `expected` (#2300, review of #2381): the bytes a spec write expects to
+ * replace. The forward write expects the spec as planned from; the put-back
+ * expects the spec as this run wrote it, so neither erases a change another
+ * session landed in between. Absent for the bank, whose writer holds its read.
+ */
+export type ScopeWriter = (
+  path: string,
+  content: string,
+  expected?: string,
+) => { written: boolean; refusal?: string | null };
 
 export function deferUndeclaredSpecs(root: string, actions: string[], writer?: ScopeWriter): void {
   if (!existsSync(join(root, "specs"))) return;
@@ -172,7 +182,8 @@ export function deferUndeclaredSpecs(root: string, actions: string[], writer?: S
   }
   // #2300: the bank through its one write path, refusing a bank another
   // session moved since `bankRead`.
-  const write: ScopeWriter = writer ?? ((p, c) => (p === bankPath ? writeDeferralBank(root, c, bankRead) : writeSpec(p, c)));
+  const write: ScopeWriter =
+    writer ?? ((p, c, e) => (p === bankPath ? writeDeferralBank(root, c, bankRead) : writeSpec(p, c, { expected: e })));
 
   // All or nothing: a spec written without its bank row reddens SC-2734, so a
   // failed write puts back every spec already written.
@@ -184,7 +195,7 @@ export function deferUndeclaredSpecs(root: string, actions: string[], writer?: S
     // (review of #2335).
     const putBack = (w: ScopeWrite) => {
       try {
-        return write(join(root, w.path), w.before).written;
+        return write(join(root, w.path), w.before, w.after).written;
       } catch {
         return false;
       }
@@ -202,7 +213,7 @@ export function deferUndeclaredSpecs(root: string, actions: string[], writer?: S
   try {
     mkdirSync(dirname(bankPath), { recursive: true });
     for (const w of plan.writes) {
-      const r = write(join(root, w.path), w.after);
+      const r = write(join(root, w.path), w.after, w.before);
       if (!r.written) return undo(`${w.path} was not written: ${r.refusal ?? "no reason given"}`);
       written.push(w);
     }
