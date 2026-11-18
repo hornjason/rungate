@@ -948,7 +948,11 @@ if (isDirectExecution) {
     );
     process.exit(1);
   }
-  const unchecked = findUncheckedSCs();
+  // #2333: generated copies are not authors, so they enter NO leg of this
+  // run — not the credit, the conformity check, the duplicate warning or the
+  // per-spec tally. Filtering one leg at a time left the next one reading
+  // them (review rounds 2 and 3 of #2372); this is the one site upstream.
+  const unchecked = findUncheckedSCs(undefined, { authoredOnly: true });
   if (unchecked.length === 0) {
     console.log("All SCs are already checked off");
     process.exit(0);
@@ -982,10 +986,7 @@ if (isDirectExecution) {
   }
 
   // Step 1: Detect duplicate SC IDs across specs
-  // #2333: the credit half reads authors only — a generated copy restating
-  // an id is neither a duplicate to renumber nor a second spec to credit.
-  const authoredUnchecked = findUncheckedSCs(undefined, { authoredOnly: true });
-  const duplicates = findDuplicateSCIds(authoredUnchecked);
+  const duplicates = findDuplicateSCIds(unchecked);
   if (duplicates.size > 0) {
     console.log(`\n⚠️  Duplicate SC IDs found across specs:`);
     for (const [id, specs] of duplicates) {
@@ -999,7 +1000,7 @@ if (isDirectExecution) {
   // credit ticked the id in every spec declaring it.
   // #2333: the credit rule's registry leaves generated copies out.
   const registry = readScRegistry(undefined, { authoredOnly: true });
-  const testFileMap = findTestFilesForSCs(authoredUnchecked, registry);
+  const testFileMap = findTestFilesForSCs(unchecked, registry);
   const testedKeys = new Set(
     [...testFileMap.values()].flat().map(c => scopedKey(c.specFile, c.id)),
   );
