@@ -66,3 +66,27 @@ export function addBlockers(
     );
   }
 }
+
+/**
+ * Remove one `blocked by` link, through the same REST endpoint and by the same
+ * database id — `issue edit --remove-blocked-by` is missing from the same old
+ * `gh` (review of #2357). Read back afterwards: a link still there is refused.
+ */
+export function removeBlocker(
+  repo: string,
+  blocked: number,
+  blocker: number,
+  exec: GhExec,
+  ids: Map<number, number> = new Map(),
+): void {
+  const id = databaseId(repo, blocker, exec, ids);
+  exec(["api", "-X", "DELETE", `repos/${repo}/issues/${blocked}/dependencies/blocked_by/${id}`]);
+  const linked = exec(["api", "--paginate", `repos/${repo}/issues/${blocked}/dependencies/blocked_by?per_page=100`, "--jq", ".[].number"])
+    .split("\n")
+    .map(l => l.trim())
+    .filter(l => l !== "")
+    .map(Number);
+  if (linked.includes(blocker)) {
+    throw new Error(`#${blocked}: the removal returned, but #${blocker} is still among its blockers on read-back`);
+  }
+}

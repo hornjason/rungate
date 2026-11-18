@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { addBlockers } from "../lib/blocked-by-write";
+import { addBlockers, removeBlocker } from "../lib/blocked-by-write";
 
 const ROOT = join(import.meta.dir, "..");
 const LIST = "repos/o/r/issues/9/dependencies/blocked_by?per_page=100";
@@ -76,11 +76,33 @@ describe("#2345: blocked-by links are written through the REST API, by the block
     expect(calls.length).toBe(1);
   });
 
-  test("both writers use it, and neither shells out to --add-blocked-by any more", () => {
+  test("a link is removed by the blocker's database id, and read back gone (review of #2357)", () => {
+    const { exec, calls } = fakeGh({
+      "repos/o/r/issues/7": "6229750699\n",
+      "repos/o/r/issues/9/dependencies/blocked_by/6229750699": "{}",
+      [LIST]: "3\n",
+    });
+    removeBlocker("o/r", 9, 7, exec);
+    expect(calls[1]).toEqual(["api", "-X", "DELETE", "repos/o/r/issues/9/dependencies/blocked_by/6229750699"]);
+    expect(calls[2]).toEqual(["api", "--paginate", LIST, "--jq", ".[].number"]);
+  });
+
+  test("a removal that still reads back is refused, never reported as done", () => {
+    const { exec } = fakeGh({
+      "repos/o/r/issues/7": "6229750699\n",
+      "repos/o/r/issues/9/dependencies/blocked_by/6229750699": "{}",
+      [LIST]: "3\n7\n",
+    });
+    expect(() => removeBlocker("o/r", 9, 7, exec)).toThrow(/still among its blockers/);
+  });
+
+  test("both writers use it, and nothing shells out to --add-blocked-by or --remove-blocked-by any more", () => {
     for (const file of ["scripts/plan-deps.ts", "scripts/plan-issues.ts"]) {
       const src = readFileSync(join(ROOT, file), "utf-8");
       expect(src, file).toContain("addBlockers(repo, blocked,");
       expect(src, file).not.toContain('"--add-blocked-by"');
+      expect(src, file).not.toContain('"--remove-blocked-by"');
     }
+    expect(readFileSync(join(ROOT, "scripts/plan-issues.ts"), "utf-8")).toContain("removeBlocker(repo, blocked, blocker,");
   });
 });

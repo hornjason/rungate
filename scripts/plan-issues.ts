@@ -28,7 +28,7 @@
  * issues it is itself demoting, and touches no others. The cause and the
  * cleanup are one action.
  */
-import { addBlockers } from "../lib/blocked-by-write";
+import { addBlockers, removeBlocker } from "../lib/blocked-by-write";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { spawnSync } from "child_process";
 import { isAbsolute, join, relative, sep } from "path";
@@ -159,7 +159,8 @@ const LIVE_GITHUB: PlanIssuesGitHub = {
     gh(["issue", "edit", String(number), "--repo", repo, "--remove-milestone"]);
   },
   removeBlockedBy: async (repo, blocked, blocker) => {
-    gh(["issue", "edit", String(blocked), "--repo", repo, "--remove-blocked-by", String(blocker)]);
+    // REST, not `issue edit --remove-blocked-by`, which an older runner's gh lacks (#2345).
+    removeBlocker(repo, blocked, blocker, args => gh([...args]), BLOCKER_IDS);
   },
   // PAGINATED, for the reason `LIVE_DECOMPOSE.milestones` gives: a phase
   // milestone on page two would read as absent and refuse the run.
