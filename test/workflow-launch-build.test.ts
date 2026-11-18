@@ -10,10 +10,13 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
+import { join } from "path";
 
 import {
   buildWorkflowLaunch,
+  coreClosure,
   GENERATED_NOTICE,
+  PURE_CORE_MODULES,
   hasTopLevelReturn,
   metaLiteral,
   parseErrors,
@@ -117,5 +120,56 @@ describe("#2287 / SC-2772: what the build must not get wrong", () => {
 
   test("a source that does not begin with meta is a refusal", () => {
     expect(() => buildWorkflowLaunch("const a = 1;\nexport const meta = {\n  name: 'x',\n};\nreturn 1;\n")).toThrow(/does not begin with/);
+  });
+});
+
+/**
+ * #2289 / SC-2774: the lib modules ship.js copies by hand each export a core
+ * that imports nothing, so the generator can bundle it (SC-2775) in place of
+ * the copy.
+ *
+ * A core is a set of exported names. Its closure is those names and every
+ * top-level declaration they reach in the same module. The closure may not
+ * reach an import, because the Workflow sandbox has no module loading (#69).
+ */
+describe("#2289 / SC-2774: each copied module exports a core that imports nothing", () => {
+  const ROOT = join(import.meta.dir, "..");
+
+  test("the four modules ADR-017 names are the ones listed", () => {
+    expect(Object.keys(PURE_CORE_MODULES).sort()).toEqual([
+      "lib/dev-liveness.ts",
+      "lib/prior-branch.ts",
+      "lib/workflow-security.ts",
+      "lib/worktree-repo.ts",
+    ]);
+  });
+
+  for (const [module, core] of Object.entries(PURE_CORE_MODULES)) {
+    test(`${module}: every core name is exported, and its closure reaches no import`, () => {
+      const c = coreClosure(readFileSync(join(ROOT, module), "utf-8"), core);
+      expect(c.missing, `${module} does not export these core names`).toEqual([]);
+      expect(c.imports, `${module}'s core reaches an import, so it cannot be bundled into the launch file`).toEqual([]);
+      // Not vacuous: the closure holds at least the core itself.
+      expect(c.declarations.length).toBeGreaterThanOrEqual(core.length);
+    });
+  }
+
+  test("a core that gains an import is caught, naming the import and the module it comes from", () => {
+    const src = [
+      'import { existsSync } from "fs";',
+      'import type { Thing } from "./types";',
+      "const RULE = /x/;",
+      "function helper(s: string): boolean { return existsSync(s); }",
+      "export function pure(s: string): boolean { return RULE.test(s); }",
+      "export function impure(s: string): boolean { return helper(s) && pure(s); }",
+      "export function typed(t: Thing): string { return String(t); }",
+    ].join("\n");
+    expect(coreClosure(src, ["pure"]).imports).toEqual([]);
+    expect(coreClosure(src, ["impure"]).imports).toEqual(["existsSync (from fs, via helper)"]);
+    // A type-only import is erased before the sandbox sees the code.
+    expect(coreClosure(src, ["typed"]).imports).toEqual([]);
+    expect(coreClosure(src, ["absent"]).missing).toEqual(["absent"]);
+    // A property name that happens to match an import is not a use of it.
+    expect(coreClosure('import { x } from "y";\nexport function f(o: { x: number }) { return o.x; }', ["f"]).imports).toEqual([]);
   });
 });
