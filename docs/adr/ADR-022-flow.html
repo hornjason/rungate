@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-022 — A merge made by automation still places the plan and closes its issues (dry run)</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e6e8ee; --dim:#8b93a7;
+          --hand:#f0b429; --auto:#3ecf8e; --judge:#7aa2f7; --warn:#f7768e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:32px 0 12px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  .sub { color:var(--dim); margin:0 0 18px; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:var(--dim); }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .hand{background:var(--hand)} .auto{background:var(--auto)} .judge{background:var(--judge)}
+  ol.timeline { list-style:none; padding:0; margin:0; border-left:2px solid var(--line); }
+  ol.timeline li { position:relative; padding:8px 0 14px 22px; }
+  ol.timeline li::before { content:""; position:absolute; left:-7px; top:14px; width:12px; height:12px; border-radius:50%; background:var(--c); }
+  .tag { font-size:11px; font-weight:700; padding:1px 7px; border-radius:9px; margin-right:8px; color:#0f1115; background:var(--c); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .card .sc { font-size:12px; color:var(--judge); font-weight:700; }
+  .card .t { font-weight:600; margin:4px 0 8px; }
+  .card .f { font-size:12px; color:var(--dim); font-family:ui-monospace, Menlo, monospace; word-break:break-all; }
+  .card .b { font-size:12px; color:var(--hand); margin-top:8px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:720px) { .cols { grid-template-columns:1fr; } }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .box h3 { margin:0 0 8px; font-size:14px; }
+  ul { margin:6px 0 0; padding-left:18px; } li { margin:3px 0; }
+  .sim { font-size:11px; color:var(--hand); border:1px solid var(--hand); border-radius:6px; padding:0 6px; margin-left:6px; }
+  code { font-family:ui-monospace, Menlo, monospace; font-size:12.5px; color:#c0caf5; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ADR-022 — A merge made by automation still places the plan and closes its issues</h1>
+  <p class="sub">Dry run, 2026-11-18, from the draft branch at main 38f1c8a plus the draft. Nothing was written.</p>
+  <div class="legend">
+    <span><span class="dot hand"></span>hand (someone types it)</span>
+    <span><span class="dot auto"></span>auto (a workflow fires)</span>
+    <span><span class="dot judge"></span>judgement (Jason decides)</span>
+  </div>
+
+  <h2>The run</h2>
+  <ol class="timeline">
+    <li style="--c:var(--judge)"><span class="tag">YOU</span>Accept or edit SC-2787 and SC-2788, then merge the ADR with <code>status: accepted</code>.</li>
+    <li style="--c:var(--auto)"><span class="tag">AUTO</span><code>adr-accepted.yml</code> files 3 issues in Engine Phase 10 and writes 2 order links (the dry run below).</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build "adr-accepted also runs when the named merge workflow completes" and the <code>close-merged-references</code> command, in parallel. Test first, pinned merges.</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Release, so consumers' pinned <code>bunx rungate@</code> can run the new command.</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build "The generated workflow closes a bot merge's declared issues", rebased onto the release.</li>
+    <li style="--c:var(--auto)"><span class="tag">AUTO</span>A consumer sets <code>board.mergeWorkflow</code> (asaCommandCenter: <code>approve-on-green</code>) and re-scaffolds. From then on a bot merge places ADR plans and closes declared issues.</li>
+  </ol>
+
+  <h2>The three issues it files</h2>
+  <div class="cards">
+    <div class="card"><div class="sc">SC-2787 (new)</div><div class="t">adr-accepted also runs when the named merge workflow completes</div>
+      <div class="f">adr-accepted emitter + yml · lib/config-readers.ts · spec · 2 tests</div></div>
+    <div class="card"><div class="sc">SC-2788 (new)</div><div class="t">close-merged-references closes the issues a bot-merged pull request declares</div>
+      <div class="f">scripts/close-merged-references.ts · lib/closing-reference-audit.ts · lib/cli-commands.ts · spec · 1 test</div></div>
+    <div class="card"><div class="sc">SC-2788</div><div class="t">The generated workflow closes a bot merge's declared issues</div>
+      <div class="f">adr-accepted emitter + yml · 1 test</div>
+      <div class="b">blocked by: both rows above (and a release)</div></div>
+  </div>
+
+  <h2>Today vs after</h2>
+  <div class="cols">
+    <div class="box"><h3>Today (real: asaCommandCenter, 2026-11-17)</h3>
+      <ul><li>ADR-055 merged by <code>app/github-actions</code>: 22 issues and 6 links filed by hand</li>
+          <li>#2083 and #2085 merged by the bot: their issues stayed open</li>
+          <li>A person's merges (#2088, #2090) closed theirs</li></ul></div>
+    <div class="box"><h3>After all three rows <span class="sim">SIMULATED</span></h3>
+      <ul><li>The merge workflow completing fires <code>adr-accepted.yml</code></li>
+          <li>Plans accepted since its last placed commit are placed; re-running files nothing twice</li>
+          <li>Declared, still-open issues close with a comment naming the PR</li>
+          <li>A consumer that sets nothing changes nothing</li></ul></div>
+  </div>
+
+  <h2>Gaps and decisions</h2>
+  <div class="cols">
+    <div class="box"><h3>Gaps found</h3><ul>
+      <li>A <code>workflow_run</code> event carries no <code>before</code> sha, so the range comes from the last successful run's head. With none, the job refuses rather than guesses.</li>
+      <li>The closing job acts on GitHub's recorded links, not on prose, so it inherits what <code>closingIssuesReferences</code> records.</li></ul></div>
+    <div class="box"><h3>Needs you</h3><ul>
+      <li>Accept the two criterion texts as written, or edit them.</li>
+      <li>Trigger = <code>workflow_run</code> on a configured merge workflow? Yes/no.</li>
+      <li>Range = since the head of the last successful run? Yes/no.</li>
+      <li>Close only declared, still-open, not-reopened issues? Yes/no.</li></ul></div>
+  </div>
+</main>
+</body>
+</html>

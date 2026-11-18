@@ -393,7 +393,7 @@ is built from this document.
 | **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751, SC-2789, SC-2790, SC-2791, SC-2792, SC-2793, SC-2794 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
 | **Phase 9** | SC-2776, SC-2777, SC-2778, SC-2779, SC-2780, SC-2782, SC-2783, SC-2784, SC-2785 |
-| **Phase 10** | SC-2625 |
+| **Phase 10** | SC-2625, SC-2787, SC-2788 |
 
 ### Phase 0 — the transform refuses
 
@@ -547,3 +547,7 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       needs: test
       proved-by: test/issue-filing-gate.test.ts, the FG-266..FG-278 describe (`-t "FG-2(6[6-9]|7[0-8])"`) — 13 pass, 0 fail, 2026-11-17, on the PR that closes #2343. With the count injected, in `ship.mode: direct`: a shrinking, level or growing backlog admits a 36th filing and refuses a 37th naming 36; an unread or throwing count does the same and the refusal says UNMEASURED with the reason; an engine-queued clause gets the ceiling, not its raise of 24; every refusal prints the day's opened and closed counts; harness mode keeps its cap of 1 and reads no count; an explicit `board.filingsPerRun` is not lifted. Three hand mutations (a growing backlog falling back, an unread count falling back, harness lifted), each caught.
       fingerprint: b980e1d9
+- [ ] SC-2787: when `board.mergeWorkflow` names a consumer's merge workflow, the generated `adr-accepted.yml` also runs on that workflow's `workflow_run` completion and places every ADR accepted since the head of its own last successful run on main; with no such run it refuses UNMEASURED rather than guess a range (ADR-022)
+      needs: test
+- [ ] SC-2788: a pull request merged into main by automation closes the issues it declares: each issue in its `closingIssuesReferences` that is still open, in this repository, and was not reopened after the merge is closed with a comment naming the pull request, and an issue the body only mentions is never closed (ADR-022)
+      needs: test
