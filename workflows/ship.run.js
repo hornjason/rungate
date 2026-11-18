@@ -60,6 +60,128 @@ function suiteCurrency(measuredSha, headSha) {
     }
     return { state: "CURRENT", reason: null };
 }
+const MARKERS = [
+    /\bdo\s+not\s+fix\b/i,
+    /\bdo\s+not\s+touch\b/i,
+    /\bdo\s+not\s+modify\b/i,
+    /\bout\s+of\s+scope\b/i,
+    /\bnot\s+in\s+scope\b/i,
+    /\balready\s+filed\b/i,
+];
+const PATH = /\b([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.(?:ts|tsx|js|jsx|md|json|ya?ml|sh))\b/g;
+const ISSUE_REF = /#(\d+)\b/g;
+function pathsNamedIn(text) {
+    return [...new Set([...text.matchAll(PATH)].map(m => m[1]))];
+}
+function prohibitions(goalText) {
+    const out = [];
+    for (const para of String(goalText ?? "").split(/\n\s*\n/)) {
+        if (!MARKERS.some(m => m.test(para)))
+            continue;
+        out.push({
+            text: para.trim(),
+            files: pathsNamedIn(para),
+            issues: [...new Set([...para.matchAll(ISSUE_REF)].map(m => `#${m[1]}`))],
+        });
+    }
+    return out;
+}
+function deniedFiles(goalText, scopeOut = []) {
+    const fromGoal = prohibitions(goalText).flatMap(p => p.files);
+    const fromScopeOut = scopeOut.flatMap(s => pathsNamedIn(String(s ?? "")));
+    return [...new Set([...fromGoal, ...fromScopeOut])];
+}
+function unresolvedProhibitions(goalText) {
+    return prohibitions(goalText).filter(p => p.files.length === 0 && p.issues.length > 0);
+}
+function normalisePath(p) {
+    const raw = String(p ?? "").trim().replace(/\\/g, "/");
+    const out = [];
+    for (const seg of raw.split("/")) {
+        if (seg === "" || seg === ".")
+            continue;
+        if (seg === ".." && out.length > 0 && out.at(-1) !== "..")
+            out.pop();
+        else
+            out.push(seg);
+    }
+    return out.join("/");
+}
+function matchesDenied(planFile, deniedEntry) {
+    const plan = normalisePath(planFile);
+    const denied = normalisePath(deniedEntry);
+    if (denied === "" || plan === "")
+        return false;
+    if (denied.includes("/"))
+        return plan === denied;
+    return plan === denied || plan.split("/").at(-1) === denied;
+}
+function denylistViolations(claimants, denied) {
+    const out = [];
+    for (const [i, c] of claimants.entries()) {
+        for (const f of c.filesToModify ?? []) {
+            if (!denied.some(d => matchesDenied(f, d)))
+                continue;
+            out.push(`${c.title ? `"${c.title}"` : `plan item ${i + 1}`} claims ${f}, which the goal ` +
+                `put out of scope. An agent handed a file is an agent told the file is in ` +
+                `scope (#306).`);
+        }
+    }
+    return out;
+}
+function scopeContradiction(files, denied) {
+    if (files.length === 0 || denied.length === 0)
+        return null;
+    if (withoutDenied(files, denied).length > 0)
+        return null;
+    return (`every file the run planned to touch is out of scope (${files.join(", ")} vs ` +
+        `denied ${denied.join(", ")}). An empty plan looks exactly like a run with ` +
+        `nothing to do, so this is reported rather than stripped in silence (#306).`);
+}
+function withoutDenied(files, denied) {
+    return files.filter(f => !denied.some(d => matchesDenied(f, d)));
+}
+function planCoverage(discoveryFiles, subIssues) {
+    const discovered = (discoveryFiles || []).map(f => String(f)).filter(f => f.trim() !== "");
+    const subs = subIssues || [];
+    const claimedSet = new Set();
+    for (const s of subs) {
+        for (const f of s.filesToModify || []) {
+            const n = normalisePath(f);
+            if (n !== "")
+                claimedSet.add(n);
+        }
+    }
+    const reasons = [];
+    if (discovered.length === 0) {
+        reasons.push("discovery named no files to modify, so there is nothing to compare the plan against. " +
+            'The union of an empty list is covered by any plan at all, which is not "the plan is ' +
+            'complete" — it is "nobody looked" (#751).');
+    }
+    if (subs.length === 0) {
+        reasons.push("the decomposition produced no sub-issues, so there is no plan to compare. An empty " +
+            "plan agrees with every discovery.");
+    }
+    return {
+        reading: reasons.length === 0 ? "MEASURED" : "UNMEASURED",
+        unmeasuredReasons: reasons,
+        uncovered: reasons.length === 0 ? discovered.filter(f => !claimedSet.has(normalisePath(f))) : [],
+        discovered: discovered.length,
+        claimed: claimedSet.size,
+    };
+}
+function planCoverageRefusal(r) {
+    if (r.reading === "UNMEASURED") {
+        return (`PLAN COVERAGE UNMEASURED: ${r.unmeasuredReasons.join(" ")} ` +
+            `Falling back to single-agent implement, which may touch any file.`);
+    }
+    if (r.uncovered.length === 0)
+        return null;
+    return (`PLAN COVERAGE: ${r.uncovered.length} of ${r.discovered} discovered file(s) are claimed by ` +
+        `no sub-issue — ${r.uncovered.join(", ")}. A file nobody claims is a file two worktrees ` +
+        `may both edit, and the SC-413 claim audit refuses it at Commit after the whole agent ` +
+        `budget is spent (#751). Falling back to single-agent implement.`);
+}
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
@@ -1672,84 +1794,6 @@ let setupResult = null
 let regressionCount = 0
 let CACHED_CEREMONY = null
 
-const DENYLIST_MARKERS = [
-  /\bdo\s+not\s+fix\b/i,
-  /\bdo\s+not\s+touch\b/i,
-  /\bdo\s+not\s+modify\b/i,
-  /\bout\s+of\s+scope\b/i,
-  /\bnot\s+in\s+scope\b/i,
-  /\balready\s+filed\b/i,
-]
-const DENYLIST_PATH = /\b([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.(?:ts|tsx|js|jsx|md|json|ya?ml|sh))\b/g
-
-function pathsNamedIn(text) {
-  return [...new Set([...String(text ?? '').matchAll(DENYLIST_PATH)].map(m => m[1]))]
-}
-
-function prohibitions(goalText) {
-  const out = []
-  for (const para of String(goalText ?? '').split(/\n\s*\n/)) {
-    if (!DENYLIST_MARKERS.some(m => m.test(para))) continue
-    out.push({
-      text: para.trim(),
-      files: pathsNamedIn(para),
-      issues: [...new Set([...para.matchAll(/#(\d+)\b/g)].map(m => `#${m[1]}`))],
-    })
-  }
-  return out
-}
-
-function deniedFiles(goalText, scopeOut = []) {
-  const fromGoal = prohibitions(goalText).flatMap(p => p.files)
-  const fromScopeOut = (scopeOut || []).flatMap(s => pathsNamedIn(s))
-  return [...new Set([...fromGoal, ...fromScopeOut])]
-}
-
-function unresolvedProhibitions(goalText) {
-  return prohibitions(goalText).filter(p => p.files.length === 0 && p.issues.length > 0)
-}
-
-function normalisePath(p) {
-  const raw = String(p ?? '').trim().replace(/\\/g, '/')
-  const out = []
-  for (const seg of raw.split('/')) {
-    if (seg === '' || seg === '.') continue
-    if (seg === '..' && out.length > 0 && out.at(-1) !== '..') out.pop()
-    else out.push(seg)
-  }
-  return out.join('/')
-}
-
-function matchesDenied(planFile, deniedEntry) {
-  const plan = normalisePath(planFile)
-  const denied = normalisePath(deniedEntry)
-  if (denied === '' || plan === '') return false
-  if (denied.includes('/')) return plan === denied
-  return plan === denied || plan.split('/').at(-1) === denied
-}
-
-function scopeContradiction(files, denied) {
-  if (!files?.length || !denied?.length) return null
-  if (withoutDenied(files, denied).length > 0) return null
-  return `every file the run planned to touch is out of scope (${files.join(', ')} vs ` +
-    `denied ${denied.join(', ')}). An empty plan looks exactly like a run with ` +
-    `nothing to do, so this is reported rather than stripped in silence (#306).`
-}
-
-function denylistViolations(claimants, denied) {
-  const out = []
-  for (const [i, c] of (claimants || []).entries()) {
-    for (const f of (c.filesToModify || [])) {
-      if (!(denied || []).some(d => matchesDenied(f, d))) continue
-      out.push(
-        `${c.title ? `"${c.title}"` : `plan item ${i + 1}`} claims ${f}, which the goal ` +
-        `put out of scope. An agent handed a file is an agent told the file is in ` +
-        `scope (#306).`,
-      )
-    }
-  }
-  return out
-}
 
 function applyScopeDenylist(disc, say, goalText) {
   const denied = deniedFiles(goalText || '', disc?.scopeOut || [])
@@ -1784,57 +1828,6 @@ function applyScopeDenylist(disc, say, goalText) {
   return { denied, refusal: null }
 }
 
-function withoutDenied(files, denied) {
-  return (files || []).filter(f => !(denied || []).some(d => matchesDenied(f, d)))
-}
-
-function planCoverage(discoveryFiles, subIssues) {
-  const discovered = (discoveryFiles || []).map(f => String(f)).filter(f => f.trim() !== '')
-  const subs = subIssues || []
-
-  const claimedSet = new Set()
-  for (const s of subs) {
-    for (const f of (s.filesToModify || [])) {
-      const n = normalisePath(f)
-      if (n !== '') claimedSet.add(n)
-    }
-  }
-
-  const reasons = []
-  if (discovered.length === 0) {
-    reasons.push(
-      'discovery named no files to modify, so there is nothing to compare the plan against. ' +
-      'The union of an empty list is covered by any plan at all, which is not "the plan is ' +
-      'complete" — it is "nobody looked" (#751).',
-    )
-  }
-  if (subs.length === 0) {
-    reasons.push(
-      'the decomposition produced no sub-issues, so there is no plan to compare. An empty ' +
-      'plan agrees with every discovery.',
-    )
-  }
-
-  return {
-    reading: reasons.length === 0 ? 'MEASURED' : 'UNMEASURED',
-    unmeasuredReasons: reasons,
-    uncovered: reasons.length === 0 ? discovered.filter(f => !claimedSet.has(normalisePath(f))) : [],
-    discovered: discovered.length,
-    claimed: claimedSet.size,
-  }
-}
-
-function planCoverageRefusal(r) {
-  if (r.reading === 'UNMEASURED') {
-    return `PLAN COVERAGE UNMEASURED: ${r.unmeasuredReasons.join(' ')} ` +
-      `Falling back to single-agent implement, which may touch any file.`
-  }
-  if (r.uncovered.length === 0) return null
-  return `PLAN COVERAGE: ${r.uncovered.length} of ${r.discovered} discovered file(s) are claimed by ` +
-    `no sub-issue — ${r.uncovered.join(', ')}. A file nobody claims is a file two worktrees ` +
-    `may both edit, and the SC-413 claim audit refuses it at Commit after the whole agent ` +
-    `budget is spent (#751). Falling back to single-agent implement.`
-}
 
 let acDeferrals = []
 let acCoverage = null

@@ -359,8 +359,15 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
   const ROOT = join(import.meta.dir, "..");
   const read = (p: string) => readFileSync(join(ROOT, p), "utf-8");
 
-  test("the launch bundle is suiteCurrency from lib/suite-measurement.ts", () => {
-    expect(LAUNCH_BUNDLE).toEqual({ "lib/suite-measurement.ts": ["suiteCurrency"] });
+  test("the launch bundle is suiteCurrency, then scope-denylist and plan-coverage (#2404)", () => {
+    expect(LAUNCH_BUNDLE).toEqual({
+      "lib/suite-measurement.ts": ["suiteCurrency"],
+      "lib/scope-denylist.ts": [
+        "pathsNamedIn", "prohibitions", "deniedFiles", "unresolvedProhibitions", "normalisePath",
+        "matchesDenied", "scopeContradiction", "denylistViolations", "withoutDenied",
+      ],
+      "lib/plan-coverage.ts": ["planCoverage", "planCoverageRefusal"],
+    });
   });
 
   test("the launch file holds exactly the bundle, between its markers, after the generated notice", () => {
@@ -375,10 +382,12 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
 
   test("ship.js defines none of the names the bundle defines — its hand copy cannot come back", () => {
     const bundle = launchBundle();
-    expect(bundle.defined).toContain("suiteCurrency");
-    expect(() => buildWorkflowLaunch(`${source}\nfunction suiteCurrency() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(
-      "suiteCurrency is defined by both workflows/ship.js and the lib bundle",
-    );
+    for (const name of ["suiteCurrency", "planCoverage", "denylistViolations"]) {
+      expect(bundle.defined).toContain(name);
+      expect(() => buildWorkflowLaunch(`${source}\nfunction ${name}() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(
+        `${name} is defined by both workflows/ship.js and the lib bundle`,
+      );
+    }
   });
 
   test("the output check refuses a bundle with a reached declaration removed, naming the name", () => {
@@ -402,5 +411,35 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
     expect(bundleDrops(blockFn, "function core() { return g(); }")).toEqual([]);
     // A local, a parameter, and a property of a reached object are all inside what is emitted.
     expect(coreClosure("const CFG = { a: 1 };\nexport function core(p) { const l = p; return l + CFG.a; }", ["core"]).imports).toEqual([]);
+  });
+});
+
+describe("#2404: an import is accepted only when the same bundle defines it", () => {
+  const files: Record<string, string> = {
+    "lib/a.ts": "export function norm(p: string) { return p.trim(); }\nexport function other() { return 1; }",
+    "lib/b.ts": 'import { norm } from "./a";\nexport function use(p: string) { return norm(p) + "!"; }',
+    "lib/c.ts": 'import { other } from "./a";\nexport function use2() { return other(); }',
+    "lib/d.ts": 'import { norm as n } from "./a";\nexport function use3(p: string) { return n(p); }',
+    "lib/e.ts": 'import { x } from "./outside";\nexport function use4() { return x(); }',
+  };
+  const read = (p: string) => files[p]!;
+
+  test("a name imported from a module the bundle carries, and that it bundles, is accepted and runs", () => {
+    const b = bundleLibCores({ "lib/a.ts": ["norm"], "lib/b.ts": ["use"] }, read);
+    expect(b.defined).toEqual(expect.arrayContaining(["norm", "use"]));
+    const use = new Function(`${b.text}\nreturn use;`)() as (p: string) => string;
+    expect(use("  x ")).toBe("x!");
+  });
+
+  test("a name that module does not bundle is still refused, naming it and the module", () => {
+    expect(() => bundleLibCores({ "lib/a.ts": ["norm"], "lib/c.ts": ["use2"] }, read)).toThrow("other (from ./a, via use2)");
+  });
+
+  test("an aliased import is refused: the bundle has one scope and no renaming", () => {
+    expect(() => bundleLibCores({ "lib/a.ts": ["norm"], "lib/d.ts": ["use3"] }, read)).toThrow("n (from ./a, via use3)");
+  });
+
+  test("an import from a module outside the bundle is still refused", () => {
+    expect(() => bundleLibCores({ "lib/a.ts": ["norm"], "lib/e.ts": ["use4"] }, read)).toThrow("x (from ./outside, via use4)");
   });
 });

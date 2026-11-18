@@ -97,13 +97,12 @@ import {
   planCoverage,
   planCoverageRefusal,
 } from "../lib/plan-coverage";
+import { BUNDLE_END, BUNDLE_START } from "../scripts/build-workflow-launch";
 
 const REPO = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO, "workflows", "ship.js"), "utf-8");
 
-const BLOCK_START = "// ──── SCOPE-DENYLIST-START ────";
-const BLOCK_END = "// ──── SCOPE-DENYLIST-END ────";
-const COVERAGE_START = "// ──── PLAN-COVERAGE-START ────";
+const launchSource = readFileSync(join(REPO, "workflows", "ship.run.js"), "utf-8");
 
 /**
  * Module scope on purpose. A missing marker throws and every case in the file
@@ -111,25 +110,24 @@ const COVERAGE_START = "// ──── PLAN-COVERAGE-START ────";
  * coverage check" into a quiet green.
  */
 const inlined = (() => {
-  const start = shipSource.indexOf(BLOCK_START);
-  const end = shipSource.indexOf(BLOCK_END);
+  // Since #2404 the launch file runs lib/plan-coverage.ts's own code, bundled
+  // with the deny-list it imports `normalisePath` from.
+  const start = launchSource.indexOf(BUNDLE_START);
+  const end = launchSource.indexOf(BUNDLE_END);
   if (start === -1 || end === -1) {
-    throw new Error(`ship.js is missing the ${BLOCK_START} / ${BLOCK_END} markers`);
+    throw new Error("workflows/ship.run.js carries no bundled lib region — the build stopped bundling plan-coverage");
   }
-  if (!shipSource.includes(COVERAGE_START)) {
-    throw new Error(`ship.js is missing ${COVERAGE_START} — the matrix would compare nothing`);
+  const body = launchSource.slice(start + BUNDLE_START.length, end);
+  // One notion of "same path": the bundle defines normalisePath once, from
+  // lib/scope-denylist.ts, and planCoverage calls that one.
+  const definitions = body.match(/^function normalisePath\(/gm) ?? [];
+  if (definitions.length !== 1) {
+    throw new Error(`the launch file's bundle defines normalisePath ${definitions.length} times — two notions of "same path"`);
   }
-  if (shipSource.indexOf(COVERAGE_START) > end) {
-    throw new Error(
-      `ship.js's plan-coverage block sits OUTSIDE the deny-list block, so it no longer shares ` +
-        `normalisePath — two notions of "same path" in one workflow`,
-    );
-  }
-  const body = shipSource.slice(start + BLOCK_START.length, end);
   const fns = new Function(`${body}\nreturn { planCoverage, planCoverageRefusal, normalisePath }`)();
   for (const name of ["planCoverage", "planCoverageRefusal", "normalisePath"]) {
     if (typeof fns[name] !== "function") {
-      throw new Error(`ship.js's deny-list block does not define ${name}`);
+      throw new Error(`the launch file's bundle does not define ${name}`);
     }
   }
   return fns as {
@@ -314,7 +312,7 @@ for (const [name, coverage, refusal] of IMPLS) {
   });
 }
 
-describe("#751 AC-5: the two copies agree, and the matrix is not comparing nothing", () => {
+describe("#751 AC-5: the bundled code and the library agree, and the matrix is not comparing nothing", () => {
   const MATRIX: [string[], PlanSubIssue[]][] = [
     [DISCOVERED_1585, PLAN_1585],
     [DISCOVERED_1585, PLAN_COMPLETE],

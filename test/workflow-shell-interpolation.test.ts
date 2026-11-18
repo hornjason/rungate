@@ -197,9 +197,8 @@ const CLASSIFIED: Record<string, string> = {
   // lib bundle, taking the `measuredSha` site and one of the two `v` sites.
   "workflows/ship.js:v×1":
     "structured, not text: `describeShaValue`'s own argument — `v.length` for an array",
-  "workflows/ship.js:r×3":
-    "prose into a prompt: evidence-quality reasons, joined into a sentence about what was not " +
-    "measured",
+  // #2404: the three `r` sites were `planCoverageRefusal`'s, which left ship.js
+  // for the lib bundle with the rest of the plan-coverage copy.
   "workflows/ship.js:reading":
     "structured, not text: `JSON.stringify(reading.verdict)` inside a refusal sentence",
   "workflows/ship.js:reply×2":
