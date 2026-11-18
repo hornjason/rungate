@@ -1,4 +1,4 @@
-# generated-sha: b5bbb6eef74ffdfa
+# generated-sha: fb0baef400f39fd7
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -38,15 +38,29 @@ jobs:
 
       - name: Give an outside reporter's recent issue the from-consumer label, if its opened run was missed
         if: ${{ github.event_name == 'schedule' }}
+        # A failed sweep is shown, and the triage below still runs on the
+        # issues that already carry the label (review of #2380).
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           TRUSTED: '["OWNER","MEMBER","COLLABORATOR"]'
         run: |
-          # The default run shell has no pipefail, so a failed read would end
-          # in a clean exit and the missed issues would go unlabelled silently.
+          # An unspecified run shell is `bash -e` with no pipefail, so a failed
+          # read would end in a clean exit with nothing labelled.
           set -o pipefail
           gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= (now - 172800 | todate)) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("from-consumer") | not) | .number' \
-            | while read -r n; do gh issue edit "$n" --repo "$GITHUB_REPOSITORY" --add-label from-consumer; done
+            | while read -r n; do
+                # A person took the label off: leave it off (review of #2380).
+                # An unreadable history labels nothing, rather than guessing.
+                removed="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$n/events?per_page=100" --jq '.[] | select(.event == "unlabeled" and .label.name == "from-consumer") | .id')" \
+                  || { echo "::warning title=consumer-intake::could not read #$n's history; not labelled this run"; continue; }
+                if [ -n "$removed" ]; then
+                  echo "#$n: from-consumer was removed by hand, not put back"
+                  continue
+                fi
+                gh issue edit "$n" --repo "$GITHUB_REPOSITORY" --add-label from-consumer \
+                  || echo "::warning title=consumer-intake::could not label #$n; the next run tries again"
+              done
 
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2

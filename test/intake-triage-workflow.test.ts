@@ -14,6 +14,8 @@ import {
   CONSUMER_INTAKE_JOB,
   CONSUMER_INTAKE_SWEEP_DAYS,
   CONSUMER_INTAKE_WORKFLOW_FILE,
+  REMOVED_FILTER,
+  SWEEP_FILTER,
   buildConsumerIntakeWorkflow,
 } from "../lib/scaffold/consumer-intake-workflow";
 import { CONSUMER_INTAKE_GRACE_MS } from "../scripts/board-conformance";
@@ -124,8 +126,8 @@ describe("#2379: the daily run labels an outside reporter's recent issue the ope
   });
 
   test("its filter picks only a recent, open, unlabelled issue by an untrusted author", () => {
-    const filter = /--jq '([^']+)'/.exec(sweep()!.run!)?.[1];
-    expect(filter, "the step has no --jq filter to run").toBeDefined();
+    expect(sweep()!.run, "the step does not run the exported filter").toContain(`--jq '${SWEEP_FILTER}'`);
+    const filter = SWEEP_FILTER;
     // Relative to now, because the filter reads jq's own clock.
     const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
     const recent = ago(1);
@@ -144,5 +146,27 @@ describe("#2379: the daily run labels an outside reporter's recent issue the ope
     });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout.trim().split("\n")).toEqual(["1", "6"]);
+  });
+
+  // Review of #2380, round 2.
+  test("a label a person took off a young issue is not put back, and an unreadable history labels nothing", () => {
+    const run = sweep()!.run!;
+    expect(run, "the step does not run the exported history filter").toContain(`--jq '${REMOVED_FILTER}'`);
+    expect(run.indexOf(REMOVED_FILTER), "the history is read after the label is written").toBeLessThan(run.indexOf("gh issue edit"));
+    expect(run).toMatch(/could not read #\$n's history; not labelled this run"; continue; \}/);
+    const events = (removed: boolean) => [
+      { id: 1, event: "labeled", label: { name: CONSUMER_LABEL } },
+      ...(removed ? [{ id: 2, event: "unlabeled", label: { name: CONSUMER_LABEL } }] : []),
+      { id: 3, event: "unlabeled", label: { name: "bug" } },
+    ];
+    const read = (e: unknown) => spawnSync("jq", ["-r", REMOVED_FILTER], { input: JSON.stringify(e), encoding: "utf-8" });
+    expect(read(events(true)).stdout.trim()).toBe("2");
+    expect(read(events(false)).stdout.trim(), "an unrelated label's removal read as this one's").toBe("");
+  });
+
+  test("one issue that cannot be labelled does not stop the rest, and a failed sweep does not stop the triage", () => {
+    const run = sweep()!.run!;
+    expect(run).toMatch(/--add-label from-consumer \\\n\s+\|\| echo "::warning title=consumer-intake::could not label #\$n/);
+    expect((sweep() as Step & { "continue-on-error"?: boolean })["continue-on-error"]).toBe(true);
   });
 });

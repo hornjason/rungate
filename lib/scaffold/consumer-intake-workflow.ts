@@ -79,6 +79,23 @@ export interface ConsumerIntakeWorkflowOptions {
   version: string;
 }
 
+/**
+ * The daily sweep's \`--jq\` filter over a page of open issues: recent, not a
+ * pull request, an author outside the trusted set, and not labelled yet. Its
+ * window is computed in jq, not by \`date -d\`, which is GNU-only (review of
+ * #2380). Exported so a test runs it through \`jq\`.
+ */
+export const SWEEP_FILTER =
+  `.[] | select(.pull_request == null) | select(.created_at >= (now - ${CONSUMER_INTAKE_SWEEP_DAYS * 86400} | todate)) | ` +
+  `select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | ` +
+  `select([.labels[].name] | index("${CONSUMER_LABEL}") | not) | .number`;
+
+/**
+ * Over an issue's events: whether anyone took the label off. A label a person
+ * removed is a decision, and the sweep does not reverse it (review of #2380).
+ */
+export const REMOVED_FILTER = `.[] | select(.event == "unlabeled" and .label.name == "${CONSUMER_LABEL}") | .id`;
+
 /** The whole `consumer-intake.yml` body. */
 export function buildConsumerIntakeWorkflow(opts: ConsumerIntakeWorkflowOptions): string {
   const cli = `bunx rungate@${opts.version}`;
@@ -122,15 +139,29 @@ jobs:
 
       - name: Give an outside reporter's recent issue the ${CONSUMER_LABEL} label, if its opened run was missed
         if: \${{ github.event_name == 'schedule' }}
+        # A failed sweep is shown, and the triage below still runs on the
+        # issues that already carry the label (review of #2380).
+        continue-on-error: true
         env:
           GH_TOKEN: \${{ github.token }}
           TRUSTED: '${trusted}'
         run: |
-          # The default run shell has no pipefail, so a failed read would end
-          # in a clean exit and the missed issues would go unlabelled silently.
+          # An unspecified run shell is \`bash -e\` with no pipefail, so a failed
+          # read would end in a clean exit with nothing labelled.
           set -o pipefail
-          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= (now - ${CONSUMER_INTAKE_SWEEP_DAYS * 86400} | todate)) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("${CONSUMER_LABEL}") | not) | .number' \\
-            | while read -r n; do gh issue edit "$n" --repo "$GITHUB_REPOSITORY" --add-label ${CONSUMER_LABEL}; done
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq '${SWEEP_FILTER}' \\
+            | while read -r n; do
+                # A person took the label off: leave it off (review of #2380).
+                # An unreadable history labels nothing, rather than guessing.
+                removed="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$n/events?per_page=100" --jq '${REMOVED_FILTER}')" \\
+                  || { echo "::warning title=consumer-intake::could not read #$n's history; not labelled this run"; continue; }
+                if [ -n "$removed" ]; then
+                  echo "#$n: ${CONSUMER_LABEL} was removed by hand, not put back"
+                  continue
+                fi
+                gh issue edit "$n" --repo "$GITHUB_REPOSITORY" --add-label ${CONSUMER_LABEL} \\
+                  || echo "::warning title=consumer-intake::could not label #$n; the next run tries again"
+              done
 
       - uses: ${opts.checkout}
       - uses: ${opts.setupBun}
