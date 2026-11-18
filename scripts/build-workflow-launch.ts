@@ -181,6 +181,159 @@ export function metaLiteral(text: string): string | null {
   return null;
 }
 
+/**
+ * The lib modules `workflows/ship.js` copies by hand, and the exported names
+ * it copies from each (ADR-017 Decision 2, #2289, SC-2774). Each module
+ * imports a node built-in or another lib module, so only these names, and what
+ * they reach in the same file, can be bundled into the launch file. That set
+ * is the module's core, and `coreClosure` proves it imports nothing.
+ */
+export const PURE_CORE_MODULES: Readonly<Record<string, readonly string[]>> = {
+  "lib/workflow-security.ts": [
+    "pathRefusal",
+    "validateFilePaths",
+    "buildSafeGitAdd",
+    "isSafeBranchName",
+    "repoSlugRefusal",
+    "rootPathRefusal",
+    "resolveEvidencePath",
+    "validateEvidenceCommand",
+    "buildSafeSSHCommand",
+    "shellQuote",
+  ],
+  "lib/worktree-repo.ts": ["repoSlug", "redactRemote", "looksLikeFilesystemPath", "worktreeIdentity"],
+  "lib/prior-branch.ts": ["priorWorkRefusal"],
+  "lib/dev-liveness.ts": ["containerProbeTarget"],
+};
+
+/** What a core reaches: its declarations, any core name the module does not export, and any import it touches. */
+export interface CoreClosure {
+  declarations: string[];
+  missing: string[];
+  imports: string[];
+}
+
+/**
+ * The closure of `core` in a module's source: every top-level declaration the
+ * named exports reach, and every value import, dynamic `import()` or
+ * `require()` any of them touches.
+ *
+ * The source is transpiled first, so a type-only import, which the sandbox
+ * never sees, is not counted. An identifier that is a property name or an
+ * object key is not a use of the binding it shares a name with. A local that
+ * shadows a top-level name is counted as a use, which can only over-report:
+ * this check is allowed to be wrong toward refusing.
+ */
+export function coreClosure(source: string, core: readonly string[]): CoreClosure {
+  const js = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
+  }).outputText;
+  const sf = ts.createSourceFile("core.js", js, ts.ScriptTarget.ESNext, true, ts.ScriptKind.JS);
+  const imports = new Map<string, string>();
+  const decls = new Map<string, ts.Node>();
+  const exported = new Set<string>();
+  // `export { local as name }` and `export { name } from "m"` (review of #2397).
+  const aliases = new Map<string, string>();
+  const reexports = new Map<string, string>();
+  const isExported = (n: ts.Node) =>
+    (ts.canHaveModifiers(n) ? ts.getModifiers(n) : undefined)?.some(m => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+  for (const st of sf.statements) {
+    if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier)) {
+      const from = st.moduleSpecifier.text;
+      const clause = st.importClause;
+      if (clause?.name) imports.set(clause.name.text, from);
+      const nb = clause?.namedBindings;
+      if (nb && ts.isNamespaceImport(nb)) imports.set(nb.name.text, from);
+      if (nb && ts.isNamedImports(nb)) for (const e of nb.elements) imports.set(e.name.text, from);
+    } else if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name) {
+      decls.set(st.name.text, st);
+      if (isExported(st)) exported.add(st.name.text);
+    } else if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        // Every name a declarator binds, destructured ones included: each maps
+        // to the whole declarator, so reaching it walks the initializer too
+        // (review of #2397, round 3).
+        const names: string[] = [];
+        const bind = (n: ts.BindingName): void => {
+          if (ts.isIdentifier(n)) names.push(n.text);
+          else for (const e of n.elements) if (!ts.isOmittedExpression(e)) bind(e.name);
+        };
+        bind(d.name);
+        for (const name of names) {
+          decls.set(name, d);
+          if (isExported(st)) exported.add(name);
+        }
+      }
+    } else if (ts.isExportDeclaration(st) && st.exportClause && ts.isNamedExports(st.exportClause)) {
+      const from = st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier) ? st.moduleSpecifier.text : null;
+      for (const e of st.exportClause.elements) {
+        const name = e.name.text;
+        if (from !== null) reexports.set(name, from);
+        else aliases.set(name, e.propertyName?.text ?? name);
+      }
+    }
+  }
+  const missing = core.filter(n => !exported.has(n) && !aliases.has(n) && !reexports.has(n));
+  const reached = new Set<string>();
+  const touched: string[] = [];
+  const queue: string[] = [];
+  for (const n of core) {
+    // A core exported from another module is not in this one, whatever it is called here.
+    if (reexports.has(n)) {
+      touched.push(`${n} (re-exported from ${reexports.get(n)})`);
+      continue;
+    }
+    const local = aliases.get(n) ?? n;
+    if (imports.has(local)) touched.push(`${n} (from ${imports.get(local)}, re-exported)`);
+    else if (decls.has(local)) queue.push(local);
+  }
+  const isNameOnly = (id: ts.Identifier) => {
+    const p = id.parent;
+    return (
+      (ts.isPropertyAccessExpression(p) && p.name === id) ||
+      (ts.isPropertyAssignment(p) && p.name === id) ||
+      (ts.isMethodDeclaration(p) && p.name === id) ||
+      (ts.isPropertyDeclaration(p) && p.name === id)
+    );
+  };
+  while (queue.length > 0) {
+    const name = queue.shift()!;
+    if (reached.has(name)) continue;
+    reached.add(name);
+    const visit = (n: ts.Node): void => {
+      // A dynamic `import()` or a `require()` loads a module as surely as an
+      // import statement, and the sandbox has neither (review of #2397).
+      if (ts.isCallExpression(n)) {
+        const callee = n.expression;
+        const loader =
+          callee.kind === ts.SyntaxKind.ImportKeyword
+            ? "import()"
+            : ts.isIdentifier(callee) && callee.text === "require" && !decls.has("require")
+              ? "require()"
+              : null;
+        if (loader !== null) {
+          const arg = n.arguments[0];
+          const what = arg && ts.isStringLiteralLike(arg) ? arg.text : "a computed module";
+          const line = `${loader} of ${what} (via ${name})`;
+          if (!touched.includes(line)) touched.push(line);
+        }
+      }
+      if (ts.isIdentifier(n) && !isNameOnly(n)) {
+        const t = n.text;
+        if (imports.has(t)) {
+          const line = `${t} (from ${imports.get(t)}, via ${name})`;
+          if (!touched.includes(line)) touched.push(line);
+        } else if (decls.has(t) && !reached.has(t)) {
+          queue.push(t);
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(decls.get(name)!);
+  }
+  return { declarations: [...reached], missing, imports: touched };
+}
+
 function main(argv: string[]): number {
   let built: LaunchBuild;
   try {

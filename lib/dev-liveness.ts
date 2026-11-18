@@ -38,7 +38,34 @@
  * server. `probeLiveness` performs the one it returns.
  */
 
-import { redactSecrets } from "./verified-push";
+/**
+ * Strip credentials out of anything git says before it is recorded.
+ *
+ * The push outcome's `detail` is written into ship-evidence.json, which is a
+ * durable artefact, and printed. git's failure output quotes the remote URL —
+ * `fatal: Authentication failed for 'https://user:ghp_…@github.com/o/r.git'`
+ * — so a push that fails to authenticate against an HTTPS remote with an
+ * embedded token would write that token into the artefact. The remote name
+ * read from `branch.<b>.remote` can be a URL for the same reason.
+ *
+ * Two independent rules rather than one, because they fail differently: the
+ * userinfo rule catches the structured case and the token rule catches a bare
+ * token that reached the output some other way.
+ *
+ * Defined here, not in lib/verified-push.ts where it is used most, so that
+ * this module imports nothing (#2289, SC-2774): `containerProbeTarget`
+ * reaches it through `safeForRecord`, and the ship launch file bundles that
+ * core. lib/verified-push.ts re-exports it.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    // scheme://user:secret@host — the password is what matters, but the
+    // username is dropped too: a PAT is often supplied AS the username.
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1<redacted>@")
+    // Bare GitHub token forms, in case one arrives outside a URL.
+    .replace(/\b(gh[pousr]|github_pat)_[A-Za-z0-9_]{10,}/g, "<redacted-token>");
+}
+
 
 export type LivenessPlan =
   /** Nothing to probe: no server-dependent OUTCOME AC in this run. */
