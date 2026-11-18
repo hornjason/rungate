@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-18
 updated: 2026-11-18
 ---
@@ -9,7 +9,7 @@ updated: 2026-11-18
 
 ## Status
 
-**Proposed, 2026-11-18.** Jason decided every decision below on 2026-11-18, and accepted the three criterion texts in *Criteria* the same day. What is left is his merge.
+**Accepted, 2026-11-18.** Jason decided every decision below on 2026-11-18 and accepted the three criterion texts in *Criteria* the same day. His merge of this file places the plan (`adr-accepted.yml`); until he merges it, nothing is filed.
 
 ## Context
 

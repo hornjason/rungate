@@ -231,6 +231,8 @@ of the last 40 merged PRs closed no issue.
       fingerprint: 8017b213
 - [ ] SC-2786: `board-ready` never puts an issue in Ready that names a file an in-progress issue names, an open pull request changes, or an issue it picked earlier in the same fill names; the skipped issue stays first in line for the next fill (Jason, 2026-11-18, ADR-021)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ### The process reaches consumers through scaffold
 
