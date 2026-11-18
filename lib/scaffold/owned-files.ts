@@ -231,6 +231,16 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't edit `run-the-engine` or share adr-accepted's group",
   },
   {
+    // SC-2784, ADR-020 Decision 2: a consumer's issue is triaged when filed
+    // and every day. A consumer has no scripts/, so the generator writes it
+    // and calls the published CLI.
+    path: ".github/workflows/consumer-intake.yml",
+    strategy: "job-preserving",
+    servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
+    customize: "Add jobs beside `triage`",
+    avoid: "Don't edit `triage`",
+  },
+  {
     // `regenerate` until #655, and the declaration was never consulted:
     // `generateAgentBriefsStep` called `writeFileSync` directly, so the row
     // described behaviour that a bare overwrite happened to coincide with.

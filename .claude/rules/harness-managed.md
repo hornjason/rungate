@@ -30,6 +30,7 @@ These files are managed by rungate. **Do not edit them directly.** What
 | `.github/workflows/board-intake.yml` | job-preserving | Set `board.id` in config and secret `RUNGATE_PROJECT_TOKEN`; add your own jobs alongside the generated `add-to-board` job | Don't edit the generated `add-to-board` job |
 | `.github/workflows/intake.yml` | job-preserving | Advisory — a reading never fails the run; add your own jobs alongside the generated `fix-commit-intake` job | Don't edit the generated `fix-commit-intake` job, and don't drop `fetch-depth: 0` — a shallow clone reads UNMEASURED |
 | `.github/workflows/specs-placed.yml` | job-preserving | Opt specs in with a `board:` block; add jobs beside `run-the-engine` | Don't edit `run-the-engine` or share adr-accepted's group |
+| `.github/workflows/consumer-intake.yml` | job-preserving | Add jobs beside `triage` | Don't edit `triage` |
 | `.claude/agents/*.md` | section-preserving | Everything but `## Project Constraints` is generated from `.claude/rungate/roles.json` and the templates; put rules mined from this repo's own history in that section and they carry forward | Don't hand-edit the generated sections — a re-scaffold rewrites them without reporting it |
 | `.claude/commands/dry-run.md` | provenance | Edit freely — a hand-edited command is preserved and reported | Don't delete its `generated-sha` marker, or edits stop surviving |
 | `docs/adr/TEMPLATE.md` | regenerate | Copy it to docs/adr/ADR-<n>-<slug>.md and edit the copy | Don't edit the template itself — a re-scaffold rewrites it |
