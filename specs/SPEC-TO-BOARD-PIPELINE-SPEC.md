@@ -229,6 +229,7 @@ of the last 40 merged PRs closed no issue.
       needs: test
       proved-by: one test per clause, 2026-11-13, -t "SC-2741|#2037|#2007" — active milestone plus work-this-next: test/board-mirror.test.ts (9 pass) and test/active-milestone.test.ts (7 pass, both Ready writers read one population); label-only and payload kept out, and demotion outside the focus: test/board-ready-fanout.test.ts (8 pass); the refill triggers and issues entering by filing, never by transfer: test/board-ready-rule.test.ts (11 pass). 0 fail. Ticked by `sync-sc-status --only SC-2741` (#2054).
       fingerprint: 8017b213
+- [ ] SC-2786: `board-ready` never puts an issue in Ready that names a file an in-progress issue, or an issue it picked earlier in the same fill, also names; the skipped issue stays first in line for the next fill (ADR-021)
 
 ### The process reaches consumers through scaffold
 
@@ -366,7 +367,7 @@ is built from this document.
 | **Phase 3** | SC-2608, SC-2609, SC-2610 |
 | **Phase 4** | SC-2611 |
 | **Phase 5** | SC-2612, SC-2613, SC-2614, SC-2750 |
-| **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753, SC-2762, SC-2763, SC-2764 |
+| **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753, SC-2762, SC-2763, SC-2764, SC-2786 |
 | **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
 | **Phase 9** | SC-2776, SC-2777, SC-2778, SC-2779, SC-2780, SC-2782, SC-2783, SC-2784, SC-2785 |
