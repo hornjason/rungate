@@ -490,6 +490,21 @@ describe("#2415: an issue plan-issues filed reads LEFT, never a verdict", () => 
     expect(t.kind, "a quoted footer suppressed a real report").toBe("DUPLICATE");
   });
 
+  test("a section appended after the footer does not unmake a planned issue (review of #2416)", () => {
+    const issue = planned(305, "The alphaReader keeps the betaWriter row again");
+    const edited = { ...issue, body: `${issue.body}\n\n---\n\nA note someone appended later.` };
+    const t = triageVerdict(edited, ctx({ openIssues: [...ctx().openIssues, edited] }));
+    expect(t.kind).toBe("LEFT");
+    if (t.kind === "LEFT") expect(t.why).toContain("docs/adr/ADR-9999-x.md");
+  });
+
+  test("a planner footer whose path is cut off still marks the issue planned, naming the path unread", () => {
+    const cut = consumer(306, `${DUP_BODY}\n\n---\n\n${PLANNED_ISSUE_FOOTER}docs/adr/ADR-9999`);
+    const t = triageVerdict(cut, ctx({ openIssues: [...ctx().openIssues, cut] }));
+    expect(t.kind).toBe("LEFT");
+    if (t.kind === "LEFT") expect(t.why).toContain("unreadable");
+  });
+
   test("the footer plan-issues writes starts with the one exported prefix triage reads", () => {
     const body = decomposedBody(ROW("Anything at all here") as never, "Criteria this serves", "docs/adr/ADR-9999-x.md");
     expect(body).toContain(`${PLANNED_ISSUE_FOOTER}docs/adr/ADR-9999-x.md\``);

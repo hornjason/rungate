@@ -94,20 +94,23 @@ const asFinding = (i: TriageIssue): Finding => ({ id: String(i.number), title: i
 
 /**
  * The plan a planned issue's OWN footer names, or null (#2415). The footer
- * must open the body's trailing section, after its last `---` rule, which is
- * where `decomposedBody` writes it; the same words quoted anywhere earlier,
- * say by a consumer citing another issue, do not make a report a plan (review
- * of #2416).
+ * counts only where `decomposedBody` writes it: directly after a `---` rule.
+ * The same words quoted inside a sentence, say by a consumer citing another
+ * issue, do not make a report a plan, and a section someone appends after
+ * the footer does not unmake one (reviews of #2416). A footer whose path
+ * cannot be read still marks the issue planned, naming the path unread.
  */
 export function plannedFrom(body: string | null | undefined): string | null {
   const text = (body ?? "").replace(/\r\n/g, "\n");
-  const rule = text.lastIndexOf("\n---\n");
-  if (rule < 0) return null;
-  const tail = text.slice(rule + "\n---\n".length).trimStart();
-  if (!tail.startsWith(PLANNED_ISSUE_FOOTER)) return null;
-  const rest = tail.slice(PLANNED_ISSUE_FOOTER.length);
-  const end = rest.indexOf("`");
-  return end > 0 ? rest.slice(0, end) : null;
+  for (let rule = text.indexOf("\n---\n"); rule >= 0; rule = text.indexOf("\n---\n", rule + 1)) {
+    const after = text.slice(rule + "\n---\n".length).replace(/^\s*/, "");
+    if (!after.startsWith(PLANNED_ISSUE_FOOTER)) continue;
+    const rest = after.slice(PLANNED_ISSUE_FOOTER.length);
+    const end = rest.indexOf("`");
+    const line = rest.indexOf("\n");
+    return end > 0 && (line < 0 || end < line) ? rest.slice(0, end) : "a plan whose path is unreadable";
+  }
+  return null;
 }
 
 export function triageVerdict(issue: TriageIssue, ctx: TriageContext): Triage {
