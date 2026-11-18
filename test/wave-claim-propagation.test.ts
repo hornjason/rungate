@@ -38,7 +38,7 @@ import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { worktreeIdentityRegion } from "./helpers/ship-block";
+import { securityHelpersRegion, worktreeIdentityRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const REAL_SHIP = join(REPO_ROOT, "workflows", "ship.js");
@@ -128,7 +128,7 @@ function buildPipeline(root: string, subs: SubFixture[], source: string = shipSo
   // The real quoting, sliced rather than re-implemented: a local copy would
   // let this suite and ship.js disagree about what reaches a shell.
   const shellQuote = new Function(
-    `${block("SECURITY-HELPERS", source)}\nreturn shellQuote;`,
+    `${securityHelpersRegion(source)}\nreturn shellQuote;`,
   )() as (s: string) => string;
 
   const timedAgent = async (prompt: string, opts: { label: string }) => {
@@ -157,7 +157,7 @@ function buildPipeline(root: string, subs: SubFixture[], source: string = shipSo
     "PROJECT_ROOT",
     "HARNESS_ROOT",
     `${[
-      block("SECURITY-HELPERS", source),
+      securityHelpersRegion(source),
       block("COLLECT-DESTINATION", source),
       block("COLLECT-CLAIM", source),
       block("PRESERVE-REFUSED", source),
@@ -267,7 +267,7 @@ function buildPipeline(root: string, subs: SubFixture[], source: string = shipSo
     // `claimKey` and `pathRefusal`, which this file already evaluates for the
     // audit below. Both come from the SAME `source` as the blocks beside
     // them, so a mutated source stays wholly mutated.
-    `${block("SECURITY-HELPERS", source)}\n${block("COLLECT-CLAIM", source)}\n` +
+    `${securityHelpersRegion(source)}\n${block("COLLECT-CLAIM", source)}\n` +
       `${block("FILES-CHANGED-SHAPE", source)}\n${block("DECOMPOSED-SHIP", source)}\n` +
       `return runDecomposedShip;`,
   )(

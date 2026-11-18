@@ -34,6 +34,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { securityHelpersRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -71,7 +72,7 @@ function loadBothPhases(): {
   return new Function(
     "PROJECT_ROOT",
     "log",
-    `${block("SECURITY-HELPERS")}
+    `${securityHelpersRegion(shipSource)}
      ${block("COLLECT-CLAIM")}
      return { validateFilePaths, buildSafeGitAdd, auditWorktreeClaims, claimKey, pathRefusal }`,
   )("/repo", () => {});
@@ -215,7 +216,7 @@ describe("SC-1533: one predicate, reached by both phases", () => {
   });
 
   test("the decider is declared once and called from both phases", () => {
-    const security = block("SECURITY-HELPERS");
+    const security = securityHelpersRegion(shipSource);
     const collect = block("COLLECT-CLAIM");
     expect((shipSource.match(/function pathRefusal\(/g) || []).length).toBe(1);
     // Declared in the security block, which is the half mirrored by

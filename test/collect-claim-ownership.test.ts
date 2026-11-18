@@ -81,6 +81,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { securityHelpersRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP_PATH = join(REPO_ROOT, "workflows", "ship.js");
@@ -127,7 +128,7 @@ function loadAudit(source: string = claimSource): Audit {
   return new Function(
     "PROJECT_ROOT",
     "log",
-    `${block("SECURITY-HELPERS")}\n${source}\nreturn auditWorktreeClaims`,
+    `${securityHelpersRegion(shipSource)}\n${source}\nreturn auditWorktreeClaims`,
   )("/repo", () => {}) as Audit;
 }
 

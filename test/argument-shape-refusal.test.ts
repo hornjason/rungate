@@ -27,6 +27,7 @@ import { join } from "path";
 import { repoSlugRefusal, rootPathRefusal } from "../lib/workflow-security";
 import { runWorkflow } from "../lib/workflow-test-harness";
 import { shipPrelude } from "../scripts/build-workflow-launch";
+import { securityHelpersRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -38,12 +39,9 @@ function inlined(): {
   repoSlugRefusal: (n: string, v: unknown) => string | null;
   rootPathRefusal: (n: string, v: unknown) => string | null;
 } {
-  const start = SHIP.indexOf("// ──── SECURITY-HELPERS-START ────");
-  const end = SHIP.indexOf("// ──── SECURITY-HELPERS-END ────");
-  if (start < 0 || end < 0) throw new Error("ship.js is missing the SECURITY-HELPERS markers");
   return new Function(
     "PROJECT_ROOT", "log",
-    `${SHIP.slice(start, end)}; return { repoSlugRefusal, rootPathRefusal };`,
+    `${securityHelpersRegion(SHIP)}; return { repoSlugRefusal, rootPathRefusal };`,
   )("/tmp/project", () => {}) as ReturnType<typeof inlined>;
 }
 
