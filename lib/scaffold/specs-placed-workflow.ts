@@ -4,7 +4,8 @@
  * A push to main that changes `specs/` runs every opted-in family through the
  * engine with no command typed by hand: milestones from each family's
  * placement table, each open issue moved into the phase its criteria hold,
- * the phase-order links, the queue label, and the board's Criteria column.
+ * the links accepted plans declare (never phase order, ADR-021), the queue
+ * label, and the board's Criteria column.
  *
  * ## The families are read at RUN time, from the specs
  *
@@ -157,7 +158,7 @@ export function buildSpecsPlacedWorkflow(opts: SpecsPlacedWorkflowOptions): stri
 #   plan-issues --families   which specs are on the board, read at run time
 #   plan-spec                each family's milestones
 #   plan-issues --place      each open issue into the phase its criteria hold
-#   plan-deps                each family's phase-order links, after the moves
+#   plan-deps                each family's declared links, after the moves
 #   board-mirror             the queue label, then the Criteria column
 #
 # Every command is idempotent, so a re-run writes only what is missing.

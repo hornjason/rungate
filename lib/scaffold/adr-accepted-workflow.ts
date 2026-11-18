@@ -108,7 +108,7 @@ export function buildAdrAcceptedWorkflow(opts: AdrAcceptedWorkflowOptions): stri
 #
 #   plan-spec      the engine spec's milestones, so every row's milestone exists
 #   plan-issues    the ADR's Decomposition rows become issues, with blocked-by
-#   plan-deps      the phase-order links between milestones
+#   plan-deps      any declared link plan-issues did not write; never phase order
 #   board-mirror   the Criteria column on the board
 #   board-ready    a Ready top-up, because issues created with GITHUB_TOKEN
 #                  fire no \`issues: opened\` run of board-ready.yml

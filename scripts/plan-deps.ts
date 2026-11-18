@@ -34,12 +34,14 @@
  * writes and 37 read-backs, plus one id read per distinct blocker
  * (`BLOCKER_IDS`).
  */
-import { addBlockers } from "../lib/blocked-by-write";
+import { addBlockers, removeBlocker } from "../lib/blocked-by-write";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
 import { declaredDependencies, dependencyPlan, groupByBlocked, readDeclaredPlans, unreadPlansThatMatter } from "../lib/spec-deps";
 import type { DeclaredPlan, DepEdge, DepIssue, UnreadablePlan } from "../lib/spec-deps";
 import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues, readMilestonePrefix } from "../lib/live-issues";
+import { phaseOf } from "../lib/board-mirror";
+import { familyOf } from "../lib/spec-placement";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-deps.test.ts` can build a
@@ -109,6 +111,85 @@ export interface PlanDepsGitHub {
    * repository it runs in. A throw is UNMEASURED, refused before the network.
    */
   readPlans: (root: string) => { plans: DeclaredPlan[]; unreadable: UnreadablePlan[] };
+  /**
+   * Take one `blocked by` link off (#2433). Read only by
+   * `--remove-phase-order --write`; absent, that run refuses.
+   */
+  removeBlocker?: (repo: string, blocked: number, blocker: number) => Promise<void>;
+}
+
+/**
+ * The phase-order links this command wrote before ADR-021 (#2433): within one
+ * milestone family, every open issue of a phase blocked by every open issue
+ * of the phase before it, among the phases that exist. Re-derived only so
+ * `--remove-phase-order` can take them OFF; nothing writes these any more.
+ */
+export function phaseOrderLinks(issues: readonly DepIssue[]): DepEdge[] {
+  const byFamily = new Map<string, Map<number, number[]>>();
+  for (const i of issues) {
+    const p = phaseOf(i.milestone);
+    const f = familyOf(i.milestone);
+    if (i.state !== "OPEN" || p === null || f === null) continue;
+    const fam = byFamily.get(f) ?? new Map<number, number[]>();
+    fam.set(p, [...(fam.get(p) ?? []), i.number]);
+    byFamily.set(f, fam);
+  }
+  const out: DepEdge[] = [];
+  for (const fam of byFamily.values()) {
+    const phases = [...fam.keys()].sort((a, b) => a - b);
+    for (let k = 1; k < phases.length; k++) {
+      for (const blocked of fam.get(phases[k])!) {
+        for (const blocker of fam.get(phases[k - 1])!) out.push({ blocked, blocker });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * What `--remove-phase-order` takes off (#2433, ADR-021 decision 2): the phase
+ * order {@link phaseOrderLinks} derives plus the pairs `--also-remove` names,
+ * kept only where the link is ON the tracker and no accepted plan declares it.
+ * A link written by hand inside a phase is not phase order, so it stays. A
+ * named pair that is not on the tracker, or that a plan declares, refuses —
+ * a typo would otherwise remove nothing and read as done.
+ */
+export function phaseOrderRemoval(
+  issues: readonly DepIssue[],
+  declared: readonly DepEdge[],
+  also: readonly DepEdge[],
+): { remove: DepEdge[]; refusals: string[] } {
+  const key = (e: DepEdge): string => `${e.blocked}<-${e.blocker}`;
+  const present = new Set(issues.flatMap(i => i.blockedBy.map(b => key({ blocked: i.number, blocker: b }))));
+  const declaredKeys = new Set(declared.map(key));
+  const refusals: string[] = [];
+  for (const e of also) {
+    if (!present.has(key(e))) {
+      refusals.push(`#${e.blocked} is not blocked by #${e.blocker} among the issues this run read, so --also-remove names nothing to take off`);
+    } else if (declaredKeys.has(key(e))) {
+      refusals.push(`#${e.blocked} blocked by #${e.blocker} is declared by an accepted plan; this never removes a declared dependency`);
+    }
+  }
+  const out = new Map<string, DepEdge>();
+  for (const e of [...phaseOrderLinks(issues), ...also]) {
+    if (present.has(key(e)) && !declaredKeys.has(key(e))) out.set(key(e), e);
+  }
+  return {
+    remove: [...out.values()].sort((a, b) => a.blocked - b.blocked || a.blocker - b.blocker),
+    refusals,
+  };
+}
+
+/** `--also-remove 1764:1591,1764:1186` — blocked:blocker pairs, or null when one does not read. */
+function alsoRemovePairs(raw: string | undefined): DepEdge[] | null {
+  if (raw === undefined) return [];
+  const out: DepEdge[] = [];
+  for (const part of raw.split(",").map(x => x.trim()).filter(x => x !== "")) {
+    const m = /^#?(\d+):#?(\d+)$/.exec(part);
+    if (m === null) return null;
+    out.push({ blocked: Number(m[1]), blocker: Number(m[2]) });
+  }
+  return out;
 }
 
 /** Each blocker's database id, read once per run however many issues it blocks. */
@@ -128,6 +209,7 @@ const LIVE_GITHUB: PlanDepsGitHub = {
   createClient: createGitHubClient,
   readIssues: (_client, repo, includeClosed) => readLiveIssues(repo, includeClosed),
   addBlockers: liveAddBlockers,
+  removeBlocker: async (repo, blocked, blocker) => removeBlocker(repo, blocked, blocker, ghWithoutGhToken, BLOCKER_IDS),
   readPlans: readDeclaredPlans,
   readMilestoneTitles: async repo =>
     ghWithoutGhToken(["api", "--paginate", `repos/${repo}/milestones?state=all&per_page=100`, "--jq", ".[].title"])
@@ -145,6 +227,14 @@ const USAGE = `rungate plan-deps --repo <owner/name> --milestone-prefix <name>
                       edge and is no blocker: it can never block anything, so
                       the edge would be a row on a card that changes no decision.
   --project-root      where docs/adr/ is read from. Defaults to the cwd.
+  --remove-phase-order
+                      take OFF the phase-order links this command wrote before
+                      ADR-021, instead of adding declared links (#2433). Lists
+                      them; --write removes them. Never removes a link an
+                      accepted plan declares, nor one inside a phase.
+  --also-remove       with --remove-phase-order: blocked:blocker pairs to take
+                      off too, e.g. 1764:1591,1162:1764. Each must be on the
+                      tracker and declared by no plan, or the run refuses.
   --milestone-prefix  REQUIRED. Consider only issues whose milestone TITLE
                       starts with this, e.g. "Pipeline": a run writes the
                       declared links of the issues in one family. Required
@@ -172,6 +262,8 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
         "include-closed": { type: "boolean", default: false },
         "milestone-prefix": { type: "string" },
         "project-root": { type: "string" },
+        "remove-phase-order": { type: "boolean", default: false },
+        "also-remove": { type: "string" },
       },
       allowPositionals: true,
     });
@@ -180,6 +272,18 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   }
 
   const { values } = parsed;
+  // #2433's mode, checked statically like every other argument: no tracker
+  // read for a run whose arguments cannot be acted on.
+  const also = alsoRemovePairs(values["also-remove"]);
+  if (values["also-remove"] !== undefined && !values["remove-phase-order"]) {
+    return refuse(values.json, `--also-remove only means something with --remove-phase-order`, true);
+  }
+  if (also === null) {
+    return refuse(values.json, `--also-remove takes blocked:blocker pairs, comma-separated, e.g. 1764:1591 — got "${values["also-remove"]}"`, true);
+  }
+  if (values["remove-phase-order"] && values.json) {
+    return refuse(true, `--remove-phase-order prints for a person and has no --json form`);
+  }
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) {
     return refuse(values.json, `--repo is required (or set GITHUB_REPOSITORY)`, true);
@@ -354,7 +458,8 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
 
   // Resolved against EVERY issue read, not the family: a row's blocker may sit
   // in another milestone. The family narrows which issues WAIT.
-  const plan = dependencyPlan(issues, declaredDependencies(plans.plans, read), {
+  const declaredEdges = declaredDependencies(plans.plans, read);
+  const plan = dependencyPlan(issues, declaredEdges, {
     includeClosed: values["include-closed"],
     unreadPlans: unreadPlansThatMatter(plans.unreadable, read),
   });
@@ -364,6 +469,41 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // and an exit code cannot tell that apart from a refusal that stopped
   // something. One expression, read by every path below.
   const refuseWrite = plan.reading === "UNMEASURED";
+
+  if (values["remove-phase-order"]) {
+    if (refuseWrite) {
+      console.error(`plan-deps: UNMEASURED — the dependency plan could not be read, so nothing is removed:`);
+      for (const r of plan.unmeasuredReasons) console.error(`  - ${r}`);
+      return REFUSAL_EXIT;
+    }
+    const removal = phaseOrderRemoval(issues, declaredEdges, also);
+    if (removal.refusals.length > 0) {
+      console.error(`plan-deps: --also-remove refused, and nothing is removed:`);
+      for (const r of removal.refusals) console.error(`  - ${r}`);
+      return REFUSAL_EXIT;
+    }
+    console.log(
+      `${repo} — ${removal.remove.length} phase-order link(s) to take off, in milestones starting "${prefix}" ` +
+        `(no accepted plan declares any of them):`,
+    );
+    for (const e of removal.remove) console.log(`  #${e.blocked} blocked by #${e.blocker}`);
+    if (!values.write) {
+      console.log(`\nNothing removed. Re-run with --write to take off ${removal.remove.length} link(s).`);
+      return 0;
+    }
+    if (gh.removeBlocker === undefined) return refuse(false, `this run cannot remove links: no removeBlocker was supplied`);
+    const failed: string[] = [];
+    for (const e of removal.remove) {
+      try {
+        await gh.removeBlocker(repo, e.blocked, e.blocker);
+      } catch (err) {
+        failed.push(`#${e.blocked} blocked by #${e.blocker} FAILED: ${(err as Error).message}`);
+      }
+    }
+    for (const f of failed) console.error(`  ${f}`);
+    console.log(`\nREMOVED ${removal.remove.length - failed.length} of ${removal.remove.length}.`);
+    return failed.length > 0 ? REFUSAL_EXIT : 0;
+  }
 
   if (values.json) {
     // Apply FIRST, then report: `wrote` and the exit code must both be

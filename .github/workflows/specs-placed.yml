@@ -1,4 +1,4 @@
-# generated-sha: 0694a153484b5fe3
+# generated-sha: 38151a952c1ffff0
 # Managed by rungate — do not edit. Opt a spec in with
 # board: { scope: active, prefix: <Name> } in its frontmatter and give it a
 # placement table; nothing here names a spec.
@@ -9,7 +9,7 @@
 #   plan-issues --families   which specs are on the board, read at run time
 #   plan-spec                each family's milestones
 #   plan-issues --place      each open issue into the phase its criteria hold
-#   plan-deps                each family's phase-order links, after the moves
+#   plan-deps                each family's declared links, after the moves
 #   board-mirror             the queue label, then the Criteria column
 #
 # Every command is idempotent, so a re-run writes only what is missing.
