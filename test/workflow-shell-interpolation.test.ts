@@ -121,13 +121,10 @@ const CLASSIFIED: Record<string, string> = {
     "prose into a prompt: `localEnvClause` composes a sentence about where the local API is",
   "workflows/ship.js:localUiClause":
     "prose into a prompt: `localEnvClause` composes a sentence about where the local UI is",
-  "workflows/ship.js:headSha":
-    "prose into a prompt: every interpolation is wrapped in `describeShaValue`, which " +
-    "`JSON.stringify`s anything that is not a SHA, inside a `reason:` sentence",
-  "workflows/ship.js:testedSha":
-    "prose into a prompt: same `describeShaValue` wrapper, same `reason:` sentences",
+  // #2408: the `headSha`, `testedSha`, `reReviewed`, `currency` and last `v` sites
+  // were the security-verdict copy's, which left ship.js for the lib bundle.
   "workflows/ship.js:reviewCurrency":
-    "prose into a prompt: `.reason` is a sentence this file composed in `reviewIsCurrent`",
+    "prose into a prompt: `.reason` is a sentence `reviewIsCurrent` composed (lib/security-verdict.ts, bundled)",
   "workflows/ship.js:suiteCurrencyVerdict":
     "prose into a prompt: `.reason` is a sentence this file composed in `suiteCurrency`",
   "workflows/ship.js:containerProbe":
@@ -142,7 +139,7 @@ const CLASSIFIED: Record<string, string> = {
   "workflows/ship.js:verifyResult":
     "prose into a prompt: the verify gate's failure lines, joined into a sentence. Reached by " +
     "`'…' + …`, not by a template — the concatenation shape the scanner could not see (#1113)",
-  "workflows/ship.js:result×4":
+  "workflows/ship.js:result×3":
     "prose into a prompt: `result.result` or the sentence 'did not report a result'",
   "workflows/ship.js:evidenceQuality":
     "prose into a prompt: `.reason`, a sentence this file composed in `dryRunEvidenceQuality`",
@@ -162,8 +159,6 @@ const CLASSIFIED: Record<string, string> = {
     "prose into a prompt: `.error`, or the sentence 'no receipt returned'",
   "workflows/ship.js:suiteResult":
     "structured, not text: the suite verdict word, or the literal 'unset'",
-  "workflows/ship.js:reReviewed":
-    "prose into a prompt: wrapped in `describeShaValue`, in a sentence about the re-review",
   "workflows/ship.js:ready×1":
     "prose into a prompt: sub-issue titles, joined into a sentence. Nested one level inside a " +
     "`log()` message, which the direct-argument exemption deliberately does not reach",
@@ -191,12 +186,8 @@ const CLASSIFIED: Record<string, string> = {
     "composes. `prior.branch` itself now passes `isSafeBranchName` before it is used at all",
   "workflows/ship.js:record×2":
     "a command, not a value: `prodQuinnAssignment` composes a JavaScript statement for `bun -e`",
-  "workflows/ship.js:currency":
-    "prose into a prompt: wrapped in `describeShaValue`, in a `reason:` sentence",
   // #2400: `suiteCurrency` and `describeSuiteShaValue` left ship.js for the
   // lib bundle, taking the `measuredSha` site and one of the two `v` sites.
-  "workflows/ship.js:v×1":
-    "structured, not text: `describeShaValue`'s own argument — `v.length` for an array",
   // #2404: the three `r` sites were `planCoverageRefusal`'s, which left ship.js
   // for the lib bundle with the rest of the plan-coverage copy.
   "workflows/ship.js:reading":

@@ -254,11 +254,16 @@ describe("#244 SC-867: ship.js and the library agree, and the refusal stayed unc
       .not.toContain("rookReviewSha(testedSha)");
   });
 
-  test("each helper has exactly one definition in ship.js", () => {
+  test("each helper has exactly one definition, in the launch file's bundle, and none in ship.js (#2408)", () => {
+    // Since #2408 these are lib/security-verdict.ts's own code, bundled into
+    // ship.run.js. ship.js calls them and must not define them again.
+    const launch = readFileSync(join(import.meta.dir, "..", "workflows", "ship.run.js"), "utf-8");
     for (const name of ["reReviewScope", "reReviewBaseFor", "resolveReReview", "securityRefusalName"]) {
+      const pattern = new RegExp(`function ${name}\\b`, "g");
+      expect((shipSource.match(pattern) ?? []).length, `ship.js defines ${name} again beside the bundle`).toBe(0);
       expect(
-        (shipSource.match(new RegExp(`function ${name}\\b`, "g")) ?? []).length,
-        `${name} is defined more than once, so there is no single binding to mutate`,
+        (launch.match(pattern) ?? []).length,
+        `the launch file defines ${name} ${(launch.match(pattern) ?? []).length} times, so there is no single binding to mutate`,
       ).toBe(1);
     }
   });

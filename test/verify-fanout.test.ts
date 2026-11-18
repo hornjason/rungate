@@ -3,6 +3,7 @@ import { spawnSync } from "child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { shipPrelude } from "../scripts/build-workflow-launch";
 
 /**
  * Coverage for the Verify-phase fan-out (#66 follow-on).
@@ -24,9 +25,6 @@ const shipSource = readFileSync(SHIP_PATH, "utf-8");
 const BLOCK_START = "// ──── VERIFY-FANOUT-START ────";
 const BLOCK_END = "// ──── VERIFY-FANOUT-END ────";
 
-/** The scope/verdict helpers ship.js defines just above the fan-out (#129). */
-const SECURITY_START = "// ──── ROOK-SECURITY-START ────";
-const SECURITY_END = "// ──── ROOK-SECURITY-END ────";
 
 function sliceBlock(startMarker: string, endMarker: string): string {
   const start = shipSource.indexOf(startMarker);
@@ -50,8 +48,9 @@ const shellQuote: (word: unknown) => string = (() => {
   return new Function(`${match[0]}\nreturn shellQuote`)();
 })();
 
+/** The scope/verdict helpers the launch file bundles from lib/security-verdict.ts (#129, #2408). */
 const security = new Function(
-  `${sliceBlock(SECURITY_START, SECURITY_END)}
+  `${shipPrelude()}
    return { rookReviewSha, rookScopeCommand, rookGateVerdict }`,
 )() as {
   rookReviewSha: (v: unknown) => string | null;

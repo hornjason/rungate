@@ -22,7 +22,7 @@
  */
 
 /** A commit SHA: 7-40 hex, case-insensitive. Normalised to lowercase. */
-const SHA = /^[0-9a-f]{7,40}$/i;
+const REVIEW_SHA = /^[0-9a-f]{7,40}$/i;
 
 export interface SecurityVerdict {
   /** Whether the security agent returned anything at all. */
@@ -73,7 +73,7 @@ export interface ClearedFindings {
 export function rookReviewSha(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
-  return SHA.test(trimmed) ? trimmed.toLowerCase() : null;
+  return REVIEW_SHA.test(trimmed) ? trimmed.toLowerCase() : null;
 }
 
 export interface ReviewCurrency {
@@ -116,8 +116,8 @@ export function reviewIsCurrent(testedSha: unknown, headSha: unknown): ReviewCur
     return {
       current: false,
       reason:
-        `no security review is current: the tested commit is ${describe(testedSha)} and ` +
-        `the head commit is ${describe(headSha)} — neither is a commit SHA, so there is ` +
+        `no security review is current: the tested commit is ${describeReviewValue(testedSha)} and ` +
+        `the head commit is ${describeReviewValue(headSha)} — neither is a commit SHA, so there is ` +
         `nothing to compare`,
     };
   }
@@ -125,7 +125,7 @@ export function reviewIsCurrent(testedSha: unknown, headSha: unknown): ReviewCur
     return {
       current: false,
       reason:
-        `no security review is current: the tested commit is ${describe(testedSha)}, not a ` +
+        `no security review is current: the tested commit is ${describeReviewValue(testedSha)}, not a ` +
         `commit SHA, so it cannot be compared against head ${head}`,
     };
   }
@@ -133,7 +133,7 @@ export function reviewIsCurrent(testedSha: unknown, headSha: unknown): ReviewCur
     return {
       current: false,
       reason:
-        `no security review is current: the head commit is ${describe(headSha)}, not a ` +
+        `no security review is current: the head commit is ${describeReviewValue(headSha)}, not a ` +
         `commit SHA, so the review pinned to ${tested} cannot be confirmed against it`,
     };
   }
@@ -247,7 +247,7 @@ export function reReviewDecision(
     return {
       decision: SECURITY_REREVIEW_EXHAUSTED,
       reason:
-        `the review-currency reading is ${describe(currency)}, not an answer about a commit — ` +
+        `the review-currency reading is ${describeReviewValue(currency)}, not an answer about a commit — ` +
         `there is nothing a re-review could be aimed at, so the cycle ran out of attempts ` +
         `before spending one`,
     };
@@ -261,7 +261,7 @@ export function reReviewDecision(
       decision: SECURITY_REREVIEW_EXHAUSTED,
       reason:
         `${read.reason} — and the re-review budget is unreadable ` +
-        `(${describe(roundsSpent)} spent of ${describe(maxRounds)}), so the cycle ran out ` +
+        `(${describeReviewValue(roundsSpent)} spent of ${describeReviewValue(maxRounds)}), so the cycle ran out ` +
         `of attempts rather than guessing at one`,
     };
   }
@@ -438,7 +438,7 @@ export function resolveReReview(
       spawned,
       verdict: "FAIL",
       failures: [
-        `the re-review returned ${describe(isRecord(reReviewed) ? reReviewed.verdict : reReviewed)}, ` +
+        `the re-review returned ${describeReviewValue(isRecord(reReviewed) ? reReviewed.verdict : reReviewed)}, ` +
           `not a verdict — round ${round} cleared nothing`,
       ],
     };
@@ -466,7 +466,7 @@ export function resolveReReview(
       spawned,
       verdict: "FAIL",
       failures: [
-        `a ${describe(scope)}-scoped re-review passed, but the verdict it would clear is a ` +
+        `a ${describeReviewValue(scope)}-scoped re-review passed, but the verdict it would clear is a ` +
           `FAIL — a diff against the flagged commit does not contain the flagged code, so ` +
           `this PASS says nothing about it (#244). Original findings stand: ` +
           (priorFailures.join("; ") || "none were recorded"),
@@ -552,16 +552,16 @@ export function rookGateVerdict(scope: unknown, rook: unknown): SecurityVerdict 
 
   if (!isRecord(scope)) {
     failures.push(
-      `the review scope was never established: the scope step returned ${describe(scope)}`,
+      `the review scope was never established: the scope step returned ${describeReviewValue(scope)}`,
     );
   } else if (scope.exitCode !== 0) {
     failures.push(
       `the review scope could not be established: scripts/rook-review-scope.ts reported ` +
-        `exit ${describe(scope.exitCode)}`,
+        `exit ${describeReviewValue(scope.exitCode)}`,
     );
   } else if (!Array.isArray(scope.files)) {
     failures.push(
-      `the review scope is not a list of files (got ${describe(scope.files)}) — ` +
+      `the review scope is not a list of files (got ${describeReviewValue(scope.files)}) — ` +
         `refusing to treat an unreadable scope as a reviewed one`,
     );
   } else if (scope.files.filter(f => typeof f === "string" && f.trim() !== "").length === 0) {
@@ -596,7 +596,7 @@ export function rookGateVerdict(scope: unknown, rook: unknown): SecurityVerdict 
     }
   } else if (rook.result !== "PASS") {
     failures.push(
-      `the security review returned no usable verdict (got ${describe(rook.result)})`,
+      `the security review returned no usable verdict (got ${describeReviewValue(rook.result)})`,
     );
   }
 
@@ -607,7 +607,7 @@ export function rookGateVerdict(scope: unknown, rook: unknown): SecurityVerdict 
   };
 }
 
-function describe(v: unknown): string {
+function describeReviewValue(v: unknown): string {
   if (v === undefined) return "nothing";
   if (v === null) return "null";
   if (Array.isArray(v)) return `an array of ${v.length}`;

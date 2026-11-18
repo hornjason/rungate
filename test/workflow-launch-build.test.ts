@@ -367,6 +367,12 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
         "matchesDenied", "scopeContradiction", "denylistViolations", "withoutDenied",
       ],
       "lib/plan-coverage.ts": ["planCoverage", "planCoverageRefusal"],
+      "lib/security-verdict.ts": [
+        "rookReviewSha", "reviewIsCurrent", "REVIEW_CURRENT", "RE_REVIEW", "SECURITY_REREVIEW_EXHAUSTED",
+        "reReviewDecision", "rookScopeCommand", "REVIEW_SCOPE_FULL", "REVIEW_SCOPE_DIFF", "reReviewScope",
+        "reReviewBaseFor", "resolveReReview", "SECURITY_FINDINGS_OUTLIVED_REREVIEW", "securityRefusalName",
+        "rookGateVerdict",
+      ],
     });
   });
 
@@ -382,7 +388,7 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
 
   test("ship.js defines none of the names the bundle defines — its hand copy cannot come back", () => {
     const bundle = launchBundle();
-    for (const name of ["suiteCurrency", "planCoverage", "denylistViolations"]) {
+    for (const name of ["suiteCurrency", "planCoverage", "denylistViolations", "rookGateVerdict", "reviewIsCurrent"]) {
       expect(bundle.defined).toContain(name);
       expect(() => buildWorkflowLaunch(`${source}\nfunction ${name}() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(
         `${name} is defined by both workflows/ship.js and the lib bundle`,
