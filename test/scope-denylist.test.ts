@@ -346,7 +346,9 @@ describe("#306 security review: the comparison cannot be stepped around", () => 
   });
 });
 
-describe("SC-1426: the deny-list the launch file runs and the library agree", () => {
+// The title is pinned by SC-1426's own text in specs/HARNESS-STANDARD.md, so it
+// keeps "inlined copy" although, since #2404, the code compared is the bundle.
+describe("SC-1426: ship.js's inlined copy and the library agree", () => {
   /** Inputs chosen so each row can disagree for a different reason. */
   const MATRIX: Array<[string, string, string[]]> = [
     ["#274's real goal", GOAL_274, []],
