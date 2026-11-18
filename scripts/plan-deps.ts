@@ -37,8 +37,8 @@
 import { addBlockers } from "../lib/blocked-by-write";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
-import { declaredDependencies, dependencyPlan, groupByBlocked, readDeclaredPlans } from "../lib/spec-deps";
-import type { DeclaredPlan, DepEdge, DepIssue } from "../lib/spec-deps";
+import { declaredDependencies, dependencyPlan, groupByBlocked, readDeclaredPlans, unreadPlansThatMatter } from "../lib/spec-deps";
+import type { DeclaredPlan, DepEdge, DepIssue, UnreadablePlan } from "../lib/spec-deps";
 import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues, readMilestonePrefix } from "../lib/live-issues";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
@@ -112,7 +112,7 @@ export interface PlanDepsGitHub {
    * local read, not a GitHub one, kept on this seam so no test reads the
    * repository it runs in. A throw is UNMEASURED, refused before the network.
    */
-  readPlans: (root: string) => { plans: DeclaredPlan[]; unreadable: string[] };
+  readPlans: (root: string) => { plans: DeclaredPlan[]; unreadable: UnreadablePlan[] };
 }
 
 /** Each blocker's database id, read once per run however many issues it blocks. */
@@ -299,10 +299,11 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
 
   // What planning declared (SC-2606), read before the network like the
   // settings above, so a tree whose ADRs cannot be read is refused without a
-  // tracker call. An accepted plan whose table no longer parses is reported,
-  // not refused: it declares nothing readable, and refusing would stop every
-  // run on a repository with one old ADR.
-  let plans: { plans: DeclaredPlan[]; unreadable: string[] };
+  // tracker call. An accepted plan whose table no longer parses is reported;
+  // it refuses the reading only when it names an open issue
+  // (`unreadPlansThatMatter`), since otherwise it provably owes no link and
+  // refusing would stop every run on a repository with one old ADR.
+  let plans: { plans: DeclaredPlan[]; unreadable: UnreadablePlan[] };
   try {
     plans = gh.readPlans(root);
   } catch (e) {
@@ -365,7 +366,7 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
         // Every key the other readings carry, empty, as PHASE_ORDER_OFF does (review of #2414).
         console.log(
           JSON.stringify(
-            { reading: "NOTHING_TO_ORDER", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, unreadablePlans: plans.unreadable, results: [], wrote, prefix, milestones: family },
+            { reading: "NOTHING_TO_ORDER", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, unreadablePlans: plans.unreadable.map(u => u.path), results: [], wrote, prefix, milestones: family },
             null,
             2,
           ),
@@ -392,6 +393,7 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // in another milestone. The family narrows which issues WAIT.
   const plan = dependencyPlan(issues, declaredDependencies(plans.plans, read), {
     includeClosed: values["include-closed"],
+    unreadPlans: unreadPlansThatMatter(plans.unreadable, read),
   });
 
   // The refusal, decided BEFORE anything is written. `plan-spec` shipped this
@@ -414,7 +416,7 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
         : failures.length > 0
           ? "partial"
           : "yes";
-    console.log(JSON.stringify({ ...plan, unreadablePlans: plans.unreadable, results, wrote }, null, 2));
+    console.log(JSON.stringify({ ...plan, unreadablePlans: plans.unreadable.map(u => u.path), results, wrote }, null, 2));
     return refuseWrite || failures.length > 0 ? REFUSAL_EXIT : 0;
   }
 
@@ -456,7 +458,7 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   if (plans.unreadable.length > 0) {
     console.log(
       `  ${plans.unreadable.length} accepted plan(s) whose Decomposition table does not parse, so they ` +
-        `declare nothing here: ${plans.unreadable.join(", ")}`,
+        `declare nothing here: ${plans.unreadable.map(u => u.path).join(", ")}`,
     );
   }
 

@@ -67,7 +67,7 @@ import {
 } from "../lib/spec-placement";
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
-import { declaredDependencies, dependencyPlan, readDeclaredPlans } from "../lib/spec-deps";
+import { declaredDependencies, dependencyPlan, readDeclaredPlans, unreadPlansThatMatter } from "../lib/spec-deps";
 import type { ConsumerIntake, DeclaredWork, FamilyIssue, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
 import { CONSUMER_LABEL, trustedBodies, verdictIn, type IssueComment } from "../lib/consumer-triage";
 import { parseCriteria } from "../lib/spec-evidence";
@@ -1060,14 +1060,20 @@ export async function main(
   // as the tracker's failure.
   //
   // ADRs that cannot be read omit the key too: an unread declaration is not
-  // a declaration of nothing.
+  // a declaration of nothing. So does an accepted plan whose table does not
+  // parse and names an open issue — `dependencyPlan` reads it UNMEASURED
+  // (`unreadPlansThatMatter`, review of #2439). One naming no open issue
+  // provably owes no link, and is not a reason to blind the reading.
   let declaredEdges: ReturnType<typeof declaredDependencies> | null;
+  let unreadPlans: string[] = [];
   try {
-    declaredEdges = declaredDependencies(readDeclaredPlans(root).plans, liveIssues);
+    const declared = readDeclaredPlans(root);
+    declaredEdges = declaredDependencies(declared.plans, liveIssues);
+    unreadPlans = unreadPlansThatMatter(declared.unreadable, liveIssues);
   } catch {
     declaredEdges = null; // UNMEASURED: `plannedEdges` is omitted below, and dependency-edges says so.
   }
-  const plan = declaredEdges === null ? null : dependencyPlan(liveIssues, declaredEdges);
+  const plan = declaredEdges === null ? null : dependencyPlan(liveIssues, declaredEdges, { unreadPlans });
   const edges =
     plan === null || plan.reading !== "MEASURED"
       ? {}

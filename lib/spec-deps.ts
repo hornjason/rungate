@@ -48,8 +48,11 @@ import { join } from "path";
 import { phaseOf } from "./board-mirror";
 import {
   adrStatus,
+  cells,
   hasDecompositionTable,
   parseDecompositionPlan,
+  plain,
+  rowCells,
   type DecompositionRow,
 } from "./issue-decomposition";
 
@@ -134,10 +137,13 @@ export interface DependencyPlan {
  * | 2 | read, none considered | every issue was filtered out — all closed, without `--include-closed` |
  * | 3 | considered, no phase | nobody carries a `Phase N` milestone: `plan-spec` never ran, or the naming drifted from `phaseOf` |
  * | 5 | a truncated blocker list | an unread edge past the page boundary reads as missing and gets re-added |
+ * | 6 | an accepted plan that does not parse names an open issue | a link it declares cannot be checked, so "nothing missing" would be a guess |
  *
- * Rows 1-3 are reads that could not be taken. Row 5 is orthogonal — the
- * phases can be fine while the live edge list is short — so it is checked
- * alongside. The one-phase row (#2239) is gone with phase order (ADR-021):
+ * Rows 1-3 are reads that could not be taken. Rows 5 and 6 are orthogonal —
+ * the phases can be fine while the live edge list is short, or a declaration
+ * unread — so they are checked alongside. Row 6 takes the paths
+ * {@link unreadPlansThatMatter} returns, never every unparseable plan: one
+ * that names no open issue provably declares nothing owed. The one-phase row (#2239) is gone with phase order (ADR-021):
  * one phase is a sound read, and the plan is what planning declared.
  */
 export function degenerateReasons(r: {
@@ -146,6 +152,7 @@ export function degenerateReasons(r: {
   readonly phases: readonly number[];
   readonly includeClosed: boolean;
   readonly truncated: readonly number[];
+  readonly unreadPlans: readonly string[];
 }): string[] {
   const out: string[] = [];
   if (r.read === 0) {
@@ -171,6 +178,13 @@ export function degenerateReasons(r: {
       `the blocker list was truncated for ${r.truncated.length} issue(s) ` +
         `(${r.truncated.map(n => `#${n}`).join(", ")}) — an edge past the page boundary ` +
         `reads as missing and would be re-added`,
+    );
+  }
+  if (r.unreadPlans.length > 0) {
+    out.push(
+      `${r.unreadPlans.length} accepted plan(s) do not parse and name an open issue (${r.unreadPlans.join(", ")}) — ` +
+        `a link they declare cannot be checked. Bring the Decomposition table to the shape ` +
+        `plan-issues reads, and re-run`,
     );
   }
   return out;
@@ -226,28 +240,69 @@ export function declaredDependencies(
   return [...out.values()];
 }
 
+/** An accepted ADR whose Decomposition table does not parse, kept whole for {@link unreadPlansThatMatter}. */
+export interface UnreadablePlan {
+  readonly path: string;
+  readonly text: string;
+}
+
 /**
  * Every accepted ADR's Decomposition under `<root>/docs/adr`, read once.
  *
  * An accepted plan whose table no longer parses (older ADRs used a shape the
- * parser refuses) declares nothing it can read: it is returned by path in
- * `unreadable`, so the caller says so, never dropped silently. Its issues
- * were filed, and their links written, by `plan-issues` when it was merged.
+ * parser refuses) declares nothing it can read: it is returned in
+ * `unreadable`, so the caller says so, never dropped silently — and
+ * {@link unreadPlansThatMatter} decides whether it can still owe a link.
  */
-export function readDeclaredPlans(root: string): { plans: DeclaredPlan[]; unreadable: string[] } {
+export function readDeclaredPlans(root: string): { plans: DeclaredPlan[]; unreadable: UnreadablePlan[] } {
   const dir = join(root, "docs", "adr");
   if (!existsSync(dir)) return { plans: [], unreadable: [] };
   const plans: DeclaredPlan[] = [];
-  const unreadable: string[] = [];
+  const unreadable: UnreadablePlan[] = [];
   for (const name of readdirSync(dir).filter(n => /^ADR-\d+.*\.md$/.test(n)).sort()) {
     const path = `docs/adr/${name}`;
     const text = readFileSync(join(dir, name), "utf-8");
     if (adrStatus(text) !== "accepted" || !hasDecompositionTable(text)) continue;
     const plan = parseDecompositionPlan(text);
     if (plan.reading === "MEASURED") plans.push({ path, rows: plan.rows });
-    else unreadable.push(path);
+    else unreadable.push({ path, text });
   }
   return { plans, unreadable };
+}
+
+/**
+ * The unparseable plans that could still declare a link the tracker owes —
+ * row 6 of {@link degenerateReasons}' table.
+ *
+ * Every declared edge needs its row's OWN issue open: {@link declaredDependencies}
+ * skips a row whose issue has closed, in both of its cells. A row names its
+ * issue by its outcome, and `plan-issues` filed that outcome as the title with
+ * its backticks removed and `\|` read as `|`. So only a line that, read the
+ * same way, contains an open issue's title can owe anything, and only if it
+ * is a table line — prose declares nothing.
+ *
+ * Such a line is read with the parser's own `rowCells`, `plain` and `cells`.
+ * When the title IS its outcome cell and every cell after the milestone is
+ * empty or `—`, the row declares nothing (live: ADR-011's row for #1885).
+ * Anything else — the title in another cell, a row too short to have a
+ * `Blocked by` — counts, because a row that cannot be read cannot be cleared.
+ * Returning every unparseable plan instead would make one old ADR refuse the
+ * reading forever.
+ */
+export function unreadPlansThatMatter(
+  unreadable: readonly UnreadablePlan[],
+  issues: readonly Pick<DepIssue, "title" | "state">[],
+): string[] {
+  const titles = issues.filter(i => i.state === "OPEN" && i.title.trim() !== "").map(i => i.title.trim());
+  const owes = (line: string): boolean => {
+    const read = line.replaceAll("\\|", "|").replaceAll("`", "");
+    const named = titles.filter(t => read.includes(t));
+    if (named.length === 0 || !line.includes("|")) return false;
+    const c = rowCells(line);
+    const declaresNothing = c.length >= 5 && named.every(t => plain(c[1]!) === t) && c.slice(4).every(x => cells(x).length === 0);
+    return !declaresNothing;
+  };
+  return unreadable.filter(u => u.text.split("\n").some(owes)).map(u => u.path);
 }
 
 /**
@@ -268,7 +323,7 @@ export function readDeclaredPlans(root: string): { plans: DeclaredPlan[]; unread
 export function dependencyPlan(
   issues: readonly DepIssue[],
   declared: readonly DepEdge[],
-  opts: { readonly includeClosed?: boolean } = {},
+  opts: { readonly includeClosed?: boolean; readonly unreadPlans?: readonly string[] } = {},
 ): DependencyPlan {
   const considered = issues.filter(i => opts.includeClosed || i.state === "OPEN");
   const unphased: number[] = [];
@@ -292,6 +347,7 @@ export function dependencyPlan(
     phases,
     includeClosed: opts.includeClosed === true,
     truncated: issues.filter(i => i.blockedByTruncated === true).map(i => i.number),
+    unreadPlans: opts.unreadPlans ?? [],
   });
 
   // The declared edges whose BLOCKED end is in the population this run

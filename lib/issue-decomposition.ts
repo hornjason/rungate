@@ -103,7 +103,7 @@ const ISSUE_REF = /^#\d+$/;
  * over-wide row renders as a well-formed five-column row with a cell missing,
  * so there is nothing in the rendered table for a reviewer to notice.
  */
-function rowCells(line: string): string[] {
+export function rowCells(line: string): string[] {
   const out: string[] = [];
   let cur = "";
   for (let i = 0; i < line.length; i++) {
@@ -153,12 +153,16 @@ function rowCells(line: string): string[] {
  * a disagreement nobody can see — `.claude/rules/checks-must-be-able-to-fail.md`,
  * the fourth shape. Hence one binding rather than two kept in step.
  */
-function plain(text: string): string {
+export function plain(text: string): string {
   return text.replaceAll("`", "").trim();
 }
 
-/** Split a cell on commas, drop the empties. `—` and `-` both mean "none". */
-function cells(text: string): string[] {
+/**
+ * Split a cell on commas, drop the empties. `—` and `-` both mean "none".
+ * Exported with {@link rowCells} and {@link plain} so `lib/spec-deps.ts` reads
+ * an old plan's row with this module's own rules rather than a copy (SC-2606).
+ */
+export function cells(text: string): string[] {
   const t = text.trim();
   if (t === "" || t === "—" || t === "-") return [];
   return t.split(",").map(plain).filter(s => s !== "");

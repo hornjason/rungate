@@ -20,7 +20,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { declaredDependencies, dependencyPlan, groupByBlocked, readDeclaredPlans } from "../lib/spec-deps";
+import { declaredDependencies, dependencyPlan, groupByBlocked, readDeclaredPlans, unreadPlansThatMatter } from "../lib/spec-deps";
 import type { DeclaredPlan, DepEdge, DepIssue } from "../lib/spec-deps";
 import type { DecompositionRow } from "../lib/issue-decomposition";
 import { familyOf, phaseInFamily } from "../lib/spec-placement";
@@ -185,10 +185,53 @@ describe("SC-2606: readDeclaredPlans reads accepted ADRs' Decomposition tables, 
         ["the first piece of planned work", []],
         ["the second piece of planned work", ["the first piece of planned work"]],
       ]);
-      expect(got.unreadable).toEqual(["docs/adr/ADR-004-broken.md"]);
+      expect(got.unreadable.map(u => u.path)).toEqual(["docs/adr/ADR-004-broken.md"]);
+      expect(got.unreadable[0]!.text).toContain("| only | three |");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // Review of #2439: an unparseable plan was reported by plan-deps and dropped
+  // by board-snapshot, whose reading then said MET over a subset. Every edge
+  // needs its row's own issue open, and that row names it by title — so the
+  // plans that can still owe a link are exactly the ones naming an open title.
+  test("SC-2606: an unparseable plan matters only when an open issue's row could declare a link", () => {
+    const issues = [iss(10, 0, { title: "Alpha opens the door" }), iss(20, 0, { title: "Beta is long done", state: "CLOSED" })];
+    const u = (path: string, text: string) => ({ path, text });
+    expect(
+      unreadPlansThatMatter(
+        [
+          u("ADR-1-open-blocked.md", "| — | Alpha opens the door | lib/a.ts | — | #7 |"),
+          u("ADR-2-closed.md", "| — | Beta is long done | lib/b.ts | — | #7 |"),
+          u("ADR-3-unfiled.md", "| — | something nobody filed | lib/c.ts | — | #7 |"),
+          // ADR-011's row for #1885: open, and its dependency cells are empty.
+          u("ADR-4-open-declares-nothing.md", "| — | Alpha opens the door | lib/a.ts | — | — |"),
+          u("ADR-5-prose.md", "We may get to Alpha opens the door later."),
+          // Conservative: the title in a cell other than the outcome counts.
+          u("ADR-6-named-as-blocker.md", "| — | something else entirely | x | — | Alpha opens the door |"),
+          u("ADR-7-too-short.md", "| — | Alpha opens the door |"),
+          u("ADR-8-blocks.md", "| — | Alpha opens the door | lib/a.ts | — | — | #9 |"),
+          // The title is not the outcome cell: an unescaped `|` splits an
+          // outcome exactly this way, so a row that cannot be read counts.
+          u("ADR-9-not-the-outcome.md", "| — | something else entirely | Alpha opens the door | — | — |"),
+        ],
+        issues,
+      ),
+    ).toEqual(["ADR-1-open-blocked.md", "ADR-6-named-as-blocker.md", "ADR-7-too-short.md", "ADR-8-blocks.md", "ADR-9-not-the-outcome.md"]);
+  });
+
+  test("SC-2606: the title is matched as plan-issues filed it — backticks dropped, an escaped pipe read as a pipe", () => {
+    const issues = [iss(10, 0, { title: "fix cells() for a|b inputs" })];
+    expect(unreadPlansThatMatter([{ path: "p.md", text: "| — | fix `cells()` for a\\|b inputs | x | — | #3 |" }], issues)).toEqual(["p.md"]);
+  });
+
+  test("SC-2606: an unparseable plan naming an open issue makes the reading UNMEASURED, naming it", () => {
+    const plan = dependencyPlan([iss(10, 0), iss(20, 1)], edges([20, 10]), { unreadPlans: ["docs/adr/ADR-007-old.md"] });
+    expect(plan.reading).toBe("UNMEASURED");
+    expect(plan.unmeasuredReasons.join(" ")).toContain("docs/adr/ADR-007-old.md");
+    // The pair: none named, the same input is MEASURED.
+    expect(dependencyPlan([iss(10, 0), iss(20, 1)], edges([20, 10]), { unreadPlans: [] }).reading).toBe("MEASURED");
   });
 
   test("a tree with no docs/adr declares nothing, and that is not a failure", () => {
@@ -487,10 +530,25 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     expect(s.reads(), "the tracker was read for a plan that could not be").toBe(0);
   });
 
+  test("SC-2606: an unparseable plan that names an open issue refuses the write, naming the plan", async () => {
+    const readPlans: PlanDepsGitHub["readPlans"] = () => ({
+      plans: declaring([20, 10])(".").plans,
+      unreadable: [{ path: "docs/adr/ADR-007-old-shape.md", text: "| — | issue 20 | x | — | issue 10 |" }],
+    });
+    const s = spy([iss(10, 0), iss(20, 1)], readPlans);
+    const got = await capture(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
+    const json = JSON.parse(got.text);
+    expect(json.reading).toBe("UNMEASURED");
+    expect(json.wrote).toBe("refused");
+    expect(json.unmeasuredReasons.join(" ")).toContain("docs/adr/ADR-007-old-shape.md");
+    expect(s.calls).toEqual([]);
+    expect(got.code).toBe(REFUSAL_EXIT);
+  });
+
   test("an accepted plan whose table does not parse is named on both channels, and the readable ones still write", async () => {
     const readPlans: PlanDepsGitHub["readPlans"] = () => ({
       plans: declaring([20, 10])(".").plans,
-      unreadable: ["docs/adr/ADR-007-old-shape.md"],
+      unreadable: [{ path: "docs/adr/ADR-007-old-shape.md", text: "| — | work that closed long ago | x | — | — |" }],
     });
     const text = await capture(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], spy([iss(10, 0), iss(20, 1)], readPlans).gh);
     expect(text.code).toBe(0);

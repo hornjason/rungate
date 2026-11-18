@@ -2221,6 +2221,27 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
     });
   });
 
+  // Review of #2439: the snapshot dropped readDeclaredPlans' unreadable list,
+  // so a plan that does not parse read as declaring nothing and the reading
+  // said MET over a subset.
+  test("SC-2606: an unparseable accepted plan naming an open issue omits plannedEdges; one naming none does not", async () => {
+    for (const [names, expectKey] of [[SECOND, false], ["work that closed long ago", true]] as const) {
+      await withSpecsDir(async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        declareFirstBeforeSecond(dir);
+        writeFileSync(
+          join(dir, "docs", "adr", "ADR-002-old-shape.md"),
+          "---\ndoc-type: adr\nstatus: accepted\ncreated: 2026-10-01\n---\n\n# Older\n\n" +
+            "| Criterion | Outcome | Files | Milestone | Blocked by |\n|---|---|---|---|---|\n" +
+            `| — | ${names} | lib/c.ts | — | #7 |\n`,
+        );
+        const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect("plannedEdges" in snap, `an old plan naming "${names}"`).toBe(expectKey);
+      });
+    }
+  });
+
   test("SC-2606: with nothing declared, two phases owe no edge — phase order is not a dependency", async () => {
     await withSpecsDir(async (dir, at) => {
       writeBoardConfig(dir, BOARD);
