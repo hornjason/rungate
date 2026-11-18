@@ -84,6 +84,25 @@ describe("SC-2749: every human step still owed is one command", () => {
     expect(lines[0], "PUT replaces the existing protection; POST 404s without required checks").not.toMatch(/-X (PUT|POST)/);
   });
 
+  // Review of #2362: with test and ai-review owed too, several missing at once
+  // is the normal case, and each of the three branch states must name them all.
+  describe("#2362 review: every missing check is owed, not only the first", () => {
+    const three = ["closing-references", "test", "ai-review"];
+    test("required-checks: one POST per missing check", () => {
+      const lines = humanSteps({ ...allSet, processChecks: three, protection: read({ branch: "main", contexts: ["other"], statusChecks: "required-checks" }) });
+      for (const c of three) expect(lines.filter(l => l.includes(`-f 'contexts[]=${c}'`))).toHaveLength(1);
+    });
+    test("unprotected: the PUT body requires all three", () => {
+      const lines = humanSteps({ ...allSet, processChecks: three, protection: read({ branch: "main", contexts: [], statusChecks: "unprotected" }) });
+      const body = JSON.parse(lines[0].match(/<<<'([^']*)'/)![1]);
+      expect(body.required_status_checks.contexts).toEqual(three);
+    });
+    test("no-required-checks: the Settings line names all three", () => {
+      const lines = humanSteps({ ...allSet, processChecks: three, protection: read({ branch: "main", contexts: [], statusChecks: "no-required-checks" }) });
+      expect(lines[0]).toStartWith(`OWED: require ${three.join(", ")} on main`);
+    });
+  });
+
   test("the protection probe says which of the three a branch is", () => {
     expect(protectionFactsFromPayload("o/n", "main", "User", {}).statusChecks).toBe("no-required-checks");
     expect(protectionFactsFromPayload("o/n", "main", "User", { required_status_checks: { contexts: [] } }).statusChecks)
