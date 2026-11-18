@@ -536,6 +536,111 @@ function containerProbeTarget(container) {
     const url = `http://${host}:${port}${healthPath}`;
     return { kind: "probe", host, port, healthPath, url, safeUrl: safeForRecord(url) };
 }
+function repoSlug(remote) {
+    if (typeof remote !== "string")
+        return null;
+    let s = remote.trim();
+    if (!s)
+        return null;
+    s = s.replace(/\/+$/, "").replace(/\.git$/i, "").replace(/\/+$/, "");
+    const scp = s.match(/^[^/]*@[^/:]+:(.+)$/);
+    if (scp)
+        return normaliseSlug(scp[1]);
+    const url = s.match(/^[a-z][a-z0-9+.-]*:\/\/[^/]*\/(.+)$/i);
+    if (url)
+        return normaliseSlug(url[1]);
+    if (/^[^/\s]+\/[^/\s]+$/.test(s))
+        return normaliseSlug(s);
+    return null;
+}
+function normaliseSlug(path) {
+    const parts = path.split("/").filter(Boolean);
+    if (parts.length !== 2)
+        return null;
+    return parts.join("/").toLowerCase();
+}
+const KEY_SHAPED = /\b(?:gh[pousr]_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{16,}|AKIA[A-Z0-9]{12,})\b/g;
+function redactRemote(remote) {
+    return String(remote)
+        .replace(/(^[a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1<redacted>@")
+        .replace(/^([^/\s]*):[^/\s@]*@/, "$1:<redacted>@")
+        .replace(/([?&][^=&\s]*(?:token|auth|key|secret|password|pat)[^=&\s]*=)[^&\s]+/gi, "$1<redacted>")
+        .replace(KEY_SHAPED, "<redacted>");
+}
+function looksLikeFilesystemPath(reported) {
+    const s = String(reported).trim();
+    if (s.startsWith("/") || s.startsWith("~/") || s.startsWith("\\\\"))
+        return true;
+    const drive = s.charCodeAt(0) | 32;
+    return drive >= 97 && drive <= 122 && s[1] === ":" && (s[2] === "\\" || s[2] === "/");
+}
+const PATH_SHAPED_CLAUSE = " — that value is a filesystem path, and worktreeRepo is the URL " +
+    "`git remote get-url origin` printed, never a path (#872)";
+function worktreeIdentity(worktreePath, expectedRepo, reported) {
+    const expected = repoSlug(expectedRepo);
+    const where = worktreePath || "(no path reported)";
+    if (!expected) {
+        return {
+            verdict: "unreported",
+            actual: null,
+            expected: null,
+            refusal: `${where} could not be checked — the run did not state a repository to compare against ` +
+                `(repo was ${JSON.stringify(expectedRepo == null ? null : redactRemote(String(expectedRepo)))}), ` +
+                `so a worktree in any repository would pass (#218)`,
+        };
+    }
+    if (reported === null || reported === undefined || String(reported).trim() === "") {
+        return {
+            verdict: "unreported",
+            actual: null,
+            expected,
+            refusal: `${where} reported no origin remote, so there is nothing to compare against ${expected} — ` +
+                `a reading that never happened is not a checkout that matched (#218)`,
+        };
+    }
+    const actual = repoSlug(reported);
+    if (!actual) {
+        return {
+            verdict: "unreadable",
+            actual: null,
+            expected,
+            refusal: `${where} reported an origin this run cannot read as owner/name ` +
+                `(${JSON.stringify(redactRemote(String(reported).trim()))}), ` +
+                `so it cannot be compared against ${expected} (#218)` +
+                (looksLikeFilesystemPath(reported) ? PATH_SHAPED_CLAUSE : ""),
+        };
+    }
+    if (actual === expected)
+        return { verdict: "match", actual, expected, refusal: null };
+    return {
+        verdict: "mismatch",
+        actual,
+        expected,
+        refusal: `${where} is a worktree of ${actual}, but this run targets ${expected} — ` +
+            `an isolated agent resolved its worktree from ambient cwd rather than the run's projectRoot. ` +
+            `Work done there would be written into the wrong repository (#218).`,
+    };
+}
+function worktreeIdentityViolations(reports, expectedRepo, opts = {}) {
+    if (!Array.isArray(reports))
+        return [];
+    const out = [];
+    for (const r of reports) {
+        const path = r && typeof r.worktreePath === "string" ? r.worktreePath.trim() : "";
+        if (!path && !opts.requirePath)
+            continue;
+        const got = worktreeIdentity(path, expectedRepo, r?.worktreeRepo);
+        if (got.refusal) {
+            out.push(got.refusal);
+            continue;
+        }
+        if (path && typeof opts.allowPath === "function" && !opts.allowPath(path)) {
+            out.push(`${path} is not this run's project root nor one of its agent worktrees, ` +
+                `so it is not a directory this run may act in (#1098)`);
+        }
+    }
+    return out;
+}
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
@@ -1224,90 +1329,6 @@ Only return the rule TEXT — strip leading dashes, numbers, and whitespace.
   return REINFORCEMENT_CACHE[role]
 }
 
-function repoSlug(remote) {
-  if (typeof remote !== 'string') return null
-  let s = remote.trim()
-  if (!s) return null
-  s = s.replace(/\/+$/, '').replace(/\.git$/i, '').replace(/\/+$/, '')
-  const scp = s.match(/^[^/]*@[^/:]+:(.+)$/)
-  if (scp) return normaliseSlug(scp[1])
-  const url = s.match(/^[a-z][a-z0-9+.-]*:\/\/[^/]*\/(.+)$/i)
-  if (url) return normaliseSlug(url[1])
-  if (/^[^/\s]+\/[^/\s]+$/.test(s)) return normaliseSlug(s)
-  return null
-}
-
-function normaliseSlug(path) {
-  const parts = String(path).split('/').filter(Boolean)
-  if (parts.length !== 2) return null
-  return parts.join('/').toLowerCase()
-}
-
-const KEY_SHAPED = /\b(?:gh[pousr]_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{16,}|AKIA[A-Z0-9]{12,})\b/g
-
-function redactRemote(remote) {
-  return String(remote)
-    .replace(/(^[a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1<redacted>@')
-    .replace(/^([^/\s]*):[^/\s@]*@/, '$1:<redacted>@')
-    .replace(/([?&][^=&\s]*(?:token|auth|key|secret|password|pat)[^=&\s]*=)[^&\s]+/gi, '$1<redacted>')
-    .replace(KEY_SHAPED, '<redacted>')
-}
-
-function looksLikeFilesystemPath(reported) {
-  const s = String(reported).trim()
-  if (s.startsWith('/') || s.startsWith('~/') || s.startsWith('\\\\')) return true
-  const drive = s.charCodeAt(0) | 32
-  return drive >= 97 && drive <= 122 && s[1] === ':' && (s[2] === '\\' || s[2] === '/')
-}
-
-const PATH_SHAPED_CLAUSE =
-  ' — that value is a filesystem path, and worktreeRepo is the URL ' +
-  '`git remote get-url origin` printed, never a path (#872)'
-
-function worktreeIdentity(worktreePath, expectedRepo, reported) {
-  const expected = repoSlug(expectedRepo)
-  const where = worktreePath || '(no path reported)'
-
-  if (!expected) {
-    return {
-      verdict: 'unreported', actual: null, expected: null,
-      refusal: `${where} could not be checked — the run did not state a repository to compare against (repo was ${JSON.stringify(expectedRepo === undefined || expectedRepo === null ? null : redactRemote(String(expectedRepo)))}), so a worktree in any repository would pass (#218)`,
-    }
-  }
-  if (reported === null || reported === undefined || String(reported).trim() === '') {
-    return {
-      verdict: 'unreported', actual: null, expected,
-      refusal: `${where} reported no origin remote, so there is nothing to compare against ${expected} — a reading that never happened is not a checkout that matched (#218)`,
-    }
-  }
-  const actual = repoSlug(reported)
-  if (!actual) {
-    return {
-      verdict: 'unreadable', actual: null, expected,
-      refusal: `${where} reported an origin this run cannot read as owner/name (${JSON.stringify(redactRemote(String(reported).trim()))}), so it cannot be compared against ${expected} (#218)${looksLikeFilesystemPath(reported) ? PATH_SHAPED_CLAUSE : ''}`,
-    }
-  }
-  if (actual === expected) return { verdict: 'match', actual, expected, refusal: null }
-  return {
-    verdict: 'mismatch', actual, expected,
-    refusal: `${where} is a worktree of ${actual}, but this run targets ${expected} — an isolated agent resolved its worktree from ambient cwd rather than the run's projectRoot. Work done there would be written into the wrong repository (#218).`,
-  }
-}
-
-function worktreeIdentityViolations(reports, expectedRepo, opts = {}) {
-  if (!Array.isArray(reports)) return []
-  const out = []
-  for (const r of reports) {
-    const path = r && typeof r.worktreePath === 'string' ? r.worktreePath.trim() : ''
-    if (!path && !opts.requirePath) continue
-    const got = worktreeIdentity(path, expectedRepo, r && r.worktreeRepo)
-    if (got.refusal) { out.push(got.refusal); continue }
-    if (path && typeof opts.allowPath === 'function' && !opts.allowPath(path)) {
-      out.push(`${path} is not this run's project root nor one of its agent worktrees, so it is not a directory this run may act in (#1098)`)
-    }
-  }
-  return out
-}
 
 function worktreeRecords(agentResults) {
   if (!Array.isArray(agentResults)) return []

@@ -637,6 +637,9 @@ export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
   ],
   "lib/prior-branch.ts": ["priorWorkRefusal"],
   "lib/dev-liveness.ts": ["containerProbeTarget", "CONTAINER_HOST"],
+  "lib/worktree-repo.ts": [
+    "repoSlug", "redactRemote", "looksLikeFilesystemPath", "worktreeIdentity", "worktreeIdentityViolations",
+  ],
 };
 
 /** The bundle the launch file is built with, read from this checkout's lib/. */
