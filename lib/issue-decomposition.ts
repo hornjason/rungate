@@ -291,10 +291,11 @@ export function parseDecompositionPlan(content: string): DecompositionReading {
     const reject = (why: string): void => {
       rejected.push({ line: at, text: line.slice(0, 70), why });
     };
-    // Exactly five. `< 5` let a row with a leaked `|` — an unescaped pipe in
-    // an outcome or a blocked-by — through, and only c[0]..c[4] are ever
-    // read, so its tail was silently truncated. That is the one thing this
-    // module promises not to do. Found by the AI review of this change.
+    // Exactly the header's width — five, or six with a Blocks column (#2339).
+    // `< 5` let a row with a leaked `|` — an unescaped pipe in an outcome or
+    // a blocked-by — through, and only the first `width` cells are ever read,
+    // so its tail was silently truncated. That is the one thing this module
+    // promises not to do. Found by the AI review of this change.
     if (c.length !== width) {
       reject(
         c.length < width
