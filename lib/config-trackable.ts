@@ -442,10 +442,13 @@ export function ensureConfigTrackable(
  * The concrete files a set of owned-file rows names on disk. A row is a path,
  * or a `<dir>/*<ext>` class (`.claude/agents/*.md`), expanded to the files of
  * that directory with that extension. Absent files are left out: an ignore
- * rule only matters for a file that was written.
+ * rule only matters for a file that was written. A directory that exists but
+ * cannot be listed is a `failure`, not an absence (review of #2359): only
+ * ENOENT means nothing was written there.
  */
-function ownedPathsOnDisk(root: string, rows: readonly string[]): string[] {
+function ownedPathsOnDisk(root: string, rows: readonly string[]): { paths: string[]; failures: string[] } {
   const out: string[] = [];
+  const failures: string[] = [];
   for (const row of rows) {
     const star = row.lastIndexOf("/*");
     if (star === -1) {
@@ -457,13 +460,19 @@ function ownedPathsOnDisk(root: string, rows: readonly string[]): string[] {
     let names: string[];
     try {
       names = readdirSync(join(root, dir));
-    } catch {
-      continue; // the directory was not written, so nothing in it can be ignored
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      // ENOENT: the directory was not written, so nothing in it can be ignored.
+      if (code !== "ENOENT") failures.push(`${dir} could not be listed (${code ?? (e as Error).message})`);
+      continue;
     }
     for (const n of names.sort()) if (n.endsWith(ext)) out.push(`${dir}/${n}`);
   }
-  return out;
+  return { paths: out, failures };
 }
+
+/** git's own refusal outside a repository: exit 128, and it says so. */
+const NOT_A_REPOSITORY = /not a git repository/i;
 
 /**
  * #2347: name every owned file this scaffold left in a path the project's
@@ -473,14 +482,25 @@ function ownedPathsOnDisk(root: string, rows: readonly string[]): string[] {
  * scaffold should also make the path trackable is a decision recorded on
  * #2347, not taken here. A tree that is not a repository has no ignore rules
  * and gets no line; a git that cannot answer gets an UNMEASURED line, never
- * a clean silence.
+ * a clean silence. "Not a repository" is only git's own exit-128 refusal
+ * saying so; a git that could not run, or failed any other way, is
+ * UNMEASURED (review of #2359).
  */
 export function reportIgnoredOwnedFiles(root: string, actions: string[], rows: readonly string[]): void {
+  const unmeasured = (why: string) =>
+    actions.push(`UNMEASURED: whether any file scaffold owns is ignored could not be read — ${why}`);
   const inside = git(root, ["rev-parse", "--is-inside-work-tree"]);
-  if (inside.status !== 0 || inside.stdout.trim() !== "true") return;
-  const reading = matchedByIgnoreRules(root, ownedPathsOnDisk(root, rows));
+  if (inside.status === 128 && NOT_A_REPOSITORY.test(inside.stderr)) return;
+  if (inside.status !== 0) {
+    unmeasured(`git rev-parse failed (${inside.status}): ${inside.stderr.trim() || "no output"}`);
+    return;
+  }
+  if (inside.stdout.trim() !== "true") return; // inside .git itself: no work tree, no ignore rules
+  const owned = ownedPathsOnDisk(root, rows);
+  for (const f of owned.failures) unmeasured(f);
+  const reading = matchedByIgnoreRules(root, owned.paths);
   if (reading.failure !== null) {
-    actions.push(`UNMEASURED: whether any file scaffold owns is ignored could not be read — ${reading.failure}`);
+    unmeasured(reading.failure);
     return;
   }
   for (const path of reading.ignored) {

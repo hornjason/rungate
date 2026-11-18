@@ -620,6 +620,27 @@ describe("#2347: an owned file written into an ignored path is named", () => {
     expect(actions).toEqual([]);
   });
 
+  test("an owned directory that cannot be listed is UNMEASURED, never a clean silence (review of #2359)", () => {
+    const root = repo({ ".gitignore": ".claude/*\n", ...files });
+    const actions: string[] = [];
+    // A file where the row expects a directory: listing it fails with ENOTDIR, not ENOENT.
+    reportIgnoredOwnedFiles(root, actions, ["CODE-MAP.md/*.md"]);
+    expect(actions.some(a => a.startsWith("UNMEASURED:") && a.includes("CODE-MAP.md"))).toBe(true);
+  });
+
+  test("a git that cannot run is UNMEASURED, not 'not a repository' (review of #2359)", () => {
+    const root = repo({ ".gitignore": ".claude/*\n", ...files });
+    const actions: string[] = [];
+    const path = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    try {
+      reportIgnoredOwnedFiles(root, actions, OWNED);
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(actions.some(a => a.startsWith("UNMEASURED:"))).toBe(true);
+  });
+
   test("scaffold runs it, over the owned-file table", () => {
     const src = readFileSync(join(import.meta.dir, "..", "lib", "scaffold", "write-steps.ts"), "utf-8");
     expect(src).toContain("reportIgnoredOwnedFiles(projectPath, actions, OWNED_FILES.map(f => f.path))");
