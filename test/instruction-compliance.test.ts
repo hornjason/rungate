@@ -239,6 +239,19 @@ describe("#2401: a RepoRails reply is a reading only when it has the reading's s
     expect(repoRailsReading("null")).toBeNull();
   });
 
+  test("review of #2402: a finding whose fields do not have their declared types is no reading", () => {
+    const reply = (finding: Record<string, unknown>) =>
+      JSON.stringify({ quality: 1, files: { "a.md": { findings: [finding] } } });
+    const good = { line: 1, severity: "warning", rule: "R", message: "m" };
+    expect(repoRailsReading(reply(good))).not.toBeNull();
+    expect(repoRailsReading(reply({ ...good, line: "n/a" }))).toBeNull();
+    expect(repoRailsReading(reply({ ...good, severity: 7 }))).toBeNull();
+    expect(repoRailsReading(reply({ ...good, rule: null }))).toBeNull();
+    expect(repoRailsReading(reply({ ...good, message: {} }))).toBeNull();
+    expect(repoRailsReading(reply({ ...good, category: 3 }))).toBeNull();
+    expect(repoRailsReading(reply({ foo: "bar" }))).toBeNull();
+  });
+
   test("a well-formed reply is returned as it was read", () => {
     expect(repoRailsReading(wellFormed)).toEqual(JSON.parse(wellFormed));
   });

@@ -128,7 +128,7 @@ interface RepoRailsFinding {
   line: number;
   severity: string;
   rule: string;
-  category: string;
+  category?: string;
   leverage?: string;
   message: string;
   fix?: string;
@@ -145,9 +145,11 @@ interface RepoRailsOutput {
  *
  * A reply that parses is not therefore a reading. On 2026-11-18 the server
  * refused every anonymous check with `{"error":"server_refused",...}`, which
- * parses, and the caller crashed reading its `files`. Only a `files` object
- * whose every entry carries a `findings` array of objects is read; anything else gives
- * the file no RepoRails reading, which `scoredBy` reports as not read.
+ * parses, and the caller crashed reading its `files`. This checks every field
+ * `runTemplateCompliance` reads, in one place, so a reply is a reading only
+ * when all of them have their declared type (review of #2402). `level` and
+ * `leverage` are read nowhere, so they decide nothing. Anything else gives the
+ * file no RepoRails reading, which `scoredBy` reports as not read.
  */
 export function repoRailsReading(stdout: string): RepoRailsOutput | null {
   let parsed: unknown;
@@ -156,22 +158,31 @@ export function repoRailsReading(stdout: string): RepoRailsOutput | null {
   } catch {
     return null;
   }
-  if (typeof parsed !== "object" || parsed === null) return null;
-  // `quality` is summed into the overall score, so a non-number there is the
-  // same crash further on (review of #2402).
-  // `level` is read nowhere, so it decides nothing (review of #2402).
-  const quality = (parsed as { quality?: unknown }).quality;
-  if (typeof quality !== "number" || !Number.isFinite(quality)) return null;
-  const files = (parsed as { files?: unknown }).files;
-  if (typeof files !== "object" || files === null || Array.isArray(files)) return null;
-  for (const entry of Object.values(files)) {
-    if (typeof entry !== "object" || entry === null) return null;
-    const findings = (entry as { findings?: unknown }).findings;
-    // Each finding is read field by field downstream, so a null one is the
-    // same crash one level deeper (review of #2402).
-    if (!Array.isArray(findings) || !findings.every(x => typeof x === "object" && x !== null)) return null;
-  }
-  return parsed as RepoRailsOutput;
+  return isRepoRailsOutput(parsed) ? parsed : null;
+}
+
+const isObject = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+const optionalString = (x: unknown) => x === undefined || typeof x === "string";
+
+/** Every field the consumer reads: `quality` is summed, each finding's fields are copied into the report. */
+function isRepoRailsOutput(x: unknown): x is RepoRailsOutput {
+  if (!isObject(x) || typeof x.quality !== "number" || !Number.isFinite(x.quality) || !isObject(x.files)) return false;
+  return Object.values(x.files).every(
+    entry => isObject(entry) && Array.isArray(entry.findings) && entry.findings.every(isRepoRailsFinding),
+  );
+}
+
+function isRepoRailsFinding(x: unknown): x is RepoRailsFinding {
+  return (
+    isObject(x) &&
+    typeof x.line === "number" &&
+    Number.isFinite(x.line) &&
+    typeof x.severity === "string" &&
+    typeof x.rule === "string" &&
+    typeof x.message === "string" &&
+    optionalString(x.category) &&
+    optionalString(x.fix)
+  );
 }
 
 /**
