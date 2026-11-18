@@ -68,6 +68,14 @@ indistinguishable from one nobody read, and it is the state this whole
 criterion exists to prevent. The merge is unblocked and the record says
 nothing.
 
+Since #2306 the review says so. On each round, `ai-review-threads` reads the
+pull request's threads and names on the conversation every thread it opened
+that was resolved with no reply from anybody but itself, once per thread
+(`unreasonedResolutions` and `unreasonedReport` in `lib/ai-review-threads.ts`).
+GitHub has no workflow event for a resolution, so this happens on the next
+push: a thread resolved after the last push is not reported. It is a record,
+not a gate, and the round's exit code does not change.
+
 **Merging past it.** `required_conversation_resolution` exists so that is not
 an option. If it is possible, the setting is off and that is its own defect —
 `readFindingDisposition` in `lib/branch-protection.ts` is the check.

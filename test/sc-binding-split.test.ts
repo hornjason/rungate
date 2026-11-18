@@ -384,7 +384,11 @@ const UNCLAIMED_RATCHET = 150;
 // generated workflow's triggers and its pinned published call, a reading no
 // registered pattern expresses; the `SC-2784` describe in
 // test/intake-triage-workflow.test.ts names it.
-const CLAIMED_UNBINDABLE = 181;
+// 181 -> 182: CRC-C3 (#2306) ticked by `sync-sc-status --only CRC-C3`: a
+// thread resolved with no reply is named on the conversation, a reading of
+// review threads no registered pattern expresses; the `CRC-C3` describe in
+// test/ai-review-threads.test.ts names it.
+const CLAIMED_UNBINDABLE = 182;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

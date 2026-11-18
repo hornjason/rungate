@@ -24,6 +24,7 @@
  * two that only a live fork or a line outside a hunk would otherwise produce.
  */
 import type { ThreadReading } from "./ai-review-rounds";
+import { nextCursor } from "./graphql-cursor";
 import { escapeAnnotation, reviewThreadRequests, threadKeyFrom } from "./scaffold/ai-review-findings";
 import type { AiReviewFindingsReading, AiReviewThreadRequest } from "./scaffold/ai-review-findings";
 
@@ -548,4 +549,109 @@ export function threadsDetailLines(result: AiReviewThreadsResult, command: strin
 /** The exit code a round's outcome earns. Only `FAILED` refuses. */
 export function aiReviewThreadsExitCode(result: AiReviewThreadsResult): number {
   return result.outcome === "FAILED" ? AI_REVIEW_THREADS_REFUSAL : 0;
+}
+
+/**
+ * #2306 — CRC-C3's clearing half. *A false positive clears by closing the
+ * thread with a short reason.* A thread the review opened and somebody
+ * resolved with no reply reads exactly like one nobody read: the merge is
+ * unblocked and the record says nothing (`reference/clearing-a-false-positive.md`,
+ * *What this procedure refuses*). So each review round names those threads on
+ * the pull request.
+ *
+ * It runs on the NEXT round, because GitHub offers no workflow event for a
+ * thread being resolved. A thread resolved after the last push is reported
+ * only if another push follows — a nudge with a known blind spot, not a gate.
+ */
+export const UNREASONED_MARKER = "rungate:unreasoned-resolution:v1";
+
+/** One thread resolved with no stated reason. */
+export interface UnreasonedResolution {
+  id: string;
+  path: string | null;
+  /** The opening comment's link, when GitHub returned one. */
+  url: string | null;
+}
+
+export type UnreasonedReading =
+  | { status: "MEASURED"; unreasoned: UnreasonedResolution[] }
+  | { status: "UNMEASURED"; reason: string };
+
+/** `{ author: { login }, body, url }`, asserted field by field. */
+function commentOf(c: unknown): { login: string | null; body: string; url: string | null } | null {
+  if (c === null || typeof c !== "object") return null;
+  const o = c as { author?: unknown; body?: unknown; url?: unknown };
+  const author = o.author !== null && typeof o.author === "object" ? (o.author as { login?: unknown }).login : null;
+  return {
+    login: typeof author === "string" ? author : null,
+    body: typeof o.body === "string" ? o.body : "",
+    url: typeof o.url === "string" ? o.url : null,
+  };
+}
+
+/**
+ * The resolved threads that carry no reason.
+ *
+ * A thread counts only if it is resolved (the literal `true`, as in
+ * `threadReading`), its FIRST comment carries the finding-key marker — so it
+ * is the review's thread, not a person's — and no later comment is a reason.
+ * A reason is a non-blank reply by anybody other than the thread's opener: the
+ * bot answering itself is not somebody stating why the finding was cleared.
+ *
+ * A node that cannot be read is skipped, as `threadReading` skips it; a list
+ * that could not be read at all is UNMEASURED, never "none".
+ */
+export function unreasonedResolutions(raw: readonly unknown[] | null | undefined, reason: string): UnreasonedReading {
+  if (raw === null || raw === undefined) return { status: "UNMEASURED", reason };
+  const unreasoned: UnreasonedResolution[] = [];
+  for (const t of raw) {
+    if (t === null || typeof t !== "object") continue;
+    const node = t as { id?: unknown; isResolved?: unknown; path?: unknown; comments?: unknown };
+    if (node.isResolved !== true || typeof node.id !== "string") continue;
+    const nodes =
+      node.comments !== null && typeof node.comments === "object"
+        ? (node.comments as { nodes?: unknown }).nodes
+        : undefined;
+    if (!Array.isArray(nodes) || nodes.length === 0) continue;
+    // Review of #2378: a thread whose comments were not read to their end —
+    // a second page, or a page that cannot say — may hold its reason past
+    // what was read. It is not reported: under-reporting is the safe
+    // direction for a record. `nextCursor` is the one reader (SC-2721).
+    if (nextCursor((node.comments as { pageInfo?: unknown }).pageInfo).kind !== "done") continue;
+    const first = commentOf(nodes[0]);
+    if (first === null || threadKeyFrom(first.body) === null) continue;
+    const answered = nodes
+      .slice(1)
+      .map(commentOf)
+      .some(c => c !== null && c.login !== first.login && c.body.trim() !== "");
+    if (answered) continue;
+    unreasoned.push({ id: node.id, path: typeof node.path === "string" ? node.path : null, url: first.url });
+  }
+  return { status: "MEASURED", unreasoned };
+}
+
+/**
+ * The conversation comment naming every unreasoned thread no earlier report
+ * named, or `null` when there is nothing new. Each thread carries its own
+ * marker, so a later round reports only threads resolved since.
+ */
+export function unreasonedReport(list: readonly UnreasonedResolution[], existing: readonly string[]): string | null {
+  const reported = (id: string) => existing.some(b => b.includes(`<!-- ${UNREASONED_MARKER} ${id} -->`));
+  const fresh = list.filter(u => !reported(u.id));
+  if (fresh.length === 0) return null;
+  const lines = fresh.map(u => {
+    const where = u.path === null ? "a thread on the pull request" : `\`${u.path}\``;
+    return u.url === null ? `- ${where}` : `- ${where} — ${u.url}`;
+  });
+  return [
+    `**${fresh.length === 1 ? "A review thread was" : `${fresh.length} review threads were`} resolved with no stated reason** (CRC-C3).`,
+    "",
+    "The AI review opened these and they were resolved with no reply. A resolved thread with no reason reads " +
+      "the same as one nobody read. Reply in each thread with the reason, in one or two sentences naming the " +
+      "evidence. The procedure is `reference/clearing-a-false-positive.md`.",
+    "",
+    ...lines,
+    "",
+    ...fresh.map(u => `<!-- ${UNREASONED_MARKER} ${u.id} -->`),
+  ].join("\n");
 }

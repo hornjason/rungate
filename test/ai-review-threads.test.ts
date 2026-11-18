@@ -24,8 +24,12 @@ import {
   threadsDetailLines,
   threadsLandedPhrase,
   type AiReviewThreadPoster,
+  UNREASONED_MARKER,
+  unreasonedReport,
+  unreasonedResolutions,
 } from "../lib/ai-review-threads";
 import type { AiReviewFindingsReading } from "../lib/scaffold/ai-review-findings";
+import { threadBody } from "../lib/scaffold/ai-review-findings";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -750,5 +754,97 @@ describe("#2203: the generated threads step", () => {
   // So the two spellings are bound here instead.
   test("the generator's fork variable is the one the CLI reads", () => {
     expect(AI_REVIEW_FORK_VAR).toBe(AI_REVIEW_PR_IS_FORK_VAR);
+  });
+});
+
+/**
+ * #2306 — CRC-C3's clearing half, executed. A false positive clears by
+ * closing the thread WITH A SHORT REASON; a thread the AI review opened and
+ * somebody resolved with no reply reads the same as one nobody read, so each
+ * review round reports those on the pull request's conversation, once per
+ * thread. `reference/clearing-a-false-positive.md` is the procedure.
+ */
+describe("CRC-C3: a review thread resolved with no stated reason is reported on its pull request", () => {
+  const bot = "github-actions";
+  const opened = (key: string) => ({ author: { login: bot }, body: threadBody({}, key), url: `https://x/pr/1#${key}` });
+  const thread = (id: string, isResolved: unknown, comments: unknown, path: unknown = "lib/a.ts") => ({
+    id,
+    isResolved,
+    path,
+    comments: { nodes: comments, pageInfo: { hasNextPage: false } },
+  });
+
+  test("a resolved finding thread with no reply is unreasoned; one with a reply is not", () => {
+    const r = unreasonedResolutions(
+      [
+        thread("T1", true, [opened("k1")]),
+        thread("T2", true, [opened("k2"), { author: { login: "jason" }, body: "Not reachable: parse() refuses it at line 40." }]),
+      ],
+      "unread",
+    );
+    expect(r.status).toBe("MEASURED");
+    if (r.status !== "MEASURED") return;
+    expect(r.unreasoned.map(u => u.id)).toEqual(["T1"]);
+    expect(r.unreasoned[0]).toMatchObject({ path: "lib/a.ts", url: "https://x/pr/1#k1" });
+  });
+
+  test("a reply from the bot itself, or an empty reply, is not a reason", () => {
+    const r = unreasonedResolutions(
+      [
+        thread("T1", true, [opened("k1"), { author: { login: bot }, body: "carried forward" }]),
+        thread("T2", true, [opened("k2"), { author: { login: "jason" }, body: "   " }]),
+      ],
+      "unread",
+    );
+    expect(r.status === "MEASURED" && r.unreasoned.map(u => u.id)).toEqual(["T1", "T2"]);
+  });
+
+  test("an open thread, a person's thread, and an unreadable node are never reported", () => {
+    const r = unreasonedResolutions(
+      [
+        thread("T1", false, [opened("k1")]),
+        thread("T2", "true", [opened("k2")]),
+        thread("T3", true, [{ author: { login: "jason" }, body: "a person's own comment" }]),
+        null,
+        thread("T5", true, "not a list"),
+      ],
+      "unread",
+    );
+    expect(r.status === "MEASURED" && r.unreasoned).toEqual([]);
+  });
+
+  test("review of #2378: a thread with more comments than one page is not reported, since its reply may be past the page", () => {
+    const long = { ...thread("T1", true, [opened("k1")]), comments: { nodes: [opened("k1")], pageInfo: { hasNextPage: true } } };
+    const short = { ...thread("T2", true, [opened("k2")]), comments: { nodes: [opened("k2")], pageInfo: { hasNextPage: false } } };
+    const silent = { ...thread("T3", true, [opened("k3")]), comments: { nodes: [opened("k3")] } };
+    const r = unreasonedResolutions([long, short, silent], "unread");
+    expect(r.status === "MEASURED" && r.unreasoned.map(u => u.id)).toEqual(["T2"]);
+  });
+
+  test("threads that could not be read are UNMEASURED, not 'none resolved without a reason'", () => {
+    expect(unreasonedResolutions(null, "the threads query failed")).toEqual({
+      status: "UNMEASURED",
+      reason: "the threads query failed",
+    });
+  });
+
+  test("the report names each thread once, with its marker, and is not posted twice", () => {
+    const list = [
+      { id: "T1", path: "lib/a.ts", url: "https://x/1" },
+      { id: "T2", path: null, url: null },
+    ];
+    const body = unreasonedReport(list, []);
+    expect(body).not.toBeNull();
+    expect(body!).toContain("resolved with no stated reason");
+    expect(body!).toContain("reference/clearing-a-false-positive.md");
+    expect(body!).toContain("`lib/a.ts`");
+    expect(body!).toContain(`<!-- ${UNREASONED_MARKER} T1 -->`);
+    expect(body!).toContain(`<!-- ${UNREASONED_MARKER} T2 -->`);
+    // A later round reports only the thread no earlier report named.
+    const again = unreasonedReport([...list, { id: "T3", path: "lib/b.ts", url: null }], [body!]);
+    expect(again).not.toBeNull();
+    expect(again!).toContain(`<!-- ${UNREASONED_MARKER} T3 -->`);
+    expect(again!).not.toContain(`<!-- ${UNREASONED_MARKER} T1 -->`);
+    expect(unreasonedReport(list, [body!]), "the same threads were reported twice").toBeNull();
   });
 });
