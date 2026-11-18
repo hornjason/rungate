@@ -373,6 +373,7 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
         "reReviewBaseFor", "resolveReReview", "SECURITY_FINDINGS_OUTLIVED_REREVIEW", "securityRefusalName",
         "rookGateVerdict",
       ],
+      "lib/prior-branch.ts": ["priorWorkRefusal"],
     });
   });
 
@@ -388,7 +389,7 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
 
   test("ship.js defines none of the names the bundle defines — its hand copy cannot come back", () => {
     const bundle = launchBundle();
-    for (const name of ["suiteCurrency", "planCoverage", "denylistViolations", "rookGateVerdict", "reviewIsCurrent"]) {
+    for (const name of ["suiteCurrency", "planCoverage", "denylistViolations", "rookGateVerdict", "reviewIsCurrent", "priorWorkRefusal"]) {
       expect(bundle.defined).toContain(name);
       expect(() => buildWorkflowLaunch(`${source}\nfunction ${name}() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(
         `${name} is defined by both workflows/ship.js and the lib bundle`,

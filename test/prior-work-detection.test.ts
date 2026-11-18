@@ -40,6 +40,7 @@ import { execFileSync } from "child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { shipPrelude } from "../scripts/build-workflow-launch";
 
 import {
   detectExistingPR,
@@ -386,9 +387,12 @@ describe("#223 SC-871: ship.js consults it before it implements", () => {
     ).toContain("priorWorkRefusal(ISSUE, priorBranchResult, existingPrResult)");
   });
 
-  test("priorWorkRefusal has exactly one definition in ship.js", () => {
+  test("priorWorkRefusal has exactly one definition in the launched file", () => {
+    // Since #2410 the definition is bundled from lib/prior-branch.ts into
+    // ship.run.js, the file a run launches, and ship.js carries none.
+    const launched = readFileSync(join(import.meta.dir, "..", "workflows", "ship.run.js"), "utf-8");
     expect(
-      (shipSource.match(/function priorWorkRefusal\b/g) ?? []).length,
+      (launched.match(/function priorWorkRefusal\b/g) ?? []).length,
       "there is no single binding to mutate",
     ).toBe(1);
   });
@@ -492,21 +496,20 @@ describe("#223 SC-872: the lookup's inputs and its reply are both checked", () =
 });
 
 describe("#223 SC-871: ship.js's inlined copy agrees with the library", () => {
-  // ship.js runs in a sandbox with no module loading, so the refusal is
-  // inlined. Two copies of one decision is two things to keep in step, and
-  // the way that is kept honest is to drive both over one input set — the
-  // pattern that found a real divergence on its first run in #244.
-  const shipSource = readFileSync(join(import.meta.dir, "..", "workflows", "ship.js"), "utf-8");
-
+  // ship.js runs in a sandbox with no module loading. Since #2410 the
+  // refusal it runs is the one ship.run.js bundles from lib/prior-branch.ts,
+  // not a hand copy, and this drives that bundled code over the same input
+  // set as the library — the pattern that found a real divergence on its
+  // first run in #244. A build that stops bundling it fails here.
   function inlinedRefusal(): (n: number, b: unknown, p: unknown) => string | null {
-    const start = shipSource.indexOf("// ──── PRIOR-WORK-REFUSAL-START ────");
-    const end = shipSource.indexOf("// ──── PRIOR-WORK-REFUSAL-END ────");
-    if (start < 0 || end < 0) throw new Error("could not slice the refusal out of ship.js");
-    const block = shipSource.slice(start, end);
-    const fn = block.match(/function priorWorkRefusal[\s\S]*?\n\}/);
-    if (!fn) throw new Error("could not find priorWorkRefusal in the sliced block");
-    return new Function(`${fn[0]}; return priorWorkRefusal;`)() as never;
+    return new Function(`${shipPrelude()}\nreturn priorWorkRefusal;`)() as never;
   }
+
+  test("ship.js carries no copy of priorWorkRefusal; the launch file carries one (#2410)", () => {
+    const ship = readFileSync(join(import.meta.dir, "..", "workflows", "ship.js"), "utf-8");
+    expect(ship.match(/function priorWorkRefusal\(/g) ?? []).toHaveLength(0);
+    expect(shipPrelude().match(/function priorWorkRefusal\(/g) ?? []).toHaveLength(1);
+  });
 
   const CASES: Array<[string, unknown, unknown]> = [
     ["no PR, no branch", null, null],

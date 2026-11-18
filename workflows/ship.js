@@ -4254,63 +4254,10 @@ whether this run may push onto the branch at all.
 }
 
 // ──── PRIOR-WORK-REFUSAL-START ────
-/**
- * Whether this run may implement, given the prior branch above and whatever
- * open PR the issue already has (#223).
- *
- * Inlined from lib/prior-branch.ts because this file runs in a sandbox with
- * no module loading; test/prior-work-detection.test.ts drives both copies
- * over one input set rather than trusting them to stay in step.
- *
- * What this deliberately does NOT refuse is RESUME. An unmerged prior branch
- * is handled directly above — merged into the worktree and pushed back onto —
- * and a refusal there would break the only thing that makes a second run
- * cheap. The condition is narrower: an open PR for this issue that this run
- * is not standing on.
- *
- * Issue #209 was shipped twice because run 2 saw neither. PR #219's head was
- * `worktree-wf_5e3ed885-98c-9`: excluded from branch detection as harness
- * scratch (#185), and carrying the issue number in nothing but its body,
- * which the PR lookup did not read. So the run branched from main and
- * re-implemented — 45 minutes, 20 agents, 911k tokens, and two divergent PRs
- * where merging either silently discards the other's work.
- */
-function priorWorkRefusal(issueNumber, priorBranch, existingPR) {
-  if (!existingPR || typeof existingPR !== 'object') return null
-  const pr = existingPR
-
-  if (pr.unreadable) {
-    return (
-      `Could not determine whether issue #${issueNumber} already has an open PR: ` +
-      `${pr.reason || 'the lookup failed with no detail'}. Refusing rather than ` +
-      `re-implementing: "no PR" and "could not look" are different facts, and ` +
-      `acting on the wrong one is how #209 was shipped twice.`
-    )
-  }
-  if (typeof pr.prNumber !== 'number' || !Number.isFinite(pr.prNumber)) {
-    return (
-      `The existing-PR lookup for issue #${issueNumber} returned a record with ` +
-      `no PR number: ${JSON.stringify(existingPR)}. Refusing rather than ` +
-      `reading a malformed answer as "no open PR" — pass null for that.`
-    )
-  }
-
-  const prBranch = typeof pr.branch === 'string' ? pr.branch : ''
-  const working =
-    priorBranch && typeof priorBranch === 'object' ? priorBranch.branch : ''
-
-  if (working && prBranch && working === prBranch) return null
-
-  const where = working
-    ? `this run picked up the branch "${working}" instead`
-    : `this run found no prior branch and would start from the base branch`
-  return (
-    `Issue #${issueNumber} already has open PR #${pr.prNumber} on branch ` +
-    `"${prBranch || '(unnamed)'}", and ${where}. Implementing now would open a ` +
-    `second PR for one issue, and merging either would silently discard the ` +
-    `other's work. Resume that branch or close that PR, then re-run.`
-  )
-}
+// `priorWorkRefusal` — whether this run may implement, given the prior branch
+// above and whatever open PR the issue already has (#223) — is bundled into
+// ship.run.js from lib/prior-branch.ts (#2410). RESUME is deliberately not
+// refused: an open PR this run is not standing on is.
 
 /**
  * The two values that go into the lookup command, checked before they are
