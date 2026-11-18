@@ -7544,6 +7544,37 @@ describe("#1964 / SC-2753: the filing cap is read from committed config, never t
     expect(r.note ?? "").toContain("origin/main");
   });
 
+  /**
+   * Split from #2318 (comment of 2026-11-17): the refusal's headline was
+   * "OVER_CAP … the cap is 1", and the UNMEASURED note explaining that 1 sat
+   * below it. An agent reasonably reads the first number as the real cap and
+   * stops; a `git fetch` was the whole repair, twice. So when the cap came
+   * from a config the gate could not read, the reason OPENS with that.
+   */
+  test("FG-288: a cap from an unreadable committed config opens the refusal with UNMEASURED and the fetch", async () => {
+    const root = freshRun();
+    writeFileSync(CONFIG(root), JSON.stringify({ project: "x", ship: DIRECT_SHIP }));
+    rmSync(`${root}.remote.git`, { recursive: true, force: true });
+    const r = await run(root, filing());
+    expect(r.rows[0].refusal).toBe("OVER_CAP");
+    const why = (r.refusal ?? "").split("\n").find(l => l.trimStart().startsWith("why:")) ?? "";
+    expect(why, "the refusal's reason does not open with UNMEASURED").toMatch(/^\s*why:\s+UNMEASURED/);
+    const text = r.refusal ?? "";
+    expect(text.indexOf("fetch origin/main, then retry"), "the refusal does not name the repair").toBeGreaterThan(-1);
+    expect(
+      text.indexOf("fetch origin/main, then retry"),
+      "the repair comes after the cap number, which is the headline an agent stops at",
+    ).toBeLessThan(text.indexOf("the cap is"));
+  });
+
+  test("FG-289 CONTROL: a cap from a config that WAS read is worded as before", async () => {
+    const r = await run(tree({ ship: { mode: "harness" } }), filing());
+    expect(r.rows[0].refusal).toBe("OVER_CAP");
+    const why = (r.refusal ?? "").split("\n").find(l => l.trimStart().startsWith("why:")) ?? "";
+    expect(why).toMatch(/^\s*why:\s+this run has already filed/);
+    expect(r.refusal ?? "").not.toContain("fetch origin/main, then retry");
+  });
+
   test("#2095 CONTROL: origin/main forged locally with update-ref — the remote still says harness, the cap stays 1", async () => {
     // The attack, in the agent's own checkout: commit direct mode and move
     // the local origin/main onto it. No push, no network, no review. Before

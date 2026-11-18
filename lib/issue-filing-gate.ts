@@ -1500,9 +1500,23 @@ export function overCapReason(
    * `null` where the ceiling was never consulted.
    */
   growth: NetGrowthBasis | null,
+  /**
+   * Why the committed config could not be read, when it could not (#2318's
+   * split). Then `cap` is the strict fallback, not the project's number, and
+   * the reason says so FIRST: a refusal leading with "the cap is 1" is read as
+   * the real cap, and the agent stops when a fetch was the whole repair.
+   */
+  unreadConfig?: string,
 ): string {
   const basis = netGrowthSentence(growth);
   return [
+    ...(unreadConfig === undefined
+      ? []
+      : [
+          `UNMEASURED — the committed config could not be read (${unreadConfig}), so fetch origin/main, then retry. ` +
+            `The cap below is the strict fallback, not this project's own.`,
+          "",
+        ]),
     `this run has already filed ${already} issue(s) in the last ${RUN_WINDOW_MS / 3_600_000}h, and the cap is ` +
       `${cap}. The overflow is a comment.`,
     ...(basis === null ? [] : ["", `  ${basis}`]),
@@ -3880,7 +3894,7 @@ export async function filingGate(
             refusal: uncountable ? "UNMEASURED_CAP" : "OVER_CAP",
             reason: uncountable
               ? uncountableReason(await targetFor(attempt.repo))
-              : overCapReason(run, spent, await targetFor(attempt.repo), clauseCap, growth.basis),
+              : overCapReason(run, spent, await targetFor(attempt.repo), clauseCap, growth.basis, allowance.committedUnmeasured),
           }
         : read2;
     const overridden = overrideOf(verdict);
@@ -4139,7 +4153,7 @@ export async function filingGate(
       // to the wrong fact.
       const reason =
         reading.outcome === "LOST"
-          ? overCapReason(run, reading.already, target, rowCap, growth.basis)
+          ? overCapReason(run, reading.already, target, rowCap, growth.basis, allowance.committedUnmeasured)
           : reading.outcome === "UNRESERVED"
             ? unreservedCapReason(run, target, rowCap)
             : uncountableReason(target);
