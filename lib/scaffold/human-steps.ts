@@ -105,7 +105,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
         for (const check of missing) {
           out.push(
             `OWED: gh api -X POST repos/${slug}/branches/${branch}/protection/required_status_checks/contexts ` +
-              `-f 'contexts[]=${check}'   # ${check} runs on every pull request and blocks nothing until it is required`,
+              `-f 'contexts[]=${check}'   # ${check} runs on every pull request and blocks nothing until it is required; a merge bot of your own must wait for it too`,
           );
         }
       } else if (missing.length > 0 && statusChecks === "unprotected") {
