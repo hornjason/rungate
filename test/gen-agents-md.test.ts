@@ -6,6 +6,7 @@ import { test, expect, describe } from "bun:test";
 import { generateAgentsMd, generateScopedRules } from "../lib/generators/agents-md";
 import { mockProjectScan, type ProjectScan } from "../lib/generators/types";
 import { isRuleIncluded } from "../lib/scaffold/profiles";
+import { commentClaimForm, titleCall } from "../lib/sc-claim-forms";
 import { scanProject } from "../lib/scanner";
 import { join } from "path";
 
@@ -210,5 +211,74 @@ describe("#1742: reporting-upstream, the rule a consumer files from", () => {
     for (const layout of ["dependencies", "link:", "this project IS rungate", "UNMEASURED"]) {
       expect(harness.content, `the rule stopped naming the \`${layout}\` case`).toContain(layout);
     }
+  });
+});
+
+/**
+ * #2375: a consumer gets the claim convention `sync-sc-status` enforces.
+ *
+ * Measured in one consumer on 2026-11-17: a dry run would have ticked six
+ * criteria because build tests named the criterion they work toward in a
+ * `describe` title, and the consumer had no rule saying a title is a claim.
+ *
+ * The examples in the rule are RUN through the two predicates that decide,
+ * so the rule cannot promise a form the scanner does not honour, or call a
+ * form safe that the scanner credits.
+ */
+describe("#2375: claiming-sc-coverage, the claim convention a consumer writes tests by", () => {
+  const ruleFor = (profile: "full" | "minimal") =>
+    generateScopedRules(mockProjectScan({ name: "consumer" }))
+      .filter(r => isRuleIncluded(r.filename, profile))
+      .find(r => r.filename === "claiming-sc-coverage.md");
+
+  test("#2375: emitted into both profiles", () => {
+    expect(ruleFor("full"), "scaffold does not emit claiming-sc-coverage.md").toBeDefined();
+    expect(ruleFor("minimal"), "a minimal consumer runs sync-sc-status too").toBeDefined();
+  });
+
+  /** Backticked examples in the table under a heading line, up to the next blank-line-then-prose. */
+  function examples(body: string, heading: string): string[] {
+    const at = body.indexOf(heading);
+    expect(at, `the rule lost its "${heading}" table`).toBeGreaterThan(-1);
+    const rest = body.slice(at + heading.length);
+    const table = rest.slice(0, rest.search(/\n\n(?!\|)/) === -1 ? undefined : rest.search(/\n\n(?!\|)/) + 1);
+    return [...table.matchAll(/^\|[^|\n]*\|\s*`([^`]+)`\s*\|$/gm)].map(m => m[1]);
+  }
+
+  /** What the scanner makes of one example: a claim, a citation, or no id at all. */
+  function reading(example: string): "claim" | "not-a-claim" | "no-id" {
+    const id = /\bSC-\d+\b/.exec(example);
+    if (id === null) return "no-id";
+    const title = /^(.*?\b(?:describe|test|it)\b[^("']*\()\s*["'`]/.exec(example);
+    if (title !== null) return titleCall(title[1]) === "runs" ? "claim" : "not-a-claim";
+    return commentClaimForm(example, id.index, id[0]) !== null ? "claim" : "not-a-claim";
+  }
+
+  test("#2375: every example under 'Counts' is a claim to the scanner", () => {
+    const counts = examples(ruleFor("full")!.content, "Counts as a claim");
+    expect(counts.length, "the Counts table is empty, so this case is vacuous").toBeGreaterThanOrEqual(6);
+    for (const ex of counts) expect(reading(ex), `the rule says \`${ex}\` counts; the scanner disagrees`).toBe("claim");
+  });
+
+  test("#2375: every example under 'Does not count' is NOT a claim to the scanner", () => {
+    const not = examples(ruleFor("full")!.content, "Does not count");
+    expect(not.length, "the Does-not-count table is empty, so this case is vacuous").toBeGreaterThanOrEqual(3);
+    for (const ex of not) expect(reading(ex), `the rule says \`${ex}\` is safe; the scanner credits it`).not.toBe("claim");
+  });
+
+  test("#2375: it tells a test that only works toward a criterion what to write instead", () => {
+    const body = ruleFor("full")!.content;
+    expect(body).toContain("works toward");
+    expect(body).toContain("issue number");
+    expect(body).toContain("sync-sc-status");
+  });
+
+  test("#2375 CONTROL: the reader can tell the two apart", () => {
+    // Or both tables could hold the same kind of example and the two cases
+    // above would pass on an empty distinction.
+    expect(reading("// covers SC-9012")).toBe("claim");
+    expect(reading("// part of the work toward SC-9012")).toBe("not-a-claim");
+    expect(reading('describe("SC-9012: x", () => {})')).toBe("claim");
+    expect(reading('test.todo("SC-9012: x")')).toBe("not-a-claim");
   });
 });
