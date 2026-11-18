@@ -103,6 +103,18 @@ describe("#2437: CRC-N3's rate — how many findings count their class by a sear
     expect(renderPopulationRate(row).join("\n")).toContain("3 could not be judged");
   });
 
+  test("the rate's denominator is the judged findings: an unjudged round lowers nothing", () => {
+    // Round 1's tree is available, round 2's is in neither place. Over all
+    // ten findings the rate would read 1 of 10 — the unjudged three dragging
+    // it down as if their searches had run and found nothing.
+    const gone = { ...round(2, FIVE), merge: "c".repeat(40), sha: "d".repeat(40) };
+    const row = populationRate([entry(1, ledgerBody([round(1, FIVE), gone]))], atMerge);
+    expect(row.findings).toBe(10);
+    expect(row.counts.unjudged).toBe(3);
+    expect(row.judged).toBe(7);
+    expect(row.rate, "unjudged findings were counted in the denominator").toBeCloseTo(1 / 7, 10);
+  });
+
   test("a ledger it cannot read is named and UNMEASURED, never a rate of zero", () => {
     const broken = `${AI_REVIEW_LEDGER_COMMENT_MARKER}\n\n\`\`\`json\n{"rounds":[`;
     const only = populationRate([entry(7, broken)], atMerge);
