@@ -280,6 +280,13 @@ describe("#2398: cores are read by the checker and bundled", () => {
     expect(coreClosure("const T: Record<string, number> = {};\nclass K { static s = (T.x = 1); }\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
       "T (used by top-level code that runs at load and that the bundle does not carry)",
     ]);
+    // A function that top-level code names may run at load, so its body is load-time code (review of #2399, round 8).
+    expect(coreClosure("const T: Record<string, number> = {};\nfunction later() { T.x = 1; }\nlater();\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    expect(coreClosure("const T: Record<string, number> = {};\nfunction a() { b(); }\nfunction b() { T.x = 1; }\n[1].forEach(a);\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
     // A function no core reaches runs nothing at load, so its body is not a use.
     expect(coreClosure("const T: Record<string, number> = {};\nfunction later() { T.x = 1; }\nexport function get() { return T.x; }", ["get"]).imports).toEqual([]);
     // A statement that touches only what no core reaches is left behind, as before.

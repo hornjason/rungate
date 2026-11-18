@@ -379,15 +379,21 @@ function readCore(source: string, core: readonly string[]): CoreReading {
   // Top-level code the bundle does not carry still runs when the module
   // loads. An enum or a namespace compiles to `var X;` plus a statement, and
   // `T.x = 1` or `const _ = (T.x = 1)` writes a binding the core reads. Code
-  // that names a reached binding directly is refused (review of #2399, rounds
-  // 4 and 6). This is a syntactic net, not a proof: it does not follow a call
-  // into an unreached function's body, and it refuses a function expression
+  // that names a reached binding is refused (review of #2399, rounds 4 and 6),
+  // and a top-level function that code names may run then, so its body is
+  // scanned as load-time code too, transitively (round 8). This is a syntactic
+  // net, not a proof: it refuses a function expression or a named function
   // that only reads a reached binding. What proves a bundled core is running
   // it: each module's input matrix runs over the bundled text (#2400 onward).
+  const followed = new Set<ts.Node>();
   const uses = (n: ts.Node): void => {
     if (ts.isIdentifier(n)) {
       const top = topLevelNode(checker.getSymbolAtLocation(n)?.declarations?.[0], sf);
       if (top && reached.has(top)) note(`${n.text} (used by top-level code that runs at load and that the bundle does not carry)`);
+      else if (top && ts.isFunctionDeclaration(top) && top.body && !followed.has(top)) {
+        followed.add(top);
+        uses(top.body);
+      }
     }
     ts.forEachChild(n, uses);
   };
