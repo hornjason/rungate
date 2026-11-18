@@ -50,10 +50,11 @@ import {
   addFrontmatterToSpecs, addFrontmatterToAdrs, detectOversizedSpecs,
   checkGovernsAlignment, detectMisplacedSpecs, detectUnconvertedSpecs,
 } from "../validators/spec-validators";
-import { ensureConfigTrackable } from "../config-trackable";
+import { ensureConfigTrackable, reportIgnoredOwnedFiles } from "../config-trackable";
 import type { ProjectType } from "../generators/types";
 import { DEFAULT_PROFILE, isStepIncluded, type ScaffoldProfile } from "./profiles";
 import { deferUndeclaredSpecs } from "./spec-scope";
+import { OWNED_FILES } from "./owned-files";
 
 export interface WriteStepOptions {
   force?: boolean;
@@ -216,6 +217,9 @@ What does this workflow produce?
   if (projectType === "code") {
     generateCodeMapStep(projectPath, actions);
   }
+
+  // Last before the commit, so it reads every file this run wrote (#2347).
+  reportIgnoredOwnedFiles(projectPath, actions, OWNED_FILES.map(f => f.path));
 
   // Leaves the tree. See STEPS_NOT_REHEARSED.
   if (!rehearsing) postScaffoldCommit(projectPath, actions, { commit });

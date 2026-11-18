@@ -107,7 +107,7 @@
  * measured before and after, and a single new entry reverts the write.
  */
 import { spawnSync } from "child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import {
   DIRECTORY_CONFIG_FILES,
@@ -183,18 +183,34 @@ function matchedByIgnoreRules(root: string, paths: readonly string[]): Trackable
   return { ignored: paths.filter(p => matched.has(p)), failure: null };
 }
 
+/** git's own refusal outside a repository: exit 128, and it says so. */
+const NOT_A_REPOSITORY = /not a git repository/i;
+
+/**
+ * Whether `root` is inside a work tree. "Outside" is only git's own exit-128
+ * refusal saying so, or a probe from inside `.git` itself; a git that could
+ * not run, or failed any other way, is a failure string, never "outside"
+ * (review of #2359 — the same fail-open in two callers).
+ */
+function workTreeProbe(root: string): "inside" | "outside" | { failure: string } {
+  const r = git(root, ["rev-parse", "--is-inside-work-tree"]);
+  if (r.status === 128 && NOT_A_REPOSITORY.test(r.stderr)) return "outside";
+  if (r.status !== 0) return { failure: `git rev-parse failed (${r.status}): ${r.stderr.trim() || "no output"}` };
+  return r.stdout.trim() === "true" ? "inside" : "outside";
+}
+
 /**
  * Whether this project's ignore rules mark the rungate config disposable.
  *
  * A project that is not a git repository has no ignore rules and nothing can
  * delete the file on a checkout, so that is `{ ignored: [], failure: null }`
- * and not an error — the harness scaffolds into trees that are not repos.
+ * and not an error — the harness scaffolds into trees that are not repos. A
+ * git that cannot answer is a `failure`, not that case.
  */
 export function configPathsIgnored(root: string): TrackableReading {
-  const inside = git(root, ["rev-parse", "--is-inside-work-tree"]);
-  if (inside.status !== 0 || inside.stdout.trim() !== "true") {
-    return { ignored: [], failure: null };
-  }
+  const probe = workTreeProbe(root);
+  if (probe === "outside") return { ignored: [], failure: null };
+  if (probe !== "inside") return { ignored: [], failure: probe.failure };
   return matchedByIgnoreRules(root, RUNGATE_CONFIG_IGNORE_PATHS);
 }
 
@@ -436,4 +452,73 @@ export function ensureConfigTrackable(
     `UPDATED: .gitignore (the rungate config was ignored — ${before.ignored.join(", ")} — ` +
       `and is now committable; commit it, or the next branch switch deletes it)`,
   );
+}
+
+/**
+ * The concrete files a set of owned-file rows names on disk. A row is a path,
+ * or a `<dir>/*<ext>` class (`.claude/agents/*.md`), expanded to the files of
+ * that directory with that extension. Absent files are left out: an ignore
+ * rule only matters for a file that was written. A directory that exists but
+ * cannot be listed is a `failure`, not an absence (review of #2359): only
+ * ENOENT means nothing was written there.
+ */
+function ownedPathsOnDisk(root: string, rows: readonly string[]): { paths: string[]; failures: string[] } {
+  const out: string[] = [];
+  const failures: string[] = [];
+  for (const row of rows) {
+    const star = row.lastIndexOf("/*");
+    if (star === -1) {
+      if (existsSync(join(root, row))) out.push(row);
+      continue;
+    }
+    const dir = row.slice(0, star);
+    const ext = row.slice(star + 2);
+    let names: string[];
+    try {
+      names = readdirSync(join(root, dir));
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      // ENOENT: the directory was not written, so nothing in it can be ignored.
+      if (code !== "ENOENT") failures.push(`${dir} could not be listed (${code ?? (e as Error).message})`);
+      continue;
+    }
+    for (const n of names.sort()) if (n.endsWith(ext)) out.push(`${dir}/${n}`);
+  }
+  return { paths: out, failures };
+}
+
+/**
+ * #2347: name every owned file this scaffold left in a path the project's
+ * ignore rules match. Such a file is written, never committed, and so never
+ * ships, which on one consumer was the `/dry-run` command (`.claude/*`
+ * ignored, agents and rules negated, commands not). It only reports: whether
+ * scaffold should also make the path trackable is a decision recorded on
+ * #2347, not taken here. A tree that is not a repository has no ignore rules
+ * and gets no line; a git that cannot answer gets an UNMEASURED line, never
+ * a clean silence. "Not a repository" is only git's own exit-128 refusal
+ * saying so; a git that could not run, or failed any other way, is
+ * UNMEASURED (review of #2359).
+ */
+export function reportIgnoredOwnedFiles(root: string, actions: string[], rows: readonly string[]): void {
+  const unmeasured = (why: string) =>
+    actions.push(`UNMEASURED: whether any file scaffold owns is ignored could not be read — ${why}`);
+  const probe = workTreeProbe(root);
+  if (probe === "outside") return;
+  if (probe !== "inside") {
+    unmeasured(probe.failure);
+    return;
+  }
+  const owned = ownedPathsOnDisk(root, rows);
+  for (const f of owned.failures) unmeasured(f);
+  const reading = matchedByIgnoreRules(root, owned.paths);
+  if (reading.failure !== null) {
+    unmeasured(reading.failure);
+    return;
+  }
+  for (const path of reading.ignored) {
+    actions.push(
+      `IGNORED: ${path} is written by scaffold, but this project's ignore rules match it, so it will not be ` +
+        `committed and will not ship; \`git check-ignore -v ${path}\` names the rule, and a \`!\` line after it un-ignores the path`,
+    );
+  }
 }

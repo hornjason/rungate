@@ -35,6 +35,7 @@ import {
   configPathsIgnored,
   configTrackabilityBlock,
   ensureConfigTrackable,
+  reportIgnoredOwnedFiles,
 } from "../lib/config-trackable";
 import { DIRECTORY_CONFIG_FILES, RUNGATE_CONFIG_IGNORE_PATHS } from "../lib/config-loader";
 import { runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
@@ -569,5 +570,98 @@ describe("#505: a config in an ignored directory is deleted by an ordinary branc
     expect(lines.indexOf(`${dirname(DIR_CONFIG)}/*`))
       .toBeGreaterThan(lines.indexOf(`!${dirname(DIR_CONFIG)}/`));
     expect(lines.indexOf(`!${DIR_CONFIG}`)).toBeGreaterThan(lines.indexOf(`${dirname(DIR_CONFIG)}/*`));
+  });
+});
+
+// #2347: scaffold names every owned file it wrote into a path the project's
+// ignore rules match, so a generated file never silently fails to ship.
+describe("#2347: an owned file written into an ignored path is named", () => {
+  const OWNED = [".claude/commands/dry-run.md", ".claude/agents/*.md", ".claude/rules/*.md", "CODE-MAP.md"];
+  const files = {
+    ".claude/commands/dry-run.md": "x",
+    ".claude/agents/a.md": "x",
+    ".claude/rules/r.md": "x",
+    "CODE-MAP.md": "x",
+  };
+
+  test("the consumer's `.claude/*` with agents and rules negated: only dry-run.md is named", () => {
+    const root = repo({ ".gitignore": ".claude/*\n!.claude/agents/\n!.claude/rules/\n", ...files });
+    const actions: string[] = [];
+    reportIgnoredOwnedFiles(root, actions, OWNED);
+    const ignored = actions.filter(a => a.startsWith("IGNORED:"));
+    expect(ignored).toHaveLength(1);
+    expect(ignored[0]).toContain(".claude/commands/dry-run.md");
+    expect(ignored[0]).toContain("git check-ignore -v");
+  });
+
+  test("the control: with the path un-ignored, nothing is named", () => {
+    const root = repo({ ".gitignore": ".claude/*\n!.claude/agents/\n!.claude/rules/\n!.claude/commands/\n", ...files });
+    const actions: string[] = [];
+    reportIgnoredOwnedFiles(root, actions, OWNED);
+    expect(actions.filter(a => a.startsWith("IGNORED:"))).toEqual([]);
+  });
+
+  test("a wildcard row is expanded: an ignored agent file is named by its own path", () => {
+    const root = repo({ ".gitignore": ".claude/agents/\n", ...files });
+    const actions: string[] = [];
+    reportIgnoredOwnedFiles(root, actions, OWNED);
+    expect(actions.some(a => a.startsWith("IGNORED:") && a.includes(".claude/agents/a.md"))).toBe(true);
+  });
+
+  test("a tree that is not a repository has no ignore rules, so nothing is named", () => {
+    const root = mkdtempSync(join(tmpdir(), "rungate-2347-norepo-"));
+    scratch.push(root);
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), body);
+    }
+    const actions: string[] = [];
+    reportIgnoredOwnedFiles(root, actions, OWNED);
+    expect(actions).toEqual([]);
+  });
+
+  test("an owned directory that cannot be listed is UNMEASURED, never a clean silence (review of #2359)", () => {
+    const root = repo({ ".gitignore": ".claude/*\n", ...files });
+    const actions: string[] = [];
+    // A file where the row expects a directory: listing it fails with ENOTDIR, not ENOENT.
+    reportIgnoredOwnedFiles(root, actions, ["CODE-MAP.md/*.md"]);
+    expect(actions.some(a => a.startsWith("UNMEASURED:") && a.includes("CODE-MAP.md"))).toBe(true);
+  });
+
+  test("a git that cannot run is UNMEASURED, not 'not a repository' (review of #2359)", () => {
+    const root = repo({ ".gitignore": ".claude/*\n", ...files });
+    const actions: string[] = [];
+    const path = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    try {
+      reportIgnoredOwnedFiles(root, actions, OWNED);
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(actions.some(a => a.startsWith("UNMEASURED:"))).toBe(true);
+  });
+
+  test("the config check's own repository probe is UNMEASURED when git cannot run (review of #2359, round 2)", () => {
+    const root = repo({ ".gitignore": ".claude/\n", ".claude/rungate.json": "{}\n" });
+    const path = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    let reading;
+    try {
+      reading = configPathsIgnored(root);
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(reading.failure).not.toBeNull();
+  });
+
+  test("outside any repository the config check is still a clean no-rules reading", () => {
+    const root = mkdtempSync(join(tmpdir(), "rungate-2359-norepo-"));
+    scratch.push(root);
+    expect(configPathsIgnored(root)).toEqual({ ignored: [], failure: null });
+  });
+
+  test("scaffold runs it, over the owned-file table", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "lib", "scaffold", "write-steps.ts"), "utf-8");
+    expect(src).toContain("reportIgnoredOwnedFiles(projectPath, actions, OWNED_FILES.map(f => f.path))");
   });
 });
