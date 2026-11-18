@@ -144,13 +144,11 @@ try {
     // the spec-write sweep (#1552) allows for a path matching /spec/i. Both
     // or neither: a failed bank write puts the spec back.
     // #2300: the bank through its one write path, refusing if another session
-    // moved it since `bankRead`; the spec refuses the same way if it changed
-    // since `content` was read. The put-back write carries no expectation.
+    // moved it since `bankRead`. Each spec write carries the bytes it expects
+    // to replace, which `writeSpecWithBank` supplies, so neither the write nor
+    // its put-back can erase another session's change.
     const wrote = writeSpecWithBank(
-      (p, c) =>
-        p === bankPath
-          ? writeDeferralBank(ROOT, c, bankRead)
-          : writeSpec(p, c, c === newContent ? { expected: content } : undefined),
+      (p, c, e) => (p === bankPath ? writeDeferralBank(ROOT, c, bankRead) : writeSpec(p, c, { expected: e })),
       { path: specPath, before: content, after: newContent },
       { path: bankPath, text: banked.text },
     );

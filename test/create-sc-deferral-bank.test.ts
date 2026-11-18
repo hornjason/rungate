@@ -248,4 +248,46 @@ describe("#2300: the deferral bank has one write path, and a stale write is refu
       "lib/finding-promotion.ts → .claude/spec-deferral-ratchet.json",
     ]);
   });
+
+  test("review of #2381: the put-back refuses rather than erase a write another session landed on top", () => {
+    const dir = scratch();
+    try {
+      const specFile = join(dir, "spec.md");
+      writeFileSync(specFile, "old");
+      const r = writeSpecWithBank(
+        (p, c, e) => {
+          if (p === "bank.json") {
+            // Session B lands its own append between this run's spec write
+            // and its bank write, and then this run's bank write fails.
+            writeFileSync(specFile, "theirs");
+            return { written: false, refusal: "bank refused" };
+          }
+          return writeSpec(p, c, { expected: e });
+        },
+        { path: specFile, before: "old", after: "mine" },
+        { path: "bank.json", text: "{}" },
+      );
+      expect(r).toMatchObject({ ok: false, restored: false });
+      expect(readFileSync(specFile, "utf-8"), "the put-back erased the other session's write").toBe("theirs");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("review of #2381: writeSpecWithBank hands each spec write the bytes it expects to replace", () => {
+    const seen: [string, string, string | undefined][] = [];
+    writeSpecWithBank(
+      (p, c, e) => {
+        seen.push([p, c, e]);
+        return { written: p !== "bank.json", refusal: p === "bank.json" ? "no" : null };
+      },
+      { path: "spec.md", before: "old", after: "new" },
+      { path: "bank.json", text: "{}" },
+    );
+    expect(seen).toEqual([
+      ["spec.md", "new", "old"],
+      ["bank.json", "{}", undefined],
+      ["spec.md", "old", "new"],
+    ]);
+  });
 });

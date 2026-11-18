@@ -854,7 +854,18 @@ export function writeDeferralBank(root: string, text: string, read: string | nul
 }
 
 /** The writer `writeSpecWithBank` writes through: `writeSpec`, or a stand-in in a test. */
-export type SpecWriter = (path: string, content: string) => { written: boolean; refusal?: string | null };
+export type SpecWriter = (
+  path: string,
+  content: string,
+  /**
+   * #2300: the bytes the write expects to replace. The forward spec write
+   * expects the spec as read; the put-back expects the spec as this run wrote
+   * it, so a revert refuses rather than erase a write another session landed
+   * on top in between (review of #2381). Absent for the bank, whose writer
+   * already holds the bank it read.
+   */
+  expected?: string,
+) => { written: boolean; refusal?: string | null };
 
 /**
  * Write the spec and then the bank, both or neither (review of #2298).
@@ -871,12 +882,12 @@ export function writeSpecWithBank(
   spec: { path: string; before: string; after: string },
   bank: { path: string; text: string | null },
 ): { ok: true } | { ok: false; why: string; restored: boolean } {
-  const specWrite = write(spec.path, spec.after);
+  const specWrite = write(spec.path, spec.after, spec.before);
   if (!specWrite.written) return { ok: false, why: `the spec was not written (${specWrite.refusal ?? "no reason given"})`, restored: true };
   if (bank.text === null) return { ok: true };
   const bankWrite = write(bank.path, bank.text);
   if (bankWrite.written) return { ok: true };
-  const undo = write(spec.path, spec.before);
+  const undo = write(spec.path, spec.before, spec.after);
   return {
     ok: false,
     why: `the deferral bank could not be written (${bankWrite.refusal ?? "no reason given"})`,
