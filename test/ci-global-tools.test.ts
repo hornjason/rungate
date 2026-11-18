@@ -249,7 +249,9 @@ describe("AC-1: one declaration, and it is a pin", () => {
       expect(typeof version, `ci.globalTools does not declare ${pkg}`).toBe("string");
       expect(run?.[1], `release.yml does not install ${pkg} at the declared ${version}`).toContain(`'${pkg}@${version}'`);
     }
-    expect(yml.indexOf("npm install -g"), "the tools must install before the suite runs").toBeLessThan(yml.indexOf("bun test"));
+    // The step lines, not the words: both appear earlier in comments.
+    expect(yml.indexOf("- run: bun test"), "release.yml no longer runs `- run: bun test`").toBeGreaterThan(-1);
+    expect(run!.index, "the tools must install before the suite runs").toBeLessThan(yml.indexOf("- run: bun test"));
   });
 });
 
