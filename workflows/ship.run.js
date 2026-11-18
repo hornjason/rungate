@@ -450,6 +450,35 @@ function describeReviewValue(v) {
         return "an object";
     return JSON.stringify(v);
 }
+function priorWorkRefusal(issueNumber, priorBranch, existingPR) {
+    if (!existingPR || typeof existingPR !== 'object')
+        return null;
+    const pr = existingPR;
+    if (pr.unreadable) {
+        return (`Could not determine whether issue #${issueNumber} already has an open PR: ` +
+            `${pr.reason || 'the lookup failed with no detail'}. Refusing rather than ` +
+            `re-implementing: "no PR" and "could not look" are different facts, and ` +
+            `acting on the wrong one is how #209 was shipped twice.`);
+    }
+    if (typeof pr.prNumber !== 'number' || !Number.isFinite(pr.prNumber)) {
+        return (`The existing-PR lookup for issue #${issueNumber} returned a record with ` +
+            `no PR number: ${JSON.stringify(existingPR)}. Refusing rather than ` +
+            `reading a malformed answer as "no open PR" — pass null for that.`);
+    }
+    const prBranch = typeof pr.branch === 'string' ? pr.branch : '';
+    const working = priorBranch && typeof priorBranch === 'object'
+        ? priorBranch.branch
+        : '';
+    if (working && prBranch && working === prBranch)
+        return null;
+    const where = working
+        ? `this run picked up the branch "${working}" instead`
+        : `this run found no prior branch and would start from the base branch`;
+    return (`Issue #${issueNumber} already has open PR #${pr.prNumber} on branch ` +
+        `"${prBranch || '(unnamed)'}", and ${where}. Implementing now would open a ` +
+        `second PR for one issue, and merging either would silently discard the ` +
+        `other's work. Resume that branch or close that PR, then re-run.`);
+}
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
@@ -2927,42 +2956,6 @@ whether this run may push onto the branch at all.
     `behind ${priorBranchResult.behindCount ?? 'unknown'}, merged ${priorBranchResult.isMerged ?? 'unknown'}`)
 }
 
-function priorWorkRefusal(issueNumber, priorBranch, existingPR) {
-  if (!existingPR || typeof existingPR !== 'object') return null
-  const pr = existingPR
-
-  if (pr.unreadable) {
-    return (
-      `Could not determine whether issue #${issueNumber} already has an open PR: ` +
-      `${pr.reason || 'the lookup failed with no detail'}. Refusing rather than ` +
-      `re-implementing: "no PR" and "could not look" are different facts, and ` +
-      `acting on the wrong one is how #209 was shipped twice.`
-    )
-  }
-  if (typeof pr.prNumber !== 'number' || !Number.isFinite(pr.prNumber)) {
-    return (
-      `The existing-PR lookup for issue #${issueNumber} returned a record with ` +
-      `no PR number: ${JSON.stringify(existingPR)}. Refusing rather than ` +
-      `reading a malformed answer as "no open PR" — pass null for that.`
-    )
-  }
-
-  const prBranch = typeof pr.branch === 'string' ? pr.branch : ''
-  const working =
-    priorBranch && typeof priorBranch === 'object' ? priorBranch.branch : ''
-
-  if (working && prBranch && working === prBranch) return null
-
-  const where = working
-    ? `this run picked up the branch "${working}" instead`
-    : `this run found no prior branch and would start from the base branch`
-  return (
-    `Issue #${issueNumber} already has open PR #${pr.prNumber} on branch ` +
-    `"${prBranch || '(unnamed)'}", and ${where}. Implementing now would open a ` +
-    `second PR for one issue, and merging either would silently discard the ` +
-    `other's work. Resume that branch or close that PR, then re-run.`
-  )
-}
 
 function lookupTargets(issue, issueRepo) {
   const digits = typeof issue === 'string' && /^\d+$/.test(issue.trim())
