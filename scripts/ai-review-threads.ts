@@ -39,6 +39,8 @@ import {
   refusalFrom,
   threadsDetailLines,
   threadsLandedPhrase,
+  unreasonedReport,
+  unreasonedResolutions,
   type AiReviewThreadPoster,
   type AiReviewPullCommenter,
   type AiReviewThreadResponse,
@@ -260,6 +262,60 @@ if (result.outcome === "FAILED") {
     `::warning title=AI review threads::UNMEASURED — there was no usable reading to post from. ` +
       `This is not a review that found nothing.`,
   );
+}
+
+// #2306 — CRC-C3: a thread this review opened and somebody resolved with no
+// reply is named on the conversation, once per thread. It never changes the
+// exit code: the report is a record, and the round's outcome is above.
+const THREADS_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$after:String){
+  repository(owner:$owner,name:$name){ pullRequest(number:$pr){
+    reviewThreads(first:100, after:$after){ pageInfo{ hasNextPage endCursor }
+      nodes{ id isResolved path comments(first:100){ nodes{ author{ login } body url } } } } } } }`;
+let threadNodes: unknown[] | null = null;
+let threadsError = "the review threads were not read";
+try {
+  const nodes: unknown[] = [];
+  for (let after: string | null = null; ; ) {
+    const page = (await client.graphql(THREADS_QUERY, {
+      owner: parsed.owner,
+      name: parsed.repo,
+      pr: parsed.pr,
+      after,
+    })) as {
+      repository?: { pullRequest?: { reviewThreads?: { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string } } } };
+    };
+    const conn = page.repository?.pullRequest?.reviewThreads;
+    if (!Array.isArray(conn?.nodes)) throw new Error("the response carried no review-thread list");
+    nodes.push(...conn.nodes);
+    if (conn.pageInfo?.hasNextPage !== true || typeof conn.pageInfo.endCursor !== "string") break;
+    after = conn.pageInfo.endCursor;
+  }
+  threadNodes = nodes;
+} catch (e) {
+  threadsError = `the review threads could not be read (${escapeAnnotation((e as Error).message)})`;
+}
+const unreasoned = unreasonedResolutions(threadNodes, threadsError);
+if (unreasoned.status === "UNMEASURED") {
+  console.log(`${COMMAND}: UNMEASURED — ${unreasoned.reason}, so a thread resolved with no reason is not reported this round`);
+} else if (unreasoned.unreasoned.length === 0) {
+  console.log(`${COMMAND}: no review thread is resolved without a stated reason`);
+} else if (comment === undefined) {
+  console.log(
+    `${COMMAND}: ${unreasoned.unreasoned.length} thread(s) resolved with no stated reason, and the conversation ` +
+      `could not be read, so they are not reported this round`,
+  );
+} else {
+  const report = unreasonedReport(unreasoned.unreasoned, comment.existing);
+  if (report === null) {
+    console.log(`${COMMAND}: ${unreasoned.unreasoned.length} thread(s) resolved with no stated reason, all reported already`);
+  } else {
+    const sent = await comment.post(report);
+    console.log(
+      sent.ok
+        ? `${COMMAND}: reported thread(s) resolved with no stated reason on the conversation`
+        : `${COMMAND}: could not report thread(s) resolved with no stated reason: ${escapeAnnotation(sent.message)}`,
+    );
+  }
 }
 
 process.exit(aiReviewThreadsExitCode(result));
