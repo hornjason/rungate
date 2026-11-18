@@ -181,6 +181,14 @@ export interface RunOptions {
    * count, not a quiet stop, because a quiet stop looks like a short run.
    */
   maxCalls?: number;
+  /**
+   * Code run in the workflow's own scope before its body (#2405). For ship.js
+   * this is the lib code workflows/ship.run.js bundles: ship.js calls it and,
+   * since #2403, no longer carries a copy, so running ship.js without it runs
+   * a script that a real launch never sees. The harness cannot read the launch
+   * file itself (lib/ is published and workflows/ is not), so callers pass it.
+   */
+  prelude?: string;
 }
 
 export async function runWorkflow(source: string, opts: RunOptions = {}): Promise<HarnessRun> {
@@ -239,7 +247,7 @@ export async function runWorkflow(source: string, opts: RunOptions = {}): Promis
   let result: unknown;
   let error: Error | null = null;
   try {
-    const fn = new Function(...names, `return (async () => {\n${workflowBody(source)}\n})()`);
+    const fn = new Function(...names, `return (async () => {\n${opts.prelude ?? ""}\n${workflowBody(source)}\n})()`);
     result = await fn(...names.map((n) => globals[n]));
   } catch (err) {
     error = err instanceof Error ? err : new Error(String(err));

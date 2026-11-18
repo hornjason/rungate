@@ -26,9 +26,12 @@ import { join } from "path";
 
 import { repoSlugRefusal, rootPathRefusal } from "../lib/workflow-security";
 import { runWorkflow } from "../lib/workflow-test-harness";
+import { shipPrelude } from "../scripts/build-workflow-launch";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
+// The lib code ship.run.js bundles, which ship.js calls and no longer defines (#2405).
+const SHIP_PRELUDE = shipPrelude();
 
 /** The inlined mirrors, lifted out of ship.js and callable. */
 function inlined(): {
@@ -179,7 +182,7 @@ describe("#533: the run refuses before any of it reaches a shell", () => {
   const ARGS = { issue: 1, projectRoot: "/tmp/p", repo: "o/r", harnessRoot: "/tmp/h" };
 
   const ran = (over: Record<string, unknown>) =>
-    runWorkflow(SHIP, { args: { ...ARGS, ...over } });
+    runWorkflow(SHIP, { prelude: SHIP_PRELUDE, args: { ...ARGS, ...over } });
 
   test("SC-1811: each of the four arguments stops the run by name", async () => {
     const bad: Array<[string, Record<string, unknown>]> = [
