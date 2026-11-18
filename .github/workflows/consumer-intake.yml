@@ -1,4 +1,4 @@
-# generated-sha: e3424c498c42380d
+# generated-sha: 814a8add2a7fa7fb
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -30,7 +30,9 @@ jobs:
     runs-on: "ubuntu-24.04"
     steps:
       - name: Give an outside reporter's issue the from-consumer label
-        if: ${{ !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) && github.event.action == 'opened' }}
+        # Not a bot: the pipeline's own plan issues are authored by
+        # github-actions[bot], association NONE (#2390).
+        if: ${{ !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) && github.event.issue.user.type != 'Bot' && github.event.action == 'opened' }}
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ github.event.issue.number }}
@@ -48,7 +50,7 @@ jobs:
           # An unspecified run shell is `bash -e` with no pipefail, so a failed
           # read would end in a clean exit with nothing labelled.
           set -o pipefail
-          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= (now - 172800 | todate)) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("from-consumer") | not) | .number' \
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= (now - 172800 | todate)) | select(.user.type != "Bot") | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("from-consumer") | not) | .number' \
             | while read -r n; do
                 # A person took the label off: leave it off (review of #2380).
                 # An unreadable history labels nothing, rather than guessing.
