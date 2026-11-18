@@ -32,6 +32,20 @@ export const REQUIRE_CLOSING_REF_VARIABLE = "RUNGATE_REQUIRE_CLOSING_REF";
 /** The process workflows whose jobs report a status on pull requests (ADR-014 decision 6's scope). */
 export const PROCESS_CHECK_WORKFLOWS = ["closing-references.yml"] as const;
 
+/**
+ * Generated checks that must pass before a merge, one context each, owed only
+ * when the workflow defines that job (#2361). rungate's own `main` requires
+ * `test` and `ai-review` beside `closing-references`; GitHub's auto-merge, and
+ * any approve-on-green bot, waits only for checks branch protection requires,
+ * so a consumer that never required `ai-review` merged a PR mid-review. Named
+ * rather than every job of the workflow: `ci.yml`'s `test-shard` is a matrix
+ * whose contexts are not one name, and `test` is the job that speaks for them.
+ */
+export const MERGE_GATE_CHECKS = [
+  { workflow: "ci.yml", context: "test" },
+  { workflow: "ai-review.yml", context: "ai-review" },
+] as const;
+
 export interface HumanStepReadings {
   /** `owner/name`; null when the origin remote names no GitHub repository; UNMEASURED when it could not be read (#2169). */
   slug: Reading<string | null>;
@@ -91,7 +105,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
         for (const check of missing) {
           out.push(
             `OWED: gh api -X POST repos/${slug}/branches/${branch}/protection/required_status_checks/contexts ` +
-              `-f 'contexts[]=${check}'   # ${check} runs on every pull request and blocks nothing until it is required`,
+              `-f 'contexts[]=${check}'   # ${check} runs on every pull request and blocks nothing until it is required; a merge bot of your own must wait for it too`,
           );
         }
       } else if (missing.length > 0 && statusChecks === "unprotected") {
@@ -126,6 +140,27 @@ export function humanSteps(r: HumanStepReadings): string[] {
 }
 
 /**
+ * Which contexts each workflow owes: `null` is every job in it, a set is only
+ * those. Entries for one file MERGE — a second context is added, and an
+ * all-jobs entry is never narrowed by a single-context one — so a workflow
+ * that gains a second tracked job cannot silently drop the first (review of
+ * #2362).
+ */
+export function wantedChecks(
+  allJobs: readonly string[],
+  gates: readonly { workflow: string; context: string }[],
+): Map<string, Set<string> | null> {
+  const wanted = new Map<string, Set<string> | null>();
+  for (const f of allJobs) wanted.set(f, null);
+  for (const g of gates) {
+    const had = wanted.get(g.workflow);
+    if (had === null) continue;
+    wanted.set(g.workflow, new Set([...(had ?? []), g.context]));
+  }
+  return wanted;
+}
+
+/**
  * The job names of the process checks present in `root`'s workflows, and the
  * workflows that are present but could not be read (#2161). A directory, a
  * permission error or a file removed between the two calls throws on read;
@@ -134,7 +169,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
 export function processChecksIn(root: string): { checks: string[]; unreadable: string[] } {
   const checks: string[] = [];
   const unreadable: string[] = [];
-  for (const file of PROCESS_CHECK_WORKFLOWS) {
+  for (const [file, only] of wantedChecks(PROCESS_CHECK_WORKFLOWS, MERGE_GATE_CHECKS)) {
     const rel = `.github/workflows/${file}`;
     const p = join(root, ".github", "workflows", file);
     // The stat decides absence, and only its ENOENT counts: existsSync also
@@ -149,7 +184,8 @@ export function processChecksIn(root: string): { checks: string[]; unreadable: s
       continue;
     }
     try {
-      checks.push(...jobContextNames(readFileSync(p, "utf-8")));
+      const jobs = jobContextNames(readFileSync(p, "utf-8"));
+      checks.push(...(only === null ? jobs : jobs.filter(j => only.has(j))));
     } catch (e) {
       unreadable.push(`${rel} could not be read (${(e as Error).message})`);
     }

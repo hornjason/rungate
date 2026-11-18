@@ -20,6 +20,7 @@ import {
   githubSlugOf,
   humanSteps,
   processChecksIn,
+  wantedChecks,
   readHumanSteps,
   readOrigin,
   sshHostName,
@@ -81,6 +82,25 @@ describe("SC-2749: every human step still owed is one command", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toStartWith("OWED: require closing-references on main");
     expect(lines[0], "PUT replaces the existing protection; POST 404s without required checks").not.toMatch(/-X (PUT|POST)/);
+  });
+
+  // Review of #2362: with test and ai-review owed too, several missing at once
+  // is the normal case, and each of the three branch states must name them all.
+  describe("#2362 review: every missing check is owed, not only the first", () => {
+    const three = ["closing-references", "test", "ai-review"];
+    test("required-checks: one POST per missing check", () => {
+      const lines = humanSteps({ ...allSet, processChecks: three, protection: read({ branch: "main", contexts: ["other"], statusChecks: "required-checks" }) });
+      for (const c of three) expect(lines.filter(l => l.includes(`-f 'contexts[]=${c}'`))).toHaveLength(1);
+    });
+    test("unprotected: the PUT body requires all three", () => {
+      const lines = humanSteps({ ...allSet, processChecks: three, protection: read({ branch: "main", contexts: [], statusChecks: "unprotected" }) });
+      const body = JSON.parse(lines[0].match(/<<<'([^']*)'/)![1]);
+      expect(body.required_status_checks.contexts).toEqual(three);
+    });
+    test("no-required-checks: the Settings line names all three", () => {
+      const lines = humanSteps({ ...allSet, processChecks: three, protection: read({ branch: "main", contexts: [], statusChecks: "no-required-checks" }) });
+      expect(lines[0]).toStartWith(`OWED: require ${three.join(", ")} on main`);
+    });
   });
 
   test("the protection probe says which of the three a branch is", () => {
@@ -293,6 +313,44 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
       expect(unreadable.join("\n")).toMatch(/closing-references\.yml could not be read/);
     } finally {
       chmodSync(dir, 0o755);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // #2361: rungate's own main requires test and ai-review as well as
+  // closing-references; GitHub's auto-merge waits only for required checks.
+  test("#2361: the generated test and ai-review checks are owed as required, not only closing-references", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-2361-"));
+    try {
+      const dir = join(root, ".github", "workflows");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "closing-references.yml"), "jobs:\n  closing-references:\n    runs-on: x\n");
+      writeFileSync(join(dir, "ci.yml"), "jobs:\n  test-shard:\n    runs-on: x\n  test:\n    runs-on: x\n");
+      writeFileSync(join(dir, "ai-review.yml"), "jobs:\n  ai-review:\n    runs-on: x\n");
+      expect(processChecksIn(root).checks.sort()).toEqual(["ai-review", "closing-references", "test"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("#2362 review: two contexts in one workflow are both kept, and an all-jobs entry is never narrowed", () => {
+    const both = wantedChecks([], [{ workflow: "ci.yml", context: "test" }, { workflow: "ci.yml", context: "lint" }]);
+    expect([...(both.get("ci.yml") ?? [])].sort()).toEqual(["lint", "test"]);
+    for (const order of [
+      wantedChecks(["ci.yml"], [{ workflow: "ci.yml", context: "test" }]),
+      wantedChecks([], [{ workflow: "ci.yml", context: "test" }]),
+    ]) expect(order.has("ci.yml")).toBe(true);
+    expect(wantedChecks(["ci.yml"], [{ workflow: "ci.yml", context: "test" }]).get("ci.yml")).toBeNull();
+  });
+
+  test("#2361: a workflow without the named job owes nothing for it, and a matrix job is never owed", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-2361b-"));
+    try {
+      const dir = join(root, ".github", "workflows");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "ci.yml"), "jobs:\n  build:\n    runs-on: x\n  test-shard:\n    runs-on: x\n");
+      expect(processChecksIn(root).checks).toEqual([]);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
