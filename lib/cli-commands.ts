@@ -252,6 +252,14 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Spec criteria and opt-in, with looks-done hints",
     usage: "rungate board-scope [--spec <path>] [--json]",
   },
+  // #2330. The pinned "where we are" view as a command a consumer can run:
+  // every family's phases with their open issues and blockers. Reads the
+  // working directory and its origin remote, so it takes no root flag.
+  board: {
+    script: "scripts/status-view.ts",
+    summary: "Each phase's open issues and blockers",
+    usage: "rungate board [--repo <owner/name>] [--markdown]   (repository defaults to GITHUB_REPOSITORY, then the origin remote)",
+  },
   // Step 5 of ADR-003. `plan-spec` turns the placement table into milestones;
   // this turns the ORDER of those milestones into `blocked by` edges, which is
   // AGENTS.md rule 4 — ordering is data, not prose.
@@ -310,7 +318,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   // `projectRootFlag`: it reads `process.cwd()`, which the child inherits.
   "unaccounted-work": {
     script: "scripts/unaccounted-work.ts",
-    summary: "Report undone work declared in a repository's prose that no open issue covers",
+    summary: "Undone work declared in prose that no open issue covers",
     usage:
       "rungate unaccounted-work [--project-root <dir>] [--repo <owner/name>] [--issues-fixture <file.json>] [--json]   " +
       "(exit 1 when work is unaccounted, 2 when a source could not be read)",
