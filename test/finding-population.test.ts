@@ -43,11 +43,25 @@ import {
   main,
   populationNotice,
   populationReading,
+  populationVerdict,
   renderFinding,
+  verifiedPopulation,
 } from "../lib/scaffold/ai-review-findings";
-import { populationVerdict, verifiedPopulation } from "../lib/finding-population";
 
 const ROOT = join(import.meta.dir, "..");
+
+/**
+ * #1883: a cited file whose lines carry `<mark-k>` exactly k times, k = 1..12,
+ * so a finding searching `<mark-k>` has a population of k by search. The
+ * delimiters keep `<mark-1>` from matching `<mark-10>`.
+ */
+const MARKED: readonly string[] = Array.from({ length: 12 }, (_, i) => i + 1).flatMap(k =>
+  Array.from({ length: k }, () => `const x = read(); // <mark-${k}>`),
+);
+const READ = (file: string): readonly string[] | null => (file === "lib/x.ts" ? MARKED : null);
+/** A finding that declares k and names the search that returns k. */
+const sized = (k: number, over: Record<string, unknown> = {}) =>
+  f({ population: k, populationSearch: [`<mark-${k}>`], ...over });
 
 const f = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   severity: "medium",
@@ -60,7 +74,7 @@ const f = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
 
 describe("FP-1..FP-6: the reading", () => {
   test("FP-1: a declared population is counted, and its instances summed", () => {
-    const r = populationReading([f({ population: 3 }), f({ population: 2 })]);
+    const r = populationReading([sized(3), sized(2)], READ);
     expect(r.declared).toBe(2);
     expect(r.undeclared).toBe(0);
     expect(r.instances).toBe(5);
@@ -69,7 +83,7 @@ describe("FP-1..FP-6: the reading", () => {
   // The whole point. A finding that never says how many siblings it has is
   // UNMEASURED about its class, and that is a different fact from "one".
   test("FP-2: an absent population is undeclared, never one", () => {
-    const r = populationReading([f(), f({ population: 4 })]);
+    const r = populationReading([f(), sized(4)], READ);
     expect(r.undeclared).toBe(1);
     expect(r.declared).toBe(1);
     // 4, not 5 — the undeclared finding contributes nothing it did not state
@@ -91,13 +105,13 @@ describe("FP-1..FP-6: the reading", () => {
   // The positive control for FP-3: the reader does accept the shape the
   // contract asks for, so FP-3 is not green because nothing is ever declared.
   test("FP-4: an integer of one or more is accepted", () => {
-    expect(populationReading([f({ population: 1 })]).declared).toBe(1);
-    expect(populationReading([f({ population: 97 })]).instances).toBe(97);
+    expect(populationReading([sized(1)], READ).declared).toBe(1);
+    expect(populationReading([sized(12)], READ).instances).toBe(12);
   });
 
   test("FP-5: an empty payload is zero of each, and says nothing about compliance", () => {
     const r = populationReading([]);
-    expect(r).toEqual({ declared: 0, undeclared: 0, instances: 0 });
+    expect(r).toEqual({ declared: 0, undeclared: 0, instances: 0, contradicted: [], unbacked: 0 });
   });
 
   // A non-object in the array is the shape `renderFinding`'s own docblock
@@ -112,7 +126,16 @@ describe("FP-1..FP-6: the reading", () => {
 describe("FP-7..FP-8: the population reaches the annotation", () => {
   // A reading nobody can see from the run is a reading that does not exist.
   test("FP-7: a rendered finding names its class size", () => {
-    expect(renderFinding(0, f({ population: 5 }))).toContain("5 instance");
+    expect(renderFinding(0, sized(5), null, READ)).toContain("5 instance");
+  });
+
+  // #1883: the annotation prints the count the search returned, and says the
+  // declared number was refused.
+  test("FP-7b: a refused declared count renders the search's count and says what was declared", () => {
+    const line = renderFinding(0, f({ population: 1, populationSearch: ["<mark-5>"] }), null, READ);
+    expect(line).toContain("5 instances of this shape, counted by search; it declared 1");
+    // and a declared count with no search renders no class size at all
+    expect(renderFinding(0, f({ population: 5 }), null, READ)).not.toContain("instance");
   });
 
   test("FP-8: a finding with no population renders without inventing one", () => {
@@ -161,8 +184,11 @@ describe("FP-9..FP-11: the contract and the conventions agree", () => {
   // that red is the derivation working. The fix subtracts a list declared
   // beside the contract rather than re-listing exclusions in the deriving
   // module, so these three cases hold the arrangement together.
-  test("FP-12: population is optional, and nothing else became so", () => {
-    expect(AI_REVIEW_OPTIONAL_FINDING_FIELDS).toEqual([AI_REVIEW_FINDING_FIELDS.population]);
+  test("FP-12: population and its search are optional, and nothing else became so", () => {
+    expect(AI_REVIEW_OPTIONAL_FINDING_FIELDS).toEqual([
+      AI_REVIEW_FINDING_FIELDS.population,
+      AI_REVIEW_FINDING_FIELDS.populationSearch,
+    ]);
     expect(AI_REVIEW_BLOCKING_REQUIRED_FIELDS).not.toContain(
       AI_REVIEW_FINDING_FIELDS.population,
     );
@@ -234,7 +260,7 @@ describe("FP-15..FP-19: a real run prints the reading", () => {
     console.log = (...a: unknown[]) => void written.push(a.map(String).join(" "));
     console.error = (...a: unknown[]) => void written.push(a.map(String).join(" "));
     try {
-      main([path]);
+      main([path], null, null, READ);
     } finally {
       console.log = log;
       console.error = err;
@@ -257,7 +283,7 @@ describe("FP-15..FP-19: a real run prints the reading", () => {
   // reading is named by value, so a sentence that prints a believable but
   // wrong count cannot pass.
   test("FP-16: the annotation names declared, total and instances by value", () => {
-    const line = notice(run([f({ population: 9 }), f({ population: 2 }), f()]))!;
+    const line = notice(run([sized(9), sized(2), f()]))!;
     expect(line).toContain("2 of 3");
     expect(line).toContain("11");
   });
@@ -271,7 +297,7 @@ describe("FP-15..FP-19: a real run prints the reading", () => {
   });
 
   test("FP-18: every finding declaring its class leaves nothing UNMEASURED", () => {
-    const line = notice(run([f({ population: 4 })]))!;
+    const line = notice(run([sized(4)]))!;
     expect(line).toContain("1 of 1");
     expect(line).toContain("covering 4 instance");
     expect(line).not.toContain("UNMEASURED");
@@ -279,6 +305,20 @@ describe("FP-15..FP-19: a real run prints the reading", () => {
 
   // The control. An empty payload is a clean review and gets no notice, so
   // the annotation's presence is evidence about findings and not about runs.
+  // #1883, at the entry point CI calls: the refusal and the unbacked count are
+  // both in the annotation a run prints, by value.
+  test("FP-20: a run names the refused finding, and counts by the search", () => {
+    const line = notice(run([f(), f({ population: 1, populationSearch: ["<mark-3>"] })]))!;
+    expect(line).toContain("Refused: finding(s) 1");
+    expect(line).toContain("covering 3 instance");
+  });
+
+  test("FP-21: a run says a count with no search behind it is not believed", () => {
+    const line = notice(run([f({ population: 4 })]))!;
+    expect(line).toContain("0 of 1");
+    expect(line).toContain("1 declared a count with no search behind it");
+  });
+
   test("FP-19: a payload with no findings prints no population annotation", () => {
     expect(notice(run([]))).toBeUndefined();
     expect(populationNotice([])).toBeNull();
@@ -345,15 +385,20 @@ describe("#1883: a population is counted by a search that ran", () => {
   });
 
   test("#1883 AC-1 MUTANT: with the comparison removed, the planted 1 is no longer refused", async () => {
-    const source = readFileSync(join(ROOT, "lib", "finding-population.ts"), "utf-8");
+    const source = readFileSync(join(ROOT, "lib", "scaffold", "ai-review-findings.ts"), "utf-8");
     const COMPARISON = `  if (declared !== null && declared !== count) return { kind: "contradicted", declared, count };\n`;
     expect(source.split(COMPARISON).length - 1, "the comparison is not exactly one line, so the mutant would miss it").toBe(1);
-    expect(/^import .* from "\.\.?\//m.test(source), "a relative import would make the mutant fail to load").toBe(false);
     const dir = mkdtempSync(join(tmpdir(), "finding-population-mutant-"));
     try {
-      const path = join(dir, "finding-population.ts");
-      writeFileSync(path, source.replace(COMPARISON, () => ""));
-      const mutant = (await import(path)) as typeof import("../lib/finding-population");
+      // The one sibling import is redirected at the real module, as the
+      // other batteries over this file do; anything else relative would not load.
+      const mutated = source
+        .replace(COMPARISON, () => "")
+        .replace(/from "\.\/ai-review-step"/g, `from "${join(ROOT, "lib", "scaffold", "ai-review-step")}"`);
+      expect(/from "\.\.?\//.test(mutated), "the mutant kept a relative import, so it would not load").toBe(false);
+      const path = join(dir, "ai-review-findings.ts");
+      writeFileSync(path, mutated);
+      const mutant = (await import(path)) as typeof import("../lib/scaffold/ai-review-findings");
       const v = mutant.populationVerdict(1, ["listIssues("], THREE);
       expect(v.kind, "the mutant still refused the planted 1, so it did not remove the comparison").not.toBe("contradicted");
     } finally {

@@ -185,6 +185,10 @@ export interface PopulationReading {
   undeclared: number;
   /** Instances claimed by the declared findings. Never includes a default. */
   instances: number;
+  /** #1883: payload indices whose declared count their own search did not return. */
+  contradicted: number[];
+  /** #1883: findings that declared a count and named no search, so it is not believed. */
+  unbacked: number;
 }
 
 /**
@@ -201,9 +205,142 @@ export interface PopulationReading {
  * introduced now, with one producer and a contract, so accepting a second
  * spelling on day one is how the contract stops meaning anything.
  */
-function populationCount(value: unknown): number | null {
+// ── #1883: the population is counted by a search, not declared ──────────
+//
+// Inline here and not in a module of its own: four mutation batteries copy
+// this file into scratch with only `./ai-review-step` redirected, so a new
+// import would make every one of their mutants fail to load.
+
+/**
+ * A finding's class size, counted by a search instead of declared (#1883,
+ * CRC-N3).
+ *
+ * The reviewer used to write `population` as a number it chose. On #1877 it
+ * wrote `1, 1, 1, —, —, 1, 2, 2, 3` across eleven rounds, every round naming
+ * one file, and the next round kept finding another instance of the same
+ * class. A self-reported count of absences carries no information when the
+ * model emits the same value whatever the truth.
+ *
+ * So the count changes provenance. The reviewer names the literal text it
+ * searched the cited file for (`populationSearch`), and the count is the
+ * number of lines of that file carrying any of it — run here, not asserted
+ * there. A declared `population` with no search behind it is UNMEASURED, not
+ * believed. A declared number the search does not return is refused, and the
+ * search's count stands.
+ *
+ * **Literal text, never a pattern or a command.** The payload is written by a
+ * model reading the branch under review, so anything here that executes is
+ * an injection route into CI, and a regular expression is a denial-of-service
+ * route (catastrophic backtracking). A substring test over each line does
+ * neither.
+
+ */
+/** At most this many search terms on one finding. A class is not a word list. */
+export const POPULATION_SEARCH_MAX_TERMS = 5;
+/** A term shorter than this matches nearly every line and counts nothing real. */
+export const POPULATION_SEARCH_TERM_MIN = 3;
+/** A term longer than this is a paste, not a search. */
+export const POPULATION_SEARCH_TERM_MAX = 200;
+
+export type PopulationVerdict =
+  /** Neither a count nor a search: the finding said nothing about its class. */
+  | { kind: "undeclared" }
+  /** A count with no search behind it. UNMEASURED: it is not believed. */
+  | { kind: "unbacked"; declared: number }
+  /** A search that could not run, or that ran and matched nothing. */
+  | { kind: "unmeasured"; why: string }
+  /** The search ran; the count is its output, and any declared number agreed. */
+  | { kind: "measured"; count: number }
+  /** The search ran and returned a different number than the one declared. */
+  | { kind: "contradicted"; declared: number; count: number };
+
+/**
+ * One declared population as a count, or `null`.
+ *
+ * `"3"`, `0`, `-1`, `1.5` and `true` are things a model emits and none is a
+ * population. A string is refused rather than parsed: the field has one
+ * producer and a contract, and a second accepted spelling is how a contract
+ * stops meaning anything.
+ */
+export function declaredPopulation(value: unknown): number | null {
   if (typeof value !== "number") return null;
   return Number.isInteger(value) && value >= 1 ? value : null;
+}
+
+/** The search terms a finding names, or `null` when they are not a usable search. */
+export function searchTerms(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > POPULATION_SEARCH_MAX_TERMS) return null;
+  const terms: string[] = [];
+  for (const t of value) {
+    if (typeof t !== "string" || /[\r\n]/.test(t)) return null;
+    if (t.length < POPULATION_SEARCH_TERM_MIN || t.length > POPULATION_SEARCH_TERM_MAX) return null;
+    terms.push(t);
+  }
+  return terms;
+}
+
+/** How many lines carry at least one of the terms, compared literally. */
+export function matchingLines(lines: readonly string[], terms: readonly string[]): number {
+  let n = 0;
+  for (const line of lines) if (terms.some(t => line.includes(t))) n++;
+  return n;
+}
+
+/**
+ * The one decision: what a finding's population is, given the cited file's
+ * lines (`null` when the file could not be read).
+ */
+export function populationVerdict(
+  declaredRaw: unknown,
+  searchRaw: unknown,
+  lines: readonly string[] | null,
+): PopulationVerdict {
+  const declared = declaredPopulation(declaredRaw);
+  if (searchRaw === undefined) {
+    return declared === null ? { kind: "undeclared" } : { kind: "unbacked", declared };
+  }
+  const terms = searchTerms(searchRaw);
+  if (terms === null) {
+    return {
+      kind: "unmeasured",
+      why:
+        `its search is not 1 to ${POPULATION_SEARCH_MAX_TERMS} literal strings of ` +
+        `${POPULATION_SEARCH_TERM_MIN} to ${POPULATION_SEARCH_TERM_MAX} characters on one line`,
+    };
+  }
+  if (lines === null) return { kind: "unmeasured", why: "the cited file could not be read in the checkout" };
+  const count = matchingLines(lines, terms);
+  if (count === 0) return { kind: "unmeasured", why: "its search matches no line of the cited file, so it does not describe the cited site" };
+  if (declared !== null && declared !== count) return { kind: "contradicted", declared, count };
+  return { kind: "measured", count };
+}
+
+/** The count a verdict stands behind, or `null` when it measured nothing. */
+export function verifiedPopulation(v: PopulationVerdict): number | null {
+  return v.kind === "measured" || v.kind === "contradicted" ? v.count : null;
+}
+
+/**
+ * #1883: the cited file's lines, read out of the checkout, or `null` when
+ * it could not be read. Supplied by the command (`checkoutLineReader` in
+ * `lib/ai-review-suppression.ts`, bounded to the checkout); `null` means no
+ * checkout was given, and then every search is UNMEASURED.
+ */
+export type CitedLines = (file: string) => readonly string[] | null;
+
+/**
+ * One finding's population verdict (#1883). The count is the output of the
+ * literal search the finding names, run over its cited file — never the
+ * integer it declared. `lib/finding-population.ts` holds the decision; this
+ * only fetches the lines.
+ */
+export function findingPopulation(item: unknown, citedLines: CitedLines | null = null): PopulationVerdict {
+  if (item === null || typeof item !== "object" || Array.isArray(item)) return { kind: "undeclared" };
+  const finding = item as Record<string, unknown>;
+  const f = AI_REVIEW_FINDING_FIELDS;
+  const file = finding[f.file];
+  const lines = citedLines !== null && typeof file === "string" && file !== "" ? citedLines(file) : null;
+  return populationVerdict(finding[f.population], finding[f.populationSearch], lines);
 }
 
 /**
@@ -243,9 +380,9 @@ function populationCount(value: unknown): number | null {
  * contributes nothing — `.claude/rules/config-access.md`'s rule against
  * substituting a default for a measurement nobody took.
  */
-export function populationNotice(reported: readonly unknown[]): string | null {
+export function populationNotice(reported: readonly unknown[], citedLines: CitedLines | null = null): string | null {
   if (reported.length === 0) return null;
-  const { declared, undeclared, instances } = populationReading(reported);
+  const { declared, undeclared, instances, contradicted, unbacked } = populationReading(reported, citedLines);
   const head = `${declared} of ${reported.length} finding(s) declared how many instances their class has`;
   const tail =
     declared === 0
@@ -256,26 +393,41 @@ export function populationNotice(reported: readonly unknown[]): string | null {
       ? "."
       : `. ${undeclared} did not, so for those the class size is UNMEASURED — not one. ` +
         `REVIEW.md asks for the whole class in one finding; the cap counts classes, not instances.`;
-  return `${head}${tail}${rest}`;
+  // #1883: the two ways a declared number is not believed, said by name.
+  const backed =
+    unbacked === 0
+      ? ""
+      : ` ${unbacked} declared a count with no search behind it, so it is UNMEASURED, not believed.`;
+  const refused =
+    contradicted.length === 0
+      ? ""
+      : ` Refused: finding(s) ${contradicted.join(", ")} declared a count their own search did not return; ` +
+        `the search's count stands.`;
+  return `${head}${tail}${rest}${backed}${refused}`;
 }
 
-export function populationReading(reported: readonly unknown[]): PopulationReading {
+export function populationReading(
+  reported: readonly unknown[],
+  citedLines: CitedLines | null = null,
+): PopulationReading {
   let declared = 0;
   let undeclared = 0;
   let instances = 0;
-  for (const item of reported) {
-    const n =
-      item !== null && typeof item === "object"
-        ? populationCount((item as Record<string, unknown>)[AI_REVIEW_FINDING_FIELDS.population])
-        : null;
+  let unbacked = 0;
+  const contradicted: number[] = [];
+  reported.forEach((item, i) => {
+    const v = findingPopulation(item, citedLines);
+    if (v.kind === "unbacked") unbacked++;
+    if (v.kind === "contradicted") contradicted.push(i);
+    const n = verifiedPopulation(v);
     if (n === null) {
       undeclared++;
-      continue;
+      return;
     }
     declared++;
     instances += n;
-  }
-  return { declared, undeclared, instances };
+  });
+  return { declared, undeclared, instances, contradicted, unbacked };
 }
 
 /**
@@ -303,6 +455,7 @@ export function renderFinding(
   index: number,
   finding: Record<string, unknown>,
   tag: Severity | null = null,
+  citedLines: CitedLines | null = null,
 ): string {
   const f = AI_REVIEW_FINDING_FIELDS;
   const where = finding[f.file] !== undefined
@@ -319,10 +472,13 @@ export function renderFinding(
   // kind" truncated away reads as "this is one line". A finding that
   // declared none renders nothing here — an invented "(1 instance)" is the
   // default substitution `populationReading` exists to refuse.
-  const population = populationCount(finding[f.population]);
+  // #1883: the count a search returned, never the one declared.
+  const verdict = findingPopulation(finding, citedLines);
+  const population = verifiedPopulation(verdict);
+  const refusedNote = verdict.kind === "contradicted" ? `, counted by search; it declared ${verdict.declared}` : "";
   const sized = population === null
     ? body
-    : `${body} [${population} instance${population === 1 ? "" : "s"} of this shape]`;
+    : `${body} [${population} instance${population === 1 ? "" : "s"} of this shape${refusedNote}]`;
   return tag === null ? sized : `${sized} [${tag}]`;
 }
 
@@ -365,11 +521,12 @@ export function renderFinding(
 export function renderCountedFindings(
   reported: unknown[] | null,
   tags: readonly (Severity | null)[] | null = null,
+  citedLines: CitedLines | null = null,
 ): string[] {
   if (reported === null) return [];
   return reported.map((item, i) =>
     item !== null && typeof item === "object" && !Array.isArray(item)
-      ? renderFinding(i, item as Record<string, unknown>, tags?.[i] ?? null)
+      ? renderFinding(i, item as Record<string, unknown>, tags?.[i] ?? null, citedLines)
       : `finding ${i} is ${JSON.stringify(item)}`,
   );
 }
@@ -547,7 +704,7 @@ export function advisoryNotice(reading: AiReviewFindingsReading): string | null 
   // out of the full render means this notice and the contradiction arm's list
   // come from one call of one function, which is what keeps them from drifting.
   const reported = reading.reported ?? [];
-  const all = renderCountedFindings(reported, reading.findingTags);
+  const all = renderCountedFindings(reported, reading.findingTags, reading.citedLines ?? null);
   // CRC-B7's sort, applied to the DISPLAY and not to the payload. `all` stays
   // subscripted by payload index — `tagOrder` returns indices into it — so
   // every line still says `finding <payload index>` and still agrees with the
@@ -941,6 +1098,12 @@ export interface AiReviewFindingsReading {
   blocked: boolean | null;
   /** The payload as read, or `null` when there was nothing readable to read. */
   reported: unknown[] | null;
+  /**
+   * #1883: how a render reads a cited file's lines, so the population it
+   * prints is the one a search returned. Absent or `null` when no checkout
+   * was given; then every search is UNMEASURED.
+   */
+  citedLines?: CitedLines | null;
   /** The subset of `reported` whose severity blocks, or `null` under UNMEASURED. */
   blockingReported: unknown[] | null;
   /** The agent's own word, or `null` when it did not write a usable one. */
@@ -1583,6 +1746,7 @@ export function readAiReviewFindings(
   raw: string | null,
   scope: AiReviewScopeReading = scopeNotSupplied(),
   suppress: AiReviewSuppressionGate | null = null,
+  citedLines: CitedLines | null = null,
 ): AiReviewFindingsReading {
   const preExisting: unknown[] = [];
   // Appended to by `readPayload`, for the same reason `preExisting` is: the
@@ -1603,8 +1767,11 @@ export function readAiReviewFindings(
     suppress,
     suppressed,
     suppression,
+    citedLines,
   );
   return {
+    // #1883: carried on the reading so every later render counts by search.
+    citedLines,
     ...withScope(
       base,
       scope,
@@ -1635,6 +1802,7 @@ function readPayload(
   suppress: AiReviewSuppressionGate | null,
   suppressedOut: unknown[],
   suppressionOut: { reasons: string[]; unmeasured: string | null },
+  citedLines: CitedLines | null = null,
 ): AiReviewFindingsReading {
   if (raw === null) {
     return unmeasured(["FINDINGS_FILE_ABSENT"], ["no findings payload was produced"]);
@@ -1921,7 +2089,7 @@ function readPayload(
       // finding is not Pre-existing, or the branch above would have returned
       // — so this list is not re-ordered: a sort over one rank reorders
       // nothing, and applying one would be a comparator no case could redden.
-      detail.push(renderFinding(i, finding, findingTag(finding, touched)));
+      detail.push(renderFinding(i, finding, findingTag(finding, touched), citedLines));
     }
   });
 
@@ -2147,6 +2315,7 @@ export function readAiReviewFindingsFile(
   path: string,
   scope: AiReviewScopeReading = scopeNotSupplied(),
   suppress: AiReviewSuppressionGate | null = null,
+  citedLines: CitedLines | null = null,
 ): AiReviewFindingsReading {
   let raw: string;
   try {
@@ -2171,7 +2340,7 @@ export function readAiReviewFindingsFile(
       null,
     );
   }
-  return readAiReviewFindings(raw, scope, suppress);
+  return readAiReviewFindings(raw, scope, suppress, citedLines);
 }
 
 /** The sentence a refusal prints, or `null` when there is nothing to refuse. */
@@ -2212,7 +2381,7 @@ export function aiReviewRefusal(reading: AiReviewFindingsReading): string | null
       // Used INSTEAD of `detail` rather than appended to it. The two overlap
       // exactly on the blocking findings, so appending would print those
       // twice, and a duplicate reads as two findings.
-      const counted = renderCountedFindings(reading.reported, reading.findingTags);
+      const counted = renderCountedFindings(reading.reported, reading.findingTags, reading.citedLines ?? null);
       // Same sort, same binding, same payload numbering. The contradiction
       // arm is the one place every counted finding is printed together, so
       // it is where an unordered list costs the most.
@@ -2473,7 +2642,11 @@ export function argumentsBeyondTheContract(argv: readonly string[]): string[] {
  * outcome line and the scope line, because the generated step reads the
  * outcome line before it reads the exit code.
  */
-function readArgv(argv: string[], suppress: AiReviewSuppressionGate | null): AiReviewFindingsReading {
+function readArgv(
+  argv: string[],
+  suppress: AiReviewSuppressionGate | null,
+  citedLines: CitedLines | null = null,
+): AiReviewFindingsReading {
   const extra = argumentsBeyondTheContract(argv);
   if (extra.length > 0) {
     // Scope is NOT read here. The argv is already known to be a shape this
@@ -2506,7 +2679,7 @@ function readArgv(argv: string[], suppress: AiReviewSuppressionGate | null): AiR
         null,
         null,
       )
-    : readAiReviewFindingsFile(path, scope, suppress);
+    : readAiReviewFindingsFile(path, scope, suppress, citedLines);
 }
 
 /**
@@ -2520,8 +2693,9 @@ export function main(
   argv: string[],
   jury: AiReviewJuryGate | null = null,
   suppress: AiReviewSuppressionGate | null = null,
+  citedLines: CitedLines | null = null,
 ): number {
-  const reading = readArgv(argv, suppress);
+  const reading = readArgv(argv, suppress, citedLines);
 
   // CRC-B4, AFTER the reading and feeding nothing back into it.
   //
@@ -2644,7 +2818,7 @@ export function main(
   // for EVERY round including a clean one with findings, because the whole
   // point is a series: a rate that only appears when it is bad is a rate
   // nobody can compare against anything.
-  const population = populationNotice(reading.reported ?? []);
+  const population = populationNotice(reading.reported ?? [], citedLines);
   if (population !== null) {
     console.log(`::notice title=${AI_REVIEW_POPULATION_TITLE}::${escapeAnnotation(population)}`);
   }

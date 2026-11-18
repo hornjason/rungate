@@ -340,6 +340,8 @@ export function productionSuppression(
 ): {
   gate: AiReviewSuppressionGate | null;
   lineTextFor: (finding: ReviewFinding) => string | undefined;
+  /** #1883: the same bounded reader's lines, for counting a finding's population search. */
+  linesOf: (file: string) => readonly string[] | null;
 } {
   const reader = checkoutLineReader(root);
   const gate =
@@ -350,7 +352,7 @@ export function productionSuppression(
           lineTextFor: reader.lineTextFor,
           anchorOccurrences: reader.occurrencesOf,
         });
-  return { gate, lineTextFor: reader.lineTextFor };
+  return { gate, lineTextFor: reader.lineTextFor, linesOf: reader.linesOf };
 }
 
 /**
@@ -397,6 +399,8 @@ export function checkoutLineText(root: string): (finding: ReviewFinding) => stri
 export function checkoutLineReader(root: string): {
   lineTextFor: (finding: ReviewFinding) => string | undefined;
   occurrencesOf: (file: string, normalisedText: string) => number | undefined;
+  /** #1883: a cited file's lines, bounded to the checkout, or `null`. */
+  linesOf: (file: string) => readonly string[] | null;
 } {
   const base = resolve(root);
   const cache = new Map<string, string[] | null>();
@@ -415,6 +419,7 @@ export function checkoutLineReader(root: string): {
     return cache.get(path) ?? null;
   };
   return {
+    linesOf,
     lineTextFor: (finding: ReviewFinding) => {
       const file = finding.file;
       const line = finding.line;

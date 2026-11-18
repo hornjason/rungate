@@ -106,6 +106,12 @@ and including the one you cited. If you swept and it really is the only one,
 say `1`. If you did not sweep, leave it off — an absent `population` is read
 as *unmeasured*, which is honest, and a `1` you did not check is not.
 
+**Beside it, put the search that produced it** (#1883): `populationSearch`,
+the literal text you looked for in the cited file, one to five strings. The
+adjudicator counts the lines of that file carrying any of them, and that
+count is the population. A `population` with no search is read as
+unmeasured, and one the search does not return is refused.
+
 Scope the class to the **property**, not to the spelling you matched. Three
 unpaginated REST reads and two unpaginated GraphQL selections in one file are
 **five**, not three — they truncate for the same reason and the author fixes
