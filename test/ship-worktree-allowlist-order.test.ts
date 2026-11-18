@@ -32,6 +32,7 @@ import { join } from "path";
 
 import { assertMarkedBlockReachable } from "../lib/reachability";
 import { structuralCut } from "../lib/source-slice";
+import { worktreeIdentityRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -305,7 +306,7 @@ describe("#1098: the identity boundary vets the destination as well", () => {
     // somewhere else reports a matching `worktreeRepo`, so every identity
     // reading says match — and the directory is still not one this run owns.
     const { worktreeIdentityViolations } = new Function(
-      `${markedBlock("WORKTREE-IDENTITY")}\nreturn { worktreeIdentityViolations }`,
+      `${worktreeIdentityRegion(shipSource)}\nreturn { worktreeIdentityViolations }`,
     )() as {
       worktreeIdentityViolations: (
         rows: unknown,

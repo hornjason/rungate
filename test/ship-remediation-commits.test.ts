@@ -60,6 +60,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
+import { shipWorktreeIdentity } from "./helpers/ship-block";
 import { join } from "path";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -284,14 +285,7 @@ function loadRunImplement(opts: { ceremony?: unknown; buildResult: unknown }) {
   // notice. The fixtures below report `worktreeRepo` because the real agents
   // are now asked for it, and a fixture that omitted it would be testing the
   // refusal rather than the path it claims to test.
-  const iStart = shipSource.indexOf("// ──── WORKTREE-IDENTITY-START ────");
-  const iEnd = shipSource.indexOf("// ──── WORKTREE-IDENTITY-END ────");
-  if (iStart === -1 || iEnd === -1) {
-    throw new Error("ship.js is missing the WORKTREE-IDENTITY-START/END markers");
-  }
-  const worktreeIdentity = new Function(
-    `${shipSource.slice(iStart, iEnd)}\nreturn worktreeIdentity;`,
-  )();
+  const worktreeIdentity = shipWorktreeIdentity(shipSource);
 
   // #180 added a third, injected for the same reason: a stub would let this
   // suite and the guard disagree about which instruction an agent worked

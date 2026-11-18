@@ -59,6 +59,7 @@ import { describe, test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { worktreeIdentityRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const RUN_REPO = "owner/project";
@@ -143,7 +144,7 @@ function loadRunRef(opts: {
       // let the wave staging point and the top-level one disagree about which
       // repository a worktree belongs to, and nothing would notice — which is
       // the exact warning the COLLECT-IDENTITY docblock carries.
-      new Function(`${sliceBlock("WORKTREE-IDENTITY")}\nreturn worktreeIdentityViolations;`)(),
+      new Function(`${worktreeIdentityRegion(shipSource)}\nreturn worktreeIdentityViolations;`)(),
       RUN_REPO,
     ),
   };
