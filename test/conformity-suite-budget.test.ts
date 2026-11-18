@@ -81,6 +81,7 @@ describe("#2384: the generated conformity suite gives its checks a budget", () =
       const at = lines.findIndex(l => l.startsWith("setDefaultTimeout("));
       const firstRun = lines.findIndex(l => /^run[A-Za-z]+\(ROOT\);$/.test(l));
       expect(firstRun, `${who}'s generated suite registers no checks`).toBeGreaterThan(-1);
+      expect(at, `${who}'s setDefaultTimeout is not a top-level line the order can be read from`).toBeGreaterThan(-1);
       expect(at, `${who}'s setDefaultTimeout comes after the first check`).toBeLessThan(firstRun);
     }
   });
