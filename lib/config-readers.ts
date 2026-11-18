@@ -291,6 +291,15 @@ export function readPipelineAccount(projectRoot: string): string | null {
   return readBoardLabel(projectRoot, "pipelineAccount");
 }
 
+/**
+ * When the pipeline started signing as `board.pipelineAccount`, as an ISO time,
+ * or `null` (#1722). The hand-edit window opens here. The reader refuses a
+ * value that is not a time, so this returns the string as written.
+ */
+export function readPipelineSince(projectRoot: string): string | null {
+  return readBoardLabel(projectRoot, "pipelineSince");
+}
+
 /** One `board.<key>` label: absent, blank and non-string are all `null`. */
 function readBoardLabel(projectRoot: string, key: string): string | null {
   return boardLabelIn(tryLoadRungateConfig(projectRoot), key);

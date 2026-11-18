@@ -59,30 +59,36 @@ export function isPersonWrite(w: BoardWrite, pipelineAccount: string): boolean {
 }
 
 /**
- * When the window opens: the pipeline account's earliest write, or
- * `undefined` when it has not written. One decider, so the reader that bounds
- * its event scan and the verdict cannot disagree about the start.
+ * Who the pipeline is, and from when (#1722).
+ *
+ * `since` is when the pipeline started signing as `account`. It is
+ * configured, not discovered, and that is the round-3 repair. Taking the start
+ * from the account's earliest write on the issues read now let an issue moved
+ * out of the payload before that write hide both the move and an earlier
+ * pipeline write. The window would then open late, and a hand edit in the gap
+ * would read as history. A configured start does not depend on which issues
+ * are in the family today.
  */
-export function windowOpens(writes: readonly BoardWrite[], pipelineAccount: string): string | undefined {
-  return writes
-    .filter(w => w.actor !== null && sameLogin(w.actor, pipelineAccount))
-    .map(w => w.at)
-    .sort()[0];
+export interface PipelineIdentity {
+  account: string | null;
+  since: string | null;
 }
 
 /**
  * The verdict over every write read for the payload's issues.
  *
- * The window opens at the pipeline account's earliest write, so a person's
- * write from before the pipeline had its own identity is history, not a hand
- * edit. Until the account has written, nothing can be certified.
+ * A person's write before `since` is history, not a hand edit. Jason's
+ * words were "the measure starts once a board write is seen signed by
+ * rungate-bot", so nothing is certified until the account has written at or
+ * after `since`.
  */
 export function handEditVerdict(
   writes: readonly BoardWrite[] | null,
-  pipelineAccount: string | null,
+  identity: PipelineIdentity,
   unreadable: string | null,
 ): HandEditVerdict {
-  if (pipelineAccount === null) {
+  const { account, since } = identity;
+  if (account === null) {
     return {
       status: "unmeasured",
       why:
@@ -90,18 +96,25 @@ export function handEditVerdict(
         "write and the pipeline's cannot be told apart",
     };
   }
-  if (writes === null) return { status: "unmeasured", why: unreadable ?? "the board writes were not read" };
-  const opened = windowOpens(writes, pipelineAccount);
-  if (opened === undefined) {
+  if (since === null || Number.isNaN(Date.parse(since))) {
     return {
       status: "unmeasured",
       why:
-        `no board write signed by ${pipelineAccount} was found on these issues, so the window has not ` +
+        `\`board.pipelineSince\` is ${since === null ? "not set" : JSON.stringify(since) + ", which is not a time"}, ` +
+        `so when ${account} started signing the pipeline's writes is unknown`,
+    };
+  }
+  if (writes === null) return { status: "unmeasured", why: unreadable ?? "the board writes were not read" };
+  if (!writes.some(w => w.actor !== null && sameLogin(w.actor, account) && w.at >= since)) {
+    return {
+      status: "unmeasured",
+      why:
+        `no board write signed by ${account} since ${since} was found on these issues, so the window has not ` +
         `opened and nothing can be certified yet`,
     };
   }
   const edits = writes
-    .filter(w => w.at >= opened && isPersonWrite(w, pipelineAccount))
+    .filter(w => w.at >= since && isPersonWrite(w, account))
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.issue - b.issue))
     .map(w => {
       const what = w.detail === "" ? w.kind : `${w.kind} ${w.detail}`;
@@ -109,8 +122,8 @@ export function handEditVerdict(
       return `#${w.issue} ${what} — by ${who} at ${w.at}`;
     });
   return edits.length === 0
-    ? { status: "met", since: opened, read: writes.length }
-    : { status: "short", since: opened, read: writes.length, edits };
+    ? { status: "met", since, read: writes.length }
+    : { status: "short", since, read: writes.length, edits };
 }
 
 type Node = Record<string, unknown>;

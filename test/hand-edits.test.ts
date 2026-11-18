@@ -58,72 +58,79 @@ describe("#1722: who counts as a person", () => {
 });
 
 describe("#1722: the verdict", () => {
+  const SINCE = "2026-11-18T10:00:00Z";
+  const ID = { account: BOT, since: SINCE };
+
   test("no pipeline account is UNMEASURED, and says which key to set", () => {
-    const v = handEditVerdict([write()], null, null);
+    const v = handEditVerdict([write()], { account: null, since: SINCE }, null);
     expect(v.status).toBe("unmeasured");
     expect(v.status === "unmeasured" && v.why).toContain("board.pipelineAccount");
   });
 
+  test("no start time, or one that is not a time, is UNMEASURED, and says which key to set", () => {
+    for (const since of [null, "yesterday"]) {
+      const v = handEditVerdict([write()], { account: BOT, since }, null);
+      expect(v.status, String(since)).toBe("unmeasured");
+      expect(v.status === "unmeasured" && v.why, String(since)).toContain("board.pipelineSince");
+    }
+  });
+
   test("a population that was not read is UNMEASURED with its reason", () => {
-    const v = handEditVerdict(null, BOT, "the token cannot read project-board events");
+    const v = handEditVerdict(null, ID, "the token cannot read project-board events");
     expect(v).toEqual({ status: "unmeasured", why: "the token cannot read project-board events" });
   });
 
-  test("until the account writes, the window is not open and nothing is certified", () => {
-    const v = handEditVerdict([write({ actor: "github-actions", actorType: "Bot" })], BOT, null);
-    expect(v.status).toBe("unmeasured");
-    expect(v.status === "unmeasured" && v.why).toContain("no board write signed by rungate-bot");
+  test("until the account writes since the start, the window is not open and nothing is certified", () => {
+    const bot = handEditVerdict([write({ actor: "github-actions", actorType: "Bot" })], ID, null);
+    expect(bot.status === "unmeasured" && bot.why).toContain("no board write signed by rungate-bot since");
+    // A write by the account BEFORE the start does not open it either.
+    const early = handEditVerdict([write({ at: "2026-11-17T00:00:00Z" })], ID, null);
+    expect(early.status).toBe("unmeasured");
   });
 
-  test("a person's write before the window opens is history, not a hand edit", () => {
-    const v = handEditVerdict(
-      [write({ actor: "hornjason", at: "2026-11-17T09:00:00Z" }), write({ at: "2026-11-18T10:00:00Z" })],
-      BOT,
-      null,
-    );
-    expect(v).toEqual({ status: "met", since: "2026-11-18T10:00:00Z", read: 2 });
+  test("a person's write before the start is history, not a hand edit", () => {
+    const v = handEditVerdict([write({ actor: "hornjason", at: "2026-11-17T09:00:00Z" }), write()], ID, null);
+    expect(v).toEqual({ status: "met", since: SINCE, read: 2 });
   });
 
-  test("a person's write after the window opens is named: issue, write, actor and time", () => {
+  test("a person's write after the start is named: issue, write, actor and time", () => {
     const v = handEditVerdict(
       [
-        write({ at: "2026-11-18T10:00:00Z" }),
+        write(),
         write({ issue: 9002, kind: "labeled", detail: "engine", actor: "hornjason", at: "2026-11-18T11:00:00Z" }),
         write({ issue: 9003, kind: "labeled", detail: "engine", actor: "github-actions", actorType: "Bot", at: "2026-11-18T12:00:00Z" }),
       ],
-      BOT,
+      ID,
       null,
     );
     expect(v.status).toBe("short");
+    expect(v.status === "short" && v.edits).toEqual(["#9002 labeled engine — by hornjason at 2026-11-18T11:00:00Z"]);
+  });
+
+  test("a write at the same instant as the start is inside the window", () => {
+    const v = handEditVerdict([write(), write({ actor: "hornjason", at: SINCE })], ID, null);
+    expect(v.status).toBe("short");
+  });
+
+  /**
+   * Round 3 of #2388. The window used to open at the account's earliest
+   * write among the issues read now. With the pipeline's first write on an
+   * issue that has since left the family, the window opened at a LATER
+   * pipeline write. A hand edit in between then read as history.
+   */
+  test("a hand edit after the start but before the account's first write that was read is still named", () => {
+    const v = handEditVerdict(
+      [write({ actor: "hornjason", at: "2026-11-18T11:00:00Z" }), write({ at: "2026-11-18T12:00:00Z" })],
+      ID,
+      null,
+    );
     expect(v.status === "short" && v.edits).toEqual([
-      "#9002 labeled engine — by hornjason at 2026-11-18T11:00:00Z",
+      "#9001 milestoned Convergence Phase 1 — by hornjason at 2026-11-18T11:00:00Z",
     ]);
   });
 
-  test("a write at the same instant the window opens is inside it", () => {
-    const v = handEditVerdict(
-      [write({ at: "2026-11-18T10:00:00Z" }), write({ actor: "hornjason", at: "2026-11-18T10:00:00Z" })],
-      BOT,
-      null,
-    );
-    expect(v.status).toBe("short");
-  });
-
-  test("the window opens at the account's EARLIEST write, whatever order the writes arrive in", () => {
-    const v = handEditVerdict(
-      [
-        write({ at: "2026-11-19T10:00:00Z" }),
-        write({ actor: "hornjason", at: "2026-11-18T12:00:00Z" }),
-        write({ at: "2026-11-18T10:00:00Z" }),
-      ],
-      BOT,
-      null,
-    );
-    expect(v.status === "short" && v.since).toBe("2026-11-18T10:00:00Z");
-  });
-
-  test("an unattributed write after the window is named as such", () => {
-    const v = handEditVerdict([write(), write({ actor: null, actorType: null, at: "2026-11-18T11:00:00Z" })], BOT, null);
+  test("an unattributed write after the start is named as such", () => {
+    const v = handEditVerdict([write(), write({ actor: null, actorType: null, at: "2026-11-18T11:00:00Z" })], ID, null);
     expect(v.status === "short" && v.edits).toEqual([
       "#9001 milestoned Convergence Phase 1 — by an unattributed actor at 2026-11-18T11:00:00Z",
     ]);

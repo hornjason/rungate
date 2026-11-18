@@ -6,11 +6,13 @@
  *
  * Reads every board write on the issues in the `<prefix> Phase N` milestones:
  * milestone and label changes, blocked-by and blocking links, title renames,
- * body edits, and project-board adds, removals and status moves. The window
- * opens at the first write signed by the pipeline account
- * (`board.pipelineAccount`). Any write a person made after that is a hand
- * edit, and each is named. Exit 0 only when the window is open and holds no
- * hand edit; UNMEASURED and SHORT both refuse.
+ * body edits, and project-board adds, removals and status moves, on every
+ * issue in the family now and every issue that left it since the window
+ * opened. The window opens at `board.pipelineSince`, when the pipeline started
+ * signing as `board.pipelineAccount`. Any write a person made after that is a
+ * hand edit, and each is named. It reads UNMEASURED until the account has
+ * written at least once since then. Exit 0 only when the window is open and
+ * holds no hand edit; UNMEASURED and SHORT both refuse.
  *
  * Not part of `board-conformance`'s default verdict: it reads UNMEASURED until
  * the pipeline account has written, and joining the verdict before then would
@@ -22,10 +24,10 @@
  */
 
 import { parseArgs } from "node:util";
-import { readPipelineAccount } from "../lib/config-readers";
+import { readPipelineAccount, readPipelineSince } from "../lib/config-readers";
 import { createGitHubClient } from "../lib/github";
 import { nextCursor } from "../lib/graphql-cursor";
-import { BOARD_WRITE_EVENTS, boardWritesOf, handEditVerdict, windowOpens, type BoardWrite } from "../lib/hand-edits";
+import { BOARD_WRITE_EVENTS, boardWritesOf, handEditVerdict, type BoardWrite, type PipelineIdentity } from "../lib/hand-edits";
 import { inMilestoneFamily, readMilestonePrefix } from "../lib/live-issues";
 
 /** Every refusal exits through this, once. */
@@ -185,7 +187,7 @@ export async function readPayloadWrites(
   src: HandEditsSource,
   repo: string,
   prefix: string,
-  pipelineAccount: string,
+  since: string,
 ): Promise<{ writes: BoardWrite[]; issues: number } | { why: string }> {
   const [owner, name] = repo.split("/");
   if (!owner || !name) return { why: `--repo ${JSON.stringify(repo)} is not owner/name` };
@@ -202,16 +204,11 @@ export async function readPayloadWrites(
   };
   const failed = await read([...family.issues].sort((a, b) => a - b));
   if (failed !== null) return { why: failed };
-  const opened = windowOpens(writes, pipelineAccount);
-  let total = family.issues.size;
-  if (opened !== undefined) {
-    const moved = await movedSince(src, family.titles, family.issues, opened);
-    if ("why" in moved) return moved;
-    const again = await read([...moved.issues].sort((a, b) => a - b));
-    if (again !== null) return { why: again };
-    total += moved.issues.size;
-  }
-  return { writes, issues: total };
+  const moved = await movedSince(src, family.titles, family.issues, since);
+  if ("why" in moved) return moved;
+  const again = await read([...moved.issues].sort((a, b) => a - b));
+  if (again !== null) return { why: again };
+  return { writes, issues: family.issues.size + moved.issues.size };
 }
 
 function liveSource(repo: string): HandEditsSource {
@@ -236,7 +233,7 @@ function liveSource(repo: string): HandEditsSource {
 
 export async function main(
   argv: readonly string[],
-  deps: { source: (repo: string) => HandEditsSource; pipelineAccount: string | null },
+  deps: { source: (repo: string) => HandEditsSource; identity: PipelineIdentity },
 ): Promise<{ code: number; lines: string[] }> {
   const { values } = parseArgs({
     args: [...argv],
@@ -253,9 +250,10 @@ export async function main(
     };
   }
   let read: { writes: BoardWrite[]; issues: number } | { why: string } | null = null;
-  if (deps.pipelineAccount !== null) {
+  const { since } = deps.identity;
+  if (deps.identity.account !== null && since !== null && !Number.isNaN(Date.parse(since))) {
     try {
-      read = await readPayloadWrites(deps.source(repo), repo, prefix, deps.pipelineAccount);
+      read = await readPayloadWrites(deps.source(repo), repo, prefix, since);
     } catch (e) {
       // A token without `read:project` is refused here by GitHub. That is
       // UNMEASURED: a status move by hand would be invisible to this read.
@@ -263,7 +261,7 @@ export async function main(
     }
   }
   const writes = read !== null && "writes" in read ? read.writes : null;
-  const verdict = handEditVerdict(writes, deps.pipelineAccount, read !== null && "why" in read ? read.why : null);
+  const verdict = handEditVerdict(writes, deps.identity, read !== null && "why" in read ? read.why : null);
   const issues = read !== null && "issues" in read ? read.issues : 0;
   if (verdict.status === "unmeasured") {
     return { code: HAND_EDITS_REFUSAL_EXIT, lines: [`${COMMAND}: UNMEASURED — ${verdict.why}`] };
@@ -287,7 +285,11 @@ export async function main(
 }
 
 if (import.meta.main) {
-  const out = await main(process.argv.slice(2), { source: liveSource, pipelineAccount: readPipelineAccount(process.cwd()) });
+  const root = process.cwd();
+  const out = await main(process.argv.slice(2), {
+    source: liveSource,
+    identity: { account: readPipelineAccount(root), since: readPipelineSince(root) },
+  });
   for (const l of out.lines) console.log(l);
   process.exit(out.code);
 }

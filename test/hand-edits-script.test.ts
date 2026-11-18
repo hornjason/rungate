@@ -16,6 +16,7 @@ import { HAND_EDITS_REFUSAL_EXIT, main, type HandEditsSource } from "../scripts/
 
 const ROOT = join(import.meta.dir, "..");
 const BOT = "rungate-bot";
+const ID = { account: BOT, since: "2026-11-18T10:00:00Z" };
 const REPO = "acme/widgets";
 
 const actor = (login: string, type = "User") => ({ __typename: type, login });
@@ -94,7 +95,7 @@ describe("#1722: the hand-edit reader", () => {
       ],
       issues: [{ number: 9001, events: [botMove("2026-11-18T10:00:00Z"), labeled("2026-11-18T11:00:00Z", actor("github-actions", "Bot"))] }],
     });
-    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, pipelineAccount: BOT });
+    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, identity: ID });
     expect(out.code, out.lines.join("\n")).toBe(0);
     expect(out.lines[0]).toContain("MET");
     expect(b.asked).toEqual([9001]);
@@ -105,7 +106,7 @@ describe("#1722: the hand-edit reader", () => {
       milestones: [{ title: "Convergence Phase 1", issues: [9001] }],
       issues: [{ number: 9001, events: [botMove("2026-11-18T10:00:00Z"), labeled("2026-11-18T12:00:00Z", actor("hornjason"))] }],
     });
-    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, pipelineAccount: BOT });
+    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, identity: ID });
     expect(out.code).toBe(HAND_EDITS_REFUSAL_EXIT);
     expect(out.lines).toEqual([
       "hand-edits: SHORT — 1 hand edit(s) since 2026-11-18T10:00:00Z on the Convergence family:",
@@ -131,7 +132,7 @@ describe("#1722: the hand-edit reader", () => {
         { event: "milestoned", created_at: "2026-11-17T00:00:00Z", milestone: { title: "Convergence Phase 1" }, issue: { number: 9004 } },
       ],
     });
-    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, pipelineAccount: BOT });
+    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, identity: ID });
     expect(out.code).toBe(HAND_EDITS_REFUSAL_EXIT);
     expect(out.lines[1]).toBe("  #9002 demilestoned Convergence Phase 1 — by hornjason at 2026-11-18T13:00:00Z");
     // 9004 left before the window opened, and 9003 was never in the family.
@@ -163,9 +164,39 @@ describe("#1722: the hand-edit reader", () => {
         ],
       ],
     });
-    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, pipelineAccount: BOT });
+    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, identity: ID });
     expect(out.lines[1]).toBe("  #9050 demilestoned Convergence Phase 1 — by hornjason at 2026-11-18T13:00:00Z");
     expect(b.asked).toEqual([9001, 9050]);
+  });
+
+  test("round 3: the pipeline's first write was on an issue that has left the family; both hand edits are still named", async () => {
+    // Pipeline writes on A (9060) at 10:30. A person moves A out at 11:00
+    // and labels B (9061) at 11:30. The pipeline writes on B at 12:00. Only
+    // B is in the family now.
+    const b = board({
+      milestones: [{ title: "Convergence Phase 1", issues: [9061] }],
+      issues: [
+        {
+          number: 9060,
+          events: [
+            botMove("2026-11-18T10:30:00Z"),
+            { __typename: "DemilestonedEvent", createdAt: "2026-11-18T11:00:00Z", actor: actor("hornjason"), milestoneTitle: "Convergence Phase 1" },
+          ],
+        },
+        { number: 9061, events: [labeled("2026-11-18T11:30:00Z", actor("hornjason")), botMove("2026-11-18T12:00:00Z")] },
+      ],
+      repoEvents: [
+        { event: "labeled", created_at: "2026-11-18T11:30:00Z", issue: { number: 9061 } },
+        { event: "demilestoned", created_at: "2026-11-18T11:00:00Z", milestone: { title: "Convergence Phase 1" }, issue: { number: 9060 } },
+        { event: "labeled", created_at: "2026-11-17T00:00:00Z", issue: { number: 1 } },
+      ],
+    });
+    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, identity: ID });
+    expect(out.code).toBe(HAND_EDITS_REFUSAL_EXIT);
+    expect(out.lines.slice(1)).toEqual([
+      "  #9060 demilestoned Convergence Phase 1 — by hornjason at 2026-11-18T11:00:00Z",
+      "  #9061 labeled engine — by hornjason at 2026-11-18T11:30:00Z",
+    ]);
   });
 
   test("an event feed that is not newest-first is refused, not read as ending on page 1", async () => {
@@ -177,19 +208,20 @@ describe("#1722: the hand-edit reader", () => {
         { event: "demilestoned", created_at: "2026-11-18T13:00:00Z", milestone: { title: "Convergence Phase 1" }, issue: { number: 9050 } },
       ],
     });
-    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, pipelineAccount: BOT });
+    const out = await main(["--prefix", "Convergence", "--repo", REPO], { source: b.source, identity: ID });
     expect(out.code).toBe(HAND_EDITS_REFUSAL_EXIT);
     expect(out.lines[0]).toContain("not newest-first");
   });
 
   test("UNMEASURED, by name, for each read that did not happen", async () => {
-    const run = (argv: string[], b: ReturnType<typeof board>, account: string | null = BOT) =>
-      main(argv, { source: b.source, pipelineAccount: account });
+    const run = (argv: string[], b: ReturnType<typeof board>, account: string | null = BOT, since: string | null = ID.since) =>
+      main(argv, { source: b.source, identity: { account, since } });
     const ok = board({ milestones: [{ title: "Convergence Phase 1", issues: [9001] }], issues: [{ number: 9001, events: [botMove("t")] }] });
 
     const cases: [string, Promise<{ code: number; lines: string[] }>, string][] = [
       ["no flags", run([], ok), "--prefix and --repo are both required"],
       ["no account", run(["--prefix", "Convergence", "--repo", REPO], ok, null), "board.pipelineAccount"],
+      ["no start", run(["--prefix", "Convergence", "--repo", REPO], ok, BOT, null), "board.pipelineSince"],
       [
         "no scope",
         run(["--prefix", "Convergence", "--repo", REPO], board({ milestones: [], issues: [], fail: "INSUFFICIENT_SCOPES read:project" })),
