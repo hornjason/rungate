@@ -223,12 +223,15 @@ const FORBIDDEN = 403;
 const PENDING_REVIEW_CONDITION = /pending review/i;
 
 /**
- * The 422 that means "this path is not in the pull request's diff" — the field
- * GitHub names is the thread's `path` (review of #2358). Any other 422, a
- * stale `commit_id` among them, is a request this producer got wrong and stays
- * a failure rather than moving to the conversation.
+ * The 422 that means "this path is not in the pull request's diff" — GitHub
+ * names the FIELD, either as `pull_request_review_thread.path` (the #1740
+ * reading: `… .path "could not be resolved"`) or as `"field":"path"` in its
+ * errors array. The bare word "path" anywhere in a message is not that
+ * (review of #2358): any other 422, a stale `commit_id` among them, is a
+ * request this producer got wrong and stays a failure rather than moving to
+ * the conversation.
  */
-const OFF_DIFF_CONDITION = /\.path\b|"path"|\bpath\b/i;
+const OFF_DIFF_CONDITION = /pull_request_review_thread\.path\b|"field"\s*:\s*"path"/;
 
 /**
  * One binding, so a mutation of it is observable. Both halves are required:
@@ -297,6 +300,8 @@ export async function postReviewThreads(
   let demoted = 0;
   let pullComments = 0;
   const alreadyOnConversation = new Set((comment?.existing ?? []).map(threadKeyFrom).filter((k): k is string => k !== null));
+  /** Keys this call put on the conversation, so a repeat can say WHEN (review of #2358). */
+  const postedThisRound = new Set<string>();
   let forbidden = 0;
   let pending = 0;
   let failed = 0;
@@ -340,7 +345,8 @@ export async function postReviewThreads(
       if (key !== null && alreadyOnConversation.has(key)) {
         posted += 1;
         pullComments += 1;
-        detail.push(`${where}: not in this pull request's diff, and already on its conversation from an earlier round, so not posted again`);
+        const when = postedThisRound.has(key) ? "earlier in this round" : "from an earlier round";
+        detail.push(`${where}: not in this pull request's diff, and already on its conversation ${when}, so not posted again`);
         continue;
       }
       const viaConversation = await comment.post(
@@ -351,7 +357,10 @@ export async function postReviewThreads(
       );
       if (viaConversation.ok) {
         // Within the round too: a second finding with this key is the same finding (review of #2358).
-        if (key !== null) alreadyOnConversation.add(key);
+        if (key !== null) {
+          alreadyOnConversation.add(key);
+          postedThisRound.add(key);
+        }
         posted += 1;
         pullComments += 1;
         detail.push(`${where}: not in this pull request's diff (422 ${request.line === null ? "at the file" : "at the line and at the file"}), so it was posted on the conversation instead`);

@@ -169,6 +169,32 @@ describe("postReviewThreads", () => {
     expect(bodies).toEqual([]);
   });
 
+  test("#2358 review: a 422 that only mentions the word path, not the path field, stays FAILED", async () => {
+    const { post } = recorder(() => ({ ok: false, status: 422, message: "Validation Failed: body is too long (maximum is 65536 characters) for the comment at this path" }));
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("FAILED");
+    expect(bodies).toEqual([]);
+  });
+
+  test("#2358 review: GitHub's errors-array shape naming the path field goes on the conversation", async () => {
+    const { post } = recorder(() => ({ ok: false, status: 422, message: 'Validation Failed: {"resource":"PullRequestReviewComment","code":"invalid","field":"path"}' }));
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("POSTED");
+    expect(bodies).toHaveLength(1);
+  });
+
+  test("#2358 review: a same-round repeat says it was posted earlier this round, not in an earlier round", async () => {
+    const { post } = recorder(refused);
+    const { comment } = pullCommenter();
+    const keyFor = () => "src/a.ts\u0000n:12\u0000off-by-one";
+    const r = await postReviewThreads(reading([finding, { ...finding }]), post, keyFor, undefined, comment);
+    const text = r.detail.join("\n");
+    expect(text).toContain("earlier in this round");
+    expect(text).not.toContain("from an earlier round");
+  });
+
   test("#2338 review: a finding with no line says it was refused at the file, not at the line", async () => {
     const { post } = recorder(refused);
     const { bodies, comment } = pullCommenter();
