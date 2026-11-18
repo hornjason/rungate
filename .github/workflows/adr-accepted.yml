@@ -1,4 +1,4 @@
-# generated-sha: c11bcf749f4d5259
+# generated-sha: 78b2451b25eb18ae
 # Managed by rungate — do not edit. Set board.engineSpec and board.milestonePrefix
 # in .claude/rungate/config.json and re-run `rungate scaffold`.
 #
@@ -121,7 +121,7 @@ jobs:
         run: |
           project="$PROJECT_ID"
           if [ -z "$project" ]; then
-            err=$(mktemp)
+            err="$RUNNER_TEMP/board-id.stderr"
             code=0
             project=$(bunx rungate@0.8.27 board-id 2>"$err") || code=$?
             cat "$err" >&2
@@ -142,7 +142,7 @@ jobs:
         run: |
           project="$PROJECT_ID"
           if [ -z "$project" ]; then
-            err=$(mktemp)
+            err="$RUNNER_TEMP/board-id.stderr"
             code=0
             project=$(bunx rungate@0.8.27 board-id 2>"$err") || code=$?
             cat "$err" >&2

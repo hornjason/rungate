@@ -18,6 +18,8 @@
  * reads exactly what it read before.
  */
 
+import { NO_BOARD_REFUSAL } from "./board-ready-workflow";
+
 /**
  * Shell for one generated step: resolve the board's node id into `$project`,
  * or end the step with a warning when none is configured, then run `command`.
@@ -27,13 +29,16 @@ export function boardProjectRun(cli: string, title: string, command: string): st
   return [
     `project="$PROJECT_ID"`,
     `if [ -z "$project" ]; then`,
-    `  err=$(mktemp)`,
+    // The runner's own temp dir, cleaned per job, as board-intake.yml does: no
+    // mktemp to leak or to fail under `bash -e` (review of #2355).
+    '  err="$RUNNER_TEMP/board-id.stderr"',
     `  code=0`,
     `  project=$(${cli} board-id 2>"$err") || code=$?`,
     `  cat "$err" >&2`,
     // Only board-id's own no-board refusal is a warning. Its other refusals
     // share the exit code, so the wording is what tells them apart.
-    `  if [ "$code" -ne 0 ] && grep -q '^UNMEASURED: no board' "$err"; then`,
+    // The one spelling of board-id's refusal, the one board-ready and board-intake read too.
+    `  if [ "$code" -ne 0 ] && grep -q '^${NO_BOARD_REFUSAL}' "$err"; then`,
     `    echo "::warning title=${title}::UNMEASURED — no board is configured (board.id in the rungate config, or the RUNGATE_PROJECT_ID variable), so there is no board to write. Set board.id and this runs."`,
     `    exit 0`,
     `  fi`,

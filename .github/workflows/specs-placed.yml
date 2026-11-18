@@ -1,4 +1,4 @@
-# generated-sha: 1330913d775969fb
+# generated-sha: 8331b5508a80e506
 # Managed by rungate — do not edit. Opt a spec in with
 # board: { scope: active, prefix: <Name> } in its frontmatter and give it a
 # placement table; nothing here names a spec.
@@ -140,7 +140,7 @@ jobs:
         run: |
           project="$PROJECT_ID"
           if [ -z "$project" ]; then
-            err=$(mktemp)
+            err="$RUNNER_TEMP/board-id.stderr"
             code=0
             project=$(bunx rungate@0.8.27 board-id 2>"$err") || code=$?
             cat "$err" >&2

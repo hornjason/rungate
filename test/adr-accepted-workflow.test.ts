@@ -412,7 +412,7 @@ describe("a repository with no board: both board steps warn and pass instead of 
       const bin = join(dir, "bin");
       mkdirSync(bin);
       writeFileSync(join(bin, "bunx"), `#!/usr/bin/env bash\necho "$*" >> "${join(dir, "calls.log")}"\n${bunx}\n`, { mode: 0o755 });
-      const r = spawnSync("bash", ["-e", "-c", script], { cwd: dir, encoding: "utf-8", env: { PATH: `${bin}:/usr/bin:/bin`, GITHUB_REPOSITORY: "o/r", ACTOR: "someone" } });
+      const r = spawnSync("bash", ["-e", "-c", script], { cwd: dir, encoding: "utf-8", env: { PATH: `${bin}:/usr/bin:/bin`, GITHUB_REPOSITORY: "o/r", ACTOR: "someone", RUNNER_TEMP: dir } });
       const calls = existsSync(join(dir, "calls.log")) ? readFileSync(join(dir, "calls.log"), "utf-8").trim().split("\n") : [];
       return { code: r.status, out: `${r.stdout}${r.stderr}`, calls: calls.map(c => c.replace(/^rungate@\S+ /, "")) };
     } finally {

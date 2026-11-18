@@ -25,6 +25,8 @@ import {
   WAIT_POLLS,
 } from "../lib/scaffold/specs-placed-workflow";
 import { createCiWorkflows } from "../lib/scaffold/steps";
+import { boardProjectRun } from "../lib/scaffold/board-project-step";
+import { NO_BOARD_REFUSAL } from "../lib/scaffold/board-ready-workflow";
 import { workflowCensus } from "../lib/scaffold/workflow-census";
 
 const ROOT = join(import.meta.dir, "..");
@@ -72,7 +74,7 @@ function execute(script: string, stubs: Record<string, string>, files: Record<st
     const r = spawnSync("bash", ["-e", "-c", script], {
       cwd: dir,
       encoding: "utf-8",
-      env: { PATH: `${bin}:/usr/bin:/bin`, GITHUB_REPOSITORY: "o/r", GITHUB_RUN_ID: "77", GITHUB_OUTPUT: join(dir, "out.txt"), HOME: dir },
+      env: { PATH: `${bin}:/usr/bin:/bin`, GITHUB_REPOSITORY: "o/r", GITHUB_RUN_ID: "77", GITHUB_OUTPUT: join(dir, "out.txt"), HOME: dir, RUNNER_TEMP: dir },
     });
     const log = existsSync(join(dir, "calls.log")) ? readFileSync(join(dir, "calls.log"), "utf-8").trim().split("\n") : [];
     return { code: r.status, out: `${r.stdout}${r.stderr}`, calls: log, dir };
@@ -284,6 +286,13 @@ describe("a repository with no board: the Criteria step warns and passes instead
   const step = STEPS.find(s => s.name === "Criteria column on the board");
   const run = runOf(step);
   const noBoard = 'case "$*" in *board-id*) echo "UNMEASURED: no board — set board.id in the rungate config under /x. Nothing was printed." >&2; exit 2;; esac; exit 0';
+
+  test("the snippet makes no scratch file of its own, and reads the refusal from NO_BOARD_REFUSAL (review of #2355)", () => {
+    const snippet = boardProjectRun("bunx rungate@0.0.0", "T", "true");
+    expect(snippet).not.toContain("mktemp");
+    expect(snippet).toContain('"$RUNNER_TEMP/board-id.stderr"');
+    expect(snippet).toContain(`grep -q '^${NO_BOARD_REFUSAL}'`);
+  });
 
   test("no variable and no board.id: a warning naming UNMEASURED, exit 0, and nothing written", () => {
     expect(run, "the Criteria step is missing").not.toBe("");
