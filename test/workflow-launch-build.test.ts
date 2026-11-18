@@ -33,7 +33,8 @@ import {
 } from "../scripts/build-workflow-launch";
 
 const source = readFileSync(SHIP_SOURCE, "utf-8");
-const built = buildWorkflowLaunch(source, WORKFLOW_SCRIPT_CAP, launchBundle());
+const bundle = launchBundle();
+const built = buildWorkflowLaunch(source, WORKFLOW_SCRIPT_CAP, bundle);
 /** The launch text with the bundled lib region taken out: what came from ship.js alone. */
 const outsideBundle = (text: string) => {
   const at = text.indexOf(BUNDLE_START);
@@ -102,8 +103,8 @@ describe("#2287 / SC-2772: what the build must not get wrong", () => {
   });
 
   test("over the cap is a refusal, not a smaller file — and exactly at the cap is accepted (review, #2291)", () => {
-    expect(() => buildWorkflowLaunch(source, built.bytes - 1)).toThrow(/over the Workflow tool's/);
-    expect(buildWorkflowLaunch(source, built.bytes).bytes).toBe(built.bytes);
+    expect(() => buildWorkflowLaunch(source, built.bytes - 1, bundle)).toThrow(/over the Workflow tool's/);
+    expect(buildWorkflowLaunch(source, built.bytes, bundle).bytes).toBe(built.bytes);
   });
 
   test("text inside a template literal is never rewritten: trailing spaces and blank-line runs survive (review, #2291)", () => {
@@ -388,10 +389,17 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
     expect(bundleDrops("export function f() { return JSON.stringify(1); }", "function f() { return JSON.stringify(1); }")).toEqual([]);
   });
 
-  test("review of #2399 round 5: a core that uses a function declared inside a top-level block is refused, naming it", () => {
-    expect(coreClosure("if (true) { function g() { return 1; } }\nexport function core() { return g(); }", ["core"]).imports).toEqual([
+  test("review of #2399 round 5: a core that uses a name declared inside a top-level block is refused, naming it", () => {
+    // A `var` in a block is module-scoped, so the module defines it and the
+    // bundle, which carries only top-level declarations, would not.
+    expect(coreClosure("if (true) { var g = () => 1; }\nexport function core() { return g(); }", ["core"]).imports).toEqual([
       "g (declared where the bundle cannot reach it, via core)",
     ]);
+    // A function declared in a block is block-scoped in a module: the module
+    // itself cannot resolve `g`, so the bundle cannot differ from it, and the
+    // output check sees the name unresolved in both.
+    const blockFn = "if (true) { function g() { return 1; } }\nexport function core() { return g(); }";
+    expect(bundleDrops(blockFn, "function core() { return g(); }")).toEqual([]);
     // A local, a parameter, and a property of a reached object are all inside what is emitted.
     expect(coreClosure("const CFG = { a: 1 };\nexport function core(p) { const l = p; return l + CFG.a; }", ["core"]).imports).toEqual([]);
   });

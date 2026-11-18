@@ -445,7 +445,11 @@ function readCore(source: string, core: readonly string[]): CoreReading {
         else {
           const top = topLevelNode(decl, sf);
           if (top) enqueue(top, sym!.name);
-          else if (decl && decl.getSourceFile() === sf) unplaced.push({ name: n.text, decl, via: name });
+          // A property is a member, not a binding in scope: what writes one at
+          // load is the load-time scan's question, not this one.
+          else if (decl && decl.getSourceFile() === sf && !(sym!.flags & (ts.SymbolFlags.Property | ts.SymbolFlags.Method | ts.SymbolFlags.Accessor))) {
+            unplaced.push({ name: n.text, decl, via: name });
+          }
         }
       }
       ts.forEachChild(n, visit);

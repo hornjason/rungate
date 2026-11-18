@@ -1,5 +1,11 @@
 /**
- * ship.js's inlined suite-currency copy and lib/suite-measurement.ts agree (#224)
+ * The suite-currency code a run launches is lib/suite-measurement.ts's (#224, #2400)
+ *
+ * Since #2400 there is no hand copy: scripts/build-workflow-launch.ts bundles
+ * `suiteCurrency` from the library into workflows/ship.run.js, between its
+ * bundle markers. This file runs the matrix over THAT text, the code a run
+ * executes, and it fails to load if the build stops bundling it. The history
+ * below is why the matrix exists.
  *
  * Run `wf_7ac5f614-d21` reported `{"status":"SHIPPED","regressions":0}` for
  * issue #209. The same branch, checked out and run, gave 3984 pass / 1 fail —
@@ -34,6 +40,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { structuralCut } from "../lib/source-slice";
+import { BUNDLE_END, BUNDLE_START } from "../scripts/build-workflow-launch";
 
 import { WorkflowStateSchema } from "../gates/schema";
 
@@ -70,6 +77,7 @@ function schemaDeclaresPath(path: string): boolean {
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP_PATH = join(REPO_ROOT, "workflows", "ship.js");
+const LAUNCH_PATH = join(REPO_ROOT, "workflows", "ship.run.js");
 const LIB_PATH = join(REPO_ROOT, "lib", "suite-measurement.ts");
 const shipSource = readFileSync(SHIP_PATH, "utf-8");
 
@@ -86,15 +94,17 @@ type CurrencyFn = (measuredSha: unknown, headSha: unknown) => Currency;
  * a quiet green run.
  */
 const BLOCK: string = (() => {
-  const start = shipSource.indexOf(START);
-  const end = shipSource.indexOf(END);
+  // The bundled lib region of the launch file (#2400), not a block in ship.js.
+  const launch = readFileSync(LAUNCH_PATH, "utf-8");
+  const start = launch.indexOf(BUNDLE_START);
+  const end = launch.indexOf(BUNDLE_END);
   if (start === -1 || end === -1) {
     throw new Error(
-      `workflows/ship.js is missing the ${START} / ${END} markers — ` +
-        "there is no inlined suite-currency copy to compare against the library",
+      "workflows/ship.run.js carries no bundled lib region — the build stopped bundling suiteCurrency, " +
+        "so the code a run launches has no suite-currency rule to test",
     );
   }
-  return shipSource.slice(start, end);
+  return launch.slice(start + BUNDLE_START.length, end);
 })();
 
 /**
@@ -111,7 +121,7 @@ const BLOCK: string = (() => {
 function loadCurrency(block: string): CurrencyFn {
   const fn = new Function(`${block}\nreturn suiteCurrency`)();
   if (typeof fn !== "function") {
-    throw new Error("the SUITE-CURRENCY block does not define suiteCurrency");
+    throw new Error("the bundled lib region of workflows/ship.run.js does not define suiteCurrency");
   }
   return fn as CurrencyFn;
 }
@@ -200,7 +210,7 @@ function transcript(fn: CurrencyFn): string[] {
 
 // ── The matrix is real, and the copy ship.js runs obeys the rule ────────────
 
-describe("#224: the inlined suite-currency copy", () => {
+describe("#224 / #2400: the suite-currency code the launch file runs", () => {
   test("the matrix exercises every state — otherwise agreement is vacuous", () => {
     const states = new Set(MATRIX.map(([, , expected]) => expected));
     expect([...states].sort()).toEqual(["CURRENT", "STALE", "UNRECORDED"]);
@@ -246,23 +256,19 @@ describe("#224: the inlined suite-currency copy", () => {
 
 // ── The agreement itself ────────────────────────────────────────────────────
 
-describe("#224: ship.js's copy and lib/suite-measurement.ts agree", () => {
-  test("the library exists — the copy has a source of truth to agree with", () => {
-    expect(
-      existsSync(LIB_PATH),
-      `lib/suite-measurement.ts is missing. ship.js carries an inlined copy of it ` +
-        `inside ${START}, and with no library there is nothing holding that copy to ` +
-        `a tested rule.`,
-    ).toBe(true);
+describe("#224 / #2400: the bundled code and lib/suite-measurement.ts agree", () => {
+  test("the library exists — the bundle has a source to come from", () => {
+    expect(existsSync(LIB_PATH), "lib/suite-measurement.ts is missing, so nothing can be bundled").toBe(true);
   });
 
-  test("both copies produce an identical transcript over the matrix", async () => {
+  test("ship.js no longer carries its own suiteCurrency — the hand copy is gone (#2400)", () => {
+    expect(shipSource).not.toMatch(/^function suiteCurrency\(/m);
+    expect(shipSource).not.toMatch(/^function suiteSha\(/m);
+  });
+
+  test("the bundled code and the library produce an identical transcript over the matrix", async () => {
     const mod = (await import(LIB_PATH)) as { suiteCurrency?: unknown };
-    expect(
-      typeof mod.suiteCurrency,
-      "lib/suite-measurement.ts does not export suiteCurrency — the copy in " +
-        "ship.js has nothing to be compared against",
-    ).toBe("function");
+    expect(typeof mod.suiteCurrency, "lib/suite-measurement.ts does not export suiteCurrency").toBe("function");
 
     const library = mod.suiteCurrency as CurrencyFn;
     expect(transcript(inlined)).toEqual(transcript(library));
@@ -437,7 +443,7 @@ describe("#224: the suite result reaches state through the recorder", () => {
 
 // ── The agreement is proven to be able to fail ──────────────────────────────
 
-describe("#224: mutation — the matrix refuses a drifted copy", () => {
+describe("#224: mutation — the matrix refuses a drifted rule", () => {
   /**
    * Build a mutant copy of the block and compile it.
    *
@@ -450,7 +456,7 @@ describe("#224: mutation — the matrix refuses a drifted copy", () => {
     const mutated = BLOCK.replace(pattern, replacement);
     if (mutated === BLOCK) {
       throw new Error(
-        `could not build the mutant: ${pattern} matched nothing in the SUITE-CURRENCY block`,
+        `could not build the mutant: ${pattern} matched nothing in the bundled lib region`,
       );
     }
     return loadCurrency(mutated);
@@ -476,7 +482,7 @@ describe("#224: mutation — the matrix refuses a drifted copy", () => {
     // and it is the half of this rule that does not look like a bug.
     // The FIRST UNRECORDED is the no-measured-SHA branch — the count-with-no-
     // SHA case the issue names in those words.
-    const mutant = mutate(/state: 'UNRECORDED',/, "state: 'CURRENT',");
+    const mutant = mutate(/state: ["']UNRECORDED["'],/, 'state: "CURRENT",');
 
     expect(mutant(undefined, SHA).state).toBe("CURRENT");
     expect(transcript(mutant)).not.toEqual(transcript(inlined));
