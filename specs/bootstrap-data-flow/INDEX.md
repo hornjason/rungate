@@ -1,6 +1,7 @@
 ---
 doc-type: index
 governs: Bootstrap data flow — scan order, data sources, consumer requirements, re-run behavior
+board: { scope: deferred }
 ---
 
 # INDEX.md

@@ -53,6 +53,7 @@ import {
 import { ensureConfigTrackable } from "../config-trackable";
 import type { ProjectType } from "../generators/types";
 import { DEFAULT_PROFILE, isStepIncluded, type ScaffoldProfile } from "./profiles";
+import { deferUndeclaredSpecs } from "./spec-scope";
 
 export interface WriteStepOptions {
   force?: boolean;
@@ -190,6 +191,9 @@ What does this workflow produce?
 
   // Phase 3: Final setup
   copySpecTemplateIfEmpty(join(projectPath, "specs"), actions);
+  // #2307: a spec with no board scope is out of every measurement, silently.
+  // Both profiles: the measurement is wrong either way.
+  deferUndeclaredSpecs(projectPath, actions);
   generateProjectState(projectPath, actions);
   // Both profiles. #485 is about the file existing at all, and `minimal` is
   // the profile the consumer that found the gap was scaffolded with.
