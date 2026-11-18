@@ -138,6 +138,9 @@ describe("#2379: the daily run labels an outside reporter's recent issue the ope
       { number: 4, created_at: ago(CONSUMER_INTAKE_SWEEP_DAYS + 5), author_association: "NONE", labels: [] },
       { number: 5, created_at: recent, author_association: "NONE", labels: [], pull_request: {} },
       { number: 6, created_at: recent, author_association: "FIRST_TIME_CONTRIBUTOR", labels: [{ name: "bug" }] },
+      // #2390: the pipeline's own plan issue — github-actions[bot], association NONE.
+      { number: 7, created_at: recent, author_association: "NONE", labels: [], user: { login: "github-actions[bot]", type: "Bot" } },
+      { number: 8, created_at: recent, author_association: "NONE", labels: [], user: { login: "a-reporter", type: "User" } },
     ];
     const r = spawnSync("jq", ["-r", filter!], {
       input: JSON.stringify(page),
@@ -145,7 +148,7 @@ describe("#2379: the daily run labels an outside reporter's recent issue the ope
       env: { ...process.env, TRUSTED: JSON.stringify(TRUSTED_ASSOCIATIONS) },
     });
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout.trim().split("\n")).toEqual(["1", "6"]);
+    expect(r.stdout.trim().split("\n")).toEqual(["1", "6", "8"]);
   });
 
   // Review of #2380, round 2.
@@ -168,5 +171,35 @@ describe("#2379: the daily run labels an outside reporter's recent issue the ope
     const run = sweep()!.run!;
     expect(run).toMatch(/--add-label from-consumer \\\n\s+\|\| echo "::warning title=consumer-intake::could not label #\$n/);
     expect((sweep() as Step & { "continue-on-error"?: boolean })["continue-on-error"]).toBe(true);
+  });
+});
+
+/**
+ * #2390: an issue a bot files is not a consumer report. The pipeline files its
+ * own plan issues as `github-actions[bot]`, with author association `NONE`,
+ * so "not OWNER, MEMBER or COLLABORATOR" alone labelled them `from-consumer`.
+ * On 2026-11-18 the daily sweep labelled ADR-017's #2289 and #2290, and the
+ * triage gave them ACTIVE and DUPLICATE.
+ *
+ * The failure matrix: a bot on the `opened` path; a bot in the sweep, beside
+ * an outside person who must still be picked; and a person adding the label
+ * to a bot's issue by hand, which still triages, because that is a decision.
+ */
+describe("#2390: an issue a bot filed is never labelled from-consumer", () => {
+  test("the opened step's condition excludes a Bot author, alongside the trusted associations", () => {
+    const label = steps().find(x => (x.run ?? "").includes("--add-label") && (x.if ?? "").includes("'opened'"))!;
+    expect(label.if).toContain("github.event.issue.user.type != 'Bot'");
+    // Still the outsider branch: the association test is kept, not replaced.
+    expect(label.if).toContain("!contains(fromJSON(");
+  });
+
+  test("the sweep drops a Bot author and keeps an outside person filed beside it", () => {
+    expect(SWEEP_FILTER).toContain('select(.user.type != "Bot")');
+  });
+
+  test("a person labelling a bot's issue by hand still triages it: the label event is not filtered by author", () => {
+    const cond = doc().jobs[CONSUMER_INTAKE_JOB]!.if ?? "";
+    expect(cond).toContain(`github.event.label.name == '${CONSUMER_LABEL}'`);
+    expect(cond).not.toContain("user.type");
   });
 });

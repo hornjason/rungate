@@ -81,12 +81,15 @@ export interface ConsumerIntakeWorkflowOptions {
 
 /**
  * The daily sweep's \`--jq\` filter over a page of open issues: recent, not a
- * pull request, an author outside the trusted set, and not labelled yet. Its
+ * pull request, not filed by a bot, an author outside the trusted set, and not
+ * labelled yet. A bot is not a consumer: the pipeline files its own plan issues
+ * as \`github-actions[bot]\` with association \`NONE\` (#2390). Its
  * window is computed in jq, not by \`date -d\`, which is GNU-only (review of
  * #2380). Exported so a test runs it through \`jq\`.
  */
 export const SWEEP_FILTER =
   `.[] | select(.pull_request == null) | select(.created_at >= (now - ${CONSUMER_INTAKE_SWEEP_DAYS * 86400} | todate)) | ` +
+  `select(.user.type != "Bot") | ` +
   `select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | ` +
   `select([.labels[].name] | index("${CONSUMER_LABEL}") | not) | .number`;
 
@@ -131,7 +134,9 @@ jobs:
     runs-on: ${opts.runsOn}
     steps:
       - name: Give an outside reporter's issue the ${CONSUMER_LABEL} label
-        if: \${{ !contains(fromJSON('${trusted}'), github.event.issue.author_association) && github.event.action == 'opened' }}
+        # Not a bot: the pipeline's own plan issues are authored by
+        # github-actions[bot], association NONE (#2390).
+        if: \${{ !contains(fromJSON('${trusted}'), github.event.issue.author_association) && github.event.issue.user.type != 'Bot' && github.event.action == 'opened' }}
         env:
           GH_TOKEN: \${{ github.token }}
           NUMBER: \${{ github.event.issue.number }}
