@@ -378,11 +378,12 @@ function readCore(source: string, core: readonly string[]): CoreReading {
   }
   // Top-level code the bundle does not carry still runs when the module
   // loads. An enum or a namespace compiles to `var X;` plus a statement, and
-  // `T.x = 1` or `const _ = (T.x = 1)` writes a binding the core reads. Any
-  // such code that uses a reached binding is refused rather than dropped
-  // (review of #2399, rounds 4 and 6). Exempt is only what the bundle emits and
-  // what runs nothing at load: a function declaration, an import or export-from,
-  // and a class's methods and instance fields.
+  // `T.x = 1` or `const _ = (T.x = 1)` writes a binding the core reads. Code
+  // that names a reached binding directly is refused (review of #2399, rounds
+  // 4 and 6). This is a syntactic net, not a proof: it does not follow a call
+  // into an unreached function's body, and it refuses a function expression
+  // that only reads a reached binding. What proves a bundled core is running
+  // it: each module's input matrix runs over the bundled text (#2400 onward).
   const uses = (n: ts.Node): void => {
     if (ts.isIdentifier(n)) {
       const top = topLevelNode(checker.getSymbolAtLocation(n)?.declarations?.[0], sf);
