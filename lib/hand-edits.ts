@@ -59,6 +59,18 @@ export function isPersonWrite(w: BoardWrite, pipelineAccount: string): boolean {
 }
 
 /**
+ * When the window opens: the pipeline account's earliest write, or
+ * `undefined` when it has not written. One decider, so the reader that bounds
+ * its event scan and the verdict cannot disagree about the start.
+ */
+export function windowOpens(writes: readonly BoardWrite[], pipelineAccount: string): string | undefined {
+  return writes
+    .filter(w => w.actor !== null && sameLogin(w.actor, pipelineAccount))
+    .map(w => w.at)
+    .sort()[0];
+}
+
+/**
  * The verdict over every write read for the payload's issues.
  *
  * The window opens at the pipeline account's earliest write, so a person's
@@ -79,10 +91,7 @@ export function handEditVerdict(
     };
   }
   if (writes === null) return { status: "unmeasured", why: unreadable ?? "the board writes were not read" };
-  const opened = writes
-    .filter(w => w.actor !== null && sameLogin(w.actor, pipelineAccount))
-    .map(w => w.at)
-    .sort()[0];
+  const opened = windowOpens(writes, pipelineAccount);
   if (opened === undefined) {
     return {
       status: "unmeasured",

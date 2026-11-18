@@ -279,6 +279,18 @@ export function readFilingOverrideLabel(projectRoot: string): string | null {
   return readBoardLabel(projectRoot, "filingOverrideLabel");
 }
 
+/**
+ * The account the pipeline signs its board writes with, or `null` (#1722).
+ *
+ * `scripts/hand-edits.ts` counts a write by any other person as a hand edit
+ * (SC-2625). `null` is the honest reading for a tree that never named one:
+ * the reading is UNMEASURED, because without it a person's write and the
+ * pipeline's cannot be told apart.
+ */
+export function readPipelineAccount(projectRoot: string): string | null {
+  return readBoardLabel(projectRoot, "pipelineAccount");
+}
+
 /** One `board.<key>` label: absent, blank and non-string are all `null`. */
 function readBoardLabel(projectRoot: string, key: string): string | null {
   return boardLabelIn(tryLoadRungateConfig(projectRoot), key);
