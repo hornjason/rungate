@@ -325,6 +325,8 @@ function readCore(source: string, core: readonly string[]): CoreReading {
         // Named by its own declaration, not the alias it is exported under.
         const node = topLevelNode(local, sf);
         if (node) enqueue(node, localSymbol?.name ?? n);
+        // Refused like the direct export below, never dropped (review of #2399).
+        else note(`${n} (not a named top-level declaration, so it cannot be bundled)`);
       }
       continue;
     }

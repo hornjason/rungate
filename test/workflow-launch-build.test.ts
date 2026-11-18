@@ -251,6 +251,12 @@ describe("#2398: cores are read by the checker and bundled", () => {
     expect(coreClosure("const obj = { a: 1, b: 2 };\nconst { b, a } = obj;\nexport { a };", ["a"]).declarations).toEqual(["a", "obj"]);
   });
 
+  test("review of #2399: a core exported under an alias whose local cannot be placed is refused, not dropped", () => {
+    expect(coreClosure("if (true) { function g() { return 1; } }\nexport { g as core };", ["core"]).imports).toEqual([
+      "core (not a named top-level declaration, so it cannot be bundled)",
+    ]);
+  });
+
   test("review of #2399 round 4: a top-level statement that uses a reached binding is refused, not dropped", () => {
     // An enum compiles to `var Color;` plus an initializer statement; emitting
     // the declaration alone would bundle an undefined Color.
