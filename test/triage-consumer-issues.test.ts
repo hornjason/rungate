@@ -25,7 +25,7 @@ import {
   type TriageIssue,
 } from "../lib/consumer-triage";
 import type { PlacingFamily } from "../lib/issue-repair";
-import { main, REFUSAL_EXIT, type TriageGitHub } from "../scripts/consumer-triage";
+import { completePullFiles, main, REFUSAL_EXIT, type TriageGitHub } from "../scripts/consumer-triage";
 
 const P9 = "Zq Phase 9 — the active one";
 const P10 = "Zq Phase 10 — later";
@@ -143,6 +143,14 @@ describe("SC-2782: one decider gives a consumer's issue exactly one verdict, the
   test("a milestone a person already set is never moved: LEFT, with no verdict", () => {
     const t = triageVerdict(consumer(210, files("lib/engine-b.ts"), "Somewhere Else"), ctx());
     expect(t.kind).toBe("LEFT");
+  });
+
+  test("an unmarked issue already in the milestone triage would pick is finished, not LEFT (review of #2356)", () => {
+    // A previous --write set the milestone, then the label or the comment failed.
+    const t = triageVerdict(consumer(213, "Something is off and I cannot say where.", P9), ctx());
+    expect(t).toMatchObject({ kind: "ACTIVE", milestone: P9 });
+    const o = triageVerdict(consumer(214, files("lib/engine-b.ts"), P10), ctx());
+    expect(o).toMatchObject({ kind: "OVERLAPS", of: 101, milestone: P10 });
   });
 
   test("a phase with no milestone is REFUSED, never guessed", () => {
@@ -324,6 +332,29 @@ describe("SC-2782: rungate consumer-triage --write gives the verdict with no han
     expect(wrote.some(w => w.op === "label")).toBe(false);
     expect(wrote.filter(w => w.number === 300).map(w => w.op)).toEqual(["milestone", "comment"]);
     expect(r.out).toContain("board.queueLabel");
+  });
+
+  test("a pull request whose file list was cut is read in full, page by page (review of #2356)", () => {
+    const paged: number[] = [];
+    const rows = completePullFiles(
+      [
+        { number: 1, title: "small", body: "", milestone: null, files: ["a.ts"], changedFiles: 1 },
+        { number: 2, title: "big", body: "", milestone: null, files: ["b1.ts"], changedFiles: 3 },
+      ],
+      n => {
+        paged.push(n);
+        return ["b1.ts", "b2.ts", "b3.ts"];
+      },
+    );
+    expect(paged).toEqual([2]);
+    expect(rows.find(r => r.number === 2)!.files).toEqual(["b1.ts", "b2.ts", "b3.ts"]);
+    expect(rows.find(r => r.number === 1)!.files).toEqual(["a.ts"]);
+  });
+
+  test("a pull request still short after paging is UNMEASURED, never a short list", () => {
+    expect(() =>
+      completePullFiles([{ number: 2, title: "big", body: "", milestone: null, files: ["b1.ts"], changedFiles: 3 }], () => ["b1.ts"]),
+    ).toThrow(/#2.*3.*1/);
   });
 
   test("an issue already carrying the queue label is not labelled twice, and one already in its milestone is not moved", async () => {

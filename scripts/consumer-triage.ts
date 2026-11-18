@@ -39,6 +39,26 @@ import { LIVE_PLACE, placingFamilies } from "./plan-issues";
 /** Every refusal exits through this. */
 export const REFUSAL_EXIT = 1;
 
+/**
+ * Each open pull request's full file list. `gh pr list --json files` returns
+ * one page of files per pull request, so a list shorter than `changedFiles`
+ * is cut, not short: it is read again page by page (review of #2356), and one
+ * still short is UNMEASURED, never a smaller overlap.
+ */
+export function completePullFiles(
+  rows: readonly (OpenPull & { readonly changedFiles: number })[],
+  pageFiles: (number: number) => string[],
+): OpenPull[] {
+  return rows.map(({ changedFiles, ...r }) => {
+    if (r.files.length >= changedFiles) return r;
+    const files = pageFiles(r.number);
+    if (files.length < changedFiles) {
+      throw new Error(`pull request #${r.number} changes ${changedFiles} files and only ${files.length} could be read`);
+    }
+    return { ...r, files };
+  });
+}
+
 /** More open pull requests than this and the list is cut, so the overlap reading is UNMEASURED. */
 export const PULL_LIMIT = 300;
 
@@ -65,10 +85,17 @@ const LIVE: TriageGitHub = {
   openIssues: async repo => (await readLiveIssues(repo, false)).filter(i => i.state === "OPEN"),
   openPulls: async repo => {
     const rows = JSON.parse(
-      ghWithoutGhToken(["pr", "list", "--repo", repo, "--state", "open", "--limit", String(PULL_LIMIT), "--json", "number,title,body,milestone,files"]),
-    ) as { number: number; title: string; body: string | null; milestone: { title: string } | null; files: { path: string }[] | null }[];
+      ghWithoutGhToken(["pr", "list", "--repo", repo, "--state", "open", "--limit", String(PULL_LIMIT), "--json", "number,title,body,milestone,files,changedFiles"]),
+    ) as { number: number; title: string; body: string | null; milestone: { title: string } | null; files: { path: string }[] | null; changedFiles: number }[];
     if (rows.length >= PULL_LIMIT) throw new Error(`${rows.length} open pull requests reached the read limit of ${PULL_LIMIT}, so the list is cut`);
-    return rows.map(r => ({ number: r.number, title: r.title, body: r.body, milestone: r.milestone?.title ?? null, files: (r.files ?? []).map(f => f.path) }));
+    return completePullFiles(
+      rows.map(r => ({ number: r.number, title: r.title, body: r.body, milestone: r.milestone?.title ?? null, files: (r.files ?? []).map(f => f.path), changedFiles: r.changedFiles })),
+      n =>
+        ghWithoutGhToken(["api", "--paginate", `repos/${repo}/pulls/${n}/files?per_page=100`, "--jq", ".[] | [.filename] | @json"])
+          .split("\n")
+          .filter(l => l.trim() !== "")
+          .map(l => (JSON.parse(l) as [string])[0]),
+    );
   },
   comments: async (repo, number) =>
     // One JSON string per line: `--paginate` concatenates pages, so a single

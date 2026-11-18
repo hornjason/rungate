@@ -96,9 +96,20 @@ export function triageVerdict(issue: TriageIssue, ctx: TriageContext): Triage {
   if (move.kind === "refuse") return { kind: "REFUSED", why: move.why };
 
   if (issue.milestone !== null) {
+    // An unmarked issue already sitting where triage would put it is a run that
+    // set the milestone and stopped before the marker (review of #2356): finish
+    // it. Any other milestone was set by a person and is never moved.
+    const again = unplacedVerdict({ ...issue, milestone: null }, ctx);
+    if (again.kind !== "REFUSED" && again.milestone === issue.milestone) {
+      return { ...again, why: `${again.why}; it already sits there, so this finishes a run that stopped before the marker` };
+    }
     return { kind: "LEFT", why: `already in "${issue.milestone}", which a person set; a milestone a person set is never moved` };
   }
+  return unplacedVerdict(issue, ctx);
+}
 
+/** Steps 3 and 4, for an issue no phase places: OVERLAPS, else ACTIVE. */
+function unplacedVerdict(issue: TriageIssue, ctx: TriageContext): Extract<Triage, { kind: "OVERLAPS" | "ACTIVE" | "REFUSED" }> {
   // 3. OVERLAPS — shared declared/changed files, or a shared named criterion.
   const stated = [...new Set(ctx.families.flatMap(f => f.stated))];
   const mineFiles = declaredFiles(issue.body ?? "");
