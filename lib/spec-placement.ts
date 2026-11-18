@@ -349,7 +349,59 @@ export interface BoardDeclaration {
 export const BOARD_KEYS: Readonly<Record<string, { what: string; values?: readonly string[] }>> = {
   scope: { what: "whether the engine consumes this spec", values: ["active", "deferred"] },
   prefix: { what: "the milestone family the spec's phases are named in" },
+  // Jason's call of 2026-11-17, a stopgap ahead of #2331. It is read by
+  // `plan-deps` through {@link phaseOrderFor}.
+  phaseOrder: {
+    what:
+      "whether plan-deps writes the family's phase order as blocked-by links; false means phases set priority " +
+      "and only real blocked-by links hold work back",
+    values: ["true", "false"],
+  },
 };
+
+/**
+ * Whether `plan-deps` writes a family's phase order, read from every spec that
+ * names the family as its `board.prefix`. Absent means on, which is how
+ * every family behaved before the key existed.
+ *
+ * Specs of one family that disagree are unreadable, not resolved: picking
+ * either is the guess {@link boardDeclaration} exists not to make.
+ */
+export function phaseOrderFor(
+  specs: readonly { path: string; text: string }[],
+  prefix: string,
+): { kind: "on" } | { kind: "off"; spec: string } | { kind: "unreadable"; why: string } {
+  const family = specs
+    .map(s => ({ path: s.path, board: boardDeclaration(s.text) }))
+    .filter(s => s.board.settings.prefix === prefix);
+  // A declaration the engine cannot read — `phaseOrder: flase` among them, since
+  // `boardDeclaration` checks every key's values — refuses rather than reading
+  // the raw text as "not false", which would be on (review of #2352).
+  // A deferred spec is shelved, so its problems are not the family's (round 2
+  // of the same review). One whose scope cannot be read may be active, so it counts.
+  const unreadable = family.find(s => s.board.problems.length > 0 && s.board.scope !== "deferred");
+  if (unreadable !== undefined) {
+    return {
+      kind: "unreadable",
+      why: `${unreadable.path}: its board: declaration cannot be read, so family ${prefix}'s phaseOrder cannot be — ${unreadable.board.problems.join("; ")}`,
+    };
+  }
+  // Only an active spec is the family; a deferred one carrying the prefix is shelved (review of #2352).
+  const declared = family
+    .filter(s => s.board.scope === "active")
+    .map(s => ({ path: s.path, value: s.board.settings.phaseOrder ?? "true" }));
+  const off = declared.filter(d => d.value === "false");
+  const on = declared.filter(d => d.value !== "false");
+  if (off.length > 0 && on.length > 0) {
+    return {
+      kind: "unreadable",
+      why:
+        `the specs of family ${prefix} disagree on board.phaseOrder: ${off[0]!.path} says false and ${on[0]!.path} says ` +
+        `${on[0]!.value}, so whether to write its phase order cannot be read`,
+    };
+  }
+  return off.length > 0 ? { kind: "off", spec: off[0]!.path } : { kind: "on" };
+}
 
 /**
  * One frontmatter entry's value, parsed as YAML — only that entry, never the
