@@ -82,7 +82,12 @@ export type ClaimForm =
   /** The id is inside a parenthetical holding only ids — `… turns it red (SC-4).` */
   | "attribution";
 
-const COVERS_NEAR = /\b(?:covers?|covered|covering|coverage)\b[^\n]{0,60}$/i;
+// #2428: and in the SAME sentence. A verb ending the previous sentence ("…which
+// customers it covers and, for each one without, why. Works toward SC-91") is
+// prose about something else, and crediting it ticked a criterion its own
+// comment said was not complete. A sentence end is `.`, `;`, `?` or `!`
+// followed by whitespace, so a `..` range and a file name's dot are not one.
+const COVERS_NEAR = /\b(?:covers?|covered|covering|coverage)\b(?:(?![.;?!]\s)[^\n]){0,60}$/i;
 
 /**
  * A verb directly after the id, making the line a SENTENCE about the
