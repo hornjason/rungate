@@ -8,6 +8,14 @@ import { mockProjectScan, type ProjectScan } from "../lib/generators/types";
 import { isRuleIncluded } from "../lib/scaffold/profiles";
 import { commentClaimForm, titleCall } from "../lib/sc-claim-forms";
 import { scanProject } from "../lib/scanner";
+import {
+  adjudicateFiling,
+  COMMENT_EXEMPTIONS,
+  declaredExemption,
+  filingAttempts,
+  measuredCorpus,
+  namedClaim,
+} from "../lib/issue-filing-gate";
 import { join } from "path";
 
 describe("generateAgentsMd with mock ProjectScan", () => {
@@ -291,5 +299,107 @@ describe("#2375: claiming-sc-coverage, the claim convention a consumer writes te
     expect(reading("// part of the work toward SC-9012")).toBe("not-a-claim");
     expect(reading('describe("SC-9012: x", () => {})')).toBe("claim");
     expect(reading('test.todo("SC-9012: x")')).toBe("not-a-claim");
+  });
+});
+
+/**
+ * #2318: a consumer's agent learns the filing gate from the rule, before the
+ * gate refuses it.
+ *
+ * Measured in one consumer on 2026-11-17: the rule's command, run as written,
+ * was answered `COMMENT_INSTEAD` until the body carried a `Cannot be a
+ * comment:` line the rule never mentioned, and nothing installed named the
+ * `Claim <N>` declaration either. So the rule's own command and example body
+ * are RUN through the gate's adjudicator here, with no placeholder left that
+ * the gate would read as an answer.
+ */
+describe("#2318: the rule's command passes the filing gate as written", () => {
+  const rule = () =>
+    generateScopedRules(mockProjectScan({ name: "consumer" })).find(r => r.filename === "reporting-upstream.md")!.content;
+
+  /** The one fenced block of a language, refused when there is not exactly one. */
+  function fenced(body: string, lang: string): string {
+    const blocks = [...body.matchAll(new RegExp("^```" + lang + "\\n([\\s\\S]*?)^```$", "gm"))].map(m => m[1]);
+    expect(blocks.length, `the rule carries ${blocks.length} \`\`\`${lang} blocks, and this reads exactly one`).toBe(1);
+    return blocks[0];
+  }
+
+  /**
+   * The example body with its placeholders filled the way a reporter would:
+   * the symptom names a file, because the rule says to, and every other
+   * placeholder gets prose that names nothing.
+   */
+  const filledBody = (symptom = "`lib/generators/agents-md.ts` writes a path that does not exist, 3 of 3 runs") =>
+    fenced(rule(), "markdown")
+      .replace(/<N>/g, "1")
+      .replace(/<the symptom[^>\n]*>/, symptom)
+      .replace(/<[^>\n]+>/g, "measured twice, same result");
+
+  test("#2318 AC-2: the example body declares a claim and a reason the gate reads", () => {
+    const body = filledBody();
+    expect(namedClaim(body, { kind: "claims", numbers: [1] }), "the example names no claim the gate reads").toBe(1);
+    expect(declaredExemption(body), "the example declares no reason the gate reads").not.toBeNull();
+  });
+
+  test("#2318 AC-2: the command and the example body together are ALLOWED by the gate", async () => {
+    const cmd = fenced(rule(), "bash")
+      .replace(/\\\n\s*/g, "")
+      .replace(/"<[^"]*>"/g, '"the generated rule names a path that does not exist"')
+      .replace(/<a file you wrote FIRST[^>]*>/, "/tmp/body.md");
+    const attempts = filingAttempts(cmd);
+    expect(attempts.length, `the rule's command is not one gh issue create: ${cmd}`).toBe(1);
+    const v = await adjudicateFiling(attempts[0], async () => measuredCorpus([]), () => filledBody(), undefined, {
+      kind: "claims",
+      numbers: [1],
+    });
+    expect(v.refusal, `the gate refused the rule's own example: ${v.reason}`).toBeNull();
+    expect(v.outcome).toBe("ALLOW");
+  });
+
+  test("#2318 AC-2 CONTROL: without the declarations the same filing is refused", async () => {
+    const bare = filledBody()
+      .split("\n")
+      .filter(l => !/^(Claim|Cannot be a comment)/.test(l))
+      .join("\n");
+    const [attempt] = filingAttempts('gh issue create --repo hornjason/rungate --title "x" --body-file /tmp/body.md');
+    const v = await adjudicateFiling(attempt, async () => measuredCorpus([]), () => bare, undefined, {
+      kind: "claims",
+      numbers: [1],
+    });
+    expect(v.refusal, "the control was allowed, so the case above witnesses nothing").not.toBeNull();
+  });
+
+  test("#2318 AC-2 CONTROL: a symptom that names no file, function or command is refused, as the rule warns", async () => {
+    const [attempt] = filingAttempts('gh issue create --repo hornjason/rungate --title "x" --body-file /tmp/body.md');
+    const vague = filledBody("the generated rule is wrong");
+    const v = await adjudicateFiling(attempt, async () => measuredCorpus([]), () => vague, undefined, {
+      kind: "claims",
+      numbers: [1],
+    });
+    expect(v.refusal, "a body naming nothing was allowed, so the rule's warning describes no refusal").not.toBeNull();
+    expect(rule(), "the rule no longer warns that the body must name a file, function or command").toContain(
+      "names no file, function or command",
+    );
+  });
+
+  test("#2318 AC-3: every reason the gate accepts is named, and the claim is this project's own", () => {
+    const body = rule();
+    for (const token of Object.keys(COMMENT_EXEMPTIONS)) {
+      expect(body, `the rule does not name \`${token}\`, which the gate accepts`).toContain(`\`${token}\``);
+    }
+    expect(body, "the rule does not say the claim comes from this project's SUCCESS.md (#2317)").toContain(
+      "this project's `SUCCESS.md`",
+    );
+  });
+
+  test("#2318 AC-1: a consumer's AGENTS.md, which always loads, names the rule; rungate's own does not", () => {
+    const consumer = generateAgentsMd(mockProjectScan({ name: "consumer" }));
+    expect(consumer, "a consumer agent that never opens package.json cannot learn the rule exists").toContain(
+      ".claude/rules/reporting-upstream.md",
+    );
+    const harness = generateAgentsMd(scanProject(join(import.meta.dir, "..")));
+    expect(harness, "rungate has no upstream, so its own AGENTS.md should not point at one").not.toContain(
+      ".claude/rules/reporting-upstream.md",
+    );
   });
 });
