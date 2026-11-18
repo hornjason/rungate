@@ -376,29 +376,37 @@ function readCore(source: string, core: readonly string[]): CoreReading {
     };
     visit(node);
   }
-  // A top-level statement that declares nothing still runs when the module
-  // loads. An enum or a namespace compiles to `var X;` plus one, and so does
-  // `T.x = 1`: each sets a binding the core reads. The bundle carries
-  // declarations only, so one that uses a reached binding is refused rather
-  // than dropped (review of #2399, round 4). Fail closed: no statement shape
-  // is listed as safe here, only the declarations the bundler emits or skips.
+  // Top-level code the bundle does not carry still runs when the module
+  // loads. An enum or a namespace compiles to `var X;` plus a statement, and
+  // `T.x = 1` or `const _ = (T.x = 1)` writes a binding the core reads. Any
+  // such code that uses a reached binding is refused rather than dropped
+  // (review of #2399, rounds 4 and 6). Exempt is only what the bundle emits and
+  // what runs nothing at load: a function declaration, an import or export-from,
+  // and a class's methods and instance fields.
+  const uses = (n: ts.Node): void => {
+    if (ts.isIdentifier(n)) {
+      const top = topLevelNode(checker.getSymbolAtLocation(n)?.declarations?.[0], sf);
+      if (top && reached.has(top)) note(`${n.text} (used by top-level code that runs at load and that the bundle does not carry)`);
+    }
+    ts.forEachChild(n, uses);
+  };
+  const isStatic = (m: ts.ClassElement) => (ts.canHaveModifiers(m) ? ts.getModifiers(m) : undefined)?.some(x => x.kind === ts.SyntaxKind.StaticKeyword) ?? false;
   for (const stmt of sf.statements) {
-    if (
-      ts.isFunctionDeclaration(stmt) ||
-      ts.isClassDeclaration(stmt) ||
-      ts.isVariableStatement(stmt) ||
-      ts.isImportDeclaration(stmt) ||
-      ts.isExportDeclaration(stmt)
-    ) {
+    if (ts.isFunctionDeclaration(stmt) || ts.isImportDeclaration(stmt) || ts.isExportDeclaration(stmt)) continue;
+    if (ts.isVariableStatement(stmt)) {
+      for (const d of stmt.declarationList.declarations) if (!reached.has(d)) uses(d);
       continue;
     }
-    const uses = (n: ts.Node): void => {
-      if (ts.isIdentifier(n)) {
-        const top = topLevelNode(checker.getSymbolAtLocation(n)?.declarations?.[0], sf);
-        if (top && reached.has(top)) note(`${n.text} (used by a top-level statement that declares nothing, so the bundle cannot carry it)`);
+    if (ts.isClassDeclaration(stmt)) {
+      if (reached.has(stmt)) continue;
+      for (const h of stmt.heritageClauses ?? []) uses(h);
+      for (const m of stmt.members) {
+        if (m.name && ts.isComputedPropertyName(m.name)) uses(m.name);
+        if (ts.isClassStaticBlockDeclaration(m)) uses(m);
+        else if (ts.isPropertyDeclaration(m) && isStatic(m) && m.initializer) uses(m.initializer);
       }
-      ts.forEachChild(n, uses);
-    };
+      continue;
+    }
     uses(stmt);
   }
   const nodes = [...reached.keys()]

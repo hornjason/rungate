@@ -262,17 +262,26 @@ describe("#2398: cores are read by the checker and bundled", () => {
     // the declaration alone would bundle an undefined Color.
     const enumSrc = "enum Color { Red, Blue }\nexport function pick() { return Color.Red; }";
     expect(coreClosure(enumSrc, ["pick"]).imports).toEqual([
-      "Color (used by a top-level statement that declares nothing, so the bundle cannot carry it)",
+      "Color (used by top-level code that runs at load and that the bundle does not carry)",
     ]);
-    expect(() => bundleLibCores({ "lib/a.ts": ["pick"] }, () => enumSrc)).toThrow("Color (used by a top-level statement that declares nothing");
+    expect(() => bundleLibCores({ "lib/a.ts": ["pick"] }, () => enumSrc)).toThrow("Color (used by top-level code that runs at load");
     // A namespace is the same shape.
     expect(coreClosure("namespace N { export const x = 1; }\nexport function f() { return N.x; }", ["f"]).imports).toEqual([
-      "N (used by a top-level statement that declares nothing, so the bundle cannot carry it)",
+      "N (used by top-level code that runs at load and that the bundle does not carry)",
     ]);
     // So is a plain write after the declaration.
     expect(coreClosure("const T: Record<string, number> = {};\nT.x = 1;\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
-      "T (used by a top-level statement that declares nothing, so the bundle cannot carry it)",
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
     ]);
+    // An unreached declaration's initializer runs at load too (review of #2399, round 6).
+    expect(coreClosure("const T: Record<string, number> = {};\nconst _ = (T.x = 1);\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    expect(coreClosure("const T: Record<string, number> = {};\nclass K { static s = (T.x = 1); }\nexport function get() { return T.x; }", ["get"]).imports).toEqual([
+      "T (used by top-level code that runs at load and that the bundle does not carry)",
+    ]);
+    // A function no core reaches runs nothing at load, so its body is not a use.
+    expect(coreClosure("const T: Record<string, number> = {};\nfunction later() { T.x = 1; }\nexport function get() { return T.x; }", ["get"]).imports).toEqual([]);
     // A statement that touches only what no core reaches is left behind, as before.
     expect(coreClosure("const other: number[] = [];\nother.push(1);\nexport function f() { return 1; }", ["f"]).imports).toEqual([]);
     // A local that shadows a reached name inside such a statement is not a use of it.
