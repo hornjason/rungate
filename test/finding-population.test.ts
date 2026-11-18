@@ -45,6 +45,7 @@ import {
   populationReading,
   renderFinding,
 } from "../lib/scaffold/ai-review-findings";
+import { populationVerdict, verifiedPopulation } from "../lib/finding-population";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -281,5 +282,82 @@ describe("FP-15..FP-19: a real run prints the reading", () => {
   test("FP-19: a payload with no findings prints no population annotation", () => {
     expect(notice(run([]))).toBeUndefined();
     expect(populationNotice([])).toBeNull();
+  });
+});
+
+/**
+ * #1883: the count is the output of a search the reviewer named, not an
+ * integer it chose.
+ *
+ * On #1877 the reviewer declared `1, 1, 1, —, —, 1, 2, 2, 3` over eleven
+ * rounds, every round naming one file, and the next round found another
+ * instance of the same class. So a declared number with no search behind it
+ * is not believed, and a declared number the search does not return is
+ * refused. The search is literal text, run over the cited file's lines.
+ */
+describe("#1883: a population is counted by a search that ran", () => {
+  const THREE = ["const a = listIssues(1);", "const b = 2;", "const c = listIssues(2);", "return listIssues(3);"];
+
+  test("#1883 AC-1: a declared 1 against a file holding three instances is refused, and the search's 3 stands", () => {
+    const v = populationVerdict(1, ["listIssues("], THREE);
+    expect(v).toEqual({ kind: "contradicted", declared: 1, count: 3 });
+    expect(verifiedPopulation(v)).toBe(3);
+  });
+
+  test("#1883 AC-1: the same count, declared truly, is measured", () => {
+    expect(populationVerdict(3, ["listIssues("], THREE)).toEqual({ kind: "measured", count: 3 });
+  });
+
+  test("#1883 AC-1: a search with no declared number is measured by the search alone", () => {
+    expect(populationVerdict(undefined, ["listIssues("], THREE)).toEqual({ kind: "measured", count: 3 });
+  });
+
+  test("#1883 AC-1: terms are a union over lines, so one class spelled two ways is one count", () => {
+    const lines = ["rest.list(a)", "gql(`first:20`)", "other()", "rest.list(b)"];
+    expect(populationVerdict(3, ["rest.list(", "first:20"], lines)).toEqual({ kind: "measured", count: 3 });
+  });
+
+  test("#1883 AC-2: a declared number with no search is UNMEASURED, never believed", () => {
+    const v = populationVerdict(1, undefined, THREE);
+    expect(v).toEqual({ kind: "unbacked", declared: 1 });
+    expect(verifiedPopulation(v), "an unbacked count reached the reading").toBeNull();
+  });
+
+  test("#1883 AC-2: a search that could not run is UNMEASURED, not zero and not one", () => {
+    for (const [why, search, lines] of [
+      ["unreadable file", ["listIssues("], null],
+      ["matches nothing", ["noSuchThing("], THREE],
+      ["not a list", "listIssues(", THREE],
+      ["empty list", [], THREE],
+      ["term too short", ["ab"], THREE],
+      ["term spans lines", ["list\nIssues"], THREE],
+      ["too many terms", ["aaa", "bbb", "ccc", "ddd", "eee", "fff"], THREE],
+      ["a non-string term", [7], THREE],
+    ] as const) {
+      const v = populationVerdict(1, search, lines as readonly string[] | null);
+      expect(v.kind, `${why}: read as ${JSON.stringify(v)}`).toBe("unmeasured");
+      expect(verifiedPopulation(v), `${why}: a number reached the reading`).toBeNull();
+    }
+  });
+
+  test("#1883 AC-2: neither a count nor a search is undeclared", () => {
+    expect(populationVerdict(undefined, undefined, THREE)).toEqual({ kind: "undeclared" });
+  });
+
+  test("#1883 AC-1 MUTANT: with the comparison removed, the planted 1 is no longer refused", async () => {
+    const source = readFileSync(join(ROOT, "lib", "finding-population.ts"), "utf-8");
+    const COMPARISON = `  if (declared !== null && declared !== count) return { kind: "contradicted", declared, count };\n`;
+    expect(source.split(COMPARISON).length - 1, "the comparison is not exactly one line, so the mutant would miss it").toBe(1);
+    expect(/^import .* from "\.\.?\//m.test(source), "a relative import would make the mutant fail to load").toBe(false);
+    const dir = mkdtempSync(join(tmpdir(), "finding-population-mutant-"));
+    try {
+      const path = join(dir, "finding-population.ts");
+      writeFileSync(path, source.replace(COMPARISON, () => ""));
+      const mutant = (await import(path)) as typeof import("../lib/finding-population");
+      const v = mutant.populationVerdict(1, ["listIssues("], THREE);
+      expect(v.kind, "the mutant still refused the planted 1, so it did not remove the comparison").not.toBe("contradicted");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
