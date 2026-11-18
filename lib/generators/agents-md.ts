@@ -216,6 +216,10 @@ export function generateAgentsMd(scan: ProjectScan, today: string = localCalenda
   // repo: that rungate is distributed at all. `Repo:` points at GitHub, so a
   // reader's best guess was "clone it" — and the session that produced #363
   // guessed "it is not distributable" and recommended hand-scaffolding.
+  // #2318: the last line points a consumer's agent at the upstream rule from
+  // the one file that always loads. SC-139 caps this file's generated prose
+  // at 200 words and the consumer fixture sat at exactly 200, so the pin line
+  // was shortened by the three words the pointer costs.
   const installSection = isHarnessItself(scan.root)
     ? ""
     : `
@@ -230,9 +234,8 @@ bunx rungate scaffold .
 bunx rungate --help
 \`\`\`
 
-Pin the version: re-scaffolding on a newer rungate rewrites generated files.
-
-Found a problem in rungate itself? \`.claude/rules/reporting-upstream.md\` says where it goes and what the filing gate needs.`;
+Pin the version; newer releases rewrite generated files.
+rungate bugs: \`.claude/rules/reporting-upstream.md\`.`;
 
   // Re-scaffolding used to strip AGENTS.md's frontmatter, because the
   // generator never emitted any. Carry the existing block forward so
