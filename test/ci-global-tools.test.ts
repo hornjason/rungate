@@ -233,6 +233,24 @@ describe("AC-1: one declaration, and it is a pin", () => {
     // The install has to precede the step that probes, or it buys nothing.
     expect(yml.indexOf("npm install -g")).toBeLessThan(yml.indexOf("- run: bun test"));
   });
+
+  // #2419: release.yml is hand-maintained, not generated, so a bump of
+  // ci.globalTools would regenerate ci.yml and leave release.yml installing the
+  // old versions with nothing failing (review of #2420). The release job must
+  // install every compliance tool at exactly the declared version.
+  test("the release job installs every compliance tool at the declared version", () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github", "workflows", "release.yml"), "utf-8");
+    const run = /^\s*npm install -g (.*)$/m.exec(yml);
+    expect(run, ".github/workflows/release.yml has no global-tool install step before its npm upgrade (#2419)").not.toBeNull();
+    const config = tryLoadRungateConfig(REPO_ROOT) as { ci?: { globalTools?: Record<string, string> } } | null;
+    const declared = config?.ci?.globalTools ?? {};
+    for (const pkg of COMPLIANCE_TOOLS) {
+      const version = declared[pkg];
+      expect(typeof version, `ci.globalTools does not declare ${pkg}`).toBe("string");
+      expect(run?.[1], `release.yml does not install ${pkg} at the declared ${version}`).toContain(`'${pkg}@${version}'`);
+    }
+    expect(yml.indexOf("npm install -g"), "the tools must install before the suite runs").toBeLessThan(yml.indexOf("bun test"));
+  });
 });
 
 describe("AC-2/AC-3: the generator reads the declaration", () => {
