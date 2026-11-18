@@ -377,7 +377,9 @@ export function phaseOrderFor(
   // A declaration the engine cannot read — `phaseOrder: flase` among them, since
   // `boardDeclaration` checks every key's values — refuses rather than reading
   // the raw text as "not false", which would be on (review of #2352).
-  const unreadable = family.find(s => s.board.problems.length > 0);
+  // A deferred spec is shelved, so its problems are not the family's (round 2
+  // of the same review). One whose scope cannot be read may be active, so it counts.
+  const unreadable = family.find(s => s.board.problems.length > 0 && s.board.scope !== "deferred");
   if (unreadable !== undefined) {
     return {
       kind: "unreadable",

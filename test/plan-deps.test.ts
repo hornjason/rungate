@@ -1260,6 +1260,21 @@ describe("phaseOrder: false — a family that opts out of phase-order links", ()
     }
   });
 
+  test("a deferred spec's bad value does not block the active family (review of #2352, round 2)", async () => {
+    const root = tree({
+      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
+      "OLD-SPEC.md": spec("{ scope: deferred, prefix: Convergence, phaseOrder: flase }"),
+    });
+    try {
+      const s = spy();
+      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
+      expect(got.code, got.text).toBe(0);
+      expect(s.calls).toEqual(["#20 +10"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a spec that cannot be read refuses as UNMEASURED, naming it, instead of throwing", async () => {
     const root = tree({
       "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
