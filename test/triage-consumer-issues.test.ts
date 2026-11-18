@@ -18,6 +18,9 @@ import {
   verdictComment,
   verdictIn,
   verdictMarker,
+  trustedBodies,
+  WORKFLOW_BOT,
+  type IssueComment,
   type OpenPull,
   type TriageIssue,
 } from "../lib/consumer-triage";
@@ -162,6 +165,14 @@ describe("SC-2782: each verdict is recorded as a marker comment the reading can 
     expect(verdictIn(["a plain comment", "mentions rungate:consumer-triage in prose"])).toBeNull();
   });
 
+  test("only a marker from someone with push access, or from the workflow, counts", () => {
+    const marker = verdictMarker("PLACED");
+    const by = (author: string, association: string): IssueComment => ({ body: marker, author, association });
+    for (const a of ["OWNER", "MEMBER", "COLLABORATOR"]) expect(verdictIn(trustedBodies([by("someone", a)]))).toBe("PLACED");
+    expect(verdictIn(trustedBodies([by(WORKFLOW_BOT, "NONE")]))).toBe("PLACED");
+    for (const a of ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "NONE"]) expect(verdictIn(trustedBodies([by("reporter", a)]))).toBeNull();
+  });
+
   test("every verdict kind round-trips through its marker", () => {
     for (const kind of ["DUPLICATE", "PLACED", "OVERLAPS", "ACTIVE"] as const) {
       expect(verdictIn([verdictMarker(kind)])).toBe(kind);
@@ -177,7 +188,11 @@ interface Wrote {
   value: string;
 }
 
-const MARKED: Record<number, string[]> = { 302: [verdictMarker("ACTIVE")] };
+const MARKED: Record<number, IssueComment[]> = {
+  302: [{ body: verdictMarker("ACTIVE"), author: WORKFLOW_BOT, association: "NONE" }],
+  // The reporter marking their own issue: it must not count.
+  300: [{ body: verdictMarker("ACTIVE"), author: "outsider", association: "NONE" }],
+};
 
 function fakeGitHub(over: Partial<TriageGitHub> = {}): { gh: TriageGitHub; wrote: Wrote[] } {
   const wrote: Wrote[] = [];
@@ -256,6 +271,12 @@ describe("SC-2782: rungate consumer-triage --write gives the verdict with no han
     const { gh, wrote } = fakeGitHub();
     await run(["--write"], gh);
     expect(wrote.filter(w => w.number === 302)).toEqual([]);
+  });
+
+  test("a marker the reporter wrote themselves does not count: the issue is still triaged", async () => {
+    const { gh, wrote } = fakeGitHub();
+    await run(["--write"], gh);
+    expect(wrote.filter(w => w.number === 300).map(w => w.op)).toEqual(["milestone", "label", "comment"]);
   });
 
   test("only issues labelled from-consumer are triaged", async () => {

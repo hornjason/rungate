@@ -19,7 +19,17 @@
  * corpus is a duplicate or an overlap the decider cannot see.
  */
 import { parseArgs } from "util";
-import { CONSUMER_LABEL, triageVerdict, verdictComment, verdictIn, type OpenPull, type Triage, type TriageIssue } from "../lib/consumer-triage";
+import {
+  CONSUMER_LABEL,
+  trustedBodies,
+  triageVerdict,
+  verdictComment,
+  verdictIn,
+  type IssueComment,
+  type OpenPull,
+  type Triage,
+  type TriageIssue,
+} from "../lib/consumer-triage";
 import { enginePrefixReading, readQueueLabel } from "../lib/config-readers";
 import type { PlacingFamily } from "../lib/issue-repair";
 import { ghWithoutGhToken, readLiveIssues } from "../lib/live-issues";
@@ -41,8 +51,8 @@ export interface TriageGitHub {
   milestones: (repo: string) => Promise<LiveMilestone[]>;
   openIssues: (repo: string) => Promise<OpenIssue[]>;
   openPulls: (repo: string) => Promise<OpenPull[]>;
-  /** Every comment body on one issue, paged to the end. */
-  comments: (repo: string, number: number) => Promise<string[]>;
+  /** Every comment on one issue, with its author, paged to the end. */
+  comments: (repo: string, number: number) => Promise<IssueComment[]>;
   comment: (repo: string, number: number, body: string) => Promise<void>;
   setMilestone: (repo: string, number: number, title: string) => Promise<void>;
   addLabel: (repo: string, number: number, label: string) => Promise<void>;
@@ -64,10 +74,13 @@ const LIVE: TriageGitHub = {
     // One JSON string per line: `--paginate` concatenates pages, so a single
     // JSON document would not parse, and a raw body with a newline would read
     // as two comments.
-    ghWithoutGhToken(["api", "--paginate", `repos/${repo}/issues/${number}/comments?per_page=100`, "--jq", ".[] | [.body] | @json"])
+    ghWithoutGhToken(["api", "--paginate", `repos/${repo}/issues/${number}/comments?per_page=100`, "--jq", ".[] | [.body, .user.login, .author_association] | @json"])
       .split("\n")
       .filter(l => l.trim() !== "")
-      .map(l => (JSON.parse(l) as [string])[0]),
+      .map(l => {
+        const [body, author, association] = JSON.parse(l) as [string, string, string];
+        return { body, author, association };
+      }),
   comment: async (repo, number, body) => void ghWithoutGhToken(["issue", "comment", String(number), "--repo", repo, "--body", body]),
   setMilestone: async (repo, number, title) => void ghWithoutGhToken(["issue", "edit", String(number), "--repo", repo, "--milestone", title]),
   addLabel: async (repo, number, label) => void ghWithoutGhToken(["issue", "edit", String(number), "--repo", repo, "--add-label", label]),
@@ -130,7 +143,7 @@ export async function main(argv: string[], gh: TriageGitHub = LIVE): Promise<num
       throw new Error(`${cut.map(i => `#${i.number}`).join(", ")} carry more labels than one page holds, so whether they are from a consumer is unread`);
     }
     for (const i of issues.filter(i => i.labels.includes(CONSUMER_LABEL))) {
-      const already = verdictIn(await gh.comments(repo, i.number));
+      const already = verdictIn(trustedBodies(await gh.comments(repo, i.number)));
       if (already !== null) rows.push({ number: i.number, triage: { kind: "TRIAGED", why: `already carries a ${already} verdict` }, results: [] });
       else pending.push(i);
     }

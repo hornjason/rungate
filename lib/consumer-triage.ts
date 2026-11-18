@@ -137,7 +137,31 @@ export function verdictMarker(kind: VerdictKind): string {
   return `${MARKER_OPEN} ${kind} -->`;
 }
 
-/** The verdict a set of comments records, or null when none carries a marker. */
+/** One issue comment, with who wrote it. */
+export interface IssueComment {
+  readonly body: string;
+  readonly author: string;
+  /** GitHub's `author_association`: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, … */
+  readonly association: string;
+}
+
+/** The associations whose marker counts. A reporter cannot mark their own issue triaged. */
+export const TRUSTED_ASSOCIATIONS: readonly string[] = ["OWNER", "MEMBER", "COLLABORATOR"];
+
+/** The account a generated workflow's `GITHUB_TOKEN` posts as (SC-2784). */
+export const WORKFLOW_BOT = "github-actions[bot]";
+
+/**
+ * The comment bodies whose marker counts: written by someone with push access,
+ * or by the workflow that runs the triage. Anyone can comment on a public
+ * issue, so a marker from anyone else would let a reporter skip triage, and
+ * `consumer-intake` (SC-2783) would then read the issue as answered.
+ */
+export function trustedBodies(comments: readonly IssueComment[]): string[] {
+  return comments.filter(c => TRUSTED_ASSOCIATIONS.includes(c.association) || c.author === WORKFLOW_BOT).map(c => c.body);
+}
+
+/** The verdict a set of comments records, or null when none carries a marker. Pass {@link trustedBodies}. */
 export function verdictIn(comments: readonly string[]): VerdictKind | null {
   for (const c of comments) {
     const m = MARKER.exec(c);
