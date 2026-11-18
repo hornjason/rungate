@@ -1,4 +1,4 @@
-# generated-sha: a47f6948f117c626
+# generated-sha: b5bbb6eef74ffdfa
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -45,9 +45,7 @@ jobs:
           # The default run shell has no pipefail, so a failed read would end
           # in a clean exit and the missed issues would go unlabelled silently.
           set -o pipefail
-          SINCE="$(date -u -d '2 days ago' +%Y-%m-%dT%H:%M:%SZ)"
-          export SINCE
-          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&since=$SINCE&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= env.SINCE) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("from-consumer") | not) | .number' \
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= (now - 172800 | todate)) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("from-consumer") | not) | .number' \
             | while read -r n; do gh issue edit "$n" --repo "$GITHUB_REPOSITORY" --add-label from-consumer; done
 
       - uses: actions/checkout@v4

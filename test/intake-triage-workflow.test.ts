@@ -114,7 +114,9 @@ describe("#2379: the daily run labels an outside reporter's recent issue the ope
 
   test("its window is the board's grace period, and its trusted set is the triage's", () => {
     expect(CONSUMER_INTAKE_SWEEP_DAYS * 24 * 60 * 60 * 1000).toBe(CONSUMER_INTAKE_GRACE_MS);
-    expect(sweep()!.run).toContain(`${CONSUMER_INTAKE_SWEEP_DAYS} days ago`);
+    expect(sweep()!.run).toContain(`now - ${CONSUMER_INTAKE_SWEEP_DAYS * 86400} | todate`);
+    // Review of #2380: no GNU-only `date -d`; ci.runner may not be Linux.
+    expect(sweep()!.run).not.toMatch(/\bdate\b/);
     expect(sweep()!.env?.TRUSTED).toBe(JSON.stringify(TRUSTED_ASSOCIATIONS));
     expect(sweep()!.run, "an event value spliced into the script").not.toContain("${{");
     // A failed tracker read must fail the step, not vanish into the pipe.
@@ -124,18 +126,21 @@ describe("#2379: the daily run labels an outside reporter's recent issue the ope
   test("its filter picks only a recent, open, unlabelled issue by an untrusted author", () => {
     const filter = /--jq '([^']+)'/.exec(sweep()!.run!)?.[1];
     expect(filter, "the step has no --jq filter to run").toBeDefined();
+    // Relative to now, because the filter reads jq's own clock.
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const recent = ago(1);
     const page = [
-      { number: 1, created_at: "2026-11-17T10:00:00Z", author_association: "NONE", labels: [] },
-      { number: 2, created_at: "2026-11-17T10:00:00Z", author_association: "OWNER", labels: [] },
-      { number: 3, created_at: "2026-11-17T10:00:00Z", author_association: "CONTRIBUTOR", labels: [{ name: CONSUMER_LABEL }] },
-      { number: 4, created_at: "2026-11-10T10:00:00Z", author_association: "NONE", labels: [] },
-      { number: 5, created_at: "2026-11-17T10:00:00Z", author_association: "NONE", labels: [], pull_request: {} },
-      { number: 6, created_at: "2026-11-17T10:00:00Z", author_association: "FIRST_TIME_CONTRIBUTOR", labels: [{ name: "bug" }] },
+      { number: 1, created_at: recent, author_association: "NONE", labels: [] },
+      { number: 2, created_at: recent, author_association: "OWNER", labels: [] },
+      { number: 3, created_at: recent, author_association: "CONTRIBUTOR", labels: [{ name: CONSUMER_LABEL }] },
+      { number: 4, created_at: ago(CONSUMER_INTAKE_SWEEP_DAYS + 5), author_association: "NONE", labels: [] },
+      { number: 5, created_at: recent, author_association: "NONE", labels: [], pull_request: {} },
+      { number: 6, created_at: recent, author_association: "FIRST_TIME_CONTRIBUTOR", labels: [{ name: "bug" }] },
     ];
     const r = spawnSync("jq", ["-r", filter!], {
       input: JSON.stringify(page),
       encoding: "utf-8",
-      env: { ...process.env, SINCE: "2026-11-16T00:00:00Z", TRUSTED: JSON.stringify(TRUSTED_ASSOCIATIONS) },
+      env: { ...process.env, TRUSTED: JSON.stringify(TRUSTED_ASSOCIATIONS) },
     });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout.trim().split("\n")).toEqual(["1", "6"]);

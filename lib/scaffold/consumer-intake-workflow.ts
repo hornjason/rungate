@@ -27,6 +27,11 @@
  * older issue on purpose is not put back. Issues filed before this workflow
  * existed are labelled by hand, once.
  *
+ * The window is computed inside the `--jq` filter (`now - seconds | todate`),
+ * not with `date -d`: that is GNU-only, and `ci.runner` may name a macOS or
+ * self-hosted runner (review of #2380). gh carries its own jq, so the filter
+ * runs wherever gh does.
+ *
  * ## It calls the published CLI
  *
  * Like every generated workflow it runs `bunx rungate@<version>`, so
@@ -124,9 +129,7 @@ jobs:
           # The default run shell has no pipefail, so a failed read would end
           # in a clean exit and the missed issues would go unlabelled silently.
           set -o pipefail
-          SINCE="$(date -u -d '${CONSUMER_INTAKE_SWEEP_DAYS} days ago' +%Y-%m-%dT%H:%M:%SZ)"
-          export SINCE
-          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&since=$SINCE&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= env.SINCE) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("${CONSUMER_LABEL}") | not) | .number' \\
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= (now - ${CONSUMER_INTAKE_SWEEP_DAYS * 86400} | todate)) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("${CONSUMER_LABEL}") | not) | .number' \\
             | while read -r n; do gh issue edit "$n" --repo "$GITHUB_REPOSITORY" --add-label ${CONSUMER_LABEL}; done
 
       - uses: ${opts.checkout}
