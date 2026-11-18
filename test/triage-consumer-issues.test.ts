@@ -277,16 +277,35 @@ describe("SC-2782: rungate consumer-triage --write gives the verdict with no han
     expect(r.out).toContain("DUPLICATE");
   });
 
-  test("--write: milestone and queue label first, the marker comment last; DUPLICATE gets only the comment", async () => {
+  test("--write: queue label, then milestone, the marker comment last; DUPLICATE gets only the comment", async () => {
     const { gh, wrote } = fakeGitHub();
     const r = await run(["--write"], gh);
     expect(r.code).toBe(0);
-    expect(wrote.filter(w => w.number === 300).map(w => w.op)).toEqual(["milestone", "label", "comment"]);
+    expect(wrote.filter(w => w.number === 300).map(w => w.op)).toEqual(["label", "milestone", "comment"]);
     expect(wrote.find(w => w.number === 300 && w.op === "milestone")?.value).toBe(P9);
     expect(wrote.find(w => w.number === 300 && w.op === "label")?.value).toBe("engine");
     expect(verdictIn([wrote.find(w => w.number === 300 && w.op === "comment")!.value])).toBe("PLACED");
     expect(wrote.filter(w => w.number === 301).map(w => w.op)).toEqual(["comment"]);
     expect(wrote.find(w => w.number === 301)!.value).toContain("#103");
+  });
+
+  // Review of #2367: the label goes first so that a milestone a run set always
+  // has the label beside it. A run that dies after the label leaves no
+  // milestone, and the next run places it as new.
+  test("#2364 review: a run that set the label and failed on the milestone is placed by the next run, not LEFT", async () => {
+    const first = fakeGitHub({ setMilestone: async () => { throw new Error("milestone write refused"); } });
+    const r1 = await run(["--write"], first.gh);
+    expect(r1.code).not.toBe(0);
+    expect(first.wrote.filter(w => w.number === 300).map(w => w.op)).toEqual(["label"]);
+    const again = fakeGitHub({
+      openIssues: async () => [
+        { ...ACTIVE_WORK, labels: ["engine"] },
+        { ...consumer(300, "Needs SC-9811."), labels: [CONSUMER_LABEL, "engine"] },
+      ],
+    });
+    const r2 = await run(["--write"], again.gh);
+    expect(r2.code).toBe(0);
+    expect(again.wrote.filter(w => w.number === 300).map(w => w.op)).toEqual(["milestone", "comment"]);
   });
 
   test("an issue that already carries a verdict marker is never triaged again", async () => {
@@ -298,7 +317,7 @@ describe("SC-2782: rungate consumer-triage --write gives the verdict with no han
   test("a marker the reporter wrote themselves does not count: the issue is still triaged", async () => {
     const { gh, wrote } = fakeGitHub();
     await run(["--write"], gh);
-    expect(wrote.filter(w => w.number === 300).map(w => w.op)).toEqual(["milestone", "label", "comment"]);
+    expect(wrote.filter(w => w.number === 300).map(w => w.op)).toEqual(["label", "milestone", "comment"]);
   });
 
   test("only issues labelled from-consumer are triaged", async () => {
@@ -315,7 +334,8 @@ describe("SC-2782: rungate consumer-triage --write gives the verdict with no han
     });
     const r = await run(["--write"], gh);
     expect(r.code).toBe(REFUSAL_EXIT);
-    expect(wrote.filter(w => w.number === 300)).toEqual([]);
+    // The label goes first (review of #2367); what must not land is the marker.
+    expect(wrote.filter(w => w.number === 300 && w.op === "comment")).toEqual([]);
     expect(r.out).toContain("FAILED");
   });
 

@@ -6,9 +6,14 @@
  * marker, asks `triageVerdict` (`lib/consumer-triage.ts`, the one decider) for
  * each, and prints the answer. With `--write` it applies it:
  *
- *   1. the milestone, when the verdict names one the issue is not already in;
- *   2. `board.queueLabel`, for every verdict but DUPLICATE;
+ *   1. `board.queueLabel`, for every verdict but DUPLICATE;
+ *   2. the milestone, when the verdict names one the issue is not already in;
  *   3. the marker comment, LAST.
+ *
+ * The label goes before the milestone (review of #2367) so that a milestone a
+ * run set always has the label beside it: that pair is the decider's evidence
+ * of a run that stopped before its marker (#2364). A run that dies after the
+ * label leaves no milestone, and the next run places the issue as new.
  *
  * The comment is last on purpose. The marker is what says "triaged", so it is
  * written only once the moves it records have landed: a move that fails leaves
@@ -187,13 +192,13 @@ export async function main(argv: string[], gh: TriageGitHub = LIVE): Promise<num
     rows.push(row);
     if (!write || triage.kind === "LEFT" || triage.kind === "REFUSED") continue;
     try {
-      if (triage.kind !== "DUPLICATE" && triage.milestone !== issue.milestone) {
-        await gh.setMilestone(repo, issue.number, triage.milestone);
-        row.results.push(`milestone "${triage.milestone}"`);
-      }
       if (triage.kind !== "DUPLICATE" && queueLabel !== null && !issue.labels.includes(queueLabel)) {
         await gh.addLabel(repo, issue.number, queueLabel);
         row.results.push(`label ${queueLabel}`);
+      }
+      if (triage.kind !== "DUPLICATE" && triage.milestone !== issue.milestone) {
+        await gh.setMilestone(repo, issue.number, triage.milestone);
+        row.results.push(`milestone "${triage.milestone}"`);
       }
       await gh.comment(repo, issue.number, verdictComment(triage));
       row.results.push("verdict comment");
