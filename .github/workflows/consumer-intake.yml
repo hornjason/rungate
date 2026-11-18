@@ -1,4 +1,4 @@
-# generated-sha: 185aa1c661db75ff
+# generated-sha: 3fa1e3c5419950ec
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -78,4 +78,4 @@ jobs:
       - name: Triage every consumer issue that has no verdict
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bunx rungate@0.8.32 consumer-triage --repo "$GITHUB_REPOSITORY" --write
+        run: bunx rungate@0.8.33 consumer-triage --repo "$GITHUB_REPOSITORY" --write
