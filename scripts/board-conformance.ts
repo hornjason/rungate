@@ -866,23 +866,23 @@ export const READINGS: readonly ReadingSpec[] = [
   {
     name: "dependency-edges",
     item: "E3",
-    what: "every ordering the plan derives is a blocked-by edge on the tracker, so what is next is computed",
+    what: "every dependency an accepted ADR declares between open issues is a blocked-by edge on the tracker, so what is next is computed",
     readsIssueRefs: true,
-    // #2024: the plan is repository-wide and chains phases WITHIN each
-    // milestone family (`familyOf`, `lib/spec-placement.ts`). #1903 wrote
-    // this reading over a family-blind plan, measured 129 of 154 because
-    // `Convergence Phase N` was chained to `Pipeline Phase N-1`, and withdrew
-    // it at review round 3. Family-aware it read 180 of 191, all eleven gaps
-    // on one Convergence issue, and `plan-deps --milestone-prefix Convergence
-    // --write` closed them.
+    // ADR-021 decision 4: MET when `plan-deps` would add nothing, SHORT naming
+    // what is missing. The plan is what accepted ADRs' Decomposition tables
+    // declare (SC-2606), so a tracker with no declared link between two open
+    // issues is ordinary — and counted over the EDGES it read 0 of 0, which
+    // this frame calls UNMEASURED, failing E3 and F2 on main (#2432). So the
+    // denominator is the open issues, as `consumer-intake`'s is: "no open
+    // issue is missing a link planning declared for it", asked of a
+    // population that was read.
     //
     // BOTH endpoints have to resolve, and that is why this carries
     // `readsIssueRefs`. An edge naming an issue that is not in the open
     // population points at something that can never close, so the blocked
-    // issue never surfaces as next — the graph is wrong in the one direction
-    // this reading exists to rule out. Rounds 1, 2 and 5 of #1697 were that
-    // hole found three times, once per reading that resolved a number
-    // without checking it.
+    // issue never surfaces as next. A blocker that is not open makes its
+    // issue owe; a WAITING end that is not open is the two readings
+    // disagreeing, and is UNMEASURED rather than dropped from the count.
     //
     // Resolved against `repoIssues`, not `onBoard`: the plan is repo-wide
     // and `issues` is the engine milestone, so resolving against the engine
@@ -892,26 +892,29 @@ export const READINGS: readonly ReadingSpec[] = [
         return "the dependency plan was never derived, so no ordering was compared against the " +
           "tracker — a tracker with no edges is not a tracker that needs none";
       }
-      return b.repoIssues === undefined
-        ? "the repository's open issues were never read, so an edge pointing at a number cannot " +
-            "be told from an edge pointing at nothing"
-        : null;
+      if (b.repoIssues === undefined) {
+        return "the repository's open issues were never read, so an edge pointing at a number cannot " +
+          "be told from an edge pointing at nothing";
+      }
+      const open = new Set(b.repoIssues.map(i => i.number));
+      const stray = [...new Set(b.plannedEdges.filter(e => !open.has(e.blocked)).map(e => `#${e.blocked}`))];
+      return stray.length === 0
+        ? null
+        : `the plan has ${stray.join(", ")} waiting, which is not among the open issues read, so the two readings disagree`;
     },
     measure: b => {
       const open = new Set(b.repoIssues!.map(i => i.number));
-      return {
-        measured: b.plannedEdges!.filter(e => e.present && open.has(e.blocked) && open.has(e.blocker)).length,
-        target: b.plannedEdges!.length,
-      };
+      const owing = new Set(b.plannedEdges!.filter(e => !(e.present && open.has(e.blocker))).map(e => e.blocked));
+      return { measured: b.repoIssues!.length - owing.size, target: b.repoIssues!.length };
     },
     offenders: b => {
       const open = new Set(b.repoIssues!.map(i => i.number));
       return b.plannedEdges!
-        .filter(e => !(e.present && open.has(e.blocked) && open.has(e.blocker)))
+        .filter(e => !(e.present && open.has(e.blocker)))
         .map(e =>
-          !open.has(e.blocked) || !open.has(e.blocker)
-            ? `#${e.blocked} blocked by #${e.blocker} — ${!open.has(e.blocked) ? `#${e.blocked}` : `#${e.blocker}`} is not an open issue, so this edge resolves to nothing`
-            : `#${e.blocked} blocked by #${e.blocker} — the plan derives it and the tracker does not carry it`,
+          !open.has(e.blocker)
+            ? `#${e.blocked} blocked by #${e.blocker} — #${e.blocker} is not an open issue, so this edge resolves to nothing`
+            : `#${e.blocked} blocked by #${e.blocker} — an accepted plan declares it and the tracker does not carry it`,
         );
     },
   },
