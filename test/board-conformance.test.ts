@@ -180,6 +180,10 @@ const completeBoard = (): BoardSnapshot => ({
   repoIssues: [
     { number: 1, names: ["SC-2618"], servesNone: false },
     { number: 2, names: [], servesNone: true },
+    // SC-2783: the three consumer issues below are open issues too.
+    { number: 30, names: [], servesNone: true },
+    { number: 31, names: [], servesNone: true },
+    { number: 32, names: [], servesNone: true },
   ],
   plannedEdges: [{ blocked: 2, blocker: 1, present: true }],
   // SC-2752: one unticked criterion an open issue names, and one open stage
@@ -197,6 +201,76 @@ const completeBoard = (): BoardSnapshot => ({
     { number: 1, family: "Pipeline", criteriaField: "SC-2618" },
     { number: 7, family: "Convergence", criteriaField: "CRC-B7" },
   ],
+  // SC-2783: three consumer issues, each conformant for a different reason —
+  // an old one with a verdict marker, an old one with a milestone, and one
+  // too young to owe either — so a reading that honoured only one route
+  // shows up in the break below rather than here.
+  consumerIntake: {
+    takenAt: "2026-11-20T00:00:00.000Z",
+    issues: [
+      { number: 30, createdAt: "2026-11-10T00:00:00.000Z", milestone: null, verdict: "PLACED" },
+      { number: 31, createdAt: "2026-11-10T00:00:00.000Z", milestone: "Fix Phase 0", verdict: null },
+      { number: 32, createdAt: "2026-11-19T12:00:00.000Z", milestone: null, verdict: null },
+    ],
+  },
+});
+
+/**
+ * SC-2783: `consumer-intake` — an issue a consumer filed must not sit
+ * unanswered. Older than two days with neither a verdict marker nor a
+ * milestone is SHORT, named; a tracker that could not be read is UNMEASURED.
+ */
+describe("SC-2783: consumer-intake reads an unanswered consumer issue as short", () => {
+  const reading = (b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === "consumer-intake")!, b);
+
+  test("the complete board is met: a marker, a milestone, or youth each answers", () => {
+    expect(reading(completeBoard()).status).toBe("met");
+  });
+
+  test("an old consumer issue with neither a marker nor a milestone is short, and named", () => {
+    const b = completeBoard();
+    b.consumerIntake!.issues[1]!.milestone = null;
+    const r = reading(b);
+    expect(r.status).toBe("short");
+    expect(r.offenders.join("\n")).toContain("#31");
+    expect(r.offenders.join("\n")).not.toContain("#30");
+  });
+
+  test("the boundary is two days: exactly two is not overdue, a millisecond past is", () => {
+    const b = completeBoard();
+    b.consumerIntake!.issues[2]!.createdAt = "2026-11-18T00:00:00.000Z";
+    expect(reading(b).status).toBe("met");
+    b.consumerIntake!.issues[2]!.createdAt = "2026-11-17T23:59:59.999Z";
+    expect(reading(b).status).toBe("short");
+  });
+
+  test("a repository with no consumer issues is met over its open issues, not 0 of 0", () => {
+    const b = completeBoard();
+    b.consumerIntake!.issues = [];
+    const r = reading(b);
+    expect(r.status).toBe("met");
+    expect(r.target).toBe(b.repoIssues!.length);
+  });
+
+  test("consumer issues never read is UNMEASURED, not an empty intake", () => {
+    const b = completeBoard();
+    delete b.consumerIntake;
+    expect(reading(b).status).toBe("unmeasured");
+  });
+
+  test("a consumer row that is not among the open issues is UNMEASURED, never silently dropped", () => {
+    const b = completeBoard();
+    b.consumerIntake!.issues.push({ number: 99, createdAt: "2026-11-01T00:00:00.000Z", milestone: null, verdict: null });
+    expect(reading(b).status).toBe("unmeasured");
+  });
+
+  test("one malformed row unreads the whole intake through the snapshot parser", () => {
+    const b = completeBoard() as unknown as Record<string, unknown>;
+    (b.consumerIntake as { issues: Record<string, unknown>[] }).issues[0]!.createdAt = "not a date";
+    const parsed = readSnapshotText(JSON.stringify(b));
+    expect(parsed.board).not.toBeNull();
+    expect(reading(parsed.board!).status).toBe("unmeasured");
+  });
 });
 
 /**
@@ -351,7 +425,7 @@ describe("the command's shape", () => {
     // is asserted as well as the names because `--list-readings` printing a
     // SUBSET would satisfy every `toContain` above — a list can only be
     // checked by its length and its membership together.
-    expect(READING_NAMES.length, "five engine, four repository-wide, and declared work").toBe(10);
+    expect(READING_NAMES.length, "five engine, four repository-wide, declared work and consumer intake").toBe(11);
   });
 
   test("every reading names the ladder item that owns wiring its source", () => {
@@ -362,7 +436,8 @@ describe("the command's shape", () => {
     // criterion is what is on the hook: SC-2752 is ticked only by a test that
     // exercises it (rule 6), which is the same obligation a ladder item's
     // verify command carries.
-    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2", "E3", "E4", "SC-2752"]);
+    // `consumer-intake` likewise: SC-2783 (ADR-020).
+    expect(READINGS.map(r => r.item).sort()).toEqual(["B1", "B2", "B3", "B4", "B6", "E1", "E2", "E3", "E4", "SC-2752", "SC-2783"]);
   });
 });
 
@@ -661,6 +736,11 @@ describe("each reading, planted short and planted complete", () => {
       what: "another family's issue whose Criteria column is empty",
       break: b => void (b.familyIssues![1]!.criteriaField = null),
     },
+    {
+      reading: "consumer-intake",
+      what: "an old consumer issue with neither a verdict marker nor a milestone",
+      break: b => void (b.consumerIntake!.issues[1]!.milestone = null),
+    },
   ];
 
   test("the break list covers every reading, so none is silently untested", () => {
@@ -781,6 +861,7 @@ describe("each reading, planted short and planted complete", () => {
     expect(readings.filter(r => r.status === "met").map(r => r.name).sort()).toEqual(
       [
         "blocked-by-edges",
+        "consumer-intake",
         "criteria-field",
         "criteria-field-all",
         "criteria-named",
@@ -791,7 +872,7 @@ describe("each reading, planted short and planted complete", () => {
         "spec-placement",
       ],
     );
-    expect(conformant(readings), "nine of ten met read as conformant").toBe(false);
+    expect(conformant(readings), "ten of eleven met read as conformant").toBe(false);
   });
 });
 
