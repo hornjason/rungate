@@ -25,7 +25,7 @@ import type { DeclaredPlan, DepEdge, DepIssue } from "../lib/spec-deps";
 import type { DecompositionRow } from "../lib/issue-decomposition";
 import { familyOf, phaseInFamily } from "../lib/spec-placement";
 import { phaseOf } from "../lib/board-mirror";
-import { REFUSAL_EXIT, main as planDepsMain } from "../scripts/plan-deps";
+import { REFUSAL_EXIT, main as planDepsMain, phaseOrderLinks, phaseOrderRemoval } from "../scripts/plan-deps";
 import type { PlanDepsGitHub } from "../scripts/plan-deps";
 
 /** One issue, spelled the way the GraphQL read spells it, titled `issue <n>`. */
@@ -1355,5 +1355,154 @@ describe("#2413: a family whose milestones hold no open issue reads nothing to o
     expect(r.stderr).toContain("UNMEASURED");
     expect(r.stderr).toContain("HTTP 502");
     expect(r.stdout).not.toContain("nothing to order");
+  });
+});
+
+/**
+ * #2433 — the planner's phase-order links come off the tracker, and
+ * hand-written links stay (ADR-021 decision 2).
+ *
+ * Measured live on 2026-11-18: Convergence carries exactly the 182 links the
+ * old adjacent-phase chain derives, 11 stale ones around #1764 from its old
+ * placement, and 2 written by hand inside a phase (#1659 on #1658, #1481 on
+ * #1591). `--remove-phase-order` takes off what the chain derives, plus the
+ * pairs `--also-remove` names, and nothing an accepted plan declares.
+ */
+describe("#2433: --remove-phase-order takes off phase order and leaves every other link", () => {
+  const fam = (number: number, family: string, phase: number, blockedBy: number[] = [], state = "OPEN"): DepIssue => ({
+    number,
+    title: `issue ${number}`,
+    state,
+    milestone: `${family} Phase ${phase} — x`,
+    blockedBy,
+  });
+
+  test("phaseOrderLinks is the old chain: adjacent phases that exist, within one family, open issues only", () => {
+    const got = phaseOrderLinks([
+      fam(10, "Convergence", 1),
+      fam(11, "Convergence", 1),
+      fam(20, "Convergence", 2),
+      fam(40, "Convergence", 4),
+      fam(50, "Convergence", 5, [], "CLOSED"),
+      fam(60, "Pipeline", 2),
+    ]);
+    expect(keys(got)).toEqual(["20<-10", "20<-11", "40<-20"]);
+  });
+
+  test("the removal is phase order that is ON the tracker and declared by nobody; a hand-written link inside a phase stays", () => {
+    const issues = [
+      fam(10, "Convergence", 1),
+      fam(11, "Convergence", 1, [10]), // by hand, inside a phase
+      fam(20, "Convergence", 2, [10, 11]),
+      fam(30, "Convergence", 3, [20]),
+      fam(31, "Convergence", 3), // phase order says 31<-20, and the tracker does not carry it
+    ];
+    const r = phaseOrderRemoval(issues, edges([30, 20]), []);
+    expect(r.refusals).toEqual([]);
+    expect(keys(r.remove)).toEqual(["20<-10", "20<-11"]);
+  });
+
+  test("--also-remove adds named pairs; one not on the tracker, or one a plan declares, refuses by name", () => {
+    const issues = [fam(10, "Convergence", 2), fam(11, "Convergence", 2), fam(12, "Convergence", 2, [10, 11])];
+    expect(keys(phaseOrderRemoval(issues, [], edges([12, 10])).remove)).toEqual(["12<-10"]);
+    const absent = phaseOrderRemoval(issues, [], edges([12, 99]));
+    expect(absent.refusals.join(" ")).toContain("#12 is not blocked by #99");
+    const declared = phaseOrderRemoval(issues, edges([12, 11]), edges([12, 11]));
+    expect(declared.refusals.join(" ")).toContain("#12 blocked by #11 is declared by an accepted plan");
+    expect(keys(declared.remove)).toEqual([]);
+  });
+
+  function removing(issues: DepIssue[], readPlans: PlanDepsGitHub["readPlans"], fail = false) {
+    const removed: string[] = [];
+    const added: string[] = [];
+    const gh: PlanDepsGitHub = {
+      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+      readIssues: async () => issues,
+      readPlans,
+      addBlockers: async (_repo, blocked, blockers) => void added.push(`#${blocked} +${[...blockers].join(",")}`),
+      removeBlocker: async (_repo, blocked, blocker) => {
+        if (fail) throw new Error("gh: HTTP 502");
+        removed.push(`${blocked}<-${blocker}`);
+      },
+    };
+    return { gh, removed, added };
+  }
+  async function said(argv: string[], gh: PlanDepsGitHub) {
+    const out: string[] = [];
+    const [log, err] = [console.log, console.error];
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void out.push(a.join(" "));
+    try {
+      return { code: await planDepsMain(argv, gh), text: out.join("\n") };
+    } finally {
+      [console.log, console.error] = [log, err];
+    }
+  }
+  const LIVE_SHAPE = [
+    fam(10, "Convergence", 1),
+    fam(11, "Convergence", 1, [10]),
+    fam(20, "Convergence", 2, [10, 11]),
+    fam(21, "Convergence", 2, [10, 11, 20]),
+  ];
+
+  test("the dry run lists every link it would take off, and touches nothing", async () => {
+    const s = removing(LIVE_SHAPE, declaring());
+    const got = await said(["--repo", "o/r", "--milestone-prefix", "Convergence", "--remove-phase-order", "--also-remove", "21:20"], s.gh);
+    expect(got.code, got.text).toBe(0);
+    for (const line of ["#20 blocked by #10", "#20 blocked by #11", "#21 blocked by #10", "#21 blocked by #11", "#21 blocked by #20"]) {
+      expect(got.text).toContain(line);
+    }
+    expect(got.text).not.toContain("#11 blocked by #10");
+    expect(s.removed).toEqual([]);
+    expect(s.added).toEqual([]);
+  });
+
+  test("--write takes each one off, adds nothing, and leaves the hand-written link", async () => {
+    const s = removing(LIVE_SHAPE, declaring());
+    const got = await said(["--repo", "o/r", "--milestone-prefix", "Convergence", "--remove-phase-order", "--also-remove", "21:20", "--write"], s.gh);
+    expect(got.code, got.text).toBe(0);
+    expect(s.removed.sort()).toEqual(["20<-10", "20<-11", "21<-10", "21<-11", "21<-20"]);
+    expect(s.added).toEqual([]);
+  });
+
+  test("a declared dependency is never taken off, even when it is also phase order", async () => {
+    const s = removing(LIVE_SHAPE, declaring([20, 10]));
+    await said(["--repo", "o/r", "--milestone-prefix", "Convergence", "--remove-phase-order", "--write"], s.gh);
+    expect(s.removed.sort()).toEqual(["20<-11", "21<-10", "21<-11"]);
+  });
+
+  test("a failed removal exits non-zero and says which", async () => {
+    const s = removing(LIVE_SHAPE, declaring(), true);
+    const got = await said(["--repo", "o/r", "--milestone-prefix", "Convergence", "--remove-phase-order", "--write"], s.gh);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    expect(got.text).toContain("FAILED");
+  });
+
+  test("an --also-remove pair that is not on the tracker refuses before anything is removed", async () => {
+    const s = removing(LIVE_SHAPE, declaring());
+    const got = await said(["--repo", "o/r", "--milestone-prefix", "Convergence", "--remove-phase-order", "--also-remove", "21:99", "--write"], s.gh);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    expect(got.text).toContain("#21 is not blocked by #99");
+    expect(s.removed).toEqual([]);
+  });
+
+  test("argument errors refuse before the tracker is read: a bad pair, --also-remove alone, or --json", async () => {
+    for (const argv of [
+      ["--remove-phase-order", "--also-remove", "21-20"],
+      ["--also-remove", "21:20"],
+      ["--remove-phase-order", "--json"],
+    ]) {
+      let reads = 0;
+      const gh: PlanDepsGitHub = {
+        ...removing(LIVE_SHAPE, declaring()).gh,
+        readIssues: async () => {
+          reads++;
+          return LIVE_SHAPE;
+        },
+      };
+      const got = await said(["--repo", "o/r", "--milestone-prefix", "Convergence", ...argv], gh);
+      expect(got.code, argv.join(" ")).toBe(REFUSAL_EXIT);
+      expect(reads, argv.join(" ")).toBe(0);
+    }
   });
 });

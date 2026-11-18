@@ -2242,6 +2242,70 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
     }
   });
 
+  // Review round 4 of #2439, carried here: the declared read sat in a bare
+  // catch, so a docs/adr that could not be read omitted the key with no
+  // reason anywhere. The omission was already UNMEASURED downstream; the
+  // reason was not recorded.
+  test("#2433: ADRs that cannot be read omit plannedEdges and say why on stderr", async () => {
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      declareFirstBeforeSecond(dir);
+      const said: string[] = [];
+      const err = console.error;
+      console.error = (...a: unknown[]) => void said.push(a.join(" "));
+      let snap: ProducedSnapshot;
+      try {
+        const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+        const broken = {
+          ...gh,
+          readPlans: () => {
+            throw new Error("EACCES: docs/adr");
+          },
+        };
+        snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], broken);
+      } finally {
+        console.error = err;
+      }
+      expect("plannedEdges" in snap!).toBe(false);
+      const text = said.join("\n");
+      expect(text).toContain("UNMEASURED");
+      expect(text).toContain("docs/adr");
+    });
+  });
+
+  test("#2433: a bug after the read escapes — it never reads as nothing measured", async () => {
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+      // A plan whose rows are not an array: `declaredDependencies` throws on it.
+      const malformed = { ...gh, readPlans: () => ({ plans: [{ path: "docs/adr/ADR-9.md", rows: null as never }], unreadable: [] }) };
+      await expect(capture([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], malformed)).rejects.toThrow();
+    });
+  });
+
+  test("#2433: an unparseable plan that blinds the reading says which on stderr", async () => {
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      declareFirstBeforeSecond(dir);
+      writeFileSync(
+        join(dir, "docs", "adr", "ADR-002-old-shape.md"),
+        "---\ndoc-type: adr\nstatus: accepted\ncreated: 2026-10-01\n---\n\n# Older\n\n" +
+          "| Criterion | Outcome | Files | Milestone | Blocked by |\n|---|---|---|---|---|\n" +
+          `| — | ${SECOND} | lib/c.ts | — | #7 |\n`,
+      );
+      const said: string[] = [];
+      const err = console.error;
+      console.error = (...a: unknown[]) => void said.push(a.join(" "));
+      try {
+        const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+        await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+      } finally {
+        console.error = err;
+      }
+      expect(said.join("\n")).toContain("docs/adr/ADR-002-old-shape.md");
+    });
+  });
+
   test("SC-2606: with nothing declared, two phases owe no edge — phase order is not a dependency", async () => {
     await withSpecsDir(async (dir, at) => {
       writeBoardConfig(dir, BOARD);

@@ -116,6 +116,14 @@ export interface BoardSnapshotGitHub {
    * omission, and `consumer-intake` is then UNMEASURED rather than empty.
    */
   readComments?: (repo: string, number: number) => Promise<IssueComment[]>;
+  /**
+   * The accepted ADRs' Decomposition tables (SC-2606). A local read, not a
+   * GitHub one; absent, it is `readDeclaredPlans` over `<root>/docs/adr`. On
+   * the seam so a test can make the read throw on purpose (#2433): with the
+   * filesystem, `plannedByUnmergedAdr` reads the same files later and fails
+   * first in its own way.
+   */
+  readPlans?: typeof readDeclaredPlans;
 }
 
 const LIVE_GITHUB: BoardSnapshotGitHub = {
@@ -1064,16 +1072,34 @@ export async function main(
   // parse and names an open issue — `dependencyPlan` reads it UNMEASURED
   // (`unreadPlansThatMatter`, review of #2439). One naming no open issue
   // provably owes no link, and is not a reason to blind the reading.
-  let declaredEdges: ReturnType<typeof declaredDependencies> | null;
-  let unreadPlans: string[] = [];
+  // The `try` holds the READ only (reviews of #2439, rounds 4 and 5, carried
+  // to #2433). A throw from the two pure functions after it is a bug, and
+  // escapes rather than reading as "nothing measured". A failed read is
+  // UNMEASURED, and said: the key is omitted below and dependency-edges reads
+  // it as never derived. It is never the reading of no ADRs, which emits
+  // `plannedEdges: []`.
+  let adrPlans: ReturnType<typeof readDeclaredPlans> | null;
   try {
-    const declared = readDeclaredPlans(root);
-    declaredEdges = declaredDependencies(declared.plans, liveIssues);
-    unreadPlans = unreadPlansThatMatter(declared.unreadable, liveIssues);
-  } catch {
-    declaredEdges = null; // UNMEASURED: `plannedEdges` is omitted below, and dependency-edges says so.
+    adrPlans = (gh.readPlans ?? readDeclaredPlans)(root);
+  } catch (e) {
+    adrPlans = null;
+    console.error(
+      `board-snapshot: UNMEASURED — the accepted ADRs under docs/adr could not be read (${(e as Error).message}), ` +
+        `so plannedEdges is omitted and dependency-edges reads UNMEASURED`,
+    );
   }
-  const plan = declaredEdges === null ? null : dependencyPlan(liveIssues, declaredEdges, { unreadPlans });
+  const plan =
+    adrPlans === null
+      ? null
+      : dependencyPlan(liveIssues, declaredDependencies(adrPlans.plans, liveIssues), {
+          unreadPlans: unreadPlansThatMatter(adrPlans.unreadable, liveIssues),
+        });
+  if (plan !== null && plan.reading !== "MEASURED") {
+    console.error(
+      `board-snapshot: UNMEASURED — the dependency plan could not be read, so plannedEdges is omitted:\n` +
+        plan.unmeasuredReasons.map(r => `  - ${r}`).join("\n"),
+    );
+  }
   const edges =
     plan === null || plan.reading !== "MEASURED"
       ? {}
