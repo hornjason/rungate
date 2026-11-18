@@ -111,6 +111,22 @@ describe("#2437: CRC-N3's rate — how many findings count their class by a sear
     expect(renderPopulationRate(row).join("\n")).toContain("3 could not be judged");
   });
 
+  test("a searched finding naming no usable file is UNMEASURED and judged — no tree could ever fix it", () => {
+    // Review of #2449: with a checkout supplied, these used to leave the
+    // denominator as unjudged, as if a tree were what was missing.
+    const noFile = [
+      finding({ file: "", populationSearch: ["needle"] }),
+      finding({ file: 12, populationSearch: ["needle"] }),
+    ];
+    for (const linesAt of [atMerge, null]) {
+      const row = populationRate([entry(1, ledgerBody([round(1, noFile)]))], linesAt);
+      expect(row.counts.unjudged, "an unusable file name was read as a missing tree").toBe(0);
+      expect(row.counts.unmeasured).toBe(2);
+      expect(row.judged).toBe(2);
+      expect(row.treeAt.none).toBe(0);
+    }
+  });
+
   test("the rate's denominator is the judged findings: an unjudged round lowers nothing", () => {
     // Round 1's tree is available, round 2's is in neither place. Over all
     // ten findings the rate would read 1 of 10 — the unjudged three dragging

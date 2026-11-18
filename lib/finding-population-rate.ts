@@ -123,18 +123,24 @@ export function populationRate(entries: readonly CrcEntry[], linesAt: LinesAt | 
         // search is decided without one, and reading for it would count a
         // tree lookup nobody needed.
         const runnable = search !== undefined && searchTerms(search) !== null;
-        if (runnable && typeof file === "string" && file !== "" && linesAt !== null) {
-          lines = round.mergeSha !== "" ? linesAt(round.mergeSha, file) : null;
-          if (lines !== null) treeAt.merge++;
-          else {
-            lines = round.sha !== "" ? linesAt(round.sha, file) : null;
-            if (lines !== null) treeAt.head++;
+        // UNJUDGED only when a tree is what is missing. A finding naming no
+        // usable file never had a tree to find, so it goes to the verdict
+        // with no lines and is UNMEASURED there, inside the denominator —
+        // review of #2449: it used to leave the rate even with a checkout.
+        if (runnable && typeof file === "string" && file !== "") {
+          if (linesAt !== null) {
+            lines = round.mergeSha !== "" ? linesAt(round.mergeSha, file) : null;
+            if (lines !== null) treeAt.merge++;
+            else {
+              lines = round.sha !== "" ? linesAt(round.sha, file) : null;
+              if (lines !== null) treeAt.head++;
+            }
           }
-        }
-        if (runnable && lines === null) {
-          treeAt.none++;
-          counts.unjudged++;
-          continue;
+          if (lines === null) {
+            treeAt.none++;
+            counts.unjudged++;
+            continue;
+          }
         }
         counts[populationVerdict(item[f.population], search, lines).kind]++;
       }
