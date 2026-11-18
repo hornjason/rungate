@@ -212,6 +212,21 @@ describe("postReviewThreads", () => {
     expect(r.outcome).toBe("POSTED");
   });
 
+  test("#2358 review: a fork's read-only token refusing the conversation comment degrades, it does not fail", async () => {
+    const { post } = recorder(refused);
+    const { comment } = pullCommenter(() => ({ ok: false, status: 403, message: "Resource not accessible by integration" }));
+    const r = await postReviewThreads(reading([finding]), post, undefined, true, comment);
+    expect(r.outcome).toBe("DEGRADED_NO_WRITE");
+    expect(aiReviewThreadsExitCode(r)).toBe(0);
+  });
+
+  test("#2358 review: the same 403 on a run that is NOT a fork is still FAILED", async () => {
+    const { post } = recorder(refused);
+    const { comment } = pullCommenter(() => ({ ok: false, status: 403, message: "Resource not accessible by integration" }));
+    const r = await postReviewThreads(reading([finding]), post, undefined, false, comment);
+    expect(r.outcome).toBe("FAILED");
+  });
+
   test("#2338: with no pull-request commenter the old behaviour holds: FAILED", async () => {
     const { post } = recorder(refused);
     const r = await postReviewThreads(reading([finding]), post);

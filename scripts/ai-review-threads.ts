@@ -226,7 +226,7 @@ try {
   };
 } catch (e) {
   console.log(
-    `${COMMAND}: the pull request's conversation could not be read (${(e as Error).message}), so a finding ` +
+    `${COMMAND}: the pull request's conversation could not be read (${escapeAnnotation((e as Error).message)}), so a finding ` +
       `GitHub refuses at the file has no fallback this round`,
   );
 }

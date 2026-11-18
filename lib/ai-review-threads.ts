@@ -366,12 +366,19 @@ export async function postReviewThreads(
         detail.push(`${where}: not in this pull request's diff (422 ${request.line === null ? "at the file" : "at the line and at the file"}), so it was posted on the conversation instead`);
         continue;
       }
-      failed += 1;
-      detail.push(
-        `${where}: not in this pull request's diff (422 ${request.line === null ? "at the file" : "at the line and at the file"}), and the conversation comment was refused too: ` +
-          `${viaConversation.status ?? "no status"} — ${viaConversation.message}`,
-      );
-      continue;
+      // A 403 here is the token, not the finding: the fork branch below
+      // decides it exactly as it decides a refused review comment (review of
+      // #2358 — a fork's read-only token must degrade, never fail).
+      if (!viaConversation.ok && viaConversation.status === FORBIDDEN) {
+        answer = viaConversation;
+      } else {
+        failed += 1;
+        detail.push(
+          `${where}: not in this pull request's diff (422 ${request.line === null ? "at the file" : "at the line and at the file"}), and the conversation comment was refused too: ` +
+            `${viaConversation.status ?? "no status"} — ${viaConversation.message}`,
+        );
+        continue;
+      }
     }
 
     if (answer.ok) {
