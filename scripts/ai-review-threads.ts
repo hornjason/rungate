@@ -39,6 +39,7 @@ import {
   threadsDetailLines,
   threadsLandedPhrase,
   type AiReviewThreadPoster,
+  type AiReviewPullCommenter,
   type AiReviewThreadResponse,
 } from "../lib/ai-review-threads";
 import {
@@ -192,11 +193,48 @@ const post: AiReviewThreadPoster = async request => {
 // workflow sets (#2203). Unset reads null, which keeps the fork degrade — so
 // this CLI under a workflow that does not yet set it behaves as before.
 const fork = prIsForkReading(process.env[AI_REVIEW_PR_IS_FORK_VAR]);
-const result = await postReviewThreads(reading, post, f => carryKey(f, lineTextFor(f)), fork);
+
+// #2338: the conversation fallback for a finding GitHub refuses at the file.
+// Offered only when the conversation could be read, so an earlier round's
+// comment is found and not posted twice; unread, the old refusal stands.
+let comment: AiReviewPullCommenter | undefined;
+try {
+  // Paged by hand to the end: a short page is the last one.
+  const existing: string[] = [];
+  for (let page = 1; ; page++) {
+    const { data } = await client.rest.issues.listComments({
+      owner: parsed.owner,
+      repo: parsed.repo,
+      issue_number: parsed.pr,
+      per_page: 100,
+      page,
+    });
+    for (const c of data as { body?: string | null }[]) existing.push(c.body ?? "");
+    if (data.length < 100) break;
+  }
+  comment = {
+    existing,
+    post: async body => {
+      try {
+        await client.rest.issues.createComment({ owner: parsed.owner, repo: parsed.repo, issue_number: parsed.pr, body });
+        return { ok: true };
+      } catch (e) {
+        const err = e as { status?: number; message?: string };
+        return { ok: false, status: typeof err.status === "number" ? err.status : null, message: err.message ?? String(e) };
+      }
+    },
+  };
+} catch (e) {
+  console.log(
+    `${COMMAND}: the pull request's conversation could not be read (${(e as Error).message}), so a finding ` +
+      `GitHub refuses at the file has no fallback this round`,
+  );
+}
+const result = await postReviewThreads(reading, post, f => carryKey(f, lineTextFor(f)), fork, comment);
 for (const line of threadsDetailLines(result, COMMAND)) console.log(line);
 console.log(
   `${COMMAND}: ${result.outcome} — attempted ${result.attempted}, posted ${result.posted}, ` +
-    `demoted ${result.demoted}`,
+    `demoted ${result.demoted}, on the conversation ${result.pullComments}`,
 );
 
 // The outcome reaches the run summary as an annotation only when it is worth
