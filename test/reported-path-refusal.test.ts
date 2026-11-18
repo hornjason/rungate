@@ -103,6 +103,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { shipWorktreeIdentity, worktreeIdentityRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -475,7 +476,7 @@ describe("#830: the refusal is delivered, and it ends the sub-issue that reporte
       "/tmp/work", 830, REPO_ROOT, {},
       async () => ({ success: true, buildResult: {} }),
       new Function(`${block("IMPLEMENT-RESULT")}\nreturn implementRefusal;`)(),
-      new Function(`${block("WORKTREE-IDENTITY")}\nreturn worktreeIdentity;`)(),
+      shipWorktreeIdentity(), // through the one helper (#2421)
       "owner/project",
       new Function(`${block("BRIEF-PRECEDENCE")}\nreturn taskSourceRefusal;`)(),
       async () => ({ branch: "rungate/run-830", refusal: null }),
@@ -539,5 +540,26 @@ describe("#830: the refusal is delivered, and it ends the sub-issue that reporte
       `the correct path fails too: ${(result.failed ?? []).map(f => (f.buildResult?.findings ?? []).join(" ")).join(" | ")}`,
     ).toBe(true);
     expect(spawned.length, "the plan did not dispatch both sub-issues").toBe(2);
+  });
+});
+
+describe("#2421: the one helper that reaches ship.js's WORKTREE-IDENTITY region", () => {
+  const REGION = "// ──── WORKTREE-IDENTITY-START ────\nfunction worktreeIdentity() { return 'x'; }\n// ──── WORKTREE-IDENTITY-END ────\n";
+
+  test("it returns the region and the function built from it", () => {
+    expect(worktreeIdentityRegion(`before\n${REGION}after`)).toContain("function worktreeIdentity()");
+    expect(shipWorktreeIdentity(REGION)()).toBe("x");
+  });
+
+  test("a source with no markers is refused, naming them", () => {
+    expect(() => worktreeIdentityRegion("function worktreeIdentity() {}")).toThrow("WORKTREE-IDENTITY-START/END");
+  });
+
+  test("a source with the markers twice is refused: a second copy survives any change to the first", () => {
+    expect(() => worktreeIdentityRegion(`${REGION}${REGION}`)).toThrow("more than once");
+  });
+
+  test("the live ship.js still yields worktreeIdentity through it", () => {
+    expect(typeof shipWorktreeIdentity()).toBe("function");
   });
 });
