@@ -27,7 +27,9 @@
     "expediteLabel": "work-this-next",
     "filingOverrideLabel": "arbiter-override",
     "engineSpec": "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
-    "milestonePrefix": "Engine"
+    "milestonePrefix": "Engine",
+    "pipelineAccount": "rungate-bot",
+    "pipelineSince": "2026-11-17T20:21:12Z"
   },
   "ship": {
     "mode": "direct",

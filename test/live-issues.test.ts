@@ -721,6 +721,7 @@ describe("what a --prefix argument actually said", () => {
     expect(withPrefix.sort()).toEqual([
       "board-conformance.ts",
       "board-snapshot.ts",
+      "hand-edits.ts",
       "plan-deps.ts",
       "plan-issues.ts",
       "plan-spec.ts",
