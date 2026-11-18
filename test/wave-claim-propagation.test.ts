@@ -38,6 +38,7 @@ import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { worktreeIdentityRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const REAL_SHIP = join(REPO_ROOT, "workflows", "ship.js");
@@ -188,7 +189,7 @@ function buildPipeline(root: string, subs: SubFixture[], source: string = shipSo
   };
 
   const worktreeIdentityFns = new Function(
-    `${block("WORKTREE-IDENTITY", source)}\nreturn { worktreeIdentity, worktreeIdentityViolations };`,
+    `${worktreeIdentityRegion(source)}\nreturn { worktreeIdentity, worktreeIdentityViolations };`,
   )() as {
     worktreeIdentity: (p: string, repo: string, reported: unknown) => { refusal: string | null };
     worktreeIdentityViolations: (rows: unknown, repo: string, opts?: unknown) => string[];

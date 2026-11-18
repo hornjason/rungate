@@ -35,6 +35,7 @@ import { basename, dirname, join } from "path";
 
 import { worktreeDiskIdentity, type RemoteReading } from "../lib/worktree-repo";
 import { worktreeRepoViolations } from "../gates/workflow.test";
+import { worktreeIdentityRegion } from "./helpers/ship-block";
 
 const RUN_REPO = "hornjason/pai-harness";
 /** A second slug, never this repo's. The harness must not name a consumer (#304). */
@@ -259,10 +260,7 @@ describe("SC-1545: ship.js produces the list and run-gate.ts persists it", () =>
   const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
 
   function loadWorktreeRecords(): (r: unknown) => Array<{ path: string; reportedRepo?: string }> {
-    const start = shipSource.indexOf("// ──── WORKTREE-IDENTITY-START ────");
-    const end = shipSource.indexOf("// ──── WORKTREE-IDENTITY-END ────");
-    if (start < 0 || end < 0) throw new Error("WORKTREE-IDENTITY markers not found in ship.js");
-    return new Function(`${shipSource.slice(start, end)}\nreturn worktreeRecords`)();
+    return new Function(`${worktreeIdentityRegion(shipSource)}\nreturn worktreeRecords`)();
   }
 
   test("agent results become worktree records, pathless rows dropped", () => {
