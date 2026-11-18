@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: fbcad119a1b36df7
+generated-sha: af7f155a28e9229d
 ---
 
 ## Command Routing
@@ -26,7 +26,7 @@ Generated from the CLI's command registry. Run one as
 | `consumer-triage` | Give each consumer-filed issue with no verdict exactly one |
 | `board-scope` | Spec criteria and opt-in, with looks-done hints |
 | `board` | Each phase's open issues and blockers |
-| `plan-deps` | Write a spec's phase order onto the tracker as blocked-by edges |
+| `plan-deps` | Write the blocked-by links accepted ADRs declare onto the tracker |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
 | `board-id` | Print the board's node id from config |
 | `ci-reading` | Print a merged pull request's CI breakdown — per-check time, queue, critical path, re-runs |

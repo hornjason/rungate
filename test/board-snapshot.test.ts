@@ -2160,23 +2160,40 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
   /**
    * Two open issues whose bodies name criteria the fixture spec states.
    *
-   * Two PHASES, and the later one carrying the edge the plan derives: a
-   * single-phase tracker is degenerate and `dependencyPlan` reports it
-   * UNMEASURED, which would leave SC-2617 unexercised here.
+   * Titled as an accepted ADR's Decomposition rows name them, so
+   * {@link declareFirstBeforeSecond} can declare the edge the later one
+   * carries (SC-2606): since ADR-021 the plan is what planning declared,
+   * never phase order.
    */
+  const FIRST = "the first piece of planned work";
+  const SECOND = "the second piece of planned work";
   const namingIssues = [
-    iss({ number: 10, milestone: "Fix Phase 0 — the first one", body: "this one serves SC-9001" }),
+    iss({ number: 10, title: FIRST, milestone: "Fix Phase 0 — the first one", body: "this one serves SC-9001" }),
     iss({
       number: 11,
+      title: SECOND,
       milestone: "Fix Phase 1 — the second one",
       body: "this one serves SC-9003",
       blockedBy: [10],
     }),
   ];
 
+  /** An accepted ADR in `dir` whose Decomposition says SECOND waits on FIRST. */
+  const declareFirstBeforeSecond = (dir: string) => {
+    mkdirSync(join(dir, "docs", "adr"), { recursive: true });
+    writeFileSync(
+      join(dir, "docs", "adr", "ADR-001-fixture.md"),
+      "---\ndoc-type: adr\nstatus: accepted\ncreated: 2026-11-18\n---\n\n# A decision\n\n## Decomposition\n\n" +
+        "| Criterion | Outcome | Files | Milestone | Blocked by |\n|---|---|---|---|---|\n" +
+        `| CRC-C2 | ${FIRST} | lib/a.ts | Fix Phase 0 | — |\n` +
+        `| CRC-C2 | ${SECOND} | lib/b.ts | Fix Phase 1 | ${FIRST} |\n`,
+    );
+  };
+
   test("all three are emitted when the specs sweep can be read", async () => {
     await withSpecsDir(async (dir, at) => {
       writeBoardConfig(dir, BOARD);
+      declareFirstBeforeSecond(dir);
       const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
       const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
 
@@ -2189,22 +2206,49 @@ describe("the repository-wide populations (SC-2615, SC-2616, SC-2617)", () => {
     });
   });
 
-  // #2239: one phase became its own reading, NOTHING_TO_SEQUENCE, so
-  // plan-deps stops refusing it. The snapshot must not read that as MEASURED:
-  // an empty plannedEdges from one phase would let `dependency-edges` report
-  // 0 of 0 about a tracker that states no order at all. The key stays omitted,
-  // exactly as when one phase was UNMEASURED.
-  test("#2239: a single-phase tracker emits no plannedEdges — nothing to sequence is not a measured order", async () => {
+  // SC-2606. #2239 omitted the key for a one-phase tracker, because one
+  // phase states no PHASE order. The plan is what planning declared now, so
+  // one phase is a measured reading and carries its declared edge.
+  test("SC-2606: a single-phase tracker emits its declared edges — one phase is a measured reading", async () => {
     await withSpecsDir(async (dir, at) => {
       writeBoardConfig(dir, BOARD);
-      const onePhase = [
-        iss({ number: 10, milestone: "Fix Phase 0 — the first one", body: "this one serves SC-9001" }),
-        iss({ number: 11, milestone: "Fix Phase 0 — the first one", body: "this one serves SC-9003" }),
-      ];
+      declareFirstBeforeSecond(dir);
+      const onePhase = namingIssues.map(i => ({ ...i, milestone: "Fix Phase 0 — the first one" }));
       const { gh } = spy(CONFORMANT_LIVE, { issues: onePhase });
       const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
       expect(snap.repoIssues?.map(i => i.number)).toEqual([10, 11]);
-      expect("plannedEdges" in snap, "a one-phase plan was emitted as a measured, empty order").toBe(false);
+      expect(snap.plannedEdges).toEqual([{ blocked: 11, blocker: 10, present: true }]);
+    });
+  });
+
+  // Review of #2439: the snapshot dropped readDeclaredPlans' unreadable list,
+  // so a plan that does not parse read as declaring nothing and the reading
+  // said MET over a subset.
+  test("SC-2606: an unparseable accepted plan naming an open issue omits plannedEdges; one naming none does not", async () => {
+    for (const [names, expectKey] of [[SECOND, false], ["work that closed long ago", true]] as const) {
+      await withSpecsDir(async (dir, at) => {
+        writeBoardConfig(dir, BOARD);
+        declareFirstBeforeSecond(dir);
+        writeFileSync(
+          join(dir, "docs", "adr", "ADR-002-old-shape.md"),
+          "---\ndoc-type: adr\nstatus: accepted\ncreated: 2026-10-01\n---\n\n# Older\n\n" +
+            "| Criterion | Outcome | Files | Milestone | Blocked by |\n|---|---|---|---|---|\n" +
+            `| — | ${names} | lib/c.ts | — | #7 |\n`,
+        );
+        const { gh } = spy(CONFORMANT_LIVE, { issues: namingIssues });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect("plannedEdges" in snap, `an old plan naming "${names}"`).toBe(expectKey);
+      });
+    }
+  });
+
+  test("SC-2606: with nothing declared, two phases owe no edge — phase order is not a dependency", async () => {
+    await withSpecsDir(async (dir, at) => {
+      writeBoardConfig(dir, BOARD);
+      const unlinked = namingIssues.map(i => ({ ...i, blockedBy: [] }));
+      const { gh } = spy(CONFORMANT_LIVE, { issues: unlinked });
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+      expect(snap.plannedEdges, "phase order came back as a planned edge").toEqual([]);
     });
   });
 

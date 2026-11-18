@@ -1,14 +1,13 @@
 /**
- * `lib/spec-deps.ts` — the phase order as `blocked by` edges (#1647).
+ * `lib/spec-deps.ts` — the dependencies planning declared, as `blocked by`
+ * edges (#1647, SC-2606, ADR-021).
  *
  * ## Every case asserts MEMBERSHIP, not a count
  *
  * `.claude/rules/checks-must-be-able-to-fail.md`, seventh shape: predict the
- * membership, not just the total. A cross-product of 2x6 is twelve edges, and
- * twelve is also what you get from pairing the wrong two phases, from
- * reversing blocked and blocker, and from chaining the last phase to the
- * first. Each of those is a real way to write this function and a count
- * cannot see any of them, so the cases below name the pairs.
+ * membership, not just the total. One edge is also what you get from
+ * reversing blocked and blocker, or from resolving a title to the wrong one
+ * of two issues, and a count cannot see either, so the cases name the pairs.
  *
  * ## And the write cases assert on the CALLS, not the exit code
  *
@@ -18,22 +17,26 @@
  * something, so the negative cases here record what reached GitHub.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
-import { chainAdjacentPhases, dependencyPlan, groupByBlocked } from "../lib/spec-deps";
-import type { DepIssue } from "../lib/spec-deps";
+import { declaredDependencies, dependencyPlan, groupByBlocked, readDeclaredPlans, unreadPlansThatMatter } from "../lib/spec-deps";
+import type { DeclaredPlan, DepEdge, DepIssue } from "../lib/spec-deps";
+import type { DecompositionRow } from "../lib/issue-decomposition";
 import { familyOf, phaseInFamily } from "../lib/spec-placement";
 import { phaseOf } from "../lib/board-mirror";
 import { REFUSAL_EXIT, main as planDepsMain } from "../scripts/plan-deps";
 import type { PlanDepsGitHub } from "../scripts/plan-deps";
 
-/** One issue, spelled the way the GraphQL read spells it. */
+/** One issue, spelled the way the GraphQL read spells it, titled `issue <n>`. */
 function iss(
   number: number,
   phase: number | null,
-  opts: { state?: string; blockedBy?: number[] } = {},
+  opts: { state?: string; blockedBy?: number[]; title?: string } = {},
 ): DepIssue {
   return {
     number,
+    title: opts.title ?? `issue ${number}`,
     state: opts.state ?? "OPEN",
     milestone: phase === null ? null : `Convergence Phase ${phase} — whatever it is called`,
     blockedBy: opts.blockedBy ?? [],
@@ -44,124 +47,278 @@ function iss(
 const keys = (es: readonly { blocked: number; blocker: number }[]): string[] =>
   es.map(e => `${e.blocked}<-${e.blocker}`).sort();
 
-describe("lib/spec-deps: the edges are the adjacent-phase cross product", () => {
-  test("two phases: every phase-1 issue is blocked by every phase-0 issue, and not the reverse", () => {
-    const plan = dependencyPlan([iss(10, 0), iss(11, 0), iss(20, 1), iss(21, 1)]);
-    expect(keys(plan.missing)).toEqual(["20<-10", "20<-11", "21<-10", "21<-11"]);
-    // The reversal is the wrong answer with the same count. Name it.
-    expect(keys(plan.missing)).not.toContain("10<-20");
-    expect(plan.phases).toEqual([0, 1]);
+/** One Decomposition row, as the parser returns it. */
+const row = (outcome: string, blockedBy: string[] = [], blocks: string[] = []): DecompositionRow => ({
+  criterion: "fixture",
+  outcome,
+  files: ["lib/fixture.ts"],
+  milestone: null,
+  blockedBy,
+  blocks,
+  line: 1,
+});
+
+const plan1 = (...rows: DecompositionRow[]): DeclaredPlan[] => [{ path: "docs/adr/ADR-900-fixture.md", rows }];
+
+/** `blocked<-blocker` pairs as declared edges, for `dependencyPlan` cases. */
+const edges = (...pairs: [number, number][]): DepEdge[] => pairs.map(([blocked, blocker]) => ({ blocked, blocker }));
+
+/**
+ * The script seam's plan reader, declaring `blocked<-blocker` pairs: one row
+ * per pair, naming its own issue by title (`issue <n>`, as `iss` titles it)
+ * and its blocker by `#n`.
+ */
+function declaring(...pairs: [number, number][]): PlanDepsGitHub["readPlans"] {
+  return () => ({ plans: plan1(...pairs.map(([blocked, blocker]) => row(`issue ${blocked}`, [`#${blocker}`]))), unreadable: [] });
+}
+
+/**
+ * Covers SC-2606 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
+ *
+ * The criterion used to name `chainAdjacentPhases`, which turned the phase
+ * order into links: every issue in a phase blocked by every issue in the
+ * phase before. ADR-021 (Jason, 2026-11-18) made phase an order Ready sorts
+ * by, and a dependency something planning DECLARES — a `Blocked by` or
+ * `Blocks` cell in an accepted ADR's Decomposition table. These cases call
+ * `declaredDependencies` directly, so a mutation of it that `dependencyPlan`'s
+ * own cases would survive still reddens here.
+ */
+describe("SC-2606: declaredDependencies is where a dependency comes from", () => {
+  test("a row's Blocked by outcome becomes an edge onto the row that names it, in that direction", () => {
+    const got = declaredDependencies(
+      plan1(row("Alpha does a thing"), row("Beta does a thing", ["Alpha does a thing"])),
+      [iss(10, 0, { title: "Alpha does a thing" }), iss(20, 1, { title: "Beta does a thing" })],
+    );
+    expect(keys(got)).toEqual(["20<-10"]);
+    expect(keys(got)).not.toContain("10<-20");
   });
 
-  test("three phases chain ADJACENTLY — phase 2 is not blocked by phase 0 directly", () => {
-    const plan = dependencyPlan([iss(10, 0), iss(20, 1), iss(30, 2)]);
-    expect(keys(plan.missing)).toEqual(["20<-10", "30<-20"]);
-    // The full-prefix version is the other plausible implementation and it is
-    // the one the header argues against. It would add this edge.
-    expect(keys(plan.missing)).not.toContain("30<-10");
+  test("`#n` resolves in both cells, each in its own direction", () => {
+    const got = declaredDependencies(plan1(row("Beta does a thing", ["#7"], ["#30"])), [
+      iss(7, 0),
+      iss(20, 1, { title: "Beta does a thing" }),
+      iss(30, 2),
+    ]);
+    expect(keys(got)).toEqual(["20<-7", "30<-20"]);
   });
 
-  test("a GAP in the numbering chains the phases that EXIST, not N-1", () => {
-    // Phase 2 carries nothing. `p - 1` would leave #30 blocked by a phase
-    // with no issues — zero blockers — which reads as startable and puts the
-    // LAST phase in the Ready lane beside the first.
-    const plan = dependencyPlan([iss(10, 0), iss(20, 1), iss(30, 3)]);
-    expect(plan.phases).toEqual([0, 1, 3]);
-    expect(keys(plan.missing)).toEqual(["20<-10", "30<-20"]);
+  test("phase order is never an edge: two phases with nothing declared yield nothing", () => {
+    // The 182 links `chainAdjacentPhases` wrote on Convergence came from
+    // exactly this input. Nothing declared is nothing written.
+    const issues = [iss(10, 0), iss(11, 0), iss(20, 1), iss(30, 2)];
+    expect(declaredDependencies([], issues)).toEqual([]);
+    expect(declaredDependencies(plan1(row("issue 20"), row("issue 30")), issues)).toEqual([]);
   });
 
-  test("the lowest phase is blocked by nothing — that is the frontier", () => {
-    const plan = dependencyPlan([iss(10, 0), iss(20, 1)]);
-    expect(plan.missing.some(e => e.blocked === 10)).toBe(false);
-    expect(plan.frontier).toBe(0);
+  test("a CLOSED issue is neither blocked nor a blocker, by title or by number", () => {
+    const issues = [iss(7, 0, { state: "CLOSED" }), iss(10, 0, { state: "CLOSED" }), iss(20, 1), iss(21, 1)];
+    const got = declaredDependencies(
+      plan1(row("issue 20", ["issue 10", "#7"]), row("issue 10", ["#21"]), row("issue 21", [], ["#7"])),
+      issues,
+    );
+    expect(got).toEqual([]);
+    // The pair: the same plan with both open writes all four, so the case
+    // above is about the state and not a malformed row.
+    const open = issues.map(i => ({ ...i, state: "OPEN" }));
+    expect(keys(declaredDependencies(
+      plan1(row("issue 20", ["issue 10", "#7"]), row("issue 10", ["#21"]), row("issue 21", [], ["#7"])),
+      open,
+    ))).toEqual(["10<-21", "20<-10", "20<-7", "7<-21"]);
+  });
+
+  test("a row whose issue was never filed contributes nothing", () => {
+    const got = declaredDependencies(plan1(row("nobody filed this one", ["#10"]), row("issue 20", ["nor this"])), [
+      iss(10, 0),
+      iss(20, 1),
+    ]);
+    expect(got).toEqual([]);
+  });
+
+  test("a title two open issues share resolves to neither — never the wrong one of two", () => {
+    const issues = [iss(10, 0), iss(20, 1, { title: "Twin" }), iss(21, 1, { title: "Twin" })];
+    expect(declaredDependencies(plan1(row("Twin", ["#10"])), issues)).toEqual([]);
+    expect(declaredDependencies(plan1(row("issue 10", ["Twin"])), issues)).toEqual([]);
+    // A `#n` reaches one of the twins exactly: the number is not ambiguous.
+    expect(keys(declaredDependencies(plan1(row("issue 10", ["#21"])), issues))).toEqual(["10<-21"]);
+  });
+
+  test("plans combine, and one dependency declared twice is one edge", () => {
+    const issues = [iss(10, 0), iss(20, 1), iss(30, 2)];
+    const got = declaredDependencies(
+      [
+        { path: "docs/adr/ADR-901-a.md", rows: [row("issue 20", ["#10"])] },
+        { path: "docs/adr/ADR-902-b.md", rows: [row("issue 30", ["#20"]), row("issue 10", [], ["#20"])] },
+      ],
+      issues,
+    );
+    expect(keys(got)).toEqual(["20<-10", "30<-20"]);
+  });
+
+  test("an issue is never its own blocker", () => {
+    expect(declaredDependencies(plan1(row("issue 10", ["#10"], ["#10"])), [iss(10, 0)])).toEqual([]);
+  });
+});
+
+describe("SC-2606: readDeclaredPlans reads accepted ADRs' Decomposition tables, and says which it could not", () => {
+  const adr = (status: string, table: string) =>
+    `---\ndoc-type: adr\nstatus: ${status}\ncreated: 2026-11-18\n---\n\n# A decision\n\n## Decomposition\n\n${table}\n`;
+  const TABLE =
+    "| Criterion | Outcome | Files | Milestone | Blocked by |\n|---|---|---|---|---|\n" +
+    "| CRC-C2 | the first piece of planned work | lib/a.ts | Phase 3 | — |\n" +
+    "| CRC-C2 | the second piece of planned work | lib/b.ts | Phase 3 | the first piece of planned work |";
+
+  test("accepted with a table is read; proposed, or accepted with no table, is not a plan; an unparseable one is named", () => {
+    const root = mkdtempSync(join(tmpdir(), "plan-deps-adrs-"));
+    try {
+      mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      writeFileSync(join(root, "docs", "adr", "ADR-001-read.md"), adr("accepted", TABLE));
+      writeFileSync(join(root, "docs", "adr", "ADR-002-proposed.md"), adr("proposed", TABLE));
+      writeFileSync(join(root, "docs", "adr", "ADR-003-no-table.md"), adr("accepted", "No plan here."));
+      writeFileSync(
+        join(root, "docs", "adr", "ADR-004-broken.md"),
+        adr("accepted", "| Criterion | Outcome | Files | Milestone | Blocked by |\n|---|---|---|---|---|\n| only | three |"),
+      );
+      writeFileSync(join(root, "docs", "adr", "TEMPLATE.md"), adr("accepted", TABLE));
+      const got = readDeclaredPlans(root);
+      expect(got.plans.map(p => p.path)).toEqual(["docs/adr/ADR-001-read.md"]);
+      expect(got.plans[0]!.rows.map(r => [r.outcome, r.blockedBy])).toEqual([
+        ["the first piece of planned work", []],
+        ["the second piece of planned work", ["the first piece of planned work"]],
+      ]);
+      expect(got.unreadable.map(u => u.path)).toEqual(["docs/adr/ADR-004-broken.md"]);
+      expect(got.unreadable[0]!.text).toContain("| only | three |");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Review of #2439: an unparseable plan was reported by plan-deps and dropped
+  // by board-snapshot, whose reading then said MET over a subset. Every edge
+  // needs its row's own issue open, and that row names it by title — so the
+  // plans that can still owe a link are exactly the ones naming an open title.
+  test("SC-2606: an unparseable plan matters only when an open issue's row could declare a link", () => {
+    const issues = [iss(10, 0, { title: "Alpha opens the door" }), iss(20, 0, { title: "Beta is long done", state: "CLOSED" })];
+    const u = (path: string, text: string) => ({ path, text });
+    expect(
+      unreadPlansThatMatter(
+        [
+          u("ADR-1-open-blocked.md", "| — | Alpha opens the door | lib/a.ts | — | #7 |"),
+          u("ADR-2-closed.md", "| — | Beta is long done | lib/b.ts | — | #7 |"),
+          u("ADR-3-unfiled.md", "| — | something nobody filed | lib/c.ts | — | #7 |"),
+          // ADR-011's row for #1885: open, and its dependency cells are empty.
+          u("ADR-4-open-declares-nothing.md", "| — | Alpha opens the door | lib/a.ts | — | — |"),
+          u("ADR-5-prose.md", "We may get to Alpha opens the door later."),
+          // Conservative: the title in a cell other than the outcome counts.
+          u("ADR-6-named-as-blocker.md", "| — | something else entirely | x | — | Alpha opens the door |"),
+          u("ADR-7-too-short.md", "| — | Alpha opens the door |"),
+          u("ADR-8-blocks.md", "| — | Alpha opens the door | lib/a.ts | — | — | #9 |"),
+          // The title is not the outcome cell: an unescaped `|` splits an
+          // outcome exactly this way, so a row that cannot be read counts.
+          u("ADR-9-not-the-outcome.md", "| — | something else entirely | Alpha opens the door | — | — |"),
+        ],
+        issues,
+      ),
+    ).toEqual(["ADR-1-open-blocked.md", "ADR-6-named-as-blocker.md", "ADR-7-too-short.md", "ADR-8-blocks.md", "ADR-9-not-the-outcome.md"]);
+  });
+
+  test("SC-2606: the title is matched as plan-issues filed it — backticks dropped, an escaped pipe read as a pipe", () => {
+    const issues = [iss(10, 0, { title: "fix cells() for a|b inputs" })];
+    expect(unreadPlansThatMatter([{ path: "p.md", text: "| — | fix `cells()` for a\\|b inputs | x | — | #3 |" }], issues)).toEqual(["p.md"]);
+  });
+
+  test("SC-2606: an unparseable plan naming an open issue makes the reading UNMEASURED, naming it", () => {
+    const plan = dependencyPlan([iss(10, 0), iss(20, 1)], edges([20, 10]), { unreadPlans: ["docs/adr/ADR-007-old.md"] });
+    expect(plan.reading).toBe("UNMEASURED");
+    expect(plan.unmeasuredReasons.join(" ")).toContain("docs/adr/ADR-007-old.md");
+    // The pair: none named, the same input is MEASURED.
+    expect(dependencyPlan([iss(10, 0), iss(20, 1)], edges([20, 10]), { unreadPlans: [] }).reading).toBe("MEASURED");
+  });
+
+  test("a tree with no docs/adr declares nothing, and that is not a failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "plan-deps-no-adrs-"));
+    try {
+      expect(readDeclaredPlans(root)).toEqual({ plans: [], unreadable: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("lib/spec-deps: dependencyPlan sets what was declared against what the tracker carries", () => {
+  test("declared and absent is MISSING; declared and present is PRESENT, so a re-run adds nothing", () => {
+    const first = dependencyPlan([iss(10, 0), iss(20, 1)], edges([20, 10]));
+    expect(keys(first.missing)).toEqual(["20<-10"]);
+    const second = dependencyPlan([iss(10, 0), iss(20, 1, { blockedBy: [10] })], edges([20, 10]));
+    expect(second.missing).toEqual([]);
+    expect(keys(second.present)).toEqual(["20<-10"]);
+    expect(second.extra).toEqual([]);
+  });
+
+  test("a link nobody declared is EXTRA and never appears in missing — hand-written, or old phase order", () => {
+    // #1481 blocked by #1591 is live, real, and WITHIN a phase. A tool that
+    // reconciled by deletion would destroy it.
+    const plan = dependencyPlan([iss(10, 0), iss(20, 2), iss(21, 2, { blockedBy: [20] })], edges([20, 10]));
+    expect(keys(plan.extra)).toEqual(["21<-20"]);
+    expect(keys(plan.missing)).toEqual(["20<-10"]);
+  });
+
+  test("an issue with no Phase milestone still gets its declared link, and is reported", () => {
+    const plan = dependencyPlan([iss(10, 0), iss(20, 1), iss(99, null)], edges([99, 10]));
+    expect(plan.unphased).toEqual([99]);
+    expect(keys(plan.missing)).toEqual(["99<-10"]);
+  });
+
+  test("a declared edge whose waiting issue is not considered is not this run's to write", () => {
+    // `plan-deps` narrows to one family: the issues that WAIT. The blocker may
+    // sit anywhere — here #50 is not in the population at all.
+    const plan = dependencyPlan([iss(10, 0), iss(20, 1)], edges([20, 50], [60, 10]));
+    expect(keys(plan.missing)).toEqual(["20<-50"]);
+  });
+
+  test("the same declared edge twice is one write", () => {
+    expect(keys(dependencyPlan([iss(10, 0), iss(20, 1)], edges([20, 10], [20, 10])).missing)).toEqual(["20<-10"]);
   });
 });
 
 /**
- * #2024 / SC-2617: the plan is repository-wide, and this repository carries
- * two milestone families at overlapping phase numbers. `Convergence Phase 1`
- * follows `Convergence Phase 0`; it never follows `Pipeline Phase 0`. The
- * withdrawn reading of #1903 measured 129 of 154 over a plan that chained the
- * two, because `phaseOf` reads the number and not the family.
+ * #2024 / SC-2617: this repository carries more than one milestone family, and
+ * `plan-deps` runs once per family. Until ADR-021 the plan chained phases
+ * within a family; now a family's run writes the declared links of the issues
+ * that sit in it, whatever family their blockers sit in, and never another
+ * family's.
  */
-describe("#2024 / SC-2617: phases chain within a milestone family, never across one", () => {
+describe("#2024 / SC-2617: a family's run writes its own issues' declared links, and no other family's", () => {
   const fam = (number: number, family: string, phase: number): DepIssue => ({
     number,
+    title: `issue ${number}`,
     state: "OPEN",
     milestone: `${family} Phase ${phase} — x`,
     blockedBy: [],
   });
 
-  test("two families at the same numbers: each chains its own phases and nothing crosses", () => {
-    const plan = dependencyPlan([
-      fam(10, "Convergence", 0),
-      fam(11, "Convergence", 1),
-      fam(20, "Pipeline", 0),
-      fam(21, "Pipeline", 1),
-    ]);
-    expect(keys(plan.missing)).toEqual(["11<-10", "21<-20"]);
-    // The family-blind plan's two extra edges, named so the wrong answer
-    // cannot pass with a different count.
-    expect(keys(plan.missing)).not.toContain("11<-20");
-    expect(keys(plan.missing)).not.toContain("21<-10");
-  });
-
-  test("a family's gap chains the phases that family has, not the other family's", () => {
-    // Pipeline has 5 and 6; Convergence has 4 and 6. A family-blind chain
-    // would block Convergence 6 on Pipeline 5, the adjacent number overall.
-    const plan = dependencyPlan([
-      fam(40, "Convergence", 4),
-      fam(60, "Convergence", 6),
-      fam(50, "Pipeline", 5),
-      fam(61, "Pipeline", 6),
-    ]);
-    expect(keys(plan.missing)).toEqual(["60<-40", "61<-50"]);
-  });
-
-  test("a family with one phase chains nothing, and does not make the plan UNMEASURED", () => {
-    // Two phases exist across the repository; neither family alone has two.
-    const plan = dependencyPlan([fam(10, "Convergence", 0), fam(20, "Pipeline", 1)]);
-    expect(plan.missing).toEqual([]);
-    expect(plan.reading).toBe("MEASURED");
-  });
-
-  test("a phase title with no family readable is unphased, never chained into a shared bucket", () => {
-    // Review of #2055: `phaseOf` is unanchored, so `Release (Phase 3)` has a
-    // phase, and a `?? ""` fallback filed it with every other unreadable
-    // title — the cross-spec chain this split exists to prevent.
-    const plan = dependencyPlan([
-      fam(10, "Convergence", 0),
-      fam(11, "Convergence", 1),
-      { number: 30, state: "OPEN", milestone: "Release (Phase 3)", blockedBy: [] },
-      { number: 40, state: "OPEN", milestone: "Docs (Phase 4)", blockedBy: [] },
-    ]);
-    expect(keys(plan.missing)).toEqual(["11<-10"]);
-    expect(plan.unphased.sort()).toEqual([30, 40]);
+  test("Convergence waits on Pipeline: the Convergence run writes it; Pipeline's own link is not its to write", () => {
+    const declared = edges([11, 10], [21, 20], [11, 20]);
+    const convergence = [fam(10, "Convergence", 0), fam(11, "Convergence", 1)];
+    const plan = dependencyPlan(convergence, declared);
+    expect(keys(plan.missing)).toEqual(["11<-10", "11<-20"]);
+    expect(keys(plan.missing)).not.toContain("21<-20");
   });
 
   test("a parenthetical phase is not a phase milestone, to every reader at once (#2057)", () => {
-    // Review of #2055 found phaseOf reading `Release (Phase 3)` as phase 3
-    // while familyOf read no family, and added a message for the split. With
-    // one reader of the title (lib/milestone-title.ts) the split cannot occur:
-    // the title is not a phase milestone, and the plan says nothing was read.
-    const plan = dependencyPlan([
-      { number: 30, state: "OPEN", milestone: "Release (Phase 3)", blockedBy: [] },
-      { number: 40, state: "OPEN", milestone: "Docs (Phase 4)", blockedBy: [] },
-    ]);
+    // With one reader of the title (lib/milestone-title.ts) the split cannot
+    // occur: the title is not a phase milestone, and the plan says nothing
+    // was read.
+    const plan = dependencyPlan(
+      [
+        { number: 30, title: "issue 30", state: "OPEN", milestone: "Release (Phase 3)", blockedBy: [] },
+        { number: 40, title: "issue 40", state: "OPEN", milestone: "Docs (Phase 4)", blockedBy: [] },
+      ],
+      [],
+    );
     expect(plan.reading).toBe("UNMEASURED");
     expect(plan.unmeasuredReasons.join(" ")).toContain("NONE carries a Phase milestone");
     expect(phaseOf("Release (Phase 3)")).toBeNull();
     expect(familyOf("Release (Phase 3)")).toBeNull();
-  });
-
-  test("bare `Phase N` titles are one family — a repository with no prefix has one sequence", () => {
-    // The same reading `familyRank` takes for a null prefix: one family.
-    const bare = (number: number, phase: number): DepIssue => ({
-      number, state: "OPEN", milestone: `Phase ${phase} — x`, blockedBy: [],
-    });
-    const plan = dependencyPlan([bare(10, 1), bare(20, 2), fam(30, "Pipeline", 2)]);
-    expect(keys(plan.missing)).toEqual(["20<-10"]);
-    expect(familyOf("Phase 2 — x")).toBe("");
   });
 
   test("familyOf reads the same grammar as phaseInFamily, so the two cannot disagree", () => {
@@ -187,107 +344,16 @@ describe("#2024 / SC-2617: phases chain within a milestone family, never across 
 });
 
 /**
- * Covers SC-2606 (SPEC-TO-BOARD-PIPELINE-SPEC.md).
- *
- * The criterion used to read `lib/spec-deps.ts contains [adjacent]`, and the
- * word sat in a header comment. A comment satisfies a `file-contains` match
- * and names nothing a reader can open or a mutation can move — #1680. The
- * rule now has one symbol, and these cases call it rather than reaching it
- * through `dependencyPlan`: a mutation of `chainAdjacentPhases` that
- * `dependencyPlan`'s own cases would survive still reddens here.
- */
-describe("SC-2606: chainAdjacentPhases is where adjacency is decided", () => {
-  /** The phase buckets the planner builds, stated directly. */
-  const buckets = (m: Record<number, number[]>): Map<number, DepIssue[]> =>
-    new Map(Object.entries(m).map(([p, ns]) => [Number(p), ns.map(n => iss(n, Number(p)))]));
-
-  test("each phase is chained to the one BEFORE it in the list, not to all earlier ones", () => {
-    const edges = chainAdjacentPhases([0, 1, 2], buckets({ 0: [10], 1: [20], 2: [30] }));
-    expect(keys(edges)).toEqual(["20<-10", "30<-20"]);
-    // The full-prefix implementation is the other plausible one and has a
-    // different count; name the edge it would add rather than the number.
-    expect(keys(edges)).not.toContain("30<-10");
-  });
-
-  test("the pairing is by POSITION in the list, so a gap chains 1 to 3", () => {
-    // `phases[k] - 1` is the wrong implementation with the right answer on
-    // every contiguous input. This is the input that separates them.
-    const edges = chainAdjacentPhases([0, 1, 3], buckets({ 0: [10], 1: [20], 3: [30] }));
-    expect(keys(edges)).toEqual(["20<-10", "30<-20"]);
-  });
-
-  test("the direction is blocked←blocker, and the reversal has the same count", () => {
-    const edges = chainAdjacentPhases([0, 1], buckets({ 0: [10, 11], 1: [20] }));
-    expect(keys(edges)).toEqual(["20<-10", "20<-11"]);
-    expect(edges.every(e => e.blocked === 20)).toBe(true);
-  });
-
-  test("one phase states no order, so it yields no edge at all", () => {
-    expect(chainAdjacentPhases([0], buckets({ 0: [10, 11] }))).toEqual([]);
-    expect(chainAdjacentPhases([], new Map())).toEqual([]);
-  });
-
-  test("dependencyPlan reports exactly what this function returns — one binding, not two", () => {
-    // If the planner ever grows its own copy of the rule, these diverge.
-    const issues = [iss(10, 0), iss(11, 0), iss(20, 1), iss(30, 3)];
-    const byPhase = buckets({ 0: [10, 11], 1: [20], 3: [30] });
-    const plan = dependencyPlan(issues);
-    expect(keys(plan.missing)).toEqual(keys(chainAdjacentPhases(plan.phases, byPhase)));
-  });
-});
-
-describe("lib/spec-deps: what it refuses to touch", () => {
-  test("an edge it did not derive is EXTRA and never appears in missing", () => {
-    // #1481 blocked by #1591 is live, real, and WITHIN a phase. A tool that
-    // reconciled by deletion would destroy it.
-    const plan = dependencyPlan([iss(10, 0), iss(20, 2), iss(21, 2, { blockedBy: [20] })]);
-    expect(keys(plan.extra)).toEqual(["21<-20"]);
-    expect(keys(plan.missing)).toEqual(["20<-10", "21<-10"]);
-  });
-
-  test("an already-present derived edge is PRESENT, so a re-run adds nothing", () => {
-    const first = dependencyPlan([iss(10, 0), iss(20, 1)]);
-    expect(keys(first.missing)).toEqual(["20<-10"]);
-    // Replay the world as it is after `--write`.
-    const second = dependencyPlan([iss(10, 0), iss(20, 1, { blockedBy: [10] })]);
-    expect(second.missing).toEqual([]);
-    expect(keys(second.present)).toEqual(["20<-10"]);
-    expect(second.extra).toEqual([]);
-  });
-
-  test("an issue with no Phase milestone gets no edge and is reported", () => {
-    const plan = dependencyPlan([iss(10, 0), iss(20, 1), iss(99, null)]);
-    expect(plan.unphased).toEqual([99]);
-    expect(plan.missing.some(e => e.blocked === 99 || e.blocker === 99)).toBe(false);
-  });
-
-  test("a CLOSED issue is neither blocked nor a blocker by default", () => {
-    const plan = dependencyPlan([iss(10, 0, { state: "CLOSED" }), iss(11, 0), iss(20, 1)]);
-    expect(keys(plan.missing)).toEqual(["20<-11"]);
-    // The pair: asking for them puts both back, so the case above is about
-    // the filter and not about #10 being malformed.
-    const withClosed = dependencyPlan(
-      [iss(10, 0, { state: "CLOSED" }), iss(11, 0), iss(20, 1)],
-      { includeClosed: true },
-    );
-    expect(keys(withClosed.missing)).toEqual(["20<-10", "20<-11"]);
-  });
-});
-
-/**
  * The WHOLE class of degenerate readings, as one table.
  *
  * Four review rounds each found a different input that walked between two
  * hand-written guards — the last was `phases.length === 0`, where issues
- * exist (so the empty check is skipped) and there is no single phase (so the
- * one-phase check is skipped), and the command prints *"the tracker already
- * carries the phase order"* about a board it could not read.
- *
- * So the cases below are not four more `if`s. They enumerate every route to
- * **fewer than two phases**, which is the property, and the last case is the
- * negative control: the only input that must reach none of them.
+ * exist and the command printed *"the tracker already carries the phase
+ * order"* about a board it could not read. So the cases below enumerate every
+ * route to a reading that could not be taken, and the last is the negative
+ * control: the only input that must reach none of them.
  */
-describe("lib/spec-deps: every route to fewer than two phases is UNMEASURED", () => {
+describe("lib/spec-deps: every reading that could not be taken is UNMEASURED", () => {
   const cases: [string, DepIssue[], { includeClosed?: boolean }, string][] = [
     ["nothing read", [], {}, "failed fetch"],
     [
@@ -305,83 +371,73 @@ describe("lib/spec-deps: every route to fewer than two phases is UNMEASURED", ()
   ];
   for (const [name, issues, opts, reason] of cases) {
     test(`${name} is UNMEASURED, and says which`, () => {
-      const plan = dependencyPlan(issues, opts);
+      const plan = dependencyPlan(issues, edges([20, 10]), opts);
       expect(plan.reading).toBe("UNMEASURED");
       expect(plan.unmeasuredReasons.join(" ")).toContain(reason);
-      expect(plan.missing, "an edge was derived from a reading that could not be taken").toEqual([]);
     });
   }
 
-  // #2239 / SC-2738: one phase is the fourth route to fewer than two, and the
-  // only one where the read was sound. It is NOT unmeasured — every issue was
-  // read and placed — and it is NOT measured, because "missing: []" from one
-  // phase means nothing to sequence, never "already sequenced". A third
-  // reading, so neither the refusal nor the flattering sentence can claim it.
-  // Exiting 1 here skipped adr-accepted.yml's board steps the moment the
-  // engine reached its last phase (2026-11-15: only Engine Phase 9 open).
-  test("#2239: exactly one phase over a sound read is NOTHING_TO_SEQUENCE — no edge, no reason, never MEASURED", () => {
-    const plan = dependencyPlan([iss(10, 0), iss(11, 0)]);
-    expect(plan.reading).toBe("NOTHING_TO_SEQUENCE");
+  // #2239 gave one phase its own reading, NOTHING_TO_SEQUENCE, because one
+  // phase states no PHASE order. The plan is no longer phase order, so one
+  // phase is an ordinary sound read and its links are what was declared.
+  test("SC-2606: one phase over a sound read is MEASURED, and its declared link is still written", () => {
+    const plan = dependencyPlan([iss(10, 0), iss(11, 0)], edges([11, 10]));
+    expect(plan.reading).toBe("MEASURED");
     expect(plan.unmeasuredReasons).toEqual([]);
-    expect(plan.missing).toEqual([]);
+    expect(keys(plan.missing)).toEqual(["11<-10"]);
     expect(plan.phases).toEqual([0]);
   });
 
-  test("#2239: one phase with a TRUNCATED blocker list is still UNMEASURED, not nothing to sequence", () => {
-    const plan = dependencyPlan([iss(10, 0), { ...iss(11, 0), blockedBy: [10], blockedByTruncated: true }]);
-    expect(plan.reading).toBe("UNMEASURED");
-    expect(plan.unmeasuredReasons.join(" ")).toContain("truncated");
-  });
-
-  test("THE NEGATIVE CONTROL: two phases over a considered set reads MEASURED", () => {
+  test("THE NEGATIVE CONTROL: a considered, phased, fully read set reads MEASURED", () => {
     // Without this, every case above passes against a function that refuses
-    // unconditionally — four green rows witnessing nothing.
-    const plan = dependencyPlan([iss(10, 0), iss(20, 1)]);
+    // unconditionally — green rows witnessing nothing.
+    const plan = dependencyPlan([iss(10, 0), iss(20, 1)], edges([20, 10]));
     expect(plan.reading).toBe("MEASURED");
     expect(keys(plan.missing)).toEqual(["20<-10"]);
   });
 
   test("the unphased case is NOT the same as the no-issues case — the reasons differ", () => {
-    // Both produce `missing: []`. Only the text distinguishes them, and the
-    // whole point of the row is that a reader can act on which one it is.
-    const empty = dependencyPlan([]).unmeasuredReasons.join(" ");
-    const unphased = dependencyPlan([iss(10, null)]).unmeasuredReasons.join(" ");
+    const empty = dependencyPlan([], []).unmeasuredReasons.join(" ");
+    const unphased = dependencyPlan([iss(10, null)], []).unmeasuredReasons.join(" ");
     expect(unphased).not.toBe(empty);
     expect(unphased).toContain("plan-spec has not run");
   });
 
-  test("a TRUNCATED blocker list refuses even when the phases are sound", () => {
-    // Orthogonal to the count: two phases, a derivable order, and a live edge
-    // list the reader could not see the end of. Deriving from it would re-add
-    // an edge that already exists past the page boundary.
-    const plan = dependencyPlan([
-      iss(10, 0),
-      { ...iss(20, 1), blockedBy: [10], blockedByTruncated: true },
-    ]);
+  test("a TRUNCATED blocker list refuses even when everything else is sound", () => {
+    // A live edge list the reader could not see the end of: an edge past the
+    // page boundary would read as missing and be written again.
+    const plan = dependencyPlan(
+      [iss(10, 0), { ...iss(20, 1), blockedBy: [10], blockedByTruncated: true }],
+      edges([20, 10]),
+    );
     expect(plan.reading).toBe("UNMEASURED");
     expect(plan.unmeasuredReasons.join(" ")).toContain("truncated");
     expect(plan.unmeasuredReasons.join(" ")).toContain("#20");
     // The pair: the identical input with the flag off is MEASURED.
-    expect(dependencyPlan([iss(10, 0), iss(20, 1, { blockedBy: [10] })]).reading).toBe("MEASURED");
+    expect(dependencyPlan([iss(10, 0), iss(20, 1, { blockedBy: [10] })], edges([20, 10])).reading).toBe("MEASURED");
   });
 });
 
 describe("lib/spec-deps: the grouping is what reaches GitHub", () => {
   test("edges collapse to one call per BLOCKED issue, blockers sorted", () => {
-    const plan = dependencyPlan([iss(10, 0), iss(11, 0), iss(20, 1), iss(21, 1)]);
+    const plan = dependencyPlan(
+      [iss(10, 0), iss(11, 0), iss(20, 1), iss(21, 1)],
+      edges([21, 11], [20, 11], [20, 10], [21, 10]),
+    );
     expect(groupByBlocked(plan.missing)).toEqual([
       { blocked: 20, blockers: [10, 11] },
       { blocked: 21, blockers: [10, 11] },
     ]);
   });
 
-  test("the grouping loses no edge — 2x3 is six edges in three calls", () => {
-    const plan = dependencyPlan([iss(1, 0), iss(2, 0), iss(7, 1), iss(8, 1), iss(9, 1)]);
+  test("the grouping loses no edge — six edges in three calls", () => {
+    const plan = dependencyPlan(
+      [iss(1, 0), iss(2, 0), iss(7, 1), iss(8, 1), iss(9, 1)],
+      edges([7, 1], [7, 2], [8, 1], [8, 2], [9, 1], [9, 2]),
+    );
     const groups = groupByBlocked(plan.missing);
     expect(groups).toHaveLength(3);
-    expect(groups.flatMap(g => g.blockers.map(b => `${g.blocked}<-${b}`)).sort()).toEqual(
-      keys(plan.missing),
-    );
+    expect(groups.flatMap(g => g.blockers.map(b => `${g.blocked}<-${b}`)).sort()).toEqual(keys(plan.missing));
   });
 });
 
@@ -389,36 +445,37 @@ describe("lib/spec-deps: the grouping is what reaches GitHub", () => {
  * `scripts/plan-deps.ts --write` — what reaches GitHub, and when it does not.
  */
 describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured reading", () => {
-  function spy(issues: DepIssue[]) {
+  function spy(issues: DepIssue[], readPlans: PlanDepsGitHub["readPlans"]) {
     const calls: string[] = [];
+    let reads = 0;
     const gh: PlanDepsGitHub = {
       createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
-      readIssues: async () => issues,
+      readIssues: async () => {
+        reads++;
+        return issues;
+      },
+      readPlans,
       addBlockers: async (_repo, blocked, blockers) => {
         calls.push(`#${blocked} +${[...blockers].join(",")}`);
       },
     };
-    return { gh, calls };
+    return { gh, calls, reads: () => reads };
   }
 
-  test("a sound two-phase reading writes, one call per blocked issue", async () => {
-    const s = spy([iss(10, 0), iss(11, 0), iss(20, 1)]);
+  test("a sound reading writes the declared links, one call per blocked issue", async () => {
+    const s = spy([iss(10, 0), iss(11, 0), iss(20, 1)], declaring([20, 10], [20, 11]));
     const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
     expect(s.calls).toEqual(["#20 +10,11"]);
     expect(code).toBe(0);
   });
 
   test("an EMPTY read writes nothing and refuses", async () => {
-    const s = spy([]);
+    const s = spy([], declaring([20, 10]));
     const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
     expect(s.calls, "an edge was written despite the refusal").toEqual([]);
     expect(code).toBe(REFUSAL_EXIT);
   });
 
-  // #2239 / SC-2738. Writes nothing, as before; what changed is the exit and
-  // the sentence. The sentence is asserted both ways, because exit 0 alone
-  // is also what the flattering "already carries the phase order" path
-  // returns — the sixth shape in checks-must-be-able-to-fail.md.
   async function capture(argv: string[], gh: PlanDepsGitHub) {
     const out: string[] = [];
     const log = console.log;
@@ -435,27 +492,71 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     return { code, text: out.join("\n") };
   }
 
+  // The ADR-021 change, at the command: the input that used to write 1 phase-
+  // order link (and on Convergence, 182) writes none when nothing is declared.
+  // The sentence is asserted both ways, because exit 0 alone is also what an
+  // unread plan would return — the sixth shape in checks-must-be-able-to-fail.md.
   for (const write of [true, false]) {
-    test(`#2239: a SINGLE-PHASE read writes nothing, says there is nothing to sequence, and exits 0 (${write ? "--write" : "dry run"})`, async () => {
-      const s = spy([iss(10, 0), iss(11, 0)]);
+    test(`SC-2606: two phases and nothing declared write nothing — phase order is never a link (${write ? "--write" : "dry run"})`, async () => {
+      const s = spy([iss(10, 0), iss(20, 1)], declaring());
       const argv = ["--repo", "o/r", "--milestone-prefix", "Convergence", ...(write ? ["--write"] : [])];
       const got = await capture(argv, s.gh);
       expect(s.calls).toEqual([]);
-      expect(got.text).toContain("nothing to sequence: every open issue sits in Phase 0");
-      expect(got.text, "one phase claimed the tracker already carries the order").not.toContain("already carries");
+      expect(got.text).toContain("already carries every declared dependency");
       expect(got.text).not.toContain("UNMEASURED");
       expect(got.code).toBe(0);
     });
   }
 
-  test("#2239: --json on a SINGLE-PHASE read reports the reading, writes nothing, and exits 0", async () => {
-    const s = spy([iss(10, 0), iss(11, 0)]);
+  test("SC-2606: one phase with a declared link writes it — one phase is no longer nothing to sequence", async () => {
+    const s = spy([iss(10, 0), iss(11, 0)], declaring([11, 10]));
     const got = await capture(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
     const json = JSON.parse(got.text);
-    expect(json.reading).toBe("NOTHING_TO_SEQUENCE");
-    expect(json.wrote).toBe("nothing-to-sequence");
-    expect(s.calls).toEqual([]);
+    expect(json.reading).toBe("MEASURED");
+    expect(json.wrote).toBe("yes");
+    expect(s.calls).toEqual(["#11 +10"]);
     expect(got.code).toBe(0);
+  });
+
+  test("SC-2606: ADRs that cannot be read refuse UNMEASURED before the tracker is read", async () => {
+    const s = spy([iss(10, 0), iss(20, 1)], () => {
+      throw new Error("EACCES: docs/adr");
+    });
+    const got = await capture(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
+    expect(got.code).toBe(REFUSAL_EXIT);
+    expect(got.text).toContain("UNMEASURED");
+    expect(got.text).toContain("EACCES");
+    expect(s.calls).toEqual([]);
+    expect(s.reads(), "the tracker was read for a plan that could not be").toBe(0);
+  });
+
+  test("SC-2606: an unparseable plan that names an open issue refuses the write, naming the plan", async () => {
+    const readPlans: PlanDepsGitHub["readPlans"] = () => ({
+      plans: declaring([20, 10])(".").plans,
+      unreadable: [{ path: "docs/adr/ADR-007-old-shape.md", text: "| — | issue 20 | x | — | issue 10 |" }],
+    });
+    const s = spy([iss(10, 0), iss(20, 1)], readPlans);
+    const got = await capture(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
+    const json = JSON.parse(got.text);
+    expect(json.reading).toBe("UNMEASURED");
+    expect(json.wrote).toBe("refused");
+    expect(json.unmeasuredReasons.join(" ")).toContain("docs/adr/ADR-007-old-shape.md");
+    expect(s.calls).toEqual([]);
+    expect(got.code).toBe(REFUSAL_EXIT);
+  });
+
+  test("an accepted plan whose table does not parse is named on both channels, and the readable ones still write", async () => {
+    const readPlans: PlanDepsGitHub["readPlans"] = () => ({
+      plans: declaring([20, 10])(".").plans,
+      unreadable: [{ path: "docs/adr/ADR-007-old-shape.md", text: "| — | work that closed long ago | x | — | — |" }],
+    });
+    const text = await capture(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], spy([iss(10, 0), iss(20, 1)], readPlans).gh);
+    expect(text.code).toBe(0);
+    expect(text.text).toContain("docs/adr/ADR-007-old-shape.md");
+    const s = spy([iss(10, 0), iss(20, 1)], readPlans);
+    const json = await capture(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
+    expect(JSON.parse(json.text).unreadablePlans).toEqual(["docs/adr/ADR-007-old-shape.md"]);
+    expect(s.calls).toEqual(["#20 +10"]);
   });
 
   test("a FAILED write exits non-zero — the status is derived from what happened", async () => {
@@ -466,6 +567,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     const gh: PlanDepsGitHub = {
       createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
       readIssues: async () => [iss(10, 0), iss(20, 1)],
+      readPlans: declaring([20, 10]),
       addBlockers: async () => {
         throw new Error("gh: HTTP 503");
       },
@@ -481,6 +583,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     const gh: PlanDepsGitHub = {
       createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
       readIssues: async () => [iss(10, 0), iss(20, 1)],
+      readPlans: declaring([20, 10]),
       addBlockers: async () => {
         throw new Error("gh: HTTP 503");
       },
@@ -503,7 +606,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     const out: string[] = [];
     const log = console.log;
     console.log = (x: string) => void out.push(x);
-    const s = spy([iss(10, 0), iss(20, 1)]);
+    const s = spy([iss(10, 0), iss(20, 1)], declaring([20, 10]));
     let code;
     try {
       code = await planDepsMain(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
@@ -516,17 +619,17 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
   });
 
   test("a second --write run is a no-op — the command is idempotent", async () => {
-    const s = spy([iss(10, 0), iss(20, 1, { blockedBy: [10] })]);
+    const s = spy([iss(10, 0), iss(20, 1, { blockedBy: [10] })], declaring([20, 10]));
     const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
     expect(s.calls, "an edge that already exists was written again").toEqual([]);
     expect(code).toBe(0);
   });
 
   test("--write never removes an EXTRA edge", async () => {
-    const s = spy([iss(10, 0), iss(20, 1), iss(21, 1, { blockedBy: [20] })]);
+    const s = spy([iss(10, 0), iss(20, 1), iss(21, 1, { blockedBy: [20] })], declaring([20, 10], [21, 10]));
     await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence"], s.gh);
-    // Only the derived pair is added; nothing in the call list removes 21<-20
-    // and `addBlockers` is the only mutation the seam exposes.
+    // Only the declared pairs are added; nothing in the call list removes
+    // 21<-20 and `addBlockers` is the only mutation the seam exposes.
     expect(s.calls).toEqual(["#20 +10", "#21 +10"]);
   });
 
@@ -534,7 +637,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     const out: string[] = [];
     const log = console.log;
     console.log = (x: string) => void out.push(x);
-    const s = spy([iss(10, 0), iss(20, 1)]);
+    const s = spy([iss(10, 0), iss(20, 1)], declaring([20, 10]));
     try {
       await planDepsMain(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
     } finally {
@@ -548,7 +651,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
     const out: string[] = [];
     const log = console.log;
     console.log = (x: string) => void out.push(x);
-    const s = spy([]);
+    const s = spy([], declaring([20, 10]));
     let code;
     try {
       code = await planDepsMain(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "Convergence"], s.gh);
@@ -561,7 +664,7 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
   });
 
   test("no --repo and no GITHUB_REPOSITORY refuses before reading anything", async () => {
-    const s = spy([iss(10, 0), iss(20, 1)]);
+    const s = spy([iss(10, 0), iss(20, 1)], declaring([20, 10]));
     const saved = process.env.GITHUB_REPOSITORY;
     delete process.env.GITHUB_REPOSITORY;
     try {
@@ -577,14 +680,6 @@ describe("scripts/plan-deps --write: nothing reaches GitHub on an unmeasured rea
   });
 });
 
-/**
- * The live convergence set, as a regression control.
- *
- * These numbers are a snapshot of a real board and will move. What must not
- * move is the SHAPE: the frontier is blocked by nothing, each later phase is
- * blocked by exactly the size of the phase before it, and the two
- * hand-authored within-phase edges are reported as EXTRA rather than planned.
- */
 /**
  * `--milestone-prefix` (item **B3**).
  *
@@ -603,16 +698,19 @@ describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Pha
   /** An issue in a named milestone family, so two can be mixed in one read. */
   const fam = (number: number, family: string, phase: number): DepIssue => ({
     number,
+    title: `issue ${number}`,
     state: "OPEN",
     milestone: `${family} Phase ${phase} — a heading`,
     blockedBy: [],
   });
 
+  // Each family declares one link; the narrowing decides which a run writes.
   function spy(issues: DepIssue[]) {
     const calls: string[] = [];
     const gh: PlanDepsGitHub = {
       createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
       readIssues: async () => issues,
+      readPlans: declaring([11, 10], [21, 20], [41, 40]),
       addBlockers: async (_repo, blocked, blockers) => {
         calls.push(`#${blocked} +${[...blockers].join(",")}`);
       },
@@ -661,10 +759,10 @@ describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Pha
     // the flag exists to prevent arriving through the fix for it.
     const s = spy([
       ...MIXED,
-      { number: 30, state: "OPEN", milestone: null, blockedBy: [] },
-      { number: 31, state: "OPEN", milestone: "Not Pipeline Phase 1 — mid-title", blockedBy: [] },
-      { number: 32, state: "OPEN", milestone: "Pipelines Phase 1 — a longer name", blockedBy: [] },
-      { number: 33, state: "OPEN", milestone: "Pipeline — no phase at all", blockedBy: [] },
+      { number: 30, title: "issue 30", state: "OPEN", milestone: null, blockedBy: [] },
+      { number: 31, title: "issue 31", state: "OPEN", milestone: "Not Pipeline Phase 1 — mid-title", blockedBy: [] },
+      { number: 32, title: "issue 32", state: "OPEN", milestone: "Pipelines Phase 1 — a longer name", blockedBy: [] },
+      { number: 33, title: "issue 33", state: "OPEN", milestone: "Pipeline — no phase at all", blockedBy: [] },
     ]);
     expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Pipeline"], s.gh)).toBe(0);
     expect(s.calls).toEqual(["#11 +10"]);
@@ -758,8 +856,8 @@ describe("scripts/plan-deps --milestone-prefix: one spec's issues, not every Pha
     // separates them, and a prefix of two words is the ordinary case on a
     // tracker carrying more than one spec.
     const s = spy([
-      { number: 40, state: "OPEN", milestone: "Spec Two Phase 0 — a", blockedBy: [] },
-      { number: 41, state: "OPEN", milestone: "Spec Two Phase 1 — b", blockedBy: [] },
+      { number: 40, title: "issue 40", state: "OPEN", milestone: "Spec Two Phase 0 — a", blockedBy: [] },
+      { number: 41, title: "issue 41", state: "OPEN", milestone: "Spec Two Phase 1 — b", blockedBy: [] },
     ]);
     expect(await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", " Spec Two "], s.gh)).toBe(0);
     expect(s.calls).toEqual(["#41 +40"]);
@@ -785,6 +883,7 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
     const gh: PlanDepsGitHub = {
       createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
       readIssues: async () => issues,
+      readPlans: declaring([11, 10]),
       addBlockers: async (_repo, blocked, blockers) => {
         calls.push(`#${blocked} +${[...blockers].join(",")}`);
       },
@@ -793,8 +892,8 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
   }
 
   const MIXED: DepIssue[] = [
-    { number: 10, state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
-    { number: 11, state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
+    { number: 10, title: "issue 10", state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
+    { number: 11, title: "issue 11", state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
   ];
 
   /** Runs `main` with both channels captured, so neither can hide. */
@@ -918,6 +1017,7 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
     readIssues: async () => {
       throw new Error("gh: HTTP 403 — Bad credentials");
     },
+    readPlans: declaring(),
     addBlockers: async () => {},
   };
 
@@ -956,6 +1056,7 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
         throw new Error("no GITHUB_TOKEN in the environment");
       }) as PlanDepsGitHub["createClient"],
       readIssues: async () => MIXED,
+      readPlans: declaring(),
       addBlockers: async () => {},
     };
     const got = await run(["--repo", "o/r", "--json", "--milestone-prefix", "Pipeline"], noClient);
@@ -980,6 +1081,7 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
         calls++;
         throw new Error("gh: HTTP 403 — Bad credentials");
       },
+      readPlans: declaring(),
       addBlockers: async () => {},
     };
     const got = await run(["--repo", "o/r", "--json"], counted);
@@ -1003,9 +1105,9 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
     // A LOCAL fixture, not the `MIXED` in this describe — that one is
     // Pipeline-only, so it cannot show a filter narrowing anything.
     const families: DepIssue[] = [
-      { number: 10, state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
-      { number: 11, state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
-      { number: 20, state: "OPEN", milestone: "Convergence Phase 0 — c", blockedBy: [] },
+      { number: 10, title: "issue 10", state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
+      { number: 11, title: "issue 11", state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
+      { number: 20, title: "issue 20", state: "OPEN", milestone: "Convergence Phase 0 — c", blockedBy: [] },
     ];
     const scoped = families.filter(i => (i.milestone ?? "").startsWith("Pipeline")).length;
     expect(scoped, "the fixture stopped mixing families, so this case cannot see a filter run")
@@ -1099,7 +1201,14 @@ describe("scripts/plan-deps --json: every refusal reaches the channel the caller
   });
 });
 
-describe("the shape the live convergence board has", () => {
+/**
+ * The live Convergence set on 2026-11-18, as the regression control for
+ * ADR-021: 39 issues over seven phases. Phase order wrote 194 links over 37
+ * blocked issues here, so 31 of 37 open issues waited on nothing anyone
+ * wrote. Nothing declared among them is zero links, and the two hand-written
+ * within-phase links stay as EXTRA.
+ */
+describe("SC-2606: the live Convergence shape — phase order alone is zero links, not 194", () => {
   const phaseSizes = [2, 6, 8, 4, 3, 10, 6];
   const issues: DepIssue[] = [];
   let next = 1;
@@ -1107,192 +1216,56 @@ describe("the shape the live convergence board has", () => {
     for (let k = 0; k < size; k++) issues.push(iss(next++, phase));
   });
 
-  test("194 edges over 37 blocked issues, and the frontier carries none", () => {
-    const plan = dependencyPlan(issues);
-    const expected = phaseSizes.slice(1).reduce((sum, size, k) => sum + size * phaseSizes[k], 0);
-    expect(expected).toBe(194);
-    expect(plan.missing).toHaveLength(194);
-    expect(groupByBlocked(plan.missing)).toHaveLength(37);
-    expect(plan.missing.some(e => e.blocked <= phaseSizes[0])).toBe(false);
+  test("nothing declared: no link missing, and the frontier is still reported", () => {
+    const plan = dependencyPlan(issues, []);
+    expect(plan.reading).toBe("MEASURED");
+    expect(plan.missing).toEqual([]);
+    expect(plan.phases).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(plan.frontier).toBe(0);
   });
 
-  test("each issue carries exactly the previous phase's size in blockers", () => {
-    const plan = dependencyPlan(issues);
-    const counts = new Map<number, number>();
-    for (const e of plan.missing) counts.set(e.blocked, (counts.get(e.blocked) ?? 0) + 1);
-    let n = phaseSizes[0] + 1;
-    for (let p = 1; p < phaseSizes.length; p++) {
-      for (let k = 0; k < phaseSizes[p]; k++, n++) {
-        expect(counts.get(n), `issue ${n} in phase ${p}`).toBe(phaseSizes[p - 1]);
-      }
-    }
+  test("hand-written links are EXTRA and nothing removes them", () => {
+    const withHand = issues.map(i => (i.number === 12 ? { ...i, blockedBy: [11] } : i));
+    const plan = dependencyPlan(withHand, []);
+    expect(keys(plan.extra)).toEqual(["12<-11"]);
+    expect(plan.missing).toEqual([]);
   });
 });
 
 /**
- * `board: { phaseOrder: false }`: a family whose spec opts out gets no
- * phase-order links. Jason's call of 2026-11-17, a stopgap ahead of #2331:
- * there, phases set priority and only real blocked-by links hold work back.
+ * `board: { phaseOrder: false }` (#2352) opted a family out of phase-order
+ * links, a stopgap ahead of ADR-021. There is no phase order left to opt out
+ * of, and review round 2 of #2439 found the opt-out still returning early —
+ * so a family that set it lost its DECLARED links too. The setting is no
+ * longer read by plan-deps at all.
  */
-describe("phaseOrder: false — a family that opts out of phase-order links", () => {
-  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("fs") as typeof import("fs");
-  const { tmpdir } = require("os") as typeof import("os");
+describe("SC-2606: board.phaseOrder no longer gates anything — declared links are written whatever it says", () => {
   const spec = (board: string) => `---\ndoc-type: spec\nboard: ${board}\n---\n\n# A spec\n\n- [ ] SC-9401: one\n`;
   const tree = (specs: Record<string, string>) => {
-    const root = mkdtempSync(join(tmpdir(), "plan-deps-phase-order-"));
-    mkdirSync(join(root, "specs"), { recursive: true });
-    for (const [name, text] of Object.entries(specs)) writeFileSync(join(root, "specs", name), text);
-    return root;
+    const dir = mkdtempSync(join(tmpdir(), "plan-deps-phase-order-"));
+    mkdirSync(join(dir, "specs"), { recursive: true });
+    for (const [name, text] of Object.entries(specs)) writeFileSync(join(dir, "specs", name), text);
+    return dir;
   };
-  const spy = () => {
-    const calls: string[] = [];
-    let read = 0;
-    const gh: PlanDepsGitHub = {
-      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
-      readIssues: async () => {
-        read++;
-        return [iss(10, 0), iss(20, 1)];
-      },
-      addBlockers: async (_repo, blocked, blockers) => void calls.push(`#${blocked} +${[...blockers].join(",")}`),
-    };
-    return { gh, calls, reads: () => read };
-  };
-  async function run(argv: string[], gh: PlanDepsGitHub) {
-    const out: string[] = [];
-    const [log, err] = [console.log, console.error];
-    console.log = (x: string) => void out.push(String(x));
-    console.error = (x: string) => void out.push(String(x));
-    try {
-      return { code: await planDepsMain(argv, gh), text: out.join("\n") };
-    } finally {
-      [console.log, console.error] = [log, err];
-    }
+  for (const value of ["false", "true", "flase"]) {
+    test(`phaseOrder: ${value} — the declared link is written, and the run exits 0`, async () => {
+      const dir = tree({ "C-SPEC.md": spec(`{ scope: active, prefix: Convergence, phaseOrder: ${value} }`) });
+      try {
+        const calls: string[] = [];
+        const gh: PlanDepsGitHub = {
+          createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+          readIssues: async () => [iss(10, 0), iss(20, 1)],
+          readPlans: declaring([20, 10]),
+          addBlockers: async (_repo, blocked, blockers) => void calls.push(`#${blocked} +${[...blockers].join(",")}`),
+        };
+        const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", dir], gh);
+        expect(code).toBe(0);
+        expect(calls).toEqual(["#20 +10"]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   }
-
-  test("the family's spec says phaseOrder: false — nothing is written, one line says why, exit 0", async () => {
-    const root = tree({ "C-SPEC.md": spec("{ scope: active, prefix: Convergence, phaseOrder: false }") });
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code, got.text).toBe(0);
-      expect(s.calls).toEqual([]);
-      expect(got.text).toContain("Convergence: specs/C-SPEC.md declares board.phaseOrder: false, so no phase-order links are written");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("the control: the same family with the key absent, or true, writes the phase order as before", async () => {
-    for (const board of ["{ scope: active, prefix: Convergence }", "{ scope: active, prefix: Convergence, phaseOrder: true }"]) {
-      const root = tree({ "C-SPEC.md": spec(board) });
-      try {
-        const s = spy();
-        const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-        expect(got.code, got.text).toBe(0);
-        expect(s.calls, board).toEqual(["#20 +10"]);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    }
-  });
-
-  test("another family's opt-out changes nothing for this one", async () => {
-    const root = tree({
-      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
-      "R-SPEC.md": spec("{ scope: active, prefix: Refresh, phaseOrder: false }"),
-    });
-    try {
-      const s = spy();
-      await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(s.calls).toEqual(["#20 +10"]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("two specs of one family that disagree refuse, before anything is read or written", async () => {
-    const root = tree({
-      "A-SPEC.md": spec("{ scope: active, prefix: Convergence, phaseOrder: false }"),
-      "B-SPEC.md": spec("{ scope: active, prefix: Convergence, phaseOrder: true }"),
-    });
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code).toBe(REFUSAL_EXIT);
-      expect(got.text).toContain("specs/A-SPEC.md says false and specs/B-SPEC.md says true");
-      expect(s.calls).toEqual([]);
-      expect(s.reads(), "the tracker was read for a family whose setting cannot be read").toBe(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  // Review of #2352: three readings the first round let through.
-  test("a value that is neither true nor false refuses by name, never reads as on", async () => {
-    for (const value of ["flase", "no"]) {
-      const root = tree({ "C-SPEC.md": spec(`{ scope: active, prefix: Convergence, phaseOrder: ${value} }`) });
-      try {
-        const s = spy();
-        const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-        expect(got.code, value).toBe(REFUSAL_EXIT);
-        expect(got.text).toContain("specs/C-SPEC.md");
-        expect(got.text).toContain("phaseOrder");
-        expect(s.calls).toEqual([]);
-        expect(s.reads()).toBe(0);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    }
-  });
-
-  test("a deferred spec carrying the family's prefix does not decide its phase order", async () => {
-    const root = tree({
-      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
-      "OLD-SPEC.md": spec("{ scope: deferred, prefix: Convergence, phaseOrder: false }"),
-    });
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code, got.text).toBe(0);
-      expect(s.calls).toEqual(["#20 +10"]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a deferred spec's bad value does not block the active family (review of #2352, round 2)", async () => {
-    const root = tree({
-      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
-      "OLD-SPEC.md": spec("{ scope: deferred, prefix: Convergence, phaseOrder: flase }"),
-    });
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code, got.text).toBe(0);
-      expect(s.calls).toEqual(["#20 +10"]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a spec that cannot be read refuses as UNMEASURED, naming it, instead of throwing", async () => {
-    const root = tree({
-      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
-      "BROKEN-SPEC.md": spec("{ scope: active, prefix: Other }"),
-    });
-    // Listed by the sweep, refused by the read: no permission to open it.
-    require("fs").chmodSync(join(root, "specs", "BROKEN-SPEC.md"), 0o000);
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code).toBe(REFUSAL_EXIT);
-      expect(got.text).toContain("UNMEASURED");
-      expect(got.text).toContain("BROKEN-SPEC.md");
-      expect(s.reads()).toBe(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
 
 /**
@@ -1309,8 +1282,8 @@ describe("phaseOrder: false — a family that opts out of phase-order links", ()
  */
 describe("#2413: a family whose milestones hold no open issue reads nothing to order", () => {
   const OTHER: DepIssue[] = [
-    { number: 50, state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
-    { number: 51, state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
+    { number: 50, title: "issue 50", state: "OPEN", milestone: "Pipeline Phase 0 — a", blockedBy: [] },
+    { number: 51, title: "issue 51", state: "OPEN", milestone: "Pipeline Phase 1 — b", blockedBy: [] },
   ];
   const TITLES = ["CI Phase 1 — lint", "CI Phase 2 — test", "CI Phase 3 — deploy", "Pipeline Phase 0 — a"];
 
@@ -1319,6 +1292,7 @@ describe("#2413: a family whose milestones hold no open issue reads nothing to o
     const gh: PlanDepsGitHub = {
       createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
       readIssues: async () => OTHER,
+      readPlans: declaring(),
       addBlockers: async (_repo, blocked, blockers) => void calls.push(`#${blocked} +${[...blockers].join(",")}`),
       ...(readMilestoneTitles ? { readMilestoneTitles } : {}),
     };
@@ -1356,7 +1330,7 @@ describe("#2413: a family whose milestones hold no open issue reads nothing to o
     const r = await run(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "CI"], s.gh);
     expect(r.code).toBe(0);
     const payload = JSON.parse(r.stdout);
-    // Not NOTHING_TO_SEQUENCE, which promises exactly one phase (review of #2414).
+    // Its own reading: no issue was considered at all (review of #2414).
     expect(payload.reading).toBe("NOTHING_TO_ORDER");
     expect(payload.wrote).toBe("nothing-to-order");
     expect(payload.milestones).toEqual(["CI Phase 1 — lint", "CI Phase 2 — test", "CI Phase 3 — deploy"]);
