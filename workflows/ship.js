@@ -8378,69 +8378,13 @@ function securityRefusalName(held, roundsSpent) {
  * measured SHA arrives through an agent reading workflow-state.json and the
  * head SHA from `git rev-parse`, and either may be short.
  *
- * INLINED, not imported. lib/suite-measurement.ts is the source of truth; the
- * sandbox has no module loading, and a top-level require() here killed every
- * ship run before it spawned an agent (#69). The copy must stay behaviourally
- * identical — test/suite-measurement-parity.test.ts extracts this block,
- * executes it, and runs both over one input matrix.
+ * NOT COPIED HERE. `suiteCurrency` is `lib/suite-measurement.ts`'s own code:
+ * scripts/build-workflow-launch.ts bundles it into workflows/ship.run.js, the
+ * file a run launches (#2400, ADR-017). The sandbox still has no module
+ * loading (#69), which is why it is bundled rather than imported. This block
+ * keeps only `suiteReadingFor`, which has no library counterpart, and
+ * test/suite-measurement-parity.test.ts runs its matrix over the bundled code.
  */
-
-/** A commit SHA: 7-40 hex, case-insensitive. Normalised to lowercase. */
-function suiteSha(value) {
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  return /^[0-9a-f]{7,40}$/i.test(trimmed) ? trimmed.toLowerCase() : null
-}
-
-/**
- * Describe a value that is not a SHA, for a refusal message.
- *
- * Its own function rather than `describeShaValue` from the block above: this
- * block is extracted by marker and executed standalone, so a reference to a
- * name declared in another marked region is a test that cannot run.
- */
-function describeSuiteShaValue(v) {
-  if (v === undefined) return 'nothing'
-  if (v === null) return 'null'
-  if (Array.isArray(v)) return `an array of ${v.length}`
-  if (typeof v === 'object') return 'an object'
-  // Symbols and functions stringify to undefined, which would read as a hole
-  // in the message rather than as a description of the value.
-  return JSON.stringify(v) ?? String(v)
-}
-
-function suiteCurrency(measuredSha, headSha) {
-  const measured = suiteSha(measuredSha)
-  const head = suiteSha(headSha)
-
-  if (!measured) {
-    return {
-      state: 'UNRECORDED',
-      reason:
-        `the suite result records ${describeSuiteShaValue(measuredSha)} as the commit it was ` +
-        `measured against, which is not a commit SHA — a count with no SHA is not evidence`,
-    }
-  }
-  if (!head) {
-    return {
-      state: 'UNRECORDED',
-      reason:
-        `the branch tip read at ship time is ${describeSuiteShaValue(headSha)}, not a commit SHA, ` +
-        `so the suite result measured against ${measured} cannot be confirmed against it`,
-    }
-  }
-
-  if (!(measured.startsWith(head) || head.startsWith(measured))) {
-    return {
-      state: 'STALE',
-      reason:
-        `the suite result is stale: it was measured against ${measured} but the branch now ends ` +
-        `at ${head} — the count did not come from the tree this run would ship`,
-    }
-  }
-
-  return { state: 'CURRENT', reason: null }
-}
 
 /**
  * The suite reading the terminal status is capped by.

@@ -82,7 +82,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function describe(v: unknown): string {
+function describeSuiteValue(v: unknown): string {
   if (v === undefined) return "nothing";
   if (v === null) return "null";
   if (Array.isArray(v)) return `an array of ${v.length}`;
@@ -114,14 +114,14 @@ function unmeasured(reason: string): SuiteReading {
 export function readSuiteMeasurement(state: unknown): SuiteReading {
   if (!isRecord(state)) {
     return unmeasured(
-      `the suite was not measured: the workflow state is ${describe(state)}, so it carries no suite result`,
+      `the suite was not measured: the workflow state is ${describeSuiteValue(state)}, so it carries no suite result`,
     );
   }
 
   const raw = state.suiteMeasurement;
   if (!isRecord(raw)) {
     return unmeasured(
-      `the suite was not measured: workflow-state.json has no suiteMeasurement record (got ${describe(raw)}) — ` +
+      `the suite was not measured: workflow-state.json has no suiteMeasurement record (got ${describeSuiteValue(raw)}) — ` +
         `no run of the suite has been bound to a commit, so there is no failure count to read`,
     );
   }
@@ -129,7 +129,7 @@ export function readSuiteMeasurement(state: unknown): SuiteReading {
   const measuredSha = suiteMeasurementSha(raw.measuredSha);
   if (!measuredSha) {
     return unmeasured(
-      `the suite measurement is not bound to a commit: measuredSha is ${describe(raw.measuredSha)}, not a ` +
+      `the suite measurement is not bound to a commit: measuredSha is ${describeSuiteValue(raw.measuredSha)}, not a ` +
         `commit SHA — a count that cannot be checked against the tree being shipped is not evidence (#224)`,
     );
   }
@@ -137,7 +137,7 @@ export function readSuiteMeasurement(state: unknown): SuiteReading {
   const failures = raw.failures;
   if (typeof failures !== "number" || !Number.isInteger(failures) || failures < 0) {
     return unmeasured(
-      `the suite measurement for ${measuredSha} has no usable failure count (got ${describe(failures)})`,
+      `the suite measurement for ${measuredSha} has no usable failure count (got ${describeSuiteValue(failures)})`,
     );
   }
 
@@ -151,13 +151,13 @@ export function readSuiteMeasurement(state: unknown): SuiteReading {
     return unmeasured(
       `the suite measurement for ${measuredSha} was taken over PART of the suite: the caller ` +
         `declared the run it recorded was less than the whole of it, so what it found is not a ` +
-        `statement about the suite (#673). ${describe(raw.tests)} test(s) collected is not a ` +
+        `statement about the suite (#673). ${describeSuiteValue(raw.tests)} test(s) collected is not a ` +
         `reading a gate can act on, whatever the count`,
     );
   }
   if (verdict !== "PASS" && verdict !== "FAIL") {
     return unmeasured(
-      `the suite measurement for ${measuredSha} carries no usable verdict (got ${describe(verdict)}) — ` +
+      `the suite measurement for ${measuredSha} carries no usable verdict (got ${describeSuiteValue(verdict)}) — ` +
         `only PASS and FAIL are results; anything else means the suite was not measured`,
     );
   }
@@ -208,12 +208,12 @@ export interface SuiteCurrency {
  * module: it decides whether a run may ship, and a throw is a refusal the
  * caller's error handling could turn back into a ship.
  *
- * `workflows/ship.js` carries an INLINED COPY of this function inside
- * `SUITE-CURRENCY` markers — the Workflow sandbox has no module loading and a
- * top-level require() there killed every ship run before it spawned an agent
- * (#69). This is the source of truth; the copy is held to it by
- * test/suite-measurement-parity.test.ts, which extracts the block, executes
- * it, and drives both over one input matrix. Change one, change the other.
+ * `workflows/ship.run.js` runs this function's own code: the Workflow sandbox
+ * has no module loading (#69), so scripts/build-workflow-launch.ts bundles it,
+ * and what it reaches, into the launch file (#2400). There is no hand copy to
+ * keep in step. test/suite-measurement-parity.test.ts runs its input matrix
+ * over the bundled text, and the bundle uses only names this module declares:
+ * `describeSuiteValue` is named so it cannot collide with ship.js's own.
  */
 export function suiteCurrency(measuredSha: unknown, headSha: unknown): SuiteCurrency {
   const measured = suiteMeasurementSha(measuredSha);
@@ -223,7 +223,7 @@ export function suiteCurrency(measuredSha: unknown, headSha: unknown): SuiteCurr
     return {
       state: "UNRECORDED",
       reason:
-        `the suite result records ${describe(measuredSha)} as the commit it was ` +
+        `the suite result records ${describeSuiteValue(measuredSha)} as the commit it was ` +
         `measured against, which is not a commit SHA — a count with no SHA is not evidence`,
     };
   }
@@ -231,7 +231,7 @@ export function suiteCurrency(measuredSha: unknown, headSha: unknown): SuiteCurr
     return {
       state: "UNRECORDED",
       reason:
-        `the branch tip read at ship time is ${describe(headSha)}, not a commit SHA, ` +
+        `the branch tip read at ship time is ${describeSuiteValue(headSha)}, not a commit SHA, ` +
         `so the suite result measured against ${measured} cannot be confirmed against it`,
     };
   }
