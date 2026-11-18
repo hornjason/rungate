@@ -97,6 +97,12 @@ export interface PlanDepsGitHub {
   readIssues: (client: unknown, repo: string, includeClosed: boolean) => Promise<DepIssue[]>;
   /** Apply one blocked issue's missing blockers. Resolves on success. */
   addBlockers: (repo: string, blocked: number, blockers: readonly number[]) => Promise<void>;
+  /**
+   * Every milestone title, open and closed (#2413). Read only when no open
+   * issue matched the prefix, to tell a finished family from a misspelled
+   * prefix. Absent, the run keeps the prefix refusal; a throw is UNMEASURED.
+   */
+  readMilestoneTitles?: (repo: string) => Promise<string[]>;
 }
 
 /** Each blocker's database id, read once per run however many issues it blocks. */
@@ -116,6 +122,10 @@ const LIVE_GITHUB: PlanDepsGitHub = {
   createClient: createGitHubClient,
   readIssues: (_client, repo, includeClosed) => readLiveIssues(repo, includeClosed),
   addBlockers: liveAddBlockers,
+  readMilestoneTitles: async repo =>
+    ghWithoutGhToken(["api", "--paginate", `repos/${repo}/milestones?state=all&per_page=100`, "--jq", ".[].title"])
+      .split("\n")
+      .filter(t => t.length > 0),
 };
 
 const USAGE = `rungate plan-deps --repo <owner/name> --milestone-prefix <name>
@@ -307,6 +317,48 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   // is false when four issues were read and the filter took them. A typo in
   // the prefix is the likeliest way to arrive here, and that sentence sends
   // the reader to the API.
+  if (issues.length === 0 && read.length > 0 && gh.readMilestoneTitles) {
+    // #2413: no OPEN issue matched, but the family may exist and be finished
+    // (every issue closed) or not yet decomposed. Its milestones decide: a
+    // family with milestones has nothing left to order, which is exit 0, not
+    // the typo refusal below that turned a consumer's main red on every push
+    // to specs/. A list that cannot be read decides nothing.
+    let titles: string[];
+    try {
+      titles = await gh.readMilestoneTitles(repo);
+    } catch (e) {
+      return refuse(
+        values.json,
+        `UNMEASURED — ${read.length} issue(s) were read and NONE carries a milestone starting ` +
+          `"${prefix}", and the milestone list could not be read: ${(e as Error).message}. A finished ` +
+          `family and a misspelled prefix cannot be told apart without it.`,
+      );
+    }
+    const family = titles.filter(t => inMilestoneFamily(t, prefix));
+    if (family.length > 0) {
+      if (values.json) {
+        // Its own reading, not a DependencyPlan: NOTHING_TO_SEQUENCE promises
+        // exactly one phase (lib/spec-deps.ts), and here no issue was
+        // considered at all (review of #2414).
+        const wrote = values.write ? "nothing-to-order" : "not-requested";
+        // Every key the other readings carry, empty, as PHASE_ORDER_OFF does (review of #2414).
+        console.log(
+          JSON.stringify(
+            { reading: "NOTHING_TO_ORDER", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, results: [], wrote, prefix, milestones: family },
+            null,
+            2,
+          ),
+        );
+        return 0;
+      }
+      console.log(
+        `${repo} — 0 issue(s) read (of ${read.length}, narrowed to milestones starting "${prefix}")\n\n` +
+          `Nothing written: nothing to order: ${family.length} milestone(s) start with "${prefix}" and none ` +
+          `holds an open issue. A finished family, or one not yet decomposed, states no order.`,
+      );
+      return 0;
+    }
+  }
   if (issues.length === 0 && read.length > 0) {
     return refuse(
       values.json,
