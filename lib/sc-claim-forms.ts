@@ -83,7 +83,7 @@ export type ClaimForm =
   | "attribution";
 
 // #2428: and in the SAME sentence. A verb ending the previous sentence ("…which
-// customers it covers and, for each one without, why. Works toward SC-91") is
+// customers it covers and, for each one without, why. Works toward <the id>") is
 // prose about something else, and crediting it ticked a criterion its own
 // comment said was not complete. A sentence end is `.`, `;`, `?` or `!`
 // followed by whitespace, so a `..` range and a file name's dot are not one.
