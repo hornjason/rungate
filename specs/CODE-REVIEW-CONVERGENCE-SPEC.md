@@ -468,7 +468,7 @@ check proving it can fail against this file and not against a fixture.
       needs: test
 - [x] CRC-C3: A false positive clears by closing the thread with a short reason.
       needs: test
-      proved-by: test/ai-review-threads.test.ts, the `CRC-C3` describe (`-t CRC-C3`, 5 pass, 0 fail, 2026-11-18, on the PR that closes #2306): a thread the review opened and somebody resolved with no reply is named on the conversation once per thread, on the next review round; `PROTECT-2` binds the half that blocks the merge.
+      proved-by: test/ai-review-threads.test.ts, the `CRC-C3` describe (`-t CRC-C3`, 6 pass, 0 fail, 2026-11-18, on the PR that closes #2306): a thread the review opened and somebody resolved with no reply is named on the conversation once per thread, on the next review round; `PROTECT-2` binds the half that blocks the merge.
       fingerprint: 9836ba62
 - [x] CRC-C4: A finding clears on its own if a later commit fixes it.
       needs: test

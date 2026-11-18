@@ -24,6 +24,7 @@
  * two that only a live fork or a line outside a hunk would otherwise produce.
  */
 import type { ThreadReading } from "./ai-review-rounds";
+import { nextCursor } from "./graphql-cursor";
 import { escapeAnnotation, reviewThreadRequests, threadKeyFrom } from "./scaffold/ai-review-findings";
 import type { AiReviewFindingsReading, AiReviewThreadRequest } from "./scaffold/ai-review-findings";
 
@@ -612,6 +613,11 @@ export function unreasonedResolutions(raw: readonly unknown[] | null | undefined
         ? (node.comments as { nodes?: unknown }).nodes
         : undefined;
     if (!Array.isArray(nodes) || nodes.length === 0) continue;
+    // Review of #2378: a thread whose comments were not read to their end —
+    // a second page, or a page that cannot say — may hold its reason past
+    // what was read. It is not reported: under-reporting is the safe
+    // direction for a record. `nextCursor` is the one reader (SC-2721).
+    if (nextCursor((node.comments as { pageInfo?: unknown }).pageInfo).kind !== "done") continue;
     const first = commentOf(nodes[0]);
     if (first === null || threadKeyFrom(first.body) === null) continue;
     const answered = nodes

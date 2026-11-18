@@ -771,7 +771,7 @@ describe("CRC-C3: a review thread resolved with no stated reason is reported on 
     id,
     isResolved,
     path,
-    comments: { nodes: comments },
+    comments: { nodes: comments, pageInfo: { hasNextPage: false } },
   });
 
   test("a resolved finding thread with no reply is unreasoned; one with a reply is not", () => {
@@ -811,6 +811,14 @@ describe("CRC-C3: a review thread resolved with no stated reason is reported on 
       "unread",
     );
     expect(r.status === "MEASURED" && r.unreasoned).toEqual([]);
+  });
+
+  test("review of #2378: a thread with more comments than one page is not reported, since its reply may be past the page", () => {
+    const long = { ...thread("T1", true, [opened("k1")]), comments: { nodes: [opened("k1")], pageInfo: { hasNextPage: true } } };
+    const short = { ...thread("T2", true, [opened("k2")]), comments: { nodes: [opened("k2")], pageInfo: { hasNextPage: false } } };
+    const silent = { ...thread("T3", true, [opened("k3")]), comments: { nodes: [opened("k3")] } };
+    const r = unreasonedResolutions([long, short, silent], "unread");
+    expect(r.status === "MEASURED" && r.unreasoned.map(u => u.id)).toEqual(["T2"]);
   });
 
   test("threads that could not be read are UNMEASURED, not 'none resolved without a reason'", () => {

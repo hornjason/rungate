@@ -31,6 +31,7 @@
  * behavioural test could tell which of them was holding the gate up.
  */
 import { createGitHubClient } from "../lib/github";
+import { nextCursor } from "../lib/graphql-cursor";
 import {
   AI_REVIEW_PR_IS_FORK_VAR,
   aiReviewThreadsExitCode,
@@ -270,7 +271,7 @@ if (result.outcome === "FAILED") {
 const THREADS_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$after:String){
   repository(owner:$owner,name:$name){ pullRequest(number:$pr){
     reviewThreads(first:100, after:$after){ pageInfo{ hasNextPage endCursor }
-      nodes{ id isResolved path comments(first:100){ nodes{ author{ login } body url } } } } } } }`;
+      nodes{ id isResolved path comments(first:100){ pageInfo{ hasNextPage } nodes{ author{ login } body url } } } } } } }`;
 let threadNodes: unknown[] | null = null;
 let threadsError = "the review threads were not read";
 try {
@@ -282,13 +283,16 @@ try {
       pr: parsed.pr,
       after,
     })) as {
-      repository?: { pullRequest?: { reviewThreads?: { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string } } } };
+      repository?: { pullRequest?: { reviewThreads?: { nodes?: unknown[]; pageInfo?: unknown } } };
     };
     const conn = page.repository?.pullRequest?.reviewThreads;
     if (!Array.isArray(conn?.nodes)) throw new Error("the response carried no review-thread list");
     nodes.push(...conn.nodes);
-    if (conn.pageInfo?.hasNextPage !== true || typeof conn.pageInfo.endCursor !== "string") break;
-    after = conn.pageInfo.endCursor;
+    // SC-2721: the one reader of "is there another page".
+    const next = nextCursor(conn.pageInfo);
+    if (next.kind === "done") break;
+    if (next.kind === "unreadable") throw new Error(next.why);
+    after = next.cursor;
   }
   threadNodes = nodes;
 } catch (e) {
