@@ -183,18 +183,34 @@ function matchedByIgnoreRules(root: string, paths: readonly string[]): Trackable
   return { ignored: paths.filter(p => matched.has(p)), failure: null };
 }
 
+/** git's own refusal outside a repository: exit 128, and it says so. */
+const NOT_A_REPOSITORY = /not a git repository/i;
+
+/**
+ * Whether `root` is inside a work tree. "Outside" is only git's own exit-128
+ * refusal saying so, or a probe from inside `.git` itself; a git that could
+ * not run, or failed any other way, is a failure string, never "outside"
+ * (review of #2359 — the same fail-open in two callers).
+ */
+function workTreeProbe(root: string): "inside" | "outside" | { failure: string } {
+  const r = git(root, ["rev-parse", "--is-inside-work-tree"]);
+  if (r.status === 128 && NOT_A_REPOSITORY.test(r.stderr)) return "outside";
+  if (r.status !== 0) return { failure: `git rev-parse failed (${r.status}): ${r.stderr.trim() || "no output"}` };
+  return r.stdout.trim() === "true" ? "inside" : "outside";
+}
+
 /**
  * Whether this project's ignore rules mark the rungate config disposable.
  *
  * A project that is not a git repository has no ignore rules and nothing can
  * delete the file on a checkout, so that is `{ ignored: [], failure: null }`
- * and not an error — the harness scaffolds into trees that are not repos.
+ * and not an error — the harness scaffolds into trees that are not repos. A
+ * git that cannot answer is a `failure`, not that case.
  */
 export function configPathsIgnored(root: string): TrackableReading {
-  const inside = git(root, ["rev-parse", "--is-inside-work-tree"]);
-  if (inside.status !== 0 || inside.stdout.trim() !== "true") {
-    return { ignored: [], failure: null };
-  }
+  const probe = workTreeProbe(root);
+  if (probe === "outside") return { ignored: [], failure: null };
+  if (probe !== "inside") return { ignored: [], failure: probe.failure };
   return matchedByIgnoreRules(root, RUNGATE_CONFIG_IGNORE_PATHS);
 }
 
@@ -471,9 +487,6 @@ function ownedPathsOnDisk(root: string, rows: readonly string[]): { paths: strin
   return { paths: out, failures };
 }
 
-/** git's own refusal outside a repository: exit 128, and it says so. */
-const NOT_A_REPOSITORY = /not a git repository/i;
-
 /**
  * #2347: name every owned file this scaffold left in a path the project's
  * ignore rules match. Such a file is written, never committed, and so never
@@ -489,13 +502,12 @@ const NOT_A_REPOSITORY = /not a git repository/i;
 export function reportIgnoredOwnedFiles(root: string, actions: string[], rows: readonly string[]): void {
   const unmeasured = (why: string) =>
     actions.push(`UNMEASURED: whether any file scaffold owns is ignored could not be read — ${why}`);
-  const inside = git(root, ["rev-parse", "--is-inside-work-tree"]);
-  if (inside.status === 128 && NOT_A_REPOSITORY.test(inside.stderr)) return;
-  if (inside.status !== 0) {
-    unmeasured(`git rev-parse failed (${inside.status}): ${inside.stderr.trim() || "no output"}`);
+  const probe = workTreeProbe(root);
+  if (probe === "outside") return;
+  if (probe !== "inside") {
+    unmeasured(probe.failure);
     return;
   }
-  if (inside.stdout.trim() !== "true") return; // inside .git itself: no work tree, no ignore rules
   const owned = ownedPathsOnDisk(root, rows);
   for (const f of owned.failures) unmeasured(f);
   const reading = matchedByIgnoreRules(root, owned.paths);

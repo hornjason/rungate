@@ -641,6 +641,25 @@ describe("#2347: an owned file written into an ignored path is named", () => {
     expect(actions.some(a => a.startsWith("UNMEASURED:"))).toBe(true);
   });
 
+  test("the config check's own repository probe is UNMEASURED when git cannot run (review of #2359, round 2)", () => {
+    const root = repo({ ".gitignore": ".claude/\n", ".claude/rungate.json": "{}\n" });
+    const path = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    let reading;
+    try {
+      reading = configPathsIgnored(root);
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(reading.failure).not.toBeNull();
+  });
+
+  test("outside any repository the config check is still a clean no-rules reading", () => {
+    const root = mkdtempSync(join(tmpdir(), "rungate-2359-norepo-"));
+    scratch.push(root);
+    expect(configPathsIgnored(root)).toEqual({ ignored: [], failure: null });
+  });
+
   test("scaffold runs it, over the owned-file table", () => {
     const src = readFileSync(join(import.meta.dir, "..", "lib", "scaffold", "write-steps.ts"), "utf-8");
     expect(src).toContain("reportIgnoredOwnedFiles(projectPath, actions, OWNED_FILES.map(f => f.path))");
