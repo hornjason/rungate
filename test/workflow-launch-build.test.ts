@@ -190,6 +190,16 @@ describe("#2289 / SC-2774: each copied module exports a core that imports nothin
     expect(coreClosure(listed, ["f", "kk"])).toEqual({ declarations: ["f", "k"], missing: [], imports: [] });
     expect(coreClosure(listed, ["g"]).imports).toEqual(["g (re-exported from ./other)"]);
     expect(coreClosure(listed, ["h"]).imports).toEqual(["h (from ./other, re-exported)"]);
+    // Review of #2397, round 3: a destructured top-level binding.
+    const destructured = [
+      'import * as fs from "fs";',
+      "const { existsSync } = fs;",
+      "const [first, , third] = [1, 2, 3];",
+      "export function reaches() { return existsSync(\"x\"); }",
+      "export function local() { return first + third; }",
+    ].join("\n");
+    expect(coreClosure(destructured, ["reaches"]).imports).toEqual(["fs (from fs, via existsSync)"]);
+    expect(coreClosure(destructured, ["local"]).imports).toEqual([]);
     // A property name that happens to match an import is not a use of it.
     expect(coreClosure('import { x } from "y";\nexport function f(o: { x: number }) { return o.x; }', ["f"]).imports).toEqual([]);
   });

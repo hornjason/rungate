@@ -250,9 +250,19 @@ export function coreClosure(source: string, core: readonly string[]): CoreClosur
       if (isExported(st)) exported.add(st.name.text);
     } else if (ts.isVariableStatement(st)) {
       for (const d of st.declarationList.declarations) {
-        if (!ts.isIdentifier(d.name)) continue;
-        decls.set(d.name.text, d);
-        if (isExported(st)) exported.add(d.name.text);
+        // Every name a declarator binds, destructured ones included: each maps
+        // to the whole declarator, so reaching it walks the initializer too
+        // (review of #2397, round 3).
+        const names: string[] = [];
+        const bind = (n: ts.BindingName): void => {
+          if (ts.isIdentifier(n)) names.push(n.text);
+          else for (const e of n.elements) if (!ts.isOmittedExpression(e)) bind(e.name);
+        };
+        bind(d.name);
+        for (const name of names) {
+          decls.set(name, d);
+          if (isExported(st)) exported.add(name);
+        }
       }
     } else if (ts.isExportDeclaration(st) && st.exportClause && ts.isNamedExports(st.exportClause)) {
       const from = st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier) ? st.moduleSpecifier.text : null;
