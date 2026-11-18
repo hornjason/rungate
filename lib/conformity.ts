@@ -86,14 +86,17 @@ import { workflowDrift } from "./scaffold/workflow-drift";
  * it to `setDefaultTimeout` before it registers anything.
  *
  * Several checks here walk the whole tree. A consumer's runner took longer
- * than bun's 5000ms default on four of them: HYGIENE-3 took 19915.54ms,
- * CONFIG-1 took 30.9s, and the closing `writeFindingsReport` hook took
- * 7526.04ms. The consumer cannot fix that, because the file is regenerated.
- * A timeout carries no message (#804), so it reads as a failed check when
- * only the clock ran out.
+ * than bun's 5000ms default on three checks and one hook:
+ *  - HYGIENE-3 took 19915.54ms;
+ *  - WARN HYGIENE-6 timed out in three runs;
+ *  - CONFIG-1 took 30.9s;
+ *  - the closing `writeFindingsReport` hook took 7526.04ms.
+ * The consumer cannot fix that, because the file is regenerated. A timeout
+ * carries no message (#804), so it reads as a failed check when only the
+ * clock ran out.
  *
  * It is declared once, for the whole file, rather than on the three checks
- * that were seen to time out. `lib/gate-timeouts.ts` gives the reason: a
+ * the issue named. `lib/gate-timeouts.ts` gives the reason: a
  * budget written on named tests covers those tests, and the next scan added
  * gets nothing. A check that sets its own budget keeps it; the fallow checks
  * pass `FALLOW_BUDGET_MS`.
