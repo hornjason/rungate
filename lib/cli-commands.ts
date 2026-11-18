@@ -284,12 +284,12 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   // this turns the ORDER of those milestones into `blocked by` edges, which is
   // AGENTS.md rule 4 — ordering is data, not prose.
   //
-  // No `projectRootFlag`: it reads the tracker, not the tree. The phase is
-  // read off each issue's milestone title, so there is no spec path to
-  // resolve and nothing on disk it could resolve against the wrong root.
+  // No `projectRootFlag`: the tree it reads — specs/ for board.phaseOrder,
+  // docs/adr/ for the accepted plans (SC-2606) — is the working directory,
+  // or the script's own --project-root.
   "plan-deps": {
     script: "scripts/plan-deps.ts",
-    summary: "Write a spec's phase order onto the tracker as blocked-by edges",
+    summary: "Write the blocked-by links accepted ADRs declare onto the tracker",
     usage:
       "rungate plan-deps --repo <owner/name> --milestone-prefix <name> [--write] [--json] [--include-closed]",
   },

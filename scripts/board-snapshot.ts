@@ -67,7 +67,7 @@ import {
 } from "../lib/spec-placement";
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
-import { dependencyPlan } from "../lib/spec-deps";
+import { declaredDependencies, dependencyPlan, readDeclaredPlans } from "../lib/spec-deps";
 import type { ConsumerIntake, DeclaredWork, FamilyIssue, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
 import { CONSUMER_LABEL, trustedBodies, verdictIn, type IssueComment } from "../lib/consumer-triage";
 import { parseCriteria } from "../lib/spec-evidence";
@@ -1046,24 +1046,30 @@ export async function main(
           }),
         };
 
-  // SC-2617. `missing` and `present` are the plan's own two halves — derived
-  // edges the tracker lacks, and derived edges it carries. `extra` is
-  // deliberately excluded: an edge somebody added that the plan does not
-  // derive is reported by `plan-deps` and removed by nobody, so counting it
-  // here would let hand-added ordering satisfy a reading about derived
-  // ordering.
+  // SC-2617, SC-2606. `missing` and `present` are the plan's own two halves —
+  // declared dependencies the tracker lacks, and ones it carries. The plan is
+  // what accepted ADRs' Decomposition tables declare, read from this root;
+  // phase order is no longer a dependency (ADR-021). `extra` is deliberately
+  // excluded: an edge no plan declares is reported by `plan-deps` and removed
+  // by nobody, so counting it here would let hand-added ordering satisfy a
+  // reading about declared ordering.
   //
   // An UNMEASURED plan omits the key. `dependencyPlan` returns UNMEASURED
   // for a truncated `blockedBy` among other reasons, and a truncated read
   // produces exactly the false `missing` edges this reading would then count
   // as the tracker's failure.
   //
-  // `!== "MEASURED"`, not `=== "UNMEASURED"` (#2239): a one-phase tracker is
-  // NOTHING_TO_SEQUENCE, and its empty plan is no order at all, so it omits
-  // the key too rather than reading as 0 of 0 derived edges.
-  const plan = dependencyPlan(liveIssues);
+  // ADRs that cannot be read omit the key too: an unread declaration is not
+  // a declaration of nothing.
+  let declaredEdges: ReturnType<typeof declaredDependencies> | null;
+  try {
+    declaredEdges = declaredDependencies(readDeclaredPlans(root).plans, liveIssues);
+  } catch {
+    declaredEdges = null; // UNMEASURED: `plannedEdges` is omitted below, and dependency-edges says so.
+  }
+  const plan = declaredEdges === null ? null : dependencyPlan(liveIssues, declaredEdges);
   const edges =
-    plan.reading !== "MEASURED"
+    plan === null || plan.reading !== "MEASURED"
       ? {}
       : {
           plannedEdges: [

@@ -1,11 +1,14 @@
 #!/usr/bin/env bun
 /**
- * Write a spec's phase order onto the tracker as `blocked by` edges (#1647).
+ * Write the dependencies planning declared onto the tracker as `blocked by`
+ * edges (#1647, SC-2606).
  *
- * Step 5 of `docs/adr/ADR-003-spec-to-tracker-mapping.md`. `plan-spec` turns
- * the spec's *Phase placement* table into milestones; this turns the order of
- * those milestones into edges, so *what can I pick up* is a question GitHub
- * can answer instead of one a person answers by reading phase numbers.
+ * Until ADR-021 this wrote the PHASE order: every issue in a phase blocked by
+ * every issue in the phase before. That made phase a gate, and ADR-021 made
+ * it an order instead — Ready sorts by it. What this writes now is what an
+ * accepted ADR's Decomposition table declared: each row's `Blocked by` and
+ * `Blocks` cells (`declaredDependencies`, `lib/spec-deps.ts`). `plan-issues`
+ * writes those links when it files the rows; this adds any that went missing.
  *
  * ## It reports by default and writes only when told
  *
@@ -14,11 +17,10 @@
  *
  * ## It never deletes an edge, and the third set is why
  *
- * `EXTRA` is an edge present on the tracker that the phase order does not
- * imply. Two are live and both are real — #1481 blocked by #1591, #1659
- * blocked by #1658 — and both are WITHIN a phase, which is the one ordering a
- * phase sequence cannot express. Reconciling by deletion would destroy the
- * only hand-authored dependencies in the repository, so this prints them and
+ * `EXTRA` is an edge present on the tracker that no accepted plan declares:
+ * one written by hand between issues that already existed, or a phase-order
+ * link this wrote before ADR-021 (#2433 takes those off). Reconciling by
+ * deletion would destroy the hand-authored ones, so this prints them and
  * stops. See `lib/spec-deps.ts`.
  *
  * ## Why the edges are grouped by blocked issue
@@ -28,14 +30,15 @@
  * writes its links and reads them back once. Since #2345 the links go through
  * the REST dependencies endpoint, one POST per link, because
  * `issue edit --add-blocked-by` is missing from older runners' `gh`. So the
- * live convergence set's 194 edges over 37 blocked issues are 194 writes and
- * 37 read-backs, plus one id read per distinct blocker (`BLOCKER_IDS`).
+ * phase-order set it once wrote, 194 edges over 37 blocked issues, was 194
+ * writes and 37 read-backs, plus one id read per distinct blocker
+ * (`BLOCKER_IDS`).
  */
 import { addBlockers } from "../lib/blocked-by-write";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
-import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
-import type { DepEdge, DepIssue } from "../lib/spec-deps";
+import { declaredDependencies, dependencyPlan, groupByBlocked, readDeclaredPlans } from "../lib/spec-deps";
+import type { DeclaredPlan, DepEdge, DepIssue } from "../lib/spec-deps";
 import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues, readMilestonePrefix } from "../lib/live-issues";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
@@ -78,6 +81,7 @@ function refuse(json: boolean, reason: string, usage = false): number {
           extra: [],
           unphased: [],
           frontier: null,
+          unreadablePlans: [],
           results: [],
           wrote: "refused",
         },
@@ -103,6 +107,12 @@ export interface PlanDepsGitHub {
    * prefix. Absent, the run keeps the prefix refusal; a throw is UNMEASURED.
    */
   readMilestoneTitles?: (repo: string) => Promise<string[]>;
+  /**
+   * Every accepted ADR's Decomposition under the project root (SC-2606). A
+   * local read, not a GitHub one, kept on this seam so no test reads the
+   * repository it runs in. A throw is UNMEASURED, refused before the network.
+   */
+  readPlans: (root: string) => { plans: DeclaredPlan[]; unreadable: string[] };
 }
 
 /** Each blocker's database id, read once per run however many issues it blocks. */
@@ -122,6 +132,7 @@ const LIVE_GITHUB: PlanDepsGitHub = {
   createClient: createGitHubClient,
   readIssues: (_client, repo, includeClosed) => readLiveIssues(repo, includeClosed),
   addBlockers: liveAddBlockers,
+  readPlans: readDeclaredPlans,
   readMilestoneTitles: async repo =>
     ghWithoutGhToken(["api", "--paginate", `repos/${repo}/milestones?state=all&per_page=100`, "--jq", ".[].title"])
       .split("\n")
@@ -134,14 +145,13 @@ const USAGE = `rungate plan-deps --repo <owner/name> --milestone-prefix <name>
   --repo              owner/name. Defaults to $GITHUB_REPOSITORY.
   --write             apply the missing edges. Without it, nothing is mutated.
   --json              the whole plan, for something other than a person.
-  --include-closed    derive edges to closed issues too. Off by default: a
-                      closed issue can never block anything, so the edge is a
-                      row on a card that changes no decision.
+  --include-closed    consider closed issues too. A closed issue still gets no
+                      edge and is no blocker: it can never block anything, so
+                      the edge would be a row on a card that changes no decision.
+  --project-root      where docs/adr/ is read from. Defaults to the cwd.
   --milestone-prefix  REQUIRED. Consider only issues whose milestone TITLE
-                      starts with this, e.g. "Pipeline". A phase number is read
-                      out of the title and nothing else, so two specs that both
-                      numbered their phases put unrelated issues in the same
-                      phase and get sequenced against each other. Required
+                      starts with this, e.g. "Pipeline": a run writes the
+                      declared links of the issues in one family. Required
                       rather than optional since #1728: omitting it resolved 89
                       edges across 38 issues spanning two families and took
                       \`board-conformance\`'s blocked-by reading from 12 of 12
@@ -275,7 +285,7 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
       if (values.json) {
         console.log(
           JSON.stringify(
-            { reading: "PHASE_ORDER_OFF", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, results: [], wrote: "phase-order-off", why },
+            { reading: "PHASE_ORDER_OFF", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, unreadablePlans: [], results: [], wrote: "phase-order-off", why },
             null,
             2,
           ),
@@ -285,6 +295,18 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
       }
       return 0;
     }
+  }
+
+  // What planning declared (SC-2606), read before the network like the
+  // settings above, so a tree whose ADRs cannot be read is refused without a
+  // tracker call. An accepted plan whose table no longer parses is reported,
+  // not refused: it declares nothing readable, and refusing would stop every
+  // run on a repository with one old ADR.
+  let plans: { plans: DeclaredPlan[]; unreadable: string[] };
+  try {
+    plans = gh.readPlans(root);
+  } catch (e) {
+    return refuse(values.json, `UNMEASURED — the accepted ADRs under ${root}/docs/adr could not be read: ${(e as Error).message}`);
   }
 
   // Only now does anything touch the network. `createClient` is inside the
@@ -337,14 +359,13 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     const family = titles.filter(t => inMilestoneFamily(t, prefix));
     if (family.length > 0) {
       if (values.json) {
-        // Its own reading, not a DependencyPlan: NOTHING_TO_SEQUENCE promises
-        // exactly one phase (lib/spec-deps.ts), and here no issue was
-        // considered at all (review of #2414).
+        // Its own reading, not a DependencyPlan: here no issue was considered
+        // at all (review of #2414).
         const wrote = values.write ? "nothing-to-order" : "not-requested";
         // Every key the other readings carry, empty, as PHASE_ORDER_OFF does (review of #2414).
         console.log(
           JSON.stringify(
-            { reading: "NOTHING_TO_ORDER", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, results: [], wrote, prefix, milestones: family },
+            { reading: "NOTHING_TO_ORDER", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, unreadablePlans: plans.unreadable, results: [], wrote, prefix, milestones: family },
             null,
             2,
           ),
@@ -367,7 +388,11 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     );
   }
 
-  const plan = dependencyPlan(issues, { includeClosed: values["include-closed"] });
+  // Resolved against EVERY issue read, not the family: a row's blocker may sit
+  // in another milestone. The family narrows which issues WAIT.
+  const plan = dependencyPlan(issues, declaredDependencies(plans.plans, read), {
+    includeClosed: values["include-closed"],
+  });
 
   // The refusal, decided BEFORE anything is written. `plan-spec` shipped this
   // backwards once — it created eight milestones and THEN returned non-zero,
@@ -386,12 +411,10 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
       ? "not-requested"
       : refuseWrite
         ? "refused"
-        : plan.reading === "NOTHING_TO_SEQUENCE"
-          ? "nothing-to-sequence"
-          : failures.length > 0
+        : failures.length > 0
           ? "partial"
           : "yes";
-    console.log(JSON.stringify({ ...plan, results, wrote }, null, 2));
+    console.log(JSON.stringify({ ...plan, unreadablePlans: plans.unreadable, results, wrote }, null, 2));
     return refuseWrite || failures.length > 0 ? REFUSAL_EXIT : 0;
   }
 
@@ -419,35 +442,34 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
   }
   if (plan.extra.length > 0) {
     console.log(
-      `\n  ${plan.extra.length} edge(s) this did not derive, LEFT ALONE — a dependency inside one\n` +
-        `  phase is the ordering a phase sequence cannot express, and deleting it would\n` +
-        `  destroy the only hand-authored edges in the repository:`,
+      `\n  ${plan.extra.length} edge(s) no accepted plan declares, LEFT ALONE — written by hand,\n` +
+        `  or phase order from before ADR-021. This never removes a link:`,
     );
     for (const e of plan.extra) console.log(`    #${e.blocked} blocked by #${e.blocker}`);
   }
 
   console.log(`\n  Frontier: ${plan.frontier === null ? "nowhere — no open issue sits in a phase" : `Phase ${plan.frontier}`}`);
   if (plan.unphased.length > 0) {
-    console.log(`  ${plan.unphased.length} issue(s) carry no Phase milestone and get no edge.`);
+    console.log(`  ${plan.unphased.length} issue(s) carry no Phase milestone.`);
+  }
+  console.log(`  Declared by ${plans.plans.length} accepted plan(s).`);
+  if (plans.unreadable.length > 0) {
+    console.log(
+      `  ${plans.unreadable.length} accepted plan(s) whose Decomposition table does not parse, so they ` +
+        `declare nothing here: ${plans.unreadable.join(", ")}`,
+    );
   }
 
-  // #2239: one phase over a sound read. Never the "already carries" sentence
-  // below — an empty plan from one phase is not a sequenced tracker — and
-  // never a refusal, because nothing was left unread. `missing` is empty by
-  // construction, so there is no write to skip.
-  if (plan.reading === "NOTHING_TO_SEQUENCE") {
-    console.log(
-      `\nNothing written: nothing to sequence: every ${values["include-closed"] ? "" : "open "}issue ` +
-        `sits in Phase ${plan.phases[0]}. One phase states no order, so no edge is missing and none is derived.`,
-    );
+  // Said on a --write run too: with nothing declared and missing, the run
+  // wrote nothing because nothing was owed, and a bare WRITING header with no
+  // line under it reads like a write that silently failed.
+  if (plan.missing.length === 0) {
+    console.log(`\nNothing written, and nothing to write — the tracker already carries every declared dependency.`);
     return 0;
   }
-
   if (!values.write) {
     console.log(
-      plan.missing.length > 0
-        ? `\nNothing written. Re-run with --write to add ${plan.missing.length} edge(s) in ${groupByBlocked(plan.missing).length} call(s).`
-        : `\nNothing written, and nothing to write — the tracker already carries the phase order.`,
+      `\nNothing written. Re-run with --write to add ${plan.missing.length} edge(s) in ${groupByBlocked(plan.missing).length} call(s).`,
     );
     return 0;
   }
