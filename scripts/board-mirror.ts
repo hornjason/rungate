@@ -758,8 +758,8 @@ export async function main(argv: string[]): Promise<number> {
   //
   // Read only under `--ready` with a repository, the one case that writes
   // Ready. With no reading there is no focus — not a focus of "nothing",
-  // which `activeMilestone` reports as `title: null` and which puts every
-  // incumbent out of scope.
+  // which `activeMilestone` reports as `title: null`. Since #2430 the focus
+  // is reported and orders nothing here; scope does not read it.
   const openInRepo =
     values.ready && repo
       ? await readOpenIssueMilestones((q, v) => client.graphql(q, v), repo.owner, repo.name)
@@ -784,10 +784,12 @@ export async function main(argv: string[]): Promise<number> {
   // #2007: an incumbent outside the focus, which `isReady` alone keeps. A card
   // already changing (blocked, so leaving for Backlog) is not added twice.
   const changing = new Set(readyChanges.map(c => c.item.number));
-  // Only on a focus that was READ (#2037). An unread focus has `title: null`,
-  // and every incumbent is out of scope against that — a missing `--repo`
-  // would empty the lane.
-  if (openInRepo !== null) {
+  // On every `--ready` run, read focus or not (#2430). #2037 ran this only on
+  // a focus that was read, because an unread one put every incumbent out of
+  // scope. Scope is now "carries a phase milestone, or is expedited", read
+  // off the card itself, so a missing `--repo` or a failed repository read
+  // must not keep an unplaced card in Ready.
+  if (values.ready) {
     for (const d of scopeDemotions(writable, active, expediteLabel)) {
       if (!changing.has(d.item.number)) readyChanges.push(d);
     }

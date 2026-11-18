@@ -840,10 +840,12 @@ async function main(): Promise<number> {
     readExpediteLabel(root),
   );
   if (workNext.status !== "NONE") console.log(`  ${workNext.why}`);
-  // **The focus, between eligibility and selection** (SC-2741, ADR-013 row
-  // 8). Ready refills from the active milestone and the expedite lane only;
-  // everything else eligible waits, counted rather than listed, because a
-  // top-up holds every open issue and the count is what a reader needs.
+  // **Scope, between eligibility and selection** (SC-2741, ADR-021). Ready
+  // refills from every placed phase — any milestone `phaseOf` reads — and the
+  // expedite lane; which comes first is `readyOrderFor`'s ranking, not a
+  // gate. An unplaced eligible issue waits, counted rather than listed,
+  // because a top-up holds every open issue and the count is what a reader
+  // needs. The focus is still printed, as the phase being worked.
   const active = activeMilestone(openMilestones, engine.prefix);
   console.log(`  Focus: ${active.why}`);
   const scoped = scopedCandidates(eligible, active, workNext.honoured);
