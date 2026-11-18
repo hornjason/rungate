@@ -279,8 +279,8 @@ export function readyPopulation<T extends { state: string; status: string }>(
 }
 
 /**
- * Ready's incumbents that have fallen outside the active milestone (#2007,
- * SC-2741).
+ * Ready's incumbents that no phase milestone places any more (#2007, #2430;
+ * before ADR-021 this was "outside the active milestone").
  *
  * `isReady` answers who may ENTER Ready, so an unblocked, unclaimed card
  * already there computes `to = Ready` and its change was filtered out as no

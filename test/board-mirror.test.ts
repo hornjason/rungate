@@ -1217,7 +1217,7 @@ describe("#2007 / #2430: board-mirror demotes a Ready incumbent no phase places"
     expect(scopeDemotions([card(2, null)], FOCUS6, null).map(d => d.item.number)).toEqual([2]);
   });
 
-  test("#2007: a Ready card inside the active milestone keeps its slot", () => {
+  test("#2007: a Ready card in the focus keeps its slot", () => {
     expect(scopeDemotions([card(3, "Zqengine Phase 6")], FOCUS6, null)).toEqual([]);
   });
 
