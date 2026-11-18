@@ -297,7 +297,7 @@ export function looksLikeFilesystemPath(reported: unknown): boolean {
   return drive >= 97 && drive <= 122 && s[1] === ":" && (s[2] === "\\" || s[2] === "/");
 }
 
-/** The clause both copies append, so the two cannot word it differently. */
+/** The clause the refusal appends. ship.run.js bundles this one declaration (#2290 wave 3c-B), so there is no second copy to word it differently. */
 const PATH_SHAPED_CLAUSE =
   " — that value is a filesystem path, and worktreeRepo is the URL " +
   "`git remote get-url origin` printed, never a path (#872)";

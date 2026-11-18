@@ -43,10 +43,23 @@ const outsideBundle = (text: string) => {
 };
 
 describe("#2287 / SC-2772: the generated ship launch file", () => {
-  test("is under the Workflow tool's cap, and ship.js itself is not — the reason it exists", () => {
+  test("is under the Workflow tool's cap, and ship.js cannot run without it — the reason it exists", () => {
     expect(WORKFLOW_SCRIPT_CAP).toBe(524_288);
     expect(built.bytes).toBeLessThan(WORKFLOW_SCRIPT_CAP);
-    expect(Buffer.byteLength(source, "utf-8"), "ship.js fits the cap again; the launch file may no longer be needed").toBeGreaterThan(WORKFLOW_SCRIPT_CAP);
+    // It existed first because ship.js was over the cap. Since #2290 wave 3c-B
+    // ship.js is under it (moving copies into the bundle shrank it), and the
+    // reason is the bundle: ship.js calls lib functions it no longer defines,
+    // so on its own it would throw at the first call. Either reason keeps the
+    // launch file; neither holding means it may no longer be needed.
+    const overCap = Buffer.byteLength(source, "utf-8") > WORKFLOW_SCRIPT_CAP;
+    const dependsOnBundle = Object.values(LAUNCH_BUNDLE)
+      .flat()
+      .filter(name => new RegExp(`\\b${name}\\(`).test(source))
+      .filter(name => !new RegExp(`(?:function|const|let)\\s+${name}\\b`).test(source));
+    expect(
+      overCap || dependsOnBundle.length > 0,
+      "ship.js fits the cap and defines every bundled name it calls; the launch file may no longer be needed",
+    ).toBe(true);
   });
 
   test("parses, begins with the meta literal, and ends its run with a top-level return", () => {
@@ -375,6 +388,9 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       ],
       "lib/prior-branch.ts": ["priorWorkRefusal"],
       "lib/dev-liveness.ts": ["containerProbeTarget", "CONTAINER_HOST"],
+      "lib/worktree-repo.ts": [
+        "repoSlug", "redactRemote", "looksLikeFilesystemPath", "worktreeIdentity", "worktreeIdentityViolations",
+      ],
     });
   });
 

@@ -3,6 +3,8 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { structuralCut } from "../lib/source-slice";
 import { worktreeIdentity } from "../lib/worktree-repo";
+import { SHIP_LAUNCH, shipPrelude } from "../scripts/build-workflow-launch";
+import { worktreeIdentityRegion } from "./helpers/ship-block";
 
 /**
  * #872 — `worktreeRepo` is a mechanical fact the harness asks an agent to
@@ -72,10 +74,11 @@ const property = (name: string) => structuralCut(SCHEMA, `${name}: {`, { balance
  * as importing it, which the Workflow sandbox makes impossible (#69). The
  * sibling `test/worktree-repo.test.ts` does the same for the same reason.
  */
+// Since #2290 wave 3c-B this is the launch file's bundled copy of the
+// library, not a hand copy in ship.js: what ship.run.js runs.
+const LAUNCH_TEXT = readFileSync(SHIP_LAUNCH, "utf-8");
 const inlined = new Function(
-  `${structuralCut(shipSource, "// ──── WORKTREE-IDENTITY-START ────", {
-    endAnchor: "// ──── WORKTREE-IDENTITY-END ────",
-  })}\nreturn { worktreeIdentity }`,
+  `${worktreeIdentityRegion(shipSource, shipPrelude(LAUNCH_TEXT))}\nreturn { worktreeIdentity }`,
 )() as { worktreeIdentity: typeof worktreeIdentity };
 
 // ── The declaration the model actually reads ─────────────────────────────
@@ -226,10 +229,13 @@ describe("#872: ship.js and lib agree", () => {
     expect(ship.verdict).toBe(lib.verdict);
   });
 
-  test("AC-11: the clause is decided by one predicate in each copy", () => {
-    for (const [name, src] of [["lib", libSource], ["ship.js", shipSource]] as const) {
-      const decls = (src.match(/function\s+looksLikeFilesystemPath\s*\(/g) || []).length;
-      expect(decls, `${name} does not declare the predicate exactly once`).toBe(1);
-    }
+  test("AC-11: the clause is decided by one predicate, and ship.js holds no copy of it", () => {
+    // #2290 wave 3c-B: the launch file carries the library's own predicate, so
+    // there is one declaration in lib, one (bundled) in ship.run.js, and none
+    // in ship.js for the two to drift between.
+    const decls = (src: string) => (src.match(/function\s+looksLikeFilesystemPath\s*\(/g) || []).length;
+    expect(decls(libSource), "lib does not declare the predicate exactly once").toBe(1);
+    expect(decls(LAUNCH_TEXT), "ship.run.js does not carry the predicate exactly once").toBe(1);
+    expect(decls(shipSource), "ship.js grew a hand copy of the predicate again").toBe(0);
   });
 });

@@ -37,7 +37,10 @@ export function worktreeRepoBundle(): string {
  * lib/worktree-repo.ts's bundle in front; refused, naming the marker, if
  * either is missing or doubled.
  */
-export function worktreeIdentityRegion(source: string = readFileSync(SHIP_PATH, "utf-8")): string {
+export function worktreeIdentityRegion(
+  source: string = readFileSync(SHIP_PATH, "utf-8"),
+  bundle: string = worktreeRepoBundle(),
+): string {
   const start = source.indexOf("// ──── WORKTREE-IDENTITY-START ────");
   const end = source.indexOf("// ──── WORKTREE-IDENTITY-END ────");
   if (start === -1 || end === -1 || end < start) {
@@ -49,7 +52,7 @@ export function worktreeIdentityRegion(source: string = readFileSync(SHIP_PATH, 
   ) {
     throw new Error("ship.js carries the WORKTREE-IDENTITY markers more than once; a second copy survives any change to the first");
   }
-  return `${worktreeRepoBundle()}\n${source.slice(start, end)}`;
+  return `${bundle}\n${source.slice(start, end)}`;
 }
 
 /** ship.js's own `worktreeIdentity`, built from the region rather than stubbed. */

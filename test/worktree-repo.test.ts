@@ -45,6 +45,8 @@ import { join } from "path";
 
 import { loadRungateConfig } from "../lib/config-loader";
 import { assertMarkedBlockReachable } from "../lib/reachability";
+import { SHIP_LAUNCH, shipPrelude } from "../scripts/build-workflow-launch";
+import { worktreeIdentityRegion } from "./helpers/ship-block";
 import { structuralCut, structuralCutAround } from "../lib/source-slice";
 import {
   readWorktreeRemote,
@@ -56,6 +58,7 @@ import {
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
+const LAUNCH_TEXT = readFileSync(SHIP_LAUNCH, "utf-8");
 
 /**
  * Every cut this file takes out of `workflows/ship.js` goes through
@@ -83,7 +86,11 @@ function markedBlock(name: string, source: string = shipSource): string {
  * never be given a source from anywhere else.
  */
 const shipBlock = new Function(
-  `${markedBlock("WORKTREE-IDENTITY")}\nreturn { repoSlug, redactRemote, worktreeIdentity, worktreeIdentityViolations, worktreeRecords }`,
+  // What the launch file RUNS (#2290 wave 3c-B): its own bundled lib region
+  // (the launch file strips comments, so the markers are read from ship.js),
+  // then ship.js's region, which keeps only `worktreeRecords`. The matrix below
+  // therefore compares the library with the code ship.run.js carries.
+  `${worktreeIdentityRegion(shipSource, shipPrelude(LAUNCH_TEXT))}\nreturn { repoSlug, redactRemote, worktreeIdentity, worktreeIdentityViolations, worktreeRecords }`,
 )() as {
   repoSlug: typeof repoSlug;
   redactRemote: typeof redactRemote;
@@ -106,7 +113,7 @@ const inlined = {
 
 const COPIES: Array<[string, typeof inlined]> = [
   ["lib/worktree-repo.ts", { repoSlug, redactRemote, worktreeIdentity, worktreeIdentityViolations }],
-  ["workflows/ship.js (inlined)", inlined],
+  ["workflows/ship.run.js (bundled)", inlined],
 ];
 
 // ── SC-1441: the slug ────────────────────────────────────────
