@@ -12,9 +12,14 @@ import { describe, expect, test } from "bun:test";
 import {
   CONSUMER_INTAKE_COMMANDS,
   CONSUMER_INTAKE_JOB,
+  CONSUMER_INTAKE_SWEEP_DAYS,
   CONSUMER_INTAKE_WORKFLOW_FILE,
+  REMOVED_FILTER,
+  SWEEP_FILTER,
   buildConsumerIntakeWorkflow,
 } from "../lib/scaffold/consumer-intake-workflow";
+import { CONSUMER_INTAKE_GRACE_MS } from "../scripts/board-conformance";
+import { spawnSync } from "child_process";
 import { CONSUMER_LABEL, TRUSTED_ASSOCIATIONS } from "../lib/consumer-triage";
 import { CLI_COMMANDS } from "../lib/cli-commands";
 import { OWNED_FILES } from "../lib/scaffold/owned-files";
@@ -89,5 +94,79 @@ describe("SC-2784: consumer-intake.yml triages on filing, on the label, and ever
   test("the scaffold owns the file, as a job-preserving managed workflow", () => {
     const row = OWNED_FILES.find(f => f.path === `.github/workflows/${CONSUMER_INTAKE_WORKFLOW_FILE}`);
     expect(row?.strategy).toBe("job-preserving");
+  });
+});
+
+/**
+ * #2379: the daily run labels an outside reporter's recent issue whose
+ * `opened` run never happened. Only `opened` added the label, and the triage
+ * reads only labelled issues, so a missed event meant never triaged.
+ */
+describe("#2379: the daily run labels an outside reporter's recent issue the opened run missed", () => {
+  const isSweep = (x: Step) => (x.if ?? "").includes("github.event_name == 'schedule'") && (x.run ?? "").includes("--add-label");
+  const sweep = () => steps().find(isSweep);
+
+  test("a schedule-only step labels before the triage reads the tracker", () => {
+    const s = steps();
+    const at = s.findIndex(isSweep);
+    expect(at, "no schedule step labels a missed issue").toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(s.findIndex(x => (x.run ?? "").includes("consumer-triage")));
+    expect(sweep()!.if).toBe("${{ github.event_name == 'schedule' }}");
+  });
+
+  test("its window is the board's grace period, and its trusted set is the triage's", () => {
+    expect(CONSUMER_INTAKE_SWEEP_DAYS * 24 * 60 * 60 * 1000).toBe(CONSUMER_INTAKE_GRACE_MS);
+    expect(sweep()!.run).toContain(`now - ${CONSUMER_INTAKE_SWEEP_DAYS * 86400} | todate`);
+    // Review of #2380: no GNU-only `date -d`; ci.runner may not be Linux.
+    expect(sweep()!.run).not.toMatch(/\bdate\b/);
+    expect(sweep()!.env?.TRUSTED).toBe(JSON.stringify(TRUSTED_ASSOCIATIONS));
+    expect(sweep()!.run, "an event value spliced into the script").not.toContain("${{");
+    // A failed tracker read must fail the step, not vanish into the pipe.
+    expect(sweep()!.run).toContain("set -o pipefail");
+  });
+
+  test("its filter picks only a recent, open, unlabelled issue by an untrusted author", () => {
+    expect(sweep()!.run, "the step does not run the exported filter").toContain(`--jq '${SWEEP_FILTER}'`);
+    const filter = SWEEP_FILTER;
+    // Relative to now, because the filter reads jq's own clock.
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const recent = ago(1);
+    const page = [
+      { number: 1, created_at: recent, author_association: "NONE", labels: [] },
+      { number: 2, created_at: recent, author_association: "OWNER", labels: [] },
+      { number: 3, created_at: recent, author_association: "CONTRIBUTOR", labels: [{ name: CONSUMER_LABEL }] },
+      { number: 4, created_at: ago(CONSUMER_INTAKE_SWEEP_DAYS + 5), author_association: "NONE", labels: [] },
+      { number: 5, created_at: recent, author_association: "NONE", labels: [], pull_request: {} },
+      { number: 6, created_at: recent, author_association: "FIRST_TIME_CONTRIBUTOR", labels: [{ name: "bug" }] },
+    ];
+    const r = spawnSync("jq", ["-r", filter!], {
+      input: JSON.stringify(page),
+      encoding: "utf-8",
+      env: { ...process.env, TRUSTED: JSON.stringify(TRUSTED_ASSOCIATIONS) },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim().split("\n")).toEqual(["1", "6"]);
+  });
+
+  // Review of #2380, round 2.
+  test("a label a person took off a young issue is not put back, and an unreadable history labels nothing", () => {
+    const run = sweep()!.run!;
+    expect(run, "the step does not run the exported history filter").toContain(`--jq '${REMOVED_FILTER}'`);
+    expect(run.indexOf(REMOVED_FILTER), "the history is read after the label is written").toBeLessThan(run.indexOf("gh issue edit"));
+    expect(run).toMatch(/could not read #\$n's history; not labelled this run"; continue; \}/);
+    const events = (removed: boolean) => [
+      { id: 1, event: "labeled", label: { name: CONSUMER_LABEL } },
+      ...(removed ? [{ id: 2, event: "unlabeled", label: { name: CONSUMER_LABEL } }] : []),
+      { id: 3, event: "unlabeled", label: { name: "bug" } },
+    ];
+    const read = (e: unknown) => spawnSync("jq", ["-r", REMOVED_FILTER], { input: JSON.stringify(e), encoding: "utf-8" });
+    expect(read(events(true)).stdout.trim()).toBe("2");
+    expect(read(events(false)).stdout.trim(), "an unrelated label's removal read as this one's").toBe("");
+  });
+
+  test("one issue that cannot be labelled does not stop the rest, and a failed sweep does not stop the triage", () => {
+    const run = sweep()!.run!;
+    expect(run).toMatch(/--add-label from-consumer \\\n\s+\|\| echo "::warning title=consumer-intake::could not label #\$n/);
+    expect((sweep() as Step & { "continue-on-error"?: boolean })["continue-on-error"]).toBe(true);
   });
 });
