@@ -868,5 +868,73 @@ make the problem go away it is upstream, and if it would not it is yours.
 `,
   });
 
+  // #2375: the claim convention `sync-sc-status` enforces, in consumer
+  // wording. rungate's own `.claude/rules/claiming-sc-coverage.md` carries
+  // the incident history and is hand-maintained; this one carries the forms.
+  // Its examples are run through `commentClaimForm` and `titleCall` by
+  // test/gen-agents-md.test.ts, so a form it promises is a form the scanner
+  // honours. Path-scoped, so it loads when a test or spec is touched and costs
+  // nothing on the always-loaded surface. Every profile: a minimal consumer
+  // runs `sync-sc-status` too.
+  rules.push({
+    filename: "claiming-sc-coverage.md",
+    content: `---
+description: Which mention of a criterion id in a test is a claim that ticks it, and which is only a citation
+paths:
+  - "test/**"
+  - "tests/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
+  - "specs/**"
+---
+
+## A test claims a criterion from a declaring position, and nowhere else
+
+\`rungate sync-sc-status\` ticks a spec's \`- [ ] SC-N\` when a passing test
+claims \`SC-N\`. It decides what a claim is by WHERE the id sits, not by what
+the words around it mean. So put an id in one of these positions only when
+the test proves the whole criterion.
+
+Counts as a claim — the criterion is ticked once the test passes:
+
+| Position | Example |
+|---|---|
+| a \`describe\`/\`test\`/\`it\` title that runs | \`describe("SC-9012: the export is complete", () => {})\` |
+| a coverage verb before the id | \`// covers SC-9012\` |
+| a label: ids, then a colon | \`// SC-9012: the export is complete\` |
+| an issue heading with a label | \`// #81 / SC-9012: the export is complete\` |
+| the id opening a comment line | \`// SC-9012 and SC-9013 (EXPORT-SPEC.md)\` |
+| a \`SPEC-REF:\` line | \`// SPEC-REF: EXPORT-SPEC.md (SC-9012)\` |
+| a parenthetical holding only ids | \`// the export is complete (SC-9012).\` |
+
+Does not count — write it one of these ways when the test only works toward
+a criterion:
+
+| Position | Example |
+|---|---|
+| the id mid-sentence in a comment | \`// part of the work toward SC-9012\` |
+| the issue number in the title instead of the id | \`describe("#81: the export writes its header", () => {})\` |
+| a title that never runs | \`test.todo("SC-9012: the export is complete")\` |
+
+## A test that works toward a criterion
+
+A criterion with open issues left is not done, and the tick tool cannot see
+your tracker. If a test covers one piece of the work, name the piece's issue
+number in its title and leave the criterion's id out of every declaring
+position until the last piece lands. Then the test that proves the whole of
+it carries the id, and \`sync-sc-status --only SC-N\` ticks it.
+
+Run \`sync-sc-status --dry-run\` first: it lists every criterion it would tick,
+so a test that claims more than it proves shows up before anything is written.
+
+## The direction this is allowed to be wrong in
+
+Toward not crediting. A claim written in a form the scanner does not know
+costs an unticked checkbox, which one \`// covers SC-N\` line fixes. The other
+direction ticks a criterion nothing proves, and nobody looks at a ticked box
+again.
+`,
+  });
+
   return rules;
 }
