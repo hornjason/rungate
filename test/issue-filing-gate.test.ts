@@ -7008,11 +7008,14 @@ describe("SC-2735: the filing-override label comes from the filing tree's config
  * reaches GitHub, and FG-275..FG-277 drive the default reader with a client
  * that lives in memory.
  *
- * Proved able to fail, by hand, each mutation reverted after the run
- * (baseline 13 pass / 0 fail, read first):
- * - the UNMEASURED arm of `netGrowthCeiling` returning the ceiling: FG-271,
- *   FG-274 red;
- * - `<= 0` inverted to `> 0`: FG-266..FG-270, FG-274, FG-278 red;
+ * #2343 / SC-2785 (ADR-020 Decision 4, Jason 2026-11-17): in direct-ship
+ * mode the cap is the ceiling WHATEVER the count says. Harness mode keeps its
+ * ship-mode cap. The count is still read, and the refusal still prints it.
+ *
+ * Proved able to fail, by hand, each mutation reverted after the run:
+ * - the direct arm falling back to `allowance.cap` when opened > closed:
+ *   FG-268, FG-269, FG-274 red;
+ * - the UNMEASURED arm returning `allowance.cap`: FG-271, FG-274 red;
  * - the `allowance.direct` check dropped, so harness mode earns the ceiling:
  *   FG-272, FG-273, FG-274 red;
  * - pull requests counted, or every close counted: FG-275 red;
@@ -7022,7 +7025,7 @@ describe("SC-2735: the filing-override label comes from the filing tree's config
  * - the pre-read's refusal passed `null` for the basis: FG-266, FG-268,
  *   FG-271 red.
  */
-describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", () => {
+describe("FG-266..FG-278: the filing cap in direct-ship mode is the ceiling whatever the day's growth (SC-2763, SC-2785)", () => {
   const at = "2026-11-13T18:00:00.000Z";
   const nowMs = Date.parse(at);
   const TITLE = "zqxjNetGrowth leaves a filing unrecorded";
@@ -7121,7 +7124,7 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     // The refusal SAYS which case applied, with the two numbers.
     expect(refused.refusal ?? "").toContain("opened 28");
     expect(refused.refusal ?? "").toContain("closed 30");
-    expect(refused.refusal ?? "").toContain(`ceiling of ${NET_GROWTH_CEILING} applies`);
+    expect(refused.refusal ?? "").toContain(`the cap is the ceiling of ${NET_GROWTH_CEILING} whatever the day's growth`);
     // And so does the ledger row, on the admitted row as much as the refused one.
     for (const row of [admitted.rows[0], refused.rows[0]]) {
       expect(row.netGrowth, "the row does not record what set its cap").toEqual({
@@ -7139,30 +7142,25 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     expect(r.rows[0].netGrowth).toMatchObject({ ceiling: true });
   });
 
-  test("FG-268: opening outruns closing — the cap is the ship-mode cap of 12", async () => {
-    const refused = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT, GROWING);
-    expect(refused.rows[0].refusal, "a growing backlog must not earn the ceiling").toBe("OVER_CAP");
-    expect(refused.refusal ?? "").toContain(`cap is ${FILINGS_PER_RUN_DIRECT}`);
-    expect(refused.refusal ?? "").toContain("opened 31");
+  test("FG-268: SC-2785: opening outruns closing — the cap is STILL the ceiling, and the counts are printed", async () => {
+    // The old fallback: a growing backlog refused the 13th filing.
+    const past = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT, GROWING);
+    expect(past.rows[0].refusal, "a growing backlog fell back to the ship-mode cap").toBeNull();
+    const refused = await gate(direct, filing(), NET_GROWTH_CEILING, GROWING);
+    expect(refused.rows[0].refusal, "the ceiling is still finite").toBe("OVER_CAP");
+    expect(refused.refusal ?? "").toContain(`cap is ${NET_GROWTH_CEILING}`);
+    expect(refused.refusal ?? "", "the refusal still prints the day's counts").toContain("opened 31");
     expect(refused.refusal ?? "").toContain("closed 30");
-    expect(refused.refusal ?? "").toContain("does not apply");
-    expect(refused.rows[0].netGrowth).toEqual({ reading: "MEASURED", opened: 31, closed: 30, ceiling: false });
-
-    // CONTROL: one below the ship-mode cap the same filing is admitted, so
-    // the row above is the cap binding and not a gate refusing everything.
-    const admitted = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT - 1, GROWING);
-    expect(admitted.rows[0].refusal).toBeNull();
+    expect(refused.rows[0].netGrowth).toEqual({ reading: "MEASURED", opened: 31, closed: 30, ceiling: true });
   });
 
-  test("FG-269: opening outruns closing — an engine-queued clause keeps its raise of 24", async () => {
-    const refused = await gate(direct, queued(), QUEUE_FILINGS_PER_RUN, GROWING);
-    expect(refused.rows[0].refusal).toBe("OVER_CAP");
-    expect(refused.refusal ?? "", "the queue's raise is today's, unchanged").toContain(
-      `cap is ${QUEUE_FILINGS_PER_RUN}`,
-    );
-    const admitted = await gate(direct, queued(), QUEUE_FILINGS_PER_RUN - 1, GROWING);
-    expect(admitted.rows[0].refusal).toBeNull();
+  test("FG-269: SC-2785: opening outruns closing — an engine-queued clause gets the ceiling, not its raise of 24", async () => {
+    const admitted = await gate(direct, queued(), QUEUE_FILINGS_PER_RUN, GROWING);
+    expect(admitted.rows[0].refusal, "the queue's raise capped a clause the ceiling admits").toBeNull();
     expect(admitted.rows[0].queuedBy).toBe(QUEUE_LABEL);
+    const refused = await gate(direct, queued(), NET_GROWTH_CEILING, GROWING);
+    expect(refused.rows[0].refusal).toBe("OVER_CAP");
+    expect(refused.refusal ?? "").toContain(`cap is ${NET_GROWTH_CEILING}`);
   });
 
   test("FG-270: closing outpaces opening — a queued clause gets the ceiling, not a LOWER 24", async () => {
@@ -7176,14 +7174,16 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     );
   });
 
-  test("FG-271: a count that cannot be read is the ship-mode cap, never the ceiling", async () => {
+  test("FG-271: SC-2785: a count that cannot be read changes nothing — the cap is the ceiling, and the refusal says the count was not read", async () => {
     const unreadable = async (): Promise<NetGrowthReading> => ({
       reading: "UNMEASURED",
       why: "the trailing day's issues could not be read (HTTP 401)",
     });
-    const r = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT, unreadable);
-    expect(r.rows[0].refusal, "an unread count lifted the cap").toBe("OVER_CAP");
-    expect(r.refusal ?? "").toContain(`cap is ${FILINGS_PER_RUN_DIRECT}`);
+    const under = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT, unreadable);
+    expect(under.rows[0].refusal, "an unread count dropped the cap to the ship-mode one").toBeNull();
+    const r = await gate(direct, filing(), NET_GROWTH_CEILING, unreadable);
+    expect(r.rows[0].refusal).toBe("OVER_CAP");
+    expect(r.refusal ?? "").toContain(`cap is ${NET_GROWTH_CEILING}`);
     expect(r.refusal ?? "", "the refusal must say the count was never read").toContain("UNMEASURED");
     expect(r.refusal ?? "", "and why").toContain("HTTP 401");
     expect(r.rows[0].netGrowth).toEqual({
@@ -7196,9 +7196,11 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     const throws = async (): Promise<NetGrowthReading> => {
       throw new Error("socket hang up");
     };
-    const t = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT, throws);
-    expect(t.rows[0].refusal, "a reader that threw lifted the cap").toBe("OVER_CAP");
+    const t = await gate(direct, filing(), NET_GROWTH_CEILING, throws);
+    expect(t.rows[0].refusal, "a reader that threw lifted the cap past the ceiling").toBe("OVER_CAP");
     expect(t.rows[0].netGrowth).toMatchObject({ reading: "UNMEASURED" });
+    const tUnder = await gate(direct, filing(), FILINGS_PER_RUN_DIRECT, throws);
+    expect(tUnder.rows[0].refusal, "a reader that threw dropped the cap").toBeNull();
   });
 
   test("FG-272: harness mode is not lifted, and its count is never read", async () => {
@@ -7232,16 +7234,16 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
       NET_GROWTH_CEILING,
     );
     expect((await netGrowthCeiling(directCap, reads({ reading: "MEASURED", opened: 2, closed: 1 }))).cap).toBe(
-      FILINGS_PER_RUN_DIRECT,
+      NET_GROWTH_CEILING,
     );
     expect((await netGrowthCeiling(directCap, reads({ reading: "UNMEASURED", why: "x" }))).cap).toBe(
-      FILINGS_PER_RUN_DIRECT,
+      NET_GROWTH_CEILING,
     );
     // A reader that throws SYNCHRONOUSLY is an unread count too, not a throw.
     const sync = await netGrowthCeiling(directCap, () => {
       throw new Error("no token");
     });
-    expect(sync.cap).toBe(FILINGS_PER_RUN_DIRECT);
+    expect(sync.cap).toBe(NET_GROWTH_CEILING);
     expect(sync.basis).toMatchObject({ reading: "UNMEASURED" });
     // The fail-closed half of `filingsPerRunFor`: an unreadable config is
     // never eligible, whatever the count says, and the count is not read.
@@ -7350,14 +7352,14 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     // The pre-read sees nothing spent; the re-read after the append sees 35
     // others in flight. The stage that re-decides must read the cap the
     // pre-read used, or a racer is admitted by one and refused by the other.
-    const race = (readGrowth: () => Promise<NetGrowthReading>) => {
+    const race = (readGrowth: () => Promise<NetGrowthReading>, inFlight = NET_GROWTH_CEILING - 1) => {
       const appended: FilingLedgerRow[] = [];
       let reads = 0;
       return filingGate(filing(), {
         projectRoot: direct,
         now: at,
         readExisting: async () => measuredCorpus([]),
-        readLedger: () => (reads++ === 0 ? [] : [...spent(direct, NET_GROWTH_CEILING - 1), ...appended]),
+        readLedger: () => (reads++ === 0 ? [] : [...spent(direct, inFlight), ...appended]),
         appendLedger: (row: FilingLedgerRow) => (appended.push(row), true),
         readTarget: async () => ({ reading: "NO_PR", branch: "b" }) as never,
         readPlan: { list: () => [] as string[], show: () => null },
@@ -7367,8 +7369,10 @@ describe("FG-266..FG-278: the filing cap meters net backlog growth (SC-2763)", (
     const under = await race(SHRINKING);
     expect(under.refusal, "the reservation stage refused under the ceiling").toBeNull();
 
-    const over = await race(GROWING);
-    expect(over.rows[0].refusal, "the reservation stage ignored the ship-mode cap").toBe("OVER_CAP");
+    // SC-2785: a growing backlog is judged against the same ceiling, not a fallback.
+    expect((await race(GROWING)).refusal, "the reservation stage fell back on a growing backlog").toBeNull();
+    const over = await race(GROWING, NET_GROWTH_CEILING);
+    expect(over.rows[0].refusal, "the reservation stage ignored the ceiling").toBe("OVER_CAP");
     expect(over.refusal ?? "", "the stage's refusal does not say what set the cap").toContain("opened 31");
   });
 });
