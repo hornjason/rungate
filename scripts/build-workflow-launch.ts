@@ -18,7 +18,7 @@
  * source in order, so nothing but trivia was removed.
  */
 import { readFileSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
+import { join, posix, resolve } from "path";
 import ts from "typescript";
 
 /** The Workflow tool's script cap — `maxLength` on its `script` input. */
@@ -263,6 +263,8 @@ export interface CoreClosure {
 
 interface CoreReading {
   closure: CoreClosure;
+  /** Each import a core reaches through a named import binding, keyed by its `imports` line (#2404). */
+  importRefs: { line: string; from: string; imported: string | null; local: string }[];
   /** The top-level nodes the core reaches, in source order, with the names each binds. */
   nodes: { node: ts.Node; names: string[] }[];
   sf: ts.SourceFile;
@@ -369,6 +371,7 @@ function readCore(source: string, core: readonly string[]): CoreReading {
     .filter((s): s is ts.ExportDeclaration => ts.isExportDeclaration(s) && !s.exportClause && !!s.moduleSpecifier)
     .map(s => (s.moduleSpecifier as ts.StringLiteral).text);
   const missing: string[] = [];
+  const importRefs: CoreReading["importRefs"] = [];
   // Names resolved into this file that are not top-level declarations: fine
   // when inside a node the bundle emits (a local, a parameter, a property of a
   // reached object), refused otherwise (#2400, from review round 5 of #2399).
@@ -455,7 +458,12 @@ function readCore(source: string, core: readonly string[]): CoreReading {
           : checker.getSymbolAtLocation(n);
         const decl = sym?.declarations?.[0];
         const imp = importedFrom(decl);
-        if (imp !== null) note(`${n.text} (from ${imp}, via ${name})`);
+        if (imp !== null) {
+          const line = `${n.text} (from ${imp}, via ${name})`;
+          note(line);
+          const imported = decl && ts.isImportSpecifier(decl) ? (decl.propertyName ?? decl.name).text : null;
+          importRefs.push({ line, from: imp, imported, local: n.text });
+        }
         else {
           const top = topLevelNode(decl, sf);
           if (top) enqueue(top, sym!.name);
@@ -517,7 +525,7 @@ function readCore(source: string, core: readonly string[]): CoreReading {
   const nodes = [...reached.keys()]
     .sort((a, b) => a.getStart(sf) - b.getStart(sf))
     .map(node => ({ node, names: boundNames(node) }));
-  return { closure: { declarations: [...reached.values()], missing, imports: touched }, nodes, sf };
+  return { closure: { declarations: [...reached.values()], missing, imports: touched }, importRefs, nodes, sf };
 }
 
 /**
@@ -552,13 +560,26 @@ export function bundleLibCores(
   const owner = new Map<string, string>();
   for (const [path, core] of Object.entries(modules)) {
     const source = read(path);
-    const { closure, nodes, sf } = readCore(source, core);
-    if (closure.missing.length > 0 || closure.imports.length > 0) {
+    const { closure, importRefs, nodes, sf } = readCore(source, core);
+    // An import is satisfied when another module in this bundle is the one it
+    // names and bundles the name, imported unaliased: the launch file has one
+    // scope, so the bundled declaration IS the binding (#2404). Anything else,
+    // including an alias, still needs a loader the sandbox does not have.
+    const satisfied = new Set<string>();
+    const blocking = closure.imports.filter(line => {
+      const ref = importRefs.find(r => r.line === line);
+      if (!ref || ref.imported === null || ref.imported !== ref.local) return true;
+      const target = libModuleOf(path, ref.from);
+      if (target === null || target === path || !modules[target]?.includes(ref.imported)) return true;
+      satisfied.add(ref.local);
+      return false;
+    });
+    if (closure.missing.length > 0 || blocking.length > 0) {
       throw new Error(
         `${path} cannot be bundled: ` +
           [
             closure.missing.length > 0 ? `it does not export ${closure.missing.join(", ")}` : "",
-            closure.imports.length > 0 ? `its core reaches ${closure.imports.join("; ")}` : "",
+            blocking.length > 0 ? `its core reaches ${blocking.join("; ")}` : "",
           ]
             .filter(Boolean)
             .join(", and "),
@@ -582,7 +603,7 @@ export function bundleLibCores(
       }
     }
     const text = moduleParts.join("\n");
-    const dropped = bundleDrops(source, text);
+    const dropped = bundleDrops(source, text).filter(n => !satisfied.has(n));
     if (dropped.length > 0) {
       throw new Error(`${path} cannot be bundled: ${dropped.join(", ")} resolves in the module and not in its emitted text`);
     }
@@ -591,9 +612,20 @@ export function bundleLibCores(
   return { text: parts.join("\n"), defined: [...owner.keys()] };
 }
 
-/** What `workflows/ship.run.js` carries from lib/ (#2400, SC-2775 wave 2a). Waves 2b-4 add the rest. */
+/** The lib module a relative import names, as a bundle key, or null for a package. */
+function libModuleOf(from: string, spec: string): string | null {
+  if (!spec.startsWith("./") && !spec.startsWith("../")) return null;
+  return posix.normalize(posix.join(posix.dirname(from), spec)).replace(/\.(js|ts)$/, "") + ".ts";
+}
+
+/** What `workflows/ship.run.js` carries from lib/ (#2400 wave 2a, #2404 wave 2b). Waves 2c-4 add the rest. */
 export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
   "lib/suite-measurement.ts": ["suiteCurrency"],
+  "lib/scope-denylist.ts": [
+    "pathsNamedIn", "prohibitions", "deniedFiles", "unresolvedProhibitions", "normalisePath",
+    "matchesDenied", "scopeContradiction", "denylistViolations", "withoutDenied",
+  ],
+  "lib/plan-coverage.ts": ["planCoverage", "planCoverageRefusal"],
 };
 
 /** The bundle the launch file is built with, read from this checkout's lib/. */

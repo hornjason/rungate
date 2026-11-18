@@ -47,6 +47,7 @@ import {
   unresolvedProhibitions,
   withoutDenied,
 } from "../lib/scope-denylist";
+import { BUNDLE_END, BUNDLE_START } from "../scripts/build-workflow-launch";
 
 const REPO = join(import.meta.dir, "..");
 const SHIP = join(REPO, "workflows", "ship.js");
@@ -54,6 +55,7 @@ const shipSource = readFileSync(SHIP, "utf-8");
 
 const BLOCK_START = "// ──── SCOPE-DENYLIST-START ────";
 const BLOCK_END = "// ──── SCOPE-DENYLIST-END ────";
+const launchSource = readFileSync(join(REPO, "workflows", "ship.run.js"), "utf-8");
 
 /**
  * Module scope on purpose. If the markers are gone, this throws and every
@@ -61,18 +63,20 @@ const BLOCK_END = "// ──── SCOPE-DENYLIST-END ────";
  * "ship.js lost its deny-list" into a quiet green.
  */
 const inlined = (() => {
-  const start = shipSource.indexOf(BLOCK_START);
-  const end = shipSource.indexOf(BLOCK_END);
+  // Since #2404 the deny-list a run executes is lib/scope-denylist.ts's own
+  // code, bundled into the launch file. The matrix runs over that region.
+  const start = launchSource.indexOf(BUNDLE_START);
+  const end = launchSource.indexOf(BUNDLE_END);
   if (start === -1 || end === -1) {
-    throw new Error(`ship.js is missing the ${BLOCK_START} / ${BLOCK_END} markers`);
+    throw new Error("workflows/ship.run.js carries no bundled lib region — the build stopped bundling the deny-list");
   }
-  const body = shipSource.slice(start + BLOCK_START.length, end);
+  const body = launchSource.slice(start + BUNDLE_START.length, end);
   const fns = new Function(
     `${body}\nreturn { pathsNamedIn, prohibitions, deniedFiles, unresolvedProhibitions, normalisePath, matchesDenied, scopeContradiction, denylistViolations, withoutDenied }`,
   )();
   for (const name of Object.keys(fns)) {
     if (typeof fns[name] !== "function") {
-      throw new Error(`ship.js's deny-list block does not define ${name} — the matrix would compare nothing`);
+      throw new Error(`the launch file's bundle does not define ${name} — the matrix would compare nothing`);
     }
   }
   return fns as {
@@ -342,7 +346,7 @@ describe("#306 security review: the comparison cannot be stepped around", () => 
   });
 });
 
-describe("SC-1426: ship.js's inlined copy and the library agree", () => {
+describe("SC-1426: the deny-list the launch file runs and the library agree", () => {
   /** Inputs chosen so each row can disagree for a different reason. */
   const MATRIX: Array<[string, string, string[]]> = [
     ["#274's real goal", GOAL_274, []],
