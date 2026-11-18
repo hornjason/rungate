@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 import { assertMarkedBlockReachable } from "../lib/reachability";
+import { shipPrelude } from "../scripts/build-workflow-launch";
 import type { ReReviewDecision } from "../lib/security-verdict";
 import {
   RE_REVIEW,
@@ -155,14 +156,17 @@ function sliceBlock(startMarker: string, endMarker: string): string {
   return shipSource.slice(start + startMarker.length, end);
 }
 
-const SECURITY_START = "// ──── ROOK-SECURITY-START ────";
-const SECURITY_END = "// ──── ROOK-SECURITY-END ────";
+/**
+ * Since #2408 the security helpers a run executes are lib/security-verdict.ts's
+ * own code, bundled into workflows/ship.run.js. Module scope on purpose:
+ * `shipPrelude` throws if the launch file carries no bundle, so every test in
+ * this file fails to load rather than going quietly green.
+ */
+const BUNDLE = shipPrelude();
 const DECISION_START = "// ──── SECURITY-DECISION-START ────";
 const DECISION_END = "// ──── SECURITY-DECISION-END ────";
 const FANOUT_START = "// ──── VERIFY-FANOUT-START ────";
 const FANOUT_END = "// ──── VERIFY-FANOUT-END ────";
-const CURRENCY_START = "// ──── REVIEW-CURRENCY-START ────";
-const CURRENCY_END = "// ──── REVIEW-CURRENCY-END ────";
 const STALE_REFUSAL_START = "// ──── STALE-REFUSAL-START ────";
 const STALE_REFUSAL_END = "// ──── STALE-REFUSAL-END ────";
 
@@ -199,7 +203,7 @@ if (!REFUSAL_HELPER.includes("function shipFailed(")) {
 
 /** The inlined copies ship.js actually runs. */
 const inlined = new Function(
-  `${sliceBlock(SECURITY_START, SECURITY_END)}
+  `${BUNDLE}
    return { rookReviewSha, rookScopeCommand, rookGateVerdict }`,
 )() as {
   rookReviewSha: typeof rookReviewSha;
@@ -224,15 +228,10 @@ const inlined = new Function(
  * closing over them.
  */
 const inlinedReviewIsCurrent: typeof reviewIsCurrent = (() => {
-  const securityBlock = sliceBlock(SECURITY_START, SECURITY_END);
-  const currencyBlock = sliceBlock(CURRENCY_START, CURRENCY_END);
-  const body = securityBlock.includes(currencyBlock)
-    ? `${securityBlock}\nreturn reviewIsCurrent`
-    : `${securityBlock}\nreturn (function () {${currencyBlock}\nreturn reviewIsCurrent})()`;
-  const fn = new Function(body)();
+  const fn = new Function(`${BUNDLE}\nreturn reviewIsCurrent`)();
   if (typeof fn !== "function") {
     throw new Error(
-      "ship.js's REVIEW-CURRENCY block does not define reviewIsCurrent — " +
+      "the launch file's bundle does not define reviewIsCurrent — " +
         "the agreement matrix below would be comparing nothing",
     );
   }
@@ -251,8 +250,6 @@ const inlinedReviewIsCurrent: typeof reviewIsCurrent = (() => {
  * differently.
  */
 const inlinedReReview = (() => {
-  const securityBlock = sliceBlock(SECURITY_START, SECURITY_END);
-  const currencyBlock = sliceBlock(CURRENCY_START, CURRENCY_END);
   // #244 added four more names to the same block. They are pulled from the
   // REAL source for the same reason the three above are: a stub would let the
   // decision block and the library disagree about what may clear a FAIL, and
@@ -261,10 +258,7 @@ const inlinedReReview = (() => {
     "{ reReviewDecision, REVIEW_CURRENT, RE_REVIEW, SECURITY_REREVIEW_EXHAUSTED, " +
     "reReviewScope, reReviewBaseFor, resolveReReview, securityRefusalName, " +
     "REVIEW_SCOPE_FULL, REVIEW_SCOPE_DIFF, SECURITY_FINDINGS_OUTLIVED_REREVIEW }";
-  const body = securityBlock.includes(currencyBlock)
-    ? `${securityBlock}\nreturn ${names}`
-    : `${securityBlock}\nreturn (function () {${currencyBlock}\nreturn ${names}})()`;
-  const out = new Function(body)() as {
+  const out = new Function(`${BUNDLE}\nreturn ${names}`)() as {
     reReviewDecision: typeof reReviewDecision;
     REVIEW_CURRENT: string;
     RE_REVIEW: string;
@@ -284,7 +278,7 @@ const inlinedReReview = (() => {
   for (const name of FUNCTIONS) {
     if (typeof (out as Record<string, unknown>)[name] !== "function") {
       throw new Error(
-        `ship.js's REVIEW-CURRENCY block does not define ${name} — ` +
+        `the launch file's bundle does not define ${name} — ` +
           "the re-review path below would be testing nothing",
       );
     }

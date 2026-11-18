@@ -618,7 +618,7 @@ function libModuleOf(from: string, spec: string): string | null {
   return posix.normalize(posix.join(posix.dirname(from), spec)).replace(/\.(js|ts)$/, "") + ".ts";
 }
 
-/** What `workflows/ship.run.js` carries from lib/ (#2400 wave 2a, #2404 wave 2b). Waves 2c-4 add the rest. */
+/** What `workflows/ship.run.js` carries from lib/ (#2400 wave 2a, #2404 wave 2b, #2408 wave 2c). Wave 4 adds run-branch. */
 export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
   "lib/suite-measurement.ts": ["suiteCurrency"],
   "lib/scope-denylist.ts": [
@@ -626,6 +626,12 @@ export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
     "matchesDenied", "scopeContradiction", "denylistViolations", "withoutDenied",
   ],
   "lib/plan-coverage.ts": ["planCoverage", "planCoverageRefusal"],
+  "lib/security-verdict.ts": [
+    "rookReviewSha", "reviewIsCurrent", "REVIEW_CURRENT", "RE_REVIEW", "SECURITY_REREVIEW_EXHAUSTED",
+    "reReviewDecision", "rookScopeCommand", "REVIEW_SCOPE_FULL", "REVIEW_SCOPE_DIFF", "reReviewScope",
+    "reReviewBaseFor", "resolveReReview", "SECURITY_FINDINGS_OUTLIVED_REREVIEW", "securityRefusalName",
+    "rookGateVerdict",
+  ],
 };
 
 /** The bundle the launch file is built with, read from this checkout's lib/. */

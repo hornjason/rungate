@@ -182,6 +182,274 @@ function planCoverageRefusal(r) {
         `may both edit, and the SC-413 claim audit refuses it at Commit after the whole agent ` +
         `budget is spent (#751). Falling back to single-agent implement.`);
 }
+const REVIEW_SHA = /^[0-9a-f]{7,40}$/i;
+function rookReviewSha(value) {
+    if (typeof value !== "string")
+        return null;
+    const trimmed = value.trim();
+    return REVIEW_SHA.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+function reviewIsCurrent(testedSha, headSha) {
+    const tested = rookReviewSha(testedSha);
+    const head = rookReviewSha(headSha);
+    if (!tested && !head) {
+        return {
+            current: false,
+            reason: `no security review is current: the tested commit is ${describeReviewValue(testedSha)} and ` +
+                `the head commit is ${describeReviewValue(headSha)} — neither is a commit SHA, so there is ` +
+                `nothing to compare`,
+        };
+    }
+    if (!tested) {
+        return {
+            current: false,
+            reason: `no security review is current: the tested commit is ${describeReviewValue(testedSha)}, not a ` +
+                `commit SHA, so it cannot be compared against head ${head}`,
+        };
+    }
+    if (!head) {
+        return {
+            current: false,
+            reason: `no security review is current: the head commit is ${describeReviewValue(headSha)}, not a ` +
+                `commit SHA, so the review pinned to ${tested} cannot be confirmed against it`,
+        };
+    }
+    const abbreviates = tested.startsWith(head) || head.startsWith(tested);
+    if (!abbreviates) {
+        return {
+            current: false,
+            reason: `the security review is stale: it was pinned to ${tested} but the branch now ends ` +
+                `at ${head} — the reviewed code is not the code this run would ship`,
+        };
+    }
+    return { current: true, reason: null };
+}
+const REVIEW_CURRENT = "CURRENT";
+const RE_REVIEW = "RE_REVIEW";
+const SECURITY_REREVIEW_EXHAUSTED = "SECURITY_REREVIEW_EXHAUSTED";
+function readCurrency(v) {
+    try {
+        if (!isRecord(v))
+            return null;
+        const current = v.current;
+        const reason = v.reason;
+        if (typeof current !== "boolean")
+            return null;
+        if (current)
+            return reason === null ? { current: true, reason: null } : null;
+        if (typeof reason !== "string" || reason.trim() === "")
+            return null;
+        return { current: false, reason };
+    }
+    catch {
+        return null;
+    }
+}
+function readCount(v) {
+    if (typeof v !== "number")
+        return null;
+    if (!Number.isInteger(v))
+        return null;
+    if (v < 0)
+        return null;
+    return v;
+}
+function reReviewDecision(currency, roundsSpent, maxRounds) {
+    const read = readCurrency(currency);
+    if (!read) {
+        return {
+            decision: SECURITY_REREVIEW_EXHAUSTED,
+            reason: `the review-currency reading is ${describeReviewValue(currency)}, not an answer about a commit — ` +
+                `there is nothing a re-review could be aimed at, so the cycle ran out of attempts ` +
+                `before spending one`,
+        };
+    }
+    if (read.current)
+        return { decision: REVIEW_CURRENT, reason: null };
+    const spent = readCount(roundsSpent);
+    const cap = readCount(maxRounds);
+    if (spent === null || cap === null) {
+        return {
+            decision: SECURITY_REREVIEW_EXHAUSTED,
+            reason: `${read.reason} — and the re-review budget is unreadable ` +
+                `(${describeReviewValue(roundsSpent)} spent of ${describeReviewValue(maxRounds)}), so the cycle ran out ` +
+                `of attempts rather than guessing at one`,
+        };
+    }
+    if (spent < cap)
+        return { decision: RE_REVIEW, reason: read.reason };
+    return {
+        decision: SECURITY_REREVIEW_EXHAUSTED,
+        reason: `${read.reason} — and the re-review cycle ran out of attempts after ${spent} of ` +
+            `${cap} round(s), so this run ends holding code nobody reviewed`,
+    };
+}
+function rookScopeCommand(projectRoot, harnessRoot, sha, outPath, base) {
+    const pinned = rookReviewSha(sha);
+    if (!pinned) {
+        throw new Error(`rookScopeCommand: "${String(sha).slice(0, 80)}" is not a commit SHA — ` +
+            `refusing to build a scope command the review cannot be pinned to`);
+    }
+    let pinnedBase = null;
+    if (base !== undefined && base !== null && base !== "") {
+        pinnedBase = rookReviewSha(base);
+        if (!pinnedBase) {
+            throw new Error(`rookScopeCommand: "${String(base).slice(0, 80)}" is not a commit SHA — ` +
+                `refusing to build a re-review scope command against a base it cannot pin`);
+        }
+    }
+    const q = (w) => `'${String(w).replace(/'/g, "'\\''")}'`;
+    return (`bun --cwd ${q(projectRoot)} ${q(`${harnessRoot}/scripts/rook-review-scope.ts`)} ` +
+        `--project ${q(projectRoot)} --sha ${pinned}` +
+        (pinnedBase ? ` --base ${pinnedBase}` : "") +
+        ` --out ${q(outPath)}`);
+}
+function isRecord(v) {
+    return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+const REVIEW_SCOPE_FULL = "full";
+const REVIEW_SCOPE_DIFF = "diff";
+function heldIsPass(held) {
+    return isRecord(held) && held.verdict === "PASS";
+}
+function reReviewScope(held) {
+    return heldIsPass(held) ? REVIEW_SCOPE_DIFF : REVIEW_SCOPE_FULL;
+}
+function reReviewBaseFor(held, testedSha) {
+    if (reReviewScope(held) === REVIEW_SCOPE_FULL)
+        return null;
+    return rookReviewSha(testedSha);
+}
+function resolveReReview(held, reReviewed, scope, round, priorSha, reviewedSha) {
+    const fresh = isRecord(reReviewed) ? reReviewed : null;
+    const spawned = fresh?.spawned === true;
+    const failures = Array.isArray(fresh?.failures)
+        ? fresh.failures.map(f => String(f)).filter(f => f.trim() !== "")
+        : [];
+    if (!fresh || (fresh.verdict !== "PASS" && fresh.verdict !== "FAIL")) {
+        return {
+            spawned,
+            verdict: "FAIL",
+            failures: [
+                `the re-review returned ${describeReviewValue(isRecord(reReviewed) ? reReviewed.verdict : reReviewed)}, ` +
+                    `not a verdict — round ${round} cleared nothing`,
+            ],
+        };
+    }
+    if (fresh.verdict === "FAIL") {
+        return {
+            spawned,
+            verdict: "FAIL",
+            failures: failures.length > 0
+                ? failures
+                : [`the re-review returned FAIL with no findings attached — round ${round}`],
+        };
+    }
+    if (heldIsPass(held))
+        return { spawned, verdict: "PASS", failures: [] };
+    const priorFailures = isRecord(held) && Array.isArray(held.failures)
+        ? held.failures.map(f => String(f)).filter(f => f.trim() !== "")
+        : [];
+    if (scope !== REVIEW_SCOPE_FULL) {
+        return {
+            spawned,
+            verdict: "FAIL",
+            failures: [
+                `a ${describeReviewValue(scope)}-scoped re-review passed, but the verdict it would clear is a ` +
+                    `FAIL — a diff against the flagged commit does not contain the flagged code, so ` +
+                    `this PASS says nothing about it (#244). Original findings stand: ` +
+                    (priorFailures.join("; ") || "none were recorded"),
+                ...priorFailures,
+            ],
+        };
+    }
+    const clearedBySha = rookReviewSha(isRecord(fresh) ? fresh.testedSha : null)
+        ?? rookReviewSha(reviewedSha);
+    if (!clearedBySha) {
+        return {
+            spawned,
+            verdict: "FAIL",
+            failures: [
+                "a full re-review passed but did not say which commit it read, so there is nothing " +
+                    "to record the clearing against (#244). Original findings stand: " +
+                    (priorFailures.join("; ") || "none were recorded"),
+                ...priorFailures,
+            ],
+        };
+    }
+    return {
+        spawned,
+        verdict: "PASS",
+        failures: [],
+        cleared: {
+            priorVerdict: "FAIL",
+            priorFailures,
+            priorSha: rookReviewSha(priorSha),
+            clearedBySha,
+            clearedByRound: round,
+            scope: REVIEW_SCOPE_FULL,
+        },
+    };
+}
+const SECURITY_FINDINGS_OUTLIVED_REREVIEW = "SECURITY_FINDINGS_OUTLIVED_REREVIEW";
+function securityRefusalName(held, roundsSpent) {
+    const spent = readCount(roundsSpent) ?? 0;
+    return !heldIsPass(held) && spent > 0
+        ? SECURITY_FINDINGS_OUTLIVED_REREVIEW
+        : "SECURITY_REVIEW_DID_NOT_PASS";
+}
+function rookGateVerdict(scope, rook) {
+    const failures = [];
+    if (!isRecord(scope)) {
+        failures.push(`the review scope was never established: the scope step returned ${describeReviewValue(scope)}`);
+    }
+    else if (scope.exitCode !== 0) {
+        failures.push(`the review scope could not be established: scripts/rook-review-scope.ts reported ` +
+            `exit ${describeReviewValue(scope.exitCode)}`);
+    }
+    else if (!Array.isArray(scope.files)) {
+        failures.push(`the review scope is not a list of files (got ${describeReviewValue(scope.files)}) — ` +
+            `refusing to treat an unreadable scope as a reviewed one`);
+    }
+    else if (scope.files.filter(f => typeof f === "string" && f.trim() !== "").length === 0) {
+        failures.push("the review scope is empty — the security review read zero files, so its verdict " +
+            "says nothing about this change (#129)");
+    }
+    const spawned = isRecord(rook);
+    if (!spawned) {
+        failures.push("the security review did not run");
+    }
+    else if (rook.result === "FAIL") {
+        const detail = Array.isArray(rook.failures)
+            ? rook.failures.map(f => String(f)).filter(f => f.trim() !== "")
+            : [];
+        if (detail.length > 0) {
+            failures.push(...detail);
+        }
+        else {
+            failures.push("the security review returned FAIL with no findings attached — see the rook transcript");
+        }
+    }
+    else if (rook.result !== "PASS") {
+        failures.push(`the security review returned no usable verdict (got ${describeReviewValue(rook.result)})`);
+    }
+    return {
+        spawned,
+        verdict: failures.length === 0 ? "PASS" : "FAIL",
+        failures,
+    };
+}
+function describeReviewValue(v) {
+    if (v === undefined)
+        return "nothing";
+    if (v === null)
+        return "null";
+    if (Array.isArray(v))
+        return `an array of ${v.length}`;
+    if (typeof v === "object")
+        return "an object";
+    return JSON.stringify(v);
+}
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
@@ -4715,278 +4983,11 @@ defect it exists to catch (#659). Report what it printed.
 }
 
 
-function rookReviewSha(value) {
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  return /^[0-9a-f]{7,40}$/i.test(trimmed) ? trimmed.toLowerCase() : null
-}
-
-function describeShaValue(v) {
-  if (v === undefined) return 'nothing'
-  if (v === null) return 'null'
-  if (Array.isArray(v)) return `an array of ${v.length}`
-  if (typeof v === 'object') return 'an object'
-  return JSON.stringify(v)
-}
-
-function reviewIsCurrent(testedSha, headSha) {
-  const tested = rookReviewSha(testedSha)
-  const head = rookReviewSha(headSha)
-
-  if (!tested && !head) {
-    return {
-      current: false,
-      reason:
-        `no security review is current: the tested commit is ${describeShaValue(testedSha)} and ` +
-        `the head commit is ${describeShaValue(headSha)} — neither is a commit SHA, so there is ` +
-        `nothing to compare`,
-    }
-  }
-  if (!tested) {
-    return {
-      current: false,
-      reason:
-        `no security review is current: the tested commit is ${describeShaValue(testedSha)}, not a ` +
-        `commit SHA, so it cannot be compared against head ${head}`,
-    }
-  }
-  if (!head) {
-    return {
-      current: false,
-      reason:
-        `no security review is current: the head commit is ${describeShaValue(headSha)}, not a ` +
-        `commit SHA, so the review pinned to ${tested} cannot be confirmed against it`,
-    }
-  }
-
-  if (!(tested.startsWith(head) || head.startsWith(tested))) {
-    return {
-      current: false,
-      reason:
-        `the security review is stale: it was pinned to ${tested} but the branch now ends ` +
-        `at ${head} — the reviewed code is not the code this run would ship`,
-    }
-  }
-
-  return { current: true, reason: null }
-}
-
-const REVIEW_CURRENT = 'CURRENT'
-const RE_REVIEW = 'RE_REVIEW'
-const SECURITY_REREVIEW_EXHAUSTED = 'SECURITY_REREVIEW_EXHAUSTED'
-
-function readReviewCurrency(v) {
-  try {
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
-    const current = v.current
-    const reason = v.reason
-    if (typeof current !== 'boolean') return null
-    if (current) return reason === null ? { current: true, reason: null } : null
-    if (typeof reason !== 'string' || reason.trim() === '') return null
-    return { current: false, reason }
-  } catch {
-    return null
-  }
-}
-
-function readRoundCount(v) {
-  if (typeof v !== 'number') return null
-  if (!Number.isInteger(v)) return null
-  if (v < 0) return null
-  return v
-}
-
-function reReviewDecision(currency, roundsSpent, maxRounds) {
-  const read = readReviewCurrency(currency)
-  if (!read) {
-    return {
-      decision: SECURITY_REREVIEW_EXHAUSTED,
-      reason:
-        `the review-currency reading is ${describeShaValue(currency)}, not an answer about a commit — ` +
-        `there is nothing a re-review could be aimed at, so the cycle ran out of attempts ` +
-        `before spending one`,
-    }
-  }
-  if (read.current) return { decision: REVIEW_CURRENT, reason: null }
-
-  const spent = readRoundCount(roundsSpent)
-  const cap = readRoundCount(maxRounds)
-  if (spent === null || cap === null) {
-    return {
-      decision: SECURITY_REREVIEW_EXHAUSTED,
-      reason:
-        `${read.reason} — and the re-review budget is unreadable ` +
-        `(${describeShaValue(roundsSpent)} spent of ${describeShaValue(maxRounds)}), so the cycle ran out ` +
-        `of attempts rather than guessing at one`,
-    }
-  }
-  if (spent < cap) return { decision: RE_REVIEW, reason: read.reason }
-
-  return {
-    decision: SECURITY_REREVIEW_EXHAUSTED,
-    reason:
-      `${read.reason} — and the re-review cycle ran out of attempts after ${spent} of ` +
-      `${cap} round(s), so this run ends holding code nobody reviewed`,
-  }
-}
-
-const REVIEW_SCOPE_FULL = 'full'
-const REVIEW_SCOPE_DIFF = 'diff'
-const SECURITY_FINDINGS_OUTLIVED_REREVIEW = 'SECURITY_FINDINGS_OUTLIVED_REREVIEW'
-
-function heldIsPass(held) {
-  return typeof held === 'object' && held !== null && !Array.isArray(held) && held.verdict === 'PASS'
-}
-
-function reReviewScope(held) {
-  return heldIsPass(held) ? REVIEW_SCOPE_DIFF : REVIEW_SCOPE_FULL
-}
-
-function reReviewBaseFor(held, testedSha) {
-  if (reReviewScope(held) === REVIEW_SCOPE_FULL) return null
-  return rookReviewSha(testedSha)
-}
-
-function readFailureList(v) {
-  return Array.isArray(v) ? v.map(f => String(f)).filter(f => f.trim() !== '') : []
-}
-
-function resolveReReview(held, reReviewed, scope, round, priorSha, reviewedSha) {
-  const isRec = v => typeof v === 'object' && v !== null && !Array.isArray(v)
-  const fresh = isRec(reReviewed) ? reReviewed : null
-  const spawned = fresh ? fresh.spawned === true : false
-  const failures = readFailureList(fresh && fresh.failures)
-
-  if (!fresh || (fresh.verdict !== 'PASS' && fresh.verdict !== 'FAIL')) {
-    return {
-      spawned, verdict: 'FAIL',
-      failures: [`the re-review returned ${describeShaValue(isRec(reReviewed) ? reReviewed.verdict : reReviewed)}, not a verdict — round ${round} cleared nothing`],
-    }
-  }
-  if (fresh.verdict === 'FAIL') {
-    return {
-      spawned, verdict: 'FAIL',
-      failures: failures.length > 0 ? failures
-        : [`the re-review returned FAIL with no findings attached — round ${round}`],
-    }
-  }
-  if (heldIsPass(held)) return { spawned, verdict: 'PASS', failures: [] }
-
-  const priorFailures = readFailureList(isRec(held) && held.failures)
-
-  if (scope !== REVIEW_SCOPE_FULL) {
-    return {
-      spawned, verdict: 'FAIL',
-      failures: [
-        `a ${describeShaValue(scope)}-scoped re-review passed, but the verdict it would clear is a FAIL — ` +
-        `a diff against the flagged commit does not contain the flagged code, so this PASS says ` +
-        `nothing about it (#244). Original findings stand: ${priorFailures.join('; ') || 'none were recorded'}`,
-        ...priorFailures,
-      ],
-    }
-  }
-
-  const clearedBySha = rookReviewSha(fresh.testedSha) || rookReviewSha(reviewedSha)
-  if (!clearedBySha) {
-    return {
-      spawned, verdict: 'FAIL',
-      failures: [
-        `a full re-review passed but did not say which commit it read, so there is nothing to ` +
-        `record the clearing against (#244). Original findings stand: ${priorFailures.join('; ') || 'none were recorded'}`,
-        ...priorFailures,
-      ],
-    }
-  }
-
-  return {
-    spawned, verdict: 'PASS', failures: [],
-    cleared: {
-      priorVerdict: 'FAIL',
-      priorFailures,
-      priorSha: rookReviewSha(priorSha),
-      clearedBySha,
-      clearedByRound: round,
-      scope: REVIEW_SCOPE_FULL,
-    },
-  }
-}
-
-function securityRefusalName(held, roundsSpent) {
-  const spent = readRoundCount(roundsSpent) === null ? 0 : readRoundCount(roundsSpent)
-  return !heldIsPass(held) && spent > 0
-    ? SECURITY_FINDINGS_OUTLIVED_REREVIEW
-    : 'SECURITY_REVIEW_DID_NOT_PASS'
-}
-
 
 function suiteReadingFor(recordedResult, currencyState) {
   if (recordedResult === 'FAIL') return 'FAIL'
   if (currencyState !== 'CURRENT') return 'UNMEASURED'
   return recordedResult === 'PASS' ? 'PASS' : 'UNMEASURED'
-}
-
-function rookScopeCommand(projectRoot, harnessRoot, sha, outPath, base) {
-  const pinned = rookReviewSha(sha)
-  if (!pinned) {
-    throw new Error(
-      `rookScopeCommand: "${String(sha).slice(0, 80)}" is not a commit SHA — ` +
-      `refusing to build a scope command the review cannot be pinned to`)
-  }
-  let pinnedBase = null
-  if (base !== undefined && base !== null && base !== '') {
-    pinnedBase = rookReviewSha(base)
-    if (!pinnedBase) {
-      throw new Error(
-        `rookScopeCommand: "${String(base).slice(0, 80)}" is not a commit SHA — ` +
-        `refusing to build a re-review scope command against a base it cannot pin`)
-    }
-  }
-  const q = w => `'${String(w).replace(/'/g, "'\\''")}'`
-  return `bun --cwd ${q(projectRoot)} ${q(`${harnessRoot}/scripts/rook-review-scope.ts`)} ` +
-    `--project ${q(projectRoot)} --sha ${pinned}` +
-    (pinnedBase ? ` --base ${pinnedBase}` : '') +
-    ` --out ${q(outPath)}`
-}
-
-function rookGateVerdict(scope, rook) {
-  const isRecord = v => typeof v === 'object' && v !== null && !Array.isArray(v)
-  const describe = v => {
-    if (v === undefined) return 'nothing'
-    if (v === null) return 'null'
-    if (Array.isArray(v)) return `an array of ${v.length}`
-    if (typeof v === 'object') return 'an object'
-    return JSON.stringify(v)
-  }
-
-  const failures = []
-
-  if (!isRecord(scope)) {
-    failures.push(`the review scope was never established: the scope step returned ${describe(scope)}`)
-  } else if (scope.exitCode !== 0) {
-    failures.push(`the review scope could not be established: scripts/rook-review-scope.ts reported exit ${describe(scope.exitCode)}`)
-  } else if (!Array.isArray(scope.files)) {
-    failures.push(`the review scope is not a list of files (got ${describe(scope.files)}) — refusing to treat an unreadable scope as a reviewed one`)
-  } else if (scope.files.filter(f => typeof f === 'string' && f.trim() !== '').length === 0) {
-    failures.push('the review scope is empty — the security review read zero files, so its verdict says nothing about this change (#129)')
-  }
-
-  const spawned = isRecord(rook)
-  if (!spawned) {
-    failures.push('the security review did not run')
-  } else if (rook.result === 'FAIL') {
-    const detail = Array.isArray(rook.failures)
-      ? rook.failures.map(f => String(f)).filter(f => f.trim() !== '')
-      : []
-    if (detail.length > 0) {
-      failures.push(...detail)
-    } else {
-      failures.push('the security review returned FAIL with no findings attached — see the rook transcript')
-    }
-  } else if (rook.result !== 'PASS') {
-    failures.push(`the security review returned no usable verdict (got ${describe(rook.result)})`)
-  }
-
-  return { spawned, verdict: failures.length === 0 ? 'PASS' : 'FAIL', failures }
 }
 
 const reviewSha = rookReviewSha(commitResult.commitSha)
