@@ -1,4 +1,4 @@
-# generated-sha: 05c655e1c41dd901
+# generated-sha: 24ec3dc13a929d0e
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 #
 # Mines the default branch's fix commits into rule candidates on every push to
@@ -35,7 +35,7 @@ jobs:
           USERPROFILE: ${{ runner.tool_cache }}/bun-home
       - name: Mine fix commits into rule candidates
         run: |
-          out=$(bunx rungate@0.8.30 intake --source fix-commits)
+          out=$(bunx rungate@0.8.31 intake --source fix-commits)
           printf '%s\n' "$out"
           case "$out" in
             *UNMEASURED*)
