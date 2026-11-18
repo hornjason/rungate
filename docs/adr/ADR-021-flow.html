@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-021 — Phases order work; they do not gate it (dry run)</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e6e8ee; --dim:#8b93a7;
+          --hand:#f0b429; --auto:#3ecf8e; --judge:#7aa2f7; --warn:#f7768e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:32px 0 12px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  .sub { color:var(--dim); margin:0 0 18px; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:var(--dim); }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .hand{background:var(--hand)} .auto{background:var(--auto)} .judge{background:var(--judge)}
+  ol.timeline { list-style:none; padding:0; margin:0; border-left:2px solid var(--line); }
+  ol.timeline li { position:relative; padding:8px 0 14px 22px; }
+  ol.timeline li::before { content:""; position:absolute; left:-7px; top:14px; width:12px; height:12px; border-radius:50%; background:var(--c); }
+  .tag { font-size:11px; font-weight:700; padding:1px 7px; border-radius:9px; margin-right:8px; color:#0f1115; background:var(--c); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .card .sc { font-size:12px; color:var(--judge); font-weight:700; }
+  .card .t { font-weight:600; margin:4px 0 8px; }
+  .card .f { font-size:12px; color:var(--dim); font-family:ui-monospace, Menlo, monospace; word-break:break-all; }
+  .card .b { font-size:12px; color:var(--hand); margin-top:8px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:720px) { .cols { grid-template-columns:1fr; } }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .box h3 { margin:0 0 8px; font-size:14px; }
+  .big { font-size:30px; font-weight:700; } .warn { color:var(--warn); } .ok { color:var(--auto); }
+  ul { margin:6px 0 0; padding-left:18px; } li { margin:3px 0; }
+  .sim { font-size:11px; color:var(--hand); border:1px solid var(--hand); border-radius:6px; padding:0 6px; margin-left:6px; }
+  code { font-family:ui-monospace, Menlo, monospace; font-size:12.5px; color:#c0caf5; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ADR-021 — Phases order work; they do not gate it</h1>
+  <p class="sub">Dry run, 2026-11-18, from the draft branch at main 44ebf03 plus the draft. Nothing was written.</p>
+  <div class="legend">
+    <span><span class="dot hand"></span>hand (someone types it)</span>
+    <span><span class="dot auto"></span>auto (a workflow fires)</span>
+    <span><span class="dot judge"></span>judgement (Jason decides)</span>
+  </div>
+
+  <h2>The run</h2>
+  <ol class="timeline">
+    <li style="--c:var(--judge)"><span class="tag">YOU</span>Wording accepted 2026-11-18 (SC-2741, SC-2606, new SC-2786). Merge the ADR with <code>status: accepted</code>.</li>
+    <li style="--c:var(--auto)"><span class="tag">AUTO</span><code>adr-accepted.yml</code> files 5 issues in Engine Phase 6 and writes 3 order links. The dry run above accepted every row.</li>
+    <li style="--c:var(--auto)"><span class="tag">AUTO</span>Under today's rule, Phase 6 becomes the lowest open Engine phase, so Ready pulls the two unblocked rows: the Ready rule and the planner change.</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build "Ready draws from every placed phase", then "the planner stops writing phase order". Test first, pinned merges.</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build the link removal. Its dry run lists all 193 links (182 + 11) before anything is written.</li>
+    <li style="--c:var(--judge)"><span class="tag">YOU</span>Glance at the removal list. Anything you want kept goes into an ADR table instead.</li>
+    <li style="--c:var(--auto)"><span class="tag">AUTO</span>The next push to <code>specs/</code> runs the removal through <code>specs-placed.yml</code>: 182 phase-order links and the 11 stale ones around #1764 off; the 2 hand-written dependencies stay.</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build "Ready never holds two issues naming the same file".</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build "Ready ranks the earliest-due milestone first", then write the steering section in HOW-WORK-FLOWS.md.</li>
+  </ol>
+
+  <h2>The five issues it files</h2>
+  <div class="cards">
+    <div class="card"><div class="sc">SC-2741 (reworded)</div><div class="t">Ready draws from every placed phase that nothing open blocks</div>
+      <div class="f">lib/board-ready-rule.ts · scripts/board-ready.ts · scripts/work-status.ts · spec · 2 tests</div></div>
+    <div class="card"><div class="sc">SC-2786 (new)</div><div class="t">Ready never holds two issues that name the same file</div>
+      <div class="f">lib/board-ready-rule.ts · lib/issue-file-overlap.ts · scripts/board-ready.ts · spec · 2 tests</div>
+      <div class="b">blocked by: the Ready rule</div></div>
+    <div class="card"><div class="sc">SC-2606 (reworded)</div><div class="t">plan-deps writes only the dependencies planning declared</div>
+      <div class="f">lib/spec-deps.ts · scripts/plan-deps.ts · scripts/board-snapshot.ts · spec · 3 tests</div></div>
+    <div class="card"><div class="sc">SC-2606</div><div class="t">The planner's phase-order links come off the tracker and hand-written links stay</div>
+      <div class="f">scripts/plan-deps.ts · specs-placed.yml + its emitter · 1 test</div>
+      <div class="b">blocked by: the planner change</div></div>
+    <div class="card"><div class="sc">SC-2741</div><div class="t">Ready ranks the earliest-due milestone first</div>
+      <div class="f">lib/board-ready-rule.ts · scripts/board-ready.ts · scripts/work-status.ts · board-ready.yml + its emitter · HOW-WORK-FLOWS.md · 2 tests</div>
+      <div class="b">blocked by: the Ready rule</div></div>
+  </div>
+
+  <h2>Today vs after</h2>
+  <div class="cols">
+    <div class="box"><h3>Today (real: work-status)</h3>
+      <div class="big warn">4</div><div>issues startable in the whole repository (the ADR's Context measurement)</div>
+      <ul><li>Ready reads only Engine Phase 10</li>
+          <li>Convergence: 37 open, 0 can start</li>
+          <li>182 phase-order links, plus 90 the planner no longer derives: 77 to closed issues, 11 stale phase order holding #1764 and 3 others, 2 real hand-written</li>
+          <li>Two issues on one file can both be pulled</li></ul></div>
+    <div class="box"><h3>After all five rows <span class="sim">SIMULATED</span></h3>
+      <div class="big ok">≈36</div><div>issues startable: Phase 10's 5 open + 31 Convergence</div>
+      <ul><li>Ranked: work-this-next → milestone due date → engine → lowest phase → unblocks the most → number</li>
+          <li>Links come only from planning (ADR Blocked by / Blocks) or by hand; 2 hand-written stay, 77 dead ones left</li>
+          <li>Never two Ready issues on the same file</li>
+          <li>B3 and E3 unchanged; <code>dependency-edges</code> reads ADR-table links</li></ul></div>
+  </div>
+
+  <h2>Gaps and decisions</h2>
+  <div class="cols">
+    <div class="box"><h3>Gaps found</h3><ul>
+      <li>A hand-written link between adjacent phases looks like a phase-order link; the removal's dry-run list is the safeguard.</li>
+      <li>Ran from the draft branch: the main checkout is 36 commits behind and lacks SC-2786.</li>
+      <li>SC-867 (from wave 2c) needs rewording too; it's handled separately, not in this ADR.</li></ul></div>
+    <div class="box"><h3>Needs you</h3><ul>
+      <li>Merge the ADR. Every decision and all three texts were answered 2026-11-18.</li>
+      <li>To focus Ready: set a due date on the milestone you want first (GitHub &gt; Milestones &gt; Edit).</li></ul></div>
+  </div>
+</main>
+</body>
+</html>

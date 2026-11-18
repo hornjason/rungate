@@ -1,8 +1,8 @@
 ---
 doc-type: code-map
 status: generated
-updated: 2026-11-15
-scanned-at-sha: f2c362f7
+updated: 2026-11-18
+scanned-at-sha: 27379168
 generator: rungate/scripts/generate-code-map.ts
 ---
 
@@ -64,5 +64,6 @@ row as orientation, not as a fact about your working tree.
 - `sync-scs`
 - `typecheck`
 - `verify-merge`
+- `build:launch`
 - `test:structure`
 - `test:external-deps`
