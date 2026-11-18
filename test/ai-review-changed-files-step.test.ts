@@ -19,13 +19,23 @@ import {
   AI_REVIEW_FINDINGS_COMMAND,
   AI_REVIEW_FINDINGS_DIR_OUTPUT,
   AI_REVIEW_FINDINGS_PATH_VAR,
+  AI_REVIEW_LINE_COUNTS_BASENAME,
+  AI_REVIEW_LINE_COUNTS_PATH_VAR,
+  AI_REVIEW_LINE_COUNTS_TITLE,
   AI_REVIEW_PREPARE_STEP_ID,
   AI_REVIEW_RESTORE_STEP_ID,
+  AI_REVIEW_RUN_STEP_ID,
   buildChangedFilesScript,
   buildReviewRunScript,
   buildReviewRunStep,
   type VertexCiDecision,
 } from "../lib/scaffold/ai-review-step";
+import {
+  AI_REVIEW_FINDING_FIELDS,
+  readAiReviewChangedFiles,
+  readAiReviewFindings,
+  readAiReviewLineCounts,
+} from "../lib/scaffold/ai-review-findings";
 
 /**
  * Covers #1356 — nothing supplied the changed-file list the adjudicator
@@ -422,5 +432,143 @@ describe("#1356 / CF: the generated job supplies the changed-file list", () => {
     expect(runStep(f).code).toBe(0);
     const lines = readFileSync(f.dest, "utf-8").split("\n").filter(l => l.length > 0);
     expect(lines, "git C-quoted the path, which the adjudicator refuses to decode").toContain(name);
+  });
+});
+
+/**
+ * Covers #1357 — the changed-files step also writes each changed file's line
+ * count, so the adjudicator can tell a finding citing a line past the end of
+ * its file (#1298: `.claude/rules/specs-routing.md:39`). Same tree, same
+ * moment, same all-or-nothing rule as the list. The adjudicator half is in
+ * `test/ai-review-finding-scope.test.ts`, L-1 to L-10.
+ */
+describe("#1357 / CF: the changed-files step writes each changed file's line count", () => {
+  /** A shallow-shaped checkout whose base and head hold exactly these files. */
+  function checkoutOf(base: Record<string, string>, head: Record<string, string | null>) {
+    const root = scratchDir("ai-review-lc-");
+    const work = join(root, "repo");
+    mkdirSync(work, { recursive: true });
+    const git = (...a: string[]) => {
+      const r = Bun.spawnSync(["git", "-C", work, ...a], { env: GIT_ENV() });
+      if (r.exitCode !== 0) throw new Error(`git ${a.join(" ")}: ${new TextDecoder().decode(r.stderr)}`);
+    };
+    const put = (files: Record<string, string | null>) => {
+      for (const [rel, body] of Object.entries(files)) {
+        if (body === null) rmSync(join(work, rel));
+        else {
+          mkdirSync(dirname(join(work, rel)), { recursive: true });
+          writeFileSync(join(work, rel), body);
+        }
+      }
+    };
+    Bun.spawnSync(["git", "init", "-q", "-b", "main", work], { env: GIT_ENV() });
+    put(base);
+    git("add", "-A");
+    git("commit", "-qm", "base");
+    git("branch", "-f", "base-tip");
+    put(head);
+    git("add", "-A");
+    git("commit", "-qm", "head");
+    git("checkout", "-q", "--detach", "HEAD");
+    return {
+      work,
+      dest: join(root, AI_REVIEW_CHANGED_FILES_BASENAME),
+      counts: join(root, AI_REVIEW_LINE_COUNTS_BASENAME),
+      base: "base-tip",
+    };
+  }
+  const run = (f: ReturnType<typeof checkoutOf>, env: Record<string, string> = {}) =>
+    runStep(f, { [AI_REVIEW_LINE_COUNTS_PATH_VAR]: f.counts, ...env });
+
+  test("CF-10: one count per changed file — the larger side, a lone CR is a break, a deleted file keeps its base count", () => {
+    const thirty = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+    const f = checkoutOf(
+      { "lib/shrunk.ts": thirty, "lib/gone.ts": "a\nb\nc\nd\ne\nf\ng\n", "README.md": "BASE\n" },
+      {
+        "lib/shrunk.ts": "a\nb\nc\nd\ne\n",
+        "lib/gone.ts": null,
+        "lib/three.ts": "a\nb\nc",
+        "lib/crlf.ts": "a\r\nb\r\n",
+        "lib/cr.ts": "a\rb\rc",
+        "README.md": "HEAD\n",
+      },
+    );
+    const r = run(f);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(f.counts), `no line counts on the success path: ${r.stderr}`).toBe(true);
+
+    const reading = readAiReviewLineCounts(f.counts);
+    expect(reading.status).toBe("MEASURED");
+    const counts = reading.counts!;
+    expect(counts.get("lib/three.ts"), "an unterminated last line was not counted").toBe(3);
+    expect(counts.get("lib/crlf.ts"), "a CRLF line was counted twice").toBe(2);
+    expect(counts.get("lib/cr.ts"), "lone CRs were read as one line").toBe(3);
+    expect(counts.get("lib/shrunk.ts"), "a shortened file took its new length, so old line numbers read past the end").toBe(30);
+    expect(counts.get("lib/gone.ts"), "a deleted file lost its base count").toBe(7);
+    expect(counts.get("readme.md")).toBe(1);
+
+    // Through the adjudicator, end to end on the files the step counted.
+    const scope = readAiReviewChangedFiles(f.dest);
+    const verdict = (file: string, line: number) =>
+      readAiReviewFindings(
+        JSON.stringify({
+          verdict: "BLOCK",
+          findings: [
+            {
+              [AI_REVIEW_FINDING_FIELDS.severity]: "high",
+              [AI_REVIEW_FINDING_FIELDS.file]: file,
+              [AI_REVIEW_FINDING_FIELDS.line]: line,
+              [AI_REVIEW_FINDING_FIELDS.summary]: "s",
+              [AI_REVIEW_FINDING_FIELDS.failureScenario]: "f",
+            },
+          ],
+        }),
+        scope,
+        null,
+        null,
+        reading,
+      ).outcome;
+    expect(verdict("lib/three.ts", 3)).toBe("BLOCKED");
+    expect(verdict("lib/three.ts", 4)).toBe("CLEAN");
+    expect(verdict("lib/shrunk.ts", 20), "the old numbering of a shortened file was demoted").toBe("BLOCKED");
+  });
+
+  test("CF-11: counts that cannot be taken write nothing, warn by title, and do not fail the step", () => {
+    const f = checkoutOf({ "a.ts": "a\n" }, { "a.ts": "b\n" });
+    const r = run(f, { [AI_REVIEW_LINE_COUNTS_PATH_VAR]: join(f.counts, "no-such-dir", "x.tsv") });
+    expect(r.code).toBe(0);
+    expect(existsSync(join(f.counts, "no-such-dir", "x.tsv"))).toBe(false);
+    expect(r.stderr, "the failure was silent").toContain(AI_REVIEW_LINE_COUNTS_TITLE);
+    // The list is unaffected: the counts are a second artefact, not a gate on the first.
+    expect(existsSync(f.dest)).toBe(true);
+  });
+
+  test("CF-12: a failed diff writes no counts, and a stale file from an earlier attempt is removed", () => {
+    const f = checkoutOf({ "a.ts": "a\n" }, { "a.ts": "b\n" });
+    writeFileSync(f.counts, "999\ta.ts\n");
+    const r = run(f, { [AI_REVIEW_BASE_REMOTE_VAR]: "refs/heads/no-such-base" });
+    expect(r.code).toBe(0);
+    expect(existsSync(f.counts), "a stale count survived a failed run and would be read as this run's").toBe(false);
+  });
+
+  test("CF-13: the writer and the adjudicator name one file, by one constant", () => {
+    const source = readFileSync(join(REPO_ROOT, "lib/scaffold/ai-review-step.ts"), "utf-8");
+    expect(source.split(`"${AI_REVIEW_LINE_COUNTS_BASENAME}"`).length - 1).toBe(1);
+    const binding =
+      `${AI_REVIEW_LINE_COUNTS_PATH_VAR}: ` +
+      `\${{ steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.${AI_REVIEW_FINDINGS_DIR_OUTPUT} }}` +
+      `/${AI_REVIEW_LINE_COUNTS_BASENAME}`;
+    // Two consumers: the changed-files step writes it, the run step's
+    // adjudicator reads it. A step's env does not carry forward (#826).
+    expect(JOB.split(binding).length - 1).toBe(2);
+    const doc = Bun.YAML.parse(JOB_YAML) as Record<string, any>;
+    const steps = doc.jobs[AI_REVIEW_JOB].steps as any[];
+    for (const id of [AI_REVIEW_CHANGED_FILES_STEP_ID, AI_REVIEW_RUN_STEP_ID]) {
+      const step = steps.find(s => s.id === id);
+      expect(step?.env?.[AI_REVIEW_LINE_COUNTS_PATH_VAR], `${id} is not handed the counts' path`).toContain(
+        AI_REVIEW_LINE_COUNTS_BASENAME,
+      );
+    }
+    expect(STEP, "the counts are read off the workspace, which the branch can plant").not.toContain("GITHUB_WORKSPACE");
   });
 });

@@ -688,9 +688,9 @@ describe("#1357: a blocking finding citing a line past the end of its file does 
   });
 
   test("#1357 / L-6: a file the counts do not name keeps blocking — no count is not a short file", () => {
-    // The step writes no row for a path absent from the tree (deleted by the
-    // pull request). Reading that absence as zero lines would demote every
-    // finding about a deletion, the wrong direction for this stage.
+    // The step writes no row for a path in neither the reviewed tree nor the
+    // base. Reading that absence as zero lines would demote every finding
+    // about such a path, the wrong direction for this stage.
     const r = readAiReviewFindings(
       payloadOf("BLOCK", [cites()]),
       scopeOver([CITED, "lib/other.ts"]),
@@ -739,7 +739,10 @@ describe("#1357: a blocking finding citing a line past the end of its file does 
   test("#1357 / L-10: the check can fail — the decider, zeroed", async () => {
     const needle = "line > count ? { line, count } : null";
     expect(source.split(needle).length - 1, "the past-end decider is not spelled once").toBe(1);
-    const path = join(SCRATCH, "mutant-line-counts-ai-review-findings.ts");
+    // Its OWN directory: AC-12 imports a mutant from SCRATCH first, Bun caches
+    // that directory's listing, and a second file written there afterwards is
+    // "Cannot find module" — measured, in this suite.
+    const path = join(mkdtempSync(join(SCRATCH, "lc-mutant-")), "mutant-ai-review-findings.ts");
     writeFileSync(
       path,
       source.replace(needle, "null").replace(/from "\.\/ai-review-step"/g, `from "${STEP_PATH}"`),

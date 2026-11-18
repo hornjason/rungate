@@ -1118,8 +1118,8 @@ function lineCountsUnreadable(detail: string): AiReviewLineCountReading {
 
 /**
  * Read the line counts the changed-files step wrote: one `<count><TAB><path>`
- * row per changed file present in the tree the reviewer read, taken BEFORE
- * the reviewer ran. This module never counts a file itself — it runs after
+ * row per changed file, the larger of the reviewed tree's copy and the
+ * base's, taken BEFORE the reviewer ran. This module never counts a file itself — it runs after
  * the review, and AC-10 in `test/ai-review-finding-scope.test.ts` holds it to
  * spawning nothing.
  *
@@ -1189,9 +1189,9 @@ export function findingCitedLine(finding: Record<string, unknown>): number | nul
  * past the end of the file, else `null`.
  *
  * `null` whenever the question cannot be answered — no counts, no usable
- * line, a path that cannot be read, or a file the counts do not name (absent
- * from the tree, e.g. deleted). Each of those keeps blocking: unanswerable is
- * not unlocatable, the direction CRC-B7 grades this stage in.
+ * line, a path that cannot be read, or a file the counts do not name (in
+ * neither the reviewed tree nor the base). Each of those keeps blocking:
+ * unanswerable is not unlocatable, the direction CRC-B7 grades this stage in.
  *
  * Locatable, never RIGHT. Whether the line says what the finding claims is
  * not decided here, and must not grow to be.

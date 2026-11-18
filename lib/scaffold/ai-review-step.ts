@@ -2054,10 +2054,12 @@ export const AI_REVIEW_CHANGED_FILES_TITLE = "AI review changed-file list";
  * and the reviewer holds `Write`. Same reasoning, same directory, same
  * outside-the-checkout placement as `AI_REVIEW_CHANGED_FILES_PATH_VAR`.
  *
- * One `<count><TAB><path>` row per changed path that is a regular file in
- * the tree; a path absent from it (deleted) gets no row, and a finding about
- * it keeps blocking. Counted with `awk 'END { print NR }'`, which counts an
- * unterminated last line as a line, the way an editor numbers it.
+ * One `<count><TAB><path>` row per changed path, holding the LARGER of the
+ * tree's copy and the base's: a finding citing the old numbering of a file
+ * the pull request shortened is then never past the end. An unterminated
+ * last line counts, a lone `\r` is a line break and `\r\n` is one — each
+ * choice only ever raises the count, so it can only demote fewer findings.
+ * A path in neither side gets no row, and a finding about it keeps blocking.
  *
  * It reaches the adjudicator by the ENVIRONMENT, never as a third positional:
  * `argumentsBeyondTheContract` refuses `argv[2]`, which is what catches a
@@ -9382,22 +9384,40 @@ if ${AI_REVIEW_GIT_ISOLATED} -c core.quotePath=false diff --name-only "\${base}"
   rm -f "\${dest}.err"
   echo "ai-review changed paths: $(wc -l < "\${dest}" | tr -d ' ') from \${base}..HEAD"
 
-  # #1357. Each listed path's line count, from this tree, before the reviewer
-  # runs. Only regular files are counted: a deleted path gets no row and a
-  # finding about it keeps blocking. \`./\` keeps awk from reading a path as an
-  # option or a \`var=value\` assignment. All or nothing, through \`.partial\`.
+  # #1357. Each listed path's line count, before the reviewer runs: the LARGER
+  # of this tree's copy and the base's, so a finding citing the old numbering
+  # of a file this pull request shortened is never read as past its end. A
+  # lone \`\\r\` counts as a line break and a \`\\r\\n\` as one, so a file the
+  # reviewer sees as many lines is never counted as one. A path in neither
+  # side gets no row and a finding about it keeps blocking. \`./\` keeps awk
+  # from reading a path as an option or a \`var=value\` assignment. All or
+  # nothing, through \`.partial\`.
   if [ -n "\${counts}" ]; then
+    count_lines='{ l = $0; sub(/\\r$/, "", l); n += 1 + gsub(/\\r/, "", l) } END { print n + 0 }'
     counted=1
     : > "\${counts}.partial" 2> "\${counts}.err" || counted=0
     while IFS= read -r p || [ -n "\${p}" ]; do
       [ "\${counted}" = 1 ] || break
       [ -n "\${p}" ] || continue
-      [ -f "./\${p}" ] || continue
-      if n=$(awk 'END { print NR }' "./\${p}" 2>> "\${counts}.err"); then
-        printf '%s\\t%s\\n' "\${n}" "\${p}" >> "\${counts}.partial" || counted=0
-      else
-        counted=0
+      n=""
+      if [ -f "./\${p}" ]; then
+        if here=$(awk "\${count_lines}" "./\${p}" 2>> "\${counts}.err"); then
+          n="\${here}"
+        else
+          counted=0
+          break
+        fi
       fi
+      if kind=$(${AI_REVIEW_GIT_ISOLATED} cat-file -t "\${base}:\${p}" 2>/dev/null) && [ "\${kind}" = blob ]; then
+        if was=$(${AI_REVIEW_GIT_ISOLATED} cat-file -p "\${base}:\${p}" 2>> "\${counts}.err" | awk "\${count_lines}" 2>> "\${counts}.err"); then
+          if [ -z "\${n}" ] || [ "\${was}" -gt "\${n}" ]; then n="\${was}"; fi
+        else
+          counted=0
+          break
+        fi
+      fi
+      [ -n "\${n}" ] || continue
+      printf '%s\\t%s\\n' "\${n}" "\${p}" >> "\${counts}.partial" || counted=0
     done < "\${dest}"
     if [ "\${counted}" = 1 ]; then
       mv "\${counts}.partial" "\${counts}"
