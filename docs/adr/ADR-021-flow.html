@@ -51,9 +51,9 @@
     <li style="--c:var(--auto)"><span class="tag">AUTO</span><code>adr-accepted.yml</code> files 4 issues in Engine Phase 6 and writes 2 order links. The dry run above accepted every row.</li>
     <li style="--c:var(--auto)"><span class="tag">AUTO</span>Under today's rule, Phase 6 becomes the lowest open Engine phase, so Ready pulls the two unblocked rows: the Ready rule and the planner change.</li>
     <li style="--c:var(--hand)"><span class="tag">ME</span>Build "Ready draws from every placed phase", then "the planner stops writing phase order". Test first, pinned merges.</li>
-    <li style="--c:var(--hand)"><span class="tag">ME</span>Build the link removal. Its dry run lists all 182 links before anything is written.</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build the link removal. Its dry run lists all 193 links (182 + 11) before anything is written.</li>
     <li style="--c:var(--judge)"><span class="tag">YOU</span>Glance at the removal list. Anything you want kept goes into an ADR table instead.</li>
-    <li style="--c:var(--auto)"><span class="tag">AUTO</span>The next push to <code>specs/</code> runs the removal through <code>specs-placed.yml</code>: 182 off, 90 authored links stay.</li>
+    <li style="--c:var(--auto)"><span class="tag">AUTO</span>The next push to <code>specs/</code> runs the removal through <code>specs-placed.yml</code>: 182 phase-order links and the 11 stale ones around #1764 off; the 2 hand-written dependencies stay.</li>
     <li style="--c:var(--hand)"><span class="tag">ME</span>Build "Ready never holds two issues naming the same file".</li>
   </ol>
 
@@ -66,7 +66,7 @@
       <div class="b">blocked by: the Ready rule</div></div>
     <div class="card"><div class="sc">SC-2606 (reworded)</div><div class="t">The planner stops writing phase order as blocked-by links</div>
       <div class="f">lib/spec-deps.ts · scripts/plan-deps.ts · scripts/board-snapshot.ts · spec · 3 tests</div></div>
-    <div class="card"><div class="sc">SC-2606</div><div class="t">The phase-order links already on the tracker come off and authored links stay</div>
+    <div class="card"><div class="sc">SC-2606</div><div class="t">The planner's phase-order links come off the tracker and hand-written links stay</div>
       <div class="f">scripts/plan-deps.ts · specs-placed.yml + its emitter · 1 test</div>
       <div class="b">blocked by: the planner change</div></div>
   </div>
@@ -77,12 +77,12 @@
       <div class="big warn">3</div><div>issues startable in the whole repository</div>
       <ul><li>Ready reads only Engine Phase 10</li>
           <li>Convergence: 37 open, 0 can start</li>
-          <li>182 phase-order links + 90 authored</li>
+          <li>182 phase-order links, plus 90 the planner no longer derives: 77 to closed issues, 11 stale phase order holding #1764 and 3 others, 2 real hand-written</li>
           <li>Two issues on one file can both be pulled</li></ul></div>
     <div class="box"><h3>After all four rows <span class="sim">SIMULATED</span></h3>
       <div class="big ok">≈35</div><div>issues startable: Phase 10's open work + 31 Convergence</div>
       <ul><li>Ranked: unblocks the most → engine first → phase → number</li>
-          <li>Only the 90 authored links remain</li>
+          <li>Links come only from planning (ADR Blocked by / Blocks) or by hand; 2 hand-written stay, 77 dead ones left</li>
           <li>Never two Ready issues on the same file</li>
           <li>B3 and E3 unchanged; <code>dependency-edges</code> reads ADR-table links</li></ul></div>
   </div>
