@@ -1,4 +1,4 @@
-# generated-sha: cc81db74ca06c804
+# generated-sha: ac6663ba86515b07
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -35,6 +35,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ github.event.issue.number }}
         run: gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label from-consumer
+
+      - name: Give an outside reporter's recent issue the from-consumer label, if its opened run was missed
+        if: ${{ github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED: '["OWNER","MEMBER","COLLABORATOR"]'
+        run: |
+          SINCE="$(date -u -d '2 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          export SINCE
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&since=$SINCE&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= env.SINCE) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("from-consumer") | not) | .number' \
+            | while read -r n; do gh issue edit "$n" --repo "$GITHUB_REPOSITORY" --add-label from-consumer; done
 
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2

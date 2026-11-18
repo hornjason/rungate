@@ -12,9 +12,12 @@ import { describe, expect, test } from "bun:test";
 import {
   CONSUMER_INTAKE_COMMANDS,
   CONSUMER_INTAKE_JOB,
+  CONSUMER_INTAKE_SWEEP_DAYS,
   CONSUMER_INTAKE_WORKFLOW_FILE,
   buildConsumerIntakeWorkflow,
 } from "../lib/scaffold/consumer-intake-workflow";
+import { CONSUMER_INTAKE_GRACE_MS } from "../scripts/board-conformance";
+import { spawnSync } from "child_process";
 import { CONSUMER_LABEL, TRUSTED_ASSOCIATIONS } from "../lib/consumer-triage";
 import { CLI_COMMANDS } from "../lib/cli-commands";
 import { OWNED_FILES } from "../lib/scaffold/owned-files";
@@ -89,5 +92,50 @@ describe("SC-2784: consumer-intake.yml triages on filing, on the label, and ever
   test("the scaffold owns the file, as a job-preserving managed workflow", () => {
     const row = OWNED_FILES.find(f => f.path === `.github/workflows/${CONSUMER_INTAKE_WORKFLOW_FILE}`);
     expect(row?.strategy).toBe("job-preserving");
+  });
+});
+
+/**
+ * #2379: the daily run labels an outside reporter's recent issue whose
+ * `opened` run never happened. Only `opened` added the label, and the triage
+ * reads only labelled issues, so a missed event meant never triaged.
+ */
+describe("#2379: the daily run labels an outside reporter's recent issue the opened run missed", () => {
+  const isSweep = (x: Step) => (x.if ?? "").includes("github.event_name == 'schedule'") && (x.run ?? "").includes("--add-label");
+  const sweep = () => steps().find(isSweep);
+
+  test("a schedule-only step labels before the triage reads the tracker", () => {
+    const s = steps();
+    const at = s.findIndex(isSweep);
+    expect(at, "no schedule step labels a missed issue").toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(s.findIndex(x => (x.run ?? "").includes("consumer-triage")));
+    expect(sweep()!.if).toBe("${{ github.event_name == 'schedule' }}");
+  });
+
+  test("its window is the board's grace period, and its trusted set is the triage's", () => {
+    expect(CONSUMER_INTAKE_SWEEP_DAYS * 24 * 60 * 60 * 1000).toBe(CONSUMER_INTAKE_GRACE_MS);
+    expect(sweep()!.run).toContain(`${CONSUMER_INTAKE_SWEEP_DAYS} days ago`);
+    expect(sweep()!.env?.TRUSTED).toBe(JSON.stringify(TRUSTED_ASSOCIATIONS));
+    expect(sweep()!.run, "an event value spliced into the script").not.toContain("${{");
+  });
+
+  test("its filter picks only a recent, open, unlabelled issue by an untrusted author", () => {
+    const filter = /--jq '([^']+)'/.exec(sweep()!.run!)?.[1];
+    expect(filter, "the step has no --jq filter to run").toBeDefined();
+    const page = [
+      { number: 1, created_at: "2026-11-17T10:00:00Z", author_association: "NONE", labels: [] },
+      { number: 2, created_at: "2026-11-17T10:00:00Z", author_association: "OWNER", labels: [] },
+      { number: 3, created_at: "2026-11-17T10:00:00Z", author_association: "CONTRIBUTOR", labels: [{ name: CONSUMER_LABEL }] },
+      { number: 4, created_at: "2026-11-10T10:00:00Z", author_association: "NONE", labels: [] },
+      { number: 5, created_at: "2026-11-17T10:00:00Z", author_association: "NONE", labels: [], pull_request: {} },
+      { number: 6, created_at: "2026-11-17T10:00:00Z", author_association: "FIRST_TIME_CONTRIBUTOR", labels: [{ name: "bug" }] },
+    ];
+    const r = spawnSync("jq", ["-r", filter!], {
+      input: JSON.stringify(page),
+      encoding: "utf-8",
+      env: { ...process.env, SINCE: "2026-11-16T00:00:00Z", TRUSTED: JSON.stringify(TRUSTED_ASSOCIATIONS) },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim().split("\n")).toEqual(["1", "6"]);
   });
 });

@@ -17,6 +17,16 @@
  * label written with the job's own token fires no further run, so this run
  * is the one that triages it.
  *
+ * ## The daily run catches an `opened` run that never happened (#2379)
+ *
+ * The triage reads only labelled issues, so an outside reporter's issue whose
+ * `opened` run was missed would never be triaged. The schedule therefore
+ * labels open issues from the last `CONSUMER_INTAKE_SWEEP_DAYS` by an author
+ * outside the trusted set that carry no label yet. The window is the board's
+ * grace period, and keeping it short means a label a maintainer took off an
+ * older issue on purpose is not put back. Issues filed before this workflow
+ * existed are labelled by hand, once.
+ *
  * ## It calls the published CLI
  *
  * Like every generated workflow it runs `bunx rungate@<version>`, so
@@ -37,6 +47,14 @@ export const CONSUMER_INTAKE_COMMANDS = ["consumer-triage"] as const;
 
 /** Its own group, never cancelling: each run re-reads the whole tracker. */
 export const CONSUMER_INTAKE_GROUP = "consumer-intake";
+
+/**
+ * How far back the daily run looks for a missed outside reporter's issue. It
+ * equals `CONSUMER_INTAKE_GRACE_MS` in scripts/board-conformance.ts, which
+ * test/intake-triage-workflow.test.ts asserts: an issue the board would call
+ * overdue is one this run had a day to label.
+ */
+export const CONSUMER_INTAKE_SWEEP_DAYS = 2;
 
 /** Once a day, off the hour so it does not queue behind every other scheduled job. */
 export const CONSUMER_INTAKE_CRON = "17 6 * * *";
@@ -96,6 +114,17 @@ jobs:
           GH_TOKEN: \${{ github.token }}
           NUMBER: \${{ github.event.issue.number }}
         run: gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label ${CONSUMER_LABEL}
+
+      - name: Give an outside reporter's recent issue the ${CONSUMER_LABEL} label, if its opened run was missed
+        if: \${{ github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: \${{ github.token }}
+          TRUSTED: '${trusted}'
+        run: |
+          SINCE="$(date -u -d '${CONSUMER_INTAKE_SWEEP_DAYS} days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          export SINCE
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&since=$SINCE&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= env.SINCE) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("${CONSUMER_LABEL}") | not) | .number' \\
+            | while read -r n; do gh issue edit "$n" --repo "$GITHUB_REPOSITORY" --add-label ${CONSUMER_LABEL}; done
 
       - uses: ${opts.checkout}
       - uses: ${opts.setupBun}
