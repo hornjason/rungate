@@ -44,6 +44,7 @@ import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-
 import { resolveConfig } from "../lib/config-loader";
 import { resolveRepoSlug } from "../lib/branch-cleanup";
 import {
+  ghWithoutGhToken,
   inMilestoneFamily,
   readIssueStates,
   readLiveIssues,
@@ -67,7 +68,8 @@ import {
 // SC-2615, SC-2616, SC-2617 — the three repository-wide populations.
 import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
 import { dependencyPlan } from "../lib/spec-deps";
-import type { DeclaredWork, FamilyIssue, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
+import type { ConsumerIntake, DeclaredWork, FamilyIssue, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
+import { CONSUMER_LABEL, trustedBodies, verdictIn, type IssueComment } from "../lib/consumer-triage";
 import { parseCriteria } from "../lib/spec-evidence";
 import { hasDecompositionTable, newlyAccepted, parseDecompositionPlan } from "../lib/issue-decomposition";
 
@@ -108,6 +110,12 @@ export interface BoardSnapshotGitHub {
     projectId: string,
     fieldName: string,
   ) => Promise<Map<number, ProjectFieldReading>>;
+  /**
+   * One issue's comments, with who wrote them — SC-2783, for the verdict
+   * marker. Optional so a caller that never reads comments says so by
+   * omission, and `consumer-intake` is then UNMEASURED rather than empty.
+   */
+  readComments?: (repo: string, number: number) => Promise<IssueComment[]>;
 }
 
 const LIVE_GITHUB: BoardSnapshotGitHub = {
@@ -118,7 +126,46 @@ const LIVE_GITHUB: BoardSnapshotGitHub = {
   readFieldIdentity: fieldId => readProjectFieldIdentity(fieldId),
   readFieldValues: (repo, numbers, projectId, fieldName) =>
     readProjectFieldValues(repo, numbers, projectId, fieldName),
+  readComments: async (repo, number) =>
+    ghWithoutGhToken(["api", "--paginate", `repos/${repo}/issues/${number}/comments?per_page=100`, "--jq", ".[] | [.body, .user.login, .author_association] | @json"])
+      .split("\n")
+      .filter(l => l.trim() !== "")
+      .map(l => {
+        const [body, author, association] = JSON.parse(l) as [string | null, string, string];
+        return { body: body ?? "", author, association };
+      }),
 };
+
+/**
+ * The consumer-filed open issues, each with its age and verdict — SC-2783.
+ *
+ * `null` (the key is then omitted, and `consumer-intake` is UNMEASURED) when
+ * any part of the population cannot be read: comments were not readable, an
+ * issue carries no filing time, or a cut label list hides whether an issue is
+ * a consumer's at all. A partial intake would drop exactly the reports the
+ * reading exists to name.
+ */
+export async function readConsumerIntake(
+  gh: BoardSnapshotGitHub,
+  repo: string,
+  open: readonly LiveIssue[],
+  takenAt: string,
+): Promise<ConsumerIntake | null> {
+  if (gh.readComments === undefined) return null;
+  if (open.some(i => i.labelsTruncated === true && !i.labels.includes(CONSUMER_LABEL))) return null;
+  const consumer = open.filter(i => i.labels.includes(CONSUMER_LABEL));
+  if (consumer.some(i => i.createdAt === undefined)) return null;
+  const issues: ConsumerIntake["issues"] = [];
+  try {
+    for (const i of consumer) {
+      const verdict = verdictIn(trustedBodies(await gh.readComments(repo, i.number)));
+      issues.push({ number: i.number, createdAt: i.createdAt!, milestone: i.milestone, verdict });
+    }
+  } catch {
+    return null; // a comment read that failed is a reading not taken, never "no marker"
+  }
+  return { takenAt, issues };
+}
 
 const USAGE = `rungate board-snapshot <spec.md> --prefix <name> [--repo <owner/name>]
 
@@ -253,6 +300,8 @@ export interface ProducedSnapshot {
   declaredWork?: DeclaredWork[];
   /** #2223 / E4: every open issue in any phase-milestone family, with the Criteria column. Absent when the column was not read. */
   familyIssues?: FamilyIssue[];
+  /** SC-2783. Absent when any consumer issue's labels, age or comments could not be read. */
+  consumerIntake?: ConsumerIntake;
 }
 
 /**
@@ -1045,8 +1094,13 @@ export async function main(
       }
     : {};
 
+  // SC-2783. Read at the same instant the snapshot is stamped, so the age the
+  // reading computes is the age the producer saw.
+  const producedAt = new Date().toISOString();
+  const consumerIntake = await readConsumerIntake(gh, repo, openIssues, producedAt);
+
   const snapshot: ProducedSnapshot = {
-    producedAt: new Date().toISOString(),
+    producedAt,
     spec: specArg,
     phases: actions.map(a => ({ phase: a.phase, criteria: a.criteria, milestoneState: a.action })),
     issues: snapshotIssues,
@@ -1060,6 +1114,7 @@ export async function main(
     ...edges,
     ...declared,
     ...family,
+    ...(consumerIntake === null ? {} : { consumerIntake }),
   };
 
   process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);

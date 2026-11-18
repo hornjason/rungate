@@ -131,6 +131,8 @@ export interface LiveIssue extends DepIssue {
    */
   readonly title: string;
   readonly body: string | null;
+  /** When the issue was filed (ISO 8601). Absent from a read that did not ask — SC-2783 needs it. */
+  readonly createdAt?: string;
   /**
    * True when the LABEL list was cut — a paged connection reporting another
    * page. Same reasoning as {@link DepIssue.blockedByTruncated}, and here
@@ -157,6 +159,7 @@ query($owner:String!,$name:String!,$states:[IssueState!],$after:String){
         state
         title
         body
+        createdAt
         milestone{title}
         labels(first:${ISSUE_PAGE}){pageInfo{hasNextPage} nodes{name}}
         blockedBy(first:${ISSUE_PAGE}){pageInfo{hasNextPage} nodes{number}}
@@ -173,6 +176,7 @@ interface IssuePage {
     state: string;
     title: string;
     body: string | null;
+    createdAt?: string;
     milestone: { title: string } | null;
     labels: { pageInfo: { hasNextPage: boolean }; nodes: { name: string }[] } | null;
     blockedBy: { pageInfo: { hasNextPage: boolean }; nodes: { number: number }[] } | null;
@@ -259,6 +263,7 @@ export async function readLiveIssues(
         // refuses rather than deriving from it: an unread blocker past the
         // boundary reads as missing and gets re-added.
         blockedByTruncated: n.blockedBy?.pageInfo.hasNextPage === true,
+        ...(typeof n.createdAt === "string" ? { createdAt: n.createdAt } : {}),
       });
     }
     if (!page.pageInfo.hasNextPage) return out;
