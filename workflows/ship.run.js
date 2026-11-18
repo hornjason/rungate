@@ -15,6 +15,52 @@ export const meta = {
   ],
 }
 // GENERATED from workflows/ship.js by scripts/build-workflow-launch.ts (#2287). Do not edit: edit ship.js and rebuild.
+// ---- bundled from lib/ by scripts/build-workflow-launch.ts: begin ----
+const SHA = /^[0-9a-f]{7,40}$/i;
+function suiteMeasurementSha(value) {
+    if (typeof value !== "string")
+        return null;
+    const trimmed = value.trim();
+    return SHA.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+function describeSuiteValue(v) {
+    if (v === undefined)
+        return "nothing";
+    if (v === null)
+        return "null";
+    if (Array.isArray(v))
+        return `an array of ${v.length}`;
+    if (typeof v === "object")
+        return "an object";
+    return JSON.stringify(v) ?? String(v);
+}
+function suiteCurrency(measuredSha, headSha) {
+    const measured = suiteMeasurementSha(measuredSha);
+    const head = suiteMeasurementSha(headSha);
+    if (!measured) {
+        return {
+            state: "UNRECORDED",
+            reason: `the suite result records ${describeSuiteValue(measuredSha)} as the commit it was ` +
+                `measured against, which is not a commit SHA — a count with no SHA is not evidence`,
+        };
+    }
+    if (!head) {
+        return {
+            state: "UNRECORDED",
+            reason: `the branch tip read at ship time is ${describeSuiteValue(headSha)}, not a commit SHA, ` +
+                `so the suite result measured against ${measured} cannot be confirmed against it`,
+        };
+    }
+    if (!(measured.startsWith(head) || head.startsWith(measured))) {
+        return {
+            state: "STALE",
+            reason: `the suite result is stale: it was measured against ${measured} but the branch now ends ` +
+                `at ${head} — the count did not come from the tree this run would ship`,
+        };
+    }
+    return { state: "CURRENT", reason: null };
+}
+// ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
 const GOAL_SCHEMA = {
@@ -4879,53 +4925,6 @@ function securityRefusalName(held, roundsSpent) {
     : 'SECURITY_REVIEW_DID_NOT_PASS'
 }
 
-
-function suiteSha(value) {
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  return /^[0-9a-f]{7,40}$/i.test(trimmed) ? trimmed.toLowerCase() : null
-}
-
-function describeSuiteShaValue(v) {
-  if (v === undefined) return 'nothing'
-  if (v === null) return 'null'
-  if (Array.isArray(v)) return `an array of ${v.length}`
-  if (typeof v === 'object') return 'an object'
-  return JSON.stringify(v) ?? String(v)
-}
-
-function suiteCurrency(measuredSha, headSha) {
-  const measured = suiteSha(measuredSha)
-  const head = suiteSha(headSha)
-
-  if (!measured) {
-    return {
-      state: 'UNRECORDED',
-      reason:
-        `the suite result records ${describeSuiteShaValue(measuredSha)} as the commit it was ` +
-        `measured against, which is not a commit SHA — a count with no SHA is not evidence`,
-    }
-  }
-  if (!head) {
-    return {
-      state: 'UNRECORDED',
-      reason:
-        `the branch tip read at ship time is ${describeSuiteShaValue(headSha)}, not a commit SHA, ` +
-        `so the suite result measured against ${measured} cannot be confirmed against it`,
-    }
-  }
-
-  if (!(measured.startsWith(head) || head.startsWith(measured))) {
-    return {
-      state: 'STALE',
-      reason:
-        `the suite result is stale: it was measured against ${measured} but the branch now ends ` +
-        `at ${head} — the count did not come from the tree this run would ship`,
-    }
-  }
-
-  return { state: 'CURRENT', reason: null }
-}
 
 function suiteReadingFor(recordedResult, currencyState) {
   if (recordedResult === 'FAIL') return 'FAIL'

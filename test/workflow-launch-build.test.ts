@@ -13,10 +13,15 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 import {
+  BUNDLE_END,
+  BUNDLE_START,
   buildWorkflowLaunch,
+  bundleDrops,
   bundleLibCores,
   coreClosure,
   GENERATED_NOTICE,
+  LAUNCH_BUNDLE,
+  launchBundle,
   PURE_CORE_MODULES,
   hasTopLevelReturn,
   metaLiteral,
@@ -28,7 +33,14 @@ import {
 } from "../scripts/build-workflow-launch";
 
 const source = readFileSync(SHIP_SOURCE, "utf-8");
-const built = buildWorkflowLaunch(source);
+const bundle = launchBundle();
+const built = buildWorkflowLaunch(source, WORKFLOW_SCRIPT_CAP, bundle);
+/** The launch text with the bundled lib region taken out: what came from ship.js alone. */
+const outsideBundle = (text: string) => {
+  const at = text.indexOf(BUNDLE_START);
+  const end = text.indexOf(BUNDLE_END);
+  return at === -1 || end === -1 ? text : text.slice(0, at) + text.slice(end + BUNDLE_END.length);
+};
 
 describe("#2287 / SC-2772: the generated ship launch file", () => {
   test("is under the Workflow tool's cap, and ship.js itself is not — the reason it exists", () => {
@@ -48,7 +60,8 @@ describe("#2287 / SC-2772: the generated ship launch file", () => {
   test("keeps every token of ship.js, in order — only comments and blank lines are gone", () => {
     const want = tokenTexts(source);
     expect(want.length, "no tokens read from ship.js — the comparison would be vacuous").toBeGreaterThan(10_000);
-    expect(tokenTexts(built.text)).toEqual(want);
+    // The bundled lib region (#2400) is the only addition, and it is checked below.
+    expect(tokenTexts(outsideBundle(built.text))).toEqual(want);
   });
 
   test("says it is generated, and from what", () => {
@@ -90,8 +103,8 @@ describe("#2287 / SC-2772: what the build must not get wrong", () => {
   });
 
   test("over the cap is a refusal, not a smaller file — and exactly at the cap is accepted (review, #2291)", () => {
-    expect(() => buildWorkflowLaunch(source, built.bytes - 1)).toThrow(/over the Workflow tool's/);
-    expect(buildWorkflowLaunch(source, built.bytes).bytes).toBe(built.bytes);
+    expect(() => buildWorkflowLaunch(source, built.bytes - 1, bundle)).toThrow(/over the Workflow tool's/);
+    expect(buildWorkflowLaunch(source, built.bytes, bundle).bytes).toBe(built.bytes);
   });
 
   test("text inside a template literal is never rewritten: trailing spaces and blank-line runs survive (review, #2291)", () => {
@@ -339,5 +352,55 @@ describe("#2398: cores are read by the checker and bundled", () => {
     expect(() => bundleLibCores({ "lib/a.ts": ["a"], "lib/b.ts": ["b"] }, p => files[p]!)).toThrow(
       "helper is defined by both lib/a.ts and lib/b.ts",
     );
+  });
+});
+
+describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no longer copies it", () => {
+  const ROOT = join(import.meta.dir, "..");
+  const read = (p: string) => readFileSync(join(ROOT, p), "utf-8");
+
+  test("the launch bundle is suiteCurrency from lib/suite-measurement.ts", () => {
+    expect(LAUNCH_BUNDLE).toEqual({ "lib/suite-measurement.ts": ["suiteCurrency"] });
+  });
+
+  test("the launch file holds exactly the bundle, between its markers, after the generated notice", () => {
+    const bundle = bundleLibCores(LAUNCH_BUNDLE, read);
+    const at = built.text.indexOf(BUNDLE_START);
+    expect(at, "the launch file carries no bundle").toBeGreaterThan(built.text.indexOf(GENERATED_NOTICE));
+    const region = built.text.slice(at + BUNDLE_START.length, built.text.indexOf(BUNDLE_END));
+    expect(tokenTexts(region)).toEqual(tokenTexts(bundle.text));
+    const f = new Function(`${region}\nreturn suiteCurrency;`)() as (m: unknown, h: unknown) => { state: string };
+    expect(f("3192a75", "3192a75c4f1e2b8d9a0c5e6f7081a2b3c4d5e6f7").state).toBe("CURRENT");
+  });
+
+  test("ship.js defines none of the names the bundle defines — its hand copy cannot come back", () => {
+    const bundle = launchBundle();
+    expect(bundle.defined).toContain("suiteCurrency");
+    expect(() => buildWorkflowLaunch(`${source}\nfunction suiteCurrency() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(
+      "suiteCurrency is defined by both workflows/ship.js and the lib bundle",
+    );
+  });
+
+  test("the output check refuses a bundle with a reached declaration removed, naming the name", () => {
+    const src = "const SHA = /^[0-9a-f]+$/;\nfunction norm(v) { return SHA.test(v) ? v : null; }\nexport function core(v) { return norm(v); }";
+    expect(bundleDrops(src, "const SHA = /^[0-9a-f]+$/;\nfunction norm(v) { return SHA.test(v) ? v : null; }\nfunction core(v) { return norm(v); }")).toEqual([]);
+    expect(bundleDrops(src, "const SHA = /^[0-9a-f]+$/;\nfunction core(v) { return norm(v); }")).toEqual(["norm"]);
+    // A global the module never declared is not a drop: it is unresolved in both.
+    expect(bundleDrops("export function f() { return JSON.stringify(1); }", "function f() { return JSON.stringify(1); }")).toEqual([]);
+  });
+
+  test("review of #2399 round 5: a core that uses a name declared inside a top-level block is refused, naming it", () => {
+    // A `var` in a block is module-scoped, so the module defines it and the
+    // bundle, which carries only top-level declarations, would not.
+    expect(coreClosure("if (true) { var g = () => 1; }\nexport function core() { return g(); }", ["core"]).imports).toEqual([
+      "g (declared where the bundle cannot reach it, via core)",
+    ]);
+    // A function declared in a block is block-scoped in a module: the module
+    // itself cannot resolve `g`, so the bundle cannot differ from it, and the
+    // output check sees the name unresolved in both.
+    const blockFn = "if (true) { function g() { return 1; } }\nexport function core() { return g(); }";
+    expect(bundleDrops(blockFn, "function core() { return g(); }")).toEqual([]);
+    // A local, a parameter, and a property of a reached object are all inside what is emitted.
+    expect(coreClosure("const CFG = { a: 1 };\nexport function core(p) { const l = p; return l + CFG.a; }", ["core"]).imports).toEqual([]);
   });
 });

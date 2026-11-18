@@ -111,9 +111,57 @@ function commentRanges(text: string): Array<{ pos: number; end: number; multilin
  * (`return /*\n*\/ x` returns undefined) — and a space when it does not, so
  * `a/* *\/b` never joins into one token. Nothing else is rewritten.
  */
-export function buildWorkflowLaunch(source: string, cap: number = WORKFLOW_SCRIPT_CAP): LaunchBuild {
+export function buildWorkflowLaunch(source: string, cap: number = WORKFLOW_SCRIPT_CAP, bundle?: CoreBundle): LaunchBuild {
   const before = parseErrors(source);
   if (before.length > 0) throw new Error(`the source does not parse: ${before[0]}`);
+  let out = stripComments(source);
+
+  const meta = /^export const meta = \{/.exec(out);
+  if (!meta) throw new Error("the launch text does not begin with `export const meta = {` — the Workflow tool requires it first");
+  out = out.replace(/^(export const meta = \{[\s\S]*?\n\};?\n)/, `$1${GENERATED_NOTICE}\n`);
+  if (!out.includes(GENERATED_NOTICE)) throw new Error("could not place the generated notice after the `meta` literal");
+
+  if (bundle) {
+    // One scope: a name ship.js declares and the bundle defines would be a
+    // redeclaration, or the hand copy coming back (#2400).
+    const own = new Set(topLevelNames(source));
+    const both = bundle.defined.filter(n => own.has(n));
+    if (both.length > 0) {
+      throw new Error(`${both.join(", ")} is defined by both workflows/ship.js and the lib bundle; delete the copy from ship.js`);
+    }
+    out = out.replace(`${GENERATED_NOTICE}\n`, `${GENERATED_NOTICE}\n${BUNDLE_START}\n${stripComments(bundle.text).trim()}\n${BUNDLE_END}\n`);
+  }
+
+  const after = parseErrors(out);
+  if (after.length > 0) throw new Error(`the launch text does not parse: ${after[0]}`);
+  if (!hasTopLevelReturn(out)) throw new Error("the launch text has no top-level `return` — the run would produce nothing");
+  // The tool accepts a script of exactly `cap` (review, #2291). Its limit is
+  // in characters; counting UTF-8 bytes, which are never fewer, is the
+  // conservative reading.
+  const bytes = Buffer.byteLength(out, "utf-8");
+  if (bytes > cap) throw new Error(`the launch text is ${bytes} bytes, over the Workflow tool's ${cap}-byte cap`);
+  return { text: out, bytes };
+}
+
+/** Marks the bundled lib region in the launch file (#2400). Added after comments are stripped, so it survives. */
+export const BUNDLE_START = "// ---- bundled from lib/ by scripts/build-workflow-launch.ts: begin ----";
+export const BUNDLE_END = "// ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----";
+
+/** The names a script's top-level statements declare. */
+function topLevelNames(text: string): string[] {
+  const out: string[] = [];
+  const bind = (b: ts.BindingName): void => {
+    if (ts.isIdentifier(b)) out.push(b.text);
+    else for (const e of b.elements) if (!ts.isOmittedExpression(e)) bind(e.name);
+  };
+  for (const st of parse(text).statements) {
+    if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name) out.push(st.name.text);
+    else if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) bind(d.name);
+  }
+  return out;
+}
+
+function stripComments(source: string): string {
   // Only the comment and the whitespace around it on its own line are ever
   // touched — never a file-wide rewrite, which reached inside template
   // literals and changed a prompt's trailing spaces and blank lines (review,
@@ -147,21 +195,7 @@ export function buildWorkflowLaunch(source: string, cap: number = WORKFLOW_SCRIP
     }
   }
   out += source.slice(at);
-
-  const meta = /^export const meta = \{/.exec(out);
-  if (!meta) throw new Error("the launch text does not begin with `export const meta = {` — the Workflow tool requires it first");
-  out = out.replace(/^(export const meta = \{[\s\S]*?\n\};?\n)/, `$1${GENERATED_NOTICE}\n`);
-  if (!out.includes(GENERATED_NOTICE)) throw new Error("could not place the generated notice after the `meta` literal");
-
-  const after = parseErrors(out);
-  if (after.length > 0) throw new Error(`the launch text does not parse: ${after[0]}`);
-  if (!hasTopLevelReturn(out)) throw new Error("the launch text has no top-level `return` — the run would produce nothing");
-  // The tool accepts a script of exactly `cap` (review, #2291). Its limit is
-  // in characters; counting UTF-8 bytes, which are never fewer, is the
-  // conservative reading.
-  const bytes = Buffer.byteLength(out, "utf-8");
-  if (bytes > cap) throw new Error(`the launch text is ${bytes} bytes, over the Workflow tool's ${cap}-byte cap`);
-  return { text: out, bytes };
+  return out;
 }
 
 /** Does the file end its run with a `return` at the top level, as every workflow script does? */
@@ -228,10 +262,47 @@ const CORE_FILE = "/core.js";
  * Transpiling first erases type-only imports, which the sandbox never sees.
  * `noResolve` keeps every import an unresolved alias, which is what marks it.
  */
-function coreProgram(source: string): { checker: ts.TypeChecker; sf: ts.SourceFile } {
-  const js = ts.transpileModule(source, {
+function transpile(source: string): string {
+  return ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
   }).outputText;
+}
+
+function jsProgram(js: string, checkJs: boolean): { program: ts.Program; sf: ts.SourceFile } {
+  const options: ts.CompilerOptions = { allowJs: true, checkJs, noResolve: true, noLib: true, types: [], target: ts.ScriptTarget.ESNext };
+  const host = ts.createCompilerHost(options);
+  host.getSourceFile = (name, lang) => (name === CORE_FILE ? ts.createSourceFile(CORE_FILE, js, lang, true, ts.ScriptKind.JS) : undefined);
+  host.fileExists = name => name === CORE_FILE;
+  host.readFile = name => (name === CORE_FILE ? js : undefined);
+  const program = ts.createProgram([CORE_FILE], options, host);
+  return { program, sf: program.getSourceFile(CORE_FILE)! };
+}
+
+/** "Cannot find name" in its forms: plain, with a suggestion, an instance or static member, a shorthand property. */
+const CANNOT_FIND_NAME = new Set([2304, 2552, 2662, 2663, 18004]);
+
+function unresolvedNames(js: string): Set<string> {
+  const { program, sf } = jsProgram(js, true);
+  const names = new Set<string>();
+  for (const d of program.getSemanticDiagnostics(sf)) {
+    if (CANNOT_FIND_NAME.has(d.code) && d.start !== undefined && d.length !== undefined) names.add(js.slice(d.start, d.start + d.length));
+  }
+  return names;
+}
+
+/**
+ * The output check (#2400, from review round 4 of #2399): every name that
+ * resolves in the module and does not resolve in its emitted bundle. A global
+ * the module never declares is unresolved in both and is not a drop. This
+ * reads the emitted text, so it holds whatever shape the closure walk missed.
+ */
+export function bundleDrops(source: string, bundleText: string): string[] {
+  const inModule = unresolvedNames(transpile(source));
+  return [...unresolvedNames(bundleText)].filter(n => !inModule.has(n)).sort();
+}
+
+function coreProgram(source: string): { checker: ts.TypeChecker; sf: ts.SourceFile } {
+  const js = transpile(source);
   const options: ts.CompilerOptions = { allowJs: true, noResolve: true, noLib: true, types: [], target: ts.ScriptTarget.ESNext };
   const host = ts.createCompilerHost(options);
   host.getSourceFile = (name, lang) => (name === CORE_FILE ? ts.createSourceFile(CORE_FILE, js, lang, true, ts.ScriptKind.JS) : undefined);
@@ -284,6 +355,10 @@ function readCore(source: string, core: readonly string[]): CoreReading {
     .filter((s): s is ts.ExportDeclaration => ts.isExportDeclaration(s) && !s.exportClause && !!s.moduleSpecifier)
     .map(s => (s.moduleSpecifier as ts.StringLiteral).text);
   const missing: string[] = [];
+  // Names resolved into this file that are not top-level declarations: fine
+  // when inside a node the bundle emits (a local, a parameter, a property of a
+  // reached object), refused otherwise (#2400, from review round 5 of #2399).
+  const unplaced: { name: string; decl: ts.Node; via: string }[] = [];
   const touched: string[] = [];
   const note = (line: string) => {
     if (!touched.includes(line)) touched.push(line);
@@ -370,11 +445,20 @@ function readCore(source: string, core: readonly string[]): CoreReading {
         else {
           const top = topLevelNode(decl, sf);
           if (top) enqueue(top, sym!.name);
+          // A property is a member, not a binding in scope: what writes one at
+          // load is the load-time scan's question, not this one.
+          else if (decl && decl.getSourceFile() === sf && !(sym!.flags & (ts.SymbolFlags.Property | ts.SymbolFlags.Method | ts.SymbolFlags.Accessor))) {
+            unplaced.push({ name: n.text, decl, via: name });
+          }
         }
       }
       ts.forEachChild(n, visit);
     };
     visit(node);
+  }
+  const emitted = [...reached.keys()];
+  for (const u of unplaced) {
+    if (!emitted.some(r => r.pos <= u.decl.pos && u.decl.end <= r.end)) note(`${u.name} (declared where the bundle cannot reach it, via ${u.via})`);
   }
   // Top-level code the bundle does not carry still runs when the module
   // loads. An enum or a namespace compiles to `var X;` plus a statement, and
@@ -453,7 +537,8 @@ export function bundleLibCores(
   const parts: string[] = [];
   const owner = new Map<string, string>();
   for (const [path, core] of Object.entries(modules)) {
-    const { closure, nodes, sf } = readCore(read(path), core);
+    const source = read(path);
+    const { closure, nodes, sf } = readCore(source, core);
     if (closure.missing.length > 0 || closure.imports.length > 0) {
       throw new Error(
         `${path} cannot be bundled: ` +
@@ -465,6 +550,7 @@ export function bundleLibCores(
             .join(", and "),
       );
     }
+    const moduleParts: string[] = [];
     for (const { node, names } of nodes) {
       for (const name of names) {
         const prior = owner.get(name);
@@ -476,19 +562,35 @@ export function bundleLibCores(
       if (ts.isVariableDeclaration(node)) {
         const flags = node.parent.flags;
         const keyword = flags & ts.NodeFlags.Const ? "const" : flags & ts.NodeFlags.Let ? "let" : "var";
-        parts.push(`${keyword} ${node.getText(sf)};`);
+        moduleParts.push(`${keyword} ${node.getText(sf)};`);
       } else {
-        parts.push(node.getText(sf).replace(/^export\s+(default\s+)?/, ""));
+        moduleParts.push(node.getText(sf).replace(/^export\s+(default\s+)?/, ""));
       }
     }
+    const text = moduleParts.join("\n");
+    const dropped = bundleDrops(source, text);
+    if (dropped.length > 0) {
+      throw new Error(`${path} cannot be bundled: ${dropped.join(", ")} resolves in the module and not in its emitted text`);
+    }
+    parts.push(text);
   }
   return { text: parts.join("\n"), defined: [...owner.keys()] };
+}
+
+/** What `workflows/ship.run.js` carries from lib/ (#2400, SC-2775 wave 2a). Waves 2b-4 add the rest. */
+export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
+  "lib/suite-measurement.ts": ["suiteCurrency"],
+};
+
+/** The bundle the launch file is built with, read from this checkout's lib/. */
+export function launchBundle(read: (path: string) => string = p => readFileSync(join(ROOT, p), "utf-8")): CoreBundle {
+  return bundleLibCores(LAUNCH_BUNDLE, read);
 }
 
 function main(argv: string[]): number {
   let built: LaunchBuild;
   try {
-    built = buildWorkflowLaunch(readFileSync(SHIP_SOURCE, "utf-8"));
+    built = buildWorkflowLaunch(readFileSync(SHIP_SOURCE, "utf-8"), WORKFLOW_SCRIPT_CAP, launchBundle());
   } catch (e) {
     console.error(`build-workflow-launch: ${(e as Error).message}`);
     return BUILD_REFUSE_EXIT;
