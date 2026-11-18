@@ -49,6 +49,18 @@ const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
 
 
+/** One marker-delimited region of ship.js, refused unless its markers appear exactly once. */
+function sliceBlock(name: string): string {
+  const a = shipSource.indexOf(`// ──── ${name}-START ────`);
+  const b = shipSource.indexOf(`// ──── ${name}-END ────`);
+  expect(a, `ship.js is missing the ${name}-START marker`).toBeGreaterThan(-1);
+  expect(b, `ship.js is missing the ${name}-END marker`).toBeGreaterThan(a);
+  // Exactly once each: a second copy would survive any mutation of the first.
+  expect(shipSource.indexOf(`// ──── ${name}-START ────`, a + 1)).toBe(-1);
+  expect(shipSource.indexOf(`// ──── ${name}-END ────`, b + 1)).toBe(-1);
+  return shipSource.slice(a, b);
+}
+
 type Probe =
   | { kind: "unconfigured"; detail: string }
   | { kind: "unmeasured"; detail: string }
