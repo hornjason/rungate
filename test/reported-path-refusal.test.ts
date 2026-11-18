@@ -546,20 +546,20 @@ describe("#830: the refusal is delivered, and it ends the sub-issue that reporte
 describe("#2421: the one helper that reaches ship.js's WORKTREE-IDENTITY region", () => {
   const REGION = "// ──── WORKTREE-IDENTITY-START ────\nfunction worktreeIdentity() { return 'x'; }\n// ──── WORKTREE-IDENTITY-END ────\n";
 
-  test("it returns the region and the function built from it", () => {
+  test("#2421 AC-2: it returns the region and the function built from it", () => {
     expect(worktreeIdentityRegion(`before\n${REGION}after`)).toContain("function worktreeIdentity()");
     expect(shipWorktreeIdentity(REGION)()).toBe("x");
   });
 
-  test("a source with no markers is refused, naming them", () => {
+  test("#2421 AC-1: a source with no markers is refused, naming them", () => {
     expect(() => worktreeIdentityRegion("function worktreeIdentity() {}")).toThrow("WORKTREE-IDENTITY-START/END");
   });
 
-  test("a source with the markers twice is refused: a second copy survives any change to the first", () => {
+  test("#2421 AC-1: a source with the markers twice is refused: a second copy survives any change to the first", () => {
     expect(() => worktreeIdentityRegion(`${REGION}${REGION}`)).toThrow("more than once");
   });
 
-  test("the live ship.js still yields worktreeIdentity through it", () => {
+  test("#2421 AC-2: the live ship.js still yields worktreeIdentity through it", () => {
     expect(typeof shipWorktreeIdentity()).toBe("function");
   });
 });
