@@ -1,0 +1,53 @@
+# generated-sha: 53ef363f4652bd30
+# Managed by rungate — do not edit the generated job.
+#
+# SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
+# or labelled from-consumer, and every day, by consumer-triage --write.
+# An outside reporter's new issue is given from-consumer first, because
+# GitHub drops the labels an author without push access sets.
+name: Consumer issues — give each one a triage verdict
+
+on:
+  issues:
+    types: [opened, labeled]
+  schedule:
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: read
+  # Milestones, labels and the verdict comment.
+  issues: write
+  # The triage reads open pull requests for shared files.
+  pull-requests: read
+
+concurrency:
+  group: consumer-intake
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    if: ${{ github.event_name == 'schedule' || github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'from-consumer') }}
+    runs-on: "ubuntu-24.04"
+    steps:
+      - name: Give an outside reporter's issue the from-consumer label
+        if: ${{ !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) && github.event.action == 'opened' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label from-consumer
+
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          # Pinned by .bun-version — the project's single declaration (#622).
+          # setup-bun reads that file, so there is no version spelled here to drift from it.
+          bun-version-file: ".bun-version"
+        env:
+          # A per-runner install path, so runners sharing a HOME cannot rewrite
+          # each other's bun mid-exec ("Text file busy").
+          HOME: ${{ runner.tool_cache }}/bun-home
+          USERPROFILE: ${{ runner.tool_cache }}/bun-home
+      - name: Triage every consumer issue that has no verdict
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bunx rungate@0.8.27 consumer-triage --repo "$GITHUB_REPOSITORY" --write
