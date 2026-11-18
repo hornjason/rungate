@@ -617,6 +617,14 @@ export function planDecomposition(
  * a row that lost its criterion produces a body that says so rather than a
  * body carrying a sentence true of anything.
  */
+/**
+ * The start of the footer every issue `plan-issues --decompose` files ends
+ * with, followed by the plan's path and a closing backtick. One binding:
+ * `decomposedBody` writes it and `lib/consumer-triage.ts` reads it to leave
+ * a planned issue unjudged (#2415).
+ */
+export const PLANNED_ISSUE_FOOTER = "Created by `rungate plan-issues --decompose ";
+
 export function decomposedBody(
   row: DecompositionRow,
   criteriaHeading: string,
@@ -651,7 +659,7 @@ export function decomposedBody(
     ``,
     `---`,
     ``,
-    `Created by \`rungate plan-issues --decompose ${planPath}\` from a reviewed plan.`,
+    `${PLANNED_ISSUE_FOOTER}${planPath}\` from a reviewed plan.`,
     `The plan is the record of why this is one issue and not two.`,
   ].join("\n");
 }

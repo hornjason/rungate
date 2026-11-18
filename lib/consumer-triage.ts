@@ -28,12 +28,17 @@
  *   did not name. A person put it there, and nothing here moves a milestone a
  *   person set, the rule `issuePlacement` keeps too. `consumer-intake` (SC-2783)
  *   counts a milestone as an answer, so the issue is not lost.
+ *   **Also LEFT, with or without a milestone:** an issue `plan-issues
+ *   --decompose` filed, which ends with the planner's own footer (#2415). It
+ *   is not a consumer report, so it gets no verdict and no marker; its plan
+ *   placed it, and a quoted footer elsewhere in a body does not count.
  * - **REFUSED** — the decider could not give a verdict without guessing: the
  *   phase it belongs in has no milestone, or no open issue sits in any phase.
  */
 import { activeMilestone } from "./board-ready-rule";
 import { criterionAnswer } from "./board-mirror";
 import { duplicateCollisions, type Finding } from "./finding-arbiter";
+import { PLANNED_ISSUE_FOOTER } from "./issue-decomposition";
 import { declaredFiles, sharedFiles } from "./issue-file-overlap";
 import { issuePlacement, type PlacingFamily } from "./issue-repair";
 
@@ -87,7 +92,36 @@ export interface TriageContext {
 
 const asFinding = (i: TriageIssue): Finding => ({ id: String(i.number), title: i.title, body: i.body ?? "" });
 
+/**
+ * The plan a planned issue's OWN footer names, or null (#2415). The footer
+ * counts only where `decomposedBody` writes it: directly after a `---` rule.
+ * The same words quoted inside a sentence, say by a consumer citing another
+ * issue, do not make a report a plan, and a section someone appends after
+ * the footer does not unmake one (reviews of #2416). A footer whose path
+ * cannot be read still marks the issue planned, naming the path unread.
+ */
+export function plannedFrom(body: string | null | undefined): string | null {
+  const text = (body ?? "").replace(/\r\n/g, "\n");
+  for (let rule = text.indexOf("\n---\n"); rule >= 0; rule = text.indexOf("\n---\n", rule + 1)) {
+    const after = text.slice(rule + "\n---\n".length).replace(/^\s*/, "");
+    if (!after.startsWith(PLANNED_ISSUE_FOOTER)) continue;
+    const rest = after.slice(PLANNED_ISSUE_FOOTER.length);
+    const end = rest.indexOf("`");
+    const line = rest.indexOf("\n");
+    return end > 0 && (line < 0 || end < line) ? rest.slice(0, end) : "a plan whose path is unreadable";
+  }
+  return null;
+}
+
 export function triageVerdict(issue: TriageIssue, ctx: TriageContext): Triage {
+  // 0. A planned issue is not a consumer report, whatever label brought it
+  // here (#2415). #2289 and #2290, two rows of one ADR, were judged as
+  // reports and one was marked a DUPLICATE of its sibling.
+  const plan = plannedFrom(issue.body);
+  if (plan !== null) {
+    return { kind: "LEFT", why: `filed by plan-issues from ${plan}; a planned issue is not a consumer report, so triage never judges it` };
+  }
+
   // 1. DUPLICATE — of an older open issue only.
   const older = ctx.openIssues.filter(o => o.number < issue.number).map(asFinding);
   const dup = duplicateCollisions(asFinding(issue), older)[0];
