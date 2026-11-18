@@ -136,7 +136,7 @@ interface RepoRailsFinding {
 
 interface RepoRailsOutput {
   quality: number;
-  level: string;
+  level?: string;
   files: Record<string, { findings: RepoRailsFinding[] }>;
 }
 
@@ -159,8 +159,9 @@ export function repoRailsReading(stdout: string): RepoRailsOutput | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   // `quality` is summed into the overall score, so a non-number there is the
   // same crash further on (review of #2402).
-  const { quality, level } = parsed as { quality?: unknown; level?: unknown };
-  if (typeof quality !== "number" || !Number.isFinite(quality) || typeof level !== "string") return null;
+  // `level` is read nowhere, so it decides nothing (review of #2402).
+  const quality = (parsed as { quality?: unknown }).quality;
+  if (typeof quality !== "number" || !Number.isFinite(quality)) return null;
   const files = (parsed as { files?: unknown }).files;
   if (typeof files !== "object" || files === null || Array.isArray(files)) return null;
   for (const entry of Object.values(files)) {

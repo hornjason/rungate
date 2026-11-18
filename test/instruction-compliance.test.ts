@@ -226,11 +226,11 @@ describe("#2401: a RepoRails reply is a reading only when it has the reading's s
     expect(repoRailsReading(JSON.stringify({ quality: 1, level: "L1", files: { "a.md": { findings: ["x"] } } }))).toBeNull();
   });
 
-  test("review of #2402: a quality that is not a number, or a level that is not a string, is no reading", () => {
+  test("review of #2402: a quality that is not a finite number is no reading; level, read nowhere, decides nothing", () => {
     const files = { "a.md": { findings: [] } };
     expect(repoRailsReading(JSON.stringify({ quality: "n/a", level: "L1", files }))).toBeNull();
     expect(repoRailsReading(JSON.stringify({ level: "L1", files }))).toBeNull();
-    expect(repoRailsReading(JSON.stringify({ quality: 1, files }))).toBeNull();
+    expect(repoRailsReading(JSON.stringify({ quality: 1, files }))).toEqual({ quality: 1, files });
   });
 
   test("empty or unparseable output is no reading", () => {
