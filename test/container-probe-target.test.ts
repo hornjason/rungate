@@ -43,10 +43,13 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { containerProbeTarget, CONTAINER_HOST } from "../lib/dev-liveness";
+import { shipPrelude } from "../scripts/build-workflow-launch";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
 
+
+/** One marker-delimited region of ship.js, refused unless its markers appear exactly once. */
 function sliceBlock(name: string): string {
   const a = shipSource.indexOf(`// ──── ${name}-START ────`);
   const b = shipSource.indexOf(`// ──── ${name}-END ────`);
@@ -70,8 +73,11 @@ const shipShellQuote: (word: unknown) => string = (() => {
   return new Function(`${m[0]}\nreturn shellQuote`)();
 })();
 
+// Since #2417 the probe ship.js runs is the one ship.run.js bundles from
+// lib/dev-liveness.ts, not a hand copy; this drives that bundled code, and a
+// build that stops bundling it fails to load here.
 const inlined = new Function(
-  `${sliceBlock("CONTAINER-PROBE")}
+  `${shipPrelude()}
    return { containerProbeTarget, CONTAINER_HOST };`,
 )() as {
   containerProbeTarget: (c: unknown) => Probe;
@@ -416,5 +422,17 @@ describe("#312 — record-env reports what the run measured", () => {
       const prompt = await runRecordEnv(probe, "s.environments.prod.quinn = 'SENTINEL';");
       expect(prompt, `arm ${probe.kind} dropped the measurement`).toContain("'SENTINEL'");
     }
+  });
+});
+
+describe("#2417: the probe has one definition, in the launched file", () => {
+  test("ship.js carries no CONTAINER-PROBE block and no copy of containerProbeTarget", () => {
+    expect(shipSource).not.toContain("CONTAINER-PROBE-START");
+    expect(shipSource.match(/function containerProbeTarget\(/g) ?? []).toHaveLength(0);
+  });
+
+  test("ship.run.js defines containerProbeTarget exactly once", () => {
+    const launched = readFileSync(join(REPO_ROOT, "workflows", "ship.run.js"), "utf-8");
+    expect(launched.match(/function containerProbeTarget\(/g) ?? []).toHaveLength(1);
   });
 });

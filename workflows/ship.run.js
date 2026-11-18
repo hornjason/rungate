@@ -479,6 +479,63 @@ function priorWorkRefusal(issueNumber, priorBranch, existingPR) {
         `second PR for one issue, and merging either would silently discard the ` +
         `other's work. Resume that branch or close that PR, then re-run.`);
 }
+function redactSecrets(text) {
+    return text
+        .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1<redacted>@")
+        .replace(/\b(gh[pousr]|github_pat)_[A-Za-z0-9_]{10,}/g, "<redacted-token>");
+}
+function safeForRecord(text) {
+    return redactSecrets(text).replace(/([?&][A-Za-z0-9_.\[\]%-]+=)[^&\s)'"`]+/g, "$1<redacted>");
+}
+const CONTAINER_HOST = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+const CONTAINER_HEALTH_PATH_UNSAFE = /[;&|$`"'\\<>{}\s\u0000-\u001f]/;
+function containerProbeTarget(container) {
+    if (!container || typeof container !== "object") {
+        return {
+            kind: "unconfigured",
+            detail: "no container is configured for this project",
+        };
+    }
+    const hosts = Array.isArray(container.hosts) ? container.hosts : [];
+    const host = hosts.find((h) => typeof h === "string" && CONTAINER_HOST.test(h));
+    if (!host) {
+        return {
+            kind: "unmeasured",
+            detail: "a container is configured and container.hosts names no host to reach it at, " +
+                "so nothing was probed. No host is guessed. This is UNMEASURED, not DOWN",
+        };
+    }
+    const port = container.port;
+    if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+        return {
+            kind: "unmeasured",
+            detail: `a container is configured at ${host} and container.port is not a port number, ` +
+                "so nothing was probed. No default port is invented: a guessed port is answered " +
+                "by whatever else holds it. This is UNMEASURED, not DOWN",
+        };
+    }
+    const raw = container.healthPath;
+    const healthPath = raw === undefined || raw === null || raw === "" ? "/" : raw;
+    if (typeof healthPath !== "string" ||
+        !healthPath.startsWith("/") ||
+        healthPath.startsWith("//")) {
+        return {
+            kind: "unmeasured",
+            detail: `a container is configured at ${host} port ${port} and container.healthPath is not ` +
+                "an absolute path, so nothing was probed. This is UNMEASURED, not DOWN",
+        };
+    }
+    if (healthPath.length > 200 || CONTAINER_HEALTH_PATH_UNSAFE.test(healthPath)) {
+        return {
+            kind: "unmeasured",
+            detail: `a container is configured at ${host} port ${port} and container.healthPath carries ` +
+                "whitespace, a shell metacharacter or over 200 characters, so nothing was probed. " +
+                "It reaches a curl command an agent runs. This is UNMEASURED, not DOWN",
+        };
+    }
+    const url = `http://${host}:${port}${healthPath}`;
+    return { kind: "probe", host, port, healthPath, url, safeUrl: safeForRecord(url) };
+}
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
@@ -4131,63 +4188,6 @@ phase('Validate')
 let quinnLocalResult = { result: 'PASS' }
 let quinnLocalRan = false
 
-const CONTAINER_HOST = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/
-
-const CONTAINER_HEALTH_PATH_UNSAFE = /[;&|$`"'\\<>{}\s\u0000-\u001f]/
-
-function containerSafeForRecord(text) {
-  return text
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, '$1<redacted>@')
-    .replace(/\b(gh[pousr]|github_pat)_[A-Za-z0-9_]{10,}/g, '<redacted-token>')
-    .replace(/([?&][A-Za-z0-9_.\[\]%-]+=)[^&\s)'"`]+/g, '$1<redacted>')
-}
-
-function containerProbeTarget(container) {
-  if (!container || typeof container !== 'object') {
-    return { kind: 'unconfigured', detail: 'no container is configured for this project' }
-  }
-  const hosts = Array.isArray(container.hosts) ? container.hosts : []
-  const host = hosts.find(h => typeof h === 'string' && CONTAINER_HOST.test(h))
-  if (!host) {
-    return {
-      kind: 'unmeasured',
-      detail:
-        'a container is configured and container.hosts names no host to reach it at, ' +
-        'so nothing was probed. No host is guessed. This is UNMEASURED, not DOWN',
-    }
-  }
-  const port = container.port
-  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
-    return {
-      kind: 'unmeasured',
-      detail:
-        `a container is configured at ${host} and container.port is not a port number, ` +
-        'so nothing was probed. No default port is invented: a guessed port is answered ' +
-        'by whatever else holds it. This is UNMEASURED, not DOWN',
-    }
-  }
-  const raw = container.healthPath
-  const healthPath = raw === undefined || raw === null || raw === '' ? '/' : raw
-  if (typeof healthPath !== 'string' || !healthPath.startsWith('/') || healthPath.startsWith('//')) {
-    return {
-      kind: 'unmeasured',
-      detail:
-        `a container is configured at ${host} port ${port} and container.healthPath is not ` +
-        'an absolute path, so nothing was probed. This is UNMEASURED, not DOWN',
-    }
-  }
-  if (healthPath.length > 200 || CONTAINER_HEALTH_PATH_UNSAFE.test(healthPath)) {
-    return {
-      kind: 'unmeasured',
-      detail:
-        `a container is configured at ${host} port ${port} and container.healthPath carries ` +
-        'whitespace, a shell metacharacter or over 200 characters, so nothing was probed. ' +
-        'It reaches a curl command an agent runs. This is UNMEASURED, not DOWN',
-    }
-  }
-  const url = `http://${host}:${port}${healthPath}`
-  return { kind: 'probe', host, port, healthPath, url, safeUrl: containerSafeForRecord(url) }
-}
 
 function quinnVerdictFor(ran, result) {
   if (!ran) return 'SKIP'

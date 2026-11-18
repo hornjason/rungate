@@ -374,6 +374,7 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
         "rookGateVerdict",
       ],
       "lib/prior-branch.ts": ["priorWorkRefusal"],
+      "lib/dev-liveness.ts": ["containerProbeTarget", "CONTAINER_HOST"],
     });
   });
 
@@ -389,12 +390,22 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
 
   test("ship.js defines none of the names the bundle defines — its hand copy cannot come back", () => {
     const bundle = launchBundle();
-    for (const name of ["suiteCurrency", "planCoverage", "denylistViolations", "rookGateVerdict", "reviewIsCurrent", "priorWorkRefusal"]) {
+    for (const name of ["suiteCurrency", "planCoverage", "denylistViolations", "rookGateVerdict", "reviewIsCurrent", "priorWorkRefusal", "containerProbeTarget"]) {
       expect(bundle.defined).toContain(name);
       expect(() => buildWorkflowLaunch(`${source}\nfunction ${name}() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(
         `${name} is defined by both workflows/ship.js and the lib bundle`,
       );
     }
+  });
+
+  test("#2417: a bundle whose code holds a dollar-backtick, dollar-quote or dollar-ampersand is inserted byte for byte", () => {
+    // String.replace reads those as patterns in a string replacement (the
+    // dollar-backtick is the text before the match). lib/dev-liveness.ts's
+    // health-path regex holds one, and the launch text stopped parsing (#2417).
+    const text = ["const R = /[;&|$`\"'<>]/;", "const Q = \"$'\";", "const P = \"$&\";"].join("\n");
+    const out = buildWorkflowLaunch(source, WORKFLOW_SCRIPT_CAP, { text, defined: ["R", "Q", "P"] }).text;
+    const region = out.slice(out.indexOf(BUNDLE_START) + BUNDLE_START.length, out.indexOf(BUNDLE_END)).trim();
+    expect(region).toBe(text);
   });
 
   test("the output check refuses a bundle with a reached declaration removed, naming the name", () => {
