@@ -529,9 +529,11 @@ what the gate was really doing.
 An issue with **no phase milestone is now eligible** and sorts last.
 `isReady`'s docblock said "never Ready" and the fanout's BR-4 asserted it;
 both are inverted rather than deleted, so reintroducing the gate fails a
-test instead of passing silently. `openFrontier` survives with one
-consumer — `rootReady` in `scripts/board-snapshot.ts` — and is no longer
-read by either writer.
+test instead of passing silently. `openFrontier` survives in
+`activeMilestone`, which names the phase being worked and gates nothing.
+Its other consumer, `rootReady` in `scripts/board-snapshot.ts`, went with
+#2433, when `blocked-by-edges` stopped requiring an edge outside the
+lowest phase.
 
 Ready also still has **one** automatic trigger — `issues: [closed]`, fanning
 out to whatever the closed issue was blocking. Measured 2026-11-05: 34 of 34

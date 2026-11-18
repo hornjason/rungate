@@ -1116,8 +1116,13 @@ const normaliseIssue = (v: unknown): BoardIssue | null => {
   if (typeof i.number !== "number") return null;
   return {
     number: i.number,
-    // Key presence, as criteriaField: an omitted list is UNREAD, not empty (#2433).
-    ...("blockedBy" in (v as object) ? { blockedBy: asList<number>(i.blockedBy).filter(n => typeof n === "number") } : {}),
+    // Read only when it IS a list of numbers (#2433, review of #2447). An
+    // omitted key, `null`, a string, or a list holding anything else is
+    // UNREAD, never coerced to `[]`: "no links" now passes blocked-by-edges,
+    // so a coerced empty list would be the flattering reading.
+    ...(Array.isArray(i.blockedBy) && i.blockedBy.every(n => typeof n === "number")
+      ? { blockedBy: [...(i.blockedBy as number[])] }
+      : {}),
     // Key PRESENCE, not value. `asText(undefined)` is `null`, which would
     // erase the distinction this field exists to carry — an omitted column
     // and a column read as empty would arrive here identical.

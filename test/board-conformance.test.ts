@@ -307,6 +307,16 @@ describe("#2433: blocked-by-edges asks only that every link resolves", () => {
     expect(reading(b).status).toBe("met");
   });
 
+  test("a blockedBy that is present but not a list of numbers is UNMEASURED, never read as no links", async () => {
+    for (const bad of [null, "12", { n: 1 }, [1, "2"]]) {
+      const board = completeBoard() as unknown as Record<string, Record<string, unknown>[]>;
+      board.issues![1]!.blockedBy = bad;
+      const at = plant(`malformed-blockedby-${JSON.stringify(bad).length}`, board as unknown as BoardSnapshot);
+      const r = run(SCRIPT, ["--snapshot", at, "--reading", "blocked-by-edges"]);
+      expect(r.out, JSON.stringify(bad)).toContain("UNMEASURED  blocked-by-edges");
+    }
+  });
+
   test("a link naming nothing is still short", () => {
     const b = completeBoard();
     b.issues[0]!.blockedBy = [9999];

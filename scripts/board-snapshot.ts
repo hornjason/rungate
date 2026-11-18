@@ -37,7 +37,7 @@ import { existsSync, readFileSync, readdirSync } from "fs";
 import { isAbsolute, join, relative } from "path";
 import { parseArgs } from "util";
 import { describeSpecSource, resolveSpecSource, type GitRunner } from "../lib/spec-source";
-import { openFrontier, phaseOf } from "../lib/board-mirror";
+import { phaseOf } from "../lib/board-mirror";
 import { withoutAmbientGitOverrides } from "../lib/git-isolation";
 import { createGitHubClient, listMilestones } from "../lib/github";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
@@ -868,8 +868,6 @@ export async function main(
     );
     return REFUSAL_EXIT;
   }
-
-  const frontier = openFrontier(engine.map(i => ({ state: i.state, phase: phaseOf(i.milestone) })));
 
   // Which absent numbers are FINISHED, rather than never-existed — #1704.
   //
