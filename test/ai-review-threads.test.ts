@@ -19,6 +19,7 @@ import {
   AI_REVIEW_THREADS_REFUSAL,
   aiReviewThreadsExitCode,
   postReviewThreads,
+  refusalFrom,
   prIsForkReading,
   threadsDetailLines,
   threadsLandedPhrase,
@@ -225,6 +226,54 @@ describe("postReviewThreads", () => {
     const { comment } = pullCommenter(() => ({ ok: false, status: 403, message: "Resource not accessible by integration" }));
     const r = await postReviewThreads(reading([finding]), post, undefined, false, comment);
     expect(r.outcome).toBe("FAILED");
+  });
+
+  // #2363: classify from GitHub's structured `errors[]`, the message text only
+  // when the body carries none.
+  test("#2363: errors[].field 'path' goes to the conversation whatever the message says", async () => {
+    const { post } = recorder(() => ({ ok: false, status: 422, message: "Validation Failed", errors: [{ field: "path", code: "invalid" }] }));
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("POSTED");
+    expect(bodies).toHaveLength(1);
+  });
+
+  test("#2363: a message naming the path field with errors[].field 'commit_id' stays FAILED", async () => {
+    const { post } = recorder(() => ({
+      ok: false,
+      status: 422,
+      message: "Validation Failed: pull_request_review_thread.path",
+      errors: [{ field: "commit_id", code: "invalid" }],
+    }));
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("FAILED");
+    expect(bodies).toEqual([]);
+  });
+
+  test("#2363: refusalFrom keeps Octokit's errors[], objects and strings alike", () => {
+    const e = Object.assign(new Error("Validation Failed"), {
+      status: 422,
+      response: { data: { errors: [{ field: "path", code: "invalid", resource: "PullRequestReviewComment" }, "User can only have one pending review per pull request"] } },
+    });
+    expect(refusalFrom(e)).toEqual({
+      ok: false,
+      status: 422,
+      message: "Validation Failed",
+      errors: [{ field: "path", code: "invalid" }, { message: "User can only have one pending review per pull request" }],
+    });
+    expect(refusalFrom(new Error("socket hang up"))).toEqual({ ok: false, status: null, message: "socket hang up" });
+  });
+
+  test("#2363: a pending-review refusal carried only in errors[] is still the pending-review state", async () => {
+    const { post } = recorder(() => ({
+      ok: false,
+      status: 422,
+      message: "Unprocessable Entity",
+      errors: [{ message: "User can only have one pending review per pull request" }],
+    }));
+    const r = await postReviewThreads(reading([finding]), post);
+    expect(r.outcome).toBe("BLOCKED_BY_PENDING_REVIEW");
   });
 
   test("#2338: with no pull-request commenter the old behaviour holds: FAILED", async () => {

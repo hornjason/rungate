@@ -167,10 +167,48 @@ export type AiReviewThreadOutcome =
   | "BLOCKED_BY_PENDING_REVIEW"
   | "FAILED";
 
-/** What the API said. `status` is `null` for a failure that never got one. */
+/**
+ * One entry of a refusal's structured `errors[]` (#2363). GitHub sends objects
+ * naming a `field` and a `code`, or bare strings, which arrive here as
+ * `{ message }`.
+ */
+export interface AiReviewApiError {
+  field?: string;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * What the API said. `status` is `null` for a failure that never got one.
+ * `errors` is the structured body when the refusal carried one; absent, the
+ * classifiers fall back to the message text.
+ */
 export type AiReviewThreadResponse =
   | { ok: true }
-  | { ok: false; status: number | null; message: string };
+  | { ok: false; status: number | null; message: string; errors?: AiReviewApiError[] };
+
+/**
+ * A thrown Octokit error as a refusal, keeping `response.data.errors` (#2363).
+ * The status and message alone threw away the one part GitHub states as data,
+ * which left every classifier matching serialized text.
+ */
+export function refusalFrom(e: unknown): Extract<AiReviewThreadResponse, { ok: false }> {
+  const err = e as { status?: unknown; message?: unknown; response?: { data?: { errors?: unknown } } };
+  const status = typeof err.status === "number" ? err.status : null;
+  const message = typeof err.message === "string" ? err.message : String(e);
+  const raw = err.response?.data?.errors;
+  if (!Array.isArray(raw)) return { ok: false, status, message };
+  const errors: AiReviewApiError[] = raw.map(x => {
+    if (typeof x === "string") return { message: x };
+    const o = (x ?? {}) as Record<string, unknown>;
+    return {
+      ...(typeof o.field === "string" ? { field: o.field } : {}),
+      ...(typeof o.code === "string" ? { code: o.code } : {}),
+      ...(typeof o.message === "string" ? { message: o.message } : {}),
+    };
+  });
+  return { ok: false, status, message, errors };
+}
 
 /**
  * The pull-request-level fallback (#2338): a finding GitHub refuses at the line
@@ -233,6 +271,30 @@ const PENDING_REVIEW_CONDITION = /pending review/i;
  */
 const OFF_DIFF_CONDITION = /pull_request_review_thread\.path\b|"field"\s*:\s*"path"/;
 
+/** The fields a refusal's structured body names, or `null` when it names none. */
+function fieldsNamed(answer: Extract<AiReviewThreadResponse, { ok: false }>): string[] | null {
+  const fields = (answer.errors ?? []).flatMap(e => (e.field === undefined ? [] : [e.field]));
+  return fields.length === 0 ? null : fields;
+}
+
+/** Every piece of text a refusal carries: its message and each error's message. */
+function refusalText(answer: Extract<AiReviewThreadResponse, { ok: false }>): string {
+  return [answer.message, ...(answer.errors ?? []).flatMap(e => (e.message === undefined ? [] : [e.message]))].join("\n");
+}
+
+/**
+ * The off-diff 422 (#2338), decided from `errors[].field` when GitHub named
+ * one (#2363): `path`, or a dotted name ending in `.path`, is off-diff and
+ * any other field is not, whatever the message says. With no field named, the
+ * message text decides, through {@link OFF_DIFF_CONDITION}.
+ */
+function isOffDiffRefusal(answer: AiReviewThreadResponse): boolean {
+  if (answer.ok || answer.status !== UNPROCESSABLE) return false;
+  const fields = fieldsNamed(answer);
+  if (fields !== null) return fields.some(f => f === "path" || f.endsWith(".path"));
+  return OFF_DIFF_CONDITION.test(answer.message);
+}
+
 /**
  * One binding, so a mutation of it is observable. Both halves are required:
  * the status narrows it to a validation refusal, the condition says WHICH —
@@ -241,7 +303,7 @@ const OFF_DIFF_CONDITION = /pull_request_review_thread\.path\b|"field"\s*:\s*"pa
  */
 function isPendingReviewRefusal(answer: AiReviewThreadResponse): boolean {
   return (
-    !answer.ok && answer.status === UNPROCESSABLE && PENDING_REVIEW_CONDITION.test(answer.message)
+    !answer.ok && answer.status === UNPROCESSABLE && PENDING_REVIEW_CONDITION.test(refusalText(answer))
   );
 }
 
@@ -339,7 +401,7 @@ export async function postReviewThreads(
       answer.status === UNPROCESSABLE &&
       comment !== undefined &&
       !isPendingReviewRefusal(answer) &&
-      OFF_DIFF_CONDITION.test(answer.message)
+      isOffDiffRefusal(answer)
     ) {
       const key = threadKeyFrom(request.body);
       if (key !== null && alreadyOnConversation.has(key)) {

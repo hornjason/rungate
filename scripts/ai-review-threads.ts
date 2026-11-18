@@ -36,6 +36,7 @@ import {
   aiReviewThreadsExitCode,
   postReviewThreads,
   prIsForkReading,
+  refusalFrom,
   threadsDetailLines,
   threadsLandedPhrase,
   type AiReviewThreadPoster,
@@ -172,12 +173,8 @@ const post: AiReviewThreadPoster = async request => {
     });
     return { ok: true };
   } catch (e) {
-    const err = e as { status?: number; message?: string };
-    return {
-      ok: false,
-      status: typeof err.status === "number" ? err.status : null,
-      message: err.message ?? String(e),
-    } satisfies AiReviewThreadResponse;
+    // #2363: keeps GitHub's structured errors[], which the classifiers read first.
+    return refusalFrom(e) satisfies AiReviewThreadResponse;
   }
 };
 
@@ -219,8 +216,7 @@ try {
         await client.rest.issues.createComment({ owner: parsed.owner, repo: parsed.repo, issue_number: parsed.pr, body });
         return { ok: true };
       } catch (e) {
-        const err = e as { status?: number; message?: string };
-        return { ok: false, status: typeof err.status === "number" ? err.status : null, message: err.message ?? String(e) };
+        return refusalFrom(e);
       }
     },
   };
