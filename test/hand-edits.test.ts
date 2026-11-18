@@ -185,6 +185,8 @@ describe("#1722: reading one issue's writes", () => {
   test("a cut edit list, a write with no time, or an event type it does not know is unreadable, never empty", () => {
     const cut = boardWritesOf(node({ userContentEdits: { pageInfo: { hasNextPage: true, endCursor: "x" }, nodes: [] } }));
     expect("why" in cut && cut.why).toContain("#9001");
+    const cutTimeline = boardWritesOf(node({ timelineItems: { pageInfo: { hasNextPage: true, endCursor: "x" }, nodes: [] } }));
+    expect("why" in cutTimeline && cutTimeline.why).toContain("timeline was not read to the end");
     const untimed = boardWritesOf(
       node({ timelineItems: { pageInfo: { hasNextPage: false }, nodes: [{ __typename: "LabeledEvent", actor: null, label: { name: "x" } }] } }),
     );
