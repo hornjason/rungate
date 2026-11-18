@@ -178,7 +178,8 @@ describe("#304: the URL the probe is handed is bounded", () => {
 describe("#304: credentials in apiBase never reach a durable artefact", () => {
   // Security review. `detail` and the printed URL land in ship-evidence.json,
   // which is attached to issues — the same leak #213 found in push `detail`,
-  // which is why redactSecrets is imported rather than written a second time.
+  // which is why there is one redactSecrets: defined in lib/dev-liveness.ts,
+  // re-exported by lib/verified-push.ts (#2289).
   const CREDS = "http://jhorn:hunter2@localhost:7777";
 
   test("the probe URL keeps the credentials — curl still needs them", () => {

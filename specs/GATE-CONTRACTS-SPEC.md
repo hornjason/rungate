@@ -464,9 +464,10 @@ Two findings, both real, both driven rather than reasoned about.
   lands in `ship-evidence.json` and gets attached to issues. `ProbeTarget`
   now carries `url` and `safeUrl` as separate fields — curl gets the first,
   every print and every record gets the second — and the unmeasured `detail`
-  strings that quote `apiBase` are redacted. `redactSecrets` is imported from
-  `lib/verified-push.ts` rather than written again; a second copy is how two
-  redactors drift and one of them stops covering a form.
+  strings that quote `apiBase` are redacted. There is one `redactSecrets`,
+  defined in `lib/dev-liveness.ts` and re-exported by `lib/verified-push.ts`
+  (#2289); a second copy is how two redactors drift and one of them stops
+  covering a form.
 
 A third point the review raised is a **refusal relaxation**, and it is the
 one worth stating rather than silently accepting. The prove gate used to
