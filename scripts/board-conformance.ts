@@ -52,10 +52,11 @@ export const REFUSE_EXIT = 1;
 /** A snapshot of the board, as the readings need to see it. */
 export interface BoardIssue {
   number: number;
-  /** Issue numbers this one is blocked by, as GitHub's own edges. */
-  /** Absent when the links were not read for this issue — never an empty list in disguise. */
+  /**
+   * Issue numbers this one is blocked by, as GitHub's own edges. Absent when
+   * the links were not read for this issue — never an empty list in disguise.
+   */
   blockedBy?: number[];
-  /** Set when the issue is deliberately a root — nothing blocks it. */
   /**
    * The board's Criteria column for this issue — a mirror of the body.
    *
