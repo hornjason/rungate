@@ -180,7 +180,7 @@ export async function main(argv: string[], gh: TriageGitHub = LIVE): Promise<num
     return REFUSAL_EXIT;
   }
 
-  const ctx = { openIssues: issues, openPulls: pulls, families, enginePrefix: engine.prefix };
+  const ctx = { openIssues: issues, openPulls: pulls, families, enginePrefix: engine.prefix, queueLabel };
   for (const issue of pending) {
     const triage = triageVerdict(issue, ctx);
     const row: Row = { number: issue.number, triage, results: [] };

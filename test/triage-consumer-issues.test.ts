@@ -145,12 +145,26 @@ describe("SC-2782: one decider gives a consumer's issue exactly one verdict, the
     expect(t.kind).toBe("LEFT");
   });
 
-  test("an unmarked issue already in the milestone triage would pick is finished, not LEFT (review of #2356)", () => {
-    // A previous --write set the milestone, then the label or the comment failed.
-    const t = triageVerdict(consumer(213, "Something is off and I cannot say where.", P9), ctx());
+  test("an unmarked issue already in the milestone triage would pick, carrying the queue label, is finished (review of #2356)", () => {
+    // A previous --write set the milestone and the label, then the comment failed.
+    const labelled = (i: TriageIssue) => ({ ...i, labels: ["zq-queue"] });
+    const t = triageVerdict(labelled(consumer(213, "Something is off and I cannot say where.", P9)), ctx({ queueLabel: "zq-queue" }));
     expect(t).toMatchObject({ kind: "ACTIVE", milestone: P9 });
-    const o = triageVerdict(consumer(214, files("lib/engine-b.ts"), P10), ctx());
+    const o = triageVerdict(labelled(consumer(214, files("lib/engine-b.ts"), P10)), ctx({ queueLabel: "zq-queue" }));
     expect(o).toMatchObject({ kind: "OVERLAPS", of: 101, milestone: P10 });
+  });
+
+  // #2364: the recommendation matching a milestone is not evidence a run set
+  // it. Only the queue label, written after the milestone, is.
+  test("#2364: a person's milestone that happens to match, with no queue label, is LEFT and gets no verdict", () => {
+    const vague = "Something is off and I cannot say where.";
+    expect(triageVerdict(consumer(215, vague, P9), ctx({ queueLabel: "zq-queue" })).kind).toBe("LEFT");
+    expect(triageVerdict({ ...consumer(216, vague, P9), labels: ["other"] }, ctx({ queueLabel: "zq-queue" })).kind).toBe("LEFT");
+  });
+
+  test("#2364: with no queue label configured there is no evidence of a stopped run, so a matching milestone is LEFT", () => {
+    const t = triageVerdict({ ...consumer(217, "Something is off and I cannot say where.", P9), labels: ["zq-queue"] }, ctx({ queueLabel: null }));
+    expect(t.kind).toBe("LEFT");
   });
 
   test("a phase with no milestone is REFUSED, never guessed", () => {
