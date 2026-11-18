@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 97 (2026-11-17)** — Specs now opt into the engine from their own frontmatter, and ship launches from a file built under the Workflow tool's cap. Jason agreed ADR-019, so the acceptance test is ordered by its own phase instead of a hand link. board-conformance exits 0 on main, and a push to specs/ now runs the engine itself, which completed stage F.
+**Session 98 (2026-11-18)** — A consumer's issue now gets a triage verdict with no command typed by hand, and the board says when one has none. 0.8.28 carries the triage, the reading and sync-sc-status to consumers; the live consumer took it with no refusals. CRC-C3 is ticked from a test.
 
-Suite: 24 PRs merged (#2283 to #2324); releases 0.8.25 and 0.8.26 published.
-Issues opened: #2287, #2288, #2289, #2290, #2292, #2296, #2297, #2300, #2301, #2302, #2303, #2304, #2305, #2306, #2307, #2309, #2316, #2319, #2323
-Issues closed: #1194, #1367, #1553, #1571, #2213, #2234, #2238, #2261, #2274, #2279, #2287, #2288, #2292, #2296, #2297, #2301, #2302, #2303, #2304, #2305, #2309, #2316, #2323
+Suite: 27 PRs merged (#2321 to #2378); releases 0.8.27 and 0.8.28 published.
+Issues opened: #2330, #2331, #2332, #2333, #2337, #2338, #2339, #2340, #2341, #2342, #2343, #2344, #2345, #2347, #2348, #2350, #2351, #2353, #2360, #2361, #2363, #2364, #2366, #2369, #2375, #2379, #2382
+Issues closed: #2275, #2306, #2307, #2317, #2319, #2325, #2327, #2330, #2332, #2333, #2338, #2339, #2340, #2341, #2342, #2343, #2345, #2347, #2348, #2350, #2351, #2353, #2360, #2361, #2363, #2364, #2369, #2375
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -102,6 +102,13 @@ Suite: 25/25 SCs done.
 
 ---
 
+**Session 2026-11-18 session 98 (consumer issues get a verdict; releases 0.8.27 and 0.8.28):**
+- MERGED: 27 PRs from #2321 to #2378. Releases 0.8.27 (specs-placed and board-scope) and 0.8.28 (consumer triage, the consumer-intake reading, sync-sc-status as a consumer CLI command).
+- A CONSUMER'S ISSUE GETS A VERDICT (ADR-020, #2321). One decider gives each from-consumer issue exactly one triage verdict (#2356, SC-2782); the board reads an unanswered one as SHORT (#2368, SC-2783); scaffold emits consumer-intake.yml, which triages on filing, on the label and daily through the published CLI (#2376, SC-2784). An outside reporter's issue is labelled first, because GitHub drops labels such an author sets.
+- CONSUMERS: sync-sc-status runs against a consumer's own specs (#2365); the filing gate asks for a claim from the consumer's SUCCESS.md (#2371); scaffold owes test and ai-review as required checks (#2362), names an owned file left in an ignored path (#2359), and gives a consumer the claim convention sync-sc-status enforces (#2377); a family can opt out of phase-order links (#2352); a repo with no board takes specs-placed and adr-accepted without a red run (#2355).
+- REVIEW: a finding GitHub will not put on the diff goes on the conversation (#2358), classified from GitHub's structured errors (#2370); a review thread resolved with no stated reason is reported on its pull request, which ticks CRC-C3 (#2378).
+- SMALLER: a Decomposition table can make an existing issue wait on a new row and refuses an unknown #N (#2374); a generated spec copy is not a second author of its source's criteria (#2372); in direct-ship mode the filing cap is the ceiling (#2346); board-scope (#2329) and rungate board (#2334) for any repository.
+
 **Session 2026-11-17 session 97 (specs opt into the engine; ship launches from a built file; release 0.8.25):**
 - MERGED: 16 PRs from #2283 to #2308. Release 0.8.25 (a waived review is refused at arming time, #2286, and the ai-review adjudicator is told which checkout to read, #2270).
 - SHIP LAUNCHES FROM A BUILT FILE (ADR-017, #2219). workflows/ship.run.js is generated comment-stripped from workflows/ship.js so it fits under the Workflow tool's size cap (#2291), every documented scriptPath names the generated file (#2294), and ship takes the gate-refusals intake reading on every terminal exit, advisory (#2295).
@@ -121,14 +128,4 @@ Suite: 25/25 SCs done.
 - MEASURED: the anchor-suppression rate is 0 of 420 logged and 102 of 420 rebuilt (#1872). The stage ladder refuses two items carrying the same verify command (#2236).
 - DECIDED BY JASON, 2026-11-16: a spec reaches the board only when its frontmatter opts it in (ADR-018 revised, #2240), and onboarding an existing spec starts with a report flagging criteria that look done (#2275); setup runs the doc-rule scan in report mode (#1126, built as #2274); SC-2768 reworded to what the installed package can prove (#1194); rule files get a project-owned section (#1553, SC-2769); #1571's disarm step needs a redesign, because the Actions token can arm auto-merge but cannot disarm it.
 - WAITING ON JASON'S MERGE: ADR-017 (#2219), ADR-018 (#2240) and the waived ai-review PR #2270.
-
-**Session 2026-11-15 session 95 (the four process workflows are generated; releases 0.8.16 to 0.8.21 cut by a numbered, tested sequence):**
-- MERGED: 60 PRs from #2118 to #2206. The ones that change what consumers get are listed below. The rest: work-status names colliding files and unclaimed In-review cards (#2118, #2134); closing-references reads commit messages (#2120); one reader each for milestone families and CommonMark fences (#2121, #2136, #2137); the SC allocator, finding-promotion and the converter stop rewriting ids they only mention (#2128, #2127, #2133, #2139); the filing gate reads the remote's main (#2140); the pinned view's needs-decision and done-phase readings (#2141, #2149).
-- THE FOUR PROCESS WORKFLOWS ARE GENERATED, AND THIS REPOSITORY RUNS THE GENERATED COPIES. closing-references (#2045, #2164), adr-accepted (#2046, #2163), board-ready with no project id (#2047, #2172) and board-intake with no project id or URL (#2166, #2180). SC-2742 and SC-2745 are ticked (#2184). Each workflow command that needed a new CLI command went command PR, then release, then generator PR: board-id (#2173, then 0.8.19, then #2166), and board-intake-move (#2193, then 0.8.20, then #2183/#2199).
-- SIX RELEASES, ONE OF THEM SPENT. 0.8.16, 0.8.17, 0.8.19, 0.8.20 and 0.8.21 published. v0.8.18 published nothing: its pre-publish suite read the live board short (criterion coverage 47 of 49, after #2047 closed before its successors were placed), so it was re-cut as 0.8.19. Jason said releases kept going wrong, so docs/guides/RELEASING.md is now numbered steps 0 to 10 with the steps that failed (#2198, #2197). Step 6 is scripts/release-wait.ts, a tested command whose only version-spending reading is a recorded failed conclusion (#2202, #2201). 0.8.21 was the first release cut by the sequence and read PUBLISHED on its first real run.
-- SECURITY: THE AI-REVIEW THREADS STEP (#1992, split into #2203). In 0.8.21 (#2204): a 403 on a run that is not a fork is FAILED; thread paths are sent in the diff's own spelling (the comparison form lowercases, and the API matches byte for byte); detail lines and the argument error are escaped before they reach the workflow-command channel. The generator half is #2209 (#2203): it sets RUNGATE_PR_IS_FORK in the threads step, and version skew is now matched on the exact unknown-command line, so text inside a finding can no longer forge it. It changes ai-review.yml, so the reviewer cannot run on it; Jason applied ai-review-override.
-- verify-merge-ref compares the remote's host as well as owner/name (#1911, #2200). The expected host is read off the pull request's own url, so a mirror, a GHE instance or a local path laid out the same way now reads UNMEASURED.
-- THIS ENTRY EXISTS BECAUSE 0.8.21 MERGED AT 00:22 LOCAL (05:22 UTC) ON 2026-11-15, after session 94's date. test/project-state-currency.test.ts then failed on main and on every open PR, and re-running cannot clear it. I parked it for Jason because the loop prompt said never to write project-state.json. Jason corrected that: the DA writes this file from the primary checkout, and only worktree agents are barred. Recorded in memory.
-- OPEN FOR JASON: merge #2209 (waived review, so his merge). #2112 (E2 recorded done) is still his; E2's own command reads MET 61 of 61 on 0.8.20, posted on the PR. #1559 needs the canonical contract chosen: config/prove-evidence.schema.json, the zod ProveEvidenceSchema and the B3 writer disagree three ways, comparison posted. #1721 stays parked; #1720 needs design.
-- IN FLIGHT AT SESSION END: #2208 (#2207: the release pre-flight runs in the release worktree as step 2b, not in the primary checkout, which was 55 commits behind when 0.8.21 was cut) and #2209 (#2203).
 
