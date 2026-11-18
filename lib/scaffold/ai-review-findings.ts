@@ -331,7 +331,7 @@ export type CitedLines = (file: string) => readonly string[] | null;
 /**
  * One finding's population verdict (#1883). The count is the output of the
  * literal search the finding names, run over its cited file — never the
- * integer it declared. `lib/finding-population.ts` holds the decision; this
+ * integer it declared. `populationVerdict` above holds the decision; this
  * only fetches the lines.
  */
 export function findingPopulation(item: unknown, citedLines: CitedLines | null = null): PopulationVerdict {

@@ -3878,7 +3878,7 @@ export const AI_REVIEW_FINDING_FIELDS = {
    * strings. The population is that search's line count, run by the
    * adjudicator; a declared `population` with no search behind it is
    * UNMEASURED, and one the search does not return is refused.
-   * `lib/finding-population.ts` holds the decision.
+   * `populationVerdict` in `lib/scaffold/ai-review-findings.ts` holds the decision.
    */
   populationSearch: "populationSearch",
 } as const;
