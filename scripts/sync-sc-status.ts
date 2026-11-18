@@ -25,7 +25,7 @@ import { join } from "path";
 import { execSync } from "child_process";
 import { matchPattern, isBehavioralSC, type ParsedSC } from "../lib/conformity";
 import { behavioralCachePath, readFreshCache } from "../lib/behavioral-cache";
-import { skipLine } from "../lib/derived-spec";
+import { readDerivedDeclaration, skipLine } from "../lib/derived-spec";
 import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
 import { detectDrift } from "./detect-sc-drift";
 import {
@@ -180,7 +180,23 @@ export interface UncheckedSC {
  * ids. A fix on the reading side alone cannot see this: the registry leg
  * would faithfully report an enumeration flag nobody had ever set wrong.
  */
-export function readScRegistry(specsDir?: string): ScRegistry {
+/**
+ * The specs that AUTHOR their criteria — every spec but a `generated-by:` copy
+ * (#2333). A copy repeats its source's ids; counted as a second author it made
+ * each of them ambiguous, so a test claiming the source's criterion credited
+ * no spec at all. The one decider for the credit rule and for board-scope's
+ * who-states-this-id map, so the two cannot disagree.
+ */
+export function authoredSpecs<T extends { content: string }>(specs: readonly T[]): T[] {
+  return specs.filter(s => readDerivedDeclaration(s.content).status !== "derived");
+}
+
+/**
+ * `authoredOnly` (#2333): leave generated copies out, for the CREDIT rule. The
+ * allocator (`scripts/create-sc.ts`) reads every spec, copies included, so an
+ * id a stale copy still states is never handed out again.
+ */
+export function readScRegistry(specsDir?: string, opts: { authoredOnly?: boolean } = {}): ScRegistry {
   const dir = specsDir || SPECS_DIR;
   if (!existsSync(dir)) return unenumeratedScRegistry(`${dir} does not exist`);
   const specs: Array<{ file: string; content: string }> = [];
@@ -193,10 +209,16 @@ export function readScRegistry(specsDir?: string): ScRegistry {
     // absent one from the allocator's side, and a different reason.
     return unenumeratedScRegistry(`${dir} could not be enumerated: ${(err as Error).message}`);
   }
-  return buildScRegistry(specs);
+  return buildScRegistry(opts.authoredOnly === true ? authoredSpecs(specs) : specs);
 }
 
-export function findUncheckedSCs(specsDir?: string): UncheckedSC[] {
+/**
+ * `authoredOnly` (#2333): leave generated copies out. The credit list and the
+ * registry beside it must agree on who the authors are — filtering only the
+ * registry made a copy's id unambiguous while the copy still sat in the credit
+ * list, so a claim was credited to both and `--only` refused the source.
+ */
+export function findUncheckedSCs(specsDir?: string, opts: { authoredOnly?: boolean } = {}): UncheckedSC[] {
   const dir = specsDir || SPECS_DIR;
   const unchecked: UncheckedSC[] = [];
   if (!existsSync(dir)) return unchecked;
@@ -204,6 +226,7 @@ export function findUncheckedSCs(specsDir?: string): UncheckedSC[] {
   for (const file of new Bun.Glob("**/*.md").scanSync({ cwd: dir, absolute: false })) {
     if (isTemplateSpec(file)) continue;
     const content = readFileSync(join(dir, file), "utf-8");
+    if (opts.authoredOnly === true && authoredSpecs([{ content }]).length === 0) continue;
     // #330: was `/^- \[ \] (SC-\d+):/`, the fourth copy of this pattern in the
     // tree and the second that could not see an anti-criterion. One owner now.
     for (const match of content.matchAll(scDeclarationPattern())) {
@@ -716,10 +739,12 @@ export function claimedScKeys(specsDir: string, testDir?: string): Set<string> {
   const specs = readdirSync(specsDir, { recursive: true, encoding: "utf-8" })
     .filter((f): f is string => typeof f === "string" && f.endsWith(".md"))
     .map(f => ({ file: f, content: readFileSync(join(specsDir, f), "utf-8") }));
-  const declarations = specs
+  // #2333: generated copies are not authors, at either half of the credit.
+  const authored = authoredSpecs(specs);
+  const declarations = authored
     .filter(s => !isTemplateSpec(s.file))
     .flatMap(s => parseScDeclarations(s.content, s.file));
-  const credits = findTestFilesForSCs(declarations, buildScRegistry(specs), testDir);
+  const credits = findTestFilesForSCs(declarations, buildScRegistry(authored), testDir);
   return new Set([...credits.values()].flat().map(c => scopedKey(c.specFile, c.id)));
 }
 
@@ -923,7 +948,11 @@ if (isDirectExecution) {
     );
     process.exit(1);
   }
-  const unchecked = findUncheckedSCs();
+  // #2333: generated copies are not authors, so they enter NO leg of this
+  // run — not the credit, the conformity check, the duplicate warning or the
+  // per-spec tally. Filtering one leg at a time left the next one reading
+  // them (review rounds 2 and 3 of #2372); this is the one site upstream.
+  const unchecked = findUncheckedSCs(undefined, { authoredOnly: true });
   if (unchecked.length === 0) {
     console.log("All SCs are already checked off");
     process.exit(0);
@@ -969,7 +998,8 @@ if (isDirectExecution) {
   // Step 2: Find SCs covered by hand-written test files.
   // Scoped to (spec, id) since #330 — see findTestFilesForSCs. The old bare-id
   // credit ticked the id in every spec declaring it.
-  const registry = readScRegistry();
+  // #2333: the credit rule's registry leaves generated copies out.
+  const registry = readScRegistry(undefined, { authoredOnly: true });
   const testFileMap = findTestFilesForSCs(unchecked, registry);
   const testedKeys = new Set(
     [...testFileMap.values()].flat().map(c => scopedKey(c.specFile, c.id)),

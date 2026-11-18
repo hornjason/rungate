@@ -24,7 +24,7 @@ import { readDerivedDeclaration } from "../lib/derived-spec";
 import { isTemplateSpec } from "../lib/sc-ids";
 import { parseCriteria } from "../lib/spec-evidence";
 import { boardDeclaration, onboardingHint, parsePlacementRows, tracksOnBoard, type OnboardingHint } from "../lib/spec-placement";
-import { claimedScKeys, scopedKey } from "./sync-sc-status";
+import { authoredSpecs, claimedScKeys, scopedKey } from "./sync-sc-status";
 
 /** The one exit code every refusal routes through. */
 export const REFUSE_EXIT = 1;
@@ -73,8 +73,11 @@ export function boardScope(root: string, only?: string): { specs: SpecScope[] } 
 
   const texts = new Map(sweep.paths.map(p => [p, readFileSync(join(root, p), "utf-8")]));
   const declaredBy = new Map<string, string[]>();
-  for (const [p, text] of texts) {
-    for (const c of parseCriteria(text)) declaredBy.set(c.id, [...(declaredBy.get(c.id) ?? []), p]);
+  // #2333: a generated copy states its source's ids without authoring them,
+  // so it is left out here exactly as the credit rule leaves it out.
+  const authored = authoredSpecs([...texts].map(([p, content]) => ({ p, content })));
+  for (const { p, content } of authored) {
+    for (const c of parseCriteria(content)) declaredBy.set(c.id, [...(declaredBy.get(c.id) ?? []), p]);
   }
   const claimed = claimedScKeys(join(root, "specs"), join(root, "test"));
 
