@@ -49,6 +49,7 @@
  */
 
 import { ADR_ACCEPTED_WORKFLOW_FILE } from "./adr-accepted-workflow";
+import { boardProjectRun } from "./board-project-step";
 
 /** The file this module generates, under `.github/workflows/`. */
 export const SPECS_PLACED_WORKFLOW_FILE = "specs-placed.yml";
@@ -243,10 +244,6 @@ ${indent(links)}
           GITHUB_TOKEN: \${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: \${{ vars.RUNGATE_PROJECT_ID }}
         run: |
-          if [ -z "$PROJECT_ID" ]; then
-            echo "::error::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to write."
-            exit 1
-          fi
-          ${cli} board-mirror --project "$PROJECT_ID" --write
+${indent(boardProjectRun(cli, "Criteria column", `${cli} board-mirror --project "$project" --write`))}
 `;
 }

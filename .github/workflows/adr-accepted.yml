@@ -1,4 +1,4 @@
-# generated-sha: a763616027f5718f
+# generated-sha: 78b2451b25eb18ae
 # Managed by rungate — do not edit. Set board.engineSpec and board.milestonePrefix
 # in .claude/rungate/config.json and re-run `rungate scaffold`.
 #
@@ -119,11 +119,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
         run: |
-          if [ -z "$PROJECT_ID" ]; then
-            echo "::error::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to write."
-            exit 1
+          project="$PROJECT_ID"
+          if [ -z "$project" ]; then
+            err="$RUNNER_TEMP/board-id.stderr"
+            code=0
+            project=$(bunx rungate@0.8.27 board-id 2>"$err") || code=$?
+            cat "$err" >&2
+            if [ "$code" -ne 0 ] && grep -q '^UNMEASURED: no board' "$err"; then
+              echo "::warning title=Criteria column::UNMEASURED — no board is configured (board.id in the rungate config, or the RUNGATE_PROJECT_ID variable), so there is no board to write. Set board.id and this runs."
+              exit 0
+            fi
+            [ "$code" -eq 0 ] || exit "$code"
           fi
-          bunx rungate@0.8.27 board-mirror --project "$PROJECT_ID" --write
+          bunx rungate@0.8.27 board-mirror --project "$project" --write
 
       - name: Top up Ready from the new issues
         if: ${{ !cancelled() && steps.accepted.outputs.any == 'true' }}
@@ -131,4 +139,17 @@ jobs:
           BOARD_PROJECT_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
           ACTOR: ${{ github.actor }}
-        run: bunx rungate@0.8.27 board-ready --repo "$GITHUB_REPOSITORY" --project "$PROJECT_ID" --actor "$ACTOR" --top-up --write
+        run: |
+          project="$PROJECT_ID"
+          if [ -z "$project" ]; then
+            err="$RUNNER_TEMP/board-id.stderr"
+            code=0
+            project=$(bunx rungate@0.8.27 board-id 2>"$err") || code=$?
+            cat "$err" >&2
+            if [ "$code" -ne 0 ] && grep -q '^UNMEASURED: no board' "$err"; then
+              echo "::warning title=Ready top-up::UNMEASURED — no board is configured (board.id in the rungate config, or the RUNGATE_PROJECT_ID variable), so there is no board to write. Set board.id and this runs."
+              exit 0
+            fi
+            [ "$code" -eq 0 ] || exit "$code"
+          fi
+          bunx rungate@0.8.27 board-ready --repo "$GITHUB_REPOSITORY" --project "$project" --actor "$ACTOR" --top-up --write

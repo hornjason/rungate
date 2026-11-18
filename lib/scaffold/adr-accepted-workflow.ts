@@ -28,6 +28,7 @@
  * acceptance step then refuses UNMEASURED, naming the key and why: a skipped
  * step reads as satisfied, and a missing family is not "nothing to place".
  */
+import { boardProjectRun } from "./board-project-step";
 
 /** The file this module generates, under `.github/workflows/`. */
 export const ADR_ACCEPTED_WORKFLOW_FILE = "adr-accepted.yml";
@@ -84,6 +85,7 @@ export function buildAdrAcceptedWorkflow(opts: AdrAcceptedWorkflowOptions): stri
   const prefix = boardInput("milestonePrefix", opts.milestonePrefix);
   const missing = [spec, prefix].flatMap(i => (i.value === null ? [i.why] : []));
   const cli = `bunx rungate@${opts.version}`;
+  const indent = (script: string) => script.split("\n").map(l => (l === "" ? "" : `          ${l}`)).join("\n");
   // JSON is a YAML double-quoted scalar, so a quote or backslash in a value
   // stays inside it.
   const envValue = (i: BoardInput) => JSON.stringify(i.value ?? "");
@@ -208,11 +210,7 @@ ${opts.setupBunEnv}
           GITHUB_TOKEN: \${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: \${{ vars.RUNGATE_PROJECT_ID }}
         run: |
-          if [ -z "$PROJECT_ID" ]; then
-            echo "::error::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to write."
-            exit 1
-          fi
-          ${cli} board-mirror --project "$PROJECT_ID" --write
+${indent(boardProjectRun(cli, "Criteria column", `${cli} board-mirror --project "$project" --write`))}
 
       - name: Top up Ready from the new issues
         if: \${{ !cancelled() && steps.accepted.outputs.any == 'true' }}
@@ -220,6 +218,7 @@ ${opts.setupBunEnv}
           BOARD_PROJECT_TOKEN: \${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: \${{ vars.RUNGATE_PROJECT_ID }}
           ACTOR: \${{ github.actor }}
-        run: ${cli} board-ready --repo "$GITHUB_REPOSITORY" --project "$PROJECT_ID" --actor "$ACTOR" --top-up --write
+        run: |
+${indent(boardProjectRun(cli, "Ready top-up", `${cli} board-ready --repo "$GITHUB_REPOSITORY" --project "$project" --actor "$ACTOR" --top-up --write`))}
 `;
 }

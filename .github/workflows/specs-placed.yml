@@ -1,4 +1,4 @@
-# generated-sha: 48f4a2bd9ac414d4
+# generated-sha: 8331b5508a80e506
 # Managed by rungate — do not edit. Opt a spec in with
 # board: { scope: active, prefix: <Name> } in its frontmatter and give it a
 # placement table; nothing here names a spec.
@@ -138,8 +138,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
         run: |
-          if [ -z "$PROJECT_ID" ]; then
-            echo "::error::UNMEASURED — RUNGATE_PROJECT_ID is not set, so there is no board to write."
-            exit 1
+          project="$PROJECT_ID"
+          if [ -z "$project" ]; then
+            err="$RUNNER_TEMP/board-id.stderr"
+            code=0
+            project=$(bunx rungate@0.8.27 board-id 2>"$err") || code=$?
+            cat "$err" >&2
+            if [ "$code" -ne 0 ] && grep -q '^UNMEASURED: no board' "$err"; then
+              echo "::warning title=Criteria column::UNMEASURED — no board is configured (board.id in the rungate config, or the RUNGATE_PROJECT_ID variable), so there is no board to write. Set board.id and this runs."
+              exit 0
+            fi
+            [ "$code" -eq 0 ] || exit "$code"
           fi
-          bunx rungate@0.8.27 board-mirror --project "$PROJECT_ID" --write
+          bunx rungate@0.8.27 board-mirror --project "$project" --write
