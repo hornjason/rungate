@@ -230,7 +230,9 @@ bunx rungate scaffold .
 bunx rungate --help
 \`\`\`
 
-Pin the version: re-scaffolding on a newer rungate rewrites generated files.`;
+Pin the version: re-scaffolding on a newer rungate rewrites generated files.
+
+Found a problem in rungate itself? \`.claude/rules/reporting-upstream.md\` says where it goes and what the filing gate needs.`;
 
   // Re-scaffolding used to strip AGENTS.md's frontmatter, because the
   // generator never emitted any. Carry the existing block forward so
@@ -827,12 +829,35 @@ available is a routing decision nobody made.
 
 ## What the body must carry
 
-The three sections every issue there needs. No criterion id — you cannot
-know one from here and you are not expected to:
+rungate's filing gate runs on your \`gh issue create\` and refuses a body
+without two declarations, so write them first:
 
-- **What must become true** — the symptom, with the numbers you measured
-- **Files this will change** — if you know; *unknown* is an honest answer
-- **How we will know** — what you would run to see it fixed
+- **\`Claim <N>\`** — which claim in this project's \`SUCCESS.md\` the
+  problem stops from holding. The gate reads your claims, not rungate's.
+- **\`Cannot be a comment: <reason>\`** — why this is an issue and not a
+  comment. The reason is one of \`out-of-pr-diff\` (nothing in an open pull
+  request to comment on; the usual one from here), \`evidence-expires\` or
+  \`green-check-lies\`.
+
+It also refuses a body that names no file, function or command, because
+those are what it checks for duplicates on. Name at least one.
+
+Then the three sections every issue there needs. No criterion id — you
+cannot know one from here and you are not expected to:
+
+\`\`\`markdown
+Claim <N>: <the claim in this project's SUCCESS.md it stops from holding>
+Cannot be a comment: out-of-pr-diff
+
+## What must become true
+<the symptom, naming the rungate file, function or command, with the numbers you measured>
+
+## Files this will change
+<if you know; unknown is an honest answer>
+
+## How we will know
+<what you would run to see it fixed>
+\`\`\`
 
 **Say which version of rungate you are on, and how you know.** A report
 against a version nobody can identify cannot be reproduced, and will be
