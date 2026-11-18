@@ -61,6 +61,7 @@ const UNPINNED = "UNPINNED";
 // run the published CLI, and #2047 and #2166 added board-ready.yml and board-intake.yml for the same reason.
 // #2233 added intake.yml, which runs the published `intake` on a push to main.
 // #2305 added specs-placed.yml, which runs the published engine commands on a push that changes specs/.
+// #2342 added consumer-intake.yml, which runs the published consumer-triage on issue events and daily.
 const GENERATED = [
   "adr-accepted.yml",
   "ai-review-unmeasured.yml",
@@ -68,6 +69,7 @@ const GENERATED = [
   "board-intake.yml",
   "board-ready.yml",
   "closing-references.yml",
+  "consumer-intake.yml",
   "ci.yml",
   "gates.yml",
   "intake.yml",
