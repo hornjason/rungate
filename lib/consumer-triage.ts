@@ -28,6 +28,10 @@
  *   did not name. A person put it there, and nothing here moves a milestone a
  *   person set, the rule `issuePlacement` keeps too. `consumer-intake` (SC-2783)
  *   counts a milestone as an answer, so the issue is not lost.
+ *   **Also LEFT, with or without a milestone:** an issue `plan-issues
+ *   --decompose` filed, which ends with the planner's own footer (#2415). It
+ *   is not a consumer report, so it gets no verdict and no marker; its plan
+ *   placed it, and a quoted footer elsewhere in a body does not count.
  * - **REFUSED** — the decider could not give a verdict without guessing: the
  *   phase it belongs in has no milestone, or no open issue sits in any phase.
  */
@@ -88,12 +92,20 @@ export interface TriageContext {
 
 const asFinding = (i: TriageIssue): Finding => ({ id: String(i.number), title: i.title, body: i.body ?? "" });
 
-/** The plan a planned issue's footer names, or null when the body carries no planner footer (#2415). */
+/**
+ * The plan a planned issue's OWN footer names, or null (#2415). The footer
+ * must open the body's trailing section, after its last `---` rule, which is
+ * where `decomposedBody` writes it; the same words quoted anywhere earlier,
+ * say by a consumer citing another issue, do not make a report a plan (review
+ * of #2416).
+ */
 export function plannedFrom(body: string | null | undefined): string | null {
-  const text = body ?? "";
-  const at = text.lastIndexOf(PLANNED_ISSUE_FOOTER);
-  if (at < 0) return null;
-  const rest = text.slice(at + PLANNED_ISSUE_FOOTER.length);
+  const text = (body ?? "").replace(/\r\n/g, "\n");
+  const rule = text.lastIndexOf("\n---\n");
+  if (rule < 0) return null;
+  const tail = text.slice(rule + "\n---\n".length).trimStart();
+  if (!tail.startsWith(PLANNED_ISSUE_FOOTER)) return null;
+  const rest = tail.slice(PLANNED_ISSUE_FOOTER.length);
   const end = rest.indexOf("`");
   return end > 0 ? rest.slice(0, end) : null;
 }

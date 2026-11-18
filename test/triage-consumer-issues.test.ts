@@ -481,6 +481,15 @@ describe("#2415: an issue plan-issues filed reads LEFT, never a verdict", () => 
     expect(t.kind).toBe("DUPLICATE");
   });
 
+  test("a consumer report QUOTING the footer is still judged: only the issue's own trailing footer counts", () => {
+    const quoted = consumer(
+      304,
+      `${DUP_BODY}\n\nSee #2289, which says: \`${PLANNED_ISSUE_FOOTER}docs/adr/ADR-9999-x.md\` from a reviewed plan.\n\nMore detail follows.`,
+    );
+    const t = triageVerdict(quoted, ctx({ openIssues: [...ctx().openIssues, quoted] }));
+    expect(t.kind, "a quoted footer suppressed a real report").toBe("DUPLICATE");
+  });
+
   test("the footer plan-issues writes starts with the one exported prefix triage reads", () => {
     const body = decomposedBody(ROW("Anything at all here") as never, "Criteria this serves", "docs/adr/ADR-9999-x.md");
     expect(body).toContain(`${PLANNED_ISSUE_FOOTER}docs/adr/ADR-9999-x.md\``);
