@@ -120,6 +120,119 @@ describe("postReviewThreads", () => {
     expect(r.demoted).toBe(1);
   });
 
+  // #2338: a finding GitHub will not put on the diff at all still reaches the
+  // pull request, as a PR-level comment that says why it is not on the diff.
+  const refused = () => ({ ok: false, status: 422, message: "Validation Failed: pull_request_review_thread.path" }) as const;
+  function pullCommenter(answer: () => Awaited<ReturnType<AiReviewThreadPoster>> = () => ({ ok: true }), existing: string[] = []) {
+    const bodies: string[] = [];
+    return { bodies, comment: { existing, post: async (body: string) => (bodies.push(body), answer()) } };
+  }
+
+  test("#2338: refused at line and at file level, the finding is posted as a pull-request comment saying why", async () => {
+    const { post } = recorder(refused);
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("POSTED");
+    expect(r.pullComments).toBe(1);
+    expect(aiReviewThreadsExitCode(r)).toBe(0);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain("off-by-one");
+    expect(bodies[0]).toContain("is not in this pull request's diff");
+    expect(r.detail.join("\n")).toContain("not in this pull request's diff");
+  });
+
+  test("#2338: a pull-request comment that is refused too is still FAILED, naming both refusals", async () => {
+    const { post } = recorder(refused);
+    const { comment } = pullCommenter(() => ({ ok: false, status: 500, message: "boom" }));
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("FAILED");
+    expect(r.detail.join("\n")).toContain("boom");
+  });
+
+  test("#2338: a finding already posted as a pull-request comment is not posted again", async () => {
+    const { post } = recorder(refused);
+    const keyFor = () => "src/a.ts\u0000n:12\u0000off-by-one";
+    const first = pullCommenter();
+    await postReviewThreads(reading([finding]), post, keyFor, undefined, first.comment);
+    const again = pullCommenter(() => ({ ok: true }), first.bodies);
+    const r = await postReviewThreads(reading([finding]), post, keyFor, undefined, again.comment);
+    expect(again.bodies).toEqual([]);
+    expect(r.outcome).toBe("POSTED");
+    expect(r.detail.join("\n")).toContain("already");
+  });
+
+  test("#2338 review: a 422 that is not about the path (a stale commit) stays FAILED, never goes to the conversation", async () => {
+    const { post } = recorder(() => ({ ok: false, status: 422, message: "Validation Failed: pull_request_review_thread.commit_id is not part of the pull request" }));
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("FAILED");
+    expect(bodies).toEqual([]);
+  });
+
+  test("#2358 review: a 422 that only mentions the word path, not the path field, stays FAILED", async () => {
+    const { post } = recorder(() => ({ ok: false, status: 422, message: "Validation Failed: body is too long (maximum is 65536 characters) for the comment at this path" }));
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("FAILED");
+    expect(bodies).toEqual([]);
+  });
+
+  test("#2358 review: GitHub's errors-array shape naming the path field goes on the conversation", async () => {
+    const { post } = recorder(() => ({ ok: false, status: 422, message: 'Validation Failed: {"resource":"PullRequestReviewComment","code":"invalid","field":"path"}' }));
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("POSTED");
+    expect(bodies).toHaveLength(1);
+  });
+
+  test("#2358 review: a same-round repeat says it was posted earlier this round, not in an earlier round", async () => {
+    const { post } = recorder(refused);
+    const { comment } = pullCommenter();
+    const keyFor = () => "src/a.ts\u0000n:12\u0000off-by-one";
+    const r = await postReviewThreads(reading([finding, { ...finding }]), post, keyFor, undefined, comment);
+    const text = r.detail.join("\n");
+    expect(text).toContain("earlier in this round");
+    expect(text).not.toContain("from an earlier round");
+  });
+
+  test("#2338 review: a finding with no line says it was refused at the file, not at the line", async () => {
+    const { post } = recorder(refused);
+    const { bodies, comment } = pullCommenter();
+    await postReviewThreads(reading([{ ...finding, line: undefined }]), post, undefined, undefined, comment);
+    expect(bodies[0]).toContain("GitHub refused it at the file.");
+    expect(bodies[0]).not.toContain("at the line");
+  });
+
+  test("#2338 review: two findings with one key in one round go on the conversation once", async () => {
+    const { post } = recorder(refused);
+    const { bodies, comment } = pullCommenter();
+    const keyFor = () => "src/a.ts\u0000n:12\u0000off-by-one";
+    const r = await postReviewThreads(reading([finding, { ...finding }]), post, keyFor, undefined, comment);
+    expect(bodies).toHaveLength(1);
+    expect(r.outcome).toBe("POSTED");
+  });
+
+  test("#2358 review: a fork's read-only token refusing the conversation comment degrades, it does not fail", async () => {
+    const { post } = recorder(refused);
+    const { comment } = pullCommenter(() => ({ ok: false, status: 403, message: "Resource not accessible by integration" }));
+    const r = await postReviewThreads(reading([finding]), post, undefined, true, comment);
+    expect(r.outcome).toBe("DEGRADED_NO_WRITE");
+    expect(aiReviewThreadsExitCode(r)).toBe(0);
+  });
+
+  test("#2358 review: the same 403 on a run that is NOT a fork is still FAILED", async () => {
+    const { post } = recorder(refused);
+    const { comment } = pullCommenter(() => ({ ok: false, status: 403, message: "Resource not accessible by integration" }));
+    const r = await postReviewThreads(reading([finding]), post, undefined, false, comment);
+    expect(r.outcome).toBe("FAILED");
+  });
+
+  test("#2338: with no pull-request commenter the old behaviour holds: FAILED", async () => {
+    const { post } = recorder(refused);
+    const r = await postReviewThreads(reading([finding]), post);
+    expect(r.outcome).toBe("FAILED");
+  });
+
   test("a 422 that survives the demotion is a real failure", async () => {
     const { post } = recorder(() => ({ ok: false, status: 422, message: "nope" }));
     const r = await postReviewThreads(reading([finding]), post);
@@ -450,7 +563,7 @@ describe("#1992: no detail line reaches the workflow-command channel unescaped",
 
   test("threadsDetailLines escapes CR, LF and %", () => {
     const lines = threadsDetailLines(
-      { outcome: "FAILED", attempted: 1, posted: 0, demoted: 0, detail: [hostile] },
+      { outcome: "FAILED", attempted: 1, posted: 0, demoted: 0, pullComments: 0, detail: [hostile] },
       "ai-review-threads",
     );
     expect(lines).toHaveLength(1);

@@ -172,6 +172,17 @@ export type AiReviewThreadResponse =
   | { ok: true }
   | { ok: false; status: number | null; message: string };
 
+/**
+ * The pull-request-level fallback (#2338): a finding GitHub refuses at the line
+ * AND at the file goes here instead of being lost. `existing` is every body
+ * already on the pull request's conversation, so a later round does not post
+ * the same finding again.
+ */
+export interface AiReviewPullCommenter {
+  post: (body: string) => Promise<AiReviewThreadResponse>;
+  existing: readonly string[];
+}
+
 /** Sends one comment. The only thing in this module that touches a network. */
 export type AiReviewThreadPoster = (
   request: AiReviewThreadRequest,
@@ -185,6 +196,8 @@ export interface AiReviewThreadsResult {
   posted: number;
   /** Of those, how many only succeeded after dropping to file level. */
   demoted: number;
+  /** Of those, how many went on the conversation because GitHub refused the file too (#2338). */
+  pullComments: number;
   /** One sentence per thing worth reading, in the order it happened. */
   detail: string[];
 }
@@ -208,6 +221,17 @@ const FORBIDDEN = 403;
  * `.claude/rules/checks-must-be-able-to-fail.md`.
  */
 const PENDING_REVIEW_CONDITION = /pending review/i;
+
+/**
+ * The 422 that means "this path is not in the pull request's diff" — GitHub
+ * names the FIELD, either as `pull_request_review_thread.path` (the #1740
+ * reading: `… .path "could not be resolved"`) or as `"field":"path"` in its
+ * errors array. The bare word "path" anywhere in a message is not that
+ * (review of #2358): any other 422, a stale `commit_id` among them, is a
+ * request this producer got wrong and stays a failure rather than moving to
+ * the conversation.
+ */
+const OFF_DIFF_CONDITION = /pull_request_review_thread\.path\b|"field"\s*:\s*"path"/;
 
 /**
  * One binding, so a mutation of it is observable. Both halves are required:
@@ -255,6 +279,7 @@ export async function postReviewThreads(
   post: AiReviewThreadPoster,
   keyFor?: (finding: Record<string, unknown>) => string | null,
   fork?: boolean | null,
+  comment?: AiReviewPullCommenter,
 ): Promise<AiReviewThreadsResult> {
   const detail: string[] = [];
 
@@ -262,17 +287,21 @@ export async function postReviewThreads(
     detail.push(
       "the review produced no usable reading, so there was nothing to post — this is not a review that found nothing",
     );
-    return { outcome: "UNMEASURED", attempted: 0, posted: 0, demoted: 0, detail };
+    return { outcome: "UNMEASURED", attempted: 0, posted: 0, demoted: 0, pullComments: 0, detail };
   }
 
   const requests = reviewThreadRequests(reading, keyFor);
   if (requests.length === 0) {
     detail.push("the reading located no finding that could be anchored to a path in this diff");
-    return { outcome: "NOTHING_TO_POST", attempted: 0, posted: 0, demoted: 0, detail };
+    return { outcome: "NOTHING_TO_POST", attempted: 0, posted: 0, demoted: 0, pullComments: 0, detail };
   }
 
   let posted = 0;
   let demoted = 0;
+  let pullComments = 0;
+  const alreadyOnConversation = new Set((comment?.existing ?? []).map(threadKeyFrom).filter((k): k is string => k !== null));
+  /** Keys this call put on the conversation, so a repeat can say WHEN (review of #2358). */
+  const postedThisRound = new Set<string>();
   let forbidden = 0;
   let pending = 0;
   let failed = 0;
@@ -300,6 +329,56 @@ export async function postReviewThreads(
       detail.push(`${where}: line refused (422), retrying as a file-level comment`);
       answer = await post({ ...request, line: null });
       if (answer.ok) demoted += 1;
+    }
+
+    // #2338: refused at the file too. The path is not in this pull request's
+    // diff as GitHub sees it (a branch behind its base is the measured cause),
+    // so the finding goes on the conversation rather than nowhere.
+    if (
+      !answer.ok &&
+      answer.status === UNPROCESSABLE &&
+      comment !== undefined &&
+      !isPendingReviewRefusal(answer) &&
+      OFF_DIFF_CONDITION.test(answer.message)
+    ) {
+      const key = threadKeyFrom(request.body);
+      if (key !== null && alreadyOnConversation.has(key)) {
+        posted += 1;
+        pullComments += 1;
+        const when = postedThisRound.has(key) ? "earlier in this round" : "from an earlier round";
+        detail.push(`${where}: not in this pull request's diff, and already on its conversation ${when}, so not posted again`);
+        continue;
+      }
+      const viaConversation = await comment.post(
+        `**\`${where}\` is not in this pull request's diff, so this finding could not go on it.** ` +
+          `GitHub refused it ${request.line === null ? "at the file" : "at the line and at the file"}. ` +
+          `The branch may be behind its base; rebasing usually puts the file back in the diff.\n\n` +
+          request.body,
+      );
+      if (viaConversation.ok) {
+        // Within the round too: a second finding with this key is the same finding (review of #2358).
+        if (key !== null) {
+          alreadyOnConversation.add(key);
+          postedThisRound.add(key);
+        }
+        posted += 1;
+        pullComments += 1;
+        detail.push(`${where}: not in this pull request's diff (422 ${request.line === null ? "at the file" : "at the line and at the file"}), so it was posted on the conversation instead`);
+        continue;
+      }
+      // A 403 here is the token, not the finding: the fork branch below
+      // decides it exactly as it decides a refused review comment (review of
+      // #2358 — a fork's read-only token must degrade, never fail).
+      if (!viaConversation.ok && viaConversation.status === FORBIDDEN) {
+        answer = viaConversation;
+      } else {
+        failed += 1;
+        detail.push(
+          `${where}: not in this pull request's diff (422 ${request.line === null ? "at the file" : "at the line and at the file"}), and the conversation comment was refused too: ` +
+            `${viaConversation.status ?? "no status"} — ${viaConversation.message}`,
+        );
+        continue;
+      }
     }
 
     if (answer.ok) {
@@ -336,10 +415,10 @@ export async function postReviewThreads(
   // -review lock, and all three outrank a partial success — a round that
   // posted three of four comments has lost a finding and must say so.
   if (failed > 0) {
-    return { outcome: "FAILED", attempted: requests.length, posted, demoted, detail };
+    return { outcome: "FAILED", attempted: requests.length, posted, demoted, pullComments, detail };
   }
   if (forbidden > 0) {
-    return { outcome: "DEGRADED_NO_WRITE", attempted: requests.length, posted, demoted, detail };
+    return { outcome: "DEGRADED_NO_WRITE", attempted: requests.length, posted, demoted, pullComments, detail };
   }
   if (pending > 0) {
     return {
@@ -347,14 +426,16 @@ export async function postReviewThreads(
       attempted: requests.length,
       posted,
       demoted,
+      pullComments,
       detail,
     };
   }
   detail.push(
     `posted ${posted} review ${posted === 1 ? "comment" : "comments"}` +
-      (demoted === 0 ? "" : `, ${demoted} at file level after a line was refused`),
+      (demoted === 0 ? "" : `, ${demoted} at file level after a line was refused`) +
+      (pullComments === 0 ? "" : `, ${pullComments} on the conversation because the file is not in this pull request's diff`),
   );
-  return { outcome: "POSTED", attempted: requests.length, posted, demoted, detail };
+  return { outcome: "POSTED", attempted: requests.length, posted, demoted, pullComments, detail };
 }
 
 /**
