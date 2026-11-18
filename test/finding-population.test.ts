@@ -30,7 +30,7 @@
  * nothing adds the two together.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -47,6 +47,7 @@ import {
   renderFinding,
   verifiedPopulation,
 } from "../lib/scaffold/ai-review-findings";
+import { productionSuppression } from "../lib/ai-review-suppression";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -382,6 +383,29 @@ describe("#1883: a population is counted by a search that ran", () => {
 
   test("#1883 AC-2: neither a count nor a search is undeclared", () => {
     expect(populationVerdict(undefined, undefined, THREE)).toEqual({ kind: "undeclared" });
+  });
+
+  // The search's count is an oracle over the file it reads, so the reader is
+  // held to the real checkout: a symlink the branch commits, pointing out of
+  // it, reads as nothing (security review of #1883).
+  test("#1883 AC-3: the cited-file reader refuses a symlink out of the checkout, and reads a file in it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "finding-population-bound-"));
+    try {
+      const checkout = join(dir, "checkout");
+      const outside = join(dir, "outside");
+      mkdirSync(join(checkout, "lib"), { recursive: true });
+      mkdirSync(outside);
+      writeFileSync(join(outside, "secret.txt"), "token=abc123\n");
+      writeFileSync(join(checkout, "lib", "x.ts"), "listIssues(1)\nlistIssues(2)\n");
+      symlinkSync(join(outside, "secret.txt"), join(checkout, "lib", "leak.ts"));
+      const { linesOf } = productionSuppression(undefined, checkout);
+      expect(linesOf("lib/x.ts"), "a real file in the checkout was not read").toEqual(["listIssues(1)", "listIssues(2)", ""]);
+      expect(linesOf("lib/leak.ts"), "a symlink out of the checkout was read").toBeNull();
+      expect(linesOf("../outside/secret.txt"), "a relative escape was read").toBeNull();
+      expect(populationVerdict(undefined, ["token="], linesOf("lib/leak.ts")).kind).toBe("unmeasured");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("#1883 AC-1 MUTANT: with the comparison removed, the planted 1 is no longer refused", async () => {

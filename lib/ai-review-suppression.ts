@@ -54,7 +54,7 @@
  * a rule this module is trusted to follow — see that predicate for the
  * measurement, and for the declared deviation from the spec it rests on.
  */
-import { readFileSync } from "fs";
+import { readFileSync, realpathSync, statSync } from "fs";
 import { isAbsolute, resolve, sep } from "path";
 
 import {
@@ -396,6 +396,9 @@ export function checkoutLineText(root: string): (finding: ReviewFinding) => stri
  * reads it as not-unique. Zero is a different fact (the file was read and
  * the text is not in it) and is also not one, so both refuse.
  */
+/** #1883: a cited file larger than this is not read. Source files are far smaller. */
+export const CITED_FILE_MAX_BYTES = 2 * 1024 * 1024;
+
 export function checkoutLineReader(root: string): {
   lineTextFor: (finding: ReviewFinding) => string | undefined;
   occurrencesOf: (file: string, normalisedText: string) => number | undefined;
@@ -403,7 +406,26 @@ export function checkoutLineReader(root: string): {
   linesOf: (file: string) => readonly string[] | null;
 } {
   const base = resolve(root);
+  // #1883: the bound is checked again on the REAL path. A symlink the branch
+  // under review commits passes the lexical check above and points anywhere,
+  // and a population search made the count of matching lines an oracle over
+  // whatever it points at — the runner's files included. Only a regular file
+  // inside the real checkout, under the size cap, is read.
+  let realBase: string | null = null;
+  try {
+    realBase = realpathSync(base);
+  } catch {
+    realBase = null;
+  }
   const cache = new Map<string, string[] | null>();
+  const readBounded = (path: string): string[] | null => {
+    if (realBase === null) return null;
+    const real = realpathSync(path);
+    if (real !== realBase && !real.startsWith(realBase + sep)) return null;
+    const st = statSync(real);
+    if (!st.isFile() || st.size > CITED_FILE_MAX_BYTES) return null;
+    return readFileSync(real, "utf-8").split("\n");
+  };
   const linesOf = (file: string): string[] | null => {
     if (typeof file !== "string" || file === "") return null;
     if (isAbsolute(file)) return null;
@@ -411,7 +433,7 @@ export function checkoutLineReader(root: string): {
     if (path !== base && !path.startsWith(base + sep)) return null;
     if (!cache.has(path)) {
       try {
-        cache.set(path, readFileSync(path, "utf-8").split("\n"));
+        cache.set(path, readBounded(path));
       } catch {
         cache.set(path, null);
       }
