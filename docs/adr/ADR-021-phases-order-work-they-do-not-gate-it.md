@@ -9,7 +9,7 @@ updated: 2026-11-18
 
 ## Status
 
-**Proposed, 2026-11-18.** Jason decided decisions 1, 2, 3 and 6 on 2026-11-18 (below). What is still open is the criterion wording in *Criteria, proposed wording*: it is his to accept or edit before he merges this.
+**Proposed, 2026-11-18.** Jason decided every decision below on 2026-11-18, and accepted the three criterion texts in *Criteria* the same day. What is left is his merge.
 
 ## Context
 
@@ -36,8 +36,8 @@ An issue may start when nothing real blocks it. Phase is a sort order, never a l
 1. **Phases order work; they do not gate it — Jason, 2026-11-18.** 31 of 37 Convergence issues were held back by nothing anyone wrote.
 2. **The phase-order links are removed, and the criteria behind them reworded — Jason, 2026-11-18.** Keeping the links while ranking by phase would leave the gate in place.
 3. **"Payload waits for the engine" becomes ordering — Jason, 2026-11-18.** His words: "i understand what it means to have engine first but if we can safely do other work it shouldn't block". Engine issues rank first, and payload issues fill the remaining Ready slots. This supersedes ADR-013 decision 9.
-4. **`dependency-edges` reads the links ADR tables declare — recommended, for Jason.** Every `Blocked by` cell in an accepted ADR's Decomposition must exist on the tracker. That gives E3 a real population, so `project-state.json`'s B3 and E3 keep their commands unchanged. `blocked-by-edges` keeps its definition (every link on an engine issue resolves), now over the authored links.
-5. **"Same file" means a file both issues name in their files list — recommended.** That is `lib/issue-file-overlap.ts`'s existing notion, applied to the in-progress issues and to every issue picked earlier in the same fill.
+4. **The board's dependency check is `plan-deps` without writing — Jason, 2026-11-18.** `dependency-edges` asks whether every dependency an accepted ADR declares is on the tracker: MET when `plan-deps` would add nothing, SHORT naming what is missing. It never decides order; Ready does. `project-state.json`'s B3 and E3 keep their commands unchanged, and `blocked-by-edges` keeps its definition (every link on an engine issue resolves).
+5. **"Same file" means a file both issues name in their files list, and an open pull request's real changes count too — Jason, 2026-11-18.** The files list is `lib/issue-file-overlap.ts`'s existing notion, applied to the in-progress issues and to every issue picked earlier in the same fill. The open-PR clause is his safeguard against a files list that is wrong: the check runs when Ready pulls work in, before anyone starts it.
 6. **True ordering comes from planning — Jason, 2026-11-18.** His words: "Wasn't true ordering come from that step. Dependencies". A dependency is declared when the work is planned, in the ADR's `Blocked by` or `Blocks` column, and `plan-issues` writes it. A dependency between two issues that already exist, which no ADR row can express, is written by hand on the tracker, and the planner never removes a link it did not write.
 
 ## Not decided here
@@ -47,7 +47,7 @@ An issue may start when nothing real blocks it. Phase is a sort order, never a l
 - Ready's depth cap, the expedite label and `work-this-next` are unchanged.
 - Consumers get the same Ready rule through the published CLI, and nothing in a consumer's config changes.
 
-## Criteria, proposed wording (Jason's to accept or edit)
+## Criteria (Jason accepted these texts, 2026-11-18)
 
 **SC-2741, reworded** (it states today's one-milestone rule):
 
@@ -55,11 +55,11 @@ An issue may start when nothing real blocks it. Phase is a sort order, never a l
 
 **SC-2606, reworded** (it states that phase order becomes links):
 
-> The planner writes a `blocked by` link only for a dependency the planning step declared: a `Blocked by` or `Blocks` cell in an accepted ADR's Decomposition table. Phase order in a placement table is a ranking key that Ready reads and is never written as a link, and the planner never removes a link it did not write.
+> lib/spec-deps.ts contains [declaredDependencies] — plan-deps writes a `blocked by` link only for a dependency planning declared: a `Blocked by` or `Blocks` cell in an accepted ADR's Decomposition table. It adds any that are missing, never writes phase order, and never removes a link it did not write. Phase order is how Ready sorts.
 
 **SC-2786, new:**
 
-> `board-ready` never puts an issue in Ready that names a file an in-progress issue, or an issue it picked earlier in the same fill, also names. The skipped issue stays first in line for the next fill.
+> `board-ready` never puts an issue in Ready that names a file an in-progress issue names, an open pull request changes, or an issue it picked earlier in the same fill names. The skipped issue stays first in line for the next fill.
 
 ## Decomposition
 
@@ -69,5 +69,5 @@ Each row serves a criterion in specs/SPEC-TO-BOARD-PIPELINE-SPEC.md. SC-2786 is 
 |---|---|---|---|---|
 | SC-2741 | Ready draws from every placed phase ranked by what each issue unblocks | lib/board-ready-rule.ts, scripts/board-ready.ts, scripts/work-status.ts, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, test/board-ready-rule.test.ts, test/work-status.test.ts | Engine Phase 6 — the board's state is a reading | — |
 | SC-2786 | Ready never holds two issues that name the same file | lib/board-ready-rule.ts, lib/issue-file-overlap.ts, scripts/board-ready.ts, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, test/board-ready-rule.test.ts, test/issue-file-overlap.test.ts | Engine Phase 6 — the board's state is a reading | Ready draws from every placed phase ranked by what each issue unblocks |
-| SC-2606 | The planner stops writing phase order as blocked-by links | lib/spec-deps.ts, scripts/plan-deps.ts, scripts/board-snapshot.ts, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, test/plan-deps.test.ts, test/board-snapshot.test.ts, test/board-conformance.test.ts | Engine Phase 6 — the board's state is a reading | — |
-| SC-2606 | The planner's phase-order links come off the tracker and hand-written links stay | scripts/plan-deps.ts, test/plan-deps.test.ts, .github/workflows/specs-placed.yml, lib/scaffold/specs-placed-workflow.ts | Engine Phase 6 — the board's state is a reading | The planner stops writing phase order as blocked-by links |
+| SC-2606 | plan-deps writes only the dependencies planning declared | lib/spec-deps.ts, scripts/plan-deps.ts, scripts/board-snapshot.ts, specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, test/plan-deps.test.ts, test/board-snapshot.test.ts, test/board-conformance.test.ts | Engine Phase 6 — the board's state is a reading | — |
+| SC-2606 | The planner's phase-order links come off the tracker and hand-written links stay | scripts/plan-deps.ts, test/plan-deps.test.ts, .github/workflows/specs-placed.yml, lib/scaffold/specs-placed-workflow.ts | Engine Phase 6 — the board's state is a reading | plan-deps writes only the dependencies planning declared |
