@@ -37,7 +37,7 @@ import { existsSync, readFileSync, readdirSync } from "fs";
 import { isAbsolute, join, relative } from "path";
 import { parseArgs } from "util";
 import { describeSpecSource, resolveSpecSource, type GitRunner } from "../lib/spec-source";
-import { openFrontier, phaseOf } from "../lib/board-mirror";
+import { phaseOf } from "../lib/board-mirror";
 import { withoutAmbientGitOverrides } from "../lib/git-isolation";
 import { createGitHubClient, listMilestones } from "../lib/github";
 import { readBoardConfig, readBoardInputs, readQueueLabel } from "../lib/config-readers";
@@ -220,13 +220,6 @@ export interface SnapshotIssue {
   number: number;
   /** The issue numbers that already block this one, live. */
   blockedBy: number[];
-  /**
-   * True when the issue sits in the lowest phase that carries any engine
-   * issue. Derived from the milestone order, not declared: the first phase
-   * has nothing before it to be blocked by, so an edge there would be a
-   * fiction.
-   */
-  rootReady: boolean;
   /** Every label on the issue, read rather than assumed empty. */
   labels: string[];
   /**
@@ -876,8 +869,6 @@ export async function main(
     return REFUSAL_EXIT;
   }
 
-  const frontier = openFrontier(engine.map(i => ({ state: i.state, phase: phaseOf(i.milestone) })));
-
   // Which absent numbers are FINISHED, rather than never-existed — #1704.
   //
   // Only the edges that did NOT resolve against the engine population are
@@ -969,7 +960,6 @@ export async function main(
   const snapshotIssues = engine.map(i => ({
     number: i.number,
     blockedBy: [...i.blockedBy],
-    rootReady: frontier !== null && phaseOf(i.milestone) === frontier,
     labels: [...i.labels],
     ...criteriaKey(i.number),
   }));

@@ -358,28 +358,16 @@ describe("the issue population (B3)", () => {
     });
   });
 
-  test("the lowest phase carrying an issue is rootReady, and nothing above it is", async () => {
+  // #2433: `rootReady` marked the lowest phase, the one place an engine
+  // issue could sit with no edge. ADR-021 made phase a sort order, so no
+  // reading needs it and the snapshot no longer carries it.
+  test("#2433: the snapshot carries no rootReady — phase is not a gate", async () => {
     await withSpec(SPEC, async (dir, at) => {
       const { gh } = spy(CONFORMANT_LIVE, {
         issues: [iss({ number: 11, milestone: IN_PHASE_1 }), iss({ number: 10, milestone: IN_PHASE_0 })],
       });
       const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
-      // Both arms. Marking everything root, or nothing, both satisfy a
-      // single-arm case and both make `blocked-by-edges` unable to fail.
-      expect(snap.issues.find(i => i.number === 10)?.rootReady).toBe(true);
-      expect(snap.issues.find(i => i.number === 11)?.rootReady).toBe(false);
-    });
-  });
-
-  test("the frontier is derived, not hardcoded to phase 0", async () => {
-    // Phase 0 carrying no issue is the ordinary mid-project state. A
-    // producer testing `phase === 0` would mark NOTHING root here, and
-    // every issue in the first phase with work in it would read as
-    // missing an edge it can never legitimately have.
-    await withSpec(SPEC, async (dir, at) => {
-      const { gh } = spy(CONFORMANT_LIVE, { issues: [iss({ number: 11, milestone: IN_PHASE_1 })] });
-      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
-      expect(snap.issues[0]?.rootReady).toBe(true);
+      for (const i of snap.issues) expect("rootReady" in i).toBe(false);
     });
   });
 
@@ -1687,24 +1675,33 @@ describe("the two files agree, and the producer never writes", () => {
   });
 
   test("the issues the producer emits drive blocked-by-edges, and an unconfigured column stays UNMEASURED", async () => {
-    // The whole point of B3, asserted end to end through both files: an
-    // unsequenced board reads SHORT, the same board with the edge reads
-    // MET, and a column this project has not configured never becomes a
-    // number. `--project-root` is the board-less scratch tree, so the last
+    // The whole point of B3, asserted end to end through both files: a
+    // link naming nothing reads SHORT, the same board with a real link
+    // reads MET, and a column this project has not configured never becomes
+    // a number. An issue with no link at all is MET too (#2433, ADR-021). `--project-root` is the board-less scratch tree, so the last
     // assertion is about the producer and not about a fixture id failing
     // to match the repository's own config.
     await withSpec(SPEC, async (dir, at) => {
       const argv = [at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir];
-      const unsequenced = spy(CONFORMANT_LIVE, {
+      const dangling = spy(CONFORMANT_LIVE, {
+        issues: [
+          iss({ number: 10, milestone: "Fix Phase 0 — the first one" }),
+          iss({ number: 11, milestone: "Fix Phase 1 — the second one", blockedBy: [9999] }),
+        ],
+      });
+      const before = readSnapshotText((await capture(argv, dangling.gh)).text);
+      const edges = (b: typeof before) => takeReadings(b.board!).find(r => r.name === "blocked-by-edges")!;
+      expect(edges(before).status, "a link naming nothing read as resolved").toBe("short");
+      expect(edges(before).why).toContain("1 of 2");
+
+      const unlinked = spy(CONFORMANT_LIVE, {
         issues: [
           iss({ number: 10, milestone: "Fix Phase 0 — the first one" }),
           iss({ number: 11, milestone: "Fix Phase 1 — the second one" }),
         ],
       });
-      const before = readSnapshotText((await capture(argv, unsequenced.gh)).text);
-      const edges = (b: typeof before) => takeReadings(b.board!).find(r => r.name === "blocked-by-edges")!;
-      expect(edges(before).status, "an unsequenced board read as sequenced").toBe("short");
-      expect(edges(before).why).toContain("1 of 2");
+      const free = readSnapshotText((await capture(argv, unlinked.gh)).text);
+      expect(edges(free).status, "an issue nothing blocks read as a hole in the graph").toBe("met");
 
       const sequenced = spy(CONFORMANT_LIVE, {
         issues: [
