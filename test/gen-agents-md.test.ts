@@ -263,7 +263,18 @@ describe("#2375: claiming-sc-coverage, the claim convention a consumer writes te
   test("#2375: every example under 'Does not count' is NOT a claim to the scanner", () => {
     const not = examples(ruleFor("full")!.content, "Does not count");
     expect(not.length, "the Does-not-count table is empty, so this case is vacuous").toBeGreaterThanOrEqual(3);
-    for (const ex of not) expect(reading(ex), `the rule says \`${ex}\` is safe; the scanner credits it`).not.toBe("claim");
+    // Review of #2377: a row with no criterion id would pass `not.toBe("claim")`
+    // without either predicate running. So every row reads exactly
+    // "not-a-claim", except the ONE row whose point is that the id is absent —
+    // and that row is held to what it says: a title that runs, naming an issue.
+    const noId = not.filter(ex => reading(ex) === "no-id");
+    expect(noId.length, `rows with no criterion id: ${noId.join(" · ")}`).toBe(1);
+    const title = /^(.*?\b(?:describe|test|it)\b[^("']*\()\s*["'`]/.exec(noId[0]);
+    expect(title && titleCall(title[1]), "the issue-number row is not a running title").toBe("runs");
+    expect(noId[0], "the issue-number row names no issue").toMatch(/#\d+/);
+    for (const ex of not.filter(e => e !== noId[0])) {
+      expect(reading(ex), `the rule says \`${ex}\` is safe; the scanner credits it`).toBe("not-a-claim");
+    }
   });
 
   test("#2375: it tells a test that only works toward a criterion what to write instead", () => {
