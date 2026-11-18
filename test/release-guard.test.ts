@@ -1015,8 +1015,9 @@ describe("#364 SC-832: the pipeline cannot report a release it did not make", ()
     // #630 added the third entry, #1488 the fourth, #2046 the fifth
     // (adr-accepted.yml, ADR-014 row 3), #2045 the sixth (closing-references.yml,
     // ADR-014 row 2), #2047 the seventh (board-ready.yml, ADR-014 row 4), #2166 the eighth
-    // (board-intake.yml, the same row), #2233 the ninth (intake.yml), #2342 the eleventh
-    // (consumer-intake.yml, ADR-020 Decision 2). The tuple is asserted as
+    // (board-intake.yml, the same row), #2233 the ninth (intake.yml), #2305 the tenth
+    // (specs-placed.yml), #2342 the eleventh (consumer-intake.yml, ADR-020
+    // Decision 2). The tuple is asserted as
     // a literal rather than by counting entries, because a count is satisfied
     // by any four names — and the thing this guards against is the set
     // growing into a directory, which a count cannot see. The fourth name is
