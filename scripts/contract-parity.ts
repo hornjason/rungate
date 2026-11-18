@@ -1008,7 +1008,7 @@ export function fieldReachability(root: string): CategoryReport {
  * to every migrated writer and reports the gap as closed — the cheapest wrong
  * fix here was deleting the stale `KNOWN_UNDECLARED_WRITES` entry instead.
  */
-const WRITE_CALL = /\b(writeFileSync|appendFileSync|writeSpec)\(\s*([A-Za-z0-9_.]+|join\([^)]*\)|resolve\([^)]*\)|`[^`]*`|"[^"]*")/g;
+const WRITE_CALL = /\b(writeFileSync|appendFileSync|writeSpec)\(\s*(join\([^)]*\)|resolve\([^)]*\)|[A-Za-z0-9_.]+|`[^`]*`|"[^"]*")/g;
 
 /** Identifiers a path is anchored to when it is inside the project being written. */
 const PROJECT_ROOTS = new Set([
@@ -1153,15 +1153,11 @@ export const KNOWN_UNDECLARED_WRITES: Record<string, string> = {
     "the generated ship launch file (#2287, ADR-017): whoever edits workflows/ship.js rebuilds and commits " +
     "workflows/ship.run.js in the same pull request, and test/workflow-launch-build.test.ts refuses a stale one",
   "scripts/typecheck.ts → .claude": "the typecheck baseline ratchet",
-  "scripts/finding-promotion.ts → .claude/spec-deferral-ratchet.json":
-    "the deferral bank moves with the criterion it counts (#2066); the promotion's caller commits both in one pull " +
-    "request, exactly as it commits the spec line the same run writes",
-  "scripts/create-sc.ts → .claude/spec-deferral-ratchet.json":
-    "the deferral bank moves with the criterion create-sc appends to a deferred spec (#2297), the same rule as " +
-    "finding-promotion's entry above; the caller commits both in one pull request",
-  "lib/scaffold/spec-scope.ts → .claude/spec-deferral-ratchet.json":
-    "scaffold banks each spec it marks deferred in the same run (#2307), naming both files in an UPDATED line, " +
-    "so `scaffold --commit` stages them together and an uncommitted run leaves both in the operator's diff",
+  "lib/finding-promotion.ts → .claude/spec-deferral-ratchet.json":
+    "the deferral bank's one write path, `writeDeferralBank` (#2300). finding-promotion (#2066) and create-sc " +
+    "(#2297) move it with the criterion they add, and each caller commits both files in one pull request; scaffold " +
+    "(#2307) banks each spec it marks deferred, naming both files in an UPDATED line so `scaffold --commit` stages " +
+    "them together. A writer through the function needs no entry; one around it is a new site and fails",
 };
 
 /**

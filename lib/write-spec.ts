@@ -61,6 +61,14 @@ export interface WriteSpecOptions {
    * matches the rest of their output.
    */
   label?: string;
+  /**
+   * #2300: the bytes the caller read and computed its new content from, or
+   * `null` when the file did not exist. When given, the write is refused if
+   * the file now holds anything else: another writer got there between the
+   * read and this write, and writing would drop its change silently. Absent
+   * (`undefined`) keeps the old behaviour for callers that read nothing.
+   */
+  expected?: string | null;
 }
 
 /**
@@ -77,12 +85,24 @@ export function writeSpec(
   content: string,
   opts?: WriteSpecOptions,
 ): SpecWriteResult {
-  const reading: DerivedReading = existsSync(specPath)
-    ? readDerivedDeclaration(readFileSync(specPath, "utf-8"))
-    : { status: "authored" };
+  const current = existsSync(specPath) ? readFileSync(specPath, "utf-8") : null;
+  const reading: DerivedReading = current === null ? { status: "authored" } : readDerivedDeclaration(current);
 
   if (!mayWrite(reading)) {
     return { written: false, reading, refusal: skipLine(opts?.label ?? specPath, reading) };
+  }
+
+  // #2300: a read-modify-write is only safe if nothing wrote in between.
+  if (opts?.expected !== undefined && current !== opts.expected) {
+    const what =
+      current === null ? "it no longer exists" : opts.expected === null ? "it was created since" : "its bytes differ";
+    return {
+      written: false,
+      reading,
+      refusal:
+        `${opts.label ?? specPath} changed on disk since it was read (${what}) — another writer got there first, ` +
+        `and this write would drop its change; re-run so the change is computed from what is there now`,
+    };
   }
 
   writeFileSync(specPath, content);

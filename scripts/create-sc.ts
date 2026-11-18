@@ -27,7 +27,7 @@ import { currentScOwner } from "../lib/sc-reservations";
 import { skipLine } from "../lib/derived-spec";
 import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
 import { join, relative, resolve, sep } from "path";
-import { bankAfterAppend, writeSpecWithBank } from "../lib/finding-promotion";
+import { bankAfterAppend, writeDeferralBank, writeSpecWithBank } from "../lib/finding-promotion";
 
 /** Same resolution sync-sc-status uses, so both halves read one tree. */
 const ROOT = join(import.meta.dir, "..");
@@ -134,7 +134,8 @@ try {
     // (#1584) can see this write targets the bank and not a spec.
     const bankPath = join(ROOT, ".claude/spec-deferral-ratchet.json");
     const specKey = relative(ROOT, resolve(specPath)).split(sep).join("/");
-    const banked = bankAfterAppend(existsSync(bankPath) ? readFileSync(bankPath, "utf-8") : null, specKey, content, newContent);
+    const bankRead = existsSync(bankPath) ? readFileSync(bankPath, "utf-8") : null;
+    const banked = bankAfterAppend(bankRead, specKey, content, newContent);
     if (!banked.ok) {
       console.error(`ERROR: ${banked.refusal}: ${banked.why}`);
       process.exit(1);
@@ -142,11 +143,14 @@ try {
     // Both through `writeSpec`, as finding-promotion does: the one write path
     // the spec-write sweep (#1552) allows for a path matching /spec/i. Both
     // or neither: a failed bank write puts the spec back.
-    // The bank write is spelled `writeSpec(bankPath, …)` so write
-    // accountability (#624) resolves it to the bank, as it does
-    // finding-promotion's, rather than reading an opaque `writeSpec(p)`.
+    // #2300: the bank through its one write path, refusing if another session
+    // moved it since `bankRead`; the spec refuses the same way if it changed
+    // since `content` was read. The put-back write carries no expectation.
     const wrote = writeSpecWithBank(
-      (p, c) => (p === bankPath ? writeSpec(bankPath, c) : writeSpec(p, c)),
+      (p, c) =>
+        p === bankPath
+          ? writeDeferralBank(ROOT, c, bankRead)
+          : writeSpec(p, c, c === newContent ? { expected: content } : undefined),
       { path: specPath, before: content, after: newContent },
       { path: bankPath, text: banked.text },
     );

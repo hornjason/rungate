@@ -43,6 +43,7 @@ import {
   bankForRetry,
   bankWithPromotion,
   decline,
+  writeDeferralBank,
   placementCount,
   promote,
   specPath,
@@ -414,6 +415,9 @@ const bankPath = join(ROOT, ".claude/spec-deferral-ratchet.json");
 const specKey = relative(ROOT, target).split(sep).join("/");
 const counts = { before: placementCount(content), after: placementCount(inserted.text) };
 let bankText: string | null = null;
+// #2300: the bank bytes `bankText` was computed from, so its write refuses
+// if another session moved the bank in between.
+let bankRead: string | null = null;
 // A new criterion moves the bank from its old count; a RETRY (the line is
 // already written) checks it, and repairs it when an earlier run's bank
 // write failed after its spec write landed (review of #2105).
@@ -434,6 +438,7 @@ if (counts.before.deferred && (moved || result.alreadyWritten)) {
     process.exit(PROMOTION_EXIT);
   }
   bankText = banked.text;
+  bankRead = current;
 }
 
 if (!write) {
@@ -462,7 +467,7 @@ if (result.alreadyWritten) {
   // or --phase is computed and dropped while the run reports success
   // (review of #2105).
   if (inserted.text !== content) {
-    const placedOnly = writeSpec(target, inserted.text);
+    const placedOnly = writeSpec(target, inserted.text, { expected: content });
     if (!placedOnly.written) {
       console.error(`REFUSED: ${placedOnly.refusal ?? `${spec} was not written, and gave no reason`}`);
       process.exit(PROMOTION_EXIT);
@@ -470,7 +475,7 @@ if (result.alreadyWritten) {
     console.log(`Placed ${result.id} in Phase ${phase}.`);
   }
 } else {
-  const wrote = writeSpec(target, inserted.text);
+  const wrote = writeSpec(target, inserted.text, { expected: content });
   if (!wrote.written) {
     console.error(`REFUSED: ${wrote.refusal ?? `${spec} was not written, and gave no reason`}`);
     process.exit(PROMOTION_EXIT);
@@ -483,12 +488,11 @@ if (result.alreadyWritten) {
 // reads the deferred spec as disagreeing with it. The spec is already
 // written, so a failure here names exactly what is left.
 if (bankText !== null) {
-  // Through `writeSpec`, the one write path the spec-write sweep (#1552)
-  // allows for a file whose path matches /spec/i. The bank is JSON and
-  // carries no generated-file marker, so `writeSpec` writes it as authored.
+  // Through `writeDeferralBank`, the bank's one write path (#2300), which
+  // writes through `writeSpec` and refuses a bank moved since `bankRead`.
   let banked: { written: boolean; refusal: string | null };
   try {
-    banked = writeSpec(bankPath, bankText);
+    banked = writeDeferralBank(ROOT, bankText, bankRead);
   } catch (e) {
     banked = { written: false, refusal: (e as Error).message };
   }

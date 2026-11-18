@@ -44,7 +44,8 @@
  * unrelated reason is distinguishable from one genuinely caught.
  */
 import { existsSync, readFileSync } from "fs";
-import { resolve, sep } from "path";
+import { join, resolve, sep } from "path";
+import { writeSpec, type SpecWriteResult } from "./write-spec";
 
 import { NAMES_NONE, answerableIds, criteriaNamedBy, criterionAnswer, specCriteriaIn } from "./board-mirror";
 import { allocateScNumber, formatSCLine } from "./create-sc";
@@ -829,6 +830,27 @@ export function bankAfterAppend(
     return { ok: false, refusal: "BANK_DRIFT", why: `${specPath} is deferred and the deferral bank could not be read` };
   }
   return bankWithPromotion(bankText, specPath, was.criteria, now.criteria);
+}
+
+/**
+ * The ONE write of the deferral bank (#2300). `finding-promotion`,
+ * `create-sc` and the scaffold's spec-scope step all move it through here.
+ *
+ * Two reasons it is one function. Write accountability (#624) resolves the
+ * literal path below to the bank, so a writer that goes through it needs no
+ * entry of its own, and one that writes around it is a new site and goes red.
+ * And `read`, the bank text the caller computed from, makes the write refuse
+ * when another session moved the bank in between, instead of dropping that
+ * move and leaving it for `BANK_DRIFT` to find later.
+ */
+export function writeDeferralBank(root: string, text: string, read: string | null): SpecWriteResult {
+  // A named literal path: write accountability reads `writeSpec(<identifier>`
+  // back to its assignment, and that is how it resolves this write to the bank.
+  const bankPath = join(root, ".claude/spec-deferral-ratchet.json");
+  return writeSpec(bankPath, text, {
+    label: ".claude/spec-deferral-ratchet.json",
+    expected: read,
+  });
 }
 
 /** The writer `writeSpecWithBank` writes through: `writeSpec`, or a stand-in in a test. */
