@@ -28,6 +28,7 @@
  * issues it is itself demoting, and touches no others. The cause and the
  * cleanup are one action.
  */
+import { addBlockedBy } from "../lib/blocked-by-write";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { spawnSync } from "child_process";
 import { isAbsolute, join, relative, sep } from "path";
@@ -348,7 +349,8 @@ const LIVE_DECOMPOSE: DecomposeGitHub = {
     return n;
   },
   addBlockedBy: async (repo, blocked, blocker) => {
-    gh(["issue", "edit", String(blocked), "--repo", repo, "--add-blocked-by", String(blocker)]);
+    // REST, not `issue edit --add-blocked-by`, which an older runner's gh lacks (#2345).
+    addBlockedBy(repo, blocked, blocker, args => gh([...args]));
   },
   blockedBy: async (repo, issue) => {
     const out = gh([

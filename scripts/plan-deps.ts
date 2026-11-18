@@ -28,6 +28,7 @@
  * 37 mutations rather than 194. `groupByBlocked` decides the grouping and is
  * tested on its own, because the group IS what reaches GitHub.
  */
+import { addBlockedBy } from "../lib/blocked-by-write";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
 import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
@@ -96,9 +97,9 @@ async function liveAddBlockers(
   blocked: number,
   blockers: readonly number[],
 ): Promise<void> {
-  const args = ["issue", "edit", String(blocked), "--repo", repo];
-  for (const b of blockers) args.push("--add-blocked-by", String(b));
-  ghWithoutGhToken(args);
+  // Through the REST dependencies API, one link at a time: `issue edit
+  // --add-blocked-by` does not exist in an older runner's gh (#2345).
+  for (const b of blockers) addBlockedBy(repo, blocked, b, ghWithoutGhToken);
 }
 
 const LIVE_GITHUB: PlanDepsGitHub = {
