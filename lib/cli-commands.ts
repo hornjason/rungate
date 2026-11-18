@@ -249,7 +249,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   // tracker AND the tree (the opted-in specs place an issue), hence the root flag.
   "consumer-triage": {
     script: "scripts/consumer-triage.ts",
-    summary: "Give each consumer-filed issue with no verdict one: duplicate, placed, overlaps or active",
+    summary: "Give each consumer-filed issue with no verdict exactly one",
     usage: "rungate consumer-triage --repo <owner/name> [--write] [--json]",
     projectRootFlag: true,
   },

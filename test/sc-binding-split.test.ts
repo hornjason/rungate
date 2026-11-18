@@ -375,7 +375,7 @@ const UNCLAIMED_RATCHET = 150;
 // 178 -> 179: SC-2782 (#2340) ticked by `sync-sc-status --only SC-2782`: a
 // consumer's issue gets one triage verdict from one decider, a tracker read
 // no registered pattern expresses; the three `SC-2782` describes in
-// test/consumer-triage.test.ts name it.
+// test/triage-consumer-issues.test.ts name it.
 const CLAIMED_UNBINDABLE = 179;
 
 function split() {

@@ -177,7 +177,9 @@ interface Wrote {
   value: string;
 }
 
-function fakeGitHub(over: Partial<TriageGitHub> & { comments?: Record<number, string[]> } = {}): { gh: TriageGitHub; wrote: Wrote[] } {
+const MARKED: Record<number, string[]> = { 302: [verdictMarker("ACTIVE")] };
+
+function fakeGitHub(over: Partial<TriageGitHub> = {}): { gh: TriageGitHub; wrote: Wrote[] } {
   const wrote: Wrote[] = [];
   const issues = [
     { ...ACTIVE_WORK, labels: ["engine"] },
@@ -191,7 +193,7 @@ function fakeGitHub(over: Partial<TriageGitHub> & { comments?: Record<number, st
     milestones: async () => [],
     openIssues: async () => issues,
     openPulls: async () => [PULL],
-    comments: async (_repo, n) => (over.comments ?? { 302: [verdictMarker("ACTIVE")] })[n] ?? [],
+    comments: async (_repo, n) => MARKED[n] ?? [],
     comment: async (_repo, number, value) => void wrote.push({ op: "comment", number, value }),
     setMilestone: async (_repo, number, value) => void wrote.push({ op: "milestone", number, value }),
     addLabel: async (_repo, number, value) => void wrote.push({ op: "label", number, value }),
