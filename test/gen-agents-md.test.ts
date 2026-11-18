@@ -369,23 +369,54 @@ describe("#2318: the rule's command passes the filing gate as written", () => {
     expect(v.refusal, "the control was allowed, so the case above witnesses nothing").not.toBeNull();
   });
 
-  test("#2318 AC-2 CONTROL: a symptom that names no file, function or command is refused, as the rule warns", async () => {
+  /**
+   * Review of #2424: the first wording said a COMMAND satisfies the gate, and
+   * the gate keys only on repository paths and shaped identifiers. So each
+   * thing the rule says is not enough is run, and refused.
+   */
+  test("#2318 AC-2 CONTROL: a symptom naming only a command, or no path or function at all, is refused, as the rule warns", async () => {
     const [attempt] = filingAttempts('gh issue create --repo hornjason/rungate --title "x" --body-file /tmp/body.md');
-    const vague = filledBody("the generated rule is wrong");
-    const v = await adjudicateFiling(attempt, async () => measuredCorpus([]), () => vague, undefined, {
-      kind: "claims",
-      numbers: [1],
-    });
-    expect(v.refusal, "a body naming nothing was allowed, so the rule's warning describes no refusal").not.toBeNull();
-    expect(rule(), "the rule no longer warns that the body must name a file, function or command").toContain(
-      "names no file, function or command",
+    for (const symptom of ["the generated rule is wrong", "`bunx rungate scaffold .` skips the gates job, 2 of 2 runs"]) {
+      const v = await adjudicateFiling(attempt, async () => measuredCorpus([]), () => filledBody(symptom), undefined, {
+        kind: "claims",
+        numbers: [1],
+      });
+      expect(v.refusal, `"${symptom}" was allowed, so the rule's warning describes no refusal`).not.toBeNull();
+    }
+    expect(rule(), "the rule no longer warns that a body must name a path or a function").toContain(
+      "names no repository path and no function",
     );
+    expect(rule(), "the rule no longer says a command alone is not enough").toContain("A command alone");
+  });
+
+  test("#2318 AC-2: a symptom naming a function in backticks is allowed, as the rule says", async () => {
+    const [attempt] = filingAttempts('gh issue create --repo hornjason/rungate --title "x" --body-file /tmp/body.md');
+    const v = await adjudicateFiling(
+      attempt,
+      async () => measuredCorpus([]),
+      () => filledBody("`generateScopedRules` writes a path that does not exist, 3 of 3 runs"),
+      undefined,
+      { kind: "claims", numbers: [1] },
+    );
+    expect(v.refusal, `a function name was refused: ${v.reason}`).toBeNull();
   });
 
   test("#2318 AC-3: every reason the gate accepts is named, and the claim is this project's own", () => {
     const body = rule();
     for (const token of Object.keys(COMMENT_EXEMPTIONS)) {
-      expect(body, `the rule does not name \`${token}\`, which the gate accepts`).toContain(`\`${token}\``);
+      // Named AND glossed (review of #2424): a token with no meaning beside
+      // it leaves a consumer guessing which one applies.
+      // A string search, not a regex: a future token with a metacharacter in
+      // it must not change what this matches (review of #2426).
+      // The gloss is the rest of its line, and it must be words, not a character.
+      const at = body.indexOf("`" + token + "`: ");
+      const start = at + token.length + 4;
+      const end = at === -1 ? -1 : body.indexOf("\n", start);
+      const gloss = at === -1 ? "" : body.slice(start, end === -1 ? undefined : end);
+      expect(
+        gloss.split(/\s+/).filter(w => w !== "").length,
+        `the rule does not name and explain \`${token}\`, which the gate accepts: "${gloss}"`,
+      ).toBeGreaterThanOrEqual(3);
     }
     expect(body, "the rule does not say the claim comes from this project's SUCCESS.md (#2317)").toContain(
       "this project's `SUCCESS.md`",
