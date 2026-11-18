@@ -54,6 +54,7 @@ import {
   markBlockedCommand,
   measuredCorpus,
   namedClaim,
+  claimsIn,
   openFindings,
   openPrForBranch,
   priorRefusalFor,
@@ -2545,6 +2546,49 @@ describe("FG-79..FG-89: a filing names the claim it moves", () => {
     expect(r.refusal, "declared cleanup is still postable").toBeNull();
     expect(r.rows[0].refusal, "and the override is recorded, not erased").toBe("NO_CLAIM");
     expect(r.rows[0].overridden, "as an override").toBe(true);
+  });
+
+  // #2317: in a consumer the claims are the consumer's own SUCCESS.md, not
+  // rungate's seven. A template still at TODO states none.
+  describe("#2317: a consumer's filing names a claim from its OWN SUCCESS.md", () => {
+    const three = [1, 2, 3].map(n => `### Claim ${n} — the dashboard refreshes every account within the hour, ${n}\n\n**How it fails:** a stale row older than an hour\n`).join("\n");
+    const template = [1, 2, 3].map(n => `### Claim ${n} — TODO\n`).join("\n");
+
+    test("claimsIn reads the filled claims, calls a TODO template unwritten, and tells absent from unreadable", () => {
+      expect(claimsIn(three)).toEqual({ kind: "claims", numbers: [1, 2, 3] });
+      expect(claimsIn(template).kind).toBe("unwritten");
+      expect(claimsIn("# nothing here\n").kind).toBe("unwritten");
+      expect(claimsIn(null).kind).toBe("absent");
+    });
+
+    test("with three claims, Claim 3 passes the claim stage and Claim 5 is NO_CLAIM, naming 1-3", async () => {
+      const attempt = (n: number) =>
+        filingAttempts(`gh issue create --title "pullRequestCache is never invalidated" --body ${shellQuoted(`\`pullRequestCache\` in lib/pr-cache.ts holds 72 entries for 36 hours. Claim ${n}. ${DECLARED}`)}`)[0];
+      const ok = await adjudicateFiling(attempt(3), async () => measuredCorpus([]), undefined, undefined, claimsIn(three));
+      expect(ok.refusal).not.toBe("NO_CLAIM");
+      const no = await adjudicateFiling(attempt(5), async () => measuredCorpus([]), undefined, undefined, claimsIn(three));
+      expect(no.refusal).toBe("NO_CLAIM");
+      expect(no.reason).toContain("Claim <1-3>");
+      expect(no.reason).not.toContain(`1-${SUCCESS_CLAIM_COUNT}`);
+    });
+
+    test("with the claims still TODO, every filing is NO_CLAIM and the reason names create-success", async () => {
+      const a = filingAttempts(`gh issue create --title "pullRequestCache is never invalidated" --body ${shellQuoted(`\`pullRequestCache\` in lib/pr-cache.ts holds 72 entries. Claim 1. ${DECLARED}`)}`)[0];
+      const v = await adjudicateFiling(a, async () => measuredCorpus([]), undefined, undefined, claimsIn(template));
+      expect(v.refusal).toBe("NO_CLAIM");
+      expect(v.reason).toContain("rungate create-success");
+    });
+
+    test("no SUCCESS.md at all keeps the old reading, so nothing that passed before is refused now", async () => {
+      const a = filingAttempts(`gh issue create --title "pullRequestCache is never invalidated" --body ${shellQuoted(`\`pullRequestCache\` in lib/pr-cache.ts holds 72 entries. Claim ${SUCCESS_CLAIM_COUNT}. ${DECLARED}`)}`)[0];
+      const v = await adjudicateFiling(a, async () => measuredCorpus([]), undefined, undefined, claimsIn(null));
+      expect(v.refusal).not.toBe("NO_CLAIM");
+    });
+
+    test("this repository's own SUCCESS.md still reads exactly Claim 1..SUCCESS_CLAIM_COUNT", () => {
+      const own = claimsIn(readFileSync(join(resolve(import.meta.dir, ".."), "SUCCESS.md"), "utf-8"));
+      expect(own).toEqual({ kind: "claims", numbers: Array.from({ length: SUCCESS_CLAIM_COUNT }, (_, i) => i + 1) });
+    });
   });
 
   test("FG-89: SUCCESS_CLAIM_COUNT equals the claims SUCCESS.md states", () => {

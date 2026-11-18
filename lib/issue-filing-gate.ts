@@ -141,6 +141,7 @@ import {
   labelValues,
 } from "./issue-create-override";
 import { headingFor, missingSections, requiredSections } from "./issue-shape";
+import { parseSuccessDoc, readSuccessDoc, UNREADABLE as SUCCESS_UNREADABLE, unfilled } from "./success-doc";
 import { asIssueFiles, overlapNote } from "./issue-file-overlap";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
@@ -278,12 +279,60 @@ export const SUCCESS_CLAIM_COUNT = 7;
  * often than a claim, and `SC-4`, which is a success criterion and a different
  * register entirely. The word has to be there.
  */
-export function namedClaim(text: string): number | null {
+export function namedClaim(text: string, claims: ClaimReading = OWN_CLAIMS): number | null {
+  const valid = claimNumbers(claims);
   for (const m of text.matchAll(/\bclaims?\s*#?\s*(\d+)/gi)) {
     const n = Number(m[1]);
-    if (n >= 1 && n <= SUCCESS_CLAIM_COUNT) return n;
+    if (valid.includes(n)) return n;
   }
   return null;
+}
+
+/**
+ * The claims a filing may name — #2317. In a consumer they are the consumer's
+ * OWN `SUCCESS.md`, not this repository's seven: `Claim <1-7>` named claims
+ * that live in a different repository, and a consumer whose claims were still
+ * the template's TODO had no honest claim to name and was not told why.
+ *
+ * - `claims`: the filled claims, by number.
+ * - `unwritten`: a SUCCESS.md that states no filled claim — every filing is
+ *   refused, and the refusal names `rungate create-success`.
+ * - `absent`: no SUCCESS.md at all. The old reading, 1..{@link SUCCESS_CLAIM_COUNT},
+ *   so nothing that passed before is refused now; scaffold seeds the file, so
+ *   this is the unscaffolded tree.
+ * - `unreadable`: present and could not be read. Refused — a gate that needs
+ *   a read must not fail open when the read does.
+ */
+export type ClaimReading =
+  | { kind: "claims"; numbers: number[] }
+  | { kind: "unwritten" }
+  | { kind: "absent" }
+  | { kind: "unreadable" };
+
+/** This repository's own reading, and the absent-file default. */
+const OWN_CLAIMS: ClaimReading = { kind: "absent" };
+
+/** The claim numbers a reading accepts. */
+function claimNumbers(claims: ClaimReading): number[] {
+  if (claims.kind === "claims") return claims.numbers;
+  if (claims.kind === "absent") return Array.from({ length: SUCCESS_CLAIM_COUNT }, (_, i) => i + 1);
+  return [];
+}
+
+/** A SUCCESS.md's text, or `null` for none, as a claim reading — #2317. */
+export function claimsIn(text: string | null): ClaimReading {
+  if (text === null) return { kind: "absent" };
+  if (text === SUCCESS_UNREADABLE) return { kind: "unreadable" };
+  const numbers = [...new Set(parseSuccessDoc(text).claims.filter(c => !unfilled(c.statement)).map(c => c.number))].sort(
+    (a, b) => a - b,
+  );
+  return numbers.length === 0 ? { kind: "unwritten" } : { kind: "claims", numbers };
+}
+
+/** How a refusal spells the claims a reading accepts: `1-3` when contiguous, else a list. */
+function claimRange(numbers: readonly number[]): string {
+  const contiguous = numbers.every((n, i) => n === numbers[0]! + i);
+  return contiguous && numbers.length > 1 ? `${numbers[0]}-${numbers[numbers.length - 1]}` : numbers.join(", ");
 }
 
 /**
@@ -2505,6 +2554,7 @@ export async function adjudicateFiling(
   readExisting: () => Promise<CorpusReading>,
   readBody: (path: string) => string | null = readBodyFile,
   readTarget: () => Promise<CommentTarget> = async () => UNRESOLVED_COMMENT_TARGET,
+  claims: ClaimReading = OWN_CLAIMS,
 ): Promise<FilingAdjudication> {
   // ── where is the body? ──
   //
@@ -2679,14 +2729,21 @@ export async function adjudicateFiling(
   // label alone posts nothing, so a filing that really is cleanup needs the
   // declaration too. A half-recipe that still worked would be worse than
   // either.
-  if (namedClaim(`${attempt.title}\n${body}`) === null) {
+  if (namedClaim(`${attempt.title}\n${body}`, claims) === null) {
+    // #2317: say which claims THIS repository states, or why it states none.
+    const ask =
+      claims.kind === "unwritten"
+        ? `This repository's SUCCESS.md states no claim yet — its claims are still the template's ` +
+          `placeholders. Write them (\`rungate create-success\` seeds the file), then name one.`
+        : claims.kind === "unreadable"
+          ? `This repository's SUCCESS.md is present and could not be read, so no claim can be checked.`
+          : `Name one as "Claim <${claimRange(claimNumbers(claims))}>" in the title or body.`;
     return {
       ...base,
       outcome: "REFUSE",
       refusal: "NO_CLAIM",
       reason:
-        `the filing is novel, and names no SUCCESS.md claim — nothing says what it moves. ` +
-        `Name one as "Claim <1-${SUCCESS_CLAIM_COUNT}>" in the title or body. Genuine cleanup ` +
+        `the filing is novel, and names no SUCCESS.md claim — nothing says what it moves. ${ask} Genuine cleanup ` +
         `is still postable by a route that is deliberately not spelled in a refusal, and that ` +
         `route is recorded against this run and counted later`,
     };
@@ -2769,7 +2826,7 @@ export async function adjudicateFiling(
     refusal: null,
     reason:
       `no open issue shares this symptom, ${category} is not a dropped category, ` +
-      `it names SUCCESS.md claim ${namedClaim(`${attempt.title}\n${body}`)}, and it declares ` +
+      `it names SUCCESS.md claim ${namedClaim(`${attempt.title}\n${body}`, claims)}, and it declares ` +
       `\`${declared}\` — ${COMMENT_EXEMPTIONS[declared]}`,
   };
 }
@@ -3482,6 +3539,9 @@ export async function filingGate(
   // The waiver's name, once per command for the same reason (SC-2735). `null`
   // waives nothing — `filingOverrideLabelFor`.
   const overrideLabel = filingOverrideLabelFor(() => readFilingOverrideLabel(root));
+  // #2317: the claims THIS repository states, read once per command. A
+  // consumer names its own claims, not this package's seven.
+  const claims = claimsIn(readSuccessDoc(root));
   // Read once per TARGET TRACKER, not once per command and not once per
   // clause. Once per clause would adjudicate two creates against two
   // different snapshots; once per command would adjudicate a `--repo other/x`
@@ -3622,6 +3682,7 @@ export async function filingGate(
       () => readFor(attempt.repo),
       readBody,
       () => targetFor(attempt.repo),
+      claims,
     );
     // The in-run class check, applied to anything the per-filing stages did
     // not already refuse. It converts an UNMEASURED as well as an ALLOW, and

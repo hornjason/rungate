@@ -125,7 +125,7 @@ const STANDING_ROW = /^\|\s*(\d+)\s*(?:[—–-][^|]*)?\|/;
  */
 const UNFILLED = /^(TODO|TBD|FIXME|XXX|N\/?A)\b|^(\?+|-+|—|\.+)$/i;
 const MIN_MEANINGFUL = 10;
-function unfilled(text: string): boolean {
+export function unfilled(text: string): boolean {
   const t = text.trim();
   return t.length < MIN_MEANINGFUL || UNFILLED.test(t);
 }
