@@ -1950,9 +1950,16 @@ describe("#171 AC-4: the #169 detection half is preserved, not relaxed", () => {
 
   test("both refusal names are in the file, and the exhaustion one is spelled once", () => {
     expect((shipSource.match(/SECURITY_REVIEW_STALE/g) || []).length).toBeGreaterThanOrEqual(2);
+    // Since #2408 the one literal is lib/security-verdict.ts's constant, which
+    // the launch file carries in its bundle; ship.js names the constant.
     expect(
       (shipSource.match(/'SECURITY_REREVIEW_EXHAUSTED'/g) || []).length,
-      "the exhaustion name is written as a literal more than once in ship.js",
+      "ship.js writes the exhaustion name as a literal instead of using the bundled constant",
+    ).toBe(0);
+    const launch = readFileSync(join(import.meta.dir, "..", "workflows", "ship.run.js"), "utf-8");
+    expect(
+      (launch.match(/["']SECURITY_REREVIEW_EXHAUSTED["']/g) || []).length,
+      "the launch file spells the exhaustion name more than once, or not at all",
     ).toBe(1);
   });
 
