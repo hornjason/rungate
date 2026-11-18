@@ -254,7 +254,9 @@ function importedFrom(decl: ts.Declaration | undefined): string | null {
 /** The node to emit and walk for a top-level declaration, or null when the declaration is not top-level. */
 function topLevelNode(decl: ts.Declaration | undefined, sf: ts.SourceFile): ts.Node | null {
   if (!decl) return null;
-  if ((ts.isFunctionDeclaration(decl) || ts.isClassDeclaration(decl)) && decl.parent === sf) return decl;
+  // Named only: an anonymous `export default function() {}` is not a
+  // statement once its `export default` is dropped (review of #2399).
+  if ((ts.isFunctionDeclaration(decl) || ts.isClassDeclaration(decl)) && decl.parent === sf && decl.name) return decl;
   let n: ts.Node = decl;
   while (ts.isBindingElement(n) || ts.isObjectBindingPattern(n) || ts.isArrayBindingPattern(n)) n = n.parent;
   if (ts.isVariableDeclaration(n) && ts.isVariableDeclarationList(n.parent) && ts.isVariableStatement(n.parent.parent) && n.parent.parent.parent === sf) {
@@ -303,6 +305,12 @@ function readCore(source: string, core: readonly string[]): CoreReading {
       continue;
     }
     const decl = e.declarations?.[0];
+    // `export * as ns from "m"`: the name is the other module's namespace.
+    if (decl && ts.isNamespaceExport(decl)) {
+      const from = decl.parent.moduleSpecifier;
+      note(`${n} (re-exported from ${from && ts.isStringLiteral(from) ? from.text : "another module"})`);
+      continue;
+    }
     if (decl && ts.isExportSpecifier(decl)) {
       const from = decl.parent.parent.moduleSpecifier;
       if (from && ts.isStringLiteral(from)) {
@@ -320,7 +328,11 @@ function readCore(source: string, core: readonly string[]): CoreReading {
       continue;
     }
     const node = topLevelNode(decl, sf);
+    // An export the bundler cannot emit as a named declaration, such as
+    // `export default <expression>` or an anonymous default, is refused.
+    // Dropping it from the closure would hide what it reaches (review of #2399).
     if (node) enqueue(node, n);
+    else note(`${n} (not a named top-level declaration, so it cannot be bundled)`);
   }
   while (queue.length > 0) {
     const { node, name } = queue.shift()!;

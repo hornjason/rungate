@@ -221,6 +221,22 @@ describe("#2398: cores are read by the checker and bundled", () => {
     expect(c.imports).toEqual(["fromStar (possibly re-exported by export * from ./star)"]);
   });
 
+  test("review of #2399: a default export that is not a named declaration is refused, and export * as ns names its module", () => {
+    expect(coreClosure("export default function() { return 1; }", ["default"]).imports).toEqual([
+      "default (not a named top-level declaration, so it cannot be bundled)",
+    ]);
+    expect(coreClosure('import { x } from "y";\nexport default x + 1;', ["default"]).imports).toEqual([
+      "default (not a named top-level declaration, so it cannot be bundled)",
+    ]);
+    expect(() => bundleLibCores({ "lib/a.ts": ["default"] }, () => "export default class { }")).toThrow("cannot be bundled");
+    // `export * as ns` exports ns, and only ns.
+    const star = 'export * as ns from "./star";\nexport function own() { return 1; }';
+    expect(coreClosure(star, ["ns"]).imports).toEqual(["ns (re-exported from ./star)"]);
+    expect(coreClosure(star, ["fromStar"]).missing).toEqual(["fromStar"]);
+    // A NAMED default function is a declaration and bundles.
+    expect(coreClosure("export default function named() { return 1; }", ["default"]).imports).toEqual([]);
+  });
+
   test("a local that shadows an import is not a use of it — the checker reads scope", () => {
     const src = 'import { existsSync } from "fs";\nexport function f(existsSync: (p: string) => boolean) { return existsSync("x"); }';
     expect(coreClosure(src, ["f"]).imports).toEqual([]);
