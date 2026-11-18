@@ -32,6 +32,20 @@ export const REQUIRE_CLOSING_REF_VARIABLE = "RUNGATE_REQUIRE_CLOSING_REF";
 /** The process workflows whose jobs report a status on pull requests (ADR-014 decision 6's scope). */
 export const PROCESS_CHECK_WORKFLOWS = ["closing-references.yml"] as const;
 
+/**
+ * Generated checks that must pass before a merge, one context each, owed only
+ * when the workflow defines that job (#2361). rungate's own `main` requires
+ * `test` and `ai-review` beside `closing-references`; GitHub's auto-merge, and
+ * any approve-on-green bot, waits only for checks branch protection requires,
+ * so a consumer that never required `ai-review` merged a PR mid-review. Named
+ * rather than every job of the workflow: `ci.yml`'s `test-shard` is a matrix
+ * whose contexts are not one name, and `test` is the job that speaks for them.
+ */
+export const MERGE_GATE_CHECKS = [
+  { workflow: "ci.yml", context: "test" },
+  { workflow: "ai-review.yml", context: "ai-review" },
+] as const;
+
 export interface HumanStepReadings {
   /** `owner/name`; null when the origin remote names no GitHub repository; UNMEASURED when it could not be read (#2169). */
   slug: Reading<string | null>;
@@ -134,7 +148,11 @@ export function humanSteps(r: HumanStepReadings): string[] {
 export function processChecksIn(root: string): { checks: string[]; unreadable: string[] } {
   const checks: string[] = [];
   const unreadable: string[] = [];
-  for (const file of PROCESS_CHECK_WORKFLOWS) {
+  const wanted = new Map<string, string | null>([
+    ...PROCESS_CHECK_WORKFLOWS.map(f => [f, null] as const),
+    ...MERGE_GATE_CHECKS.map(g => [g.workflow, g.context] as const),
+  ]);
+  for (const [file, only] of wanted) {
     const rel = `.github/workflows/${file}`;
     const p = join(root, ".github", "workflows", file);
     // The stat decides absence, and only its ENOENT counts: existsSync also
@@ -149,7 +167,8 @@ export function processChecksIn(root: string): { checks: string[]; unreadable: s
       continue;
     }
     try {
-      checks.push(...jobContextNames(readFileSync(p, "utf-8")));
+      const jobs = jobContextNames(readFileSync(p, "utf-8"));
+      checks.push(...(only === null ? jobs : jobs.filter(j => j === only)));
     } catch (e) {
       unreadable.push(`${rel} could not be read (${(e as Error).message})`);
     }

@@ -297,6 +297,34 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
     }
   });
 
+  // #2361: rungate's own main requires test and ai-review as well as
+  // closing-references; GitHub's auto-merge waits only for required checks.
+  test("#2361: the generated test and ai-review checks are owed as required, not only closing-references", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-2361-"));
+    try {
+      const dir = join(root, ".github", "workflows");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "closing-references.yml"), "jobs:\n  closing-references:\n    runs-on: x\n");
+      writeFileSync(join(dir, "ci.yml"), "jobs:\n  test-shard:\n    runs-on: x\n  test:\n    runs-on: x\n");
+      writeFileSync(join(dir, "ai-review.yml"), "jobs:\n  ai-review:\n    runs-on: x\n");
+      expect(processChecksIn(root).checks.sort()).toEqual(["ai-review", "closing-references", "test"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("#2361: a workflow without the named job owes nothing for it, and a matrix job is never owed", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-2361b-"));
+    try {
+      const dir = join(root, ".github", "workflows");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "ci.yml"), "jobs:\n  build:\n    runs-on: x\n  test-shard:\n    runs-on: x\n");
+      expect(processChecksIn(root).checks).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("an unreadable workflow is still reported when there is no GitHub origin", () => {
     const lines = humanSteps({ ...allSet, slug: read(null), unreadableWorkflows: [".github/workflows/closing-references.yml could not be read (EISDIR)"] });
     expect(lines[0]).toStartWith("UNMEASURED: human steps");
