@@ -1859,9 +1859,9 @@
           },
           {
             "what": "A consumer's issue gets a triage verdict, so one with no criterion answer cannot sit unnoticed and redden every PR",
-            "mechanism": "ADR-020 (PR #2321) proposes consumer-triage, consumer-intake.yml and a consumer-intake reading. It waits on Jason's merge",
-            "status": "open",
-            "verify": null,
+            "mechanism": "ADR-020 (PR #2321), merged and shipped in 0.8.28: consumer-triage gives each consumer-filed issue one verdict (#2356, SC-2782), the board reads an unanswered one as SHORT (#2368, SC-2783), and scaffold emits consumer-intake.yml, which triages on filing and daily (#2376, SC-2784)",
+            "status": "in-place",
+            "verify": "out=$(bun test test/triage-consumer-issues.test.ts -t SC-2782 2>&1) && echo \"$out\" | grep -qE '^ [1-9][0-9]* pass'",
             "issue": 2319
           }
         ]
