@@ -232,6 +232,9 @@ export function coreClosure(source: string, core: readonly string[]): CoreClosur
   const imports = new Map<string, string>();
   const decls = new Map<string, ts.Node>();
   const exported = new Set<string>();
+  // `export { local as name }` and `export { name } from "m"` (review of #2397).
+  const aliases = new Map<string, string>();
+  const reexports = new Map<string, string>();
   const isExported = (n: ts.Node) =>
     (ts.canHaveModifiers(n) ? ts.getModifiers(n) : undefined)?.some(m => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
   for (const st of sf.statements) {
@@ -251,12 +254,29 @@ export function coreClosure(source: string, core: readonly string[]): CoreClosur
         decls.set(d.name.text, d);
         if (isExported(st)) exported.add(d.name.text);
       }
+    } else if (ts.isExportDeclaration(st) && st.exportClause && ts.isNamedExports(st.exportClause)) {
+      const from = st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier) ? st.moduleSpecifier.text : null;
+      for (const e of st.exportClause.elements) {
+        const name = e.name.text;
+        if (from !== null) reexports.set(name, from);
+        else aliases.set(name, e.propertyName?.text ?? name);
+      }
     }
   }
-  const missing = core.filter(n => !exported.has(n));
+  const missing = core.filter(n => !exported.has(n) && !aliases.has(n) && !reexports.has(n));
   const reached = new Set<string>();
   const touched: string[] = [];
-  const queue = core.filter(n => decls.has(n));
+  const queue: string[] = [];
+  for (const n of core) {
+    // A core exported from another module is not in this one, whatever it is called here.
+    if (reexports.has(n)) {
+      touched.push(`${n} (re-exported from ${reexports.get(n)})`);
+      continue;
+    }
+    const local = aliases.get(n) ?? n;
+    if (imports.has(local)) touched.push(`${n} (from ${imports.get(local)}, re-exported)`);
+    else if (decls.has(local)) queue.push(local);
+  }
   const isNameOnly = (id: ts.Identifier) => {
     const p = id.parent;
     return (

@@ -178,6 +178,18 @@ describe("#2289 / SC-2774: each copied module exports a core that imports nothin
     expect(coreClosure(dynamic, ["lazy"]).imports).toEqual(["import() of node:fs (via lazy)"]);
     expect(coreClosure(dynamic, ["old"]).imports).toEqual(["require() of child_process (via old)"]);
     expect(coreClosure(dynamic, ["computed"]).imports).toEqual(["import() of a computed module (via computed)"]);
+    // Review of #2397, round 2: a core exported by an export list, under an
+    // alias, or re-exported from another module.
+    const listed = [
+      'import { h } from "./other";',
+      "function f(s: string) { return s.length; }",
+      "function k(s: string) { return s.trim(); }",
+      "export { f, k as kk, h };",
+      'export { g } from "./other";',
+    ].join("\n");
+    expect(coreClosure(listed, ["f", "kk"])).toEqual({ declarations: ["f", "k"], missing: [], imports: [] });
+    expect(coreClosure(listed, ["g"]).imports).toEqual(["g (re-exported from ./other)"]);
+    expect(coreClosure(listed, ["h"]).imports).toEqual(["h (from ./other, re-exported)"]);
     // A property name that happens to match an import is not a use of it.
     expect(coreClosure('import { x } from "y";\nexport function f(o: { x: number }) { return o.x; }', ["f"]).imports).toEqual([]);
   });
