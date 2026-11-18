@@ -109,14 +109,13 @@ const jury =
 // directory on purpose, so the working directory is not the checkout; it is
 // the fallback only for a step generated before the variable was set.
 const checkoutRoot = process.env[AI_REVIEW_CHECKOUT_ROOT_VAR];
-const { gate: suppress } = productionSuppression(
-  process.env[AI_REVIEW_THREADS_PATH_VAR],
-  checkoutRoot !== undefined && checkoutRoot !== "" ? checkoutRoot : process.cwd(),
-);
+const root = checkoutRoot !== undefined && checkoutRoot !== "" ? checkoutRoot : process.cwd();
+// #1883: `linesOf` reads the same checkout, so a finding's population is counted by its search.
+const { gate: suppress, linesOf: citedLines } = productionSuppression(process.env[AI_REVIEW_THREADS_PATH_VAR], root);
 
 // One line, and `process.exit(main(` is load-bearing text: AC-4 in
 // `test/ai-review-findings-command.test.ts` reads it to prove this file
 // declares no exit code of its own. Wrapping the call across lines makes
 // that case red for a formatting reason, which is worth knowing before
 // reformatting it.
-process.exit(main(process.argv.slice(2), jury, suppress));
+process.exit(main(process.argv.slice(2), jury, suppress, citedLines));

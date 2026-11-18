@@ -649,11 +649,17 @@ describe("#1225: the harmful-change count, and why it is UNMEASURED here", () =>
     // UNMEASURED to UNMEASURED. The judgement is recorded here rather than in
     // a widened predicate, because a predicate that decides "is this a remedy"
     // is a second guess at the same question and would pass this one silently.
+    //
+    // `populationSearch` (#1883) was judged on 2026-11-18 and is NOT a remedy
+    // either: it is the literal text the reviewer searched the cited file for,
+    // so the population can be counted rather than declared. It changes nothing
+    // in the candidate, so there is still nothing to run.
     expect(Object.keys(AI_REVIEW_FINDING_FIELDS).sort()).toEqual([
       "failureScenario",
       "file",
       "line",
       "population",
+      "populationSearch",
       "severity",
       "summary",
     ]);
