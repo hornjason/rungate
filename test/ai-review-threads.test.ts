@@ -251,6 +251,19 @@ describe("postReviewThreads", () => {
     expect(bodies).toEqual([]);
   });
 
+  test("#2370 review: with no field named, the off-diff text inside errors[] counts, as it does for pending review", async () => {
+    const { post } = recorder(() => ({
+      ok: false,
+      status: 422,
+      message: "Validation Failed",
+      errors: [{ message: 'pull_request_review_thread.path "could not be resolved"' }],
+    }));
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("POSTED");
+    expect(bodies).toHaveLength(1);
+  });
+
   test("#2363: refusalFrom keeps Octokit's errors[], objects and strings alike", () => {
     const e = Object.assign(new Error("Validation Failed"), {
       status: 422,

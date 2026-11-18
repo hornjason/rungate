@@ -286,13 +286,13 @@ function refusalText(answer: Extract<AiReviewThreadResponse, { ok: false }>): st
  * The off-diff 422 (#2338), decided from `errors[].field` when GitHub named
  * one (#2363): `path`, or a dotted name ending in `.path`, is off-diff and
  * any other field is not, whatever the message says. With no field named, the
- * message text decides, through {@link OFF_DIFF_CONDITION}.
+ * text decides — the message and each error's own message — through {@link OFF_DIFF_CONDITION}.
  */
 function isOffDiffRefusal(answer: AiReviewThreadResponse): boolean {
   if (answer.ok || answer.status !== UNPROCESSABLE) return false;
   const fields = fieldsNamed(answer);
   if (fields !== null) return fields.some(f => f === "path" || f.endsWith(".path"));
-  return OFF_DIFF_CONDITION.test(answer.message);
+  return OFF_DIFF_CONDITION.test(refusalText(answer));
 }
 
 /**
