@@ -473,7 +473,10 @@ function render(v: StatusView, f: Fmt, markdown: boolean): string {
         : [
             ...(fams.some(x => x.open > 0) ? issuesUnread(f, v.phaseIssues) : []),
             ...fams.flatMap(x =>
-              x.open === 0
+              x.open === 0 && x.closed === 0
+                ? // No issue ever sat in these milestones: not started, which is not done (review of #2334).
+                  [f.item(`${f.text(x.family)}: not started — no issue in any of its phases yet`)]
+                : x.open === 0
                 ? [f.item(`✓ ${f.text(x.family)}: done — ${x.phases.length} phase(s), ${x.closed} closed`)]
                 : [
                     f.item(`${f.text(x.family)}: ${x.closed} of ${x.open + x.closed} done`),

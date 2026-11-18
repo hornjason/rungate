@@ -480,6 +480,15 @@ describe("#2097 review round 2", () => {
     expect(trustedAuthor("stranger", "CONTRIBUTOR")).toBe(false);
   });
 
+  test("a family whose milestones hold no issue at all is not started, never done (review of #2334)", () => {
+    const text = renderText(view({ otherFamilies: read([{ family: "Zqnew", open: 0, closed: 0, phases: [] }]) }));
+    expect(text).not.toContain("Zqnew: done");
+    expect(text).toContain("Zqnew: not started — no issue in any of its phases yet");
+    // The control: closed work and nothing open is still one done line.
+    const done = renderText(view({ otherFamilies: read([{ family: "Zqold", open: 0, closed: 4, phases: [] }]) }));
+    expect(done).toContain("✓ Zqold: done");
+  });
+
   test("Other work, read and empty, still shows its heading and says so", () => {
     const md = renderMarkdown(view({ otherFamilies: read([]) }));
     expect(md).toContain("### Other work");
