@@ -161,6 +161,31 @@ describe("postReviewThreads", () => {
     expect(r.detail.join("\n")).toContain("already");
   });
 
+  test("#2338 review: a 422 that is not about the path (a stale commit) stays FAILED, never goes to the conversation", async () => {
+    const { post } = recorder(() => ({ ok: false, status: 422, message: "Validation Failed: pull_request_review_thread.commit_id is not part of the pull request" }));
+    const { bodies, comment } = pullCommenter();
+    const r = await postReviewThreads(reading([finding]), post, undefined, undefined, comment);
+    expect(r.outcome).toBe("FAILED");
+    expect(bodies).toEqual([]);
+  });
+
+  test("#2338 review: a finding with no line says it was refused at the file, not at the line", async () => {
+    const { post } = recorder(refused);
+    const { bodies, comment } = pullCommenter();
+    await postReviewThreads(reading([{ ...finding, line: undefined }]), post, undefined, undefined, comment);
+    expect(bodies[0]).toContain("GitHub refused it at the file.");
+    expect(bodies[0]).not.toContain("at the line");
+  });
+
+  test("#2338 review: two findings with one key in one round go on the conversation once", async () => {
+    const { post } = recorder(refused);
+    const { bodies, comment } = pullCommenter();
+    const keyFor = () => "src/a.ts\u0000n:12\u0000off-by-one";
+    const r = await postReviewThreads(reading([finding, { ...finding }]), post, keyFor, undefined, comment);
+    expect(bodies).toHaveLength(1);
+    expect(r.outcome).toBe("POSTED");
+  });
+
   test("#2338: with no pull-request commenter the old behaviour holds: FAILED", async () => {
     const { post } = recorder(refused);
     const r = await postReviewThreads(reading([finding]), post);

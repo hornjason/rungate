@@ -223,6 +223,14 @@ const FORBIDDEN = 403;
 const PENDING_REVIEW_CONDITION = /pending review/i;
 
 /**
+ * The 422 that means "this path is not in the pull request's diff" — the field
+ * GitHub names is the thread's `path` (review of #2358). Any other 422, a
+ * stale `commit_id` among them, is a request this producer got wrong and stays
+ * a failure rather than moving to the conversation.
+ */
+const OFF_DIFF_CONDITION = /\.path\b|"path"|\bpath\b/i;
+
+/**
  * One binding, so a mutation of it is observable. Both halves are required:
  * the status narrows it to a validation refusal, the condition says WHICH —
  * and the wrong direction here is the expensive one, because a false positive
@@ -321,7 +329,13 @@ export async function postReviewThreads(
     // #2338: refused at the file too. The path is not in this pull request's
     // diff as GitHub sees it (a branch behind its base is the measured cause),
     // so the finding goes on the conversation rather than nowhere.
-    if (!answer.ok && answer.status === UNPROCESSABLE && comment !== undefined && !isPendingReviewRefusal(answer)) {
+    if (
+      !answer.ok &&
+      answer.status === UNPROCESSABLE &&
+      comment !== undefined &&
+      !isPendingReviewRefusal(answer) &&
+      OFF_DIFF_CONDITION.test(answer.message)
+    ) {
       const key = threadKeyFrom(request.body);
       if (key !== null && alreadyOnConversation.has(key)) {
         posted += 1;
@@ -331,18 +345,21 @@ export async function postReviewThreads(
       }
       const viaConversation = await comment.post(
         `**\`${where}\` is not in this pull request's diff, so this finding could not go on it.** ` +
-          `GitHub refused it at the line and at the file. The branch may be behind its base; rebasing usually puts the file back in the diff.\n\n` +
+          `GitHub refused it ${request.line === null ? "at the file" : "at the line and at the file"}. ` +
+          `The branch may be behind its base; rebasing usually puts the file back in the diff.\n\n` +
           request.body,
       );
       if (viaConversation.ok) {
+        // Within the round too: a second finding with this key is the same finding (review of #2358).
+        if (key !== null) alreadyOnConversation.add(key);
         posted += 1;
         pullComments += 1;
-        detail.push(`${where}: not in this pull request's diff (422 at the line and at the file), so it was posted on the conversation instead`);
+        detail.push(`${where}: not in this pull request's diff (422 ${request.line === null ? "at the file" : "at the line and at the file"}), so it was posted on the conversation instead`);
         continue;
       }
       failed += 1;
       detail.push(
-        `${where}: not in this pull request's diff (422 at the line and at the file), and the conversation comment was refused too: ` +
+        `${where}: not in this pull request's diff (422 ${request.line === null ? "at the file" : "at the line and at the file"}), and the conversation comment was refused too: ` +
           `${viaConversation.status ?? "no status"} — ${viaConversation.message}`,
       );
       continue;
