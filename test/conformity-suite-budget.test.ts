@@ -73,8 +73,9 @@ describe("#2384: the generated conformity suite gives its checks a budget", () =
         "CONFORMITY_TEST_BUDGET_MS",
       ]);
 
-      // Before the first registration: a setDefaultTimeout after the checks
-      // it was meant for registers them at the old default first.
+      // Before the first registration. MEASURED on bun 1.3.14: a test
+      // registered before setDefaultTimeout keeps the old default, and a
+      // 400ms test under `--timeout 100` is killed at 100ms.
       const lines = text.split("\n");
       const at = lines.findIndex(l => l.startsWith("setDefaultTimeout("));
       const firstRun = lines.findIndex(l => /^run[A-Za-z]+\(ROOT\);$/.test(l));
