@@ -43,7 +43,7 @@ import {
   workflowBody,
   type HarnessCall,
 } from "../lib/workflow-test-harness";
-import { shipPrelude } from "../scripts/build-workflow-launch";
+import { BUNDLE_END, BUNDLE_START, shipPrelude } from "../scripts/build-workflow-launch";
 
 const SHIP = readFileSync(join(import.meta.dir, "..", "workflows", "ship.js"), "utf-8");
 // The lib code ship.run.js bundles, which ship.js calls and no longer defines (#2405).
@@ -393,6 +393,17 @@ describe("#2405: the harness runs ship.js with the code ship.run.js bundles from
     const run = await runWorkflow(mini, { prelude: SHIP_PRELUDE });
     expect(run.error).toBeNull();
     expect((run.result as { state: string }).state).toBe("CURRENT");
+  });
+
+  test("shipPrelude returns the region between the markers, and refuses a launch file without both in order (review of #2406)", () => {
+    expect(shipPrelude(`head\n${BUNDLE_START}\nfunction f() {}\n${BUNDLE_END}\ntail`)).toBe("\nfunction f() {}\n");
+    for (const broken of [
+      `head\n${BUNDLE_START}\nfunction f() {}\n`,
+      `head\n${BUNDLE_END}\nfunction f() {}\n${BUNDLE_START}\n`,
+      "head\nfunction f() {}\n",
+    ]) {
+      expect(() => shipPrelude(broken)).toThrow("the launch file carries no bundled lib region");
+    }
   });
 
   test("and throws without it, because ship.js alone no longer defines the function", async () => {
