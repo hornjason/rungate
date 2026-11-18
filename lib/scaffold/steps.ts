@@ -771,6 +771,10 @@ export function refreshAgentsMd(root: string, type: ProjectType, actions: string
  *    it; the template did not. Regenerating without it would have deleted a
  *    live check — the same silent-coverage-loss this issue is about, just
  *    pointed the other way.
+ *
+ * The `setDefaultTimeout` line comes before any check is registered (#2384).
+ * Several checks walk the whole tree, and on a busy consumer runner they took
+ * longer than bun's 5000ms default.
  */
 export function generateConformityTest(root?: string): string {
   // A package cannot import itself by name without an `exports` map, and
@@ -783,10 +787,12 @@ export function generateConformityTest(root?: string): string {
   // survive any mutation of either, which is the defect #208 was about.
   const from = root && isHarnessItself(root) ? "../lib/conformity" : "rungate/lib/conformity";
   return `import { resolve } from "path";
-import { afterAll } from "bun:test";
-import { runScaffoldConformity, runSpecDiscovery, runSpecDrift, runDocHygiene, runFallowCheck, runAgentFileValidation, runDirectoryValidation, runPackageValidation, runTsconfigValidation, runConfigAccessValidation, runPromptConfigAccessValidation, runSuccessDocValidation, runAiReviewValidation, runBranchProtectionValidation, runWorkflowDriftValidation, writeFindingsReport } from "${from}";
+import { afterAll, setDefaultTimeout } from "bun:test";
+import { CONFORMITY_TEST_BUDGET_MS, runScaffoldConformity, runSpecDiscovery, runSpecDrift, runDocHygiene, runFallowCheck, runAgentFileValidation, runDirectoryValidation, runPackageValidation, runTsconfigValidation, runConfigAccessValidation, runPromptConfigAccessValidation, runSuccessDocValidation, runAiReviewValidation, runBranchProtectionValidation, runWorkflowDriftValidation, writeFindingsReport } from "${from}";
 
 const ROOT = resolve(import.meta.dir, "..");
+
+setDefaultTimeout(CONFORMITY_TEST_BUDGET_MS);
 
 runScaffoldConformity(ROOT);
 runSpecDiscovery(ROOT);

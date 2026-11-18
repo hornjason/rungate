@@ -1,8 +1,10 @@
 import { resolve } from "path";
-import { afterAll } from "bun:test";
-import { runScaffoldConformity, runSpecDiscovery, runSpecDrift, runDocHygiene, runFallowCheck, runAgentFileValidation, runDirectoryValidation, runPackageValidation, runTsconfigValidation, runConfigAccessValidation, runPromptConfigAccessValidation, runSuccessDocValidation, runAiReviewValidation, runBranchProtectionValidation, runWorkflowDriftValidation, writeFindingsReport } from "../lib/conformity";
+import { afterAll, setDefaultTimeout } from "bun:test";
+import { CONFORMITY_TEST_BUDGET_MS, runScaffoldConformity, runSpecDiscovery, runSpecDrift, runDocHygiene, runFallowCheck, runAgentFileValidation, runDirectoryValidation, runPackageValidation, runTsconfigValidation, runConfigAccessValidation, runPromptConfigAccessValidation, runSuccessDocValidation, runAiReviewValidation, runBranchProtectionValidation, runWorkflowDriftValidation, writeFindingsReport } from "../lib/conformity";
 
 const ROOT = resolve(import.meta.dir, "..");
+
+setDefaultTimeout(CONFORMITY_TEST_BUDGET_MS);
 
 runScaffoldConformity(ROOT);
 runSpecDiscovery(ROOT);
