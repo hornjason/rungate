@@ -12,6 +12,7 @@
  *   bun scripts/sync-sc-status.ts           # Run targeted tests and flip checkboxes
  *   bun scripts/sync-sc-status.ts --dry-run # Show what would flip without changing files
  *   bun scripts/sync-sc-status.ts --report  # Output per-spec coverage report
+ *   rungate sync-sc-status [--dry-run] [--only …]   # a consumer, on its own tree (#2360)
  */
 
 import { parseArgs } from "util";
@@ -43,7 +44,44 @@ import {
 
 export { isTemplateSpec };
 
-const ROOT = join(import.meta.dir, "..");
+/**
+ * The tree whose specs and tests this run reads (#2360).
+ *
+ * `--project-root <dir>` (or `=<dir>`) names it, and the CLI dispatcher
+ * appends the caller's directory for every consumer. Absent, it is this
+ * script's own repository, so `bun scripts/sync-sc-status.ts` and the
+ * `posttest` hook behave exactly as before. Given with no directory it
+ * REFUSES: falling back to the package would read rungate's specs and
+ * report on them as the consumer's.
+ */
+export function resolveSyncRoot(argv: readonly string[]): { root: string } | { refusal: string } {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: { "project-root": { type: "string" } },
+    strict: false,
+    allowPositionals: true,
+    tokens: true,
+  });
+  let given = false;
+  let value: string | undefined;
+  for (const t of tokens ?? []) {
+    if (t.kind !== "option" || t.name !== "project-root") continue;
+    given = true;
+    value = t.value; // the last one wins, as for every other flag
+  }
+  if (!given) return { root: join(import.meta.dir, "..") };
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    return {
+      refusal:
+        "--project-root was given with no directory after it. Refusing rather than falling back to this " +
+        "package's own specs, which would be reported as yours.",
+    };
+  }
+  return { root: value };
+}
+
+const ROOT_READING = resolveSyncRoot(process.argv.slice(2));
+const ROOT = "root" in ROOT_READING ? ROOT_READING.root : join(import.meta.dir, "..");
 const SPECS_DIR = join(ROOT, "specs");
 const TEST_DIR = join(ROOT, "test");
 const dryRun = process.argv.includes("--dry-run");
@@ -91,12 +129,17 @@ export function unknownSyncArgs(argv: readonly string[]): string[] {
   if (valued.length > 0) return valued;
   const { tokens } = parseArgs({
     args: [...argv],
-    options: { only: { type: "string" }, "dry-run": { type: "boolean" }, report: { type: "boolean" } },
+    options: {
+      only: { type: "string" },
+      "project-root": { type: "string" },
+      "dry-run": { type: "boolean" },
+      report: { type: "boolean" },
+    },
     strict: false,
     allowPositionals: true,
     tokens: true,
   });
-  const known = new Set(["only", "dry-run", "report"]);
+  const known = new Set(["only", "project-root", "dry-run", "report"]);
   const out: string[] = [];
   for (const t of tokens ?? []) {
     if (t.kind === "option" && t.name === "only" && (t.value === undefined || t.value.startsWith("-"))) {
@@ -859,7 +902,19 @@ if (isDirectExecution) {
   if (unknownArgs.length > 0) {
     console.error(
       `sync-sc-status: cannot use argument(s): ${unknownArgs.join(", ")}. Nothing was read or written. ` +
-        "It takes --dry-run, --report and --only <SC-id,…>; there is no --help.",
+        "It takes --dry-run, --report, --only <SC-id,…> and --project-root <dir>; there is no --help.",
+    );
+    process.exit(1);
+  }
+  if ("refusal" in ROOT_READING) {
+    console.error(`sync-sc-status: ${ROOT_READING.refusal} Nothing was read or written.`);
+    process.exit(1);
+  }
+  // #2360: a root with no specs/ is a reading not taken, not "all checked".
+  if (!existsSync(SPECS_DIR)) {
+    console.error(
+      `sync-sc-status: no specs directory at ${SPECS_DIR}. UNMEASURED — nothing was read, which is not the same ` +
+        `as every criterion being ticked. Pass --project-root <dir> naming the tree whose specs/ you mean.`,
     );
     process.exit(1);
   }

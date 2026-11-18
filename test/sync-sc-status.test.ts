@@ -20,8 +20,12 @@ import {
   onlyRefusesShortFlip,
   parseOnlyArg,
   unknownSyncArgs,
+  resolveSyncRoot,
   type UncheckedSC,
 } from "../scripts/sync-sc-status";
+import { spawnSync } from "child_process";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
 
 import { scScanTestTimeout } from "./helpers/sc-scan-budget";
 
@@ -367,5 +371,52 @@ describe("#2054: --only narrows the flip to the named criteria", () => {
     const emptyExit = src.indexOf('console.log("No SCs to flip")');
     expect(decided).toBeGreaterThan(-1);
     expect(emptyExit).toBeGreaterThan(decided);
+  });
+});
+
+// #2360: a consumer ticks its own criteria. The script read
+// `join(import.meta.dir, "..")`, so from node_modules it read the package's
+// specs and reported on a tree the consumer never asked about.
+describe("#2360: --project-root points the run at the consumer's tree", () => {
+  const PKG = join(import.meta.dir, "..");
+
+  test("absent means this repository, as before; given means that directory", () => {
+    expect(resolveSyncRoot([])).toEqual({ root: PKG });
+    expect(resolveSyncRoot(["--project-root", "/x", "--dry-run"])).toEqual({ root: "/x" });
+    expect(resolveSyncRoot(["--project-root=/x"])).toEqual({ root: "/x" });
+  });
+
+  test("--project-root with no directory refuses, never falls back to the package", () => {
+    expect(resolveSyncRoot(["--project-root"])).toHaveProperty("refusal");
+    expect(resolveSyncRoot(["--project-root", "--dry-run"])).toHaveProperty("refusal");
+  });
+
+  test("it is a known argument, so it does not trip the unknown-argument refusal", () => {
+    expect(unknownSyncArgs(["--project-root", "/x", "--dry-run", "--only", "SC-9471"])).toEqual([]);
+  });
+
+  test("run through the CLI from a consumer tree, it reads that tree's spec and nothing of the package's", () => {
+    const consumer = mkdtempSync(join(tmpdir(), "rg-2360-consumer-"));
+    try {
+      mkdirSync(join(consumer, "specs"), { recursive: true });
+      mkdirSync(join(consumer, "test"), { recursive: true });
+      const spec = "---\ndoc-type: spec\ntestable: true\n---\n\n# Demo\n\n- [ ] SC-9471: the demo works\n";
+      writeFileSync(join(consumer, "specs", "DEMO-SPEC.md"), spec);
+      writeFileSync(
+        join(consumer, "test", "demo.test.ts"),
+        'import { test, expect } from "bun:test";\n// covers SC-9471\ntest("demo", () => expect(1).toBe(1));\n',
+      );
+      const r = spawnSync("bun", [join(PKG, "bin", "rungate.ts"), "sync-sc-status", "--only", "SC-9471", "--dry-run"], {
+        cwd: consumer, encoding: "utf-8", timeout: 120_000,
+      });
+      const out = r.stdout + r.stderr;
+      expect(out).toContain("Found 1 unchecked SCs");
+      expect(out).toContain("DEMO-SPEC.md");
+      expect(out, "it read the package's own specs").not.toContain("SPEC-TO-BOARD-PIPELINE-SPEC");
+      expect(r.status).toBe(0);
+      expect(readFileSync(join(consumer, "specs", "DEMO-SPEC.md"), "utf-8"), "a dry run wrote the spec").toBe(spec);
+    } finally {
+      rmSync(consumer, { recursive: true, force: true });
+    }
   });
 });
