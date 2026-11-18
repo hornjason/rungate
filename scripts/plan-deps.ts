@@ -35,7 +35,7 @@ import { addBlockers } from "../lib/blocked-by-write";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
 import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
-import type { DepEdge, DepIssue, DependencyPlan } from "../lib/spec-deps";
+import type { DepEdge, DepIssue } from "../lib/spec-deps";
 import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues, readMilestonePrefix } from "../lib/live-issues";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
@@ -337,12 +337,11 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     const family = titles.filter(t => inMilestoneFamily(t, prefix));
     if (family.length > 0) {
       if (values.json) {
-        const empty: DependencyPlan = {
-          reading: "NOTHING_TO_SEQUENCE", unmeasuredReasons: [], phases: [],
-          missing: [], present: [], extra: [], unphased: [], frontier: null,
-        };
-        const wrote = values.write ? "nothing-to-sequence" : "not-requested";
-        console.log(JSON.stringify({ ...empty, results: [], wrote }, null, 2));
+        // Its own reading, not a DependencyPlan: NOTHING_TO_SEQUENCE promises
+        // exactly one phase (lib/spec-deps.ts), and here no issue was
+        // considered at all (review of #2414).
+        const wrote = values.write ? "nothing-to-order" : "not-requested";
+        console.log(JSON.stringify({ reading: "NOTHING_TO_ORDER", prefix, milestones: family, missing: [], results: [], wrote }, null, 2));
         return 0;
       }
       console.log(

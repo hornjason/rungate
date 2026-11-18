@@ -1356,8 +1356,10 @@ describe("#2413: a family whose milestones hold no open issue reads nothing to o
     const r = await run(["--repo", "o/r", "--write", "--json", "--milestone-prefix", "CI"], s.gh);
     expect(r.code).toBe(0);
     const payload = JSON.parse(r.stdout);
-    expect(payload.reading).toBe("NOTHING_TO_SEQUENCE");
-    expect(payload.wrote).toBe("nothing-to-sequence");
+    // Not NOTHING_TO_SEQUENCE, which promises exactly one phase (review of #2414).
+    expect(payload.reading).toBe("NOTHING_TO_ORDER");
+    expect(payload.wrote).toBe("nothing-to-order");
+    expect(payload.milestones).toEqual(["CI Phase 1 — lint", "CI Phase 2 — test", "CI Phase 3 — deploy"]);
     expect(payload.missing).toEqual([]);
   });
 
