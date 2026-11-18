@@ -3,7 +3,7 @@ import { spawnSync } from "child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { shipPrelude } from "../scripts/build-workflow-launch";
+import { bundleLibCores, LAUNCH_BUNDLE, shipPrelude } from "../scripts/build-workflow-launch";
 
 /**
  * Coverage for the Verify-phase fan-out (#66 follow-on).
@@ -21,6 +21,17 @@ import { shipPrelude } from "../scripts/build-workflow-launch";
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP_PATH = join(REPO_ROOT, "workflows", "ship.js");
 const shipSource = readFileSync(SHIP_PATH, "utf-8");
+
+/**
+ * Only the container probe's module, bundled exactly as ship.run.js bundles it
+ * (#2417). Not the whole prelude: the bundle also defines rookGateVerdict and
+ * rookScopeCommand, and declaring them inside the block would shadow the ones
+ * this harness injects (review of #2418).
+ */
+const PROBE_BUNDLE = bundleLibCores(
+  { "lib/dev-liveness.ts": LAUNCH_BUNDLE["lib/dev-liveness.ts"]! },
+  (p: string) => readFileSync(join(REPO_ROOT, p), "utf-8"),
+).text;
 
 const BLOCK_START = "// ──── VERIFY-FANOUT-START ────";
 const BLOCK_END = "// ──── VERIFY-FANOUT-END ────";
@@ -88,7 +99,7 @@ function invokeFanout(b: Bindings): Promise<void> {
   // the same argument the `shellQuote` extraction above makes.
   const block =
     // The probe is bundled from lib/dev-liveness.ts since #2417.
-    shipPrelude() + "\n" +
+    PROBE_BUNDLE + "\n" +
     sliceBlock(BLOCK_START, BLOCK_END);
   const factory = new Function(
     "log",
@@ -812,5 +823,16 @@ describe("Verify fan-out: a container value that reaches a shell is not probed (
       expect(mutant, "the mutation changed nothing — the harness has no target").not.toBe(runner);
       expect(spawnRunner(mutant, config).code, "the mutant refused too").toBe(0);
     });
+  });
+});
+
+describe("#2417: the fan-out harness prepends the probe, not the names it injects", () => {
+  test("the probe module defines containerProbeTarget and neither review helper the harness passes in", () => {
+    expect(PROBE_BUNDLE).toMatch(/function containerProbeTarget\(/);
+    for (const injected of ["rookGateVerdict", "rookScopeCommand"]) {
+      expect(PROBE_BUNDLE, `${injected} would shadow the harness's injected value (review of #2418)`).not.toMatch(
+        new RegExp(`function ${injected}\\(`),
+      );
+    }
   });
 });

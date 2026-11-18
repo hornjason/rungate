@@ -3,7 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 import { assertMarkedBlockReachable } from "../lib/reachability";
-import { shipPrelude } from "../scripts/build-workflow-launch";
+import { bundleLibCores, LAUNCH_BUNDLE, shipPrelude } from "../scripts/build-workflow-launch";
 import type { ReReviewDecision } from "../lib/security-verdict";
 import {
   RE_REVIEW,
@@ -2161,6 +2161,17 @@ const shellQuote: (word: unknown) => string = (() => {
   return new Function(`${match[0]}\nreturn shellQuote`)();
 })();
 
+/**
+ * Only the container probe's module, bundled exactly as ship.run.js bundles it
+ * (#2417). Not the whole prelude: the bundle also defines rookGateVerdict and
+ * rookScopeCommand, and declaring them inside the block would shadow the ones
+ * this harness injects (review of #2418).
+ */
+const PROBE_BUNDLE = bundleLibCores(
+  { "lib/dev-liveness.ts": LAUNCH_BUNDLE["lib/dev-liveness.ts"]! },
+  (p: string) => readFileSync(join(REPO_ROOT, p), "utf-8"),
+).text;
+
 function runFanout(opts: { rook?: unknown; scope?: unknown } = {}) {
   // The fan-out opens by resolving the container probe target (#312), so
   // `containerProbeTarget` is a free name in it. Prepended from ITS own
@@ -2169,7 +2180,7 @@ function runFanout(opts: { rook?: unknown; scope?: unknown } = {}) {
   // let this harness agree with something that does not run.
   const block =
     // The probe is bundled from lib/dev-liveness.ts since #2417.
-    shipPrelude() + "\n" +
+    PROBE_BUNDLE + "\n" +
     sliceBlock(FANOUT_START, FANOUT_END);
   const labels: string[] = [];
   const prompts: string[] = [];
