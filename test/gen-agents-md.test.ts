@@ -408,9 +408,15 @@ describe("#2318: the rule's command passes the filing gate as written", () => {
       // it leaves a consumer guessing which one applies.
       // A string search, not a regex: a future token with a metacharacter in
       // it must not change what this matches (review of #2426).
+      // The gloss is the rest of its line, and it must be words, not a character.
       const at = body.indexOf("`" + token + "`: ");
-      const gloss = at === -1 ? "" : body.slice(at + token.length + 4, at + token.length + 5);
-      expect(gloss.trim(), `the rule does not name and explain \`${token}\`, which the gate accepts`).not.toBe("");
+      const start = at + token.length + 4;
+      const end = at === -1 ? -1 : body.indexOf("\n", start);
+      const gloss = at === -1 ? "" : body.slice(start, end === -1 ? undefined : end);
+      expect(
+        gloss.split(/\s+/).filter(w => w !== "").length,
+        `the rule does not name and explain \`${token}\`, which the gate accepts: "${gloss}"`,
+      ).toBeGreaterThanOrEqual(3);
     }
     expect(body, "the rule does not say the claim comes from this project's SUCCESS.md (#2317)").toContain(
       "this project's `SUCCESS.md`",
