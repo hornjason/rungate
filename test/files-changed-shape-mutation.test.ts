@@ -47,6 +47,7 @@ import { spawnSync } from "child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { shipWorktreeIdentity } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP = join(REPO_ROOT, "workflows", "ship.js");
@@ -320,7 +321,7 @@ describe("#611 AC-6: under the mutant, the annotated element reaches the collect
       "/tmp/work", 611, REPO_ROOT, {},
       async () => ({ success: true, buildResult: {} }),
       new Function(`${slice("IMPLEMENT-RESULT")}\nreturn implementRefusal;`)(),
-      new Function(`${slice("WORKTREE-IDENTITY")}\nreturn worktreeIdentity;`)(),
+      shipWorktreeIdentity(src), // this file's own (redirectable) source, through the one helper (#2421)
       "owner/project",
       new Function(`${slice("BRIEF-PRECEDENCE")}\nreturn taskSourceRefusal;`)(),
       async () => ({ branch: "rungate/run-611", refusal: null }),

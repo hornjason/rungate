@@ -50,6 +50,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { shipWorktreeIdentity } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -457,7 +458,7 @@ const SUBS = [
 function loadRunDecomposedShip(agent: (p: string, o: { label: string }) => Promise<unknown>) {
   const marked = (name: string) => block(name);
   const guard = new Function(`${marked("IMPLEMENT-RESULT")}\nreturn implementRefusal;`)();
-  const identity = new Function(`${marked("WORKTREE-IDENTITY")}\nreturn worktreeIdentity;`)();
+  const identity = shipWorktreeIdentity(shipSource); // this file's own (redirectable) source, through the one helper (#2421)
   const taskSource = new Function(`${marked("BRIEF-PRECEDENCE")}\nreturn taskSourceRefusal;`)();
   const waveNeedsIntegration = new Function(`${marked("RUN-REF")}\nreturn waveNeedsIntegration;`)();
 

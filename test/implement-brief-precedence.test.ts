@@ -25,6 +25,7 @@ import {
   TASK_SOURCES,
 } from "../lib/brief-precedence";
 import { enclosingChain } from "../lib/reachability";
+import { shipWorktreeIdentity } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -376,7 +377,7 @@ function loadRunImplement(buildResult: unknown) {
     300000,
     {},
     guard("IMPLEMENT-RESULT", "implementRefusal"),
-    guard("WORKTREE-IDENTITY", "worktreeIdentity"),
+    shipWorktreeIdentity(shipSource), // this file's own (redirectable) source, through the one helper (#2421)
     "owner/project",
     guard("BRIEF-PRECEDENCE", "taskSourceRefusal"),
     guard("FILES-CHANGED-SHAPE", "filesChangedShapeRefusal"),
@@ -424,7 +425,7 @@ function loadRunDecomposedShip(
     "/tmp/work", 180, REPO_ROOT, {},
     async () => ({ success: true, buildResult: {} }),
     guard("IMPLEMENT-RESULT", "implementRefusal"),
-    guard("WORKTREE-IDENTITY", "worktreeIdentity"),
+    shipWorktreeIdentity(shipSource), // this file's own (redirectable) source, through the one helper (#2421)
     "owner/project",
     guard("BRIEF-PRECEDENCE", "taskSourceRefusal"),
     async () => ({ branch: "rungate/run-180", refusal: null }),
