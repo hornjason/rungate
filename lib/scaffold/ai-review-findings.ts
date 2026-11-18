@@ -790,7 +790,14 @@ export type AiReviewUnmeasuredReason =
    * Comparing against a list the reader cannot normalise would demote every
    * finding, so the list being unreadable is a reading that failed.
    */
-  | "CHANGED_FILES_UNREADABLE";
+  | "CHANGED_FILES_UNREADABLE"
+  /**
+   * #1357. The changed files' line counts were named and could not be read,
+   * or a row in them is not `<count><TAB><path>`. Judging a cited line against
+   * the rows that happened to survive would let the damage decide which
+   * findings block, so it refuses.
+   */
+  | "LINE_COUNTS_UNREADABLE";
 
 /**
  * The fields a BLOCKING finding must carry, derived from the one contract map
@@ -1079,6 +1086,130 @@ export function readAiReviewChangedFiles(path: string | undefined): AiReviewScop
   };
 }
 
+/**
+ * #1357. Whether the changed files' line counts were read, and if not, why.
+ * Three states for the reason `AiReviewScopeReading` has three: nobody handed
+ * this run the counts is a property of the workflow, counts that could not
+ * be read are a property of this run.
+ *
+ * `counts` is keyed by `normaliseRepoPath`, the spelling a finding's `file`
+ * is reduced to, so `./x` and `x` are one file here as they are in CRC-B7.
+ */
+export type AiReviewLineCountReading =
+  | { status: "NOT_SUPPLIED"; counts: null; detail: string; reason: null }
+  | { status: "MEASURED"; counts: ReadonlyMap<string, number>; detail: string; reason: null }
+  | { status: "UNMEASURED"; counts: null; detail: string; reason: "LINE_COUNTS_UNREADABLE" };
+
+/** The reading for a run nobody handed line counts. Nothing is judged on its line. */
+export function lineCountsNotSupplied(): AiReviewLineCountReading {
+  return {
+    status: "NOT_SUPPLIED",
+    counts: null,
+    reason: null,
+    detail:
+      "no line counts were given, so whether a blocking finding cites a line inside " +
+      "the file it names was not checked",
+  };
+}
+
+function lineCountsUnreadable(detail: string): AiReviewLineCountReading {
+  return { status: "UNMEASURED", counts: null, reason: "LINE_COUNTS_UNREADABLE", detail };
+}
+
+/**
+ * Read the line counts the changed-files step wrote: one `<count><TAB><path>`
+ * row per changed file present in the tree the reviewer read, taken BEFORE
+ * the reviewer ran. This module never counts a file itself — it runs after
+ * the review, and AC-10 in `test/ai-review-finding-scope.test.ts` holds it to
+ * spawning nothing.
+ *
+ * An EMPTY file is a reading, unlike an empty changed-file list: a pull
+ * request that only deletes files has nothing left to count. A row that is
+ * not `<count><TAB><path>` refuses the whole file.
+ *
+ * A path `normaliseRepoPath` cannot read gets no entry, so a finding naming
+ * it is never judged on its line and keeps blocking. Two rows reducing to one
+ * key keep the LARGER count: the smaller one could call a real line missing.
+ */
+export function readAiReviewLineCounts(path: string | undefined): AiReviewLineCountReading {
+  if (path === undefined || path === "") return lineCountsNotSupplied();
+
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch (e) {
+    return lineCountsUnreadable(
+      `the line counts at ${path} could not be read: ${(e as Error).message}. Counts that ` +
+        `could not be taken are not files with no lines`,
+    );
+  }
+
+  const counts = new Map<string, number>();
+  const rows = raw.split("\n").filter(row => row.length > 0);
+  for (const [at, row] of rows.entries()) {
+    const m = row.match(/^(\d+)\t(.+)$/);
+    if (m === null) {
+      return lineCountsUnreadable(
+        `row ${at + 1} of the line counts at ${path} is not "<count><TAB><path>": ` +
+          `${JSON.stringify(row)}. Judging cited lines against the rows that did parse ` +
+          `would let the damage decide which findings block`,
+      );
+    }
+    const key = normaliseRepoPath(m[2]);
+    if (key === null) continue;
+    counts.set(key, Math.max(counts.get(key) ?? 0, Number(m[1])));
+  }
+  return {
+    status: "MEASURED",
+    counts,
+    reason: null,
+    detail: `${counts.size} file line count(s) read from ${path}`,
+  };
+}
+
+/**
+ * The line a finding cites, or `null` when it gives none this reader can use:
+ * the declared `line` when it is a positive integer, else a `:N` suffix on
+ * `file`. ONE binding — `reviewThreadRequests` anchors a comment on it and
+ * `citedLinePastEnd` judges it, and two parsers could disagree about which
+ * line one finding names.
+ */
+export function findingCitedLine(finding: Record<string, unknown>): number | null {
+  const declared = finding[AI_REVIEW_FINDING_FIELDS.line];
+  if (typeof declared === "number" && Number.isInteger(declared) && declared > 0) return declared;
+  const suffixed = String(finding[AI_REVIEW_FINDING_FIELDS.file])
+    .trim()
+    .replace(/\\/g, "/")
+    .match(/^(.*?):(\d+)(?::\d+)?$/);
+  return suffixed ? Number(suffixed[2]) : null;
+}
+
+/**
+ * #1357's one decider: the cited line and the file's count when the line is
+ * past the end of the file, else `null`.
+ *
+ * `null` whenever the question cannot be answered — no counts, no usable
+ * line, a path that cannot be read, or a file the counts do not name (absent
+ * from the tree, e.g. deleted). Each of those keeps blocking: unanswerable is
+ * not unlocatable, the direction CRC-B7 grades this stage in.
+ *
+ * Locatable, never RIGHT. Whether the line says what the finding claims is
+ * not decided here, and must not grow to be.
+ */
+export function citedLinePastEnd(
+  finding: Record<string, unknown>,
+  counts: ReadonlyMap<string, number> | null,
+): { line: number; count: number } | null {
+  if (counts === null) return null;
+  const line = findingCitedLine(finding);
+  if (line === null) return null;
+  const named = normaliseRepoPath(finding[AI_REVIEW_FINDING_FIELDS.file]);
+  if (named === null) return null;
+  const count = counts.get(named);
+  if (count === undefined) return null;
+  return line > count ? { line, count } : null;
+}
+
 // `unlocatableBlockingFinding` lived here and is gone. It was #1204's
 // refusal predicate, and the merge with CRC-B7 retired the refusal; the
 // comparison it performed now happens inside `readPayload` against
@@ -1137,6 +1268,14 @@ export interface AiReviewFindingsReading {
    * Substitution*, in the place it decides a required check.
    */
   scopeDropped: string[] | null;
+  /** #1357: how the changed files' line counts were read, and whether they were. */
+  lineCounts: AiReviewLineCountReading;
+  /**
+   * #1357: blocking findings citing a line past the end of the file they
+   * name — CARRIED in `reported`, never dropped — or `null` when the counts
+   * were not read. `null` and `[]` are "not checked" and "checked, none".
+   */
+  pastEndReported: unknown[] | null;
   /**
    * CRC-B7's tag for each entry of `reported`, BY PAYLOAD INDEX, or `null`
    * when there was no payload to tag.
@@ -1358,15 +1497,8 @@ export function reviewThreadRequests(
     const spelt = repoPathSpelling(raw);
     if (spelt === null) continue;
     const path = diffSpelling.get(spelt.toLowerCase()) ?? spelt;
-    const suffixed = String(raw).trim().replace(/\\/g, "/").match(/^(.*?):(\d+)(?::\d+)?$/);
-
-    const declared = finding[f.line];
-    const line =
-      typeof declared === "number" && Number.isInteger(declared) && declared > 0
-        ? declared
-        : suffixed
-          ? Number(suffixed[2])
-          : null;
+    // #1357: the one parser, shared with `citedLinePastEnd`.
+    const line = findingCitedLine(finding);
 
     requests.push({ path, line, body: threadBody(finding, keyFor?.(finding)) });
   }
@@ -1667,6 +1799,8 @@ function unmeasured(
     scope: scopeNotSupplied(),
     unlocatableReported: null,
     scopeDropped: null,
+    lineCounts: lineCountsNotSupplied(),
+    pastEndReported: null,
     findingTags,
   };
 }
@@ -1689,17 +1823,26 @@ function withScope(
   scope: AiReviewScopeReading,
   unlocatableReported: unknown[] | null,
   scopeDropped: string[] | null,
+  // #1357. The line counts are a second input of the same kind, so they meet
+  // the reading HERE rather than at a second site that could disagree.
+  lineCounts: AiReviewLineCountReading = lineCountsNotSupplied(),
+  pastEndReported: unknown[] | null = null,
 ): AiReviewFindingsReading {
+  const reasons = [...reading.unmeasuredReasons];
+  const detail = [...reading.detail];
+  if (scope.status === "UNMEASURED") {
+    reasons.push(scope.reason);
+    detail.push(scope.detail);
+  }
+  if (lineCounts.status === "UNMEASURED") {
+    reasons.push(lineCounts.reason);
+    detail.push(lineCounts.detail);
+  }
   const merged =
-    scope.status === "UNMEASURED"
-      ? unmeasured(
-          [...reading.unmeasuredReasons, scope.reason],
-          [...reading.detail, scope.detail],
-          reading.reported,
-          reading.findingTags,
-        )
+    reasons.length > reading.unmeasuredReasons.length
+      ? unmeasured(reasons, detail, reading.reported, reading.findingTags)
       : reading;
-  return { ...merged, scope, unlocatableReported, scopeDropped };
+  return { ...merged, scope, unlocatableReported, scopeDropped, lineCounts, pastEndReported };
 }
 
 /**
@@ -1747,8 +1890,11 @@ export function readAiReviewFindings(
   scope: AiReviewScopeReading = scopeNotSupplied(),
   suppress: AiReviewSuppressionGate | null = null,
   citedLines: CitedLines | null = null,
+  lineCounts: AiReviewLineCountReading = lineCountsNotSupplied(),
 ): AiReviewFindingsReading {
   const preExisting: unknown[] = [];
+  // #1357, appended to by `readPayload` for `preExisting`'s reason.
+  const pastEnd: unknown[] = [];
   // Appended to by `readPayload`, for the same reason `preExisting` is: the
   // entries belong to the reading its caller composes, and every early return
   // in there is a state in which the split had not happened yet.
@@ -1768,6 +1914,8 @@ export function readAiReviewFindings(
     suppressed,
     suppression,
     citedLines,
+    lineCounts.status === "MEASURED" ? lineCounts.counts : null,
+    pastEnd,
   );
   return {
     // #1883: carried on the reading so every later render counts by search.
@@ -1777,6 +1925,8 @@ export function readAiReviewFindings(
       scope,
       scope.status === "MEASURED" ? preExisting : null,
       scope.status === "MEASURED" ? dropped : null,
+      lineCounts,
+      lineCounts.status === "MEASURED" ? pastEnd : null,
     ),
     suppressedReported: suppressed,
     suppressionReasons: suppression.reasons,
@@ -1803,6 +1953,8 @@ function readPayload(
   suppressedOut: unknown[],
   suppressionOut: { reasons: string[]; unmeasured: string | null },
   citedLines: CitedLines | null = null,
+  lineCounts: ReadonlyMap<string, number> | null = null,
+  pastEnd: unknown[] = [],
 ): AiReviewFindingsReading {
   if (raw === null) {
     return unmeasured(["FINDINGS_FILE_ABSENT"], ["no findings payload was produced"]);
@@ -2048,6 +2200,24 @@ function readPayload(
           return;
         }
       }
+      // #1357, AFTER the scope check: a finding naming a file outside the
+      // diff is Pre-existing whatever line it cites, and is reported as such.
+      // It demotes on CRC-B8's terms — carried in `reported`, named in
+      // `pastEnd`, counted toward `demoted` so a BLOCK verdict over it is not
+      // read as a CONTRADICTION.
+      const past = citedLinePastEnd(finding, lineCounts);
+      if (past !== null) {
+        demoted += 1;
+        pastEnd.push(item);
+        detail.push(
+          `finding ${i} cites line ${past.line} of ${JSON.stringify(
+            finding[AI_REVIEW_FINDING_FIELDS.file],
+          )}, which has ${past.count} line(s) in the tree the reviewer read. A line that does ` +
+            `not exist cannot be located, so it is reported and does not block. Whether the ` +
+            `finding is right is not decided here — only that it cites nothing`,
+        );
+        return;
+      }
       // CRC-B4's verifier quorum does NOT appear here, and its absence is
       // the decision rather than an omission.
       //
@@ -2157,6 +2327,8 @@ function readPayload(
     scope: scopeNotSupplied(),
     unlocatableReported: null,
     scopeDropped: null,
+    lineCounts: lineCountsNotSupplied(),
+    pastEndReported: null,
     findingTags: tags,
   };
 }
@@ -2316,6 +2488,7 @@ export function readAiReviewFindingsFile(
   scope: AiReviewScopeReading = scopeNotSupplied(),
   suppress: AiReviewSuppressionGate | null = null,
   citedLines: CitedLines | null = null,
+  lineCounts: AiReviewLineCountReading = lineCountsNotSupplied(),
 ): AiReviewFindingsReading {
   let raw: string;
   try {
@@ -2328,6 +2501,7 @@ export function readAiReviewFindingsFile(
         scope,
         null,
         null,
+        lineCounts,
       );
     }
     return withScope(
@@ -2338,9 +2512,10 @@ export function readAiReviewFindingsFile(
       scope,
       null,
       null,
+      lineCounts,
     );
   }
-  return readAiReviewFindings(raw, scope, suppress, citedLines);
+  return readAiReviewFindings(raw, scope, suppress, citedLines, lineCounts);
 }
 
 /** The sentence a refusal prints, or `null` when there is nothing to refuse. */
@@ -2507,6 +2682,10 @@ export function aiReviewScopeLine(reading: AiReviewFindingsReading): string {
     reading.blockingReported === null ? "withheld" : String(reading.blockingReported.length);
   const unlocatable =
     reading.unlocatableReported === null ? "not checked" : String(reading.unlocatableReported.length);
+  const pastEnd =
+    reading.pastEndReported === null
+      ? `not checked (line counts ${reading.lineCounts.status})`
+      : String(reading.pastEndReported.length);
   const drops = reading.scopeDropped;
   const dropped =
     drops === null
@@ -2517,7 +2696,7 @@ export function aiReviewScopeLine(reading: AiReviewFindingsReading): string {
           `so this comparison ran over a NARROWER set than the pull request touched`;
   return (
     `${AI_REVIEW_SCOPE_LINE} ${reading.scope.status} — findings reported: ${produced}, ` +
-    `allowed to block: ${blocking}, unlocatable: ${unlocatable}, ` +
+    `allowed to block: ${blocking}, unlocatable: ${unlocatable}, past end of file: ${pastEnd}, ` +
     `changed-file entries dropped: ${dropped}. ${reading.scope.detail}`
   );
 }
@@ -2646,6 +2825,7 @@ function readArgv(
   argv: string[],
   suppress: AiReviewSuppressionGate | null,
   citedLines: CitedLines | null = null,
+  lineCounts: AiReviewLineCountReading = lineCountsNotSupplied(),
 ): AiReviewFindingsReading {
   const extra = argumentsBeyondTheContract(argv);
   if (extra.length > 0) {
@@ -2678,8 +2858,9 @@ function readArgv(
         scope,
         null,
         null,
+        lineCounts,
       )
-    : readAiReviewFindingsFile(path, scope, suppress, citedLines);
+    : readAiReviewFindingsFile(path, scope, suppress, citedLines, lineCounts);
 }
 
 /**
@@ -2694,8 +2875,11 @@ export function main(
   jury: AiReviewJuryGate | null = null,
   suppress: AiReviewSuppressionGate | null = null,
   citedLines: CitedLines | null = null,
+  // #1357: bound by the wrapper from the environment, like the ballot and
+  // never as a third positional — see the ballot's paragraph below.
+  lineCounts: AiReviewLineCountReading = lineCountsNotSupplied(),
 ): number {
-  const reading = readArgv(argv, suppress, citedLines);
+  const reading = readArgv(argv, suppress, citedLines, lineCounts);
 
   // CRC-B4, AFTER the reading and feeding nothing back into it.
   //
