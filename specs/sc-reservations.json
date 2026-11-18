@@ -34,12 +34,5 @@
     "records that reading for the thirteen it cleared, PR by PR; this file cannot",
     "prove it about itself, so do not read the sentence above as proof."
   ],
-  "reservations": [
-    {
-      "owner": "rg/adr-020-consumer-verdict",
-      "from": 2782,
-      "to": 2785,
-      "note": "ADR-020's four criteria in SPEC-TO-BOARD-PIPELINE-SPEC.md (#2319); delete when this branch merges"
-    }
-  ]
+  "reservations": []
 }

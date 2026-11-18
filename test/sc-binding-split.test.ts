@@ -380,7 +380,11 @@ const UNCLAIMED_RATCHET = 150;
 // board reads an unanswered consumer issue as short, a reading no registered
 // pattern expresses; the `SC-2783` describe in test/board-conformance.test.ts
 // names it.
-const CLAIMED_UNBINDABLE = 180;
+// 180 -> 181: SC-2784 (#2342) ticked by `sync-sc-status --only SC-2784`: a
+// generated workflow's triggers and its pinned published call, a reading no
+// registered pattern expresses; the `SC-2784` describe in
+// test/intake-triage-workflow.test.ts names it.
+const CLAIMED_UNBINDABLE = 181;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
