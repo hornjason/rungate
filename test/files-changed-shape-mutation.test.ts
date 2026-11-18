@@ -321,7 +321,7 @@ describe("#611 AC-6: under the mutant, the annotated element reaches the collect
       "/tmp/work", 611, REPO_ROOT, {},
       async () => ({ success: true, buildResult: {} }),
       new Function(`${slice("IMPLEMENT-RESULT")}\nreturn implementRefusal;`)(),
-      shipWorktreeIdentity(), // through the one helper (#2421)
+      shipWorktreeIdentity(src), // this file's own (redirectable) source, through the one helper (#2421)
       "owner/project",
       new Function(`${slice("BRIEF-PRECEDENCE")}\nreturn taskSourceRefusal;`)(),
       async () => ({ branch: "rungate/run-611", refusal: null }),

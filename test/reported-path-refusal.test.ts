@@ -476,7 +476,7 @@ describe("#830: the refusal is delivered, and it ends the sub-issue that reporte
       "/tmp/work", 830, REPO_ROOT, {},
       async () => ({ success: true, buildResult: {} }),
       new Function(`${block("IMPLEMENT-RESULT")}\nreturn implementRefusal;`)(),
-      shipWorktreeIdentity(), // through the one helper (#2421)
+      shipWorktreeIdentity(shipSource), // this file's own source, through the one helper (#2421)
       "owner/project",
       new Function(`${block("BRIEF-PRECEDENCE")}\nreturn taskSourceRefusal;`)(),
       async () => ({ branch: "rungate/run-830", refusal: null }),

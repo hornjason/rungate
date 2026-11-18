@@ -436,7 +436,7 @@ function loadRunDecomposedShip(briefedAgent: BriefedAgentFake) {
     {},
     async () => ({ success: true, buildResult: {} }),
     sliced("IMPLEMENT-RESULT", "implementRefusal"),
-    shipWorktreeIdentity(), // through the one helper (#2421)
+    shipWorktreeIdentity(shipSource), // this file's own (redirectable) source, through the one helper (#2421)
     RUN_REPO,
     // #180's guard, injected from its own markers for the same reason as the
     // two above: a stub would let the two copies disagree about what counts

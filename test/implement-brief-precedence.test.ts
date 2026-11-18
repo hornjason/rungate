@@ -377,7 +377,7 @@ function loadRunImplement(buildResult: unknown) {
     300000,
     {},
     guard("IMPLEMENT-RESULT", "implementRefusal"),
-    shipWorktreeIdentity(), // through the one helper (#2421)
+    shipWorktreeIdentity(shipSource), // this file's own (redirectable) source, through the one helper (#2421)
     "owner/project",
     guard("BRIEF-PRECEDENCE", "taskSourceRefusal"),
     guard("FILES-CHANGED-SHAPE", "filesChangedShapeRefusal"),
@@ -425,7 +425,7 @@ function loadRunDecomposedShip(
     "/tmp/work", 180, REPO_ROOT, {},
     async () => ({ success: true, buildResult: {} }),
     guard("IMPLEMENT-RESULT", "implementRefusal"),
-    shipWorktreeIdentity(), // through the one helper (#2421)
+    shipWorktreeIdentity(shipSource), // this file's own (redirectable) source, through the one helper (#2421)
     "owner/project",
     guard("BRIEF-PRECEDENCE", "taskSourceRefusal"),
     async () => ({ branch: "rungate/run-180", refusal: null }),

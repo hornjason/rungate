@@ -175,7 +175,7 @@ describe("#181 SC-855 (AC-3): the decomposed path ACTS on the refusal, it does n
     // #218's guard, injected the same way and for the same reason: a stub
     // would let this suite and the real block disagree about which
     // repository a worktree belongs to.
-    const identity = shipWorktreeIdentity(); // through the one helper (#2421)
+    const identity = shipWorktreeIdentity(shipSource); // this file's own (redirectable) source, through the one helper (#2421)
     // #180s guard, injected the same way and for the same reason.
     const pStart = shipSource.indexOf("// ──── BRIEF-PRECEDENCE-START ────");
     const pEnd = shipSource.indexOf("// ──── BRIEF-PRECEDENCE-END ────");

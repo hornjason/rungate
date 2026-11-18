@@ -458,7 +458,7 @@ const SUBS = [
 function loadRunDecomposedShip(agent: (p: string, o: { label: string }) => Promise<unknown>) {
   const marked = (name: string) => block(name);
   const guard = new Function(`${marked("IMPLEMENT-RESULT")}\nreturn implementRefusal;`)();
-  const identity = shipWorktreeIdentity(); // through the one helper (#2421)
+  const identity = shipWorktreeIdentity(shipSource); // this file's own (redirectable) source, through the one helper (#2421)
   const taskSource = new Function(`${marked("BRIEF-PRECEDENCE")}\nreturn taskSourceRefusal;`)();
   const waveNeedsIntegration = new Function(`${marked("RUN-REF")}\nreturn waveNeedsIntegration;`)();
 

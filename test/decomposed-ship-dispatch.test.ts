@@ -269,7 +269,7 @@ function loadRunDecomposedShip(deps: {
   // #218's guard, injected for the same reason as the one above: a stub
   // would let this block and the real one disagree about which repository a
   // worktree belongs to, and nothing would notice.
-  const worktreeIdentity = shipWorktreeIdentity(); // through the one helper (#2421)
+  const worktreeIdentity = shipWorktreeIdentity(shipSource); // this file's own (redirectable) source, through the one helper (#2421)
 
   // #180's guard, injected for the reason the two above are.
   const precStart = shipSource.indexOf("// ──── BRIEF-PRECEDENCE-START ────");
