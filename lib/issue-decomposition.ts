@@ -56,6 +56,13 @@ export interface DecompositionRow {
    * as another row's outcome in THIS plan, resolved after every row is read.
    */
   blockedBy: string[];
+  /**
+   * #2339: existing issues (`#<n>` only) that must wait on THIS row — the
+   * optional sixth column, so a later plan can order an earlier plan's issues
+   * behind its own work. Always set by the parser, `[]` when the table has no
+   * Blocks column; optional only so a hand-built row need not spell it.
+   */
+  blocks?: string[];
   /** 1-indexed line of the row, for a message somebody can act on. */
   line: number;
 }
@@ -70,6 +77,9 @@ export interface DecompositionReading {
 
 /** The header the table must open with, so another table is never read as one. */
 const HEADER = /^\|\s*Criterion\s*\|\s*Outcome\s*\|\s*Files\s*\|/;
+
+/** An existing issue, as a cell names one. */
+const ISSUE_REF = /^#\d+$/;
 
 /**
  * Split a row on its UNESCAPED pipes, and turn `\|` back into `|`.
@@ -176,12 +186,22 @@ function blockingCycles(
   rows: readonly DecompositionRow[],
   byOutcome: ReadonlyMap<string, number>,
 ): string[][] {
+  // #2339: an existing issue IS a node once a row can block it. A row that
+  // waits on #77 and also blocks #77 closes a ring through the tracker that
+  // this file can see without reading it; edges already on the tracker are
+  // still out of view.
   const blockers = new Map<string, string[]>();
   for (const r of rows) {
     blockers.set(
       r.outcome,
-      r.blockedBy.filter(b => !/^#\d+$/.test(b) && byOutcome.has(b)),
+      r.blockedBy.filter(b => ISSUE_REF.test(b) || byOutcome.has(b)),
     );
+  }
+  for (const r of rows) {
+    for (const n of r.blocks ?? []) {
+      if (!ISSUE_REF.test(n)) continue;
+      blockers.set(n, [...(blockers.get(n) ?? []), r.outcome]);
+    }
   }
 
   const found: string[][] = [];
@@ -211,7 +231,7 @@ function blockingCycles(
     done.add(node);
   };
 
-  for (const r of rows) if (!done.has(r.outcome)) walk(r.outcome);
+  for (const node of blockers.keys()) if (!done.has(node)) walk(node);
   return found;
 }
 
@@ -230,6 +250,13 @@ export function parseDecompositionPlan(content: string): DecompositionReading {
     };
   }
 
+  // #2339: an optional sixth column, Blocks, read only when the header names
+  // it. Every row is then held to six cells, so a five-cell row is refused
+  // rather than read as "blocks nothing" — the same reason `!== 5` refuses.
+  const head = rowCells(lines[start]);
+  const withBlocks = head.length === 6 && plain(head[5]).toLowerCase() === "blocks";
+  const width = withBlocks ? 6 : 5;
+
   const rows: DecompositionRow[] = [];
   const rejected: { line: number; text: string; why: string }[] = [];
   for (let i = start + 1; i < lines.length; i++) {
@@ -244,10 +271,10 @@ export function parseDecompositionPlan(content: string): DecompositionReading {
     // the tool creates one, which is this module's cardinal failure arriving
     // through whitespace an editor inserts. Found by the AI review of this
     // change.
-    let width = 0;
+    let indent = 0;
     let pos = 0;
     for (; pos < lines[i].length && (lines[i][pos] === " " || lines[i][pos] === "\t"); pos++) {
-      width += lines[i][pos] === "\t" ? 4 : 1;
+      indent += lines[i][pos] === "\t" ? 4 : 1;
     }
     const line = lines[i].slice(pos);
     // A table ends at a blank line or an indented code block — NOT at a row
@@ -257,22 +284,23 @@ export function parseDecompositionPlan(content: string): DecompositionReading {
     // leading pipe. Anything else non-blank is now READ and refused on its
     // cell count, because a loud refusal is recoverable and a silent drop is
     // the failure this module exists to prevent.
-    if (width >= 4 || line.trim() === "") break;
+    if (indent >= 4 || line.trim() === "") break;
     if (/^\|[\s|:-]+\|$/.test(line)) continue;
     const c = rowCells(line);
     const at = i + 1;
     const reject = (why: string): void => {
       rejected.push({ line: at, text: line.slice(0, 70), why });
     };
-    // Exactly five. `< 5` let a row with a leaked `|` — an unescaped pipe in
-    // an outcome or a blocked-by — through, and only c[0]..c[4] are ever
-    // read, so its tail was silently truncated. That is the one thing this
-    // module promises not to do. Found by the AI review of this change.
-    if (c.length !== 5) {
+    // Exactly the header's width — five, or six with a Blocks column (#2339).
+    // `< 5` let a row with a leaked `|` — an unescaped pipe in an outcome or
+    // a blocked-by — through, and only the first `width` cells are ever read,
+    // so its tail was silently truncated. That is the one thing this module
+    // promises not to do. Found by the AI review of this change.
+    if (c.length !== width) {
       reject(
-        c.length < 5
-          ? `only ${c.length} cells, need 5`
-          : `${c.length} cells, need 5 — an unescaped \`|\` in a cell splits the row, and the ` +
+        c.length < width
+          ? `only ${c.length} cells, need ${width}`
+          : `${c.length} cells, need ${width} — an unescaped \`|\` in a cell splits the row, and the ` +
             `extra cells would be dropped without this refusal; write it as \`\\|\``,
       );
       continue;
@@ -329,6 +357,7 @@ export function parseDecompositionPlan(content: string): DecompositionReading {
       files,
       milestone: m === "" || m === "—" || m === "-" ? null : m,
       blockedBy: cells(c[4]),
+      blocks: withBlocks ? cells(c[5]) : [],
       line: at,
     });
   }
@@ -355,10 +384,23 @@ export function parseDecompositionPlan(content: string): DecompositionReading {
   // satisfied.
   for (const r of rows) {
     for (const b of r.blockedBy) {
-      if (/^#\d+$/.test(b)) continue;
+      if (ISSUE_REF.test(b)) continue;
       if (byOutcome.has(b)) continue;
       reasons.push(
         `line ${r.line}: blocked by "${b}", which is neither #<issue> nor the outcome of another row`,
+      );
+    }
+  }
+
+  // #2339: Blocks names existing issues only. Two rows of one plan are
+  // ordered by Blocked by on the row that waits; a second spelling of the same
+  // edge would be a second decider for one fact.
+  for (const r of rows) {
+    for (const b of r.blocks ?? []) {
+      if (ISSUE_REF.test(b)) continue;
+      reasons.push(
+        `line ${r.line}: blocks "${b}" — the Blocks column takes #<issue> only; to order two rows ` +
+          `of this plan, write it as Blocked by on the row that waits`,
       );
     }
   }
@@ -376,9 +418,9 @@ export function parseDecompositionPlan(content: string): DecompositionReading {
       );
       continue;
     }
-    const chain = [...cycle, cycle[0]].map(o => `"${o}"`).join(" <- ");
+    const chain = [...cycle, cycle[0]].map(o => (ISSUE_REF.test(o) ? o : `"${o}"`)).join(" <- ");
     reasons.push(
-      `lines ${cycle.map(o => byOutcome.get(o)).join(", ")}: a blocking CYCLE, ${chain} ` +
+      `lines ${cycle.filter(o => byOutcome.has(o)).map(o => byOutcome.get(o)).join(", ")}: a blocking CYCLE, ${chain} ` +
         `(<- reads "is blocked by") — none of these issues could ever start`,
     );
   }
@@ -408,6 +450,12 @@ export interface LiveTracker {
   milestones: Set<string>;
   /** Every criterion id a spec under `specs/` states. A row naming any other is refused (SC-2738). */
   statedCriteria: ReadonlySet<string>;
+  /**
+   * #2339: the state of each `#<n>` the plan names, as the tracker holds it.
+   * A number absent here is not an issue in the repository (or is a pull
+   * request), and the row naming it is refused by that number.
+   */
+  namedIssues: ReadonlyMap<number, "open" | "closed">;
 }
 
 export type DecomposeAction =
@@ -491,6 +539,26 @@ export function planDecomposition(
     }
   }
 
+  // #2339: every #<n> must be an issue the tracker holds. A closed one may be
+  // waited on — a row whose title only a closed issue holds resolves the same
+  // way (SC-2738) — but it cannot be made to wait: it is finished.
+  for (const r of rows) {
+    for (const b of r.blockedBy) {
+      if (ISSUE_REF.test(b) && !live.namedIssues.has(Number(b.slice(1)))) {
+        reasons.push(`line ${r.line}: blocked by ${b}, which is not an issue in this repository`);
+      }
+    }
+    for (const b of r.blocks ?? []) {
+      if (!ISSUE_REF.test(b)) continue;
+      const state = live.namedIssues.get(Number(b.slice(1)));
+      if (state === undefined) {
+        reasons.push(`line ${r.line}: blocks ${b}, which is not an issue in this repository`);
+      } else if (state === "closed") {
+        reasons.push(`line ${r.line}: blocks ${b}, which is closed — a finished issue cannot wait on a new row`);
+      }
+    }
+  }
+
   const actions: DecomposeAction[] = [];
   for (const r of rows) {
     const existing = live.openTitles.get(r.outcome);
@@ -514,6 +582,7 @@ export function planDecomposition(
   const edges: { blocked: string; blocker: string }[] = [];
   for (const r of rows) {
     for (const b of r.blockedBy) edges.push({ blocked: r.outcome, blocker: b });
+    for (const b of r.blocks ?? []) edges.push({ blocked: b, blocker: r.outcome });
   }
 
   return {

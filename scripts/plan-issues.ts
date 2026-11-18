@@ -254,6 +254,12 @@ export interface DecomposeGitHub {
    * safe half and one unsafe one. See the edge pass in `decompose`.
    */
   blockedBy: (repo: string, issue: number) => Promise<number[]>;
+  /**
+   * #2339: the state of each issue a plan names by `#<n>`. A number that is
+   * not an issue — never existed, deleted, or a pull request — is absent from
+   * the map; any other failed read throws, and the run refuses UNMEASURED.
+   */
+  issueStates: (repo: string, numbers: readonly number[]) => Promise<Map<number, "open" | "closed">>;
 }
 
 function issueTitles(repo: string, state: "open" | "closed"): Map<string, number> {
@@ -348,6 +354,30 @@ const LIVE_DECOMPOSE: DecomposeGitHub = {
     // wire every edge to nothing and report success.
     if (!Number.isInteger(n) || n <= 0) throw new Error(`created, but could not read a number from: ${url}`);
     return n;
+  },
+  issueStates: async (repo, numbers) => {
+    const out = new Map<number, "open" | "closed">();
+    for (const n of numbers) {
+      let raw: string;
+      try {
+        raw = gh([
+          // single resource: one issue by its number, not a list — there is no second page.
+          "api",
+          `repos/${repo}/issues/${n}`,
+          "--jq",
+          "[.state, (.pull_request != null)] | @json",
+        ]);
+      } catch (e) {
+        // Absent (404) and deleted (410) both mean "not an issue here"; a
+        // rate limit or a network error is not an answer and must throw.
+        if (/HTTP 404|HTTP 410|Not Found/i.test((e as Error).message)) continue;
+        throw e;
+      }
+      const [state, isPull] = JSON.parse(raw) as [string, boolean];
+      if (isPull) continue;
+      out.set(n, state === "closed" ? "closed" : "open");
+    }
+    return out;
   },
   addBlockedBy: async (repo, blocked, blocker) => {
     // REST, not `issue edit --add-blocked-by`, which an older runner's gh lacks (#2345).
@@ -500,6 +530,15 @@ async function decompose(
   // column, not absent.
   const statedCriteria = new Set(answerableIds(sweep));
 
+  // #2339: only the numbers this plan names, and only when it names any.
+  const named = [
+    ...new Set(
+      reading.rows
+        .flatMap(r => [...r.blockedBy, ...(r.blocks ?? [])])
+        .filter(b => /^#\d+$/.test(b))
+        .map(b => Number(b.slice(1))),
+    ),
+  ];
   let live;
   try {
     live = {
@@ -507,6 +546,7 @@ async function decompose(
       closedTitles: await api.closedTitles(repo),
       milestones: await api.milestones(repo),
       statedCriteria,
+      namedIssues: named.length > 0 ? await api.issueStates(repo, named) : new Map<number, "open" | "closed">(),
     };
   } catch (e) {
     return refuse(`UNMEASURED — could not read the tracker, so the plan was not applied:`, [
@@ -560,9 +600,12 @@ async function decompose(
   const alreadyWired: string[] = [];
   const existing = new Map<number, Set<number>>();
   if (write) {
+    // Either end may be an existing issue (#2339: a Blocks cell puts one on
+    // the BLOCKED end), so both ends resolve the same way.
+    const end = (x: string): number | undefined => (/^#\d+$/.test(x) ? Number(x.slice(1)) : numbers.get(x));
     for (const e of planned.edges) {
-      const blocked = numbers.get(e.blocked);
-      const blocker = /^#(\d+)$/.exec(e.blocker) ? Number(e.blocker.slice(1)) : numbers.get(e.blocker);
+      const blocked = end(e.blocked);
+      const blocker = end(e.blocker);
       if (blocked === undefined || blocker === undefined) {
         // One end was never created, because its creation failed above. Say
         // so: a missing edge that nothing reports is an order silently lost.
@@ -615,7 +658,8 @@ async function decompose(
     else if (a.kind === "closed") console.log(`  closed  #${a.number}  ${a.row.outcome}`);
     else console.log(`  create  ${a.row.criterion.padEnd(8)}  ${a.title}`);
   }
-  for (const e of planned.edges) console.log(`  order   "${e.blocked}" blocked by "${e.blocker}"`);
+  const shown = (x: string): string => (/^#\d+$/.test(x) ? x : `"${x}"`);
+  for (const e of planned.edges) console.log(`  order   ${shown(e.blocked)} blocked by ${shown(e.blocker)}`);
   if (!write) {
     console.log(`\nNothing written. Re-run with --write to apply.`);
     return 0;

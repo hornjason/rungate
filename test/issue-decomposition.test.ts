@@ -511,14 +511,28 @@ describe("every live list read proves it is complete", () => {
   const apiCalls = (): string[] =>
     [...SRC.matchAll(/gh\(\[([\s\S]*?)\]\)/g)].map(m => m[1]).filter(c => c.includes('"api"'));
 
+  /**
+   * #2339: the exemption the message below always offered, now read. A call
+   * marked `// single resource:` must also address ONE thing — its endpoint
+   * ends in an interpolated id — so the marker cannot excuse a list read.
+   */
+  const singleResource = (c: string): boolean =>
+    c.includes("// single resource:") && /\/\$\{\w+\}`/.test(c);
+
   test("EVERY `gh api` call reads every page", () => {
     expect(
-      apiCalls().filter(c => !c.includes("--paginate")),
+      apiCalls().filter(c => !c.includes("--paginate") && !singleResource(c)),
       "a `gh api` read with no `--paginate` returns the FIRST page and reports it as the " +
         "whole answer. Add `--paginate` (and `--jq` per row — `--paginate` concatenates each " +
         "page's response, so the result is not one JSON document). If the endpoint really " +
         "returns a single resource rather than a list, say so in a comment on the call.",
     ).toEqual([]);
+  });
+
+  test("#2339 CONTROL: the single-resource marker does not excuse a list endpoint", () => {
+    expect(singleResource('// single resource: x\n "api", `repos/${repo}/issues/${n}`')).toBe(true);
+    expect(singleResource('// single resource: x\n "api", `repos/${repo}/issues?state=open`')).toBe(false);
+    expect(singleResource('"api", `repos/${repo}/issues/${n}`')).toBe(false);
   });
 
   test("the scan can see the calls at all — the control", () => {
@@ -588,7 +602,13 @@ describe("planDecomposition resolves rows against the tracker as it is now", () 
     line: 3,
     ...over,
   });
-  const empty: LiveTracker = { openTitles: new Map(), closedTitles: new Map(), milestones: new Set(), statedCriteria: STATED };
+  const empty: LiveTracker = {
+    openTitles: new Map(),
+    closedTitles: new Map(),
+    milestones: new Set(),
+    statedCriteria: STATED,
+    namedIssues: new Map(),
+  };
   const HEADING = "## Criteria this serves";
 
   test("a title nothing holds becomes a create", () => {
@@ -638,7 +658,7 @@ describe("planDecomposition resolves rows against the tracker as it is now", () 
   });
 
   test("edges are emitted for every blocker, including to a row that already exists", () => {
-    const live: LiveTracker = { ...empty, openTitles: new Map([["the first half", 1700]]) };
+    const live: LiveTracker = { ...empty, openTitles: new Map([["the first half", 1700]]), namedIssues: new Map([[9, "open"]]) };
     const p = planDecomposition(
       [
         row({ outcome: "the first half" }),
@@ -728,6 +748,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
         calls.push(`create #${n} "${issue.title}" milestone=${issue.milestone ?? "-"}`);
         return n;
       },
+      issueStates: async () => new Map(),
       addBlockedBy: async (_repo, blocked, blocker) => {
         calls.push(`edge #${blocked} blocked by #${blocker}`);
       },
@@ -896,6 +917,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
           bodies.push(issue.body);
           return 2000;
         },
+        issueStates: async () => new Map(),
         addBlockedBy: async () => {},
       };
       // A plan INSIDE the project root, reached by an absolute path — which
@@ -945,6 +967,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
           bodies.push(issue.body);
           return 2000;
         },
+        issueStates: async () => new Map(),
         addBlockedBy: async () => {},
       };
       mkdirSync(join(dir, "..config"), { recursive: true });
@@ -993,6 +1016,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
         create: async () => {
           throw new Error("must not create on a refusal");
         },
+        issueStates: async () => new Map(),
         addBlockedBy: async () => {},
       };
       const code = await planIssuesMain(
@@ -1145,6 +1169,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
         calls.push("create");
         return 1;
       },
+      issueStates: async () => new Map(),
       addBlockedBy: async () => {
         calls.push("edge");
       },
@@ -1171,6 +1196,7 @@ describe("scripts/plan-issues --decompose: what reaches GitHub", () => {
       create: async () => {
         throw new Error("rate limited");
       },
+      issueStates: async () => new Map(),
       addBlockedBy: async (_r, b, k) => {
         calls.push(`edge #${b} #${k}`);
       },
@@ -1236,6 +1262,11 @@ const PREDICTED_RED = [
   "SIX values and no trailing pipe is REFUSED, not quietly trimmed to five",
   "TWO backslashes before a pipe: the pipe stays escaped, as GFM reads it",
   "one bad row makes the WHOLE reading unmeasured, not a partial plan",
+  // #2339: the width check now reads the header, so it has two more cases
+  // asserting its refusal — a sixth cell under five headers, and a fifth
+  // under six.
+  "CONTROL: a table without a Blocks column parses exactly as today",
+  "with a Blocks header, a five-cell row is refused, never read as Blocks-empty",
 ];
 
 describe.skipIf(process.env[MUTANT_GUARD] === "1")(
@@ -1405,6 +1436,7 @@ describe("SC-2738: --decompose files nothing twice and nothing no spec states", 
     closedTitles: new Map(),
     milestones: new Set(),
     statedCriteria: STATED,
+    namedIssues: new Map(),
     ...over,
   });
   const HEADING = "## Criteria this serves";
@@ -1456,6 +1488,7 @@ describe("SC-2738: --decompose files nothing twice and nothing no spec states", 
         calls.push(`create "${issue.title}"`);
         return 3000;
       },
+      issueStates: async () => new Map(),
       addBlockedBy: async (_r, blocked, blocker) => {
         calls.push(`edge #${blocked} blocked by #${blocker}`);
       },
@@ -1520,5 +1553,192 @@ describe("SC-2738: --decompose files nothing twice and nothing no spec states", 
     // The sweep's own refusal, not the unknown-criterion one an empty id set
     // would also produce (that message names `specs/` too).
     expect(r.said).toContain("the criterion ids under");
+  });
+});
+
+// #2339: a Decomposition table links its rows to issues that already exist,
+// in both directions. `#N` in Blocked by already resolved; what was missing
+// is an optional Blocks column (an existing issue waits on a new row) and a
+// check that each named number is an issue the tracker actually holds.
+describe("#2339: a plan links rows to existing issues, both directions", () => {
+  const HEAD6 = [
+    "| Criterion | Outcome | Files | Milestone | Blocked by | Blocks |",
+    "|---|---|---|---|---|---|",
+  ];
+  const plan6 = (...rows: string[]) => ["# A plan", "", ...HEAD6, ...rows, ""].join("\n");
+  const TILE = "| CRC-C2 | admin shows one uniform tile per module | lib/a.ts | — | #77 | #2070, #2071 |";
+
+  test("an optional Blocks column is read into the row", () => {
+    const r = parseDecompositionPlan(plan6(TILE));
+    expect(r.reading, r.unmeasuredReasons.join("; ")).toBe("MEASURED");
+    expect(r.rows[0].blockedBy).toEqual(["#77"]);
+    expect(r.rows[0].blocks).toEqual(["#2070", "#2071"]);
+  });
+
+  test("CONTROL: a table without a Blocks column parses exactly as today", () => {
+    const r = parseDecompositionPlan(plan("| CRC-C2 | an outcome long enough to pass | lib/a.ts | — | #77 |"));
+    expect(r.reading).toBe("MEASURED");
+    expect(r.rows[0].blockedBy).toEqual(["#77"]);
+    expect(r.rows[0].blocks).toEqual([]);
+    // And a sixth cell is still refused when the header has five.
+    const wide = parseDecompositionPlan(plan("| CRC-C2 | an outcome long enough to pass | lib/a.ts | — | — | #77 |"));
+    expect(wide.reading).toBe("UNMEASURED");
+    expect(wide.rejected[0].why).toContain("6 cells, need 5");
+  });
+
+  test("with a Blocks header, a five-cell row is refused, never read as Blocks-empty", () => {
+    const r = parseDecompositionPlan(plan6("| CRC-C2 | an outcome long enough to pass | lib/a.ts | — | #77 |"));
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.rejected[0].why).toContain("only 5 cells, need 6");
+  });
+
+  test("Blocks takes existing issues only; a row title there is refused, pointing at Blocked by", () => {
+    const r = parseDecompositionPlan(
+      plan6(
+        "| CRC-C2 | the first half of the work | lib/a.ts | — | — | the second half of the work |",
+        "| CRC-C2 | the second half of the work | lib/b.ts | — | — | |",
+      ),
+    );
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.unmeasuredReasons.join(" ")).toContain('blocks "the second half of the work"');
+    expect(r.unmeasuredReasons.join(" ")).toContain("Blocked by");
+  });
+
+  test("a row that both waits on and blocks the same issue is a cycle", () => {
+    const r = parseDecompositionPlan(plan6("| CRC-C2 | an outcome long enough to pass | lib/a.ts | — | #77 | #77 |"));
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.unmeasuredReasons.join(" ")).toMatch(/blocking CYCLE.*#77/);
+  });
+
+  const live = (issues: [number, "open" | "closed"][]): LiveTracker => ({
+    openTitles: new Map(),
+    closedTitles: new Map(),
+    milestones: new Set(),
+    statedCriteria: STATED,
+    namedIssues: new Map(issues),
+  });
+
+  test("a Blocks #N becomes an edge with the existing issue on the blocked end", () => {
+    const rows = parseDecompositionPlan(plan6(TILE)).rows;
+    const p = planDecomposition(rows, live([[77, "open"], [2070, "open"], [2071, "open"]]), "p.md", "## C");
+    expect(p.reading, p.unmeasuredReasons.join("; ")).toBe("MEASURED");
+    expect(p.edges).toEqual([
+      { blocked: "admin shows one uniform tile per module", blocker: "#77" },
+      { blocked: "#2070", blocker: "admin shows one uniform tile per module" },
+      { blocked: "#2071", blocker: "admin shows one uniform tile per module" },
+    ]);
+  });
+
+  test("an unknown #N is refused by number, in either column, with the rest of the plan still reported", () => {
+    const rows = parseDecompositionPlan(
+      plan6(
+        "| CRC-C2 | admin shows one uniform tile per module | lib/a.ts | Phase 9 | #999 | #2070, #998 |",
+      ),
+    ).rows;
+    const p = planDecomposition(rows, live([[2070, "open"]]), "p.md", "## C");
+    expect(p.reading).toBe("UNMEASURED");
+    const said = p.unmeasuredReasons.join("\n");
+    expect(said).toContain("blocked by #999, which is not an issue in this repository");
+    expect(said).toContain("blocks #998, which is not an issue in this repository");
+    expect(said, "a known number was refused").not.toContain("#2070,");
+    expect(said, "the other refusal was swallowed").toContain('milestone "Phase 9" does not exist');
+  });
+
+  test("a closed #N in Blocks is refused: a finished issue cannot wait on a new row", () => {
+    const rows = parseDecompositionPlan(plan6("| CRC-C2 | admin shows one uniform tile per module | lib/a.ts | — | — | #2070 |")).rows;
+    const p = planDecomposition(rows, live([[2070, "closed"]]), "p.md", "## C");
+    expect(p.reading).toBe("UNMEASURED");
+    expect(p.unmeasuredReasons.join(" ")).toContain("blocks #2070, which is closed");
+  });
+
+  test("a closed #N in Blocked by is accepted, as a row whose title only a closed issue holds is (SC-2738)", () => {
+    const rows = parseDecompositionPlan(plan6("| CRC-C2 | admin shows one uniform tile per module | lib/a.ts | — | #77 | |")).rows;
+    const p = planDecomposition(rows, live([[77, "closed"]]), "p.md", "## C");
+    expect(p.reading, p.unmeasuredReasons.join("; ")).toBe("MEASURED");
+    expect(p.edges).toEqual([{ blocked: "admin shows one uniform tile per module", blocker: "#77" }]);
+  });
+
+  /** A fake tracker recording what reached it. */
+  function tracker(issues: [number, "open" | "closed"][]) {
+    const calls: string[] = [];
+    const asked: number[][] = [];
+    let next = 2000;
+    const api: DecomposeGitHub = {
+      openTitles: async () => new Map(),
+      closedTitles: async () => new Map(),
+      milestones: async () => new Set(),
+      issueStates: async (_repo, numbers) => {
+        asked.push([...numbers]);
+        const known = new Map(issues);
+        return new Map(numbers.filter(n => known.has(n)).map(n => [n, known.get(n)!] as const));
+      },
+      blockedBy: async () => [],
+      create: async (_repo, issue) => {
+        const n = next++;
+        calls.push(`create #${n} "${issue.title}"`);
+        return n;
+      },
+      addBlockedBy: async (_repo, blocked, blocker) => {
+        calls.push(`edge #${blocked} blocked by #${blocker}`);
+      },
+    };
+    return { api, calls, asked };
+  }
+
+  async function decompose(text: string, api: DecomposeGitHub, extra: string[] = []) {
+    const dir = mkdtempSync(join(tmpdir(), "rg-2339-"));
+    const said: string[] = [];
+    const real = { log: console.log, error: console.error };
+    console.log = (...a: unknown[]) => void said.push(a.join(" "));
+    console.error = (...a: unknown[]) => void said.push(a.join(" "));
+    try {
+      const p = join(dir, "plan.md");
+      writeFileSync(p, text);
+      const code = await planIssuesMain(["--decompose", p, "--repo", "o/r", ...extra], undefined as never, api);
+      return { code, said: said.join("\n") };
+    } finally {
+      console.log = real.log;
+      console.error = real.error;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a dry run prints both directions, and reads only the numbers the plan names", async () => {
+    const { api, calls, asked } = tracker([[77, "open"], [2070, "open"], [2071, "open"]]);
+    const r = await decompose(plan6(TILE), api);
+    expect(r.code, r.said).toBe(0);
+    expect(r.said).toContain('order   "admin shows one uniform tile per module" blocked by #77');
+    expect(r.said).toContain('order   #2070 blocked by "admin shows one uniform tile per module"');
+    expect(r.said).toContain('order   #2071 blocked by "admin shows one uniform tile per module"');
+    expect(asked).toEqual([[77, 2070, 2071]]);
+    expect(calls, "a dry run reached GitHub").toEqual([]);
+  });
+
+  test("--write creates both edges, the Blocks one with the existing issue blocked", async () => {
+    const { api, calls } = tracker([[77, "open"], [2070, "open"], [2071, "open"]]);
+    const r = await decompose(plan6(TILE), api, ["--write"]);
+    expect(r.code, r.said).toBe(0);
+    expect(calls).toEqual([
+      'create #2000 "admin shows one uniform tile per module"',
+      "edge #2000 blocked by #77",
+      "edge #2070 blocked by #2000",
+      "edge #2071 blocked by #2000",
+    ]);
+  });
+
+  test("an unknown #N refuses the dry run by number and creates nothing", async () => {
+    const { api, calls } = tracker([[2070, "open"]]);
+    const r = await decompose(plan6(TILE), api, ["--write"]);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(calls).toEqual([]);
+    expect(r.said).toContain("blocked by #77, which is not an issue in this repository");
+    expect(r.said).toContain("blocks #2071, which is not an issue in this repository");
+  });
+
+  test("a plan naming no #N never asks the tracker about numbers", async () => {
+    const { api, asked } = tracker([]);
+    const r = await decompose(plan("| CRC-C2 | an outcome long enough to pass | lib/a.ts | — | — |"), api);
+    expect(r.code, r.said).toBe(0);
+    expect(asked).toEqual([]);
   });
 });
