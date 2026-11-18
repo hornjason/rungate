@@ -162,6 +162,14 @@ describe("SC-2782: one decider gives a consumer's issue exactly one verdict, the
     expect(triageVerdict({ ...consumer(216, vague, P9), labels: ["other"] }, ctx({ queueLabel: "zq-queue" })).kind).toBe("LEFT");
   });
 
+  test("#2367 review: a cut label list that lacks the queue label is REFUSED, never read as a person's milestone", () => {
+    const cut = { ...consumer(218, "Something is off and I cannot say where.", P9), labels: ["from-consumer"], labelsTruncated: true };
+    expect(triageVerdict(cut, ctx({ queueLabel: "zq-queue" })).kind).toBe("REFUSED");
+    // The label inside the page that was read is still evidence.
+    const inPage = { ...cut, labels: ["from-consumer", "zq-queue"] };
+    expect(triageVerdict(inPage, ctx({ queueLabel: "zq-queue" })).kind).toBe("ACTIVE");
+  });
+
   test("#2364: with no queue label configured there is no evidence of a stopped run, so a matching milestone is LEFT", () => {
     const t = triageVerdict({ ...consumer(217, "Something is off and I cannot say where.", P9), labels: ["zq-queue"] }, ctx({ queueLabel: null }));
     expect(t.kind).toBe("LEFT");

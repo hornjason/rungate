@@ -51,6 +51,8 @@ export interface TriageIssue {
   readonly milestone: string | null;
   /** Its labels, when read; only the stopped-run check looks at them (#2364). */
   readonly labels?: readonly string[];
+  /** True when the label list was cut at a page boundary, so an absent label is unread. */
+  readonly labelsTruncated?: boolean;
 }
 
 /** An open pull request: its changed files are what it shares. */
@@ -75,8 +77,9 @@ export interface TriageContext {
   /** `board.milestonePrefix`, the engine family Ready draws from first. */
   readonly enginePrefix: string | null;
   /**
-   * `board.queueLabel`, which a triage run writes after the milestone and
-   * before the marker — the only evidence that a run, not a person, set an
+   * `board.queueLabel`, which a triage run writes BEFORE the milestone and
+   * the marker (review of #2367) — so a milestone a run set always has it
+   * beside it, and it is the only evidence that a run, not a person, set an
    * unmarked issue's milestone (#2364). Null or absent: no such evidence.
    */
   readonly queueLabel?: string | null;
@@ -110,6 +113,13 @@ export function triageVerdict(issue: TriageIssue, ctx: TriageContext): Triage {
     // milestone can match by coincidence (#2364). Any other milestone was set by
     // a person and is never moved.
     const runLabelled = ctx.queueLabel != null && (issue.labels ?? []).includes(ctx.queueLabel);
+    // A cut label list cannot say the label is absent (review of #2367).
+    if (!runLabelled && ctx.queueLabel != null && issue.labelsTruncated === true) {
+      return {
+        kind: "REFUSED",
+        why: `its labels were cut at a page boundary without ${ctx.queueLabel}, so whether a run set "${issue.milestone}" is unread`,
+      };
+    }
     const again = runLabelled ? unplacedVerdict({ ...issue, milestone: null }, ctx) : null;
     if (again !== null && again.kind !== "REFUSED" && again.milestone === issue.milestone) {
       return { ...again, why: `${again.why}; it already sits there, so this finishes a run that stopped before the marker` };
