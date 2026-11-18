@@ -247,6 +247,10 @@ describe("#2398: cores are read by the checker and bundled", () => {
     expect(coreClosure(src, ["global"]).imports).toEqual(["require() of z (via global)"]);
   });
 
+  test("review of #2399: a core exported from a destructured binding is named as asked, not by pattern order", () => {
+    expect(coreClosure("const obj = { a: 1, b: 2 };\nconst { b, a } = obj;\nexport { a };", ["a"]).declarations).toEqual(["a", "obj"]);
+  });
+
   test("a local that shadows an import is not a use of it — the checker reads scope", () => {
     const src = 'import { existsSync } from "fs";\nexport function f(existsSync: (p: string) => boolean) { return existsSync("x"); }';
     expect(coreClosure(src, ["f"]).imports).toEqual([]);

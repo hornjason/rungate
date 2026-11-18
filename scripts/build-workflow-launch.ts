@@ -317,13 +317,14 @@ function readCore(source: string, core: readonly string[]): CoreReading {
         note(`${n} (re-exported from ${from.text})`);
         continue;
       }
-      const local = checker.getExportSpecifierLocalTargetSymbol(decl)?.declarations?.[0];
+      const localSymbol = checker.getExportSpecifierLocalTargetSymbol(decl);
+      const local = localSymbol?.declarations?.[0];
       const imp = importedFrom(local);
       if (imp !== null) note(`${n} (from ${imp}, re-exported)`);
       else {
         // Named by its own declaration, not the alias it is exported under.
         const node = topLevelNode(local, sf);
-        if (node) enqueue(node, boundNames(node)[0] ?? n);
+        if (node) enqueue(node, localSymbol?.name ?? n);
       }
       continue;
     }
