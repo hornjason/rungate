@@ -466,8 +466,10 @@ check proving it can fail against this file and not against a fixture.
       needs: test
 - [ ] CRC-C2: A PR cannot merge while any bug-review or security-review finding is open.
       needs: test
-- [ ] CRC-C3: A false positive clears by closing the thread with a short reason.
+- [x] CRC-C3: A false positive clears by closing the thread with a short reason.
       needs: test
+      proved-by: test/ai-review-threads.test.ts, the `CRC-C3` describe (`-t CRC-C3`, 5 pass, 0 fail, 2026-11-18, on the PR that closes #2306): a thread the review opened and somebody resolved with no reply is named on the conversation once per thread, on the next review round; `PROTECT-2` binds the half that blocks the merge.
+      fingerprint: 9836ba62
 - [x] CRC-C4: A finding clears on its own if a later commit fixes it.
       needs: test
       proved-by: test/ai-review-workflow.test.ts (AC-3b) — 371 pass, 0 fail, 2026-10-28
@@ -1828,6 +1830,13 @@ finding nobody answered blocks the merge*; CRC-C3's own sentence is about
 (`reference/clearing-a-false-positive.md`) rather than an executed check. A
 procedure a person follows is not a test, and ticking it on the strength of
 the other half is the move this criterion has already been burned by.
+
+**#2306 executed the clearing half, and CRC-C3 is ticked from that test.**
+Each review round names, on the pull request's conversation, every thread it
+opened that was resolved with no reply. The `CRC-C3` describe in
+`test/ai-review-threads.test.ts` proves it. GitHub has no workflow event for a
+resolution, so the report comes on the next push, and a thread resolved after
+the last push is not seen. That limit is written into the procedure file.
 
 **CRC-E8 does not belong in this phase and is moved to the table above it.**
 With one account and `enforce_admins: true`, requiring an approving review
