@@ -28,7 +28,7 @@
  * issues it is itself demoting, and touches no others. The cause and the
  * cleanup are one action.
  */
-import { addBlockedBy } from "../lib/blocked-by-write";
+import { addBlockers } from "../lib/blocked-by-write";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { spawnSync } from "child_process";
 import { isAbsolute, join, relative, sep } from "path";
@@ -350,7 +350,7 @@ const LIVE_DECOMPOSE: DecomposeGitHub = {
   },
   addBlockedBy: async (repo, blocked, blocker) => {
     // REST, not `issue edit --add-blocked-by`, which an older runner's gh lacks (#2345).
-    addBlockedBy(repo, blocked, blocker, args => gh([...args]));
+    addBlockers(repo, blocked, [blocker], args => gh([...args]), BLOCKER_IDS);
   },
   blockedBy: async (repo, issue) => {
     const out = gh([
@@ -667,6 +667,9 @@ export interface PlaceGitHub {
   openIssues: (repo: string) => Promise<{ number: number; title: string; body: string | null; milestone: string | null }[]>;
   setMilestone: (repo: string, number: number, title: string) => Promise<void>;
 }
+
+/** Each blocker's database id, read once per run however many issues it blocks (#2345). */
+const BLOCKER_IDS = new Map<number, number>();
 
 const LIVE_PLACE: PlaceGitHub = {
   milestones: LIVE_GITHUB.milestones,
