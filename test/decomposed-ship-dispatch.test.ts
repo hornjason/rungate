@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { stripComments } from "./helpers/strip-comments";
-import { shipWorktreeIdentity } from "./helpers/ship-block";
+import { securityHelpersRegion, shipWorktreeIdentity } from "./helpers/ship-block";
 
 /**
  * Regression coverage for issue #66 — SC-411.
@@ -264,7 +264,7 @@ function loadRunDecomposedShip(deps: {
     if (a === -1 || b === -1) throw new Error(`ship.js is missing the ${name}-START/END markers`);
     return shipSource.slice(a, b);
   };
-  const pathTableBlocks = `${marked("SECURITY-HELPERS")}\n${marked("COLLECT-CLAIM")}`;
+  const pathTableBlocks = `${securityHelpersRegion(shipSource)}\n${marked("COLLECT-CLAIM")}`;
 
   // #218's guard, injected for the same reason as the one above: a stub
   // would let this block and the real one disagree about which repository a

@@ -60,7 +60,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
-import { shipWorktreeIdentity } from "./helpers/ship-block";
+import { securityHelpersRegion, shipWorktreeIdentity } from "./helpers/ship-block";
 import { join } from "path";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -225,7 +225,7 @@ function loadCollectAgentWork(agentImpl: (p: string, o: unknown) => unknown) {
     // #400 gave staging and the claim audit one path-safety decider, and it
     // lives here. It also carries the real `shellQuote`, which this loader
     // used to inject a copy of.
-    markedBlock("SECURITY-HELPERS"),
+    securityHelpersRegion(shipSource),
     markedBlock("COLLECT-DESTINATION"),
     markedBlock("COLLECT-CLAIM"),
     // Every refusal preserves the worktrees before returning (#228), so the
@@ -328,7 +328,7 @@ function loadRunImplement(opts: { ceremony?: unknown; buildResult: unknown }) {
   const reportedPathRefusal = new Function(
     "PROJECT_ROOT",
     "log",
-    `${marked("SECURITY-HELPERS")}\n${marked("COLLECT-CLAIM")}\n`
+    `${securityHelpersRegion(shipSource)}\n${marked("COLLECT-CLAIM")}\n`
       + `${marked("FILES-CHANGED-SHAPE")}\nreturn reportedPathRefusal;`,
   )(REPO_ROOT, () => {});
 

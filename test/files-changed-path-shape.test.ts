@@ -50,7 +50,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { shipWorktreeIdentity } from "./helpers/ship-block";
+import { securityHelpersRegion, shipWorktreeIdentity } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -96,7 +96,7 @@ function loadClaimAudit(): {
   return new Function(
     "PROJECT_ROOT",
     "log",
-    `${block("SECURITY-HELPERS")}\n${block("COLLECT-CLAIM")}\nreturn { auditWorktreeClaims, pathRefusal }`,
+    `${securityHelpersRegion(shipSource)}\n${block("COLLECT-CLAIM")}\nreturn { auditWorktreeClaims, pathRefusal }`,
   )("/repo", () => {}) as never;
 }
 
@@ -477,7 +477,7 @@ function loadRunDecomposedShip(agent: (p: string, o: { label: string }) => Promi
     // claim audit's own `claimKey` and `pathRefusal`, so those two blocks are
     // evaluated in too — from `marked`, the same source every other block
     // here comes from, so a mutant stays wholly a mutant.
-    `${marked("SECURITY-HELPERS")}\n${marked("COLLECT-CLAIM")}\n`
+    `${securityHelpersRegion(shipSource)}\n${marked("COLLECT-CLAIM")}\n`
       + `${marked("FILES-CHANGED-SHAPE")}\n${marked("DECOMPOSED-SHIP")}\nreturn runDecomposedShip;`,
   );
   const run = factory(

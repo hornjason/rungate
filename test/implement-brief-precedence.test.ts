@@ -25,7 +25,7 @@ import {
   TASK_SOURCES,
 } from "../lib/brief-precedence";
 import { enclosingChain } from "../lib/reachability";
-import { shipWorktreeIdentity } from "./helpers/ship-block";
+import { securityHelpersRegion, shipWorktreeIdentity } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -343,7 +343,7 @@ function reportedPathRefusalFromSource(): (b: unknown, label: string) => string 
   return new Function(
     "PROJECT_ROOT",
     "log",
-    `${b("SECURITY-HELPERS")}\n${b("COLLECT-CLAIM")}\n${b("FILES-CHANGED-SHAPE")}\nreturn reportedPathRefusal;`,
+    `${securityHelpersRegion(shipSource)}\n${b("COLLECT-CLAIM")}\n${b("FILES-CHANGED-SHAPE")}\nreturn reportedPathRefusal;`,
   )("/repo", () => {}) as (b: unknown, label: string) => string | null;
 }
 
@@ -415,7 +415,7 @@ function loadRunDecomposedShip(
     // #830 added a fifth, and it reaches further: the shape block's new path
     // check asks COLLECT-CLAIM's `claimKey` and SECURITY-HELPERS'
     // `pathRefusal`, so both are evaluated in here too.
-    `${slice("// ──── SECURITY-HELPERS-START ────", "// ──── SECURITY-HELPERS-END ────")}\n`
+    `${securityHelpersRegion(shipSource)}\n`
       + `${slice("// ──── COLLECT-CLAIM-START ────", "// ──── COLLECT-CLAIM-END ────")}\n`
       + `${slice("// ──── FILES-CHANGED-SHAPE-START ────", "// ──── FILES-CHANGED-SHAPE-END ────")}\n${block}\nreturn runDecomposedShip;`,
   )(

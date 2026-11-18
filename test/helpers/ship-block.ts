@@ -41,18 +41,35 @@ export function worktreeIdentityRegion(
   source: string = readFileSync(SHIP_PATH, "utf-8"),
   bundle: string = worktreeRepoBundle(),
 ): string {
-  const start = source.indexOf("// ──── WORKTREE-IDENTITY-START ────");
-  const end = source.indexOf("// ──── WORKTREE-IDENTITY-END ────");
+  return `${bundle}\n${markedRegion(source, "WORKTREE-IDENTITY")}`;
+}
+
+/**
+ * ship.js's SECURITY-HELPERS region, START marker through the line before END
+ * (#2290 wave 4-A1, plan on #2290). Refused, naming the markers, if either is
+ * missing or doubled. Wave 4-B moves its copies of lib/workflow-security.ts
+ * into the launch bundle; then only this function changes for its readers.
+ */
+export function securityHelpersRegion(source: string = readFileSync(SHIP_PATH, "utf-8")): string {
+  return markedRegion(source, "SECURITY-HELPERS");
+}
+
+/**
+ * One marked region, by literal markers. The two names are spelled out at
+ * each call so the anchors stay literal where a reader greps for them.
+ */
+function markedRegion(source: string, name: "WORKTREE-IDENTITY" | "SECURITY-HELPERS"): string {
+  const START = name === "WORKTREE-IDENTITY" ? "// ──── WORKTREE-IDENTITY-START ────" : "// ──── SECURITY-HELPERS-START ────";
+  const END = name === "WORKTREE-IDENTITY" ? "// ──── WORKTREE-IDENTITY-END ────" : "// ──── SECURITY-HELPERS-END ────";
+  const start = source.indexOf(START);
+  const end = source.indexOf(END);
   if (start === -1 || end === -1 || end < start) {
-    throw new Error("ship.js is missing the WORKTREE-IDENTITY-START/END markers");
+    throw new Error(`ship.js is missing the ${name}-START/END markers`);
   }
-  if (
-    source.indexOf("// ──── WORKTREE-IDENTITY-START ────", start + 1) !== -1 ||
-    source.indexOf("// ──── WORKTREE-IDENTITY-END ────", end + 1) !== -1
-  ) {
-    throw new Error("ship.js carries the WORKTREE-IDENTITY markers more than once; a second copy survives any change to the first");
+  if (source.indexOf(START, start + 1) !== -1 || source.indexOf(END, end + 1) !== -1) {
+    throw new Error(`ship.js carries the ${name} markers more than once; a second copy survives any change to the first`);
   }
-  return `${bundle}\n${source.slice(start, end)}`;
+  return source.slice(start, end);
 }
 
 /** ship.js's own `worktreeIdentity`, built from the region rather than stubbed. */

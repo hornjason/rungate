@@ -22,7 +22,7 @@ import { join } from "path";
 import { dependencyWaves, wavePlanSummary } from "../lib/decomposition-waves";
 import { assertMarkedBlockReachable } from "../lib/reachability";
 import { structuralCut } from "../lib/source-slice";
-import { shipWorktreeIdentity } from "./helpers/ship-block";
+import { securityHelpersRegion, shipWorktreeIdentity } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const RUN_REPO = "owner/project";
@@ -422,7 +422,7 @@ function loadRunDecomposedShip(briefedAgent: BriefedAgentFake) {
     // claim audit's own `claimKey` and `pathRefusal`, so those two blocks are
     // evaluated here too — real, never stubbed, for the reason every other
     // injection in this factory states.
-    `${marked("SECURITY-HELPERS")}\n${marked("COLLECT-CLAIM")}\n`
+    `${securityHelpersRegion(shipSource)}\n${marked("COLLECT-CLAIM")}\n`
       + `${shapeBlock}\n${block}\nreturn runDecomposedShip;`,
   );
 

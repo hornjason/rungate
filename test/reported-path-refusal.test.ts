@@ -103,7 +103,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { shipWorktreeIdentity, worktreeIdentityRegion } from "./helpers/ship-block";
+import { securityHelpersRegion, shipWorktreeIdentity, worktreeIdentityRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -141,7 +141,7 @@ function block(name: string): string {
  */
 function loadPhases(mutate: (src: string) => string = s => s): Phases {
   const src = mutate(
-    `${block("SECURITY-HELPERS")}\n${block("FILES-CHANGED-SHAPE")}\n${block("COLLECT-CLAIM")}`,
+    `${securityHelpersRegion(shipSource)}\n${block("FILES-CHANGED-SHAPE")}\n${block("COLLECT-CLAIM")}`,
   );
   return new Function(
     "PROJECT_ROOT",
@@ -455,7 +455,7 @@ describe("#830: the refusal is delivered, and it ends the sub-issue that reporte
       "worktreeIdentity", "REPO", "taskSourceRefusal",
       "establishRunRef", "integrateWave", "waveNeedsIntegration",
       "measureLaunchBase",
-      `${block("SECURITY-HELPERS")}\n${block("COLLECT-CLAIM")}\n`
+      `${securityHelpersRegion(shipSource)}\n${block("COLLECT-CLAIM")}\n`
         + `${block("FILES-CHANGED-SHAPE")}\n${block("DECOMPOSED-SHIP")}\nreturn runDecomposedShip;`,
     );
     const spawned: string[] = [];
@@ -561,5 +561,19 @@ describe("#2421: the one helper that reaches ship.js's WORKTREE-IDENTITY region"
 
   test("#2421 AC-2: the live ship.js still yields worktreeIdentity through it", () => {
     expect(typeof shipWorktreeIdentity()).toBe("function");
+  });
+});
+
+describe("#2680: the one helper that reaches ship.js's security-helpers region", () => {
+  test("#2680 AC-1: a source with no markers, or with them twice, is refused, naming them", () => {
+    expect(() => securityHelpersRegion("function pathRefusal() {}")).toThrow(/SECURITY-HELPERS-START\/END markers/);
+    const once = "// ──── SECURITY-HELPERS-START ────\nfunction pathRefusal() { return null }\n// ──── SECURITY-HELPERS-END ────\n";
+    expect(() => securityHelpersRegion(once + once)).toThrow(/more than once/);
+  });
+
+  test("#2680 AC-2: the live ship.js region still yields pathRefusal through it", () => {
+    const pathRefusal = new Function(`${securityHelpersRegion()}\nreturn pathRefusal;`)() as (p: string) => unknown;
+    expect(pathRefusal("lib/ok.ts")).toBeNull();
+    expect(pathRefusal("../escape.ts")).not.toBeNull();
   });
 });

@@ -47,7 +47,7 @@ import { spawnSync } from "child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { shipWorktreeIdentity } from "./helpers/ship-block";
+import { securityHelpersRegion, shipWorktreeIdentity } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP = join(REPO_ROOT, "workflows", "ship.js");
@@ -304,7 +304,7 @@ describe("#611 AC-6: under the mutant, the annotated element reaches the collect
       // SAME `src` the rest of this factory reads. Pulling them from the real
       // source instead would let the mutant run half-real, which is the thing
       // this file exists to rule out.
-      `${slice("SECURITY-HELPERS")}\n${slice("COLLECT-CLAIM")}\n`
+      `${securityHelpersRegion(src)}\n${slice("COLLECT-CLAIM")}\n`
         + `${slice("FILES-CHANGED-SHAPE")}\n${slice("DECOMPOSED-SHIP")}\nreturn runDecomposedShip;`,
     );
     const run = factory(
@@ -345,7 +345,7 @@ describe("#611 AC-6: under the mutant, the annotated element reaches the collect
     };
     return new Function(
       "PROJECT_ROOT", "log",
-      `${slice("SECURITY-HELPERS")}\n${slice("COLLECT-CLAIM")}\nreturn auditWorktreeClaims`,
+      `${securityHelpersRegion(shipSource)}\n${slice("COLLECT-CLAIM")}\nreturn auditWorktreeClaims`,
     )("/repo", () => {}) as (r: unknown) => { violations: Array<{ detail: string }> };
   }
 
