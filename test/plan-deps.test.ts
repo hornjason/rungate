@@ -1233,170 +1233,39 @@ describe("SC-2606: the live Convergence shape — phase order alone is zero link
 });
 
 /**
- * `board: { phaseOrder: false }`: a family whose spec opts out gets no
- * phase-order links. Jason's call of 2026-11-17, a stopgap ahead of #2331:
- * there, phases set priority and only real blocked-by links hold work back.
+ * `board: { phaseOrder: false }` (#2352) opted a family out of phase-order
+ * links, a stopgap ahead of ADR-021. There is no phase order left to opt out
+ * of, and review round 2 of #2439 found the opt-out still returning early —
+ * so a family that set it lost its DECLARED links too. The setting is no
+ * longer read by plan-deps at all.
  */
-describe("phaseOrder: false — a family that opts out of phase-order links", () => {
-  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("fs") as typeof import("fs");
-  const { tmpdir } = require("os") as typeof import("os");
+describe("SC-2606: board.phaseOrder no longer gates anything — declared links are written whatever it says", () => {
   const spec = (board: string) => `---\ndoc-type: spec\nboard: ${board}\n---\n\n# A spec\n\n- [ ] SC-9401: one\n`;
   const tree = (specs: Record<string, string>) => {
-    const root = mkdtempSync(join(tmpdir(), "plan-deps-phase-order-"));
-    mkdirSync(join(root, "specs"), { recursive: true });
-    for (const [name, text] of Object.entries(specs)) writeFileSync(join(root, "specs", name), text);
-    return root;
+    const dir = mkdtempSync(join(tmpdir(), "plan-deps-phase-order-"));
+    mkdirSync(join(dir, "specs"), { recursive: true });
+    for (const [name, text] of Object.entries(specs)) writeFileSync(join(dir, "specs", name), text);
+    return dir;
   };
-  const spy = () => {
-    const calls: string[] = [];
-    let read = 0;
-    const gh: PlanDepsGitHub = {
-      createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
-      readIssues: async () => {
-        read++;
-        return [iss(10, 0), iss(20, 1)];
-      },
-      readPlans: declaring([20, 10]),
-      addBlockers: async (_repo, blocked, blockers) => void calls.push(`#${blocked} +${[...blockers].join(",")}`),
-    };
-    return { gh, calls, reads: () => read };
-  };
-  async function run(argv: string[], gh: PlanDepsGitHub) {
-    const out: string[] = [];
-    const [log, err] = [console.log, console.error];
-    console.log = (x: string) => void out.push(String(x));
-    console.error = (x: string) => void out.push(String(x));
-    try {
-      return { code: await planDepsMain(argv, gh), text: out.join("\n") };
-    } finally {
-      [console.log, console.error] = [log, err];
-    }
+  for (const value of ["false", "true", "flase"]) {
+    test(`phaseOrder: ${value} — the declared link is written, and the run exits 0`, async () => {
+      const dir = tree({ "C-SPEC.md": spec(`{ scope: active, prefix: Convergence, phaseOrder: ${value} }`) });
+      try {
+        const calls: string[] = [];
+        const gh: PlanDepsGitHub = {
+          createClient: (() => ({}) as never) as PlanDepsGitHub["createClient"],
+          readIssues: async () => [iss(10, 0), iss(20, 1)],
+          readPlans: declaring([20, 10]),
+          addBlockers: async (_repo, blocked, blockers) => void calls.push(`#${blocked} +${[...blockers].join(",")}`),
+        };
+        const code = await planDepsMain(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", dir], gh);
+        expect(code).toBe(0);
+        expect(calls).toEqual(["#20 +10"]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   }
-
-  test("the family's spec says phaseOrder: false — nothing is written, one line says why, exit 0", async () => {
-    const root = tree({ "C-SPEC.md": spec("{ scope: active, prefix: Convergence, phaseOrder: false }") });
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code, got.text).toBe(0);
-      expect(s.calls).toEqual([]);
-      expect(got.text).toContain("Convergence: specs/C-SPEC.md declares board.phaseOrder: false, so no phase-order links are written");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("the control: the same family with the key absent, or true, writes its declared links as before", async () => {
-    for (const board of ["{ scope: active, prefix: Convergence }", "{ scope: active, prefix: Convergence, phaseOrder: true }"]) {
-      const root = tree({ "C-SPEC.md": spec(board) });
-      try {
-        const s = spy();
-        const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-        expect(got.code, got.text).toBe(0);
-        expect(s.calls, board).toEqual(["#20 +10"]);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    }
-  });
-
-  test("another family's opt-out changes nothing for this one", async () => {
-    const root = tree({
-      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
-      "R-SPEC.md": spec("{ scope: active, prefix: Refresh, phaseOrder: false }"),
-    });
-    try {
-      const s = spy();
-      await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(s.calls).toEqual(["#20 +10"]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("two specs of one family that disagree refuse, before anything is read or written", async () => {
-    const root = tree({
-      "A-SPEC.md": spec("{ scope: active, prefix: Convergence, phaseOrder: false }"),
-      "B-SPEC.md": spec("{ scope: active, prefix: Convergence, phaseOrder: true }"),
-    });
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code).toBe(REFUSAL_EXIT);
-      expect(got.text).toContain("specs/A-SPEC.md says false and specs/B-SPEC.md says true");
-      expect(s.calls).toEqual([]);
-      expect(s.reads(), "the tracker was read for a family whose setting cannot be read").toBe(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  // Review of #2352: three readings the first round let through.
-  test("a value that is neither true nor false refuses by name, never reads as on", async () => {
-    for (const value of ["flase", "no"]) {
-      const root = tree({ "C-SPEC.md": spec(`{ scope: active, prefix: Convergence, phaseOrder: ${value} }`) });
-      try {
-        const s = spy();
-        const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-        expect(got.code, value).toBe(REFUSAL_EXIT);
-        expect(got.text).toContain("specs/C-SPEC.md");
-        expect(got.text).toContain("phaseOrder");
-        expect(s.calls).toEqual([]);
-        expect(s.reads()).toBe(0);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    }
-  });
-
-  test("a deferred spec carrying the family's prefix does not decide its phase order", async () => {
-    const root = tree({
-      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
-      "OLD-SPEC.md": spec("{ scope: deferred, prefix: Convergence, phaseOrder: false }"),
-    });
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code, got.text).toBe(0);
-      expect(s.calls).toEqual(["#20 +10"]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a deferred spec's bad value does not block the active family (review of #2352, round 2)", async () => {
-    const root = tree({
-      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
-      "OLD-SPEC.md": spec("{ scope: deferred, prefix: Convergence, phaseOrder: flase }"),
-    });
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code, got.text).toBe(0);
-      expect(s.calls).toEqual(["#20 +10"]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a spec that cannot be read refuses as UNMEASURED, naming it, instead of throwing", async () => {
-    const root = tree({
-      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
-      "BROKEN-SPEC.md": spec("{ scope: active, prefix: Other }"),
-    });
-    // Listed by the sweep, refused by the read: no permission to open it.
-    require("fs").chmodSync(join(root, "specs", "BROKEN-SPEC.md"), 0o000);
-    try {
-      const s = spy();
-      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
-      expect(got.code).toBe(REFUSAL_EXIT);
-      expect(got.text).toContain("UNMEASURED");
-      expect(got.text).toContain("BROKEN-SPEC.md");
-      expect(s.reads()).toBe(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
 
 /**

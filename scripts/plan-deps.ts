@@ -40,10 +40,6 @@ import { createGitHubClient } from "../lib/github";
 import { declaredDependencies, dependencyPlan, groupByBlocked, readDeclaredPlans, unreadPlansThatMatter } from "../lib/spec-deps";
 import type { DeclaredPlan, DepEdge, DepIssue, UnreadablePlan } from "../lib/spec-deps";
 import { ghWithoutGhToken, inMilestoneFamily, readLiveIssues, readMilestonePrefix } from "../lib/live-issues";
-import { existsSync, readFileSync } from "fs";
-import { join } from "path";
-import { specFilesIn } from "../lib/board-mirror";
-import { phaseOrderFor } from "../lib/spec-placement";
 
 /**
  * THE one non-zero exit. One site, so `test/plan-deps.test.ts` can build a
@@ -258,44 +254,11 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
 
   const prefix = prefixRead.prefix;
 
-  // `board: { phaseOrder: false }`: the family's spec opts out of phase-order
-  // links. Read before the network, like the prefix, so a setting that cannot
-  // be read is refused without a tracker call, and an opt-out writes nothing
-  // at all. Absent specs/ is a tree where nothing can opt out, so it is on.
+  // `board: { phaseOrder: false }` (#2352) let a family opt out of the
+  // phase-order links. Since ADR-021 there are none to opt out of, so the
+  // setting is not read here: a family that set it still gets the links its
+  // accepted plans declare (review of #2439, round 2).
   const root = values["project-root"] ?? process.cwd();
-  if (existsSync(join(root, "specs"))) {
-    const sweep = specFilesIn(root);
-    if (sweep.reading === "UNMEASURED") {
-      return refuse(values.json, `UNMEASURED — the specs could not be listed to read board.phaseOrder: ${sweep.reasons.join("; ")}`);
-    }
-    // A listed spec the read refuses is UNMEASURED, named, like every other
-    // spec sweep — never an uncaught throw (review of #2352).
-    const texts: { path: string; text: string }[] = [];
-    for (const p of sweep.paths) {
-      try {
-        texts.push({ path: p, text: readFileSync(join(root, p), "utf-8") });
-      } catch (e) {
-        return refuse(values.json, `UNMEASURED — ${p} could not be read to find board.phaseOrder: ${(e as Error).message}`);
-      }
-    }
-    const order = phaseOrderFor(texts, prefix);
-    if (order.kind === "unreadable") return refuse(values.json, `UNMEASURED — ${order.why}`);
-    if (order.kind === "off") {
-      const why = `${prefix}: ${order.spec} declares board.phaseOrder: false, so no phase-order links are written; real blocked-by links are untouched`;
-      if (values.json) {
-        console.log(
-          JSON.stringify(
-            { reading: "PHASE_ORDER_OFF", unmeasuredReasons: [], phases: [], missing: [], present: [], extra: [], unphased: [], frontier: null, unreadablePlans: [], results: [], wrote: "phase-order-off", why },
-            null,
-            2,
-          ),
-        );
-      } else {
-        console.log(`plan-deps: ${why}`);
-      }
-      return 0;
-    }
-  }
 
   // What planning declared (SC-2606), read before the network like the
   // settings above, so a tree whose ADRs cannot be read is refused without a
