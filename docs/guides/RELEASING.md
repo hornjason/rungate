@@ -93,8 +93,10 @@ gh pr create -R hornjason/rungate --label ai-review-override \
 #    also says "does not complete SC-N", one phrase per id.
 
 # 9. Merge BY HAND once `test` passes. Never --auto on this label.
+#    `--by-hand`, because the label refuses the arming mode (WAIVED_REVIEW,
+#    no SHA printed). It still refuses a head the branch has moved past.
 ( set -euo pipefail
-  SHA=$(<T> bun scripts/verify-merge-ref.ts --pr <N>)
+  SHA=$(<T> bun scripts/verify-merge-ref.ts --pr <N> --by-hand)
   gh pr merge <N> -R hornjason/rungate --squash --match-head-commit "$SHA"
   <T> bun scripts/verify-merge-ref.ts --pr <N> --after-merge
   git -C ~/Projects/rungate worktree remove ~/Projects/rg-wt-rel-XYZ )
