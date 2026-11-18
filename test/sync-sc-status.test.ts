@@ -391,6 +391,25 @@ describe("#2360: --project-root points the run at the consumer's tree", () => {
     expect(resolveSyncRoot(["--project-root", "--dry-run"])).toHaveProperty("refusal");
   });
 
+  test("review of #2365: an IMPORTER's --project-root never repoints this module's defaults", () => {
+    // finding-promotion, create-sc and board-scope import the readers here and
+    // may be run with their own --project-root. Only this script, run as the
+    // entry point, reads the flag; an importer keeps the package's own specs.
+    const dir = mkdtempSync(join(tmpdir(), "rg-2365-importer-"));
+    try {
+      const probe = join(dir, "probe.ts");
+      writeFileSync(
+        probe,
+        `import { findUncheckedSCs } from ${JSON.stringify(join(PKG, "scripts", "sync-sc-status.ts"))};\nconsole.log("unchecked=" + findUncheckedSCs().length);\n`,
+      );
+      const r = spawnSync("bun", [probe, "--project-root", join(dir, "nowhere")], { encoding: "utf-8", timeout: 60_000 });
+      const n = Number(/unchecked=(\d+)/.exec(r.stdout)?.[1] ?? "-1");
+      expect(n, `the import read the importer's --project-root: ${r.stdout}${r.stderr}`).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("it is a known argument, so it does not trip the unknown-argument refusal", () => {
     expect(unknownSyncArgs(["--project-root", "/x", "--dry-run", "--only", "SC-9471"])).toEqual([]);
   });

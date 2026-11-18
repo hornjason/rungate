@@ -80,7 +80,12 @@ export function resolveSyncRoot(argv: readonly string[]): { root: string } | { r
   return { root: value };
 }
 
-const ROOT_READING = resolveSyncRoot(process.argv.slice(2));
+// Only as the ENTRY POINT (review of #2365). finding-promotion, create-sc and
+// board-scope import the readers below and may carry a --project-root of their
+// own; an importer keeps this package's tree, exactly as before #2360.
+const ROOT_READING: ReturnType<typeof resolveSyncRoot> = import.meta.main
+  ? resolveSyncRoot(process.argv.slice(2))
+  : { root: join(import.meta.dir, "..") };
 const ROOT = "root" in ROOT_READING ? ROOT_READING.root : join(import.meta.dir, "..");
 const SPECS_DIR = join(ROOT, "specs");
 const TEST_DIR = join(ROOT, "test");
