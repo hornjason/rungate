@@ -316,6 +316,33 @@ describe("SC-2782: rungate consumer-triage --write gives the verdict with no han
     expect(again.wrote.filter(w => w.number === 300).map(w => w.op)).toEqual(["milestone", "comment"]);
   });
 
+  // Review of #2367, round 3: the stopped-run branch end to end through the
+  // CLI. A vague report places nowhere, so only the milestone-plus-label
+  // evidence decides it: with the label the run is finished with the marker
+  // alone; without it a person set the milestone and nothing is written.
+  test("#2364 review: through the CLI, milestone plus queue label finishes the run with the marker only; milestone alone is left", async () => {
+    const vague = "Something is off and I cannot say where.";
+    const finished = fakeGitHub({
+      openIssues: async () => [
+        { ...ACTIVE_WORK, labels: ["engine"] },
+        { ...consumer(304, vague, P9), labels: [CONSUMER_LABEL, "engine"] },
+      ],
+    });
+    expect((await run(["--write"], finished.gh)).code).toBe(0);
+    const ops = finished.wrote.filter(w => w.number === 304);
+    expect(ops.map(w => w.op)).toEqual(["comment"]);
+    expect(verdictIn([ops[0]!.value])).toBe("ACTIVE");
+
+    const left = fakeGitHub({
+      openIssues: async () => [
+        { ...ACTIVE_WORK, labels: ["engine"] },
+        { ...consumer(305, vague, P9), labels: [CONSUMER_LABEL] },
+      ],
+    });
+    await run(["--write"], left.gh);
+    expect(left.wrote.filter(w => w.number === 305)).toEqual([]);
+  });
+
   test("an issue that already carries a verdict marker is never triaged again", async () => {
     const { gh, wrote } = fakeGitHub();
     await run(["--write"], gh);
