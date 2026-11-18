@@ -121,6 +121,9 @@ jobs:
           GH_TOKEN: \${{ github.token }}
           TRUSTED: '${trusted}'
         run: |
+          # The default run shell has no pipefail, so a failed read would end
+          # in a clean exit and the missed issues would go unlabelled silently.
+          set -o pipefail
           SINCE="$(date -u -d '${CONSUMER_INTAKE_SWEEP_DAYS} days ago' +%Y-%m-%dT%H:%M:%SZ)"
           export SINCE
           gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&since=$SINCE&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= env.SINCE) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("${CONSUMER_LABEL}") | not) | .number' \\

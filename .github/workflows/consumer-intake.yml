@@ -1,4 +1,4 @@
-# generated-sha: ac6663ba86515b07
+# generated-sha: a47f6948f117c626
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -42,6 +42,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TRUSTED: '["OWNER","MEMBER","COLLABORATOR"]'
         run: |
+          # The default run shell has no pipefail, so a failed read would end
+          # in a clean exit and the missed issues would go unlabelled silently.
+          set -o pipefail
           SINCE="$(date -u -d '2 days ago' +%Y-%m-%dT%H:%M:%SZ)"
           export SINCE
           gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&since=$SINCE&per_page=100" --jq '.[] | select(.pull_request == null) | select(.created_at >= env.SINCE) | select(.author_association as $a | env.TRUSTED | fromjson | index($a) | not) | select([.labels[].name] | index("from-consumer") | not) | .number' \

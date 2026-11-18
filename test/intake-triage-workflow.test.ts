@@ -117,6 +117,8 @@ describe("#2379: the daily run labels an outside reporter's recent issue the ope
     expect(sweep()!.run).toContain(`${CONSUMER_INTAKE_SWEEP_DAYS} days ago`);
     expect(sweep()!.env?.TRUSTED).toBe(JSON.stringify(TRUSTED_ASSOCIATIONS));
     expect(sweep()!.run, "an event value spliced into the script").not.toContain("${{");
+    // A failed tracker read must fail the step, not vanish into the pipe.
+    expect(sweep()!.run).toContain("set -o pipefail");
   });
 
   test("its filter picks only a recent, open, unlabelled issue by an untrusted author", () => {
