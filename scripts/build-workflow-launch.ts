@@ -215,7 +215,8 @@ export interface CoreClosure {
 
 /**
  * The closure of `core` in a module's source: every top-level declaration the
- * named exports reach, and every value import any of them touches.
+ * named exports reach, and every value import, dynamic `import()` or
+ * `require()` any of them touches.
  *
  * The source is transpiled first, so a type-only import, which the sandbox
  * never sees, is not counted. An identifier that is a property name or an
@@ -270,6 +271,23 @@ export function coreClosure(source: string, core: readonly string[]): CoreClosur
     if (reached.has(name)) continue;
     reached.add(name);
     const visit = (n: ts.Node): void => {
+      // A dynamic `import()` or a `require()` loads a module as surely as an
+      // import statement, and the sandbox has neither (review of #2397).
+      if (ts.isCallExpression(n)) {
+        const callee = n.expression;
+        const loader =
+          callee.kind === ts.SyntaxKind.ImportKeyword
+            ? "import()"
+            : ts.isIdentifier(callee) && callee.text === "require" && !decls.has("require")
+              ? "require()"
+              : null;
+        if (loader !== null) {
+          const arg = n.arguments[0];
+          const what = arg && ts.isStringLiteralLike(arg) ? arg.text : "a computed module";
+          const line = `${loader} of ${what} (via ${name})`;
+          if (!touched.includes(line)) touched.push(line);
+        }
+      }
       if (ts.isIdentifier(n) && !isNameOnly(n)) {
         const t = n.text;
         if (imports.has(t)) {

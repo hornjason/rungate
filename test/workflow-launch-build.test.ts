@@ -169,6 +169,15 @@ describe("#2289 / SC-2774: each copied module exports a core that imports nothin
     // A type-only import is erased before the sandbox sees the code.
     expect(coreClosure(src, ["typed"]).imports).toEqual([]);
     expect(coreClosure(src, ["absent"]).missing).toEqual(["absent"]);
+    // Review of #2397: a dynamic import() or a require() is a module load too.
+    const dynamic = [
+      'export async function lazy() { return (await import("node:fs")).existsSync("x"); }',
+      'export function old() { return require("child_process"); }',
+      "export function computed(m: string) { return import(m); }",
+    ].join("\n");
+    expect(coreClosure(dynamic, ["lazy"]).imports).toEqual(["import() of node:fs (via lazy)"]);
+    expect(coreClosure(dynamic, ["old"]).imports).toEqual(["require() of child_process (via old)"]);
+    expect(coreClosure(dynamic, ["computed"]).imports).toEqual(["import() of a computed module (via computed)"]);
     // A property name that happens to match an import is not a use of it.
     expect(coreClosure('import { x } from "y";\nexport function f(o: { x: number }) { return o.x; }', ["f"]).imports).toEqual([]);
   });
