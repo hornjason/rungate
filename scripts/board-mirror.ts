@@ -279,8 +279,8 @@ export function readyPopulation<T extends { state: string; status: string }>(
 }
 
 /**
- * Ready's incumbents that have fallen outside the active milestone (#2007,
- * SC-2741).
+ * Ready's incumbents that no phase milestone places any more (#2007, #2430;
+ * before ADR-021 this was "outside the active milestone").
  *
  * `isReady` answers who may ENTER Ready, so an unblocked, unclaimed card
  * already there computes `to = Ready` and its change was filtered out as no
@@ -377,7 +377,7 @@ export function splitReadyChanges<
 ): {
   readyWritable: T[];
   heldByCap: T[];
-  /** Eligible promotions outside the active milestone — waiting, not held by the cap. */
+  /** Eligible promotions no phase milestone places — waiting, not held by the cap (#2430). */
   outOfScope: T[];
   selection: ReturnType<typeof selectReady>;
   /**
@@ -758,8 +758,8 @@ export async function main(argv: string[]): Promise<number> {
   //
   // Read only under `--ready` with a repository, the one case that writes
   // Ready. With no reading there is no focus — not a focus of "nothing",
-  // which `activeMilestone` reports as `title: null` and which puts every
-  // incumbent out of scope.
+  // which `activeMilestone` reports as `title: null`. Since #2430 the focus
+  // is reported and orders nothing here; scope does not read it.
   const openInRepo =
     values.ready && repo
       ? await readOpenIssueMilestones((q, v) => client.graphql(q, v), repo.owner, repo.name)
@@ -784,10 +784,12 @@ export async function main(argv: string[]): Promise<number> {
   // #2007: an incumbent outside the focus, which `isReady` alone keeps. A card
   // already changing (blocked, so leaving for Backlog) is not added twice.
   const changing = new Set(readyChanges.map(c => c.item.number));
-  // Only on a focus that was READ (#2037). An unread focus has `title: null`,
-  // and every incumbent is out of scope against that — a missing `--repo`
-  // would empty the lane.
-  if (openInRepo !== null) {
+  // On every `--ready` run, read focus or not (#2430). #2037 ran this only on
+  // a focus that was read, because an unread one put every incumbent out of
+  // scope. Scope is now "carries a phase milestone, or is expedited", read
+  // off the card itself, so a missing `--repo` or a failed repository read
+  // must not keep an unplaced card in Ready.
+  if (values.ready) {
     for (const d of scopeDemotions(writable, active, expediteLabel)) {
       if (!changing.has(d.item.number)) readyChanges.push(d);
     }
@@ -894,11 +896,11 @@ export async function main(argv: string[]): Promise<number> {
     if (fieldChanges.length === 0) console.log(`  every cell already agrees with its issue body`);
     if (values.ready) {
       console.log(
-        `\n  Ready lane — unblocked, unclaimed, and in the active milestone (SC-2741)`,
+        `\n  Ready lane — unblocked, unclaimed, and in a placed phase (SC-2741)`,
       );
       console.log(`    Focus: ${active.why}`);
       if (outOfScope.length > 0) {
-        console.log(`    ${outOfScope.length} eligible issue(s) wait outside the active milestone`);
+        console.log(`    ${outOfScope.length} eligible issue(s) wait because no phase milestone places them`);
       }
       console.log(`    depth: ${cap ?? "UNMEASURED"}. ${selection.why}`);
       // Under `--ready` only (#1962, round 2): this run did attempt a Ready

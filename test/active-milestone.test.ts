@@ -106,16 +106,21 @@ describe("#2037: every writer of Ready reads the same population", () => {
     expect(text, `\`${ident}\` is not the repository's open issues (#2037)`).toMatch(assigned);
   });
 
-  test("board-mirror demotes out of scope only on a focus it actually read", () => {
-    // An unread focus is `title: null`, and every incumbent is out of scope
-    // against that, so an unguarded call empties Ready whenever --repo is
-    // missing or the repository read fails.
+  test("#2430: board-mirror demotes out of scope whether or not the focus was read", () => {
+    // Until #2430 an unread focus (`title: null`) put every incumbent out of
+    // scope, so #2037 ran the demotions only on a focus that was read. Scope
+    // is now "carries a phase milestone, or is expedited" — `inReadyScope`
+    // never reads the focus — so that guard only stopped an unplaced card
+    // leaving Ready whenever --repo was missing or the repository read failed.
     const text = src("scripts/board-mirror.ts");
     const ident = focusArguments(text)[0].split(",")[0].trim();
     const calls = text.split("scopeDemotions(writable").length - 1;
     expect(calls).toBe(1);
-    const guarded = new RegExp(`if \\(${ident} !== null\\) \\{\\s*for \\(const d of scopeDemotions\\(writable`);
-    expect(text, "scopeDemotions runs on a focus nobody read").toMatch(guarded);
+    const onTheRead = new RegExp(`if \\(${ident} !== null\\) \\{\\s*for \\(const d of scopeDemotions\\(writable`);
+    expect(text, "scopeDemotions waits on the repository read again").not.toMatch(onTheRead);
+    expect(text, "scopeDemotions must run on every --ready run").toMatch(
+      /if \(values\.ready\) \{\s*for \(const d of scopeDemotions\(writable/,
+    );
   });
 
   test("board-ready and work-status keep their repository-wide reads", () => {

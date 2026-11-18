@@ -785,19 +785,31 @@ export function activeMilestone(
 }
 
 /**
- * Is this card inside the focus? The ONE predicate, for entry and for stay.
+ * May this card be in Ready? The ONE predicate, for entry and for stay.
+ *
+ * #2430, ADR-021 decision 1 (Jason, 2026-11-18): **phases order work; they do
+ * not gate it.** A card in ANY placed phase may be in Ready — engine or
+ * payload, lowest phase or not — because what may start is decided by what
+ * blocks it (eligibility, before this), and phase is only how Ready SORTS
+ * (`readyOrderFor`). Until #2430 this read "the active milestone exactly",
+ * which held 31 of 37 Convergence issues back behind nothing anyone wrote.
  *
  * `expedited` is the caller's reading of the expedite lane: an honoured
  * promotion on the way in, carrying the configured label for a card already
- * in Ready. Everything else must sit in the active milestone exactly.
+ * in Ready. Everything else must sit in a phase milestone. An issue with no
+ * milestone still stays out (ADR-021, "not decided here").
+ *
+ * `active` is no longer read here. It stays in the signature because every
+ * caller already holds it and reports it as the focus; the decision no longer
+ * depends on it.
  */
 export function inReadyScope(
   r: { readonly milestone: string | null },
-  active: ActiveMilestone,
+  _active: ActiveMilestone,
   expedited: boolean,
 ): boolean {
   if (expedited) return true;
-  return active.title !== null && r.milestone === active.title;
+  return phaseOf(r.milestone) !== null;
 }
 
 /**

@@ -388,7 +388,11 @@ const UNCLAIMED_RATCHET = 150;
 // thread resolved with no reply is named on the conversation, a reading of
 // review threads no registered pattern expresses; the `CRC-C3` describe in
 // test/ai-review-threads.test.ts names it.
-const CLAIMED_UNBINDABLE = 182;
+// 182 -> 181: SC-2741 UNTICKED on the PR for #2430. ADR-021 reworded it to
+// Jason's accepted text (Ready draws from every placed phase, ranked by due
+// date), and the ranking half is #2434's, so the new wording is not yet true.
+// #2434 ticks it again with `sync-sc-status --only SC-2741`.
+const CLAIMED_UNBINDABLE = 181;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
