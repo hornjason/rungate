@@ -8635,7 +8635,9 @@ while (!reviewCurrency.current) {
 //
 // The NAME of the refusal is chosen (#244, SC-3) — exhaustion holding
 // findings is a different fact from exhaustion holding a clean review — but
-// the name never decides whether a refusal happens.
+// the name never decides whether a refusal happens. `securityRefusalName`
+// picks SECURITY_FINDINGS_OUTLIVED_REREVIEW or SECURITY_REREVIEW_EXHAUSTED; it
+// is lib/security-verdict.ts's own code, bundled into ship.run.js (#2408).
 if (securityVerdict.verdict !== 'PASS') {
   for (const f of securityVerdict.failures) log(`SECURITY BLOCK: ${f}`)
   log(`SECURITY: the run is blocked and no PR will be opened (spawned=${securityVerdict.spawned})`)
