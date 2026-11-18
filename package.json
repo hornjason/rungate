@@ -36,6 +36,7 @@
     "scripts/status-view.ts",
     "scripts/plan-deps.ts",
     "scripts/plan-issues.ts",
+    "scripts/consumer-triage.ts",
     "scripts/board-ready.ts",
     "scripts/board-id.ts",
     "scripts/ci-reading.ts",

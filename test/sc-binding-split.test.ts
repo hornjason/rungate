@@ -372,7 +372,11 @@ const UNCLAIMED_RATCHET = 150;
 // direct-ship mode the filing cap is the ceiling whatever the day's growth, a
 // behaviour no registered pattern expresses; the FG-266..FG-278 describe in
 // test/issue-filing-gate.test.ts names it.
-const CLAIMED_UNBINDABLE = 178;
+// 178 -> 179: SC-2782 (#2340) ticked by `sync-sc-status --only SC-2782`: a
+// consumer's issue gets one triage verdict from one decider, a tracker read
+// no registered pattern expresses; the three `SC-2782` describes in
+// test/consumer-triage.test.ts name it.
+const CLAIMED_UNBINDABLE = 179;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
