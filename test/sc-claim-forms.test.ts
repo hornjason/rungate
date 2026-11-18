@@ -50,6 +50,10 @@ describe("#360 SC-804: a declaring position is credited", () => {
     ["a parenthetical of two ids", "// tests the extractor (SC-9900, SC-9901)", "attribution"],
     ["a parenthetical with an issue", "// resolved per the brief (#190, SC-9901)", "attribution"],
     ["a parenthetical LABEL", "// ── Extraction floor (SC-9901: the home) ──", "attribution"],
+    // #2428: the verb and the id share a sentence. A range and a file name's
+    // dot are not sentence ends, so these still read as the verb's.
+    ["a covered range", " * Covers SC-9898..SC-9901", "covers"],
+    ["a file name between the verb and the id", "// covered in a.test.ts by SC-9901", "covers"],
   ];
 
   test.each(DECLARING)("%s", (_label, comment, expected) => {
@@ -81,6 +85,12 @@ describe("#360 SC-805: a citation is not credited", () => {
     ["a parenthetical citation", '// Prose cites ids constantly ("see SC-9901"). Counting citations would'],
     ["fixture content", "// Should contain both the original SC-9900 and a new SC-9901"],
     ["a quoted spec line", '// The SC statement in a spec file: "SC-9901: Something (behavioral)"'],
+    // #2428, lifted from a consumer's test file (rungate 0.8.34): "covers" ends
+    // the previous sentence, and the id sits in the next one, written the way
+    // the consumer rule says a test that only works toward a criterion should.
+    ["a coverage verb in the previous sentence", " * covers and, for each one without, why. Works toward SC-9901; does not"],
+    ["a coverage verb across a semicolon", "// covers the reading; SC-9901 is what it works toward"],
+    ["a coverage verb before a question", "// what does it cover? SC-9901 is not it"],
   ];
 
   test.each(CITATIONS)("%s", (_label, comment) => {
