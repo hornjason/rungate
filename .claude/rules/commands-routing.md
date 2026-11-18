@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: ccbf0a1827e2b2ed
+generated-sha: 303de959d0d782da
 ---
 
 ## Command Routing
@@ -16,13 +16,13 @@ Generated from the CLI's command registry. Run one as
 | `create-sc` | Generate a matchable success-criterion line from a registered pattern |
 | `convert-spec` | Convert an existing document into a testable spec |
 | `audit-specs` | Report which success criteria are matched, unmatched or uncovered |
+| `sync-sc-status` | Tick each criterion a passing test claims, in this project's specs |
 | `audit-spec-evidence` | Refuse a ticked criterion that does not name what proved it |
 | `plan-spec` | Derive a repository's milestones from a spec's Phase placement table |
 | `criterion-inventory` | Trace every criterion to the tests, issues and pull requests that name it |
 | `board-mirror` | Show every spec's criteria, and what is ready to pick up, on the project board |
 | `board-conformance` | Whether the board says what the spec says, reading by reading |
 | `plan-issues` | Apply an approved issue plan: --decompose files issues, --repair links and demotes them |
-| `consumer-triage` | Give each consumer-filed issue with no verdict exactly one |
 | `board-scope` | Spec criteria and opt-in, with looks-done hints |
 | `board` | Each phase's open issues and blockers |
 | `plan-deps` | Write a spec's phase order onto the tracker as blocked-by edges |
