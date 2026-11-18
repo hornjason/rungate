@@ -14,7 +14,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { bankAfterAppend, writeSpecWithBank } from "../lib/finding-promotion";
+import { bankAfterAppend, writeDeferralBank, writeSpecWithBank } from "../lib/finding-promotion";
+import { writeSpec } from "../lib/write-spec";
+import { KNOWN_UNDECLARED_WRITES, trackedWriteSites } from "../scripts/contract-parity";
+import { execFileSync } from "child_process";
+import { mkdirSync } from "fs";
 
 const ROOT = join(import.meta.dir, "..");
 const BANK = join(ROOT, ".claude", "spec-deferral-ratchet.json");
@@ -154,4 +158,136 @@ describe("create-sc consults the bank before it writes anything", () => {
     },
     30_000,
   );
+});
+
+/**
+ * #2300 — the deferral bank's write path.
+ *
+ * Half 2, concurrency: two sessions moving different deferred specs from the
+ * same bank each read the old bank, and the second write dropped the first
+ * update. `writeSpec` now takes the bytes its caller read and refuses when
+ * the file holds different ones, so the second move is refused, not lost.
+ *
+ * Half 1, accountability: every bank write goes through `writeDeferralBank`,
+ * whose one write write-accountability resolves. A writer through it needs no
+ * entry of its own; a writer around it is a new site and goes red.
+ */
+describe("#2300: the deferral bank has one write path, and a stale write is refused", () => {
+  const scratch = () => mkdtempSync(join(tmpdir(), "rg-2300-"));
+
+  test("writeSpec refuses when the file changed since its caller read it", () => {
+    const dir = scratch();
+    try {
+      const p = join(dir, "x.json");
+      writeFileSync(p, "B1");
+      const stale = writeSpec(p, "B2", { expected: "B0" });
+      expect(stale.written).toBe(false);
+      expect(stale.refusal).toContain("changed on disk since it was read");
+      expect(readFileSync(p, "utf-8")).toBe("B1");
+      expect(writeSpec(p, "B2", { expected: "B1" }).written).toBe(true);
+      expect(readFileSync(p, "utf-8")).toBe("B2");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("expected: null means 'it did not exist', and a file that appeared since is refused", () => {
+    const dir = scratch();
+    try {
+      const p = join(dir, "y.json");
+      expect(writeSpec(p, "A", { expected: null }).written).toBe(true);
+      expect(writeSpec(p, "B", { expected: null }).written, "a file that appeared since was overwritten").toBe(false);
+      expect(writeSpec(join(dir, "z.json"), "C", { expected: "was here" }).written, "a file that vanished since was recreated").toBe(false);
+      // No `expected` at all keeps today's behaviour for every other caller.
+      expect(writeSpec(p, "D").written).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("two bank moves from the same starting bank: the second is refused, the first survives", () => {
+    const dir = scratch();
+    try {
+      mkdirSync(join(dir, ".claude"), { recursive: true });
+      const b0 = bank("specs/A.md", 1);
+      writeFileSync(join(dir, ".claude", "spec-deferral-ratchet.json"), b0);
+      const first = bankAfterAppend(b0, "specs/A.md", spec(true, [9001]), spec(true, [9001, 9002]));
+      const second = bankAfterAppend(b0, "specs/OTHER.md", spec(true, [1, 2, 3]), spec(true, [1, 2, 3, 4]));
+      if (!first.ok || !second.ok || first.text === null || second.text === null) throw new Error("fixture banks did not move");
+      expect(writeDeferralBank(dir, first.text, b0).written).toBe(true);
+      const lost = writeDeferralBank(dir, second.text, b0);
+      expect(lost.written, "the second move overwrote the first").toBe(false);
+      expect(readFileSync(join(dir, ".claude", "spec-deferral-ratchet.json"), "utf-8")).toBe(first.text);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a write whose path is spelled inline as join(root, …) is resolved, not read as the identifier 'join'", () => {
+    // Found building #2300: the scanner's identifier branch came first, so
+    // `writeSpec(join(root, "x"), …)` matched as the bare word `join`, found no
+    // assignment for it, and dropped the write from accountability unseen.
+    const dir = scratch();
+    try {
+      mkdirSync(join(dir, "lib"), { recursive: true });
+      writeFileSync(join(dir, "lib", "w.ts"), 'export function w(root: string, t: string) { writeSpec(join(root, "kept.json"), t); }\n');
+      const sites = trackedWriteSites(dir, new Set(["kept.json"]));
+      expect(sites.map(x => `${x.file} → ${x.destination}`)).toEqual(["lib/w.ts → kept.json"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("write accountability sees ONE bank write, in the shared function, and no per-caller entry", () => {
+    const tracked = new Set(execFileSync("git", ["-C", ROOT, "ls-files"], { encoding: "utf-8" }).split("\n").filter(Boolean));
+    const bankSites = trackedWriteSites(ROOT, tracked)
+      .filter(w => w.destination === ".claude/spec-deferral-ratchet.json")
+      .map(w => w.file);
+    expect(bankSites).toEqual(["lib/finding-promotion.ts"]);
+    expect(Object.keys(KNOWN_UNDECLARED_WRITES).filter(k => k.endsWith("→ .claude/spec-deferral-ratchet.json"))).toEqual([
+      "lib/finding-promotion.ts → .claude/spec-deferral-ratchet.json",
+    ]);
+  });
+
+  test("review of #2381: the put-back refuses rather than erase a write another session landed on top", () => {
+    const dir = scratch();
+    try {
+      const specFile = join(dir, "spec.md");
+      writeFileSync(specFile, "old");
+      const r = writeSpecWithBank(
+        (p, c, e) => {
+          if (p === "bank.json") {
+            // Session B lands its own append between this run's spec write
+            // and its bank write, and then this run's bank write fails.
+            writeFileSync(specFile, "theirs");
+            return { written: false, refusal: "bank refused" };
+          }
+          return writeSpec(p, c, { expected: e });
+        },
+        { path: specFile, before: "old", after: "mine" },
+        { path: "bank.json", text: "{}" },
+      );
+      expect(r).toMatchObject({ ok: false, restored: false });
+      expect(readFileSync(specFile, "utf-8"), "the put-back erased the other session's write").toBe("theirs");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("review of #2381: writeSpecWithBank hands each spec write the bytes it expects to replace", () => {
+    const seen: [string, string, string | undefined][] = [];
+    writeSpecWithBank(
+      (p, c, e) => {
+        seen.push([p, c, e]);
+        return { written: p !== "bank.json", refusal: p === "bank.json" ? "no" : null };
+      },
+      { path: "spec.md", before: "old", after: "new" },
+      { path: "bank.json", text: "{}" },
+    );
+    expect(seen).toEqual([
+      ["spec.md", "new", "old"],
+      ["bank.json", "{}", undefined],
+      ["spec.md", "old", "new"],
+    ]);
+  });
 });

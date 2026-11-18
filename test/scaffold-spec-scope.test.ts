@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { DEFERRED_LINE, deferUndeclaredSpecs, withDeferredScope } from "../lib/scaffold/spec-scope";
+import { writeSpec } from "../lib/write-spec";
 import { boardDeclaration } from "../lib/spec-placement";
 
 const ROOT = join(import.meta.dir, "..");
@@ -156,6 +157,48 @@ describe("#2307: every spec declares a board scope after one scaffold", () => {
       expect(refusal, actions.join("\n")).toBeDefined();
       expect(refusal).toContain("specs/UNDECLARED-SPEC.md could not be put back");
       expect(actions.some(a => a.startsWith("UPDATED:")), "a refused run reported a write").toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("review of #2381: each spec write, and its put-back, carries the bytes it expects to replace", () => {
+    const root = tree();
+    try {
+      const seen: [string, string | undefined][] = [];
+      // Every spec write lands; the bank write fails, so the specs are put back.
+      const writer = (path: string, content: string, expected?: string) => {
+        seen.push([path.slice(root.length + 1), expected === undefined ? undefined : expected === content ? "SAME" : "DIFF"]);
+        if (path.endsWith("spec-deferral-ratchet.json")) return { written: false, refusal: "bank refused" };
+        writeFileSync(path, content);
+        return { written: true };
+      };
+      deferUndeclaredSpecs(root, [], writer);
+      const specWrites = seen.filter(([p]) => p.startsWith("specs/"));
+      expect(specWrites.length, "no spec was written, so nothing below is checked").toBeGreaterThanOrEqual(2);
+      // A forward write and its put-back each expect bytes other than the ones they write.
+      expect(specWrites.every(([, e]) => e === "DIFF"), JSON.stringify(seen)).toBe(true);
+      expect(seen.find(([p]) => p.endsWith("spec-deferral-ratchet.json"))?.[1]).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("review of #2381: a spec another session edited after the plan is not overwritten", () => {
+    const root = tree();
+    try {
+      const actions: string[] = [];
+      const target = join(root, "specs/UNDECLARED-SPEC.md");
+      let edited = false;
+      deferUndeclaredSpecs(root, actions, (path, content, expected) => {
+        if (!edited) {
+          edited = true;
+          writeFileSync(target, "edited by another session\n");
+        }
+        return path.endsWith("spec-deferral-ratchet.json") ? { written: true } : writeSpec(path, content, { expected });
+      });
+      expect(readAt(root, "specs/UNDECLARED-SPEC.md")).toBe("edited by another session\n");
+      expect(actions.some(a => a.startsWith("REFUSED:")), actions.join("\n")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -44,7 +44,8 @@
  * unrelated reason is distinguishable from one genuinely caught.
  */
 import { existsSync, readFileSync } from "fs";
-import { resolve, sep } from "path";
+import { join, resolve, sep } from "path";
+import { writeSpec, type SpecWriteResult } from "./write-spec";
 
 import { NAMES_NONE, answerableIds, criteriaNamedBy, criterionAnswer, specCriteriaIn } from "./board-mirror";
 import { allocateScNumber, formatSCLine } from "./create-sc";
@@ -831,8 +832,40 @@ export function bankAfterAppend(
   return bankWithPromotion(bankText, specPath, was.criteria, now.criteria);
 }
 
+/**
+ * The ONE write of the deferral bank (#2300). `finding-promotion`,
+ * `create-sc` and the scaffold's spec-scope step all move it through here.
+ *
+ * Two reasons it is one function. Write accountability (#624) resolves the
+ * literal path below to the bank, so a writer that goes through it needs no
+ * entry of its own, and one that writes around it is a new site and goes red.
+ * And `read`, the bank text the caller computed from, makes the write refuse
+ * when another session moved the bank in between, instead of dropping that
+ * move and leaving it for `BANK_DRIFT` to find later.
+ */
+export function writeDeferralBank(root: string, text: string, read: string | null): SpecWriteResult {
+  // A named literal path: write accountability reads `writeSpec(<identifier>`
+  // back to its assignment, and that is how it resolves this write to the bank.
+  const bankPath = join(root, ".claude/spec-deferral-ratchet.json");
+  return writeSpec(bankPath, text, {
+    label: ".claude/spec-deferral-ratchet.json",
+    expected: read,
+  });
+}
+
 /** The writer `writeSpecWithBank` writes through: `writeSpec`, or a stand-in in a test. */
-export type SpecWriter = (path: string, content: string) => { written: boolean; refusal?: string | null };
+export type SpecWriter = (
+  path: string,
+  content: string,
+  /**
+   * #2300: the bytes the write expects to replace. The forward spec write
+   * expects the spec as read; the put-back expects the spec as this run wrote
+   * it, so a revert refuses rather than erase a write another session landed
+   * on top in between (review of #2381). Absent for the bank, whose writer
+   * already holds the bank it read.
+   */
+  expected?: string,
+) => { written: boolean; refusal?: string | null };
 
 /**
  * Write the spec and then the bank, both or neither (review of #2298).
@@ -849,12 +882,12 @@ export function writeSpecWithBank(
   spec: { path: string; before: string; after: string },
   bank: { path: string; text: string | null },
 ): { ok: true } | { ok: false; why: string; restored: boolean } {
-  const specWrite = write(spec.path, spec.after);
+  const specWrite = write(spec.path, spec.after, spec.before);
   if (!specWrite.written) return { ok: false, why: `the spec was not written (${specWrite.refusal ?? "no reason given"})`, restored: true };
   if (bank.text === null) return { ok: true };
   const bankWrite = write(bank.path, bank.text);
   if (bankWrite.written) return { ok: true };
-  const undo = write(spec.path, spec.before);
+  const undo = write(spec.path, spec.before, spec.after);
   return {
     ok: false,
     why: `the deferral bank could not be written (${bankWrite.refusal ?? "no reason given"})`,

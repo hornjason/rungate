@@ -1813,9 +1813,9 @@ describe("#2066 / SC-2612: finding-promotion writes the spec's family, section, 
     expect(cli.indexOf("specWithCriterion(content")).toBeGreaterThan(-1);
     expect(cli.indexOf("specWithCriterion(content")).toBeLessThan(dryRun);
     expect(cli.indexOf("bankWithPromotion(")).toBeLessThan(dryRun);
-    expect(cli).toContain("writeSpec(target, inserted.text)");
+    expect(cli).toContain("writeSpec(target, inserted.text, { expected: content })");
     expect(cli).not.toContain("content.trimEnd()}\\n${result.line}");
-    expect(cli.indexOf("writeSpec(bankPath, bankText)")).toBeGreaterThan(cli.indexOf("writeSpec(target, inserted.text)"));
+    expect(cli.indexOf("writeDeferralBank(ROOT, bankText, bankRead)")).toBeGreaterThan(cli.indexOf("writeSpec(target, inserted.text"));
 
   });
 });
@@ -1843,7 +1843,7 @@ describe("#2066 review round 1", () => {
     const branch = cli.slice(cli.indexOf("if (result.alreadyWritten) {"));
     const end = branch.indexOf("} else {");
     expect(branch.slice(0, end)).toContain("inserted.text !== content");
-    expect(branch.slice(0, end)).toContain("writeSpec(target, inserted.text)");
+    expect(branch.slice(0, end)).toContain("writeSpec(target, inserted.text, { expected: content })");
   });
 
   test("a grouped id says it was allocated with no reservation registry behind it", () => {
