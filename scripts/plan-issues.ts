@@ -670,7 +670,7 @@ export interface PlaceGitHub {
 }
 
 /** Each blocker's database id, read once per run however many issues it blocks (#2345). */
-const BLOCKER_IDS = new Map<number, number>();
+const BLOCKER_IDS = new Map<string, number>();
 
 const LIVE_PLACE: PlaceGitHub = {
   milestones: LIVE_GITHUB.milestones,

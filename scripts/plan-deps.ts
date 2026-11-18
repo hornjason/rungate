@@ -96,7 +96,7 @@ export interface PlanDepsGitHub {
 }
 
 /** Each blocker's database id, read once per run however many issues it blocks. */
-const BLOCKER_IDS = new Map<number, number>();
+const BLOCKER_IDS = new Map<string, number>();
 
 async function liveAddBlockers(
   repo: string,

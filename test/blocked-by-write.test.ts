@@ -48,7 +48,7 @@ describe("#2345: blocked-by links are written through the REST API, by the block
   });
 
   test("a blocker shared by many issues has its id read once per run", () => {
-    const ids = new Map<number, number>();
+    const ids = new Map<string, number>();
     const { exec, calls } = fakeGh({
       "repos/o/r/issues/7": "6229750699\n",
       [POST]: "{}",
@@ -59,6 +59,21 @@ describe("#2345: blocked-by links are written through the REST API, by the block
     addBlockers("o/r", 9, [7], exec, ids);
     addBlockers("o/r", 10, [7], exec, ids);
     expect(calls.filter(c => c[1] === "repos/o/r/issues/7").length).toBe(1);
+  });
+
+  test("the id cache is per repository: the same number in another repository is read again (review of #2357)", () => {
+    const ids = new Map<string, number>();
+    const { exec, calls } = fakeGh({
+      "repos/o/r/issues/7": "111\n",
+      "repos/o/other/issues/7": "222\n",
+      [POST]: "{}",
+      [LIST]: "7\n",
+      "repos/o/other/issues/9/dependencies/blocked_by": "{}",
+      "repos/o/other/issues/9/dependencies/blocked_by?per_page=100": "7\n",
+    });
+    addBlockers("o/r", 9, [7], exec, ids);
+    addBlockers("o/other", 9, [7], exec, ids);
+    expect(calls.find(c => c[3] === "repos/o/other/issues/9/dependencies/blocked_by")).toContain("issue_id=222");
   });
 
   test("a link that does not read back is refused, naming it, never reported as wired", () => {

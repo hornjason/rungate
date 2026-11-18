@@ -25,15 +25,18 @@
 /** How a `gh` call is made. Injected so a test never shells out. */
 export type GhExec = (args: readonly string[]) => string;
 
-function databaseId(repo: string, blocker: number, exec: GhExec, ids: Map<number, number>): number {
-  const known = ids.get(blocker);
+function databaseId(repo: string, blocker: number, exec: GhExec, ids: Map<string, number>): number {
+  // Keyed by repository too: a dependency may cross repositories, so the same
+  // number in another repository is another issue (review of #2357).
+  const key = `${repo}#${blocker}`;
+  const known = ids.get(key);
   if (known !== undefined) return known;
   const raw = exec(["api", `repos/${repo}/issues/${blocker}`, "--jq", ".id"]).trim();
   const id = Number(raw);
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new Error(`#${blocker}: could not read its database id (got "${raw.slice(0, 40)}"), so no link was written`);
   }
-  ids.set(blocker, id);
+  ids.set(key, id);
   return id;
 }
 
@@ -42,7 +45,7 @@ export function addBlockers(
   blocked: number,
   blockers: readonly number[],
   exec: GhExec,
-  ids: Map<number, number> = new Map(),
+  ids: Map<string, number> = new Map(),
 ): void {
   if (blockers.length === 0) return;
   // Every id before any write, so an unreadable one writes nothing for this issue.
@@ -77,7 +80,7 @@ export function removeBlocker(
   blocked: number,
   blocker: number,
   exec: GhExec,
-  ids: Map<number, number> = new Map(),
+  ids: Map<string, number> = new Map(),
 ): void {
   const id = databaseId(repo, blocker, exec, ids);
   exec(["api", "-X", "DELETE", `repos/${repo}/issues/${blocked}/dependencies/blocked_by/${id}`]);
