@@ -28,6 +28,7 @@
  * issues it is itself demoting, and touches no others. The cause and the
  * cleanup are one action.
  */
+import { addBlockers, removeBlocker } from "../lib/blocked-by-write";
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { spawnSync } from "child_process";
 import { isAbsolute, join, relative, sep } from "path";
@@ -158,7 +159,8 @@ const LIVE_GITHUB: PlanIssuesGitHub = {
     gh(["issue", "edit", String(number), "--repo", repo, "--remove-milestone"]);
   },
   removeBlockedBy: async (repo, blocked, blocker) => {
-    gh(["issue", "edit", String(blocked), "--repo", repo, "--remove-blocked-by", String(blocker)]);
+    // REST, not `issue edit --remove-blocked-by`, which an older runner's gh lacks (#2345).
+    removeBlocker(repo, blocked, blocker, args => gh([...args]), BLOCKER_IDS);
   },
   // PAGINATED, for the reason `LIVE_DECOMPOSE.milestones` gives: a phase
   // milestone on page two would read as absent and refuse the run.
@@ -348,7 +350,8 @@ const LIVE_DECOMPOSE: DecomposeGitHub = {
     return n;
   },
   addBlockedBy: async (repo, blocked, blocker) => {
-    gh(["issue", "edit", String(blocked), "--repo", repo, "--add-blocked-by", String(blocker)]);
+    // REST, not `issue edit --add-blocked-by`, which an older runner's gh lacks (#2345).
+    addBlockers(repo, blocked, [blocker], args => gh([...args]), BLOCKER_IDS);
   },
   blockedBy: async (repo, issue) => {
     const out = gh([
@@ -665,6 +668,9 @@ export interface PlaceGitHub {
   openIssues: (repo: string) => Promise<{ number: number; title: string; body: string | null; milestone: string | null }[]>;
   setMilestone: (repo: string, number: number, title: string) => Promise<void>;
 }
+
+/** Each blocker's database id, read once per run however many issues it blocks (#2345). */
+const BLOCKER_IDS = new Map<string, number>();
 
 const LIVE_PLACE: PlaceGitHub = {
   milestones: LIVE_GITHUB.milestones,

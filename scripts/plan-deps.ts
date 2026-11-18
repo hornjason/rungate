@@ -21,13 +21,17 @@
  * only hand-authored dependencies in the repository, so this prints them and
  * stops. See `lib/spec-deps.ts`.
  *
- * ## Why one call per blocked issue
+ * ## Why the edges are grouped by blocked issue
  *
- * `gh issue edit <N> --add-blocked-by <M>` takes the flag repeatedly. The
- * live convergence set is 194 edges over 37 blocked issues, so grouping is
- * 37 mutations rather than 194. `groupByBlocked` decides the grouping and is
- * tested on its own, because the group IS what reaches GitHub.
+ * `groupByBlocked` decides the grouping and is tested on its own, because the
+ * group IS what reaches GitHub: each group is one `addBlockers` call, which
+ * writes its links and reads them back once. Since #2345 the links go through
+ * the REST dependencies endpoint, one POST per link, because
+ * `issue edit --add-blocked-by` is missing from older runners' `gh`. So the
+ * live convergence set's 194 edges over 37 blocked issues are 194 writes and
+ * 37 read-backs, plus one id read per distinct blocker (`BLOCKER_IDS`).
  */
+import { addBlockers } from "../lib/blocked-by-write";
 import { parseArgs } from "util";
 import { createGitHubClient } from "../lib/github";
 import { dependencyPlan, groupByBlocked } from "../lib/spec-deps";
@@ -95,14 +99,17 @@ export interface PlanDepsGitHub {
   addBlockers: (repo: string, blocked: number, blockers: readonly number[]) => Promise<void>;
 }
 
+/** Each blocker's database id, read once per run however many issues it blocks. */
+const BLOCKER_IDS = new Map<string, number>();
+
 async function liveAddBlockers(
   repo: string,
   blocked: number,
   blockers: readonly number[],
 ): Promise<void> {
-  const args = ["issue", "edit", String(blocked), "--repo", repo];
-  for (const b of blockers) args.push("--add-blocked-by", String(b));
-  ghWithoutGhToken(args);
+  // Through the REST dependencies API, one link at a time: `issue edit
+  // --add-blocked-by` does not exist in an older runner's gh (#2345).
+  addBlockers(repo, blocked, blockers, ghWithoutGhToken, BLOCKER_IDS);
 }
 
 const LIVE_GITHUB: PlanDepsGitHub = {
