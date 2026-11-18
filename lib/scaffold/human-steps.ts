@@ -140,6 +140,27 @@ export function humanSteps(r: HumanStepReadings): string[] {
 }
 
 /**
+ * Which contexts each workflow owes: `null` is every job in it, a set is only
+ * those. Entries for one file MERGE — a second context is added, and an
+ * all-jobs entry is never narrowed by a single-context one — so a workflow
+ * that gains a second tracked job cannot silently drop the first (review of
+ * #2362).
+ */
+export function wantedChecks(
+  allJobs: readonly string[],
+  gates: readonly { workflow: string; context: string }[],
+): Map<string, Set<string> | null> {
+  const wanted = new Map<string, Set<string> | null>();
+  for (const f of allJobs) wanted.set(f, null);
+  for (const g of gates) {
+    const had = wanted.get(g.workflow);
+    if (had === null) continue;
+    wanted.set(g.workflow, new Set([...(had ?? []), g.context]));
+  }
+  return wanted;
+}
+
+/**
  * The job names of the process checks present in `root`'s workflows, and the
  * workflows that are present but could not be read (#2161). A directory, a
  * permission error or a file removed between the two calls throws on read;
@@ -148,11 +169,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
 export function processChecksIn(root: string): { checks: string[]; unreadable: string[] } {
   const checks: string[] = [];
   const unreadable: string[] = [];
-  const wanted = new Map<string, string | null>([
-    ...PROCESS_CHECK_WORKFLOWS.map(f => [f, null] as const),
-    ...MERGE_GATE_CHECKS.map(g => [g.workflow, g.context] as const),
-  ]);
-  for (const [file, only] of wanted) {
+  for (const [file, only] of wantedChecks(PROCESS_CHECK_WORKFLOWS, MERGE_GATE_CHECKS)) {
     const rel = `.github/workflows/${file}`;
     const p = join(root, ".github", "workflows", file);
     // The stat decides absence, and only its ENOENT counts: existsSync also
@@ -168,7 +185,7 @@ export function processChecksIn(root: string): { checks: string[]; unreadable: s
     }
     try {
       const jobs = jobContextNames(readFileSync(p, "utf-8"));
-      checks.push(...(only === null ? jobs : jobs.filter(j => j === only)));
+      checks.push(...(only === null ? jobs : jobs.filter(j => only.has(j))));
     } catch (e) {
       unreadable.push(`${rel} could not be read (${(e as Error).message})`);
     }

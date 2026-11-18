@@ -20,6 +20,7 @@ import {
   githubSlugOf,
   humanSteps,
   processChecksIn,
+  wantedChecks,
   readHumanSteps,
   readOrigin,
   sshHostName,
@@ -311,6 +312,16 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("#2362 review: two contexts in one workflow are both kept, and an all-jobs entry is never narrowed", () => {
+    const both = wantedChecks([], [{ workflow: "ci.yml", context: "test" }, { workflow: "ci.yml", context: "lint" }]);
+    expect([...(both.get("ci.yml") ?? [])].sort()).toEqual(["lint", "test"]);
+    for (const order of [
+      wantedChecks(["ci.yml"], [{ workflow: "ci.yml", context: "test" }]),
+      wantedChecks([], [{ workflow: "ci.yml", context: "test" }]),
+    ]) expect(order.has("ci.yml")).toBe(true);
+    expect(wantedChecks(["ci.yml"], [{ workflow: "ci.yml", context: "test" }]).get("ci.yml")).toBeNull();
   });
 
   test("#2361: a workflow without the named job owes nothing for it, and a matrix job is never owed", () => {
