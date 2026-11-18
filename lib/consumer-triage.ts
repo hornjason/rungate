@@ -34,6 +34,7 @@
 import { activeMilestone } from "./board-ready-rule";
 import { criterionAnswer } from "./board-mirror";
 import { duplicateCollisions, type Finding } from "./finding-arbiter";
+import { PLANNED_ISSUE_FOOTER } from "./issue-decomposition";
 import { declaredFiles, sharedFiles } from "./issue-file-overlap";
 import { issuePlacement, type PlacingFamily } from "./issue-repair";
 
@@ -87,7 +88,25 @@ export interface TriageContext {
 
 const asFinding = (i: TriageIssue): Finding => ({ id: String(i.number), title: i.title, body: i.body ?? "" });
 
+/** The plan a planned issue's footer names, or null when the body carries no planner footer (#2415). */
+export function plannedFrom(body: string | null | undefined): string | null {
+  const text = body ?? "";
+  const at = text.lastIndexOf(PLANNED_ISSUE_FOOTER);
+  if (at < 0) return null;
+  const rest = text.slice(at + PLANNED_ISSUE_FOOTER.length);
+  const end = rest.indexOf("`");
+  return end > 0 ? rest.slice(0, end) : null;
+}
+
 export function triageVerdict(issue: TriageIssue, ctx: TriageContext): Triage {
+  // 0. A planned issue is not a consumer report, whatever label brought it
+  // here (#2415). #2289 and #2290, two rows of one ADR, were judged as
+  // reports and one was marked a DUPLICATE of its sibling.
+  const plan = plannedFrom(issue.body);
+  if (plan !== null) {
+    return { kind: "LEFT", why: `filed by plan-issues from ${plan}; a planned issue is not a consumer report, so triage never judges it` };
+  }
+
   // 1. DUPLICATE — of an older open issue only.
   const older = ctx.openIssues.filter(o => o.number < issue.number).map(asFinding);
   const dup = duplicateCollisions(asFinding(issue), older)[0];

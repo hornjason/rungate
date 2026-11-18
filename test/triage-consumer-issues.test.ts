@@ -25,6 +25,7 @@ import {
   type TriageIssue,
 } from "../lib/consumer-triage";
 import type { PlacingFamily } from "../lib/issue-repair";
+import { decomposedBody, PLANNED_ISSUE_FOOTER } from "../lib/issue-decomposition";
 import { completePullFiles, main, REFUSAL_EXIT, type TriageGitHub } from "../scripts/consumer-triage";
 
 const P9 = "Zq Phase 9 — the active one";
@@ -436,5 +437,52 @@ describe("SC-2782: rungate consumer-triage --write gives the verdict with no han
     const r = await run(["--write"], gh);
     expect(r.code).toBe(0);
     expect(wrote.filter(w => w.number === 303).map(w => w.op)).toEqual(["comment"]);
+  });
+});
+
+/**
+ * #2415 — triage never judges an issue the planner filed.
+ *
+ * #2289 and #2290, two rows of ADR-017's Decomposition, were labelled as
+ * consumer reports, and triage marked one a DUPLICATE of its sibling. #2390
+ * closed that entry point; this closes the judgement, whatever route a
+ * planned issue takes to reach triage.
+ */
+describe("#2415: an issue plan-issues filed reads LEFT, never a verdict", () => {
+  const ROW = (outcome: string) => ({
+    criterion: "SC-9811",
+    outcome,
+    files: ["lib/dup-one.ts", "lib/dup-two.ts"],
+    milestone: null,
+    blockedBy: [],
+  });
+  const planned = (number: number, outcome: string): TriageIssue => ({
+    number,
+    title: outcome,
+    body: `${DUP_BODY}\n\n${decomposedBody(ROW(outcome) as never, "Criteria this serves", "docs/adr/ADR-9999-x.md")}`,
+    milestone: null,
+  });
+
+  test("two sibling rows sharing every key: neither is a DUPLICATE, both are LEFT naming the plan", () => {
+    const older = planned(300, "The alphaReader keeps the betaWriter row");
+    const newer = planned(301, "The alphaReader keeps the betaWriter row too");
+    const open = [...ctx().openIssues, older, newer];
+    for (const issue of [older, newer]) {
+      const t = triageVerdict(issue, ctx({ openIssues: open }));
+      expect(t.kind, `#${issue.number} was judged as a consumer report`).toBe("LEFT");
+      if (t.kind === "LEFT") expect(t.why).toContain("docs/adr/ADR-9999-x.md");
+    }
+  });
+
+  test("the same pair without the planner's footer is still a DUPLICATE: the guard does not switch duplicates off", () => {
+    const older = consumer(302, DUP_BODY);
+    const newer = consumer(303, DUP_BODY);
+    const t = triageVerdict(newer, ctx({ openIssues: [...ctx().openIssues, older, newer] }));
+    expect(t.kind).toBe("DUPLICATE");
+  });
+
+  test("the footer plan-issues writes starts with the one exported prefix triage reads", () => {
+    const body = decomposedBody(ROW("Anything at all here") as never, "Criteria this serves", "docs/adr/ADR-9999-x.md");
+    expect(body).toContain(`${PLANNED_ISSUE_FOOTER}docs/adr/ADR-9999-x.md\``);
   });
 });
