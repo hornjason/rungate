@@ -280,13 +280,12 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Each phase's open issues and blockers",
     usage: "rungate board [--repo <owner/name>] [--markdown]   (repository defaults to GITHUB_REPOSITORY, then the origin remote)",
   },
-  // Step 5 of ADR-003. `plan-spec` turns the placement table into milestones;
-  // this turns the ORDER of those milestones into `blocked by` edges, which is
-  // AGENTS.md rule 4 — ordering is data, not prose.
+  // Step 5 of ADR-003, as ADR-021 reworded it: the `blocked by` links an
+  // accepted ADR's Decomposition declares, never the order of the milestones
+  // (SC-2606). AGENTS.md rule 4 — ordering is data, not prose.
   //
-  // No `projectRootFlag`: the tree it reads — specs/ for board.phaseOrder,
-  // docs/adr/ for the accepted plans (SC-2606) — is the working directory,
-  // or the script's own --project-root.
+  // No `projectRootFlag`: the one tree it reads is docs/adr/, under the
+  // working directory or the script's own --project-root.
   "plan-deps": {
     script: "scripts/plan-deps.ts",
     summary: "Write the blocked-by links accepted ADRs declare onto the tracker",
