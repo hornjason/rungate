@@ -6,6 +6,7 @@ import {
   runTemplateCompliance,
   collectComplianceSurface,
   COMPLIANCE_TOOLS,
+  repoRailsReading,
   type ComplianceReport,
 } from "../lib/compliance";
 import { toolProbe, type ToolProbe } from "../lib/tool-probe";
@@ -196,6 +197,38 @@ describe("Instruction Compliance — Layer 1 (Template Quality)", () => {
       const high = f.findings.filter(fi => fi.severity === "HIGH").length;
       console.log(`   ${q.padStart(6)} ${f.file} (agnix:${f.agnixFindings} rr:${f.reporailsFindings} high:${high})`);
     }
+  });
+});
+
+// #2401: on 2026-11-18 RepoRails' server refused every anonymous check during
+// its 0.6.8 release, and each `check --format json` printed the refusal below.
+// It parses, so it was returned as a reading and the run crashed on its
+// missing `files`, failing CI on every pull request. A reply that is not a
+// reading is no reading for that file: never a crash, never a clean score.
+describe("#2401: a RepoRails reply is a reading only when it has the reading's shape", () => {
+  const refused = '{"error":"server_refused","message":"Try again in ~60 min."}';
+  const wellFormed = JSON.stringify({
+    quality: 0.8,
+    level: "L1",
+    files: { "AGENTS.md": { findings: [{ line: 1, severity: "warning", rule: "CORE:C:0035", category: "coherence", message: "m" }] } },
+  });
+
+  test("the server's refusal is no reading", () => {
+    expect(repoRailsReading(refused)).toBeNull();
+  });
+
+  test("a file entry with no findings array is no reading", () => {
+    expect(repoRailsReading(JSON.stringify({ quality: 1, level: "L1", files: { "AGENTS.md": {} } }))).toBeNull();
+  });
+
+  test("empty or unparseable output is no reading", () => {
+    expect(repoRailsReading("")).toBeNull();
+    expect(repoRailsReading("not json")).toBeNull();
+    expect(repoRailsReading("null")).toBeNull();
+  });
+
+  test("a well-formed reply is returned as it was read", () => {
+    expect(repoRailsReading(wellFormed)).toEqual(JSON.parse(wellFormed));
   });
 });
 // The third argument here used to be `{ timeout: 300_000 }`. `describe` takes

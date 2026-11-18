@@ -141,6 +141,31 @@ interface RepoRailsOutput {
 }
 
 /**
+ * One RepoRails reply as a reading, or null when it is not one (#2401).
+ *
+ * A reply that parses is not therefore a reading. On 2026-11-18 the server
+ * refused every anonymous check with `{"error":"server_refused",...}`, which
+ * parses, and the caller crashed reading its `files`. Only a `files` object
+ * whose every entry carries a `findings` array is read; anything else gives
+ * the file no RepoRails reading, which `scoredBy` reports as not read.
+ */
+export function repoRailsReading(stdout: string): RepoRailsOutput | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const files = (parsed as { files?: unknown }).files;
+  if (typeof files !== "object" || files === null || Array.isArray(files)) return null;
+  for (const entry of Object.values(files)) {
+    if (typeof entry !== "object" || entry === null || !Array.isArray((entry as { findings?: unknown }).findings)) return null;
+  }
+  return parsed as RepoRailsOutput;
+}
+
+/**
  * RepoRails ships only as an npx package here, so every invocation pays a cold
  * `npx` resolve (~8s). Running the surface one file at a time serially put the
  * whole scan at ~257s. These run concurrently instead.
@@ -156,8 +181,7 @@ async function runRepoRailsOne(path: string): Promise<RepoRailsOutput | null> {
     try {
       const stdout = (await new Response(proc.stdout).text()).trim();
       await proc.exited;
-      if (!stdout) return null;
-      return JSON.parse(stdout) as RepoRailsOutput;
+      return repoRailsReading(stdout);
     } finally {
       clearTimeout(timer);
     }
