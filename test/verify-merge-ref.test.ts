@@ -277,6 +277,30 @@ describe("#1571 / CRC-F6: a waived review is refused at arming time", () => {
     expect(mergeRefReading({ ...base, prState: "MERGED", mergeCommit: MERGE, labels: [WAIVED_REVIEW_LABEL] }).reading).toBe("MERGED_CLEAN");
   });
 
+  /**
+   * #2393: the release guide's step 8 opens the PR with this label, so step 9's
+   * pin must use the mode that answers it. Arming refuses WAIVED_REVIEW and
+   * prints no SHA. Measured on #2385, the step stopped at its first line.
+   */
+  test("RELEASING.md step 9 pins with --by-hand, because step 8 puts the waived label on", () => {
+    const guide = readFileSync(join(REPO, "docs", "guides", "RELEASING.md"), "utf-8");
+    const from = guide.indexOf("# 8. ");
+    const nine = guide.indexOf("# 9. ");
+    const ten = guide.indexOf("# 10. ");
+    expect([from, nine, ten].every(i => i >= 0) && from < nine && nine < ten, "steps 8, 9 and 10 not found in order").toBe(true);
+    expect(guide.slice(from, nine), "step 8 no longer labels the PR").toContain(`--label ${WAIVED_REVIEW_LABEL}`);
+    const step9 = guide.slice(nine, ten);
+    const pin = step9.split("\n").find(l => l.includes("verify-merge-ref.ts --pr <N>") && !l.includes("--after-merge"));
+    expect(pin, "step 9 has no pinning call").toBeDefined();
+    expect(pin).toContain("--by-hand");
+    expect(step9.indexOf(pin!)).toBeLessThan(step9.indexOf("gh pr merge"));
+    const merge = step9.split("\n").find(l => l.includes("gh pr merge"));
+    expect(merge, "the merge line arms auto-merge").not.toContain("--auto");
+    // And that mode really does answer a waived, current head.
+    expect(exitFor("WAIVED_REVIEW", "by-hand")).toBe(0);
+    expect(exitFor("WAIVED_REVIEW", "arming")).toBe(REFUSE_EXIT);
+  });
+
   test("the label literal agrees with the one the review workflow waives on", async () => {
     // This script stays import-free for its mutant, so the value is bound here.
     const { AI_REVIEW_OVERRIDE_LABEL } = await import("../lib/scaffold/ai-review-step");
