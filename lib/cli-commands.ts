@@ -244,6 +244,15 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
       "rungate plan-issues (--repair | --decompose) <plan.md> --repo <owner/name> [--write] [--json]",
     projectRootFlag: true,
   },
+  // ADR-020 Decision 1 (SC-2782): every open `from-consumer` issue with no
+  // verdict marker gets exactly one, from `lib/consumer-triage.ts`. Reads the
+  // tracker AND the tree (the opted-in specs place an issue), hence the root flag.
+  "consumer-triage": {
+    script: "scripts/consumer-triage.ts",
+    summary: "Give each consumer-filed issue with no verdict exactly one",
+    usage: "rungate consumer-triage --repo <owner/name> [--write] [--json]",
+    projectRootFlag: true,
+  },
   // #2275, onboarding existing specs. Read-only: what each spec holds, its
   // `board:` setting, and a looks-done hint per unticked criterion. It never
   // ticks. Reads the working directory, so it takes no root flag.
