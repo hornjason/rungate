@@ -48,7 +48,7 @@ import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 
 import { remedyMessage } from "../lib/check-remedy";
-import { buildWorkflowLaunch } from "../scripts/build-workflow-launch";
+import { buildWorkflowLaunch, launchBundle, WORKFLOW_SCRIPT_CAP } from "../scripts/build-workflow-launch";
 import { agentDerivedNames, bareAgentInterpolations } from "../lib/workflow-taint";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -193,11 +193,10 @@ const CLASSIFIED: Record<string, string> = {
     "a command, not a value: `prodQuinnAssignment` composes a JavaScript statement for `bun -e`",
   "workflows/ship.js:currency":
     "prose into a prompt: wrapped in `describeShaValue`, in a `reason:` sentence",
-  "workflows/ship.js:measuredSha":
-    "prose into a prompt: wrapped in `describeSuiteShaValue`, in a `reason:` sentence",
-  "workflows/ship.js:v×2":
-    "structured, not text: `describeShaValue`'s own argument — `v.length` for an array, and " +
-    "`JSON.stringify(v)` for everything that reaches the final line",
+  // #2400: `suiteCurrency` and `describeSuiteShaValue` left ship.js for the
+  // lib bundle, taking the `measuredSha` site and one of the two `v` sites.
+  "workflows/ship.js:v×1":
+    "structured, not text: `describeShaValue`'s own argument — `v.length` for an array",
   "workflows/ship.js:r×3":
     "prose into a prompt: evidence-quality reasons, joined into a sentence about what was not " +
     "measured",
@@ -404,7 +403,8 @@ describe("#2287: only generated launch files leave the census, and each names it
       // The notice alone is a claim. A hand-written file carrying it would
       // leave the census unscanned, so a skip holds only for the exact bytes
       // the build produces from the source it names (review, #2291).
-      const rebuilt = buildWorkflowLaunch(sourceOf(source!)).text;
+      // Built as the build script builds it: with the lib bundle (#2400).
+      const rebuilt = buildWorkflowLaunch(sourceOf(source!), WORKFLOW_SCRIPT_CAP, launchBundle()).text;
       expect(sourceOf(f) === rebuilt, `${f} carries the generated notice but is not the build of ${source}`).toBe(true);
     }
     expect(WORKFLOW_FILES).toContain("ship.js");
