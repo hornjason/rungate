@@ -13,6 +13,11 @@ rule stays in `.claude/rules/`, where every agent loads it on every turn. These
 instances live here, where they are read when somebody is writing or repairing
 a check.
 
+They are the only evidence several of this repository's checks were ever
+proved able to fail, and deleting them is the cheapest wrong fix for a rule
+file that is too long. The rule's own pointer to this file said so at length
+until #2353 moved the sentence here, to make room in the always-loaded surface.
+
 The move was #1009 and nothing was rewritten: every section below is the text
 that was in the rules file, in its original order, at its original heading
 level. Two of these tables are byte-compared against `specs/HARNESS-STANDARD.md`

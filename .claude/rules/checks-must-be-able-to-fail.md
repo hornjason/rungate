@@ -145,12 +145,6 @@ break and the counts are in `reference/check-failure-worked-instances.md`.
 
 ## The worked instances live next door
 
-Every measurement this file used to carry inline — the batteries, the mutation
-tables, the named wrong fixes, the counts — is in
-`reference/check-failure-worked-instances.md`, in the same order and the same
-words. They were moved, not deleted (#1009): they are the only evidence several
-of this repository's checks were ever proved able to fail, and deleting them is
-the cheapest wrong fix for a file that is too long.
-
-Read them when you are writing the check, not before. They are a record of
-measurements already taken; what you need on every turn is above this line.
+The batteries, mutation tables, named wrong fixes and counts are in
+`reference/check-failure-worked-instances.md` (#1009). Read them when you are
+writing a check, not before, and never delete them to shorten this file.
