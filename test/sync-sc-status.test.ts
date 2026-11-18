@@ -415,6 +415,22 @@ describe("#2360: --project-root points the run at the consumer's tree", () => {
       expect(out, "it read the package's own specs").not.toContain("SPEC-TO-BOARD-PIPELINE-SPEC");
       expect(r.status).toBe(0);
       expect(readFileSync(join(consumer, "specs", "DEMO-SPEC.md"), "utf-8"), "a dry run wrote the spec").toBe(spec);
+
+      // Review of #2365: `--project-root=<dir>` through the CLI, run from
+      // somewhere else. The dispatcher must not append the caller's directory
+      // after it, or the last-one-wins reader silently takes the wrong root.
+      const elsewhere = mkdtempSync(join(tmpdir(), "rg-2360-elsewhere-"));
+      try {
+        const eq = spawnSync(
+          "bun",
+          [join(PKG, "bin", "rungate.ts"), "sync-sc-status", `--project-root=${consumer}`, "--only", "SC-9471", "--dry-run"],
+          { cwd: elsewhere, encoding: "utf-8", timeout: 120_000 },
+        );
+        expect(eq.stdout + eq.stderr).toContain("Found 1 unchecked SCs");
+        expect(eq.status).toBe(0);
+      } finally {
+        rmSync(elsewhere, { recursive: true, force: true });
+      }
     } finally {
       rmSync(consumer, { recursive: true, force: true });
     }

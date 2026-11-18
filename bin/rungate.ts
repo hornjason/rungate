@@ -74,7 +74,11 @@ if (!existsSync(script)) {
 // Only added when the caller did not say otherwise, and only for commands
 // that accept the flag — a script that does not would read it as a
 // positional argument.
-const needsRoot = command.projectRootFlag && !rest.includes("--project-root");
+// Either spelling counts as the caller saying so: `--project-root=<dir>` read
+// as absent appended the cwd AFTER it, and a last-one-wins reader then took
+// the cwd over the directory the caller named (review of #2365).
+const givesRoot = rest.some(a => a === "--project-root" || a.startsWith("--project-root="));
+const needsRoot = command.projectRootFlag && !givesRoot;
 const args = needsRoot ? [...rest, "--project-root", process.cwd()] : rest;
 
 // Run the script as an ENTRY MODULE, so `import.meta.main` is true inside it
