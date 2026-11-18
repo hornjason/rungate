@@ -341,11 +341,15 @@ function readCore(source: string, core: readonly string[]): CoreReading {
       // import statement, and the sandbox has neither (review of #2397).
       if (ts.isCallExpression(n)) {
         const callee = n.expression;
-        const own = ts.isIdentifier(callee) ? topLevelNode(checker.getSymbolAtLocation(callee)?.declarations?.[0], sf) : null;
+        // A `require` declared in this file, as a parameter, a local or a
+        // top-level declaration, is a function the module wrote, not the
+        // loader. The global one has no declaration here (review of #2399).
+        const declaredAt = ts.isIdentifier(callee) ? checker.getSymbolAtLocation(callee)?.declarations?.[0] : undefined;
+        const declared = declaredAt !== undefined && declaredAt.getSourceFile() === sf;
         const loader =
           callee.kind === ts.SyntaxKind.ImportKeyword
             ? "import()"
-            : ts.isIdentifier(callee) && callee.text === "require" && own === null
+            : ts.isIdentifier(callee) && callee.text === "require" && !declared
               ? "require()"
               : null;
         if (loader !== null) {

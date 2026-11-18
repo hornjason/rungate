@@ -237,6 +237,16 @@ describe("#2398: cores are read by the checker and bundled", () => {
     expect(coreClosure("export default function named() { return 1; }", ["default"]).imports).toEqual([]);
   });
 
+  test("review of #2399: a parameter or local named require is not the module loader", () => {
+    const src = [
+      "export function viaParam(require: (id: string) => unknown) { return require(\"x\"); }",
+      "export function viaLocal() { const require = (id: string) => id; return require(\"y\"); }",
+      "export function global() { return require(\"z\"); }",
+    ].join("\n");
+    expect(coreClosure(src, ["viaParam", "viaLocal"]).imports).toEqual([]);
+    expect(coreClosure(src, ["global"]).imports).toEqual(["require() of z (via global)"]);
+  });
+
   test("a local that shadows an import is not a use of it — the checker reads scope", () => {
     const src = 'import { existsSync } from "fs";\nexport function f(existsSync: (p: string) => boolean) { return existsSync("x"); }';
     expect(coreClosure(src, ["f"]).imports).toEqual([]);
