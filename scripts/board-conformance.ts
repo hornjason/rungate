@@ -238,6 +238,46 @@ export interface BoardSnapshot {
    * {@link BoardIssue.criteriaField}.
    */
   familyIssues?: FamilyIssue[];
+
+  /**
+   * Every open issue a consumer filed (`from-consumer`), with when it was
+   * filed, its milestone and its verdict marker — SC-2783, ADR-020.
+   *
+   * `takenAt` is when the producer read it, so the age is a property of the
+   * snapshot and not of whoever reads it later. **Absent means it was never
+   * read**, and `consumer-intake` goes UNMEASURED.
+   */
+  consumerIntake?: ConsumerIntake;
+}
+
+/** The consumer-filed issues and when they were read — SC-2783. */
+export interface ConsumerIntake {
+  takenAt: string;
+  issues: ConsumerIntakeIssue[];
+}
+
+/** One open consumer-filed issue — SC-2783. */
+export interface ConsumerIntakeIssue {
+  number: number;
+  createdAt: string;
+  milestone: string | null;
+  /** The verdict a trusted marker comment records, or null for none. */
+  verdict: string | null;
+}
+
+/** How long a consumer issue may wait for an answer before it is overdue — SC-2783. */
+export const CONSUMER_INTAKE_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
+
+/**
+ * The consumer issues older than the grace period with neither a verdict
+ * marker nor a milestone — SC-2783. Either one answers the report; a
+ * milestone a person set counts as much as a triage verdict.
+ */
+export function consumerIntakeOverdue(intake: ConsumerIntake): ConsumerIntakeIssue[] {
+  const at = Date.parse(intake.takenAt);
+  return intake.issues.filter(
+    i => i.verdict === null && i.milestone === null && at - Date.parse(i.createdAt) > CONSUMER_INTAKE_GRACE_MS,
+  );
 }
 
 /** One open issue in some phase-milestone family — #2223 / E4. */
@@ -916,6 +956,42 @@ export const READINGS: readonly ReadingSpec[] = [
     // criterion the spec parks is worth seeing on both lines.
     planned: b => b.declaredWork!.filter(w => w.planned !== undefined).map(w => `${w.id} (${w.source}) — ${w.planned}`),
   },
+  {
+    name: "consumer-intake",
+    item: "SC-2783",
+    what: "every consumer-filed issue older than two days carries a verdict marker or a milestone",
+    readsIssueRefs: false,
+    // The denominator is EVERY open issue, not the consumer ones: a
+    // repository nobody has filed into is conformant, and counting only
+    // consumer issues would make it 0 of 0, which this frame reads as
+    // UNMEASURED — every repository without consumers would fail its board.
+    // The question is therefore "no open issue is an unanswered consumer
+    // report", asked of a population that was read.
+    unreadable: b => {
+      if (b.consumerIntake === undefined) {
+        return "consumer-filed issues were never read with their comments, so whether any waits unanswered is unknown";
+      }
+      if (b.repoIssues === undefined) return "open issues were never read, so the intake has nothing to be counted against";
+      if (Number.isNaN(Date.parse(b.consumerIntake.takenAt))) {
+        return `the intake's read time ${JSON.stringify(b.consumerIntake.takenAt)} is not a time, so no issue's age is known`;
+      }
+      // A consumer row outside the open population would be dropped by the
+      // ratio below, and the reading would get easier the more it disagreed.
+      const open = new Set(b.repoIssues.map(i => i.number));
+      const stray = b.consumerIntake.issues.filter(i => !open.has(i.number)).map(i => `#${i.number}`);
+      return stray.length === 0
+        ? null
+        : `consumer issue(s) ${stray.join(", ")} are not among the open issues read, so the two readings disagree`;
+    },
+    measure: b => ({
+      measured: b.repoIssues!.length - consumerIntakeOverdue(b.consumerIntake!).length,
+      target: b.repoIssues!.length,
+    }),
+    offenders: b =>
+      consumerIntakeOverdue(b.consumerIntake!).map(
+        i => `#${i.number} — filed by a consumer at ${i.createdAt}, and carries neither a verdict marker nor a milestone`,
+      ),
+  },
 ];
 
 export const READING_NAMES: readonly string[] = READINGS.map(r => r.name);
@@ -1356,6 +1432,10 @@ export function readSnapshotText(text: string): SnapshotRead {
   const familyRows = Array.isArray(raw.familyIssues) ? raw.familyIssues.map(normaliseFamilyIssue) : null;
   const family =
     familyRows !== null && familyRows.every(f => f !== null) ? { familyIssues: familyRows as FamilyIssue[] } : {};
+  // SC-2783. The declared-work rule: one row this command cannot identify
+  // unreads the whole intake, because a dropped row is an unanswered report
+  // the reading would never name.
+  const intake = normaliseConsumerIntake(raw.consumerIntake);
 
   return {
     board: {
@@ -1371,9 +1451,28 @@ export function readSnapshotText(text: string): SnapshotRead {
       ...edges,
       ...declared,
       ...family,
+      ...(intake === null ? {} : { consumerIntake: intake }),
     },
     why: null,
   };
+}
+
+/** The consumer intake, or `null` when it is absent or any part is unidentifiable — SC-2783. */
+function normaliseConsumerIntake(raw: unknown): ConsumerIntake | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.takenAt !== "string" || !Array.isArray(r.issues)) return null;
+  const issues: ConsumerIntakeIssue[] = [];
+  for (const row of r.issues as unknown[]) {
+    if (typeof row !== "object" || row === null) return null;
+    const i = row as Record<string, unknown>;
+    if (typeof i.number !== "number" || !Number.isInteger(i.number)) return null;
+    if (typeof i.createdAt !== "string" || Number.isNaN(Date.parse(i.createdAt))) return null;
+    if (i.milestone !== null && typeof i.milestone !== "string") return null;
+    if (i.verdict !== null && typeof i.verdict !== "string") return null;
+    issues.push({ number: i.number, createdAt: i.createdAt, milestone: i.milestone as string | null, verdict: i.verdict as string | null });
+  }
+  return { takenAt: r.takenAt, issues };
 }
 
 /** One family-issue row, or `null` for one this command cannot identify — #2223 / E4. */

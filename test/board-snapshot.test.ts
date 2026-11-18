@@ -46,6 +46,7 @@ import {
   withoutAmbientGitOverrides,
 } from "../lib/git-isolation";
 import type { LiveIssue, ProjectFieldReading } from "../lib/live-issues";
+import { CONSUMER_LABEL, verdictMarker, type IssueComment } from "../lib/consumer-triage";
 import { NAMES_NONE } from "../lib/board-mirror";
 import { oneScMentionPattern } from "../lib/sc-ids";
 import { PRODUCE_TIMEOUT_MS, readSnapshotText, takeReadings } from "../scripts/board-conformance";
@@ -82,6 +83,10 @@ interface SpyOptions {
   identity?: { name: string; projectId: string };
   /** What `readFieldIdentity` throws instead of answering. */
   identityThrow?: Error;
+  /** SC-2783: each issue's comments. Given, the spy can read comments; absent, it cannot. */
+  comments?: Record<number, IssueComment[]>;
+  /** SC-2783: what `readComments` throws instead of answering. */
+  commentsThrow?: Error;
 }
 
 /** One live issue, with the fields a case is not asserting on defaulted. */
@@ -149,6 +154,15 @@ function spy(live: Live[] = [], throwsOrOpts?: Error | SpyOptions) {
       for (const n of numbers) out.set(n, o.fields?.[n] ?? { kind: "off-board" });
       return out;
     },
+    ...(o.comments !== undefined || o.commentsThrow !== undefined
+      ? {
+          readComments: async (_repo: string, n: number) => {
+            calls.push(`readComments ${n}`);
+            if (o.commentsThrow) throw o.commentsThrow;
+            return o.comments?.[n] ?? [];
+          },
+        }
+      : {}),
   };
   return { gh, calls, asked, askedFields };
 }
@@ -1133,6 +1147,69 @@ describe("the refusals, and whether the API was reached", () => {
           r => r.name === "criteria-field",
         )!;
         expect(shortReading.status).toBe("short");
+      });
+    });
+  });
+
+  /**
+   * SC-2783: `consumerIntake`, the producer half. Every open consumer-filed
+   * issue with when it was filed, its milestone, and the verdict a TRUSTED
+   * marker records; any part unreadable omits the key.
+   */
+  describe("SC-2783: the consumer intake", () => {
+    const CREATED = "2026-11-01T00:00:00Z";
+    const intake = {
+      issues: [
+        iss({ number: 50, labels: [CONSUMER_LABEL], createdAt: CREATED }),
+        iss({ number: 51, labels: [CONSUMER_LABEL], createdAt: CREATED, milestone: IN_PHASE_0 }),
+        iss({ number: 52, labels: ["bug"], createdAt: CREATED }),
+      ],
+    };
+    const marker = (association: string): IssueComment => ({ body: verdictMarker("PLACED"), author: "someone", association });
+
+    test("consumer issues only, with a trusted marker read as the verdict and a reporter's own marker not", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        const { gh, calls } = spy(CONFORMANT_LIVE, { ...intake, comments: { 50: [marker("OWNER")], 51: [marker("NONE")] } });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.consumerIntake?.issues).toEqual([
+          { number: 50, createdAt: CREATED, milestone: null, verdict: "PLACED" },
+          { number: 51, createdAt: CREATED, milestone: IN_PHASE_0, verdict: null },
+        ]);
+        expect(snap.consumerIntake?.takenAt).toBe(snap.producedAt);
+        expect(calls.filter(c => c.startsWith("readComments")), "a non-consumer issue's comments were read").not.toContain("readComments 52");
+      });
+    });
+
+    test("a comment read that fails omits the intake, never reads as 'no marker'", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        const { gh } = spy(CONFORMANT_LIVE, { ...intake, commentsThrow: new Error("HTTP 502") });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect("consumerIntake" in snap).toBe(false);
+      });
+    });
+
+    test("a consumer issue with no filing time omits the intake", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        const { gh } = spy(CONFORMANT_LIVE, { issues: [iss({ number: 50, labels: [CONSUMER_LABEL] })], comments: {} });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect("consumerIntake" in snap).toBe(false);
+      });
+    });
+
+    test("a cut label list that might hide the consumer label omits the intake", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        const cut = iss({ number: 53, labels: ["bug"], labelsTruncated: true, createdAt: CREATED });
+        const { gh } = spy(CONFORMANT_LIVE, { issues: [...intake.issues, cut], comments: {} });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect("consumerIntake" in snap).toBe(false);
+      });
+    });
+
+    test("a caller that cannot read comments omits the intake", async () => {
+      await withSpec(SPEC, async (dir, at) => {
+        const { gh } = spy(CONFORMANT_LIVE, intake);
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect("consumerIntake" in snap).toBe(false);
       });
     });
   });
