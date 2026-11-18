@@ -144,6 +144,24 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      # The compliance tools ci.yml installs, pinned by ci.globalTools in
+      # .claude/rungate/config.json — one declaration (#597). Without them this
+      # job's suite had only `npx @reporails/cli`, whose server refused every
+      # anonymous check on 2026-11-18, so test/instruction-compliance.test.ts
+      # (#755) found no tool reading the surface and v0.8.32 and v0.8.33 were
+      # spent. Before the npm upgrade below, because ci-global-tools.test.ts
+      # reads the FIRST `npm install -g` line as this file's tool pins. A
+      # failed install is UNMEASURED, as in ci.yml, not fatal here: the suite's
+      # own #755 cases decide whether an unread surface fails the release.
+      - name: Install pinned global tools
+        run: |
+          set -uo pipefail
+          status=0
+          npm install -g 'agnix@0.59.0' '@reporails/cli@0.6.4' || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::warning title=Global tools UNMEASURED::npm install -g exited $status, so the tools pinned by ci.globalTools are absent from this runner and the compliance checks that shell out to them will report it."
+          fi
+
       # OIDC needs npm >= 11.5.1 and node 22 ships 10.x. Asserted rather than
       # assumed: an npm too old to speak OIDC does not say so, it looks for a
       # token, finds none and reports an auth failure that sends you to the
