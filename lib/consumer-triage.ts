@@ -49,6 +49,10 @@ export interface TriageIssue {
   readonly title: string;
   readonly body: string | null;
   readonly milestone: string | null;
+  /** Its labels, when read; only the stopped-run check looks at them (#2364). */
+  readonly labels?: readonly string[];
+  /** True when the label list was cut at a page boundary, so an absent label is unread. */
+  readonly labelsTruncated?: boolean;
 }
 
 /** An open pull request: its changed files are what it shares. */
@@ -72,6 +76,13 @@ export interface TriageContext {
   readonly families: readonly PlacingFamily[];
   /** `board.milestonePrefix`, the engine family Ready draws from first. */
   readonly enginePrefix: string | null;
+  /**
+   * `board.queueLabel`, which a triage run writes BEFORE the milestone and
+   * the marker (review of #2367) — so a milestone a run set always has it
+   * beside it, and it is the only evidence that a run, not a person, set an
+   * unmarked issue's milestone (#2364). Null or absent: no such evidence.
+   */
+  readonly queueLabel?: string | null;
 }
 
 const asFinding = (i: TriageIssue): Finding => ({ id: String(i.number), title: i.title, body: i.body ?? "" });
@@ -96,11 +107,21 @@ export function triageVerdict(issue: TriageIssue, ctx: TriageContext): Triage {
   if (move.kind === "refuse") return { kind: "REFUSED", why: move.why };
 
   if (issue.milestone !== null) {
-    // An unmarked issue already sitting where triage would put it is a run that
-    // set the milestone and stopped before the marker (review of #2356): finish
-    // it. Any other milestone was set by a person and is never moved.
-    const again = unplacedVerdict({ ...issue, milestone: null }, ctx);
-    if (again.kind !== "REFUSED" && again.milestone === issue.milestone) {
+    // An unmarked issue a run set the milestone AND queue label on, then stopped
+    // before the marker (review of #2356): finish it. The label is the
+    // evidence; the recommendation matching is not, because a person's
+    // milestone can match by coincidence (#2364). Any other milestone was set by
+    // a person and is never moved.
+    const runLabelled = ctx.queueLabel != null && (issue.labels ?? []).includes(ctx.queueLabel);
+    // A cut label list cannot say the label is absent (review of #2367).
+    if (!runLabelled && ctx.queueLabel != null && issue.labelsTruncated === true) {
+      return {
+        kind: "REFUSED",
+        why: `its labels were cut at a page boundary without ${ctx.queueLabel}, so whether a run set "${issue.milestone}" is unread`,
+      };
+    }
+    const again = runLabelled ? unplacedVerdict({ ...issue, milestone: null }, ctx) : null;
+    if (again !== null && again.kind !== "REFUSED" && again.milestone === issue.milestone) {
       return { ...again, why: `${again.why}; it already sits there, so this finishes a run that stopped before the marker` };
     }
     return { kind: "LEFT", why: `already in "${issue.milestone}", which a person set; a milestone a person set is never moved` };
