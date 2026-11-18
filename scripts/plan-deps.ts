@@ -241,10 +241,17 @@ export async function main(argv: string[], gh: PlanDepsGitHub = LIVE_GITHUB): Pr
     if (sweep.reading === "UNMEASURED") {
       return refuse(values.json, `UNMEASURED — the specs could not be listed to read board.phaseOrder: ${sweep.reasons.join("; ")}`);
     }
-    const order = phaseOrderFor(
-      sweep.paths.map(p => ({ path: p, text: readFileSync(join(root, p), "utf-8") })),
-      prefix,
-    );
+    // A listed spec the read refuses is UNMEASURED, named, like every other
+    // spec sweep — never an uncaught throw (review of #2352).
+    const texts: { path: string; text: string }[] = [];
+    for (const p of sweep.paths) {
+      try {
+        texts.push({ path: p, text: readFileSync(join(root, p), "utf-8") });
+      } catch (e) {
+        return refuse(values.json, `UNMEASURED — ${p} could not be read to find board.phaseOrder: ${(e as Error).message}`);
+      }
+    }
+    const order = phaseOrderFor(texts, prefix);
     if (order.kind === "unreadable") return refuse(values.json, `UNMEASURED — ${order.why}`);
     if (order.kind === "off") {
       const why = `${prefix}: ${order.spec} declares board.phaseOrder: false, so no phase-order links are written; real blocked-by links are untouched`;

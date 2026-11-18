@@ -371,10 +371,23 @@ export function phaseOrderFor(
   specs: readonly { path: string; text: string }[],
   prefix: string,
 ): { kind: "on" } | { kind: "off"; spec: string } | { kind: "unreadable"; why: string } {
-  const declared = specs
-    .map(s => ({ path: s.path, settings: boardDeclaration(s.text).settings }))
-    .filter(s => s.settings.prefix === prefix)
-    .map(s => ({ path: s.path, value: s.settings.phaseOrder ?? "true" }));
+  const family = specs
+    .map(s => ({ path: s.path, board: boardDeclaration(s.text) }))
+    .filter(s => s.board.settings.prefix === prefix);
+  // A declaration the engine cannot read — `phaseOrder: flase` among them, since
+  // `boardDeclaration` checks every key's values — refuses rather than reading
+  // the raw text as "not false", which would be on (review of #2352).
+  const unreadable = family.find(s => s.board.problems.length > 0);
+  if (unreadable !== undefined) {
+    return {
+      kind: "unreadable",
+      why: `${unreadable.path}: its board: declaration cannot be read, so family ${prefix}'s phaseOrder cannot be — ${unreadable.board.problems.join("; ")}`,
+    };
+  }
+  // Only an active spec is the family; a deferred one carrying the prefix is shelved (review of #2352).
+  const declared = family
+    .filter(s => s.board.scope === "active")
+    .map(s => ({ path: s.path, value: s.board.settings.phaseOrder ?? "true" }));
   const off = declared.filter(d => d.value === "false");
   const on = declared.filter(d => d.value !== "false");
   if (off.length > 0 && on.length > 0) {

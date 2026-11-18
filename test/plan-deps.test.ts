@@ -1226,4 +1226,56 @@ describe("phaseOrder: false — a family that opts out of phase-order links", ()
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Review of #2352: three readings the first round let through.
+  test("a value that is neither true nor false refuses by name, never reads as on", async () => {
+    for (const value of ["flase", "no"]) {
+      const root = tree({ "C-SPEC.md": spec(`{ scope: active, prefix: Convergence, phaseOrder: ${value} }`) });
+      try {
+        const s = spy();
+        const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
+        expect(got.code, value).toBe(REFUSAL_EXIT);
+        expect(got.text).toContain("specs/C-SPEC.md");
+        expect(got.text).toContain("phaseOrder");
+        expect(s.calls).toEqual([]);
+        expect(s.reads()).toBe(0);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a deferred spec carrying the family's prefix does not decide its phase order", async () => {
+    const root = tree({
+      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
+      "OLD-SPEC.md": spec("{ scope: deferred, prefix: Convergence, phaseOrder: false }"),
+    });
+    try {
+      const s = spy();
+      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
+      expect(got.code, got.text).toBe(0);
+      expect(s.calls).toEqual(["#20 +10"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a spec that cannot be read refuses as UNMEASURED, naming it, instead of throwing", async () => {
+    const root = tree({
+      "C-SPEC.md": spec("{ scope: active, prefix: Convergence }"),
+      "BROKEN-SPEC.md": spec("{ scope: active, prefix: Other }"),
+    });
+    // Listed by the sweep, refused by the read: no permission to open it.
+    require("fs").chmodSync(join(root, "specs", "BROKEN-SPEC.md"), 0o000);
+    try {
+      const s = spy();
+      const got = await run(["--repo", "o/r", "--write", "--milestone-prefix", "Convergence", "--project-root", root], s.gh);
+      expect(got.code).toBe(REFUSAL_EXIT);
+      expect(got.text).toContain("UNMEASURED");
+      expect(got.text).toContain("BROKEN-SPEC.md");
+      expect(s.reads()).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
