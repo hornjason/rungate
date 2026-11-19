@@ -96,6 +96,58 @@ describe("#323: HYGIENE-11's date lookup is one git call and still agrees with g
     180_000,
   );
 
+  // #2455: a merge that changed a file relative to EVERY parent is the
+  // file's last commit to `git log -1 -- <file>`, and `--name-only` lists no
+  // files for a merge, so the single call dated the file from an older
+  // commit. Found on #2443's CI: main and the branch both changed one spec,
+  // and the merge ref's commit was a day newer than either side.
+  test("#2455: a merge that changed a file on both sides dates it, as per-file git log does", () => {
+    const repo = mkdtempSync(join(tmpdir(), "rg-mergedates-"));
+    const git = (args: string[], date: string) => {
+      const r = spawnSync("git", ["-C", repo, ...args], {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_DATE: date,
+          GIT_COMMITTER_DATE: date,
+          GIT_AUTHOR_NAME: "t",
+          GIT_AUTHOR_EMAIL: "t@t",
+          GIT_COMMITTER_NAME: "t",
+          GIT_COMMITTER_EMAIL: "t@t",
+        },
+      });
+      expect(r.status, `git ${args.join(" ")}: ${r.stderr}`).toBe(0);
+    };
+    const write = (f: string, s: string) => writeFileSync(join(repo, f), s);
+    git(["init", "-q", "-b", "main"], "2026-01-01T12:00:00Z");
+    write("a.md", "a0\n\nmiddle\n\nz0\n");
+    write("b.md", "b0\n");
+    write("c.md", "c0\n");
+    git(["add", "."], "2026-01-01T12:00:00Z");
+    git(["commit", "-q", "-m", "base"], "2026-01-01T12:00:00Z");
+    git(["checkout", "-q", "-b", "side"], "2026-01-02T12:00:00Z");
+    write("a.md", "a0\n\nmiddle\n\nz1\n");
+    write("b.md", "b1\n");
+    git(["commit", "-q", "-am", "side changes a and b"], "2026-01-02T12:00:00Z");
+    git(["checkout", "-q", "main"], "2026-01-03T12:00:00Z");
+    write("a.md", "a1\n\nmiddle\n\nz0\n");
+    write("c.md", "c1\n");
+    git(["commit", "-q", "-am", "main changes a and c"], "2026-01-03T12:00:00Z");
+    git(["merge", "-q", "--no-edit", "side"], "2026-01-05T12:00:00Z");
+
+    const files = ["a.md", "b.md", "c.md"];
+    const fast = lastCommitDates(repo, files);
+    const perFile = Object.fromEntries(
+      files.map(f => [
+        f,
+        spawnSync("git", ["-C", repo, "log", "-1", "--format=%ci", "--", f]).stdout.toString().trim().split(" ")[0],
+      ]),
+    );
+    // The fixture says what it is meant to: a is the merge's, b the side's,
+    // c main's. Without this the case could agree with git about nothing.
+    expect(perFile).toEqual({ "a.md": "2026-01-05", "b.md": "2026-01-02", "c.md": "2026-01-03" });
+    expect(Object.fromEntries(files.map(f => [f, fast.get(f)]))).toEqual(perFile);
+  });
+
   test("an untracked file gets no date, rather than a wrong one", () => {
     // The boundary the loop handled with `if (!dateStr) continue`. A path with
     // no commit is newly added, which is the opposite of stale — returning a
