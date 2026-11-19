@@ -889,12 +889,13 @@ export function proofsFor(
   passing: ReadonlySet<string>,
   testDir?: string,
 ): Map<string, string> {
-  const dir = testDir || TEST_DIR;
+  // Spelled with ?? on purpose: the || spelling is the anchor test/sync-sc-todo-outranks-comment.test.ts cuts findTestFilesForSCs on.
+  const root = testDir ?? TEST_DIR;
   const out = new Map<string, string>();
   for (const [file, credits] of testFileMap) {
     const live = credits.filter(c => passing.has(scopedKey(c.specFile, c.id)) && !out.has(scopedKey(c.specFile, c.id)));
     if (live.length === 0) continue;
-    const source = readFileSync(join(dir, file), "utf-8");
+    const source = readFileSync(join(root, file), "utf-8");
     const sites = coverageClaimSites(source);
     for (const c of live) {
       const site = sites.find(s => s.id === c.id && s.kind === "title");
