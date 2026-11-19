@@ -429,8 +429,10 @@ check proving it can fail against this file and not against a fixture.
       needs: test
       proved-by: test/ai-review-conventions.test.ts (AC-C1..AC-C9b) — 371 pass, 0 fail, 2026-10-28
       fingerprint: ebeaeab9
-- [ ] CRC-A7: `REVIEW.md` caps the nits, lists paths to skip, demands file-and-line evidence rather than a guess from a name, and requires a summary that starts with a count and says plainly when there is nothing to fix.
+- [x] CRC-A7: `REVIEW.md` caps the nits, lists paths to skip, demands file-and-line evidence rather than a guess from a name, and requires a summary that starts with a count and says plainly when there is nothing to fix.
       needs: test
+      proved-by: test/ai-review-conventions.test.ts, the `#1653` describes (A7-1..A7-8) — 8 pass, 0 fail, 2026-11-19, on the PR that closes #1653: each of REVIEW.md's four sections is asserted on its own, the prompt's payload shape carries `review_summary` (the slot the fourth clause needed), and the adjudicator reads the summary's leading count back against the findings it lists, as a notice that decides nothing. Six mutations each turn a case red: the summary section dropped, the prompt slot dropped, the count compare made constant, the numeral cut to one digit, a summary reading invented for an unreadable payload, the nit cap's number removed.
+      fingerprint: 0ee9df2d
 - [ ] CRC-A8: **Fix at the source.** When the reviewer keeps flagging the same thing, the repair goes into the skill, a lint rule, or an instruction file — not into another finding.
       needs: test
 
