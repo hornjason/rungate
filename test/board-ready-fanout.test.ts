@@ -2674,7 +2674,9 @@ describe("SC-2741: a milestone created, edited or deleted refills Ready", () => 
   });
 
   test("each milestone event tops up Ready, writes, and names no closed issue", () => {
-    for (const t of milestoneTypes) {
+    // The three actions by name, not the parsed list: a trigger dropped from
+    // the workflow would otherwise empty this loop and leave it green.
+    for (const t of ["created", "edited", "deleted"]) {
       const r = fill(`milestone-${t}`);
       expect(r.code, `milestone-${t} refused: ${r.out}`).toBe(0);
       expect(r.argv, `milestone-${t} never reached the command`).not.toBeNull();
