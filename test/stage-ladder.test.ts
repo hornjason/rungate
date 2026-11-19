@@ -27,6 +27,7 @@ import { spawnSync } from "child_process";
 import {
   COMMAND_NOT_FOUND,
   ITEM_SCOPES,
+  REFUSAL_EXCERPT_CHARS,
   REFUSAL_EXCERPT_LINES,
   refusalExcerpt,
   claimedImprovements,
@@ -367,6 +368,15 @@ describe("the live plan", () => {
     expect(refusalExcerpt(flood, "").split("\n").filter(l => l.startsWith("line ")).length).toBe(REFUSAL_EXCERPT_LINES);
     expect(refusalExcerpt(flood, "")).toContain("line 499");
     expect(refusalExcerpt("", "")).toBe("(no output)");
+    // Review of #2458: the character bound, exercised. Last lines far over
+    // REFUSAL_EXCERPT_CHARS, with the verdict at the very end: the excerpt
+    // keeps the END (a start-anchored cut would drop the verdict) and stays
+    // bounded (no cut at all would carry every character).
+    const longLines = Array.from({ length: 9 }, (_, i) => `noise ${i} ${"x".repeat(400)}`).join("\n") + "\nVERDICT: refused";
+    const capped = refusalExcerpt(longLines, "");
+    expect(capped).toContain("VERDICT: refused");
+    expect(capped).toContain("…");
+    expect(capped.length).toBeLessThanOrEqual("stdout, last lines:\n".length + 1 + REFUSAL_EXCERPT_CHARS);
     expect(refusalExcerpt(null, "only stderr")).toContain("only stderr");
   });
 
