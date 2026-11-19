@@ -650,6 +650,33 @@ describe("#1533: the clean arm scores FIRED only on a line the candidate changed
     expect(atLast.outcome).toBe("QUIET");
   });
 
+  test("#1533: the decider's case set, every row of its docblock table", () => {
+    // Review of #2450, round 4: the cases were added one round at a time.
+    // They are listed once here, row for row with `findingOnChangedLine`'s
+    // docblock, so a missing row is a red case rather than a next round.
+    const last = CLEAN.candidateLineCount!;
+    const changed = CLEAN.changedLines![0]!;
+    const unchanged = 19;
+    expect(CLEAN.changedLines).not.toContain(unchanged);
+    const rows: [string, Record<string, unknown>, ReviewControlSubject, boolean][] = [
+      ["another file", { file: "lib/elsewhere.ts", line: changed }, CLEAN, false],
+      ["subject file, line not a number", { file: CLEAN.file, line: "n/a" }, CLEAN, true],
+      ["subject file, non-integer line", { file: CLEAN.file, line: changed + 0.5 }, CLEAN, true],
+      ["subject file, line 0", { file: CLEAN.file, line: 0 }, CLEAN, true],
+      ["subject file, line past the end", { file: CLEAN.file, line: last + 1 }, CLEAN, true],
+      ["subject file, unchanged line", { file: CLEAN.file, line: unchanged }, CLEAN, false],
+      ["subject file, changed line", { file: CLEAN.file, line: changed }, CLEAN, true],
+      ["planted arm, any line", { file: PLANTED.file, line: 1 }, PLANTED, true],
+    ];
+    for (const [label, finding, s, want] of rows) {
+      expect(findingOnChangedLine(s, finding), label).toBe(want);
+    }
+    // And the docblock lists exactly as many rows as this table holds.
+    const source = readFileSync(join(import.meta.dir, "..", "evals", "ai-review-control", "control.ts"), "utf-8");
+    const block = source.slice(source.indexOf("#1533's one decider"), source.indexOf("export function findingOnChangedLine"));
+    expect(block.split("\n").filter(l => /^\s*\* \| (another|the subject|any line)/.test(l))).toHaveLength(7);
+  });
+
   test("the scope can fail: with the decider answering every line, line 19 FIRES again", async () => {
     const source = readFileSync(join(import.meta.dir, "..", "evals", "ai-review-control", "control.ts"), "utf-8");
     const needle = "return subject.changedLines.includes(line);";

@@ -284,10 +284,19 @@ export function changedLines(baseline: string, candidate: string): number[] {
 
 /**
  * #1533's one decider: does this finding land on a line the candidate
- * changed? A finding naming another file does not. A finding naming the
- * subject's file with no usable line DOES — unattributable is not
- * pre-existing, and the direction this is allowed to be wrong in is toward
- * FIRED, which a reader then argues with.
+ * changed? The direction it is allowed to be wrong in is toward FIRED, which
+ * a reader then argues with. **The whole case set**, enumerated once and
+ * held row for row by the `#1533: the decider's case set` test:
+ *
+ * | the finding names                                   | answer |
+ * |-----------------------------------------------------|--------|
+ * | another file                                        | false — not about the diff |
+ * | the subject's file, `line` not a number             | true — unattributable |
+ * | the subject's file, `line` a non-integer number     | true — unattributable |
+ * | the subject's file, `line` < 1 or past its last line| true — unattributable |
+ * | the subject's file, a line it did not change        | false — pre-existing |
+ * | the subject's file, a line it changed               | true |
+ * | any line, on a subject with no computed lines       | true — a planted arm is never excused |
  */
 export function findingOnChangedLine(
   subject: ReviewControlSubject,
