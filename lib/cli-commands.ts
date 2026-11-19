@@ -327,6 +327,13 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
       "[--top-up] [--moving-issue <n>] [--actor <login>] [--write]   (at least one of --closed-issue, --top-up; " +
       "--project defaults to board.id in the rungate config)",
   },
+  // #2507: ships before the generated board-flow.yml that calls it (#2481).
+  // The board is --project, else board.id in the working directory's config.
+  "board-flow": {
+    script: "scripts/board-flow.ts",
+    summary: "Move an issue's card to the lane an issue or pull request event decides",
+    usage: "rungate board-flow --repo <owner/name> --event <kind> [--project <id>] [--actor <login>] [--write]   (board defaults to board.id)",
+  },
   // #2173. For a generated workflow that works in shell (`board-intake.yml`,
   // #2166) and so cannot read the config through the loader itself. No
   // `projectRootFlag`: it reads `process.cwd()`, which the child inherits.

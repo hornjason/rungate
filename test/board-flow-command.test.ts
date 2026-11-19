@@ -52,11 +52,14 @@ describe("#2507: board-flow finds its board from --project, then board.id", () =
   test("board.id in the config of the directory it runs in is the board", () => {
     const r = run([SCRIPT], dir({ id: "PVT_fixture" }), ["--repo", "acme/widgets", "--event", EVENT]);
     expect(r.out, "board.id was not read").not.toContain(NO_BOARD_REFUSAL);
+    // Reached only once a board is resolved: the next stage, the credential.
+    expect(r.out).toContain("BOARD_PROJECT_TOKEN is not set");
   });
 
   test("--project still wins, with no config at all", () => {
     const r = run([SCRIPT], dir(), ["--repo", "acme/widgets", "--project", "PVT_flag", "--event", EVENT]);
     expect(r.out).not.toContain(NO_BOARD_REFUSAL);
+    expect(r.out).toContain("BOARD_PROJECT_TOKEN is not set");
   });
 
   test("--repo and --event are still required", () => {
