@@ -40,6 +40,12 @@
       "from": 2786,
       "to": 2786
     },
-    { "owner": "rg/fa-unmeasured-headline", "from": 288, "to": 289, "namespace": "FG" }
+    { "owner": "rg/fa-unmeasured-headline", "from": 288, "to": 289, "namespace": "FG" },
+    {
+      "owner": "rg/2344-adr-consumer-board",
+      "from": 2789,
+      "to": 2794,
+      "note": "ADR-023 criteria (#2344); above ADR-022's 2787-2788, reserved on rg/2337-adr-bot-merges"
+    }
   ]
 }
