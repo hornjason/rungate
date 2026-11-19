@@ -178,6 +178,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         // handed to GitHub's search and read back as "no pull requests".
         // Round-tripped, because Date.parse rolls 2026-02-30 over to March 2
         // rather than refusing it (review of #2494).
+        // UTC-INTENTIONAL: --since is a calendar date read as UTC midnight, and the round-trip compares it in that same zone.
         const at = new Date(`${next}T00:00:00Z`);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(next) || Number.isNaN(at.getTime()) || at.toISOString().slice(0, 10) !== next) {
           console.error(`UNMEASURED: --since needs a date as YYYY-MM-DD, not ${JSON.stringify(next)}. Nothing was read.`);
