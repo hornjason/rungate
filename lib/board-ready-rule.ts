@@ -160,6 +160,32 @@ export function dueRank(r: Rankable): number {
 }
 
 /**
+ * SC-2741 (#2434): one issue from GitHub's REST issue list
+ * (`GET /repos/{owner}/{repo}/issues`) as a Rankable, so `work-status`
+ * ranks by the same keys `board-ready` reads over GraphQL.
+ *
+ * The REST list carries both keys. Measured 2026-11-19 on #2434:
+ * `milestone.due_on` and `issue_dependencies_summary` =
+ * `{blocked_by: 0, blocking: 3, total_blocked_by: 3, total_blocking: 4}`.
+ * `blocking` is the OPEN count the rule ranks by; `total_blocking` counts
+ * closed dependents too. An absent field is unread (`null`), never zero.
+ */
+export function rankableFromRestIssue(i: any): Rankable {
+  return {
+    number: i.number,
+    milestone: i.milestone?.title ?? null,
+    labels: (i.labels ?? [])
+      .map((l: any) => (typeof l === "string" ? l : l?.name))
+      .filter((n: any): n is string => typeof n === "string"),
+    dueOn: typeof i.milestone?.due_on === "string" ? (i.milestone.due_on as string) : null,
+    unblocks:
+      typeof i.issue_dependencies_summary?.blocking === "number"
+        ? (i.issue_dependencies_summary.blocking as number)
+        : null,
+  };
+}
+
+/**
  * Which milestone family an issue's phase belongs to — 0 for the engine, 1
  * for everything else.
  *
