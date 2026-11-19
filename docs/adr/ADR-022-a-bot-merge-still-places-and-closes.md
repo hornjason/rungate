@@ -1,15 +1,15 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-18
-updated: 2026-11-18
+updated: 2026-11-19
 ---
 
 # ADR-022 — A merge made by automation still places the plan and closes its issues
 
 ## Status
 
-**Proposed, 2026-11-18.** Jason chose the route on 2026-11-18: rungate's own workflow handles a merge made with `GITHUB_TOKEN` (option B on #2337), rather than asking every consumer for a PAT or a GitHub App. Still open: the two criterion texts in *Criteria*, which are his to accept or edit, and his merge.
+**Accepted, 2026-11-19.** Jason chose the route on 2026-11-18: rungate's own workflow handles a merge made with `GITHUB_TOKEN` (option B on #2337), rather than asking every consumer for a PAT or a GitHub App. He accepted the two criterion texts in *Criteria* on 2026-11-19. His merge of this file places the plan (`adr-accepted.yml`); until he merges it, nothing is filed.
 
 ## Context
 
@@ -39,7 +39,7 @@ A consumer names its merge workflow in `board.mergeWorkflow`. The generated `adr
 - **Which repositories set `board.mergeWorkflow`** is each consumer's choice. asaCommandCenter's is `approve-on-green`.
 - **rungate's own repository** sets nothing. Its auto-merge is GitHub's native one, whose merges start workflows.
 
-## Criteria, proposed wording (Jason's to accept or edit)
+## Criteria (Jason accepted these texts, 2026-11-19)
 
 **SC-2787, new:**
 
