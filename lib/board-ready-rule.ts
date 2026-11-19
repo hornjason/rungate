@@ -1096,28 +1096,84 @@ export function readyOccupancy(
  * fallback — promote everything eligible and let a human trim it — is the
  * exact failure the cap exists to prevent, performed automatically.
  */
+/**
+ * SC-2786 (#2431): what each eligible issue names, and which files are
+ * already taken and by whom — an in-progress issue, an open pull request, or
+ * a card already in Ready. `filesOf` lacking an issue means it names none.
+ */
+export interface ReadyFileClaims {
+  readonly filesOf: ReadonlyMap<number, readonly string[]>;
+  readonly held: ReadonlyMap<string, string>;
+}
+
+/** One issue Ready passed over this fill, and the file that stopped it. */
+export interface ReadySkip {
+  readonly number: number;
+  readonly file: string;
+  readonly holder: string;
+}
+
+/**
+ * SC-2786's one decider: the first of `files` somebody already holds, and
+ * who, or `null`. Exact paths, as `sharedFiles` in `lib/issue-file-overlap.ts`
+ * compares them — a source file and its test are edited together by one
+ * issue, and stem matching would make nearly every pair collide.
+ */
+export function fileCollision(
+  files: readonly string[],
+  taken: ReadonlyMap<string, string>,
+): { file: string; holder: string } | null {
+  for (const file of files) {
+    const holder = taken.get(file);
+    if (holder !== undefined) return { file, holder };
+  }
+  return null;
+}
+
 export function selectReady<T extends Rankable>(
   eligible: readonly T[],
   occ: ReadyOccupancy,
   enginePrefix: string | null,
   honoured: ReadonlySet<number>,
-): { readonly promote: readonly T[]; readonly why: string } {
+  // SC-2786. `null` is a caller that read no files, and fills exactly as
+  // before; the writer always passes one.
+  claims: ReadyFileClaims | null = null,
+): { readonly promote: readonly T[]; readonly why: string; readonly skipped: readonly ReadySkip[] } {
   if (occ.free === 0) {
     // One branch for every reason there is no room — UNMEASURED, FULL and
     // WEDGED each carry their own sentence on the reading itself, so this
     // does not restate them and cannot disagree with them.
-    return { promote: [], why: occ.why };
+    return { promote: [], why: occ.why, skipped: [] };
   }
   // A copy, not a sort in place: the caller's array is its own decision
   // record and reordering it changes what its log prints.
-  const promote = [...eligible].sort(readyOrderFor(enginePrefix, honoured)).slice(0, occ.free);
+  const ranked = [...eligible].sort(readyOrderFor(enginePrefix, honoured));
+  const promote: T[] = [];
+  const skipped: ReadySkip[] = [];
+  // Taken = what others hold, plus what this fill has already picked. An
+  // issue passed over keeps its rank: it is skipped, never re-ordered, so the
+  // next fill meets it first again once its file is free.
+  const taken = new Map(claims?.held ?? []);
+  for (const issue of ranked) {
+    if (promote.length >= occ.free) break;
+    const files = claims?.filesOf.get(issue.number) ?? [];
+    const hit = fileCollision(files, taken);
+    if (hit !== null) {
+      skipped.push({ number: issue.number, file: hit.file, holder: hit.holder });
+      continue;
+    }
+    promote.push(issue);
+    for (const f of files) if (!taken.has(f)) taken.set(f, `#${issue.number} (picked this fill)`);
+  }
   return {
     promote,
+    skipped,
     why:
       `${occ.why}; ${eligible.length} eligible, promoting ${promote.length} ` +
       (enginePrefix === null
         ? "in phase then age order"
-        : `in ${enginePrefix}-first, then phase, then age order`),
+        : `in ${enginePrefix}-first, then phase, then age order`) +
+      (skipped.length === 0 ? "" : `, passing over ${skipped.length} that name a file already taken`),
   };
 }
 
