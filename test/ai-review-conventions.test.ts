@@ -223,7 +223,12 @@ import {
   buildReviewPrompt,
   buildReviewRunScript,
 } from "../lib/scaffold/ai-review-step";
-import { readAiReviewFindings, summaryNotice, summaryReading } from "../lib/scaffold/ai-review-findings";
+import {
+  readAiReviewChangedFiles,
+  readAiReviewFindings,
+  summaryNotice,
+  summaryReading,
+} from "../lib/scaffold/ai-review-findings";
 import { stubBunx } from "./helpers/stub-bunx";
 
 /**
@@ -979,5 +984,20 @@ describe("#1653: the summary is read back against the findings it counts", () =>
     // An unreadable payload has no summary reading at all — not ABSENT, which
     // would say the reviewer wrote a payload and left the key out.
     expect(summaryNotice(readAiReviewFindings(null))).toBeNull();
+  });
+
+  test("A7-9: a payload read beside an unreadable scope keeps its summary reading", () => {
+    // withScope rebuilds the reading as UNMEASURED when the changed-file list
+    // cannot be read. The payload WAS read, so its summary reading must
+    // survive the rebuild rather than vanish as if no payload existed (review
+    // of #2465).
+    const scope = readAiReviewChangedFiles(join(tmpdir(), "rg-1653-no-such-changed-files.txt"));
+    expect(scope.status, "the planted scope must be UNMEASURED or this case reads nothing").toBe("UNMEASURED");
+    const reading = readAiReviewFindings(
+      JSON.stringify({ findings: [], verdict: "PASS", [AI_REVIEW_SUMMARY_KEY]: "0 findings: nothing to fix." }),
+      scope,
+    );
+    expect(reading.outcome).toBe("UNMEASURED");
+    expect(summaryNotice(reading)).toStartWith("OPENS_WITH_COUNT");
   });
 });

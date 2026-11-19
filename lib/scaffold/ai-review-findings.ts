@@ -1913,7 +1913,10 @@ function withScope(
     reasons.length > reading.unmeasuredReasons.length
       ? unmeasured(reasons, detail, reading.reported, reading.findingTags)
       : reading;
-  return { ...merged, scope, unlocatableReported, scopeDropped, lineCounts, pastEndReported };
+  // #1653: the payload WAS read even when the scope or line counts were not,
+  // so its summary reading survives the rebuild above (review of #2465).
+  // `undefined` still means no payload was read, and stays undefined.
+  return { ...merged, summary: reading.summary, scope, unlocatableReported, scopeDropped, lineCounts, pastEndReported };
 }
 
 /**
