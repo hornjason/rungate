@@ -330,8 +330,8 @@ async function main(): Promise<number> {
        blocking(first:100,after:$c){
          pageInfo{hasNextPage endCursor}
          nodes{
-           number state milestone{title} assignees{totalCount}
-           issueDependenciesSummary{blockedBy}
+           number state milestone{title dueOn} assignees{totalCount}
+           issueDependenciesSummary{blockedBy blocking}
            projectItems(first:20){
              pageInfo{hasNextPage endCursor}
              nodes{
@@ -354,8 +354,8 @@ async function main(): Promise<number> {
        issues(first:100,after:$c,states:[OPEN]){
          pageInfo{hasNextPage endCursor}
          nodes{
-           number state milestone{title} assignees{totalCount}
-           issueDependenciesSummary{blockedBy}
+           number state milestone{title dueOn} assignees{totalCount}
+           issueDependenciesSummary{blockedBy blocking}
            projectItems(first:20){
              pageInfo{hasNextPage endCursor}
              nodes{
@@ -875,12 +875,26 @@ async function main(): Promise<number> {
   // either, and `[]` is the honest reading for it: UNPLACED, sorted behind
   // everything the plan does place.
   const labelsOfNumber = new Map(dependents.map(d => [d.number, d.labels]));
+  // SC-2741 (#2434): the ranking's due date and unblock count, off the same
+  // candidate nodes. Scalars on selections already made, so the node product
+  // is unchanged (BR-46). An absent `blocking` is unread, never zero.
+  const dueOfNumber = new Map<number, string | null>(
+    candidates.map((b: any) => [b.number, typeof b.milestone?.dueOn === "string" ? b.milestone.dueOn : null]),
+  );
+  const unblocksOfNumber = new Map<number, number | null>(
+    candidates.map((b: any) => [
+      b.number,
+      typeof b.issueDependenciesSummary?.blocking === "number" ? (b.issueDependenciesSummary.blocking as number) : null,
+    ]),
+  );
   const eligible = decisions
     .filter(dec => dec.move)
     .map(dec => ({
       ...dec,
       milestone: milestoneOfNumber.get(dec.number) ?? null,
       labels: labelsOfNumber.get(dec.number) ?? [],
+      dueOn: dueOfNumber.get(dec.number) ?? null,
+      unblocks: unblocksOfNumber.get(dec.number) ?? null,
     }));
   const occ = readyOccupancy(occupied, dispatchable, cap);
   // The ENGINE milestone family, from this project's own config (#1943):

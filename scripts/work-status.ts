@@ -754,6 +754,13 @@ const candidateRankables = pickable.map((i: any) => ({
   labels: (i.labels ?? [])
     .map((l: any) => (typeof l === "string" ? l : l?.name))
     .filter((n: any) => typeof n === "string"),
+  // SC-2741 (#2434): the same two ranking keys the writer reads, so this list
+  // is the order `board-ready` would pull in. An absent summary is unread.
+  dueOn: typeof i.milestone?.due_on === "string" ? (i.milestone.due_on as string) : null,
+  unblocks:
+    typeof i.issue_dependencies_summary?.blocking === "number"
+      ? (i.issue_dependencies_summary.blocking as number)
+      : null,
 }));
 // The ENGINE milestone family, from this project's own config (#1943).
 // Without it `Convergence Phase 3` outranked `Pipeline Phase 6` and the
