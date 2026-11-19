@@ -296,9 +296,10 @@ take.
       needs: test
       proved-by: test/board-command.test.ts "SC-2791: rungate scaffold installs /board, which reads the repository it sits in"
       fingerprint: c6347cc7
-- [ ] SC-2792: `work-status` and `verify-merge-ref` run as `rungate` CLI commands that ship in `files[]` and read the repository from `--repo`, then `GITHUB_REPOSITORY`, then the origin remote, never from a constant (Jason, 2026-11-19, ADR-023)
+- [x] SC-2792: `work-status` and `verify-merge-ref` run as `rungate` CLI commands that ship in `files[]` and read the repository from `--repo`, then `GITHUB_REPOSITORY`, then the origin remote, never from a constant (Jason, 2026-11-19, ADR-023)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/verify-merge-ref.test.ts "SC-2792: verify-merge-ref reads the repository it is in, and runs as rungate verify-merge-ref"
 - [ ] SC-2793: `rungate scaffold`'s report of human steps owed says whether `board.id` is set and whether the project token can write that board, each as one OWED command or UNMEASURED with its reason, never "done" (Jason, 2026-11-19, ADR-023)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
