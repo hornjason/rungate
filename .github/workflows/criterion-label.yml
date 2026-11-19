@@ -1,4 +1,4 @@
-# generated-sha: e0f468c9974165e6
+# generated-sha: f939b14de9520f01
 # Managed by rungate — do not edit the generated job.
 #
 # #2020, generated since #2467: an issue that names no criterion and does not
@@ -54,4 +54,4 @@ jobs:
             args+=(--issue "$ISSUE")
             if [ "$ACTION" = "opened" ]; then args+=(--comment); fi
           fi
-          bunx rungate@0.8.36 criterion-label "${args[@]}"
+          bunx rungate@0.8.37 criterion-label "${args[@]}"
