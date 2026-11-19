@@ -116,7 +116,7 @@ function commitsSince(root: string, since: string): { oids: string[] } | { why: 
   return { oids: list.stdout.split("\n").map(s => s.trim()).filter(Boolean) };
 }
 
-const PR_FIELDS = `number merged mergedAt mergeCommit { oid }
+const PR_FIELDS = `number merged mergedAt lastEditedAt mergeCommit { oid } baseRepository { nameWithOwner }
   closingIssuesReferences(first: 50) {
     totalCount
     nodes {
@@ -131,6 +131,7 @@ export async function mergedPullRequestNodes(
   owner: string,
   name: string,
   oids: string[],
+  repo: string,
 ): Promise<{ nodes: unknown[] } | { why: string }> {
   const nodes: unknown[] = [];
   for (let i = 0; i < oids.length; i += COMMITS_PER_QUERY) {
@@ -145,7 +146,11 @@ export async function mergedPullRequestNodes(
       const commit = data.repository?.[`c${k}`];
       const prs = commit?.associatedPullRequests;
       if (!prs || !Array.isArray(prs.nodes)) return { why: `commit ${batch[k].slice(0, 12)}'s pull requests could not be read` };
-      const mergedHere = prs.nodes.filter(p => p?.merged === true && p?.mergeCommit?.oid === batch[k]);
+      // Merged BY this commit, INTO this repository: a pull request that only
+      // contains the commit, or whose base is a fork, declared nothing here.
+      const mergedHere = prs.nodes.filter(
+        p => p?.merged === true && p?.mergeCommit?.oid === batch[k] && p?.baseRepository?.nameWithOwner === repo,
+      );
       // A commit pushed straight to the branch has no pull request, and that is
       // a reading: it declared nothing. One whose list was cut short might.
       if (mergedHere.length === 0 && prs.totalCount !== prs.nodes.length) {
@@ -241,7 +246,7 @@ export async function main(argv: string[], root = process.cwd()): Promise<number
     const repo = canonical.repository?.nameWithOwner;
     if (typeof repo !== "string") return refuse(`${owner}/${name} was not found, or the credential cannot read it`);
 
-    const read = await mergedPullRequestNodes(client, owner, name, commits.oids);
+    const read = await mergedPullRequestNodes(client, owner, name, commits.oids, repo);
     if ("why" in read) return refuse(read.why);
     const r = readAll(read.nodes);
     if ("unread" in r) return refuse(`${r.unread.length} pull request(s) could not be read: ${r.unread.join("; ")}`);

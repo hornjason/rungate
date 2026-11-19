@@ -39,6 +39,7 @@ const ref = (number: number, over: { state?: string; repo?: string; reopenedAt?:
 const pr = (number: number, refs: unknown[], over: Record<string, unknown> = {}) => ({
   number,
   mergedAt: MERGED_AT,
+  lastEditedAt: null,
   closingIssuesReferences: { totalCount: refs.length, nodes: refs },
   ...over,
 });
@@ -86,6 +87,17 @@ describe("#2496: which declared issues a merged pull request still owes a close"
     expect(verdicts.map(v => [v.issue, v.close])).toEqual([[7, true], [7, false]]);
   });
 
+  test("a description edited after the merge leaves its links; one edited before does not", () => {
+    // Security review of #2496: the author can edit a merged pull request's
+    // description, and GitHub reads the links from it as it is now.
+    const after = mergedReferencesToClose(read(pr(65, [ref(1), ref(2)], { lastEditedAt: "2026-11-18T12:05:00Z" })), REPO);
+    expect(after.map(v => v.close)).toEqual([false, false]);
+    for (const v of after) expect(!v.close && v.why).toContain("edited after the merge");
+    const before = mergedReferencesToClose(read(pr(66, [ref(1)], { lastEditedAt: "2026-11-18T11:00:00Z" })), REPO);
+    expect(before.map(v => v.close)).toEqual([true]);
+    expect(mergedPullRequestFrom(pr(67, [ref(1)], { lastEditedAt: "soon" })).kind).toBe("UNMEASURED");
+  });
+
   test("an issue the body only mentions is never closed: only GitHub's links are read", () => {
     // The body names #9 in prose; GitHub linked only #1. No field of the
     // payload carries the body, so a mention has no path to a close.
@@ -117,28 +129,33 @@ describe("#2496: the live read and the writes, against a client that records wha
   const B = "b".repeat(40);
   const C = "c".repeat(40);
   const commit = (oid: string, prs: unknown[], totalCount = prs.length) => ({ oid, associatedPullRequests: { totalCount, nodes: prs } });
-  const merged = (number: number, mergeOid: string, refs: unknown[]) => ({ ...pr(number, refs), merged: true, mergeCommit: { oid: mergeOid } });
+  const merged = (number: number, mergeOid: string, refs: unknown[], base = REPO) => ({
+    ...pr(number, refs),
+    merged: true,
+    mergeCommit: { oid: mergeOid },
+    baseRepository: { nameWithOwner: base },
+  });
   const reading = (repository: Record<string, unknown>) => {
     const queries: string[] = [];
     const client = { graphql: async (q: string) => (queries.push(q), { repository }) } as any;
     return { client, queries };
   };
 
-  test("only the pull request a commit was merged BY is read; one that merely contains it is not", async () => {
+  test("only the pull request a commit was merged BY, into this repository, is read", async () => {
     const { client } = reading({
       // A stacked branch's pull request contains commit A too, merged elsewhere.
-      c0: commit(A, [merged(70, A, [ref(1)]), merged(71, C, [ref(2)])]),
+      c0: commit(A, [merged(70, A, [ref(1)]), merged(71, C, [ref(2)]), merged(73, A, [ref(3)], "fork/repo")]),
       // A commit pushed straight to the branch has no pull request: it declared nothing.
       c1: commit(B, []),
     });
-    const r = await mergedPullRequestNodes(client, "owner", "repo", [A, B]);
+    const r = await mergedPullRequestNodes(client, "owner", "repo", [A, B], REPO);
     expect("nodes" in r && r.nodes.map((n: any) => n.number)).toEqual([70]);
   });
 
   test("a commit whose pull request list was cut short, or not read at all, is UNMEASURED", async () => {
-    const short = await mergedPullRequestNodes(reading({ c0: commit(A, [merged(72, C, [])], 9) }).client, "owner", "repo", [A]);
+    const short = await mergedPullRequestNodes(reading({ c0: commit(A, [merged(72, C, [])], 9) }).client, "owner", "repo", [A], REPO);
     expect("why" in short && short.why).toContain("9 associated pull requests and 1 were read");
-    const missing = await mergedPullRequestNodes(reading({ c0: null }).client, "owner", "repo", [A]);
+    const missing = await mergedPullRequestNodes(reading({ c0: null }).client, "owner", "repo", [A], REPO);
     expect("why" in missing && missing.why).toContain("could not be read");
   });
 

@@ -475,6 +475,8 @@ export function inertClosingMessage(refs: InertClosingReference[], prNumber: num
 export interface MergedPullRequest {
   number: number;
   mergedAt: string;
+  /** When the description was last edited, or null when it never was. */
+  lastEditedAt: string | null;
   closing: Array<{
     id: string;
     number: number;
@@ -512,6 +514,9 @@ export function mergedPullRequestFrom(node: unknown): MergedPullRequestReading {
   if (refs.totalCount !== refs.nodes.length) {
     return no(`${at}: GitHub records ${refs.totalCount} closing links and ${refs.nodes.length} were read`);
   }
+  if (n.lastEditedAt !== null && (typeof n.lastEditedAt !== "string" || Number.isNaN(Date.parse(n.lastEditedAt)))) {
+    return no(`${at}: lastEditedAt is ${JSON.stringify(n.lastEditedAt)}, so an edit after the merge cannot be ruled out`);
+  }
   const closing: MergedPullRequest["closing"] = [];
   for (const r of refs.nodes as unknown[]) {
     if (r === null || typeof r !== "object") return no(`${at}: a closing link is not an object`);
@@ -527,7 +532,7 @@ export function mergedPullRequestFrom(node: unknown): MergedPullRequestReading {
     }
     closing.push({ id: l.id, number: l.number, state: l.state, repository: { nameWithOwner: l.repository.nameWithOwner }, lastReopenedAt: last });
   }
-  return { kind: "READ", pr: { number: n.number, mergedAt: n.mergedAt, closing } };
+  return { kind: "READ", pr: { number: n.number, mergedAt: n.mergedAt, lastEditedAt: n.lastEditedAt, closing } };
 }
 
 export type MergedReferenceVerdict =
@@ -544,9 +549,16 @@ export type MergedReferenceVerdict =
  *
  * "In this repository" is `declaredClosingIn`'s, the one decider for which
  * links belong to this tracker.
+ *
+ * "It declares" means at the merge. GitHub reads the links from the
+ * description as it is now, so a description edited after the merge may name
+ * issues the merge never declared, and its author can edit it whoever merged
+ * it. Such a pull request's links are all left, saying so, rather than acted
+ * on (security review of #2496).
  */
 export function mergedReferencesToClose(pr: MergedPullRequest, repoNameWithOwner: string): MergedReferenceVerdict[] {
   const merged = Date.parse(pr.mergedAt);
+  const editedAfter = pr.lastEditedAt !== null && Date.parse(pr.lastEditedAt) > merged;
   return pr.closing.map((l): MergedReferenceVerdict => {
     const base = { issue: l.number, pr: pr.number };
     // Asked per link, not as a set of numbers: owner/repo#1 and other/repo#1
@@ -555,6 +567,9 @@ export function mergedReferencesToClose(pr: MergedPullRequest, repoNameWithOwner
       return { ...base, close: false, why: `it is in another repository (${l.repository.nameWithOwner})` };
     }
     if (l.state !== "OPEN") return { ...base, close: false, why: `it is already closed (${l.state.toLowerCase()})` };
+    if (editedAfter) {
+      return { ...base, close: false, why: `#${pr.number}'s description was edited after the merge (${pr.lastEditedAt}), so its links may not be the ones the merge declared` };
+    }
     if (l.lastReopenedAt !== null && Date.parse(l.lastReopenedAt) > merged) {
       return { ...base, close: false, why: `it was reopened after the merge (${l.lastReopenedAt}), so a person has decided it is not done` };
     }
