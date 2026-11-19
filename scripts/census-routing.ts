@@ -429,6 +429,20 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
       [...SWEPT_DIRS, ...SWEPT_JS_DIRS].some(d => inDir(c.path, d)) && c.added.some(l => WRITE_CALL.test(l)),
   },
   {
+    // #2477. `test/anti.test.ts` refuses a consumer's name in any non-test
+    // `.ts` file under these directories, and its known-file list only
+    // shrinks, so a removed line reddens it as surely as an added one.
+    // PR #2476 added a lib/scaffold file naming a consumer in a doc comment;
+    // this router printed 136 suites without it and CI refused on SC-A1.
+    // Any change fires, not a name match: the names live in the suite, and
+    // it runs in well under a second.
+    id: "anti",
+    event: "changed a non-test .ts file in gates/, lib/ or scripts/",
+    tests: ["test/anti.test.ts"],
+    fires: c =>
+      ANTI_SCANNED_DIRS.some(d => inDir(c.path, d)) && c.path.endsWith(".ts") && !c.path.endsWith(".test.ts"),
+  },
+  {
     id: "spec-edit",
     event: "touched specs/",
     tests: ["test/agents-md-spec-listing.test.ts", "test/spec-requirements.test.ts"],
