@@ -73,6 +73,8 @@ describe("#1968: --project-root names the tree the report measures", () => {
     // credential refusal — which names the token, never board.id.
     delete env.GITHUB_TOKEN;
     delete env.GH_TOKEN;
+    // A repository to read (#2482): the fixture tree has no origin remote.
+    env.GITHUB_REPOSITORY = "fixture-owner/fixture-repo";
     const r = spawnSync("bun", [join(ROOT, "scripts", "work-status.ts"), ...args], {
       encoding: "utf-8",
       env,
@@ -112,6 +114,104 @@ describe("#1968: --project-root names the tree the report measures", () => {
       }
     } finally {
       rmSync(empty, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("#2482: the repository is read from --repo, then GITHUB_REPOSITORY, then the origin remote", () => {
+  // ADR-023. The script spelled its repository as a constant, so run in a
+  // consumer it reported rungate's own issues under the consumer's board.
+  const made: string[] = [];
+  const tree = (origin: string | null): string => {
+    const d = mkdtempSync(join(tmpdir(), "work-status-repo-"));
+    made.push(d);
+    mkdirSync(join(d, ".claude", "rungate"), { recursive: true });
+    writeFileSync(join(d, ".claude", "rungate", "config.json"), JSON.stringify({ project: "fixture", board: { id: "PVT_fixture" } }));
+    if (origin !== null) {
+      spawnSync("git", ["init", "-q", d]);
+      spawnSync("git", ["-C", d, "remote", "add", "origin", origin]);
+    }
+    return d;
+  };
+  const run = (cwd: string, args: string[], repoEnv?: string, entry = [join(ROOT, "scripts", "work-status.ts")]) => {
+    const env: Record<string, string | undefined> = { ...process.env };
+    // No credential, so every run that resolves a repository stops at the
+    // credential refusal, after printing which repository it would read.
+    delete env.GITHUB_TOKEN;
+    delete env.GH_TOKEN;
+    delete env.GITHUB_REPOSITORY;
+    if (repoEnv !== undefined) env.GITHUB_REPOSITORY = repoEnv;
+    const r = spawnSync("bun", [...entry, ...args], { encoding: "utf-8", env, cwd, timeout: 30_000 });
+    return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+  const ORIGIN = "https://github.com/origin-owner/origin-repo.git";
+
+  test("each source wins over the ones after it, and the run says which repository it read", () => {
+    try {
+      const d = tree(ORIGIN);
+      const cases: Array<[string[], string | undefined, string]> = [
+        [["--repo", "flag-owner/flag-repo"], "env-owner/env-repo", "flag-owner/flag-repo"],
+        [[], "env-owner/env-repo", "env-owner/env-repo"],
+        // An empty GITHUB_REPOSITORY names nothing and falls through.
+        [[], "", "origin-owner/origin-repo"],
+        [[], undefined, "origin-owner/origin-repo"],
+      ];
+      for (const [args, repoEnv, expected] of cases) {
+        const r = run(d, args, repoEnv);
+        const label = `${args.join(" ")} GITHUB_REPOSITORY=${repoEnv}`;
+        expect(r.out, label).toContain(`Repository: ${expected}`);
+        expect(r.out.match(/^Repository: /gm)?.length, label).toBe(1);
+        expect(r.out, label).toContain("no GitHub credential");
+      }
+      // The ssh spelling of a remote is a repository too.
+      const ssh = run(tree("git@github.com:ssh-owner/ssh-repo.git"), []);
+      expect(ssh.out).toContain("Repository: ssh-owner/ssh-repo");
+    } finally {
+      for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  test("no repository from any source, or a malformed one, is refused before the credential is read", () => {
+    try {
+      const bare = tree(null);
+      for (const [args, label] of [[[], "none"], [["--repo", "not a repo"], "malformed"], [["--repo"], "bare flag"]] as Array<[string[], string]>) {
+        const r = run(bare, args);
+        expect(r.status, `${label}:\n${r.out}`).toBe(2);
+        expect(r.out, label).toContain("UNMEASURED: no repository to read");
+        expect(r.out, label).not.toContain("Repository: ");
+        expect(r.out, label).not.toContain("no GitHub credential");
+      }
+    } finally {
+      for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  test("the script names no repository and reads nothing beside itself", () => {
+    const script = readFileSync(join(ROOT, "scripts", "work-status.ts"), "utf-8");
+    expect(script).not.toMatch(/["'`]hornjason\//);
+    expect(script).not.toMatch(/owner:\s*"[^"$]/);
+    // The plan is the project's, so it is read under the project root. A read
+    // beside the script reads the installed package's copy, in a consumer.
+    expect(script).not.toMatch(/import\.meta\.dir/);
+    expect(script).toMatch(/STATE_FILE = join\(ROOT, "project-state\.json"\)/);
+  });
+
+  test("rungate work-status runs the script against the directory it was started in", () => {
+    try {
+      const d = tree(ORIGIN);
+      const cli = [join(ROOT, "bin", "rungate.ts"), "work-status"];
+      const here = run(d, [], undefined, cli);
+      expect(here.out).toContain("Repository: origin-owner/origin-repo");
+      expect(here.out).toContain("no GitHub credential");
+      // This package's own tree HAS a board configured, so a run that read the
+      // package instead of the directory would not refuse on board.id here.
+      const empty = mkdtempSync(join(tmpdir(), "work-status-cli-empty-"));
+      made.push(empty);
+      const none = run(empty, ["--repo", "a/b"], undefined, cli);
+      expect(none.status, none.out).toBe(2);
+      expect(none.out).toContain("board.id");
+    } finally {
+      for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
     }
   });
 });
@@ -648,21 +748,19 @@ describe("the status reader does not leak the token on any hop", () => {
   test("the repository is named once — no query spells the owner itself", () => {
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
 
-    // Anti-vacuity: the constant must exist and must be the thing the count
-    // below is counting. Without this the assertion passes on a file that
-    // renamed REPO away entirely.
-    expect(code, "scripts/work-status.ts must declare REPO").toMatch(
-      /const REPO = "hornjason\/rungate";/,
+    // Anti-vacuity: REPO must exist, once, and come from the one reading
+    // (#2482). Without this the assertions below pass on a file that renamed
+    // REPO away entirely.
+    expect(code, "scripts/work-status.ts must declare REPO from the resolved reading").toMatch(
+      /const REPO = repoReading\.repo;/,
     );
+    expect((code.match(/\bconst REPO\b/g) ?? []).length).toBe(1);
 
-    for (const word of ["hornjason", "rungate"]) {
-      expect(
-        (code.match(new RegExp(word, "g")) ?? []).length,
-        `"${word}" must appear exactly once in scripts/work-status.ts — inside ` +
-          `REPO. A query that spells it again is a second decider over which ` +
-          `repository this tool reports on, and a rename moves only one of them.`,
-      ).toBe(1);
-    }
+    // #2482 removed the one literal the file held, so none may come back. A
+    // query that spells a repository is a second decider over which one this
+    // tool reports on, and a rename or a consumer moves only one of them.
+    expect(code, "a repository is spelled as a literal").not.toMatch(/hornjason/);
+    expect(code, "a query spells its owner").not.toMatch(/owner:\s*"[^"$]/);
   });
 
   // The population the row above was too narrow to cover. Every abandonment of
@@ -1274,6 +1372,7 @@ describe("#1944: the report names local work every run, from the one decider", (
   // whole report, the same as an absent board or credential.
   const KNOWN_EXITS_BEFORE_SECTION = [
     "if (PROJECT === null)",
+    'if ("why" in repoReading)',
     "if (!token)",
     'if (focus.kind === "unknown")',
     'if (dir === undefined || dir.trim() === "" || dir.startsWith("--"))',

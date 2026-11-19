@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 315935c3304150b0
+generated-sha: 85642b9bce67238f
 ---
 
 ## Command Routing
@@ -27,6 +27,7 @@ Generated from the CLI's command registry. Run one as
 | `criterion-label` | Label open issues that name no criterion |
 | `board-scope` | Spec criteria and opt-in, with looks-done hints |
 | `board` | Each phase's open issues and blockers |
+| `work-status` | What is being worked, what is Ready next, and the plan, read live |
 | `plan-deps` | Write the blocked-by links accepted ADRs declare onto the tracker |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
 | `board-id` | Print the board's node id from config |
