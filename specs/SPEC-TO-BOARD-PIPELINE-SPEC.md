@@ -300,6 +300,7 @@ take.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       proved-by: test/verify-merge-ref.test.ts "SC-2792: verify-merge-ref reads the repository it is in, and runs as rungate verify-merge-ref"
+      fingerprint: 71bb8945
 - [ ] SC-2793: `rungate scaffold`'s report of human steps owed says whether `board.id` is set and whether the project token can write that board, each as one OWED command or UNMEASURED with its reason, never "done" (Jason, 2026-11-19, ADR-023)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
