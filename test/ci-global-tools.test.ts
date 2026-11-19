@@ -391,7 +391,13 @@ function runGenerator(modulePath: string, label: string): Run {
 
 describe("AC-4: the pin can be removed, and the removal is visible", () => {
   test("the real generator pins both tools; the mutant installs them unpinned", () => {
-    const mutantPath = join(SCRATCH, "steps-mutant.ts");
+    // The copy sits where the real file does relative to a package.json (#2501):
+    // harnessVersion reads the manifest two directories above its own file and
+    // throws when there is none. Before #2501 it returned "" instead, so every
+    // mutant here generated workflows pinned to `bunx rungate@` with no version.
+    const mutantPath = join(SCRATCH, "lib", "scaffold", "steps-mutant.ts");
+    mkdirSync(dirname(mutantPath), { recursive: true });
+    writeFileSync(join(SCRATCH, "package.json"), JSON.stringify({ version: JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf-8")).version }));
     writeFileSync(mutantPath, buildMutantSource(readFileSync(STEPS, "utf-8")));
 
     const real = runGenerator(STEPS, "real");

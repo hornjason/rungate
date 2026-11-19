@@ -1186,11 +1186,6 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
     }
   } else {
     // No config exists — create directory structure
-    let harnessVersion = "unknown";
-    try {
-      const harnessPkg = JSON.parse(readFileSync(join(dirname(dirname(__dirname)), "package.json"), "utf-8"));
-      harnessVersion = harnessPkg.version || "unknown";
-    } catch {}
 
     // Prefer package.json name, fall back to directory basename
     let projectName = basename(root);
@@ -1203,7 +1198,9 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
 
     const config = {
       "$schema": "rungate",
-      harnessVersion,
+      // #2501: the one reader. A second copy here wrote "unknown" on an
+      // unreadable manifest while every workflow pin refused the same input.
+      harnessVersion: harnessVersion(),
       scaffoldedAt: new Date().toISOString(),
       project: projectName,
       repo,
@@ -5485,6 +5482,10 @@ export function createGitHooks(root: string, actions: string[]): void {
  * when a consumer genuinely needs a newer line.
  */
 export function harnessDevDepRange(version?: string): string {
+  // No version given reads rungate's own package.json, and an unreadable one
+  // throws (#2501) instead of reaching the fallback below. The fallback is for
+  // a version STRING that does not parse; on a manifest nobody could read,
+  // `^0.2.0` would pin a consumer of a 0.8 tree to the 0.2 line, silently.
   const v = version ?? harnessVersion();
   const m = /^(\d+)\.(\d+)\./.exec(v);
   // An unparseable version falls back to the widest range that is still a
@@ -5494,15 +5495,29 @@ export function harnessDevDepRange(version?: string): string {
   return `^${m[1]}.${m[2]}.0`;
 }
 
-function harnessVersion(): string {
+/**
+ * The version in `root`'s `package.json`, or a throw naming the path and why
+ * (#2501). Every generated `bunx rungate@<version>` pin carries this value,
+ * so an unreadable manifest must stop the scaffold before it writes anything.
+ * The empty string it used to return became `bunx rungate@ <command>` in
+ * every generated workflow, with scaffold reporting success.
+ */
+export function readHarnessVersion(root: string): string {
+  const path = join(root, "package.json");
+  let pkg: { version?: unknown };
   try {
-    const pkg = JSON.parse(
-      readFileSync(join(dirname(dirname(__dirname)), "package.json"), "utf-8"),
-    );
-    return typeof pkg?.version === "string" ? pkg.version : "";
-  } catch {
-    return "";
+    pkg = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown };
+  } catch (e) {
+    throw new Error(`rungate scaffold: ${path} could not be read (${(e as Error).message}), so no generated workflow can be pinned to a version`);
   }
+  if (typeof pkg?.version !== "string" || pkg.version === "") {
+    throw new Error(`rungate scaffold: ${path} has no version string, so no generated workflow can be pinned to a version`);
+  }
+  return pkg.version;
+}
+
+function harnessVersion(): string {
+  return readHarnessVersion(dirname(dirname(__dirname)));
 }
 
 /**
