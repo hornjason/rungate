@@ -20,6 +20,7 @@ import { join } from "path";
 
 import { mergedPullRequestFrom, mergedReferencesToClose } from "../lib/closing-reference-audit";
 import { CLI_COMMANDS } from "../lib/cli-commands";
+import { closeAll, mergedPullRequestNodes, plan } from "../scripts/close-merged-references";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "close-merged-references.ts");
@@ -108,6 +109,67 @@ describe("#2496: which declared issues a merged pull request still owes a close"
       expect(r.kind, label).toBe("UNMEASURED");
       if (r.kind === "UNMEASURED") expect(r.why, label).toContain(names);
     }
+  });
+});
+
+describe("#2496: the live read and the writes, against a client that records what it was asked", () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  const C = "c".repeat(40);
+  const commit = (oid: string, prs: unknown[], totalCount = prs.length) => ({ oid, associatedPullRequests: { totalCount, nodes: prs } });
+  const merged = (number: number, mergeOid: string, refs: unknown[]) => ({ ...pr(number, refs), merged: true, mergeCommit: { oid: mergeOid } });
+  const reading = (repository: Record<string, unknown>) => {
+    const queries: string[] = [];
+    const client = { graphql: async (q: string) => (queries.push(q), { repository }) } as any;
+    return { client, queries };
+  };
+
+  test("only the pull request a commit was merged BY is read; one that merely contains it is not", async () => {
+    const { client } = reading({
+      // A stacked branch's pull request contains commit A too, merged elsewhere.
+      c0: commit(A, [merged(70, A, [ref(1)]), merged(71, C, [ref(2)])]),
+      // A commit pushed straight to the branch has no pull request: it declared nothing.
+      c1: commit(B, []),
+    });
+    const r = await mergedPullRequestNodes(client, "owner", "repo", [A, B]);
+    expect("nodes" in r && r.nodes.map((n: any) => n.number)).toEqual([70]);
+  });
+
+  test("a commit whose pull request list was cut short, or not read at all, is UNMEASURED", async () => {
+    const short = await mergedPullRequestNodes(reading({ c0: commit(A, [merged(72, C, [])], 9) }).client, "owner", "repo", [A]);
+    expect("why" in short && short.why).toContain("9 associated pull requests and 1 were read");
+    const missing = await mergedPullRequestNodes(reading({ c0: null }).client, "owner", "repo", [A]);
+    expect("why" in missing && missing.why).toContain("could not be read");
+  });
+
+  test("each close comments naming the pull request, then closes; a failed close is reported and the rest still run", async () => {
+    const calls: string[] = [];
+    const client = {
+      rest: {
+        issues: {
+          createComment: async (p: { issue_number: number; body: string }) => {
+            calls.push(`comment #${p.issue_number}: ${p.body}`);
+            if (p.issue_number === 2) throw new Error("rate limited");
+          },
+          update: async (p: { issue_number: number; state: string; state_reason: string }) => {
+            calls.push(`update #${p.issue_number} ${p.state} ${p.state_reason}`);
+          },
+        },
+      },
+    } as any;
+    const verdicts = plan([read(pr(80, [ref(1), ref(2), ref(3, { state: "CLOSED" })]))], REPO);
+    const failed = await closeAll(client, "owner", "repo", verdicts, new Map([[80, MERGED_AT]]));
+    expect(failed).toEqual(["#2: rate limited"]);
+    expect(calls.filter(c => c.startsWith("update"))).toEqual(["update #1 closed completed"]);
+    expect(calls[0]).toStartWith("comment #1: ");
+    expect(calls[0]).toContain("#80");
+    // A closed issue is never written to at all.
+    expect(calls.some(c => c.includes("#3"))).toBe(false);
+  });
+
+  test("an issue two merged pull requests both declare is closed once, by the first", () => {
+    const verdicts = plan([read(pr(90, [ref(1)])), read(pr(91, [ref(1)]))], REPO);
+    expect(verdicts.map(v => [v.issue, v.pr, v.close])).toEqual([[1, 90, true], [1, 91, false]]);
   });
 });
 

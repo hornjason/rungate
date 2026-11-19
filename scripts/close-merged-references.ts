@@ -74,7 +74,7 @@ function readAll(nodes: unknown[]): { prs: MergedPullRequest[] } | { unread: str
  * The plan: one verdict per link, in pull-request order. An issue two pull
  * requests both declare is closed once, by the first.
  */
-function plan(prs: MergedPullRequest[], repo: string): MergedReferenceVerdict[] {
+export function plan(prs: MergedPullRequest[], repo: string): MergedReferenceVerdict[] {
   const out: MergedReferenceVerdict[] = [];
   const planned = new Map<number, number>();
   for (const pr of prs) {
@@ -126,7 +126,7 @@ const PR_FIELDS = `number merged mergedAt mergeCommit { oid }
   }`;
 
 /** The pull request each commit was merged by, read for every commit before anything is decided. */
-async function mergedPullRequestNodes(
+export async function mergedPullRequestNodes(
   client: ReturnType<typeof createGitHubClient>,
   owner: string,
   name: string,
@@ -157,7 +157,7 @@ async function mergedPullRequestNodes(
   return { nodes };
 }
 
-async function closeAll(
+export async function closeAll(
   client: ReturnType<typeof createGitHubClient>,
   owner: string,
   name: string,
