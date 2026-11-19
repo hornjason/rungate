@@ -33,7 +33,7 @@ export interface Declaration {
 }
 
 export type SourceReading =
-  | { source: SourceName; kind: "READ"; declarations: Declaration[]; unreadable: string[]; files: number }
+  | { source: SourceName; kind: "READ"; declarations: Declaration[]; unreadable: string[]; files: number; skipped?: number }
   | { source: SourceName; kind: "ABSENT"; why: string }
   | { source: SourceName; kind: "UNMEASURED"; why: string };
 
@@ -274,14 +274,17 @@ export interface PrBody {
  * the reason; neither is a zero.
  */
 export function prBodiesSource(
-  read: { prs: readonly PrBody[] } | { kind: "ABSENT" | "UNMEASURED"; why: string },
+  read: { prs: readonly PrBody[]; skipped?: number } | { kind: "ABSENT" | "UNMEASURED"; why: string },
 ): SourceReading {
   const source = "pr-bodies";
   if ("kind" in read) return { source, kind: read.kind, why: read.why };
   const declarations = read.prs.flatMap(pr =>
     pr.body ? declarationsIn(pr.body, `PR #${pr.number}`, source, PR_BODY_MARKERS) : [],
   );
-  return { source, kind: "READ", declarations, unreadable: [], files: read.prs.length };
+  // A PR set aside for its author is counted, not dropped (review of #2494):
+  // "every author was untrusted" must not read like "no pull requests".
+  const skipped = read.skipped ?? 0;
+  return { source, kind: "READ", declarations, unreadable: [], files: read.prs.length + skipped, ...(skipped ? { skipped } : {}) };
 }
 
 /**
@@ -326,7 +329,7 @@ export function isAccounted(d: Declaration, states: IssueStates): boolean {
 
 export interface Report {
   root: string;
-  sources: Array<{ source: SourceName; kind: SourceReading["kind"]; why?: string; files?: number; declarations?: number }>;
+  sources: Array<{ source: SourceName; kind: SourceReading["kind"]; why?: string; files?: number; declarations?: number; skipped?: number }>;
   issueStates: { kind: IssueStates["kind"]; why?: string; cited: number; open?: number };
   unaccounted: Declaration[];
   unmeasured: string[];
@@ -345,7 +348,7 @@ export function buildReport(root: string, sources: readonly SourceReading[], cit
     root,
     sources: sources.map(s =>
       s.kind === "READ"
-        ? { source: s.source, kind: s.kind, files: s.files, declarations: s.declarations.length }
+        ? { source: s.source, kind: s.kind, files: s.files, declarations: s.declarations.length, ...(s.skipped ? { skipped: s.skipped } : {}) }
         : { source: s.source, kind: s.kind, why: s.why },
     ),
     issueStates:
@@ -368,7 +371,7 @@ export function renderReport(r: Report): string[] {
   for (const s of r.sources) {
     lines.push(
       s.kind === "READ"
-        ? `  ${s.source}: READ — ${s.files} file(s), ${s.declarations} declaration(s)`
+        ? `  ${s.source}: READ — ${s.files} file(s), ${s.declarations} declaration(s)${s.skipped ? `, ${s.skipped} skipped (author not an owner, member or collaborator)` : ""}`
         : `  ${s.source}: ${s.kind} — ${s.why}`,
     );
   }

@@ -303,6 +303,11 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
     const report = json(r.out);
     expect(where(report.unaccounted.filter(u => u.source === "pr-bodies"))).toEqual(["PR #2293:1", "PR #2310:3"]);
     expect(report.sources.find(s => s.source === "pr-bodies")?.kind).toBe("READ");
+    // Review of #2494: the two strangers' PRs are counted as skipped, not vanished.
+    const row = report.sources.find(s => s.source === "pr-bodies") as { files?: number; skipped?: number };
+    expect(row.files).toBe(5);
+    expect(row.skipped).toBe(2);
+    expect(run(SCRIPT, ["--project-root", root, "--issues-fixture", FIXTURE, "--prs-fixture", prsFixture]).out).toContain("2 skipped (author not an owner, member or collaborator)");
     expect(r.code).toBe(1);
   });
 
@@ -383,6 +388,10 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
     const r = run(SCRIPT, ["--project-root", root, "--since", "last week"]);
     expect(r.code).toBe(2);
     expect(r.err).toContain("--since");
+    // Review of #2494: the fixture and --since together are a contradiction.
+    const both = run(SCRIPT, ["--project-root", root, "--prs-fixture", join(SCRATCH, "prs.json"), "--since", "2026-11-01"]);
+    expect(both.code).toBe(2);
+    expect(both.err).toContain("pass one");
     // Review of #2494: a day past the end of its month is a typo, not a later date.
     for (const bad of ["2026-02-30", "2026-04-31", "2025-02-29"]) {
       const b = run(SCRIPT, ["--project-root", root, "--since", bad]);
