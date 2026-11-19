@@ -143,9 +143,10 @@ export interface ReviewControlSubject {
   /**
    * #1533. 1-based lines of the candidate that differ from the baseline —
    * what the diff a reviewer is handed actually changed. A clean arm scores
-   * FIRED only on these.
+   * FIRED only on these. `null` on a planted arm, which scores on its
+   * declared range and never reads this (review of #2450).
    */
-  changedLines: readonly number[];
+  changedLines: readonly number[] | null;
   /** The defect, or why this subject is clean. */
   note: string;
 }
@@ -230,6 +231,9 @@ function unmeasuredReading(
   };
 }
 
+/** #1533. The largest baseline × candidate line product `changedLines` will tabulate. */
+export const CHANGED_LINES_MAX_CELLS = 4_000_000;
+
 /**
  * #1533. The 1-based lines of `candidate` outside a longest common
  * subsequence with `baseline`: the lines it changed or added. Line-level
@@ -241,6 +245,15 @@ export function changedLines(baseline: string, candidate: string): number[] {
   const b = candidate.split("\n");
   const n = a.length;
   const m = b.length;
+  // The table is n × m cells. Subjects are compacted copies of a few hundred
+  // lines; a pair past this bound is not one, and refusing it by name beats
+  // allocating it in silence on every load (review of #2450).
+  if (n * m > CHANGED_LINES_MAX_CELLS) {
+    throw new Error(
+      `changedLines: ${n} × ${m} lines is past the ${CHANGED_LINES_MAX_CELLS}-cell bound; ` +
+        `a control subject is a compacted copy, not a whole module`,
+    );
+  }
   const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
@@ -278,6 +291,9 @@ export function findingOnChangedLine(
   if (finding[f.file] !== subject.file) return false;
   const line = finding[f.line];
   if (typeof line !== "number" || !Number.isInteger(line)) return true;
+  // A subject whose changed lines were not computed — a planted arm — cannot
+  // excuse a finding as pre-existing; it is read toward FIRED.
+  if (subject.changedLines === null) return true;
   return subject.changedLines.includes(line);
 }
 
@@ -414,7 +430,7 @@ export function readReviewControl(
       preExistingBlocking++;
       detail.push(
         `pre-existing, not scored: ${renderFinding(i, finding)} — not on a line the candidate ` +
-          `changed (${subject.file}: ${subject.changedLines.join(", ") || "none"})`,
+          `changed (${subject.file}: ${subject.changedLines?.join(", ") || "none"})`,
       );
     }
   }
@@ -664,7 +680,10 @@ export function loadReviewControlSubjects(dir: string): ReviewControlSubject[] {
         marker: typeof c.marker === "string" ? c.marker : null,
         candidatePath,
         baselinePath,
-        changedLines: changedLines(readFileSync(baselinePath, "utf-8"), readFileSync(candidatePath, "utf-8")),
+        changedLines:
+          kind === "clean"
+            ? changedLines(readFileSync(baselinePath, "utf-8"), readFileSync(candidatePath, "utf-8"))
+            : null,
         note: String(c.defect ?? c.why ?? ""),
       });
     }

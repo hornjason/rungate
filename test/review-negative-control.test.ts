@@ -579,12 +579,19 @@ describe("#1533: the clean arm scores FIRED only on a line the candidate changed
     expect(CLEAN.changedLines).toEqual(banked.changedLinesInTheDiff);
     expect(changedLines("a\nb\nc\n", "a\nB\nc\nd\n")).toEqual([2, 4]);
     expect(changedLines("same\n", "same\n")).toEqual([]);
+    // Computed for a clean arm only; a planted arm scores on its range.
+    expect(PLANTED.changedLines).toBeNull();
+    const huge = "x\n".repeat(2100);
+    expect(() => changedLines(huge, huge), "a pair past the bound was tabulated").toThrow("bound");
   });
 
   test("#1524's two FIRED draws re-score QUIET: their blocking finding is on no changed line", () => {
     expect(banked.draws).toHaveLength(2);
     for (const draw of banked.draws) {
       expect(draw.scoreOutcome, "the banked draw is not the FIRED reading this re-scores").toBe("FIRED");
+      // `onAChangedLine` was banked by #1532 on 2026-10-24, before
+      // `changedLines` existed, so this compares the decider with an
+      // independent record rather than with its own output (review of #2450).
       for (const f of draw.findings) {
         expect(findingOnChangedLine(CLEAN, f), `the banked onAChangedLine for line ${f.line} disagrees`).toBe(f.onAChangedLine);
       }
@@ -796,10 +803,10 @@ describe("#1225: the harmful-change count, and why it is UNMEASURED here", () =>
     // fixture used to name `lib/test-suite-lock.ts`, the path from before
     // #1513 moved the subject, which scoped scoring reads as another file.
     const loop = subject("suite-lock-redirect/clean-loop");
-    expect(loop.changedLines.length, "clean-loop changed nothing, so it is not a refactor").toBeGreaterThan(0);
+    expect(loop.changedLines?.length ?? 0, "clean-loop changed nothing, so it is not a refactor").toBeGreaterThan(0);
     const fired = readReviewControl(
       loop,
-      payload([onThePlant({ file: loop.file, line: loop.changedLines[0] })], AI_REVIEW_BLOCK_VERDICT),
+      payload([onThePlant({ file: loop.file, line: loop.changedLines![0] })], AI_REVIEW_BLOCK_VERDICT),
       REVIEWER,
     );
     const run = summariseReviewControl([
