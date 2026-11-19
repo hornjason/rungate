@@ -428,10 +428,15 @@ export function readReviewControl(
       detail.push(`FIRED on a clean subject: ${renderFinding(i, finding)}`);
     } else {
       preExistingBlocking++;
-      detail.push(
-        `pre-existing, not scored: ${renderFinding(i, finding)} — not on a line the candidate ` +
-          `changed (${subject.file}: ${subject.changedLines?.join(", ") || "none"})`,
-      );
+      // Two reasons a finding is not about the diff, and the sentence names
+      // which (review of #2450): a line the candidate left alone in its own
+      // file, or a file the candidate does not change at all.
+      const where =
+        finding[AI_REVIEW_FINDING_FIELDS.file] === subject.file
+          ? `not on a line the candidate changed (${subject.file}: ${subject.changedLines?.join(", ") || "none"})`
+          : `it names ${JSON.stringify(finding[AI_REVIEW_FINDING_FIELDS.file])}, a file the candidate ` +
+            `does not change (the candidate is ${subject.file})`;
+      detail.push(`pre-existing, not scored: ${renderFinding(i, finding)} — ${where}`);
     }
   }
   if (outcome === "FIRED") detail.push(subject.note);

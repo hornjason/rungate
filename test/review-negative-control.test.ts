@@ -507,6 +507,9 @@ describe("#1169: the control can fail — the mutant reviewers", () => {
     expect(missed.outcome).toBe("MISSED");
     expect(clean.outcome).toBe("QUIET");
     expect(clean.preExistingBlocking).toBe(1);
+    // Named as another file, not as an unchanged line of the subject's own.
+    expect(clean.detail.join("\n")).toContain("a file the candidate does not change");
+    expect(clean.detail.join("\n")).not.toContain("not on a line the candidate changed");
 
     const run = summariseReviewControl([missed, clean]);
     expect(run.passed).toBe(false);
@@ -629,7 +632,7 @@ describe("#1533: the clean arm scores FIRED only on a line the candidate changed
     const r = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line: 19 })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
     expect(r.outcome).toBe("QUIET");
     expect(r.preExistingBlocking).toBe(1);
-    expect(r.detail.join("\n")).toContain("pre-existing");
+    expect(r.detail.join("\n")).toContain("not on a line the candidate changed");
   });
 
   test("a blocking finding on the subject file that names no line is FIRED — unattributable is not pre-existing", () => {
