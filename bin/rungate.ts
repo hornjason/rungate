@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { CLI_COMMANDS, helpText, runCommandScript } from "../lib/cli-commands";
 import { harnessVersionLine } from "../lib/harness-identity";
+import { INCOMPLETE_INSTALL_EXIT, incompleteInstallMessage, missingDependencies } from "../lib/install-integrity";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -51,17 +52,29 @@ if (!command) {
   process.exit(1);
 }
 
+// #2479: a half-written install crashes inside the script on a missing
+// module, naming a temp path. Asked here, after the command is known and
+// before it runs, so `--version`, `--help` and an unknown command still work
+// from an install that cannot load a dependency.
+//
+// The command's own script is part of the same check (review round 4 of
+// #2491). A missing script is either the race that half-writes everything
+// else, or the packaging bug #363 is about, and from inside one install the
+// two look identical. So it is reported with the dependencies, through the
+// one refusal, and the packaging cause is named after the race.
 const script = join(PACKAGE_ROOT, command.script);
-if (!existsSync(script)) {
-  // Reachable only from an installed package whose `files` lost the script.
-  // Named rather than swallowed: "command does nothing" is the failure #363
-  // is about, and a missing file must not look like a successful run.
-  console.error(
-    `rungate: "${name}" is registered but ${command.script} is not in this ` +
-      `installation. The package's "files" field and lib/cli-commands.ts ` +
-      `disagree — see test/cli-contract.test.ts, which exists to stop this.`,
-  );
-  process.exit(1);
+const missing = missingDependencies(PACKAGE_ROOT);
+const scriptMissing = !existsSync(script);
+if (scriptMissing) missing.push(command.script);
+if (missing.length > 0) {
+  console.error(incompleteInstallMessage(PACKAGE_ROOT, missing));
+  if (scriptMissing) {
+    console.error(
+      `If a re-run still cannot find ${command.script}, "${name}" is registered but the ` +
+        `package's "files" field leaves it out — see test/cli-contract.test.ts, which exists to stop this.`,
+    );
+  }
+  process.exit(INCOMPLETE_INSTALL_EXIT);
 }
 
 // Default the project root to where the USER is, not to where the package
