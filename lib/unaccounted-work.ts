@@ -61,8 +61,17 @@ export function citationsIn(text: string): number[] {
  * #2494).
  */
 export const clip = (s: string) => {
-  const safe = s.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "\uFFFD");
-  return safe.length > 160 ? `${safe.slice(0, 157)}...` : safe;
+  // By code point (the u flag), so characters outside the BMP are matched
+  // whole: the tag block U+E0000–E007F, which can carry text an agent reads
+  // and a person does not see, and the variation selectors supplement
+  // U+E0100–E01EF (review of #2494).
+  const safe = s.replace(
+    /[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu,
+    "\uFFFD",
+  );
+  // Cut by code point too, so an emoji at the boundary is never split into a lone surrogate.
+  const points = Array.from(safe);
+  return points.length > 160 ? `${points.slice(0, 157).join("")}...` : safe;
 };
 
 /** Who may add a line to the report through a pull request body: people with a say in the repository. */
