@@ -147,6 +147,12 @@ export interface ReviewControlSubject {
    * declared range and never reads this (review of #2450).
    */
   changedLines: readonly number[] | null;
+  /**
+   * #1533. How many lines the candidate has, so a cited line outside
+   * 1..this is unattributable rather than "unchanged". `null` on a planted
+   * arm, with `changedLines`.
+   */
+  candidateLineCount: number | null;
   /** The defect, or why this subject is clean. */
   note: string;
 }
@@ -293,7 +299,11 @@ export function findingOnChangedLine(
   if (typeof line !== "number" || !Number.isInteger(line)) return true;
   // A subject whose changed lines were not computed — a planted arm — cannot
   // excuse a finding as pre-existing; it is read toward FIRED.
-  if (subject.changedLines === null) return true;
+  if (subject.changedLines === null || subject.candidateLineCount === null) return true;
+  // A line that is not in the candidate — 0, negative, past its end — is as
+  // unusable as no line at all, so it is unattributable, not unchanged
+  // (review of #2450).
+  if (line < 1 || line > subject.candidateLineCount) return true;
   return subject.changedLines.includes(line);
 }
 
@@ -677,6 +687,7 @@ export function loadReviewControlSubjects(dir: string): ReviewControlSubject[] {
       }
       const candidatePath = join(subjectDir, c.candidate);
       const baselinePath = join(subjectDir, baseline);
+      const candidateText = kind === "clean" ? readFileSync(candidatePath, "utf-8") : null;
       subjects.push({
         id: c.id,
         kind,
@@ -686,9 +697,10 @@ export function loadReviewControlSubjects(dir: string): ReviewControlSubject[] {
         candidatePath,
         baselinePath,
         changedLines:
-          kind === "clean"
-            ? changedLines(readFileSync(baselinePath, "utf-8"), readFileSync(candidatePath, "utf-8"))
-            : null,
+          candidateText === null ? null : changedLines(readFileSync(baselinePath, "utf-8"), candidateText),
+        // Lines as an editor numbers them: a trailing newline ends the last
+        // line rather than starting another.
+        candidateLineCount: candidateText === null ? null : candidateText.replace(/\n$/, "").split("\n").length,
         note: String(c.defect ?? c.why ?? ""),
       });
     }

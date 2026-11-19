@@ -620,10 +620,12 @@ line the diff never touched, occupies the blocking slot without the draw ever
 reaching the question — so the honest outcome is `UNMEASURED`, in exactly the
 sense the row above gives it.
 
-`score` cannot see this, by design-as-it-stands: it reads severity, file and
-line, and it has no notion of which lines the diff changed. Whether it should
-is **#1533**. Until that is decided, a reading in this state is recorded with
-**both** values and they are never merged:
+`score` could not see this until **#1533**, which scopes the clean arm to the
+lines the candidate changed (see *The clean arm is scored on the lines the
+candidate changed* above): a finding true of the base on an untouched line is
+now named *pre-existing* and does not score `FIRED`. The readings banked
+before that rule were scored without it, so for them the two values are still
+recorded side by side and never merged:
 
 | field | what it is | may it be hand-written? |
 |---|---|---|

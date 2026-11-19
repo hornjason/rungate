@@ -638,6 +638,16 @@ describe("#1533: the clean arm scores FIRED only on a line the candidate changed
   test("a blocking finding on the subject file that names no line is FIRED — unattributable is not pre-existing", () => {
     const r = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line: "n/a" })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
     expect(r.outcome).toBe("FIRED");
+    // Review of #2450: a line that is not in the candidate is as unusable.
+    const last = CLEAN.candidateLineCount!;
+    for (const line of [0, -3, last + 1]) {
+      const out = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+      expect(out.outcome, `line ${line} of a ${last}-line candidate was excused as pre-existing`).toBe("FIRED");
+    }
+    // And the last real line is a real line: unchanged there is still QUIET.
+    expect(CLEAN.changedLines).not.toContain(last);
+    const atLast = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line: last })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+    expect(atLast.outcome).toBe("QUIET");
   });
 
   test("the scope can fail: with the decider answering every line, line 19 FIRES again", async () => {
