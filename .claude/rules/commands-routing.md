@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: a2918c8d66fc2304
+generated-sha: e3ae2198d9fc2fe7
 ---
 
 ## Command Routing
@@ -30,6 +30,7 @@ Generated from the CLI's command registry. Run one as
 | `work-status` | What is being worked, what is Ready next, and the plan, read live |
 | `plan-deps` | Write the blocked-by links accepted ADRs declare onto the tracker |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
+| `board-flow` | Move an issue's card to the lane an issue or pull request event decides |
 | `board-id` | Print the board's node id from config |
 | `ci-reading` | Print a merged pull request's CI breakdown — per-check time, queue, critical path, re-runs |
 | `board-intake-move` | Move a board item to a column, verified in the item and in the board's search index |
