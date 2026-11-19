@@ -1186,11 +1186,6 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
     }
   } else {
     // No config exists — create directory structure
-    let harnessVersion = "unknown";
-    try {
-      const harnessPkg = JSON.parse(readFileSync(join(dirname(dirname(__dirname)), "package.json"), "utf-8"));
-      harnessVersion = harnessPkg.version || "unknown";
-    } catch {}
 
     // Prefer package.json name, fall back to directory basename
     let projectName = basename(root);
@@ -1203,7 +1198,9 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
 
     const config = {
       "$schema": "rungate",
-      harnessVersion,
+      // #2501: the one reader. A second copy here wrote "unknown" on an
+      // unreadable manifest while every workflow pin refused the same input.
+      harnessVersion: harnessVersion(),
       scaffoldedAt: new Date().toISOString(),
       project: projectName,
       repo,
