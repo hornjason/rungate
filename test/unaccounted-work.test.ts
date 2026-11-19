@@ -396,6 +396,11 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
     const both = run(SCRIPT, ["--project-root", root, "--prs-fixture", join(SCRATCH, "prs.json"), "--since", "2026-11-01"]);
     expect(both.code).toBe(2);
     expect(both.err).toContain("pass one");
+    // Review of #2494: a malformed --repo is refused before anything is sent,
+    // never read back as zero pull requests.
+    const badRepo = run(SCRIPT, ["--project-root", root, "--issues-fixture", FIXTURE, "--since", "2026-11-01", "--repo", "not a repo", "--json"]);
+    expect(badRepo.code).toBe(2);
+    expect(json(badRepo.out).unmeasured.join("\n")).toMatch(/^pr-bodies — GitHub could not list the pull requests/m);
     // Review of #2494: a day past the end of its month is a typo, not a later date.
     for (const bad of ["2026-02-30", "2026-04-31", "2025-02-29"]) {
       const b = run(SCRIPT, ["--project-root", root, "--since", bad]);

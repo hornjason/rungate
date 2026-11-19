@@ -85,6 +85,11 @@ async function fetchPrBodies(repo: string | null, since: string): Promise<Source
     return prBodiesSource({ kind: "UNMEASURED", why: "no repository to read pull requests from: pass --repo, or give the tree an origin remote" });
   }
   try {
+    // Validated before anything is sent (review of #2494): search matches
+    // nothing for a malformed `repo:` qualifier and returns zero results, and
+    // zero would read as "no pull requests" rather than a reading not taken.
+    const { owner, repo: name } = parseOwnerRepo(repo);
+    const slug = `${owner}/${name}`;
     const client = createGitHubClient();
     const seen = new Map<number, AuthoredPr>();
     const query = `query($q: String!, $after: String) {
@@ -94,7 +99,7 @@ async function fetchPrBodies(repo: string | null, since: string): Promise<Source
         nodes { ... on PullRequest { number body authorAssociation } }
       }
     }`;
-    for (const q of [`repo:${repo} is:pr merged:>=${since}`, `repo:${repo} is:pr is:open`]) {
+    for (const q of [`repo:${slug} is:pr merged:>=${since}`, `repo:${slug} is:pr is:open`]) {
       const pages: PrSearchPage[] = [];
       let after: string | null = null;
       // The one pager (lib/graphql-cursor.ts): a page that cannot say whether
