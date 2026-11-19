@@ -687,6 +687,9 @@ describe("#1533: the clean arm scores FIRED only on a line the candidate changed
       ["subject file, unchanged line", { file: CLEAN.file, line: unchanged }, CLEAN, false],
       ["subject file, changed line", { file: CLEAN.file, line: changed }, CLEAN, true],
       ["planted arm, any line", { file: PLANTED.file, line: 1 }, PLANTED, true],
+      // Review of #2450, round 6: the first row's "either" — another file on
+      // a subject with no computed lines is still not about the diff.
+      ["planted arm, another file", { file: "lib/elsewhere.ts", line: 1 }, PLANTED, false],
     ];
     for (const [label, finding, s, want] of rows) {
       expect(findingOnChangedLine(s, finding), label).toBe(want);
@@ -694,7 +697,9 @@ describe("#1533: the clean arm scores FIRED only on a line the candidate changed
     // And the docblock lists exactly as many rows as this table holds.
     const source = readFileSync(join(import.meta.dir, "..", "evals", "ai-review-control", "control.ts"), "utf-8");
     const block = source.slice(source.indexOf("#1533's one decider"), source.indexOf("export function findingOnChangedLine"));
-    expect(block.split("\n").filter(l => /^\s*\* \| (another|the subject|any line)/.test(l))).toHaveLength(7);
+    // Seven rows; the test holds eight inputs because the first row's
+    // "either" is held on both kinds of subject.
+    expect(block.split("\n").filter(l => /^\s*\* \| (another|subject's) /.test(l))).toHaveLength(7);
   });
 
   test("the scope can fail: with the decider answering every line, line 19 FIRES again", async () => {

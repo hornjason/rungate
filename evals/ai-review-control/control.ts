@@ -287,18 +287,20 @@ export function changedLines(baseline: string, candidate: string): number[] {
 /**
  * #1533's one decider: does this finding land on a line the candidate
  * changed? The direction it is allowed to be wrong in is toward FIRED, which
- * a reader then argues with. **The whole case set**, enumerated once and
- * held row for row by the `#1533: the decider's case set` test:
+ * a reader then argues with. **The whole case set**, over the three inputs
+ * the answer reads, enumerated once and held row for row by the
+ * `#1533: the decider's case set` test. The rows partition the inputs: each
+ * finding matches exactly one, in the order the code tests them.
  *
- * | the finding names                                   | answer |
- * |-----------------------------------------------------|--------|
- * | another file                                        | false — not about the diff |
- * | the subject's file, `line` not a number             | true — unattributable |
- * | the subject's file, `line` a non-integer number     | true — unattributable |
- * | the subject's file, `line` < 1 or past its last line| true — unattributable |
- * | the subject's file, a line it did not change        | false — pre-existing |
- * | the subject's file, a line it changed               | true |
- * | any line, on a subject with no computed lines       | true — a planted arm is never excused |
+ * | file      | `line`                              | changed lines computed | answer |
+ * |-----------|-------------------------------------|------------------------|--------|
+ * | another   | anything                            | either | false — not about the diff |
+ * | subject's | not a number                        | either | true — unattributable |
+ * | subject's | a non-integer number                | either | true — unattributable |
+ * | subject's | an integer                          | no     | true — a planted arm is never excused |
+ * | subject's | an integer < 1 or past the last line| yes    | true — unattributable |
+ * | subject's | in range, a line it did not change  | yes    | false — pre-existing |
+ * | subject's | in range, a line it changed         | yes    | true |
  */
 export function findingOnChangedLine(
   subject: ReviewControlSubject,
