@@ -1,25 +1,23 @@
-# Not managed by rungate: caller-owned, like issue-audit.yml.
+# generated-sha: e0f468c9974165e6
+# Managed by rungate — do not edit the generated job.
 #
-# #2020 — an issue filed with `gh issue create --body` skips the issue forms,
-# so nothing read whether it names a criterion until a pull request hit it
-# (ADR-013 rule 9, step 4). This labels it `needs-criterion` when it is
-# opened, says why once, and takes the label off when an edit answers it.
-# The daily run re-reads every open issue, so a missed event cannot leave the
-# label stale; a dispatch run with no issue is the backfill.
-#
-# Every `uses:` is pinned to a commit SHA, and a test asserts it.
+# #2020, generated since #2467: an issue that names no criterion and does not
+# say it serves none is labelled needs-criterion when it is filed, told why
+# once, and unlabelled when an edit answers it. The daily run re-reads every
+# open issue, and a run by hand with no issue is the backfill.
 name: Criterion label
 
 on:
   issues:
     types: [opened, edited, reopened]
   schedule:
-    - cron: "41 6 * * *" # daily, off the hour
+    - cron: "41 6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write # the label and the one comment are the whole point
+  # The label and the one comment are the whole point.
+  issues: write
 
 # One run per issue at a time; the daily sweep has its own group.
 concurrency:
@@ -28,14 +26,19 @@ concurrency:
 
 jobs:
   criterion-label:
-    runs-on: ubuntu-latest
+    runs-on: "ubuntu-24.04"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.0.2
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
+          # Pinned by .bun-version — the project's single declaration (#622).
+          # setup-bun reads that file, so there is no version spelled here to drift from it.
           bun-version-file: ".bun-version"
-      - run: bun install --frozen-lockfile --ignore-scripts
-
+        env:
+          # A per-runner install path, so runners sharing a HOME cannot rewrite
+          # each other's bun mid-exec ("Text file busy").
+          HOME: ${{ runner.tool_cache }}/bun-home
+          USERPROFILE: ${{ runner.tool_cache }}/bun-home
       # The issue number and the event name go through env:, never into the
       # script text. The title and body are written by whoever opened the
       # issue, so they are read through the API and never interpolated here.
@@ -51,4 +54,4 @@ jobs:
             args+=(--issue "$ISSUE")
             if [ "$ACTION" = "opened" ]; then args+=(--comment); fi
           fi
-          bun scripts/criterion-label.ts "${args[@]}"
+          bunx rungate@0.8.36 criterion-label "${args[@]}"

@@ -241,6 +241,16 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't edit `triage`",
   },
   {
+    // #2467: the needs-criterion label, so a consumer's label count and its
+    // criteria-named reading can be compared. A consumer has no scripts/,
+    // so the generator writes it and calls the published CLI.
+    path: ".github/workflows/criterion-label.yml",
+    strategy: "job-preserving",
+    servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
+    customize: "Add jobs beside `criterion-label`",
+    avoid: "Don't edit `criterion-label`",
+  },
+  {
     // `regenerate` until #655, and the declaration was never consulted:
     // `generateAgentBriefsStep` called `writeFileSync` directly, so the row
     // described behaviour that a bare overwrite happened to coincide with.

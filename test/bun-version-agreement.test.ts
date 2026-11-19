@@ -61,10 +61,10 @@ const REPO_ROOT = join(import.meta.dir, "..");
  * which installs it for the unmeasured classifier, since #2046 one in
  * `adr-accepted.yml`, since #2045 one in `closing-references.yml` and since
  * #2047 one in `board-ready.yml`, since #2166 one in `board-intake.yml` and since
- * #2233 one in `intake.yml`, since #2305 one in `specs-placed.yml` and since #2342 one in `consumer-intake.yml`, all of which run the published CLI. Declared once, because three cases below count
+ * #2233 one in `intake.yml`, since #2305 one in `specs-placed.yml`, since #2342 one in `consumer-intake.yml` and since #2467 one in `criterion-label.yml`, all of which run the published CLI. Declared once, because three cases below count
  * them and three literals would drift apart.
  */
-const GENERATED_BUN_STEPS = 11;
+const GENERATED_BUN_STEPS = 12;
 
 const WORKFLOW_DIR = join(REPO_ROOT, ".github", "workflows");
 

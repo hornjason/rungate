@@ -70,6 +70,7 @@ const GENERATED = [
   "board-ready.yml",
   "closing-references.yml",
   "consumer-intake.yml",
+  "criterion-label.yml",
   "ci.yml",
   "gates.yml",
   "intake.yml",
