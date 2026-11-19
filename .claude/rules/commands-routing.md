@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 90dbd2d2995484fa
+generated-sha: 315935c3304150b0
 ---
 
 ## Command Routing
@@ -24,7 +24,7 @@ Generated from the CLI's command registry. Run one as
 | `board-conformance` | Whether the board says what the spec says, reading by reading |
 | `plan-issues` | Apply an approved issue plan: --decompose files issues, --repair links and demotes them |
 | `consumer-triage` | Give each consumer-filed issue with no verdict exactly one |
-| `criterion-label` | Label each open issue that names no criterion, and unlabel it once it does |
+| `criterion-label` | Label open issues that name no criterion |
 | `board-scope` | Spec criteria and opt-in, with looks-done hints |
 | `board` | Each phase's open issues and blockers |
 | `plan-deps` | Write the blocked-by links accepted ADRs declare onto the tracker |
