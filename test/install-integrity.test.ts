@@ -108,6 +108,28 @@ describe("#2479: the install is checked before a command runs", () => {
     expect(missingDependencies(pkg)).toEqual(["zod"]);
   });
 
+  // Review of #2491, round 4: a manifest that parses but declares no
+  // dependencies is as torn as one that does not parse.
+  test("a package.json that parses but declares no dependencies is named as unreadable, not read as complete", () => {
+    for (const body of ["{}", '{"name":"rungate","dependencies":null}', '{"name":"rungate","dependencies":{}}', '{"dependencies":[]}']) {
+      const { pkg } = install();
+      writeFileSync(join(pkg, "package.json"), body);
+      expect(missingDependencies(pkg), body).toEqual(["package.json (unreadable: it declares no dependencies)"]);
+    }
+  });
+
+  // Review of #2491, round 4: the command's own script is part of the
+  // install, and a half-written one is the same race.
+  test("a run whose command script is missing refuses with the message, naming the script and the packaging cause", () => {
+    const { pkg, project } = install();
+    rmSync(join(pkg, "scripts/sync-sc-status.ts"));
+    const r = run(pkg, project, ["sync-sc-status", "--dry-run"]);
+    expect(r.stderr, `no guard message; stderr was:\n${r.stderr}`).toContain(MARK);
+    expect(r.stderr).toContain("scripts/sync-sc-status.ts");
+    expect(r.stderr).toContain('"files" field');
+    expect(r.code).toBe(INCOMPLETE_INSTALL_EXIT);
+  });
+
   // Review of #2491, round 3: the check walks the tree, so a dependency's
   // own missing dependency is named by the path that needed it.
   test("a missing package two hops down is named by the path that needed it", () => {

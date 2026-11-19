@@ -63,6 +63,13 @@ function packageDir(name: string, from: string): string | null {
 export function missingDependencies(packageRoot: string): string[] {
   const own = readManifest(packageRoot);
   if (typeof own === "string") return [`package.json (unreadable: ${own})`];
+  // rungate's own manifest always declares dependencies, so one that parses
+  // and declares none is as torn as one that does not parse (review round 4
+  // of #2491). A package further down may legitimately declare none.
+  const deps = (own as { dependencies?: unknown }).dependencies;
+  if (deps === null || typeof deps !== "object" || Array.isArray(deps) || Object.keys(deps).length === 0) {
+    return ["package.json (unreadable: it declares no dependencies)"];
+  }
   const missing: string[] = [];
   const seen = new Set<string>();
   const queue = Object.keys(own.dependencies ?? {}).map(name => ({ name, from: packageRoot, via: "" }));
