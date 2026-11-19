@@ -572,6 +572,46 @@ interface OpenItem {
   milestone: string | null;
 }
 
+/**
+ * #2466: the plan in `project-state.json` is this checkout's, so it is printed
+ * only as this checkout's repository's. Asked about another repository, the
+ * goal and stages are left out and the reason names both, rather than one
+ * repository's finish line printed above another's phases. A checkout with
+ * no readable origin says nothing about which repository its plan is, so
+ * nothing contradicts `repo` and the plan is read as before.
+ */
+export function planFor(root: string, repo: string, gh: Gh = liveGh): ReturnType<typeof planLines> {
+  const origin = spawnSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf-8" });
+  const own = origin.status === 0 ? repoFromRemote(origin.stdout) : null;
+  if (own !== null && own.toLowerCase() !== repo.toLowerCase()) {
+    // Review of #2469: a repository renamed on GitHub keeps its old name in
+    // every remote cloned before the rename, and GitHub redirects the old
+    // name. So two different names are resolved through the API before
+    // they are called two repositories.
+    const canonical = (name: string): Reading<string> => {
+      const r = ghJson<{ full_name?: unknown }>(gh, ["api", `repos/${name}`]);
+      if (r.kind === "UNMEASURED") return r;
+      return typeof r.value.full_name === "string" ? read(r.value.full_name.toLowerCase()) : unmeasured(`repos/${name} carried no full_name`);
+    };
+    const a = canonical(own);
+    const b = canonical(repo);
+    if (a.kind === "READ" && b.kind === "READ" && a.value === b.value) {
+      const planPath = join(root, "project-state.json");
+      return planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json");
+    }
+    const unresolved = [a, b].find(r => r.kind === "UNMEASURED");
+    const why =
+      `this checkout's project-state.json is ${own}'s plan and this view is of ${repo}, ` +
+      `so its goal and stages are left out rather than printed as ${repo}'s` +
+      (unresolved !== undefined && unresolved.kind === "UNMEASURED"
+        ? ` (whether one is the other renamed could not be checked: ${unresolved.why})`
+        : "");
+    return { goal: unmeasured(why), stages: unmeasured(why) };
+  }
+  const planPath = join(root, "project-state.json");
+  return planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json");
+}
+
 export function gather(
   root: string,
   repo: string,
@@ -579,8 +619,7 @@ export function gather(
   now = new Date(),
   health: (root: string) => Reading<HealthLine[]> = readHealth,
 ): StatusView {
-  const planPath = join(root, "project-state.json");
-  const plan = planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json");
+  const plan = planFor(root, repo, gh);
   const { engineSpec, milestonePrefix } = readBoardInputs(root);
   const queueLabel = readQueueLabel(root);
   let specText: string | null = null;
