@@ -92,6 +92,22 @@ describe("#2487: withProofLine", () => {
     expect(r.content).toBe(ticked);
   });
 
+  // Review of #2492: audit-specs --fix writes an unindented REVIEW marker
+  // under a bullet, and parseCriteria reads past it.
+  test("a REVIEW marker under the bullet does not hide an existing proof line", () => {
+    const spec = "- [x] SC-9870: marked\n<!-- REVIEW: unmatched -->\n      needs: test\n      proved-by: test/old.test.ts\n";
+    const r = withProofLine(spec, "SC-9870", "test/new.test.ts");
+    expect(r.wrote).toBe(false);
+    expect(r.content).toBe(spec);
+  });
+
+  test("a REVIEW marker under the bullet: a new proof goes after the block, where parseCriteria reads it", () => {
+    const spec = "- [x] SC-9871: marked\n<!-- REVIEW: unmatched -->\n      needs: test\n\n";
+    const r = withProofLine(spec, "SC-9871", "test/new.test.ts");
+    expect(r.wrote).toBe(true);
+    expect(provedBy(r.content, "SC-9871")).toBe("test/new.test.ts");
+  });
+
   test("an unticked criterion is not given a proof line", () => {
     const r = withProofLine(SPEC, "SC-9861", "test/a.test.ts");
     expect(r.wrote).toBe(false);
@@ -148,6 +164,24 @@ describe("#2487: the proof names the claiming test", () => {
     expect(testTitleAt(SRC, SRC.indexOf("SC-9865"))).toBe("SC-9865: the title names it");
     expect(testTitleAt(SRC, SRC.indexOf("SC-9867"))).toBe("SC-9867 in single quotes");
     expect(testTitleAt(SRC, SRC.indexOf("SC-9866"))).toBeUndefined();
+  });
+
+  // Review of #2492: one id declared by two specs, claimed by two titles.
+  test("an id two specs declare, claimed by one title per spec, cites each spec's own title", () => {
+    const dir = scratch();
+    writeFileSync(
+      join(dir, "dual.test.ts"),
+      'import { test } from "bun:test";\ntest("SC-9872 for ALPHA-SPEC", () => {});\ntest("SC-9872 for BRAVO-SPEC", () => {});\n',
+    );
+    const map = new Map([
+      ["dual.test.ts", [
+        { id: "SC-9872", specFile: "ALPHA-SPEC.md" },
+        { id: "SC-9872", specFile: "BRAVO-SPEC.md" },
+      ]],
+    ]);
+    const proofs = proofsFor(map, new Set(["ALPHA-SPEC.md::SC-9872", "BRAVO-SPEC.md::SC-9872"]), dir);
+    expect(proofs.get("ALPHA-SPEC.md::SC-9872")).toBe('test/dual.test.ts "SC-9872 for ALPHA-SPEC"');
+    expect(proofs.get("BRAVO-SPEC.md::SC-9872")).toBe('test/dual.test.ts "SC-9872 for BRAVO-SPEC"');
   });
 
   test("proofsFor names file and title for a title claim, the file alone for a comment claim, and only passing files", () => {

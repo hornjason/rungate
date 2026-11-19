@@ -33,6 +33,7 @@ import {
   buildScRegistry,
   isQualifiedBy,
   isTemplateSpec,
+  qualifierTokens,
   oneScMentionPattern,
   parseScDeclarations,
   requiresQualification,
@@ -898,8 +899,19 @@ export function proofsFor(
     const source = readFileSync(join(root, file), "utf-8");
     const sites = coverageClaimSites(source);
     for (const c of live) {
-      const site = sites.find(s => s.id === c.id && s.kind === "title");
-      const title = site ? testTitleAt(source, site.at) : undefined;
+      // Review of #2492: an id two specs declare can be claimed in one file by
+      // two titles, one per spec, and each criterion must cite its own. So a
+      // title naming this credit's spec wins, then one qualified by the window
+      // the credit rule itself uses, then the first.
+      const titled = sites
+        .filter(s => s.id === c.id && s.kind === "title")
+        .map(s => ({ s, title: testTitleAt(source, s.at) }));
+      const tokens = qualifierTokens(c.specFile).map(t => t.toLowerCase());
+      const pick =
+        titled.find(t => t.title !== undefined && tokens.some(k => t.title!.toLowerCase().includes(k))) ??
+        titled.find(t => isQualifiedBy(source, t.s.at, c.specFile)) ??
+        titled[0];
+      const title = pick?.title;
       out.set(scopedKey(c.specFile, c.id), `test/${file}${title ? ` "${title}"` : ""}`);
     }
   }
@@ -922,7 +934,10 @@ export function withProofLine(content: string, id: string, proof: string): { con
   let end = at + 1;
   let indent = "      ";
   let sawAnnotation = false;
-  while (end < lines.length && /^\s{2,}\S/.test(lines[end])) {
+  // An unindented `<!-- REVIEW: … -->` marker from `audit-specs --fix` sits
+  // inside the block, as parseCriteria reads it; stopping there would miss a
+  // proof or waiver below it and write a second one (review of #2492).
+  while (end < lines.length && (/^\s{2,}\S/.test(lines[end]) || /^\s*<!--/.test(lines[end]))) {
     if (PROOF_OR_WAIVER.test(lines[end])) return { content, wrote: false };
     const kv = lines[end].match(/^(\s{2,})[a-z-]+:/);
     if (kv && !sawAnnotation) {
