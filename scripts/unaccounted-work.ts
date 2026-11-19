@@ -26,6 +26,7 @@ import { homedir } from "os";
 import { resolve } from "path";
 
 import { createGitHubClient, parseOwnerRepo } from "../lib/github";
+import { nextCursor } from "../lib/graphql-cursor";
 import {
   buildReport,
   citedNumbers,
@@ -96,11 +97,16 @@ async function fetchPrBodies(repo: string | null, since: string): Promise<Source
     for (const q of [`repo:${repo} is:pr merged:>=${since}`, `repo:${repo} is:pr is:open`]) {
       const pages: PrSearchPage[] = [];
       let after: string | null = null;
-      do {
+      // The one pager (lib/graphql-cursor.ts): a page that cannot say whether
+      // more exist is UNMEASURED, never read as the last one.
+      for (;;) {
         const data = (await client.graphql(query, { q, after })) as { search: PrSearchPage };
         pages.push(data.search);
-        after = data.search.pageInfo.hasNextPage ? data.search.pageInfo.endCursor : null;
-      } while (after);
+        const next = nextCursor(data.search?.pageInfo);
+        if (next.kind === "unreadable") return prBodiesSource({ kind: "UNMEASURED", why: `${q}: ${next.why}` });
+        if (next.kind === "done") break;
+        after = next.cursor;
+      }
       const read = prsFromSearch(pages);
       if ("why" in read) return prBodiesSource({ kind: "UNMEASURED", why: `${q}: ${read.why}` });
       for (const it of read.prs) seen.set(it.number, it);
