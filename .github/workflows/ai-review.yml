@@ -1,4 +1,4 @@
-# generated-sha: 7384b19e9be19386
+# generated-sha: a64719bc1d9d183e
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -3502,6 +3502,11 @@ jobs:
           # `error` rather than a `null` literal, so every unreadable shape leaves
           # by the one branch that already exists below and already says UNMEASURED
           # out loud. A second way to be unreadable would be a second decider.
+          #
+          # CRC-N3: `population` and `populationSearch` are kept, as `null` when
+          # the reviewer gave none. Projected away, every finding read as *not
+          # recorded* to the class-size rate (31 of 31 on PRs 2400-2448); always
+          # written, a missing key means only "this ledger predates the field".
           findings="null"
           # The verdict word's own default, and it is `null` rather than an empty
           # string for the three-state reason `turns` states: a round that recorded
@@ -3512,7 +3517,7 @@ jobs:
           # docstring rather than left for a reader to discover.
           verdict="null"
           if [ -n "${AI_REVIEW_FINDINGS_PATH:-}" ] && [ -s "${AI_REVIEW_FINDINGS_PATH}" ]; then
-            if parsed=$(jq -c 'if (.findings | type) == "array" then [ .findings[] | {severity, file, line, summary, failure_scenario} ] else error("findings is not a list") end' "${AI_REVIEW_FINDINGS_PATH}" 2>/dev/null); then
+            if parsed=$(jq -c 'if (.findings | type) == "array" then [ .findings[] | {severity, file, line, summary, failure_scenario, population: (.population // null), populationSearch: (.populationSearch // null)} ] else error("findings is not a list") end' "${AI_REVIEW_FINDINGS_PATH}" 2>/dev/null); then
               # Record the TEXT at each cited line, out of the checkout this round
               # reviewed. A later round cannot obtain it: `actions/checkout` above runs
               # at `fetch-depth: 1`, so the commit a finding was raised against is not
