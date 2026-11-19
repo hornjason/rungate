@@ -88,8 +88,13 @@ export interface SpecsPlacedWorkflowOptions {
 
 /**
  * The wait step's script. The GitHub API lists the ADR workflow's runs; any
- * not yet `completed` and created before this run is waited for. Runs created
- * AFTER this one are not, so the two workflows can never wait on each other.
+ * not yet `completed` that was created before this run, OR that runs on this
+ * run's own commit, is waited for. The commit is what catches the merge that
+ * starts both workflows in the same second (#2464): a strict `created_at <`
+ * let that pair through, and `plan-issues --place` ran before the ADR's
+ * issues existed. A later run from ANOTHER push is still not waited for, and
+ * adr-accepted.yml has no wait of its own, so the two cannot wait on each
+ * other.
  * Every page is read: the list is newest-first, so an earlier run still going
  * falls off page one once 100 newer runs exist. A list it cannot read fails
  * the step, through `pipefail`, rather than reading as "none unfinished".
@@ -98,7 +103,7 @@ export function buildWaitScript(): string {
   return `set -euo pipefail
 mine=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
 for poll in $(seq 1 ${WAIT_POLLS}); do
-  earlier=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/${ADR_ACCEPTED_WORKFLOW_FILE}/runs?per_page=100" --jq ".workflow_runs[] | select(.status != \\"completed\\" and .created_at < \\"$mine\\") | .id" | paste -sd ' ' -)
+  earlier=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/${ADR_ACCEPTED_WORKFLOW_FILE}/runs?per_page=100" --jq ".workflow_runs[] | select(.status != \\"completed\\" and (.created_at < \\"$mine\\" or .head_sha == \\"$GITHUB_SHA\\")) | .id" | paste -sd ' ' -)
   if [ -z "$earlier" ]; then
     echo "No earlier ${ADR_ACCEPTED_WORKFLOW_FILE} run is unfinished; going ahead."
     exit 0
