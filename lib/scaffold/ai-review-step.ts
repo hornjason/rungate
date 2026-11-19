@@ -10708,6 +10708,11 @@ fi
 # \`error\` rather than a \`null\` literal, so every unreadable shape leaves
 # by the one branch that already exists below and already says UNMEASURED
 # out loud. A second way to be unreadable would be a second decider.
+#
+# CRC-N3: \`${AI_REVIEW_FINDING_FIELDS.population}\` and \`${AI_REVIEW_FINDING_FIELDS.populationSearch}\` are kept, as \`null\` when
+# the reviewer gave none. Projected away, every finding read as *not
+# recorded* to the class-size rate (31 of 31 on PRs 2400-2448); always
+# written, a missing key means only "this ledger predates the field".
 findings="null"
 # The verdict word's own default, and it is \`null\` rather than an empty
 # string for the three-state reason \`turns\` states: a round that recorded
@@ -10718,7 +10723,7 @@ findings="null"
 # docstring rather than left for a reader to discover.
 verdict="null"
 if [ -n "\${${AI_REVIEW_FINDINGS_PATH_VAR}:-}" ] && [ -s "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" ]; then
-  if parsed=\$(jq -c 'if (.${AI_REVIEW_FINDINGS_KEY} | type) == "array" then [ .${AI_REVIEW_FINDINGS_KEY}[] | {${AI_REVIEW_FINDING_FIELDS.severity}, ${AI_REVIEW_FINDING_FIELDS.file}, ${AI_REVIEW_FINDING_FIELDS.line}, ${AI_REVIEW_FINDING_FIELDS.summary}, ${AI_REVIEW_FINDING_FIELDS.failureScenario}} ] else error("${AI_REVIEW_FINDINGS_KEY} is not a list") end' "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" 2>/dev/null); then
+  if parsed=\$(jq -c 'if (.${AI_REVIEW_FINDINGS_KEY} | type) == "array" then [ .${AI_REVIEW_FINDINGS_KEY}[] | {${AI_REVIEW_FINDING_FIELDS.severity}, ${AI_REVIEW_FINDING_FIELDS.file}, ${AI_REVIEW_FINDING_FIELDS.line}, ${AI_REVIEW_FINDING_FIELDS.summary}, ${AI_REVIEW_FINDING_FIELDS.failureScenario}, ${AI_REVIEW_FINDING_FIELDS.population}: (.${AI_REVIEW_FINDING_FIELDS.population} // null), ${AI_REVIEW_FINDING_FIELDS.populationSearch}: (.${AI_REVIEW_FINDING_FIELDS.populationSearch} // null)} ] else error("${AI_REVIEW_FINDINGS_KEY} is not a list") end' "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" 2>/dev/null); then
     # Record the TEXT at each cited line, out of the checkout this round
     # reviewed. A later round cannot obtain it: \`actions/checkout\` above runs
     # at \`fetch-depth: 1\`, so the commit a finding was raised against is not

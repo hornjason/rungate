@@ -475,6 +475,40 @@ function runPersist(rig: Rig = {}) {
 
 const ONE_FINDING = { findings: [{ severity: "high", file: "lib/a.ts", line: 4, summary: "s" }] };
 
+/**
+ * CRC-N3: the ledger keeps the class size the reviewer wrote.
+ *
+ * The projection used to keep five fields, so `population` and
+ * `populationSearch` (#1883) never reached the ledger and
+ * `lib/finding-population-rate.ts` (#2437) read every finding as *not
+ * recorded* — measured on PRs 2400-2448, 31 of 31. Both keys are now always
+ * written, `null` when the reviewer gave none, so "the reviewer gave none"
+ * (`null`) and "this ledger predates the field" (no key) stay two facts.
+ */
+describe("CRC-N3: the ledger keeps a finding's class size, and says when there was none", () => {
+  test("a finding's population and search reach the ledger as written", () => {
+    const r = runPersist({
+      payload: {
+        findings: [{ ...ONE_FINDING.findings[0], population: 3, populationSearch: ["needle", "other"] }],
+      },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const recorded = r.rounds?.at(-1)?.findings?.[0];
+    expect(recorded?.population, "the class size was dropped on the way to the ledger").toBe(3);
+    expect(recorded?.populationSearch).toEqual(["needle", "other"]);
+  });
+
+  test("a finding without them is written with both keys null — recorded, and empty", () => {
+    const r = runPersist({ payload: ONE_FINDING });
+    expect(r.status, r.stderr).toBe(0);
+    const recorded = r.rounds?.at(-1)?.findings?.[0] as Record<string, unknown>;
+    expect("population" in recorded, "an absent key reads as a ledger that predates the field").toBe(true);
+    expect("populationSearch" in recorded).toBe(true);
+    expect(recorded.population).toBeNull();
+    expect(recorded.populationSearch).toBeNull();
+  });
+});
+
 describe("AC-L0 (#1168): the rig delivers its own fixture unmangled", () => {
   /**
    * The premise every upsert row rests on, asserted rather than assumed.
@@ -514,7 +548,18 @@ describe("AC-L1 (#1168): a round is written, and the ledger is cumulative", () =
       // rather than the recorder having dropped it. `ONE_FINDING` omits it
       // on purpose: it is the shape the reviewer is NOT supposed to write,
       // and recording it faithfully is what keeps the refusal reachable.
-      { severity: "high", file: "lib/a.ts", line: 4, summary: "s", failure_scenario: null },
+      // `population` and `populationSearch` are `null` for the same reason
+      // (CRC-N3): written, and empty, so the class-size rate reads this
+      // finding as one whose reviewer gave none rather than as not recorded.
+      {
+        severity: "high",
+        file: "lib/a.ts",
+        line: 4,
+        summary: "s",
+        failure_scenario: null,
+        population: null,
+        populationSearch: null,
+      },
     ]);
     expect(r.rounds![0].round).toBe(2);
     // The identity rule is stamped on the entry, so a later round reads which
@@ -3138,12 +3183,12 @@ describe("AC-L16 (#1511): a blocking finding's failure_scenario survives the pro
     // The pre-#1511 projection, restored. The defect verbatim rather than a
     // reconstruction of its shape.
     const real = buildPersistScript();
-    const WIDE = ", summary, failure_scenario}";
+    const WIDE = ", summary, failure_scenario,";
     expect(
       real.split(WIDE).length - 1,
       "the projection moved — this row mutates a string that is no longer there",
     ).toBe(1);
-    const mutant = real.replace(WIDE, ", summary}");
+    const mutant = real.replace(WIDE, ", summary,");
 
     const r = runPersist({
       list: [],
