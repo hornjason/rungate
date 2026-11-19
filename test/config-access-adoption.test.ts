@@ -203,35 +203,40 @@ describe("SC-1449: the accessors read the directory layout, which is what the ol
    * tree that has everything it needs on the command line.
    */
   test("engineSpec and milestonePrefix read independently, and absent is null per key — #1718", () => {
-    const rows: { why: string; board: unknown; want: { engineSpec: string | null; milestonePrefix: string | null } }[] =
+    const rows: { why: string; board: unknown; want: { engineSpec: string | null; milestonePrefix: string | null; mergeWorkflow: string | null } }[] =
       [
-        { why: "no board key at all", board: undefined, want: { engineSpec: null, milestonePrefix: null } },
-        { why: "an empty board", board: {}, want: { engineSpec: null, milestonePrefix: null } },
-        { why: "an array, not a block", board: [], want: { engineSpec: null, milestonePrefix: null } },
+        { why: "no board key at all", board: undefined, want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null } },
+        { why: "an empty board", board: {}, want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null } },
+        { why: "an array, not a block", board: [], want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null } },
         {
           why: "a spec and no prefix",
           board: { engineSpec: "specs/X.md" },
-          want: { engineSpec: "specs/X.md", milestonePrefix: null },
+          want: { engineSpec: "specs/X.md", milestonePrefix: null, mergeWorkflow: null },
         },
         {
           why: "a prefix and no spec",
           board: { milestonePrefix: "Pipeline" },
-          want: { engineSpec: null, milestonePrefix: "Pipeline" },
+          want: { engineSpec: null, milestonePrefix: "Pipeline", mergeWorkflow: null },
         },
         {
           why: "blank is absent, not a value — a blank prefix matches no milestone",
           board: { engineSpec: "   ", milestonePrefix: "" },
-          want: { engineSpec: null, milestonePrefix: null },
+          want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null },
         },
         {
           why: "a non-string is absent too",
           board: { engineSpec: 7, milestonePrefix: ["Pipeline"] },
-          want: { engineSpec: null, milestonePrefix: null },
+          want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null },
+        },
+        {
+          why: "the merge workflow reads beside them, by the same rules (ADR-022)",
+          board: { engineSpec: "specs/X.md", mergeWorkflow: " approve-on-green " },
+          want: { engineSpec: "specs/X.md", milestonePrefix: null, mergeWorkflow: "approve-on-green" },
         },
         {
           why: "whitespace around a real value is trimmed, not refused",
           board: { engineSpec: " specs/X.md ", milestonePrefix: " Pipeline " },
-          want: { engineSpec: "specs/X.md", milestonePrefix: "Pipeline" },
+          want: { engineSpec: "specs/X.md", milestonePrefix: "Pipeline", mergeWorkflow: null },
         },
       ];
     const root = mkdtempSync(join(tmpdir(), "rungate-board-inputs-"));

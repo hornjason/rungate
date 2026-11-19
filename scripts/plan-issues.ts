@@ -226,7 +226,19 @@ rungate plan-issues --accepted-since <commit> [--project-root <dir>]
 
   Print each docs/adr/*.md that is accepted now and was not at <commit>, and
   that carries a Decomposition table — one path per line, nothing else on
-  stdout. Reads git only; touches no tracker. Used by adr-accepted.yml.`;
+  stdout. Reads git only; touches no tracker. Used by adr-accepted.yml.
+
+rungate plan-issues --accepted-since-last-run <workflow.yml> [--repo <owner/name>] [--project-root <dir>]
+
+  The same list, from the head of <workflow.yml>'s newest successful run whose
+  head commit is on this checkout's history (ADR-022: a run started by
+  workflow_run carries no before sha). No successful run, none on this
+  history, or runs that cannot be read: UNMEASURED, and nothing is listed.`;
+
+/** The successful runs of a workflow, newest first. Injected so a test never shells out. */
+export interface RunsGitHub {
+  runs: (repo: string, workflowFile: string) => Promise<unknown[]>;
+}
 
 /** What creating issues from a plan needs. Injected so a test never shells out. */
 export interface DecomposeGitHub {
@@ -451,6 +463,68 @@ export function refusalReporter(
  * ADR as absent at the earlier commit would list every accepted ADR in the
  * repository, and the workflow would re-run all of their plans.
  */
+/**
+ * Where a merge-triggered run's range starts (ADR-022 decision 3, SC-2787): the
+ * head of the newest successful run whose head commit is on this branch.
+ *
+ * What GitHub reports as the head of a run that `workflow_run` started cannot
+ * be observed offline, so it is not trusted: a run counts only when
+ * `isAncestor` says its head is in this checkout's history, and older runs are
+ * tried in turn. An older start is safe, because every planning step is
+ * idempotent. A missing run, a run off this branch, or runs that could not be
+ * read each refuse, by name, rather than guess a range or read "no runs" as
+ * "nothing was accepted".
+ */
+export function sinceLastSuccessfulRun(
+  runs: readonly unknown[] | null,
+  isAncestor: (sha: string) => boolean,
+  unreadWhy?: string,
+): { sha: string; run: number; skipped: number } | { why: string } {
+  if (runs === null) return { why: `the successful runs could not be read (${unreadWhy ?? "no reason given"}), so there is no range to read` };
+  if (runs.length === 0) return { why: "there is no successful run of this workflow to start the range from, so it refuses rather than guess one" };
+  let skipped = 0;
+  for (const r of runs) {
+    const run = r as { id?: unknown; head_sha?: unknown } | null;
+    if (typeof run?.head_sha !== "string" || !Number.isInteger(run.id)) {
+      return { why: `a successful run carries no id or head_sha (${JSON.stringify(r)?.slice(0, 80)})` };
+    }
+    if (isAncestor(run.head_sha)) return { sha: run.head_sha, run: run.id as number, skipped };
+    skipped++;
+  }
+  return { why: `none of the ${runs.length} successful runs read has its head on this branch's history, so there is no range to read` };
+}
+
+export const LIVE_RUNS: RunsGitHub = {
+  runs: async (repo, workflowFile) => {
+    const body = JSON.parse(gh(["api", `repos/${repo}/actions/workflows/${workflowFile}/runs?status=success&per_page=30`])) as { workflow_runs?: unknown };
+    if (!Array.isArray(body.workflow_runs)) throw new Error("the response carried no workflow_runs list");
+    return body.workflow_runs;
+  },
+};
+
+async function acceptedSinceLastRun(root: string, repo: string, workflowFile: string, api: RunsGitHub): Promise<number> {
+  let runs: unknown[] | null = null;
+  let unreadWhy: string | undefined;
+  try {
+    runs = await api.runs(repo, workflowFile);
+  } catch (e) {
+    unreadWhy = (e as Error).message;
+  }
+  const isAncestor = (sha: string) =>
+    /^[0-9a-f]{40}$/.test(sha) && spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", sha, "HEAD"], { encoding: "utf-8" }).status === 0;
+  const start = sinceLastSuccessfulRun(runs, isAncestor, unreadWhy);
+  if ("why" in start) {
+    console.error(`plan-issues: UNMEASURED — ${workflowFile}: ${start.why}. Nothing is listed.`);
+    return REFUSAL_EXIT;
+  }
+  console.error(
+    `plan-issues: reading what was accepted since run ${start.run} (${start.sha.slice(0, 12)}), the newest successful run of ${workflowFile} on this branch` +
+      (start.skipped > 0 ? `; ${start.skipped} newer run(s) had a head not on it` : "") +
+      ".",
+  );
+  return acceptedSince(root, start.sha);
+}
+
 function acceptedSince(root: string, since: string): number {
   const git = (...args: string[]) => spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
   if (git("cat-file", "-e", `${since}^{commit}`).status !== 0) {
@@ -856,6 +930,7 @@ export async function main(
   gh2: PlanIssuesGitHub = LIVE_GITHUB,
   gh3: DecomposeGitHub = LIVE_DECOMPOSE,
   gh4: PlaceGitHub = LIVE_PLACE,
+  gh5: RunsGitHub = LIVE_RUNS,
 ): Promise<number> {
   let parsed;
   try {
@@ -869,6 +944,7 @@ export async function main(
         json: { type: "boolean", default: false },
         "project-root": { type: "string" },
         "accepted-since": { type: "string" },
+        "accepted-since-last-run": { type: "string" },
         "milestone-prefix": { type: "string" },
         spec: { type: "string" },
         place: { type: "boolean", default: false },
@@ -909,6 +985,24 @@ export async function main(
       return REFUSAL_EXIT;
     }
     return await place(gh4, values["project-root"] ?? process.cwd(), placeRepo, values.write, values.json);
+  }
+  const lastRun = values["accepted-since-last-run"];
+  if (lastRun !== undefined) {
+    if (values.repair || values.decompose || values["accepted-since"] !== undefined) {
+      console.error(`plan-issues: --accepted-since-last-run lists plans; it applies none — pass it alone\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+    // A bare file name: it is interpolated into an API path.
+    if (!/^[A-Za-z0-9._-]+\.ya?ml$/.test(lastRun)) {
+      console.error(`plan-issues: --accepted-since-last-run needs a workflow file name such as adr-accepted.yml, not ${JSON.stringify(lastRun)}`);
+      return REFUSAL_EXIT;
+    }
+    const runsRepo = values.repo ?? process.env.GITHUB_REPOSITORY;
+    if (!runsRepo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(runsRepo)) {
+      console.error(`plan-issues: --accepted-since-last-run needs --repo owner/name (or GITHUB_REPOSITORY)\n\n${USAGE}`);
+      return REFUSAL_EXIT;
+    }
+    return acceptedSinceLastRun(values["project-root"] ?? process.cwd(), runsRepo, lastRun, gh5);
   }
   if (values["accepted-since"] !== undefined) {
     if (values.repair || values.decompose) {

@@ -77,6 +77,12 @@ export interface AdrAcceptedWorkflowOptions {
   engineSpec: string | null;
   /** `board.milestonePrefix`, read through `readBoardInputs`. */
   milestonePrefix: string | null;
+  /**
+   * `board.mergeWorkflow`, read through `readBoardInputs` (ADR-022, SC-2787).
+   * Null emits exactly the push-only workflow; a name adds the
+   * `workflow_run` trigger and the range read that goes with it.
+   */
+  mergeWorkflow: string | null;
 }
 
 /** The whole `adr-accepted.yml` body. */
@@ -85,6 +91,57 @@ export function buildAdrAcceptedWorkflow(opts: AdrAcceptedWorkflowOptions): stri
   const prefix = boardInput("milestonePrefix", opts.milestonePrefix);
   const missing = [spec, prefix].flatMap(i => (i.value === null ? [i.why] : []));
   const cli = `bunx rungate@${opts.version}`;
+  // ADR-022: a merge made by automation starts no push run. A name that would
+  // be read as something other than itself is not written as a trigger, and
+  // every run says so instead of quietly placing nothing after a bot merge.
+  const merge = opts.mergeWorkflow === null ? null : boardInput("mergeWorkflow", opts.mergeWorkflow);
+  const mergeName = merge?.value ?? null;
+  const mergeWarning =
+    merge !== null && merge.value === null
+      ? `
+          echo "::warning title=Merge workflow trigger UNMEASURED::${merge.why}, so this workflow does not run when the merge workflow completes, and a merge made by automation places nothing. Fix it and re-run rungate scaffold."`
+      : "";
+  const mergeTrigger =
+    mergeName === null
+      ? ""
+      : `
+  # ADR-022 (SC-2787): a merge the named workflow makes with GITHUB_TOKEN
+  # starts no push run, and a workflow_run event is created even then. No
+  # branches filter: that workflow runs on pull request events.
+  workflow_run:
+    workflows: [${JSON.stringify(mergeName)}]
+    types: [completed]`;
+  const mergePermission = mergeName === null ? "" : `
+  # The range read lists this workflow's own successful runs (ADR-022).
+  actions: read`;
+  const fetchStep =
+    mergeName === null
+      ? ""
+      : `
+      # The range read below holds GITHUB_TOKEN on a merge-triggered run, so
+      # the package is fetched here first, by a step that holds no token.
+      - name: Fetch rungate before any step holds a token
+        run: ${cli} --version`;
+  const acceptedEnv =
+    mergeName === null
+      ? `
+          BEFORE: \${{ github.event.before }}`
+      : `
+          BEFORE: \${{ github.event.before }}
+          EVENT: \${{ github.event_name }}
+          # Only a merge-triggered run reads the API; a push run holds no token.
+          GITHUB_TOKEN: \${{ github.event_name == 'workflow_run' && secrets.GITHUB_TOKEN || '' }}`;
+  const acceptedRead =
+    mergeName === null
+      ? `${cli} plan-issues --accepted-since "$BEFORE" > accepted.txt`
+      : `# A workflow_run carries no before sha: the range starts at the head of
+          # this workflow's newest successful run that is on this branch, and
+          # with no such run the read refuses rather than guess one.
+          if [ "$EVENT" = "workflow_run" ]; then
+            ${cli} plan-issues --accepted-since-last-run ${ADR_ACCEPTED_WORKFLOW_FILE} --repo "$GITHUB_REPOSITORY" > accepted.txt
+          else
+            ${cli} plan-issues --accepted-since "$BEFORE" > accepted.txt
+          fi`;
   const indent = (script: string) => script.split("\n").map(l => (l === "" ? "" : `          ${l}`)).join("\n");
   // JSON is a YAML double-quoted scalar, so a quote or backslash in a value
   // stays inside it.
@@ -126,13 +183,13 @@ name: ADR accepted — place its plan on the board
 on:
   push:
     branches: [main]
-    paths: ["docs/adr/**"]
+    paths: ["docs/adr/**"]${mergeTrigger}
 
 permissions:
   contents: read
   # Issues, milestones and blocked-by edges. Nothing else this job writes is
   # reachable with GITHUB_TOKEN.
-  issues: write
+  issues: write${mergePermission}
 
 # Two merges in quick succession must not race each other's issue creation:
 # the second run reads the tracker the first one wrote.
@@ -155,13 +212,12 @@ jobs:
       - uses: ${opts.setupBun}
         with:
 ${opts.setupBunWith}
-${opts.setupBunEnv}
+${opts.setupBunEnv}${fetchStep}
       - id: accepted
         name: Which ADRs did this push accept?
-        env:
-          BEFORE: \${{ github.event.before }}
-        run: |
-          ${cli} plan-issues --accepted-since "$BEFORE" > accepted.txt
+        env:${acceptedEnv}
+        run: |${mergeWarning}
+          ${acceptedRead}
           echo "Accepted by this push:"
           cat accepted.txt
           if [ ! -s accepted.txt ]; then

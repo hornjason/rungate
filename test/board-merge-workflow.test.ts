@@ -149,15 +149,20 @@ describe("SC-2787: the range starts at the newest successful run whose head is o
     const errs: string[] = [];
     const real = console.error;
     console.error = (...a: unknown[]) => void errs.push(a.join(" "));
+    // A reader that fails loudly if asked: the refusal must come from the
+    // name check, not from a later read that happens to fail too.
+    const asked = { runs: async () => { throw new Error("the API was asked"); } };
     try {
       for (const bad of ["../ci.yml", "a/b.yml", "adr-accepted", ""]) {
-        const code = await planIssuesMain(["--accepted-since-last-run", bad, "--repo", "fixture/fixture"]);
+        errs.length = 0;
+        const code = await planIssuesMain(["--accepted-since-last-run", bad, "--repo", "fixture/fixture"], undefined, undefined, undefined, asked);
         expect(code, bad).toBe(REFUSAL_EXIT);
+        expect(errs.join("\n"), bad).toContain("needs a workflow file name");
+        expect(errs.join("\n"), bad).not.toContain("the API was asked");
       }
     } finally {
       console.error = real;
     }
-    expect(errs.join("\n")).toContain("--accepted-since-last-run");
   });
 
   test("SC-2787: end to end, the range read lists exactly what was accepted after the qualifying run", async () => {
@@ -191,9 +196,13 @@ describe("SC-2787: the range starts at the newest successful run whose head is o
       try {
         // A newer successful run whose head is a pull request branch's commit,
         // not on main, is passed over for the one that is.
-        code = await planIssuesMain(["--accepted-since-last-run", ADR_ACCEPTED_WORKFLOW_FILE, "--repo", "fixture/fixture", "--project-root", dir], {
-          runs: async () => [{ id: 20, head_sha: "d".repeat(40) }, { id: 19, head_sha: placed }],
-        });
+        code = await planIssuesMain(
+          ["--accepted-since-last-run", ADR_ACCEPTED_WORKFLOW_FILE, "--repo", "fixture/fixture", "--project-root", dir],
+          undefined,
+          undefined,
+          undefined,
+          { runs: async () => [{ id: 20, head_sha: "d".repeat(40) }, { id: 19, head_sha: placed }] },
+        );
       } finally {
         console.log = real.log;
         console.error = real.error;
