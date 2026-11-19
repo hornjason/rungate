@@ -281,6 +281,33 @@ export function prBodiesSource(
   return { source, kind: "READ", declarations, unreadable: [], files: read.prs.length };
 }
 
+/**
+ * One page of a GraphQL `search(type: ISSUE)` for pull requests, as the
+ * command reads it: the nodes, whether there is another page, and how many the
+ * search says exist (#2489). Exported so the truncation rule is tested
+ * without GitHub.
+ */
+export interface PrSearchPage {
+  issueCount: number;
+  nodes: Array<{ number?: number; body?: string | null; authorAssociation?: string } | null>;
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+}
+
+/**
+ * The pull requests a paged search returned, or why the reading is not whole.
+ * GitHub's search stops at 1,000 results. When the search says more exist than
+ * the pages held, the source is UNMEASURED with both numbers, never a partial
+ * list reported as READ (review of #2494).
+ */
+export function prsFromSearch(pages: readonly PrSearchPage[]): { prs: Array<PrBody & { author_association?: string }> } | { why: string } {
+  const prs = pages.flatMap(p =>
+    p.nodes.flatMap(n => (n && typeof n.number === "number" ? [{ number: n.number, body: n.body ?? null, author_association: n.authorAssociation }] : [])),
+  );
+  const claimed = pages.length > 0 ? pages[0].issueCount : 0;
+  if (claimed > prs.length) return { why: `the search found ${claimed} pull requests and only ${prs.length} could be read` };
+  return { prs };
+}
+
 /** Every source this command knows how to discover, in report order. */
 export function discoverSources(root: string, home: string): SourceReading[] {
   return [trackedFilesSource(root), planFileSource(root), agentMemorySource(root, home)];

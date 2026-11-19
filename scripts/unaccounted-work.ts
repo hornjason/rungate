@@ -32,8 +32,10 @@ import {
   discoverSources,
   openIssuesInPage,
   prBodiesSource,
+  prsFromSearch,
   renderReport,
   trustedAuthors,
+  type PrSearchPage,
   type IssueStates,
   type PrBody,
   type SourceReading,
@@ -72,10 +74,24 @@ async function fetchPrBodies(repo: string | null, since: string): Promise<Source
   try {
     const client = createGitHubClient();
     const seen = new Map<number, PrBody>();
-    type Item = { number: number; body?: string | null; author_association?: string };
+    const query = `query($q: String!, $after: String) {
+      search(query: $q, type: ISSUE, first: 100, after: $after) {
+        issueCount
+        pageInfo { hasNextPage endCursor }
+        nodes { ... on PullRequest { number body authorAssociation } }
+      }
+    }`;
     for (const q of [`repo:${repo} is:pr merged:>=${since}`, `repo:${repo} is:pr is:open`]) {
-      const items = (await client.paginate(client.rest.search.issuesAndPullRequests, { q, per_page: 100 })) as Item[];
-      for (const it of trustedAuthors(items)) seen.set(it.number, { number: it.number, body: it.body ?? null });
+      const pages: PrSearchPage[] = [];
+      let after: string | null = null;
+      do {
+        const data = (await client.graphql(query, { q, after })) as { search: PrSearchPage };
+        pages.push(data.search);
+        after = data.search.pageInfo.hasNextPage ? data.search.pageInfo.endCursor : null;
+      } while (after);
+      const read = prsFromSearch(pages);
+      if ("why" in read) return prBodiesSource({ kind: "UNMEASURED", why: `${q}: ${read.why}` });
+      for (const it of trustedAuthors(read.prs)) seen.set(it.number, { number: it.number, body: it.body });
     }
     return prBodiesSource({ prs: [...seen.values()].sort((a, b) => b.number - a.number) });
   } catch (e) {

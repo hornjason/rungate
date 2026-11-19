@@ -21,7 +21,7 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 
 import { CLI_COMMANDS } from "../lib/cli-commands";
-import { arrayElementLines, citationsIn, clip, declarationsIn, memoryDirFor, openIssuesInPage, prBodiesSource, trustedAuthors } from "../lib/unaccounted-work";
+import { arrayElementLines, citationsIn, clip, declarationsIn, memoryDirFor, openIssuesInPage, prBodiesSource, prsFromSearch, trustedAuthors } from "../lib/unaccounted-work";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "unaccounted-work.ts");
@@ -353,6 +353,22 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
       { number: 7 },
     ];
     expect(trustedAuthors(items).map(i => i.number)).toEqual([1, 2, 3]);
+  });
+
+  // Review of #2494: GitHub's search stops at 1,000 results, and a partial
+  // list must not read as a whole one.
+  test("a search that found more pull requests than its pages held is not a READ", () => {
+    const page = (n: number, issueCount: number) => ({
+      issueCount,
+      nodes: Array.from({ length: n }, (_, i) => ({ number: i + 1, body: "b", authorAssociation: "OWNER" })),
+      pageInfo: { hasNextPage: false, endCursor: null },
+    });
+    expect(prsFromSearch([page(3, 3)])).toEqual({
+      prs: [1, 2, 3].map(n => ({ number: n, body: "b", author_association: "OWNER" })),
+    });
+    const cut = prsFromSearch([page(1000, 1400)]);
+    expect("why" in cut && cut.why).toBe("the search found 1400 pull requests and only 1000 could be read");
+    expect(prsFromSearch([])).toEqual({ prs: [] });
   });
 
   test("a --since that is not a date is refused before anything is read", () => {
