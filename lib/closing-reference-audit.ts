@@ -462,3 +462,102 @@ export function inertClosingMessage(refs: InertClosingReference[], prNumber: num
     `the quote so the number is not adjacent to the verb.`
   );
 }
+
+/**
+ * #2496 (ADR-022): one merged pull request, as the closing command reads it.
+ *
+ * A merge made with `GITHUB_TOKEN` starts no workflow, and GitHub does not act
+ * on its closing keywords, so the issues it names stay open. What GitHub does
+ * still record is `closingIssuesReferences`: the links it would have acted on.
+ * Each link carries what the four-part rule below needs and nothing else; the
+ * body is deliberately not here, so a mention in prose has no path to a close.
+ */
+export interface MergedPullRequest {
+  number: number;
+  mergedAt: string;
+  closing: Array<{
+    id: string;
+    number: number;
+    state: string;
+    repository: { nameWithOwner: string };
+    /** The newest `reopened` event on the issue, or null when it was never reopened. */
+    lastReopenedAt: string | null;
+  }>;
+}
+
+export type MergedPullRequestReading =
+  | { kind: "READ"; pr: MergedPullRequest }
+  | { kind: "UNMEASURED"; why: string };
+
+/**
+ * Read one GraphQL `PullRequest` node into a `MergedPullRequest`, or say what
+ * could not be read. Every field the rule reads must be present: a link with
+ * no state, no repository or an unread timeline is UNMEASURED, never "not
+ * owed", and a pull request with more links than were read is refused rather
+ * than read as the shorter list.
+ */
+export function mergedPullRequestFrom(node: unknown): MergedPullRequestReading {
+  const no = (why: string): MergedPullRequestReading => ({ kind: "UNMEASURED", why });
+  if (node === null || typeof node !== "object") return no("a pull request entry is not an object");
+  const n = node as Record<string, any>;
+  if (!Number.isInteger(n.number)) return no(`a pull request carries no number (${JSON.stringify(n.number)})`);
+  const at = `#${n.number}`;
+  if (typeof n.mergedAt !== "string" || Number.isNaN(Date.parse(n.mergedAt))) {
+    return no(`${at}: mergedAt is ${JSON.stringify(n.mergedAt)}, not a time, so a reopen cannot be placed before or after it`);
+  }
+  const refs = n.closingIssuesReferences;
+  if (refs === null || typeof refs !== "object" || !Array.isArray(refs.nodes) || !Number.isInteger(refs.totalCount)) {
+    return no(`${at}: closingIssuesReferences was not read`);
+  }
+  if (refs.totalCount !== refs.nodes.length) {
+    return no(`${at}: GitHub records ${refs.totalCount} closing links and ${refs.nodes.length} were read`);
+  }
+  const closing: MergedPullRequest["closing"] = [];
+  for (const r of refs.nodes as unknown[]) {
+    if (r === null || typeof r !== "object") return no(`${at}: a closing link is not an object`);
+    const l = r as Record<string, any>;
+    if (typeof l.id !== "string" || !Number.isInteger(l.number)) return no(`${at}: a closing link carries no id or number`);
+    if (typeof l.state !== "string") return no(`${at}: closing link #${l.number} carries no state`);
+    if (typeof l.repository?.nameWithOwner !== "string") return no(`${at}: closing link #${l.number} carries no repository`);
+    const events = l.timelineItems?.nodes;
+    if (!Array.isArray(events)) return no(`${at}: closing link #${l.number}'s timeline was not read, so a reopen after the merge cannot be ruled out`);
+    const last = events.length === 0 ? null : (events[events.length - 1] as { createdAt?: unknown })?.createdAt;
+    if (last !== null && (typeof last !== "string" || Number.isNaN(Date.parse(last)))) {
+      return no(`${at}: closing link #${l.number}'s reopen carries no time`);
+    }
+    closing.push({ id: l.id, number: l.number, state: l.state, repository: { nameWithOwner: l.repository.nameWithOwner }, lastReopenedAt: last });
+  }
+  return { kind: "READ", pr: { number: n.number, mergedAt: n.mergedAt, closing } };
+}
+
+export type MergedReferenceVerdict =
+  | { issue: number; pr: number; close: true; id: string }
+  | { issue: number; pr: number; close: false; why: string };
+
+/**
+ * ADR-022 decision 4: which of a merged pull request's closing links are still
+ * owed a close. All four must hold: GitHub linked it (it is in the list at
+ * all), it is in this repository, it is still open, and its newest reopen is
+ * not after the merge. The last is what keeps an issue a person reopened after
+ * the merge from being closed again; "open" alone cannot tell "never closed"
+ * from "reopened". Every link gets a verdict, so what was left says why.
+ *
+ * "In this repository" is `declaredClosingIn`'s, the one decider for which
+ * links belong to this tracker.
+ */
+export function mergedReferencesToClose(pr: MergedPullRequest, repoNameWithOwner: string): MergedReferenceVerdict[] {
+  const merged = Date.parse(pr.mergedAt);
+  return pr.closing.map((l): MergedReferenceVerdict => {
+    const base = { issue: l.number, pr: pr.number };
+    // Asked per link, not as a set of numbers: owner/repo#1 and other/repo#1
+    // share a number, and a set would let the second ride on the first.
+    if (declaredClosingIn([l], repoNameWithOwner).length !== 1) {
+      return { ...base, close: false, why: `it is in another repository (${l.repository.nameWithOwner})` };
+    }
+    if (l.state !== "OPEN") return { ...base, close: false, why: `it is already closed (${l.state.toLowerCase()})` };
+    if (l.lastReopenedAt !== null && Date.parse(l.lastReopenedAt) > merged) {
+      return { ...base, close: false, why: `it was reopened after the merge (${l.lastReopenedAt}), so a person has decided it is not done` };
+    }
+    return { ...base, close: true, id: l.id };
+  });
+}

@@ -80,6 +80,11 @@ describe("#2496: which declared issues a merged pull request still owes a close"
     for (const v of verdicts) expect(v.pr).toBe(50);
   });
 
+  test("an issue in another repository sharing a number with one here is still left", () => {
+    const verdicts = mergedReferencesToClose(read(pr(59, [ref(7), ref(7, { repo: "elsewhere/repo" })])), REPO);
+    expect(verdicts.map(v => [v.issue, v.close])).toEqual([[7, true], [7, false]]);
+  });
+
   test("an issue the body only mentions is never closed: only GitHub's links are read", () => {
     // The body names #9 in prose; GitHub linked only #1. No field of the
     // payload carries the body, so a mention has no path to a close.

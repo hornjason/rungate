@@ -378,6 +378,15 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     usage: "<payload> | rungate audit-closing-references --repo <owner/name>  |  " +
       "rungate audit-closing-references --fixture <file.json> --repo <owner/name>",
   },
+  // ADR-022 (#2496): a merge made by automation runs no closing keywords, so
+  // the issues its pull request declares are closed here. Writes only with
+  // --write; the generated workflow that passes it is #2497.
+  "close-merged-references": {
+    script: "scripts/close-merged-references.ts",
+    summary: "Close the issues a pull request merged by automation declares",
+    usage:
+      "rungate close-merged-references --since <sha> [--repo <owner/name>] [--project-root <dir>] [--write]   |   --fixture <prs.json>",
+  },
   "sync-spec-tests": {
     script: "scripts/sync-spec-tests.ts",
     summary: "Regenerate the conformity suite from the specs",
