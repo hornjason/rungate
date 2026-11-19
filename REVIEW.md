@@ -139,7 +139,7 @@ only when you can name the file, the line, and the input that breaks.
 
 ## Open the summary with the count
 
-Write a top-level `summary` beside `verdict` in the payload. It opens with
+Write a top-level `review_summary` beside `verdict` in the payload. It opens with
 the number of findings in your list, as a numeral, and then says in one
 plain sentence what they add up to. When that number is 0, say plainly that
 there is nothing to fix: `0 findings: nothing to fix.` Do not soften a zero

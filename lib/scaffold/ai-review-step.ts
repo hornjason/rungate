@@ -3872,7 +3872,7 @@ export const AI_REVIEW_VERDICT_KEY = "verdict";
  * leading number back against the findings it counts and says whether the
  * two agree. `REVIEW.md` asks for it by this name.
  */
-export const AI_REVIEW_SUMMARY_KEY = "summary";
+export const AI_REVIEW_SUMMARY_KEY = "review_summary";
 
 /** The key each finding carries its severity under. */
 export const AI_REVIEW_SEVERITY_KEY = "severity";
