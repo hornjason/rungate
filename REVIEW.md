@@ -137,6 +137,17 @@ pagination findings, every one `medium`, over seven rounds.
 `critical` and `high` block the pull request and are not capped. Raise one
 only when you can name the file, the line, and the input that breaks.
 
+## Open the summary with the count
+
+Write a top-level `summary` beside `verdict` in the payload. It opens with
+the number of findings in your list, as a numeral, and then says in one
+plain sentence what they add up to. When that number is 0, say plainly that
+there is nothing to fix: `0 findings: nothing to fix.` Do not soften a zero
+into "looks mostly fine", and do not open with anything but the count.
+
+A later step reads the number back against the findings you listed and
+reports whether they agree. It decides nothing about blocking.
+
 ## If you want more
 
 - `.claude/rules/checks-must-be-able-to-fail.md` — the shapes a guard takes
