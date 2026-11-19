@@ -412,7 +412,11 @@ const UNCLAIMED_RATCHET = 150;
 // reading of a generated workflow and a git history no registered pattern
 // expresses; the `SC-2787` describes in test/board-merge-workflow.test.ts
 // name it.
-const CLAIMED_UNBINDABLE = 185;
+// 185 -> 186: SC-2791 (#2484) ticked by `sync-sc-status --only SC-2791`:
+// scaffold installs a /board command that names no repository, a reading of a
+// rendered command file no registered pattern expresses; the `SC-2791`
+// describe in test/board-command.test.ts names it (2026-11-19).
+const CLAIMED_UNBINDABLE = 186;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
