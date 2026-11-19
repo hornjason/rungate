@@ -266,7 +266,8 @@ describe("#2020: the workflow", () => {
     expect(code).toMatch(/issues:\s*\n\s*types:\s*\[opened, edited, reopened\]/);
     expect(code).toMatch(/schedule:\s*\n\s*- cron:/);
     expect(code).toContain("workflow_dispatch:");
-    expect(code).toContain("bun scripts/criterion-label.ts");
+    // #2467: generated, so it runs the published command, not a script path.
+    expect(code).toMatch(/bunx rungate@\S+ criterion-label/);
   });
 
   test("comments only when the issue was just opened", () => {
