@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { CLI_COMMANDS, helpText, runCommandScript } from "../lib/cli-commands";
 import { harnessVersionLine } from "../lib/harness-identity";
+import { INCOMPLETE_INSTALL_EXIT, incompleteInstallMessage, missingDependencies } from "../lib/install-integrity";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -77,6 +78,16 @@ if (!existsSync(script)) {
 // Either spelling counts as the caller saying so: `--project-root=<dir>` read
 // as absent appended the cwd AFTER it, and a last-one-wins reader then took
 // the cwd over the directory the caller named (review of #2365).
+// #2479: a half-written install crashes inside the script on a missing
+// module, naming a temp path. Asked here, after the command is known and
+// before it runs, so `--version`, `--help` and an unknown command still work
+// from an install that cannot load a dependency.
+const missing = missingDependencies(PACKAGE_ROOT);
+if (missing.length > 0) {
+  console.error(incompleteInstallMessage(PACKAGE_ROOT, missing));
+  process.exit(INCOMPLETE_INSTALL_EXIT);
+}
+
 const givesRoot = rest.some(a => a === "--project-root" || a.startsWith("--project-root="));
 const needsRoot = command.projectRootFlag && !givesRoot;
 const args = needsRoot ? [...rest, "--project-root", process.cwd()] : rest;
