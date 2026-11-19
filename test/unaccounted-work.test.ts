@@ -21,7 +21,7 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 
 import { CLI_COMMANDS } from "../lib/cli-commands";
-import { arrayElementLines, citationsIn, declarationsIn, memoryDirFor, openIssuesInPage } from "../lib/unaccounted-work";
+import { arrayElementLines, citationsIn, declarationsIn, memoryDirFor, openIssuesInPage, prBodiesSource } from "../lib/unaccounted-work";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "unaccounted-work.ts");
@@ -92,7 +92,8 @@ describe("#2100: undone work in tracked prose that cites no open issue is report
     const root = repo(CONSUMER);
     const report = json(run(SCRIPT, ["--project-root", root, "--issues-fixture", FIXTURE, "--json"]).out);
     const kind = Object.fromEntries(report.sources.map(s => [s.source, s.kind]));
-    expect(kind).toEqual({ "tracked-files": "READ", "plan-file": "ABSENT", "agent-memory": "ABSENT" });
+    // #2489: pull request bodies are read only when asked for, so a plain run reports them absent.
+    expect(kind).toEqual({ "tracked-files": "READ", "plan-file": "ABSENT", "agent-memory": "ABSENT", "pr-bodies": "ABSENT" });
     expect(report.unmeasured).toEqual([]);
   });
 
@@ -277,4 +278,63 @@ test("#2100: a GraphQL page with no repository is a refusal, and only an OPEN Is
     },
   };
   expect(openIssuesInPage(page, [1, 2, 3, 4, 5])).toEqual([1]);
+});
+
+describe("#2489: pull request bodies are a source, read when asked for", () => {
+  // Our first consumer records gaps in PR bodies when a filing cap stops it
+  // filing them, and nothing listed them (2026-11-19, a dated record).
+  const PRS = [
+    { number: 2310, body: "Fixes #2299\n\nFollow-up: the calendar page needs the same label, not filed.\nNot done here: the export, see #10." },
+    { number: 2298, body: null },
+    { number: 2293, body: "TODO: drop the shim once 0.8.36 is pinned" },
+  ];
+  let prsFixture: string;
+  beforeAll(() => {
+    prsFixture = join(SCRATCH, "prs.json");
+    writeFileSync(prsFixture, JSON.stringify(PRS));
+  });
+
+  test("a line declaring undone work in a PR body, citing no open issue, is reported by PR number and line", () => {
+    const root = repo({ "README.md": "# fine\n" });
+    const r = run(SCRIPT, ["--project-root", root, "--issues-fixture", FIXTURE, "--prs-fixture", prsFixture, "--json"]);
+    const report = json(r.out);
+    expect(where(report.unaccounted.filter(u => u.source === "pr-bodies"))).toEqual(["PR #2293:1", "PR #2310:3"]);
+    expect(report.sources.find(s => s.source === "pr-bodies")?.kind).toBe("READ");
+    expect(r.code).toBe(1);
+  });
+
+  test("a PR-body line citing an open issue is accounted for, and a body that is null holds nothing", () => {
+    const reading = prBodiesSource({ prs: PRS });
+    expect(reading.kind).toBe("READ");
+    if (reading.kind !== "READ") return;
+    expect(reading.files).toBe(3);
+    const lines = reading.declarations.map(d => `${d.path}:${d.line}`);
+    expect(lines).toContain("PR #2310:4");
+    expect(reading.declarations.find(d => d.path === "PR #2310" && d.line === 4)?.cites).toEqual([10]);
+    expect(lines.filter(l => l.startsWith("PR #2298"))).toEqual([]);
+  });
+
+  test("without --since or --prs-fixture the source is ABSENT and says how to read it", () => {
+    const root = repo({ "README.md": "# fine\n" });
+    const report = json(run(SCRIPT, ["--project-root", root, "--issues-fixture", FIXTURE, "--json"]).out);
+    const row = report.sources.find(s => s.source === "pr-bodies");
+    expect(row?.kind).toBe("ABSENT");
+    expect(row?.why).toContain("--since");
+  });
+
+  test("an unreadable --prs-fixture is UNMEASURED and refuses; the mutant does not", () => {
+    const root = repo({ "README.md": "# fine\n" });
+    const args = ["--project-root", root, "--issues-fixture", FIXTURE, "--prs-fixture", join(SCRATCH, "no-such-prs.json"), "--json"];
+    const real = run(SCRIPT, args);
+    expect(json(real.out).unmeasured.join("\n")).toMatch(/^pr-bodies — --prs-fixture .* could not be read/m);
+    expect(real.code).toBe(2);
+    expect(run(MUTANT, args).code).toBe(0);
+  });
+
+  test("a --since that is not a date is refused before anything is read", () => {
+    const root = repo({ "README.md": "# fine\n" });
+    const r = run(SCRIPT, ["--project-root", root, "--since", "last week"]);
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("--since");
+  });
 });
