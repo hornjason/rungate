@@ -194,14 +194,28 @@ Until those exist, the Ready **column** reflects spec work only, and
 
 ## Why the Ready column and the pickable query are different
 
-`isReady()` requires an issue to be unblocked, unassigned, **and** in the
-earliest phase that still has open work. The phase requirement is
-deliberate: without it the first run put 36 of 46 open issues in the lane,
-which is the backlog under another name.
+`isReady()` requires an issue to be unblocked, unassigned, **and** in a
+placed phase: any milestone `phaseOf` reads. Since ADR-021 a phase orders the
+work and never gates it, so an issue nothing open blocks may enter Ready from
+any placed phase, up to the lane's depth.
 
-The consequence is that **an issue with no phase milestone is never Ready**,
-and that is correct rather than a defect to route around. Everyday work is
-not meant to appear in a lane whose meaning is *this is the next spec work*.
+**How Ready ranks** (SC-2741, ADR-021): `work-this-next` first. Then the
+milestone's **due date**, earliest first and undated last. Then the engine
+before the payload, then the lowest phase, then how many open issues each
+unblocks, then the oldest. **To change focus, set or change a milestone's due
+date on GitHub's milestone page**; that is the whole mechanism, and to focus a
+whole spec you date its phases. Creating, editing or deleting a milestone
+refills the lane, as an issue being labelled, milestoned or closed does.
+`work-status` (which `/board` reads) prints the same order.
+
+**Ready never holds two issues naming the same file** (SC-2786). A file is
+taken when a claimed issue or a card already in Ready names it, an open pull
+request changes it, or an issue picked earlier in the same fill names it. An
+issue passed over keeps its place and is picked first once the file is free.
+
+**An issue with no phase milestone is never Ready**, and that is correct
+rather than a defect to route around. It enters by being placed in a
+milestone, or one at a time through `work-this-next`.
 
 **Do not give a triage milestone a `Phase <n>` name to make it score.** It
 would match `phaseOf`, enter the frontier calculation, and redden every
@@ -211,7 +225,7 @@ Two lanes, and they answer different questions:
 
 | | answers | mechanism |
 |---|---|---|
-| the board's **Ready** column | what is the next spec work | `isReady`, phase-ordered |
+| the board's **Ready** column | what is the next spec work | `isReady`, ranked by due date, then phase (SC-2741) |
 | `-is:blocked no:assignee` | what can anyone pick up | GitHub search, live |
 
 ---
