@@ -57,7 +57,9 @@ import {
   scopedCandidates,
   selectReady,
   workNextReading,
+  type ReadyFileClaims,
 } from "../lib/board-ready-rule";
+import { declaredFiles } from "../lib/issue-file-overlap";
 import { measureClosedIssues } from "../lib/board-throughput";
 // #1935: the endpoint is resolved, not hard-coded, so this script can be RUN
 // by a test rather than only read. Loopback only — it carries a PAT.
@@ -621,8 +623,14 @@ async function main(): Promise<number> {
   const LABELS_QUERY = `query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
        issues(first:100,after:$c,states:[OPEN]){
          pageInfo{hasNextPage endCursor}
-         nodes{number milestone{title} labels(first:20){pageInfo{hasNextPage endCursor} nodes{name}}}}}}`;
+         nodes{number milestone{title} body assignees{totalCount} labels(first:20){pageInfo{hasNextPage endCursor} nodes{name}}}}}}`;
   const labelsOf = new Map<number, string[]>();
+  // SC-2786 (#2431): every open issue's body and claim, from the SAME pass,
+  // so the files an issue names and whether somebody holds it are one
+  // reading. `body` and `assignees` are scalars, so the node product is
+  // unchanged (BR-46).
+  const bodyOf = new Map<number, string>();
+  const claimedNumbers: number[] = [];
   // **Every open issue's milestone, from the SAME complete pass** (SC-2741).
   // The focus is the lowest engine phase with ANY open issue — claimed and
   // blocked ones included — so it cannot be read off the candidates, and on a
@@ -654,6 +662,11 @@ async function main(): Promise<number> {
         return EXIT_REFUSED;
       }
       openMilestones.push({ milestone: n2?.milestone?.title ?? null });
+      if (typeof n2?.body === "string") bodyOf.set(n2.number, n2.body);
+      // A count that could not be read holds its files: picking an issue onto
+      // a file somebody may be editing is the thing SC-2786 prevents.
+      const claimCount = n2?.assignees?.totalCount;
+      if (typeof claimCount !== "number" || claimCount > 0) claimedNumbers.push(n2.number);
       labelsOf.set(
         n2.number,
         (n2?.labels?.nodes ?? []).map((l: any) => l?.name).filter((x: any) => typeof x === "string"),
@@ -677,6 +690,62 @@ async function main(): Promise<number> {
     if (step.kind === "done") break;
     labelCursor = step.cursor;
   }
+  // ── Open pull requests' changed files — SC-2786 (#2431) ─────────────────
+  //
+  // A file an open pull request changes is taken: an issue naming it would
+  // be started onto a file that is about to move under it. One query of its
+  // own, paged; 50 × 100 is 5,000 nodes (BR-46). A pull request changing
+  // more than one page of files is WARNED about by number rather than
+  // refused: its first hundred are held, and a lane starved by one large
+  // pull request is the worse failure.
+  const OPEN_PRS_QUERY = `query($o:String!,$n:String!,$c:String){repository(owner:$o,name:$n){
+       pullRequests(first:50,after:$c,states:[OPEN]){
+         pageInfo{hasNextPage endCursor}
+         nodes{number files(first:100){pageInfo{hasNextPage endCursor} nodes{path}}}}}}`;
+  const held = new Map<string, string>();
+  let prCursor: string | null = null;
+  for (;;) {
+    const d = await gql(token, apiBase, OPEN_PRS_QUERY, { o: owner, n: name, c: prCursor });
+    const prs = d?.repository?.pullRequests;
+    if (!prs) {
+      console.log(
+        "::warning::UNMEASURED — the open pull request read returned no pullRequests connection, so " +
+          "which files are taken could not be told and an issue could be started onto a file under " +
+          "change. Nothing written.",
+      );
+      return EXIT_REFUSED;
+    }
+    for (const pr of prs.nodes ?? []) {
+      if (pr?.files?.pageInfo?.hasNextPage) {
+        console.log(
+          `::warning::PR #${pr.number} changes more than 100 files; only the first 100 are held, so a ` +
+            "collision with the rest cannot be seen this fill.",
+        );
+      }
+      for (const f of pr?.files?.nodes ?? []) {
+        if (typeof f?.path === "string" && !held.has(f.path)) held.set(f.path, `PR #${pr.number}`);
+      }
+    }
+    const step = nextCursor(prs.pageInfo);
+    if (step.kind === "unreadable") {
+      console.log(
+        `::warning::UNMEASURED — the open pull request read could not tell whether more pages exist: ` +
+          `${step.why}. Nothing written.`,
+      );
+      return EXIT_REFUSED;
+    }
+    if (step.kind === "done") break;
+    prCursor = step.cursor;
+  }
+  // Then the issues somebody holds: claimed open issues, and the cards
+  // already in Ready, by the files their bodies name. First holder wins, so
+  // the message names one holder per file.
+  const holdFilesOf = (n: number, as: string) => {
+    for (const f of declaredFiles(bodyOf.get(n) ?? "")) if (!held.has(f)) held.set(f, `#${n} (${as})`);
+  };
+  for (const n of claimedNumbers) holdFilesOf(n, "in progress");
+  for (const c of readyIncumbents) holdFilesOf(c.number, "in Ready");
+
   // The incumbents' labels, from the same pass, so a card carrying the
   // expedite label keeps its slot (SC-2741). A closed incumbent has none here,
   // and `incumbentDecisions` never reaches the scope for a closed card.
@@ -852,7 +921,19 @@ async function main(): Promise<number> {
   if (scoped.outOfScope.length > 0) {
     console.log(`  ${scoped.outOfScope.length} eligible issue(s) wait because no phase milestone places them.`);
   }
-  const selection = selectReady(scoped.inScope, occ, engine.prefix, workNext.honoured);
+  // SC-2786: what each in-scope issue names, read from the same body pass.
+  const claims: ReadyFileClaims = {
+    filesOf: new Map(scoped.inScope.map(dec => [dec.number, declaredFiles(bodyOf.get(dec.number) ?? "")])),
+    held,
+  };
+  const selection = selectReady(scoped.inScope, occ, engine.prefix, workNext.honoured, claims);
+  for (const s of selection.skipped) {
+    console.log(
+      `  #${s.number} eligible but passed over: it names ${s.file}, which ${s.holder} holds. ` +
+        "It keeps its place and is first in line once that file is free.",
+    );
+  }
+  const passedOver = new Set(selection.skipped.map(s => s.number));
   console.log(
     `  depth: ${cap ?? "UNMEASURED"}` +
       (throughput === null
@@ -872,7 +953,7 @@ async function main(): Promise<number> {
   // and a reader who cannot tell them apart goes looking for a bug in the
   // decider.
   for (const dec of scoped.inScope) {
-    if (!selection.promote.includes(dec)) {
+    if (!selection.promote.includes(dec) && !passedOver.has(dec.number)) {
       console.log(`  #${dec.number} eligible but held: ${heldReason(occ)}`);
     }
   }

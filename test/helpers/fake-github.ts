@@ -30,6 +30,14 @@ export interface FakeItem {
   readonly assignees?: number;
   readonly milestone?: string | null;
   readonly labels?: readonly string[];
+  /** The issue body (SC-2786 reads its declared files). Absent reads as empty. */
+  readonly body?: string;
+}
+
+/** An open pull request and the files it changes (SC-2786). */
+export interface FakePullRequest {
+  readonly number: number;
+  readonly files: readonly string[];
 }
 
 export interface FakePlan {
@@ -45,6 +53,8 @@ export interface FakePlan {
   readonly permission?: string;
   /** How many issues closed as COMPLETED inside the throughput window. */
   readonly delivered?: number;
+  /** Open pull requests and their changed files. Absent is none. */
+  readonly openPullRequests?: readonly FakePullRequest[];
 }
 
 /** One `updateProjectV2ItemFieldValue` the script actually sent. */
@@ -195,6 +205,26 @@ export function startFakeGitHub(plan: FakePlan): FakeGitHub {
         });
       }
 
+      // SC-2786: the open pull requests' changed files.
+      if (q.includes("pullRequests(first:50")) {
+        return Response.json({
+          data: {
+            repository: {
+              pullRequests: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: (plan.openPullRequests ?? []).map(pr => ({
+                  number: pr.number,
+                  files: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: pr.files.map(path => ({ path })),
+                  },
+                })),
+              },
+            },
+          },
+        });
+      }
+
       if (q.includes("labels(first:20)")) {
         return Response.json({
           data: {
@@ -203,6 +233,8 @@ export function startFakeGitHub(plan: FakePlan): FakeGitHub {
                 pageInfo: { hasNextPage: false, endCursor: null },
                 nodes: plan.openIssues.map(n => ({
                   number: n,
+                  body: plan.items.find(i => i.number === n)?.body ?? "",
+                  assignees: { totalCount: plan.items.find(i => i.number === n)?.assignees ?? 0 },
                   milestone: (() => {
                     const m = plan.items.find(i => i.number === n)?.milestone;
                     return m == null ? null : { title: m };

@@ -56,6 +56,8 @@ import {
   readyOrderFor,
   readyTarget,
   selectReady,
+  fileCollision,
+  type ReadyFileClaims,
   undispatchableRemedy,
   needsCriterionLine,
   needsCriterionRefusal,
@@ -293,6 +295,86 @@ describe("SC-2715: phase orders the queue, and never empties it", () => {
 
   test("a queue of only phase-less issues is ordered by age, not discarded", () => {
     expect([item(8, null), item(2, null)].sort(readyOrderFor(ENGINE, NO_WORK_NEXT)).map(i => i.number)).toEqual([2, 8]);
+  });
+});
+
+/**
+ * SC-2786 (specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, ADR-021 row 76, #2431):
+ * `board-ready` never puts an issue in Ready that names a file an
+ * in-progress issue names, an open pull request changes, or an issue it
+ * picked earlier in the same fill names. The skipped issue stays first in
+ * line for the next fill.
+ *
+ * Held fixed in every row: four engine issues at phase 0, a lane with room
+ * for two. What varies is which files each names and which are held.
+ */
+describe("SC-2786: Ready never holds two issues that name the same file", () => {
+  const four = [item(1, 0), item(2, 0), item(3, 0), item(4, 0)];
+  const claims = (filesOf: Record<number, string[]>, held: Record<string, string> = {}): ReadyFileClaims => ({
+    filesOf: new Map(Object.entries(filesOf).map(([n, f]) => [Number(n), f])),
+    held: new Map(Object.entries(held)),
+  });
+  const picked = (c: ReadyFileClaims | null, free = 2) =>
+    selectReady(four, atDepth(4 - free, 4), ENGINE, NO_WORK_NEXT, c).promote.map(i => i.number);
+
+  test("control: with nothing held and no shared file, the first two are picked as before", () => {
+    expect(picked(claims({ 1: ["lib/a.ts"], 2: ["lib/b.ts"] }))).toEqual([1, 2]);
+    expect(picked(null), "a fill handed no claims changed its order").toEqual([1, 2]);
+  });
+
+  test("an issue naming a file an in-progress issue names is skipped, and the next one is picked", () => {
+    const r = selectReady(four, atDepth(2, 4), ENGINE, NO_WORK_NEXT, claims({ 1: ["lib/a.ts"] }, { "lib/a.ts": "#90 (in progress)" }));
+    expect(r.promote.map(i => i.number)).toEqual([2, 3]);
+    expect(r.skipped).toEqual([{ number: 1, file: "lib/a.ts", holder: "#90 (in progress)" }]);
+  });
+
+  test("an issue naming a file an open pull request changes is skipped", () => {
+    expect(picked(claims({ 2: ["scripts/x.ts"] }, { "scripts/x.ts": "PR #77" }))).toEqual([1, 3]);
+  });
+
+  test("two candidates naming the same file: only the first is picked in one fill", () => {
+    const r = selectReady(four, atDepth(2, 4), ENGINE, NO_WORK_NEXT, claims({ 1: ["lib/a.ts"], 2: ["lib/a.ts", "lib/c.ts"] }));
+    expect(r.promote.map(i => i.number)).toEqual([1, 3]);
+    expect(r.skipped).toEqual([{ number: 2, file: "lib/a.ts", holder: "#1 (picked this fill)" }]);
+  });
+
+  test("the skipped issue stays first in line: once its file is free, the next fill picks it first", () => {
+    const busy = claims({ 1: ["lib/a.ts"] }, { "lib/a.ts": "#90 (in progress)" });
+    expect(picked(busy, 1)).toEqual([2]);
+    const freed = claims({ 1: ["lib/a.ts"] });
+    expect(picked(freed, 1), "the skip demoted the issue instead of holding its place").toEqual([1]);
+  });
+
+  test("an issue naming no file never collides — no declaration is no evidence", () => {
+    expect(picked(claims({}, { "lib/a.ts": "#90 (in progress)" }))).toEqual([1, 2]);
+  });
+
+  test("fileCollision names the first held file and its holder, or nothing", () => {
+    const taken = new Map([["lib/b.ts", "PR #5"]]);
+    expect(fileCollision(["lib/a.ts", "lib/b.ts"], taken)).toEqual({ file: "lib/b.ts", holder: "PR #5" });
+    expect(fileCollision(["lib/a.ts"], taken)).toBeNull();
+    expect(fileCollision([], taken)).toBeNull();
+  });
+
+  test("the check can fail: with the decider answering nothing, two issues on one file are both picked", async () => {
+    const source = readFileSync(join(import.meta.dir, "..", "lib", "board-ready-rule.ts"), "utf-8");
+    const needle = "if (holder !== undefined) return { file, holder };";
+    expect(source.split(needle).length - 1, "the collision decider is not spelled once").toBe(1);
+    const { mkdtempSync, writeFileSync, rmSync } = await import("fs");
+    const { tmpdir } = await import("os");
+    const dir = mkdtempSync(join(tmpdir(), "board-ready-2431-mutant-"));
+    try {
+      const lib = join(import.meta.dir, "..", "lib");
+      const path = join(dir, "board-ready-rule.ts");
+      writeFileSync(path, source.replace(needle, "").replace(/from "\.\//g, `from "${lib}/`));
+      const mutant = (await import(path)) as typeof import("../lib/board-ready-rule");
+      const got = mutant
+        .selectReady(four, mutant.readyOccupancy(2, 2, 4), ENGINE, NO_WORK_NEXT, claims({ 1: ["lib/a.ts"], 2: ["lib/a.ts"] }))
+        .promote.map(i => i.number);
+      expect(got, "the mutant changed nothing, so the case witnesses nothing").toEqual([1, 2]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
