@@ -349,7 +349,7 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
     expect(text).toContain("TODO");
     expect(clip("a\tb")).toBe("a\tb");
     // Review of #2494: text that reorders or hides itself is the same class.
-    for (const ch of ["\u202e", "\u2066", "\u2069", "\u200b", "\u200d", "\ufeff", "\u{E0041}", "\u{E007F}", "\u{E0100}"]) {
+    for (const ch of ["\u202e", "\u2066", "\u2069", "\u200b", "\u200d", "\ufeff", "\u{E0041}", "\u{E007F}", "\u{E0100}", "\u2028", "\u2029"]) {
       expect(clip(`TODO ${ch}x`), JSON.stringify(ch)).toBe("TODO \uFFFDx");
     }
     // An emoji at the cut is kept whole or dropped whole, never halved.

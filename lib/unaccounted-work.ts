@@ -66,7 +66,7 @@ export const clip = (s: string) => {
   // and a person does not see, and the variation selectors supplement
   // U+E0100–E01EF (review of #2494).
   const safe = s.replace(
-    /[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu,
+    /[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu,
     "\uFFFD",
   );
   // Cut by code point too, so an emoji at the boundary is never split into a lone surrogate.
