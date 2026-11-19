@@ -467,10 +467,13 @@ export function refusalReporter(
  * Where a merge-triggered run's range starts (ADR-022 decision 3, SC-2787): the
  * head of the newest successful run whose head commit is on this branch.
  *
- * What GitHub reports as the head of a run that `workflow_run` started cannot
- * be observed offline, so it is not trusted: a run counts only when
+ * A run `workflow_run` started records the default branch and its tip at the
+ * time, not the triggering pull request's head: measured on 2026-11-19 over
+ * this repository's `ai-review-unmeasured.yml` runs, every one read
+ * `headBranch: main` with `headSha` a merge commit on main (review of #2509).
+ * The head is still not trusted on that say-so: a run counts only when
  * `isAncestor` says its head is in this checkout's history, and older runs are
- * tried in turn. An older start is safe, because every planning step is
+ * tried in turn, so a change in what GitHub records refuses rather than guesses. An older start is safe, because every planning step is
  * idempotent. A missing run, a run off this branch, or runs that could not be
  * read each refuse, by name, rather than guess a range or read "no runs" as
  * "nothing was accepted".
@@ -481,7 +484,13 @@ export function sinceLastSuccessfulRun(
   unreadWhy?: string,
 ): { sha: string; run: number; skipped: number } | { why: string } {
   if (runs === null) return { why: `the successful runs could not be read (${unreadWhy ?? "no reason given"}), so there is no range to read` };
-  if (runs.length === 0) return { why: "there is no successful run of this workflow to start the range from, so it refuses rather than guess one" };
+  if (runs.length === 0) {
+    return {
+      why:
+        "there is no successful run of this workflow to start the range from, so it refuses rather than guess one. " +
+        "A person merging any change under docs/adr/ starts a push run, and its success gives the next merge-triggered run a start",
+    };
+  }
   let skipped = 0;
   for (const r of runs) {
     const run = r as { id?: unknown; head_sha?: unknown } | null;
