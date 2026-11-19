@@ -13,8 +13,7 @@ repository**: a census of citations, a list of files on disk, a count of ticked
 criteria, two documents agreeing. They go red when your change is correct, in a
 file you never opened, because the tree moved.
 
-Measured 2026-10-19: three of eight PRs from one swarm were red this way,
-none a flake, every fixer having seen a green targeted suite
+Three of eight PRs from one 2026-10-19 swarm went red this way
 (`reference/self-referential-tests-worked-instances.md`).
 
 **Read this before you add a file, add a doc, add an anchor, or rename
@@ -53,10 +52,8 @@ every one fails with a bare `expect(...).toEqual([])` and no guidance.
 `CLOSURE-8` is the one people miss: a `join(import.meta.dir, "..")` read is the
 same property as an import, expressed in different syntax.
 
-The last row is the UNMEASURED shape, not a noisy one — a battery whose
-mutant fails to load goes **green while witnessing nothing**. What it cost,
-in full: `reference/self-referential-tests-worked-instances.md`, *adding an
-import*.
+A mutant that fails to load goes **green while witnessing nothing**
+(the reference file, *adding an import*).
 
 ## Tier 2 — a hand-maintained list or number you must update
 
@@ -120,10 +117,8 @@ bun scripts/census-routing.ts          # the `bun test …` line for YOUR diff
 bun scripts/census-routing.ts --all    # every row, and what it routes to
 ```
 
-It reads the diff rather than the file list, and that is the whole of #990:
-**an edit to a spec and a tick inside one are the same path and different
-events.** Why a `--name-only` router cannot tell them apart:
-`reference/self-referential-tests-worked-instances.md`, *the #990 tick*.
+It reads the diff, not the file list: an edit to a spec and a tick inside
+one are different events (#990).
 
 | what you did | what to run |
 |---|---|
@@ -143,16 +138,11 @@ events.** Why a `--name-only` router cannot tell them apart:
 | touched config/ | `test/check-registry.test.ts` `test/matcher-registry-parity.test.ts` |
 | wrote the DA-owned session state (project-state.json, PROJECT-STATE.md, SUCCESS.md) | `test/closing-keywords.test.ts` `test/project-state-currency.test.ts` `test/project-state-shape.test.ts` `test/update-project-state.test.ts` `test/success-doc.test.ts` `test/distribution-standing.test.ts` `test/rule-lifecycle-spec.test.ts` `test/check-state-claims.test.ts` |
 
-**That table is rendered from `CENSUS_TRIGGERS` in `scripts/census-routing.ts`
-and compared byte-for-byte by that script's own test file**, in both
-directions: a row the router lacks is red, and a census test named here that
-no row routes to is red. So nobody has to remember to update it.
+The table is rendered from `CENSUS_TRIGGERS` in `scripts/census-routing.ts`,
+and that script's test compares the two in both directions.
 
-Bounded and cheap. The point is not to run everything; it is that the file
-you changed is never the only file with an opinion about it. **This does
-not enforce** — it prints a command. A ship run no longer depends on you
-reading it (#1004); why the two routers are complements:
-`reference/self-referential-tests-worked-instances.md`, *the selector*.
+It prints a command and enforces nothing (#1004; the reference file, *the
+selector*).
 
 ## If you are writing one of these
 
@@ -166,7 +156,4 @@ Related: `.claude/rules/checks-must-be-able-to-fail.md`,
 `.claude/rules/claiming-sc-coverage.md`,
 `.claude/rules/harness-managed.md`.
 
-This file tripped three of its own checks while it was being written —
-verbatim in `reference/self-referential-tests-worked-instances.md`. The one
-that matters is the Tier 2 row: **cite a stable symbol, never a line
-number.**
+**Cite a stable symbol, never a line number.**
