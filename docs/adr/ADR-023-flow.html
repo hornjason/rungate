@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-023 — Rungate makes, wires and moves a consumer's project board (dry run)</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e6e8ee; --dim:#8b93a7;
+          --hand:#f0b429; --auto:#3ecf8e; --judge:#7aa2f7; --warn:#f7768e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:32px 0 12px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  .sub { color:var(--dim); margin:0 0 18px; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:var(--dim); }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .hand{background:var(--hand)} .auto{background:var(--auto)} .judge{background:var(--judge)}
+  ol.timeline { list-style:none; padding:0; margin:0; border-left:2px solid var(--line); }
+  ol.timeline li { position:relative; padding:8px 0 14px 22px; }
+  ol.timeline li::before { content:""; position:absolute; left:-7px; top:14px; width:12px; height:12px; border-radius:50%; background:var(--c); }
+  .tag { font-size:11px; font-weight:700; padding:1px 7px; border-radius:9px; margin-right:8px; color:#0f1115; background:var(--c); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .card .sc { font-size:12px; color:var(--judge); font-weight:700; }
+  .card .t { font-weight:600; margin:4px 0 8px; }
+  .card .f { font-size:12px; color:var(--dim); font-family:ui-monospace, Menlo, monospace; word-break:break-all; }
+  .card .b { font-size:12px; color:var(--hand); margin-top:8px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:720px) { .cols { grid-template-columns:1fr; } }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .box h3 { margin:0 0 8px; font-size:14px; }
+  ul { margin:6px 0 0; padding-left:18px; } li { margin:3px 0; }
+  .sim { font-size:11px; color:var(--hand); border:1px solid var(--hand); border-radius:6px; padding:0 6px; margin-left:6px; }
+  code { font-family:ui-monospace, Menlo, monospace; font-size:12.5px; color:#c0caf5; }
+  .lanes { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .lane { font-size:12px; padding:3px 9px; border-radius:6px; background:#222734; border:1px solid var(--line); }
+  .arrow { color:var(--dim); font-size:12px; align-self:center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ADR-023 — Rungate makes, wires and moves a consumer's project board</h1>
+  <p class="sub">Dry run, 2026-11-19, from the draft branch at main 8bfb0e1e plus the draft. <code>plan-issues --decompose</code> ran without <code>--write</code>; nothing was written.</p>
+  <div class="legend">
+    <span><span class="dot hand"></span>hand (someone types it)</span>
+    <span><span class="dot auto"></span>auto (a workflow fires)</span>
+    <span><span class="dot judge"></span>judgement (Jason decides)</span>
+  </div>
+
+  <h2>The run</h2>
+  <ol class="timeline">
+    <li style="--c:var(--judge)"><span class="tag">YOU</span>Accept or edit SC-2789 to SC-2794, answer the two open questions, and merge the ADR with <code>status: accepted</code>.</li>
+    <li style="--c:var(--auto)"><span class="tag">AUTO</span><code>adr-accepted.yml</code> files 7 issues in Engine Phase 10 and writes 4 order links (the dry run below).</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build the four unblocked rows in parallel: <code>board-init</code>, generated <code>board-flow.yml</code>, <code>work-status</code> and <code>verify-merge-ref</code> as CLI commands. Test first, pinned merges.</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Build <code>/board</code>, the human-steps token check and <code>/work-loop</code> as their blockers merge.</li>
+    <li style="--c:var(--hand)"><span class="tag">ME</span>Release, so a consumer's pinned <code>bunx rungate@</code> has the new commands.</li>
+    <li style="--c:var(--hand)"><span class="tag">HAND</span>Jason retires the user-level <code>board</code> and <code>dry-run</code> skills with one command I hand him (I am denied <code>~/.claude</code>).</li>
+    <li style="--c:var(--auto)"><span class="tag">AUTO</span>A consumer re-scaffolds and runs <code>rungate board-init</code> once. From then on its cards move by themselves and <code>/board</code> reads its own repository.</li>
+  </ol>
+
+  <h2>Real output: plan-issues --decompose (no --write)</h2>
+  <div class="box"><pre style="margin:0;white-space:pre-wrap;font:12px/1.5 ui-monospace,Menlo,monospace;color:#c0caf5">  create  SC-2789   rungate board-init makes and wires a consumer's project board
+  create  SC-2790   board-flow.yml is generated for consumers and moves their cards
+  create  SC-2792   work-status runs as a rungate command and reads the repository it is in
+  create  SC-2792   verify-merge-ref runs as a rungate command
+  create  SC-2791   Scaffold installs /board as a rungate command that reads its own repository
+  create  SC-2793   The human-steps report says whether the token can write the board
+  create  SC-2794   Scaffold installs the work loop as a project command
+  order   "Scaffold installs /board …" blocked by "work-status runs as a rungate command …"
+  order   "The human-steps report …" blocked by "rungate board-init makes and wires …"
+  order   "Scaffold installs the work loop …" blocked by "work-status runs as a rungate command …"
+  order   "Scaffold installs the work loop …" blocked by "verify-merge-ref runs as a rungate command"
+
+Nothing written. Re-run with --write to apply.</pre></div>
+
+  <h2>The seven issues it files</h2>
+  <div class="cards">
+    <div class="card"><div class="sc">SC-2789 (new)</div><div class="t">rungate board-init makes and wires a consumer's project board</div>
+      <div class="f">lib/board-init.ts · scripts/board-init.ts · lib/cli-commands.ts · package.json · HOW-WORK-FLOWS.md · 1 test</div></div>
+    <div class="card"><div class="sc">SC-2790 (new)</div><div class="t">board-flow.yml is generated for consumers and moves their cards</div>
+      <div class="f">board-flow emitter + yml · steps.ts · owned-files.ts · harness-managed.md · scripts/board-flow.ts · cli-commands.ts · package.json · 1 test</div></div>
+    <div class="card"><div class="sc">SC-2792 (new)</div><div class="t">work-status runs as a rungate command and reads the repository it is in</div>
+      <div class="f">scripts/work-status.ts · lib/cli-commands.ts · package.json · 2 tests</div></div>
+    <div class="card"><div class="sc">SC-2792</div><div class="t">verify-merge-ref runs as a rungate command</div>
+      <div class="f">scripts/verify-merge-ref.ts · lib/cli-commands.ts · package.json · 2 tests</div></div>
+    <div class="card"><div class="sc">SC-2791 (new)</div><div class="t">Scaffold installs /board as a rungate command that reads its own repository</div>
+      <div class="f">templates/process/board.md · process-files.ts · owned-files.ts · harness-managed.md · .claude/commands/board.md · 1 test</div>
+      <div class="b">blocked by: work-status as a command</div></div>
+    <div class="card"><div class="sc">SC-2793 (new)</div><div class="t">The human-steps report says whether the token can write the board</div>
+      <div class="f">lib/scaffold/human-steps.ts · scripts/scaffold-project.ts · 1 test</div>
+      <div class="b">blocked by: board-init</div></div>
+    <div class="card"><div class="sc">SC-2794 (new)</div><div class="t">Scaffold installs the work loop as a project command</div>
+      <div class="f">templates/process/work-loop.md · process-files.ts · owned-files.ts · harness-managed.md · .claude/commands/work-loop.md · 1 test</div>
+      <div class="b">blocked by: work-status and verify-merge-ref as commands</div></div>
+  </div>
+
+  <h2>Today vs after</h2>
+  <div class="cols">
+    <div class="box"><h3>Today (measured on main 8bfb0e1e)</h3>
+      <ul><li>No code creates a project, a field or a Status option; this repo's board was made by hand</li>
+          <li><code>board-flow.yml</code> is caller-owned and runs <code>bun scripts/board-flow.ts</code>, which no consumer has</li>
+          <li><code>/board</code> is an agent-written user skill that reads only hornjason/rungate</li>
+          <li><code>work-status</code> hard-codes <code>hornjason/rungate</code>; it and <code>verify-merge-ref</code> do not ship</li>
+          <li>The token check reads a secret's name, not whether it can write the board</li></ul></div>
+    <div class="box"><h3>After all seven rows <span class="sim">SIMULATED</span></h3>
+      <ul><li><code>rungate board-init</code> makes the board, its Status options, Criteria field and view, and writes the ids; a second run changes nothing</li>
+          <li>A card moves by itself:
+            <div class="lanes"><span class="lane">Backlog</span><span class="arrow">→</span><span class="lane">Ready</span><span class="arrow">→ assigned →</span><span class="lane">In progress</span><span class="arrow">→ PR →</span><span class="lane">In review</span><span class="arrow">→ closed →</span><span class="lane">Done</span></div></li>
+          <li><code>/board</code>, <code>/dry-run</code> and <code>/work-loop</code> are rungate's, installed by scaffold, reading the repo they sit in</li>
+          <li>Scaffold says OWED or UNMEASURED for <code>board.id</code> and for the token's write access</li></ul></div>
+  </div>
+
+  <h2>What reaches Ready <span class="sim">SIMULATED</span></h2>
+  <div class="box"><ul>
+    <li>Active milestone: Engine Phase 10, the payload ships. Every issue here waited on #2434 (PR #2453), so nothing is startable until it merges.</li>
+    <li>Pulled first: one of <code>board-init</code>, <code>board-flow.yml</code>, <code>work-status</code>, <code>verify-merge-ref</code>. All four are unblocked, but all four name <code>lib/cli-commands.ts</code> and <code>package.json</code>, so the file-overlap rule (SC-2786) lets in one at a time.</li>
+    <li>Next as slots open: <code>/board</code>, then the human-steps check, then <code>/work-loop</code>.</li>
+    <li>Kept out: nothing labelled only, nothing in a later phase. Expedite: none.</li></ul></div>
+
+  <h2>Gaps and decisions</h2>
+  <div class="cols">
+    <div class="box"><h3>Gaps found</h3><ul>
+      <li>Four rows name <code>lib/cli-commands.ts</code> and <code>package.json</code>, so Ready runs them one at a time. This is correct; it is slower than the four looking parallel.</li>
+      <li>The 2026-11-05 automation switch-off on this repository's board is recorded only in a comment. <code>board-init</code> makes it a step that is written down.</li>
+      <li>ADR-022 reserves SC-2787 and SC-2788 on its own branch, so this one takes 2789 to 2794 rather than the allocator's first free id.</li></ul></div>
+    <div class="box"><h3>Needs you</h3><ul>
+      <li>Accept the six criterion texts as written, or edit them.</li>
+      <li>Should a consumer's board belong to the repository's owner, with <code>--owner</code> to override? Yes or no.</li>
+      <li>Should <code>census-routing</code> stay rungate's own, with the work loop running the project's <code>test.command</code> instead? Yes or no.</li>
+      <li>Merge the ADR.</li></ul></div>
+  </div>
+</main>
+</body>
+</html>
