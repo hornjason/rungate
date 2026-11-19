@@ -227,9 +227,11 @@ of the last 40 merged PRs closed no issue.
 - [ ] SC-2741: Ready holds work from every placed phase that nothing open blocks, up to its depth cap, plus `work-this-next`, which always ranks first. The rest rank by their milestone's due date, earliest first and undated last, then engine before payload, then lowest phase, then how many open issues each unblocks, then number. A phase never holds back an issue nothing blocks, and adding or removing a milestone, changing a milestone's due date, or adding a label triggers the refill (Jason, 2026-11-18, ADR-021; reworded from the one-milestone rule of 2026-11-12, #1752)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
-- [ ] SC-2786: `board-ready` never puts an issue in Ready that names a file an in-progress issue names, an open pull request changes, or an issue it picked earlier in the same fill names; the skipped issue stays first in line for the next fill (Jason, 2026-11-18, ADR-021)
+- [x] SC-2786: `board-ready` never puts an issue in Ready that names a file an in-progress issue names, an open pull request changes, or an issue it picked earlier in the same fill names; the skipped issue stays first in line for the next fill (Jason, 2026-11-18, ADR-021)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/board-ready-rule.test.ts, the `SC-2786` describe — 8 pass, 0 fail, 2026-11-18, on the PR that closes #2431: an issue naming a file an in-progress issue, an open pull request or an earlier pick of the same fill names is passed over, keeps its rank and is picked first once the file is free; a mutant whose `fileCollision` answers nothing picks both. test/board-ready-fanout.test.ts, the four `SC-2786` cases — 4 pass, 0 fail — run scripts/board-ready.ts against the loopback GitHub and observe one write where two cards share a file, none where a pull request or a claimed issue holds it, and two in the control.
+      fingerprint: 29ba452b
 
 ### The process reaches consumers through scaffold
 
