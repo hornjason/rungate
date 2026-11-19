@@ -55,7 +55,7 @@
  * | **baseline** — unmutated | 10 pass, 0 fail | **10 pass, 0 fail** | — |
  * | `censusTests` forced to `[]` — the genuinely pre-#1004 selector | 4 | **4 of 10** | a committed tick of `specs/X.md`: the original puts `test/sc-binding-split.test.ts` in `tests`, the mutant does not |
  * | the cheapest wrong fix — append the two missing names whenever a `specs/*.md` moves, no router | 8 | **8 of 10** | an edit to `.claude/rules/y.md`: the original routes `rule-provenance`, the mutant routes nothing; and an unticked spec edit, where the mutant routes two census files the original does not |
- * | `allCensusTests()` unioned unconditionally — a router that selects everything | 3 | **3 of 10** | a `lib/thing.ts`-only change: the original adds 0 census files, the mutant adds every one present |
+ * | `allCensusTests()` unioned unconditionally — a router that selects everything | 3 | **3 of 10** | a `bin/thing.ts`-only change: the original adds 0 census files, the mutant adds every one present |
  * | the `existsSync` filter dropped | 1 | **1 of 10** | a tree with no census files and a tick: the original appends nothing, the mutant hands `bun test` five paths that are not there |
  * | the census router fed names only — `added`/`removed` emptied, which is the question the two routers used to ask git separately | 5 | **5 of 10** | a committed tick: `spec-tick` cannot fire without the `+`/`-` payload, so the SC census is unrouted while `spec-edit` still fires |
  *
@@ -109,7 +109,7 @@ function put(root: string, rel: string, body: string): void {
 const STUB = 'import { test } from "bun:test";\ntest("stub", () => {});\n';
 
 /**
- * A project whose graph can see `lib/thing.ts`, `specs/X.md` and
+ * A project whose graph can see `bin/thing.ts`, `specs/X.md` and
  * `.claude/rules/y.md`, and whose census tests are present but unreachable.
  *
  * The two markdown paths are named as literals in `test/thing.test.ts` on
@@ -128,12 +128,12 @@ function project(opts: { censusFiles?: boolean; overlap?: boolean } = {}): {
   const root = mkdtempSync(join(tmpdir(), "select-affected-"));
   made.push(root);
 
-  put(root, "lib/thing.ts", "export const thing = 1;\n");
+  put(root, "bin/thing.ts", "export const thing = 1;\n");
   put(
     root,
     "test/thing.test.ts",
     'import { test, expect } from "bun:test";\n' +
-      'import { thing } from "../lib/thing";\n' +
+      'import { thing } from "../bin/thing";\n' +
       'const SPEC = "specs/X.md";\n' +
       'const RULE = ".claude/rules/y.md";\n' +
       'test("thing", () => { expect(thing + SPEC.length + RULE.length).toBeGreaterThan(0); });\n',
@@ -141,7 +141,7 @@ function project(opts: { censusFiles?: boolean; overlap?: boolean } = {}): {
   if (opts.censusFiles !== false) {
     for (const t of allCensusTests()) {
       const overlapping = opts.overlap && t === "test/sc-binding-split.test.ts";
-      put(root, t, overlapping ? `import { thing } from "../lib/thing";\n${STUB}` : STUB);
+      put(root, t, overlapping ? `import { thing } from "../bin/thing";\n${STUB}` : STUB);
     }
   }
   put(root, "specs/X.md", "- [ ] SC-9201: a criterion that is not yet met\n");
@@ -226,9 +226,14 @@ describe("#1004: a census test reaches the SELECTED set", () => {
 
   // CONTROL against a union that fires on everything. A count going up is
   // not evidence; a count that stays put on a census-neutral change is.
+  // The module lives in bin/, not lib/, since #2477: `test/anti.test.ts`
+  // walks every non-test .ts file under gates/, lib/ and scripts/ for a
+  // consumer's name, so an edit there is a census event and no longer neutral.
+  // bin/ is still walked by the graph (SCAN_DIRS) and read by no row but
+  // write-site, which needs a write call this edit does not have.
   test("a census-neutral change adds nothing, and tests equals graphTests", () => {
     const { root, base } = project();
-    put(root, "lib/thing.ts", "export const thing = 2;\n");
+    put(root, "bin/thing.ts", "export const thing = 2;\n");
     commit(root, "code");
 
     const s = selectionFor(root, base);
@@ -247,13 +252,13 @@ describe("#1004: a census test reaches the SELECTED set", () => {
 describe("#1004: the artefact says which half each test came from", () => {
   test("graphTests and censusTests partition tests, with no duplicate", () => {
     const { root, base } = project({ overlap: true });
-    put(root, "lib/thing.ts", "export const thing = 2;\n");
+    put(root, "bin/thing.ts", "export const thing = 2;\n");
     put(root, "specs/X.md", TICKED);
     commit(root, "code and tick");
 
     const s = selectionFor(root, base);
     expect(s.mode).toBe("SELECTED");
-    // The overlap: this stub imports lib/thing, so the graph reaches it AND
+    // The overlap: this stub imports bin/thing, so the graph reaches it AND
     // the tick routes it. Counted once, and attributed to the graph.
     expect(s.graphTests).toContain("test/sc-binding-split.test.ts");
     expect(s.censusTests, "a graph-reached test was re-attributed to the census").not.toContain(
