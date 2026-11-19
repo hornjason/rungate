@@ -392,7 +392,11 @@ const UNCLAIMED_RATCHET = 150;
 // Jason's accepted text (Ready draws from every placed phase, ranked by due
 // date), and the ranking half is #2434's, so the new wording is not yet true.
 // #2434 ticks it again with `sync-sc-status --only SC-2741`.
-const CLAIMED_UNBINDABLE = 181;
+// 181 -> 182: SC-2786 (#2431) ticked by `sync-sc-status --only SC-2786`:
+// Ready passes over an issue naming a file already taken, a reading of issue
+// bodies and open pull requests no registered pattern expresses; the
+// `SC-2786` describe in test/board-ready-rule.test.ts names it.
+const CLAIMED_UNBINDABLE = 182;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
