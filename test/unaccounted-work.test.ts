@@ -21,7 +21,7 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 
 import { CLI_COMMANDS } from "../lib/cli-commands";
-import { arrayElementLines, citationsIn, clip, declarationsIn, memoryDirFor, openIssuesInPage, prBodiesSource, trustedOpen } from "../lib/unaccounted-work";
+import { arrayElementLines, citationsIn, clip, declarationsIn, memoryDirFor, openIssuesInPage, prBodiesSource, trustedAuthors } from "../lib/unaccounted-work";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "unaccounted-work.ts");
@@ -342,7 +342,7 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
     expect(clip("a\tb")).toBe("a\tb");
   });
 
-  test("an open PR counts only from an owner, member or collaborator", () => {
+  test("a PR body counts only from an owner, member or collaborator, merged or open", () => {
     const items = [
       { number: 1, author_association: "OWNER" },
       { number: 2, author_association: "MEMBER" },
@@ -352,7 +352,7 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
       { number: 6, author_association: "FIRST_TIME_CONTRIBUTOR" },
       { number: 7 },
     ];
-    expect(trustedOpen(items).map(i => i.number)).toEqual([1, 2, 3]);
+    expect(trustedAuthors(items).map(i => i.number)).toEqual([1, 2, 3]);
   });
 
   test("a --since that is not a date is refused before anything is read", () => {

@@ -62,16 +62,16 @@ export const clip = (s: string) => {
   return safe.length > 160 ? `${safe.slice(0, 157)}...` : safe;
 };
 
-/** Who may add a line to the report through an OPEN pull request: people with a say in the repository. */
+/** Who may add a line to the report through a pull request body: people with a say in the repository. */
 export const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 /**
- * The open pull requests whose author has a say in the repository (#2489,
- * security review). A merged PR was merged by a maintainer, so its body is
- * read whoever wrote it. An open one from a stranger is not read, or anyone
- * could make this command report work by opening a PR.
+ * The pull requests whose author has a say in the repository (#2489, security
+ * review). Merged ones too: an author can edit a body after the merge, so
+ * "a maintainer merged it" says nothing about the text read today. A PR from
+ * anyone else is not read, or anyone could make this command report work.
  */
-export function trustedOpen<T extends { author_association?: string }>(items: readonly T[]): T[] {
+export function trustedAuthors<T extends { author_association?: string }>(items: readonly T[]): T[] {
   return items.filter(i => TRUSTED_ASSOCIATIONS.has(i.author_association ?? ""));
 }
 

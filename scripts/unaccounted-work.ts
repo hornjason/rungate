@@ -33,7 +33,7 @@ import {
   openIssuesInPage,
   prBodiesSource,
   renderReport,
-  trustedOpen,
+  trustedAuthors,
   type IssueStates,
   type PrBody,
   type SourceReading,
@@ -73,14 +73,10 @@ async function fetchPrBodies(repo: string | null, since: string): Promise<Source
     const client = createGitHubClient();
     const seen = new Map<number, PrBody>();
     type Item = { number: number; body?: string | null; author_association?: string };
-    const merged = (await client.paginate(client.rest.search.issuesAndPullRequests, {
-      q: `repo:${repo} is:pr merged:>=${since}`,
-      per_page: 100,
-    })) as Item[];
-    const open = trustedOpen(
-      (await client.paginate(client.rest.search.issuesAndPullRequests, { q: `repo:${repo} is:pr is:open`, per_page: 100 })) as Item[],
-    );
-    for (const it of [...merged, ...open]) seen.set(it.number, { number: it.number, body: it.body ?? null });
+    for (const q of [`repo:${repo} is:pr merged:>=${since}`, `repo:${repo} is:pr is:open`]) {
+      const items = (await client.paginate(client.rest.search.issuesAndPullRequests, { q, per_page: 100 })) as Item[];
+      for (const it of trustedAuthors(items)) seen.set(it.number, { number: it.number, body: it.body ?? null });
+    }
     return prBodiesSource({ prs: [...seen.values()].sort((a, b) => b.number - a.number) });
   } catch (e) {
     return prBodiesSource({ kind: "UNMEASURED", why: `GitHub could not list the pull requests (${(e as Error).message})` });
