@@ -18,6 +18,7 @@
  * look has not found nothing.
  */
 import { actorMayWrite, readBoardCredential } from "../lib/board-ready-fanout";
+import { readBoardProjectId } from "../lib/config-readers";
 import {
   DERIVED_LANE_EVENTS,
   WEBHOOK_LANE_EVENTS,
@@ -131,13 +132,24 @@ async function closingIssues(
 
 async function main(): Promise<number> {
   const repo = arg("repo");
-  const project = arg("project");
   const actor = arg("actor");
   const event = arg("event");
   const apply = process.argv.includes("--write");
 
-  if (repo === null || project === null || event === null) {
-    console.error("UNMEASURED: --repo <owner/name> --project <id> --event <kind> are all required");
+  if (repo === null || event === null) {
+    console.error("UNMEASURED: --repo <owner/name> and --event <kind> are both required");
+    return EXIT_REFUSED;
+  }
+  // #2507: the board is `--project`, else `board.id` in the config of the
+  // directory it runs in, exactly as `rungate board-ready` finds it (#2165),
+  // and refused in the same words, so the generated board-flow.yml (#2481) can
+  // name no project id and treat a missing board the way board-ready.yml does.
+  const root = process.cwd();
+  const project = arg("project") ?? readBoardProjectId(root);
+  if (project === null) {
+    console.error(
+      `UNMEASURED: no board — pass --project <id>, or set board.id in the rungate config under ${root}. Nothing was read.`,
+    );
     return EXIT_REFUSED;
   }
   // The event kind is checked against the decider's OWN list rather than a

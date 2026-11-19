@@ -40,6 +40,7 @@
     "scripts/consumer-triage.ts",
     "scripts/criterion-label.ts",
     "scripts/board-ready.ts",
+    "scripts/board-flow.ts",
     "scripts/board-id.ts",
     "scripts/ci-reading.ts",
     "scripts/unaccounted-work.ts",
