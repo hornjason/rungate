@@ -73,6 +73,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  ANTI_SCANNED_DIRS,
   CENSUS_TRIGGERS,
   allCensusTests,
   censusDirsRead,
@@ -2182,5 +2183,46 @@ describe("#2150: an edit that adds a criterion id or a write site routes the cen
     ]) {
       expect(censusTestsFor([c]).tests, `${c.path} routed the chokepoint with no added write`).not.toContain(CHOKEPOINT);
     }
+  });
+});
+
+describe("#2477: a change to a .ts file the anti suite walks routes test/anti.test.ts", () => {
+  const ANTI = "test/anti.test.ts";
+
+  // #2476's first push: a new lib/scaffold file whose doc comment named a
+  // consumer. The router printed 136 suites, none of them this one, and CI's
+  // test-shard (2) refused it on SC-A1.
+  test("a new file, an added line or a removed line under lib/, gates/ or scripts/ routes it", () => {
+    for (const c of [
+      change({ path: "lib/scaffold/criterion-label-workflow.ts", isNew: true, added: [" * a consumer, by name"] }),
+      change({ path: "gates/contracts.ts", added: ["const x = 1;"] }),
+      // SC-A1's known-file list only shrinks, so cleaning a name out of a
+      // listed file reddens it too, until the file is delisted.
+      change({ path: "scripts/work-status.ts", removed: ["// a consumer, by name"] }),
+    ]) {
+      expect(censusTestsFor([c]).tests, `${c.path} did not route the anti suite`).toContain(ANTI);
+    }
+  });
+
+  test("control: a test file, a non-.ts file, or a directory the suite does not walk, does not", () => {
+    for (const c of [
+      change({ path: "gates/workflow.test.ts", added: ["const x = 1;"] }),
+      change({ path: "lib/README.md", added: ["a consumer, by name"] }),
+      change({ path: "hooks/h.ts", added: ["const x = 1;"] }),
+      change({ path: "test/anti-helper.ts", added: ["const x = 1;"] }),
+    ]) {
+      expect(censusTestsFor([c]).tests, `${c.path} routed the anti suite`).not.toContain(ANTI);
+    }
+  });
+
+  // The row's directories are a second spelling of the suite's own walk, so
+  // they are held to it: every findTsFiles call in the suite must name only
+  // directories the row reads, and together they must name all of them.
+  test("the row reads exactly the directories the anti suite walks", () => {
+    const src = readFileSync(join(import.meta.dir, "anti.test.ts"), "utf8");
+    const calls = [...src.matchAll(/findTsFiles\(HARNESS,\s*\[([^\]]*)\]\)/g)];
+    expect(calls.length, "no findTsFiles call read, so the comparison is over nothing").toBeGreaterThan(2);
+    const walked = new Set(calls.flatMap(m => [...m[1].matchAll(/"([^"]+)"/g)].map(d => d[1])));
+    expect([...walked].sort()).toEqual([...ANTI_SCANNED_DIRS].sort());
   });
 });

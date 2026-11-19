@@ -225,6 +225,14 @@ const WRITE_CALL = new RegExp(
     .join("|")})\\s*\\(`,
 );
 
+/**
+ * The directories `test/anti.test.ts` walks for non-test `.ts` files (#2477).
+ * A second spelling of that suite's `findTsFiles` calls, held to them by
+ * `test/census-routing.test.ts`: the suite is a test file, so this script
+ * cannot import the list from it.
+ */
+export const ANTI_SCANNED_DIRS = ["gates", "lib", "scripts"] as const;
+
 export const CENSUS_TRIGGERS: CensusTrigger[] = [
   {
     id: "new-file",
@@ -419,6 +427,20 @@ export const CENSUS_TRIGGERS: CensusTrigger[] = [
     tests: ["test/spec-write-chokepoint.test.ts"],
     fires: c =>
       [...SWEPT_DIRS, ...SWEPT_JS_DIRS].some(d => inDir(c.path, d)) && c.added.some(l => WRITE_CALL.test(l)),
+  },
+  {
+    // #2477. `test/anti.test.ts` refuses a consumer's name in any non-test
+    // `.ts` file under these directories, and its known-file list only
+    // shrinks, so a removed line reddens it as surely as an added one.
+    // PR #2476 added a lib/scaffold file naming a consumer in a doc comment;
+    // this router printed 136 suites without it and CI refused on SC-A1.
+    // Any change fires, not a name match: the names live in the suite, and
+    // it runs in well under a second.
+    id: "anti",
+    event: "changed a non-test .ts file in gates/, lib/ or scripts/",
+    tests: ["test/anti.test.ts"],
+    fires: c =>
+      ANTI_SCANNED_DIRS.some(d => inDir(c.path, d)) && c.path.endsWith(".ts") && !c.path.endsWith(".test.ts"),
   },
   {
     id: "spec-edit",
