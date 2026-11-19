@@ -118,6 +118,7 @@ import {
   AI_REVIEW_RUN_STEP_ID,
   AI_REVIEW_SEVERITIES,
   AI_REVIEW_SEVERITY_KEY,
+  AI_REVIEW_SUMMARY_KEY,
   AI_REVIEW_VERDICT_KEY,
   AI_REVIEW_WORKFLOW_FILE,
   buildReviewRunScript,
@@ -390,7 +391,9 @@ describe("AC-5 (#675): the contract the SHIPPED workflow states, against the dec
     // prompt asks for that nothing reads is an instruction the agent spends
     // turns on and the gate ignores.
     const t = template();
-    const declaredTop = new Set<string>([AI_REVIEW_FINDINGS_KEY, AI_REVIEW_VERDICT_KEY]);
+    // #1653: `review_summary` is declared and read — `readPayload` reads it
+    // beside the list it counts, and `summaryNotice` prints the reading.
+    const declaredTop = new Set<string>([AI_REVIEW_FINDINGS_KEY, AI_REVIEW_VERDICT_KEY, AI_REVIEW_SUMMARY_KEY]);
     for (const key of Object.keys(t)) {
       expect(
         declaredTop.has(key),

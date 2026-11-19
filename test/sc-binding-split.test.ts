@@ -401,7 +401,12 @@ const UNCLAIMED_RATCHET = 150;
 // date and refilled on a milestone event, a reading no registered pattern
 // expresses; the `SC-2741` describes in test/board-ready-rule.test.ts and
 // test/board-ready-fanout.test.ts name it.
-const CLAIMED_UNBINDABLE = 183;
+// 183 -> 184: CRC-A7 (#1653) ticked by `sync-sc-status --only CRC-A7`:
+// REVIEW.md states four clauses and the payload carries the summary slot the
+// fourth needs, a reading of a prose document and a prompt no registered
+// pattern expresses; the `#1653` describes in test/ai-review-conventions.test.ts
+// name it.
+const CLAIMED_UNBINDABLE = 184;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
