@@ -56,6 +56,7 @@ import {
   readyOrderFor,
   readyTarget,
   selectReady,
+  dueRank,
   fileCollision,
   type ReadyFileClaims,
   undispatchableRemedy,
@@ -308,6 +309,48 @@ describe("SC-2715: phase orders the queue, and never empties it", () => {
  * Held fixed in every row: four engine issues at phase 0, a lane with room
  * for two. What varies is which files each names and which are held.
  */
+/**
+ * SC-2741 (specs/SPEC-TO-BOARD-PIPELINE-SPEC.md, ADR-021 row 79, #2434):
+ * after `work-this-next`, Ready ranks by the milestone's due date, earliest
+ * first and undated last, then engine before payload, then lowest phase,
+ * then how many open issues each unblocks, then number.
+ */
+describe("SC-2741: Ready ranks the earliest-due milestone first", () => {
+  const dated = (n: number, phase: number, dueOn: string | null, family = ENGINE, unblocks?: number | null): Rankable => ({
+    ...item(n, phase, [], family),
+    dueOn,
+    ...(unblocks === undefined ? {} : { unblocks }),
+  });
+  const order = (xs: Rankable[], honoured: ReadonlySet<number> = NO_WORK_NEXT) =>
+    [...xs].sort(readyOrderFor(ENGINE, honoured)).map(i => i.number);
+
+  test("the earliest-due milestone ranks first, ahead of family and phase", () => {
+    // A payload phase 3 due in December beats an engine phase 1 due in March.
+    expect(order([dated(1, 1, "2027-03-01T00:00:00Z"), dated(2, 3, "2026-12-01T00:00:00Z", PAYLOAD)])).toEqual([2, 1]);
+  });
+
+  test("an undated milestone ranks after every dated one, and two undated fall through to family and phase", () => {
+    expect(order([dated(1, 0, null), dated(2, 4, "2026-12-01T00:00:00Z", PAYLOAD)])).toEqual([2, 1]);
+    expect(order([dated(5, 2, null, PAYLOAD), dated(6, 3, null), dated(7, 1, null)])).toEqual([7, 6, 5]);
+  });
+
+  test("within one milestone, more issues unblocked ranks first, and an unread count ranks after a read one", () => {
+    expect(order([dated(1, 2, null, ENGINE, 0), dated(2, 2, null, ENGINE, 3), dated(3, 2, null, ENGINE, null)])).toEqual([2, 1, 3]);
+  });
+
+  test("work-this-next still ranks first, whatever the dates", () => {
+    const expedite = { ...dated(9, 5, null), labels: [WORK_NEXT_LABEL] };
+    const honoured = new Set([9]);
+    expect(order([dated(1, 0, "2026-11-20T00:00:00Z"), expedite], honoured)).toEqual([9, 1]);
+  });
+
+  test("dueRank reads a date, and an absent or unreadable one is Infinity", () => {
+    expect(dueRank(dated(1, 0, "2026-12-01T00:00:00Z"))).toBe(Date.parse("2026-12-01T00:00:00Z"));
+    expect(dueRank(item(1, 0))).toBe(Number.POSITIVE_INFINITY);
+    expect(dueRank(dated(1, 0, "not a date"))).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
 describe("SC-2786: Ready never holds two issues that name the same file", () => {
   const four = [item(1, 0), item(2, 0), item(3, 0), item(4, 0)];
   const claims = (filesOf: Record<number, string[]>, held: Record<string, string> = {}): ReadyFileClaims => ({
