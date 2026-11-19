@@ -547,9 +547,10 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       needs: test
       proved-by: test/issue-filing-gate.test.ts, the FG-266..FG-278 describe (`-t "FG-2(6[6-9]|7[0-8])"`) — 13 pass, 0 fail, 2026-11-17, on the PR that closes #2343. With the count injected, in `ship.mode: direct`: a shrinking, level or growing backlog admits a 36th filing and refuses a 37th naming 36; an unread or throwing count does the same and the refusal says UNMEASURED with the reason; an engine-queued clause gets the ceiling, not its raise of 24; every refusal prints the day's opened and closed counts; harness mode keeps its cap of 1 and reads no count; an explicit `board.filingsPerRun` is not lifted. Three hand mutations (a growing backlog falling back, an unread count falling back, harness lifted), each caught.
       fingerprint: b980e1d9
-- [ ] SC-2787: when `board.mergeWorkflow` names a consumer's merge workflow, the generated `adr-accepted.yml` also runs on that workflow's `workflow_run` completion and places every ADR accepted since the head of its own last successful run on main; with no such run it refuses UNMEASURED rather than guess a range (Jason, 2026-11-19, ADR-022)
+- [x] SC-2787: when `board.mergeWorkflow` names a consumer's merge workflow, the generated `adr-accepted.yml` also runs on that workflow's `workflow_run` completion and places every ADR accepted since the head of its own last successful run on main; with no such run it refuses UNMEASURED rather than guess a range (Jason, 2026-11-19, ADR-022)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/board-merge-workflow.test.ts "SC-2787: board.mergeWorkflow is read from config"
 - [ ] SC-2788: a pull request merged into main by automation closes the issues it declares: each issue in its `closingIssuesReferences` that is still open, in this repository, and was not reopened after the merge is closed with a comment naming the pull request, and an issue the body only mentions is never closed (Jason, 2026-11-19, ADR-022)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
