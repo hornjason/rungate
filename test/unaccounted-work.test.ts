@@ -284,9 +284,12 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
   // Our first consumer records gaps in PR bodies when a filing cap stops it
   // filing them, and nothing listed them (2026-11-19, a dated record).
   const PRS = [
-    { number: 2310, body: "Fixes #2299\n\nFollow-up: the calendar page needs the same label, not filed.\nNot done here: the export, see #10." },
-    { number: 2298, body: null },
-    { number: 2293, body: "TODO: drop the shim once 0.8.36 is pinned" },
+    { number: 2310, author_association: "OWNER", body: "Fixes #2299\n\nFollow-up: the calendar page needs the same label, not filed.\nNot done here: the export, see #10." },
+    { number: 2298, author_association: "MEMBER", body: null },
+    { number: 2293, author_association: "COLLABORATOR", body: "TODO: drop the shim once 0.8.36 is pinned" },
+    // Review of #2494: a stranger's body is never read, through the same path the live read uses.
+    { number: 2291, author_association: "NONE", body: "TODO: a stranger's line" },
+    { number: 2290, body: "TODO: no association at all" },
   ];
   let prsFixture: string;
   beforeAll(() => {
@@ -307,7 +310,7 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
     const reading = prBodiesSource({ prs: PRS });
     expect(reading.kind).toBe("READ");
     if (reading.kind !== "READ") return;
-    expect(reading.files).toBe(3);
+    expect(reading.files).toBe(PRS.length);
     const lines = reading.declarations.map(d => `${d.path}:${d.line}`);
     expect(lines).toContain("PR #2310:4");
     expect(reading.declarations.find(d => d.path === "PR #2310" && d.line === 4)?.cites).toEqual([10]);

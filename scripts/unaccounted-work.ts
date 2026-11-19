@@ -50,17 +50,28 @@ export const EXIT_UNACCOUNTED = 1;
 const USAGE =
   "rungate unaccounted-work [--project-root <dir>] [--repo <owner/name>] [--since <YYYY-MM-DD>] [--issues-fixture <file.json>] [--prs-fixture <file.json>] [--json]";
 
-/** `[{ "number": 12, "body": "…" }]`, the shape `fetchPrBodies` returns. */
+type AuthoredPr = PrBody & { author_association?: string };
+
+/**
+ * The one place pull requests become the source, for the fixture and the live
+ * read alike. Only a trusted author's body is read (review of #2494: with the
+ * filter in the live path alone, no test could see it removed).
+ */
+function sourceFromPrs(prs: readonly AuthoredPr[]): SourceReading {
+  return prBodiesSource({ prs: trustedAuthors(prs).map(p => ({ number: p.number, body: p.body })) });
+}
+
+/** `[{ "number": 12, "body": "…", "author_association": "OWNER" }]`, the shape the live read collects. */
 function fixturePrs(path: string): SourceReading {
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-    if (!Array.isArray(raw)) throw new Error("not an array of { number, body }");
-    const prs: PrBody[] = raw.map(r => {
-      const { number, body } = r as { number?: unknown; body?: unknown };
+    if (!Array.isArray(raw)) throw new Error("not an array of { number, body, author_association }");
+    const prs: AuthoredPr[] = raw.map(r => {
+      const { number, body, author_association } = r as { number?: unknown; body?: unknown; author_association?: unknown };
       if (typeof number !== "number" || (body !== null && typeof body !== "string")) throw new Error("an entry is not { number, body }");
-      return { number, body };
+      return { number, body, author_association: typeof author_association === "string" ? author_association : undefined };
     });
-    return prBodiesSource({ prs });
+    return sourceFromPrs(prs);
   } catch (e) {
     return prBodiesSource({ kind: "UNMEASURED", why: `--prs-fixture ${path} could not be read (${(e as Error).message})` });
   }
@@ -73,7 +84,7 @@ async function fetchPrBodies(repo: string | null, since: string): Promise<Source
   }
   try {
     const client = createGitHubClient();
-    const seen = new Map<number, PrBody>();
+    const seen = new Map<number, AuthoredPr>();
     const query = `query($q: String!, $after: String) {
       search(query: $q, type: ISSUE, first: 100, after: $after) {
         issueCount
@@ -91,9 +102,9 @@ async function fetchPrBodies(repo: string | null, since: string): Promise<Source
       } while (after);
       const read = prsFromSearch(pages);
       if ("why" in read) return prBodiesSource({ kind: "UNMEASURED", why: `${q}: ${read.why}` });
-      for (const it of trustedAuthors(read.prs)) seen.set(it.number, { number: it.number, body: it.body });
+      for (const it of read.prs) seen.set(it.number, it);
     }
-    return prBodiesSource({ prs: [...seen.values()].sort((a, b) => b.number - a.number) });
+    return sourceFromPrs([...seen.values()].sort((a, b) => b.number - a.number));
   } catch (e) {
     return prBodiesSource({ kind: "UNMEASURED", why: `GitHub could not list the pull requests (${(e as Error).message})` });
   }
