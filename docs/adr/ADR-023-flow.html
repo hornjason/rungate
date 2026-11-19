@@ -50,7 +50,7 @@
   <h2>The run</h2>
   <ol class="timeline">
     <li style="--c:var(--judge)"><span class="tag">YOU</span>Accept or edit SC-2789 to SC-2794, answer the two open questions, and merge the ADR with <code>status: accepted</code>.</li>
-    <li style="--c:var(--auto)"><span class="tag">AUTO</span><code>adr-accepted.yml</code> files 7 issues in Engine Phase 10 and writes 5 order links (the dry run below).</li>
+    <li style="--c:var(--auto)"><span class="tag">AUTO</span><code>adr-accepted.yml</code> files 7 issues in Engine Phase 7 and writes 5 order links (the dry run below).</li>
     <li style="--c:var(--hand)"><span class="tag">ME</span>Build the three unblocked rows: <code>board-init</code>, generated <code>board-flow.yml</code>, and <code>work-status</code> as a CLI command. Test first, pinned merges.</li>
     <li style="--c:var(--hand)"><span class="tag">ME</span>Build <code>verify-merge-ref</code>, <code>/board</code>, the human-steps token check and <code>/work-loop</code> as their blockers merge.</li>
     <li style="--c:var(--hand)"><span class="tag">ME</span>Release, so a consumer's pinned <code>bunx rungate@</code> has the new commands.</li>
@@ -114,7 +114,7 @@ Nothing written. Re-run with --write to apply.</pre></div>
 
   <h2>What reaches Ready <span class="sim">SIMULATED</span></h2>
   <div class="box"><ul>
-    <li>Active milestone: Engine Phase 10, the payload ships. Every issue here waited on #2434 (PR #2453), so nothing is startable until it merges.</li>
+    <li>Milestone: Engine Phase 7, nothing is hand-run, beside the other scaffold criteria (SC-2742 to SC-2749). Phase 7 ranks ahead of Phase 10, so these rank ahead of the payload's acceptance test (#1722).</li>
     <li>Pulled first: one of <code>board-init</code>, <code>board-flow.yml</code>, <code>work-status</code>. All three are unblocked, but all three name <code>lib/cli-commands.ts</code> and <code>package.json</code>, so the file-overlap rule (SC-2786) lets in one at a time.</li>
     <li>Next as slots open: <code>verify-merge-ref</code> and <code>/board</code>, then the human-steps check, then <code>/work-loop</code>.</li>
     <li>Kept out: nothing labelled only, nothing in a later phase. Expedite: none.</li></ul></div>

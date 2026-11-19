@@ -64,7 +64,7 @@ One rungate command makes a consumer's board and writes its ids into the config,
 
 ## Criteria, proposed wording (Jason's to accept or edit)
 
-Each goes in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, under *The process reaches consumers through scaffold*, placed in Phase 10. The ids are reserved to this branch in `specs/sc-reservations.json`.
+Each goes in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, under *The process reaches consumers through scaffold*, placed in Phase 7 beside SC-2742 to SC-2749, the other criteria of that section. Phase 10 is "strictly last, and the only phase whose subject is not this document"; these are criteria of this document (review of #2454). The ids are reserved to this branch in `specs/sc-reservations.json`.
 
 **SC-2789, new:**
 
@@ -92,16 +92,16 @@ Each goes in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, under *The process reaches 
 
 ## Decomposition
 
-Each row serves a criterion above. The criterion lines and the Phase 10 placement are written in the spec by this ADR's pull request.
+Each row serves a criterion above. The criterion lines and the Phase 7 placement are written in the spec by this ADR's pull request.
 
 SC-2792 spans two rows, so they are ordered: the `verify-merge-ref` row waits on the `work-status` row and is the one that completes SC-2792. The `work-status` row titles its tests by its issue number, not by the criterion id, so `sync-sc-status` cannot tick SC-2792 on half of it.
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
-| SC-2789 | rungate board-init makes and wires a consumer's project board | lib/board-init.ts, scripts/board-init.ts, lib/cli-commands.ts, package.json, test/board-init.test.ts, docs/guides/HOW-WORK-FLOWS.md | Engine Phase 10 — the payload ships | — |
-| SC-2790 | board-flow.yml is generated for consumers and moves their cards | lib/scaffold/board-flow-workflow.ts, lib/scaffold/steps.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .github/workflows/board-flow.yml, scripts/board-flow.ts, lib/cli-commands.ts, package.json, test/board-flow-workflow.test.ts | Engine Phase 10 — the payload ships | — |
-| SC-2792 | work-status runs as a rungate command and reads the repository it is in | scripts/work-status.ts, lib/cli-commands.ts, package.json, test/work-status.test.ts, test/package-closure.test.ts | Engine Phase 10 — the payload ships | — |
-| SC-2792 | verify-merge-ref runs as a rungate command | scripts/verify-merge-ref.ts, lib/cli-commands.ts, package.json, test/verify-merge-ref.test.ts, test/package-closure.test.ts | Engine Phase 10 — the payload ships | work-status runs as a rungate command and reads the repository it is in |
-| SC-2791 | Scaffold installs /board as a rungate command that reads its own repository | templates/process/board.md, lib/scaffold/process-files.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .claude/commands/board.md, test/board-command.test.ts | Engine Phase 10 — the payload ships | work-status runs as a rungate command and reads the repository it is in |
-| SC-2793 | The human-steps report says whether the token can write the board | lib/scaffold/human-steps.ts, scripts/scaffold-project.ts, test/human-steps.test.ts | Engine Phase 10 — the payload ships | rungate board-init makes and wires a consumer's project board |
-| SC-2794 | Scaffold installs the work loop as a project command | templates/process/work-loop.md, lib/scaffold/process-files.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .claude/commands/work-loop.md, test/work-loop-command.test.ts | Engine Phase 10 — the payload ships | work-status runs as a rungate command and reads the repository it is in, verify-merge-ref runs as a rungate command |
+| SC-2789 | rungate board-init makes and wires a consumer's project board | lib/board-init.ts, scripts/board-init.ts, lib/cli-commands.ts, package.json, test/board-init.test.ts, docs/guides/HOW-WORK-FLOWS.md | Engine Phase 7 — nothing is hand-run | — |
+| SC-2790 | board-flow.yml is generated for consumers and moves their cards | lib/scaffold/board-flow-workflow.ts, lib/scaffold/steps.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .github/workflows/board-flow.yml, scripts/board-flow.ts, lib/cli-commands.ts, package.json, test/board-flow-workflow.test.ts | Engine Phase 7 — nothing is hand-run | — |
+| SC-2792 | work-status runs as a rungate command and reads the repository it is in | scripts/work-status.ts, lib/cli-commands.ts, package.json, test/work-status.test.ts, test/package-closure.test.ts | Engine Phase 7 — nothing is hand-run | — |
+| SC-2792 | verify-merge-ref runs as a rungate command | scripts/verify-merge-ref.ts, lib/cli-commands.ts, package.json, test/verify-merge-ref.test.ts, test/package-closure.test.ts | Engine Phase 7 — nothing is hand-run | work-status runs as a rungate command and reads the repository it is in |
+| SC-2791 | Scaffold installs /board as a rungate command that reads its own repository | templates/process/board.md, lib/scaffold/process-files.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .claude/commands/board.md, test/board-command.test.ts | Engine Phase 7 — nothing is hand-run | work-status runs as a rungate command and reads the repository it is in |
+| SC-2793 | The human-steps report says whether the token can write the board | lib/scaffold/human-steps.ts, scripts/scaffold-project.ts, test/human-steps.test.ts | Engine Phase 7 — nothing is hand-run | rungate board-init makes and wires a consumer's project board |
+| SC-2794 | Scaffold installs the work loop as a project command | templates/process/work-loop.md, lib/scaffold/process-files.ts, lib/scaffold/owned-files.ts, .claude/rules/harness-managed.md, .claude/commands/work-loop.md, test/work-loop-command.test.ts | Engine Phase 7 — nothing is hand-run | work-status runs as a rungate command and reads the repository it is in, verify-merge-ref runs as a rungate command |
