@@ -64,6 +64,29 @@
 export const COMMAND_NOT_FOUND = 127;
 
 /**
+ * #2457: what a refusing verify command printed, as the report shows it.
+ *
+ * The end of each stream, labelled, because that is where a verdict and the
+ * readings before it are. The first spelling took the first 300 characters
+ * of stderr, which for `board-conformance` is its version and spec-resolution
+ * preamble, so every F2 refusal on CI named no reading at all. Bounded per
+ * stream, so one noisy command cannot flood the report.
+ */
+export const REFUSAL_EXCERPT_LINES = 10;
+export const REFUSAL_EXCERPT_CHARS = 1200;
+export function refusalExcerpt(stdout: string | null | undefined, stderr: string | null | undefined): string {
+  const tail = (s: string | null | undefined): string => {
+    const lines = (s ?? "").split("\n").map(l => l.trimEnd()).filter(l => l.trim() !== "");
+    const t = lines.slice(-REFUSAL_EXCERPT_LINES).join("\n");
+    return t.length > REFUSAL_EXCERPT_CHARS ? `…${t.slice(-REFUSAL_EXCERPT_CHARS)}` : t;
+  };
+  const out = tail(stdout);
+  const err = tail(stderr);
+  if (out === "" && err === "") return "(no output)";
+  return [out && `stdout, last lines:\n${out}`, err && `stderr, last lines:\n${err}`].filter(Boolean).join("\n");
+}
+
+/**
  * Where a `verify` can be run — see {@link StageItem.scope} for each.
  *
  * Declared as the list rather than only as a union so the validator's
