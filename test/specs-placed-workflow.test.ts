@@ -74,7 +74,7 @@ function execute(script: string, stubs: Record<string, string>, files: Record<st
     const r = spawnSync("bash", ["-e", "-c", script], {
       cwd: dir,
       encoding: "utf-8",
-      env: { PATH: `${bin}:/usr/bin:/bin`, GITHUB_REPOSITORY: "o/r", GITHUB_RUN_ID: "77", GITHUB_OUTPUT: join(dir, "out.txt"), HOME: dir, RUNNER_TEMP: dir },
+      env: { PATH: `${bin}:/usr/bin:/bin`, GITHUB_REPOSITORY: "o/r", GITHUB_RUN_ID: "77", GITHUB_SHA: "abc123", GITHUB_OUTPUT: join(dir, "out.txt"), HOME: dir, RUNNER_TEMP: dir },
     });
     const log = existsSync(join(dir, "calls.log")) ? readFileSync(join(dir, "calls.log"), "utf-8").trim().split("\n") : [];
     return { code: r.status, out: `${r.stdout}${r.stderr}`, calls: log, dir };
@@ -239,6 +239,36 @@ describe("SC-2780: it never writes while an earlier ADR placement is running", (
     });
     expect(earlier.code).not.toBe(0);
     expect(earlier.out).toContain("run(s) 9");
+  });
+
+  test("#2464: an unfinished ADR run from this push holds it even when created in the same second", () => {
+    // Measured in a consumer on 0.8.35: adr-accepted and specs-placed were
+    // created at the same second by one merge, the strict `<` let
+    // specs-placed go ahead, and `plan-issues --place` ran before the ADR's
+    // issues existed. The run's own push is matched by commit, which cannot
+    // tie on a timestamp.
+    const runs = (list: { id: number; status: string; created_at: string; head_sha: string }[]) =>
+      JSON.stringify({ workflow_runs: list });
+    const jqGh = [
+      'expr=""; for a in "$@"; do [ "$prev" = "--jq" ] && expr="$a"; prev="$a"; done',
+      'case "$*" in',
+      '  *"actions/runs/77"*) echo "2026-11-17T12:00:00Z";;',
+      '  *) jq -r "$expr" < runs.json;;',
+      "esac",
+    ].join("\n");
+    expect(spawnSync("jq", ["--version"]).status, "jq must be on PATH: without it this case measures nothing").toBe(0);
+    const samePush = execute(wait, { gh: jqGh, sleep: "exit 0" }, {
+      "runs.json": runs([{ id: 5, status: "in_progress", created_at: "2026-11-17T12:00:00Z", head_sha: "abc123" }]),
+    });
+    expect(samePush.code, "a same-second run from this push did not hold it").not.toBe(0);
+    expect(samePush.out).toContain("run(s) 5");
+    // The control: the same second, another push's commit. Not this run's
+    // placement to wait for, and adr-accepted never waits back either way.
+    const otherPush = execute(wait, { gh: jqGh, sleep: "exit 0" }, {
+      "runs.json": runs([{ id: 6, status: "in_progress", created_at: "2026-11-17T12:00:00Z", head_sha: "def456" }]),
+    });
+    expect(otherPush.code, otherPush.out).toBe(0);
+    expect(otherPush.calls.filter(c => c.startsWith("sleep"))).toStrictEqual([]);
   });
 
   test("an earlier unfinished run past the first page of runs still holds it", () => {
