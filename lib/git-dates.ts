@@ -27,7 +27,15 @@ export function lastCommitDates(root: string, pathspecs: string[]): Map<string, 
   {
     const log = spawnSync(
       "git",
-      ["-C", root, "log", "--format=%H %ci", "--name-only", "--", ...pathspecs],
+      // `-c` (#2455), the combined-diff flag every git has carried for years
+      // (`--diff-merges=c` is its newer spelling, absent from older gits): a
+      // merge lists the files it changed
+      // relative to EVERY parent, which is exactly when `git log -1 -- <file>`
+      // shows that merge. Plain `--name-only` lists nothing for a merge, so a
+      // doc both sides changed was dated from an older commit. First-parent
+      // diffs would over-list: a file the merge took unchanged from one side
+      // is pruned by per-file history and must not take the merge's date.
+      ["-C", root, "log", "--format=%H %ci", "-c", "--name-only", "--", ...pathspecs],
       { timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
     );
     if (log.error) {
