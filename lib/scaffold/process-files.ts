@@ -16,12 +16,17 @@
  *   `scripts/work-status.ts`, which is not a published command; a consumer
  *   reads it with `board-ready --top-up` and no `--write`, which changes
  *   nothing and prints what a top-up would move.
+ *
+ * #2484, ADR-023 row 5, SC-2791: `/board` is the third. It runs the CLI
+ * from the repository it sits in and names no repository, so the one
+ * difference between the two renderings is the CLI.
  */
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
 export const DRY_RUN_COMMAND_PATH = ".claude/commands/dry-run.md";
 export const ADR_TEMPLATE_PATH = "docs/adr/TEMPLATE.md";
+export const BOARD_COMMAND_PATH = ".claude/commands/board.md";
 
 /** Where the two sources ship. `templates/` is in `package.json` `files[]`. */
 export const PROCESS_TEMPLATES_DIR = join(import.meta.dir, "..", "..", "templates", "process");
@@ -44,7 +49,7 @@ function source(name: string, dir: string): string | null {
   return existsSync(p) ? readFileSync(p, "utf-8") : null;
 }
 
-/** Both files, rendered for this repository (`harness`) or a consumer. */
+/** Every process file, rendered for this repository (`harness`) or a consumer. */
 export function processFiles(harness: boolean, dir: string = PROCESS_TEMPLATES_DIR): ProcessFile[] {
   const missing = (path: string, name: string): ProcessFile => ({
     path,
@@ -53,15 +58,20 @@ export function processFiles(harness: boolean, dir: string = PROCESS_TEMPLATES_D
   });
   const command = source("dry-run.md", dir);
   const template = source("adr-template.md", dir);
+  const board = source("board.md", dir);
+  const cli = harness ? "bun bin/rungate.ts" : "bunx rungate";
   return [
     command === null
       ? missing(DRY_RUN_COMMAND_PATH, "dry-run.md")
       : {
           path: DRY_RUN_COMMAND_PATH,
           content: command
-            .replaceAll("{{CLI}}", harness ? "bun bin/rungate.ts" : "bunx rungate")
+            .replaceAll("{{CLI}}", cli)
             .replace("{{READY_NOW}}", harness ? READY_NOW.harness : READY_NOW.consumer),
         },
     template === null ? missing(ADR_TEMPLATE_PATH, "adr-template.md") : { path: ADR_TEMPLATE_PATH, content: template },
+    board === null
+      ? missing(BOARD_COMMAND_PATH, "board.md")
+      : { path: BOARD_COMMAND_PATH, content: board.replaceAll("{{CLI}}", cli) },
   ];
 }
