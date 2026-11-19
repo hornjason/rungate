@@ -108,6 +108,21 @@ describe("#2479: the install is checked before a command runs", () => {
     expect(missingDependencies(pkg)).toEqual(["zod"]);
   });
 
+  // Review of #2491, round 3: the check walks the tree, so a dependency's
+  // own missing dependency is named by the path that needed it.
+  test("a missing package two hops down is named by the path that needed it", () => {
+    const { pkg } = install({ omit: ["@octokit/core"] });
+    expect(missingDependencies(pkg)).toContain("@octokit/rest > @octokit/core");
+  });
+
+  test("a run from an install missing a transitive dependency refuses with the message", () => {
+    const { pkg, project } = install({ omit: ["@octokit/core"] });
+    const r = run(pkg, project, ["sync-sc-status", "--dry-run"]);
+    expect(r.stderr, `no guard message; stderr was:\n${r.stderr}`).toContain(MARK);
+    expect(r.stderr).toContain("@octokit/rest > @octokit/core");
+    expect(r.code).toBe(INCOMPLETE_INSTALL_EXIT);
+  });
+
   // Review of #2491: the race that half-writes a dependency can half-write
   // rungate's own manifest, and the check must refuse by name, not throw.
   test("a truncated package.json is named as missing, not thrown", () => {
