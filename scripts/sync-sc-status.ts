@@ -27,6 +27,7 @@ import { matchPattern, isBehavioralSC, type ParsedSC } from "../lib/conformity";
 import { behavioralCachePath, readFreshCache } from "../lib/behavioral-cache";
 import { readDerivedDeclaration, skipLine } from "../lib/derived-spec";
 import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
+import { criterionFingerprint, parseCriteria, specDeclaresEvidence } from "../lib/spec-evidence";
 import { detectDrift } from "./detect-sc-drift";
 import {
   ambiguityOf,
@@ -927,7 +928,13 @@ const PROOF_OR_WAIVER = /^\s{2,}(?:proved-by|waived-reason|waived-by|waived-unti
  * same run `parseCriteria` in lib/spec-evidence.ts reads, and the line goes
  * at its end, at the indent of the block's first annotation, or six spaces.
  */
-export function withProofLine(content: string, id: string, proof: string): { content: string; wrote: boolean } {
+export function withProofLine(
+  content: string,
+  id: string,
+  proof: string,
+  /** #2508: written beneath the proof when the spec declares `evidence: required`. */
+  fingerprint?: string,
+): { content: string; wrote: boolean } {
   const lines = content.split("\n");
   const at = lines.findIndex(l => l.startsWith(`- [x] ${id}:`) || l.startsWith(`- [X] ${id}:`));
   if (at === -1) return { content, wrote: false };
@@ -946,7 +953,7 @@ export function withProofLine(content: string, id: string, proof: string): { con
     }
     end++;
   }
-  lines.splice(end, 0, `${indent}proved-by: ${proof}`);
+  lines.splice(end, 0, `${indent}proved-by: ${proof}`, ...(fingerprint === undefined ? [] : [`${indent}fingerprint: ${fingerprint}`]));
   return { content: lines.join("\n"), wrote: true };
 }
 
@@ -985,10 +992,17 @@ export function flipCheckboxes(
       // person wrote this line by hand.
       const proof = proofs?.get(id);
       if (proof) {
-        const r = withProofLine(content, id, proof);
+        // #2508: a spec that declares `evidence: required` also refuses a
+        // tick with no `fingerprint:`, so it is written in the same edit, by
+        // the one function audit-spec-evidence records it with.
+        const text = specDeclaresEvidence(content) ? parseCriteria(content).find(c => c.id === id)?.text : undefined;
+        const fingerprint = text === undefined ? undefined : criterionFingerprint(text);
+        const r = withProofLine(content, id, proof, fingerprint);
         if (r.wrote) {
           content = r.content;
-          console.log(`  ${id}: ${shouldSkipWrite ? "would write" : "wrote"} proved-by: ${proof}`);
+          const verb = shouldSkipWrite ? "would write" : "wrote";
+          console.log(`  ${id}: ${verb} proved-by: ${proof}`);
+          if (fingerprint !== undefined) console.log(`  ${id}: ${verb} fingerprint: ${fingerprint}`);
         }
       }
     }

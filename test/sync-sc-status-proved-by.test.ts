@@ -175,9 +175,13 @@ describe("#2508: a tick in a spec that declares evidence also writes its fingerp
       const c = criterion(after, id);
       expect(c.recordedFingerprint, id).toBe(criterionFingerprint(c.text));
     }
-    // The checker CI runs, over exactly the two this run ticked.
-    const refused = evidenceViolations(after, "2026-11-19").filter(v => /SC-986[12]\b/.test(JSON.stringify(v)));
-    expect(refused).toEqual([]);
+    // The checker CI runs. SC-9861's block is complete, so nothing about it is
+    // refused; SC-9862's fixture lacks a `needs:` line, which is not this
+    // change's to write, so for it only the proof and fingerprint codes count.
+    const violations = evidenceViolations(after, "2026-11-19");
+    expect(violations.filter(v => v.id === "SC-9861")).toEqual([]);
+    const evidenceCodes = ["FINGERPRINT_MISSING", "TICKED_WITHOUT_EVIDENCE", "EVIDENCE_BLANK", "EVIDENCE_STALE"];
+    expect(violations.filter(v => v.id === "SC-9862" && evidenceCodes.includes(v.code))).toEqual([]);
   });
 
   test("a spec that does not declare evidence gets proved-by only, as before", () => {
