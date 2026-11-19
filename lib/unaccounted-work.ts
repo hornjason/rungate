@@ -21,7 +21,7 @@ import { spawnSync } from "child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 
-export type SourceName = "tracked-files" | "plan-file" | "agent-memory";
+export type SourceName = "tracked-files" | "plan-file" | "agent-memory" | "pr-bodies";
 
 export interface Declaration {
   source: SourceName;
@@ -54,11 +54,23 @@ export function citationsIn(text: string): number[] {
 
 const clip = (s: string) => (s.length > 160 ? `${s.slice(0, 157)}...` : s);
 
+/**
+ * The markers read in a pull request body (#2489): the prose markers, plus the
+ * two ways an agent writes down work it could not file at the time. Kept off
+ * the tracked-file scan, where "not done" is ordinary prose.
+ */
+export const PR_BODY_MARKERS: readonly RegExp[] = [...PROSE_MARKERS, /\bnot (?:yet )?filed\b/i, /\bnot done\b/i];
+
 /** Every line of `text` carrying a marker. */
-export function declarationsIn(text: string, path: string, source: SourceName): Declaration[] {
+export function declarationsIn(
+  text: string,
+  path: string,
+  source: SourceName,
+  markers: readonly RegExp[] = PROSE_MARKERS,
+): Declaration[] {
   const out: Declaration[] = [];
   text.split("\n").forEach((line, i) => {
-    if (PROSE_MARKERS.some(re => re.test(line))) {
+    if (markers.some(re => re.test(line))) {
       out.push({ source, path, line: i + 1, text: clip(line.trim()), cites: citationsIn(line) });
     }
   });
@@ -222,6 +234,30 @@ export function agentMemorySource(root: string, home: string): SourceReading {
     else if (read.text !== null) declarations.push(...declarationsIn(read.text, abs, source));
   }
   return { source, kind: "READ", declarations, unreadable, files: names.length };
+}
+
+/** One pull request's number and body, as GitHub returns them. A PR with no description has a null body. */
+export interface PrBody {
+  number: number;
+  body: string | null;
+}
+
+/**
+ * Pull request bodies as a source (#2489). The PRs are fetched by the command
+ * (`--since`, or `--prs-fixture` in tests), so this only turns the reading it
+ * is handed into declarations, each placed at `PR #N` and its line in the body.
+ * Not reading them is ABSENT, and a read that failed is UNMEASURED, both with
+ * the reason; neither is a zero.
+ */
+export function prBodiesSource(
+  read: { prs: readonly PrBody[] } | { kind: "ABSENT" | "UNMEASURED"; why: string },
+): SourceReading {
+  const source = "pr-bodies";
+  if ("kind" in read) return { source, kind: read.kind, why: read.why };
+  const declarations = read.prs.flatMap(pr =>
+    pr.body ? declarationsIn(pr.body, `PR #${pr.number}`, source, PR_BODY_MARKERS) : [],
+  );
+  return { source, kind: "READ", declarations, unreadable: [], files: read.prs.length };
 }
 
 /** Every source this command knows how to discover, in report order. */
