@@ -1000,4 +1000,28 @@ describe("#1653: the summary is read back against the findings it counts", () =>
     expect(reading.outcome).toBe("UNMEASURED");
     expect(summaryNotice(reading)).toStartWith("OPENS_WITH_COUNT");
   });
+
+  test("A7-10: a payload refused for another reason still reports its summary, once its list was read", () => {
+    // readPayload has two exits after the findings list is read: CLEAN or
+    // BLOCKED, and UNMEASURED for a bad severity, a missing verdict and the
+    // rest. Both carry the summary (second review of #2465). Before the list
+    // is read there is no count to compare, so there is no reading.
+    const badSeverity = readAiReviewFindings(
+      JSON.stringify({
+        findings: [{ severity: "bogus", file: "a.ts", line: 1, summary: "x", failure_scenario: "y" }],
+        verdict: "PASS",
+        [AI_REVIEW_SUMMARY_KEY]: "1 finding: a bad severity.",
+      }),
+    );
+    expect(badSeverity.outcome).toBe("UNMEASURED");
+    expect(summaryNotice(badSeverity)).toStartWith("OPENS_WITH_COUNT");
+
+    const noVerdict = readAiReviewFindings(JSON.stringify({ findings: [], [AI_REVIEW_SUMMARY_KEY]: "2 findings." }));
+    expect(noVerdict.outcome).toBe("UNMEASURED");
+    expect(summaryNotice(noVerdict)).toStartWith("WRONG_COUNT");
+
+    const noList = readAiReviewFindings(JSON.stringify({ verdict: "PASS", [AI_REVIEW_SUMMARY_KEY]: "0 findings." }));
+    expect(noList.outcome).toBe("UNMEASURED");
+    expect(summaryNotice(noList), "with no findings list there is no count to read the summary against").toBeNull();
+  });
 });

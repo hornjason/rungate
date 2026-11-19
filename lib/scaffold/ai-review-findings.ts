@@ -604,8 +604,9 @@ export function summaryReading(s: AiReviewSummary): {
 
 /**
  * The summary reading as one notice line, opening with its kind, or `null`
- * when no payload was read: an unreadable round has no summary to judge,
- * and ABSENT would say the reviewer wrote a payload and left the key out.
+ * when no findings list was read: with no count there is nothing to judge
+ * the summary against, and ABSENT would say the reviewer wrote a list and
+ * left the key out.
  */
 export function summaryNotice(reading: AiReviewFindingsReading): string | null {
   if (reading.summary === undefined) return null;
@@ -1360,8 +1361,9 @@ export interface AiReviewFindingsReading {
   /**
    * #1653 / CRC-A7: the reviewer's summary beside the number of findings its
    * payload listed, read together so the count can be checked. Absent when
-   * no payload was read; `text` is `null` when one was read and carried no
-   * usable summary. Nothing reads it to decide the outcome.
+   * no findings list was read, so there is no count to check against; `text`
+   * is `null` when one was read and carried no usable summary. Nothing reads
+   * it to decide the outcome.
    */
   summary?: AiReviewSummary;
   /**
@@ -2115,6 +2117,12 @@ function readPayload(
     );
   }
 
+  // #1653: read ONCE, here, where the list it counts is first known to be a
+  // list, and attached to both exits below — the UNMEASURED one as well as
+  // CLEAN/BLOCKED. A summary dropped on one exit and kept on the other is the
+  // defect two review rounds of #2465 found one site at a time.
+  const summary: AiReviewSummary = { text: summaryText(obj[AI_REVIEW_SUMMARY_KEY]), listed: list.length };
+
   const reasons: AiReviewUnmeasuredReason[] = [];
   const detail: string[] = [];
   const blocking: unknown[] = [];
@@ -2361,7 +2369,7 @@ function readPayload(
   // against an `Important`. The two have to be derived from one array.
   const tags = tagsForPayload(kept, touched);
 
-  if (reasons.length > 0) return unmeasured(reasons, detail, kept, tags);
+  if (reasons.length > 0) return { ...unmeasured(reasons, detail, kept, tags), summary };
 
   // The decision, and the only place it is made. `verdict` is compared to it
   // afterwards; it never contributes to it.
@@ -2404,9 +2412,8 @@ function readPayload(
     lineCounts: lineCountsNotSupplied(),
     pastEndReported: null,
     findingTags: tags,
-    // #1653: read here, beside the list it counts, so the count compared is
-    // the payload's own and not the post-suppression `kept`.
-    summary: { text: summaryText(obj[AI_REVIEW_SUMMARY_KEY]), listed: Array.isArray(list) ? list.length : 0 },
+    // #1653: the payload's own count, not the post-suppression `kept`.
+    summary,
   };
 }
 
