@@ -23,6 +23,7 @@ import {
 } from "../lib/board-init";
 import { writeBoardConfig } from "../lib/config-loader";
 import { CLI_COMMANDS } from "../lib/cli-commands";
+import { REFUSAL_EXIT, main as boardInitMain } from "../scripts/board-init";
 
 const REPO = "acme/widgets";
 
@@ -246,6 +247,57 @@ describe("SC-2789: board.id and board.fields are written into the config, and no
     const d = mkdtempSync(join(tmpdir(), "board-init-noconfig-"));
     made.push(d);
     expect(() => writeBoardConfig(d, { id: "PVT_1", fields: { Status: "F_s", Criteria: "F_c" } })).toThrow("scaffold");
+  });
+
+  test("SC-2789: the command writes the ids only after a whole board, and a second run leaves the file alone", async () => {
+    const d = project({ project: "w", board: { expediteLabel: "now" } });
+    const { api, writes } = memoryBoard();
+    const out: string[] = [];
+    const real = { log: console.log, error: console.error };
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void out.push(a.join(" "));
+    try {
+      // A dry run changes neither the board nor the file.
+      expect(await boardInitMain(["--repo", REPO, "--project-root", d], d, api)).toBe(0);
+      expect(writes).toEqual([]);
+      expect(read(d).board).toEqual({ expediteLabel: "now" });
+
+      expect(await boardInitMain(["--repo", REPO, "--project-root", d, "--write"], d, api)).toBe(0);
+      const written = read(d).board;
+      expect(written.expediteLabel).toBe("now");
+      expect(typeof written.id).toBe("string");
+      expect(Object.keys(written.fields).sort()).toEqual(["Criteria", "Status"]);
+
+      const file = readFileSync(join(d, ".claude", "rungate", "config.json"), "utf8");
+      const before = writes.length;
+      expect(await boardInitMain(["--repo", REPO, "--project-root", d, "--write"], d, api)).toBe(0);
+      expect(writes.length).toBe(before);
+      expect(readFileSync(join(d, ".claude", "rungate", "config.json"), "utf8")).toBe(file);
+      expect(out.join("\n")).toContain("already names this board");
+    } finally {
+      console.log = real.log;
+      console.error = real.error;
+    }
+  });
+
+  test("SC-2789: a refused board leaves the config untouched, and an unscaffolded project is refused first", async () => {
+    const d = project({ project: "w" });
+    const { api } = memoryBoard([], { failOn: "create-view" });
+    const errs: string[] = [];
+    const real = { log: console.log, error: console.error };
+    console.log = () => {};
+    console.error = (...a: unknown[]) => void errs.push(a.join(" "));
+    try {
+      expect(await boardInitMain(["--repo", REPO, "--project-root", d, "--write"], d, api)).toBe(REFUSAL_EXIT);
+      expect(read(d)).toEqual({ project: "w" });
+      const bare = mkdtempSync(join(tmpdir(), "board-init-bare-"));
+      made.push(bare);
+      expect(await boardInitMain(["--repo", REPO, "--project-root", bare, "--write"], bare, api)).toBe(REFUSAL_EXIT);
+      expect(errs.join("\n")).toContain("rungate scaffold first");
+    } finally {
+      console.log = real.log;
+      console.error = real.error;
+    }
   });
 
   test("SC-2789: it is a rungate command, and the script it runs ships", () => {
